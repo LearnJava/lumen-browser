@@ -37,8 +37,8 @@
 use std::collections::HashSet;
 
 use lumen_dom::{
-    Attribute, Document, DocumentMode, Namespace, NodeData, NodeId, QualName, ShadowRootMode,
-    ViewportMeta, ViewportWidth,
+    Attribute, Document, DocumentMode, MetaRefresh, Namespace, NodeData, NodeId, QualName,
+    ShadowRootMode, ViewportMeta, ViewportWidth,
 };
 
 use crate::foreign_content;
@@ -563,6 +563,9 @@ impl IncrementalTreeBuilder {
                 // Void: не push в open_elements.
                 if name == "meta" && let Some(meta) = parse_viewport_meta(attrs) {
                     self.doc.set_viewport_meta(meta);
+                }
+                if name == "meta" && let Some(refresh) = parse_meta_refresh(attrs) {
+                    self.doc.set_meta_refresh(refresh);
                 }
             }
             Token::StartTag {
@@ -2953,6 +2956,53 @@ fn parse_viewport_meta(attrs: &[(String, String)]) -> Option<ViewportMeta> {
     Some(meta)
 }
 
+/// Parse `<meta http-equiv="refresh" content="…">` attributes into a
+/// [`MetaRefresh`] (BUG-566, HTML LS §4.2.5.3 "shared declarative refresh
+/// steps").
+///
+/// Returns `None` if the tag is not a refresh meta (`http-equiv` mismatch,
+/// missing `content`, or a `content` value with no parseable leading time).
+fn parse_meta_refresh(attrs: &[(String, String)]) -> Option<MetaRefresh> {
+    let http_equiv = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("http-equiv"))?.1.as_str();
+    if !http_equiv.eq_ignore_ascii_case("refresh") {
+        return None;
+    }
+    let content = &attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("content"))?.1;
+    let (_, s) = split_leading_ws(content);
+    let digits_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (digits, mut rest) = s.split_at(digits_end);
+    if digits.is_empty() && !rest.starts_with('.') {
+        return None;
+    }
+    let delay_seconds: u64 = digits.parse().unwrap_or(0);
+    // Discard the fractional part (spec keeps only whole seconds).
+    if let Some(after_dot) = rest.strip_prefix('.') {
+        let frac_end = after_dot.find(|c: char| !c.is_ascii_digit()).unwrap_or(after_dot.len());
+        rest = &after_dot[frac_end..];
+    }
+    let (_, rest) = split_leading_ws(rest);
+    let rest = rest.strip_prefix(';').or_else(|| rest.strip_prefix(',')).unwrap_or(rest);
+    let (_, rest) = split_leading_ws(rest);
+    if rest.is_empty() {
+        return Some(MetaRefresh { delay_seconds, url: None });
+    }
+    let rest = if rest.len() >= 3 && rest[..3].eq_ignore_ascii_case("url") {
+        let (_, after_url) = split_leading_ws(&rest[3..]);
+        let after_eq = after_url.strip_prefix('=').unwrap_or(after_url);
+        split_leading_ws(after_eq).1
+    } else {
+        rest
+    };
+    let url = match rest.chars().next() {
+        Some(q @ ('\'' | '"')) => {
+            let body = &rest[1..];
+            body.find(q).map_or(body, |end| &body[..end])
+        }
+        _ => rest,
+    };
+    Some(MetaRefresh { delay_seconds, url: Some(url.trim_end().to_string()) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4101,6 +4151,69 @@ mod tests {
             r#"<html><head><meta name="description" content="hello"></head><body></body></html>"#,
         );
         assert!(doc.viewport_meta().is_none(), "description meta must not set viewport_meta");
+    }
+
+    // ─── `<meta http-equiv="refresh">` (BUG-566) ───────────────────────────────
+
+    #[test]
+    fn meta_refresh_with_url() {
+        let doc = parse(
+            r#"<html><head><meta http-equiv="refresh" content="5; url=https://example.com/next"></head><body></body></html>"#,
+        );
+        let mr = doc.meta_refresh().expect("refresh meta must be set");
+        assert_eq!(mr.delay_seconds, 5);
+        assert_eq!(mr.url.as_deref(), Some("https://example.com/next"));
+    }
+
+    #[test]
+    fn meta_refresh_no_url_reloads_self() {
+        let doc = parse(r#"<html><head><meta http-equiv="refresh" content="3"></head><body></body></html>"#);
+        let mr = doc.meta_refresh().expect("refresh meta must be set");
+        assert_eq!(mr.delay_seconds, 3);
+        assert_eq!(mr.url, None);
+    }
+
+    #[test]
+    fn meta_refresh_quoted_url() {
+        let doc = parse(
+            r#"<html><head><meta http-equiv="refresh" content='0;url="https://example.com/a b"'></head><body></body></html>"#,
+        );
+        let mr = doc.meta_refresh().expect("refresh meta must be set");
+        assert_eq!(mr.url.as_deref(), Some("https://example.com/a b"));
+    }
+
+    #[test]
+    fn meta_refresh_comma_separator_and_no_url_equals() {
+        let doc = parse(
+            r#"<html><head><meta http-equiv="refresh" content="2, https://example.com/c"></head><body></body></html>"#,
+        );
+        let mr = doc.meta_refresh().expect("refresh meta must be set");
+        assert_eq!(mr.delay_seconds, 2);
+        assert_eq!(mr.url.as_deref(), Some("https://example.com/c"));
+    }
+
+    #[test]
+    fn meta_refresh_wrong_http_equiv_ignored() {
+        let doc = parse(r#"<html><head><meta http-equiv="content-type" content="5"></head><body></body></html>"#);
+        assert!(doc.meta_refresh().is_none());
+    }
+
+    #[test]
+    fn meta_refresh_no_leading_digits_ignored() {
+        let doc = parse(
+            r#"<html><head><meta http-equiv="refresh" content="url=https://example.com"></head><body></body></html>"#,
+        );
+        assert!(doc.meta_refresh().is_none(), "no leading time -> invalid, ignored");
+    }
+
+    #[test]
+    fn meta_refresh_first_occurrence_wins() {
+        let doc = parse(
+            r#"<html><head><meta http-equiv="refresh" content="1;url=https://first.example"><meta http-equiv="refresh" content="2;url=https://second.example"></head><body></body></html>"#,
+        );
+        let mr = doc.meta_refresh().expect("refresh meta must be set");
+        assert_eq!(mr.delay_seconds, 1);
+        assert_eq!(mr.url.as_deref(), Some("https://first.example"));
     }
 
     // ─── Declarative Shadow DOM (WHATWG HTML §14.5) ───────────────────────────
