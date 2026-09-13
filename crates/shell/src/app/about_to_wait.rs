@@ -1204,7 +1204,7 @@ impl Lumen {
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
-            for (url, _target, _width, _height, token) in popups {
+            for (url, _target, _width, _height, token, no_opener) in popups {
                 // GAP-NAVCTX срез 1 (BUG-884): `open("javascript:...")` must run
                 // the code (in the OPENER's context, per HTML LS §7.4.5) rather
                 // than reach the network layer, which today rejects `javascript:`
@@ -1239,7 +1239,15 @@ impl Lumen {
                         // used to leave open for a synchronous top-of-page
                         // `opener.postMessage()` (see
                         // `window_messaging::arm_pending_opener`).
-                        lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
+                        //
+                        // GAP-NAVCTX срез 11 (BUG-797): `noopener`/`noreferrer`
+                        // in `window.open()`'s `features` argument (HTML LS
+                        // §7.2.2.1) skip arming entirely — same carve-out
+                        // `click.rs`/`frame_links.rs` already apply to
+                        // `rel=noopener`/`rel=noreferrer` on `<a target=_blank>`.
+                        if !no_opener {
+                            lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
+                        }
                         self.navigate_to(source);
                     }
                     Err(reason) => eprintln!("window.open заблокирован: {reason}"),
@@ -1250,8 +1258,19 @@ impl Lumen {
                 // consumes the armed pair above; also delivers anything
                 // already queued for this tab (e.g. the opener posted before
                 // yielding).
+                //
+                // GAP-NAVCTX срез 11 (BUG-797): `_lumen_install_opener` is
+                // skipped under `noopener`/`noreferrer` — nothing was armed
+                // above, and installing anyway would resurrect the opener
+                // link the feature asked to sever. `_lumen_window_pump_messages`
+                // still runs unconditionally: it delivers ordinary
+                // `postMessage` calls the OPENER makes on the `WindowProxy`
+                // stub `window.open()` returned it, a channel `noopener` does
+                // not touch (only the POPUP's `window.opener` is nulled).
                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                    j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
+                    if !no_opener {
+                        j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
+                    }
                     j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));
                 });
             }

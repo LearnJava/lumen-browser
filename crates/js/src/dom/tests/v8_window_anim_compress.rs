@@ -357,6 +357,34 @@ fn window_open_feature_parsing_partial() {
     assert_eq!(reqs[0].height, 600);
 }
 
+// GAP-NAVCTX срез 11 (BUG-797): `noopener`/`noreferrer` in `features` parse
+// to `PopupRequest::no_opener` — the shell reads this to skip
+// `window_messaging::arm_pending_opener`/`_lumen_install_opener`, the same
+// carve-out `click.rs`/`frame_links.rs` already apply to `rel=noopener`.
+#[test]
+fn window_open_feature_noopener_sets_no_opener_flag() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("window.open('https://x.com', '', 'width=1024,noopener')").unwrap();
+    let reqs = rt.take_window_open_requests();
+    assert!(reqs[0].no_opener);
+}
+
+#[test]
+fn window_open_feature_noreferrer_also_sets_no_opener_flag() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("window.open('https://x.com', '', 'noreferrer')").unwrap();
+    let reqs = rt.take_window_open_requests();
+    assert!(reqs[0].no_opener);
+}
+
+#[test]
+fn window_open_without_noopener_feature_leaves_flag_unset() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("window.open('https://x.com', '', 'width=1024,height=768')").unwrap();
+    let reqs = rt.take_window_open_requests();
+    assert!(!reqs[0].no_opener);
+}
+
 #[test]
 fn window_open_take_clears_queue() {
     let rt = v8_runtime_with_dom(make_doc());

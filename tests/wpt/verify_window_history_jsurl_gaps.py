@@ -189,6 +189,17 @@ console.log("PROBE anchor-clicked");
 </script>
 """, "child-ran opener=object (not null, unlike the noreferrer sibling)"),
 
+    # GAP-NAVCTX срез 11 (BUG-797): `window.open()`'s own `windowFeatures`
+    # third argument, not a `rel` attribute on a link — the same boolean
+    # feature (`noopener`), but a different carve-out site
+    # (`about_to_wait.rs`'s popup drain rather than `click.rs`/`frame_links.rs`).
+    "win-open-noopener": ("""
+<script>
+open("vwjh-child.html?from=open-noopener", "_blank", "noopener");
+console.log("PROBE open-called");
+</script>
+""", "child-ran opener=null (feature honored, not just the rel= carve-out)"),
+
     # `prompt-and-unload-script-closeable.html` waits for `beforeunload` then
     # `unload`, both triggered by `window.close()`. Whether this top-level
     # context is script-closeable at all is itself part of the answer, so

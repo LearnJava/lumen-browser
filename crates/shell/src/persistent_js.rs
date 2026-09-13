@@ -431,10 +431,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// 4, BUG-797) is the `window_messaging` handle the opener's returned
     /// `WindowProxy` stub was minted with — the shell resolves it to the new
     /// tab's real id (`lumen_js::window_messaging::resolve_token`) so a
-    /// `postMessage` the opener already queued still finds it. Returns an
+    /// `postMessage` the opener already queued still finds it. The trailing
+    /// `bool` (GAP-NAVCTX срез 11, BUG-797) is `true` when `features` carried
+    /// `noopener`/`noreferrer` — the shell must then skip
+    /// `window_messaging::arm_pending_opener` for this popup. Returns an
     /// empty vec between `window.open()` calls.
     #[allow(dead_code)]
-    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32)>;
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32, bool)>;
     /// Drain `console.log/warn/error` messages buffered in the JS runtime.
     ///
     /// Each entry is `(level, text)` where level is 0=log, 1=warn, 2=error.
@@ -1058,11 +1061,11 @@ impl PersistentJs for V8PersistentJs {
             "if(typeof _lumen_gc_collect==='function')_lumen_gc_collect([{arr}]);"
         ));
     }
-    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32)> {
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32, bool)> {
         self.rt
             .take_window_open_requests()
             .into_iter()
-            .map(|r| (r.url, r.target, r.width, r.height, r.token))
+            .map(|r| (r.url, r.target, r.width, r.height, r.token, r.no_opener))
             .collect()
     }
     fn take_console_messages(&self) -> Vec<(u8, String)> {
