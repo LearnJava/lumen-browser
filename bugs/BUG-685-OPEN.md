@@ -453,3 +453,54 @@ clippy -p lumen-html-parser --all-targets -- -D warnings` — чисто.
 `1000000-final`), и разового флака `lumen-js --lib` под нагрузкой полного
 прогона — прогнан отдельно (`cargo test -p lumen-js --lib --features
 v8-backend`) сразу после, 3612/3612 зелёные.
+
+## GAP-XMLDOC срез 7 (2026-09-14): прототип-цепочка для parser-built MathML-элементов
+
+Закрывает для MathML ровно то, что срез 4 закрыл для SVG: `<math>`-разметка
+(и `document.createElementNS('http://www.w3.org/1998/Math/MathML', ...)`)
+теперь даёт типизированный прототип вместо голого `Element.prototype`.
+Отличие от SVG — по объёму, не по механизму: MathML Core §2.2 определяет
+РОВНО ОДИН интерфейс, `MathMLElement`, для всех элементов неймспейса; нет ни
+таблицы тег→конструктор (`SVG_TAG_MAP`), ни отдельного `getBBox`-подобного
+API для этого интерфейса — сам класс существовал бы пустым, если бы не был
+нужен как якорь для `instanceof` и как цель `_lumen_element_prototype_for`.
+
+- Новый модуль `crates/js/src/mathml.rs` (по образцу `svg.rs`, но на два
+  порядка меньше) — `class MathMLElement extends Element {}`, без
+  `focus`/`blur`-заглушки (SVGElement её несёт, но MathML-элементы не
+  фокусируемы по спеке) и без per-tag map. `window.MathMLElement` +
+  `window.MATHML_NAMESPACE` — тем же путём, что SVG вешает `SVG_NAMESPACE`.
+  Подключён в `install_v8!`-батч `v8_runtime.rs` сразу после
+  `svg::install_svg_bindings_v8`.
+- `_lumen_element_prototype_for` (`web_api_shim_mid.js`) — новая ветка для
+  MathML-неймспейса перед общим HTML-путём: `MathMLElement.prototype`, если
+  шим установлен, иначе `Element.prototype` (тот же безопасный fallback, что
+  и у SVG-ветки). В отличие от SVG-ветки, локальное имя не читается —
+  незачем, интерфейс один на всех.
+- `_lumen_create_element_ns` (`v8_runtime/install/dom_core.rs`) — namespace-
+  селектор получил ветку `"http://www.w3.org/1998/Math/MathML" =>
+  Namespace::MathMl` рядом с существовавшей SVG-веткой; раньше
+  `createElementNS` на этом namespace URI молча откатывался в `Namespace::Html`
+  (тот же класс проблемы, что и общий пробел BUG-830 для произвольных
+  namespace URI — тут закрыт только этот один известный случай, не общий
+  регистр).
+
+**Сознательно не сделано** (следующий срез, если/когда возьмут): HTML/MathML
+integration points (`<annotation-xml>` с `encoding="text/html"`,
+`<mi>`/`<mo>`/`<mn>`/`<ms>`/`<mtext>` как MathML text integration points) —
+тот же вырез, что срез 6 оставил открытым для namespace assignment, теперь
+открыт и для прототипов: всё под этими точками остаётся с MathML-прототипом,
+хотя по спеке должно переключаться на HTML-прототип цепочки.
+Никакого нового JS DOM API у `MathMLElement` не появилось — MathML Core не
+даёт этому интерфейсу собственных методов сверх базового `Element`.
+
+Тесты: три новых юнит-теста в `crates/js/src/mathml.rs`
+(`mathml_element_class_exists`, `mathml_element_extends_element`,
+`mathml_namespace_constant_is_set`) плюс два интеграционных в
+`crates/js/src/dom/tests/v8_core/mod.rs`
+(`parser_built_mathml_gets_typed_prototype`,
+`create_element_ns_mathml_gets_typed_prototype`) — зеркалят пару SVG-тестов
+среза 4. `cargo test -p lumen-js --lib --features v8-backend` — 3616/3617
+зелёные (один разовый флак `worker_blob_url_script`, тот же паттерн, что и
+у среза 6 — зелёный при изолированном прогоне). `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` — чисто.
