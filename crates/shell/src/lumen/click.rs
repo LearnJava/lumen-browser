@@ -869,6 +869,88 @@ impl Lumen {
                         if let Some(nav_base) = self.frame_env.as_ref().map(|e| e.page_base.clone()) {
                             self.navigate_frame_to(idx, &href, &nav_base);
                         }
+                    } else if !t.is_empty()
+                        && !t.eq_ignore_ascii_case("_self")
+                        && links::is_navigable_href(&href)
+                    {
+                        // GAP-NAVCTX срез 12 (BUG-883): `target` names neither
+                        // `_blank` (handled above, early `return`) nor a live
+                        // frame of this document (`named_frame` above is
+                        // `None` here) — HTML LS §7.3.2 "the rules for
+                        // choosing a navigable" next looks for an ALREADY
+                        // OPEN top-level traversable (another tab) with that
+                        // `window.name`, falling back to creating a new one
+                        // exactly like `_blank` (same opener/`rel` rules)
+                        // only if none matched. Before this slice a named
+                        // target with no frame match fell all the way through
+                        // to the plain `is_navigable_href` branch below and
+                        // silently navigated the CURRENT document in place —
+                        // the "уже существовавшее, более узкое ограничение"
+                        // GAP-NAVCTX срез 2 (BUG-883) left untouched.
+                        let resolved = self.source.resolve_href(&href);
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkNavigate { href: &href, resolved: &resolved },
+                            });
+                        }
+                        if let Some(tab_idx) = self.find_tab_by_window_name(t) {
+                            // Navigating an EXISTING browsing context sets no
+                            // `opener` — only *creating* one does. `window.name`
+                            // itself still has to be re-armed: each navigation
+                            // gets a brand-new JS runtime (no in-place global
+                            // object to carry the old value on), so without
+                            // this a SECOND reuse of the same target would
+                            // find nothing (`find_tab_by_window_name` reads
+                            // the live `window.name`, now reset to the shim's
+                            // default by the navigation this branch is about
+                            // to run).
+                            lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
+                            self.switch_tab(tab_idx);
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                        } else {
+                            let has_noopener = rel_attr
+                                .split_ascii_whitespace()
+                                .any(|tok| tok.eq_ignore_ascii_case("noopener") || tok.eq_ignore_ascii_case("noreferrer"));
+                            let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                            self.open_new_tab();
+                            let new_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                            if !has_noopener {
+                                lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
+                            }
+                            // Carry the name forward (HTML LS §7.2.2 step 3)
+                            // so a later link with the same `target` finds
+                            // this tab via `find_tab_by_window_name` instead
+                            // of piling up another new one. Armed BEFORE
+                            // `navigate_to`, applied inside
+                            // `run_scripts_with_dom` before the target
+                            // document's own scripts run — a post-navigate
+                            // follow-up `eval` (like the opener fallback
+                            // below) would race that runtime's creation and
+                            // lose, same reason opener installation moved
+                            // off it in GAP-NAVCTX срез 5.
+                            lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                            if !has_noopener {
+                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                    j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
+                                    j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));
+                                });
+                            }
+                            // Fallback for a target document with no scripts
+                            // at all (never reaches `run_scripts_with_dom`'s
+                            // runtime creation, so never consumes the armed
+                            // name above) — same fallback shape as the
+                            // opener install just above.
+                            let name_js = serde_json::to_string(t).unwrap_or_default();
+                            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                j.eval_js(&format!("window.name = {name_js};"));
+                            });
+                        }
                     } else if let Some(frag) = links::fragment_only(&href) {
                         if click_log::is_enabled() {
                             let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {

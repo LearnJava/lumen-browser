@@ -28,11 +28,15 @@ pub(crate) enum LinkTarget {
     /// Страница: `_top`, а для фрейма глубины 0 и `_parent` — его родитель и
     /// есть верхнее окно.
     Page,
-    /// Новое окно (`_blank` или имя, которое здесь некому носить). Открывается
-    /// как настоящая новая вкладка (GAP-NAVCTX срез 2, [BUG-883]) — опенер при
-    /// этом уходит в фон тем же путём, что и обычное переключение вкладки
-    /// (`Lumen::open_new_tab`); его таймеры при этом всё ещё не тикают, пока
-    /// не появится параллельная накачка нескольких `js_ctx` (не в этом срезе).
+    /// `_blank` или имя, не совпавшее ни с одним живым фреймом этого
+    /// документа. `_blank` всегда открывает настоящую новую вкладку
+    /// (GAP-NAVCTX срез 2, [BUG-883]); именованный `target` сперва ищет уже
+    /// открытую ВКЛАДКУ с таким `window.name` (срез 12,
+    /// [`Lumen::find_tab_by_window_name`]) и лишь без совпадения открывает
+    /// новую (унаследовав её от `_blank`) — опенер при этом уходит в фон тем
+    /// же путём, что и обычное переключение вкладки (`Lumen::open_new_tab`);
+    /// его таймеры при этом всё ещё не тикают, пока не появится параллельная
+    /// накачка нескольких `js_ctx` (не в этом срезе).
     NewWindow,
 }
 
@@ -69,6 +73,25 @@ impl Lumen {
                 // arm below already applies for `_top`.
                 if links::is_navigable_href(&href) {
                     let resolved = nav_base.resolve_str(&href);
+                    let t = target_attr.trim();
+                    // GAP-NAVCTX срез 12 (BUG-883): `target` reaches this arm
+                    // both for the reserved `_blank` and for a genuine name
+                    // that matched no live frame ([`Lumen::link_destination`]
+                    // folds both into `NewWindow`) — only the latter can name
+                    // an ALREADY OPEN tab, so `_blank` skips straight to the
+                    // create-new-tab branch below.
+                    if !t.eq_ignore_ascii_case("_blank")
+                        && let Some(tab_idx) = self.find_tab_by_window_name(t)
+                    {
+                        // Navigating an EXISTING browsing context sets no
+                        // `opener` — only *creating* one does (HTML LS §7.2.2).
+                        // `window.name` still needs re-arming — see
+                        // `click.rs`'s identical branch for why.
+                        lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
+                        self.switch_tab(tab_idx);
+                        self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                        return true;
+                    }
                     // GAP-NAVCTX срез 10 (BUG-797): same pending-opener
                     // arming as the page-level `<a target=_blank>` path
                     // (`click.rs`) — the opener is the TAB the frame lives
@@ -86,11 +109,31 @@ impl Lumen {
                     if !has_noopener {
                         lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
                     }
+                    // GAP-NAVCTX срез 12 (BUG-883): a genuinely NAMED target
+                    // (not `_blank`) that still ended up creating a new tab
+                    // (no existing tab matched above) must carry that name
+                    // forward (HTML LS §7.2.2 step 3) so a later link with
+                    // the same `target` finds it via `find_tab_by_window_name`
+                    // instead of piling up another one. Armed BEFORE
+                    // `navigate_to`, same one-shot-push reasoning as the
+                    // opener above — see `window_messaging::
+                    // arm_pending_window_name`'s doc comment.
+                    if !t.is_empty() && !t.eq_ignore_ascii_case("_blank") {
+                        lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
+                    }
                     self.navigate_to(PageSource::from_arg(Some(&resolved)));
                     if !has_noopener {
                         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                             j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
                             j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));
+                        });
+                    }
+                    // Fallback for a target document with no scripts at all,
+                    // same shape as the opener fallback above.
+                    if !t.is_empty() && !t.eq_ignore_ascii_case("_blank") {
+                        let name_js = serde_json::to_string(t).unwrap_or_default();
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.eval_js(&format!("window.name = {name_js};"));
                         });
                     }
                 }
@@ -166,6 +209,36 @@ impl Lumen {
             let Ok(doc) = owner.lock() else { continue };
             if doc.get(handle.host).get_attr("name") == Some(name) {
                 return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// Найти уже открытую ВКЛАДКУ, чей `window.name` совпадает с `name` (HTML
+    /// LS §7.3.2, «the rules for choosing a navigable», та же ветка
+    /// совпадения по browsing-context name, что [`Self::find_frame_by_name`]
+    /// уже покрывает для фреймов ОДНОГО документа) — GAP-NAVCTX срез 12
+    /// (BUG-883). Именованный `target`, не совпавший ни с одним живым
+    /// фреймом, раньше всегда открывал НОВУЮ вкладку (или, у ссылки СТРАНИЦЫ,
+    /// тихо навигировал текущий документ) — при повторном клике с тем же
+    /// именем плодились вкладки вместо повторного использования уже открытой,
+    /// как того требует спека.
+    ///
+    /// Смотрит только в `bg_tabs` (T1/T2, живой `js_ctx`) — тот же приём, что
+    /// уже качает GC-паз на запаркованной вкладке (`switch_tab`) и доставляет
+    /// `postMessage` мимо активного контекста (`window_messaging`,
+    /// `about_to_wait`'s помпа). Гибернированные (T3) вкладки без живого JS
+    /// пропускаются: спросить их `window.name` нечем, и это тот же масштаб
+    /// компромисса, что `switch_tab`'s быстрый путь уже принимает.
+    pub(crate) fn find_tab_by_window_name(&self, name: &str) -> Option<usize> {
+        if name.is_empty() {
+            return None;
+        }
+        let expected = serde_json::to_string(name).ok()?;
+        for (&tab_id, snap) in &self.bg_tabs {
+            let Some(js) = snap.js_ctx.as_ref() else { continue };
+            if js.eval_js_value("window.name").ok().as_deref() == Some(expected.as_str()) {
+                return self.tab_strip.tabs.iter().position(|t| t.id == tab_id);
             }
         }
         None
