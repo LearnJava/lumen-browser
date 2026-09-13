@@ -6362,6 +6362,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 _lumen_compile_and_set_on_handler(nid, attrName, newVal);
             }
             _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal);
+            _lumen_embed_object_maybe_attr_changed(nid, attrName);
         },
         removeAttribute: function(n)    { var nid = this.__nid__;
             var attrName = String(n);
@@ -6369,6 +6370,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (_lumen_is_on_attr_name(attrName)) {
                 _lumen_set_on_handler(nid, attrName, null);
             }
+            if (attrName === 'src' || attrName === 'data') delete _lumen_embed_object_last_url[nid];
         },
         hasAttribute:    function(n)    { var nid = this.__nid__; return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
@@ -6383,6 +6385,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
             _lumen_set_attr(nid, attrName, String(v));
             _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, String(v));
+            _lumen_embed_object_maybe_attr_changed(nid, attrName);
         },
         removeAttributeNS: function(ns, n)    { var nid = this.__nid__; _lumen_remove_attr(nid, String(n)); },
         hasAttributeNS:    function(ns, n)    { var nid = this.__nid__; return _lumen_get_attr(nid, String(n)) !== undefined; },
@@ -10405,7 +10408,7 @@ var _lumen_resource_pending_count = 0;
 function _lumen_resource_track(nid, local) {
     var tag = String(local).toLowerCase();
     if (tag !== 'script' && tag !== 'link' && tag !== 'track' && tag !== 'source'
-        && tag !== 'style') return;
+        && tag !== 'style' && tag !== 'embed' && tag !== 'object') return;
     _lumen_resource_pending[nid] = tag;
     _lumen_resource_pending_count++;
 }
@@ -10933,6 +10936,96 @@ function _lumen_link_hints_scan() {
     }
 }
 
+// ── <embed>/<object>: resolve + load/error (BUG-798) ─────────────────────────
+//
+// Neither element had ANY loading code at all — not broken, just absent:
+// `_lumen_install_reflection` gave them `src`/`data`/`type` as plain reflected
+// attributes and nothing else, so `embed.onload`/`object.onload` could never
+// fire and pages that `await` one (the common pattern for a video/PDF embed)
+// hung forever. This is the same class of gap as `<img>` (BUG-630) and
+// `<iframe>` (BUG-480) but not the same bug — there was no half-working path
+// to repair, only a resource type the engine never knew these two tags carry.
+//
+// The fix stops at the level that unblocks the WPT TIMEOUTs: resolve the URL,
+// fetch it, dispatch `load`/`error`. A real embedded renderer — a nested
+// browsing context for `<object>`'s `contentDocument`/`contentWindow`, actual
+// plugin/PDF content, the §4.8.6 fallback-content switch — is a separate,
+// much larger piece of work and out of scope here, matching the note already
+// left on BUG-798.
+function _lumen_embed_object_url_attr(tag) {
+    return tag === 'embed' ? 'src' : 'data';
+}
+
+// nid → the src/data URL last (re)started for this element. Keyed by raw
+// attribute value, not resolved URL: a plain read between two mutations must
+// not re-fetch, while an actual change (`embed-change-src.html` sets a second
+// `src` after the first `load` and awaits a second one) always must.
+var _lumen_embed_object_last_url = {};
+
+function _lumen_embed_object_reload(nid, tag) {
+    var attr = _lumen_embed_object_url_attr(tag);
+    var raw = _lumen_u2n(_lumen_get_attr(nid, attr));
+    raw = (raw === null) ? '' : String(raw).trim();
+    // No src/data → no resource is obtained, so neither event fires (also the
+    // state after removeAttribute, hence clearing the record rather than
+    // leaving a stale URL a later same-value set would then wrongly dedup).
+    if (raw === '') { delete _lumen_embed_object_last_url[nid]; return; }
+    if (_lumen_embed_object_last_url[nid] === raw) return;
+    _lumen_embed_object_last_url[nid] = raw;
+    var url;
+    try { url = _url_resolve(raw, _lumen_document_base_url()); }
+    catch (e) { setTimeout(function() { _lumen_resource_fire(nid, 'error'); }, 0); return; }
+    // Reuses the <link> hint fetch verbatim — same resolve-fetch-dispatch
+    // shape, no body handling needed.
+    _lumen_link_hint_fetch(nid, url, null);
+}
+
+// Insertion-hook half, called from `_lumen_resource_try_prepare` for an
+// element `document.createElement('embed'|'object')` minted and then
+// inserted — see `_lumen_resource_track`.
+function _lumen_embed_object_prepare(nid, tag) {
+    _lumen_embed_object_reload(nid, tag);
+}
+
+// The parser's half — same reason `_lumen_link_hints_scan` exists for
+// `<link>`: an `<embed>`/`<object>` written by the HTML parser never passes
+// through the insertion hook above, which only covers elements minted by
+// `createElement`.
+function _lumen_embed_object_scan() {
+    ['embed', 'object'].forEach(function(tag) {
+        var els;
+        try { els = document.getElementsByTagName(tag); } catch (e) { return; }
+        if (!els) return;
+        for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (!el || el.__nid__ === undefined) continue;
+            _lumen_embed_object_reload(el.__nid__, tag);
+        }
+    });
+}
+
+// A connected element's `src`/`data` is live: HTML LS re-runs the resource
+// algorithm whenever it is set, not just on insertion. Called from the
+// reflected property setters (`web_api_shim_tail_b.js`), which already know
+// their own tag.
+function _lumen_embed_object_attr_changed(nid, tag, attrName) {
+    if (attrName !== _lumen_embed_object_url_attr(tag)) return;
+    if (!_lumen_resource_is_connected(nid)) return;
+    _lumen_embed_object_reload(nid, tag);
+}
+
+// Same, but for a caller that only has the attribute name — generic
+// `setAttribute`/`setAttributeNS` (near BUG-360's on-attribute handling,
+// further down this file), which sees every element's every attribute and
+// must not pay a tag lookup for the overwhelming majority that are neither
+// `<embed>` nor `<object>`.
+function _lumen_embed_object_maybe_attr_changed(nid, attrName) {
+    if (attrName !== 'src' && attrName !== 'data') return;
+    var tag = _lumen_get_tag_name(nid).toLowerCase();
+    if (tag !== 'embed' && tag !== 'object') return;
+    _lumen_embed_object_attr_changed(nid, tag, attrName);
+}
+
 // ── <style>: HTML LS §4.14 «update a style block» (BUG-804) ──────────────────
 //
 // `<style>` never reported anything to the page, on ANY insertion path: it is
@@ -11123,7 +11216,8 @@ function _lumen_resource_try_prepare(nid) {
         _lumen_resource_pending_count--;
         return;
     }
-    if (kind !== 'script' && kind !== 'link' && kind !== 'style') return;
+    if (kind !== 'script' && kind !== 'link' && kind !== 'style'
+        && kind !== 'embed' && kind !== 'object') return;
     if (!_lumen_resource_is_connected(nid)) return;
     delete _lumen_resource_pending[nid];
     _lumen_resource_pending_count--;
@@ -11135,6 +11229,8 @@ function _lumen_resource_try_prepare(nid) {
     // spec's own «already started» bookkeeping for the other kinds.
     if (kind === 'style') { _lumen_style_update_block(nid, false); return; }
     if (kind === 'link') { _lumen_link_prepare(nid); return; }
+    // BUG-798: <embed>/<object> minted by createElement and then inserted.
+    if (kind === 'embed' || kind === 'object') { _lumen_embed_object_prepare(nid, kind); return; }
     _lumen_script_prepare(nid);
 }
 
