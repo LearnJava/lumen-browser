@@ -24,7 +24,7 @@
 use crate::style::calc::calc_node_contains_percent;
 use crate::style::parse::image::parse_bg_image_value;
 use crate::style::parse::transform::parse_transform_fn;
-use crate::style::{BackgroundImage, CalcNode, Length, parse_color, parse_length};
+use crate::style::{BackgroundImage, CalcNode, Length, parse_color, parse_length_q};
 
 /// One `|`-alternative in a `syntax` descriptor, together with its optional
 /// `+`/`#` multiplier.
@@ -277,7 +277,12 @@ fn decode_ident_token(s: &str) -> Option<String> {
 
 /// Splits `s` on top-level (i.e. outside `'…'`/`"…"`/`(…)`/`[…]`/`{…}`)
 /// separators — commas when `by_comma`, whitespace runs otherwise. Returns
-/// `None` on unbalanced nesting.
+/// `None` on unbalanced bracket nesting. An unterminated `'…`/`"…` that runs
+/// to EOF is NOT an error — CSS Syntax §4.3.5 treats that as a complete
+/// (unterminated) string token, not a parse failure — so it closes the final
+/// item instead of invalidating the whole split (BUG-531, found live:
+/// `` `'foo' "bar` `` — the last of a `<string>+` list left unterminated —
+/// used to fail this way).
 fn split_top_level(s: &str, by_comma: bool) -> Option<Vec<&str>> {
     let bytes = s.as_bytes();
     let n = bytes.len();
@@ -336,7 +341,7 @@ fn split_top_level(s: &str, by_comma: bool) -> Option<Vec<&str>> {
     if start < n {
         items.push(&s[start..]);
     }
-    if depth != 0 || in_string.is_some() {
+    if depth != 0 {
         return None;
     }
     Some(items)
@@ -384,8 +389,13 @@ fn calc_node_has_font_relative_length(node: &CalcNode) -> bool {
     }
 }
 
+// `parse_length_q(_, false)` (standards mode), not the lenient `parse_length`
+// (always quirks mode, BUG-531 found live: a bare unitless non-zero number
+// like `"10"` or `"1"` in a `<length>+` list was wrongly accepted) — CSS
+// Values §6 only allows an omitted unit for `0`, and registerProperty's
+// syntax matching has no quirks-mode document to inherit leniency from.
 fn matches_length(value: &str) -> bool {
-    match parse_length(value) {
+    match parse_length_q(value, false) {
         Some(Length::Percent(_)) => false,
         Some(Length::Calc(node)) => !calc_node_contains_percent(&node),
         Some(_) => true,
@@ -394,57 +404,269 @@ fn matches_length(value: &str) -> bool {
 }
 
 fn matches_percentage(value: &str) -> bool {
-    matches!(parse_length(value), Some(Length::Percent(_)))
+    matches!(parse_length_q(value, false), Some(Length::Percent(_)))
 }
 
 fn matches_length_percentage(value: &str) -> bool {
-    parse_length(value).is_some()
+    parse_length_q(value, false).is_some()
 }
 
 fn matches_integer(value: &str) -> bool {
-    value.trim().parse::<i64>().is_ok()
+    value.trim().parse::<i64>().is_ok() || matches_calc_typed(value, None).is_some()
 }
 
 fn matches_number(value: &str) -> bool {
-    value.trim().parse::<f64>().is_ok()
+    value.trim().parse::<f64>().is_ok() || matches_calc_typed(value, None).is_some()
 }
 
 fn matches_angle(value: &str) -> bool {
+    // CSS units are ASCII case-insensitive (`3DEG`/`3dEg` are the same
+    // `<angle>` as `3deg`) — found live via BUG-531's `3dPpX` resolution case,
+    // the same gap applies here.
+    let lower = value.to_ascii_lowercase();
     for suffix in ["deg", "rad", "turn", "grad"] {
-        if let Some(num) = value.strip_suffix(suffix)
+        if let Some(num) = lower.strip_suffix(suffix)
             && num.trim().parse::<f64>().is_ok()
         {
             return true;
         }
     }
-    false
+    matches_calc_typed(value, Some(CalcUnitCategory::Angle)).is_some()
 }
 
 fn matches_time(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
     // `ms` first — otherwise `200ms` reads as `200m` + a leftover `s`.
     for suffix in ["ms", "s"] {
-        if let Some(num) = value.strip_suffix(suffix)
+        if let Some(num) = lower.strip_suffix(suffix)
             && num.trim().parse::<f64>().is_ok()
         {
             return true;
         }
     }
-    false
+    matches_calc_typed(value, Some(CalcUnitCategory::Time)).is_some()
 }
 
 fn matches_resolution(value: &str) -> bool {
     // CSS Values L4 §9.1: "the allowed range of <resolution> values always
     // excludes negative values" — `-5.3dpcm` must fail even though the
     // number itself parses fine.
+    let lower = value.to_ascii_lowercase();
     for suffix in ["dppx", "dpcm", "dpi", "x"] {
-        if let Some(num) = value.strip_suffix(suffix)
+        if let Some(num) = lower.strip_suffix(suffix)
             && let Ok(n) = num.trim().parse::<f64>()
             && n >= 0.0
         {
             return true;
         }
     }
-    false
+    matches_calc_typed(value, Some(CalcUnitCategory::Resolution)).is_some_and(|v| v >= 0.0)
+}
+
+// ---------------------------------------------------------------------
+// BUG-531 residual: a minimal typed `calc()` evaluator for the five
+// unitless-or-single-dimension syntax types (`<number>`/`<integer>`/
+// `<angle>`/`<time>`/`<resolution>`). Deliberately separate from
+// `crate::style::calc::CalcNode` — that AST's leaves are `Length` (px/em/%/
+// viewport units), which none of these five types use, and threading
+// em/percent/viewport basis through it for a type it was never meant to
+// carry would be a bigger change than this narrow grammar needs. Only `+ -
+// * /` and parens are supported — the WPT corpus for this file never nests
+// `min()`/`max()`/`clamp()`/trig inside a registered `<number>`-family
+// syntax, so those are left for whoever needs them next.
+// ---------------------------------------------------------------------
+
+/// The one dimension (if any) a numeric `calc()` leaf carries, canonicalized
+/// to a single unit per dimension so `+`/`-` can compare like with like.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CalcUnitCategory {
+    /// Canonical unit: degrees.
+    Angle,
+    /// Canonical unit: milliseconds.
+    Time,
+    /// Canonical unit: dppx.
+    Resolution,
+}
+
+/// A leaf or intermediate result while evaluating a typed `calc()` tree.
+/// `category: None` means a plain (dimensionless) number.
+#[derive(Clone, Copy, Debug)]
+struct CalcNumber {
+    value: f64,
+    category: Option<CalcUnitCategory>,
+}
+
+enum CalcTok {
+    Num(CalcNumber),
+    Op(char),
+    Open,
+    Close,
+}
+
+/// Scans a `calc()`'s inner text into tokens, resolving each numeric
+/// literal's unit suffix (if any) to its canonical value/category at scan
+/// time. Returns `None` on any character the grammar doesn't recognize —
+/// including units outside the five supported dimensions (e.g. `%`/`px`),
+/// which is exactly the type-mismatch rejection this function needs to
+/// produce (`calc(10%)` for `<angle>` must not validate).
+fn tokenize_typed_calc(s: &str) -> Option<Vec<CalcTok>> {
+    let bytes = s.as_bytes();
+    let n = bytes.len();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < n {
+        let c = bytes[i] as char;
+        match c {
+            c if c.is_whitespace() => i += 1,
+            '(' => {
+                out.push(CalcTok::Open);
+                i += 1;
+            }
+            ')' => {
+                out.push(CalcTok::Close);
+                i += 1;
+            }
+            '+' | '-' | '*' | '/' => {
+                out.push(CalcTok::Op(c));
+                i += 1;
+            }
+            c if c.is_ascii_digit() || c == '.' => {
+                let start = i;
+                while i < n && (bytes[i] as char).is_ascii_digit() {
+                    i += 1;
+                }
+                if i < n && bytes[i] == b'.' {
+                    i += 1;
+                    while i < n && (bytes[i] as char).is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+                if i < n && matches!(bytes[i], b'e' | b'E') {
+                    let mut j = i + 1;
+                    if j < n && matches!(bytes[j], b'+' | b'-') {
+                        j += 1;
+                    }
+                    if j < n && (bytes[j] as char).is_ascii_digit() {
+                        while j < n && (bytes[j] as char).is_ascii_digit() {
+                            j += 1;
+                        }
+                        i = j;
+                    }
+                }
+                let value: f64 = s[start..i].parse().ok()?;
+                let unit_start = i;
+                while i < n && (bytes[i] as char).is_ascii_alphabetic() {
+                    i += 1;
+                }
+                let (value, category) = match &s[unit_start..i].to_ascii_lowercase()[..] {
+                    "" => (value, None),
+                    "deg" => (value, Some(CalcUnitCategory::Angle)),
+                    "rad" => (value.to_degrees(), Some(CalcUnitCategory::Angle)),
+                    "grad" => (value * 0.9, Some(CalcUnitCategory::Angle)),
+                    "turn" => (value * 360.0, Some(CalcUnitCategory::Angle)),
+                    "s" => (value * 1000.0, Some(CalcUnitCategory::Time)),
+                    "ms" => (value, Some(CalcUnitCategory::Time)),
+                    "dppx" | "x" => (value, Some(CalcUnitCategory::Resolution)),
+                    "dpi" => (value / 96.0, Some(CalcUnitCategory::Resolution)),
+                    "dpcm" => (value * 2.54 / 96.0, Some(CalcUnitCategory::Resolution)),
+                    _ => return None,
+                };
+                out.push(CalcTok::Num(CalcNumber { value, category }));
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+fn eval_typed_calc_expr(toks: &[CalcTok], pos: &mut usize) -> Option<CalcNumber> {
+    let mut acc = eval_typed_calc_term(toks, pos)?;
+    while let Some(CalcTok::Op(op @ ('+' | '-'))) = toks.get(*pos) {
+        let op = *op;
+        *pos += 1;
+        let rhs = eval_typed_calc_term(toks, pos)?;
+        // CSS Values L4 §10.1: `+`/`-` require both sides to be the same
+        // dimension (a dimensionless number is never compatible with one
+        // that carries a unit, in either direction).
+        if acc.category != rhs.category {
+            return None;
+        }
+        acc.value = if op == '+' { acc.value + rhs.value } else { acc.value - rhs.value };
+    }
+    Some(acc)
+}
+
+fn eval_typed_calc_term(toks: &[CalcTok], pos: &mut usize) -> Option<CalcNumber> {
+    let mut acc = eval_typed_calc_factor(toks, pos)?;
+    while let Some(CalcTok::Op(op @ ('*' | '/'))) = toks.get(*pos) {
+        let op = *op;
+        *pos += 1;
+        let rhs = eval_typed_calc_factor(toks, pos)?;
+        if op == '*' {
+            acc = match (acc.category, rhs.category) {
+                (None, cat) | (cat, None) => CalcNumber { value: acc.value * rhs.value, category: cat },
+                _ => return None, // two dimensioned operands — not a valid product
+            };
+        } else {
+            // CSS Values L4 §10.1: the divisor of `/` must be a plain
+            // number; dividing by a literal zero is a calc()-invalidating
+            // computation error.
+            if rhs.category.is_some() || rhs.value == 0.0 {
+                return None;
+            }
+            acc = CalcNumber { value: acc.value / rhs.value, category: acc.category };
+        }
+    }
+    Some(acc)
+}
+
+fn eval_typed_calc_factor(toks: &[CalcTok], pos: &mut usize) -> Option<CalcNumber> {
+    match toks.get(*pos) {
+        Some(CalcTok::Op('-')) => {
+            *pos += 1;
+            let v = eval_typed_calc_factor(toks, pos)?;
+            Some(CalcNumber { value: -v.value, category: v.category })
+        }
+        Some(CalcTok::Op('+')) => {
+            *pos += 1;
+            eval_typed_calc_factor(toks, pos)
+        }
+        Some(CalcTok::Open) => {
+            *pos += 1;
+            let v = eval_typed_calc_expr(toks, pos)?;
+            match toks.get(*pos) {
+                Some(CalcTok::Close) => {
+                    *pos += 1;
+                    Some(v)
+                }
+                _ => None,
+            }
+        }
+        Some(CalcTok::Num(n)) => {
+            let n = *n;
+            *pos += 1;
+            Some(n)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `value` is a `calc(...)` expression whose result matches
+/// `expected` (`None` for a plain number, e.g. `<number>`/`<integer>`).
+/// Returns the resolved value on success, purely so [`matches_resolution`]
+/// can still apply its "no negative resolution" rule to a calc() result.
+fn matches_calc_typed(value: &str, expected: Option<CalcUnitCategory>) -> Option<f64> {
+    let t = value.trim();
+    if t.len() < 6 || !t[..5].eq_ignore_ascii_case("calc(") || !t.ends_with(')') {
+        return None;
+    }
+    let toks = tokenize_typed_calc(&t[5..t.len() - 1])?;
+    let mut pos = 0usize;
+    let result = eval_typed_calc_expr(&toks, &mut pos)?;
+    if pos != toks.len() || result.category != expected {
+        return None;
+    }
+    Some(result.value)
 }
 
 fn matches_custom_ident(value: &str) -> bool {
@@ -734,7 +956,7 @@ fn component_matches_single(kind: &SyntaxComponentKind, token: &str) -> bool {
 /// ordinary declaration on a real element resolves `em`/`rem` normally).
 fn is_computationally_independent(kind: &SyntaxComponentKind, token: &str) -> bool {
     match kind {
-        SyntaxComponentKind::Type(SyntaxType::Length | SyntaxType::LengthPercentage) => match parse_length(token) {
+        SyntaxComponentKind::Type(SyntaxType::Length | SyntaxType::LengthPercentage) => match parse_length_q(token, false) {
             Some(Length::Calc(node)) => !calc_node_has_font_relative_length(&node),
             Some(l) => !length_leaf_is_font_relative(&l),
             None => true, // already failed the type match itself; not this check's job
@@ -743,7 +965,60 @@ fn is_computationally_independent(kind: &SyntaxComponentKind, token: &str) -> bo
     }
 }
 
+/// Removes CSS comments (`/* ... */`), quote-aware so a `/*` inside a
+/// `'...'`/`"..."` string doesn't start one. Unlike the universal
+/// `<declaration-value>` scanner ([`declaration_value_is_well_formed`]),
+/// which already treats comments inline while it scans, every per-type
+/// single-value matcher below (`matches_length`, `matches_number`, …)
+/// receives the token unstripped — found live via `"10px /*:)*/"` failing
+/// `<length>` (BUG-531): a real CSS tokenizer never lets a comment reach
+/// value parsing at all.
+fn strip_css_comments(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+    let mut in_string: Option<char> = None;
+    while i < n {
+        let c = chars[i];
+        if let Some(q) = in_string {
+            out.push(c);
+            if c == '\\' && i + 1 < n {
+                out.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if c == q {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\'' | '"' => {
+                in_string = Some(c);
+                out.push(c);
+                i += 1;
+            }
+            '/' if i + 1 < n && chars[i + 1] == '*' => {
+                i += 2;
+                while i + 1 < n && !(chars[i] == '*' && chars[i + 1] == '/') {
+                    i += 1;
+                }
+                i = if i + 1 < n { i + 2 } else { n };
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 fn component_matches(component: &SyntaxComponent, value: &str, require_independent: bool) -> bool {
+    let value = strip_css_comments(value);
+    let value = value.as_str();
     let single_ok = |t: &str| {
         component_matches_single(&component.kind, t)
             && (!require_independent || is_computationally_independent(&component.kind, t))
@@ -762,10 +1037,18 @@ fn component_matches(component: &SyntaxComponent, value: &str, require_independe
 }
 
 fn value_matches_parsed_syntax(value: &str, parsed: &ParsedSyntax, require_independent: bool) -> bool {
-    let value = value.trim();
     match parsed {
-        ParsedSyntax::Universal => !is_css_wide_keyword_value(value) && declaration_value_is_well_formed(value),
+        // NOT `value.trim()` here: `declaration_value_is_well_formed` must see
+        // a trailing unescaped newline that sits right after an unclosed
+        // quote (`"\n`) to recognize the bad-string it produces — `.trim()`
+        // would delete exactly the character that makes it invalid, since
+        // `str::trim` strips from the whole string's edges with no notion of
+        // "inside an open string token".
+        ParsedSyntax::Universal => {
+            !is_css_wide_keyword_value(value.trim()) && declaration_value_is_well_formed(value)
+        }
         ParsedSyntax::Components(components) => {
+            let value = value.trim();
             components.iter().any(|c| component_matches(c, value, require_independent))
         }
     }
@@ -843,6 +1126,11 @@ mod tests {
         err("*", ")");
         err("*", "var(--foo)");
         err("*", "semi;colon");
+        // An unescaped newline right after an unclosed quote is a bad-string —
+        // found via a real WPT run of `register-property-syntax-parsing.html`
+        // (BUG-531): a plain `.trim()` before this check used to delete
+        // exactly this trailing newline, hiding the bad-string.
+        err("*", "\"\n");
     }
 
     #[test]
@@ -892,5 +1180,35 @@ mod tests {
     fn missing_initial_value_required_for_non_universal() {
         assert!(validate_registered_property("*", None).is_ok());
         assert!(validate_registered_property("<length>", None).is_err());
+    }
+
+    /// BUG-531 residual — `register-property-syntax-parsing.html`'s five
+    /// `calc()` lines for the unitless-or-single-dimension syntax types,
+    /// transcribed verbatim (lines 57/60-63/67/69 of the vendored file).
+    #[test]
+    fn typed_calc_for_number_integer_angle_time() {
+        ok("<number>", "calc(1 / 2)");
+        ok("<integer>", "calc(1)");
+        ok("<integer>", "calc(1 + 2)");
+        ok("<integer>", "calc(3.1415)");
+        ok("<integer>", "calc(3.1415 + 3.1415)");
+        ok("<angle>", "calc(50grad + 3.14159rad)");
+        ok("<time>", "calc(2s - 9ms)");
+    }
+
+    #[test]
+    fn typed_calc_rejects_mismatched_or_malformed_dimensions() {
+        // A dimensionless number is not an <angle>/<time>, and vice versa.
+        err("<angle>", "calc(1)");
+        err("<time>", "calc(50grad + 3.14159rad)");
+        // `+`/`-` require the same dimension on both sides.
+        err("<angle>", "calc(50grad + 2s)");
+        // The divisor of `/` must be a plain number.
+        err("<number>", "calc(1deg / 2deg)");
+        // Division by a literal zero invalidates the whole calc().
+        err("<number>", "calc(1 / 0)");
+        // A unit outside the five supported dimensions (e.g. `%`) doesn't parse.
+        err("<angle>", "calc(10%)");
+        err("<resolution>", "calc(-1dpi)");
     }
 }
