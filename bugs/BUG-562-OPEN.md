@@ -1,9 +1,25 @@
 # BUG-562: `position-try`/`position-try-fallbacks`/`position-try-order`/`@position-try` (CSS Anchor Positioning's fallback mechanism) are not implemented at all
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** ДОРАБОТКА — никогда не реализованная функциональность (новое at-rule, новые свойства, fallback-алгоритм), не дефект уже работающего кода
 **Дата:** 2026-08-04
 **Компонент:** css-parser/layout (no `"position-try"` / `"position-try-fallbacks"` / `"position-try-order"` / `@position-try` handling anywhere in `crates/engine/css-parser/src/` or `crates/engine/layout/src/style.rs`)
 **Найден:** P2, WPT-RUN-3 срез 40 (`css/css-anchor-position`), 2026-08-04
+
+## Ревизия P3 2026-09-13
+
+Переквалифицировано из бага в ДОРАБОТКУ (см. `feedback_feature_gap_is_not_a_bug`
+в памяти проекта / прецеденты BUG-492/BUG-511/BUG-521/BUG-538/BUG-553): «Масштаб»
+ниже уже прямо говорит, что это не точечный дефект, а нереализованный
+sub-feature — `@position-try`/`CSSPositionTryRule` как новый тип at-rule,
+`position-try-fallbacks`/`position-try-order`/`position-try` как новые
+свойства, плюс алгоритм подбора fallback-позиции (spec §4), которого в
+layout нет вовсе. Основной анкор-позиционинг (`anchor-name`/`position-anchor`/
+`anchor()`/`anchor-size()`/`inset-area`) уже реализован и не затронут —
+это отдельный, самодостаточный подмодуль той же спеки. `CSS-SPECS.md:119`
+дополнен пометкой об этом остатке; отдельная строка `ROADMAP.md` не нужна
+(см. BUG-538: путь «CSS-свойство → CSS-SPECS.md» задачу не заводит).
+Указатель убран из `STATUS-P3.md`.
 
 ## Симптом
 
