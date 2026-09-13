@@ -355,7 +355,7 @@ push не переключает insertion mode): generic block elements (`is_bl
 переключает режим вовсе — ведёт себя как `<meta>`/`<link>`.
 
 **Сознательно не тронуто** (осталось на следующие срезы GAP-XMLDOC):
-`<table>`/`<select>`/`<textarea>`/`<button>` и formatting-элементы (`<a>`,
+`<table>`/`<select>`/`<button>` и formatting-элементы (`<a>`,
 `<b>`, …) — их push-сайты попутно переключают insertion mode или трогают
 active-formatting-list; self-closing версия каждого из них потребовала бы
 отдельного разбора, что делает mode/список согласованным после немедленного
@@ -364,3 +364,38 @@ pop, а самозакрывающиеся `<table/>`/`<select/>` не встр�
 измеренного случая было бы гаданием. Токенизатор (`tokenizer.rs`) не тронут:
 self-closing флаг для RAWTEXT-тегов он вычисляет верно уже с самого первого
 коммита крейта, разница была только в tree builder.
+
+## GAP-XMLDOC срез 9 (2026-09-14): self-closing `<textarea/>` в xml_mode
+
+Закрывает `<textarea>` из списка «сознательно не тронуто» выше — единственный
+измеренный по корпусу случай (`grep -rlE '<textarea([[:space:]][^>]*)?/>'` по
+вендоренному WPT: **43 файла**; `<table>`/`<select>`/`<button>`/formatting-
+элементы дают 0 совпадений тем же грепом, так и остаются неизмеренными).
+
+Причина была не в токенизаторе (self-closing флаг для RCDATA он и так вычисляет
+верно), а в том, что стартовый тег `<textarea>` обрабатывается в
+`mode_in_body`, а не в `mode_in_head` — RAWTEXT-фикс среза 2
+(`title`/`style`/`script`/`noframes`) правил только `mode_in_head`, ветка
+`<textarea>` в `mode_in_body` продолжала матчить `Token::StartTag { ref name,
+ref attrs, .. }` (`self_closing` игнорировался вовсе) и безусловно толкала
+элемент на `open_elements` и переключала `insertion_mode` в `Text` — тот же
+паттерн, что чинил срез 2, только в другом месте разбора.
+
+Правка — ровно тот же приём, что уже применён к `title`/`style`/`script`/
+`noframes` (`if !(self.xml_mode && self_closing) { push; switch mode }`),
+только на сайте `<textarea>`. Обычный HTML5-разбор (`parse`, `xml_mode ==
+false`) не изменился — self-closing по-прежнему игнорируется на не-void
+элементе, `<textarea/>` продолжает открывать реальный `<textarea>`, чьё
+содержимое тянется до `</textarea>`.
+
+Тесты: `xml_flavoured_self_closing_textarea_does_not_swallow_following_markup`
+(в `xml_mode` `<textarea/><p>after</p>` — `<p>` должен выжить соседом, не
+потеряться в тексте textarea) и
+`plain_parse_self_closing_textarea_still_consumes_following_text` (обычный
+`parse` не регрессирует). `cargo test -p lumen-html-parser` — 455/455 юнит +
+9/9 интеграционных зелёные. `cargo clippy -p lumen-html-parser --all-targets
+-- -D warnings` — чисто. `scripts/scoped-test.sh` (все обратные зависимости) —
+зелёный, кроме того же чужого дрейфа CPU-эталонов
+(`lumen-driver::cases::snapshot_cpu`, `55-text-rendering`/`57-canvas-2d`/
+`32-list-markers`/`34-forms`), подтверждённого идентичным на чистом `main`
+без этого среза предыдущими срезами.
