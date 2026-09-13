@@ -38,6 +38,12 @@ use crate::display_list::{
 /// Runs every DEVX-8b check over one freshly built display list and its
 /// provenance index. Called from `build_display_list_ordered_dpr` right
 /// before it returns `(out, ProvenanceIndex)`.
+// `dev-release` inherits `release` (`debug-assertions = false`), so the
+// `cfg(debug_assertions)` call site in `display_list/builder.rs` vanishes
+// there too — without the `allow`, `cargo clippy --workspace` reports this
+// whole chain as dead code (BUG-1053, same root cause as
+// `lumen_layout::invariants`).
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 pub(crate) fn check(out: &[DisplayCommand], index: &ProvenanceIndex, root: &LayoutBox) {
     check_coverage(out, index);
     check_clip_stack_balance(out);
@@ -54,6 +60,7 @@ pub(crate) fn check(out: &[DisplayCommand], index: &ProvenanceIndex, root: &Layo
 /// count other than 1 anywhere means a command escaped bookkeeping (a
 /// gap, i.e. no origin claims it) or two origins claimed the same
 /// command (an overlap).
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 fn check_coverage(out: &[DisplayCommand], index: &ProvenanceIndex) {
     let mut covers = vec![0u16; out.len()];
     for span in index.spans() {
@@ -92,6 +99,7 @@ fn check_coverage(out: &[DisplayCommand], index: &ProvenanceIndex) {
 /// `root_bg` span legitimately includes the box's own `overflow-x/y`
 /// clip-open command right after its background/border, so depth changes
 /// partway through that very span.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 fn check_clip_stack_balance(out: &[DisplayCommand]) {
     let mut clip_depth: i32 = 0;
     let mut scroll_depth: i32 = 0;
@@ -141,6 +149,7 @@ fn collect_node_ids(root: &LayoutBox) -> HashSet<NodeId> {
 /// references a `NodeId` absent from that set points at a dangling
 /// identity — e.g. stale after an incremental graft, or copied from the
 /// wrong node.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 fn check_origins_resolve(index: &ProvenanceIndex, known_nodes: &HashSet<NodeId>) {
     for span in index.spans() {
         if let Some(n) = span.origin.node {
@@ -169,6 +178,7 @@ fn check_origins_resolve(index: &ProvenanceIndex, known_nodes: &HashSet<NodeId>)
 /// painted something", not "this exact box instance did" — still enough
 /// to catch the failure mode DEVX-7's gate exists for: an origin that
 /// painted nothing at all.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 fn check_visible_boxes_have_spans(root: &LayoutBox, index: &ProvenanceIndex) {
     if box_has_visible_self_paint(root) {
         assert!(
