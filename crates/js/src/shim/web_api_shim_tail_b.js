@@ -614,6 +614,11 @@ function _lumen_apply_ready_state(state) {
         // again, and the per-node flag keeps a `<style>` a head script built
         // from reporting its first update twice.
         _lumen_style_blocks_scan();
+        // BUG-798: the parser's `<embed src>`/`<object data>` elements start
+        // their fetch from here — same reason again, neither ever passes
+        // through the insertion hook. The per-node URL record keeps an
+        // element a head script already appended from reporting twice.
+        _lumen_embed_object_scan();
         // BUG-804: the parser's `<track>` elements start the §4.8.11.1 track
         // processing model from here — same reason once more. The model itself
         // lives in the media shim (`video_bindings.rs`), which is its own
@@ -1622,16 +1627,37 @@ _lumen_install_reflection(HTMLVideoElement.prototype, [
 ]);
 
 _lumen_install_reflection(HTMLObjectElement.prototype, [
-    ['data',           'data',           'url'],
     ['type',           'type',           'string'],
     ['name',           'name',           'string'],
     ['useMap',         'usemap',         'string'],
 ]);
 
 _lumen_install_reflection(HTMLEmbedElement.prototype, [
-    ['src',            'src',            'url'],
     ['type',           'type',           'string'],
 ]);
+
+// BUG-798: `object.data`/`embed.src` are plain URL-reflecting attributes like
+// any other, but setting either while the element is connected must also
+// (re)start the resource load (`object-events.html`, `embed-change-src.html`)
+// — a plain `_lumen_install_reflection('url')` row never notifies anything.
+[['HTMLObjectElement', 'data', 'object'], ['HTMLEmbedElement', 'src', 'embed']]
+    .forEach(function(row) {
+        var proto = globalThis[row[0]].prototype;
+        var attr = row[1], tag = row[2];
+        Object.defineProperty(proto, attr, {
+            get: function() {
+                var n = _lumen_reflect_nid(this);
+                return n === -1 ? '' : _lumen_reflect_url(n, attr);
+            },
+            set: function(v) {
+                var n = _lumen_reflect_nid(this);
+                if (n === -1) return;
+                _lumen_set_attr(n, attr, String(v));
+                _lumen_embed_object_attr_changed(n, tag, attr);
+            },
+            enumerable: true, configurable: true
+        });
+    });
 
 _lumen_install_reflection(HTMLMapElement.prototype,     [['name', 'name', 'string']]);
 _lumen_install_reflection(HTMLSlotElement.prototype,    [['name', 'name', 'string']]);
