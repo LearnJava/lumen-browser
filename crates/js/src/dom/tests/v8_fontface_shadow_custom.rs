@@ -826,6 +826,30 @@ fn shadow_root_getter_null_for_closed() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-878's fix (`_lumen_get_shadow_root_host` reading the shadow root's own
+// host via the `Document::shadow_host_of` map instead of its never-set
+// `Node::parent`) also repairs `assignedNodes()`, which resolves a slot's
+// host the same broken way: BUG-876 measured `assignedNodes().length === 0`
+// for exactly this shape. `slotchange` dispatch (BUG-876's other half — no
+// dispatch point exists anywhere in the codebase) is a separate, untouched
+// gap, so BUG-876 stays OPEN.
+#[test]
+fn assigned_nodes_resolves_light_dom_slottable_via_shadow_host() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var child = document.createElement('div');
+                child.setAttribute('slot', 's1');
+                host.appendChild(child);
+                var sr = host.attachShadow({ mode: 'open' });
+                sr.innerHTML = '<slot name="s1"></slot>';
+                var slot = sr.querySelector('slot');
+                slot.assignedNodes().length
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Number(1.0));
+}
+
 #[test]
 fn shadow_root_append_child_works() {
     let rt = v8_runtime_with_dom(make_doc());
