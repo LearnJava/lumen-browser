@@ -3210,10 +3210,14 @@ var _LUMEN_KNOWN_HTML_TAGS = {};
 // parsed from markup (foreign content, srez 3) or built by `createElementNS` —
 // gets its typed `SVG*Element` prototype from `svg.rs`'s `_lumen_svg_ctor_for_local`
 // (keyed by the untouched, case-preserved local name, not the upper-cased
-// `_lumen_get_tag_name`). If the SVG shim was never installed in this runtime,
-// or the namespace is something else non-HTML (MathML/unknown), the generic
-// `Element.prototype` is the safe fallback — `SVGElement` already chains
-// through it, so no `instanceof` relation is lost, only narrowed.
+// `_lumen_get_tag_name`). GAP-XMLDOC срез 7: a MathML-namespace element gets
+// the single `MathMLElement` prototype (`mathml.rs`) — MathML Core has no
+// per-tag subclasses the way SVG does, so no local-name lookup is needed.
+// If the relevant shim was never installed in this runtime, or the namespace
+// is something else non-HTML (unknown foreign namespace, BUG-830), the
+// generic `Element.prototype` is the safe fallback — both typed classes
+// already chain through it, so no `instanceof` relation is lost, only
+// narrowed.
 function _lumen_element_prototype_for(nid) {
     var ns = _lumen_u2n(_lumen_get_namespace_uri(nid));
     if (ns === 'http://www.w3.org/2000/svg') {
@@ -3222,6 +3226,9 @@ function _lumen_element_prototype_for(nid) {
             return _lumen_svg_ctor_for_local(svgLocal).prototype;
         }
         return Element.prototype;
+    }
+    if (ns === 'http://www.w3.org/1998/Math/MathML') {
+        return (typeof MathMLElement === 'function') ? MathMLElement.prototype : Element.prototype;
     }
     if (ns !== 'http://www.w3.org/1999/xhtml') return Element.prototype;
     var tag  = _lumen_get_tag_name(nid);

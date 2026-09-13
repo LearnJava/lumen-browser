@@ -879,16 +879,20 @@ pub(crate) fn install_tree_mutation(
             "_lumen_create_element_ns",
             move |ns: String, local: String| -> i32 {
                 let mut doc = d.lock().unwrap();
-                // Foreign-content namespace selection. SVG keeps the local name's
-                // original case (case-sensitive tags like `linearGradient`); the
-                // empty string means "no namespace" per DOM §4.5 "validate and
-                // extract" (BUG-328, e.g. `createElementNS(null/"", name)` — the
-                // JS shim normalizes `null`/`undefined` to `""` before this call),
-                // distinct from HTML; any other namespace URI falls back to HTML.
-                // Returns -1 on overflow (see `_lumen_create_element` above for
-                // why this must be i32, not u32).
+                // Foreign-content namespace selection. SVG/MathML keep the local
+                // name's original case (case-sensitive tags like `linearGradient`,
+                // and the sole case-sensitive MathML attribute `definitionURL` is
+                // handled elsewhere); the empty string means "no namespace" per DOM
+                // §4.5 "validate and extract" (BUG-328, e.g. `createElementNS(null/"",
+                // name)` — the JS shim normalizes `null`/`undefined` to `""` before
+                // this call), distinct from HTML; any other namespace URI falls back
+                // to HTML (BUG-830 — no general namespace registry yet). Returns -1
+                // on overflow (see `_lumen_create_element` above for why this must be
+                // i32, not u32).
                 let namespace = if ns == "http://www.w3.org/2000/svg" {
                     Namespace::Svg
+                } else if ns == "http://www.w3.org/1998/Math/MathML" {
+                    Namespace::MathMl
                 } else if ns.is_empty() {
                     Namespace::None
                 } else {

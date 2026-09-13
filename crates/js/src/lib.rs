@@ -106,6 +106,7 @@ pub mod xhr;
 pub mod dom_parser;
 pub mod gc_policy;
 pub mod svg;
+pub mod mathml;
 pub mod file_input;
 /// BUG-378: sealing pass that hides the engine's internal `_lumen_*` global
 /// names from enumeration and freezes the function-valued ones.
