@@ -47,11 +47,17 @@ const GEOMETRY_EPSILON: f32 = 0.5;
 /// `svg_group_transform`, not resolved against a CSS containing block, and
 /// are left at `Rect::ZERO` by the box builder until paint applies the
 /// transform).
+// `dev-release` inherits `release` (`debug-assertions = false`), so the
+// `cfg(debug_assertions)` call sites in `box_tree/entry.rs` vanish there too —
+// without the `allow`, `cargo clippy --workspace` (not just `--release`)
+// reports these as dead code (BUG-1053).
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub(crate) fn check_geometry(root: &LayoutBox) {
     check_finite(root);
     check_containment(root);
 }
 
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 fn check_finite(b: &LayoutBox) {
     debug_assert!(
         b.rect.x.is_finite() && b.rect.y.is_finite() && b.rect.width.is_finite() && b.rect.height.is_finite(),
@@ -72,6 +78,7 @@ fn check_finite(b: &LayoutBox) {
     }
 }
 
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 fn check_containment(b: &LayoutBox) {
     let parent_is_plain_block =
         matches!(b.kind, BoxKind::Block) && b.style.display == Display::Block;

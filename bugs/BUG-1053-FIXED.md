@@ -1,6 +1,6 @@
 # BUG-1053 — ГЕЙТ СЛОМАН: `cargo clippy --workspace --all-targets --profile dev-release -- -D warnings` красный на `main` независимо от задачи
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-13 (P1)
 **Заведён:** 2026-09-13 (P3, финальный гейт BUG-561)
 **Область:** layout (`crates/engine/layout/src/invariants.rs:50,55,75` — `check_geometry`/`check_finite`/`check_containment`)
 **Владелец:** P1/P5
@@ -56,3 +56,19 @@ the workspace, а не чинить по одному.
 на `debug_assertions` (например собственный feature-флаг), если инварианты
 должны молчать и в `dev-release`/`release` тоже. Блокирует любой финальный
 гейт `/lumen-task-finish`, пока не закрыт.
+
+## Исправление (P1, 2026-09-13)
+
+`#[cfg_attr(not(debug_assertions), allow(dead_code))]` (в `lumen-layout` — с
+дополнительным `test`-исключением, т.к. `check_geometry` там вызывается
+напрямую из `#[cfg(test)] mod tests` этого же файла) на все функции обеих
+цепочек: `check_geometry`/`check_finite`/`check_containment`
+(`crates/engine/layout/src/invariants.rs`) и
+`check`/`check_coverage`/`check_clip_stack_balance`/`check_origins_resolve`/
+`check_visible_boxes_have_spans` (`crates/engine/paint/src/invariants.rs`).
+Тот же приём подтверждён `cargo build --workspace --profile dev-release`
+(0 warnings) — других экземпляров этого паттерна в воркспейсе не нашлось,
+масштаб из раздела «Масштаб» ограничился этими двумя крейтами.
+`cargo clippy --workspace --all-targets [--profile dev-release] -- -D
+warnings` зелён; `cargo test -p lumen-layout -p lumen-paint invariants` —
+20/20.
