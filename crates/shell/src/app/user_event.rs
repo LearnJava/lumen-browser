@@ -85,6 +85,22 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            LoadEvent::ImageDecodeFailed { src } => {
+                // BUG-1048: streaming/dynamic decode gave up on `src` — record
+                // it the same way a successful decode records its size
+                // (`stream_image_errors` mirrors `stream_image_sizes`), so the
+                // next coalesced pass (`apply_stream_intrinsic_sizes`) can find
+                // the `<img>` node(s) still waiting on this URL and fire `error`.
+                self.stream_image_errors.insert(src);
+                self.stream_image_sizes_dirty = true;
+                // Without a redraw request nothing schedules the next
+                // `RedrawRequested`, which is the only caller of
+                // `apply_stream_intrinsic_sizes` — the flag above would sit
+                // unread until some unrelated event happened to repaint.
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
             LoadEvent::FontLoaded {
                 family, weight, style, unicode_range, ascent_override, descent_override,
                 size_adjust, line_gap_override, variation_settings, bytes,
