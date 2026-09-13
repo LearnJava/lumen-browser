@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-13",
  "counts": {
-  "open": 160,
-  "fixed": 840,
+  "open": 159,
+  "fixed": 842,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1000,
+ "total_bugs": 1001,
  "phases": [
   {
    "id": "P0",
@@ -7443,13 +7443,6 @@
    "date": "2026-09-11",
    "debtor": false
   },
-  "BUG-561": {
-   "status": "open",
-   "title": "`CSS.supports()`/`@supports` check a separate, stale allowlist that lags behind the real cascade dispatch in `layout/src/style.rs` -- `anchor-name`/`position-an…",
-   "component": "css-parser (`crates/engine/css-parser/src/lib.rs:36` `SUPPORTED_PROPERTIES`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-562": {
    "status": "open",
    "title": "CSS Anchor Positioning's fallback mechanism (spec §4: `position-try*` properties, `@position-try` at-rule, `CSSPositionTryRule`) is entirely unimplemented -- co…",
@@ -7462,13 +7455,6 @@
    "title": "`element.style.<prop>` for `anchor()`/`anchor-size()`/`position-area` is a raw-text passthrough -- never calls the real parsers (`layout/src/style.rs::parse_anc…",
    "component": "js (`crates/js/src/dom.rs:4260-4298` `_lumen_make_style`; `dom.rs:4241-4255` `_lumen_parse_style`/`_lumen_serialize_style`)",
    "date": "2026-09-11",
-   "debtor": false
-  },
-  "BUG-566": {
-   "status": "open",
-   "title": "pragma\" crates/engine/html-parser/src/*.rs crates/shell/src/*.rs` and `grep -rln '\"refresh\"' crates/engine/ crates/js/` both zero hits)",
-   "component": "engine (no pragma-directive processing anywhere -- `grep -rn \"http.equiv\\",
-   "date": null,
    "debtor": false
   },
   "BUG-567": {
@@ -9645,6 +9631,13 @@
    "status": "open",
    "title": "`zoom: calc(1 + (sign(1em - 1px) * 0.5))` — весь `calc()` с `sign()` внутри отбрасывается как невалидный (`isn't valid in 'zoom'`), `zoom` остаётся на дефолте в…",
    "component": "css-parser (`crates/engine/layout/src/style/cascade.rs::parse_zoom`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1053": {
+   "status": "open",
+   "title": "ГЕЙТ СЛОМАН: `cargo clippy --workspace --all-targets --profile dev-release -- -D warnings` красный на HEAD `main` (не связано с BUG-561) -- `check_geometry`/`ch…",
+   "component": "layout (`crates/engine/layout/src/invariants.rs:50,55,75` `check_geometry`/`check_finite`/`check_containment`)",
    "date": null,
    "debtor": false
   },
@@ -14029,6 +14022,20 @@
    "component": "layout (`crates/engine/layout/src/lib.rs::collect_layout_rects_rec`)",
    "date": "2026-09-13",
    "debtor": false
+  },
+  "BUG-561": {
+   "status": "fixed",
+   "title": "`CSS.supports()`/`@supports` check a separate, stale allowlist that lags behind the real cascade dispatch in `layout/src/style.rs` -- `anchor-name`/`position-an…",
+   "component": "css-parser (`crates/engine/css-parser/src/lib.rs:36` `SUPPORTED_PROPERTIES`)",
+   "date": "2026-09-13",
+   "debtor": false
+  },
+  "BUG-566": {
+   "status": "fixed",
+   "title": "`<meta http-equiv=\"refresh\" content=\"N; url=...\">` never scheduled a navigation, at parse time or dynamically -- contrast `http-equiv=\"Content-Type\"`, which doe…",
+   "component": "engine (no pragma-directive processing anywhere)",
+   "date": "2026-09-13",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14950,6 +14957,9 @@
   ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
+  ],
+  "layout (`crates/engine/layout/src/invariants.rs:50,55,75` `check_geometry`/`check_finite`/`check_containment`)": [
+   "BUG-1053"
   ],
   "layout (`crates/engine/layout/src/invariants.rs` — `check_geometry`/`check_finite`/`check_containment`, DEVX-8a)": [
    "BUG-1001"
