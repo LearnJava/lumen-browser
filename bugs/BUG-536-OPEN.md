@@ -71,7 +71,7 @@ each), `event-dispatch.tentative.html` (30/30), `all-interpolates-same-as
 (`events-001/003/005/006/008`, `before-load-001`, `disconnected-element
 -001`) TIMEOUT at the harness level waiting on an event that never comes.
 
-Not exclusive to this category: [BUG-533](BUG-533-OPEN.md) (`css-highlight
+Not exclusive to this category: [BUG-533](BUG-533-FIXED.md) (`css-highlight
 -api`, срез 26) already noted one file whose harness hung on a related
 throw-during-cleanup path; this is the first slice to isolate the CSS
 Transitions-specific JS surface as a whole.

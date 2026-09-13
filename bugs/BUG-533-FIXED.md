@@ -1,6 +1,6 @@
 # BUG-533: `StaticRange` constructor is entirely missing
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-13 (P3)
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/dom.rs` — live `Range` global at `~6958`, no `StaticRange` counterpart on either engine)
 **Найден:** P2, WPT-RUN-3 срез 26 (`css/css-highlight-api`) — массовый прогон
@@ -72,3 +72,43 @@ follow DOM mutations.
 
 Committed `.ini` under `tests/wpt/metadata/css/css-highlight-api/` for the
 files above; `expected: TIMEOUT`/`FAIL` per actual run.
+
+## Срез P3 2026-09-13 (закрытие)
+
+The row's status had been flipped to `FIXED 2026-09-11` at some earlier point
+with no substantiating detail added and no matching commit (`git log --all
+-- crates/ | grep -i static.range` — zero hits); `grep -rn "StaticRange"
+crates/` on `HEAD` confirmed the constructor still did not exist anywhere.
+Discovered while writing regression tests for
+[BUG-534](BUG-534-OPEN.md) — its Setlike test files construct
+`new StaticRange(...)`, which threw `ReferenceError`.
+
+Implemented in `crates/js/src/shim/web_api_shim_mid.js`, immediately after
+`_lumen_make_range`/`Range` (same file, same nid-addressing scheme
+`node.__nid__`). Per DOM §5.4/`AbstractRange`, the exposed surface is
+`startContainer`/`startOffset`/`endContainer`/`endOffset`/`collapsed` only —
+`commonAncestorContainer` belongs to `Range`, not `AbstractRange`, so this
+card's original "Что нужно" section overstated the required surface by one
+member. The boundary pair is captured once at construction
+(`Object.defineProperty(this, '__start_nid__', ...)`, non-writable) and never
+rewritten afterwards, matching the spec's "static" semantics — contrast
+`Range`, whose native mutation ops rewrite `__start_nid__`/`__end_nid__` in
+place.
+
+Verified via 22 end-to-end tests over the real V8 shim
+(`crates/js/tests/cases/bug534_highlight_api.rs`) that construct
+`StaticRange` instances and feed them through `Highlight`/`HighlightRegistry`,
+including the two `*-tampered-*-prototype.html` scenarios this bug's own
+symptom section flagged as blocked. `cargo test -p lumen-js --features
+v8-backend` green (3632/3632, one pre-existing unrelated flake under
+`--test-threads` >1 — `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`,
+passes in isolation). `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` clean. Live WPT run not performed (no working
+`.venv`/`wss` patch in this slot) — confidence rests on the transcribed unit
+tests, not a real wptrunner pass. `.ini` dropped for
+`Highlight-iteration.html`, `Highlight-iteration-with-modifications.html`,
+`Highlight-multiple-type-attribute.html`, `highlight-priority.html`, and (as
+part of BUG-534's slice) five more `css-highlight-api` files whose only
+listed failure was this constructor;
+`HighlightRegistry-highlightsFromPoint-ranges.html.ini` kept, re-attributed
+to BUG-534's remaining `highlightsFromPoint()` hit-testing gap.

@@ -8968,6 +8968,47 @@ function Range() { return _lumen_make_range(0, 0, 0, 0); }
 Range.prototype.START_TO_START = 0; Range.prototype.START_TO_END = 1;
 Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
 
+// ── StaticRange (WHATWG DOM §5.4) — BUG-533 ─────────────────────────────────
+// An immutable AbstractRange: unlike Range, its [nid, offset] boundary pair
+// is captured once at construction and never rewritten by native mutation
+// ops afterwards — matches the spec ("static" = does not track the document).
+// Same nid-addressing as `_lumen_make_range` above, so the CSS Custom
+// Highlight API's `Highlight` (BUG-534) can accept `Range`/`StaticRange`
+// interchangeably.
+function StaticRange(init) {
+    if (new.target === undefined) {
+        throw new TypeError('Failed to construct StaticRange: please use the new operator');
+    }
+    if (init === null || typeof init !== 'object') {
+        throw new TypeError("Failed to construct StaticRange: parameter 1 is not an object");
+    }
+    var sc = init.startContainer, ec = init.endContainer;
+    if (!sc || sc.__nid__ === undefined || !ec || ec.__nid__ === undefined) {
+        throw new TypeError("Failed to construct StaticRange: startContainer/endContainer must be Nodes");
+    }
+    Object.defineProperty(this, '__start_nid__', { value: sc.__nid__, enumerable: false });
+    Object.defineProperty(this, '__start_off__', { value: init.startOffset >>> 0, enumerable: false });
+    Object.defineProperty(this, '__end_nid__',   { value: ec.__nid__, enumerable: false });
+    Object.defineProperty(this, '__end_off__',   { value: init.endOffset >>> 0, enumerable: false });
+}
+Object.defineProperty(StaticRange.prototype, 'startContainer', {
+    get: function() { return _lumen_make_element(this.__start_nid__); }, enumerable: false, configurable: true,
+});
+Object.defineProperty(StaticRange.prototype, 'startOffset', {
+    get: function() { return this.__start_off__; }, enumerable: false, configurable: true,
+});
+Object.defineProperty(StaticRange.prototype, 'endContainer', {
+    get: function() { return _lumen_make_element(this.__end_nid__); }, enumerable: false, configurable: true,
+});
+Object.defineProperty(StaticRange.prototype, 'endOffset', {
+    get: function() { return this.__end_off__; }, enumerable: false, configurable: true,
+});
+Object.defineProperty(StaticRange.prototype, 'collapsed', {
+    get: function() { return this.__start_nid__ === this.__end_nid__ && this.__start_off__ === this.__end_off__; },
+    enumerable: false, configurable: true,
+});
+Object.defineProperty(StaticRange.prototype, Symbol.toStringTag, { value: 'StaticRange', configurable: true });
+
 // ── CSSOM (CSSOM-1 срез 3, read-only; CSSOM-5 срез 1 adds the write half) ──
 // `document.styleSheets`, `<style>`/`<link>.sheet` (getter added on
 // `HTMLStyleElement`/`HTMLLinkElement`.prototype in web_api_shim_tail_b.js),

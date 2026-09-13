@@ -111,7 +111,7 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
 | [BUG-478](../../bugs/BUG-478-FIXED.md) `Element.getClientRects` | `Event-dispatch-redispatch`, `scrolling/input-text-scroll-event-when-using-arrow-keys` |
 | [BUG-482](../../bugs/BUG-482-OPEN.md) `document.scrollingElement` | почти весь `events/scrolling/` — 13 ERROR вида `Cannot read properties of undefined (reading 'scrollTo'/'scrollLeft'/'style')` |
 | [BUG-746](../../bugs/BUG-746-OPEN.md) `document.styleSheets` | 4 ERROR `webkit-{animation-*,transition-end}-event` (`styleSheets[0].insertRule`) |
-| [BUG-533](../../bugs/BUG-533-OPEN.md) `StaticRange` | 14 FAIL `StaticRange is not defined` |
+| [BUG-533](../../bugs/BUG-533-FIXED.md) `StaticRange` | 14 FAIL `StaticRange is not defined` |
 | [BUG-689](../../bugs/BUG-689-OPEN.md) `Attr`-подсистема | 32 FAIL `document.createAttribute is not a function` |
 | [BUG-480](../../bugs/BUG-480-OPEN.md) вложенные browsing context | `handler-count.html` (3 id, `Browsing context for element was detached`), `scrollend-event-fires-to-iframe-window` |
 
