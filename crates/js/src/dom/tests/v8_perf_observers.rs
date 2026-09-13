@@ -669,10 +669,12 @@ fn mutation_observer_records_are_mutation_record_instances() {
 }
 
 #[test]
-fn attribute_ns_methods_are_name_based() {
-    // BUG-309: the namespaced attribute accessors mirror the name-only model —
-    // setAttributeNS stores under the qualified name, so hasAttribute finds it
-    // irrespective of namespace (WPT dom/nodes/Element-hasAttribute.html §1).
+fn attribute_ns_methods_fall_back_to_name_based_for_an_unknown_namespace() {
+    // BUG-309, updated by GAP-XMLDOC срез 10 (BUG-685): Lumen only tracks a
+    // real `Namespace` for the eleven §13.2.6.5 "adjust foreign attributes"
+    // names (xlink:*/xml:*/xmlns*) — an arbitrary caller-supplied namespace
+    // URI like `'foo'` has no representation (BUG-830), so it keeps the old
+    // name-only behavior rather than becoming unfindable.
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval("var _el = document.createElement('p'); _el.setAttributeNS('foo', 'x', 'first');")
         .unwrap();
@@ -695,6 +697,88 @@ fn attribute_ns_methods_are_name_based() {
     );
     assert_eq!(
         rt.eval("_el.getAttributeNS('foo', 'x')").unwrap(),
+        lumen_core::JsValue::Null
+    );
+}
+
+#[test]
+fn attribute_ns_methods_are_namespace_aware_for_xlink() {
+    // GAP-XMLDOC срез 10, BUG-685, BUG-309: `xlink:href` is one of the
+    // eleven names §13.2.6.5 gives a real namespace, so the NS-aware
+    // accessors must match it by (namespace, local name), not by the
+    // qualified `n` argument alone — `getAttributeNS(XLINK_NS, 'href')`
+    // finds an attribute stored as `xlink:href`, and a plain `getAttributeNS`
+    // call with the wrong namespace does not.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var _el = document.createElement('a'); \
+         _el.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#target');",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("_el.getAttributeNS('http://www.w3.org/1999/xlink', 'href')")
+            .unwrap(),
+        lumen_core::JsValue::String("#target".into())
+    );
+    assert_eq!(
+        rt.eval("_el.hasAttributeNS('http://www.w3.org/1999/xlink', 'href')")
+            .unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    // Wrong namespace for the same local name: no match.
+    assert_eq!(
+        rt.eval("_el.getAttributeNS('http://www.w3.org/2000/svg', 'href')")
+            .unwrap(),
+        lumen_core::JsValue::Null
+    );
+    // `Attr.namespaceURI` reflects the real namespace too.
+    assert_eq!(
+        rt.eval("_el.getAttributeNode('xlink:href').namespaceURI").unwrap(),
+        lumen_core::JsValue::String("http://www.w3.org/1999/xlink".into())
+    );
+    rt.eval("_el.removeAttributeNS('http://www.w3.org/1999/xlink', 'href')")
+        .unwrap();
+    assert_eq!(
+        rt.eval("_el.hasAttribute('xlink:href')").unwrap(),
+        lumen_core::JsValue::Bool(false)
+    );
+}
+
+#[test]
+fn parser_built_xlink_href_reports_its_real_namespace_uri() {
+    // GAP-XMLDOC срез 10, BUG-685: unlike a script-created attribute, a
+    // parser-built `xlink:href` (inside SVG foreign content) gets its
+    // namespace from `foreign_content::adjust_foreign_attribute` at parse
+    // time — `Attr.namespaceURI` and `getAttributeNS` must see it without
+    // any script ever calling `setAttributeNS`.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "document.body.innerHTML = '<svg><use xlink:href=\"#a\"></use></svg>'; \
+         var _use = document.querySelector('use');",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("_use.getAttributeNS('http://www.w3.org/1999/xlink', 'href')")
+            .unwrap(),
+        lumen_core::JsValue::String("#a".into())
+    );
+    assert_eq!(
+        rt.eval("_use.getAttributeNode('xlink:href').namespaceURI").unwrap(),
+        lumen_core::JsValue::String("http://www.w3.org/1999/xlink".into())
+    );
+}
+
+#[test]
+fn plain_attribute_namespace_uri_is_null() {
+    // DOM §4.9.2: an attribute the parser never namespaces (`id`, `class`,
+    // a plain `href` even on an SVG element) reports `namespaceURI === null`
+    // — `Namespace::Html` is not a "real" namespace for an `Attr`, unlike for
+    // a `Node` (GAP-XMLDOC срез 10, BUG-685).
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var _el = document.createElement('div'); _el.setAttribute('id', 'x');")
+        .unwrap();
+    assert_eq!(
+        rt.eval("_el.getAttributeNode('id').namespaceURI").unwrap(),
         lumen_core::JsValue::Null
     );
 }

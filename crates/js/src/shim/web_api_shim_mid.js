@@ -5651,11 +5651,26 @@ function _lumen_make_dataset(nid) {
 function NamedNodeMap() { throw new TypeError('Illegal constructor'); }
 globalThis.NamedNodeMap = NamedNodeMap;
 
+// Normalizes a `getAttributeNS`/`setAttributeNS`/`hasAttributeNS`/
+// `removeAttributeNS` namespace argument to what the `_lumen_*_ns` natives'
+// `Option<String>` parameter expects: `null` for "no namespace" (DOM LS
+// §4.5 "validate and extract" treats `undefined`/`null`/`''` identically),
+// a string otherwise (GAP-XMLDOC срез 10, BUG-685, BUG-309).
+function _lumen_ns_arg(ns) {
+    return (ns === undefined || ns === null || ns === '') ? null : String(ns);
+}
+
 // A live `Attr` node over `nid`'s `name` attribute: reads and writes go
 // straight through to the element, so the object never holds a stale value.
-// Lumen's attribute model is name-only (see `getAttributeNS` on the element
-// wrapper), hence `namespaceURI === null` and a prefix split done on the
-// qualified name alone.
+// `prefix`/`localName` still come from a textual split of the qualified name
+// (Lumen's attribute model has no separate prefix field) — but `namespaceURI`
+// now reads the real `Namespace` the parser/`setAttributeNS` tagged the
+// attribute with (GAP-XMLDOC срез 10, BUG-685, BUG-309), instead of being
+// hardcoded `null`. An attribute the parser never namespaces (plain `id`,
+// `class`, ...) still reports `null` — `_lumen_get_attr_namespace_uri`
+// returns `undefined` for those (`Namespace::Html` isn't a "real" namespace
+// for attributes, same asymmetry `Node.namespaceURI` doesn't have but
+// `Attr.namespaceURI` does per spec: only §13.2.6.5's eleven names get one).
 function _lumen_make_attr(nid, name) {
     var colon = name.indexOf(':');
     var attr = Object.create(Attr.prototype);
@@ -5669,7 +5684,10 @@ function _lumen_make_attr(nid, name) {
         nodeName:     { get: function() { return name; }, enumerable: true, configurable: true },
         localName:    { get: function() { return colon >= 0 ? name.slice(colon + 1) : name; }, enumerable: true, configurable: true },
         prefix:       { get: function() { return colon >= 0 ? name.slice(0, colon) : null; }, enumerable: true, configurable: true },
-        namespaceURI: { get: function() { return null; }, enumerable: true, configurable: true },
+        namespaceURI: { get: function() {
+            var uri = _lumen_get_attr_namespace_uri(nid, name);
+            return uri === undefined || uri === 'http://www.w3.org/1999/xhtml' ? null : uri;
+        }, enumerable: true, configurable: true },
         nodeType:     { get: function() { return 2; }, enumerable: true, configurable: true },
         // DOM §4.9.2: `specified` is a legacy getter that is always true.
         specified:    { get: function() { return true; }, enumerable: true, configurable: true },
@@ -6391,20 +6409,34 @@ var _LUMEN_WRAPPER_MEMBERS = {
         hasAttribute:    function(n)    { var nid = this.__nid__; return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
         hasAttributes:   function()     { var nid = this.__nid__; return _lumen_get_attr_names(nid).length > 0; },
-        // DOM §4.9.2: namespaced attribute accessors. Lumen's attribute model is
-        // name-only, so the namespace argument is accepted but ignored — the
-        // attribute is stored and looked up under its qualified name, matching the
-        // name-based getAttribute/hasAttribute lookup (BUG-309).
-        getAttributeNS:    function(ns, n)    { var nid = this.__nid__; return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
-        setAttributeNS:    function(ns, n, v) { var nid = this.__nid__;
-            var attrName = String(n);
-            var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
-            _lumen_set_attr(nid, attrName, String(v));
-            _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, String(v));
-            _lumen_embed_object_maybe_attr_changed(nid, attrName);
+        // DOM §4.9.2 namespaced attribute accessors (GAP-XMLDOC срез 10,
+        // BUG-685, BUG-309): `ns` is looked up against the real `Namespace`
+        // the parser (or a prior `setAttributeNS`) tagged the attribute with,
+        // via `_lumen_find_attr_by_ns`, which returns the attribute's stored
+        // qualified name (e.g. `xlink:href`) for `n` = `href`. A `null`/empty
+        // `ns` still falls back to the old plain by-name lookup — Lumen only
+        // tracks namespace for the eleven §13.2.6.5-listed attribute names,
+        // so that is the correct behavior for every other attribute anyway.
+        // `_lumen_ns_arg` normalizes `undefined`/`null`/`''` to `null` (the
+        // native side's `Option<String>::None`) before crossing into Rust.
+        getAttributeNS:    function(ns, n)    { var nid = this.__nid__;
+            var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
+            return attrName === null ? null : _lumen_u2n(_lumen_get_attr(nid, attrName));
         },
-        removeAttributeNS: function(ns, n)    { var nid = this.__nid__; _lumen_remove_attr(nid, String(n)); },
-        hasAttributeNS:    function(ns, n)    { var nid = this.__nid__; return _lumen_get_attr(nid, String(n)) !== undefined; },
+        setAttributeNS:    function(ns, n, v) { var nid = this.__nid__;
+            var qualifiedName = String(n);
+            var oldVal = _lumen_u2n(_lumen_get_attr(nid, qualifiedName));
+            _lumen_set_attr_ns(nid, _lumen_ns_arg(ns), qualifiedName, String(v));
+            _lumen_ce_maybe_attr_changed(nid, qualifiedName, oldVal, String(v));
+            _lumen_embed_object_maybe_attr_changed(nid, qualifiedName);
+        },
+        removeAttributeNS: function(ns, n)    { var nid = this.__nid__;
+            var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
+            if (attrName !== null) { _lumen_remove_attr(nid, attrName); }
+        },
+        hasAttributeNS:    function(ns, n)    { var nid = this.__nid__;
+            return _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)) !== null;
+        },
         // DOM LS §4.9.3: toggleAttribute(qualifiedName, force?)
         toggleAttribute: function(n, force) { var nid = this.__nid__;
             var attrName = String(n);

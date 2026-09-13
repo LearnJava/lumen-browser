@@ -501,13 +501,38 @@ pub(crate) fn install_node_properties(
             }
         );
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_get_attr",
             move |node_id: u32, name: String| -> Option<String> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 doc.try_get(nid)?.get_attr(&name).map(|s| s.to_string())
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_attr_namespace_uri",
+            // DOM §4.9.2 `Attr.namespaceURI` (GAP-XMLDOC срез 10, BUG-685):
+            // parser-built foreign attributes (`xlink:href` and friends,
+            // §13.2.6.5 "adjust foreign attributes") carry a real
+            // `Namespace` on `Attribute.name` — this surfaces it, matching
+            // by the attribute's full qualified name the same way
+            // `_lumen_get_attr`/`_lumen_get_attr_names` already do (BUG-309:
+            // `namespaceURI` was hardcoded `null` because this native did
+            // not exist yet).
+            move |node_id: u32, name: String| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                match doc.try_get(nid).map(|n| &n.data) {
+                    Some(NodeData::Element { attrs, .. }) => attrs
+                        .iter()
+                        .find(|a| a.name.local.eq_ignore_ascii_case(&name))
+                        .and_then(|a| namespace_uri(a.name.namespace))
+                        .map(|s| s.to_string()),
+                    _ => None,
+                }
             }
         );
         let d = Arc::clone(&doc);
@@ -551,6 +576,49 @@ pub(crate) fn install_node_properties(
             }
             dirty.store(true, Ordering::Relaxed);
         });
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_find_attr_by_ns",
+            // DOM §4.9.2 `getAttributeNS`/`hasAttributeNS`/`removeAttributeNS`
+            // (GAP-XMLDOC срез 10, BUG-685, BUG-309): resolves (namespace URI,
+            // local name) to the attribute's stored qualified name (e.g.
+            // `xlink:href`), so the JS wrapper can hand that straight to the
+            // existing plain-name `_lumen_get_attr`/`_lumen_remove_attr`.
+            // `None` for "not found" — distinct from an empty qualified name.
+            move |node_id: u32, ns: Option<String>, local_name: String| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                if !doc.contains_id(nid) {
+                    return None;
+                }
+                find_attr_by_namespace(&doc, nid, ns.as_deref(), &local_name)
+            }
+        );
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
+        reg!(scope, ctx, store,
+            "_lumen_set_attr_ns",
+            // `setAttributeNS(namespace, qualifiedName, value)` (GAP-XMLDOC
+            // срез 10, BUG-685, BUG-309): unlike `_lumen_set_attr`, tags the
+            // attribute with the namespace the caller declared instead of
+            // always `Html`.
+            move |node_id: u32, ns: Option<String>, qualified_name: String, value: String| {
+                let mut doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                if !doc.contains_id(nid) {
+                    return;
+                }
+                let old = doc.get(nid).get_attr(&qualified_name).map(|s| s.to_string());
+                set_attribute_ns(&mut doc, nid, ns.as_deref(), &qualified_name, &value);
+                if old.as_deref() != Some(value.as_str()) {
+                    record_dom_touch(&touched, nid);
+                }
+                dirty.store(true, Ordering::Relaxed);
+            }
+        );
         // ── Form-control runtime value (BUG-441) ────────────────────────────
         // `el.value` is NOT the `value` content attribute: the attribute only
         // seeds the control's value and then stays put as its *default*
