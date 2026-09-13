@@ -61,7 +61,7 @@ pub fn parse(input: &str) -> Document {
 /// this covers only the CDATA slice, still driven by the HTML5 tree builder.
 pub fn parse_xml_flavoured(input: &str) -> Document {
     let mut builder = IncrementalTreeBuilder::new();
-    builder.xml_cdata_mode = true;
+    builder.xml_mode = true;
     for token in Tokenizer::new(input) {
         builder.apply_token(token);
     }
@@ -207,11 +207,16 @@ pub struct IncrementalTreeBuilder {
     /// (§13.2.4.1 шаг 4, контекстный элемент вместо корня) и EOF-догон
     /// html/head/body.
     is_fragment: bool,
-    /// `true` for [`parse_xml_flavoured`]: strips a `<![CDATA[ ... ]]>`
-    /// wrapper off `<style>`/`<script>` RAWTEXT content on `</style>`/
-    /// `</script>` (BUG-786) — see [`crate::xml_cdata`]. `false` (default)
-    /// keeps HTML5 semantics, where the markers are literal text.
-    xml_cdata_mode: bool,
+    /// `true` for [`parse_xml_flavoured`]. Two effects, both scoped to
+    /// documents already identified as XML-flavoured — HTML5 semantics for
+    /// ordinary documents are untouched:
+    /// * strips a `<![CDATA[ ... ]]>` wrapper off `<style>`/`<script>`
+    ///   RAWTEXT content on `</style>`/`</script>` (BUG-786) — see
+    ///   [`crate::xml_cdata`].
+    /// * honours the self-closing flag (`/>`) on non-void elements the way
+    ///   XML does, instead of the HTML5 rule that ignores it outside void
+    ///   elements — see [`Self::push_open_element`] (GAP-XMLDOC срез 2).
+    xml_mode: bool,
 }
 
 impl IncrementalTreeBuilder {
@@ -233,7 +238,7 @@ impl IncrementalTreeBuilder {
             scripting_enabled: true,
             declarative_shadow_templates: HashSet::new(),
             is_fragment: false,
-            xml_cdata_mode: false,
+            xml_mode: false,
         }
     }
 
@@ -503,13 +508,17 @@ impl IncrementalTreeBuilder {
                 }
             }
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "title" => {
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.original_insertion_mode = Some(self.insertion_mode);
-                self.insertion_mode = InsertionMode::Text;
+                if !(self.xml_mode && self_closing) {
+                    self.open_elements.push(el);
+                    self.original_insertion_mode = Some(self.insertion_mode);
+                    self.insertion_mode = InsertionMode::Text;
+                }
             }
             Token::StartTag {
                 ref name,
@@ -517,12 +526,13 @@ impl IncrementalTreeBuilder {
                 self_closing,
             } if matches!(name.as_str(), "noframes" | "style" | "script") =>
             {
-                let _ = self_closing;
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.original_insertion_mode = Some(self.insertion_mode);
-                self.insertion_mode = InsertionMode::Text;
+                if !(self.xml_mode && self_closing) {
+                    self.open_elements.push(el);
+                    self.original_insertion_mode = Some(self.insertion_mode);
+                    self.insertion_mode = InsertionMode::Text;
+                }
             }
             // §13.2.6.4.4 «In head» — `<noscript>`. Behaviour depends on
             // scripting flag (§13.2.3.5): if scripting is enabled, noscript
@@ -845,19 +855,23 @@ impl IncrementalTreeBuilder {
             }
             // Block-уровневые элементы: закрывают <p> в button scope.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if is_block_element(name) => {
                 if self.has_element_in_button_scope("p") {
                     self.close_p_element();
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
             }
             // <h1>..<h6>: закрывают <p> в button scope, а также
             // предыдущий heading в стеке.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") => {
                 if self.has_element_in_button_scope("p") {
                     self.close_p_element();
@@ -869,11 +883,13 @@ impl IncrementalTreeBuilder {
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
             }
             // <li>: имплисит-закрытие предыдущего <li>.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "li" => {
                 self.close_list_item_like(&["li"]);
                 if self.has_element_in_button_scope("p") {
@@ -881,11 +897,13 @@ impl IncrementalTreeBuilder {
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
             }
             // <dt>/<dd>: closing previous <dt>/<dd>.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if matches!(name.as_str(), "dt" | "dd") => {
                 self.close_list_item_like(&["dt", "dd"]);
                 if self.has_element_in_button_scope("p") {
@@ -893,7 +911,7 @@ impl IncrementalTreeBuilder {
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
             }
             // <a>: если уже есть в active formatting, прогнать adoption
             // agency и удалить.
@@ -1072,11 +1090,10 @@ impl IncrementalTreeBuilder {
                 ref attrs,
                 self_closing,
             } => {
-                let _ = self_closing;
                 self.reconstruct_active_formatting();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
             }
             // Generic end tag.
             Token::EndTag { ref name } => {
@@ -1112,7 +1129,7 @@ impl IncrementalTreeBuilder {
             }
             Token::EndTag { .. } => {
                 if let Some(el) = self.open_elements.pop()
-                    && self.xml_cdata_mode
+                    && self.xml_mode
                 {
                     self.strip_cdata_wrapper_from(el);
                 }
@@ -1126,7 +1143,7 @@ impl IncrementalTreeBuilder {
         }
     }
 
-    /// [`xml_cdata_mode`][Self::xml_cdata_mode] support: `el` just closed
+    /// [`xml_mode`][Self::xml_mode] support: `el` just closed
     /// (its RAWTEXT content is complete) — if that content is a single text
     /// child wrapped in `<![CDATA[ ... ]]>`, rewrite it to the unwrapped
     /// inner text (BUG-786). RAWTEXT elements coalesce into one text node
@@ -2046,6 +2063,27 @@ impl IncrementalTreeBuilder {
     fn append_to_current_open(&mut self, node: NodeId) {
         let parent = self.current_insertion_parent();
         self.doc.append_child(parent, node);
+    }
+
+    /// Pushes a just-created non-void element onto the open-elements stack,
+    /// then — only in [`xml_mode`][Self::xml_mode] — immediately pops it
+    /// back off if the start tag was self-closing (GAP-XMLDOC срез 2).
+    ///
+    /// HTML5 (§13.2.5.32 "before attribute value state" note) defines the
+    /// self-closing flag but the tree builder ignores it outside void/foreign
+    /// elements — real markup does this too (`<br/>text` closes `br`, a void
+    /// element, either way) and Lumen follows that for ordinary documents.
+    /// XML-flavoured documents (`.xhtml`/`.xht`/`.svg`) rely on the opposite
+    /// rule: `<div class="a"/>` is XML well-formed and self-closes. Without
+    /// this, a self-closing non-void tag opens an element it never closes,
+    /// so N sibling self-closing tags become N nested elements — measured on
+    /// the corpus (BUG-786 "Вторая грань") to turn `flex-direction: column`
+    /// layouts with O(2^depth) cost into TIMEOUTs.
+    fn push_open_element(&mut self, el: NodeId, self_closing: bool) {
+        self.open_elements.push(el);
+        if self.xml_mode && self_closing {
+            self.open_elements.pop();
+        }
     }
 
     /// Вставка текста с coalescing: если последний ребёнок текущего
@@ -4134,5 +4172,49 @@ mod tests {
         let doc = parse_xml_flavoured("<style>div { color: red; }</style>");
         let s = doc.to_string();
         assert!(s.contains("div { color: red; }"));
+    }
+
+    // --- parse_xml_flavoured / GAP-XMLDOC срез 2: self-closing non-void tags ---
+
+    #[test]
+    fn xml_flavoured_self_closing_div_does_not_nest_siblings() {
+        // BUG-786 «Вторая грань»: HTML5 ignores `/>` on a non-void element, so
+        // N sibling self-closing tags nest N deep instead of staying siblings.
+        let doc = parse_xml_flavoured(r#"<div class="a"/><div class="b"/><div class="c"/>"#);
+        let body = doc.body().expect("body");
+        let children: Vec<NodeId> = doc.get(body).children.clone();
+        assert_eq!(children.len(), 3, "three self-closed divs must be siblings: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_nested_container_closes_at_slash_gt() {
+        let doc = parse_xml_flavoured(r#"<div id="outer"><span id="inner"/>tail</div>"#);
+        let body = doc.body().expect("body");
+        let outer = doc.get(body).children.first().copied().expect("outer div");
+        // `tail` must be a sibling of the self-closed span, not its descendant.
+        assert_eq!(doc.get(outer).children.len(), 2, "span + tail text: {}", doc);
+    }
+
+    #[test]
+    fn plain_parse_ignores_self_closing_on_non_void_element() {
+        // HTML5 semantics (default `parse`) — self-closing flag is ignored
+        // outside void elements, so siblings still nest.
+        let doc = parse(r#"<div class="a"/><div class="b"/>"#);
+        let body = doc.body().expect("body");
+        let children: Vec<NodeId> = doc.get(body).children.clone();
+        assert_eq!(children.len(), 1, "plain HTML5 parse must nest, not close: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_script_does_not_swallow_following_markup() {
+        // GAP-XMLDOC срез 16 case 2: a self-closing `<script src="…"/>` in a
+        // plain HTML5 parse eats everything up to the next real `</script>`.
+        // In xml_mode it must close immediately, leaving `<p>` a sibling.
+        let doc = parse_xml_flavoured(r#"<script src="a.js"/><p>after</p>"#);
+        let body = doc.body().expect("body");
+        let has_p = doc.get(body).children.iter().any(|&n| {
+            matches!(&doc.get(n).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+        });
+        assert!(has_p, "<p> after self-closing <script/> must survive: {}", doc);
     }
 }
