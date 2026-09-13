@@ -203,3 +203,43 @@ length` активной вкладки растёт `+1` относительн
 (`cpu_snapshots_match_references`, 7 файлов) подтверждён A/B через
 `git stash` тем же на `main` без этой правки — предсуществующий дрейф, не
 регрессия.
+
+## Срез 4 (GAP-NAVCTX срез 13, 2026-09-13, `p1-gap-navctx-srez13`) — `window.open(url, name)`'s собственный тоже переиспользует открытую вкладку
+
+Закрыт первый пункт «не в этом срезе» среза 12: `window.open(url, name)`
+заводит вкладку через ДРУГОЙ путь, чем `<a target>` — `about_to_wait.rs`'s
+`window_open_requests`, а не `click.rs`/`frame_links.rs` — и `PopupRequest
+::target` до этого среза захватывался нативом (`_lumen_window_open`), но
+нигде не читался: каждый вызов минтил новую вкладку независимо от `target`.
+
+Тот же приём среза 12, применённый к этому пути: именованный (не пустой,
+не `_blank`, не `_self`) `target` сперва зовёт `Lumen::find_tab_by_window_
+name`; при совпадении — `switch_tab`+`navigate_to` вместо `open_new_tab`,
+без арминга opener (переиспользуется существующий контекст, не создаётся
+новый) и с переармированием `window.name` тем же `arm_pending_window_name`
+на каждый реюз. Без совпадения — прежний путь (`open_new_tab` + условный
+`arm_pending_opener`/`_lumen_install_opener` под `noopener`/`noreferrer`),
+плюс новое армирование имени, чтобы следующий `window.open` с тем же именем
+нашёл эту вкладку.
+
+Живой проб (`tests/wpt/verify_gap_navctx_window_open_named_reuse.py`, прямой
+`window.open(...)` через `eval`, не клик): страница A вызывает
+`window.open('/child1', 'dup')` — новая вкладка получает `window.name=dup`;
+третья вкладка C вызывает `window.open('/child2', 'dup')` — та же вкладка
+ПЕРЕИСПОЛЬЗУЕТСЯ, различитель `history.length` растёт `+1` (2→3), а не
+сбрасывается к базовому значению новой вкладки.
+
+**Не в этом срезе (осознанная граница, не регрессия):**
+- **`window.open(url, '_self')`** — HTML LS требует навигации ТЕКУЩЕГО окна;
+  Lumen по-прежнему открывает новую вкладку для любого `target`, кроме
+  теперь уже обработанного именованного случая (тот же долг, что документ
+  `PopupRequest::target` уже фиксировал до этого среза).
+- **BUG-883 (таймеры опенера в фоне)** — архитектурно отдельная работа, не
+  тронута.
+
+Гейт: `cargo clippy -p lumen-shell --all-targets -- -D warnings` и
+`cargo clippy --workspace --all-targets -- -D warnings` чисто;
+`scripts/scoped-test.sh` — единственный красный
+(`cpu_snapshots_match_references`, те же 7 файлов) подтверждён A/B через
+`git stash` тем же на `main` без этой правки — предсуществующий дрейф, не
+регрессия.
