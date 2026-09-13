@@ -389,4 +389,5 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "word-spacing",
     "writing-mode",
     "z-index",
+    "zoom",
 ];

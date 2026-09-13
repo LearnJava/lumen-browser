@@ -2356,6 +2356,24 @@ function _lumen_css_canonical_line_clamp(strVal) {
 // `_lumen_expand_trbl_shorthand` and gets the same fan-out too.
 var _LUMEN_CSS_WIDE_KEYWORDS = ['initial', 'inherit', 'unset', 'revert', 'revert-layer', 'revert-rule'];
 
+// CSS Viewport L1 §5 (BUG-532): `zoom = normal | <number [0,∞]> |
+// <percentage [0,∞]>` — no `auto`/`reset`/`document` keyword (those are a
+// separate, non-standard WebKit vocabulary `lumen-layout`'s cascade parser
+// tolerates for compat, `crates/engine/layout/src/style/cascade.rs::parse_zoom`,
+// but which this spec grammar itself rejects, `zoom-valid.html`). Negative
+// numbers/percentages are invalid; `0`/`0%` are syntactically valid here
+// even though they compute to `1` (`zoom-computed.html`'s "legacy crap"
+// clamp) — that clamp is a getComputedStyle concern, not a parse concern.
+function _lumen_css_canonical_zoom(strVal) {
+    var v = strVal.trim();
+    if (v.toLowerCase() === 'normal') return 'normal';
+    var m = /^([+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+))(%)?$/.exec(v);
+    if (!m) return null;
+    var num = parseFloat(m[1]);
+    if (!isFinite(num) || num < 0) return null;
+    return v;
+}
+
 // Срез 10: single dispatch point for "canonicalize (or reject) a plain
 // longhand value", shared by `setProperty` and `_lumen_parse_style`'s
 // per-declaration loop above — previously each had its own copy of this
@@ -2429,6 +2447,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     if (key === 'scroll-marker-group') {
         return _lumen_css_canonical_scroll_marker_group(strVal);
+    }
+    if (key === 'zoom') {
+        return _lumen_css_canonical_zoom(strVal);
     }
     return strVal;
 }
