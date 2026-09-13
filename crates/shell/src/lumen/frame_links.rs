@@ -56,10 +56,11 @@ impl Lumen {
             let Ok(doc) = handle.doc.lock() else { return false };
             links::find_link(&doc, source_node).map(|(anchor, href)| {
                 let target = doc.get(anchor).get_attr("target").unwrap_or_default().to_owned();
-                (href, target)
+                let rel = doc.get(anchor).get_attr("rel").unwrap_or_default().to_owned();
+                (href, target, rel)
             })
         };
-        let Some((href, target_attr)) = found else { return false };
+        let Some((href, target_attr, rel_attr)) = found else { return false };
         match self.link_destination(idx, &target_attr) {
             LinkTarget::NewWindow => {
                 // GAP-NAVCTX срез 2 (BUG-883): open a real tab instead of the
@@ -68,8 +69,30 @@ impl Lumen {
                 // arm below already applies for `_top`.
                 if links::is_navigable_href(&href) {
                     let resolved = nav_base.resolve_str(&href);
+                    // GAP-NAVCTX срез 10 (BUG-797): same pending-opener
+                    // arming as the page-level `<a target=_blank>` path
+                    // (`click.rs`) — the opener is the TAB the frame lives
+                    // in (opener tracking is tab-granular, not frame-granular),
+                    // so reusing `self.tab_strip.active` here is correct even
+                    // though the click originated in a child document.
+                    // Same `rel=noopener`/`rel=noreferrer` carve-out as
+                    // `click.rs` — see its comment for the spec citation.
+                    let has_noopener = rel_attr
+                        .split_ascii_whitespace()
+                        .any(|tok| tok.eq_ignore_ascii_case("noopener") || tok.eq_ignore_ascii_case("noreferrer"));
+                    let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
                     self.open_new_tab();
+                    let new_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                    if !has_noopener {
+                        lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
+                    }
                     self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                    if !has_noopener {
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
+                            j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));
+                        });
+                    }
                 }
                 true
             }

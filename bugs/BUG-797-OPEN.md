@@ -197,3 +197,65 @@ BUG-805 не дошёл (2207/2207 прошли за 4.37 с), полный ск
 
 Не тронуто: BUG-883 (таймеры опенера в фоне) и заглушка `opener: null` по
 умолчанию для обычной навигации (не через `window.open()`) — как и раньше.
+
+## Срез 6 (GAP-NAVCTX срез 10, 2026-09-13, `p1-gap-navctx-srez10`) — `opener` для обычной навигации через `<a target=_blank>`
+
+Закрыт хвост, оставленный срезом 5 ("заглушка `opener: null` по умолчанию
+для обычной навигации, не через `window.open()`"): `arm_pending_opener` —
+механизм, срезом 4/5 подключённый только к `window.open()`
+(`about_to_wait.rs`) — теперь так же подключается к двум местам, где
+`Lumen::open_new_tab()` открывает вкладку по клику на `<a target=_blank>`,
+а не по вызову скрипта:
+
+* `click.rs::handle_click_at_inner` — обычная ссылка СТРАНИЦЫ;
+* `frame_links.rs::frame_link_click` (ветка `LinkTarget::NewWindow`) —
+  ссылка ВНУТРИ `<iframe>`-поддокумента (опенер отслеживается на уровне
+  вкладки, а не фрейма, так что `self.tab_strip.active` тот же самый
+  идентификатор что и у страничного клика).
+
+Оба места читают id опенера ДО `open_new_tab()` (который переключает
+`self.tab_strip.active`), вооружают `arm_pending_opener(new_tab_id,
+opener_tab_id)` ДО `navigate_to`, и дублируют пост-фактум-установку
+`_lumen_install_opener`/`_lumen_window_pump_messages` для попап-документа
+совсем без `<script>` — тот же троекратный паттерн, что уже есть в
+`about_to_wait.rs` для `window.open()`.
+
+**Границы правки — HTML LS §7.3.2 карветаут.** `rel="noopener"`/
+`rel="noreferrer"` на исходной ссылке ОБЯЗАН оставить `window.opener` в
+новой вкладке `null` (это отдельный, специально предусмотренный спекой
+путь, а не то же самое "заглушка вместо реализации", что закрывает этот
+баг) — оба места читают атрибут `rel` рядом с `target` и пропускают
+вооружение `arm_pending_opener`, если он содержит токен `noopener` или
+`noreferrer` (регистронезависимо). Пробный набор уже содержал ровно такую
+ссылку (`win-anchor-target`, `rel="noreferrer"`) — без карветаута этот
+срез стал бы её регрессией.
+
+**Живая проверка** (`--mcp-live-port`, `LUMEN_NO_ENGINE_THREAD=1`, реальный
+клик через MCP `click` по `{"selector": "#lnk"}`, не JS `.click()` —
+последний уходит в `_lumen_run_activation_behavior`/
+`_lumen_navigate_or_fragment`, отдельный путь, полностью игнорирующий
+`target`, и потому не проверяет код, изменённый этим срезом): обычная
+`<a target=_blank>` — дочерняя вкладка получила `window.opener` живым
+объектом (`typeof window.opener === "object"`); та же ссылка с
+`rel="noreferrer"` — `window.opener === null`, без регрессии.
+`win-anchor-target-opener` — новый вариант в
+`verify_window_history_jsurl_gaps.py`, документирующий это же наблюдение
+через постоянно воспроизводимый скрипт (использует JS `.click()`, поэтому
+де-факто проверяет только "сервер получил GET"/"дочерний документ
+исполнился", не сам `opener` — граница отмечена в комментарии рядом).
+
+**Не в этом срезе:** `window.open()`'s собственный `windowFeatures`
+(`"noopener"` в третьем аргументе) по-прежнему не парсится вообще — тот же
+предсуществующий пробел, что был до этого среза (срезы 4/5 вооружали
+`arm_pending_opener` безусловно и для `open()`); BUG-883 (таймеры опенера в
+фоне) не тронут.
+
+Гейт: `cargo build -p lumen-shell --profile dev-release`,
+`cargo clippy -p lumen-shell --all-targets -- -D warnings`,
+`cargo clippy --workspace --all-targets -- -D warnings` — все чисто;
+`cargo test -p lumen-js --features v8-backend --lib window_messaging` (6/6)
+и `cargo test --bin lumen scripts_and_frames` (84/84) — зелёные;
+`cargo test -p lumen-driver --test all` — единственный красный
+(`cpu_snapshots_match_references`), тот же байт-в-байт список из 7 файлов,
+что и на `main` до этого среза (подтверждено `git stash`), предсуществующий
+дрейф, не от этой правки.

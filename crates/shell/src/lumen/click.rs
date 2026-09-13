@@ -766,11 +766,12 @@ impl Lumen {
                         let doc = src.document.lock().unwrap();
                         links::find_link(&doc, r.source_node).map(|(anchor, href)| {
                             let target = doc.get(anchor).get_attr("target").unwrap_or_default().to_owned();
-                            (href, target)
+                            let rel = doc.get(anchor).get_attr("rel").unwrap_or_default().to_owned();
+                            (href, target, rel)
                         })
                     })
                 });
-                if let Some((href, target_attr)) = link {
+                if let Some((href, target_attr, rel_attr)) = link {
                     // GAP-NAVCTX срез 1 (BUG-884): `<a href="javascript:...">`
                     // runs the code in the clicking document, ignoring `target`
                     // — popup/named-frame targeting for a `javascript:` anchor
@@ -805,8 +806,43 @@ impl Lumen {
                                     outcome: click_log::ClickOutcome::LinkNavigate { href: &href, resolved: &resolved },
                                 });
                             }
+                            // GAP-NAVCTX срез 10 (BUG-797): a plain
+                            // `<a target=_blank>` click used to leave the new
+                            // tab's `window.opener` at the JS shim's `null`
+                            // default — only `window.open()` (about_to_wait.rs)
+                            // armed the pending-opener slot. Same mechanism,
+                            // same ordering: read the opener's id BEFORE
+                            // `open_new_tab()` moves `self.tab_strip.active`,
+                            // arm it BEFORE `navigate_to` so the popup's own
+                            // top-of-page script sees a live `opener`.
+                            //
+                            // `rel=noopener`/`rel=noreferrer` are excluded —
+                            // HTML LS §7.3.2 requires them to force a new
+                            // top-level traversable with no back-reference at
+                            // all, not merely a same-tab-id-but-opener-absent
+                            // popup. `win-anchor-target`'s probe page
+                            // (`rel="noreferrer"`) exercises exactly this.
+                            let has_noopener = rel_attr
+                                .split_ascii_whitespace()
+                                .any(|tok| tok.eq_ignore_ascii_case("noopener") || tok.eq_ignore_ascii_case("noreferrer"));
+                            let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
                             self.open_new_tab();
+                            let new_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                            if !has_noopener {
+                                lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
+                            }
                             self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                            // Fallback install for a popup document with no
+                            // scripts at all (never reaches
+                            // `run_scripts_with_dom`, so never consumes the
+                            // armed pair above) — same fallback `window.open()`
+                            // relies on.
+                            if !has_noopener {
+                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                    j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
+                                    j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));
+                                });
+                            }
                         }
                         return;
                     }
