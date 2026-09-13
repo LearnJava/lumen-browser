@@ -520,6 +520,21 @@ pub(crate) struct Lumen {
     /// сделать релейаут. Флаг коалесцирует пачку декодов (сотня картинок = один
     /// проход, а не сотня релейаутов).
     pub(crate) stream_image_sizes_dirty: bool,
+    /// BUG-1048: `src` of every streaming/dynamic image whose fetch or decode
+    /// failed in the current navigation (mirrors [`Self::stream_image_sizes`]
+    /// for the failure case, which had no signal at all before this). Consumed
+    /// by [`Lumen::apply_stream_intrinsic_sizes`] to fire `error` on matching
+    /// `<img>` nodes; a URL stays here so a node that adopts it later (same
+    /// dedup rationale as `stream_image_sizes`) still gets told.
+    pub(crate) stream_image_errors: std::collections::HashSet<String>,
+    /// BUG-1048: `(node index, src)` pairs that already received their
+    /// `load`/`error` dispatch for the streaming/dynamic pipeline — the
+    /// per-node dedup the eager pipeline gets for free from firing inline at
+    /// decode time (which knows the node), but this path resolves `src` to
+    /// node(s) only later, in a coalesced pass that can see the same node more
+    /// than once (`apply_stream_intrinsic_sizes` reruns whenever a sibling
+    /// image's size arrives) or the same `src` on several nodes.
+    pub(crate) stream_image_events_fired: std::collections::HashSet<(u32, String)>,
     /// U-1: scroll offset to restore once the in-flight navigation completes.
     /// Set by back/forward navigation before kicking off an async (streaming)
     /// reload; consumed in `apply_loaded_page` (and the sync fallback in

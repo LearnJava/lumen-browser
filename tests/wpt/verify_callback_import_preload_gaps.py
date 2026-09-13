@@ -733,6 +733,27 @@ setTimeout(function () { console.log("PROBE ioa-checked"); }, 3000);
 </script>
 """, "ioa-parser-attr-fired and ioa-script-attr-fired"),
 
+    # BUG-1048: the streaming/dynamic decode pipeline (a script-created `<img>`
+    # whose fetch fails, added well after `window.onload` like the success
+    # case above) had NO failure signal at all — `onerror` never fired and
+    # `complete` stayed `false` forever, unlike the eager pipeline's `<img>`
+    # (which already fires `error` via `page_pipeline.rs`).
+    "img-onerror-dynamic": ("""
+<script>
+window.addEventListener("load", function () {
+    var made = document.createElement("img");
+    made.addEventListener("error", function () {
+        console.log("PROBE ioe-listener-fired complete=" + made.complete +
+                    " naturalWidth=" + made.naturalWidth);
+    });
+    made.src = "vcip-missing.png?script-made-404";
+    document.body.appendChild(made);
+    console.log("PROBE ioe-appended complete=" + made.complete);
+});
+setTimeout(function () { console.log("PROBE ioe-checked"); }, 3000);
+</script>
+""", "ioe-listener-fired complete=true naturalWidth=0"),
+
     # `import-maps/dynamic-module-map-key.html` hangs on a subtest that has
     # nothing to do with import maps: a `<script>` first connected as an
     # *empty* `type=importmap`, then removed, retyped `text/javascript`, given

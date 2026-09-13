@@ -62,6 +62,8 @@ impl Lumen {
             stream_images_requested: std::mem::take(&mut self.stream_images_requested),
             stream_image_sizes: std::mem::take(&mut self.stream_image_sizes),
             stream_image_sizes_dirty: self.stream_image_sizes_dirty,
+            stream_image_errors: std::mem::take(&mut self.stream_image_errors),
+            stream_image_events_fired: std::mem::take(&mut self.stream_image_events_fired),
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
             frozen_styles: std::mem::take(&mut self.frozen_styles),
@@ -151,6 +153,8 @@ impl Lumen {
         self.stream_images_requested = snap.stream_images_requested;
         self.stream_image_sizes = snap.stream_image_sizes;
         self.stream_image_sizes_dirty = snap.stream_image_sizes_dirty;
+        self.stream_image_errors = snap.stream_image_errors;
+        self.stream_image_events_fired = snap.stream_image_events_fired;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
         self.frozen_styles = snap.frozen_styles;

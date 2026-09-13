@@ -86,3 +86,58 @@ DOM-обход), вне бюджета минимального фикса эт�
 2. `verify_window_history_jsurl_gaps.py --variant canvas-misc` (после
    правки на прикреплённый `<img>`; неприкреплённый `new Image()` остаётся
    отдельным пунктом) — `drew-svg`/`toDataURL` печатаются.
+
+## Срез 1 (GAP-LOADEV, 2026-09-13, `p1-gap-loadev-bug1048`) — прикреплённый скриптовый `<img>` теперь диспатчит `load`/`error`
+
+Закрыты пункты 1–3 причины (выше) для прикреплённого узла; пункт 4
+(неприкреплённый `new Image()`) не тронут — отдельная, более глубокая правка
+(нужен hook на присвоение `.src`, а не на DOM-обход), вне бюджета.
+
+* **Новое событие для decode-неудачи.** `LoadEvent::ImageDecodeFailed { src }`
+  (`page_load.rs`) — `spawn_image_requests`'s `None`-арм (`page_load.rs:1134`)
+  раньше молча ничего не слал; теперь шлёт этот вариант тем же `proxy`, что
+  уже шлёт `ImageDecoded`. Обработчик в `user_event.rs` кладёт `src` в новое
+  поле `stream_image_errors` (зеркало `stream_image_sizes` для неудачи) и
+  взводит тот же `stream_image_sizes_dirty`, каким уже коалесцируется путь
+  успеха — включая явный `window.request_redraw()` (без него флаг лежал бы
+  непрочитанным до случайного соседнего перерисовывания: первая версия среза
+  забыла его и `img-onerror-dynamic`-проба ничего не печатала, хотя
+  `stream_image_errors` уже содержал URL).
+* **Per-node dedup.** Новое поле `stream_image_events_fired: HashSet<(u32,
+  String)>` (пара node-index + url) — `apply_stream_intrinsic_sizes`
+  (`page_load.rs:1044`), тот же коалесцированный проход, что уже сопоставляет
+  `url -> node_id` для intrinsic-size, теперь на каждое совпадение (успех ИЛИ
+  зафиксированная неудача) при первом попадании в `stream_image_events_fired`
+  зовёт `fire_image_load`/`fire_image_error` через `route_task_js` — без
+  дедупа один и тот же узел получил бы `load` при каждом повторном проходе
+  (проход перезапускается на любой новый декод, не только «свой»).
+* И `stream_image_sizes`, и `stream_image_errors` не дренируются за проход
+  (тот же аргумент, что уже обосновывает недренирование `stream_image_sizes`,
+  — BUG-735: узел, принявший тот же `src` ПОЗЖЕ, ещё должен получить свой
+  `load`/`error`), и `relayout.rs`'s принудительное взведение `dirty`
+  (BUG-730: новый узел на новом поддереве мог принять уже известный URL)
+  расширено на `stream_image_errors` тем же условием.
+* Оба новых поля заведены рядом с `stream_image_sizes`/`_dirty` во всех
+  местах, где живёт per-tab состояние (`state.rs`, `page_state.rs`,
+  `page_snapshot.rs`'s take/restore, три сброса в `resumed.rs`/`page_load.rs`
+  навигационном пути/`tabs_cmd.rs`, инициализация в `window_mode.rs`) — то же
+  зеркалирование, что уже требуют `stream_image_sizes`/`_dirty`.
+
+**Живая проверка.** `verify_callback_import_preload_gaps.py --variant
+img-onload-attr` (успех, dev-release): `ioa-script-listener-fired` и
+`ioa-script-attr-fired` теперь печатаются (раньше — тишина, при том что
+сервер видел `GET /vcip-pixel.png?script-made`). Новый вариант той же пробы,
+`img-onerror-dynamic` (decode-неудача — скриптовый `<img>` с заведомо
+404-путём, добавленный после `window.onload`): `ioe-listener-fired
+complete=true naturalWidth=0` печатается (раньше — тишина, `img.complete`
+оставался `false` навсегда).
+
+**Не в этом срезе:** неприкреплённый `new Image()` (пункт 4 причины,
+`verify_window_history_jsurl_gaps.py --variant canvas-misc`) не тронут —
+`collect_image_requests` по-прежнему обходит только связное DOM-дерево.
+
+Гейт: `cargo clippy -p lumen-shell --all-targets --features v8 -- -D
+warnings` и `cargo clippy --workspace --all-targets -- -D warnings` чисто;
+`scripts/scoped-test.sh` (база `90fcdc8cb`) — единственный красный
+(`cpu_snapshots_match_references`, те же 7 файлов) — предсуществующий дрейф,
+не регрессия (правка не трогает paint/layout).

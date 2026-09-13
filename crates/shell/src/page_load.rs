@@ -474,6 +474,8 @@ impl Lumen {
             self.stream_images_requested.clear();
             self.stream_image_sizes.clear();
             self.stream_image_sizes_dirty = false;
+            self.stream_image_errors.clear();
+            self.stream_image_events_fired.clear();
             self.stream_sheet = lumen_css_parser::Stylesheet::default();
             self.stream_layout_seeded = false;
             self.stream_builder = None;
@@ -1039,6 +1041,15 @@ impl Lumen {
     /// второй проход по тем же узлам DOM не меняет и релейаут не заказывает.
     /// Петли «релейаут → новый запрос → новый декод» нет — `spawn_image_requests`
     /// дедуплицируется через `stream_images_requested`.
+    ///
+    /// BUG-1048: тем же проходом теперь диспатчит `load`/`error` на `<img>`,
+    /// который эту intrinsic-пару (или отказ) ждёт — до этого события у
+    /// streaming/динамического пути не было вовсе, поэтому скриптовый `<img>`
+    /// (BUG-730 «streaming/dynamic») фетчился и рисовался, но `img.complete`
+    /// оставался `false` навсегда. `stream_image_events_fired` дедуплицирует по
+    /// `(node, url)`: несколько `<img>` могут делить один URL, и сам проход
+    /// перезапускается на каждый новый декод, так что без него один и тот же
+    /// узел получил бы `load` повторно.
     pub(crate) fn apply_stream_intrinsic_sizes(&mut self) {
         if !self.stream_image_sizes_dirty {
             return;
@@ -1050,6 +1061,8 @@ impl Lumen {
             self.stream_image_sizes_dirty = true;
             return;
         };
+        // (node index, размер) — `None` значит decode-неудачу (`fire_image_error`).
+        let mut fires: Vec<(u32, Option<(u32, u32)>)> = Vec::new();
         let changed = {
             let Some(src) = self.layout_source.as_ref() else { return };
             let Ok(mut doc) = src.document.lock() else { return };
@@ -1061,13 +1074,28 @@ impl Lumen {
                 if req.is_lazy {
                     continue;
                 }
-                let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) else {
-                    continue;
-                };
-                changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+                let nid = req.node_id.index() as u32;
+                if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
+                    changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+                    if self.stream_image_events_fired.insert((nid, req.url.clone())) {
+                        fires.push((nid, Some((w, h))));
+                    }
+                } else if self.stream_image_errors.contains(&req.url)
+                    && self.stream_image_events_fired.insert((nid, req.url.clone()))
+                {
+                    fires.push((nid, None));
+                }
             }
             changed
         };
+        for (nid, size) in fires {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                match size {
+                    Some((w, h)) => j.fire_image_load(nid, w, h),
+                    None => j.fire_image_error(nid),
+                }
+            });
+        }
         if !changed {
             return;
         }
@@ -1124,8 +1152,16 @@ impl Lumen {
                     decode_image(&req.url, &base, &sink, Some(cookie_jar), target)
                 });
                 match decoded {
-                    // streaming best-effort: финальный pipeline залогирует/применит.
-                    None => {}
+                    // BUG-1048: was a silent drop ("streaming best-effort: финальный
+                    // pipeline залогирует/применит") — true for the streaming
+                    // prologue (a later full pass over the same URL retries), but
+                    // this fn's OTHER caller (`spawn_dynamic_image_loads`) is that
+                    // final pass for a script-created `<img>`: nothing runs after
+                    // it, so a fetch/decode failure needs its own signal or
+                    // `onerror` never fires and `img.complete` stays `false` forever.
+                    None => {
+                        let _ = proxy.send_event(LoadEvent::ImageDecodeFailed { src: req.url });
+                    }
                     Some(image_cache::DecodedImage::Static(img)) => {
                         let _ = proxy.send_event(LoadEvent::ImageDecoded {
                             src: req.url,
@@ -1793,6 +1829,13 @@ pub(crate) enum LoadEvent {
         image: Box<lumen_image::Image>,
         animated: Option<Box<lumen_image::AnimatedGif>>,
     },
+    /// BUG-1048: the streaming/dynamic decode pipeline ([`Lumen::spawn_image_requests`])
+    /// gave up on `src` (fetch or decode failure), same fork the eager pipeline
+    /// already has (`page_pipeline.rs`'s `None` arm calling `fire_image_error`).
+    /// Before this event the streaming path had no failure signal at all — a
+    /// script-created `<img>` whose fetch 404s never got `onerror` and
+    /// `complete` stayed `false` forever.
+    ImageDecodeFailed { src: String },
     /// PH3-19: web-шрифт из @font-face url() декодирован в фоновом потоке.
     /// Регистрируется в FontRegistry + MultiFontMeasurer и вызывает relayout —
     /// текст появляется в fallback-шрифте сразу, подменяется по приходу (FOUT).

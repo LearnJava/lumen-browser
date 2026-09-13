@@ -797,7 +797,10 @@ impl Lumen {
         // проход `apply_stream_intrinsic_sizes`, и здесь мы его заказываем.
         // Пустой карте заказывать нечего; сам проход no-op, если дописывать
         // нечего, так что «релейаут → проход → релейаут» не зацикливается.
-        self.stream_image_sizes_dirty |= !self.stream_image_sizes.is_empty();
+        // BUG-1048: тот же аргумент для decode-неудач — новый узел мог принять
+        // URL, чей фетч уже провалился раньше, и без этого никогда не узнал бы.
+        self.stream_image_sizes_dirty |=
+            !self.stream_image_sizes.is_empty() || !self.stream_image_errors.is_empty();
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }

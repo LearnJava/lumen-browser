@@ -107,6 +107,10 @@ pub(crate) struct PageSnapshot {
     pub(crate) stream_image_sizes: HashMap<String, (u32, u32)>,
     /// BUG-735: mirrors [`Lumen::stream_image_sizes_dirty`].
     pub(crate) stream_image_sizes_dirty: bool,
+    /// BUG-1048: mirrors [`Lumen::stream_image_errors`].
+    pub(crate) stream_image_errors: std::collections::HashSet<String>,
+    /// BUG-1048: mirrors [`Lumen::stream_image_events_fired`].
+    pub(crate) stream_image_events_fired: std::collections::HashSet<(u32, String)>,
     pub(crate) ime_composing: Option<String>,
     pub(crate) bfcache: BfCache,
     /// Parsed stylesheets of frozen bfcache pages, keyed by URL.
