@@ -175,6 +175,20 @@ setTimeout(function () {
 </script>
 """, "server GET of vwjh-child.html?from=anchor + parent-storage"),
 
+    # GAP-NAVCTX срез 10 (BUG-797): the same anchor as `win-anchor-target`
+    # but WITHOUT `rel=noreferrer` — a plain `<a target=_blank>` click is
+    # "regular navigation", not `window.open()`, and per HTML LS §7.3.2 it
+    # must still set the new tab's `window.opener` back to this document
+    # (only `noopener`/`noreferrer` forces it to null, which the sibling
+    # variant above covers).
+    "win-anchor-target-opener": ("""
+<a id=lnk target="_blank" href="vwjh-child.html?from=anchor-opener">child</a>
+<script>
+document.getElementById("lnk").click();
+console.log("PROBE anchor-clicked");
+</script>
+""", "child-ran opener=object (not null, unlike the noreferrer sibling)"),
+
     # `prompt-and-unload-script-closeable.html` waits for `beforeunload` then
     # `unload`, both triggered by `window.close()`. Whether this top-level
     # context is script-closeable at all is itself part of the answer, so
