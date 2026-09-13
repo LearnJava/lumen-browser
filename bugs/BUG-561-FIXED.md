@@ -1,6 +1,6 @@
 # BUG-561: `CSS.supports()` checks a stale property allowlist that lags behind `layout/src/style.rs` — `anchor-name`/`position-anchor`/`position-area`/`anchor-scope` report as unsupported even though they're implemented
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-13
 **Дата:** 2026-08-04
 **Компонент:** css-parser (`crates/engine/css-parser/src/lib.rs:36` — `SUPPORTED_PROPERTIES`)
 **Найден:** P2, WPT-RUN-3 срез 40 (`css/css-anchor-position`), 2026-08-04
@@ -44,7 +44,7 @@ these properties, even though setting them via `element.style.anchorName =
 '--foo'` and reading them back through `getPropertyValue` works.
 
 This is a second, independent introspection-vs-implementation drift next to
-[BUG-539](BUG-539-OPEN.md) (`getComputedStyle()` Proxy `has`-trap gap) — different
+[BUG-539](BUG-539-FIXED.md) (`getComputedStyle()` Proxy `has`-trap gap) — different
 mechanism (a stale allowlist vs. a missing Proxy trap), same failure class:
 Lumen's feature-detection surface (`CSS.supports`/`@supports`) undercounts
 what the engine actually implements.
@@ -55,3 +55,19 @@ Whether other already-implemented properties elsewhere in the codebase have
 the same `SUPPORTED_PROPERTIES` gap (this bug is scoped to what WPT-RUN-3
 srez 40 actually exercised: the four CSS Anchor Positioning properties
 above).
+
+## Исправлено (P3, 2026-09-13)
+
+Компонент за это время переехал: диспетчер каскада живёт теперь в
+`crates/engine/layout/src/style/apply/{layout,css_wide}.rs`, а не в
+`style.rs` — но match-рукава те же, `anchor-name`/`position-anchor`/
+`"inset-area" | "position-area"`/`anchor-scope` подтверждены прямым чтением
+кода. Добавлены в `SUPPORTED_PROPERTIES`
+(`crates/engine/css-parser/src/lib.rs`): `anchor-name`, `anchor-scope`,
+`position-anchor`, `position-area`, и попутно `inset-area` — тот же
+match-рукав, что и `position-area`, поэтому он был бы следующим экземпляром
+того же дрейфа. `CSS.supports()`/`@supports` теперь честно отвечают `true`
+для всех пяти.
+
+Сабтесты WPT заново не измерялись — прогонов `css/css-anchor-position` в
+этой сессии не было; `cargo test -p lumen-css-parser` зелёный (459/459).
