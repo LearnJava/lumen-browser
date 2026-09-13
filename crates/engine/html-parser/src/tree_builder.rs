@@ -1113,13 +1113,17 @@ impl IncrementalTreeBuilder {
             }
             // <textarea>.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "textarea" => {
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.original_insertion_mode = Some(self.insertion_mode);
-                self.insertion_mode = InsertionMode::Text;
+                if !(self.xml_mode && self_closing) {
+                    self.open_elements.push(el);
+                    self.original_insertion_mode = Some(self.insertion_mode);
+                    self.insertion_mode = InsertionMode::Text;
+                }
             }
             // <button>: если есть в scope, закрыть.
             Token::StartTag {
@@ -4575,6 +4579,41 @@ mod tests {
             matches!(&doc.get(n).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
         });
         assert!(has_p, "<p> after self-closing <script/> must survive: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_textarea_does_not_swallow_following_markup() {
+        // GAP-XMLDOC срез 9: `<textarea/>` was not covered by срез 2's
+        // RAWTEXT fix (title/style/script/noframes) because its start-tag
+        // handler lives in mode_in_body, not mode_in_head, and never
+        // consulted `self_closing`/`xml_mode` at all. In a plain HTML5
+        // parse and, until this fix, also in xml_mode, a self-closing
+        // `<textarea/>` still switched the tokenizer into Text mode and
+        // swallowed everything up to the next literal `</textarea>`.
+        let doc = parse_xml_flavoured(r#"<textarea/><p>after</p>"#);
+        let body = doc.body().expect("body");
+        let has_p = doc.get(body).children.iter().any(|&n| {
+            matches!(&doc.get(n).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+        });
+        assert!(has_p, "<p> after self-closing <textarea/> must survive: {}", doc);
+    }
+
+    #[test]
+    fn plain_parse_self_closing_textarea_still_consumes_following_text() {
+        // HTML5 semantics (default `parse`) — self-closing flag stays
+        // ignored on non-void elements, so <textarea/> still opens a real
+        // textarea whose content runs until the next `</textarea>`.
+        let doc = parse("<textarea/>after</textarea><p>tail</p>");
+        let body = doc.body().expect("body");
+        let textarea = doc.get(body).children.first().copied().expect("textarea");
+        let NodeData::Element { name, .. } = &doc.get(textarea).data else {
+            panic!("textarea must be an element: {doc}");
+        };
+        assert_eq!(name.local, "textarea", "plain parse: {doc}");
+        let has_p = doc.get(body).children.iter().any(|&n| {
+            matches!(&doc.get(n).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+        });
+        assert!(has_p, "<p> after </textarea> must survive: {}", doc);
     }
 
     #[test]
