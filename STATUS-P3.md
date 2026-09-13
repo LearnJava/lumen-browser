@@ -1,10 +1,8 @@
-BUGS.md:78
 BUGS.md:73
 BUGS.md:74
 BUGS.md:75
 BUGS.md:76
 BUGS.md:77
-BUGS.md:78
 
 BUGS.md:79
 BUGS.md:80
