@@ -1418,20 +1418,15 @@ fn contributes_to_scrollable_overflow(
     rects_overlap(bounds, padding_box)
 }
 
-/// A child's border-box, expanded by its own CSS `transform` (BUG-504).
+/// Axis-aligned bounding box of `rect`'s four corners after applying `m`.
 ///
-/// CSS Overflow L3 §3.4: `transform` doesn't move a box for flow purposes
-/// (`LayoutBox::rect` stays untouched), but it *does* contribute to the
-/// scrollable overflow rectangle — a translated/rotated/scaled child can
-/// force a scroll container to grow its scroll range even though the
-/// child's flow position and size are unaffected. Returns `c.rect` itself
-/// when the child carries no transform (the common case, zero-cost).
-fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
-    let Some(m) = forward_box_transform(c) else {
-        return c.rect;
-    };
-    let (x0, y0) = (c.rect.x, c.rect.y);
-    let (x1, y1) = (c.rect.x + c.rect.width, c.rect.y + c.rect.height);
+/// Shared by [`child_scrollable_bounds`] (scrollable-overflow, BUG-504) and
+/// [`collect_layout_rects_rec`] (`getBoundingClientRect`, BUG-540): both need
+/// the same "transform a box, then re-flatten to an AABB" step, just applied
+/// to a different rect and consumed differently.
+fn transformed_aabb(rect: &lumen_core::geom::Rect, m: &Mat4) -> lumen_core::geom::Rect {
+    let (x0, y0) = (rect.x, rect.y);
+    let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
     let corners = [
         m.transform_point_2d(x0, y0),
         m.transform_point_2d(x1, y0),
@@ -1443,6 +1438,21 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
     let min_y = corners.iter().fold(f32::INFINITY, |acc, p| acc.min(p.1));
     let max_y = corners.iter().fold(f32::NEG_INFINITY, |acc, p| acc.max(p.1));
     lumen_core::geom::Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+/// A child's border-box, expanded by its own CSS `transform` (BUG-504).
+///
+/// CSS Overflow L3 §3.4: `transform` doesn't move a box for flow purposes
+/// (`LayoutBox::rect` stays untouched), but it *does* contribute to the
+/// scrollable overflow rectangle — a translated/rotated/scaled child can
+/// force a scroll container to grow its scroll range even though the
+/// child's flow position and size are unaffected. Returns `c.rect` itself
+/// when the child carries no transform (the common case, zero-cost).
+fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
+    match forward_box_transform(c) {
+        Some(m) => transformed_aabb(&c.rect, &m),
+        None => c.rect,
+    }
 }
 
 /// The horizontal scrollable-overflow span of a box, as `(min_x, max_x)`
@@ -1878,7 +1888,17 @@ fn collect_layout_rects_rec(
         // its descendants, so `or_insert` keeps the element's own border box; plain
         // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
         // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
-        let r = &b.rect;
+        //
+        // BUG-540: `forward_box_transform` (own `transform`/individual transform
+        // properties/`offset-path`, same matrix paint composites) is applied here
+        // too — a real browser's `getBoundingClientRect()` reports the *transformed*
+        // box, not the flow-position `rect` paint starts from. Ancestor transforms
+        // are not accumulated (out of scope of the filed repro, which transforms the
+        // queried box itself, not a container above it).
+        let r = match forward_box_transform(b) {
+            Some(m) => transformed_aabb(&b.rect, &m),
+            None => b.rect,
+        };
         out.entry(b.node.index() as u32)
             .or_insert([r.x, r.y, r.width, r.height]);
         // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of

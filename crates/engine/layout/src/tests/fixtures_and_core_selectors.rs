@@ -186,6 +186,52 @@ use super::*;
         assert_eq!(style.get("display").map(String::as_str), Some("inline"));
     }
 
+    /// BUG-540: `getBoundingClientRect()` (backed by `collect_layout_rects`)
+    /// must report the box's own CSS `transform`, not the untransformed flow
+    /// `rect` — paint already composites `forward_box_transform`; the geometry
+    /// snapshot didn't. Locks a plain `translate()` case.
+    #[test]
+    fn layout_rects_composite_own_transform() {
+        let (doc, root) = lay_full_with_doc(
+            "<html><body><div id=a>x</div></body></html>",
+            "body{margin:0} #a{position:absolute;top:10px;left:20px;width:50px;height:20px;transform:translate(100px,5px)}",
+        );
+        let a_nid = find_first_dom_node_by_selector(&doc, "#a")
+            .expect("div must be findable in the DOM")
+            .index() as u32;
+
+        let rects = collect_layout_rects(&root, &doc);
+        let rect = rects.get(&a_nid).expect("div must have a rect entry");
+        assert!(
+            (rect[0] - 120.0).abs() < 0.05 && (rect[1] - 15.0).abs() < 0.05,
+            "rect must be translated by the CSS transform: got {rect:?}"
+        );
+    }
+
+    /// BUG-540: same as above for `offset-path` (CSS Motion Path), the exact
+    /// case `ruby-position-alternate`'s sibling `offset-path-bounding-client-rect.html`
+    /// exercises — motion-path repositioning was applied at paint time only.
+    #[test]
+    fn layout_rects_composite_offset_path() {
+        let (doc, root) = lay_full_with_doc(
+            "<html><body><div id=a>x</div></body></html>",
+            r#"body{margin:0} #a{position:absolute;top:0;left:0;width:40px;height:40px;offset-path:path("M 0 0 L 960 0");offset-distance:480px;offset-rotate:0deg}"#,
+        );
+        let a_nid = find_first_dom_node_by_selector(&doc, "#a")
+            .expect("div must be findable in the DOM")
+            .index() as u32;
+
+        let rects = collect_layout_rects(&root, &doc);
+        let rect = rects.get(&a_nid).expect("div must have a rect entry");
+        // Box centre lands on the path point (rect_topleft + (480, 0) = (480,
+        // 0)); the reported top-left trails it by half the 40x40 box on each
+        // axis, i.e. (460, -20).
+        assert!(
+            (rect[0] - 460.0).abs() < 0.05 && (rect[1] - (-20.0)).abs() < 0.05,
+            "rect must be repositioned along the motion path: got {rect:?}"
+        );
+    }
+
     /// BUG-1007: `collect_client_rects` must answer with exactly one rect for a
     /// node that owns a real `LayoutBox` — same as `collect_layout_rects`,
     /// which this asserts against for parity (a single-fragment element must

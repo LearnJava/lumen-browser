@@ -1,6 +1,6 @@
 # BUG-540: `getBoundingClientRect()` ignores the `offset-path` motion-path transform (paint-only, not reflected in geometry queries)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-13 (P3)
 **Дата:** 2026-08-03
 **Компонент:** layout/paint (`offset-path` applied via `resolve_motion_transform` in paint's `property_trees.rs`, per `CSS-SPECS.md` — never reaches the layout-box rect that geometry queries read)
 **Найден:** WPT-RUN-3 срез 28 (`ROADMAP.md`) — массовый прогон `css/motion`
@@ -36,9 +36,24 @@ about *animated* interpolation never being observable; this is about the
 *static* (non-animated) `offset-path` transform never reaching geometry
 queries at all.
 
-## Как исправить (не входит в объём P2)
+## Срез P3 2026-09-13 (закрытие)
 
-Whatever code path makes `getBoundingClientRect()`/`collect_layout_rects`
-account for a live `transform` (if it does) should also composite the
-motion-path matrix from `resolve_motion_transform`; if `transform` has the
-same gap, this may be one fix rather than two.
+Проверено: у обычного `transform` (не только `offset-path`) была та же дыра —
+`collect_layout_rects_rec` читал `b.rect` без композиции с
+`forward_box_transform` вообще, для любого transform-источника. Исправлено:
+`collect_layout_rects_rec` (`crates/engine/layout/src/lib.rs`) теперь считает
+`forward_box_transform(b)` (та же матрица, что уже применяет paint) и
+заворачивает основной rect бокса через новый общий хелпер `transformed_aabb`
+(4 угла → AABB), вынесенный из уже существовавшего `child_scrollable_bounds`
+(BUG-504) — та же самая операция там уже делалась для scrollable-overflow.
+
+Аккумуляция трансформации по цепочке предков (трансформированный контейнер
+двигает repored-rect нетрансформированного потомка) сознательно вне объёма —
+заявленный репро трансформирует сам запрашиваемый бокс, не контейнер над ним.
+
+2 новых регресс-теста (`layout_rects_composite_own_transform`,
+`layout_rects_composite_offset_path`,
+`crates/engine/layout/src/tests/fixtures_and_core_selectors.rs`),
+`cargo test -p lumen-layout --lib` 3955/3955, `cargo clippy -p lumen-layout
+--all-targets -- -D warnings` чист. `dump_golden.py --build` — те же
+предсуществующие 4/12 (BUG-1008-класс), изменение не трогает display list.
