@@ -558,6 +558,31 @@ fn layout_page(
     out
 }
 
+/// Документ XML-flavoured (GAP-XMLDOC/BUG-786) — по MIME-типу или, если тот
+/// отсутствует/generic (например, локальный `file://` без заголовков),
+/// по расширению адреса. Единственное текущее следствие — CDATA-обёртка
+/// `<style>`/`<script>` снимается перед CSS/JS ([`lumen_html_parser::parse_xml_flavoured`]);
+/// остальные грани GAP-XMLDOC (foreign content, self-closing non-void tags)
+/// этим не покрыты.
+pub(crate) fn is_xml_flavoured_document(content_type: Option<&str>, base: &ResourceBase) -> bool {
+    if let Some(ct) = content_type {
+        let mime = ct.split(';').next().unwrap_or(ct).trim().to_ascii_lowercase();
+        if mime == "application/xhtml+xml"
+            || mime == "image/svg+xml"
+            || mime == "application/xml"
+            || mime == "text/xml"
+            || mime.ends_with("+xml")
+        {
+            return true;
+        }
+    }
+    let path = match base {
+        ResourceBase::File(p) => p.to_string_lossy().to_ascii_lowercase(),
+        ResourceBase::Url(u) => u.to_ascii_lowercase(),
+    };
+    path.ends_with(".xhtml") || path.ends_with(".xht") || path.ends_with(".svg")
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn parse_and_layout(
@@ -597,7 +622,11 @@ pub(crate) fn parse_and_layout(
 
     let mut doc = {
         let _s = lumen_core::trace::span("parse-html", "parse");
-        lumen_html_parser::parse(&source)
+        if is_xml_flavoured_document(content_type, base) {
+            lumen_html_parser::parse_xml_flavoured(&source)
+        } else {
+            lumen_html_parser::parse(&source)
+        }
     };
     // BUG-358: stamp the document with what it was actually decoded as / served
     // as, so `document.characterSet`/`charset`/`inputEncoding`/`contentType`

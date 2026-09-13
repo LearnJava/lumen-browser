@@ -303,3 +303,26 @@ SVG-namespace `<script>` внутри обычной HTML-страницы) вы
 `<script xmlns="http://www.w3.org/1999/xhtml" src="…"/>` самозакрывающимся,
 то есть до ожидания SMIL-события не доходят вовсе) и 1 — со слабой стадии
 «что-то бросило».
+
+## GAP-XMLDOC срез 1: CDATA-обёртка снята (P1, 2026-09-13)
+
+Первая грань («потеря CDATA в `<style>`/`<script>`») починена точечно, без
+полноценного XML-парсера. `crates/engine/html-parser/src/xml_cdata.rs`
+(`strip_cdata_wrapper`) снимает одиночную обёртку `<![CDATA[ ... ]]>` (с
+допуском окружающих пробелов) с RAWTEXT-содержимого; вызывается из
+`tree_builder::mode_text` на `</style>`/`</script>`/`</noframes>`, только
+когда `IncrementalTreeBuilder::xml_cdata_mode` включён — новая точка входа
+[`lumen_html_parser::parse_xml_flavoured`], а не изменение поведения
+`parse()` по умолчанию (HTML5-семантика для обычных документов не тронута,
+`plain_parse_does_not_strip_cdata` — регрессионный тест на это).
+
+Точка вызова — `crates/shell/src/page_pipeline.rs::parse_and_layout`:
+`is_xml_flavoured_document` решает по MIME (`application/xhtml+xml`,
+`image/svg+xml`, `…+xml`, `application(text)/xml`) и, если тип отсутствует
+или общий, по расширению адреса (`.xhtml`/`.xht`/`.svg`).
+
+Закрывает часть 3 («`<script>`», срез 16) — случай «`<![CDATA[` в начале
+инлайн-скрипта» — тем же механизмом, поскольку он тоже RAWTEXT-обёртка.
+Не закрывает: самозакрывающийся `<script src="…"/>` (срез 16, случай 2),
+префиксный `<h:script>` (случай 1), самозакрывающиеся не-void теги вообще
+(срез 11) — остаётся за GAP-XMLDOC, следующие срезы.

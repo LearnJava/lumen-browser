@@ -19,6 +19,7 @@ pub mod quirks_mode;
 pub mod srcset;
 pub mod tokenizer;
 pub mod tree_builder;
+mod xml_cdata;
 
 pub use picture::{PickedSource, PictureParams, pick_img_source, pick_picture_source};
 pub use preload_scanner::{PreloadHint, PreloadScanner, scan_preload_hints};
@@ -30,4 +31,4 @@ pub use srcset::{
     parse_srcset, pick_best_for_density, pick_best_for_width,
 };
 pub use tokenizer::{Token, Tokenizer};
-pub use tree_builder::{IncrementalTreeBuilder, parse, parse_fragment};
+pub use tree_builder::{IncrementalTreeBuilder, parse, parse_fragment, parse_xml_flavoured};

@@ -174,6 +174,8 @@ use crate::page_pipeline::{
     JsLayoutSnapshot, LayoutSource, LoadedPage, RenderOutcome, dispatch_preload_hints,
     parse_and_layout, render_bytes,
 };
+#[cfg(test)]
+use crate::page_pipeline::is_xml_flavoured_document;
 use crate::scripts::{
     collect_inline_scripts, collect_scripts_ordered, resolve_script_sources,
     run_scripts_with_dom,
