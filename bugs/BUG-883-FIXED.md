@@ -15,7 +15,7 @@
 не получает управления. Открываемый документ при этом **загружается** (запрос
 виден на сервере пробы), исполняет свои скрипты и логирует в тот же stderr.
 
-Это отдельный барьер, стоящий **раньше** [BUG-797](BUG-797-OPEN.md) (заглушка
+Это отдельный барьер, стоящий **раньше** [BUG-797](BUG-797-FIXED.md) (заглушка
 `window.open` без реального `opener`/`postMessage`): даже если бы канал был,
 вызывающая сторона уже мертва и ответ услышать некому.
 
@@ -51,7 +51,7 @@ child-ran search=?from=freeze opener=null parent-is-self=true name=undefined
 `w === window` → `false`, `w.name` = переданное имя, `w.location.href` =
 `about:blank` для `open()` без аргументов, `w.document` — `undefined`), а у
 самого окна `window.closed` и `window.name` — `undefined`
-([BUG-887](BUG-887-OPEN.md)). В открытом документе `window.opener === null` и
+([BUG-887](BUG-887-FIXED.md)). В открытом документе `window.opener === null` и
 `window.parent === window`.
 
 ## Цена по WPT
@@ -65,7 +65,7 @@ child-ran search=?from=freeze opener=null parent-is-self=true name=undefined
 `…/same-origin-top-navigation-without-user-activation.window.html`,
 `html/browsers/windows/noreferrer-null-opener.html`,
 `html/browsers/browsing-the-web/unloading-documents/prompt-and-unload-script-closeable.html`
-(последний — вместе с [BUG-887](BUG-887-OPEN.md)).
+(последний — вместе с [BUG-887](BUG-887-FIXED.md)).
 
 Нижняя граница: всё семейство `RemoteContext`/`common/dispatcher` строится на
 `open()`, и по BUG-797 оно уже числится за отдельным механизмом.
@@ -128,7 +128,7 @@ child-ran …` — событие приходит СРАЗУ, синхронн�
   имя падает в прежний `navigate_to` того же документа (уже существовавшее,
   более узкое ограничение, не расширено и не сужено этим срезом).
 - **`window.close()`/`window.closed`/`window.name`** — отдельный баг
-  ([BUG-887](BUG-887-OPEN.md)), не тронут.
+  ([BUG-887](BUG-887-FIXED.md)), не тронут.
 
 Гейт: `cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings`
 чисто; `scripts/scoped-test.sh` — единственный красный
