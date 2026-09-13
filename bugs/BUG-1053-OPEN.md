@@ -36,6 +36,18 @@ only инварианты) вызываются только из трёх `#[cf
 раньше: обычная работа гоняет `-p <crate>`, где `lumen-layout` целиком не
 попадает в область.
 
+## Масштаб
+
+Не изолировано в `lumen-layout`: обычный `cargo build --workspace --profile
+dev-release` (без `-D warnings`, поэтому не падает, но предупреждает) кажет
+тот же паттерн в `crates/engine/paint/src/invariants.rs` —
+`check_coverage`/`check_clip_stack_balance`/`check_origins_resolve`/
+`check_visible_boxes_have_spans` тоже `never used` в `dev-release`. Похоже,
+это системная дыра в паре `debug_assert!`-инвариантов и профиля `dev-release`
+(`debug-assertions = false` через `inherits = "release"`), а не разовая
+ошибка одного модуля — вероятно, стоит поискать остальные экземпляры across
+the workspace, а не чинить по одному.
+
 ## Что дальше
 
 Не чинил в рамках BUG-561 (несвязанный крейт, drive-by fix запрещён
