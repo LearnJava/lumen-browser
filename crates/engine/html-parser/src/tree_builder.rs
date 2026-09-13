@@ -45,6 +45,14 @@ use crate::foreign_content;
 use crate::push_tokenizer::PushTokenizer;
 use crate::tokenizer::{Token, Tokenizer};
 
+/// Whether `ns` is a foreign (non-HTML) namespace for the purposes of HTML
+/// LS §13.2.6.5 — SVG and MathML share every foreign-content rule this
+/// crate implements (breakout list, unconditional self-closing; GAP-XMLDOC
+/// срезы 3 и 6, BUG-685).
+fn is_foreign_namespace(ns: Namespace) -> bool {
+    matches!(ns, Namespace::Svg | Namespace::MathMl)
+}
+
 /// Парсит вход целиком в pull-режиме и возвращает построенный
 /// [`Document`]. Эквивалент `IncrementalTreeBuilder::new() + feed(input)
 /// + finish()`, но без накладных расходов на push-буферизацию.
@@ -344,7 +352,7 @@ impl IncrementalTreeBuilder {
                 _ => {}
             }
         }
-        if self.current_namespace() == Namespace::Svg
+        if is_foreign_namespace(self.current_namespace())
             && matches!(token, Token::StartTag { .. } | Token::EndTag { .. })
         {
             self.dispatch_foreign_content(token, had_html_prefix);
@@ -354,11 +362,11 @@ impl IncrementalTreeBuilder {
     }
 
     /// §13.2.6.5 "the rules for parsing tokens in foreign content", reduced
-    /// to SVG only (GAP-XMLDOC срез 3, BUG-685) — routed here from
-    /// [`apply_token`][Self::apply_token] whenever
-    /// [`current_namespace`][Self::current_namespace] is SVG. See
-    /// `crate::foreign_content` for what this deliberately leaves out
-    /// (MathML, integration points, foreign-attribute namespacing).
+    /// to SVG (GAP-XMLDOC срез 3) and MathML (GAP-XMLDOC срез 6), both
+    /// BUG-685 — routed here from [`apply_token`][Self::apply_token]
+    /// whenever [`current_namespace`][Self::current_namespace] is foreign.
+    /// See `crate::foreign_content` for what this deliberately leaves out
+    /// (integration points, foreign-attribute namespacing).
     ///
     /// `forced_breakout` is `true` when [`apply_token`][Self::apply_token]
     /// already stripped an `html:`/`h:` prefix off this token (GAP-XMLDOC
@@ -371,7 +379,7 @@ impl IncrementalTreeBuilder {
                 ref attrs,
                 ..
             } if forced_breakout || foreign_content::breaks_out_of_foreign_content(name, attrs) => {
-                while self.current_namespace() == Namespace::Svg {
+                while is_foreign_namespace(self.current_namespace()) {
                     self.open_elements.pop();
                 }
                 self.dispatch(token);
@@ -2121,17 +2129,19 @@ impl IncrementalTreeBuilder {
     /// Создаёт DOM-элемент с заданными атрибутами; не вставляет.
     fn create_element_with_attrs(&mut self, name: &str, attrs: &[(String, String)]) -> NodeId {
         let qname = self.resolve_element_name(name);
-        let svg_attrs = qname.namespace == Namespace::Svg;
+        let namespace = qname.namespace;
         let id = self.doc.create_element(qname);
         if let NodeData::Element {
             attrs: dom_attrs, ..
         } = &mut self.doc.get_mut(id).data
         {
             for (k, v) in attrs {
-                let local = if svg_attrs {
-                    foreign_content::adjust_svg_attribute_name(k).to_string()
-                } else {
-                    k.clone()
+                let local = match namespace {
+                    Namespace::Svg => foreign_content::adjust_svg_attribute_name(k).to_string(),
+                    Namespace::MathMl => {
+                        foreign_content::adjust_mathml_attribute_name(k).to_string()
+                    }
+                    _ => k.clone(),
                 };
                 dom_attrs.push(Attribute {
                     name: QualName::html(local),
@@ -2143,19 +2153,27 @@ impl IncrementalTreeBuilder {
     }
 
     /// Namespace-aware qualified name for a newly created element — HTML by
-    /// default, SVG while [`current_namespace`][Self::current_namespace] is
-    /// already SVG or the tag being opened is `<svg>` itself (HTML LS
-    /// §13.2.6.5 "insert a foreign element", GAP-XMLDOC срез 3, BUG-685).
-    /// MathML is not implemented — see `crate::foreign_content`.
+    /// default, SVG/MathML while [`current_namespace`][Self::current_namespace]
+    /// is already that namespace or the tag being opened is `<svg>`/`<math>`
+    /// itself (HTML LS §13.2.6.5 "insert a foreign element", GAP-XMLDOC
+    /// срезы 3 и 6, BUG-685).
     fn resolve_element_name(&self, name: &str) -> QualName {
         match self.current_namespace() {
             Namespace::Svg => QualName {
                 namespace: Namespace::Svg,
                 local: foreign_content::adjust_svg_tag_name(name).to_string(),
             },
+            Namespace::MathMl => QualName {
+                namespace: Namespace::MathMl,
+                local: name.to_string(),
+            },
             _ if name == "svg" => QualName {
                 namespace: Namespace::Svg,
                 local: "svg".to_string(),
+            },
+            _ if name == "math" => QualName {
+                namespace: Namespace::MathMl,
+                local: "math".to_string(),
             },
             _ => QualName::html(name),
         }
@@ -2212,7 +2230,8 @@ impl IncrementalTreeBuilder {
     /// Pushes a just-created non-void element onto the open-elements stack,
     /// then immediately pops it back off if the start tag was self-closing
     /// and either [`xml_mode`][Self::xml_mode] is on (GAP-XMLDOC срез 2) or
-    /// `el` is a foreign (SVG) element (GAP-XMLDOC срез 3, BUG-685).
+    /// `el` is a foreign (SVG/MathML) element (GAP-XMLDOC срезы 3 и 6,
+    /// BUG-685).
     ///
     /// HTML5 (§13.2.5.32 "before attribute value state" note) defines the
     /// self-closing flag but the tree builder ignores it outside void/foreign
@@ -2232,7 +2251,7 @@ impl IncrementalTreeBuilder {
     ///   the previous one the same way BUG-786 did for XML documents.
     fn push_open_element(&mut self, el: NodeId, self_closing: bool) {
         self.open_elements.push(el);
-        let is_foreign = self.node_namespace(el) == Namespace::Svg;
+        let is_foreign = is_foreign_namespace(self.node_namespace(el));
         if self_closing && (self.xml_mode || is_foreign) {
             self.open_elements.pop();
         }
@@ -4540,6 +4559,69 @@ mod tests {
         // <div> is on the §13.2.6.5 breakout list — it must land back in
         // Namespace::Html even while nested inside <svg>.
         let doc = parse("<svg><foreignObject><div>text</div></foreignObject></svg>");
+        let div = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "div"))
+            .expect("div element");
+        let NodeData::Element { name, .. } = &div.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html, "breakout div: {doc}");
+    }
+
+    #[test]
+    fn mathml_descendants_get_mathml_namespace() {
+        // GAP-XMLDOC срез 6, BUG-685: same gap as srez 3, other namespace.
+        let doc = parse("<body><math><mrow><mi>x</mi></mrow></math></body>");
+        let body = doc.body().expect("body");
+        let math = doc.get(body).children.first().copied().expect("math");
+        let NodeData::Element { name, .. } = &doc.get(math).data else {
+            panic!("math must be an element: {doc}");
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "math element: {doc}");
+        let mrow = doc.get(math).children.first().copied().expect("mrow");
+        let NodeData::Element { name: mrow_name, .. } = &doc.get(mrow).data else {
+            panic!("mrow must be an element: {doc}");
+        };
+        assert_eq!(mrow_name.namespace, Namespace::MathMl, "mrow element: {doc}");
+    }
+
+    #[test]
+    fn mathml_definitionurl_attribute_case_is_restored() {
+        let doc = parse(r#"<math><mo definitionurl="foo">x</mo></math>"#);
+        let mo = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "mo"))
+            .expect("mo element");
+        let NodeData::Element { attrs, .. } = &mo.data else {
+            unreachable!()
+        };
+        assert!(
+            attrs.iter().any(|a| a.name.local == "definitionURL"),
+            "definitionurl must be case-restored: {doc}"
+        );
+    }
+
+    #[test]
+    fn mathml_self_closing_elements_do_not_nest_siblings() {
+        let doc = parse("<math><mspace/><mspace/></math>");
+        let math = doc
+            .get(doc.root())
+            .children
+            .iter()
+            .find_map(|&c| find_node(&doc, c, "math"))
+            .unwrap_or_else(|| panic!("math node id: {doc}"));
+        assert_eq!(
+            doc.get(math).children.len(),
+            2,
+            "mspace + mspace must be siblings, not nested: {}",
+            doc
+        );
+    }
+
+    #[test]
+    fn mathml_breakout_tag_returns_to_html_namespace() {
+        // <div> is on the shared §13.2.6.5 breakout list — must land back in
+        // Namespace::Html even while nested inside <math>.
+        let doc = parse("<math><mtext><div>text</div></mtext></math>");
         let div = doc
             .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "div"))
             .expect("div element");

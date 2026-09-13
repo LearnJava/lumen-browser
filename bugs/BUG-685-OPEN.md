@@ -394,3 +394,62 @@ text element parsing algorithm») — но к моменту этого сохр
 lumen-html-parser` — 431/431 юнит + 9/9 интеграционных (`fragment_parsing`)
 зелёные. `cargo clippy -p lumen-html-parser --all-targets -- -D warnings`
 — чисто.
+
+## GAP-XMLDOC срез 6 (2026-09-14): MathML namespace в парсере
+
+Закрывает для MathML ровно то, что срез 3 закрыл для SVG: parser-side
+namespace assignment. Измерение (корпус вендоренного WPT, `.xht`/`.xhtml`/
+`.svg`, `grep -rlE '<math[ >]'`) — **113 файлов** несут `<math>` markup;
+до этого среза каждый такой элемент и весь его поддерева уходил в
+`Namespace::Html` тем же путём, что SVG до среза 3 (§13.2.6.5 не
+применялась ни к одному из двух foreign-content неймспейсов, только теперь
+у SVG есть свой путь, а у MathML — нет).
+
+Механизм — обобщение среза 3, не переизобретение:
+
+- `is_foreign_namespace(ns)` (новая свободная функция, верх
+  `tree_builder.rs`) — `matches!(ns, Namespace::Svg | Namespace::MathMl)`.
+  Три места, ранее сравнивавшие `current_namespace() == Namespace::Svg`
+  напрямую (`apply_token`'s foreign-content routing,
+  `dispatch_foreign_content`'s breakout pop-loop, `push_open_element`'s
+  self-closing check), теперь зовут её — тем самым MathML бесплатно
+  получает тот же breakout-список, тот же self-closing-в-foreign-content
+  путь (§13.2.6.5 шаг 4, тот же, что нашёл 27 `flexbox-justify-content-
+  vert-*.xhtml` в BUG-786), что уже был у SVG.
+- `resolve_element_name`/`create_element_with_attrs` — новая ветка для
+  `Namespace::MathMl`: `<math>` и всё, пока стек не покинул MathML,
+  получают этот неймспейс; local name не приводится к camelCase (в
+  отличие от SVG, у MathML нет таблицы регистро-чувствительных имён тегов
+  — спека называет только один регистро-чувствительный **атрибут**,
+  `definitionURL`, обслуженный новой `foreign_content::
+  adjust_mathml_attribute_name`).
+- §13.2.6.5 "any other start tag" breakout-список — общий для SVG и
+  MathML по спеке, так что `breaks_out_of_foreign_content` не продублирован,
+  только doc-comment в `foreign_content.rs` перестал говорить «SVG only».
+
+**Сознательно не сделано** (следующий срез, если/когда возьмут, как и
+прототип-цепочка SVG была отдельным срезом 4 после среза 3):
+прототип-цепочка (`MathMLElement`-иерархии в JS ещё нет вовсе — грубее
+пробела, оставленного срезом 4 для SVG, там классы уже существовали и не
+хватало только подключения); HTML/MathML integration points
+(`<annotation-xml>` с `encoding="text/html"`, `<mi>`/`<mo>`/`<mn>`/`<ms>`/
+`<mtext>` как MathML text integration points) — по этому же срезу всё под
+ними остаётся в MathML-неймспейсе, спецификационно неверно, но тем же
+компромиссом, что срез 3 принял для `<foreignObject>`; foreign-attribute
+namespacing не тронут (не входил в скоуп и для SVG).
+
+Тесты: четыре новых в `crates/engine/html-parser/src/tree_builder.rs`
+(`mathml_descendants_get_mathml_namespace`,
+`mathml_definitionurl_attribute_case_is_restored`,
+`mathml_self_closing_elements_do_not_nest_siblings`,
+`mathml_breakout_tag_returns_to_html_namespace`) плюс один в
+`foreign_content.rs` (`adjusts_mathml_definitionurl`). `cargo test -p
+lumen-html-parser` — 443/443 юнит + 9/9 интеграционных зелёные. `cargo
+clippy -p lumen-html-parser --all-targets -- -D warnings` — чисто.
+`scripts/scoped-test.sh` (все обратные зависимости) — зелёный, кроме
+чужого дрейфа CPU-эталонов (`lumen-driver`), подтверждённого идентичным
+предыдущими срезами (`55-text-rendering`/`57-canvas-2d`/`32-list-markers`/
+`34-forms`/`45-multiple-backgrounds`/`51-scrollbar-rendering`/
+`1000000-final`), и разового флака `lumen-js --lib` под нагрузкой полного
+прогона — прогнан отдельно (`cargo test -p lumen-js --lib --features
+v8-backend`) сразу после, 3612/3612 зелёные.
