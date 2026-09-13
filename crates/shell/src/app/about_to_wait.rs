@@ -1204,7 +1204,7 @@ impl Lumen {
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
-            for (url, _target, _width, _height, token, no_opener) in popups {
+            for (url, target, _width, _height, token, no_opener) in popups {
                 // GAP-NAVCTX срез 1 (BUG-884): `open("javascript:...")` must run
                 // the code (in the OPENER's context, per HTML LS §7.4.5) rather
                 // than reach the network layer, which today rejects `javascript:`
@@ -1226,11 +1226,39 @@ impl Lumen {
                     resolve_js_navigation(&url, &self.source)
                 };
                 // GAP-NAVCTX срез 4 (BUG-797): opener's tab id, read BEFORE
-                // `open_new_tab()` moves `self.tab_strip.active` to the popup.
+                // `open_new_tab()`/`switch_tab()` moves `self.tab_strip.active`
+                // away from it.
                 let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
-                self.open_new_tab();
-                let new_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                // GAP-NAVCTX срез 13 (BUG-883): a named target (neither empty
+                // nor the shim's `_blank` default, HTML LS §7.3.2) first
+                // looks for an already-open tab with that `window.name` —
+                // same rule срез 12 already applies to `<a target=…>`; before
+                // this slice `window.open(url, name)` always minted a new tab
+                // even when an earlier call with the same `name` was still
+                // open (`PopupRequest::target` was captured but never read).
+                let is_named_target = !target.is_empty() && !target.eq_ignore_ascii_case("_blank")
+                    && !target.eq_ignore_ascii_case("_self");
+                let reuse_tab = if is_named_target { self.find_tab_by_window_name(&target) } else { None };
+                let new_tab_id = if let Some(tab_idx) = reuse_tab {
+                    // Navigating an EXISTING browsing context sets no new
+                    // `opener` — only *creating* one does (same rule as
+                    // click.rs's reuse branch).
+                    self.switch_tab(tab_idx);
+                    self.tab_strip.tabs[self.tab_strip.active].id as u32
+                } else {
+                    self.open_new_tab();
+                    self.tab_strip.tabs[self.tab_strip.active].id as u32
+                };
                 lumen_js::window_messaging::resolve_token(token, new_tab_id);
+                if is_named_target {
+                    // Re-armed on every reuse too: each navigation gets a
+                    // fresh JS runtime with no in-place global to carry the
+                    // old `window.name` on, so a second reuse would
+                    // otherwise find nothing (mirrors срез 12's
+                    // `arm_pending_window_name` call in click.rs).
+                    lumen_js::window_messaging::arm_pending_window_name(target.clone());
+                }
+                let install_opener = reuse_tab.is_none() && !no_opener;
                 match resolved {
                     Ok(source) => {
                         // GAP-NAVCTX срез 5 (BUG-797): armed here, right
@@ -1245,7 +1273,7 @@ impl Lumen {
                         // §7.2.2.1) skip arming entirely — same carve-out
                         // `click.rs`/`frame_links.rs` already apply to
                         // `rel=noopener`/`rel=noreferrer` on `<a target=_blank>`.
-                        if !no_opener {
+                        if install_opener {
                             lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
                         }
                         self.navigate_to(source);
@@ -1267,8 +1295,12 @@ impl Lumen {
                 // `postMessage` calls the OPENER makes on the `WindowProxy`
                 // stub `window.open()` returned it, a channel `noopener` does
                 // not touch (only the POPUP's `window.opener` is nulled).
+                //
+                // GAP-NAVCTX срез 13 (BUG-883): `install_opener` is also
+                // `false` on a tab reuse — nothing was armed above either,
+                // for the same "navigating, not creating" reason.
                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                    if !no_opener {
+                    if install_opener {
                         j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
                     }
                     j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));

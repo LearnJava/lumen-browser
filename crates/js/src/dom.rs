@@ -154,8 +154,12 @@ pub type NavUpdate = (NavAction, String, String, String);
 pub struct PopupRequest {
     /// Target URL. Empty string means `about:blank`.
     pub url: String,
-    /// Window target (`_blank`, `_self`, named window, etc.). Lumen treats all
-    /// targets as a new tab for now.
+    /// Window target (`_blank`, `_self`, named window, etc.). GAP-NAVCTX
+    /// срез 13 (BUG-883): a name other than empty/`_blank`/`_self` makes the
+    /// shell look for an already-open tab with that `window.name`
+    /// (`Lumen::find_tab_by_window_name`) before minting a new tab; `_self`
+    /// itself is not handled specially yet and still opens a new tab like
+    /// `_blank`.
     pub target: String,
     /// Requested popup width in CSS px (from `width=` feature, default 800).
     pub width: u32,
