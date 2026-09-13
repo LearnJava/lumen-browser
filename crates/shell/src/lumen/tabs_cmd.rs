@@ -480,6 +480,22 @@ impl Lumen {
                 // can grow freely now that this tab is in the foreground.
                 j.run_gc_pass(0);
             });
+            // GAP-NAVCTX срез 15 (BUG-883): this tab's timers/sockets/workers
+            // kept running while it sat in `self.bg_tabs` (see the pump loop
+            // in `about_to_wait.rs`), so its DOM may have mutated since the
+            // `layout_box`/`display_list` above were captured at park time.
+            // `restore_page_snapshot` never relaid out on its own — nothing
+            // could mutate a parked tab before this slice — so pick up the
+            // dirty flag the same way a rAF turn's mutation does and force
+            // one relayout before the stale layout gets painted.
+            if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_dom_dirty()
+            })
+            .unwrap_or(false)
+            {
+                self.poll_dynamic_frames();
+                self.relayout_raf_dirty();
+            }
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
             // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
             // checkpoint exists — restore scroll + form state from it.

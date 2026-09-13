@@ -1330,10 +1330,7 @@ impl Lumen {
         // runtime — the active one via `route_task_js` (may route to the
         // engine thread under the flag), every parked one directly, the same
         // way `switch_tab` already reaches into a backgrounded tab's
-        // `PageSnapshot::js_ctx` to run a GC pass. A backgrounded tab's
-        // timers stay frozen (BUG-883's still-open gap, not this one's), but
-        // a postMessage still has to land so a popup can hand a result back
-        // to an opener neither side is ever brought to the foreground for.
+        // `PageSnapshot::js_ctx` to run a GC pass.
         {
             let active_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -1346,6 +1343,45 @@ impl Lumen {
                     js.eval_js(&format!(
                         "if(typeof _lumen_window_pump_messages==='function')_lumen_window_pump_messages({tab_id});"
                     ));
+                }
+            }
+        }
+
+        // GAP-NAVCTX срез 15 (BUG-883): a backgrounded tab's own runtime is a
+        // live V8 isolate on its own thread (`v8_thread_main`) the whole time
+        // it sits in `self.bg_tabs` — parking never stopped it, it just never
+        // got ticked. `switch_tab`'s GC pass and the postMessage pump right
+        // above already prove `eval_js` on a parked `PageSnapshot::js_ctx` is
+        // safe without bringing the tab to the foreground; this applies the
+        // same call to the timer/pump surface `frame_js_handles` above already
+        // drains for sub-documents, so a backgrounded opener's `setTimeout`/
+        // `setInterval`/sockets/workers/broadcast channels keep running
+        // instead of freezing until the tab is revisited. No visibility-based
+        // throttling (HTML LS §8.1's ≥1000 ms clamp for hidden documents) —
+        // out of this slice's scope, tracked as a follow-up, not a regression
+        // (nothing throttled backgrounded timers before this slice either).
+        // DOM mutations this produces are not relaid out here — the tab is
+        // not on screen — `switch_tab` picks up `take_dom_dirty()` on restore.
+        for snap in self.bg_tabs.values() {
+            if let Some(js) = snap.js_ctx.as_ref() {
+                js.tick_timers();
+                js.pump_websockets();
+                js.pump_sse();
+                js.pump_workers();
+                js.pump_broadcast_channels();
+                js.pump_shared_workers();
+                if let Some(wakeup_epoch_ms) = js.take_timer_wakeup() {
+                    let now_epoch_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64() * 1000.0)
+                        .unwrap_or(0.0);
+                    let delay_ms = (wakeup_epoch_ms - now_epoch_ms).max(0.0);
+                    let wakeup = std::time::Instant::now()
+                        + std::time::Duration::from_millis(delay_ms as u64 + 1);
+                    next_wakeup = Some(match next_wakeup {
+                        Some(cur) => cur.min(wakeup),
+                        None => wakeup,
+                    });
                 }
             }
         }
