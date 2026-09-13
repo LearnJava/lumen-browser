@@ -56,6 +56,7 @@ DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, ".tmp", "wpt-corpus")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_stats  # noqa: E402
+import heavy_lock  # noqa: E402
 import port_guard  # noqa: E402
 
 #: Pilot selection (WPT-RUN-4 slice 2): ten categories picked to exercise the
@@ -1242,7 +1243,13 @@ def main() -> int:
             budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
                                    args.processes)
             print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
-            state = run_shard(shard, binary, args.out_dir, args.processes, budget, exclude_file)
+            # BUG-1029 §3: held per shard, not for the whole (possibly
+            # multi-day, --resume'd) run — a shard's browsers are the memory
+            # spike, and releasing between shards lets a build waiting on
+            # scripts/cargo-heavy.sh get in during the gap instead of being
+            # starved for as long as this corpus run keeps going.
+            with heavy_lock.heavy_lock(f"run_corpus.py pid={os.getpid()} shard={shard['name']}"):
+                state = run_shard(shard, binary, args.out_dir, args.processes, budget, exclude_file)
             shard_states.append(state)
             print(f" {state['outcome']} in {state['seconds']}s", flush=True)
             # Checkpoint after every shard: a corpus run outlives the session

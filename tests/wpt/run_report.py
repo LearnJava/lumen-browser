@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import expectations  # noqa: E402
+import heavy_lock  # noqa: E402
 import port_guard  # noqa: E402
 import run_smoke  # noqa: E402
 import run_suite  # noqa: E402
@@ -582,7 +583,12 @@ def main() -> int:
     port_guard.reap_lumen_orphans(own_pid=os.getpid())
 
     try:
-        rv = run_smoke.run(args.binary, test_ids, extra_args=extra_args)
+        # BUG-1029 §3: a heavy `cargo build` running at the same time as this
+        # (browsers under test, ~1 GB RSS each) is the other half of the
+        # 2026-09-07 OOM combination — courtesy lock, not a hard gate; see
+        # heavy_lock.py's module docstring.
+        with heavy_lock.heavy_lock(f"run_report.py pid={os.getpid()}"):
+            rv = run_smoke.run(args.binary, test_ids, extra_args=extra_args)
         if not os.path.isfile(json_path) or os.path.getsize(json_path) == 0:
             print("wptrunner produced no report (crashed before suite_end?)", file=sys.stderr)
             return rv or 1
