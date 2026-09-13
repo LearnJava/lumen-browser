@@ -33,6 +33,15 @@ pub(crate) struct UsedSizeOverride {
     /// (BUG-333/BUG-343); its row-direction pass does not, matching what
     /// `SavedItemSizing`'s three call sites each did before this refactor.
     pub(crate) box_sizing: Option<BoxSizing>,
+    /// BUG-736 — clears `width`/`height` back to `auto` before `width`/
+    /// `height` above are applied, whenever the item's own style carries
+    /// `width_is_intrinsic_hint` (a replaced element whose `width` is
+    /// `build_box`'s presentational-hint fallback, not an authored value).
+    /// Lets a flex item's used size come from this override plus
+    /// `aspect_ratio` (CSS Flexbox L1 §9.2/§4.5 transferred size) instead of
+    /// pinning it to the raw intrinsic pixel size the hint baked in for the
+    /// ordinary (non-flex) block/inline layout it originally targeted.
+    pub(crate) clear_intrinsic_hint: bool,
 }
 
 /// The **margin-box** cross width a column flex item is laid out at — the value
@@ -358,7 +367,27 @@ pub(crate) fn build_flex_init(
                 // `INDEFINITE_HEIGHT_CONSULTED` / `CV_AUTO_TOUCHED`.
                 let outer_cv = CV_AUTO_TOUCHED.with(|c| c.replace(false));
                 let outer_ih = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.replace(false));
-                lay_out(&mut children[i], content_x, content_y, probe_width, None, measurer, viewport, children_pcb, hp, false);
+                // BUG-736: a replaced element's intrinsic-hint `width` (see
+                // `ComputedStyle::width_is_intrinsic_hint`) otherwise wins
+                // over `probe_width` unconditionally (an explicit pixel
+                // length ignores `available_width`), so the item never
+                // stretches to the column's cross size the way an ordinary
+                // block does — its `aspect_ratio`-derived height is measured
+                // at its raw intrinsic width instead of the item's real used
+                // width.
+                if children[i].style.width_is_intrinsic_hint || children[i].style.height_is_intrinsic_hint {
+                    lay_out_with_used_size(
+                        &mut children[i], content_x, content_y, probe_width, None, measurer, viewport,
+                        children_pcb, hp, false,
+                        UsedSizeOverride {
+                            width: Some(probe_width),
+                            clear_intrinsic_hint: true,
+                            ..Default::default()
+                        },
+                    );
+                } else {
+                    lay_out(&mut children[i], content_x, content_y, probe_width, None, measurer, viewport, children_pcb, hp, false);
+                }
                 let cv_here = CV_AUTO_TOUCHED.with(|c| c.get());
                 let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
                 CV_AUTO_TOUCHED.with(|c| c.set(outer_cv || cv_here));
@@ -418,7 +447,44 @@ pub(crate) fn build_flex_init(
                         // container width as its base size and was then shrunk down to an
                         // equal share of the row instead of staying at its min-width
                         // (BUG-179, TEST-46 — second column drifted ~160px right).
-                        let w = if is.width.is_none() {
+                        // BUG-736 — CSS Flexbox L1 §9.2/§4.5 + CSS Sizing L4
+                        // §4.1: a replaced element whose `width` is only
+                        // `build_box`'s intrinsic-hint (not authored) and
+                        // whose cross axis (height) will stretch to a
+                        // definite single-line container height uses the
+                        // TRANSFERRED size — the cross size run through its
+                        // `aspect_ratio` — as its flex base size, instead of
+                        // its raw intrinsic width. Falls through to the
+                        // ordinary intrinsic-width path when the cross axis
+                        // isn't stretch-resolved to a definite size (wrapped
+                        // lines, non-stretch alignment, an auto cross margin,
+                        // or no `aspect_ratio`) — there the item's own
+                        // intrinsic size (already what the hint holds) is the
+                        // correct CSS Flexbox §9.9 max-content fallback.
+                        let cross_align = if matches!(is.align_self, AlignValue::Auto) {
+                            s.align_items
+                        } else {
+                            is.align_self
+                        };
+                        let stretch_eligible = is.width_is_intrinsic_hint
+                            && (is.height.is_none() || is.height_is_intrinsic_hint)
+                            && !is_wrap
+                            && !matches!(is.margin_top, LengthOrAuto::Auto)
+                            && !matches!(is.margin_bottom, LengthOrAuto::Auto)
+                            && matches!(
+                                cross_align,
+                                AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch
+                            );
+                        let transferred = if stretch_eligible {
+                            is.aspect_ratio.zip(explicit_cross).and_then(|((aw, ah), cross)| {
+                                (ah > 0.0).then(|| (cross - m_t - m_b).max(0.0) * aw / ah)
+                            })
+                        } else {
+                            None
+                        };
+                        let w = if let Some(t) = transferred {
+                            t
+                        } else if is.width.is_none() {
                             flex_auto_base_main_width(item, cb, measurer, viewport)
                         } else {
                             item.rect.width

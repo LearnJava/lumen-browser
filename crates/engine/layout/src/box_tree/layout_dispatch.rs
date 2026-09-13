@@ -590,6 +590,19 @@ pub(super) fn dispatch_box(
         match used_size_override {
             Some(ov) => {
                 let mut owned = (*b.style).clone();
+                // BUG-736: an intrinsic-hint width/height is a presentational
+                // fallback for ordinary block/inline layout, not an authored
+                // size — a flex item must see `auto` here so its used size
+                // comes from this override plus `aspect_ratio` instead of the
+                // raw intrinsic pixels.
+                if ov.clear_intrinsic_hint {
+                    if owned.width_is_intrinsic_hint {
+                        owned.width = None;
+                    }
+                    if owned.height_is_intrinsic_hint {
+                        owned.height = None;
+                    }
+                }
                 if let Some(bs) = ov.box_sizing {
                     owned.box_sizing = bs;
                 }

@@ -1,6 +1,6 @@
 # BUG-736: `<img>` как flex-элемент не ужимается по контейнеру и растягивается по поперечной оси
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-14
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs` — `lay_out_flex`,
 размер flex-элемента)
 **Найден:** P3 при разборе [BUG-733](BUG-733-FIXED.md), 2026-08-09
@@ -50,3 +50,30 @@ intrinsic-соотношением, если его поперечный раз�
 (§4.5 + CSS Sizing L4 §4.1). Соотношение теперь доступно как
 `style.aspect_ratio` (заполняется в ветке `is_image_element`, см.
 [BUG-734](BUG-734-FIXED.md)) — отдельный канал заводить не нужно.
+
+## Фикс (2026-09-14)
+
+Presentational-hint `width`/`height` у `<img>` (декодированный intrinsic
+размер или content-атрибуты) помечается новыми полями `ComputedStyle`
+`width_is_intrinsic_hint`/`height_is_intrinsic_hint`, чтобы flex-раскладка
+отличала «автор задал размер» от «размер — заглушка под intrinsic». Флаг
+сбрасывается любой авторской записью в `width`/`height` (явное значение,
+`initial`/`inherit`/`unset`).
+
+Flex-basis растянутого по cross-оси replaced item теперь считается по CSS
+Flexbox L1 §9.2/§4.5 — transferred size через `aspect_ratio` — вместо сырого
+intrinsic-пикселя; чинит и row-, и column-направление (`flex.rs`,
+`build_flex_init`). В column-направлении item с intrinsic-hint дополнительно
+лэйаутится с явным `UsedSizeOverride` (`probe_width`), чтобы его
+`aspect_ratio`-derived высота считалась от реального используемого, а не от
+сырого intrinsic, ширины.
+
+Новые тесты: `box_tree::tests::intrinsic_and_wrap::bug736_row_flex_replaced_item_uses_transferred_size`,
+`bug736_column_flex_replaced_item_stretches_and_derives_height`.
+
+Гейт: `cargo clippy --workspace --all-targets -- -D warnings` чисто;
+`lumen-layout --lib` (3957 тестов) и `--all-targets` (77) зелёные.
+`scripts/scoped-test.sh` — единственный красный `cpu_snapshots_match_references`
+(те же 7 файлов, что и в [BUG-1048](BUG-1048-OPEN.md)) — предсуществующий
+дрейф, не регрессия (правка не трогает paint); `lumen-network` — известный
+сломанный гейт [BUG-805](BUG-805-OPEN.md).

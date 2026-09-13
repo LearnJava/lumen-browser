@@ -33,9 +33,20 @@ pub(in crate::style) fn apply_image_presentational_hints(doc: &Document, node: N
     let node_ref = doc.get(node);
     if let Some(w) = node_ref.get_attr("width").and_then(parse_html_dimension) {
         style.width = Some(Length::Px(w));
+        // BUG-736: the `width`/`height` content attributes reach here
+        // whether the author wrote them or the shell filled them in after
+        // decode (`image_requests::apply_intrinsic_size` — the *only* signal
+        // layout has for "decoded pixel size", since it inserts the value as
+        // this very attribute rather than through a side channel). Flex
+        // layout needs to tell "no width was specified" from "width happens
+        // to equal the intrinsic size" to apply CSS Flexbox L1 §9.2/§4.5's
+        // aspect-ratio transferred-size algorithm instead of pinning the
+        // item to this raw pixel value.
+        style.width_is_intrinsic_hint = true;
     }
     if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
         style.height = Some(Length::Px(h));
+        style.height_is_intrinsic_hint = true;
     }
     // hspace/vspace/border are <img>-only presentational attributes (HTML5 §15.3.9).
     if is_img {

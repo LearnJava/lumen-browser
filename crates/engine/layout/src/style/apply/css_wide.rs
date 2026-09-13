@@ -458,8 +458,19 @@ pub(in crate::style) fn apply_css_wide_keyword(
                 Vec::new()
             };
         }
-        "width" => style.width = if inh_only_inherit { inherited.width.clone() } else { init.width.clone() },
-        "height" => style.height = if inh_only_inherit { inherited.height.clone() } else { init.height.clone() },
+        "width" => {
+            style.width = if inh_only_inherit { inherited.width.clone() } else { init.width.clone() };
+            // BUG-736: `initial`/`inherit`/`unset` on `width` is still an
+            // authored declaration — it must cancel the presentational-hint
+            // marker the same way an ordinary value does (see `layout.rs`'s
+            // `"width"` arm).
+            style.width_is_intrinsic_hint = false;
+        }
+        "height" => {
+            style.height = if inh_only_inherit { inherited.height.clone() } else { init.height.clone() };
+            // BUG-736: see the `"width"` arm above.
+            style.height_is_intrinsic_hint = false;
+        }
         // CSS Logical Properties L1 — inline-size / block-size.
         "inline-size" => style.inline_size = if inh_only_inherit { inherited.inline_size.clone() } else { init.inline_size.clone() },
         "block-size" => style.block_size = if inh_only_inherit { inherited.block_size.clone() } else { init.block_size.clone() },

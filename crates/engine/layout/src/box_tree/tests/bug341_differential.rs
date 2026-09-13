@@ -1108,7 +1108,12 @@ fn layout_result_cache_key_distinguishes_used_size_override_from_plain_probe() {
     super::super::lay_out_with_used_size(
         find_mut(&mut tree, item_node),
         0.0, 0.0, 400.0, None, None, vp, init_pcb, &null_hp, false,
-        super::super::UsedSizeOverride { width: Some(250.0), height: None, box_sizing: None },
+        super::super::UsedSizeOverride {
+            width: Some(250.0),
+            height: None,
+            box_sizing: None,
+            clear_intrinsic_hint: false,
+        },
     );
     let stats = super::super::take_layout_result_cache_stats();
     super::super::set_layout_result_cache(false);

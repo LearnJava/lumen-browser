@@ -274,13 +274,22 @@ fn step_item(
             return StepOutcome::Advance;
         }
 
+        // BUG-736: a replaced element's intrinsic-hint `width` otherwise wins
+        // over `item_avail_cross` the same way it did in the Step-1 probe
+        // (`build_flex_init`) — force it to the resolved cross width here too,
+        // for the (rarer) case this dispatch isn't served by the `replayable`
+        // shortcut above (e.g. `flex-grow` changed the item's main size from
+        // what Step 1 measured).
+        let width_hinted = frame.b.children[pos.i].style.width_is_intrinsic_hint;
+        let height_hinted = frame.b.children[pos.i].style.height_is_intrinsic_hint;
         match dispatch_box(
             &mut frame.b.children[pos.i], content_x, content_y + main_cursor, item_avail_cross,
             Some(inner_main), measurer, viewport, pcb, hp, false, None, AlignValue::Auto,
             Some(UsedSizeOverride {
                 height: Some(inner_main),
+                width: width_hinted.then_some(item_avail_cross),
                 box_sizing: Some(BoxSizing::BorderBox),
-                ..Default::default()
+                clear_intrinsic_hint: width_hinted || height_hinted,
             }),
         ) {
             DispatchOutcome::Done => {
@@ -344,10 +353,17 @@ fn step_item(
         };
         let cross_cursor = frame.init.cross_cursor;
         let explicit_cross = frame.init.explicit_cross;
+        // BUG-736: a replaced element's intrinsic-hint `height` (see
+        // `ComputedStyle::height_is_intrinsic_hint`) is definite by itself —
+        // it would otherwise win over the `aspect_ratio`-from-`width`
+        // derivation `finalize_block_height` runs when `height` is `auto`,
+        // pinning the item to its raw intrinsic height regardless of the
+        // main-axis (width) size this override just resolved. Clearing is a
+        // no-op for a style that was never hinted.
         match dispatch_box(
             &mut frame.b.children[pos.i], content_x + main_cursor, content_y + cross_cursor, inner_main,
             explicit_cross, measurer, viewport, pcb, hp, false, None, AlignValue::Auto,
-            Some(UsedSizeOverride { width: Some(used_main), ..Default::default() }),
+            Some(UsedSizeOverride { width: Some(used_main), clear_intrinsic_hint: true, ..Default::default() }),
         ) {
             DispatchOutcome::Done => {
                 post_item_place(frame, li, &pos, viewport);

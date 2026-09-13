@@ -98,6 +98,42 @@ fn bug734_unknown_intrinsic_size_stays_collapsed() {
     assert_eq!((w, h), (0.0, 0.0));
 }
 
+// ── BUG-736: a replaced flex item must size via its aspect ratio ──────────
+
+/// Row flex container with a definite cross size (`height`): the `<img>`'s
+/// main size (width) must come from the CSS Flexbox L1 §9.2/§4.5 transferred
+/// size (cross size run through the intrinsic ratio: 300 × 852/725 ≈
+/// 352.55), not from its raw intrinsic width shrunk to fit. Edge rounds this
+/// to 353×300. Before the fix: 600×725 — flex-shrink pinned the width to
+/// exactly the container's free space and the height never left its raw
+/// intrinsic value.
+#[test]
+fn bug736_row_flex_replaced_item_uses_transferred_size() {
+    let (w, h) = img_border_box(
+        r#"<div class="row"><img width="852" height="725" src="x.png"></div>"#,
+        ".row { display: flex; width: 600px; height: 300px; }",
+    );
+    assert!((w - 352.55).abs() < 0.1, "width={w}");
+    assert!((h - 300.0).abs() < 0.1, "height={h}");
+}
+
+/// Column flex container with a definite cross size (`width`): the `<img>`
+/// stretches to the container's width like any other item, and its main
+/// size (height) is derived from that stretched width via the intrinsic
+/// ratio (200 × 725/852 ≈ 170.19), not measured against the raw intrinsic
+/// width. Edge rounds this to 200×170. Before the fix: 852×300 — the item
+/// never stretched to the container's width, and the flex-shrink algorithm
+/// pinned its height to the container's free space instead of the ratio.
+#[test]
+fn bug736_column_flex_replaced_item_stretches_and_derives_height() {
+    let (w, h) = img_border_box(
+        r#"<div class="col"><img width="852" height="725" src="x.png"></div>"#,
+        ".col { display: flex; flex-direction: column; width: 200px; height: 300px; }",
+    );
+    assert!((w - 200.0).abs() < 0.1, "width={w}");
+    assert!((h - 170.19).abs() < 0.1, "height={h}");
+}
+
 // ── BUG-737: intrinsic width of a row flex container ──────────────────────
 
 /// Border-box widths of the direct children of the element with `id="outer"`.

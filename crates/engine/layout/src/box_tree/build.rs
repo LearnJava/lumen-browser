@@ -338,6 +338,10 @@ fn build_box_inner(
                     }
                     if st.width.is_none() && st.height.is_none() {
                         st.width = Some(Length::Px(iw));
+                        // BUG-736: помечаем — это hint, не авторское значение,
+                        // иначе flex-раскладка примет его за явную ширину и
+                        // никогда не применит transferred-size через ratio.
+                        st.width_is_intrinsic_hint = true;
                     }
                 } else {
                     // Известна одна сторона — ratio не построить, поведение
