@@ -1,9 +1,29 @@
 # BUG-553: CSS Gap Decorations implemented under non-spec property names (`gap-rule*` instead of `column-rule*`/`row-rule*`/`rule*`), row axis entirely missing
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** ДОРАБОТКА — никогда не реализованная функциональность (правильная per-axis модель и `<gap-rule-list>` грамматика), не дефект уже работающего кода
 **Дата:** 2026-08-04
 **Компонент:** css-parser/layout (`crates/engine/layout/src/style.rs:3552-3559,15586-15625`), paint (`crates/engine/paint/src/gap_decorations.rs`)
 **Найден:** WPT-RUN-3 срез 37 (`ROADMAP.md`) — массовый прогон `css/css-gaps`
+
+## Ревизия P3 2026-09-13
+
+Переквалифицировано из бага в ДОРАБОТКУ (см. `feedback_feature_gap_is_not_a_bug`
+в памяти проекта / прецеденты BUG-492/BUG-511/BUG-521/BUG-538): объём работы —
+не переименование одного свойства, а (1) разбиение единого
+axis-agnostic `gap_rule_*` триплета на два независимых
+(`column_rule_*` в grid/flex-смысле + новый `row_rule_*`), не сталкиваясь
+с одноимённым multicol-полем `column_rule_*`, уже занимающим это имя в
+Rust, (2) регистрация `column-rule`/`row-rule`/`rule` (+ лонгхэнды) как
+известных свойств для flex/grid-контейнеров без коллизии с multicol на
+multicol-контейнерах, и (3) с нуля реализованная грамматика
+`<gap-rule-list>`/`<gap-auto-rule-list>` (`repeat()`, посегментные списки,
+`outset`/`inset`/`overlap-join`/`cap`) — этой грамматики в парсере нет вообще,
+не «недопарсена». Тот же класс, что закрытые ранее BUG-521/538: новый
+алгоритм, а не точечный патч. `CSS-SPECS.md:113` уже понижен до 🟡 с точным
+описанием остатка и ссылкой на этот баг — отдельная строка в `ROADMAP.md` не
+нужна (путь «CSS-свойство → CSS-SPECS.md» задачу не заводит, см. BUG-538).
+Указатель убран из `STATUS-P3.md`.
 
 ## Механизм
 
