@@ -296,6 +296,17 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   kills a port holder that belongs to somebody else's *running* corpus run —
   it stops and says so. `run_corpus.py` calls it before every shard;
   `--no-port-guard` turns that off.
+- `tests/wpt/heavy_lock.py` — **ours** (BUG-1029 §3) — a courtesy, machine-wide
+  advisory lock so a heavy `cargo build` and a WPT run don't pile their memory
+  on top of each other: both are OK alone on a 7.6 GB box, together they
+  contributed to two 2026-09-07 OOM kills. `run_report.py`/`run_corpus.py`
+  hold it while browsers are actually running (per shard for `run_corpus.py`,
+  not for the whole possibly multi-day `--resume`'d run); wrap a heavy build
+  in it with `scripts/cargo-heavy.sh <cargo-subcommand> [args...]`. Both sides
+  wait up to 5 minutes for a busy lock, then proceed anyway with a warning —
+  deliberately not a hard gate, so a long corpus run cannot wedge every
+  session's build for its duration. `report`/`selftest` subcommands mirror
+  `port_guard.py`'s.
 - `tests/wpt/host_audit.py` — **ours** (WPT-RUN-5 slice 20) — how much of the
   corpus is addressed to a hostname this machine cannot resolve. WPT is a
   multi-origin suite (five subdomains plus the separate `not-web-platform.test`
