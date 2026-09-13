@@ -100,6 +100,17 @@ struct Hub {
     /// `run_scripts_with_dom`, and nothing else can interleave a different
     /// tab's load in between.
     pending_opener: Option<(u32, u32)>,
+    /// GAP-NAVCTX срез 12 (BUG-883): the `window.name` a just-created tab
+    /// must carry, armed by the shell the same tick as `pending_opener`
+    /// (before the `navigate_to` call that will reach the new tab's own
+    /// `run_scripts_with_dom`) and consumed the same way — a one-shot slot,
+    /// not a map, for the same reason: navigation is synchronous on one
+    /// thread, so nothing can interleave a different tab's load in between.
+    /// A post-`navigate_to` follow-up `eval` (the way opener installation
+    /// falls back for a scriptless popup) is not enough here: it races the
+    /// navigation's OWN document/script install and loses — the fresh
+    /// runtime resets `window.name` back to its shim default right after.
+    pending_window_name: Option<String>,
 }
 
 static HUB: OnceLock<Mutex<Hub>> = OnceLock::new();
@@ -261,6 +272,26 @@ pub fn arm_pending_opener(own_tab_id: u32, opener_tab_id: u32) {
 pub fn take_pending_opener() -> Option<(u32, u32)> {
     let mut h = hub().lock().unwrap();
     h.pending_opener.take()
+}
+
+/// Arm the `window.name` a NEWLY created tab must carry — called immediately
+/// before the `navigate_to` that spawns it, only when the tab was opened for
+/// a genuinely named (non-`_blank`) `target` that matched no already-open tab
+/// (GAP-NAVCTX срез 12, [`Self::find_tab_by_window_name`'s doc in
+/// `frame_links.rs`] for why a name has to stick at all).
+#[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+pub fn arm_pending_window_name(name: String) {
+    let mut h = hub().lock().unwrap();
+    h.pending_window_name = Some(name);
+}
+
+/// Take (and clear) the armed pending `window.name`, if any. Called
+/// unconditionally at the top of every `run_scripts_with_dom` invocation —
+/// same reason [`take_pending_opener`] is.
+#[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+pub fn take_pending_window_name() -> Option<String> {
+    let mut h = hub().lock().unwrap();
+    h.pending_window_name.take()
 }
 
 /// Drop every mapping/queue that names `tab_id` — called when a tab closes so

@@ -514,6 +514,9 @@ pub(crate) fn run_scripts_with_dom(
     // return below — see `window_messaging::take_pending_opener`'s doc
     // comment for why an unclaimed pair must not survive past this call.
     let armed_opener = lumen_js::window_messaging::take_pending_opener();
+    // GAP-NAVCTX срез 12 (BUG-883): same one-shot take, same reason — see
+    // `window_messaging::take_pending_window_name`'s doc comment.
+    let armed_window_name = lumen_js::window_messaging::take_pending_window_name();
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
     // Import map must be captured before `doc` moves into the Arc and applied
@@ -650,6 +653,16 @@ pub(crate) fn run_scripts_with_dom(
                     let _ = rt.eval(&format!(
                         "_lumen_install_opener({own_tab_id}, {opener_tab_id});"
                     ));
+                }
+                // GAP-NAVCTX срез 12 (BUG-883): same one-shot-push shape,
+                // same reason — a post-`navigate_to` follow-up `eval` (the
+                // shell's fallback, still in place for a scriptless popup)
+                // is too late here: it would race this very runtime's own
+                // creation and lose, leaving `window.name` at the shim's
+                // default instead of the name the tab was opened for.
+                if let Some(name) = armed_window_name {
+                    let name_js = serde_json::to_string(&name).unwrap_or_default();
+                    let _ = rt.eval(&format!("window.name = {name_js};"));
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
