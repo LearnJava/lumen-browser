@@ -1,6 +1,6 @@
 # BUG-534: CSS Custom Highlight API — `Highlight`/`HighlightRegistry` are ad-hoc Phase-0 stubs, not the spec's Setlike/Maplike interfaces
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → GAP-HLHITTEST)
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`, installed via `install_highlight_api_bindings_v8`)
 **Найден:** P2, WPT-RUN-3 срез 26 (`css/css-highlight-api`) — массовый прогон
@@ -208,4 +208,14 @@ on the transcribed unit tests above, not a real wptrunner pass; the next
 step for whoever picks this back up is a live re-run to get exact
 per-subtest `.ini` precision, then tackling the hit-testing gap (needs paint
 to consume `CSS.highlights` — a real architectural addition, not a point
-fix, likely its own follow-up card once scoped).
+fix).
+
+## Срез P3 2026-09-13 (реклассификация остатка)
+
+Оставшийся объём (реальный hit-testing в `highlightsFromPoint()`) удовлетворяет
+обоим условиям реклассификации `docs/probe-method.md` §8: функциональности нет
+вовсе (paint не читает `CSS.highlights` ни в одном месте) и объём — новая связь
+paint↔JS-registry, а не точечная правка. Заведена [GAP-HLHITTEST](../ROADMAP.md)
+(`planned`), статус этой карточки — `OPEN (ДОРАБОТКА → GAP-HLHITTEST)`. Сама
+Setlike/Maplike-реализация Highlight/HighlightRegistry (срез 2026-09-13 выше) не
+затронута — полностью готова и работает.
