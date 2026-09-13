@@ -1276,3 +1276,49 @@ fn fontload5_unresolvable_local_only_face_stays_unloaded() {
     );
     assert_eq!(probe_attr(&page, "data-face-status"), "unloaded");
 }
+
+// ── GAP-XMLDOC / BUG-786: XML-flavoured document detection ──────────────
+
+#[test]
+fn xml_flavoured_detects_xhtml_mime() {
+    let base = ResourceBase::Url("https://example.com/page".to_owned());
+    assert!(is_xml_flavoured_document(Some("application/xhtml+xml"), &base));
+    assert!(is_xml_flavoured_document(
+        Some("application/xhtml+xml; charset=utf-8"),
+        &base
+    ));
+}
+
+#[test]
+fn xml_flavoured_detects_svg_mime() {
+    let base = ResourceBase::Url("https://example.com/page".to_owned());
+    assert!(is_xml_flavoured_document(Some("image/svg+xml"), &base));
+}
+
+#[test]
+fn xml_flavoured_falls_back_to_extension_when_content_type_absent() {
+    assert!(is_xml_flavoured_document(
+        None,
+        &ResourceBase::File(PathBuf::from("/tmp/reference/foo.xht"))
+    ));
+    assert!(is_xml_flavoured_document(
+        None,
+        &ResourceBase::Url("https://example.com/test.xhtml".to_owned())
+    ));
+    assert!(is_xml_flavoured_document(
+        None,
+        &ResourceBase::Url("https://example.com/icon.svg".to_owned())
+    ));
+}
+
+#[test]
+fn xml_flavoured_false_for_plain_html() {
+    assert!(!is_xml_flavoured_document(
+        Some("text/html; charset=utf-8"),
+        &ResourceBase::Url("https://example.com/page.html".to_owned())
+    ));
+    assert!(!is_xml_flavoured_document(
+        None,
+        &ResourceBase::Url("https://example.com/page".to_owned())
+    ));
+}

@@ -52,6 +52,22 @@ pub fn parse(input: &str) -> Document {
     builder.finish()
 }
 
+/// Same as [`parse`], but for documents the caller has already identified as
+/// XML-flavoured (`.xhtml`/`.xht`/`.svg`, `application/xhtml+xml`, …):
+/// `<style>`/`<script>` content wrapped in `<![CDATA[ ... ]]>` has that
+/// wrapper stripped before it reaches the CSS/JS parser, instead of being
+/// left as literal RAWTEXT (BUG-786). GAP-XMLDOC tracks the rest of proper
+/// XML document handling (foreign content, self-closing non-void tags, …) —
+/// this covers only the CDATA slice, still driven by the HTML5 tree builder.
+pub fn parse_xml_flavoured(input: &str) -> Document {
+    let mut builder = IncrementalTreeBuilder::new();
+    builder.xml_cdata_mode = true;
+    for token in Tokenizer::new(input) {
+        builder.apply_token(token);
+    }
+    builder.finish()
+}
+
 /// Парсит `input` как **фрагмент** (HTML LS §13.4 «Parsing HTML fragments»)
 /// и возвращает временный [`Document`] вместе с корневым `<html>`-узлом
 /// фрагмента: дети этого узла — результат разбора (шаг 14 алгоритма).
@@ -191,6 +207,11 @@ pub struct IncrementalTreeBuilder {
     /// (§13.2.4.1 шаг 4, контекстный элемент вместо корня) и EOF-догон
     /// html/head/body.
     is_fragment: bool,
+    /// `true` for [`parse_xml_flavoured`]: strips a `<![CDATA[ ... ]]>`
+    /// wrapper off `<style>`/`<script>` RAWTEXT content on `</style>`/
+    /// `</script>` (BUG-786) — see [`crate::xml_cdata`]. `false` (default)
+    /// keeps HTML5 semantics, where the markers are literal text.
+    xml_cdata_mode: bool,
 }
 
 impl IncrementalTreeBuilder {
@@ -212,6 +233,7 @@ impl IncrementalTreeBuilder {
             scripting_enabled: true,
             declarative_shadow_templates: HashSet::new(),
             is_fragment: false,
+            xml_cdata_mode: false,
         }
     }
 
@@ -1089,7 +1111,11 @@ impl IncrementalTreeBuilder {
                 self.insert_text(&s);
             }
             Token::EndTag { .. } => {
-                self.open_elements.pop();
+                if let Some(el) = self.open_elements.pop()
+                    && self.xml_cdata_mode
+                {
+                    self.strip_cdata_wrapper_from(el);
+                }
                 if let Some(prev) = self.original_insertion_mode.take() {
                     self.insertion_mode = prev;
                 } else {
@@ -1097,6 +1123,30 @@ impl IncrementalTreeBuilder {
                 }
             }
             _ => { /* EOF / etc. — parse error, ignore */ }
+        }
+    }
+
+    /// [`xml_cdata_mode`][Self::xml_cdata_mode] support: `el` just closed
+    /// (its RAWTEXT content is complete) — if that content is a single text
+    /// child wrapped in `<![CDATA[ ... ]]>`, rewrite it to the unwrapped
+    /// inner text (BUG-786). RAWTEXT elements coalesce into one text node
+    /// via [`Self::insert_text`], so «single child» covers every case the
+    /// corpus this targets actually produces.
+    fn strip_cdata_wrapper_from(&mut self, el: NodeId) {
+        let Some(&child) = self.doc.get(el).children.first() else {
+            return;
+        };
+        if self.doc.get(el).children.len() != 1 {
+            return;
+        }
+        if let NodeData::Text(s) = &self.doc.get(child).data {
+            let stripped = crate::xml_cdata::strip_cdata_wrapper(s);
+            if stripped.len() != s.len() {
+                let owned = stripped.to_string();
+                if let NodeData::Text(s) = &mut self.doc.get_mut(child).data {
+                    *s = owned;
+                }
+            }
         }
     }
 
@@ -4036,5 +4086,53 @@ mod tests {
         } else {
             panic!("expected ShadowRoot");
         }
+    }
+
+    // --- parse_xml_flavoured / BUG-786 CDATA slice ---
+
+    #[test]
+    fn xml_flavoured_strips_cdata_from_style() {
+        let doc = parse_xml_flavoured(
+            "<style type=\"text/css\"><![CDATA[\ndiv { color: red; }\n]]></style>",
+        );
+        let s = doc.to_string();
+        assert!(s.contains("div { color: red; }"), "CDATA markers not stripped: {s}");
+        assert!(!s.contains("CDATA"), "CDATA marker leaked into text node: {s}");
+    }
+
+    #[test]
+    fn xml_flavoured_strips_cdata_from_inline_script() {
+        let doc = parse_xml_flavoured("<script><![CDATA[\nvar x = 1 < 2;\n]]></script>");
+        let s = doc.to_string();
+        assert!(s.contains("var x = 1 < 2;"), "CDATA markers not stripped: {s}");
+        assert!(!s.contains("CDATA"), "CDATA marker leaked into text node: {s}");
+    }
+
+    #[test]
+    fn xml_flavoured_first_rule_survives_multi_rule_style() {
+        // BUG-786 срез 13: без починки терялось именно ПЕРВОЕ правило блока —
+        // не весь блок целиком.
+        let doc = parse_xml_flavoured(
+            "<style><![CDATA[\n#a { width: 100px; }\n#b { width: 200px; }\n]]></style>",
+        );
+        let s = doc.to_string();
+        assert!(s.contains("#a { width: 100px; }"), "first rule lost: {s}");
+        assert!(s.contains("#b { width: 200px; }"));
+    }
+
+    #[test]
+    fn plain_parse_does_not_strip_cdata() {
+        // HTML5 semantics (default `parse`) leave CDATA markers as literal
+        // RAWTEXT — only `parse_xml_flavoured` opts into XML behaviour.
+        let doc = parse("<style><![CDATA[div{color:red}]]></style>");
+        let s = doc.to_string();
+        assert!(s.contains("CDATA"), "plain HTML parse must not strip CDATA: {s}");
+    }
+
+    #[test]
+    fn xml_flavoured_leaves_plain_style_untouched() {
+        let doc = parse_xml_flavoured("<style>div { color: red; }</style>");
+        let s = doc.to_string();
+        assert!(s.contains("div { color: red; }"));
     }
 }
