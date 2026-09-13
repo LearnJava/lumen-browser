@@ -3206,14 +3206,23 @@ var _LUMEN_KNOWN_HTML_TAGS = {};
 ).split(' ').forEach(function(_t) { _LUMEN_KNOWN_HTML_TAGS[_t] = true; });
 
 // BUG-322: resolves the [[Prototype]] a native element wrapper (`_lumen_build_element`)
-// should get. Non-HTML-namespace elements (SVG/MathML/unknown) get the generic
-// `Element.prototype` here — the SVG shim (`svg.rs`) re-points `createElementNS`
-// results at typed `SVG*Element` prototypes afterward, and those already chain
-// through `Element.prototype` (`class SVGElement extends Element`), so this is a
-// safe, non-conflicting default for anything the SVG shim doesn't touch (e.g. SVG
-// markup parsed via `innerHTML` rather than `createElementNS`).
+// should get. GAP-XMLDOC срез 4 (BUG-685): an SVG-namespace element — whether
+// parsed from markup (foreign content, srez 3) or built by `createElementNS` —
+// gets its typed `SVG*Element` prototype from `svg.rs`'s `_lumen_svg_ctor_for_local`
+// (keyed by the untouched, case-preserved local name, not the upper-cased
+// `_lumen_get_tag_name`). If the SVG shim was never installed in this runtime,
+// or the namespace is something else non-HTML (MathML/unknown), the generic
+// `Element.prototype` is the safe fallback — `SVGElement` already chains
+// through it, so no `instanceof` relation is lost, only narrowed.
 function _lumen_element_prototype_for(nid) {
     var ns = _lumen_u2n(_lumen_get_namespace_uri(nid));
+    if (ns === 'http://www.w3.org/2000/svg') {
+        if (typeof _lumen_svg_ctor_for_local === 'function') {
+            var svgLocal = _lumen_u2n(_lumen_get_local_name(nid)) || '';
+            return _lumen_svg_ctor_for_local(svgLocal).prototype;
+        }
+        return Element.prototype;
+    }
     if (ns !== 'http://www.w3.org/1999/xhtml') return Element.prototype;
     var tag  = _lumen_get_tag_name(nid);
     var ctor = _lumen_html_tag_prototypes[tag];
