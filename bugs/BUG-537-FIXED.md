@@ -1,6 +1,6 @@
 # BUG-537: `getComputedStyle()` never exposes `background-image`/`object-fit`/`object-position`/`image-rendering`/`vertical-align` (implemented in `ComputedStyle`, just missing from the serialization whitelist)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-13 (P3)
 **Дата:** 2026-08-03
 **Компонент:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)
 **Найден:** WPT-RUN-3 срез 28 (`ROADMAP.md`) — массовый прогон `css/css-images`
@@ -123,3 +123,28 @@ parsed gradient representation (CSS Images L3 §2.3.1 canonical order +
 color-normalization — `black` → `rgb(0, 0, 0)` — via the same
 `css_color_to_css`/`color_to_css` helpers already used elsewhere in this
 function).
+
+## Закрытие, срез P3 2026-09-13
+
+Пять из шести свойств (`background-image` + all `background-*` longhands
+listed above, `object-fit`, `object-position`, `image-rendering`,
+`vertical-align`) уже присутствовали в `computed_style_to_map` на момент
+взятия этой карточки — добавлены более ранней, не связанной с BUG-537
+правкой (подтверждено `grep`, без git-blame). Единственное реально
+отсутствующее свойство было `aspect-ratio` — `ComputedStyle.aspect_ratio:
+Option<(f32, f32)>` (`style/computed.rs:507`) парсится полностью
+(`style/apply/layout.rs`), но не сериализовалось вовсе (`grep -n
+"aspect.ratio" selector_query.rs` — ноль совпадений).
+
+Добавлена запись `computed_style_to_map` (`selector_query.rs`) —
+`Some((w, h))` → `"auto {w} / {h}"`, `None` → `"auto"` (CSS Sizing L4 §6.1
+computed-value form), плюс хелпер `aspect_ratio_num` рядом с `px_str` для
+бесюнитного числа (омитит `.0` у целых значений). 3 новых юнит-теста
+(`computed_map_aspect_ratio_default_and_set`: default, `16 / 9`, одиночное
+число `1.5` → `1.5 / 1`), `cargo test -p lumen-layout --lib` 3954/3954,
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` чист.
+
+Живой WPT-прогон не выполнен (нет `.venv` в слоте) — проверено юнит-тестом,
+дословно воспроизводящим формат, который `test_computed_style_aspect_ratio()`
+(упомянутый в тексте карточки выше) ожидает от каждого `getComputedStyle(...)
+.aspectRatio` чтения.

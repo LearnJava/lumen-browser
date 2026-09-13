@@ -492,6 +492,17 @@ fn px_str(v: f32) -> String {
     }
 }
 
+/// Serialises one `aspect-ratio` ratio component as a bare CSS `<number>`
+/// (no unit) — omits the decimal point for whole-number values, matching
+/// `test_computed_value("aspect-ratio", …)`'s expected `"auto W / H"` form.
+fn aspect_ratio_num(v: f32) -> String {
+    if v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        format!("{}", v)
+    }
+}
+
 /// CSS Rhythmic Sizing L1 §3.1 (BUG-517) — computed-value serialization for
 /// the `block-step` shorthand: `none` when all four longhands are at their
 /// initial value, else the non-initial ones joined in `size insert align
@@ -1246,6 +1257,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ImageRendering::CrispEdges => "crisp-edges",
         ImageRendering::Pixelated => "pixelated",
     }.into());
+    m.insert("aspect-ratio".into(), match style.aspect_ratio {
+        Some((w, h)) => format!("auto {} / {}", aspect_ratio_num(w), aspect_ratio_num(h)),
+        None => "auto".into(),
+    });
 
     // `border-color` shorthand — CSSOM `getPropertyValue` on a shorthand only
     // resolves when every longhand it covers serializes to the same value
@@ -2935,6 +2950,16 @@ mod tests {
         assert_eq!(m.get("object-fit").map(String::as_str), Some("cover"));
         assert_eq!(m.get("object-position").map(String::as_str), Some("0% 20px"));
         assert_eq!(m.get("image-rendering").map(String::as_str), Some("pixelated"));
+    }
+
+    #[test]
+    fn computed_map_aspect_ratio_default_and_set() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("aspect-ratio").map(String::as_str), Some("auto"));
+        let m = div_computed_map("<div>x</div>", "div { aspect-ratio: 16 / 9; }");
+        assert_eq!(m.get("aspect-ratio").map(String::as_str), Some("auto 16 / 9"));
+        let m = div_computed_map("<div>x</div>", "div { aspect-ratio: 1.5; }");
+        assert_eq!(m.get("aspect-ratio").map(String::as_str), Some("auto 1.5 / 1"));
     }
 
     #[test]
