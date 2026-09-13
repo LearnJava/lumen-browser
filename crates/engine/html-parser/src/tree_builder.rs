@@ -36,8 +36,12 @@
 
 use std::collections::HashSet;
 
-use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId, QualName, ShadowRootMode, ViewportMeta, ViewportWidth};
+use lumen_dom::{
+    Attribute, Document, DocumentMode, Namespace, NodeData, NodeId, QualName, ShadowRootMode,
+    ViewportMeta, ViewportWidth,
+};
 
+use crate::foreign_content;
 use crate::push_tokenizer::PushTokenizer;
 use crate::tokenizer::{Token, Tokenizer};
 
@@ -318,7 +322,61 @@ impl IncrementalTreeBuilder {
             }
             self.flush_pending_table_text();
         }
+        if self.current_namespace() == Namespace::Svg
+            && matches!(token, Token::StartTag { .. } | Token::EndTag { .. })
+        {
+            self.dispatch_foreign_content(token);
+            return;
+        }
         self.dispatch(token);
+    }
+
+    /// §13.2.6.5 "the rules for parsing tokens in foreign content", reduced
+    /// to SVG only (GAP-XMLDOC срез 3, BUG-685) — routed here from
+    /// [`apply_token`][Self::apply_token] whenever
+    /// [`current_namespace`][Self::current_namespace] is SVG. See
+    /// `crate::foreign_content` for what this deliberately leaves out
+    /// (MathML, integration points, foreign-attribute namespacing).
+    fn dispatch_foreign_content(&mut self, token: Token) {
+        match token {
+            Token::StartTag {
+                ref name,
+                ref attrs,
+                ..
+            } if foreign_content::breaks_out_of_foreign_content(name, attrs) => {
+                while self.current_namespace() == Namespace::Svg {
+                    self.open_elements.pop();
+                }
+                self.dispatch(token);
+            }
+            Token::StartTag {
+                name,
+                attrs,
+                self_closing,
+            } => {
+                let el = self.create_element_with_attrs(&name, &attrs);
+                self.append_to_current_open(el);
+                self.push_open_element(el, self_closing);
+            }
+            Token::EndTag { name } => {
+                let lname = name.to_ascii_lowercase();
+                let mut boundary = None;
+                for i in (0..self.open_elements.len()).rev() {
+                    let node = self.open_elements[i];
+                    if self.element_local(node).eq_ignore_ascii_case(&lname) {
+                        boundary = Some(i);
+                        break;
+                    }
+                    if self.node_namespace(node) == Namespace::Html {
+                        break;
+                    }
+                }
+                if let Some(i) = boundary {
+                    self.open_elements.truncate(i);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Маршрутизатор по insertion mode (§13.2.6).
@@ -2021,19 +2079,64 @@ impl IncrementalTreeBuilder {
 
     /// Создаёт DOM-элемент с заданными атрибутами; не вставляет.
     fn create_element_with_attrs(&mut self, name: &str, attrs: &[(String, String)]) -> NodeId {
-        let id = self.doc.create_element(QualName::html(name));
+        let qname = self.resolve_element_name(name);
+        let svg_attrs = qname.namespace == Namespace::Svg;
+        let id = self.doc.create_element(qname);
         if let NodeData::Element {
             attrs: dom_attrs, ..
         } = &mut self.doc.get_mut(id).data
         {
             for (k, v) in attrs {
+                let local = if svg_attrs {
+                    foreign_content::adjust_svg_attribute_name(k).to_string()
+                } else {
+                    k.clone()
+                };
                 dom_attrs.push(Attribute {
-                    name: QualName::html(k.clone()),
+                    name: QualName::html(local),
                     value: v.clone(),
                 });
             }
         }
         id
+    }
+
+    /// Namespace-aware qualified name for a newly created element — HTML by
+    /// default, SVG while [`current_namespace`][Self::current_namespace] is
+    /// already SVG or the tag being opened is `<svg>` itself (HTML LS
+    /// §13.2.6.5 "insert a foreign element", GAP-XMLDOC срез 3, BUG-685).
+    /// MathML is not implemented — see `crate::foreign_content`.
+    fn resolve_element_name(&self, name: &str) -> QualName {
+        match self.current_namespace() {
+            Namespace::Svg => QualName {
+                namespace: Namespace::Svg,
+                local: foreign_content::adjust_svg_tag_name(name).to_string(),
+            },
+            _ if name == "svg" => QualName {
+                namespace: Namespace::Svg,
+                local: "svg".to_string(),
+            },
+            _ => QualName::html(name),
+        }
+    }
+
+    /// Namespace of the current node (`open_elements` top), or `Html` for
+    /// an empty stack (document root).
+    fn current_namespace(&self) -> Namespace {
+        self.open_elements
+            .last()
+            .map(|&id| self.node_namespace(id))
+            .unwrap_or(Namespace::Html)
+    }
+
+    /// Namespace stored on `id`'s `QualName` — `Html` if `id` isn't an
+    /// element (shouldn't happen for a stack entry, but this stays a total
+    /// function rather than one more `unwrap()`).
+    fn node_namespace(&self, id: NodeId) -> Namespace {
+        match &self.doc.get(id).data {
+            NodeData::Element { name, .. } => name.namespace,
+            _ => Namespace::Html,
+        }
     }
 
     /// Resolve the current insertion parent.
@@ -2066,22 +2169,30 @@ impl IncrementalTreeBuilder {
     }
 
     /// Pushes a just-created non-void element onto the open-elements stack,
-    /// then — only in [`xml_mode`][Self::xml_mode] — immediately pops it
-    /// back off if the start tag was self-closing (GAP-XMLDOC срез 2).
+    /// then immediately pops it back off if the start tag was self-closing
+    /// and either [`xml_mode`][Self::xml_mode] is on (GAP-XMLDOC срез 2) or
+    /// `el` is a foreign (SVG) element (GAP-XMLDOC срез 3, BUG-685).
     ///
     /// HTML5 (§13.2.5.32 "before attribute value state" note) defines the
     /// self-closing flag but the tree builder ignores it outside void/foreign
     /// elements — real markup does this too (`<br/>text` closes `br`, a void
-    /// element, either way) and Lumen follows that for ordinary documents.
-    /// XML-flavoured documents (`.xhtml`/`.xht`/`.svg`) rely on the opposite
-    /// rule: `<div class="a"/>` is XML well-formed and self-closes. Without
-    /// this, a self-closing non-void tag opens an element it never closes,
-    /// so N sibling self-closing tags become N nested elements — measured on
-    /// the corpus (BUG-786 "Вторая грань") to turn `flex-direction: column`
-    /// layouts with O(2^depth) cost into TIMEOUTs.
+    /// element, either way) and Lumen follows that for ordinary HTML
+    /// elements. Two exceptions honour the flag instead:
+    /// * XML-flavoured documents (`.xhtml`/`.xht`/`.svg`) — `<div class="a"/>`
+    ///   is XML well-formed and self-closes. Without this, a self-closing
+    ///   non-void tag opens an element it never closes, so N sibling
+    ///   self-closing tags become N nested elements — measured on the
+    ///   corpus (BUG-786 "Вторая грань") to turn `flex-direction: column`
+    ///   layouts with O(2^depth) cost into TIMEOUTs.
+    /// * Foreign content (§13.2.6.5 step 4) honours the self-closing flag
+    ///   unconditionally, in *any* document — `<rect/>`/`<circle/>` inside an
+    ///   inline `<svg>` are the common case and are never void elements per
+    ///   HTML's fixed list, so without this every sibling shape nests inside
+    ///   the previous one the same way BUG-786 did for XML documents.
     fn push_open_element(&mut self, el: NodeId, self_closing: bool) {
         self.open_elements.push(el);
-        if self.xml_mode && self_closing {
+        let is_foreign = self.node_namespace(el) == Namespace::Svg;
+        if self_closing && (self.xml_mode || is_foreign) {
             self.open_elements.pop();
         }
     }
@@ -4216,5 +4327,87 @@ mod tests {
             matches!(&doc.get(n).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
         });
         assert!(has_p, "<p> after self-closing <script/> must survive: {}", doc);
+    }
+
+    #[test]
+    fn svg_descendants_get_svg_namespace() {
+        // GAP-XMLDOC срез 3, BUG-685: everything under <svg> must stop landing
+        // in Namespace::Html.
+        let doc = parse("<body><svg><rect/><g><circle/></g></svg></body>");
+        let body = doc.body().expect("body");
+        let svg = doc.get(body).children.first().copied().expect("svg");
+        let NodeData::Element { name, .. } = &doc.get(svg).data else {
+            panic!("svg must be an element: {doc}");
+        };
+        assert_eq!(name.namespace, Namespace::Svg, "svg element: {doc}");
+        let rect = doc.get(svg).children.first().copied().expect("rect");
+        let NodeData::Element { name: rect_name, .. } = &doc.get(rect).data else {
+            panic!("rect must be an element: {doc}");
+        };
+        assert_eq!(rect_name.namespace, Namespace::Svg, "rect element: {doc}");
+    }
+
+    #[test]
+    fn svg_camel_case_tag_names_are_restored() {
+        // The tokenizer lower-cases every tag name; foreign content must map
+        // it back via the SVG spec's mixed-case table (BUG-685).
+        let doc = parse("<svg><lineargradient id=\"g\"></lineargradient></svg>");
+        let svg_id = doc
+            .get(doc.root())
+            .children
+            .iter()
+            .find_map(|&c| find_node(&doc, c, "svg"))
+            .unwrap_or_else(|| panic!("svg node id: {doc}"));
+        let grad = doc.get(svg_id).children.first().copied().expect("linearGradient child");
+        let NodeData::Element { name, .. } = &doc.get(grad).data else {
+            panic!("child must be an element: {doc}");
+        };
+        assert_eq!(name.local, "linearGradient", "case must be restored: {doc}");
+    }
+
+    #[test]
+    fn svg_self_closing_shapes_do_not_nest_siblings() {
+        // §13.2.6.5 step 4 honours the self-closing flag unconditionally in
+        // foreign content, unlike ordinary HTML elements (BUG-685).
+        let doc = parse("<svg><rect/><circle/></svg>");
+        let svg = doc
+            .get(doc.root())
+            .children
+            .iter()
+            .find_map(|&c| find_node(&doc, c, "svg"))
+            .unwrap_or_else(|| panic!("svg node id: {doc}"));
+        assert_eq!(
+            doc.get(svg).children.len(),
+            2,
+            "rect + circle must be siblings, not nested: {}",
+            doc
+        );
+    }
+
+    #[test]
+    fn svg_breakout_tag_returns_to_html_namespace() {
+        // <div> is on the §13.2.6.5 breakout list — it must land back in
+        // Namespace::Html even while nested inside <svg>.
+        let doc = parse("<svg><foreignObject><div>text</div></foreignObject></svg>");
+        let div = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "div"))
+            .expect("div element");
+        let NodeData::Element { name, .. } = &div.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html, "breakout div: {doc}");
+    }
+
+    /// Test helper: depth-first search under `id` for the first element whose
+    /// local name is `local`, ASCII-case-insensitively.
+    fn find_node(doc: &Document, id: NodeId, local: &str) -> Option<NodeId> {
+        if matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case(local))
+        {
+            return Some(id);
+        }
+        doc.get(id)
+            .children
+            .iter()
+            .find_map(|&c| find_node(doc, c, local))
     }
 }
