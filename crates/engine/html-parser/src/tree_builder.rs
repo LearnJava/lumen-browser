@@ -877,21 +877,22 @@ impl IncrementalTreeBuilder {
                         | "title"
                 ) =>
             {
-                // Process as in InHead. `script`/`style`/`noframes`/`title`
-                // switch insertion_mode to Text as a side effect (RAWTEXT
-                // capture) that must survive this call — restoring `saved`
-                // unconditionally clobbered it back to InBody before the
-                // element's own Text/EndTag tokens arrived, so CDATA-strip
-                // (routed only through mode_text's EndTag arm, GAP-XMLDOC
-                // срез 5) silently never ran for one of these tags seen
-                // after body already opened. Same "only restore if InHead
-                // didn't move us elsewhere" guard as `<template>` below.
-                let saved = self.insertion_mode;
-                self.insertion_mode = InsertionMode::InHead;
-                self.dispatch(token);
-                if self.insertion_mode == InsertionMode::InHead {
-                    self.insertion_mode = saved;
-                }
+                // §13.2.6.4.7 "in body": "process the token using the
+                // rules for the 'in head' insertion mode" is a plain
+                // delegation, not a mode switch — call `mode_in_head`
+                // directly instead of mutating `self.insertion_mode` first.
+                // `script`/`style`/`noframes`/`title` capture
+                // `self.insertion_mode` as `original_insertion_mode` to
+                // restore once their RAWTEXT body's closing tag arrives
+                // (§13.2.6.2 "generic raw text element parsing algorithm");
+                // if this call first forced `insertion_mode` to `InHead`,
+                // that capture recorded `InHead` instead of the real
+                // current mode (`InBody`), and restoring it later routed
+                // the tag *after* the script/style through InHead's
+                // "anything else" fallback — which treats stray content as
+                // still being in `<head>` and reopens a second `<body>`
+                // (GAP-XMLDOC срез 5 test regression, BUG-685).
+                self.mode_in_head(token);
             }
             // `<template>` in body: delegate to InHead processing which switches
             // to InTemplate — do NOT restore mode afterwards.
