@@ -2151,15 +2151,35 @@ impl IncrementalTreeBuilder {
         } = &mut self.doc.get_mut(id).data
         {
             for (k, v) in attrs {
-                let local = match namespace {
-                    Namespace::Svg => foreign_content::adjust_svg_attribute_name(k).to_string(),
-                    Namespace::MathMl => {
-                        foreign_content::adjust_mathml_attribute_name(k).to_string()
+                // §13.2.6.5 "adjust foreign attributes" runs for both foreign
+                // namespaces before the per-namespace case-restoration table
+                // below — `xlink:href` on a MathML element is just as much a
+                // foreign attribute as on an SVG one (GAP-XMLDOC срез 10).
+                let foreign_ns = if matches!(namespace, Namespace::Svg | Namespace::MathMl) {
+                    foreign_content::adjust_foreign_attribute(k)
+                } else {
+                    None
+                };
+                let attr_name = match foreign_ns {
+                    Some(ns) => QualName {
+                        namespace: ns,
+                        local: k.clone(),
+                    },
+                    None => {
+                        let local = match namespace {
+                            Namespace::Svg => {
+                                foreign_content::adjust_svg_attribute_name(k).to_string()
+                            }
+                            Namespace::MathMl => {
+                                foreign_content::adjust_mathml_attribute_name(k).to_string()
+                            }
+                            _ => k.clone(),
+                        };
+                        QualName::html(local)
                     }
-                    _ => k.clone(),
                 };
                 dom_attrs.push(Attribute {
-                    name: QualName::html(local),
+                    name: attr_name,
                     value: v.clone(),
                 });
             }
@@ -4776,6 +4796,88 @@ mod tests {
             attrs.iter().any(|a| a.name.local == "definitionURL"),
             "definitionurl must be case-restored: {doc}"
         );
+    }
+
+    #[test]
+    fn svg_xlink_href_gets_xlink_namespace() {
+        // GAP-XMLDOC срез 10, BUG-685: §13.2.6.5 "adjust foreign attributes".
+        let doc = parse(r##"<svg><use xlink:href="#a"></use></svg>"##);
+        let use_el = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "use"))
+            .expect("use element");
+        let NodeData::Element { attrs, .. } = &use_el.data else {
+            unreachable!()
+        };
+        let attr = attrs
+            .iter()
+            .find(|a| a.name.local == "xlink:href")
+            .unwrap_or_else(|| panic!("xlink:href attribute: {doc}"));
+        assert_eq!(attr.name.namespace, Namespace::XLink);
+        assert_eq!(attr.value, "#a");
+    }
+
+    #[test]
+    fn mathml_xlink_href_gets_xlink_namespace() {
+        // Foreign-attribute adjustment runs for MathML too, not just SVG.
+        let doc = parse(r##"<math><mi xlink:href="#a">x</mi></math>"##);
+        let mi = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "mi"))
+            .expect("mi element");
+        let NodeData::Element { attrs, .. } = &mi.data else {
+            unreachable!()
+        };
+        let attr = attrs
+            .iter()
+            .find(|a| a.name.local == "xlink:href")
+            .unwrap_or_else(|| panic!("xlink:href attribute: {doc}"));
+        assert_eq!(attr.name.namespace, Namespace::XLink);
+    }
+
+    #[test]
+    fn xmlns_and_xml_lang_get_their_namespace() {
+        let doc = parse(r#"<svg xmlns:xlink="http://www.w3.org/1999/xlink"><rect xml:lang="en"></rect></svg>"#);
+        let svg = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "svg"))
+            .expect("svg element");
+        let NodeData::Element { attrs, .. } = &svg.data else {
+            unreachable!()
+        };
+        let xmlns_xlink = attrs
+            .iter()
+            .find(|a| a.name.local == "xmlns:xlink")
+            .unwrap_or_else(|| panic!("xmlns:xlink attribute: {doc}"));
+        assert_eq!(xmlns_xlink.name.namespace, Namespace::XmlNs);
+
+        let rect = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "rect"))
+            .expect("rect element");
+        let NodeData::Element { attrs, .. } = &rect.data else {
+            unreachable!()
+        };
+        let xml_lang = attrs
+            .iter()
+            .find(|a| a.name.local == "xml:lang")
+            .unwrap_or_else(|| panic!("xml:lang attribute: {doc}"));
+        assert_eq!(xml_lang.name.namespace, Namespace::Xml);
+    }
+
+    #[test]
+    fn plain_svg_attributes_keep_html_namespace() {
+        // Only the eleven listed names get a real namespace — everything
+        // else (including `href` itself, unlike its `xlink:` sibling) stays
+        // Html-namespaced, matching every other SVG/MathML attribute.
+        let doc = parse(r##"<svg><a href="#a"></a></svg>"##);
+        let a = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "a"))
+            .expect("a element");
+        let NodeData::Element { attrs, .. } = &a.data else {
+            unreachable!()
+        };
+        let href = attrs
+            .iter()
+            .find(|attr| attr.name.local == "href")
+            .unwrap_or_else(|| panic!("href attribute: {doc}"));
+        assert_eq!(href.name.namespace, Namespace::Html);
     }
 
     #[test]

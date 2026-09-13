@@ -6,14 +6,19 @@
 //! MathML `<annotation-xml>` with an HTML-flavoured `encoding`, and the
 //! MathML text integration points `<mi>`/`<mo>`/`<mn>`/`<ms>`/`<mtext>`) are
 //! all covered; the §13.2.6.5 "any other start tag" breakout list is shared
-//! between the two namespaces per spec. Not implemented, and out of scope:
-//! foreign-attribute namespacing (`xlink:href` stays a plain attribute
-//! instead of gaining `Namespace::XLink`). See `bugs/BUG-685-OPEN.md` for
-//! the measured remainder.
+//! between the two namespaces per spec. Foreign-attribute namespacing
+//! (`xlink:href` and friends, GAP-XMLDOC срез 10, same bug) is covered for
+//! the eleven names §13.2.6.5 "adjust foreign attributes" lists; general
+//! namespace-prefix resolution (an arbitrary `xmlns:foo="..."` binding) is
+//! not — same "point fix, not a resolver" boundary as
+//! [`strip_known_html_prefix`]. See `bugs/BUG-685-OPEN.md` for the measured
+//! remainder.
 //!
 //! This module only supplies the static lookup tables and the "does this
 //! start tag break out of foreign content" decision — the tree builder
 //! drives the actual stack manipulation.
+
+use lumen_dom::Namespace;
 
 /// "Adjust SVG tag names" (§13.2.6.5, "insert a foreign element"). The
 /// tokenizer already lower-cases every tag name (§13.2.5.8 "tag name
@@ -142,6 +147,28 @@ pub(crate) fn adjust_svg_attribute_name(lower: &str) -> &str {
     }
 }
 
+/// "Adjust foreign attributes" (§13.2.6.5) — the eleven `xlink:`/`xml:`/
+/// `xmlns` attribute names get a real namespace instead of staying a plain
+/// HTML-namespaced attribute, on any element in the SVG or MathML namespace
+/// (the spec runs this step for both, not per-namespace like the tag/
+/// attribute-case tables above). The tokenizer already lower-cases every
+/// attribute name (§13.2.5.32 "attribute name state"), and all eleven names
+/// are already lower-case in the spec, so there is no case to restore here
+/// — this table only classifies. `local` in the returned pair is the
+/// qualified name as written (`xlink:href`, not `href`): Lumen's attribute
+/// model has no separate prefix field, so the qualified string doubles as
+/// both the storage key existing `Node::get_attr("xlink:href")` call sites
+/// already use and the serialization name; only `namespace` changes.
+pub(crate) fn adjust_foreign_attribute(name: &str) -> Option<Namespace> {
+    match name {
+        "xlink:actuate" | "xlink:arcrole" | "xlink:href" | "xlink:role" | "xlink:show"
+        | "xlink:title" | "xlink:type" => Some(Namespace::XLink),
+        "xml:lang" | "xml:space" => Some(Namespace::Xml),
+        "xmlns" | "xmlns:xlink" => Some(Namespace::XmlNs),
+        _ => None,
+    }
+}
+
 /// §13.2.6.5 "any other start tag" breakout list: these HTML tag names pop
 /// back out of foreign content instead of becoming a foreign (SVG or
 /// MathML) element, even while the current node is foreign — the spec
@@ -243,6 +270,31 @@ mod tests {
     fn plain_attributes_left_alone() {
         assert_eq!(adjust_svg_attribute_name("id"), "id");
         assert_eq!(adjust_svg_attribute_name("class"), "class");
+    }
+
+    #[test]
+    fn foreign_attributes_get_their_namespace() {
+        assert_eq!(adjust_foreign_attribute("xlink:href"), Some(Namespace::XLink));
+        assert_eq!(adjust_foreign_attribute("xlink:show"), Some(Namespace::XLink));
+        assert_eq!(adjust_foreign_attribute("xlink:actuate"), Some(Namespace::XLink));
+        assert_eq!(adjust_foreign_attribute("xlink:arcrole"), Some(Namespace::XLink));
+        assert_eq!(adjust_foreign_attribute("xlink:role"), Some(Namespace::XLink));
+        assert_eq!(adjust_foreign_attribute("xlink:title"), Some(Namespace::XLink));
+        assert_eq!(adjust_foreign_attribute("xlink:type"), Some(Namespace::XLink));
+        assert_eq!(adjust_foreign_attribute("xml:lang"), Some(Namespace::Xml));
+        assert_eq!(adjust_foreign_attribute("xml:space"), Some(Namespace::Xml));
+        assert_eq!(adjust_foreign_attribute("xmlns"), Some(Namespace::XmlNs));
+        assert_eq!(adjust_foreign_attribute("xmlns:xlink"), Some(Namespace::XmlNs));
+    }
+
+    #[test]
+    fn plain_and_unknown_prefixed_attributes_are_not_foreign() {
+        assert_eq!(adjust_foreign_attribute("href"), None);
+        assert_eq!(adjust_foreign_attribute("id"), None);
+        // Custom xmlns bindings other than the two the spec lists by name
+        // are out of scope (general namespace resolution, not a point fix).
+        assert_eq!(adjust_foreign_attribute("xmlns:foo"), None);
+        assert_eq!(adjust_foreign_attribute("xml:base"), None);
     }
 
     #[test]

@@ -230,6 +230,99 @@ pub(super) fn remove_attribute(doc: &mut lumen_dom::Document, id: lumen_dom::Nod
     }
 }
 
+/// DOM §4.5 "validate and extract" namespace resolution, attribute-namespacing
+/// slice (GAP-XMLDOC срез 10, BUG-685): the reverse of [`namespace_uri`],
+/// restricted to the namespaces Lumen's closed `Namespace` enum can actually
+/// represent. `None` means "not one of the namespaces Lumen tracks for
+/// attributes" — distinct from `Namespace::Html`'s "definitely no namespace",
+/// since a caller-supplied URI Lumen has no representation for is neither
+/// (same BUG-830 "no general namespace registry yet" limitation as
+/// `_lumen_create_element_ns`, applied to attributes rather than elements).
+fn known_attribute_namespace(ns: Option<&str>) -> Option<lumen_dom::Namespace> {
+    match ns? {
+        "http://www.w3.org/1999/xlink" => Some(lumen_dom::Namespace::XLink),
+        "http://www.w3.org/XML/1998/namespace" => Some(lumen_dom::Namespace::Xml),
+        "http://www.w3.org/2000/xmlns/" => Some(lumen_dom::Namespace::XmlNs),
+        "http://www.w3.org/2000/svg" => Some(lumen_dom::Namespace::Svg),
+        "http://www.w3.org/1998/Math/MathML" => Some(lumen_dom::Namespace::MathMl),
+        _ => None,
+    }
+}
+
+/// `setAttributeNS`'s namespace resolution — like [`known_attribute_namespace`],
+/// but a `null`/empty/unrecognized `ns` falls back to `Namespace::Html`
+/// instead of "unknown", matching every already-existing plain attribute and
+/// `_lumen_create_element_ns`'s own fallback, rather than being rejected.
+pub(super) fn resolve_attribute_namespace(ns: Option<&str>) -> lumen_dom::Namespace {
+    known_attribute_namespace(ns).unwrap_or(lumen_dom::Namespace::Html)
+}
+
+/// `getAttributeNS`/`hasAttributeNS`/`removeAttributeNS` (GAP-XMLDOC срез 10,
+/// BUG-685, BUG-309): finds the stored qualified name of the attribute whose
+/// namespace URI is `ns` and whose local name (the qualified name's suffix
+/// after the last `:`, or the whole name if there is none) is `local_name`.
+/// `ns` of `None`/empty/unrecognized falls back to a plain by-name lookup —
+/// the DOM standard's "no namespace" case for the first two, and (BUG-309,
+/// BUG-830) the best Lumen can do for a namespace URI it has no
+/// representation for, matching pre-срез-10 behavior for that case rather
+/// than newly reporting "not found" for every attribute set through it.
+pub(super) fn find_attr_by_namespace(
+    doc: &lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    ns: Option<&str>,
+    local_name: &str,
+) -> Option<String> {
+    let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(id).data else {
+        return None;
+    };
+    match known_attribute_namespace(ns) {
+        None => attrs
+            .iter()
+            .find(|a| a.name.local == local_name)
+            .map(|a| a.name.local.clone()),
+        Some(known) => attrs
+            .iter()
+            .find(|a| {
+                a.name.namespace == known && a.name.local.rsplit(':').next() == Some(local_name)
+            })
+            .map(|a| a.name.local.clone()),
+    }
+}
+
+/// `setAttributeNS(namespace, qualifiedName, value)` (GAP-XMLDOC срез 10,
+/// BUG-685, BUG-309): unlike [`set_attribute`], tags the attribute with the
+/// namespace resolved from `ns` instead of always `Html`. An existing
+/// attribute is matched by its stored qualified name (same identity model as
+/// every other attribute accessor here — Lumen has no separate prefix field),
+/// and has its namespace corrected too, since the whole point of calling the
+/// `NS` form is to declare one.
+pub(super) fn set_attribute_ns(
+    doc: &mut lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    ns: Option<&str>,
+    qualified_name: &str,
+    value: &str,
+) {
+    let namespace = resolve_attribute_namespace(ns);
+    if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+        if let Some(attr) = attrs
+            .iter_mut()
+            .find(|a| a.name.local.eq_ignore_ascii_case(qualified_name))
+        {
+            attr.name.namespace = namespace;
+            attr.value = value.to_string();
+        } else {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName {
+                    namespace,
+                    local: qualified_name.to_string(),
+                },
+                value: value.to_string(),
+            });
+        }
+    }
+}
+
 // ── innerHTML/outerHTML/insertAdjacentHTML (BUG-368, BUG-351) ─────────────────
 
 /// HTML LS §13.1.2 void elements — no content model, no closing tag when serialized.

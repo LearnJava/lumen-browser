@@ -577,3 +577,90 @@ CPU-эталонов (`lumen-driver::cases::snapshot_cpu`,
 `55-text-rendering`/`57-canvas-2d`/`32-list-markers`/`34-forms`/
 `45-multiple-backgrounds`/`51-scrollbar-rendering`/`1000000-final`),
 подтверждённого идентичным на чистом `main` без этого среза.
+
+## GAP-XMLDOC срез 10 (2026-09-14): foreign-attribute namespacing (`xlink:href` и другие)
+
+Закрывает пробел, который срезы 3 и 8 сознательно оставляли открытым:
+HTML LS §13.2.6.5 "adjust foreign attributes" — одиннадцать имён
+(`xlink:actuate`/`arcrole`/`href`/`role`/`show`/`title`/`type`,
+`xml:lang`/`space`, `xmlns`, `xmlns:xlink`) внутри SVG или MathML должны
+получать реальный namespace вместо обычного HTML-атрибута. По корпусу
+вендоренного WPT `xlink:`-атрибуты встречаются в **763** `.svg`/`.xhtml`/
+`.xht`/`.html`-файлах — на два порядка больше, чем у любого другого
+оставшегося пробела GAP-XMLDOC (self-closing `table`/`select`/`button` —
+0 совпадений тем же грепом, до сих пор неизмерены; SVG `<title>` с markup,
+не знающий о namespace токенизатор — 1 файл).
+
+Живой, воспроизводимый дефект, а не только пробел в спеке: JS-мост уже
+явно документировал игнорирование — `getAttributeNS`/`setAttributeNS`/
+`hasAttributeNS`/`removeAttributeNS` принимали и отбрасывали аргумент
+namespace (комментарий "the namespace argument is accepted but ignored",
+BUG-309), а `Attr.namespaceURI` был захардкожен в `null` — при том что
+структура `Attribute`/`QualName`/`Namespace` (`crates/engine/dom/src/lib.rs`)
+уже несёт поле namespace и варианты `Xml`/`XmlNs`/`XLink` уже существовали,
+просто ничего их не заполняло и не читало.
+
+Механизм — точечная доработка, не резолвер (та же граница, что и у
+[`strip_known_html_prefix`], срез 5):
+
+- `foreign_content::adjust_foreign_attribute` — новая таблица (по образцу
+  `adjust_mathml_attribute_name`), классифицирует ровно одиннадцать имён в
+  `Namespace`; токенизатор уже лишь приводит атрибуты к нижнему регистру, и
+  все одиннадцать имён и так целиком строчные в спеке, так что
+  восстанавливать нечего — только классификация.
+- `tree_builder::create_element_with_attrs` — шаг «adjust foreign attributes»
+  идёт ПЕРЕД таблицами case-restoration для SVG/MathML и применяется на
+  любом элементе в обоих foreign-неймспейсах разом (в отличие от
+  `adjust_svg_attribute_name`/`adjust_mathml_attribute_name`, которые
+  привязаны каждая к своему), как того требует спека. `local` в
+  `QualName` остаётся полным квалифицированным именем (`xlink:href`, не
+  `href`) — у модели атрибутов Lumen нет отдельного поля prefix, так что
+  строка одновременно служит и ключом хранения, которым уже пользуются
+  существующие сайты `Node::get_attr("xlink:href")`
+  (`crates/engine/layout/src/box_tree/svg.rs`,
+  `crates/engine/layout/src/box_tree/image_requests.rs`), и именем
+  сериализации; меняется только `namespace`.
+- JS-мост (`crates/js/src/v8_runtime/install/dom_core.rs`,
+  `crates/js/src/v8_runtime/dom_helpers.rs`,
+  `crates/js/src/shim/web_api_shim_mid.js`): новый натив
+  `_lumen_get_attr_namespace_uri` питает `Attr.namespaceURI` (было
+  `null` всегда); новый натив `_lumen_find_attr_by_ns` находит хранимое
+  квалифицированное имя атрибута по (namespace URI, local name) и питает
+  `getAttributeNS`/`hasAttributeNS`/`removeAttributeNS`; новый натив
+  `_lumen_set_attr_ns` (+ `dom_helpers::set_attribute_ns`) заводит атрибут
+  с реальным namespace вместо всегда-`Html` для `setAttributeNS`. Namespace
+  URI, не входящий в известный набор (xlink/xml/xmlns/svg/mathml), даёт
+  плоский поиск по имени — тот же откат на `Html`, что уже делает
+  `_lumen_create_element_ns` для элементов (BUG-830, «нет общего реестра
+  namespace»), сохраняющий дособытийное поведение для `getAttributeNS`
+  с произвольным `ns`, а не превращающий каждый такой атрибут в
+  ненаходимый.
+
+**Сознательно не сделано**: `NamedNodeMap.getNamedItemNS`/
+`setNamedItemNS`/`removeNamedItemNS` и `Element.getAttributeNodeNS`
+по-прежнему откатываются на плоский по-имени путь (не входили в измеренный
+корпусом список, тот же выбор границы, что и general namespace-prefix
+resolution). Общая проблема — токенизатор выбирает RAWTEXT/RCDATA без учёта
+namespace (найдено в срезе 8, SVG `<title>` с markup) — не тронута, как и
+self-closing `<table>`/`<select>`/`<button>` (срез 2, по-прежнему 0
+совпадений по корпусу).
+
+Тесты: `svg_xlink_href_gets_xlink_namespace`,
+`mathml_xlink_href_gets_xlink_namespace`,
+`xmlns_and_xml_lang_get_their_namespace`,
+`plain_svg_attributes_keep_html_namespace` (`tree_builder.rs`);
+`foreign_attributes_get_their_namespace`,
+`plain_and_unknown_prefixed_attributes_are_not_foreign`
+(`foreign_content.rs`); `attribute_ns_methods_are_namespace_aware_for_xlink`,
+`parser_built_xlink_href_reports_its_real_namespace_uri`,
+`plain_attribute_namespace_uri_is_null`, и обновлённый
+`attribute_ns_methods_fall_back_to_name_based_for_an_unknown_namespace`
+(было `..._are_name_based`, `crates/js/src/dom/tests/v8_perf_observers.rs`).
+`cargo test -p lumen-html-parser` — 461/461 юнит + 9/9 интеграционных
+зелёные. `cargo test -p lumen-js --lib --features v8-backend` — 3620/3620
+зелёные. `cargo clippy -p lumen-html-parser --all-targets -- -D warnings` и
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` — чисто. `scripts/scoped-test.sh` (17 крейтов) — зелёный, кроме
+того же чужого дрейфа CPU-эталонов (`lumen-driver::cases::snapshot_cpu`,
+тот же список семи фикстур, что и в срезах 6–9), не связанного с этой
+правкой (парсер атрибутов и JS-мост, не растеризация).
