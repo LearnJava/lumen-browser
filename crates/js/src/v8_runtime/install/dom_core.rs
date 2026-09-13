@@ -1132,8 +1132,12 @@ pub(crate) fn install_shadow_dom(
             doc.try_get(cur)?;
             loop {
                 let node = doc.get(cur);
+                // BUG-878: a `ShadowRoot`'s own `Node::parent` is never set
+                // (`attach_shadow` doc comment), so the host must come from the
+                // `host -> root` map (`Document::shadow_host_of`), not from
+                // walking `parent` one step further like every other ancestor.
                 if matches!(node.data, NodeData::ShadowRoot { .. }) {
-                    return node.parent.map(|h| h.index() as u32);
+                    return doc.shadow_host_of(cur).map(|h| h.index() as u32);
                 }
                 {
                     let p = node.parent?;

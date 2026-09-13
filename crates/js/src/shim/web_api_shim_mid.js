@@ -7537,7 +7537,11 @@ _lumen_canvas_define_dim('height', 1, 150);
             var cur = nid;
             while (cur !== null) {
                 if (cur === htmlId) return true;
-                cur = _lumen_u2n(_lumen_get_parent(cur));
+                // BUG-878: bridge the ShadowRoot -> host boundary the plain
+                // parent pointer doesn't cross — see `_lumen_resource_is_connected`.
+                var parent = _lumen_u2n(_lumen_get_parent(cur));
+                if (parent === null) parent = _lumen_u2n(_lumen_get_shadow_root_host(cur));
+                cur = parent;
             }
             return false;
         },
@@ -10346,13 +10350,24 @@ function _lumen_resource_track(nid, local) {
 
 // Same shadow-inclusive test as Node.isConnected, by nid alone — no element
 // wrapper is allocated, because this runs on the DOM insertion hot path.
+//
+// BUG-878: `_lumen_get_parent` follows only the *actual* DOM parent pointer,
+// which stops dead at a `ShadowRoot` node — it is deliberately not a DOM
+// child of its host (`attach_shadow`'s doc comment). A script inserted into a
+// shadow tree therefore walked up to the root and then hit a `null` parent
+// forever, reading as permanently disconnected even while its host sat right
+// under `<html>`. Bridging through `_lumen_get_shadow_root_host` at the point
+// the plain-parent walk dead-ends restores the shadow-inclusive ancestor
+// chain DOM LS §4.4 actually specifies.
 function _lumen_resource_is_connected(nid) {
     var htmlId = _lumen_u2n(_lumen_get_html_element());
     if (htmlId === null) return false;
     var cur = nid;
     while (cur !== null && cur !== undefined) {
         if (cur === htmlId) return true;
-        cur = _lumen_u2n(_lumen_get_parent(cur));
+        var parent = _lumen_u2n(_lumen_get_parent(cur));
+        if (parent === null) parent = _lumen_u2n(_lumen_get_shadow_root_host(cur));
+        cur = parent;
     }
     return false;
 }
