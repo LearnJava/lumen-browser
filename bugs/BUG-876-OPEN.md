@@ -57,3 +57,21 @@ DOM Standard §4.2.2.4 «assign slottables»: при вставке/удален
 поставить `slotchange` в очередь микрозадач для затронутых слотов. Сейчас
 пересчёта нет вовсе — `assignedNodes` считает по дереву в момент вызова и
 на живом хосте даёт пусто, а очереди `slotchange` не существует.
+
+## Побочное исправление половины (BUG-878, 2026-09-13, `p1-gap-loadev-bug878`)
+
+`assignedNodes()` возвращало пусто не из-за отсутствующей логики
+распределения (фильтр по атрибуту `slot` уже был на месте,
+`web_api_shim_mid.js`'s `assignedNodes`), а из-за того же нативного
+дефекта, что BUG-878: `_lumen_get_shadow_root_host(slotNid)` не мог найти
+хост, потому что искал его через `.parent` самого узла `ShadowRoot`
+(никогда не установлен — `ShadowRoot` намеренно не DOM-ребёнок host'а),
+вместо обратного поиска по карте `host -> root`. Фикс BUG-878
+(`Document::shadow_host_of`) чинит и этот вызов —
+`assigned_nodes_resolves_light_dom_slottable_via_shadow_host`
+(`crates/js/src/dom/tests/v8_fontface_shadow_custom.rs`) подтверждает
+`assignedNodes().length === 1` для ровно той разметки, что в §Симптом.
+
+**Не тронуто:** диспатч `slotchange` — точки диспатча по-прежнему нет
+нигде в кодовой базе, это отдельная, не начатая часть задачи. Статус
+остаётся `OPEN`.

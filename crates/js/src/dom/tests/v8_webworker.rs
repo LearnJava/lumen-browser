@@ -292,6 +292,51 @@ fn dynamic_external_script_fires_error_on_http_failure() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// ── BUG-878: `<script src>` appended into a shadow root ─────────────────
+
+/// The same chunk-loader shape as `dynamic_external_script_executes_and_fires_load`,
+/// but the script is appended to an open shadow root instead of `document.head`.
+/// `_lumen_resource_is_connected`'s plain-parent walk used to dead-end at the
+/// `ShadowRoot` node (never a DOM child of its host), so the element stayed
+/// "pending" forever and the fetch never started.
+#[test]
+fn dynamic_external_script_in_shadow_root_executes_and_fires_load() {
+    let provider = Arc::new(FixedFetch { status: 200, body: "globalThis.__b878_ext = 7;" });
+    let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+    rt.eval(
+        r#"globalThis.__b878_ext_load = false;
+                   var host = document.createElement('div');
+                   document.body.appendChild(host);
+                   var root = host.attachShadow({mode: 'open'});
+                   var s = document.createElement('script');
+                   s.src = 'chunk.js';
+                   s.onload = function() { globalThis.__b878_ext_load = true; };
+                   root.appendChild(s);
+                   _lumen_tick_timers();"#,
+    )
+    .unwrap();
+    let r = rt
+        .eval("globalThis.__b878_ext === 7 && globalThis.__b878_ext_load === true")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// `isConnected` must also see through the shadow-root boundary — the same
+/// `_lumen_get_parent` dead-end this bug's connectivity check hit.
+#[test]
+fn element_in_connected_shadow_root_is_connected() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        r#"var host = document.createElement('div');
+                   document.body.appendChild(host);
+                   var root = host.attachShadow({mode: 'open'});
+                   var p = document.createElement('p');
+                   root.appendChild(p);"#,
+    )
+    .unwrap();
+    assert!(bool_eval(&rt, "p.isConnected === true"));
+}
+
 // ── BUG-703: dynamic `<link rel=stylesheet>` load/error ────────────────
 
 /// The shape behind the tbank.ru hang: a block loader appends a

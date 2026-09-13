@@ -697,6 +697,21 @@ impl Document {
         self.shadow_roots.get(&host).copied()
     }
 
+    /// Return the host of `shadow_root`, or `None` if it is not currently a
+    /// registered shadow root (stale id or a plain node).
+    ///
+    /// The reverse of [`Document::shadow_root_of`]. A `ShadowRoot`'s own
+    /// `Node::parent` field is never set (`attach_shadow`'s doc comment: "not
+    /// a DOM child of host"), so callers that need to bridge out of a shadow
+    /// tree via its host must go through the `host -> root` map instead of
+    /// following `parent`.
+    pub fn shadow_host_of(&self, shadow_root: NodeId) -> Option<NodeId> {
+        self.shadow_roots
+            .iter()
+            .find(|&(_, &sr)| sr == shadow_root)
+            .map(|(&host, _)| host)
+    }
+
     /// Whether `id` is a shadow host (has an attached shadow root).
     pub fn is_shadow_host(&self, id: NodeId) -> bool {
         self.shadow_roots.contains_key(&id)
