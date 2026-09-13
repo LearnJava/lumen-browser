@@ -355,6 +355,8 @@ pub fn compute_style(
         break_after: BreakValue::Auto,
         break_inside: BreakValue::Auto,
         aspect_ratio: None,
+        width_is_intrinsic_hint: false,
+        height_is_intrinsic_hint: false,
         // Box Alignment — все не наследуются, default = Auto.
         align_items: AlignValue::Auto,
         align_self: AlignValue::Auto,

@@ -315,6 +315,12 @@ pub(in crate::style) fn apply_decl_layout(
                 // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
                 style.width = parse_sizing_length(val, is_quirks);
                 style.anchor_size_w = None;
+                // BUG-736: an authored `width` declaration always wins over
+                // (and cancels) the presentational-hint marker a `width`
+                // content attribute or decoded intrinsic size may have set —
+                // this value is genuinely specified, not a replaced
+                // element's intrinsic-size fallback.
+                style.width_is_intrinsic_hint = false;
             }
         }
         "height" => {
@@ -323,6 +329,8 @@ pub(in crate::style) fn apply_decl_layout(
             } else {
                 style.height = parse_sizing_length(val, is_quirks);
                 style.anchor_size_h = None;
+                // BUG-736: see the `"width"` arm above.
+                style.height_is_intrinsic_hint = false;
             }
         }
         // CSS Logical Properties L1 §2.1 — inline-size / block-size.

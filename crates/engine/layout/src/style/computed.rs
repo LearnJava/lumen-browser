@@ -505,6 +505,27 @@ pub struct ComputedStyle {
     /// Phase 0: parsing — real intrinsic-aspect-ratio enforcement
     /// требует layout-time pass.
     pub aspect_ratio: Option<(f32, f32)>,
+    /// Не CSS-свойство — внутренняя пометка `box_tree::build`: `true`, если
+    /// `width` заполнен не автором, а presentational-hint'ом из декодированных
+    /// intrinsic-пикселей `<img>` (оба `width`/`height` были `auto` — см. ветку
+    /// `is_image_element` в `build.rs`). Отличает «автор явно задал ширину» от
+    /// «ширина — заглушка под intrinsic-размер», что нужно flex-раскладке
+    /// (BUG-736): подставленную ширину нельзя трактовать как разрешающий
+    /// flex-basis `width`, иначе алгоритм CSS Flexbox L1 §9.2/§4.5
+    /// (transferred size через `aspect_ratio`) никогда не срабатывает и
+    /// растянутый/сжатый по main-оси элемент замещения не пересчитывает
+    /// вторую сторону по соотношению. Не наследуется, не сбрасывается кроме
+    /// как через новый `compute_style`.
+    pub width_is_intrinsic_hint: bool,
+    /// Same as [`Self::width_is_intrinsic_hint`], for `height`. Both an
+    /// `<img>` element's own `width`/`height` content attributes (whether the
+    /// author wrote them or the shell filled them in after decode — see
+    /// `image_requests::apply_intrinsic_size`) go through the SAME
+    /// presentational-hint path (`apply_image_presentational_hints`), so both
+    /// axes need this flag independently: a replaced element commonly has
+    /// both attributes at once, and BUG-736's row-direction flex case is
+    /// gated on the CROSS axis (height) hint, not the main axis (width) one.
+    pub height_is_intrinsic_hint: bool,
     /// CSS Box Alignment L3 — alignment свойства для flex/grid items.
     /// Все не наследуются. Phase 0: parsing only.
     pub align_items: AlignValue,
@@ -1172,6 +1193,8 @@ impl ComputedStyle {
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
             aspect_ratio: None,
+            width_is_intrinsic_hint: false,
+            height_is_intrinsic_hint: false,
             align_items: AlignValue::Auto,
             align_self: AlignValue::Auto,
             align_content: AlignValue::Auto,
