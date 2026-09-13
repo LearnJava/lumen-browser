@@ -166,6 +166,13 @@ pub struct PopupRequest {
     /// shell resolves it to the popup's real tab id once created, so a
     /// `postMessage` the opener queued before that point still finds it.
     pub token: u32,
+    /// GAP-NAVCTX срез 11 (BUG-797): `true` when `features` carries a
+    /// `noopener` or `noreferrer` token (HTML LS §7.2.2.1 boolean feature —
+    /// present at all means "on", the parser does not look at a value). Same
+    /// carve-out `click.rs`/`frame_links.rs` already apply to `rel`: the
+    /// shell must not arm `window_messaging::arm_pending_opener` for this
+    /// popup, leaving the JS shim's `window.opener = null` default in place.
+    pub no_opener: bool,
 }
 
 /// A print request emitted by `window.print()` (W-2 Phase 1).

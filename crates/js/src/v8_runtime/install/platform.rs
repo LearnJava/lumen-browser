@@ -606,16 +606,22 @@ pub(crate) fn install_window_open(
             move |url: String, target: String, features: String| -> u32 {
                 let mut width: u32 = 800;
                 let mut height: u32 = 600;
+                // GAP-NAVCTX срез 11 (BUG-797): `noopener`/`noreferrer` are
+                // boolean features (HTML LS §7.2.2.1) — comma-separated
+                // tokens, not `key=value` pairs like `width`/`height` above.
+                let mut no_opener = false;
                 for part in features.split(',') {
                     let part = part.trim();
                     if let Some(v) = part.strip_prefix("width=") {
                         width = v.trim().parse().unwrap_or(800);
                     } else if let Some(v) = part.strip_prefix("height=") {
                         height = v.trim().parse().unwrap_or(600);
+                    } else if part.eq_ignore_ascii_case("noopener") || part.eq_ignore_ascii_case("noreferrer") {
+                        no_opener = true;
                     }
                 }
                 let token = crate::window_messaging::alloc_token();
-                wor.lock().unwrap().push(PopupRequest { url, target, width, height, token });
+                wor.lock().unwrap().push(PopupRequest { url, target, width, height, token, no_opener });
                 token
             }
         );

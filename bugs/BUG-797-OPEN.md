@@ -259,3 +259,48 @@ opener_tab_id)` ДО `navigate_to`, и дублируют пост-фактум-
 (`cpu_snapshots_match_references`), тот же байт-в-байт список из 7 файлов,
 что и на `main` до этого среза (подтверждено `git stash`), предсуществующий
 дрейф, не от этой правки.
+
+## Срез 7 (GAP-NAVCTX срез 11, 2026-09-13, `p1-gap-navctx-srez11`) — `window.open()`'s собственный `windowFeatures` (`noopener`/`noreferrer`) теперь парсится
+
+Закрыт хвост, оставленный срезом 6 ("`window.open()`'s собственный
+`windowFeatures` по-прежнему не парсится вообще"): третий аргумент
+`window.open(url, target, features)` теперь разбирается на тот же
+`no_opener`-флаг, каким срез 6 уже отмечает `rel=noopener`/`rel=noreferrer`
+на ссылках.
+
+**Механизм.** `_lumen_window_open` (`platform.rs`) — тот же цикл по
+`features.split(',')`, что уже читает `width=`/`height=`, — теперь также
+ловит булевы токены `noopener`/`noreferrer` (регистронезависимо, HTML LS
+§7.2.2.1: присутствие токена — это "включено", значение после `=`, если оно
+там есть, не разбирается) и кладёт результат в новое поле
+`PopupRequest::no_opener`. `take_window_open_requests()` (трейт
+`PersistentJs`, `persistent_js.rs`) прокинул шестой элемент кортежа до
+`about_to_wait.rs`, который при `no_opener == true` пропускает и
+`window_messaging::arm_pending_opener`, и последующий вызов
+`_lumen_install_opener` в фолбэке — оставляя JS-шима дефолт
+`window.opener = null` нетронутым. `_lumen_window_pump_messages` в фолбэке
+вызывается БЕЗУСЛОВНО в обоих случаях: это отдельный канал (обычный
+`postMessage` опенера на возвращённый ему `WindowProxy`-стаб по токену),
+которого `noopener` не касается — спека нулит только `window.opener` на
+стороне попапа, а не способность опенера писать в попап, который он сам
+создал.
+
+**Живая проверка** (`tests/wpt/verify_window_history_jsurl_gaps.py`, новый
+вариант `win-open-noopener`, dev-release): `open("vwjh-child.html?…",
+"_blank", "noopener")` — дочерний документ залогировал `child-ran … search=
+?from=open-noopener opener=null …`, то есть `window.opener` в попапе остался
+`null`, а не превратился в объект (как было бы без этого среза — срезы 4/5
+вооружали `arm_pending_opener` безусловно для `window.open()`).
+
+**Не в этом срезе:** BUG-883 (таймеры опенера в фоне) не тронут;
+`rel="opener"` (обратный карветаут, тоже часть §7.3.2, но не встречался ни в
+одном виденном пробнике) не проверялся.
+
+Гейт: `cargo build -p lumen-js -p lumen-shell --profile dev-release
+--features v8-backend` чисто; `cargo clippy -p lumen-js --features
+v8-backend --all-targets -- -D warnings`, `cargo clippy -p lumen-shell
+--all-targets -- -D warnings` и `cargo clippy --workspace --all-targets --
+-D warnings` — все чисто; `cargo test -p lumen-js --features v8-backend
+--lib window_open` (17/17, включая три новых теста на парсинг
+`noopener`/`noreferrer`) и `cargo test --bin lumen scripts_and_frames`
+(84/84) — зелёные.
