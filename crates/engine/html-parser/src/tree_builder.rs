@@ -307,7 +307,7 @@ impl IncrementalTreeBuilder {
     /// Применяет один токен к DOM. Используется и pull-парсером
     /// `parse()`, и push-режимом — общая точка, чтобы поведение
     /// гарантированно совпадало.
-    fn apply_token(&mut self, token: Token) {
+    fn apply_token(&mut self, mut token: Token) {
         // InTableText аккумулирует подряд идущие Text-токены и
         // разрешается при первом не-Text токене.
         if self.insertion_mode == InsertionMode::InTableText {
@@ -322,10 +322,32 @@ impl IncrementalTreeBuilder {
             }
             self.flush_pending_table_text();
         }
+        // GAP-XMLDOC срез 5 (BUG-685, «Третья грань, случай 1»): `html:`/
+        // `h:` — the two XHTML-bound namespace prefixes measured in the
+        // vendored WPT corpus. Stripped unconditionally under `xml_mode`
+        // (not gated on `current_namespace`, since by the time a closing
+        // tag like `</html:div>` arrives the element it closes has already
+        // moved to the HTML namespace — see `strip_known_html_prefix` doc).
+        // `had_html_prefix` remembers the strip happened so
+        // `dispatch_foreign_content` can force a breakout even for names
+        // (`script`, `link`, ...) absent from the ordinary §13.2.6.5
+        // breakout list.
+        let mut had_html_prefix = false;
+        if self.xml_mode {
+            match &mut token {
+                Token::StartTag { name, .. } | Token::EndTag { name } => {
+                    if let Some(stripped) = foreign_content::strip_known_html_prefix(name) {
+                        *name = stripped.to_string();
+                        had_html_prefix = true;
+                    }
+                }
+                _ => {}
+            }
+        }
         if self.current_namespace() == Namespace::Svg
             && matches!(token, Token::StartTag { .. } | Token::EndTag { .. })
         {
-            self.dispatch_foreign_content(token);
+            self.dispatch_foreign_content(token, had_html_prefix);
             return;
         }
         self.dispatch(token);
@@ -337,13 +359,18 @@ impl IncrementalTreeBuilder {
     /// [`current_namespace`][Self::current_namespace] is SVG. See
     /// `crate::foreign_content` for what this deliberately leaves out
     /// (MathML, integration points, foreign-attribute namespacing).
-    fn dispatch_foreign_content(&mut self, token: Token) {
+    ///
+    /// `forced_breakout` is `true` when [`apply_token`][Self::apply_token]
+    /// already stripped an `html:`/`h:` prefix off this token (GAP-XMLDOC
+    /// срез 5) — such a tag always breaks out, even for names like
+    /// `script`/`link` that are not on the ordinary breakout list.
+    fn dispatch_foreign_content(&mut self, token: Token, forced_breakout: bool) {
         match token {
             Token::StartTag {
                 ref name,
                 ref attrs,
                 ..
-            } if foreign_content::breaks_out_of_foreign_content(name, attrs) => {
+            } if forced_breakout || foreign_content::breaks_out_of_foreign_content(name, attrs) => {
                 while self.current_namespace() == Namespace::Svg {
                     self.open_elements.pop();
                 }
@@ -850,11 +877,21 @@ impl IncrementalTreeBuilder {
                         | "title"
                 ) =>
             {
-                // Process as in InHead (mode restored after dispatch).
+                // Process as in InHead. `script`/`style`/`noframes`/`title`
+                // switch insertion_mode to Text as a side effect (RAWTEXT
+                // capture) that must survive this call — restoring `saved`
+                // unconditionally clobbered it back to InBody before the
+                // element's own Text/EndTag tokens arrived, so CDATA-strip
+                // (routed only through mode_text's EndTag arm, GAP-XMLDOC
+                // срез 5) silently never ran for one of these tags seen
+                // after body already opened. Same "only restore if InHead
+                // didn't move us elsewhere" guard as `<template>` below.
                 let saved = self.insertion_mode;
                 self.insertion_mode = InsertionMode::InHead;
                 self.dispatch(token);
-                self.insertion_mode = saved;
+                if self.insertion_mode == InsertionMode::InHead {
+                    self.insertion_mode = saved;
+                }
             }
             // `<template>` in body: delegate to InHead processing which switches
             // to InTemplate — do NOT restore mode afterwards.
@@ -4396,6 +4433,117 @@ mod tests {
             unreachable!()
         };
         assert_eq!(name.namespace, Namespace::Html, "breakout div: {doc}");
+    }
+
+    #[test]
+    fn html_prefixed_script_breaks_out_of_svg_and_stays_rawtext() {
+        // GAP-XMLDOC срез 5 (BUG-685, «Третья грань, случай 1»): WPT's
+        // `<svg xmlns:h="…/1999/xhtml"><h:script>…</h:script></svg>` idiom —
+        // `script` is not on the ordinary §13.2.6.5 breakout list, but the
+        // `h:`/`html:` prefix forces it anyway, and the element must land in
+        // Namespace::Html (`getBBox` etc. must not apply to it).
+        let doc = parse_xml_flavoured("<svg><h:script>var x = 1;</h:script></svg>");
+        let script = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "script"),
+            )
+            .unwrap_or_else(|| panic!("script element: {doc}"));
+        let NodeData::Element { name, .. } = &script.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html, "h:script namespace: {doc}");
+        assert_eq!(
+            script.children.len(),
+            1,
+            "script body must be a single RAWTEXT node, not parsed markup: {doc}"
+        );
+    }
+
+    #[test]
+    fn html_prefixed_script_cdata_body_is_unwrapped() {
+        // Same breakout as above, combined with the срез 1 CDATA strip —
+        // both fixes must compose on the same element.
+        let doc =
+            parse_xml_flavoured("<svg><html:script><![CDATA[var x = 1 < 2;]]></html:script></svg>");
+        let script = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "script"),
+            )
+            .unwrap_or_else(|| panic!("script element: {doc}"));
+        let &child = script
+            .children
+            .first()
+            .unwrap_or_else(|| panic!("script text child: {doc}"));
+        let NodeData::Text(text) = &doc.get(child).data else {
+            panic!("script child must be text: {doc}");
+        };
+        assert_eq!(text, "var x = 1 < 2;");
+    }
+
+    #[test]
+    fn html_prefixed_void_element_breaks_out() {
+        let doc = parse_xml_flavoured(r#"<svg><h:meta charset="utf-8"/></svg>"#);
+        let meta = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "meta"),
+            )
+            .unwrap_or_else(|| panic!("meta element: {doc}"));
+        let NodeData::Element { name, .. } = &meta.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html, "h:meta namespace: {doc}");
+    }
+
+    #[test]
+    fn html_prefixed_end_tag_closes_broken_out_element() {
+        // Regression for the prefix carrying over to the *closing* tag too:
+        // by the time `</html:div>` arrives the element is already in
+        // Namespace::Html, so the close must not require an exact
+        // "html:div" == "html:div" match against the (unprefixed) open
+        // element — two siblings, not one nesting the other.
+        let doc = parse_xml_flavoured("<svg><html:div>a</html:div><html:div>b</html:div></svg>");
+        // Breaking out of foreign content pops all the way past <svg> (same
+        // as `svg_breakout_tag_returns_to_html_namespace` above) — the divs
+        // land as <body> children, siblings of <svg>, not inside it.
+        let body = body_of(&doc);
+        let divs: Vec<NodeId> = doc
+            .get(body)
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| {
+                matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "div")
+            })
+            .collect();
+        assert_eq!(divs.len(), 2, "two html:div siblings must not nest: {doc}");
+        for child in divs {
+            let NodeData::Element { name, .. } = &doc.get(child).data else {
+                panic!("expected element child: {doc}");
+            };
+            assert_eq!(name.local, "div");
+            assert_eq!(name.namespace, Namespace::Html);
+        }
+    }
+
+    #[test]
+    fn other_namespace_prefixes_do_not_break_out() {
+        // `d:` (SVG 1.1 test-metadata namespace) and `svg:` are not `h:`/
+        // `html:` — must stay untouched, still SVG-namespaced with the
+        // literal prefixed local name (no resolver, see
+        // `foreign_content::strip_known_html_prefix`).
+        let doc = parse_xml_flavoured("<svg><d:testDescription>note</d:testDescription></svg>");
+        // Not on the SVG tag-name-casing table (`adjust_svg_tag_name` only
+        // knows official SVG local names) — stays exactly as the tokenizer
+        // lower-cased it, same as any other unrecognized foreign tag.
+        let el = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "d:testdescription"),
+            )
+            .unwrap_or_else(|| panic!("d:testdescription element: {doc}"));
+        let NodeData::Element { name, .. } = &el.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Svg, "d: prefix must stay SVG: {doc}");
     }
 
     /// Test helper: depth-first search under `id` for the first element whose

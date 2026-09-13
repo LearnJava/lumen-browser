@@ -557,17 +557,26 @@ impl<'a> Tokenizer<'a> {
 
 /// Элементы, чьё содержимое в HTML5 — RAWTEXT (литеральный текст до
 /// `</tag` + терминатор; character references **не** декодируются).
+///
+/// `html:script`/`h:script` — namespace-префиксные варианты, встреченные в
+/// вендоренном WPT-корпусе (`xmlns:h="…/1999/xhtml"` на `<svg>`-корне,
+/// GAP-XMLDOC срез 5, BUG-685 «Третья грань, случай 1») — токенизатор не
+/// знает про namespace/tree builder state, только про литеральное имя тега,
+/// поэтому проверка на префикс жёстко вшита здесь так же, как обычная
+/// `"script"`; `tree_builder::dispatch_foreign_content` снимает префикс и
+/// заводит элемент в HTML-неймспейсе отдельно.
 fn is_raw_text_element(name: &str) -> bool {
-    matches!(name, "script" | "style")
+    matches!(name, "script" | "style" | "html:script" | "h:script")
 }
 
 /// Элементы, чьё содержимое — RCDATA (литеральный текст до `</tag` +
 /// терминатор; character references декодируются). Это нужно, чтобы
 /// `<title>Foo &amp; Bar</title>` стало текстом `Foo & Bar`, и чтобы
 /// внутри `<textarea>` HTML-like содержимое (например `<world>`)
-/// не превращалось в реальные теги.
+/// не превращалось в реальные теги. `html:title`/`h:title` — тот же
+/// namespace-префиксный случай, что и `is_raw_text_element`.
 fn is_rcdata_element(name: &str) -> bool {
-    matches!(name, "title" | "textarea")
+    matches!(name, "title" | "textarea" | "html:title" | "h:title")
 }
 
 #[cfg(test)]
