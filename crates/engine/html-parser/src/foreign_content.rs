@@ -148,6 +148,27 @@ pub(crate) fn breaks_out_of_foreign_content(lower_name: &str, attrs: &[(String, 
     }
 }
 
+/// Strips a namespace prefix bound to XHTML in the vendored WPT corpus
+/// (`xmlns:h="…/1999/xhtml"`, `xmlns:html="…/1999/xhtml"` — both forms
+/// occur, `h:` is by far the more common one) and returns the local name
+/// beneath it, e.g. `strip_known_html_prefix("h:script") == Some("script")`.
+///
+/// This is a hardcoded pair, not a resolver: real XML namespace resolution
+/// walks the ancestor chain for `xmlns:*` declarations, which is out of
+/// scope here (GAP-XMLDOC срез 5, same "point fix, not a resolver"
+/// boundary as the rest of this module — see `bugs/BUG-685-OPEN.md`
+/// "Третья грань, случай 1"). Other prefixes seen in the same corpus
+/// (`d:testDescription`, `m:mi`, `rdf:li`, `svg:svg`) are bound to
+/// different namespaces (SVG 1.1 test metadata, MathML, RDF, SVG itself)
+/// and must NOT break out — `strip_known_html_prefix` only ever matches
+/// `h:`/`html:`.
+pub(crate) fn strip_known_html_prefix(lower_name: &str) -> Option<&str> {
+    lower_name
+        .strip_prefix("html:")
+        .or_else(|| lower_name.strip_prefix("h:"))
+        .filter(|suffix| !suffix.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +221,23 @@ mod tests {
             "font",
             &[("id".to_string(), "x".to_string())]
         ));
+    }
+
+    #[test]
+    fn strips_known_html_prefixes() {
+        assert_eq!(strip_known_html_prefix("h:script"), Some("script"));
+        assert_eq!(strip_known_html_prefix("html:link"), Some("link"));
+        assert_eq!(strip_known_html_prefix("h:div"), Some("div"));
+    }
+
+    #[test]
+    fn leaves_other_prefixes_and_bare_names_alone() {
+        assert_eq!(strip_known_html_prefix("d:testDescription"), None);
+        assert_eq!(strip_known_html_prefix("m:mi"), None);
+        assert_eq!(strip_known_html_prefix("rdf:li"), None);
+        assert_eq!(strip_known_html_prefix("svg:svg"), None);
+        assert_eq!(strip_known_html_prefix("script"), None);
+        assert_eq!(strip_known_html_prefix("h:"), None);
+        assert_eq!(strip_known_html_prefix("html:"), None);
     }
 }

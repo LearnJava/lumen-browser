@@ -308,3 +308,89 @@ lumen-js --features v8-backend` — 3612/3612 (юнит) + 116/116 (интегр
 зелёные, включая все существующие `svg::tests_v8::*` и
 `create_element_ns_builds_native_svg_tree`. `cargo clippy -p lumen-js
 --all-targets --features v8-backend -- -D warnings` — чисто.
+
+## GAP-XMLDOC срез 5 (2026-09-13): namespace-префиксный `html:`/`h:` breakout
+
+Закрывает «Третья грань, случай 1» (срез 16) — `<h:script src="…"/>`/
+`<html:script>…</html:script>` не становились скриптом вообще, внешний
+файл не запрашивался. Измерение по вендоренному корпусу
+(`grep -rhoE '<[a-zA-Z][a-zA-Z0-9]*:script\b'`) — **224 уникальных файла**
+несут этот паттерн (212 с префиксом `h:`, 12 — `html:`), каждый гарантированно
+TIMEOUT: харнесс физически не грузится. Тот же XHTML-namespace-идиом
+(`xmlns:h="…/1999/xhtml"` на корне `<svg>`) используется в корпусе и для
+`link`/`meta`/`div`/`frameset` — сотни occurrences, не только `script`.
+
+Правка в трёх точках:
+
+- `foreign_content::strip_known_html_prefix` — новая функция, жёстко
+  зашитая пара префиксов (`html:`, `h:`), не резолвер: реальное XML
+  namespace-разрешение потребовало бы ходить по цепочке предков в поисках
+  `xmlns:*`-деклараций, что снова «вне духа точечных срезов» (тот же
+  принцип уже заявлен в шапке модуля для MathML/integration
+  points/foreign-attribute namespacing). Другие префиксы корпуса
+  (`d:testDescription` — SVG 1.1 test-metadata, `m:mi` — MathML, `rdf:li`,
+  `svg:svg`) не трогаются — только `h:`/`html:`, единственные два реально
+  измеренных случая, где префикс означает XHTML.
+- `tree_builder::apply_token` — при `xml_mode` снимает `html:`/`h:` с имени
+  StartTag/EndTag БЕЗУСЛОВНО, ещё до SVG-роутинга: к моменту, когда придёт
+  закрывающий `</html:div>`, элемент уже мог уйти из SVG-неймспейса в
+  HTML (см. ниже), так что решение «снимать ли префикс» не может зависеть
+  от текущего namespace на тот момент — только от литерального префикса в
+  самом токене. `had_html_prefix` запоминает, что снятие произошло, и
+  передаётся в `dispatch_foreign_content` как `forced_breakout`.
+- `tree_builder::dispatch_foreign_content(token, forced_breakout)` —
+  `forced_breakout` форсирует переход в HTML-неймспейс (тот же
+  pop-до-первого-non-SVG-предка, что и обычный §13.2.6.5 breakout-список)
+  даже для имён вроде `script`/`link`, которых в самом breakout-списке нет
+  и быть не должно (простой `<script>` без префикса внутри `<svg>` —
+  легальный SMIL/встроенный SVG-скрипт, должен остаться в SVG-неймспейсе,
+  это НЕ регрессия).
+- `tokenizer::is_raw_text_element`/`is_rcdata_element` — токенизатор не
+  знает о namespace/tree builder state, только о литеральном имени тега,
+  поэтому `html:script`/`h:script` (и `html:title`/`h:title` для RCDATA)
+  добавлены туда же, жёстко, рядом с обычными `"script"`/`"title"` —
+  иначе RAWTEXT-сканирование (в т.ч. совместно с CDATA-обёрткой среза 1)
+  не запустится и `<![CDATA[...]]>` внутри `<h:script>` разберётся как
+  markup, а не как литеральный текст.
+
+**Побочный фикс, обнаруженный тестами этого среза:** `mode_in_body`'s
+in-head-redirect для `base`/`basefont`/`bgsound`/`link`/`meta`/`noframes`/
+`script`/`style`/`title` физически переключал `self.insertion_mode` в
+`InHead` перед вызовом `self.dispatch(token)`, а не просто делегировал
+обработку (спека §13.2.6.4.7 говорит «process the token using the rules
+for the 'in head' insertion mode» — вызов, а не смена состояния).
+RAWTEXT-теги (`script`/`style`/`noframes`/`title`) внутри `mode_in_head`
+сохраняют текущий `self.insertion_mode` в `original_insertion_mode`,
+чтобы вернуться к нему после закрывающего тега (§13.2.6.2 «generic raw
+text element parsing algorithm») — но к моменту этого сохранения
+`self.insertion_mode` уже был подменён на `InHead` самим редиректом, а не
+реальным «снаружи» режимом (`InBody`, если тег встречен уже внутри
+`<body>`, что как раз и происходит внутри `<svg>` из этого среза).
+Первая попытка фикса («восстанавливать `saved` только если
+`mode_in_head` не переключил режим», по образцу соседней ветки для
+`<template>`) исправляла симптом не там: `original_insertion_mode`
+всё равно фиксировал неверный `InHead`, и по закрытии RAWTEXT-элемента
+парсер возвращался в `InHead`, чей fallback «anything else» интерпретирует
+всё, что идёт дальше, как всё ещё находящееся в `<head>` — следующий тег
+(`<p>` в регрессионном тесте) реализовывал implied-`<body>` заново,
+создавая ВТОРОЙ `<body>` в дереве. Правильный фикс — не трогать
+`self.insertion_mode` перед делегированием вовсе, звать `self.mode_in_head(token)`
+напрямую как функцию: тогда `original_insertion_mode` корректно фиксирует
+реальный текущий режим (`InBody`), и после RAWTEXT-содержимого парсер
+возвращается именно туда.
+
+**Сознательно не сделано:** произвольные `xmlns:*`-декларации (полноценный
+резолвер), другие HTML-теги, которых корпус не показал с этим префиксом
+(измерено только `script`/`link`/`meta`/`div`/`frameset` через грепы выше).
+
+Тесты: пять новых в `crates/engine/html-parser/src/tree_builder.rs`
+(`html_prefixed_script_breaks_out_of_svg_and_stays_rawtext`,
+`html_prefixed_script_cdata_body_is_unwrapped`,
+`html_prefixed_void_element_breaks_out`,
+`html_prefixed_end_tag_closes_broken_out_element`,
+`other_namespace_prefixes_do_not_break_out`) плюс два в
+`foreign_content.rs` (`strips_known_html_prefixes`,
+`leaves_other_prefixes_and_bare_names_alone`). `cargo test -p
+lumen-html-parser` — 431/431 юнит + 9/9 интеграционных (`fragment_parsing`)
+зелёные. `cargo clippy -p lumen-html-parser --all-targets -- -D warnings`
+— чисто.
