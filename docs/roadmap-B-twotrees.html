@@ -6864,6 +6864,16 @@
        ]
       },
       {
+       "id": "GAP-PERMISSIONELEM",
+       "title": "GAP: `<permission>` Permission Element API отсутствует целиком",
+       "status": "planned",
+       "size": "M",
+       "note": "`<permission type=\"camera\">` (Permission Element API, Chromium-only origin trial, `.tentative.` throughout the vendored subtree) не заведён вовсе: тег не зарегистрирован, падает в generic unknown-tag путь (`document.createElement('permission')` даёт обычный `HTMLUnknownElement`), нет ни `HTMLPermissionElement`, ни `HTMLUserMediaElement`, ни пермишн-промпт-вайринга — целая фича, не точечный дефект. Самодостаточно `permission-element/`, 48 сабтестов. Реклассифицировано из BUG-583 2026-09-13 (P3) по тому же правилу, что BUG-553/554/562/568 (целиком отсутствующая фича — задача ROADMAP, не баг). Не W3C Candidate Recommendation — приоритет по решению, не автоматически.",
+       "bugs": [
+        "BUG-583"
+       ]
+      },
+      {
        "id": "GAP-RUBYBOX",
        "title": "GAP: `<ruby>` box-tree интеграция отсутствует целиком",
        "status": "planned",
@@ -6871,6 +6881,16 @@
        "note": "`<ruby>` не имеет box-tree интеграции вовсе: `ruby.rs`'s `RubyBox`/`lay_out_ruby` (over/under-стекинг, `ruby-align`, `ruby-merge`) существуют и покрыты юнит-тестами, но не вызываются ни из одного места конвейера (`grep -rn \"lay_out_ruby\" crates/engine/layout/src/` вне `ruby.rs`/тестов — ноль) — `CSS-SPECS.md:123` уже документирует это как «module has no pipeline callers». Живой `--dump-layout`-пробой подтверждено: `ruby-position: over` и `: under` на реальной странице дают идентичную раскладку (аннотация всегда под базой, в порядке разметки) — сам параметр не влияет на геометрию вовсе, не только `alternate`. Отдельно от этого — BUG-614 (`<ruby>`/`<rb>`/`<rt>`/`<rp>`/`<rtc>` падают на `Display::Block` вместо inline) остаётся самостоятельным точечным багом: он не требует `lay_out_ruby` и не решает эту задачу. BUG-535 (`ruby-position: alternate`) заведён как точечный дефект, но реклассифицирован сюда 2026-09-13 (P3) — с нулём вызовов `lay_out_ruby` реализация `alternate` в этом модуле не даёт наблюдаемого эффекта ни для одной страницы; объём — подключить существующий алгоритм к дереву блоков (выбор `<ruby>`/`<rtc>`/`<rt>` по тегу, вызов `lay_out_ruby` из inline-раскладки), а не один недостающий keyword.",
        "bugs": [
         "BUG-535"
+       ]
+      },
+      {
+       "id": "GAP-UASHADOWSLOT",
+       "title": "GAP: `<select>`/`<details>` UA shadow tree со слотом требует настоящего `display: contents`",
+       "status": "planned",
+       "size": "M",
+       "note": "Остаток BUG-604 после среза 2026-09-13: `<select>`/`<details>` (HTML LS §4.10.11/§4.11.1) должны иметь UA shadow tree СО слотом (в отличие от `<video>`/`<audio>`, у которых слота нет вовсе — эта половина уже закрыта тем же срезом, `Document::create_element`/`try_create_element` в `crates/engine/dom/src/lib.rs` вызывают `attach_ua_shadow_root` для всех четырёх тегов, `select`/`details` — единственные, кому нужен слот). Завести слот напрямую нельзя: `<slot>` спецификационно `display: contents`, а в этом движке `Display::Contents` только парсится/хранится, в layout трактуется как `Block` (`crates/engine/layout/src/style/values/typography.rs` — комментарий `enum Display::Contents`, «Treated as Block (deferred)»). Реальный `<slot>`-бокс между host и его контентом вставил бы лишний видимый wrapper в КАЖДЫЙ `<select>`/`<details>` на КАЖДОЙ странице — `<details>` вообще не opaque (в отличие от `<select>`, его контент реально проходит через block-flow, `is_details_element`-ветка `box_tree/build.rs:645`), так что это движение пикселей далеко за пределами исходных 9 сабтестов `widgets/shadow-dom.html`. Объём — довести `Display::Contents` до настоящей семантики «бокс не порождается, дети подмешиваются в родительский formatting context» (`BoxKind::Skip` сегодня делает противоположное — выкидывает поддерево целиком, `layout_dispatch.rs:1585` `BoxKind::Skip => unreachable!()` для контейнерного layout), только потом — сам UA shadow root для `select`/`details`. Найден P2, WPT-VENDOR-html-rendering, 2026-08-04; реклассифицировано из остатка BUG-604 2026-09-13 (P3).",
+       "bugs": [
+        "BUG-604"
        ]
       }
      ]
@@ -7674,7 +7694,7 @@
   "BUG-604": {
    "status": "open",
    "title": "No UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` -- light-DOM children appended to `<video>`/`<audio>` render directly instead of b…",
-   "component": "layout/dom (no internal shadow-root construction for these 4 interfaces)",
+   "component": "dom (`crates/engine/dom/src/lib.rs` — `Document::create_element`/`try_create_element`, `ua_shadow_kind`/`attach_ua_shadow_root`)",
    "date": null,
    "debtor": false
   },

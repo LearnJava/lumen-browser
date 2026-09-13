@@ -1,7 +1,7 @@
 # BUG-604: no UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` — light-DOM children render directly instead of being hidden/slotted per spec
 
-**Статус:** OPEN
-**Компонент:** layout/dom (no internal shadow-root construction anywhere for these interfaces; the fix is architectural, not a one-line gap)
+**Статус:** OPEN (ДОРАБОТКА → GAP-UASHADOWSLOT, остаток `<select>`/`<details>`)
+**Компонент:** dom (`crates/engine/dom/src/lib.rs` — `Document::create_element`/`try_create_element`, `ua_shadow_kind`/`attach_ua_shadow_root`)
 **Найден:** P2, WPT-VENDOR-html-rendering, 2026-08-04
 
 ## Симптом
@@ -44,3 +44,46 @@ into each element's construction, not a display-property tweak. Confirmed
 narrowly (4 elements, 1 file, 9 subtests) in this slice; likely affects any
 other WPT test that assumes UA shadow tree encapsulation for these same
 four elements elsewhere in the vendored corpus (not swept beyond this file).
+
+## Срез P3 2026-09-13
+
+Independently re-verified before touching anything: the general Shadow DOM
+machinery (`Document::attach_shadow`/`build_flat_tree`/
+`compute_slot_assignments` in `crates/engine/dom/src/lib.rs`) is fully
+implemented and tested — the "architectural gap" framing above overstated
+the remaining work. `compute_slot_assignments`'s existing rule ("children
+with no matching slot are not rendered in the flat tree") already gives
+exactly the `<video>`/`<audio>` "no slot" semantics for free once a shadow
+root is attached with no `<slot>` child inside it — no new mechanism needed.
+
+**Landed (`<video>`/`<audio>`):** `Document::create_element`/
+`try_create_element` now call `attach_ua_shadow_root` for these two tags
+(`ua_shadow_kind`), attaching an empty `Closed` shadow root at construction
+time regardless of creation path (HTML parser or `createElement`). Since
+`<video>`/`<audio>` are opaque replaced boxes in layout (`BoxKind::Video`/
+`BoxKind::Audio` never walk DOM/flat-tree children for their own geometry —
+`crates/engine/layout/src/box_tree/build.rs`), this has zero effect on
+existing page layout; it only changes what `build_flat_tree` reports for a
+light-tree child appended to one of these elements, which is exactly the
+spec-required "never part of the flat tree" behavior the WPT assertion
+checks. 5 new unit tests in `crates/engine/dom/src/lib.rs` (shadow-host
+attachment for both tags via both creation paths, ordinary elements
+unaffected, a `<span>` child of `<video>` excluded from
+`build_flat_tree`'s output). Full `cargo test -p lumen-dom`/
+`-p lumen-layout`/`-p lumen-js --features v8-backend`, `cargo clippy -p
+lumen-dom --all-targets -- -D warnings`: all green, no regressions.
+
+**Not landed (`<select>`/`<details>`):** giving these two a real UA shadow
+tree needs the slot's *content* to render without the `<slot>` element
+itself generating a box (HTML/CSS: `<slot>`'s default `display` is
+`contents`). This engine's `Display::Contents` is parsed/stored but laid
+out as plain `Block` (deferred — see `enum Display` doc comment,
+`crates/engine/layout/src/style/values/typography.rs`), so a real `<slot>`
+would insert a spurious visible wrapper box into *every* `<select>`/
+`<details>` on *every* page — `<details>` is not opaque like `<video>`
+(its content really does flow through block-flow layout,
+`is_details_element` branch, `box_tree/build.rs:645`), so this is a genuine
+pixel-moving change far outside this bug's original 9-subtest blast
+radius, gated by a separate, real `display: contents` implementation.
+Reclassified into [GAP-UASHADOWSLOT](../ROADMAP.md) per the same rule as
+BUG-534/553/562/583 (absent primitive + family-sized, not a point fix).
