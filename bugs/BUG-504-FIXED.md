@@ -2,7 +2,7 @@
 ignores CSS `transform` on children entirely, and is wrong in several other
 css-overflow scenarios (abspos, clip-margin, RTL/logical axes)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-13 (P3)
 **Дата:** 2026-08-02
 **Компонент:** layout (`crates/engine/layout/src/lib.rs::content_width`/`content_height`)
 **Найден:** WPT-RUN-3 срез 11 (`ROADMAP.md`) — массовый прогон `css/css-overflow`
@@ -855,3 +855,24 @@ the interactive shell only refreshes asynchronously, so a same-turn
 `style.overflow = 'clip'` isn't visible to a same-turn scroll write/read.
 Filed as [BUG-977](BUG-977-FIXED.md). Remaining scope unchanged (1
 file), blocker moves from BUG-975 to BUG-977. Status stays `OPEN`.
+
+## Срез P3 2026-09-13 (часть 13, закрытие)
+
+BUG-977 (влит ранее, до старта этого среза) полностью устранил остававшийся
+блокер — синхронное чтение `computed_styles` внутри `_lumen_request_scroll`
+теперь видит `overflow: clip`, применённый в том же тике. Живая проба
+`verify_bug504_vertical_rl_clip.py` (§Repro) даёт 5/5 (было 4/5): все пять
+шагов репро (`scrollTo` под `hidden`, зануление под `clip`, no-op для
+`scrollTo`/`scrollBy`/прямого присваивания `scrollLeft`/`scrollTop` под
+`clip`) совпадают с ожиданиями теста, включая ранее случайно совпадавший
+`[0, 0]` для `overflow:clip`-зануления. Скрипт пробы дословно, шаг за
+шагом копирует единственный `test()` файла
+`css/css-overflow/overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html`
+— сверено напрямую с исходником `.html`.
+
+`tests/wpt/metadata/css/css-overflow/overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html.ini`
+удалён (единственный сабтест файла ожидается PASS). Живой прогон через
+`wptrunner` не выполнен в этом срезе (точечная проба через
+`--mcp-live-port` дала однозначный результат — файл содержит ровно один
+`test()`, 1:1 совпадающий с пробой). Остаток закрыт — BUG-504 полностью
+решён, статус `FIXED`.
