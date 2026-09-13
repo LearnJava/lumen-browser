@@ -1229,6 +1229,15 @@ impl Lumen {
                 // `open_new_tab()`/`switch_tab()` moves `self.tab_strip.active`
                 // away from it.
                 let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                // GAP-NAVCTX срез 14 (BUG-883): `_self` (HTML LS §7.3.2) means
+                // "navigate THIS browsing context", not "open a browsing
+                // context" — before this slice it fell through to the
+                // unnamed-target branch below and minted a brand new tab for
+                // every `_self` call. Checked first so it also short-circuits
+                // the named-target lookup (an opener navigating itself is
+                // never a name lookup, even if a stray `name` argument was
+                // also passed — `_self` as `target` wins per spec).
+                let is_self_target = target.eq_ignore_ascii_case("_self");
                 // GAP-NAVCTX срез 13 (BUG-883): a named target (neither empty
                 // nor the shim's `_blank` default, HTML LS §7.3.2) first
                 // looks for an already-open tab with that `window.name` —
@@ -1236,10 +1245,15 @@ impl Lumen {
                 // this slice `window.open(url, name)` always minted a new tab
                 // even when an earlier call with the same `name` was still
                 // open (`PopupRequest::target` was captured but never read).
-                let is_named_target = !target.is_empty() && !target.eq_ignore_ascii_case("_blank")
-                    && !target.eq_ignore_ascii_case("_self");
+                let is_named_target = !is_self_target && !target.is_empty()
+                    && !target.eq_ignore_ascii_case("_blank");
                 let reuse_tab = if is_named_target { self.find_tab_by_window_name(&target) } else { None };
-                let new_tab_id = if let Some(tab_idx) = reuse_tab {
+                let new_tab_id = if is_self_target {
+                    // No context switch at all — `self.tab_strip.active` is
+                    // already the opener; `navigate_to()` below runs against
+                    // it in place, the same tab id it already had.
+                    opener_tab_id
+                } else if let Some(tab_idx) = reuse_tab {
                     // Navigating an EXISTING browsing context sets no new
                     // `opener` — only *creating* one does (same rule as
                     // click.rs's reuse branch).
@@ -1258,7 +1272,10 @@ impl Lumen {
                     // `arm_pending_window_name` call in click.rs).
                     lumen_js::window_messaging::arm_pending_window_name(target.clone());
                 }
-                let install_opener = reuse_tab.is_none() && !no_opener;
+                // `_self` navigates the opener's OWN context — there is no
+                // second context to link an `opener` to, same as the reuse
+                // branch above.
+                let install_opener = !is_self_target && reuse_tab.is_none() && !no_opener;
                 match resolved {
                     Ok(source) => {
                         // GAP-NAVCTX срез 5 (BUG-797): armed here, right
