@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-13",
  "counts": {
-  "open": 161,
+  "open": 160,
   "fixed": 840,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1001,
+ "total_bugs": 1000,
  "phases": [
   {
    "id": "P0",
@@ -3944,7 +3944,7 @@
        "title": "WPT: вендорить + прогнать категорию `quirks`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root quirks --recursive`, ~2 мин, 72 файла, 17 исполнившихся id) — **6/17 harness OK, 2/75 сабтестов**. Три класса сигнала: (1) 7 TIMEOUT (`hashless-hex-color/*`, `table-cell-width-calculation*`, `line-height-calculation`, `percentage-height-calculation`, `blocks-ignore-line-height`) — все используют `iframe.contentWindow` + `document.open/write/close()` для сравнения quirks/limited-quirks/no-quirks режимов между документами, реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без отдельного browsing context) и смежных гэпов; (2) `classname-query-after-sibling-adoption.html` (`templateDocument.compatMode` — `undefined`) и `supports.html` (`CSS.supports()`/`@supports` не валидируют value, принимают \"00ff00\"/\"1 1\" как валидные) — реконфирмации [BUG-358](bugs/BUG-358-FIXED.md)/[BUG-482](bugs/BUG-482-OPEN.md)/[BUG-552](bugs/BUG-552-OPEN.md) (`document.compatMode` не реализован на живом документе) и [BUG-501](bugs/BUG-501-OPEN.md) (`@supports`/`CSS.supports()` полностью игнорируют value); (3) новый [BUG-658](bugs/BUG-658-OPEN.md) — `table-cell-width-calculation-applies-to.html` (`checkLayout('table')` инлайн-скриптом сразу после разметки) дал `width expected 80 but got 0` при исполнении под wptrunner, но `--dump-layout` на том же файле пост-settle показывает верную геометрию (`w=80.00`) — тот же гэп синхронизации публикации layout-снапшота, что [BUG-555](bugs/BUG-555-OPEN.md) документировал для `getComputedStyle()`, только через `offsetWidth`/`getBoundingClientRect()` (`_lumen_get_bounding_rect`), причём `0` вместо `\"\"` — гонку сложнее отличить от «нулевого бокса на самом деле». Живой `--mcp-live-port`-пробой не подтверждалось (инфраструктурная нестабильность живого клиента в этой сессии — токен не читался из лог-файла Client-классом `scripts/scroll_perf.py`), вывод сделан по коду (`_lumen_get_bounding_rect` — тот же паблиш-путь, что `getComputedStyle`) и по кросс-проверке `--dump-layout`.",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root quirks --recursive`, ~2 мин, 72 файла, 17 исполнившихся id) — **6/17 harness OK, 2/75 сабтестов**. Три класса сигнала: (1) 7 TIMEOUT (`hashless-hex-color/*`, `table-cell-width-calculation*`, `line-height-calculation`, `percentage-height-calculation`, `blocks-ignore-line-height`) — все используют `iframe.contentWindow` + `document.open/write/close()` для сравнения quirks/limited-quirks/no-quirks режимов между документами, реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без отдельного browsing context) и смежных гэпов; (2) `classname-query-after-sibling-adoption.html` (`templateDocument.compatMode` — `undefined`) и `supports.html` (`CSS.supports()`/`@supports` не валидируют value, принимают \"00ff00\"/\"1 1\" как валидные) — реконфирмации [BUG-358](bugs/BUG-358-FIXED.md)/[BUG-482](bugs/BUG-482-OPEN.md)/[BUG-552](bugs/BUG-552-OPEN.md) (`document.compatMode` не реализован на живом документе) и [BUG-501](bugs/BUG-501-OPEN.md) (`@supports`/`CSS.supports()` полностью игнорируют value); (3) новый [BUG-658](bugs/BUG-658-OPEN.md) — `table-cell-width-calculation-applies-to.html` (`checkLayout('table')` инлайн-скриптом сразу после разметки) дал `width expected 80 but got 0` при исполнении под wptrunner, но `--dump-layout` на том же файле пост-settle показывает верную геометрию (`w=80.00`) — тот же гэп синхронизации публикации layout-снапшота, что [BUG-555](bugs/BUG-555-DUPLICATE.md) документировал для `getComputedStyle()`, только через `offsetWidth`/`getBoundingClientRect()` (`_lumen_get_bounding_rect`), причём `0` вместо `\"\"` — гонку сложнее отличить от «нулевого бокса на самом деле». Живой `--mcp-live-port`-пробой не подтверждалось (инфраструктурная нестабильность живого клиента в этой сессии — токен не читался из лог-файла Client-классом `scripts/scroll_perf.py`), вывод сделан по коду (`_lumen_get_bounding_rect` — тот же паблиш-путь, что `getComputedStyle`) и по кросс-проверке `--dump-layout`.",
        "bugs": [
         "BUG-658"
        ]
@@ -7433,13 +7433,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-555": {
-   "status": "open",
-   "title": "`getComputedStyle()` deterministically returns `\"\"` for every property when read from an inline `<script>` that runs during the initial HTML parse (before the p…",
-   "component": "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-556": {
    "status": "fixed",
    "title": "`Node.nextSibling`/`previousSibling` (DOM §4.4) are missing entirely on the live element/text/comment wrapper -- only element-only `nextElementSibling`/`previou…",
@@ -8024,7 +8017,7 @@
   "BUG-658": {
    "status": "fixed",
    "title": "`offsetWidth`/`offsetHeight`/`getBoundingClientRect()` read back `0` (not a distinguishable sentinel like `getComputedStyle`'s `\"\"`) when called from an inline…",
-   "component": "js (`crates/js/src/dom.rs:3196` — `offsetWidth`/`offsetHeight`/`getBoundingClientRect()`, backed by `_lumen_get_bounding_rect`), shell (`crates/shell/src/main.rs::apply_loaded_page` — same publish path as [BUG-555](bugs/BUG-555-OPEN.md))",
+   "component": "js (`crates/js/src/dom.rs:3196` — `offsetWidth`/`offsetHeight`/`getBoundingClientRect()`, backed by `_lumen_get_bounding_rect`), shell (`crates/shell/src/main.rs::apply_loaded_page` — same publish path as [BUG-555](bugs/BUG-555-DUPLICATE.md))",
    "date": "2026-09-11",
    "debtor": false
   },
@@ -15361,9 +15354,6 @@
   ],
   "shell (`crates/shell/src/main.rs:525` — `let (_network_svc, _transport) = …`) / network (`crates/network/src/bin/network_service.rs`)": [
    "BUG-769"
-  ],
-  "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)": [
-   "BUG-555"
   ],
   "shell (`crates/shell/src/main.rs::commit_nav_state`)": [
    "BUG-352"
