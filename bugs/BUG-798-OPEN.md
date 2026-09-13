@@ -93,3 +93,56 @@ BUG-480, но **не тот же баг** — `<embed>`/`<object>` не имею
 `nested-browsing-contexts/name-attribute.window.html` делят подтесты между
 `<object>`/`<embed>`/`<frame>` (сюда) и `<iframe>`
 ([BUG-480](BUG-480-OPEN.md)).
+
+## Срез 4, GAP-LOADEV (2026-09-13, `p1-gap-loadev-bug798`) — закрыт
+
+Строки из «Причина» устарели по нумерации (файл разошёлся на
+`crates/js/src/shim/*.js` в SPLIT-JS3, реализация теперь в
+`web_api_shim_mid.js`/`web_api_shim_tail_b.js`), но диагноз остался верным:
+ни резолва, ни фетча, ни события не было вовсе.
+
+Фикс — JS-only, без единой правки на Rust-стороне: `<embed>`/`<object>`
+заведены в уже существующую fetch-based модель, которой раньше пользовались
+только `<script src>`/`<link rel=stylesheet|preload|…>`/`<style>`
+(`_lumen_resource_pending`/`_lumen_resource_try_prepare`/
+`_lumen_resource_is_connected` в `web_api_shim_mid.js`), а не в тяжёлый
+декодирующий пайплайн `<img>` (`page_load.rs`/`page_pipeline.rs`) — decode
+здесь не нужен, только байты пришли/не пришли. Сам fetch — переиспользованный
+как есть `_lumen_link_hint_fetch(nid, url, null)`, уже написанный для
+`<link>`-хинтов.
+
+Три независимых пути обновления `src`/`data`, все ведут в один
+`_lumen_embed_object_reload(nid, tag)`:
+
+1. `document.createElement('embed'|'object')` + вставка — `'embed'`/`'object'`
+   добавлены в список тегов `_lumen_resource_track`/`_lumen_resource_try_prepare`,
+   тем же способом, что `'link'`.
+2. Элемент от HTML-парсера — новый `_lumen_embed_object_scan()`, вызываемый из
+   `_lumen_apply_ready_state('interactive')` (та же причина, что у
+   `_lumen_link_hints_scan`: разметка никогда не проходит через хук вставки).
+3. `src`/`data`, установленный на уже подключённом элементе
+   (`embed-change-src.html` меняет `src` после первого `load` и ждёт второй) —
+   IDL-аксессоры `object.data`/`embed.src` заменены с генерической
+   `_lumen_install_reflection('url')`-строки на собственные `get`/`set`,
+   вызывающие `_lumen_embed_object_attr_changed`; для `setAttribute('src'|'data', …)`
+   — та же проверка добавлена в общую обёртку `setAttribute`/`setAttributeNS`
+   через `_lumen_embed_object_maybe_attr_changed`.
+
+**Не в этом срезе** (совпадает со «направление починки» изначального файла):
+полноценная встроенная browsing context для `<object>`
+(`contentDocument`/`contentWindow`) и §4.8.6 fallback-content на детей при
+неудаче — тот же уровень, что уже принят для `<iframe>`/`<frame>`: сам факт
+диспатча `load`/`error` снимает WPT TIMEOUT, визуальный рендер остаётся
+заглушкой.
+
+**Проверка.** `tests/wpt/verify_frame_load_media_gaps.py --variant nbc-object
+--variant nbc-embed --variant nbc-parser` (dev-release, Windows): сервер
+видит все три пути (`?object=1`, `?embed=1`, `?p-object=1`/`?p-embed=1`),
+`nbc-object-load`/`nbc-embed-load`/`nbc-parser-load ×3` печатаются — раньше
+ни один запрос не уходил вовсе (срез 24 выше). `cargo test -p lumen-js
+--features v8-backend --lib` — 1855/1855, без изменений (шим-правка не
+трогала уже покрытые пути).
+
+Гейт: изменения — только `crates/js/src/shim/{web_api_shim_mid,
+web_api_shim_tail_b}.js`, без Rust-кода — `scripts/scoped-test.sh` и
+workspace clippy прогоняются в `/lumen-task-finish`, не здесь.
