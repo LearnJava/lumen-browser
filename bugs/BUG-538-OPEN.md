@@ -1,9 +1,27 @@
 # BUG-538: `text-box-trim`/`text-box-edge` (CSS Inline L3) not implemented at all
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** ДОРАБОТКА — никогда не реализованная функциональность, не дефект реализованного кода
 **Дата:** 2026-08-03
 **Компонент:** css-parser + layout (no `ComputedStyle` field exists yet)
 **Найден:** WPT-RUN-3 срез 28 (`ROADMAP.md`) — массовый прогон `css/css-inline`
+
+## Ревизия P3 2026-09-13
+
+Переквалифицировано из бага в ДОРАБОТКУ (см. `feedback_feature_gap_is_not_a_bug`
+в памяти проекта / прецеденты BUG-492/BUG-511/BUG-521): `grep -n
+'text_box_trim\|text-box-trim\|TextBoxTrim\|text_box_edge\|TextBoxEdge'` по
+`crates/engine/layout/src/style.rs`, `crates/engine/css-parser/src/*.rs` и
+`CSS-SPECS.md` — ноль совпадений везде, подтверждает отсутствие поля и записи
+в спек-трекере. Свойство не «просто не распарсено» — `text-box-trim` обрезает
+half-leading вокруг строки по метрикам шрифта (ascent/descent относительно
+`text-box-edge`'s `text | cap | ex | alphabetic | ideographic |
+ideographic-ink` словаря), а такой примитив (line-box trim по шрифтовым
+метрикам) в layout-коде не существует вообще — нужен новый алгоритм, а не
+точечный патч. `CSS-SPECS.md`'s строка "CSS Inline L3" уже 🟡 — получила
+in-place примечание про отсутствующий text-box-trim/text-box-edge, без
+даунгрейда и без отдельной строки в `ROADMAP.md` (путь `CSS-свойство →
+CSS-SPECS.md` задачу не заводит). Указатель убран из `STATUS-P3.md`.
 
 ## Механизм
 
