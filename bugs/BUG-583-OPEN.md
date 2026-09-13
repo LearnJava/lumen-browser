@@ -1,6 +1,9 @@
 # BUG-583: `<permission>` element (Permission Element API) not implemented at all
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → GAP-PERMISSIONELEM)
+**Тип:** ДОРАБОТКА — целиком нереализованная фича (тег, интерфейс,
+пермишн-промпт-вайринг), не дефект реализованного кода. Перенесено в
+[GAP-PERMISSIONELEM](../ROADMAP.md).
 **Компонент:** dom/js (no `<permission>` tag handling anywhere — grep for
 `"permission"`/`'permission'` across `crates/dom`, `crates/html-parser`,
 `crates/js/src/dom.rs` returns zero hits; the element falls through to the
@@ -36,3 +39,10 @@ experimental/non-standard (single-vendor origin trial, not yet a W3C
 Candidate Recommendation feature) — flagging for scope triage rather than
 implying it should be prioritized; recorded per this track's "no subdirectory
 skipped silently" rule.
+
+## Ревизия P3 2026-09-13
+
+Реклассифицировано в ДОРАБОТКУ, тот же класс, что BUG-553/554/562/568:
+целиком отсутствующая фича (тег, интерфейс, пермишн-промпт-вайринг) — это
+задача ROADMAP, а не точечный дефект, который можно закрыть одним патчем.
+Перенесено в [GAP-PERMISSIONELEM](../ROADMAP.md).
