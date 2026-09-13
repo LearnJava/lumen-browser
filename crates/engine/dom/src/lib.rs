@@ -88,6 +88,18 @@ impl Default for ViewportMeta {
     }
 }
 
+/// Parsed `<meta http-equiv="refresh" content="…">` pragma (HTML LS §4.2.5.3
+/// shared declarative refresh steps).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetaRefresh {
+    /// Whole seconds to wait before navigating (fractional part of `content`
+    /// discarded per spec).
+    pub delay_seconds: u64,
+    /// Target URL, unresolved (resolved against the document base URL by the
+    /// navigator). `None` means "refresh to the current page".
+    pub url: Option<String>,
+}
+
 /// Error returned by [`Document::to_bytes`] and [`Document::from_bytes`].
 #[derive(Debug)]
 pub enum DomSnapshotError {
@@ -375,6 +387,15 @@ pub struct Document {
     /// Set by the HTML parser when the viewport meta tag is encountered in `<head>`.
     /// Used by the shell to compute the effective CSS layout viewport width/scale.
     viewport_meta: Option<ViewportMeta>,
+    /// Parsed `<meta http-equiv="refresh">` pragma, if any (BUG-566).
+    ///
+    /// Set once by the HTML parser on the first valid occurrence in tree
+    /// order (later occurrences are ignored, matching the spec's "shared
+    /// declarative refresh steps" being taken only once). Consumed by the
+    /// shell to schedule the timed navigation before the page's first script
+    /// line runs.
+    #[serde(default)]
+    meta_refresh: Option<MetaRefresh>,
     /// Active pointer captures: maps `pointerId` → captured `NodeId`.
     ///
     /// Set by `Element.setPointerCapture(pointerId)` (W3C Pointer Events L3 §4.1).
@@ -486,6 +507,7 @@ impl Document {
             timing_origin: 0.0,
             js_refs: HashMap::new(),
             viewport_meta: None,
+            meta_refresh: None,
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
@@ -554,6 +576,22 @@ impl Document {
     /// encounters `<meta name="viewport" content="…">`.
     pub fn set_viewport_meta(&mut self, meta: ViewportMeta) {
         self.viewport_meta = Some(meta);
+    }
+
+    /// Parsed `<meta http-equiv="refresh">` pragma, if the page declared one
+    /// (BUG-566).
+    pub fn meta_refresh(&self) -> Option<&MetaRefresh> {
+        self.meta_refresh.as_ref()
+    }
+
+    /// Set the refresh pragma. Called by the HTML parser on the first valid
+    /// `<meta http-equiv="refresh">` it encounters — a no-op if one is
+    /// already set, since only the first occurrence in tree order takes
+    /// effect.
+    pub fn set_meta_refresh(&mut self, refresh: MetaRefresh) {
+        if self.meta_refresh.is_none() {
+            self.meta_refresh = Some(refresh);
+        }
     }
 
     /// Current selection. The shell updates this on mouse events; JS reads it

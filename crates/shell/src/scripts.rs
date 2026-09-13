@@ -664,6 +664,28 @@ pub(crate) fn run_scripts_with_dom(
                     let name_js = serde_json::to_string(&name).unwrap_or_default();
                     let _ = rt.eval(&format!("window.name = {name_js};"));
                 }
+                // BUG-566: `<meta http-equiv="refresh">`'s shared declarative
+                // refresh steps. Scheduled here, before the first script line
+                // runs, so a synchronous top-of-page script that reads
+                // `location.href`/mutates the DOM doesn't race the timer
+                // being armed — same one-shot-push shape as the opener/name
+                // pushes above. Implemented on top of the existing JS
+                // `setTimeout` + `location.replace`/`.reload` rather than a
+                // new shell-side timer: the engine pumps exactly one live
+                // `js_ctx` per shell process (see `about_to_wait.rs`), so
+                // there is no separate non-JS clock to hook into.
+                let meta_refresh = {
+                    let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    doc.meta_refresh().cloned()
+                };
+                if let Some(refresh) = meta_refresh {
+                    let delay_ms = refresh.delay_seconds.saturating_mul(1000);
+                    let action = match &refresh.url {
+                        Some(url) => format!("location.replace({})", js_string_literal(url)),
+                        None => "location.reload()".to_string(),
+                    };
+                    let _ = rt.eval(&format!("setTimeout(function() {{ {action}; }}, {delay_ms});"));
+                }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
