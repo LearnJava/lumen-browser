@@ -12,6 +12,7 @@
 //! у нас 250+ самых частых), foster parent reparenting.
 
 mod entities;
+mod foreign_content;
 pub mod picture;
 pub mod preload_scanner;
 pub mod push_tokenizer;

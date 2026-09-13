@@ -203,3 +203,64 @@ String(c.firstChild.tagName)                  // SVG                           (
   `createElementNS`-элементах работает; на разобранных из разметки — нет.
   Цена ровно в сабтестах WPT: `innertext-setter.html` не берёт 4 (`<svg>`/`<math>`,
   обычный и detached), `outertext-setter.html` — 2.
+
+## GAP-XMLDOC срез 3 (2026-09-13): namespace + adjustSVGTagNames в парсере
+
+Реализована ровно parser-половина «Дальше» выше — SVG only, без MathML.
+`IncrementalTreeBuilder` (`crates/engine/html-parser/src/tree_builder.rs`)
+теперь ведёт «current namespace» как функцию от `open_elements.last()`
+(`current_namespace`/`node_namespace`) вместо константного `Namespace::Html`:
+
+- `resolve_element_name` присваивает `Namespace::Svg` элементу `<svg>` и всем
+  потомкам, пока стек не вышел из foreign content; `create_element_with_attrs`
+  строит `QualName` через неё вместо безусловного `QualName::html(name)`
+  (было — строка 1879 из симптома выше, актуальный номер после доработок
+  сдвинулся).
+- Новый модуль `crates/engine/html-parser/src/foreign_content.rs` даёт
+  таблицы `adjustSVGTagNames`/`adjustSVGAttributeNames` (HTML LS §13.2.6.5) —
+  токенизатор лишает регистр каждое имя тега/атрибута ещё на этапе
+  токенизации, так что `linearGradient`/`foreignObject`/`viewBox` и т.п.
+  восстанавливаются по статической таблице, а не по исходному написанию.
+- `apply_token` перед обычной `dispatch` проверяет `current_namespace() ==
+  Svg` для Start/EndTag и уводит их в новую `dispatch_foreign_content` —
+  упрощённую версию §13.2.6.5: breakout-список (`div`, `p`, `table`, …,
+  `font` только с `color`/`face`/`size`) возвращает в HTML-режим и
+  переигрывает токен через обычный `dispatch`; закрывающий тег ищет
+  совпадение по стеку до первой HTML-границы. Text/Comment/Doctype токены
+  через этот путь не идут — `insert_text` уже namespace-агностичен.
+- `push_open_element`: self-closing (`/>`) теперь закрывает foreign-элемент
+  сразу в ЛЮБОМ документе (не только `xml_mode`) — HTML LS §13.2.6.5 шаг 4
+  требует этого безусловно, и `<svg><rect/><circle/></svg>` без фикса
+  вложил бы `circle` внутрь `rect` тем же паттерном, что BUG-786 «Вторая
+  грань» для XML-документов.
+
+**Сознательно не сделано** (следующий срез, если/когда возьмут):
+MathML (`<math>`/`<mi>`/…) — таблицы и breakout-список рассчитаны только на
+SVG; HTML/MathML integration points (`<foreignObject>`/`<desc>`/`<title>`/
+`annotation-xml`) не переключают детей обратно в HTML — сейчас всё под
+`<foreignObject>` остаётся в SVG-неймспейсе, что спецификационно неверно,
+но безопаснее, чем совсем не иметь foreign content; foreign-attribute
+namespacing (`xlink:href` и т.п. остаются с `Namespace::Html` на самом
+атрибуте, только `local` восстановлен по таблице). **Главное — из
+симптома этого бага ещё не закрыто:** прототип-цепочка. Once namespace is
+correct, `_lumen_element_prototype_for`
+(`crates/js/src/shim/web_api_shim_mid.js:3215`) отдаёt голый
+`Element.prototype` для любой не-HTML-namespace ноды по собственному
+комментарию в коде — `svg.rs`'s `SVG_TAG_MAP` перевешивает прототип только
+из-под монки-патча `document.createElementNS`, а не из общего пути
+построения элемента (`_lumen_build_element`), так что `<rect>`, разобранный
+из разметки, теперь корректно имеет `namespaceURI`/`tagName`, но всё ещё
+`instanceof Element`, не `instanceof SVGRectElement` — `getBBox()` и весь
+остальной SVG DOM по-прежнему недоступны на нём. Это отдельный, сравнимый
+по объёму кусок в `crates/js/src/svg.rs` + `web_api_shim_mid.js`, не
+затронутый этим срезом.
+
+Тесты: `crates/engine/html-parser/src/foreign_content.rs` (таблицы) +
+`crates/engine/html-parser/src/tree_builder.rs::tests::svg_*` (сквозной
+разбор — namespace, регистр тега, self-closing, breakout). `cargo test -p
+lumen-html-parser` — 424/424; `scripts/scoped-test.sh` (все обратные
+зависимости, включая `lumen-driver`/`lumen-network`) — зелёный, кроме
+чужого дрейфа CPU-эталонов, подтверждённого идентичным на чистом `main`
+без этого среза (`55-text-rendering`/`57-canvas-2d`/`32-list-markers`/
+`34-forms`/`45-multiple-backgrounds`/`51-scrollbar-rendering`/
+`1000000-final` — те же расхождения в байтах что с патчем, что без).
