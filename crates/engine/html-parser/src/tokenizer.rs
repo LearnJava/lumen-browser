@@ -93,6 +93,20 @@ impl<'a> Tokenizer<'a> {
         self.text_only.as_ref()
     }
 
+    /// Отменяет RAWTEXT/RCDATA-режим, только что выставленный
+    /// `consume_start_tag` для последнего выданного `StartTag` (GAP-XMLDOC
+    /// срез 12, BUG-685). Токенизатор решает по голому имени тега
+    /// (`is_raw_text_element`/`is_rcdata_element`), не видя namespace —
+    /// вызывающий (tree builder), который его видит, зовёт это сразу после
+    /// того, как узнал, что только что открытый `<script>`/`<title>` на
+    /// самом деле лежит в foreign-неймспейсе (SVG/MathML), где генерик
+    /// RAWTEXT/RCDATA алгоритм не должен применяться вовсе (HTML LS
+    /// §13.2.6.5). Вызов до следующего `next()` — иначе поздно: text-only
+    /// цикл уже начнёт литерально сканировать текст на этом самом вызове.
+    pub fn cancel_text_only(&mut self) {
+        self.text_only = None;
+    }
+
     fn peek(&self) -> Option<char> {
         self.input[self.pos..].chars().next()
     }
