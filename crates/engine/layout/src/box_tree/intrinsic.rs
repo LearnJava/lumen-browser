@@ -39,6 +39,73 @@ fn is_row_flex_container(b: &LayoutBox) -> bool {
         )
 }
 
+/// Is `b` a grid container (`display: grid`/`inline-grid`)?
+fn is_grid_container(b: &LayoutBox) -> bool {
+    matches!(b.style.display, Display::Grid | Display::InlineGrid)
+}
+
+/// CSS Grid L1 §11.5 — intrinsic width contribution of a grid container:
+/// the sum of its columns' intrinsic widths plus `column-gap`, not the widest
+/// child (BUG-740).
+///
+/// A fully spec-correct answer needs the real placement + track-sizing
+/// algorithm (`build_grid_init`) run against an infinite available width, so
+/// this covers only the case the bug's own "direction" section calls out as
+/// safe: an explicit, non-auto-repeat column template, row-flow placement,
+/// and no item overriding its own grid placement (which could send it to a
+/// column other than the round-robin one assumed here, or make columns
+/// overlap). `None` tells the caller to fall back to the pre-existing
+/// "widest child" rule instead of reporting a confidently wrong number.
+fn grid_col_intrinsic_sum(
+    b: &LayoutBox,
+    viewport: Size,
+    per_item: &dyn Fn(&LayoutBox) -> f32,
+) -> Option<f32> {
+    let s = &b.style;
+    if s.grid_template_col_auto_repeat.is_some() {
+        return None;
+    }
+    if matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense) {
+        return None;
+    }
+    let template = &s.grid_template_columns;
+    let n_cols = template.len();
+    if n_cols <= 1 || matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
+        return None;
+    }
+
+    let mut items: Vec<&LayoutBox> = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).collect();
+    if items.is_empty() {
+        return None;
+    }
+    let auto_placed = |line: &GridLine| matches!(line, GridLine::Auto);
+    if items.iter().any(|c| {
+        !auto_placed(&c.style.grid_column_start)
+            || !auto_placed(&c.style.grid_column_end)
+            || !auto_placed(&c.style.grid_row_start)
+            || !auto_placed(&c.style.grid_row_end)
+    }) {
+        return None;
+    }
+
+    // CSS Grid §6 — modified document order (source order reordered by `order`),
+    // same as `build_grid_init`'s auto-placement pass.
+    items.sort_by_key(|c| c.style.order);
+
+    let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+
+    let mut col_widths = vec![0.0_f32; n_cols];
+    for (k, c) in items.iter().enumerate() {
+        let col = k % n_cols;
+        let cem = c.style.font_size;
+        let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+        let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+        col_widths[col] = col_widths[col].max(per_item(c) + ml + mr);
+    }
+
+    Some(col_widths.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
+}
+
 /// CSS Flexbox L1 §9.9 — intrinsic width contribution of a **row-direction**
 /// flex container: its items sit side by side on the main axis, so the
 /// container's intrinsic width is the *sum* of the items' outer (margin-box)
@@ -141,30 +208,7 @@ pub(crate) fn preferred_inline_block_width(
     // InlineBlockRow — горизонтальный поток: суммируем ширины детей + их margins.
     // InlineSpace — collapsed whitespace gap; его ширина = char_width(' ').
     // Остальные боксы (Block, Image и т.д.) — вертикальный поток: берём max.
-    let content_w = if is_row_flex_container(b) {
-        // Row flex container: items are laid side by side (see
-        // `flex_row_intrinsic_sum`). A child with no preference of its own
-        // contributes 0, matching the `unwrap_or(0.0)` used for the other
-        // horizontal flow below.
-        flex_row_intrinsic_sum(b, viewport, &|c| {
-            preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
-        })
-    } else if matches!(b.kind, BoxKind::InlineBlockRow) {
-        let sum: f32 = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
-            if matches!(c.kind, BoxKind::InlineSpace) {
-                // Учитываем ширину collapsed space, чтобы при shrink-to-fit
-                // не занижать ширину контейнера и не вызывать перенос соседних
-                // inline-block элементов на следующую строку.
-                return measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size));
-            }
-            let cw = preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0);
-            let cem = c.style.font_size;
-            let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
-            let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
-            cw + ml + mr
-        }).sum();
-        sum
-    } else {
+    let block_flow = || {
         // Vertical (block) flow: in-flow children stack, so the container is as
         // wide as its widest child. Floated children, however, are placed side
         // by side on the same line (CSS 2.1 §9.5.1) — their margin-box widths
@@ -188,6 +232,37 @@ pub(crate) fn preferred_inline_block_width(
             }
         }
         inflow_max.max(float_sum)
+    };
+    let content_w = if is_row_flex_container(b) {
+        // Row flex container: items are laid side by side (see
+        // `flex_row_intrinsic_sum`). A child with no preference of its own
+        // contributes 0, matching the `unwrap_or(0.0)` used for the other
+        // horizontal flow below.
+        flex_row_intrinsic_sum(b, viewport, &|c| {
+            preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
+        })
+    } else if matches!(b.kind, BoxKind::InlineBlockRow) {
+        let sum: f32 = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
+            if matches!(c.kind, BoxKind::InlineSpace) {
+                // Учитываем ширину collapsed space, чтобы при shrink-to-fit
+                // не занижать ширину контейнера и не вызывать перенос соседних
+                // inline-block элементов на следующую строку.
+                return measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size));
+            }
+            let cw = preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0);
+            let cem = c.style.font_size;
+            let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+            let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+            cw + ml + mr
+        }).sum();
+        sum
+    } else if is_grid_container(b) {
+        grid_col_intrinsic_sum(b, viewport, &|c| {
+            preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
+        })
+        .unwrap_or_else(block_flow)
+    } else {
+        block_flow()
     };
     if content_w > 0.0 {
         Some(
@@ -234,6 +309,29 @@ pub(crate) fn max_content_outer_width(
         };
         return outer.max(0.0);
     }
+    let block_flow = || {
+        // Block container: in-flow children stack vertically → take the
+        // widest. Floated children are laid side by side on one line
+        // (CSS 2.1 §9.5.1), so their margin-box widths sum. The max-content
+        // width is the larger of the in-flow maximum and the float run sum.
+        let mut inflow_max = 0.0_f32;
+        let mut float_sum = 0.0_f32;
+        for c in &b.children {
+            if !contributes_to_intrinsic_width(c) {
+                continue;
+            }
+            let cw = max_content_outer_width(c, measurer, viewport);
+            if c.style.float_side != FloatSide::None {
+                let cem = c.style.font_size;
+                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                float_sum += cw + ml.max(0.0) + mr.max(0.0);
+            } else {
+                inflow_max = inflow_max.max(cw);
+            }
+        }
+        inflow_max.max(float_sum)
+    };
     let content_w = match &b.kind {
         BoxKind::InlineRun { segments, .. } => {
             // max-content = all segments on one line (no wrapping).
@@ -267,29 +365,13 @@ pub(crate) fn max_content_outer_width(
                 max_content_outer_width(c, measurer, viewport)
             })
         }
-        _ => {
-            // Block container: in-flow children stack vertically → take the
-            // widest. Floated children are laid side by side on one line
-            // (CSS 2.1 §9.5.1), so their margin-box widths sum. The max-content
-            // width is the larger of the in-flow maximum and the float run sum.
-            let mut inflow_max = 0.0_f32;
-            let mut float_sum = 0.0_f32;
-            for c in &b.children {
-                if !contributes_to_intrinsic_width(c) {
-                    continue;
-                }
-                let cw = max_content_outer_width(c, measurer, viewport);
-                if c.style.float_side != FloatSide::None {
-                    let cem = c.style.font_size;
-                    let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
-                    let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
-                    float_sum += cw + ml.max(0.0) + mr.max(0.0);
-                } else {
-                    inflow_max = inflow_max.max(cw);
-                }
-            }
-            inflow_max.max(float_sum)
+        // Grid container: max-content is the sum of column max-content widths
+        // + gaps (CSS Grid L1 §11.5), not the widest item — see BUG-740.
+        _ if is_grid_container(b) => {
+            grid_col_intrinsic_sum(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
+                .unwrap_or_else(block_flow)
         }
+        _ => block_flow(),
     };
     (content_w + pl + pr + s.border_left_width + s.border_right_width).max(0.0)
 }
@@ -419,6 +501,17 @@ fn min_content_outer_width_of_contents(
             flex_row_intrinsic_sum(b, viewport, &|c| {
                 min_content_outer_width(c, measurer, viewport)
             })
+        }
+        // Grid container: columns can't share space, so min-content is the sum
+        // of column min-content widths + gaps, not the widest item (BUG-740).
+        _ if is_grid_container(b) => {
+            grid_col_intrinsic_sum(b, viewport, &|c| min_content_outer_width(c, measurer, viewport))
+                .unwrap_or_else(|| {
+                    b.children.iter()
+                        .filter(|c| contributes_to_intrinsic_width(c))
+                        .map(|c| min_content_outer_width(c, measurer, viewport))
+                        .fold(0.0_f32, f32::max)
+                })
         }
         _ => {
             b.children.iter()

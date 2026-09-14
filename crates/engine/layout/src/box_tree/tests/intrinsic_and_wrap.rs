@@ -235,6 +235,91 @@ fn bug737_inline_block_wrapping_row_flex_shrinks_to_sum() {
     assert_eq!(ib.rect.width, 80.0);
 }
 
+// ── BUG-740: intrinsic width of a grid container is the sum of columns ────
+
+const GRID_CSS: &str =
+    "#outer { display: flex; width: 600px; } \
+     .inner { display: grid; grid-template-columns: auto auto; } \
+     .leaf { display: block; width: 40px; height: 10px; } \
+     .tail { width: 30px; height: 10px; }";
+const GRID_HTML: &str = r#"<div id="outer">
+    <div class="inner"><div class="leaf"></div><div class="leaf"></div></div>
+    <div class="tail"></div></div>"#;
+
+/// Двухколоночный grid как flex-элемент: его max-content — СУММА колонок
+/// (40 + 40), а не максимум одного ребёнка (до BUG-740 давало 40).
+#[test]
+fn bug740_grid_max_content_is_sum_of_columns() {
+    assert_eq!(child_widths(GRID_HTML, GRID_CSS), vec![80.0, 30.0]);
+}
+
+/// `column-gap` входит в intrinsic-ширину grid-контейнера так же, как у
+/// flex (BUG-737): два столбца по 40 с зазором 10 дают 90.
+#[test]
+fn bug740_grid_max_content_includes_gap() {
+    let css = GRID_CSS.replace(
+        ".inner { display: grid; grid-template-columns: auto auto; }",
+        ".inner { display: grid; grid-template-columns: auto auto; gap: 10px; }",
+    );
+    assert_eq!(child_widths(GRID_HTML, &css), vec![90.0, 30.0]);
+}
+
+/// Три элемента на двух колонках раскладываются по кругу (round-robin):
+/// колонка 0 получает элементы 0 и 2, колонка 1 — элемент 1. Ширина
+/// колонки 0 — максимум из (40, 20) = 40, колонки 1 — 40, итог 80.
+#[test]
+fn bug740_grid_round_robin_placement_takes_column_max() {
+    let css = GRID_CSS.replace(".leaf { display: block; width: 40px; height: 10px; }",
+        ".leaf { display: block; width: 40px; height: 10px; } .leaf3 { display: block; width: 20px; height: 10px; }");
+    let html = r#"<div id="outer">
+        <div class="inner"><div class="leaf"></div><div class="leaf"></div><div class="leaf3"></div></div>
+        <div class="tail"></div></div>"#;
+    assert_eq!(child_widths(html, &css), vec![80.0, 30.0]);
+}
+
+/// `repeat(auto-fill, ...)` зависит от доступной ширины, которой на этапе
+/// intrinsic-расчёта ещё нет — контейнер не может честно посчитать
+/// column-sizing и падает назад на старое блочное правило «самый широкий
+/// ребёнок», а не врёт числом.
+#[test]
+fn bug740_auto_fill_falls_back_to_widest_child() {
+    let css = GRID_CSS.replace(
+        "grid-template-columns: auto auto;",
+        "grid-template-columns: repeat(auto-fill, 40px);",
+    );
+    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+}
+
+/// Явное позиционирование ребёнка (`grid-column`) может увести его в
+/// колонку, отличную от предполагаемой раскладкой «по кругу», или создать
+/// перекрытие — та же осторожность, что и с auto-fill выше.
+#[test]
+fn bug740_explicit_item_placement_falls_back_to_widest_child() {
+    let css = format!(
+        "{GRID_CSS} .inner > .leaf:first-child {{ grid-column: 2; }}"
+    );
+    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+}
+
+/// Колоночный поток (`grid-auto-flow: column`) не соответствует
+/// предположению «по кругу построчно» — тоже честный откат.
+#[test]
+fn bug740_column_flow_falls_back_to_widest_child() {
+    let css = GRID_CSS.replace(
+        "grid-template-columns: auto auto;",
+        "grid-template-columns: auto auto; grid-auto-flow: column;",
+    );
+    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+}
+
+/// Однoколоночный grid складывает элементы вертикально — как блок,
+/// правило «самый широкий ребёнок» для него уже верно.
+#[test]
+fn bug740_single_column_grid_stays_widest_child() {
+    let css = GRID_CSS.replace("grid-template-columns: auto auto;", "grid-template-columns: auto;");
+    assert_eq!(child_widths(GRID_HTML, &css), vec![40.0, 30.0]);
+}
+
 // ── BUG-738: out-of-flow дети не участвуют в intrinsic-ширине ─────────────
 
 const ABS_CSS: &str =
