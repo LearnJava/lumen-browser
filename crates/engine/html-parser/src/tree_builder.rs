@@ -1196,7 +1196,10 @@ impl IncrementalTreeBuilder {
             // <a>: если уже есть в active formatting, прогнать adoption
             // agency и удалить.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
+                ..
             } if name == "a" => {
                 if let Some(existing) = self.find_active_formatting_after_marker("a") {
                     self.adoption_agency("a");
@@ -1209,23 +1212,29 @@ impl IncrementalTreeBuilder {
                 self.reconstruct_active_formatting();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
                 self.push_active_formatting(el, name, attrs);
             }
             // Formatting elements: b, big, code, em, font, i, s,
             // small, strike, strong, tt, u.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
+                ..
             } if is_formatting_element(name) => {
                 self.reconstruct_active_formatting();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
                 self.push_active_formatting(el, name, attrs);
             }
             // <nobr>: специальный случай — если есть в scope, adoption.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
+                ..
             } if name == "nobr" => {
                 self.reconstruct_active_formatting();
                 if self.has_element_in_scope("nobr") {
@@ -1234,7 +1243,7 @@ impl IncrementalTreeBuilder {
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
                 self.push_active_formatting(el, name, attrs);
             }
             // End tags для formatting elements → adoption agency.
@@ -4867,6 +4876,69 @@ mod tests {
             children.len(),
             3,
             "self-closed table/select/button must be siblings, not nested: {}",
+            doc
+        );
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_formatting_elements_do_not_nest_siblings() {
+        // GAP-XMLDOC срез 17: `<a>`, the §13.2.4.3 formatting elements
+        // (b/big/code/em/font/i/s/small/strike/strong/tt/u) and `<nobr>` all
+        // push onto `open_elements` directly (`self.open_elements.push(el)`)
+        // instead of through `push_open_element(el, self_closing)` — the same
+        // self-closing-blind push site class that срезы 2/9/16 already fixed
+        // for div/textarea/table/select/button. Before this fix a self-closed
+        // `<b>`/`<a>`/`<nobr>` stayed on `open_elements` forever, so whatever
+        // followed it in the markup nested *inside* it instead of becoming
+        // its sibling.
+        //
+        // `<li>` is deliberately chosen as the probe here (not another
+        // formatting tag): its start-tag handler doesn't call
+        // `reconstruct_active_formatting`, so it isolates the
+        // `open_elements`-stack effect of this fix from §13.2.4.3
+        // reconstruction, which *does* legitimately re-wrap later formatting
+        // starts/text around a still-active (not yet forgotten) entry —
+        // that reconstruction behavior is covered separately below and is
+        // unrelated to this push site.
+        let doc = parse_xml_flavoured(r#"<b id="x"/><li id="y">tail</li>"#);
+        let body = doc.body().expect("body");
+        let children: Vec<NodeId> = doc.get(body).children.clone();
+        assert_eq!(
+            children.len(),
+            2,
+            "self-closed <b/> and the following <li> must be siblings, not nested: {}",
+            doc
+        );
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_formatting_element_reconstructs_for_trailing_text() {
+        // Because `push_active_formatting` is untouched, a self-closed
+        // formatting element still sits on the active formatting list after
+        // this fix pops it off `open_elements` — trailing text after it
+        // reconstructs a *new* element to wrap the text, per §13.2.4.3's
+        // usual "residual style" reconstruction, exactly as an implicitly
+        // (not explicitly) closed `<b>` would.
+        use lumen_dom::NodeData;
+        let doc = parse_xml_flavoured(r#"<b id="x"/>tail"#);
+        let body = doc.body().expect("body");
+        let children: Vec<NodeId> = doc.get(body).children.clone();
+        assert_eq!(
+            children.len(),
+            2,
+            "self-closed <b/> and a reconstructed <b> wrapping tail must both be body children: {}",
+            doc
+        );
+        let reconstructed = children[1];
+        assert!(
+            matches!(&doc.get(reconstructed).data, NodeData::Element { name, .. } if name.local == "b"),
+            "second body child must be a reconstructed <b>: {}",
+            doc
+        );
+        let tail = doc.get(reconstructed).children.first().copied().expect("tail text");
+        assert!(
+            matches!(&doc.get(tail).data, NodeData::Text(t) if t == "tail"),
+            "reconstructed <b> must wrap the trailing text: {}",
             doc
         );
     }
