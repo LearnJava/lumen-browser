@@ -986,3 +986,70 @@ foreign content (push-режим); self-closing `<table>`/`<select>`/
 rendering/1000000-final) — тот же класс чужого CPU-эталонного дрейфа,
 что уже подтверждён на чистом `main` срезами 12/13 (этот срез не
 касается paint/layout/raster кода вовсе).
+
+## GAP-XMLDOC срез 15 (2026-09-14): CDATA в потоковом (push-режим) foreign content (`p1-gap-xmldoc-srez15`)
+
+Срез 14 взвёл `cdata_allowed` только в `run_pull` (`parse`/
+`parse_fragment`) — реальный сетевой путь, `IncrementalTreeBuilder::feed`/
+`feed_bytes` → `PushTokenizer`, никогда его не устанавливал, поэтому
+`<![CDATA[` внутри `<svg>`/`<math>`, загруженных постранично, всегда шёл
+bogus-comment веткой независимо от namespace — последний пункт из
+"Не в этом срезе" среза 14 и из `docs/engine-gaps.md`.
+
+**Фикс — два независимых места.**
+
+1. **Взвод флага.** `PushTokenizer` получил персистентное поле
+   `cdata_allowed` (тот же приём, что уже есть у `text_only` для RAWTEXT/
+   RCDATA, срез 12) и второй элемент в возврате `on_token`:
+   `feed_with_context`/`feed_bytes_with_context`/`end_with_context` теперь
+   принимают `FnMut(Token) -> (bool, bool)` — `(cancel_text_only,
+   cdata_allowed)`. `IncrementalTreeBuilder::apply_token_for_stream`
+   пересчитывает оба сигнала после каждого токена (`current_context_
+   forbids_text_only()` и `cdata_sections_allowed()`), в точности как
+   `run_pull` делает для pull-режима. `tokenize()` взводит его на живом
+   `Tokenizer` перед КАЖДЫМ `next()`, не только между chunk-ами.
+
+2. **Безопасность chunk-boundary (реальный баг, не просто недостающая
+   проводка).** `find_safe_split`'s Data-state ветка ищет только
+   ПОСЛЕДНИЙ `<` в буфере — эвристика, которая молча ломается внутри
+   CDATA-контента: `<`/`>` там данные, а не начало новой конструкции.
+   `<svg><![CDATA[a<b]]>c` (весь `<svg>` и открытие CDATA-секции в одном
+   chunk-е) — последний `<` в буфере это НЕ `<![CDATA[`, а тот, что внутри
+   `a<b`; старая логика проверяла его как обычный тег, "случайно" находила
+   `>` где-то дальше и признавала буфер безопасным раньше настоящего
+   `]]>`, что дало временному под-токенизатору на этом усечённом slice
+   ложный EOF внутри CDATA-секции (`consume_cdata_section` лениво
+   финализирует контент на EOF — корректно для настоящего конца ввода,
+   некорректно для конца временного slice). Добавлена
+   `last_unterminated_cdata_start(bytes)` — ищет буквальный
+   (case-sensitive) `<![CDATA[`, чей `]]>` ещё не пришёл, и если такой
+   есть, split ставится на его позиции БЕЗ ЗАПУСКА generic-скана вообще
+   (приоритетная ветка перед обычным "последний `<`"). Это же исключило
+   вторую ложную зависимость: `is_tag_closed`'s CDATA-ветка первой
+   версии фикса опиралась на `self.cdata_allowed` ДО этого chunk-а — не
+   видит открывающий `<svg>` из ТОГО ЖЕ буфера — убрана, буквальный
+   `<![CDATA[` теперь просто ВСЕГДА ждёт `]]>`, независимо от
+   `cdata_allowed`: лишняя буферизация в случае, когда секция окажется
+   bogus comment-ом, безопасна (тот же консервативный принцип, что и у
+   остального `find_safe_split`).
+
+Тесты: `push_tokenizer.rs` — 3 новых
+(`cdata_inside_svg_opened_in_the_same_stream_matches_pull` — byte/2/3/5/
+100-байтовые chunk-и против pull, `cdata_with_gt_before_terminator_
+survives_chunk_split_right_after_gt` — регрессия именно на находку выше,
+разрез сразу после `>` внутри контента, `cdata_disallowed_context_still_
+becomes_bogus_comment_when_streamed`); `tree_builder.rs` —
+`feed_streams_cdata_inside_svg_foreign_content` (`feed_bytes` на 1/2/5/
+11/100-байтовых chunk-ах и `feed` на `&str`-чанках, сравнение `Document::
+to_string()` с pull `parse()`). `cargo test -p lumen-html-parser` —
+469+5+15 зелёных (было 465+5+15). `cargo clippy -p lumen-html-parser
+--all-targets --profile dev-release -- -D warnings` — чисто.
+
+`tree_builder.rs` пересекло собственный baseline (5121 → 5416,
+`scripts/file-size-baseline.tsv` обновлён тем же коммитом, тот же
+паттерн, что срезы 8/9). Не паяльный/layout/paint код — `scoped-test.sh`/
+`dump_golden.py` не запускались руками (правило `docs/commands.md`:
+полный гейт — один раз, внутри `/lumen-task-finish`).
+
+Не в этом срезе (без изменений): self-closing `<table>`/`<select>`/
+`<button>`; сама XML-парсер-архитектура.

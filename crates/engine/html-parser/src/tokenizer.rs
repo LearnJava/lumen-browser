@@ -16,18 +16,18 @@
 //! Отложено: полный набор named entities (есть ~2000+ в HTML5 spec;
 //! реализуем при первой реальной странице, где это потребуется).
 //!
-//! `<![CDATA[...]]>` (GAP-XMLDOC срез 14, BUG-685) — namespace-зависимо:
+//! `<![CDATA[...]]>` (GAP-XMLDOC срезы 14/15, BUG-685) — namespace-зависимо:
 //! разрешено (эмитится как `Token::Text`) только когда вызывающий (tree
 //! builder, видящий adjusted current node) явно взвёл
 //! [`Tokenizer::set_cdata_allowed`] перед этим `next()`; иначе — bogus
 //! comment с данными `[CDATA[...` (HTML LS "cdata-in-html-content" parse
-//! error). Только `run_pull` (`parse`/`parse_fragment`) взводит флаг —
-//! `PushTokenizer` (сетевая загрузка страниц) его никогда не устанавливает,
-//! поэтому там `<![CDATA[` всегда идёт bogus-comment веткой: раньше
-//! конструкция терялась целиком (ни узла, ни текста), теперь — как минимум
-//! настоящий comment-узел с тем же содержимым, что видел бы браузер вне
-//! foreign content; полноценная поддержка CDATA в потоковом foreign content
-//! остаётся отдельным срезом.
+//! error). И `run_pull` (`parse`/`parse_fragment`), и `PushTokenizer`
+//! (сетевая загрузка страниц) взводят флаг заново после каждого токена —
+//! `PushTokenizer` делает это через второй элемент возврата `on_token`
+//! (см. `IncrementalTreeBuilder::apply_token_for_stream`,
+//! `crates/engine/html-parser/src/push_tokenizer.rs`), которое до среза
+//! 15 всегда было `false`, так что `<![CDATA[` в потоковом foreign content
+//! всегда уходило в bogus-comment ветку независимо от namespace.
 
 // Долг по документации: файл написан до включения `missing_docs` и пока не
 // покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
