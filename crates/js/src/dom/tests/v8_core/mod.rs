@@ -313,6 +313,17 @@ fn get_element_by_id_tag_name() {
 }
 
 #[test]
+fn element_local_name_is_lowercase() {
+    // BUG-575: Element.prototype.localName must exist and read the
+    // lower-case tag name (tagName is upper-case-only in this engine).
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval("document.getElementById('main').localName")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("div".into()));
+}
+
+#[test]
 fn query_selector_by_id() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt
