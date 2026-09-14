@@ -808,7 +808,12 @@ pub(crate) fn install_node_properties(
                 for c in old_children {
                     doc.detach(c);
                 }
-                let new_children = parse_html_fragment(&mut doc, &html);
+                // GAP-XMLDOC срез 14 (BUG-685): `nid` — the actual element
+                // `Element.innerHTML=` was called on ("context" per HTML LS
+                // §13.4/DOM Parsing) — not `target`, which is redirected to
+                // the template content fragment above and would report a
+                // `DocumentFragment` with no namespace of its own.
+                let new_children = parse_html_fragment_with_context(&mut doc, &html, Some(nid));
                 for c in new_children {
                     doc.append_child(target, c);
                 }

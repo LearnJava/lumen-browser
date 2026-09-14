@@ -3037,6 +3037,32 @@ Node.prototype.compareDocumentPosition = function(other) {
     Object.defineProperty(Node.prototype, _c[0], { value: _c[1], writable: false, enumerable: true, configurable: false });
 });
 
+// DOM §4.4 "the legacy nodeType constants" — `Node.ELEMENT_NODE`/
+// `Node.TEXT_NODE`/etc, kept for web compat and never actually removed from
+// the spec. GAP-XMLDOC срез 14 (BUG-685) found these missing entirely (0
+// hits for `TEXT_NODE`/`COMMENT_NODE` anywhere in this shim) while adding a
+// WPT test that asserts `nodeType === Node.TEXT_NODE`: every such assertion
+// silently compared against `undefined` instead of the real numeric
+// constant. Values match the existing bare-number `nodeType` getters spread
+// across this file (`_lumen_make_character_data`, the generic element mixin
+// at `get nodeType()` below, `Document`'s own `nodeType` at 9, …) — same
+// literal table WebIDL puts on both the interface object and the prototype.
+[['ELEMENT_NODE', 1],
+ ['ATTRIBUTE_NODE', 2],
+ ['TEXT_NODE', 3],
+ ['CDATA_SECTION_NODE', 4],
+ ['ENTITY_REFERENCE_NODE', 5],
+ ['ENTITY_NODE', 6],
+ ['PROCESSING_INSTRUCTION_NODE', 7],
+ ['COMMENT_NODE', 8],
+ ['DOCUMENT_NODE', 9],
+ ['DOCUMENT_TYPE_NODE', 10],
+ ['DOCUMENT_FRAGMENT_NODE', 11],
+ ['NOTATION_NODE', 12]].forEach(function(_c) {
+    Object.defineProperty(Node, _c[0], { value: _c[1], writable: false, enumerable: true, configurable: false });
+    Object.defineProperty(Node.prototype, _c[0], { value: _c[1], writable: false, enumerable: true, configurable: false });
+});
+
 function Element() { throw new TypeError('Illegal constructor'); }
 Element.prototype = Object.create(Node.prototype);
 Element.prototype.constructor = Element;

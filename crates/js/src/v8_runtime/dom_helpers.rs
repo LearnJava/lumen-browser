@@ -486,11 +486,36 @@ pub(super) fn import_node(
 /// document parser starts in `initial`, where §13.2.6.4.1–4 *must* drop a
 /// leading whitespace run and *must* put a leading comment on the `Document`
 /// itself — both then fell outside `<body>` and were silently lost, which is
-/// what broke React 18's `<!--$-->` Suspense markers. Everything else about the
-/// two paths is unchanged: `parse_fragment` still parses at body level, so the
-/// context element (a bare `<td>`, an SVG subtree) remains BUG-685's gap.
+/// what broke React 18's `<!--$-->` Suspense markers. Context element support
+/// (a bare `<td>`, an SVG subtree) is [`parse_html_fragment_with_context`] —
+/// this always parses at body level, same as before GAP-XMLDOC срез 14.
 pub(super) fn parse_html_fragment(doc: &mut lumen_dom::Document, html: &str) -> Vec<lumen_dom::NodeId> {
-    let (temp, root) = lumen_html_parser::parse_fragment(html);
+    parse_html_fragment_with_context(doc, html, None)
+}
+
+/// Same as [`parse_html_fragment`], but with a real HTML LS §13.4 context
+/// element (GAP-XMLDOC срез 14, BUG-685) — `context_nid`'s namespace/local
+/// name/attributes decide the "adjusted current node" the fragment parser
+/// uses for foreign-content routing and the CDATA-allowed flag while its
+/// synthetic root is still the only element on the stack. `_lumen_set_inner_html`
+/// is the one caller that has a real context element to offer
+/// (`Element.innerHTML=`'s `this`); `outerHTML`/`insertAdjacentHTML` don't
+/// (their context is the target's *parent*, not measured yet), so they keep
+/// going through the `None` path above.
+pub(super) fn parse_html_fragment_with_context(
+    doc: &mut lumen_dom::Document,
+    html: &str,
+    context_nid: Option<lumen_dom::NodeId>,
+) -> Vec<lumen_dom::NodeId> {
+    let context = context_nid.and_then(|nid| match &doc.get(nid).data {
+        lumen_dom::NodeData::Element { name, attrs } => Some(lumen_html_parser::FragmentContext {
+            namespace: name.namespace,
+            local: name.local.clone(),
+            attrs: attrs.iter().map(|a| (a.name.local.clone(), a.value.clone())).collect(),
+        }),
+        _ => None,
+    });
+    let (temp, root) = lumen_html_parser::parse_fragment_with_context(html, context);
     temp.get(root)
         .children
         .clone()
