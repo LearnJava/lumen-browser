@@ -399,3 +399,51 @@ false`) не изменился — self-closing по-прежнему игно�
 (`lumen-driver::cases::snapshot_cpu`, `55-text-rendering`/`57-canvas-2d`/
 `32-list-markers`/`34-forms`), подтверждённого идентичным на чистом `main`
 без этого среза предыдущими срезами.
+
+## GAP-XMLDOC срез 16 (2026-09-14): self-closing `<table>`/`<select>`/`<button>` в xml_mode — не «неизмерено», а живой дефект (`p1-gap-xmldoc-srez16`)
+
+Срез 11 (общий ре-замер) записал `<table>`/`<select>`/`<button>`
+self-closing как «0 хитов по корпусу, остаётся неизмеренным» и явно
+предупредил: «расширять `push_open_element` на них без измеренного случая
+было бы гаданием». Взял этот пункт как первую строку `STATUS-P1.md`
+(`ROADMAP.md:896`) и вместо очередного grep по корпусу написал целевой
+юнит-тест на сам механизм (`xml_flavoured_self_closing_table_select_button_do_not_nest_siblings`)
+— он не прошёл: `<table/><select/><button/>` вложились друг в друга вместо
+того, чтобы остаться соседями, тем же паттерном, что «Вторая грань» этого
+бага описывала для `<div/>` до среза 2.
+
+**Причина — не «неизмерено», а отдельный, необобщённый push-сайт.**
+`table`/`select`/`button` в `mode_in_body` — единственные три
+не-RAWTEXT-элемента во всём `mode_in_body`, что вставляются через голый
+`self.open_elements.push(el)` вместо `push_open_element(el, self_closing)`,
+и при этом деструктурируют токен как `Token::StartTag { ref name, ref attrs, .. }`
+— поле `self_closing` не просто не учитывается, оно даже не связывается с
+именем. Срез 2 обобщил `push_open_element` на пять мест `mode_in_body` и
+явно назвал два класса, которые он НЕ тронул: RAWTEXT-элементы (закрыты
+отдельно срезами 2/9) и эти три, потому что каждый из них ещё и
+переключает `insertion_mode` (`InTable`/`InSelect`) или трогает
+active-formatting — что требует решения, переключать ли режим при
+немедленном self-closing pop, не просто скопировать вызов.
+
+Фикс — тот же приём, что уже применён к `<textarea>` (срез 9): деструктурировать
+`self_closing`, звать `push_open_element(el, self_closing)` вместо голого
+`push`, и переключать `insertion_mode` только если элемент реально остался
+открытым (`!(self.xml_mode && self_closing)`) — для `<button>` этого шага
+не требуется, он не меняет insertion mode ни при каком исходе. Обычный
+HTML5-разбор (`parse`, `xml_mode == false`) не регрессирует:
+`push_open_element` уже безусловно игнорирует `self_closing` вне
+`xml_mode`/foreign content, так что `insertion_mode`-переключение
+происходит как раньше на каждом self-closing `<table>`/`<select>`.
+
+Тест: `xml_flavoured_self_closing_table_select_button_do_not_nest_siblings`
+(`tree_builder.rs`) — `<table/><select/><button/>` в xml_mode дают три
+соседних элемента `<body>`, не три уровня вложенности. `cargo test -p
+lumen-html-parser --lib` — 470/470 зелёные (был 469, включая новый тест).
+`cargo clippy -p lumen-html-parser --all-targets --profile dev-release --
+-D warnings` — чисто. `tree_builder.rs` пересёк собственный baseline (5416
+→ 5455 строк), `scripts/file-size-baseline.tsv` обновлён тем же коммитом.
+
+**Не в этом срезе:** формирующие элементы (`<a>`, `<b>`, …) из того же
+списка «сознательно не тронуто» среза 2 — они трогают active-formatting
+list, отдельный, необследованный класс правки; сама архитектура
+полноценного XML-парсера.
