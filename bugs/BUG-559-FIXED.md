@@ -1,6 +1,6 @@
 # BUG-559: `window.screen.width`/`height` (and siblings) are silently writable, `window.screenLeft`/`screenTop`/`screenX`/`screenY` are missing entirely
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-14
 **Дата:** 2026-08-04
 **Компонент:** js (`crates/js/src/navigator_bindings.rs:213-225` — the `_screen` object literal and its `Object.defineProperty(globalThis, 'screen', …)`)
 **Найден:** P2, WPT-RUN-3 срез 39 (`css/cssom-view`), 2026-08-04
@@ -68,3 +68,18 @@ basic, easily fixed spec-conformance gap.
    or the actual OS window position if available through the windowing
    backend; `screenLeft`/`screenTop` must equal `screenX`/`screenY`
    respectively.
+
+## Фикс P3 2026-09-14
+
+`navigator_bindings.rs`: each of `width`/`height`/`availWidth`/
+`availHeight`/`colorDepth`/`pixelDepth` on `_screen` is now given a
+`writable: false` descriptor before the `globalThis.screen`
+`defineProperty` call (not a blanket `Object.freeze` — `orientation`
+must stay writable, since `screen_orientation.rs` replaces that stub
+with the real `ScreenOrientation` instance right after this shim
+runs; freezing it broke that assignment, confirmed by a graphic-tests
+regression during verification). `window.screenX`/`screenY`/
+`screenLeft`/`screenTop` added as readonly `0` (no windowing backend
+to query a real position from); `screenLeft`/`screenTop` alias
+`screenX`/`screenY` as required. Regression tests:
+`screen_dimensions_are_readonly`, `screen_position_properties_exist`.
