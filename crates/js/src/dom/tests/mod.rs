@@ -230,3 +230,6 @@ mod v8_bug599_get_root_node;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug630_image_load_events;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug552_document_metadata;
