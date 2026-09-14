@@ -800,3 +800,78 @@ unclosed-svg-script.html.ini`):
 (push_tokenizer) + 9 интеграционных (`fragment_parsing.rs`) зелёные, без
 единой правки существующих тестов. `cargo clippy -p lumen-html-parser
 --all-targets -- -D warnings` — чисто.
+
+## GAP-XMLDOC срез 13 (2026-09-14): исполнимость foreign `<script>` — закрывает файл целиком (5/5)
+
+Срез 12 закрыл RAWTEXT/RCDATA, но оставил три сабтеста
+`unclosed-svg-script.html` красными — все три об одном и том же: движок
+исполнял foreign (SVG) `<script>`, закрытый ЛЮБЫМ способом, если в его
+детях осталось непустое текстовое содержимое. По HTML LS §13.2.6.5
+«already started»-флаг настоящего движка выставляется только двумя
+путями — литеральный `</script>` конец-тега, пока скрипт ещё текущий
+узел, или self-closing стартовый тег (шаг 7 того же алгоритма, который
+также требует исполнить скрипт). Любое другое закрытие — неявный pop как
+побочный эффект конец-тега предка (`</svg>` после незакрытого `<script>`)
+или foreign-content breakout-тег (`<s>` внутри текста скрипта) — не
+взводит этот флаг вовсе, хотя уже разобранный текст остаётся в дереве как
+обычный контент.
+
+**Почему это отдельная точка правки, а не пере-использование RAWTEXT-фикса
+среза 12.** Lumen не моделирует «already started» во время разбора —
+исполнение скриптов целиком отложено до постпарсингового обхода дерева в
+порядке документа (`collect_scripts_ordered`, `crates/shell/src/scripts.rs`),
+который сегодня считает исполнимым любой `<script>` с непустым текстом
+или `src`. Три красных сабтеста требуют, чтобы ЭТОТ обход знал то, что
+знает только парсер в момент закрытия элемента — само по себе решение
+не выводится из финального дерева.
+
+**Исправление — три места:**
+
+- `Document` (`crates/engine/dom/src/lib.rs`) получил
+  `non_executable_foreign_scripts: HashSet<NodeId>` плюс
+  `mark_foreign_script_not_executable`/`is_script_executable` — тот же
+  приём, что уже применён для `viewport_meta`/`meta_refresh`: парсер
+  пишет наблюдение в `Document`, шелл читает его позже.
+- `tree_builder.rs::dispatch_foreign_content` — новый хелпер
+  `mark_if_foreign_script_not_executable` вызывается в двух местах:
+  - breakout-ветка (forced или из `foreign_content::breaks_out_of_foreign_content`)
+    — помечает КАЖДЫЙ foreign `<script>`, снятый со стека в цикле
+    `while is_foreign_namespace(...) { pop() }`, до того как он выпадет;
+  - ветка `EndTag` — если найденная граница `i` НЕ верх стека (то есть
+    искомый тег закрыл что-то помимо самого себя, включая случай, когда
+    искомый тег — вовсе не `"script"`) или найденное имя не `"script"`,
+    все `<script>`-элементы в `open_elements[i..]` перед `truncate`
+    помечаются. Единственное исключение (`top_is_direct_script_close`) —
+    буквально `</script>`, пока скрипт был верхним элементом стека: это и
+    есть спековая «current node is an SVG script element» ветка.
+- `crates/shell/src/scripts.rs::collect_scripts_ordered` (и
+  `collect_inline_scripts`, тот же обход из другого потребителя) —
+  проверяет `doc.is_script_executable(id)` первым делом внутри ветки
+  `<script>`, и разрешает внешний источник искать `href`/`xlink:href`
+  вдобавок к `src`, когда элемент в `Namespace::Svg` (само-закрывающийся
+  `<script href="…"/>` иначе даже не попадал бы в исполнение — SVG не
+  знает атрибута `src`).
+
+**Живое измерение** (`run_smoke.py`, полный streaming/network путь):
+`unclosed-svg-script.html` — было `TEST_END: Test OK. Subtests passed
+2/5`; стало `TEST_END: Test OK. Subtests passed 5/5` — все три
+`UNEXPECTED-PASS`, `.ini`-ожидания (`tests/wpt/metadata/html/syntax/
+parsing/unclosed-svg-script.html.ini`) удалены целиком, файл больше не
+нуждается в отдельных expectations.
+
+Новый интеграционный набор
+`crates/engine/html-parser/tests/foreign_script_execution.rs` (не в
+`tree_builder.rs` — тот файл уже 5232 строки, выше грандфазеренного
+лимита в 2000, растить нельзя) — 5 тестов через публичный `parse`/
+`Document::is_script_executable`, по одному на каждую ветку алгоритма
+(закрыт своим тегом, не закрыт, закрыт breakout'ом, self-closing,
+регрессия на bogus-end-tag среза 12).
+
+`cargo test -p lumen-html-parser` — 462+9+5 зелёных (5 новых из
+`foreign_script_execution.rs`, ни одна существующая не тронута).
+`cargo clippy -p lumen-dom -p lumen-html-parser --all-targets -- -D
+warnings` и `cargo clippy -p lumen-shell --all-targets --profile
+dev-release -- -D warnings` — чисто.
+
+Закрывает GAP-XMLDOC срез 12's remainder полностью — `unclosed-svg-
+script.html` больше не появится ни в одном списке остатков.
