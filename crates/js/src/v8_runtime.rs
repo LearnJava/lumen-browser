@@ -273,6 +273,8 @@ impl V8JsRuntime {
                 dom_dirty: Arc::clone(&dom_dirty),
                 never_flushed: Arc::clone(&self.style_never_flushed),
                 scroll_states: Arc::clone(&scroll_states),
+                focused_nid: Arc::clone(&self.focused_nid),
+                last_flushed_focus: Arc::clone(&self.last_flushed_focus),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
@@ -290,7 +292,13 @@ impl V8JsRuntime {
 
             install::install_print(scope, ctx, store, Arc::clone(&print_requests))?;
 
-            install::install_dialog_focus(scope, ctx, store, Arc::clone(&pending_focus_requests))?;
+            install::install_dialog_focus(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&pending_focus_requests),
+                Arc::clone(&self.focused_nid),
+            )?;
 
             install::install_document_meta(scope, ctx, store, Arc::clone(&doc))?;
 
@@ -302,7 +310,13 @@ impl V8JsRuntime {
                 Arc::clone(&pending_scripted_font_faces),
             )?;
 
-            install::install_node_lookup(scope, ctx, store, Arc::clone(&doc))?;
+            install::install_node_lookup(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&doc),
+                Arc::clone(&self.focused_nid),
+            )?;
 
             install::install_node_properties(
                 scope,

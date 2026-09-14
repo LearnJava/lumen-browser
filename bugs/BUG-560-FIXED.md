@@ -1,6 +1,6 @@
 # BUG-560: `:focus-within` style/match never reflects a synchronous `element.focus()` call — the shell applies the focus request only on its next pump
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-14
 **Дата:** 2026-08-04
 **Компонент:** js/shell (`crates/js/src/dom.rs:13474` — `HTMLElement.prototype.focus`, queues via `_lumen_request_focus`; `crates/shell/src/main.rs:3048` — drains the queue "on its next pump")
 **Найден:** P2, WPT-RUN-3 срез 40 (`css/selectors`), 2026-08-04
@@ -92,4 +92,49 @@ focus()` (`web_api_shim_tail_b.js:822`) зовёт `_lumen_request_focus(nid)`
 дополнительного `await`/таймера, когда памп уже прошёл), в этом замере не
 проверялся — открытый вопрос, чинит ли простое ожидание кадра эту грань
 так же, как чинит `:focus`-стиль.
+
+## Исправлено 2026-09-14 (P3)
+
+Корень был архитектурный: `:focus`/`:focus-within`/`:focus-visible` матчинг
+читает потоко-локальные `HOVER_NID`/`FOCUS_NID`/`ACTIVE_NID`
+(`crates/engine/layout/src/style/env.rs`), которые выставляет только реальный
+relayout на потоке шелла (`set_interactive_state` в `relayout.rs`/`frames.rs`).
+Два независимых пути читают состояние фокуса на ДВИЖКОВОМ (JS/V8) потоке, где
+эти thread-local никогда не выставлялись:
+
+1. **Синхронный флаш стиля** (`crates/js/src/v8_runtime/style_flush.rs`,
+   CSSOM-4/BUG-493) — обслуживает `getComputedStyle()`/`getBoundingClientRect()`
+   в том же скриптовом такте, что и мутация. Он пересчитывал layout вообще без
+   интерактивного состояния и, что хуже, не считал новый `.focus()` поводом для
+   пересчёта вовсе (`.focus()` не трогает DOM, значит `dom_dirty` остаётся
+   `false`) — до фикса такой same-tick флаш просто отдавал снятый ДО фокуса
+   снимок.
+2. **Матчинг селекторов** (`_lumen_node_matches_selector`/`_lumen_query_selector*`,
+   `crates/js/src/v8_runtime/install/dom_core.rs`) — матчит напрямую по
+   `Document`, вообще без прохода layout, поэтому НИКОГДА не выставлял
+   интерактивное состояние — этим объясняется замер 2026-08-23, где `matches`
+   давал `false` даже спустя пампы после применения `:focus`-стиля.
+
+**Исправление:** заведено `V8JsRuntime::focused_nid` — зеркало «что сейчас
+сфокусировано» на движковом потоке, обновляемое синхронно с двух сторон:
+`_lumen_request_focus`/`_lumen_request_blur` (JS вызвал `.focus()`/`.blur()`,
+`v8_runtime/install/platform.rs`) и `notify_focus_changed` (эхо от шелл-фокуса —
+клик, Tab, `crates/shell/src/persistent_js.rs`). Оба потребителя используют это
+зеркало: `style_flush::FlushHandles::maybe_flush` ставит `set_interactive_state`
+перед `layout_measured_with_counters` и требует пересчёт при расхождении с
+`last_flushed_focus`, даже если `dom_dirty` не взведён; `with_focus_state` в
+`dom_core.rs` оборачивает им все `query_all*`/`matches_selector` вызовы.
+`:hover`/`:active` вне рамок этого бага не тронуты — тот же класс приближения
+остаётся открытым для них отдельно.
+
+Побочный эффект: `scrollIntoView()` внутри `.focus()` (замер 2026-09-01) тоже
+читает геометрию через `_lumen_get_bounding_rect`, который зовёт тот же
+`maybe_flush()` — тем же фиксом обе жертвы одного корня закрыты одновременно.
+
+Регрессия: `crates/js/src/dom/tests/v8_bug560_sync_focus.rs` — 5 тестов
+(`getComputedStyle`/`:focus-within`/`matches`/`querySelectorAll`/`.blur()`, все
+внутри одного синхронного такта). `cargo clippy --workspace --all-targets
+-- -D warnings` чист, `scripts/scoped-test.sh` — единственный красный тест
+(`cpu_snapshots_match_references`) идентичен на `main` без изменений (чужой
+дрейф, не регрессия этой задачи).
 

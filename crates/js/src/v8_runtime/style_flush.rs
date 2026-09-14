@@ -75,6 +75,15 @@ pub(crate) struct FlushHandles {
     /// (e.g. `overflow` flipping to `clip`) sees the correctly reclamped
     /// value instead of silently losing a prior scroll position.
     pub(crate) scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// BUG-560: the engine thread's same-tick focus mirror (see
+    /// [`super::runtime::V8JsRuntime::focused_nid`]) — read-only here, used to
+    /// install the correct `:focus`/`:focus-within` state before laying out.
+    pub(crate) focused_nid: Arc<Mutex<Option<u32>>>,
+    /// BUG-560: the focus target baked into the current `computed_styles`/
+    /// `layout_rects` snapshot, so [`Self::maybe_flush`] can tell a same-tick
+    /// `.focus()` apart from "nothing changed" even when it left `dom_dirty`
+    /// untouched. Updated at the end of every successful flush.
+    pub(crate) last_flushed_focus: Arc<Mutex<Option<u32>>>,
 }
 
 /// Bundled font for the flush's own measurer — the same file every other
@@ -100,7 +109,19 @@ impl FlushHandles {
     /// to the pre-CSSOM-4 stale-snapshot behaviour rather than blocking or
     /// panicking.
     pub(crate) fn maybe_flush(&self) {
-        if !self.never_flushed.load(Ordering::Relaxed) && !self.dom_dirty.load(Ordering::Relaxed) {
+        // BUG-560: `element.focus()` changes `:focus`/`:focus-within` matching
+        // without touching the DOM, so it never sets `dom_dirty` — without this
+        // check a same-tick `getComputedStyle()` right after `.focus()` would
+        // keep serving the pre-focus snapshot even though the flush below would
+        // otherwise happily recompute it. Compare against the focus baked into
+        // the last flush rather than trusting `dom_dirty`/`never_flushed` alone.
+        let current_focus = *self.focused_nid.lock().unwrap_or_else(|e| e.into_inner());
+        let focus_changed =
+            *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner()) != current_focus;
+        if !self.never_flushed.load(Ordering::Relaxed)
+            && !self.dom_dirty.load(Ordering::Relaxed)
+            && !focus_changed
+        {
             return;
         }
         let Some(sheet) = self
@@ -128,8 +149,18 @@ impl FlushHandles {
             return;
         };
         let viewport = lumen_core::geom::Size::new(vw, vh);
+        // BUG-560: install the engine thread's same-tick focus mirror before
+        // laying out, so `:focus`/`:focus-within`/`:focus-visible` resolve
+        // against the target `.focus()` just requested instead of the
+        // thread-local's untouched "nothing focused" default (a real relayout
+        // does the equivalent via `set_interactive_state` on the shell thread —
+        // this flush runs on the engine thread, which never gets that call).
+        // `:hover`/`:active` stay unset — out of this bug's scope.
+        let focus_node = current_focus.map(|n| lumen_dom::NodeId::from_index(n as usize));
+        lumen_layout::set_interactive_state(None, focus_node, None);
         let (mut layout_root, counters) =
             lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer);
+        lumen_layout::clear_interactive_state();
         // BUG-504 part 10: the fresh tree above starts every scroll container
         // at `scroll_x`/`scroll_y == 0.0` (box-tree construction default) —
         // unlike a real relayout, this one-off flush tree never goes through
@@ -184,5 +215,9 @@ impl FlushHandles {
             .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
             .collect();
         self.never_flushed.store(false, Ordering::Relaxed);
+        *self
+            .last_flushed_focus
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = current_focus;
     }
 }

@@ -18,10 +18,45 @@ function MouseEvent(type, init) {
     this.screenY       = (init && init.screenY       != null) ? +init.screenY       : 0;
     this.clientX       = (init && init.clientX       != null) ? +init.clientX       : 0;
     this.clientY       = (init && init.clientY       != null) ? +init.clientY       : 0;
-    this.pageX         = (init && init.pageX         != null) ? +init.pageX         : this.clientX;
-    this.pageY         = (init && init.pageY         != null) ? +init.pageY         : this.clientY;
-    this.offsetX       = (init && init.offsetX       != null) ? +init.offsetX       : 0;
-    this.offsetY       = (init && init.offsetY       != null) ? +init.offsetY       : 0;
+    // CSSOM View §5: x/y are plain aliases of clientX/clientY (BUG-558).
+    this.x             = this.clientX;
+    this.y             = this.clientY;
+    // pageX/pageY/offsetX/offsetY are live getters over the current scroll
+    // position unless the init dict pins them explicitly (BUG-558) — a later
+    // scrollBy() on the same page must be reflected on re-read of the same
+    // event object, not just at construction time.
+    if (init && init.pageX != null) {
+        this.pageX = +init.pageX;
+    } else {
+        Object.defineProperty(this, 'pageX', {
+            get: function() { return this.clientX + ((this.view || window).scrollX || 0); },
+            enumerable: true, configurable: true
+        });
+    }
+    if (init && init.pageY != null) {
+        this.pageY = +init.pageY;
+    } else {
+        Object.defineProperty(this, 'pageY', {
+            get: function() { return this.clientY + ((this.view || window).scrollY || 0); },
+            enumerable: true, configurable: true
+        });
+    }
+    if (init && init.offsetX != null) {
+        this.offsetX = +init.offsetX;
+    } else {
+        Object.defineProperty(this, 'offsetX', {
+            get: function() { return this.pageX; },
+            enumerable: true, configurable: true
+        });
+    }
+    if (init && init.offsetY != null) {
+        this.offsetY = +init.offsetY;
+    } else {
+        Object.defineProperty(this, 'offsetY', {
+            get: function() { return this.pageY; },
+            enumerable: true, configurable: true
+        });
+    }
     this.movementX     = (init && init.movementX     != null) ? +init.movementX     : 0;
     this.movementY     = (init && init.movementY     != null) ? +init.movementY     : 0;
     this.button        = (init && init.button        != null) ? (init.button  | 0)  : 0;
@@ -3175,6 +3210,26 @@ DOMImplementation.prototype.constructor = DOMImplementation;
     _ctor.prototype = Object.create(HTMLElement.prototype);
     _ctor.prototype.constructor = _ctor;
     globalThis[_name] = _ctor;
+});
+
+// BUG-567: HTML LS §4.2.2 `HTMLTitleElement.text` — a legacy IDL attribute
+// (contrast `document.title`, which already has a real getter/setter). On
+// get, concatenates only DIRECT Text-node children's data (not comment nodes,
+// not text nested inside a child element) — `title.text-01.html` exercises
+// exactly this distinction against `textContent`, which walks the whole
+// subtree. On set, spec defers to the `textContent` setter (replace all
+// children with a single Text node).
+Object.defineProperty(HTMLTitleElement.prototype, 'text', {
+    get: function() {
+        var kids = this.childNodes;
+        var out = '';
+        for (var i = 0; i < kids.length; i++) {
+            if (kids[i].nodeType === 3) out += kids[i].data;
+        }
+        return out;
+    },
+    set: function(v) { this.textContent = String(v); },
+    enumerable: true, configurable: true,
 });
 
 // BUG-322: tag name (as returned by `_lumen_get_tag_name`, always upper-cased) →

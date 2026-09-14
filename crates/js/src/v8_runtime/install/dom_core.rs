@@ -264,6 +264,30 @@ fn parse_scripted_font_weight(s: &str) -> u16 {
     }
 }
 
+/// BUG-560: `query_all`/`matches_selector` (and their scoped siblings) match
+/// selectors directly against the `Document`, with no layout pass of their
+/// own — so unlike a real relayout they never call
+/// `lumen_layout::set_interactive_state` first, and `:focus`/`:focus-within`/
+/// `:focus-visible` always read the engine thread's `FOCUS_NID` thread-local
+/// at its default "nothing focused" value. Installs the engine thread's
+/// same-tick focus mirror ([`crate::v8_runtime::runtime::V8JsRuntime::focused_nid`])
+/// around `f` so a selector match inside `f` sees the current focus, then
+/// restores the thread-local to "nothing focused" afterwards so an unrelated
+/// selector match elsewhere on this thread (e.g. inside the same-tick style
+/// flush's own bracketing, `style_flush::FlushHandles::maybe_flush`) is not
+/// left with a stale focus target. `:hover`/`:active` are untouched — out of
+/// this bug's scope, and matched this path exactly as they always have (never).
+fn with_focus_state<R>(focused_nid: &Mutex<Option<u32>>, f: impl FnOnce() -> R) -> R {
+    let nid = focused_nid
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map(|n| NodeId::from_index(n as usize));
+    lumen_layout::set_interactive_state(None, nid, None);
+    let result = f();
+    lumen_layout::clear_interactive_state();
+    result
+}
+
 /// `getElementById`/`querySelector` and the other node-lookup entry points.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_node_lookup(
@@ -271,6 +295,7 @@ pub(crate) fn install_node_lookup(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
+    focused_nid: Arc<Mutex<Option<u32>>>,
 ) -> JsResult<()> {
     // ── node lookup ──────────────────────────────────────────────────────────
     {
@@ -293,19 +318,25 @@ pub(crate) fn install_node_lookup(
             lumen_css_parser::is_valid_selector_list(&sel)
         });
         let d = Arc::clone(&doc);
+        let fnid = Arc::clone(&focused_nid);
         reg!(scope, ctx, store, "_lumen_query_selector", move |sel: String| -> Option<u32> {
-            let doc = d.lock().unwrap();
-            query_all(&doc, &sel).into_iter().next().map(|n| n.index() as u32)
+            with_focus_state(&fnid, || {
+                let doc = d.lock().unwrap();
+                query_all(&doc, &sel).into_iter().next().map(|n| n.index() as u32)
+            })
         });
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        let fnid = Arc::clone(&focused_nid);
+        reg!(scope, ctx, store,
             "_lumen_query_selector_all",
             move |sel: String| -> Vec<u32> {
-                let doc = d.lock().unwrap();
-                query_all(&doc, &sel)
-                    .into_iter()
-                    .map(|n| n.index() as u32)
-                    .collect()
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    query_all(&doc, &sel)
+                        .into_iter()
+                        .map(|n| n.index() as u32)
+                        .collect()
+                })
             }
         );
         // BUG-291: Element/DocumentFragment/ShadowRoot.querySelector(All) must be
@@ -314,33 +345,42 @@ pub(crate) fn install_node_lookup(
         // for subtrees not yet attached to the document (`testharness.js` builds
         // its results table off-document before appending it).
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        let fnid = Arc::clone(&focused_nid);
+        reg!(scope, ctx, store,
             "_lumen_query_selector_scoped",
             move |node_id: u32, sel: String| -> Option<u32> {
-                let doc = d.lock().unwrap();
-                let scope = NodeId::from_index(node_id as usize);
-                query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.index() as u32)
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    let scope = NodeId::from_index(node_id as usize);
+                    query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.index() as u32)
+                })
             }
         );
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        let fnid = Arc::clone(&focused_nid);
+        reg!(scope, ctx, store,
             "_lumen_query_selector_all_scoped",
             move |node_id: u32, sel: String| -> Vec<u32> {
-                let doc = d.lock().unwrap();
-                let scope = NodeId::from_index(node_id as usize);
-                query_all_scoped(&doc, scope, &sel)
-                    .into_iter()
-                    .map(|n| n.index() as u32)
-                    .collect()
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    let scope = NodeId::from_index(node_id as usize);
+                    query_all_scoped(&doc, scope, &sel)
+                        .into_iter()
+                        .map(|n| n.index() as u32)
+                        .collect()
+                })
             }
         );
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        let fnid = Arc::clone(&focused_nid);
+        reg!(scope, ctx, store,
             "_lumen_node_matches_selector",
             move |node_id: u32, sel: String| -> bool {
-                let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
-                matches_selector(&doc, nid, &sel)
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    let nid = NodeId::from_index(node_id as usize);
+                    matches_selector(&doc, nid, &sel)
+                })
             }
         );
         // DOM LS §4.2.6: `Element`/`DocumentFragment`/`ShadowRoot` querySelector(All)
@@ -350,24 +390,30 @@ pub(crate) fn install_node_lookup(
         // subtree — e.g. `testharness.js`'s `render()` template builder — always
         // returned nothing).
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        let fnid = Arc::clone(&focused_nid);
+        reg!(scope, ctx, store,
             "_lumen_query_selector_scoped",
             move |node_id: u32, sel: String| -> Option<u32> {
-                let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
-                query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    let nid = NodeId::from_index(node_id as usize);
+                    query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
+                })
             }
         );
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        let fnid = Arc::clone(&focused_nid);
+        reg!(scope, ctx, store,
             "_lumen_query_selector_all_scoped",
             move |node_id: u32, sel: String| -> Vec<u32> {
-                let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
-                query_all_within(&doc, nid, &sel)
-                    .into_iter()
-                    .map(|n| n.index() as u32)
-                    .collect()
+                with_focus_state(&fnid, || {
+                    let doc = d.lock().unwrap();
+                    let nid = NodeId::from_index(node_id as usize);
+                    query_all_within(&doc, nid, &sel)
+                        .into_iter()
+                        .map(|n| n.index() as u32)
+                        .collect()
+                })
             }
         );
     }

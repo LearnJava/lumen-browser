@@ -184,6 +184,23 @@ pub struct V8JsRuntime {
     pub(super) print_requests: Arc<Mutex<Vec<crate::dom::PrintRequest>>>,
     /// Focus requests queued by JS via `_lumen_request_focus` / `_lumen_request_blur`.
     pub(super) pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
+    /// BUG-560: the engine thread's own up-to-date view of "what node is
+    /// currently focused", mirroring the shell's `focused_node` but updated
+    /// synchronously (no queue, no pump) from both directions — written by
+    /// `_lumen_request_focus`/`_lumen_request_blur` the instant a page calls
+    /// `element.focus()`/`.blur()` (same tick as [`Self::pending_focus_requests`]'s
+    /// push, which the shell only drains on its next pump) and by
+    /// `V8JsRuntime::set_focused_nid` when the shell echoes a focus change it
+    /// initiated itself (mouse click, Tab). Read by the same-tick style/layout
+    /// flush ([`crate::v8_runtime::style_flush::FlushHandles::maybe_flush`]) and
+    /// by `matches()`/`querySelectorAll()`'s selector matching so `:focus`/
+    /// `:focus-within`/`:focus-visible` resolve correctly inside the very
+    /// script turn that called `.focus()`, instead of only after the shell's
+    /// next pump applies [`Self::pending_focus_requests`].
+    pub(super) focused_nid: Arc<Mutex<Option<u32>>>,
+    /// BUG-560: the focus target baked into the current same-tick style flush
+    /// snapshot — see [`crate::v8_runtime::style_flush::FlushHandles::last_flushed_focus`].
+    pub(super) last_flushed_focus: Arc<Mutex<Option<u32>>>,
     /// Node ID of the current pointer capture target (W3C Pointer Events L3 §4.1),
     /// set via `_lumen_set_capture_state`/`_lumen_release_capture_state`.
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
@@ -331,6 +348,8 @@ impl V8JsRuntime {
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
+            focused_nid: Arc::new(Mutex::new(None)),
+            last_flushed_focus: Arc::new(Mutex::new(None)),
             pointer_capture_nid: Arc::new(Mutex::new(None)),
             deterministic: AtomicBool::new(false),
             deterministic_rng_seed: Mutex::new(None),
@@ -873,6 +892,16 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::take_focus_requests`].
     pub fn take_focus_requests(&self) -> Vec<Option<u32>> {
         std::mem::take(&mut *self.pending_focus_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// BUG-560: record the shell's current focus target on the engine thread's
+    /// own mirror ([`Self::focused_nid`]), so a same-tick `:focus`/`:focus-within`
+    /// read agrees with a focus change the shell just applied (click, Tab) even
+    /// before/without any `_lumen_request_focus` round trip. Called from
+    /// `notify_focus_changed`, which already runs this echo for every shell-side
+    /// focus change.
+    pub fn set_focused_nid(&self, nid: Option<u32>) {
+        *self.focused_nid.lock().unwrap_or_else(|e| e.into_inner()) = nid;
     }
 
     /// Returns the DOM node nid that currently holds pointer capture (pointer_id=1).

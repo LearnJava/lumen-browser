@@ -94,6 +94,36 @@ fn element_traversal_sibling_navigation_skips_text() {
 }
 
 #[test]
+fn node_next_previous_sibling_walk_all_node_types() {
+    // BUG-556: Node.nextSibling/previousSibling (DOM §4.4) walk ALL sibling
+    // node types (text, comment, element), unlike the element-only
+    // nextElementSibling/previousElementSibling tested above.
+    let rt = v8_runtime_with_dom(make_doc());
+    build_mixed_children(&rt, "_t");
+    // Layout: text('x'), span#a, text(' '), b#b, text(' '), span#c, text('y')
+    let after_a_is_text = rt
+        .eval("document.getElementById('a').nextSibling.nodeType === 3 && document.getElementById('a').nextSibling.data === ' '")
+        .unwrap();
+    assert_eq!(after_a_is_text, lumen_core::JsValue::Bool(true));
+    let before_a_is_text = rt
+        .eval("document.getElementById('a').previousSibling.nodeType === 3 && document.getElementById('a').previousSibling.data === 'x'")
+        .unwrap();
+    assert_eq!(before_a_is_text, lumen_core::JsValue::Bool(true));
+    let first_child_next_is_a = rt
+        .eval("_t.firstChild.nextSibling.id === 'a'")
+        .unwrap();
+    assert_eq!(first_child_next_is_a, lumen_core::JsValue::Bool(true));
+    let last_child_prev_is_c = rt
+        .eval("_t.lastChild.previousSibling.id === 'c'")
+        .unwrap();
+    assert_eq!(last_child_prev_is_c, lumen_core::JsValue::Bool(true));
+    let edges = rt
+        .eval("_t.firstChild.previousSibling === null && _t.lastChild.nextSibling === null")
+        .unwrap();
+    assert_eq!(edges, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn element_traversal_null_edges() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(r#"
