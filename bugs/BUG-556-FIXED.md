@@ -1,6 +1,6 @@
 # BUG-556: `Node.nextSibling`/`Node.previousSibling` are missing entirely on the live element/text/comment wrapper
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-14 (ревизия P3, дрейф трекера)
 **Дата:** 2026-08-04
 **Компонент:** js (`crates/js/src/dom.rs` — `_lumen_build_element`, around `:6542-6598` where `childNodes`/`firstChild`/`lastChild`/`nextElementSibling`/`previousElementSibling` are defined as getters on `_obj`)
 **Найден:** P2, WPT-RUN-3 срез 39 (`css/cssom-view`), 2026-08-04
@@ -57,3 +57,20 @@ finding.
 Add `nextSibling`/`previousSibling` getters to `_obj` mirroring
 `nextElementSibling`/`previousElementSibling` but over
 `_lumen_get_children(pid)` instead of `_lumen_element_child_nids(pid)`.
+
+## Ревизия P3 2026-09-14 — дрейф трекера, уже исправлено
+
+Заявка описывает `dom.rs` до `P1/SPLIT-JS3` (шимы вынесены в
+`crates/js/src/shim/*.js`, `include_str!`). `nextSibling`/`previousSibling`
+уже определены как геттеры на `_LUMEN_WRAPPER_MEMBERS` в
+`crates/js/src/shim/web_api_shim_mid.js:7725-7744`, над
+`_lumen_get_children` (все типы узлов, а не только элементы) — реализация
+попала в коммит `800cab893` («ES-модули из сети, nomodule, template.content
+и узловые операции DOM», 2026-08-17), через 13 дней после подачи этой
+заявки, но `BUGS.md` не обновили. Регрессионного теста не было —
+добавлен `dom::tests::v8_childnode_traversal::node_next_previous_sibling_walk_all_node_types`
+(обход текст → элемент → текст → элемент → текст, включая null-края
+`firstChild.previousSibling`/`lastChild.nextSibling`). `cargo test -p
+lumen-js --features v8-backend` — зелёный; `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` — чисто. Закрыт как
+FIXED задним числом.
