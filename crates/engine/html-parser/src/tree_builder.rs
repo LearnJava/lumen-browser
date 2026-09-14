@@ -422,6 +422,9 @@ impl IncrementalTreeBuilder {
                 ..
             } if forced_breakout || foreign_content::breaks_out_of_foreign_content(name, attrs) => {
                 while is_foreign_namespace(self.current_namespace()) {
+                    if let Some(&node) = self.open_elements.last() {
+                        self.mark_if_foreign_script_not_executable(node);
+                    }
                     self.open_elements.pop();
                 }
                 self.dispatch(token);
@@ -449,10 +452,40 @@ impl IncrementalTreeBuilder {
                     }
                 }
                 if let Some(i) = boundary {
+                    // GAP-XMLDOC срез 13 (BUG-685): HTML LS §13.2.6.5 only
+                    // treats an SVG/MathML script as executed when the
+                    // `</script>` end tag arrives while that script is
+                    // still the *current* node (`i` is the top of the
+                    // stack) — closing it as a side effect of some
+                    // ancestor's end tag (`i` below the top) never sets
+                    // the "already started" flag on a real engine, even
+                    // though the script's already-parsed text stays in the
+                    // tree. `top_is_direct_script_close` is exactly that
+                    // one exempted shape; everything else in the truncated
+                    // range gets marked.
+                    let top_is_direct_script_close =
+                        i + 1 == self.open_elements.len() && lname == "script";
+                    if !top_is_direct_script_close {
+                        let nodes: Vec<NodeId> = self.open_elements[i..].to_vec();
+                        for node in nodes {
+                            self.mark_if_foreign_script_not_executable(node);
+                        }
+                    }
                     self.open_elements.truncate(i);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// If `node` is a foreign (SVG/MathML) `<script>` element, record it as
+    /// not executable (GAP-XMLDOC срез 13, BUG-685) — see
+    /// [`Document::mark_foreign_script_not_executable`].
+    fn mark_if_foreign_script_not_executable(&mut self, node: NodeId) {
+        if is_foreign_namespace(self.node_namespace(node))
+            && self.element_local(node).eq_ignore_ascii_case("script")
+        {
+            self.doc.mark_foreign_script_not_executable(node);
         }
     }
 

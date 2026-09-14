@@ -425,6 +425,20 @@ pub struct Document {
     /// line runs.
     #[serde(default)]
     meta_refresh: Option<MetaRefresh>,
+    /// Foreign (SVG/MathML) `<script>` elements the parser closed by any
+    /// path other than the two HTML LS §13.2.6.5 execution triggers — a
+    /// literal `</script>` end tag while the element was still the current
+    /// node, or a self-closing start tag. A script closed some other way
+    /// (an ancestor's end tag implicitly popping it, a foreign-content
+    /// breakout tag, EOF) never has its "already started" flag set on a
+    /// real engine and so never runs, even though its markup still ends up
+    /// as ordinary text content in the tree (GAP-XMLDOC срез 13, BUG-685).
+    /// Lumen defers all script execution to a post-parse document-order
+    /// walk (`collect_scripts_ordered` in `lumen-shell`) rather than
+    /// modelling the parser's own "already started" flag, so the parser
+    /// records the exception here for that walk to skip instead.
+    #[serde(default)]
+    non_executable_foreign_scripts: HashSet<NodeId>,
     /// Active pointer captures: maps `pointerId` → captured `NodeId`.
     ///
     /// Set by `Element.setPointerCapture(pointerId)` (W3C Pointer Events L3 §4.1).
@@ -537,6 +551,7 @@ impl Document {
             js_refs: HashMap::new(),
             viewport_meta: None,
             meta_refresh: None,
+            non_executable_foreign_scripts: HashSet::new(),
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
@@ -621,6 +636,24 @@ impl Document {
         if self.meta_refresh.is_none() {
             self.meta_refresh = Some(refresh);
         }
+    }
+
+    /// Record that a foreign (SVG/MathML) `<script>` element was closed by
+    /// the parser without hitting an HTML LS §13.2.6.5 execution trigger —
+    /// a literal `</script>` end tag while it was still the current node,
+    /// or a self-closing start tag (GAP-XMLDOC срез 13, BUG-685). Lives on
+    /// `Document` rather than the parser itself because script execution
+    /// happens in a later, separate document-order walk.
+    pub fn mark_foreign_script_not_executable(&mut self, id: NodeId) {
+        self.non_executable_foreign_scripts.insert(id);
+    }
+
+    /// `false` for a foreign `<script>` the parser closed without a real
+    /// execution trigger — see [`mark_foreign_script_not_executable`]
+    /// [Self::mark_foreign_script_not_executable]. `true` for every other
+    /// node, including all non-`<script>` elements.
+    pub fn is_script_executable(&self, id: NodeId) -> bool {
+        !self.non_executable_foreign_scripts.contains(&id)
     }
 
     /// Current selection. The shell updates this on mouse events; JS reads it

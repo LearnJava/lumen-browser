@@ -72,6 +72,15 @@ pub(crate) fn collect_scripts_ordered(
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "script"
     {
+        // GAP-XMLDOC срез 13 (BUG-685): a foreign (SVG/MathML) `<script>`
+        // the parser closed without a genuine HTML LS §13.2.6.5 execution
+        // trigger — see `Document::mark_foreign_script_not_executable` —
+        // still has its parsed text/attributes in the tree, but a real
+        // engine never sets its "already started" flag, so it must not
+        // run here either.
+        if !doc.is_script_executable(id) {
+            return;
+        }
         let script_type = node.get_attr("type").map(|t| t.trim());
         let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
         // Only module + classic-JS scripts execute; everything else is data.
@@ -89,7 +98,17 @@ pub(crate) fn collect_scripts_ordered(
         }
         let target = if is_module { modules } else { classic };
         // `src` wins over inline body (HTML LS §4.12.1 — inline ignored if set).
-        if let Some(src) = node.get_attr("src") {
+        // GAP-XMLDOC срез 13 (BUG-685): SVG's `<script>` names its external
+        // source `href` (or the legacy `xlink:href`), not `src` — measured
+        // on the vendored `unclosed-svg-script.html` self-closing subtest.
+        let external_src = node.get_attr("src").or_else(|| {
+            if name.namespace == Namespace::Svg {
+                node.get_attr("href").or_else(|| node.get_attr("xlink:href"))
+            } else {
+                None
+            }
+        });
+        if let Some(src) = external_src {
             let src = src.trim();
             if !src.is_empty() {
                 target.push(ScriptSource::External(id, src.to_owned()));
@@ -370,6 +389,11 @@ pub(crate) fn collect_inline_scripts(
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "script"
     {
+        // Тот же пропуск закрытых-не-по-спецификации foreign-скриптов, что
+        // и в `collect_scripts_ordered` (GAP-XMLDOC срез 13, BUG-685).
+        if !doc.is_script_executable(id) {
+            return;
+        }
         let script_type = node.get_attr("type").map(|t| t.trim());
         let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
         let is_importmap = script_type.is_some_and(|t| t.eq_ignore_ascii_case("importmap"));

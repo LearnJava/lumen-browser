@@ -258,7 +258,7 @@ use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry, BfCachePayload, FrozenPage, History, SearchHistory};
 use lumen_dom::{
-    Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
+    Document, Namespace, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
     DomPosition, Range, delete_range, insert_text_at, locate_text_offset_range, node_text_content,
 };
