@@ -7,9 +7,11 @@
 //! атрибуты (quoted/unquoted), комментарии, базовые character references,
 //! void-элементы, lenient end-tag matching.
 //!
-//! Что не поддерживается (отложено до Phase 1+): CDATA, insertion modes
-//! (in_table, in_select), полный набор named entities (~2125 имён —
-//! у нас 250+ самых частых), foster parent reparenting.
+//! Что не поддерживается (отложено до Phase 1+): полный набор named
+//! entities (~2125 имён — у нас 250+ самых частых). `<![CDATA[...]]>` —
+//! только в pull-режиме (`parse`/[`parse_fragment`]/
+//! [`parse_fragment_with_context`]), namespace-зависимо (GAP-XMLDOC срез
+//! 14, BUG-685); `PushTokenizer` (сетевая загрузка) её не различает.
 
 mod entities;
 mod foreign_content;
@@ -32,4 +34,7 @@ pub use srcset::{
     parse_srcset, pick_best_for_density, pick_best_for_width,
 };
 pub use tokenizer::{Token, Tokenizer};
-pub use tree_builder::{IncrementalTreeBuilder, parse, parse_fragment, parse_xml_flavoured};
+pub use tree_builder::{
+    FragmentContext, IncrementalTreeBuilder, parse, parse_fragment, parse_fragment_with_context,
+    parse_xml_flavoured,
+};

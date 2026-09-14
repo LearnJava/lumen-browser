@@ -53,6 +53,18 @@ fn is_foreign_namespace(ns: Namespace) -> bool {
     matches!(ns, Namespace::Svg | Namespace::MathMl)
 }
 
+/// Same `encoding` check as [`IncrementalTreeBuilder::has_html_encoding`],
+/// against a fragment context element's raw `(name, value)` attribute list
+/// instead of a real DOM node's [`lumen_dom::Attribute`]s — GAP-XMLDOC срез
+/// 14 (BUG-685) needs both shapes for the same table
+/// ([`IncrementalTreeBuilder::resolve_content_namespace`]).
+fn attrs_have_html_encoding(attrs: &[(String, String)]) -> bool {
+    attrs.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("encoding")
+            && matches!(v.to_ascii_lowercase().as_str(), "text/html" | "application/xhtml+xml")
+    })
+}
+
 /// Прогоняет `input` через `tokenizer` и `builder`, token за token, отменяя
 /// RAWTEXT/RCDATA-переключение токенизатора для `<script>`/`<style>`/
 /// `<title>`/`<textarea>`, только что открытых в foreign-неймспейсе
@@ -64,12 +76,17 @@ fn is_foreign_namespace(ns: Namespace) -> bool {
 /// разошлись бы, реализуй каждая свою копию цикла.
 fn run_pull(builder: &mut IncrementalTreeBuilder, input: &str) {
     let mut tokenizer = Tokenizer::new(input);
+    tokenizer.set_cdata_allowed(builder.cdata_sections_allowed());
     while let Some(token) = tokenizer.next() {
         let is_open_start_tag = matches!(&token, Token::StartTag { self_closing: false, .. });
         builder.apply_token(token);
         if is_open_start_tag && builder.current_context_forbids_text_only() {
             tokenizer.cancel_text_only();
         }
+        // GAP-XMLDOC срез 14 (BUG-685): re-derived after every token, same
+        // pattern as the RAWTEXT/RCDATA cancel above — the adjusted current
+        // node the CDATA decision depends on changes as elements open/close.
+        tokenizer.set_cdata_allowed(builder.cdata_sections_allowed());
     }
 }
 
@@ -107,13 +124,42 @@ pub fn parse_xml_flavoured(input: &str) -> Document {
 /// `Document` (мимо `<body>`), а фрагмент обязан сохранить и то и другое
 /// (BUG-982: `d.innerHTML=' abc'` терял пробел, `'<!--$-->x'` — комментарий).
 ///
-/// Не реализовано из §13.4 — числится за `bugs/BUG-685-OPEN.md` вместе с
-/// foreign content: выбор insertion mode и состояния токенизатора по
-/// **реальному** контекстному элементу (шаги 3 и 6 — здесь контекст всегда
-/// «как `<body>`», что и нужно всем нынешним вызовам:
-/// `innerHTML`/`outerHTML`/`insertAdjacentHTML`), а также form pointer (шаг 7).
+/// Не реализовано из §13.4: выбор insertion mode по контекстному элементу
+/// (шаг 4 всё ещё безусловно «in body» — верно для всех измеренных
+/// вызывающих: `innerHTML`/`outerHTML`/`insertAdjacentHTML` никогда не дают
+/// контекст вроде `<select>`/`<template>`, требующий другого стартового
+/// режима) и form pointer (шаг 7). [`parse_fragment_with_context`] закрывает
+/// оставшуюся часть, нужную GAP-XMLDOC (BUG-685): adjusted current node
+/// (шаг 3) для CDATA-флага и foreign-content routing, когда контекст —
+/// SVG/MathML элемент.
 pub fn parse_fragment(input: &str) -> (Document, NodeId) {
-    let (mut builder, root) = IncrementalTreeBuilder::new_fragment();
+    parse_fragment_with_context(input, None)
+}
+
+/// Namespace/имя/атрибуты контекстного элемента для HTML LS §13.4 fragment
+/// parsing (GAP-XMLDOC срез 14, BUG-685) — то, на что вызывается
+/// `Element.innerHTML=`. Используется только чтобы вычислить adjusted
+/// current node (§13.2.6.5 "adjusted current node"), пока стек открытых
+/// элементов держит один-единственный синтетический `<html>`-корень
+/// (`parse_fragment` его всегда создаёт в HTML-неймспейсе независимо от
+/// контекста — сам контекстный элемент в дерево фрагмента не попадает,
+/// ровно как того требует спека).
+pub struct FragmentContext {
+    /// Неймспейс контекстного элемента.
+    pub namespace: Namespace,
+    /// Локальное имя контекстного элемента (lower-case).
+    pub local: String,
+    /// Атрибуты контекстного элемента — нужны для MathML
+    /// `<annotation-xml encoding="text/html">`, единственного integration
+    /// point, чья принадлежность зависит не только от имени тега.
+    pub attrs: Vec<(String, String)>,
+}
+
+/// Same as [`parse_fragment`], but with a real HTML LS §13.4 context
+/// element (GAP-XMLDOC срез 14, BUG-685) — `context: None` reproduces
+/// `parse_fragment`'s old body-like default exactly.
+pub fn parse_fragment_with_context(input: &str, context: Option<FragmentContext>) -> (Document, NodeId) {
+    let (mut builder, root) = IncrementalTreeBuilder::new_fragment(context);
     run_pull(&mut builder, input);
     (builder.finish(), root)
 }
@@ -243,6 +289,14 @@ pub struct IncrementalTreeBuilder {
     ///   XML does, instead of the HTML5 rule that ignores it outside void
     ///   elements — see [`Self::push_open_element`] (GAP-XMLDOC срез 2).
     xml_mode: bool,
+    /// HTML LS §13.4 fragment context element (GAP-XMLDOC срез 14,
+    /// BUG-685) — `Some` only for [`new_fragment`][Self::new_fragment]
+    /// with a real [`FragmentContext`]. Consulted only while
+    /// `open_elements` holds exactly the synthetic root (`len() == 1`):
+    /// that is precisely the spec's "fragment case" for "adjusted current
+    /// node", the one place namespace/CDATA decisions must see the context
+    /// element instead of the always-HTML synthetic root.
+    fragment_context: Option<FragmentContext>,
 }
 
 impl IncrementalTreeBuilder {
@@ -265,6 +319,7 @@ impl IncrementalTreeBuilder {
             declarative_shadow_templates: HashSet::new(),
             is_fragment: false,
             xml_mode: false,
+            fragment_context: None,
         }
     }
 
@@ -276,10 +331,14 @@ impl IncrementalTreeBuilder {
     /// Стек open elements непустой намеренно — весь `in body` (scope-запросы,
     /// adoption agency, `append_to_current_open`) написан в расчёте на корень
     /// под ногами; пустой стек дал бы вставку в `#document` и молча иное
-    /// поведение у `</div>`, `<body>` и adoption agency.
-    fn new_fragment() -> (Self, NodeId) {
+    /// поведение у `</div>`, `<body>` и adoption agency. `context` (GAP-XMLDOC
+    /// срез 14, BUG-685) не вставляется в дерево — сам `html`-корень всегда
+    /// HTML-неймспейса, ровно как требует спека; `context` лишь подменяет
+    /// adjusted current node, пока стек держит один этот корень.
+    fn new_fragment(context: Option<FragmentContext>) -> (Self, NodeId) {
         let mut builder = Self::new();
         builder.is_fragment = true;
+        builder.fragment_context = context;
         let html = builder.create_element_with_attrs("html", &[]);
         let doc_root = builder.doc.root();
         builder.doc.append_child(doc_root, html);
@@ -421,7 +480,13 @@ impl IncrementalTreeBuilder {
                 ref attrs,
                 ..
             } if forced_breakout || foreign_content::breaks_out_of_foreign_content(name, attrs) => {
-                while is_foreign_namespace(self.current_namespace()) {
+                // GAP-XMLDOC срез 14 (BUG-685): `real_current_namespace`,
+                // not `current_namespace` — this loop pops *real* stack
+                // entries, and in the fragment case the synthetic root is
+                // never itself foreign even when the context element is
+                // (`current_namespace` would report the context's foreign
+                // namespace here and pop the root right off the stack).
+                while is_foreign_namespace(self.real_current_namespace()) {
                     if let Some(&node) = self.open_elements.last() {
                         self.mark_if_foreign_script_not_executable(node);
                     }
@@ -440,6 +505,30 @@ impl IncrementalTreeBuilder {
             }
             Token::EndTag { name } => {
                 let lname = name.to_ascii_lowercase();
+                // GAP-XMLDOC срез 14 (BUG-685): an end tag whose name is on
+                // the same §13.2.6.5 breakout list as the start-tag branch
+                // above (`b`, `br`, `p`, `table`, …) exits foreign content
+                // exactly like its start-tag counterpart would, REGARDLESS
+                // of whether anything on the stack actually matches it —
+                // WPT-measured as a bare `</p>`/`</br>` right inside
+                // `<svg>`/`<math>` with no open `<p>`/`<br>` to close: real
+                // browsers still produce a genuine (self-closing) `<br>`, or
+                // an empty `<p>`, as the nearest HTML ancestor's child, via
+                // "in body"'s own special-cased end-tag rules for those two
+                // names. A name NOT on this list (e.g. a bogus `</g>`,
+                // srez 12's regression test) must stay on the plain
+                // search-the-stack-or-ignore path below — it must never pop
+                // a genuinely still-open element like a foreign `<script>`.
+                if foreign_content::breaks_out_of_foreign_content(&lname, &[]) {
+                    while is_foreign_namespace(self.real_current_namespace()) {
+                        if let Some(&node) = self.open_elements.last() {
+                            self.mark_if_foreign_script_not_executable(node);
+                        }
+                        self.open_elements.pop();
+                    }
+                    self.dispatch(Token::EndTag { name });
+                    return;
+                }
                 let mut boundary = None;
                 for i in (0..self.open_elements.len()).rev() {
                     let node = self.open_elements[i];
@@ -2280,8 +2369,25 @@ impl IncrementalTreeBuilder {
     }
 
     /// Namespace of the current node (`open_elements` top), or `Html` for
-    /// an empty stack (document root).
+    /// an empty stack (document root). Overridden by the fragment context
+    /// element while the stack holds only the synthetic root — HTML LS
+    /// §13.2.6.5 "adjusted current node" for the fragment case (GAP-XMLDOC
+    /// срез 14, BUG-685); see [`fragment_context`][Self::fragment_context].
     fn current_namespace(&self) -> Namespace {
+        if self.open_elements.len() == 1
+            && let Some(ctx) = &self.fragment_context
+        {
+            return ctx.namespace;
+        }
+        self.real_current_namespace()
+    }
+
+    /// Namespace of the REAL current node (`open_elements` top, never the
+    /// fragment-context override) — see the warning on
+    /// [`current_namespace`][Self::current_namespace]. Needed anywhere that
+    /// actually walks or mutates the open-elements stack, since the context
+    /// element never sits on it for real.
+    fn real_current_namespace(&self) -> Namespace {
         self.open_elements
             .last()
             .map(|&id| self.node_namespace(id))
@@ -2320,36 +2426,82 @@ impl IncrementalTreeBuilder {
     ///   becomes an SVG element regardless of `encoding` — the one
     ///   exception that goes the other way.
     fn start_tag_namespace(&self, name: &str) -> Namespace {
+        if self.open_elements.len() == 1
+            && let Some(ctx) = &self.fragment_context
+        {
+            let has_html_encoding = attrs_have_html_encoding(&ctx.attrs);
+            return Self::resolve_content_namespace(ctx.namespace, &ctx.local, has_html_encoding, name);
+        }
         let Some(&top) = self.open_elements.last() else {
             return Namespace::Html;
         };
         let top_ns = self.node_namespace(top);
-        if top_ns == Namespace::MathMl && self.element_local(top) == "annotation-xml" && name == "svg" {
-            return Namespace::Svg;
-        }
-        if self.is_integration_point_host(top, top_ns, name) {
-            return Namespace::Html;
-        }
-        top_ns
+        Self::resolve_content_namespace(top_ns, self.element_local(top), self.has_html_encoding(top), name)
     }
 
-    /// Whether `node` (namespace `ns`, already looked up by the caller) is
-    /// an HTML LS §13.2.6.5 integration point for a start tag named `name`
-    /// — see [`start_tag_namespace`][Self::start_tag_namespace]. `name`
-    /// only matters for the MathML text integration points, whose
-    /// `mglyph`/`malignmark` children are the one exception that stays
-    /// MathML.
-    fn is_integration_point_host(&self, node: NodeId, ns: Namespace, name: &str) -> bool {
-        let local = self.element_local(node);
-        match ns {
-            Namespace::Svg => foreign_content::is_svg_html_integration_point(local),
+    /// HTML LS §13.2.6.5 namespace/integration-point table shared by
+    /// [`start_tag_namespace`][Self::start_tag_namespace] and
+    /// [`cdata_sections_allowed`][Self::cdata_sections_allowed] —
+    /// parameterized over the adjusted current node's identity
+    /// (`node_ns`/`node_local`/`node_has_html_encoding`) instead of a
+    /// concrete [`NodeId`], since the fragment-case override (GAP-XMLDOC
+    /// срез 14, BUG-685) has no real node to look up: the context element
+    /// never enters the tree.
+    ///
+    /// `tag_name` only matters for the MathML text integration points'
+    /// `mglyph`/`malignmark` exception (those children stay MathML); pass
+    /// `""` (never a real tag name) when the caller isn't routing a
+    /// specific start tag.
+    fn resolve_content_namespace(
+        node_ns: Namespace,
+        node_local: &str,
+        node_has_html_encoding: bool,
+        tag_name: &str,
+    ) -> Namespace {
+        if node_ns == Namespace::MathMl && node_local == "annotation-xml" && tag_name == "svg" {
+            return Namespace::Svg;
+        }
+        let is_integration_point = match node_ns {
+            Namespace::Svg => foreign_content::is_svg_html_integration_point(node_local),
             Namespace::MathMl => {
-                (local == "annotation-xml" && self.has_html_encoding(node))
-                    || (foreign_content::is_mathml_text_integration_point(local)
-                        && !matches!(name, "mglyph" | "malignmark"))
+                (node_local == "annotation-xml" && node_has_html_encoding)
+                    || (foreign_content::is_mathml_text_integration_point(node_local)
+                        && !matches!(tag_name, "mglyph" | "malignmark"))
             }
             _ => false,
-        }
+        };
+        if is_integration_point { Namespace::Html } else { node_ns }
+    }
+
+    /// Whether `<![CDATA[` right now would start a real CDATA section
+    /// (GAP-XMLDOC срез 14, BUG-685) — true iff the adjusted current node
+    /// (same fragment-case override as [`current_namespace`]
+    /// [Self::current_namespace]) is foreign (SVG/MathML) and not an
+    /// integration point. Uses [`resolve_content_namespace`]
+    /// [Self::resolve_content_namespace] with `tag_name = ""` — CDATA isn't
+    /// a start tag, so the MathML `mglyph`/`malignmark` exception (which
+    /// only ever concerns an incoming tag name) never applies here.
+    fn cdata_sections_allowed(&self) -> bool {
+        let content_ns = if self.open_elements.len() == 1 {
+            match &self.fragment_context {
+                Some(ctx) => {
+                    let has_html_encoding = attrs_have_html_encoding(&ctx.attrs);
+                    Self::resolve_content_namespace(ctx.namespace, &ctx.local, has_html_encoding, "")
+                }
+                None => Namespace::Html,
+            }
+        } else {
+            match self.open_elements.last() {
+                Some(&top) => Self::resolve_content_namespace(
+                    self.node_namespace(top),
+                    self.element_local(top),
+                    self.has_html_encoding(top),
+                    "",
+                ),
+                None => Namespace::Html,
+            }
+        };
+        is_foreign_namespace(content_ns)
     }
 
     /// Whether `node` (a MathML `annotation-xml` element) carries an

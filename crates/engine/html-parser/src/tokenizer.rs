@@ -13,9 +13,21 @@
 //!
 //! Оба режима завершаются только `</tag` + терминатор (case-insensitive).
 //!
-//! Отложено: DOCTYPE (пропускаем), CDATA, полный набор named entities
-//! (есть ~2000+ в HTML5 spec; реализуем при первой реальной странице,
-//! где это потребуется).
+//! Отложено: полный набор named entities (есть ~2000+ в HTML5 spec;
+//! реализуем при первой реальной странице, где это потребуется).
+//!
+//! `<![CDATA[...]]>` (GAP-XMLDOC срез 14, BUG-685) — namespace-зависимо:
+//! разрешено (эмитится как `Token::Text`) только когда вызывающий (tree
+//! builder, видящий adjusted current node) явно взвёл
+//! [`Tokenizer::set_cdata_allowed`] перед этим `next()`; иначе — bogus
+//! comment с данными `[CDATA[...` (HTML LS "cdata-in-html-content" parse
+//! error). Только `run_pull` (`parse`/`parse_fragment`) взводит флаг —
+//! `PushTokenizer` (сетевая загрузка страниц) его никогда не устанавливает,
+//! поэтому там `<![CDATA[` всегда идёт bogus-comment веткой: раньше
+//! конструкция терялась целиком (ни узла, ни текста), теперь — как минимум
+//! настоящий comment-узел с тем же содержимым, что видел бы браузер вне
+//! foreign content; полноценная поддержка CDATA в потоковом foreign content
+//! остаётся отдельным срезом.
 
 // Долг по документации: файл написан до включения `missing_docs` и пока не
 // покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
@@ -57,6 +69,11 @@ pub struct Tokenizer<'a> {
     /// внутри всегда литеральны. `decode_entities = true` для RCDATA
     /// (`<title>`, `<textarea>`), `false` для RAWTEXT (`<script>`, `<style>`).
     text_only: Option<(String, bool)>,
+    /// GAP-XMLDOC срез 14 (BUG-685): взводится вызывающим перед каждым
+    /// `next()` через [`set_cdata_allowed`][Self::set_cdata_allowed] —
+    /// `true`, когда adjusted current node сейчас foreign (SVG/MathML) и не
+    /// является integration point. См. module docs.
+    cdata_allowed: bool,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -65,6 +82,7 @@ impl<'a> Tokenizer<'a> {
             input,
             pos: 0,
             text_only: None,
+            cdata_allowed: false,
         }
     }
 
@@ -78,7 +96,17 @@ impl<'a> Tokenizer<'a> {
             input,
             pos: 0,
             text_only,
+            cdata_allowed: false,
         }
+    }
+
+    /// Взводит [`cdata_allowed`][Self::cdata_allowed] для следующего
+    /// `next()` (GAP-XMLDOC срез 14, BUG-685) — вызывающий (`run_pull`)
+    /// зовёт это перед каждым вызовом, свежо пересчитывая по текущему
+    /// состоянию дерева, а не один раз при создании: adjusted current node
+    /// меняется по ходу разбора.
+    pub fn set_cdata_allowed(&mut self, allowed: bool) {
+        self.cdata_allowed = allowed;
     }
 
     /// Текущая позиция курсора (в байтах от начала `input`). Используется
@@ -228,6 +256,17 @@ impl<'a> Iterator for Tokenizer<'a> {
                 } else if self.rest_starts_with_ascii_ci("doctype") {
                     self.pos += "doctype".len();
                     self.consume_doctype()
+                } else if self.rest().starts_with("[CDATA[") {
+                    // GAP-XMLDOC срез 14 (BUG-685): case-sensitive per HTML
+                    // LS §13.2.5.42 — `<![cdata[` (lowercase) falls through
+                    // to the generic unknown-declaration branch below, not
+                    // here, exactly like a real browser.
+                    self.pos += "[CDATA[".len();
+                    if self.cdata_allowed {
+                        self.consume_cdata_section()
+                    } else {
+                        self.consume_bogus_comment_with_prefix("[CDATA[")
+                    }
                 } else {
                     // Неизвестное `<!...` — съесть до '>' и продолжить.
                     while let Some(c) = self.consume() {
@@ -418,6 +457,46 @@ impl<'a> Tokenizer<'a> {
                 None => return Some(Token::Comment(content)),
             }
         }
+    }
+
+    /// HTML LS §13.2.5.68 "CDATA section state" (GAP-XMLDOC срез 14,
+    /// BUG-685) — called only when the caller already established
+    /// [`cdata_allowed`][Self::cdata_allowed]; everything up to `]]>` (or
+    /// EOF, lenient like [`consume_comment`]) becomes a single character
+    /// token. An empty section yields no token at all, matching how the
+    /// rest of this tokenizer treats zero-width runs.
+    fn consume_cdata_section(&mut self) -> Option<Token> {
+        let mut data = String::new();
+        loop {
+            if self.rest().starts_with("]]>") {
+                self.pos += 3;
+                break;
+            }
+            match self.consume() {
+                Some(c) => data.push(c),
+                None => break,
+            }
+        }
+        if data.is_empty() { self.next() } else { Some(Token::Text(data)) }
+    }
+
+    /// HTML LS "cdata-in-html-content" parse error (GAP-XMLDOC срез 14,
+    /// BUG-685) — a `<![CDATA[` outside foreign content (or inside a
+    /// foreign integration point) is not a real CDATA section: it becomes
+    /// a bogus comment whose data is `prefix` (`"[CDATA["`, already
+    /// consumed by the caller) followed by everything up to the next `>`
+    /// (or EOF), unparsed — same lenient bogus-comment shape as the
+    /// existing unknown-`<!...` branch, just captured as a token instead of
+    /// silently discarded.
+    fn consume_bogus_comment_with_prefix(&mut self, prefix: &str) -> Option<Token> {
+        let mut data = String::from(prefix);
+        while let Some(c) = self.consume() {
+            if c == '>' {
+                break;
+            }
+            data.push(c);
+        }
+        Some(Token::Comment(data))
     }
 
     /// HTML5 §13.2.5.53–72: после `<!DOCTYPE` парсим имя, опционально
@@ -836,11 +915,45 @@ mod tests {
 
     #[test]
     fn doctype_unknown_markup_declaration_still_skipped() {
-        // `<![CDATA[...]]>` или `<!ENTITY ...>` — не наш случай, должно
-        // молча скушать до '>' и не дать DOCTYPE-токен.
-        let t = tok("<![CDATA[ignore this]]><p>x</p>");
-        // Первый токен должен быть от `<p>`, CDATA пропущена.
+        // `<!ENTITY ...>` — по-прежнему не наш случай (не `--`, не
+        // `doctype`, не `[CDATA[`), должно молча скушать до '>' и не дать
+        // DOCTYPE-токен.
+        let t = tok("<!ENTITY foo \"bar\"><p>x</p>");
+        // Первый токен должен быть от `<p>`, декларация пропущена.
         assert!(matches!(&t[0], Token::StartTag { name, .. } if name == "p"));
+    }
+
+    #[test]
+    fn cdata_disallowed_by_default_becomes_bogus_comment() {
+        // GAP-XMLDOC срез 14 (BUG-685): `Tokenizer::new` без
+        // `set_cdata_allowed(true)` — HTML LS "cdata-in-html-content" parse
+        // error, `<![CDATA[...]]>` становится bogus comment, не молча
+        // пропадает (old behaviour, before this слайс).
+        let t = tok("<![CDATA[ignore this]]><p>x</p>");
+        assert!(matches!(&t[0], Token::Comment(data) if data == "[CDATA[ignore this]]"));
+        assert!(matches!(&t[1], Token::StartTag { name, .. } if name == "p"));
+    }
+
+    #[test]
+    fn cdata_allowed_emits_text() {
+        // GAP-XMLDOC срез 14 (BUG-685): with the flag armed (what `run_pull`
+        // does whenever the adjusted current node is foreign and not an
+        // integration point), the section becomes literal character data.
+        let mut t = Tokenizer::new("<![CDATA[a<b]]>c");
+        t.set_cdata_allowed(true);
+        let tokens: Vec<Token> = t.collect();
+        assert_eq!(tokens, vec![Token::Text("a<b".into()), Token::Text("c".into())]);
+    }
+
+    #[test]
+    fn cdata_lowercase_marker_is_not_recognized() {
+        // Case-sensitive per HTML LS §13.2.5.42 — `[cdata[` falls into the
+        // generic unknown-declaration branch (silently skipped), even with
+        // the flag armed.
+        let mut t = Tokenizer::new("<![cdata[x]]><p>y</p>");
+        t.set_cdata_allowed(true);
+        let tokens: Vec<Token> = t.collect();
+        assert!(matches!(&tokens[0], Token::StartTag { name, .. } if name == "p"));
     }
 
     #[test]

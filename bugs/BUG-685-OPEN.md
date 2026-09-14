@@ -875,3 +875,114 @@ dev-release -- -D warnings` — чисто.
 
 Закрывает GAP-XMLDOC срез 12's remainder полностью — `unclosed-svg-
 script.html` больше не появится ни в одном списке остатков.
+
+## GAP-XMLDOC срез 14 (2026-09-14): контекст фрагмента и CDATA-секции (`p1-gap-xmldoc-srez14`)
+
+Ре-замер `html/syntax/parsing` (после того, как срез 13 закрыл файл
+целиком) нашёл два ранее неизмеренных красных файла из того же
+семейства, оба про то, чего в `parse_fragment` не было вовсе (задокументировано
+как известный пробел ещё в исходной формулировке `parse_fragment`):
+реальный контекстный элемент §13.4 и CDATA-секции.
+
+**`cdata-in-integration-point-fragment.html` (0/9 → 9/9).** HTML LS
+§13.2.6.5 "adjusted current node" в fragment-случае — пока стек
+открытых элементов держит только синтетический корень, adjusted current
+node = контекстный элемент, а не сам корень (всегда HTML-неймспейса).
+`parse_fragment` игнорировал контекст целиком (`el.innerHTML=` для
+`createElementNS`-элемента разбирался как `<body>`-контекст), поэтому
+namespace-зависимые решения (CDATA-allowed, integration-point routing)
+были недостижимы для этого пути вообще.
+
+- Новый `parse_fragment_with_context(input, Option<FragmentContext>)`
+  (`tree_builder.rs`) — `FragmentContext { namespace, local, attrs }` не
+  вставляется в дерево (синтетический `<html>`-корень остаётся HTML,
+  как требует спека), а лишь подменяет `current_namespace()`/
+  `start_tag_namespace()` ровно пока `open_elements.len() == 1`.
+  `parse_fragment` — тонкая обёртка с `context: None`, старое
+  поведение не тронуто ни для одного существующего вызывающего.
+- `start_tag_namespace`/`is_integration_point_host` переписаны в
+  параметризованную `resolve_content_namespace(ns, local,
+  has_html_encoding, tag_name)`, общую для реального узла стека и для
+  контекста — код integration-point-таблицы (срез 8) не задублирован.
+- CDATA-секции — новый механизм в `tokenizer.rs`, отсутствовавший
+  целиком (`<![CDATA[...]]>` раньше молча поглощался без единого
+  токена, даже в HTML-контенте): `Tokenizer::set_cdata_allowed(bool)`,
+  вызывается `run_pull` перед каждым `next()` по свежепосчитанному
+  `IncrementalTreeBuilder::cdata_sections_allowed()` (тот же
+  `resolve_content_namespace` с `tag_name=""`, т.к. CDATA — не тег, и
+  MathML-исключение `mglyph`/`malignmark` тут не при делах). Разрешено
+  → `Token::Text`; запрещено → HTML LS "cdata-in-html-content" parse
+  error, bogus comment с данными `[CDATA[...` (было — вообще ничего,
+  ни узла, ни текста). Реализовано только в pull-режиме
+  (`parse`/`parse_fragment*`) — `PushTokenizer` (сетевая загрузка)
+  флаг никогда не взводит, там `<![CDATA[` теперь тоже bogus comment
+  (было — молчаливое поглощение), полноценная foreign-content поддержка
+  в потоковом пути остаётся отдельным срезом.
+- Мост до JS: `_lumen_set_inner_html` (`dom_core.rs`) теперь передаёт
+  `nid` — сам элемент, на который вызван `Element.innerHTML=` (не
+  `target`, который для `<template>` перенаправлен на content-фрагмент)
+  — как контекст в новый `dom_helpers::parse_html_fragment_with_context`.
+  `outerHTML`/`insertAdjacentHTML` (`_lumen_parse_html_fragment`) не
+  тронуты — их контекст (родитель цели) не измерен.
+
+**`html_content_in_foreign_context.html` (0/1 → 1/1).** Отдельный,
+существовавший до контекстной работы баг в `dispatch_foreign_content`'s
+EndTag-ветке: тест перебирает полный breakout-список (§13.2.6.5) не
+только как start tag (уже работало, срезы 3/6), но и как ГОЛЫЙ END TAG
+без открытого соответствия (`e[0]=='/' → "/p"`/`"/br"`, т.е. разметка
+`<svg></p></svg`) — поиск по стеку не находил совпадения, доходил до
+HTML-namespace `<body>`/корня и просто игнорировал тег целиком (ни
+`<p>`, ни `<br>` не создавались). Реальные браузеры для ИМЕННО этих
+breakout-имён создают настоящий элемент (`<br>` self-closing, пустой
+`<p>`) как ребёнка ближайшего HTML-предка — тот же эффект, что у
+start-tag breakout'а. Исправление: если имя end tag'а само есть в
+`foreign_content::breaks_out_of_foreign_content`, ветка сразу пуляет
+(pop while foreign, тот же цикл, что у start-tag breakout'а) и
+диспатчит EndTag через `self.dispatch` (routing в "in body", чьи
+собственные специальные правила для `br`/`p` создают элемент) — имя НЕ
+из breakout-списка (например бессмысленный `</g>`) остаётся на старом
+generic-поиске-или-игнорировать, чтобы не схлопывать реально открытые
+элементы (регрессия на это — `svg_script_with_bogus_end_tag_inside_
+stays_executable`, срез 12: `</g>` внутри `<script>` внутри `<svg>` не
+должен закрывать сам `<script>`).
+
+**Побочная находка, тоже исправлена.** WPT-ассерты обоих файлов активно
+используют `Node.TEXT_NODE`/`Node.COMMENT_NODE` и т.п. — эти
+legacy-константы (DOM §4.4) не были заведены в шиме НИ РАЗУ (0 хитов
+`TEXT_NODE`/`COMMENT_NODE` по всему `crates/js/src/shim/`), хотя
+`Node.DOCUMENT_POSITION_*` рядом уже были. Без них `cdata-in-
+integration-point-fragment.html` был красным ДАЖЕ ПОСЛЕ правильного
+разбора — `Node.TEXT_NODE === undefined` заваливал `assert_equals`
+независимо от парсера. Добавлены `ELEMENT_NODE`(1)…`NOTATION_NODE`(12)
+на `Node` и `Node.prototype` тем же `forEach`-паттерном
+(`web_api_shim_mid.js`).
+
+Тесты: `crates/engine/html-parser/tests/fragment_parsing.rs` — 6 новых
+(`mathml_text_integration_point_context_disallows_cdata`,
+`svg_html_integration_point_context_disallows_cdata`,
+`non_integration_point_svg_context_allows_cdata`,
+`html_breakout_tag_exits_svg_opened_inside_fragment`,
+`breakout_end_tag_exits_svg_with_no_matching_open_element`,
+`bogus_end_tag_inside_svg_is_ignored`); `tokenizer.rs` — 3 новых/1
+переписанный (CDATA allowed/disallowed/lowercase-marker). `cargo test
+-p lumen-html-parser` — 465+5+15 зелёных. `cargo clippy --workspace
+--all-targets --profile dev-release --features v8-backend -- -D
+warnings` — чисто.
+
+Живое измерение (`run_smoke.py`, полный streaming/network путь через
+`.venv`): оба файла — было `Subtests passed 0/9`/`0/1`, стало `9/9`/
+`1/1`; regression-набор (`unclosed-svg-script.html`,
+`foreign_content_00*.html`, `Document/Element.getElementsByTagName-
+foreign-*.html`) без изменений. `.ini`-заглушки обоих файлов удалены —
+не нуждаются в отдельных expectations.
+
+Не в этом срезе: полноценная XML-парсер-архитектура (сам GAP-XMLDOC
+остаётся `planned`, это очередной срез, не закрытие); CDATA в потоковом
+foreign content (push-режим); self-closing `<table>`/`<select>`/
+`<button>` (по-прежнему 0 хитов в вендоренном корпусе, срезы 2/9/11).
+`scripts/scoped-test.sh` — единственный красный
+(`lumen-driver::cases::snapshot_cpu`, 55-text-rendering/57-canvas-2d/
+32-list-markers/34-forms/45-multiple-backgrounds/51-scrollbar-
+rendering/1000000-final) — тот же класс чужого CPU-эталонного дрейфа,
+что уже подтверждён на чистом `main` срезами 12/13 (этот срез не
+касается paint/layout/raster кода вовсе).

@@ -11,12 +11,30 @@
 
 #![allow(clippy::unwrap_used)]
 
-use lumen_dom::{Document, NodeData, NodeId};
+use lumen_dom::{Document, Namespace, NodeData, NodeId};
+use lumen_html_parser::FragmentContext;
 
 /// Плоское представление верхнего уровня фрагмента: по одной записи на
 /// ребёнка корня, вложенность — в скобках.
 fn shape(src: &str) -> Vec<String> {
     let (doc, root) = lumen_html_parser::parse_fragment(src);
+    doc.get(root)
+        .children
+        .iter()
+        .map(|&c| describe(&doc, c))
+        .collect()
+}
+
+/// Тот же [`shape`], но с реальным контекстным элементом (GAP-XMLDOC срез
+/// 14, BUG-685) — `namespace`/`local` того элемента, на который вызван
+/// `Element.innerHTML=`.
+fn shape_with_context(src: &str, namespace: Namespace, local: &str) -> Vec<String> {
+    let context = FragmentContext {
+        namespace,
+        local: local.to_string(),
+        attrs: Vec::new(),
+    };
+    let (doc, root) = lumen_html_parser::parse_fragment_with_context(src, Some(context));
     doc.get(root)
         .children
         .iter()
@@ -137,4 +155,86 @@ fn document_parser_still_swallows_what_the_spec_tells_it_to() {
             .iter()
             .any(|&c| matches!(&doc.get(c).data, NodeData::Comment(s) if s == "$"))
     );
+}
+
+/// HTML LS §13.2.6.5 "adjusted current node" for the fragment case
+/// (GAP-XMLDOC срез 14, BUG-685) — WPT
+/// `html/syntax/parsing/cdata-in-integration-point-fragment.html`. A MathML
+/// text integration point context (`<mi>`/`<mo>`/`<mn>`/`<ms>`/`<mtext>`)
+/// forbids CDATA sections just like plain HTML: `x<![CDATA[y]]>` becomes a
+/// text node `"x"` plus a bogus comment, `y` never becomes character data.
+#[test]
+fn mathml_text_integration_point_context_disallows_cdata() {
+    for tag in ["mi", "mo", "mn", "ms", "mtext"] {
+        let shape = shape_with_context("x<![CDATA[y]]>", Namespace::MathMl, tag);
+        assert_eq!(shape.len(), 2, "context <{tag}>: expected text + comment, got {shape:?}");
+        assert_eq!(shape[0], "#text\"x\"", "context <{tag}>");
+        assert!(shape[1].starts_with("#comment"), "context <{tag}>: expected a comment, got {}", shape[1]);
+    }
+}
+
+/// Same WPT test, SVG HTML integration points (`<foreignObject>`/`<desc>`/
+/// `<title>`) — also disallow CDATA.
+#[test]
+fn svg_html_integration_point_context_disallows_cdata() {
+    for tag in ["foreignObject", "desc", "title"] {
+        let shape = shape_with_context("x<![CDATA[y]]>", Namespace::Svg, tag);
+        assert_eq!(shape.len(), 2, "context <{tag}>: expected text + comment, got {shape:?}");
+        assert_eq!(shape[0], "#text\"x\"", "context <{tag}>");
+        assert!(shape[1].starts_with("#comment"), "context <{tag}>: expected a comment, got {}", shape[1]);
+    }
+}
+
+/// Same WPT test's control case: a non-integration-point SVG context
+/// (`<path>`) is genuine foreign content — CDATA IS allowed, `y` becomes
+/// character data merged with the preceding `x`.
+#[test]
+fn non_integration_point_svg_context_allows_cdata() {
+    let shape = shape_with_context("x<![CDATA[y]]>", Namespace::Svg, "path");
+    assert_eq!(shape, ["#text\"xy\""]);
+}
+
+/// WPT `html/syntax/parsing/html_content_in_foreign_context.html` — an HTML
+/// LS §13.2.6.5 breakout tag (`<b>`) opened right after a foreign
+/// `<svg>`/`<math>` inside `Element.innerHTML=` must exit back to HTML
+/// content, landing as the context's own child, not `<svg>`'s. This is the
+/// ordinary (non-context) foreign-content breakout srez 3/6 already cover —
+/// the regression this guards is specific to the fragment-parsing entry
+/// point: `dispatch_foreign_content`'s "pop while foreign" loop must never
+/// walk past the synthetic fragment root even though [`current_namespace`]
+/// reports the FOREIGN adjusted current node while the stack still holds
+/// only that root (GAP-XMLDOC срез 14, BUG-685).
+#[test]
+fn html_breakout_tag_exits_svg_opened_inside_fragment() {
+    for (context_ns, context_local) in [(Namespace::Html, "div"), (Namespace::Svg, "foreignObject")] {
+        let shape = shape_with_context("<svg><b>x</svg>", context_ns, context_local);
+        assert_eq!(shape.len(), 2, "context <{context_local}>: expected <svg> + <b>, got {shape:?}");
+        assert_eq!(shape[0], "<svg>", "context <{context_local}>");
+        assert_eq!(shape[1], "<b>(#text\"x\")", "context <{context_local}>");
+    }
+}
+
+/// Same WPT test, the two bare-end-tag element ids (`"/p"`/`"/br"`) — a
+/// `</p>`/`</br>` with nothing open to close it still exits `<svg>` and
+/// produces a genuine element as the wrapper's own child, same as its
+/// start-tag counterpart. Regression for the fix's first (too broad) shape,
+/// which made ANY unmatched end tag reaching an HTML-namespace boundary
+/// fall through and pop — that silently destroyed still-open, unrelated
+/// foreign elements too (see `svg_script_with_bogus_end_tag_inside_stays_executable`
+/// in `foreign_script_execution.rs`).
+#[test]
+fn breakout_end_tag_exits_svg_with_no_matching_open_element() {
+    for (tag, expected) in [("p", "<p>"), ("br", "<br>")] {
+        let shape = shape_with_context(&format!("<svg></{tag}></svg"), Namespace::Html, "div");
+        assert_eq!(shape, ["<svg>", expected], "</{tag}> inside <svg>");
+    }
+}
+
+/// A bare, genuinely unrecognized end tag (`</g>`) inside foreign content
+/// must NOT exit anything — it's simply ignored (HTML LS §13.2.6.5 "any
+/// other end tag", no match anywhere on the stack).
+#[test]
+fn bogus_end_tag_inside_svg_is_ignored() {
+    let shape = shape_with_context("<svg><g></g></svg>x", Namespace::Html, "div");
+    assert_eq!(shape, ["<svg>(<g>)", "#text\"x\""]);
 }
