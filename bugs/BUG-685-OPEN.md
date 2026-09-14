@@ -713,3 +713,90 @@ namespace-резолвера (`xmlns:*` по цепочке предков) ка
 `cargo test -p lumen-html-parser` — 462/462 юнит + 9/9 интеграционных
 зелёные. `cargo clippy -p lumen-html-parser --all-targets -- -D
 warnings` — чисто.
+
+## GAP-XMLDOC срез 12 (2026-09-14): RAWTEXT/RCDATA тоже namespace-blind — исправлено, измерено через вендоренный WPT-тест
+
+Срез 11 закрыл grep-по-корпусу пункты, но упустил один из двух, оставленных
+`docs/engine-gaps.md`: «`<title>`/`<script>` whose RAWTEXT/RCDATA state the
+tokenizer picks by bare tag name, not tree namespace». Grep по XML-корпусу на
+вложенный тег внутри `<title>` дал 0 (проверено срезом 11), но сам дефект не
+ограничен `<title>` — он бьёт по `<script>` в SVG/MathML тоже, а measurable
+evidence для него не в корпусе, а в уже вендоренном
+`tests/wpt/html/syntax/parsing/unclosed-svg-script.html` (`svg` scripts с
+bogus end tag/breakout/self-closing внутри — ровно этот случай).
+
+**Причина.** `crates/engine/html-parser/src/tokenizer.rs::consume_start_tag`
+переключает токенизатор в RAWTEXT (`<script>`/`<style>`) или RCDATA
+(`<title>`/`<textarea>`) по голому имени тега — `Tokenizer`/`PushTokenizer`
+вообще не видят namespace/insertion mode, эта информация целиком в
+`tree_builder.rs`. По HTML LS §13.2.6.5 «generic raw text/RCDATA element
+parsing algorithm» вызывается только HTML insertion-mode правилами («in
+head»/«in body»), никогда — «rules for parsing tokens in foreign content»:
+настоящий foreign `<script>`/`<title>` (SVG/MathML, не integration point)
+не должен переводить токенизатор в text-only вовсе. Из-за этого
+`<svg><script>a=1;</g></script></svg>` в Lumen читал RAWTEXT до первого
+литерального `</script>` — т.е. включая `</g>` — и подсовывал JS-парсеру
+невалидный код `a=1;</g>` (`Unexpected token '<'`), а не корректные
+`a=1;` + отдельный (проигнорированный внутри foreign content) `</g>`.
+
+**Живое измерение до правки** (`run_smoke.py` через полный streaming/network
+путь, тот же, что для реальных страниц): `unclosed-svg-script.html` —
+`TEST_END: ERROR` (0/5 сабтестов даже выполнились — JS-исключение при
+загрузке `testharness.js` рушило тест целиком, потому что RAWTEXT-мусор
+из первого `<svg><script>` утаскивал за собой всё, вплоть до
+harness-скриптов). После правки — `TEST_END: Test OK. Subtests passed
+2/5`: два сабтеста, ровно завязанных на этот дефект («SVG scripts with end
+tag should run», «SVG scripts with bogus end tag inside should run»), стали
+зелёными.
+
+**Исправление — в двух местах, потому что решение принимается ПОСЛЕ того,
+как токенизатор уже переключился, а не до:**
+
+- `Tokenizer::cancel_text_only()` (`tokenizer.rs`) — отменяет
+  RAWTEXT/RCDATA, которое `consume_start_tag` только что выставил для
+  последнего `StartTag`. Вызывать нужно до следующего `next()`.
+- Pull-режим (`parse`/`parse_xml_flavoured`/`parse_fragment`,
+  `tree_builder.rs`) — раньше гонял `for token in Tokenizer::new(input) {
+  builder.apply_token(token) }`; вынесено в общий `run_pull`, который после
+  каждого `StartTag` спрашивает новый `IncrementalTreeBuilder::
+  current_context_forbids_text_only()` (= `is_foreign_namespace(
+  current_namespace())`, тот самый namespace, что уже учитывает
+  integration-point- и `html:`/`h:`-breakout-резолвинг из срезов 5/8 —
+  никакого дублирования логики) и, если да, зовёт `cancel_text_only()`.
+- Push-режим (`IncrementalTreeBuilder::feed`/`feed_bytes`/`finish`, реальный
+  путь сетевой загрузки страниц) — сложнее: `PushTokenizer::tokenize`
+  раньше делал `(&mut tokenizer).collect()` на весь «безопасный» кусок
+  буфера ЦЕЛИКОМ, до того как `apply_token` видел хоть один токен из
+  этого куска, — отменять было уже поздно и не для чего (токенизатор к
+  этому моменту успевал целиком просканировать RAWTEXT). Переписано на
+  `feed_with_context`/`feed_bytes_with_context`/`end_with_context` —
+  каждый токен уходит в переданный `on_token` немедленно, пока внутренний
+  `Tokenizer` ещё жив, и `on_token` (в `tree_builder.rs` —
+  `apply_token_for_stream`) успевает применить токен к дереву и тут же
+  отменить text-only, если контекст запрещает. Старые `feed`/`feed_bytes`/
+  `end` (используются ~30 юнит-тестами `push_tokenizer.rs`) сохранены
+  как есть — просто оболочка над той же логикой с `on_token = |_| false`.
+
+**Не закрыто этим срезом** — три сабтеста того же файла остаются
+`FAIL` (metadata обновлена: `expected: ERROR` на весь тест → per-subtest
+`expected: FAIL` на эти три, `tests/wpt/metadata/html/syntax/parsing/
+unclosed-svg-script.html.ini`):
+
+- «SVG scripts without end tag should not run» — незакрытый `<script>`
+  внутри `<svg>` (RAWTEXT остаётся не активной, но контент всё равно
+  выполняется — вероятно, отдельный порядок операций foreign-content
+  dispatch, не исследовано);
+- «SVG scripts ended by HTML breakout should not run» — breakout-тег
+  (`<s>`) внутри текста `<script>` в foreign content;
+- «SVG scripts with self-closing start tag should run» — самозакрывающийся
+  SVG `<script href="…"/>` (тот же класс, что self-closing
+  `<table>`/`<select>`/`<button>` из срезов 9/11 — отдельная задача,
+  не про RAWTEXT/RCDATA).
+
+`docs/engine-gaps.md` обновлён — снята закрытая часть, оставлены эти три
+как явный остаток.
+
+`cargo test -p lumen-html-parser` — 462 юнит (tree_builder) + 41 юнит
+(push_tokenizer) + 9 интеграционных (`fragment_parsing.rs`) зелёные, без
+единой правки существующих тестов. `cargo clippy -p lumen-html-parser
+--all-targets -- -D warnings` — чисто.

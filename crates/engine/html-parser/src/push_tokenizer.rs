@@ -66,7 +66,31 @@ impl PushTokenizer {
     pub fn feed(&mut self, chunk: &str) -> Vec<Token> {
         assert!(!self.ended, "feed() after end()");
         self.buf.push_str(chunk);
-        self.tokenize(false)
+        let mut out = Vec::new();
+        self.tokenize(false, |tok| {
+            out.push(tok);
+            false
+        });
+        out
+    }
+
+    /// Вариант [`feed`][Self::feed], в который вызывающий (tree builder)
+    /// подмешан прямо в цикл токенизации, а не применяет токены к дереву
+    /// уже после того, как токенизатор дошёл до конца безопасного chunk-а
+    /// (GAP-XMLDOC срез 12, BUG-685). Это принципиально: RAWTEXT/RCDATA
+    /// решение (`is_raw_text_element`/`is_rcdata_element` в `tokenizer.rs`)
+    /// принимается токенизатором *в момент* выдачи `StartTag`, до которого
+    /// namespace ещё не известен — `on_token` вызывается сразу после
+    /// каждого токена, пока внутренний `Tokenizer` жив, поэтому у
+    /// вызывающего есть шанс аннулировать text-only через
+    /// [`Tokenizer::cancel_text_only`] прежде, чем тот успеет
+    /// просканировать хоть байт как RAWTEXT. `on_token` возвращает `true`,
+    /// если text-only, только что выставленный ЭТИМ токеном (не
+    /// self-closing `StartTag`), нужно отменить.
+    pub fn feed_with_context(&mut self, chunk: &str, on_token: impl FnMut(Token) -> bool) {
+        assert!(!self.ended, "feed_with_context() after end()");
+        self.buf.push_str(chunk);
+        self.tokenize(false, on_token);
     }
 
     /// Вариант [`PushTokenizer::feed`] для сырых байт из сети.
@@ -85,6 +109,26 @@ impl PushTokenizer {
     ///   → заменяются U+FFFD inline, обработка продолжается.
     /// - Незавершённая последовательность при `end()` → U+FFFD.
     pub fn feed_bytes(&mut self, chunk: &[u8]) -> Vec<Token> {
+        self.decode_bytes_into_buf(chunk);
+        let mut out = Vec::new();
+        self.tokenize(false, |tok| {
+            out.push(tok);
+            false
+        });
+        out
+    }
+
+    /// [`feed_bytes`][Self::feed_bytes] variant of
+    /// [`feed_with_context`][Self::feed_with_context] — see its docs.
+    pub fn feed_bytes_with_context(&mut self, chunk: &[u8], on_token: impl FnMut(Token) -> bool) {
+        self.decode_bytes_into_buf(chunk);
+        self.tokenize(false, on_token);
+    }
+
+    /// UTF-8-decoding half of `feed_bytes`, shared with
+    /// [`feed_bytes_with_context`][Self::feed_bytes_with_context] — everything
+    /// up to (not including) the actual tokenization pass.
+    fn decode_bytes_into_buf(&mut self, chunk: &[u8]) {
         assert!(!self.ended, "feed_bytes() after end()");
 
         self.partial_utf8.extend_from_slice(chunk);
@@ -143,7 +187,6 @@ impl PushTokenizer {
         }
 
         self.partial_utf8.drain(..consumed);
-        self.tokenize(false)
     }
 
     /// Финализирует ввод. Хвост буфера токенизируется как при EOF —
@@ -154,13 +197,29 @@ impl PushTokenizer {
     /// последовательностью в конце, она заменяется U+FFFD (WHATWG
     /// Encoding §4).
     pub fn end(&mut self) -> Vec<Token> {
+        self.finalize_buf();
+        let mut out = Vec::new();
+        self.tokenize(true, |tok| {
+            out.push(tok);
+            false
+        });
+        out
+    }
+
+    /// [`end`][Self::end] variant of
+    /// [`feed_with_context`][Self::feed_with_context] — see its docs.
+    pub fn end_with_context(&mut self, on_token: impl FnMut(Token) -> bool) {
+        self.finalize_buf();
+        self.tokenize(true, on_token);
+    }
+
+    fn finalize_buf(&mut self) {
         self.ended = true;
         // Незавершённая последовательность на EOF → U+FFFD (WHATWG Encoding §4)
         if !self.partial_utf8.is_empty() {
             self.buf.push('\u{FFFD}');
             self.partial_utf8.clear();
         }
-        self.tokenize(true)
     }
 
     /// Количество ещё не потреблённых байт строкового буфера.
@@ -172,10 +231,18 @@ impl PushTokenizer {
 
     /// Прокручивает pull-токенизатор по slice буфера, ограниченному
     /// «безопасной точкой среза» (если не `final_chunk`), или по всему
-    /// буферу (если `final_chunk`). Эмитнутые токены возвращаются;
-    /// буфер обрезается слева на потреблённую часть; `text_only`
-    /// переходит в следующее состояние pull-токенизатора.
-    fn tokenize(&mut self, final_chunk: bool) -> Vec<Token> {
+    /// буферу (если `final_chunk`). Каждый выданный токен сразу проходит
+    /// через `on_token`, а не собирается в `Vec` заранее (GAP-XMLDOC срез
+    /// 12, BUG-685) — `on_token` может отменить RAWTEXT/RCDATA, которое
+    /// `Tokenizer` только что выставил внутри себя для этого самого токена
+    /// (см. [`Tokenizer::cancel_text_only`]), и должна успеть сделать это
+    /// до того, как тот же `tokenizer` продолжит собственный `next()` и
+    /// начнёт сканировать text-only. Раньше здесь стоял один `.collect()`
+    /// на весь безопасный slice — весь chunk токенизировался целиком, ДО
+    /// того как вызывающий увидел хотя бы один токен, так что аннулировать
+    /// решение было уже некому. Буфер обрезается слева на потреблённую
+    /// часть; `text_only` переходит в следующее состояние pull-токенизатора.
+    fn tokenize(&mut self, final_chunk: bool, mut on_token: impl FnMut(Token) -> bool) {
         let safe_end = if final_chunk {
             self.buf.len()
         } else {
@@ -183,7 +250,7 @@ impl PushTokenizer {
         };
 
         if safe_end == 0 {
-            return Vec::new();
+            return;
         }
 
         // ВАЖНО: вырезаем slice так, чтобы границы лежали на UTF-8
@@ -192,13 +259,18 @@ impl PushTokenizer {
         // Для безопасности используем `floor_char_boundary`-эквивалент.
         let safe_end = floor_char_boundary(&self.buf, safe_end);
 
-        let tokens: Vec<Token>;
         let consumed: usize;
         let next_text_only: Option<(String, bool)>;
         {
             let slice = &self.buf[..safe_end];
             let mut tokenizer = Tokenizer::with_state(slice, self.text_only.take());
-            tokens = (&mut tokenizer).collect();
+            while let Some(tok) = tokenizer.next() {
+                let opened_text_only =
+                    matches!(&tok, Token::StartTag { self_closing: false, .. });
+                if on_token(tok) && opened_text_only {
+                    tokenizer.cancel_text_only();
+                }
+            }
             consumed = tokenizer.pos();
             next_text_only = tokenizer.text_only_state().cloned();
         }
@@ -208,8 +280,6 @@ impl PushTokenizer {
         // Поэтому consumed == safe_end. Подстраховка на случай раннего
         // выхода — обрезаем по фактически потреблённому байту.
         self.buf.drain(..consumed);
-
-        tokens
     }
 
     /// Находит максимальный offset в `self.buf`, до которого pull-

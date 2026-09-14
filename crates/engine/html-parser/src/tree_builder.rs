@@ -53,14 +53,32 @@ fn is_foreign_namespace(ns: Namespace) -> bool {
     matches!(ns, Namespace::Svg | Namespace::MathMl)
 }
 
+/// Прогоняет `input` через `tokenizer` и `builder`, token за token, отменяя
+/// RAWTEXT/RCDATA-переключение токенизатора для `<script>`/`<style>`/
+/// `<title>`/`<textarea>`, только что открытых в foreign-неймспейсе
+/// (GAP-XMLDOC срез 12, BUG-685): токенизатор сам не знает про namespace
+/// (см. `is_raw_text_element`/`is_rcdata_element` в `tokenizer.rs`), поэтому
+/// решение — здесь, сразу после того, как `apply_token` создал элемент и
+/// его настоящий неймспейс стал известен через `current_namespace()`. Общий
+/// для `parse`/`parse_xml_flavoured`/`parse_fragment` — все три раньше молча
+/// разошлись бы, реализуй каждая свою копию цикла.
+fn run_pull(builder: &mut IncrementalTreeBuilder, input: &str) {
+    let mut tokenizer = Tokenizer::new(input);
+    while let Some(token) = tokenizer.next() {
+        let is_open_start_tag = matches!(&token, Token::StartTag { self_closing: false, .. });
+        builder.apply_token(token);
+        if is_open_start_tag && builder.current_context_forbids_text_only() {
+            tokenizer.cancel_text_only();
+        }
+    }
+}
+
 /// Парсит вход целиком в pull-режиме и возвращает построенный
 /// [`Document`]. Эквивалент `IncrementalTreeBuilder::new() + feed(input)
 /// + finish()`, но без накладных расходов на push-буферизацию.
 pub fn parse(input: &str) -> Document {
     let mut builder = IncrementalTreeBuilder::new();
-    for token in Tokenizer::new(input) {
-        builder.apply_token(token);
-    }
+    run_pull(&mut builder, input);
     builder.finish()
 }
 
@@ -74,9 +92,7 @@ pub fn parse(input: &str) -> Document {
 pub fn parse_xml_flavoured(input: &str) -> Document {
     let mut builder = IncrementalTreeBuilder::new();
     builder.xml_mode = true;
-    for token in Tokenizer::new(input) {
-        builder.apply_token(token);
-    }
+    run_pull(&mut builder, input);
     builder.finish()
 }
 
@@ -98,9 +114,7 @@ pub fn parse_xml_flavoured(input: &str) -> Document {
 /// `innerHTML`/`outerHTML`/`insertAdjacentHTML`), а также form pointer (шаг 7).
 pub fn parse_fragment(input: &str) -> (Document, NodeId) {
     let (mut builder, root) = IncrementalTreeBuilder::new_fragment();
-    for token in Tokenizer::new(input) {
-        builder.apply_token(token);
-    }
+    run_pull(&mut builder, input);
     (builder.finish(), root)
 }
 
@@ -278,16 +292,33 @@ impl IncrementalTreeBuilder {
     /// токены к DOM. После каждого `feed` `Document` валиден для
     /// чтения.
     pub fn feed(&mut self, chunk: &str) {
-        for token in self.tokenizer.feed(chunk) {
-            self.apply_token(token);
-        }
+        // GAP-XMLDOC срез 12 (BUG-685): `feed_with_context` вместо
+        // collect-then-apply — `on_token` применяет каждый токен к дереву и
+        // тут же (пока `PushTokenizer`'s внутренний `Tokenizer` ещё жив)
+        // решает, годится ли только что выставленный RAWTEXT/RCDATA —
+        // `self.tokenizer` временно вынут через `mem::take`, чтобы замыкание
+        // могло держать `&mut self` без конфликта заимствований.
+        let mut tokenizer = std::mem::take(&mut self.tokenizer);
+        tokenizer.feed_with_context(chunk, |token| self.apply_token_for_stream(token));
+        self.tokenizer = tokenizer;
     }
 
     /// Вариант [`feed`][Self::feed] для сырых байт.
     pub fn feed_bytes(&mut self, chunk: &[u8]) {
-        for token in self.tokenizer.feed_bytes(chunk) {
-            self.apply_token(token);
-        }
+        let mut tokenizer = std::mem::take(&mut self.tokenizer);
+        tokenizer.feed_bytes_with_context(chunk, |token| self.apply_token_for_stream(token));
+        self.tokenizer = tokenizer;
+    }
+
+    /// `on_token` для [`feed`][Self::feed]/[`feed_bytes`][Self::feed_bytes]/
+    /// [`finish`][Self::finish]: применяет токен к дереву, затем сообщает
+    /// [`PushTokenizer`] через возврат, форбидит ли *текущий* (только что
+    /// открытый этим токеном, если это был `StartTag`) контекст
+    /// RAWTEXT/RCDATA — см. [`current_context_forbids_text_only`]
+    /// [Self::current_context_forbids_text_only].
+    fn apply_token_for_stream(&mut self, token: Token) -> bool {
+        self.apply_token(token);
+        self.current_context_forbids_text_only()
     }
 
     /// Возвращает ссылку на текущее состояние DOM.
@@ -301,9 +332,9 @@ impl IncrementalTreeBuilder {
     /// Гарантирует наличие `<html>` / `<head>` / `<body>` даже для
     /// пустого ввода (§13.2.6.4.1-3).
     pub fn finish(mut self) -> Document {
-        for token in self.tokenizer.end() {
-            self.apply_token(token);
-        }
+        let mut tokenizer = std::mem::take(&mut self.tokenizer);
+        tokenizer.end_with_context(|token| self.apply_token_for_stream(token));
+        self.tokenizer = tokenizer;
         if !self.seen_doctype {
             self.doc.set_mode(DocumentMode::Quirks);
         }
@@ -2222,6 +2253,21 @@ impl IncrementalTreeBuilder {
             .last()
             .map(|&id| self.node_namespace(id))
             .unwrap_or(Namespace::Html)
+    }
+
+    /// GAP-XMLDOC срез 12 (BUG-685): true right after a `<script>`/`<style>`/
+    /// `<title>`/`<textarea>` start tag opened an element whose *resolved*
+    /// namespace ([`current_namespace`][Self::current_namespace], which
+    /// already accounts for `html:`/`h:` breakout and integration-point
+    /// overrides) is foreign. HTML LS §13.2.6.5's "generic raw text/RCDATA
+    /// element parsing algorithm" is invoked only by the HTML insertion-mode
+    /// rules ("in head"/"in body"), never by "the rules for parsing tokens
+    /// in foreign content" — so a genuinely-foreign `<script>`/`<title>`
+    /// must not leave the tokenizer in RAWTEXT/RCDATA state, even though the
+    /// tokenizer's own [`is_raw_text_element`][crate::tokenizer]-style check
+    /// (namespace-blind, keyed on bare tag name) already switched it there.
+    fn current_context_forbids_text_only(&self) -> bool {
+        is_foreign_namespace(self.current_namespace())
     }
 
     /// Namespace a start tag named `name` should be processed under, given
