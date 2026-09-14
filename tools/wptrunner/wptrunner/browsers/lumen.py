@@ -85,10 +85,21 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
     # set `LUMEN_EXTRA_CA_CERT` on the child process — see
     # `crates/network/src/tls/mod.rs::trusted_root_store`. Without it every
     # `.https.` test fails `UnknownIssuer` before the request is even sent.
+    #
+    # BUG-755: Forced Colors Mode has no on-disk persistence and no BiDi/MCP
+    # toggle — the only way to turn it on for a headless run is the
+    # `--forced-colors` CLI flag `LumenBrowser.make_command` adds below.
+    # `LumenBrowser` builds an explicit, minimal `env` dict for the child
+    # process (see `LumenBrowser.__init__`), so setting `LUMEN_FORCED_COLORS`
+    # in this wptrunner process's own environment would NOT propagate to the
+    # browser — reading it here, in the parent, and turning it into a CLI arg
+    # sidesteps that entirely. Invocation: `LUMEN_FORCED_COLORS=1
+    # python run_report.py --all --root forced-colors-mode --recursive`.
     return {
         "binary": kwargs["binary"],
         "ipc_mode": test_type == "reftest",
         "ca_cert_path": kwargs.get("ca_cert_path"),
+        "forced_colors": os.environ.get("LUMEN_FORCED_COLORS") == "1",
     }
 
 
@@ -214,7 +225,8 @@ class LumenBrowser(WebDriverBrowser):
     listener to come up. `binary` doubles as `webdriver_binary` — Lumen
     speaks BiDi itself, there is no separate driver process."""
 
-    def __init__(self, logger, binary, ipc_mode=False, ca_cert_path=None, **kwargs):
+    def __init__(self, logger, binary, ipc_mode=False, ca_cert_path=None,
+                 forced_colors=False, **kwargs):
         env = dict(kwargs.pop("env", None) or {})
         if ca_cert_path:
             # BUG-785: the browser has no CLI flag for this, only an env var
@@ -232,11 +244,18 @@ class LumenBrowser(WebDriverBrowser):
         env["LUMEN_NO_ADBLOCK"] = "1"
         super().__init__(logger, binary=binary, webdriver_binary=binary, env=env or None, **kwargs)
         self.ipc_mode = ipc_mode
+        self.forced_colors = forced_colors
 
     def make_command(self):
         if self.ipc_mode:
+            # BUG-755's `--forced-colors` only affects the live `Lumen` window
+            # state built in `run_window_mode` (the `--bidi-port` path below)
+            # — `--ipc-server`'s reftest rendering goes through the separate,
+            # a11y_store-less `render_source_to_png` path, so passing the
+            # flag here would be silently ignored. Not forwarded on purpose.
             return [self.binary, "--ipc-server"]
-        return [self.binary, "--bidi-port", str(self.port)]
+        forced_colors_args = ["--forced-colors"] if self.forced_colors else []
+        return [self.binary, "--bidi-port", str(self.port), *forced_colors_args]
 
     def create_output_handler(self, cmd):
         if self.ipc_mode:

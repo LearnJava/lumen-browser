@@ -29,6 +29,7 @@ pub(crate) fn print_usage() {
     eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
     eprintln!("  [--viewport <W>x<H>]                            — фикс. CSS-размер окна (переопределяет --deterministic 1280×800)");
     eprintln!("  [--maximized]                                   — развернуть окно на весь экран (живой перф-аудит)");
+    eprintln!("  [--forced-colors]                               — включить Forced Colors Mode (или LUMEN_FORCED_COLORS=1, BUG-755)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
@@ -260,6 +261,44 @@ pub(crate) fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
         }
     }
     (found, rest)
+}
+
+/// Извлечь `--forced-colors` из аргументов (BUG-755).
+///
+/// Также активируется переменной окружения `LUMEN_FORCED_COLORS=1` — до этого
+/// флага Forced Colors Mode включался единственным способом, тумблером в
+/// живой a11y-панели, и был недоступен headless/автоматическим прогонам
+/// (`--bidi-port`, WPT), из-за чего вся категория `forced-colors-mode`
+/// зеленела вхолостую вместо проверки реального поведения.
+pub(crate) fn extract_forced_colors(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_FORCED_COLORS").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--forced-colors" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+#[cfg(test)]
+mod forced_colors_tests {
+    use super::extract_forced_colors;
+
+    #[test]
+    fn flag_present_is_extracted_and_removed() {
+        let args: Vec<String> = vec!["--forced-colors".into(), "http://x.com".into()];
+        let (found, rest) = extract_forced_colors(&args);
+        assert!(found);
+        assert_eq!(rest, vec!["http://x.com".to_string()]);
+    }
+
+    // `LUMEN_FORCED_COLORS=1` не проверяется здесь: переменные окружения
+    // процесса общие для всех тестов одного бинарника, а `cargo test` гоняет
+    // их параллельно в потоках одного процесса — установка env var в одном
+    // тесте протекала бы в остальные.
 }
 
 /// Извлечь `--network-service` из аргументов (PH1-4).
@@ -656,6 +695,7 @@ pub(crate) fn run_cli() -> ExitCode {
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
     let (maximized, rest_args) = extract_maximized(&rest_args);
+    let (forced_colors, rest_args) = extract_forced_colors(&rest_args);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
     // PERF-6: session health journal. Turned on by `--activity-log`/`--click-log`
@@ -816,7 +856,7 @@ pub(crate) fn run_cli() -> ExitCode {
         CliMode::Dump { source, kind } => {
             run_dump_mode(&source, kind, event_sink, viewport_override)
         }
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_cfg, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, forced_colors, det_cfg, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => {
             run_screenshot(&source, &output, event_sink, viewport_override)

@@ -84,10 +84,11 @@ fontVariantEmoji:  "unicode"                          (было "")
 те же две ошибки. Обе упираются в барьеры **вне** этого бага, вскрытые той же
 пробой:
 
-* **[BUG-755](BUG-755-OPEN.md)** — forced-colors mode вообще нельзя включить в
+* **[BUG-755](BUG-755-FIXED.md)** — forced-colors mode нельзя было включить в
   автоматическом прогоне: `A11yPrefs::open_in_memory()`, дефолт `false`, ни
-  CLI-флага, ни BiDi/MCP-ручки. `forced_colors_active()` в прогоне всегда
-  `false`, так что форсировать движку нечего.
+  CLI-флага, ни BiDi/MCP-ручки. `forced_colors_active()` в прогоне всегда была
+  `false`, так что форсировать движку было нечего. Закрыт 2026-09-14
+  (`--forced-colors`/`LUMEN_FORCED_COLORS=1`).
 * **[BUG-443](BUG-443-FIXED.md)/[BUG-555](BUG-555-DUPLICATE.md)** — `getComputedStyle()`,
   вызванный из инлайнового `<script>` во время разбора (а тесты категории
   читают стиль именно так), детерминированно возвращает `""` для **любого**
