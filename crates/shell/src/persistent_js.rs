@@ -1209,6 +1209,12 @@ impl PersistentJs for V8PersistentJs {
         ));
     }
     fn notify_focus_changed(&self, nid: Option<u32>) {
+        // BUG-560: keep the engine thread's same-tick focus mirror in sync with
+        // every shell-initiated focus change (mouse click, Tab) too — not just
+        // the `.focus()`/`.blur()` ones `_lumen_request_focus`/`_lumen_request_blur`
+        // already cover — so a script reading `:focus`/`:focus-within` right
+        // after one of those observes it without waiting for another pump.
+        self.rt.set_focused_nid(nid);
         let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
         self.eval_js(&format!(
             "if(typeof _lumen_focus_update==='function')_lumen_focus_update({n});\
