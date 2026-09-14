@@ -233,3 +233,6 @@ mod v8_bug630_image_load_events;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug552_document_metadata;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug560_sync_focus;

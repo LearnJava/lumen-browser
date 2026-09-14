@@ -82,7 +82,7 @@ active=el, load-handler-end`. Ни одна из шести контрольны
 Сабтест `focus-visible-010` («Programmatic focus on page load should match
 `:focus-visible`») по-прежнему FAIL, как и записано в его `.ini`: в момент
 обработчика `focus` вычисленный `outline-color` — `auto`, стиль `:focus`
-шелл применяет только на следующем прогоне ([BUG-560](BUG-560-OPEN.md)).
+шелл применяет только на следующем прогоне ([BUG-560](BUG-560-FIXED.md)).
 Это отдельный дефект, не этот.
 
 ---

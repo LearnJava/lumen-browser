@@ -64,20 +64,29 @@ pub(crate) fn install_dialog_focus(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
+    focused_nid: Arc<Mutex<Option<u32>>>,
 ) -> JsResult<()> {
     // ── dialog focus management (HTML LS §6.6.3) ─────────────────────────────
     // `showModal()` calls `_lumen_request_focus(nid)` to focus the first autofocus
     // element (or the dialog itself).  `close()` calls `_lumen_request_focus(prev)`
     // to restore focus to the element that was active before the dialog opened.
     // The shell drains these via `take_focus_requests()` after each JS pump.
+    // BUG-560: `focused_nid` is updated in the same call, synchronously — it is
+    // the engine thread's own same-tick view of focus, read by selector matching
+    // and the same-tick style flush so `:focus`/`:focus-within` do not have to
+    // wait for the shell's next pump to apply `pending_focus_requests`.
     {
         let pfr = Arc::clone(&pending_focus_requests);
+        let fnid = Arc::clone(&focused_nid);
         reg!(scope, ctx, store, "_lumen_request_focus", move |nid: u32| {
             pfr.lock().unwrap().push(Some(nid));
+            *fnid.lock().unwrap() = Some(nid);
         });
         let pfr2 = Arc::clone(&pending_focus_requests);
+        let fnid2 = Arc::clone(&focused_nid);
         reg!(scope, ctx, store, "_lumen_request_blur", move || {
             pfr2.lock().unwrap().push(None);
+            *fnid2.lock().unwrap() = None;
         });
     }
     Ok(())
