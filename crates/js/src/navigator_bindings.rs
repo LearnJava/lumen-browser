@@ -267,7 +267,15 @@ fn build_navigator_shim(p: &NavigatorProfile) -> String {
     orientation: {{ type: 'landscape-primary', angle: 0 }}
   }};
   try {{
-    Object.freeze(_screen);
+    // Lock the dimension fields per CSSOM View §4.1's `readonly` attributes.
+    // `orientation` is deliberately left writable: screen_orientation.rs
+    // replaces this stub with the real ScreenOrientation instance right
+    // after this shim runs.
+    for (const name of ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth']) {{
+      Object.defineProperty(_screen, name, {{
+        value: _screen[name], writable: false, configurable: true, enumerable: true
+      }});
+    }}
     Object.defineProperty(globalThis, 'screen', {{
       value: _screen, writable: false, configurable: true, enumerable: true
     }});
