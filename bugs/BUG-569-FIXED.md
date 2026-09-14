@@ -1,9 +1,8 @@
 # BUG-569: `HTMLImageElement.prototype.decode()` does not exist
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — `HTMLImageElement` wrapper has no
-`decode` member; confirmed by `grep -n "\"decode\"" crates/js/src/*.rs`
-returning nothing anywhere in the JS crate)
+**Статус:** FIXED 2026-09-14 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js` —
+`HTMLImageElement.prototype.decode`)
 **Найден:** P2, WPT-VENDOR-html-semantics-embedded-content, 2026-08-04
 
 ## Симптом
@@ -38,3 +37,28 @@ for the method to await yet.
 `the-img-element/`, all with the identical `TypeError` shape — a single
 missing method blocks every `decode()`-based test regardless of what image
 state (cached/picture/source) each variant is actually probing.
+
+## Исправлено
+
+`decode()` settles off the same `_lumen_img_state` table BUG-630 already
+populates for `complete`/`naturalWidth`/`naturalHeight` — no new async decode
+pipeline was needed. Added `HTMLImageElement.prototype.decode` in
+`crates/js/src/shim/web_api_shim_tail_b.js`, right after the `complete`/
+`naturalWidth`/`naturalHeight` getter block: a node that is already
+`complete` (success or failure) resolves/rejects synchronously (rejection
+uses the same zero-dimensions shape `_lumen_fire_image_error` writes, an
+`EncodingError` `DOMException`, mirroring how the `complete` getter already
+treats that shape as failure); a node still in flight waits for the `load`/
+`error` event that `_lumen_fire_image_load`/`_lumen_fire_image_error`
+dispatch once the shell's decode pipeline settles it, then re-checks the
+state the same way.
+
+New test file `crates/js/tests/cases/bug569_img_decode.rs` (5 tests):
+`decode` exists and returns a `Promise`; resolves immediately when the state
+is already a success; rejects with `EncodingError` when the state is already
+a failure; resolves after a `load` event fired while still pending; rejects
+after an `error` event fired while still pending.
+
+`cargo test -p lumen-js --features v8-backend` green (121/121, was 116),
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` clean.
