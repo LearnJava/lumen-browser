@@ -21,6 +21,7 @@ pub(crate) fn run_window_mode(
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
     maximized: bool,
+    forced_colors: bool,
     deterministic: deterministic::DetConfig,
     viewport_override: Option<(f32, f32)>,
     automation_handle: AutomationHandle,
@@ -493,8 +494,21 @@ pub(crate) fn run_window_mode(
             &network_log,
         )),
         privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
-        a11y_store: lumen_storage::A11yPrefs::open_in_memory()
-            .expect("a11y_prefs in-memory"),
+        a11y_store: {
+            // BUG-755: `--forced-colors`/`LUMEN_FORCED_COLORS=1` is the only
+            // way to enable Forced Colors Mode without a live a11y-panel
+            // toggle — set it before the first layout so headless/automated
+            // runs (WPT `forced-colors-mode`) actually exercise the mode
+            // instead of passing vacuously with it permanently off.
+            let store = lumen_storage::A11yPrefs::open_in_memory()
+                .expect("a11y_prefs in-memory");
+            if forced_colors {
+                store
+                    .set_forced_colors(true)
+                    .expect("a11y_prefs set_forced_colors");
+            }
+            store
+        },
         a11y_panel: panels::a11y_panel::A11yPanel::new(),
         platform_bridge: lumen_a11y::platform::platform_bridge(),
         print_panel: panels::print_panel::PrintPanel::new(),
