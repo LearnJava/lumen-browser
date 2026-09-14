@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-14",
  "counts": {
-  "open": 354,
-  "fixed": 645,
+  "open": 353,
+  "fixed": 646,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7452,13 +7452,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-575": {
-   "status": "open",
-   "title": "`Element.prototype.localName` does not exist at all. Surfaces in `form-submission-target/resources/reltester.js` (`submitter.localName !== \"form\"` always true)…",
-   "component": "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-576": {
    "status": "open",
    "title": "`select.options.add()` missing (mirror `select.add()` at `dom.rs:14401` does work). 4 subtests/2 files. Найден P2, WPT-VENDOR-html-semantics-forms, 2026-08-04",
@@ -14050,6 +14043,13 @@
    "status": "fixed",
    "title": "`Node.prototype.contains()` does not exist at all on any node kind -- surfaces as `elementDocument.contains is not a function` inside `resources/testdriver.js`'…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `Node.prototype` shared-method block)",
+   "date": "2026-09-14",
+   "debtor": false
+  },
+  "BUG-575": {
+   "status": "fixed",
+   "title": "`Element.prototype.localName` does not exist at all. Surfaces in `form-submission-target/resources/reltester.js` (`submitter.localName !== \"form\"` always true)…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `_LUMEN_WRAPPER_MEMBERS` element getter block)",
    "date": "2026-09-14",
    "debtor": false
   }

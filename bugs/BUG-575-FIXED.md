@@ -1,11 +1,23 @@
 # BUG-575: `Element.prototype.localName` missing entirely
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs::_lumen_build_element`, `dom.rs:5589-5606`
-— the per-element getter block has `tagName`/`nodeName`/`nodeType`/
-`namespaceURI` but no `localName` getter)
+**Статус:** FIXED (закрыто ревизией) 2026-09-14
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`
+element getter block, `dom.rs` since split into `crates/js/src/dom/`)
 **Найден:** P2, WPT-VENDOR-html-semantics-forms, 2026-08-04 (root-caused with a
 standalone `--dump-layout` probe outside the WPT run)
+
+## Ревизия P3 2026-09-14
+
+Уже устранено побочно фиксом [BUG-367](BUG-367-FIXED.md) (2026-08-10, шесть
+дней после подачи этой заявки) — `localName` добавлен на `_LUMEN_WRAPPER_MEMBERS`
+вместе с namespace-aware `tagName`/`prefix` (`web_api_shim_mid.js:6367`,
+`get localName() { var nid = this.__nid__; return _lumen_u2n(_lumen_get_local_name(nid)); }`).
+Подтверждено новым регрессионным тестом
+`dom::tests::v8_core::element_local_name_is_lowercase`
+(`document.getElementById('main').localName === 'div'`) — зелёный на чистом
+`main`, код обёртки не менялся. `cargo test -p lumen-js --features v8-backend`
+зелёный, `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` чист.
 
 ## Симптом
 
