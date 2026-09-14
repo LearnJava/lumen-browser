@@ -3226,6 +3226,21 @@ DOMImplementation.prototype.constructor = DOMImplementation;
     globalThis[_name] = _ctor;
 });
 
+// BUG-572: HTML LS §4.12.1.2 `HTMLScriptElement.supports(type)` — a static
+// feature-detection method pages use to probe support for a `<script type>`
+// before relying on it, distinct from the per-instance IDL reflection below.
+// `classic`/`module`/`importmap` are the only recognized values; the engine
+// executes all three (classic via `is_classic_script_type`, modules, and
+// import maps — see `crates/shell/src/scripts.rs`), so all three answer
+// `true` and everything else `false`.
+Object.defineProperty(HTMLScriptElement, 'supports', {
+    value: function supports(type) {
+        var t = String(type);
+        return t === 'classic' || t === 'module' || t === 'importmap';
+    },
+    writable: true, enumerable: false, configurable: true,
+});
+
 // BUG-567: HTML LS §4.2.2 `HTMLTitleElement.text` — a legacy IDL attribute
 // (contrast `document.title`, which already has a real getter/setter). On
 // get, concatenates only DIRECT Text-node children's data (not comment nodes,
