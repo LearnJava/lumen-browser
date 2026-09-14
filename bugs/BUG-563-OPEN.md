@@ -1,9 +1,59 @@
 # BUG-563: inline-style CSSOM getter/setter for `anchor()`/`anchor-size()`/`position-area` is a raw-text passthrough — no parsing, validation, or canonical serialization
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-ANCHORCSSOM](../ROADMAP.md))
+**Тип:** ДОРАБОТКА — новая грамматика (`<anchor-side>` расширение, `anchor()`/`anchor-size()` как непрозрачный узел `calc()`, полная ось-совместимая грамматика `position-area`), не точечная довязка существующего CSSOM-механизма
 **Дата:** 2026-08-04
-**Компонент:** js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_parse_style`/`_lumen_serialize_style`, the `element.style.<prop>` getter/setter shim)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand` — `dom.rs` с тех пор расщеплён на `crates/js/src/dom/*`, сам `_lumen_make_style`/`_lumen_parse_style`/`_lumen_serialize_style` теперь тоже в шиме), layout (`crates/engine/layout/src/style/parse/box_sides.rs`, `crates/engine/layout/src/anchor.rs`, `crates/engine/layout/src/style/calc.rs`)
 **Найден:** P2, WPT-RUN-3 срез 42 (`css/css-anchor-position`), 2026-08-04
+
+## Ревизия P3 2026-09-14
+
+Переквалифицировано из бага в ДОРАБОТКУ (прецеденты BUG-535/538/553/562).
+Общий CSSOM-механизм «валидировать+канонизировать specified-value на
+`element.style`-сеттере», которым описывался этот баг, уже построен и закрыт
+как отдельный трек (CSSOM-2/BUG-484, 19 срезов, закрыт 2026-09-03) —
+`_lumen_canonicalize_longhand` в `web_api_shim_mid.js` диспетчеризует
+`top`/`left`/`right`/`bottom` в `_lumen_css_canonical_length`
+(`layout/src/style/values/length.rs::canonical_specified_length`), но эта
+функция знает только `<length-percentage>`/`calc()`/`min()`/`max()`/
+`clamp()` — не `anchor()`. `position-area` не зарегистрирован в диспетчере
+вовсе (сырой passthrough, второй симптом заявки). Прямым чтением кода и
+трёх вендоренных тестов (`anchor-parse-valid.html`,
+`anchor-size-parse-valid.html`, `position-area-parsing.html`) подтверждено,
+что дыра — не одна недостающая привязка, а четыре независимых пробела:
+
+1. `parse_anchor_func` (`layout/src/style/parse/box_sides.rs:385`) принимает
+   `<anchor-el> <anchor-side>` только в этом порядке; спека — `&&`-комбинатор
+   (порядок произвольный). `anchor-parse-valid.html`'s `value_flip_order`
+   явно проверяет `anchor(inside --foo)` парсясь так же, как
+   `anchor(--foo inside)`, и сериализуясь канонически (имя первым).
+2. `parse_anchor_side` (там же) не реализует `inside`/`outside`/
+   `self-start`/`self-end` — четверть спекового списка `<anchor-side>`
+   ключевых слов просто отсутствует как вариант.
+3. Тест ожидает `anchor()`/`anchor-size()` как непрозрачный лист внутри
+   дерева `calc()`/`min()`/`max()`, с полным упрощением дерева вокруг него
+   (`calc(anchor(--foo left, 1px) + 10%)` → `calc(10% + anchor(--foo left,
+   1px))`, `min(100px, 10%, anchor(--foo top), anchor(--bar bottom))`
+   остаётся как есть). `style/calc.rs::CalcNode` сейчас не имеет варианта
+   для анкор-функции как операнда — это расширение калькулятора, не
+   точечный парсер.
+4. `position-area`'s реальная грамматика (`position-area-parsing.html`) —
+   12 категорий ключевых слов (физические `horizontal`/`vertical`,
+   логические `inline`/`block`, self-варианты обоих, `start`/`end`,
+   `self-start`/`self-end`, плюс `center`/`span-all`/`none`) с попарной
+   проверкой совместимости осей (`horizontal`+`vertical` валидно,
+   `horizontal`+`horizontal` — нет) и спецификационно-зависимым порядком
+   канонической сериализации (для одних пар канон — physical-first, для
+   других — logical/block-first). Текущий `InsetAreaKeyword`
+   (`layout/src/anchor.rs`) схлопывает всё в ~9 значений БЕЗ хранения оси —
+   `top`/`left` мапятся в один и тот же `Start`, поэтому невозможно отличить
+   валидную пару от невалидной, не говоря о канонической сериализации.
+
+Это новая грамматика плюс интеграция в дерево `calc()`, а не однострочная
+довязка вроде остальных закрытых CSSOM-2/3 срезов (BUG-505's многочисленные
+срезы, для сравнения, были именно такими). `CSS-SPECS.md:119` дополнен
+пометкой об этом остатке; заведён [GAP-ANCHORCSSOM](../ROADMAP.md).
+Указатель убран из `STATUS-P3.md`.
 
 ## Симптом
 
