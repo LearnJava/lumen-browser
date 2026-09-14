@@ -1,6 +1,6 @@
 # BUG-574: `Node.prototype.contains()` missing entirely (all node kinds, incl. `Document`)
 
-**Статус:** OPEN
+**Статус:** FIXED (закрыто ревизией) 2026-09-14
 **Компонент:** js (`crates/js/src/dom.rs:4503-4512` — `Node.prototype` shared-method
 block; only `hasChildNodes` is wired there, `contains` was never added.
 Live element/text/comment wrappers get their `[[Prototype]]` chained to
@@ -71,3 +71,26 @@ old FAIL logs, not re-opening them).
 used by `send_keys`/`get_computed_role`/`action_sequence`/etc., not just
 `click()`'s `getInViewCenterPoint`). Fix both together — same `Node.prototype`
 shared-method block, same implementation pattern.
+
+## Закрытие (P3-ревизия, 2026-09-14)
+
+Уже сделано — побочным эффектом [BUG-732](BUG-732-FIXED.md) (2026-08-10,
+«шесть базовых DOM/CSSOM-API отсутствуют в шиме»), тот же фикс, что уже
+закрыл [BUG-462](BUG-462-FIXED.md) с тем же симптомом (`elementDocument.contains
+is not a function` из вендоренного `testdriver.js`) под другим номером. BUG-732
+добавил `Node.prototype.contains`/`compareDocumentPosition`
+(`crates/js/src/shim/web_api_shim_mid.js:3070-3072`) на цепочку прототипов, по
+которой висят обёртки element/text/comment (`_lumen_build_element`), плюс
+собственные копии на `document`-литерале (`web_api_shim_mid.js:9881-9882`) и на
+`DocumentFragment` (`web_api_shim_mid.js:3909-3916`) — те два объекта, что не
+наследуют `Node.prototype` вовсе. DOM §4.4 соседи, которые заявка просила
+проверить в том же проходе, тоже на месте: `getRootNode` (закрыт отдельно как
+[BUG-599](BUG-599-FIXED.md)), `isSameNode`/`isEqualNode`
+(`web_api_shim_mid.js:7779-7787`, `10251-10254`).
+
+Подтверждено юнит-тестами
+`dom::tests::v8_bug732_node_and_collections::{contains_self_descendant_and_foreign_node, document_contains_element}`
+(`cargo test -p lumen-js --features v8-backend v8_bug732_node_and_collections` —
+7/7 OK на чистом `main`, код не менялся) — покрывают ровно сценарии этой заявки:
+`document.contains(el)`, `el.contains(other)`, `Node.prototype` на живых
+обёртках. Код не менялся, закрытие — устранение расхождения статуса.
