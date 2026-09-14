@@ -4619,6 +4619,38 @@ mod tests {
     }
 
     #[test]
+    fn xml_flavoured_self_closing_h_script_with_src_is_requestable() {
+        // WPT reftest idiom, 212 corpus files (GAP-XMLDOC срез 11 measurement):
+        // `<svg xmlns:h="…/1999/xhtml"><h:script src="…"/></svg>`. Срез 5 already
+        // strips the `h:` prefix into Namespace::Html; срез 2 already makes
+        // self-closing skip RAWTEXT/stack-push in xml_mode. This test pins that
+        // the combination — prefixed name AND self-closing AND an attribute —
+        // still produces a normal HTML `<script src>` element a loader can find,
+        // with a sibling surviving after it (not swallowed as RAWTEXT to EOF).
+        let doc = parse_xml_flavoured(
+            r#"<svg xmlns:h="http://www.w3.org/1999/xhtml"><h:script src="/common/reftest-wait.js"/><rect/></svg>"#,
+        );
+        let script = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "script"),
+            )
+            .unwrap_or_else(|| panic!("script element: {doc}"));
+        let NodeData::Element { name, attrs, .. } = &script.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html, "h:script namespace: {doc}");
+        assert!(
+            attrs.iter().any(|a| a.name.local == "src" && a.value == "/common/reftest-wait.js"),
+            "src attribute must survive on the self-closing element: {doc}"
+        );
+        assert!(script.children.is_empty(), "self-closing script must have no children: {doc}");
+        let has_rect = doc.find_first_element(
+            |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "rect"),
+        );
+        assert!(has_rect.is_some(), "<rect/> after self-closing <h:script/> must survive: {doc}");
+    }
+
+    #[test]
     fn plain_parse_self_closing_textarea_still_consumes_following_text() {
         // HTML5 semantics (default `parse`) — self-closing flag stays
         // ignored on non-void elements, so <textarea/> still opens a real
