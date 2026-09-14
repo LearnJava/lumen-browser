@@ -1,7 +1,7 @@
 # BUG-740: intrinsic-ширина grid-контейнера считается как у блока
 
-**Статус:** OPEN
-**Компонент:** layout (`crates/engine/layout/src/box_tree.rs` —
+**Статус:** FIXED 2026-09-14 (P3)
+**Компонент:** layout (`crates/engine/layout/src/box_tree/intrinsic.rs` —
 `max_content_outer_width`, `min_content_outer_width_of_contents`,
 `preferred_inline_block_width`)
 **Найден:** P3 при разборе [BUG-733](BUG-733-FIXED.md), 2026-08-10
@@ -60,3 +60,37 @@ Edge: `grid-template-columns: auto auto` — 42.69 против 85.38, а с я�
 треками `60px 30px` контейнер выходит 10.67 при элементах на 60 и 90, то есть
 фон рисуется полоской слева от содержимого. Формы лежат в `.tmp/p3/bug739.html`
 (тесты 3 и 9) ветки `p3-bug-739`.
+
+## Исправлено 2026-09-14 (P3)
+
+Аппроксимация, не полный track sizing (см. «Направление фикса» выше — честный
+путь через вынос placement + track sizing из `lay_out_grid` не сделан).
+Новая `grid_col_intrinsic_sum()` в `intrinsic.rs` раскладывает элементы по
+колонкам round-robin (та же модель, что auto-placement в `build_grid_init`)
+и берёт максимум внутри каждой колонки; итог — сумма ширин колонок +
+`column-gap` (CSS Grid L1 §11.5), а не максимум по всем детям. Используется
+во всех трёх функциях (`preferred_inline_block_width`, `max_content_outer_width`,
+`min_content_outer_width_of_contents`) там же, где раньше стояла ветка
+`_ if is_row_flex_container(b)`.
+
+Аппроксимация честно откатывается на старое блочное правило («самый широкий
+ребёнок»), когда раскладка по кругу не гарантирована:
+
+- `grid-template-columns: repeat(auto-fill|auto-fit, …)` — число треков
+  зависит от доступной ширины, которой на этапе intrinsic-расчёта ещё нет;
+- явный `grid-column`/`grid-row` у ребёнка — может увести его в другую
+  колонку или создать перекрытие;
+- `grid-auto-flow: column` — не соответствует предположению «по кругу
+  построчно».
+
+7 новых тестов `box_tree::tests::intrinsic_and_wrap::bug740_*` (сумма колонок,
+gap, round-robin с тремя элементами на двух колонках, три случая честного
+отката, однoколоночный grid не меняется). `cargo clippy --workspace
+--all-targets -- -D warnings` чист, `cargo test -p lumen-layout --lib`
+3964/3964. `graphic_tests/run.py --continue-on-fail`: 12/156 FAIL — идентично
+прогону 2026-09-10 (до этого фикса, задокументирован в BUGS-FIXED.md), то есть
+предсуществующий дрейф, не регрессия от этого изменения.
+
+Открытым остаётся честный track sizing для `repeat(auto-fill|auto-fit, …)` и
+явного `grid-column`/`grid-row`/`grid-auto-flow: column` — заводить отдельной
+заявкой, если понадобится.
