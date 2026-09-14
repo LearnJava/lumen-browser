@@ -525,6 +525,77 @@ const VIDEO_SHIM: &str = r#"(function() {
     return track;
   }
 
+  // BUG-570: cue *data* has always been real — `appendCues` above has built
+  // plain `{id,startTime,endTime,text,track,pauseOnExit}` records since
+  // BUG-775 — what was missing is the JS-visible interface layer itself:
+  // neither `TextTrackCue` nor `VTTCue` was ever installed as a global, so
+  // `new VTTCue(...)` threw `ReferenceError` and `instanceof` checks against
+  // either name were unsatisfiable. `TextTrackCue` is the spec's abstract
+  // base (`interface TextTrackCue : EventTarget`, HTML LS §4.8.11.13) — WebIDL
+  // gives it no constructor operation, so `new TextTrackCue(...)` must throw a
+  // TypeError even though `VTTCue.prototype`'s prototype chain still runs
+  // through it.
+  // `EventTarget` is a page-shim global installed well before this file runs
+  // in the real browser (`install_video_bindings_v8` is called after
+  // `WEB_API_SHIM`, see `v8_runtime.rs`), but this file's own unit tests run
+  // against a bare runtime with no page shim at all — guard the base so an
+  // unrelated video-only test doesn't start failing on a top-level
+  // `ReferenceError` raised just by *defining* the cue classes.
+  var _lumen_cue_base = (typeof EventTarget === 'function') ? EventTarget : function () {};
+  function TextTrackCue() {
+    throw new TypeError("Illegal constructor");
+  }
+  TextTrackCue.prototype = Object.create(_lumen_cue_base.prototype);
+  TextTrackCue.prototype.constructor = TextTrackCue;
+
+  // VTTCue (WebVTT §3.1) — the only constructible cue type. Layout-affecting
+  // members (`region`/`vertical`/`snapToLines`/`line`/`lineAlign`/`position`/
+  // `positionAlign`/`size`/`align`) are stored and echoed back at their spec
+  // defaults; nothing downstream reads them yet, since rendering still goes
+  // through the plain `{startTime,endTime,text}` triple `appendCues` builds —
+  // data-correct but visually inert until BUG-570's sibling rendering gaps
+  // close. `track` starts null; wiring it to a real `addCue`/`removeCue` pair
+  // is the separate, already-documented `CAPABILITIES.md` method-layer gap,
+  // not this bug.
+  function VTTCue(startTime, endTime, text) {
+    if (!(this instanceof VTTCue)) {
+      throw new TypeError("Failed to construct 'VTTCue': Please use the 'new' operator.");
+    }
+    if (arguments.length < 3) {
+      throw new TypeError("Failed to construct 'VTTCue': 3 arguments required, but only " + arguments.length + " present.");
+    }
+    _lumen_cue_base.call(this);
+    this.id = '';
+    this.pauseOnExit = false;
+    this.startTime = +startTime;
+    this.endTime = +endTime;
+    this.text = String(text);
+    this.region = null;
+    this.vertical = '';
+    this.snapToLines = true;
+    this.line = 'auto';
+    this.lineAlign = 'start';
+    this.position = 'auto';
+    this.positionAlign = 'auto';
+    this.size = 100;
+    this.align = 'center';
+    this.track = null;
+    this.onenter = null;
+    this.onexit = null;
+  }
+  VTTCue.prototype = Object.create(TextTrackCue.prototype);
+  VTTCue.prototype.constructor = VTTCue;
+  // WebVTT §3.5.17 "cue text rendering rules" — full markup parsing (`<i>`/
+  // `<b>`/timestamps/…) is not implemented; this returns the cue text as one
+  // plain Text node, correct for the dominant markup-free case.
+  VTTCue.prototype.getCueAsHTML = function() {
+    var frag = document.createDocumentFragment();
+    frag.appendChild(document.createTextNode(this.text));
+    return frag;
+  };
+  globalThis.TextTrackCue = TextTrackCue;
+  globalThis.VTTCue = VTTCue;
+
   function makeTrackList(tracks) {
     var listObj = {
       length: tracks.length,
@@ -1901,6 +1972,148 @@ tt.length === 1
                        && v.controls === true && v.loop === true"
                 ),
                 "controls/loop must reflect the content attribute"
+            );
+        }
+    }
+
+    // ── BUG-570: VTTCue/TextTrackCue/TrackEvent global constructors ───────────
+    //
+    // Needs the real DOM (`EventTarget`/`document.createDocumentFragment` live
+    // in the full `web_api_shim`, not the bare `with_video()` stub).
+    mod vtt_cue {
+        use std::sync::{Arc, Mutex};
+
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_dom::{Document, QualName};
+
+        use crate::v8_runtime::V8JsRuntime;
+
+        fn rt_with_dom() -> V8JsRuntime {
+            let mut doc = Document::new();
+            let html = doc.create_element(QualName::html("html"));
+            let body = doc.create_element(QualName::html("body"));
+            doc.append_child(doc.root(), html);
+            doc.append_child(html, body);
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(
+                Arc::new(Mutex::new(doc)),
+                "",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+            rt
+        }
+
+        fn truthy(rt: &V8JsRuntime, expr: &str) -> bool {
+            matches!(rt.eval(expr).unwrap(), lumen_core::JsValue::Bool(true))
+        }
+
+        #[test]
+        fn vtt_cue_constructor_sets_spec_defaults() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(
+                    &rt,
+                    "var cue = new VTTCue(3, 12, 'foo bar');
+                     cue.startTime === 3 && cue.endTime === 12 && cue.text === 'foo bar'
+                       && cue.id === '' && cue.region === null && cue.pauseOnExit === false
+                       && cue.snapToLines === true && cue.line === 'auto'
+                       && cue.lineAlign === 'start' && cue.position === 'auto'
+                       && cue.positionAlign === 'auto' && cue.size === 100
+                       && cue.align === 'center'"
+                ),
+                "new VTTCue(...) must populate the WebVTT §3.1 defaults"
+            );
+        }
+
+        /// The generated WPT title names this exact scenario: a value exactly
+        /// representable as a double but not as a float must round-trip intact.
+        #[test]
+        fn vtt_cue_line_position_size_stay_double_precision() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(
+                    &rt,
+                    "var cue = new VTTCue(0, 1, 'text');
+                     var v = 1.000000000000004;
+                     cue.line = v; cue.position = v; cue.size = v;
+                     cue.line === v && cue.position === v && cue.size === v"
+                ),
+                "line/position/size must not be truncated to float precision"
+            );
+        }
+
+        #[test]
+        fn get_cue_as_html_returns_document_fragment_with_text_node() {
+            let rt = rt_with_dom();
+            // `frag instanceof DocumentFragment` is not asserted here: Lumen's
+            // `createDocumentFragment()` returns a plain, prototype-less object
+            // literal (see `_lumen_make_document_fragment`'s own comment), so
+            // `instanceof` against any constructor is false for every fragment
+            // in this engine — a pre-existing, unrelated limitation, not
+            // something this fix should paper over.
+            assert!(
+                truthy(
+                    &rt,
+                    "var cue = new VTTCue(0, 0, '');
+                     var frag = cue.getCueAsHTML();
+                     frag.nodeType === 11
+                       && frag.childNodes.length === 1
+                       && frag.childNodes[0].data === ''"
+                ),
+                "getCueAsHTML() should wrap the cue text in a document fragment"
+            );
+        }
+
+        #[test]
+        fn text_track_cue_is_not_constructible_but_is_the_vtt_cue_base() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(&rt, "TextTrackCue !== VTTCue"),
+                "TextTrackCue and VTTCue must be separate interfaces"
+            );
+            assert!(
+                truthy(
+                    &rt,
+                    "var threw = false;
+                     try { new TextTrackCue(0, 0, ''); } catch (e) { threw = e instanceof TypeError; }
+                     threw"
+                ),
+                "TextTrackCue has no constructor operation and must throw TypeError"
+            );
+            assert!(
+                truthy(&rt, "new VTTCue(0, 1, 'x') instanceof TextTrackCue"),
+                "VTTCue must inherit from TextTrackCue"
+            );
+        }
+
+        #[test]
+        fn track_event_constructor_exposes_readonly_track() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(
+                    &rt,
+                    "var ev = new TrackEvent('foo');
+                     ev instanceof TrackEvent && ev instanceof Event && ev.track === null"
+                ),
+                "TrackEvent('foo') must default track to null"
+            );
+            assert!(
+                truthy(
+                    &rt,
+                    "var ev = new TrackEvent('foo', { track: 42 });
+                     ev.track = {};
+                     ev.track === 42"
+                ),
+                "TrackEvent.track is readonly — a later assignment must be ignored"
             );
         }
     }

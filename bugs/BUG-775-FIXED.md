@@ -171,7 +171,7 @@ of undefined (setting 'mode')` на `track.track.mode` в логе больше 
 * **[BUG-903](BUG-903-OPEN.md)** — конформность самого `parse_vtt`: блок не
   завершается на второй строке таймингов (`arrows.vtt` — 6 cues по спеке, 0 у
   нас), и подпись принимает form feed после `WEBVTT`.
-* **[BUG-570](BUG-570-OPEN.md)** — `VTTCue`/`TextTrackCue`/`TrackEvent` не
+* **[BUG-570](BUG-570-FIXED.md)** — `VTTCue`/`TextTrackCue`/`TrackEvent` не
   установлены как глобальные конструкторы (заведён раньше, не трогался).
 
 Не покрыто этим фиксом и не измерялось:
