@@ -267,9 +267,21 @@ fn build_navigator_shim(p: &NavigatorProfile) -> String {
     orientation: {{ type: 'landscape-primary', angle: 0 }}
   }};
   try {{
+    Object.freeze(_screen);
     Object.defineProperty(globalThis, 'screen', {{
       value: _screen, writable: false, configurable: true, enumerable: true
     }});
+  }} catch(_) {{}}
+
+  // ── window position (CSSOM View §5) ─────────────────────────────────────────
+  // No real windowing backend to query here, so report the origin; screenLeft/
+  // screenTop are legacy aliases and must equal screenX/screenY respectively.
+  try {{
+    for (const name of ['screenX', 'screenY', 'screenLeft', 'screenTop']) {{
+      Object.defineProperty(globalThis, name, {{
+        value: 0, writable: false, configurable: true, enumerable: true
+      }});
+    }}
   }} catch(_) {{}}
 
   // ── timezone normalisation ──────────────────────────────────────────────────
@@ -388,6 +400,34 @@ mod tests {
         install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
         let ok = rt
             .eval("screen.orientation.type === 'landscape-primary' && screen.orientation.angle === 0")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn screen_dimensions_are_readonly() {
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let ok = rt
+            .eval(
+                "(function() { \
+                    screen.width = 0; screen.height = 0; \
+                    return screen.width === 1920 && screen.height === 1080; \
+                })()",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true), "screen dimensions must stay immutable");
+    }
+
+    #[test]
+    fn screen_position_properties_exist() {
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let ok = rt
+            .eval(
+                "typeof screenX === 'number' && typeof screenY === 'number' \
+                    && screenLeft === screenX && screenTop === screenY",
+            )
             .unwrap();
         assert_eq!(ok, JsValue::Bool(true));
     }
