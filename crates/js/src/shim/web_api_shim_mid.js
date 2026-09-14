@@ -261,6 +261,20 @@ function HashChangeEvent(type, init) {
 HashChangeEvent.prototype = Object.create(Event.prototype);
 HashChangeEvent.prototype.constructor = HashChangeEvent;
 
+// TrackEvent — fired at `AudioTrackList`/`VideoTrackList`/`TextTrackList` for
+// `addtrack`/`removetrack` (HTML LS §4.8.10.11, `interface TrackEvent : Event`,
+// BUG-570). `track` is a readonly `(VideoTrack or AudioTrack or TextTrack)?`
+// member defaulting to null — exposed through a getter with no setter so an
+// assignment after construction (WPT's own constructor test does exactly
+// that) is silently ignored rather than mutating the event.
+function TrackEvent(type, init) {
+    Event.call(this, type, init);
+    var track = (init != null && init.track !== undefined) ? init.track : null;
+    Object.defineProperty(this, 'track', { get: function() { return track; }, enumerable: true, configurable: true });
+}
+TrackEvent.prototype = Object.create(Event.prototype);
+TrackEvent.prototype.constructor = TrackEvent;
+
 // ToggleEvent — <details> and popover state changes (HTML LS §4.11.1, Popover
 // API §3.5). Both used to fire a plain `Event` with `oldState`/`newState` bolted
 // on as own properties and no such global existed at all (BUG-578), so

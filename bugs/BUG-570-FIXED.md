@@ -1,6 +1,6 @@
 # BUG-570: `VTTCue`/`TextTrackCue`/`TrackEvent` global constructors do not exist
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-14 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — none of the three interfaces is
 registered as a global; `crates/js/src/text_track_store.rs` implements the
 underlying cue data model but only mentions the interface names in doc
@@ -52,3 +52,44 @@ the already-documented `CAPABILITIES.md` gap "⬜ addTextTrack(), TextTrack.
 mode-setter" — that bullet covers missing *methods* on an existing
 `TextTrack` instance; this finding is the separate, unlisted gap of missing
 *constructors* for the cue/event types themselves.
+
+## Исправлено
+
+`dom.rs` has since been split; the real fix sites are
+`crates/js/src/video_bindings.rs` (`TextTrackCue`/`VTTCue`, next to the
+`makeTextTrack`/`appendCues` machinery that has owned the actual cue data
+since BUG-775) and `crates/js/src/shim/web_api_shim_mid.js` (`TrackEvent`,
+next to the other `Event` subclasses like `HashChangeEvent`).
+
+`TextTrackCue` is the spec's abstract base (`interface TextTrackCue :
+EventTarget`) — WebIDL gives it no constructor operation, so it is installed
+as a function that always throws `TypeError`, with `VTTCue.prototype`
+chaining through its prototype. `VTTCue(startTime, endTime, text)` populates
+the WebVTT §3.1 defaults (`id`, `pauseOnExit`, `region`, `vertical`,
+`snapToLines`, `line`, `lineAlign`, `position`, `positionAlign`, `size`,
+`align`) and adds `getCueAsHTML()`, which wraps the cue text in a single Text
+node inside a document fragment (full WebVTT markup parsing — `<i>`/`<b>`/
+timestamps — stays unimplemented, out of this bug's scope). `TrackEvent`
+mirrors the other `Event` subclasses: `track` is exposed through a
+getter-only property so a later assignment (the WPT constructor test does
+exactly that) is silently ignored rather than mutating the event.
+
+Both cue classes derive from a `_lumen_cue_base` that falls back to a no-op
+function when `EventTarget` isn't defined — needed only so the crate's own
+bare-runtime unit tests (which install `video_bindings` without the rest of
+the page shim) don't fail at *install* time; in the real browser `EventTarget`
+is always installed first (`v8_runtime.rs`'s `WEB_API_SHIM` eval runs before
+`install_v8!(video_bindings::install_video_bindings_v8)`).
+
+Wiring `track`/`addCue`/`removeCue` to a real `TextTrack`, and full WebVTT
+cue-text markup parsing, remain the separate, already-documented
+`CAPABILITIES.md` method-layer gap this bug explicitly excluded.
+
+New tests in `crates/js/src/video_bindings.rs`'s `tests_v8::vtt_cue` module
+(5 tests): constructor defaults, double-precision `line`/`position`/`size`
+round-trip, `getCueAsHTML()` shape, `TextTrackCue`/`VTTCue` separateness plus
+the illegal-constructor throw, and `TrackEvent`'s readonly `track`.
+
+`cargo test -p lumen-js --features v8-backend` 3645/3645 (was 3640),
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` clean.

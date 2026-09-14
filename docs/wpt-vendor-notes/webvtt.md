@@ -25,7 +25,7 @@ process): **21/72 harness OK, 1/176 subtests passed**.
 
 Three distinct, confirmed clusters explain almost every failure:
 
-- **[BUG-570](../../bugs/BUG-570-OPEN.md) (already filed, not new)** — all 19
+- **[BUG-570](../../bugs/BUG-570-FIXED.md) (already filed, not new)** — all 19
   `api/VTTCue/*` and `api/VTTRegion/*` files: harness completes (`Test OK`)
   but every subtest fails on `VTTCue is not defined` / `VTTRegion is not
   defined` — the constructors were never installed as JS globals. Also
@@ -74,7 +74,7 @@ reftest в `rendering/`, раннер их не исполняет).
 `run_report.py --all --root webvtt --recursive` — ~8 мин 17 с, **21/72
 harness OK, 1/176 сабтестов**. Два подтверждённых корня объясняют
 подавляющее большинство провалов: уже заведённый
-[BUG-570](../../bugs/BUG-570-OPEN.md) (`VTTCue`/`VTTRegion`/`TrackEvent` не
+[BUG-570](../../bugs/BUG-570-FIXED.md) (`VTTCue`/`VTTRegion`/`TrackEvent` не
 установлены как глобалы — весь `api/VTTCue`/`api/VTTRegion`) и новый
 [BUG-775](../../bugs/BUG-775-FIXED.md) (`HTMLTrackElement` никогда не диспатчит
 `load`/`error` — весь `parsing/file-parsing/` и большая часть
