@@ -55,6 +55,47 @@ fn mouseevent_page_coords_default_to_client() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-558: `x`/`y` alias `clientX`/`clientY`, and `pageX`/`pageY` (hence the
+/// `offsetX`/`offsetY` mirror this shim derives them from) must be live
+/// getters over the current scroll position, not a value frozen at
+/// construction — the same `MouseEvent` instance re-read after a scroll must
+/// see the new sum, exactly `tests/wpt/css/cssom-view/mouseEvent.html`.
+#[test]
+fn mouseevent_x_y_alias_and_live_page_coords_track_scroll() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var e = new MouseEvent('mousedown', {clientX: 10, clientY: 20});").unwrap();
+    let r = rt.eval(
+        "e.x === 10 && e.y === 20 && \
+                 e.pageX === 10 && e.pageY === 20 && \
+                 e.offsetX === e.pageX && e.offsetY === e.pageY"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+
+    rt.set_page_scroll_y(5000.0);
+    let r = rt.eval(
+        "e.pageX === 10 && e.pageY === 5020 && \
+                 e.offsetX === e.pageX && e.offsetY === e.pageY"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-558: an explicit `pageX`/`pageY`/`offsetX`/`offsetY` in the init dict
+/// must win and stay static — only the *default* (derived-from-client) case
+/// is a live getter.
+#[test]
+fn mouseevent_explicit_page_offset_stays_static_across_scroll() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var e = new MouseEvent('mousedown', \
+                 {clientX: 10, clientY: 20, pageX: 99, pageY: 88, offsetX: 1, offsetY: 2});"
+    ).unwrap();
+    rt.set_page_scroll_y(5000.0);
+    let r = rt.eval(
+        "e.pageX === 99 && e.pageY === 88 && e.offsetX === 1 && e.offsetY === 2"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn keyboardevent_instanceof_chain() {
     let rt = v8_runtime_with_dom(make_doc());

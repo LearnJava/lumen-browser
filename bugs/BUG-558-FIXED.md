@@ -1,6 +1,6 @@
 # BUG-558: `MouseEvent` is missing the `x`/`y` aliases, and `pageX`/`pageY` (hence `offsetX`/`offsetY`) are frozen at construction instead of live getters over current scroll position
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-14 (P3)
 **Дата:** 2026-08-04
 **Компонент:** js (`crates/js/src/dom.rs:3441-3460` — the `MouseEvent` constructor)
 **Найден:** P2, WPT-RUN-3 срез 39 (`css/cssom-view`), 2026-08-04
@@ -64,3 +64,33 @@ Two independent gaps in the `MouseEvent` constructor (`dom.rs:3441-3460`):
    overridden via the init dict (per spec, an explicit `init.pageX` should
    still win and stay static — check the exact algorithm before
    implementing to avoid breaking that case).
+
+## Исправление (P3, 2026-09-14)
+
+Код давно переехал из `dom.rs:3441-3460` в
+`crates/js/src/shim/web_api_shim_mid.js`'s `MouseEvent` constructor (шимы
+вынесены в JS-файлы дорожкой SPLIT-JS, заявка описывала старое место).
+
+- `x`/`y` — плоские алиасы `clientX`/`clientY`, назначенные один раз в
+  конструкторе (безопасно: `clientX`/`clientY` сами нигде не мутируются
+  после создания события).
+- `pageX`/`pageY` — собственные (`Object.defineProperty(this, …)`) геттеры,
+  вычисляющие `this.clientX + (this.view || window).scrollX` /
+  `this.clientY + (this.view || window).scrollY` при каждом обращении,
+  если только `init.pageX`/`init.pageY` не заданы явно (тогда — статичное
+  значение, как того требует спецификация).
+- `offsetX`/`offsetY` — тем же способом зеркалят `pageX`/`pageY`
+  (вендоренный `mouseEvent.html` требует именно `offsetX === pageX`, не
+  расчёт от padding-box цели — тот алгоритм CSSOM View за пределами этой
+  заявки).
+
+Два новых теста в `crates/js/src/dom/tests/v8_event_classes.rs`:
+`mouseevent_x_y_alias_and_live_page_coords_track_scroll` (через
+`rt.set_page_scroll_y`, дословно сценарий WPT-файла — `pageY` на том же
+объекте события меняется после скролла) и
+`mouseevent_explicit_page_offset_stays_static_across_scroll` (явные
+`init.pageX`/`pageY`/`offsetX`/`offsetY` остаются статичными).
+
+`cargo test -p lumen-js --features v8-backend` 3630/3630 + 116/116,
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` чист.
