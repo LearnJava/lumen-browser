@@ -371,13 +371,22 @@ impl IncrementalTreeBuilder {
 
     /// `on_token` для [`feed`][Self::feed]/[`feed_bytes`][Self::feed_bytes]/
     /// [`finish`][Self::finish]: применяет токен к дереву, затем сообщает
-    /// [`PushTokenizer`] через возврат, форбидит ли *текущий* (только что
-    /// открытый этим токеном, если это был `StartTag`) контекст
-    /// RAWTEXT/RCDATA — см. [`current_context_forbids_text_only`]
-    /// [Self::current_context_forbids_text_only].
-    fn apply_token_for_stream(&mut self, token: Token) -> bool {
+    /// [`PushTokenizer`] через возврат два сигнала, оба пересчитанные заново
+    /// после этого токена — тот же приём, каким `run_pull` пере-выводит
+    /// `cdata_allowed` после каждого токена в pull-режиме:
+    ///
+    /// * форбидит ли *текущий* (только что открытый этим токеном, если это
+    ///   был `StartTag`) контекст RAWTEXT/RCDATA — см.
+    ///   [`current_context_forbids_text_only`]
+    ///   [Self::current_context_forbids_text_only];
+    /// * станет ли следующий `<![CDATA[` реальной CDATA-секцией — см.
+    ///   [`cdata_sections_allowed`][Self::cdata_sections_allowed]
+    ///   (GAP-XMLDOC срез 15, BUG-685: раньше push-режим никогда не взводил
+    ///   это на `PushTokenizer`, поэтому CDATA в потоковом foreign content
+    ///   всегда уходила в bogus-comment ветку тайминга среза 14).
+    fn apply_token_for_stream(&mut self, token: Token) -> (bool, bool) {
         self.apply_token(token);
-        self.current_context_forbids_text_only()
+        (self.current_context_forbids_text_only(), self.cdata_sections_allowed())
     }
 
     /// Возвращает ссылку на текущее состояние DOM.
@@ -4013,6 +4022,29 @@ mod tests {
         assert_eq!(bytes_1, pull);
         let bytes_2 = parse_feed_bytes_chunks(input, 2).to_string();
         assert_eq!(bytes_2, pull);
+    }
+
+    #[test]
+    fn feed_streams_cdata_inside_svg_foreign_content() {
+        // GAP-XMLDOC срез 15 (BUG-685): before this срез, `PushTokenizer`
+        // never armed `cdata_allowed`, so `<![CDATA[...]]>` inside real
+        // foreign content (`<svg>`, no `xml_mode` needed — plain HTML5
+        // parsing already treats it as foreign) came out as a bogus
+        // comment in the streamed/network path, diverging from `parse`
+        // (pull). `>` inside the section, before the `]]>` terminator,
+        // also exercises `find_safe_split`'s CDATA-aware terminator check.
+        let input = "<html><body><svg><![CDATA[x>y]]></svg></body></html>";
+        let pull = parse(input).to_string();
+        for chunk_size in [1usize, 2, 5, 11, 100] {
+            let chunked = parse_feed_bytes_chunks(input, chunk_size).to_string();
+            assert_eq!(chunked, pull, "chunk_size={chunk_size}");
+        }
+        // Same, split as `&str` chunks через `feed` (не `feed_bytes`).
+        let mut b = IncrementalTreeBuilder::new();
+        let (head, tail) = input.split_at(input.find("x>y").unwrap() + 2);
+        b.feed(head);
+        b.feed(tail);
+        assert_eq!(b.finish().to_string(), pull);
     }
 
     // ──────── <template> element ────────

@@ -44,6 +44,14 @@ pub struct PushTokenizer {
     /// `feed_bytes`-вызова. Максимум 3 байта. Присоединяется к началу
     /// следующего chunk-а в `feed_bytes`.
     partial_utf8: Vec<u8>,
+    /// [`Tokenizer::cdata_allowed`][crate::tokenizer::Tokenizer], перенесённое
+    /// между chunk-ами так же, как `text_only` (GAP-XMLDOC срез 15,
+    /// BUG-685) — только `*_with_context` вызывающие (tree builder) реально
+    /// меняют его через `on_token`'s второй элемент возврата; `feed`/
+    /// `feed_bytes`/`end` без контекста (используются `preload_scanner`,
+    /// которому namespace безразличен) держат его всегда `false`, что
+    /// совпадает с их прежним поведением.
+    cdata_allowed: bool,
 }
 
 impl PushTokenizer {
@@ -54,6 +62,7 @@ impl PushTokenizer {
             text_only: None,
             ended: false,
             partial_utf8: Vec::new(),
+            cdata_allowed: false,
         }
     }
 
@@ -69,7 +78,7 @@ impl PushTokenizer {
         let mut out = Vec::new();
         self.tokenize(false, |tok| {
             out.push(tok);
-            false
+            (false, false)
         });
         out
     }
@@ -84,10 +93,17 @@ impl PushTokenizer {
     /// каждого токена, пока внутренний `Tokenizer` жив, поэтому у
     /// вызывающего есть шанс аннулировать text-only через
     /// [`Tokenizer::cancel_text_only`] прежде, чем тот успеет
-    /// просканировать хоть байт как RAWTEXT. `on_token` возвращает `true`,
+    /// просканировать хоть байт как RAWTEXT. `on_token` возвращает
+    /// `(cancel_text_only, cdata_allowed)`: `cancel_text_only` — `true`,
     /// если text-only, только что выставленный ЭТИМ токеном (не
-    /// self-closing `StartTag`), нужно отменить.
-    pub fn feed_with_context(&mut self, chunk: &str, on_token: impl FnMut(Token) -> bool) {
+    /// self-closing `StartTag`), нужно отменить; `cdata_allowed` — станет
+    /// ли следующий `<![CDATA[` реальной CDATA-секцией, пересчитанное
+    /// после применения ЭТОГО токена — то же «пере-выводить после каждого
+    /// токена», что `run_pull` делает в pull-режиме (GAP-XMLDOC срез 15,
+    /// BUG-685: до этого среза push-режим никогда не взводил
+    /// `cdata_allowed`, поэтому `<![CDATA[` в потоковой foreign content
+    /// всегда уходил в bogus-comment ветку).
+    pub fn feed_with_context(&mut self, chunk: &str, on_token: impl FnMut(Token) -> (bool, bool)) {
         assert!(!self.ended, "feed_with_context() after end()");
         self.buf.push_str(chunk);
         self.tokenize(false, on_token);
@@ -113,14 +129,18 @@ impl PushTokenizer {
         let mut out = Vec::new();
         self.tokenize(false, |tok| {
             out.push(tok);
-            false
+            (false, false)
         });
         out
     }
 
     /// [`feed_bytes`][Self::feed_bytes] variant of
     /// [`feed_with_context`][Self::feed_with_context] — see its docs.
-    pub fn feed_bytes_with_context(&mut self, chunk: &[u8], on_token: impl FnMut(Token) -> bool) {
+    pub fn feed_bytes_with_context(
+        &mut self,
+        chunk: &[u8],
+        on_token: impl FnMut(Token) -> (bool, bool),
+    ) {
         self.decode_bytes_into_buf(chunk);
         self.tokenize(false, on_token);
     }
@@ -201,14 +221,14 @@ impl PushTokenizer {
         let mut out = Vec::new();
         self.tokenize(true, |tok| {
             out.push(tok);
-            false
+            (false, false)
         });
         out
     }
 
     /// [`end`][Self::end] variant of
     /// [`feed_with_context`][Self::feed_with_context] — see its docs.
-    pub fn end_with_context(&mut self, on_token: impl FnMut(Token) -> bool) {
+    pub fn end_with_context(&mut self, on_token: impl FnMut(Token) -> (bool, bool)) {
         self.finalize_buf();
         self.tokenize(true, on_token);
     }
@@ -242,7 +262,7 @@ impl PushTokenizer {
     /// того как вызывающий увидел хотя бы один токен, так что аннулировать
     /// решение было уже некому. Буфер обрезается слева на потреблённую
     /// часть; `text_only` переходит в следующее состояние pull-токенизатора.
-    fn tokenize(&mut self, final_chunk: bool, mut on_token: impl FnMut(Token) -> bool) {
+    fn tokenize(&mut self, final_chunk: bool, mut on_token: impl FnMut(Token) -> (bool, bool)) {
         let safe_end = if final_chunk {
             self.buf.len()
         } else {
@@ -261,20 +281,30 @@ impl PushTokenizer {
 
         let consumed: usize;
         let next_text_only: Option<(String, bool)>;
+        // GAP-XMLDOC срез 15 (BUG-685): переносится между chunk-ами так же,
+        // как `text_only` — обновляется на самом токенизаторе после КАЖДОГО
+        // токена (тот же приём, что `run_pull` для pull-режима), не только
+        // между вызовами `tokenize`.
+        let mut cdata_allowed = self.cdata_allowed;
         {
             let slice = &self.buf[..safe_end];
             let mut tokenizer = Tokenizer::with_state(slice, self.text_only.take());
+            tokenizer.set_cdata_allowed(cdata_allowed);
             while let Some(tok) = tokenizer.next() {
                 let opened_text_only =
                     matches!(&tok, Token::StartTag { self_closing: false, .. });
-                if on_token(tok) && opened_text_only {
+                let (cancel_text_only, next_cdata_allowed) = on_token(tok);
+                if cancel_text_only && opened_text_only {
                     tokenizer.cancel_text_only();
                 }
+                cdata_allowed = next_cdata_allowed;
+                tokenizer.set_cdata_allowed(cdata_allowed);
             }
             consumed = tokenizer.pos();
             next_text_only = tokenizer.text_only_state().cloned();
         }
         self.text_only = next_text_only;
+        self.cdata_allowed = cdata_allowed;
 
         // pull-токенизатор всегда дочитывает slice до конца (он lenient).
         // Поэтому consumed == safe_end. Подстраховка на случай раннего
@@ -328,10 +358,23 @@ impl PushTokenizer {
             // RAWTEXT (`<script>`/`<style>`, decode=false) entity не
             // декодирует — `&amp;` остаётся литералом и в pull, и в push.
             split
+        } else if let Some(open_pos) = last_unterminated_cdata_start(bytes) {
+            // GAP-XMLDOC срез 15 (BUG-685): буквальный `<![CDATA[`, чей `]]>`
+            // ещё не пришёл, занимает ВЕСЬ остаток буфера — CDATA-контент
+            // сам может содержать `<`/`>` (это данные, а не новые
+            // конструкции), поэтому обычный «последний `<`» скан ниже сюда
+            // заходить не должен: он принял бы внутренний `<` за начало
+            // нового тега/комментария и мог бы посчитать буфер «закрытым»
+            // раньше настоящего `]]>` (пример — `<![CDATA[a<b]]>c`: без
+            // этой ветки последний `<` в буфере — тот, что внутри `a<b`, а
+            // не в `<![CDATA[`). Ждать `]]>` всегда безопасно — вопрос
+            // прежний: срез 15 не срезает по первому `>` внутри секции.
+            open_pos
         } else {
             // Data state. Опасные хвосты:
             //   * `<…` без правильного терминатора (любой тег / комментарий
-            //     / DOCTYPE);
+            //     / DOCTYPE — включая уже терминированный `<![CDATA[…]]>`,
+            //     который сюда и не попадает благодаря ветке выше);
             //   * `&…` без `;` (entity, ограничено 32 байтами).
             //
             // Для `<` терминатор зависит от типа конструкции:
@@ -375,6 +418,31 @@ impl Default for PushTokenizer {
     }
 }
 
+/// Ищет байтовое смещение первого литерального (case-sensitive) `<![CDATA[`
+/// в `bytes`, чей `]]>` ещё не пришёл — GAP-XMLDOC срез 15 (BUG-685),
+/// используется `find_safe_split`. Уже терминированные секции пропускаются
+/// (поиск продолжается сразу после их `]]>`), поэтому
+/// `<![CDATA[x]]><![CDATA[y` корректно возвращает позицию ВТОРОГО маркера,
+/// а не первого.
+fn last_unterminated_cdata_start(bytes: &[u8]) -> Option<usize> {
+    const MARKER: &[u8] = b"<![CDATA[";
+    const TERMINATOR: &[u8] = b"]]>";
+    let mut pos = 0;
+    while pos + MARKER.len() <= bytes.len() {
+        let rel = bytes[pos..].windows(MARKER.len()).position(|w| w == MARKER)?;
+        let start = pos + rel;
+        let content_start = start + MARKER.len();
+        match bytes[content_start..].windows(TERMINATOR.len()).position(|w| w == TERMINATOR) {
+            Some(term_rel) => {
+                // Секция уже терминирована — продолжаем поиск за её `]]>`.
+                pos = content_start + term_rel + TERMINATOR.len();
+            }
+            None => return Some(start),
+        }
+    }
+    None
+}
+
 /// Проверяет, закрыта ли конструкция, начинающаяся с `<` в начале
 /// `tail`. Используется `find_safe_split` для решения, безопасно ли
 /// скармливать `tail` pull-токенизатору в текущем виде, или нужно
@@ -382,6 +450,13 @@ impl Default for PushTokenizer {
 ///
 /// Возвращает `true`, если pull-токенизатор сможет завершить
 /// разбор этой конструкции на хвосте `tail` без EOF посредине.
+///
+/// Литеральный (case-sensitive) `<![CDATA[` всегда ждёт `]]>`, независимо
+/// от того, допустима ли сейчас реальная CDATA-секция (GAP-XMLDOC срез 15,
+/// BUG-685) — токен, который делает её допустимой (открывающий `<svg>`/
+/// `<math>`), может обнаружиться позже в ТОМ ЖЕ буфере, до которого этот
+/// статический анализ не заглядывает; ждать дольше здесь всегда безопасно
+/// (тот же консервативный принцип, что у `find_safe_split` в целом).
 fn is_tag_closed(tail: &[u8]) -> bool {
     debug_assert!(tail.first() == Some(&b'<'));
     if tail.len() < 2 {
@@ -393,7 +468,12 @@ fn is_tag_closed(tail: &[u8]) -> bool {
             // Ищем `-->` начиная с позиции 4 (после `<!--`).
             tail.windows(3).skip(4).any(|w| w == b"-->")
         }
-        // `<!DOCTYPE…>`, `<![CDATA[…]]>` и т.п. — терминатор `>`.
+        // Литеральный `<![CDATA[…]]>` — терминатор `]]>`, не первый `>`.
+        // `starts_with` уже требует `tail.len() >= 9`, поэтому неполный
+        // префикс (`<![CDA`) падает в generic-ветку ниже, что верно: без
+        // `>` вообще она и так не «закрыта».
+        b'!' if tail.starts_with(b"<![CDATA[") => tail[9..].windows(3).any(|w| w == b"]]>"),
+        // `<!DOCTYPE…>` и прочее — терминатор `>`.
         b'!' => tail[2..].contains(&b'>'),
         // `</tag…>` или `<tag…>` — терминатор `>`.
         b'/' => tail[2..].contains(&b'>'),
@@ -865,5 +945,148 @@ mod tests {
                 "chunk_size={chunk_size}"
             );
         }
+    }
+
+    // ──────── CDATA в потоковом foreign content (GAP-XMLDOC срез 15) ────────
+
+    /// Обновляет `inside_svg` по StartTag/EndTag `<svg>` в `tok` — общая
+    /// замена для настоящего tree builder-а в этих тестах: `cdata_allowed`
+    /// становится `true` ровно тогда, когда становится `true`
+    /// `IncrementalTreeBuilder::cdata_sections_allowed` для документа с
+    /// одним foreign-элементом верхнего уровня.
+    fn track_svg(tok: &Token, inside_svg: &mut bool) {
+        match tok {
+            Token::StartTag { name, self_closing: false, .. } if name == "svg" => {
+                *inside_svg = true;
+            }
+            Token::EndTag { name } if name == "svg" => *inside_svg = false,
+            _ => {}
+        }
+    }
+
+    /// Токенизирует `input` через `feed_with_context`/`end_with_context`,
+    /// c `cdata_allowed`, реалистично привязанным к тому, открыт ли сейчас
+    /// `<svg>` (GAP-XMLDOC срез 15, BUG-685) — так же, как
+    /// `IncrementalTreeBuilder::apply_token_for_stream` привязывает его к
+    /// `cdata_sections_allowed`.
+    fn tokenize_svg_scoped_cdata_chunked(input: &str, chunk_size: usize) -> Vec<Token> {
+        let mut pt = PushTokenizer::new();
+        let mut out = Vec::new();
+        let mut inside_svg = false;
+        let bytes = input.as_bytes();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let end = (pos + chunk_size).min(bytes.len());
+            pt.feed_with_context(&input[pos..end], |tok| {
+                track_svg(&tok, &mut inside_svg);
+                let cdata_allowed = inside_svg;
+                out.push(tok);
+                (false, cdata_allowed)
+            });
+            pos = end;
+        }
+        pt.end_with_context(|tok| {
+            track_svg(&tok, &mut inside_svg);
+            let cdata_allowed = inside_svg;
+            out.push(tok);
+            (false, cdata_allowed)
+        });
+        out
+    }
+
+    /// Pull-эквивалент [`tokenize_svg_scoped_cdata_chunked`] — то же
+    /// «взвести перед каждым `next()`», что `run_pull` делает через
+    /// `IncrementalTreeBuilder::cdata_sections_allowed`.
+    fn pull_tokens_svg_scoped_cdata(input: &str) -> Vec<Token> {
+        let mut t = Tokenizer::new(input);
+        let mut inside_svg = false;
+        let mut out = Vec::new();
+        loop {
+            t.set_cdata_allowed(inside_svg);
+            match t.next() {
+                Some(tok) => {
+                    track_svg(&tok, &mut inside_svg);
+                    out.push(tok);
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn cdata_inside_svg_opened_in_the_same_stream_matches_pull() {
+        // GAP-XMLDOC срез 15 (BUG-685): `<svg>` opens and the CDATA section
+        // both arrive over the network — `cdata_allowed` must flip to `true`
+        // in response to the `<svg>` StartTag, exactly like pull, not stay
+        // stuck at the stale value from before this chunk.
+        let input = "<svg><![CDATA[a<b]]>c</svg>";
+        // `normalize` — потому что pull может само по себе разбить смежные
+        // Text-токены на несколько (CDATA-контент и последующий Data-текст
+        // — разные emission-события даже в pull), и push волен резать их
+        // по-своему на chunk boundary; тождественность гарантируется на
+        // уровне text-node coalescing в tree builder-е (см. модульный
+        // докстринг `tree_builder.rs`), не на уровне сырых токенов.
+        let pull = normalize(&pull_tokens_svg_scoped_cdata(input));
+        for chunk_size in [1usize, 2, 3, 5, 100] {
+            let push = normalize(&tokenize_svg_scoped_cdata_chunked(input, chunk_size));
+            assert_eq!(push, pull, "chunk_size={chunk_size}");
+        }
+    }
+
+    #[test]
+    fn cdata_with_gt_before_terminator_survives_chunk_split_right_after_gt() {
+        // Regression: a bare `>` inside CDATA content, landing right at a
+        // chunk boundary, must not be mistaken for the section's terminator
+        // by `find_safe_split` — only `]]>` ends a real CDATA section.
+        // Before срез 15's CDATA-aware `is_tag_closed` branch, the generic
+        // `<!...>` case used `contains(&b'>')`, so this exact split would
+        // have looked "safe" and truncated the section early. The `<svg>`
+        // opens in the SAME first chunk as the truncation point, which is
+        // exactly the case the stale-`self.cdata_allowed` heuristic can't
+        // see coming — hence `is_tag_closed` must ignore it entirely.
+        let input = "<svg><![CDATA[x>y]]>z</svg>";
+        let split = input.find("x>y").unwrap() + 2; // сразу после "x>"
+        let mut pt = PushTokenizer::new();
+        let mut out = Vec::new();
+        let mut inside_svg = false;
+        pt.feed_with_context(&input[..split], |tok| {
+            track_svg(&tok, &mut inside_svg);
+            let cdata_allowed = inside_svg;
+            out.push(tok);
+            (false, cdata_allowed)
+        });
+        pt.feed_with_context(&input[split..], |tok| {
+            track_svg(&tok, &mut inside_svg);
+            let cdata_allowed = inside_svg;
+            out.push(tok);
+            (false, cdata_allowed)
+        });
+        pt.end_with_context(|tok| {
+            track_svg(&tok, &mut inside_svg);
+            let cdata_allowed = inside_svg;
+            out.push(tok);
+            (false, cdata_allowed)
+        });
+        assert_eq!(normalize(&out), normalize(&pull_tokens_svg_scoped_cdata(input)));
+    }
+
+    #[test]
+    fn cdata_disallowed_context_still_becomes_bogus_comment_when_streamed() {
+        // `on_token` reports `cdata_allowed = false` throughout (adjusted
+        // current node never foreign) — streamed `<![CDATA[` must fall back
+        // to the same bogus-comment shape as pull, not silently vanish.
+        let input = "<![CDATA[ignore]]><p>x</p>";
+        let mut pt = PushTokenizer::new();
+        let mut out = Vec::new();
+        pt.feed_with_context(input, |tok| {
+            out.push(tok);
+            (false, false)
+        });
+        pt.end_with_context(|tok| {
+            out.push(tok);
+            (false, false)
+        });
+        assert_eq!(normalize(&out), pull_tokens(input));
     }
 }
