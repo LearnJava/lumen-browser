@@ -1354,6 +1354,45 @@ _lumen_install_reflection(HTMLImageElement.prototype, [
     });
 });
 
+// BUG-569: `decode()` (HTML LS §4.8.4.4) — settles off the same `_lumen_img_state`
+// BUG-630 populates, so it never needs its own decode pipeline: a node already
+// `complete` resolves/rejects synchronously (rejects only on the same
+// zero-dimensions shape `_lumen_fire_image_error` writes, mirroring how
+// `complete`'s getter above already treats that as the failure case); a node
+// still in flight waits for the `load`/`error` event `_lumen_fire_image_load`/
+// `_lumen_fire_image_error` dispatch once the shell's pipeline settles it.
+HTMLImageElement.prototype.decode = function decode() {
+    var self = this;
+    var n = _lumen_reflect_nid(self);
+    return new Promise(function(resolve, reject) {
+        function trySettle() {
+            var st = (n === -1) ? undefined : _lumen_img_state[n];
+            if (!st || !st.complete) { return false; }
+            if (st.naturalWidth === 0 && st.naturalHeight === 0) {
+                reject(new DOMException('Failed to decode image', 'EncodingError'));
+            } else {
+                resolve();
+            }
+            return true;
+        }
+        // n === -1: not a live element (e.g. called on a detached prototype
+        // receiver) — no load/error event will ever come for it.
+        if (n === -1) {
+            reject(new DOMException('Failed to decode image', 'EncodingError'));
+            return;
+        }
+        if (trySettle()) { return; }
+        function onLoad() { cleanup(); trySettle(); }
+        function onError() { cleanup(); trySettle(); }
+        function cleanup() {
+            self.removeEventListener('load', onLoad);
+            self.removeEventListener('error', onError);
+        }
+        self.addEventListener('load', onLoad);
+        self.addEventListener('error', onError);
+    });
+};
+
 // BUG-450: `width`/`height` are not a global attribute pair — until the canvas
 // members moved onto `HTMLCanvasElement.prototype` they were served to EVERY
 // element by the shared wrapper table, which is why `document.createElement('div')

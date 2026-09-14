@@ -12,6 +12,7 @@
 mod activation_target;
 mod bug518_mixin_cssom;
 mod bug534_highlight_api;
+mod bug569_img_decode;
 mod indexed_db;
 mod link_activation;
 mod no_automation_markers;
