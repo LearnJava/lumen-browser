@@ -1,6 +1,6 @@
 # BUG-552: `document.compatMode` (and sibling document metadata properties) missing on the live `document` — only defined on synthetically-built detached documents
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-358](BUG-358-FIXED.md)
 **Дата:** 2026-08-04
 **Компонент:** js (`crates/js/src/dom.rs:4780-4827` — `_lumen_build_detached_document`)
 **Найден:** WPT-RUN-3 срез 34 (`ROADMAP.md`) — массовый прогон `css/css-position`
@@ -37,3 +37,23 @@ document) for their containing-block-height special case to apply.
 1 file / 3 subtests in this slice. Likely affects any WPT test using
 `document.compatMode` as a quirks-mode feature-detect (a common WPT idiom
 across `quirks/` subdirectories in several categories, not searched here).
+
+## Ревизия P3 2026-09-14 — закрыт как дубликат
+
+Заявка (2026-08-04) описывает `dom.rs` до фикса [BUG-358](BUG-358-FIXED.md)
+(2026-08-09), который сделал ровно это: `compatMode`/`characterSet`/
+`charset`/`inputEncoding`/`contentType`/`URL`/`documentURI` — все на живом
+`document` (`crates/js/src/shim/web_api_shim_mid.js:9800-9810`), не только на
+отсоединённом. Само сомнение заявки — «даже сам детач-стаб — хардкод
+`"CSS1Compat"`, doctype-сниффинга нигде нет» — тоже больше не верно:
+`_lumen_get_document_compat_mode` (`crates/js/src/v8_runtime/install/dom_core.rs:92-98`)
+читает `Document::mode()`, реальный флаг quirks-режима, который
+`lumen-html-parser` вычисляет из DOCTYPE через `set_mode` (не хардкод).
+Живая проверка через `cargo test -p lumen-js --features v8-backend bug552`
+(7 новых тестов, `dom/tests/v8_bug552_document_metadata.rs`): все семь
+свойств присутствуют на живом `document`, `compatMode` корректно даёт
+`"BackCompat"` в `DocumentMode::Quirks`, `"CSS1Compat"` в `NoQuirks`/
+`LimitedQuirks`, `characterSet`/`charset`/`inputEncoding` совпадают друг с
+другом и с `Document::character_set`, `contentType` — с `Document::content_type`,
+`URL`/`documentURI` — с URL страницы. Заявка не была сверена после фикса
+BUG-358 — тот же класс дрейфа, что у BUG-482/512/523/533/534/544/555.
