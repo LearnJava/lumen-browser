@@ -1,11 +1,11 @@
 # BUG-567: `HTMLTitleElement.prototype.text` does not exist
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — `HTMLTitleElement` is registered
-as an interface/tag-constructor name (`dom.rs:4614`, `dom.rs:4648`: `'TITLE':
-HTMLTitleElement`) but nothing ever defines a `.text` getter/setter on its
-prototype or instances; contrast `document.title`, which does have a real
-`get`/`set` pair at `dom.rs:7152-7153`)
+**Статус:** FIXED 2026-09-14
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — `dom.rs` с тех
+пор расщеплён на `crates/js/src/dom/*`; `HTMLTitleElement` регистрируется как
+интерфейс/тег-конструктор в общем цикле генерации HTML-интерфейсов, но
+ничего не определяло `.text` на его прототипе; contrast `document.title`,
+у которого уже был настоящий `get`/`set`)
 **Найден:** P2, WPT-VENDOR-html-semantics-document-metadata, 2026-08-04
 
 ## Симптом
@@ -49,3 +49,17 @@ fails identically on `undefined`. `title-multiple-elements.html` and
 run (timed out on an unrelated `module 'foo' not found` error before
 reaching the relevant assertions) and should be re-checked once this is
 fixed.
+
+## Исправление
+
+`HTMLTitleElement.prototype.text` определён в `web_api_shim_mid.js` сразу
+после генерации HTML-интерфейсов: геттер суммирует `data` только прямых
+дочерних узлов с `nodeType === 3` (используя уже существующие `childNodes`/
+`nodeType`/`data`, без новых нативных привязок), сеттер делегирует в
+`textContent` — ровно алгоритм спеки. Регрессия —
+`crates/js/src/dom/tests/v8_bug567_title_text.rs` (3 теста: обычный текстовый
+child, смесь комментарий+текст+вложенный элемент — дословная транскрипция
+`title.text-01.html`, сеттер не нормализует пробелы — транскрипция
+`title.text-03.html`). `cargo test -p lumen-js --features v8-backend`:
+3640/3640 (было 3637). `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` чист.

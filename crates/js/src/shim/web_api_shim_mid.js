@@ -3186,6 +3186,26 @@ DOMImplementation.prototype.constructor = DOMImplementation;
     globalThis[_name] = _ctor;
 });
 
+// BUG-567: HTML LS §4.2.2 `HTMLTitleElement.text` — a legacy IDL attribute
+// (contrast `document.title`, which already has a real getter/setter). On
+// get, concatenates only DIRECT Text-node children's data (not comment nodes,
+// not text nested inside a child element) — `title.text-01.html` exercises
+// exactly this distinction against `textContent`, which walks the whole
+// subtree. On set, spec defers to the `textContent` setter (replace all
+// children with a single Text node).
+Object.defineProperty(HTMLTitleElement.prototype, 'text', {
+    get: function() {
+        var kids = this.childNodes;
+        var out = '';
+        for (var i = 0; i < kids.length; i++) {
+            if (kids[i].nodeType === 3) out += kids[i].data;
+        }
+        return out;
+    },
+    set: function(v) { this.textContent = String(v); },
+    enumerable: true, configurable: true,
+});
+
 // BUG-322: tag name (as returned by `_lumen_get_tag_name`, always upper-cased) →
 // concrete HTML*Element interface global. Tags without a dedicated entry fall back
 // to `HTMLElement.prototype` in `_lumen_element_prototype_for` below, matching HTML
