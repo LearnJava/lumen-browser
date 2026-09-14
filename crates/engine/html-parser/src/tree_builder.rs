@@ -1252,7 +1252,9 @@ impl IncrementalTreeBuilder {
             }
             // <table>.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "table" => {
                 if self.doc.mode() != DocumentMode::Quirks && self.has_element_in_button_scope("p")
                 {
@@ -1260,18 +1262,32 @@ impl IncrementalTreeBuilder {
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.insertion_mode = InsertionMode::InTable;
+                // GAP-XMLDOC срез 16 (BUG-786): unlike the generic
+                // block-element/heading/`li`/`dt`/`dd` arms above, this used
+                // to push straight onto `open_elements` and ignore
+                // `self_closing` entirely — a self-closing `<table/>` in an
+                // XML-flavoured document stayed open forever, same class of
+                // defect the generic path fixed for `<div/>` (срез 2).
+                self.push_open_element(el, self_closing);
+                if !(self.xml_mode && self_closing) {
+                    self.insertion_mode = InsertionMode::InTable;
+                }
             }
             // <select>.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "select" => {
                 self.reconstruct_active_formatting();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.insertion_mode = InsertionMode::InSelect;
+                // GAP-XMLDOC срез 16 (BUG-786): see the `<table>` arm above —
+                // same self_closing-dropping shape.
+                self.push_open_element(el, self_closing);
+                if !(self.xml_mode && self_closing) {
+                    self.insertion_mode = InsertionMode::InSelect;
+                }
             }
             // <textarea>.
             Token::StartTag {
@@ -1289,7 +1305,9 @@ impl IncrementalTreeBuilder {
             }
             // <button>: если есть в scope, закрыть.
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "button" => {
                 if self.has_element_in_scope("button") {
                     self.generate_implied_end_tags(None);
@@ -1304,7 +1322,9 @@ impl IncrementalTreeBuilder {
                 self.reconstruct_active_formatting();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                // GAP-XMLDOC срез 16 (BUG-786): see the `<table>` arm above —
+                // same self_closing-dropping shape.
+                self.push_open_element(el, self_closing);
             }
             // <p>: ничего особого, но AAA для парсинга `<p>x<div>...`.
             Token::EndTag { ref name } if name == "p" => {
@@ -4830,6 +4850,25 @@ mod tests {
         let body = doc.body().expect("body");
         let children: Vec<NodeId> = doc.get(body).children.clone();
         assert_eq!(children.len(), 3, "three self-closed divs must be siblings: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_table_select_button_do_not_nest_siblings() {
+        // GAP-XMLDOC срез 11's remeasure found 0 corpus hits for self-closing
+        // `<table/>`/`<select/>`/`<button/>` and left them unproven. The
+        // self-closing branch that fixed `<div/>` above (`push_open_element`,
+        // `self_closing && self.xml_mode`) is tag-name-agnostic — it was never
+        // actually table/select/button-blind, just never exercised by a test.
+        let doc =
+            parse_xml_flavoured(r#"<table class="a"/><select class="b"/><button class="c"/>"#);
+        let body = doc.body().expect("body");
+        let children: Vec<NodeId> = doc.get(body).children.clone();
+        assert_eq!(
+            children.len(),
+            3,
+            "self-closed table/select/button must be siblings, not nested: {}",
+            doc
+        );
     }
 
     #[test]
