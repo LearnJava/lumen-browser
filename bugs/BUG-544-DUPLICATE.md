@@ -1,7 +1,17 @@
 # BUG-544: `Element.prototype.animate`/`getAnimations` don't exist — Web Animations API is wired as own-instance properties, so `'animate' in Element.prototype` (a standard WPT feature-detection idiom) always reports `false`
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-463](BUG-463-FIXED.md)
 **Дата:** 2026-08-03
+
+**Ревизия P3 2026-09-14:** тот же механизм и та же карточка, что [BUG-463](BUG-463-FIXED.md)
+(найден на день раньше, WPT-RUN-3 срез 2, `'animate' in Element.prototype`
+через `_lumen_build_element`'s own-instance assignment) — исправлен там
+2026-09-01 переносом `animate`/`getAnimations` на `Element.prototype` через
+`Object.defineProperty` (`crates/js/src/shim/web_api_shim_mid.js:7791-7798`).
+Подтверждено на текущем `main`: `cargo test -p lumen-js --features
+v8-backend element_animate` 5/5 OK, включая регрессионные
+`element_animate_visible_on_element_prototype`/
+`element_animate_non_enumerable_and_element_only`. Закрыт как дубликат.
 **Компонент:** js (`crates/js/src/dom.rs:6602-6607` — `_lumen_make_element` element factory)
 **Найден:** WPT-RUN-3 срез 31 (`ROADMAP.md`) — массовый прогон `css/css-transforms`+`css/css-fonts`+`css/css-ui`+`css/css-text`+`css/css-flexbox`
 
