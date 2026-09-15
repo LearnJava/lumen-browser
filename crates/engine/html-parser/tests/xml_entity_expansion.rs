@@ -93,6 +93,91 @@ fn undeclared_entity_reference_stays_literal() {
     );
 }
 
+/// GAP-XMLDOC срез 30 (BUG-786): a CDATA section is literal character data
+/// (XML §2.7) — the one construct whose whole purpose is that `&` and `<`
+/// inside it are *not* markup. Before this срез the entity pre-pass rewrote
+/// its contents like any other text, so `<![CDATA[&t;]]>` built the `<i>`
+/// element the author had explicitly escaped.
+#[test]
+fn entity_reference_inside_cdata_section_stays_literal() {
+    let doc = parse_xml_flavoured(
+        r#"<!DOCTYPE html [
+<!ENTITY t "<i>M</i>">
+]>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p id="a"><![CDATA[x&t;y]]></p></body></html>"#,
+    );
+    let p = find_node(&doc, doc.root(), "p").unwrap_or_else(|| panic!("<p>: {doc}"));
+    assert_eq!(find_node(&doc, p, "i"), None, "CDATA content must not become markup: {doc}");
+    let text = doc.get(p).children.first().copied().unwrap_or_else(|| panic!("text child: {doc}"));
+    assert!(
+        matches!(&doc.get(text).data, NodeData::Text(t) if t == "x&t;y"),
+        "CDATA content must survive verbatim: {doc}"
+    );
+}
+
+/// Same root as the CDATA case, and the one that can execute code: a comment's
+/// content is not parsed for entity references (XML §2.5), but the pre-pass
+/// used to expand them — so a replacement text carrying `-->` closed the
+/// comment early and the rest of it landed in the document as live markup.
+#[test]
+fn entity_reference_inside_comment_cannot_inject_markup() {
+    let doc = parse_xml_flavoured(
+        r#"<!DOCTYPE html [
+<!ENTITY t "--><script>BOOM</script><!--">
+]>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><!-- &t; --><p id="a">z</p></body></html>"#,
+    );
+    assert_eq!(
+        find_node(&doc, doc.root(), "script"),
+        None,
+        "a comment must not be able to inject a <script>: {doc}"
+    );
+}
+
+/// A processing instruction's content is likewise not parsed for references
+/// (XML §2.6) — and since срез 27 wired `<?xml-stylesheet href=…?>` into the
+/// cascade, expanding one there would have fetched a URL the document never
+/// literally contained.
+#[test]
+fn entity_reference_inside_processing_instruction_stays_literal() {
+    let doc = parse_xml_flavoured(
+        r#"<!DOCTYPE html [
+<!ENTITY h "other.css">
+]>
+<?xml-stylesheet type="text/css" href="&h;"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p id="a">z</p></body></html>"#,
+    );
+    let pi = doc
+        .get(doc.root())
+        .children
+        .iter()
+        .copied()
+        .find(|&c| matches!(&doc.get(c).data, NodeData::ProcessingInstruction { .. }))
+        .unwrap_or_else(|| panic!("PI node: {doc}"));
+    let NodeData::ProcessingInstruction { data, .. } = &doc.get(pi).data else {
+        panic!("PI node: {doc}")
+    };
+    assert!(data.contains("&h;"), "PI data must stay literal, got {data:?}: {doc}");
+}
+
+/// XML §4.4.2: an entity's replacement text is itself parsed, so a reference
+/// inside it resolves too. A single non-recursive pass left `&b;` as text.
+#[test]
+fn nested_entity_reference_expands_to_markup() {
+    let doc = parse_xml_flavoured(
+        r#"<!DOCTYPE html [
+<!ENTITY c "<span id='deep'>D</span>">
+<!ENTITY b "&c;">
+<!ENTITY a "&b;">
+]>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p id="a">&a;</p></body></html>"#,
+    );
+    let p = find_node(&doc, doc.root(), "p").unwrap_or_else(|| panic!("<p>: {doc}"));
+    let span = find_node(&doc, p, "span").unwrap_or_else(|| panic!("<span>: {doc}"));
+    assert_eq!(first_element_child(&doc, p), Some(span), "chain must resolve: {doc}");
+    assert_eq!(doc.get(span).get_attr("id"), Some("deep"));
+}
+
 #[test]
 fn plain_html_document_is_unaffected() {
     // Regression: `parse` (non-XML-flavoured) must never consult this
