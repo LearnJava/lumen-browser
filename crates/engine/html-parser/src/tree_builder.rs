@@ -4505,6 +4505,24 @@ mod tests {
     }
 
     #[test]
+    fn iframe_noembed_xmp_content_stays_inert_text() {
+        // BUG-983: before the tokenizer fix, markup inside these RAWTEXT
+        // elements became live DOM instead of a single text node.
+        for tag in ["iframe", "noembed", "xmp"] {
+            let doc = parse(&format!("<{tag}><div id=\"lost\">abc</div></{tag}>"));
+            let host = find_element(&doc, tag).unwrap_or_else(|| panic!("{tag} element: {doc}"));
+            let has_live_div = doc.get(host).children.iter().any(|&c| {
+                matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "div")
+            });
+            assert!(!has_live_div, "{tag}: nested markup must not become a live element: {doc}");
+            let has_text = doc.get(host).children.iter().any(|&c| {
+                matches!(&doc.get(c).data, NodeData::Text(s) if s.contains("lost"))
+            });
+            assert!(has_text, "{tag}: nested markup must survive as literal text: {doc}");
+        }
+    }
+
+    #[test]
     fn frameset_noframes_content_raw() {
         // <noframes> inside <frameset> is parsed as raw text via InHead routing.
         let doc = parse("<frameset><frame><noframes>fallback</noframes></frameset>");
@@ -5398,6 +5416,21 @@ mod tests {
             unreachable!()
         };
         assert_eq!(name.namespace, Namespace::Html, "span under desc: {doc}");
+    }
+
+    #[test]
+    fn svg_desc_noembed_stays_rawtext() {
+        // WPT html/syntax/parsing/html-integration-point.html "SVG desc
+        // should be an HTML integration point" — regression for BUG-983:
+        // before the RAWTEXT table fix, <noembed> inside the integration
+        // point's HTML content decoded entities instead of leaving them
+        // literal.
+        let doc = parse("<svg><desc><noembed>&lt;/noembed&gt;&lt;img></noembed></desc></svg>");
+        let noembed = find_element(&doc, "noembed").expect("noembed element");
+        let text = doc.get(noembed).children.iter().find_map(|&c| {
+            if let NodeData::Text(s) = &doc.get(c).data { Some(s.clone()) } else { None }
+        });
+        assert_eq!(text.as_deref(), Some("&lt;/noembed&gt;&lt;img>"), "{doc}");
     }
 
     #[test]
