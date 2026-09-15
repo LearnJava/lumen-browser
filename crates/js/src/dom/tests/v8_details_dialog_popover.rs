@@ -50,6 +50,74 @@ fn toggle_attribute_force_false() {
                  el.toggleAttribute('hidden', false) === false && !el.hasAttribute('hidden')"));
 }
 
+// ── BUG-594: `hidden` tristate reflection ────────────────────────────────
+
+#[test]
+fn hidden_getter_until_found_case_insensitive() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('hidden', 'UNTIL-FOUND'); \
+                 el.hidden === 'until-found'"));
+}
+
+#[test]
+fn hidden_getter_other_value_is_true() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('hidden', 'foo'); \
+                 el.hidden === true"));
+}
+
+#[test]
+fn hidden_getter_absent_is_false() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.hidden === false"));
+}
+
+#[test]
+fn hidden_setter_string_until_found() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.hidden = 'until-found'; \
+                 el.getAttribute('hidden') === 'until-found' && el.hidden === 'until-found'"));
+}
+
+#[test]
+fn hidden_setter_nonempty_string_is_true() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.hidden = 'foo'; \
+                 el.getAttribute('hidden') === '' && el.hidden === true"));
+}
+
+#[test]
+fn hidden_setter_false_removes_attribute() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('hidden', 'until-found'); \
+                 el.hidden = false; \
+                 !el.hasAttribute('hidden') && el.hidden === false"));
+}
+
+#[test]
+fn hidden_setter_number_follows_tobool() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.hidden = 1; \
+                 var a = el.getAttribute('hidden') === '' && el.hidden === true; \
+                 el.hidden = 0; \
+                 var b = !el.hasAttribute('hidden') && el.hidden === false; \
+                 a && b"));
+}
+
 // ── <details>/<summary> + <dialog> tests ─────────────────────────────────
 
 /// Build a doc with <details id="d"><summary id="s">Sum</summary><p>Body</p></details>
