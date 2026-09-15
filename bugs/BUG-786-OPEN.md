@@ -609,3 +609,42 @@ CPU-эталонов (`lumen-driver::cases::snapshot_cpu`, сигнатура и
 как таковая. Оставшиеся необобщённые push-сайты того же семейства —
 `option`/`optgroup` в `mode_in_select` (тоже 0 хитов по корпусу тем же
 грепом) — на следующий срез.
+
+## GAP-XMLDOC срез 20 (2026-09-15): self-closing `<option>`/`<optgroup>` в xml_mode — последний необобщённый push-сайт `mode_in_body`-семейства (`p1-gap-xmldoc-srez20`)
+
+Взял следующую невычеркнутую строку `STATUS-P1.md` (`ROADMAP.md:896`) —
+ровно тот пункт, что срез 18 оставил открытым: `mode_in_select`'s
+`option`/`optgroup` рукава деструктурировали токен без `self_closing` и
+безусловно толкали элемент голым `self.open_elements.push(el)`.
+
+**Корпус снова 0 хитов.** `grep -rlE "<(option|optgroup)([[:space:]][^>]*)?/>"`
+по вендоренному `.xht`/`.xhtml`/`.svg` — **0** совпадений на оба тега, тот
+же случай, что был у `<table>`/`<select>`/`<button>` (срез 16) и у
+`<caption>`/`<colgroup>`/`<tbody>`/`<thead>`/`<tfoot>`/`<tr>` (срез 19):
+структурно идентичный push-сайт того же класса, доказанного уже на
+`<div>`/`<td>`/`<table>`, чинится на основании механизма, не свежей
+корпусной улики.
+
+**Фикс — тот же приём, что срезы 16–19.** Оба рукава переведены на
+`push_open_element(el, self_closing)`. В отличие от `td`/`th`/`caption`,
+здесь не пришлось переключать `insertion_mode` или active-formatting
+условно — `mode_in_select` не меняет insertion mode на `option`/`optgroup`
+и не трогает active-formatting-list вовсе, так что правка ограничена
+самим пуш-вызовом.
+
+С этим срезом закрыт последний известный push-сайт `mode_in_body`/
+table/select-семейства: `docs/engine-gaps.md` больше не перечисляет ни
+одного неизмеренного/неисправленного тега этого класса.
+
+Тест: `xml_flavoured_self_closing_option_optgroup_do_not_nest_siblings`
+(`tree_builder.rs`) — `<optgroup><option/><option/></optgroup>` в
+xml_mode даёт два `<option>`-соседа под одним `<optgroup>`, не вложенные
+друг в друга. `cargo test -p lumen-html-parser --lib` — 476/476 зелёные
+(было 475). `cargo clippy -p lumen-html-parser --all-targets -- -D
+warnings` — чисто. `tree_builder.rs` пересёк собственный baseline (5624
+→ 5657), `scripts/file-size-baseline.tsv` обновлён тем же коммитом
+только для этой строки.
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая — она не закрывается точечными срезами и остаётся GAP-XMLDOC
+как задачей ROADMAP, а не конкретным пунктом-тегом.
