@@ -27,6 +27,33 @@
 //! принимает `&[u8]` и сам буферизует незавершённые UTF-8 последовательности.
 
 use crate::tokenizer::{Token, Tokenizer};
+use crate::xml_entities::{self, PrologScan};
+use std::collections::HashMap;
+
+/// Resolution state of the custom general-entity prolog scan (GAP-XMLDOC
+/// срез 31, BUG-786) — only meaningful while [`PushTokenizer::xml_mode`] is
+/// on; an ordinary HTML5 push parse starts and stays in [`EntityGate::None`]
+/// (never scanned, zero overhead).
+enum EntityGate {
+    /// Still accumulating the prolog, looking for a `<!DOCTYPE … [ … ]>`
+    /// that might declare entities. [`PushTokenizer::tokenize`] does not
+    /// hand anything to the pull tokenizer while this is the state — the
+    /// buffer keeps growing untouched.
+    Scanning,
+    /// Resolved: no custom entities declared for this document (the common
+    /// case) — tokenize normally from here on, exactly as before this срез.
+    None,
+    /// Resolved: this document's internal subset declares entities.
+    /// [`PushTokenizer::tokenize`] withholds the entire buffer from the
+    /// pull tokenizer until `final_chunk` — splicing an expanded
+    /// replacement text into an already-tokenized prefix has no
+    /// well-defined byte offset to resume the buffer drain from, so this
+    /// document falls back to whole-document expansion (like
+    /// `parse_xml_flavoured`, pull mode) at end-of-input instead of
+    /// streaming. Rare in practice — declaring an XML general entity is
+    /// itself a small minority of `.xhtml`/`.xht`/`.svg` documents.
+    Entities(HashMap<String, String>),
+}
 
 /// Push-режим HTML5 токенизатора. См. module-level docs.
 pub struct PushTokenizer {
@@ -57,6 +84,8 @@ pub struct PushTokenizer {
     /// разбора, поэтому переносится в каждый внутренний `Tokenizer`
     /// напрямую из этого поля, не через `on_token`.
     xml_mode: bool,
+    /// GAP-XMLDOC срез 31 (BUG-786) — see [`EntityGate`].
+    entity_gate: EntityGate,
 }
 
 impl PushTokenizer {
@@ -69,13 +98,19 @@ impl PushTokenizer {
             partial_utf8: Vec::new(),
             cdata_allowed: false,
             xml_mode: false,
+            entity_gate: EntityGate::None,
         }
     }
 
     /// Взводит [`xml_mode`][Self::xml_mode] — зовётся один раз, документ
-    /// либо XML-flavoured целиком, либо нет.
+    /// либо XML-flavoured целиком, либо нет. Arms [`EntityGate::Scanning`]
+    /// too (GAP-XMLDOC срез 31) — an ordinary HTML5 push parse never scans
+    /// for declared entities at all.
     pub fn set_xml_mode(&mut self, xml_mode: bool) {
         self.xml_mode = xml_mode;
+        if xml_mode {
+            self.entity_gate = EntityGate::Scanning;
+        }
     }
 
     /// Скармливает chunk токенизатору и возвращает токены, ставшие
@@ -275,6 +310,26 @@ impl PushTokenizer {
     /// решение было уже некому. Буфер обрезается слева на потреблённую
     /// часть; `text_only` переходит в следующее состояние pull-токенизатора.
     fn tokenize(&mut self, final_chunk: bool, mut on_token: impl FnMut(Token) -> (bool, bool)) {
+        if matches!(self.entity_gate, EntityGate::Scanning) {
+            match xml_entities::scan_prolog(&self.buf, final_chunk) {
+                PrologScan::NeedMore => return,
+                PrologScan::NoEntities => self.entity_gate = EntityGate::None,
+                PrologScan::Entities(entities) => self.entity_gate = EntityGate::Entities(entities),
+            }
+        }
+        if let EntityGate::Entities(entities) = &self.entity_gate {
+            if !final_chunk {
+                // Keep buffering raw, unexpanded bytes — see `EntityGate`'s
+                // doc comment for why this document cannot stream.
+                return;
+            }
+            let mut expanded = String::with_capacity(self.buf.len());
+            let mut budget = xml_entities::MAX_ENTITY_EXPANSIONS;
+            xml_entities::expand_into(&mut expanded, &self.buf, entities, 0, &mut budget);
+            self.buf = expanded;
+            self.entity_gate = EntityGate::None;
+        }
+
         let safe_end = if final_chunk {
             self.buf.len()
         } else {

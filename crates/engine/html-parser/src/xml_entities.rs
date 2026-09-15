@@ -45,14 +45,14 @@ fn consume_quoted(s: &str) -> Option<(&str, &str)> {
 /// makes a recursive entity a *fatal* error rather than capping the depth;
 /// a cap is the lenient equivalent that cannot hang, and no real document
 /// nests general entities anywhere near this deep.
-const MAX_ENTITY_DEPTH: usize = 8;
+pub(crate) const MAX_ENTITY_DEPTH: usize = 8;
 
 /// Total number of references this module will expand across one document.
 /// Together with [`MAX_ENTITY_DEPTH`] this bounds the classic "billion
 /// laughs" shape (`<!ENTITY aN "&aN-1;&aN-1;">`), whose output is
 /// exponential in the depth alone. Measured corpus documents expand
 /// single-digit counts; 1x1-green.svg, the densest, expands 10.
-const MAX_ENTITY_EXPANSIONS: usize = 100_000;
+pub(crate) const MAX_ENTITY_EXPANSIONS: usize = 100_000;
 
 /// Longest declared entity name this module accepts, and therefore the
 /// widest window in which a `&` can still be the start of a reference.
@@ -129,13 +129,13 @@ fn parse_declared_entities(input: &str) -> HashMap<String, String> {
     entities
 }
 
-/// Length of the `<!DOCTYPE … >` declaration starting at `s`'s first byte,
-/// internal subset included. Mirrors `Tokenizer::consume_doctype`'s walk
-/// (GAP-XMLDOC срез 21): a `<?x?>`/`<!--x-->`/`<!ENTITY …>` inside `[ … ]`
-/// carries its own `>`, which is not the declaration's end. Unterminated
-/// input yields the whole remaining string, the same lenient stance the
-/// tokenizer takes at EOF.
-fn doctype_declaration_len(s: &str) -> usize {
+/// Checked variant of [`doctype_declaration_len`]: `None` means the
+/// declaration is not yet terminated within `s` (either genuinely
+/// unterminated, or `s` is only a prefix still growing — the caller decides
+/// which). Mirrors `Tokenizer::consume_doctype`'s walk (GAP-XMLDOC срез 21):
+/// a `<?x?>`/`<!--x-->`/`<!ENTITY …>` inside `[ … ]` carries its own `>`,
+/// which is not the declaration's end.
+fn doctype_declaration_len_checked(s: &str) -> Option<usize> {
     const KEYWORD: &str = "<!doctype";
     let mut in_subset = false;
     let mut depth: i32 = 0;
@@ -145,11 +145,18 @@ fn doctype_declaration_len(s: &str) -> usize {
             '<' if in_subset => depth += 1,
             '>' if in_subset && depth > 0 => depth -= 1,
             ']' if in_subset && depth == 0 => in_subset = false,
-            '>' if !in_subset => return KEYWORD.len() + i + c.len_utf8(),
+            '>' if !in_subset => return Some(KEYWORD.len() + i + c.len_utf8()),
             _ => {}
         }
     }
-    s.len()
+    None
+}
+
+/// Length of the `<!DOCTYPE … >` declaration starting at `s`'s first byte,
+/// internal subset included. Unterminated input yields the whole remaining
+/// string, the same lenient stance the tokenizer takes at EOF.
+fn doctype_declaration_len(s: &str) -> usize {
+    doctype_declaration_len_checked(s).unwrap_or(s.len())
 }
 
 /// Length of the construct at `s`'s first byte (always a `<`) **inside which
@@ -169,10 +176,16 @@ fn doctype_declaration_len(s: &str) -> usize {
 /// falling back to per-character scanning: re-entering expansion inside a
 /// construct the tokenizer will itself consume to EOF would reintroduce
 /// exactly the defect this guards against.
+/// Checked variant of `span_to`: `None` if `close` has not arrived yet.
+fn span_to_checked(s: &str, open: &str, close: &str) -> Option<usize> {
+    s[open.len()..].find(close).map(|o| open.len() + o + close.len())
+}
+
+fn span_to(s: &str, open: &str, close: &str) -> usize {
+    span_to_checked(s, open, close).unwrap_or(s.len())
+}
+
 fn opaque_span_len(s: &str) -> Option<usize> {
-    fn span_to(s: &str, open: &str, close: &str) -> usize {
-        s[open.len()..].find(close).map_or(s.len(), |o| open.len() + o + close.len())
-    }
     if s.starts_with("<!--") {
         return Some(span_to(s, "<!--", "-->"));
     }
@@ -191,13 +204,97 @@ fn opaque_span_len(s: &str) -> Option<usize> {
     None
 }
 
+/// Result of [`scan_prolog`] on a possibly-incomplete document prefix.
+pub(crate) enum PrologScan {
+    /// Not enough bytes yet to tell whether a DOCTYPE (and therefore
+    /// entities) is coming — the caller must wait for more input.
+    NeedMore,
+    /// The prolog is over — either the root element started, or a DOCTYPE
+    /// without an internal subset was found — and no entities were
+    /// declared.
+    NoEntities,
+    /// A DOCTYPE internal subset was found and is fully closed; these are
+    /// its declared general entities (possibly empty — e.g. a subset
+    /// holding only comments/PIs).
+    Entities(HashMap<String, String>),
+}
+
+/// Is `prefix` (shorter than `candidate`) still a possible start of
+/// `candidate`, byte-for-byte, case-insensitively? Used to tell "this chunk
+/// boundary cut a recognised construct's opening sequence in half" apart
+/// from "this is definitely something else" without needing a char-boundary
+/// slice — `candidate` is always pure ASCII.
+fn is_prefix_of(prefix: &str, candidate: &str) -> bool {
+    prefix.len() < candidate.len()
+        && candidate.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+/// Scans `buf` — the document read so far, from byte 0 — for XML's prolog
+/// (`Misc* (doctypedecl Misc*)?`, XML §2.8): whitespace, comments and PIs are
+/// skipped, and the first `<!DOCTYPE` found is resolved into its declared
+/// entities via [`parse_declared_entities`]. The first byte that opens
+/// anything else ends the prolog — a DOCTYPE, if any, must precede the root
+/// element, so nothing seen after that point can still declare an entity.
+///
+/// `at_eof` decides how an incomplete-looking tail is read: mid-stream, an
+/// unterminated comment/PI/DOCTYPE (or a bare `<` too short to identify)
+/// might still be completed by the next chunk, so the scan reports
+/// [`PrologScan::NeedMore`] instead of guessing. At real EOF there is no
+/// "more" coming, so the same unterminated tail resolves to `NoEntities` —
+/// matching [`opaque_span_len`]'s "unterminated construct swallows the
+/// rest" stance elsewhere in this module.
+pub(crate) fn scan_prolog(buf: &str, at_eof: bool) -> PrologScan {
+    let mut rest = buf.trim_start();
+    loop {
+        if rest.is_empty() {
+            return if at_eof { PrologScan::NoEntities } else { PrologScan::NeedMore };
+        }
+        if !rest.starts_with('<') {
+            return PrologScan::NoEntities;
+        }
+        if rest.starts_with("<!--") {
+            match span_to_checked(rest, "<!--", "-->") {
+                Some(len) => {
+                    rest = rest[len..].trim_start();
+                    continue;
+                }
+                None => return if at_eof { PrologScan::NoEntities } else { PrologScan::NeedMore },
+            }
+        }
+        if rest.starts_with("<?") {
+            match span_to_checked(rest, "<?", "?>") {
+                Some(len) => {
+                    rest = rest[len..].trim_start();
+                    continue;
+                }
+                None => return if at_eof { PrologScan::NoEntities } else { PrologScan::NeedMore },
+            }
+        }
+        let keyword = b"<!doctype";
+        if rest.len() >= keyword.len() && rest.as_bytes()[..keyword.len()].eq_ignore_ascii_case(keyword) {
+            return match doctype_declaration_len_checked(rest) {
+                Some(_) => PrologScan::Entities(parse_declared_entities(rest)),
+                None => if at_eof { PrologScan::NoEntities } else { PrologScan::NeedMore },
+            };
+        }
+        if is_prefix_of(rest, "<!--") || is_prefix_of(rest, "<!doctype") {
+            return if at_eof { PrologScan::NoEntities } else { PrologScan::NeedMore };
+        }
+        // A bare `<` alone is already a complete, unambiguous prefix of
+        // neither `<!--`/`<!doctype` (both need a second byte, checked
+        // above) nor `<?` (one byte, `starts_with` above already matched it
+        // if so) — so it can only be the root element opening.
+        return PrologScan::NoEntities;
+    }
+}
+
 /// Walks `input`, copying it into `out` while replacing every `&name;`
 /// reference to a declared entity with that entity's replacement text —
 /// which is itself walked the same way, so a chain `&a;` → `&b;` → `<b/>`
 /// resolves to markup (XML §4.4.2 "Included"), bounded by
 /// [`MAX_ENTITY_DEPTH`] and `budget`. Spans listed by [`opaque_span_len`]
 /// are copied verbatim.
-fn expand_into(
+pub(crate) fn expand_into(
     out: &mut String,
     input: &str,
     entities: &HashMap<String, String>,
