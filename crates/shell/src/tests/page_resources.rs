@@ -181,6 +181,37 @@ fn collect_link_hrefs_finds_stylesheet() {
     assert_eq!(only_hrefs, vec!["style.css"]);
 }
 
+/// GAP-XMLDOC срез 27 (BUG-786): `<?xml-stylesheet href="…" type="text/css"?>`
+/// перед `<html>` — единственная точка входа реальной внешней таблицы стилей
+/// в XML-документ (HTML LS не знает этой конструкции вовсе; `<link>` внутри
+/// `<head>` требует уже разобранного дерева, а PI стоит раньше корня). Только
+/// в `parse_xml_flavoured` — обычный `parse()` не создаёт `ProcessingInstruction`
+/// узел вовсе (срез 22/23), так что регрессии на plain HTML не нужно, нечему
+/// регрессировать.
+#[test]
+fn collect_link_hrefs_finds_xml_stylesheet_pi() {
+    let doc = lumen_html_parser::parse_xml_flavoured(
+        "<?xml version=\"1.0\"?><?xml-stylesheet type=\"text/css\" href=\"style.css\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body/></html>",
+    );
+    let mut hrefs = Vec::new();
+    collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _)| h.as_str()).collect();
+    assert_eq!(only_hrefs, vec!["style.css"]);
+}
+
+/// Тот же PI, но `type` — не CSS (или отсутствует `href`, или
+/// `alternate="yes"`) — не должен попадать в каскад, зеркалит гейт
+/// `rel=alternate` у обычного `<link>`.
+#[test]
+fn collect_link_hrefs_ignores_non_css_or_alternate_xml_stylesheet_pi() {
+    let doc = lumen_html_parser::parse_xml_flavoured(
+        "<?xml-stylesheet type=\"text/xsl\" href=\"a.xsl\"?><?xml-stylesheet href=\"alt.css\" alternate=\"yes\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body/></html>",
+    );
+    let mut hrefs = Vec::new();
+    collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
+    assert!(hrefs.is_empty());
+}
+
 /// BUG-804: исход каждого `<link rel=stylesheet>` возвращается по узлам, в
 /// порядке объявления, и провал не выпадает из списка — иначе элементу
 /// негде выстрелить `error`. `samples/` заведомо не содержит этих файлов,

@@ -446,6 +446,55 @@ fn style_element_text(doc: &Document, id: NodeId) -> String {
     out
 }
 
+/// Разобрать псевдо-атрибуты `<?xml-stylesheet ...?>` (`name="value"` /
+/// `name='value'`, XML §2.3 `Attribute`-грамматика без декларации DTD) — та
+/// же синтаксическая форма, что и у обычных XML-атрибутов, но живёт в теле
+/// processing instruction, а не в теге, поэтому обычный аттрибут-парсер
+/// токенизатора сюда не дотягивается.
+fn parse_pi_pseudo_attrs(data: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let bytes = data.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let name_start = i;
+        while i < bytes.len() && bytes[i] != b'=' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if name_start == i {
+            break;
+        }
+        let name = data[name_start..i].to_owned();
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'=' {
+            break;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let Some(&quote) = bytes.get(i).filter(|b| **b == b'"' || **b == b'\'') else {
+            break;
+        };
+        i += 1;
+        let value_start = i;
+        while i < bytes.len() && bytes[i] != quote {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let value = data[value_start..i].to_owned();
+        i += 1;
+        out.push((name, value));
+    }
+    out
+}
+
 /// Собрать `(узел, href, charset-атрибут)` каждого `<link rel=stylesheet>`,
 /// который попадёт в каскад.
 ///
@@ -456,6 +505,27 @@ fn style_element_text(doc: &Document, id: NodeId) -> String {
 /// «determine the fallback encoding» (BUG-509).
 pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String, Option<String>)>, media_ctx: &lumen_css_parser::MediaContext) {
     let node = doc.get(id);
+    if let NodeData::ProcessingInstruction { target, data } = &node.data {
+        if target == "xml-stylesheet" {
+            let pseudo = parse_pi_pseudo_attrs(data);
+            let get = |k: &str| pseudo.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+            let sheet_type = get("type").unwrap_or("text/css");
+            let href = get("href").unwrap_or("");
+            let media = get("media").unwrap_or("");
+            let alternate = get("alternate").unwrap_or("no");
+            // `alternate="yes"` без `<link rel="alternate stylesheet">`-эквивалента
+            // выбора пользователем — тот же принцип, что и обычный alternate
+            // `<link>`: не входит в каскад по умолчанию.
+            if (sheet_type.is_empty() || sheet_type.eq_ignore_ascii_case("text/css"))
+                && !href.is_empty()
+                && !alternate.eq_ignore_ascii_case("yes")
+                && link_media_matches(media, media_ctx)
+            {
+                out.push((id, href.to_owned(), None));
+            }
+        }
+        return;
+    }
     if let NodeData::Element { name, attrs } = &node.data
         && name.local == "link"
     {
