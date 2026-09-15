@@ -1,8 +1,9 @@
 # BUG-588: `window.frameElement` missing entirely (always `undefined`, should be `null` at top level)
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs`/`v8_runtime.rs` — grep for `frameElement` returns zero hits anywhere)
+**Статус:** FIXED
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js`)
 **Найден:** P2, WPT-VENDOR-html-browsers, 2026-08-04
+**Исправлено:** P3, 2026-09-15
 
 ## Симптом
 
@@ -31,3 +32,23 @@ Single missing getter. The rest of the same test file (checking
 `frames[0].frameElement` from inside a nested browsing context) is expected
 to additionally hit the iframe-without-browsing-context limitation once this
 getter exists.
+
+## Исправление
+
+`_lumen_frame_install_hierarchy` (`crates/js/src/frame_bridge.rs`) installs
+the real `frameElement`/`parent`/`top`/`name` getters, but it is only invoked
+from `V8JsRuntime::register_parent_document`/`register_top_document` — i.e.
+only for a JS context that turns out to itself be an embedded frame. A
+top-level page that is never involved in any frame relationship never reaches
+that call, so `window.frameElement` stayed a plain missing property
+(`undefined`) instead of `null`.
+
+Fix: added `window.frameElement = null;` to the unconditional window
+bootstrap in `crates/js/src/shim/web_api_shim_tail_b.js`, right next to the
+existing `window.parent = window;`/`window.frames = window;` defaults. Being
+a plain assignment it is configurable, so `installHierarchyAccessors`'s later
+`Object.defineProperty(window, 'frameElement', ...)` for a real child frame
+still overrides it.
+
+Regression test:
+`crates/js/src/dom/tests/v8_core/mod.rs::frame_element_is_null_at_top_level`.
