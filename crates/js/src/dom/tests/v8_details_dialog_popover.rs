@@ -394,6 +394,61 @@ fn dialog_escape_cancel_preventable() {
         "document.getElementById('dlg').hasAttribute('open')"));
 }
 
+#[test]
+fn dialog_request_close_removes_open() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    assert!(bool_eval(&rt,
+        "var dlg = document.getElementById('dlg'); \
+                 dlg.show(); \
+                 dlg.requestClose(); \
+                 !dlg.hasAttribute('open')"));
+}
+
+#[test]
+fn dialog_request_close_fires_cancel_then_close() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    assert!(bool_eval(&rt,
+        "var dlg = document.getElementById('dlg'); \
+                 var log = []; \
+                 dlg.addEventListener('cancel', function() { log.push('cancel'); }); \
+                 dlg.addEventListener('close', function() { log.push('close'); }); \
+                 dlg.show(); \
+                 dlg.requestClose(); \
+                 log.length === 2 && log[0] === 'cancel' && log[1] === 'close'"));
+}
+
+#[test]
+fn dialog_request_close_sets_return_value() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    assert!(bool_eval(&rt,
+        "var dlg = document.getElementById('dlg'); \
+                 dlg.show(); \
+                 dlg.requestClose('ok'); \
+                 dlg.returnValue === 'ok'"));
+}
+
+#[test]
+fn dialog_request_close_preventable() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    assert!(bool_eval(&rt,
+        "var dlg = document.getElementById('dlg'); \
+                 dlg.addEventListener('cancel', function(e) { e.preventDefault(); }); \
+                 dlg.show(); \
+                 dlg.requestClose(); \
+                 dlg.hasAttribute('open')"));
+}
+
+#[test]
+fn dialog_request_close_noop_when_not_open() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    assert!(bool_eval(&rt,
+        "var dlg = document.getElementById('dlg'); \
+                 var got = false; \
+                 dlg.addEventListener('cancel', function() { got = true; }); \
+                 dlg.requestClose(); \
+                 !got"));
+}
+
 // ── <dialog> focus management tests (HTML LS §6.6.3) ─────────────────────
 
 fn make_dialog_focus_doc() -> Arc<Mutex<Document>> {

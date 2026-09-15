@@ -705,6 +705,28 @@ function _lumen_find_autofocus_in(container_nid) {
     return -1;
 }
 
+// Shared "close the dialog" steps (HTML LS §4.11.7 close()/requestClose()):
+// set returnValue if given, remove open/modal state, pop the modal stack,
+// restore the previously-focused element, fire `close`. Called by both
+// `dialog.close()` and (after a non-prevented `cancel` event) `requestClose()`.
+function _lumen_dialog_close_steps(wrapper, nid, rv) {
+    if (rv !== undefined) { _lumen_wrapper_set_slot(wrapper, '__returnValue__', String(rv)); }
+    _lumen_remove_attr(nid, 'open');
+    _lumen_remove_attr(nid, 'data-lumen-modal');
+    var idx = _lumen_modal_dialog_nids.indexOf(nid);
+    if (idx >= 0) _lumen_modal_dialog_nids.splice(idx, 1);
+    // HTML LS §6.6.3: restore focus to the element that was focused before open.
+    var prev = _lumen_dialog_prev_focus[nid];
+    delete _lumen_dialog_prev_focus[nid];
+    if (prev !== undefined && prev !== -1) {
+        _lumen_request_focus(prev);
+    } else {
+        _lumen_request_blur();
+    }
+    var closeEvt = new Event('close', { bubbles: false, cancelable: false });
+    _lumen_dispatch(nid, closeEvt);
+}
+
 // ── Focus management (HTML LS §6.6) ──────────────────────────────────────────
 // BUG-381. The shell owns the real focus state (`Shell.focused_node` — it feeds
 // `:focus` matching, keyboard/IME routing and the platform a11y bridge) and

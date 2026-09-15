@@ -6596,21 +6596,17 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         close: function(rv) { var nid = this.__nid__;
             if (_lumen_get_attr(nid, 'open') === undefined) return;
-            if (rv !== undefined) { _lumen_wrapper_set_slot(this, '__returnValue__', String(rv)); }
-            _lumen_remove_attr(nid, 'open');
-            _lumen_remove_attr(nid, 'data-lumen-modal');
-            var idx = _lumen_modal_dialog_nids.indexOf(nid);
-            if (idx >= 0) _lumen_modal_dialog_nids.splice(idx, 1);
-            // HTML LS §6.6.3: restore focus to the element that was focused before open.
-            var prev = _lumen_dialog_prev_focus[nid];
-            delete _lumen_dialog_prev_focus[nid];
-            if (prev !== undefined && prev !== -1) {
-                _lumen_request_focus(prev);
-            } else {
-                _lumen_request_blur();
+            _lumen_dialog_close_steps(this, nid, rv);
+        },
+        // HTML LS §4.11.7: fires a cancelable `cancel` event first; only runs
+        // the normal close steps (see close()) if it isn't prevented.
+        requestClose: function(rv) { var nid = this.__nid__;
+            if (_lumen_get_attr(nid, 'open') === undefined) return;
+            var cancelEvt = new Event('cancel', { bubbles: false, cancelable: true });
+            var notPrevented = _lumen_dispatch(nid, cancelEvt);
+            if (notPrevented) {
+                _lumen_dialog_close_steps(this, nid, rv);
             }
-            var closeEvt = new Event('close', { bubbles: false, cancelable: false });
-            _lumen_dispatch(nid, closeEvt);
         },
         // HTML Popover API (WHATWG HTML §6.12)
         get popover() { var nid = this.__nid__;
