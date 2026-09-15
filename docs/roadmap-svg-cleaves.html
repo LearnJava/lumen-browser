@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-15",
  "counts": {
-  "open": 348,
+  "open": 350,
   "fixed": 651,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 999,
+ "total_bugs": 1001,
  "phases": [
   {
    "id": "P0",
@@ -6894,6 +6894,16 @@
        "bugs": [
         "BUG-584"
        ]
+      },
+      {
+       "id": "GAP-ORIGIN",
+       "title": "GAP: `Origin` WebIDL-глобал (tuple/opaque происхождение, cross-origin проверки, PSL same-site) отсутствует целиком",
+       "status": "planned",
+       "size": "M",
+       "note": "`Origin` WebIDL-глобал (`Origin.from()`, `new Origin()`, `.opaque`, `.isSameOrigin()`, `.isSameSite()`, HTML LS §origin-2) не реализован вовсе — `grep` по `crates/js/src/dom.rs` и шим-файлам на `Origin` вне комментариев даёт ноль. Не одна недостающая привязка, шесть переплетённых пробелов: (1) самого понятия opaque-происхождения в JS-слое нет — `_lumen_parse_url` (`crates/js/src/shim/url_parse_shim.js:43`), источник `URL.prototype.origin`/`Location.prototype.origin`, всегда даёт непустую строку `protocol + '//' + host`, даже для `file:`/`data:`/`blob:`; верное opaque/tuple различение есть только на Rust-стороне (`origin_for_url`, `crates/js/src/file_input.rs:82-100`) и в JS не проброшено; (2) `.isSameSite()` требует PSL-aware registrable domain — `lumen_core::ext::PublicSuffixList`/`PslProvider` (`crates/storage/src/psl.rs`) недостижимы из `crates/js` без циклической зависимости (`crates/storage` уже зависит от `lumen-js`), нужен новый нативный биндинг тем же DI-паттерном, что `AudioPlaybackProvider` (`crates/js/src/audio_element.rs:44-84` + `crates/shell/src/window_mode.rs:62`); (3) `Origin.from(Window)`/`Origin.from(MessageEvent)` обязаны бросать `TypeError` на cross-origin/sandboxed фреймах и окнах (`origin-from-window.window.js`, `origin-from-messageevent.window.js`) — упирается в модель same-origin-domain/sandboxing, которой для этого API ещё нет; (4) конструированные `MessageEvent`/`ExtendableMessageEvent` обязаны давать `Origin.from()` бросить (`origin-from-messageevent.window.js:4-7`, `origin-from-extendablemessageevent.any.js:15-18`) — нужен внутренний слот «настоящего» origin отдельно от видимого `.origin`; (5) `Origin` обязан работать и в Worker-скоупе (`origin-from-worker.window.js`) — установка в оба шима (`web_api_shim()`/`worker_exposed_shim()`, `crates/js/src/dom.rs:496-519`); (6) `Origin.from(HyperlinkElementUtils)` цепляет уже отдельно заявленный пробел `SVGAnimatedString.baseVal` на `<a href>`/`xlink:href`. 181 сабтест, самодостаточно `html/browsers/origin/api/`. Найден P2, WPT-VENDOR-html-browsers, 2026-08-04; реклассифицировано из BUG-585 2026-09-15 (P3) по тому же правилу, что BUG-553/554/562/568/583/584 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект).",
+       "bugs": [
+        "BUG-585"
+       ]
       }
      ]
     },
@@ -9524,6 +9534,20 @@
    "status": "open",
    "title": "`zoom: calc(1 + (sign(1em - 1px) * 0.5))` — весь `calc()` с `sign()` внутри отбрасывается как невалидный (`isn't valid in 'zoom'`), `zoom` остаётся на дефолте в…",
    "component": "css-parser (`crates/engine/layout/src/style/cascade.rs::parse_zoom`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1054": {
+   "status": "open",
+   "title": "`node.nodeValue = null`/`node.data = null` на Text/Comment/ProcessingInstruction даёт буквальную строку `\"null\"` вместо `\"\"` — все три сеттера зовут `String(v)`…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_character_data`/`_LUMEN_WRAPPER_CD_MEMBERS`/`_lumen_make_processing_instruction`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1055": {
+   "status": "open",
+   "title": "`element.appendChild(x)` молча ничего не делает (не бросает, не вставляет) для любого детач-узла без `__nid__` — `new Comment()`, `new Text()`, `document.create…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — арена-элементный `appendChild`, `~6718`)",
    "date": null,
    "debtor": false
   },
@@ -14618,11 +14642,17 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_font_face_try_one_source`; `crates/js/src/shim/web_api_shim_mid_b.js` — `_lumen_fetch`)": [
    "BUG-1013"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_character_data`/`_LUMEN_WRAPPER_CD_MEMBERS`/`_lumen_make_processing_instruction`)": [
+   "BUG-1054"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`/`_lumen_serialize_style`)": [
    "BUG-473"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_parse_font_shorthand_families`)": [
    "BUG-1015"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — арена-элементный `appendChild`, `~6718`)": [
+   "BUG-1055"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — геттер `tabIndex`; `web_api_shim_tail_b.js` — `_lumen_is_focusable`/`_LUMEN_FOCUSABLE_TAGS`)": [
    "BUG-1012"
