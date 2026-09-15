@@ -46,7 +46,6 @@ ROADMAP.md	bugs/BUG-569-OPEN.md	stale-status-suffix	bugs/BUG-569-FIXED.md
 ROADMAP.md	bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 ROADMAP.md	bugs/BUG-575-OPEN.md	stale-status-suffix	bugs/BUG-575-FIXED.md
 ROADMAP.md	bugs/BUG-576-OPEN.md	stale-status-suffix	bugs/BUG-576-FIXED.md
-ROADMAP.md	bugs/BUG-581-OPEN.md	stale-status-suffix	bugs/BUG-581-FIXED.md
 ROADMAP.md	bugs/BUG-803-OPEN.md	stale-status-suffix	bugs/BUG-803-FIXED.md
 ROADMAP.md	bugs/BUG-850-OPEN.md	stale-status-suffix	bugs/BUG-850-FIXED.md
 ROADMAP.md	docs/tasks/p2-wpt-status-sync.md	missing	
@@ -129,7 +128,7 @@ bugs/BUG-554-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
 bugs/BUG-556-FIXED.md	BUG-476-OPEN.md	stale-status-suffix	bugs/BUG-476-FIXED.md
 bugs/BUG-566-FIXED.md	BUG-1053-OPEN.md	stale-status-suffix	bugs/BUG-1053-FIXED.md
 bugs/BUG-577-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-582-OPEN.md	BUG-579-OPEN.md	stale-status-suffix	bugs/BUG-579-FIXED.md
+bugs/BUG-584-OPEN.md	BUG-582-OPEN.md	stale-status-suffix	bugs/BUG-582-FIXED.md
 bugs/BUG-590-FIXED.md	bugs/BUG-871-OPEN.md	wrong-relative-path	bugs/BUG-871-OPEN.md
 bugs/BUG-599-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-604-OPEN.md	BUG-351-OPEN.md	stale-status-suffix	bugs/BUG-351-FIXED.md
