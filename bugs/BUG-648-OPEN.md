@@ -94,7 +94,7 @@ synchronous `_perf_entries` push.
 
 - `PerformanceObserverEntryList is not defined` (`po-observe.any.html`) —
   same class as [BUG-645](BUG-645-OPEN.md)/[BUG-624](BUG-624-OPEN.md)/
-  [BUG-637](BUG-637-OPEN.md)/[BUG-589](BUG-589-OPEN.md): WebIDL
+  [BUG-637](BUG-637-OPEN.md)/[BUG-589](BUG-589-FIXED.md): WebIDL
   interface objects absent as globals even where the underlying behavior
   (the plain-object "list" passed to callbacks, `dom.rs:8319-8326`) works.
 - `case-sensitivity.any.html` (`resources/square.png?id=1` never loads,

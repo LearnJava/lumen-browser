@@ -261,5 +261,65 @@ pub(super) fn window_named_properties_template<'s>(
                     | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,
             ),
     );
+    template.set_indexed_property_handler(window_indexed_properties_handler());
     template
+}
+
+/// `window`'s indexed `[[DefineOwnProperty]]` has no indexed property setter
+/// per WebIDL — per spec that means EVERY array-index define/assign fails,
+/// even one landing on a currently-supported index (`window[0] = "foo"` must
+/// throw just as hard as `window[999999] = "foo"` when index 0 really is a
+/// live nested browsing context — the getter is read-only). So this handler
+/// intercepts unconditionally, with one carve-out: [`indexed_define_trusted`]
+/// lets the *engine's own* setup code — `_lumen_frame_install_index`
+/// (`frame_bridge.rs`) installing the `window[i]`/`window[name]` getters that
+/// implement this same interface's indexed *property getter* — through, via
+/// a plain JS flag it raises only around its own `Object.defineProperty`
+/// calls. Anything page script does through the same trap still gets the
+/// spec's "no indexed setter → always false" answer.
+fn indexed_define_trusted(scope: &mut v8::PinScope) -> bool {
+    let ctx = scope.get_current_context();
+    let global = ctx.global(scope);
+    let Some(key) = v8::String::new(scope, "_lumen_indexed_define_trusted") else {
+        return false;
+    };
+    global
+        .get(scope, key.into())
+        .is_some_and(|v| v.boolean_value(scope))
+}
+
+/// Indexed-property handler for `window` (HTML LS §7.3.3, BUG-589). No
+/// indexed property getter here claims an index is "supported" either
+/// (`window[i]`'s real getter is a plain per-index accessor property
+/// `_lumen_frame_install_index` installs, not this native interceptor) — so
+/// leaving `getter`/`query` unset here is correct: V8 falls through to the
+/// ordinary own-property lookup, which finds that accessor when one was
+/// installed and answers `undefined`/`false` otherwise, exactly the pre-
+/// existing behaviour for indices nothing ever wrote.
+fn window_indexed_properties_handler<'s>() -> v8::IndexedPropertyHandlerConfiguration<'s> {
+    let definer = |scope: &mut v8::PinScope,
+                   _index: u32,
+                   _desc: &v8::PropertyDescriptor,
+                   _args: v8::PropertyCallbackArguments,
+                   mut rv: v8::ReturnValue<()>| {
+        if indexed_define_trusted(scope) {
+            return v8::Intercepted::kNo;
+        }
+        rv.set_bool(false);
+        v8::Intercepted::kYes
+    };
+    let setter = |scope: &mut v8::PinScope,
+                  _index: u32,
+                  _value: v8::Local<v8::Value>,
+                  _args: v8::PropertyCallbackArguments,
+                  mut rv: v8::ReturnValue<()>| {
+        if indexed_define_trusted(scope) {
+            return v8::Intercepted::kNo;
+        }
+        rv.set_bool(false);
+        v8::Intercepted::kYes
+    };
+    v8::IndexedPropertyHandlerConfiguration::new()
+        .definer(definer)
+        .setter(setter)
 }

@@ -2156,7 +2156,17 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       var mk = function(h) {
         return function() { return _lumen_frame_content_window(h); };
       };
-      Object.defineProperty(window, String(idx), { get: mk(host), configurable: true });
+      // BUG-589: `window`'s indexed [[DefineOwnProperty]] now rejects every
+      // array-index define (WebIDL: no indexed property setter -> always
+      // false, even for a supported index) — this flag is this one call's
+      // carve-out to still install the getter itself (see
+      // `named_access.rs::indexed_define_trusted`).
+      globalThis._lumen_indexed_define_trusted = true;
+      try {
+        Object.defineProperty(window, String(idx), { get: mk(host), configurable: true });
+      } finally {
+        globalThis._lumen_indexed_define_trusted = false;
+      }
       var nm = _lumen_frame_name_at(idx);
       if (nm) {
         Object.defineProperty(window, nm, { get: mk(host), configurable: true });
