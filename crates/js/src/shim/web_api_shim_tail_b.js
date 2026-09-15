@@ -1008,6 +1008,9 @@ window.blur  = function() {};
 //            The spec distinguishes a missing-value default from an
 //            invalid-value default; the two coincide for every attribute in the
 //            table below, so one `def` covers both.
+//   tristate-bool — `hidden`-shaped: getter returns `false`/`true`/`"until-found"`,
+//            setter takes a boolean-ish value or the case-insensitive string
+//            "until-found" (BUG-594).
 
 // HTML LS §4.2.3 «document base URL»: the `href` of the first <base> element
 // resolved against the document URL, falling back to the document URL itself.
@@ -1086,6 +1089,33 @@ function _lumen_define_reflection(proto, entry) {
         set = function(v) {
             var n = _lumen_reflect_nid(this);
             if (n !== -1) _lumen_set_attr(n, attr, String(v));
+        };
+    } else if (kind === 'tristate-bool') {
+        // HTML LS §3.2.6.2 "hidden" -- getter returns `false` (attribute
+        // absent), `true` (attribute present, any value other than an ASCII
+        // case-insensitive "until-found"), or the string "until-found".
+        // Setter: a real JS string matching "until-found" case-insensitively
+        // sets that value verbatim; anything else follows ToBoolean(v) --
+        // true removes/sets the attribute to '' the same way plain `bool`
+        // reflection already does, false removes it (BUG-594).
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return false;
+            if (!_lumen_has_attr(n, attr)) return false;
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            if (v !== null && String(v).toLowerCase() === 'until-found') return 'until-found';
+            return true;
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            if (typeof v === 'string' && v.toLowerCase() === 'until-found') {
+                _lumen_set_attr(n, attr, 'until-found');
+            } else if (v) {
+                _lumen_set_attr(n, attr, '');
+            } else {
+                _lumen_remove_attr(n, attr);
+            }
         };
     } else if (kind === 'enum') {
         get = function() {
@@ -1184,7 +1214,7 @@ _lumen_install_reflection(HTMLElement.prototype, [
     ['title',          'title',          'string'],
     ['lang',           'lang',           'string'],
     ['dir',            'dir',            'enum',   { def: '', keys: ['ltr', 'rtl', 'auto'] }],
-    ['hidden',         'hidden',         'bool'],
+    ['hidden',         'hidden',         'tristate-bool'],
     ['inert',          'inert',          'bool'],
     ['accessKey',      'accesskey',      'string'],
     ['autocapitalize', 'autocapitalize', 'string'],

@@ -55,10 +55,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-15",
+ "generated": "2026-09-16",
  "counts": {
-  "open": 350,
-  "fixed": 651,
+  "open": 343,
+  "fixed": 658,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6904,6 +6904,16 @@
        "bugs": [
         "BUG-585"
        ]
+      },
+      {
+       "id": "GAP-BEFOREMATCH",
+       "title": "GAP: `hidden=\"until-found\"` reveal-алгоритм и `beforematch`-событие отсутствуют целиком",
+       "status": "done",
+       "size": "M",
+       "note": "Остаток BUG-594 после среза 2026-09-16: тристейт-рефлексия `hidden`/`\"until-found\"` уже закрыта тем срезом, но сама HTML LS §3.2.6.2 «reveal»-модель для `hidden=\"until-found\"` отсутствует целиком — `grep -rn beforematch crates/` и `grep -rn until-found crates/` outside `_lumen_define_reflection` дают ноль. Три переплетённых пробела: (1) нет CSS UA-правила `[hidden=\"until-found\"] { content-visibility: hidden }`-эквивалента (элемент физически не скрыт хотя атрибут выставлен); (2) нет `beforematch`-события и «reveal algorithm» — снятие `hidden` до `null` и скролл к элементу при фрагментной навигации (`#:~:text=`/обычный якорь на потомка), find-in-page или программном `Element.focus()`/`.scrollIntoView()` на скрытом потомке; (3) нет диспетчинга самого события с bubbles/composed семантикой перед reveal-шагами. Покрывает остаток `the-hidden-attribute/` — `beforematch-*.html` (element-fragment-navigation, attribute/element-removal ×2, infinite-loop, scroll-to-text-fragment), `hidden-until-found-00{1,2,4,5,7}.html`, `hidden-until-found-and-details.html`, `hidden-until-found-text-fragment.html` — 9 файлов, ~13 из исходных 13 остаются (только `hidden-until-found-idl.html` закрыт срезом BUG-594). Найден P2, WPT-VENDOR-html-editing, 2026-08-04; реклассифицировано из остатка BUG-594 2026-09-16 (P3).",
+       "bugs": [
+        "BUG-594"
+       ]
       }
      ]
     },
@@ -7490,55 +7500,6 @@
    "status": "open",
    "title": "`Origin` WebIDL global (`Origin.from()`, tuple/opaque origin) not implemented at all. 181 subtests, all `html/browsers/origin/api/` (self-contained category). K…",
    "component": "js (`crates/js/src/dom.rs` -- no `Origin` global constructor anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-586": {
-   "status": "open",
-   "title": "`document.domain` not implemented: getter is `undefined` instead of a string, setter never validates against the document's origin so cases required to throw `S…",
-   "component": "js (`crates/js/src/dom.rs` -- no `\"domain\"` getter/setter on `document`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-587": {
-   "status": "open",
-   "title": "WindowProxy `[[DefineOwnProperty]]` doesn't enforce the \"unforgeable\" restriction on same-origin own properties `window`/`document`/`location`/`top` -- both com…",
-   "component": "js/V8 host-object layer (WindowProxy own-property trap, no `[[DefineOwnProperty]]` unforgeable-property guard)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-588": {
-   "status": "open",
-   "title": "`window.frameElement` missing entirely -- always `undefined` instead of `null` even for the top-level window (no iframe involved), independent of the iframe-bro…",
-   "component": "js (`crates/js/src/dom.rs`/`v8_runtime.rs` -- no `frameElement` anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-589": {
-   "status": "open",
-   "title": "`window` is not a proper WebIDL exotic object: no `Symbol.toStringTag` (`[object Object]` instead of `[object Window]`/`[object WindowProperties]`, same class a…",
-   "component": "js/V8 host-object layer (`window` global + \"WindowProperties\" prototype; `Symbol.toStringTag` pattern from `dom.rs:11143-11165` not applied to `window`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-592": {
-   "status": "open",
-   "title": "`setHTMLUnsafe`/`getHTML` (WHATWG HTML LS §14.5) implemented only on `Element`, missing on `ShadowRoot` (separate hand-rolled object literal) and as `Document.p…",
-   "component": "js (`dom.rs:1315-1366` `_lumen_make_shadow_root` -- no `setHTMLUnsafe`/`getHTML`; no `Document.parseHTMLUnsafe` static anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-593": {
-   "status": "open",
-   "title": "`structuredClone` cannot clone `Blob`/`File`/`ImageData`/`Error` -- throws `DataCloneError` instead of round-tripping. 19 subtests, `structured-clone.any.html`.…",
-   "component": "js (`dom.rs:10176-10260` `structuredClone` -- own doc comment already says \"Not handled: Blob/File/ImageData/Error\", never filed until now)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-594": {
-   "status": "open",
-   "title": "`hidden` reflects as plain boolean instead of the `\"\"`/`\"hidden\"`/`\"until-found\"` tristate enum -- `hidden=\"until-found\"` mode (reveal algorithm, `beforematch`…",
-   "component": "js (`dom.rs:10724-10735`, `hidden` reflection entry)",
    "date": null,
    "debtor": false
   },
@@ -14085,6 +14046,55 @@
    "title": "Токенайзер переводил в text-only режим только четыре тега: RAWTEXT `<script>`/`<style>`, RCDATA `<title>`/`<textarea>`. По HTML LS §13.2.6.4.7 RAWTEXT — это ещё…",
    "component": "engine (`crates/engine/html-parser/src/tokenizer.rs` — `is_raw_text_element`)",
    "date": "2026-09-15",
+   "debtor": false
+  },
+  "BUG-586": {
+   "status": "fixed",
+   "title": "`document.domain` not implemented: getter is `undefined` instead of a string, setter never validates against the document's origin so cases required to throw `S…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_mid_b.js`)",
+   "date": "2026-09-15",
+   "debtor": false
+  },
+  "BUG-587": {
+   "status": "fixed",
+   "title": "WindowProxy `[[DefineOwnProperty]]` doesn't enforce the \"unforgeable\" restriction on same-origin own properties `window`/`document`/`location`/`top` -- both com…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_b.js`)",
+   "date": "2026-09-15",
+   "debtor": false
+  },
+  "BUG-588": {
+   "status": "fixed",
+   "title": "`window.frameElement` missing entirely -- always `undefined` instead of `null` even for the top-level window (no iframe involved), independent of the iframe-bro…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js`)",
+   "date": "2026-09-15",
+   "debtor": false
+  },
+  "BUG-589": {
+   "status": "fixed",
+   "title": "`window` is not a proper WebIDL exotic object: no `Symbol.toStringTag` (`[object Object]` instead of `[object Window]`/`[object WindowProperties]`, same class a…",
+   "component": "js/V8 host-object layer (`crates/js/src/v8_runtime/named_access.rs`, `crates/js/src/shim/web_api_shim_tail_b.js`, `crates/js/src/frame_bridge.rs`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-593": {
+   "status": "fixed",
+   "title": "`structuredClone` cannot clone `Blob`/`File`/`ImageData`/`Error` -- throws `DataCloneError` instead of round-tripping. 19 subtests, `structured-clone.any.html`.…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- `structuredClone`; `crates/js/src/file_input.rs`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-592": {
+   "status": "fixed",
+   "title": "`setHTMLUnsafe`/`getHTML` (WHATWG HTML LS §14.5) implemented only on `Element`, missing on `ShadowRoot` (separate hand-rolled object literal) and as `Document.p…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `ShadowRoot.prototype`; `crates/js/src/dom_parser.rs` — `Document.parseHTMLUnsafe`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-594": {
+   "status": "fixed",
+   "title": "`hidden` reflected as plain boolean instead of the `\"\"`/`\"hidden\"`/`\"until-found\"` tristate enum -- `hidden=\"until-found\"` read back as `true` instead of the st…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- `_lumen_define_reflection`, global-attributes table)",
+   "date": "2026-09-16",
    "debtor": false
   }
  },
