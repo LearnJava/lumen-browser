@@ -238,6 +238,21 @@ fn self_window_globalthis_are_the_same_object() {
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-588: `window.frameElement` must be `null` (HTML LS
+// `#dom-window-frameelement`), not `undefined`, for a top-level page that
+// was never embedded in any frame relationship. `_lumen_frame_install_hierarchy`
+// (frame_bridge.rs) only installs the real getter for a context that turns
+// out to be an embedded frame, so a page that is never registered that way
+// used to fall through to a plain missing property.
+#[test]
+fn frame_element_is_null_at_top_level() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval("window.frameElement === null")
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-233: a property stored on `self` must be visible through `window`
 // and vice-versa, because webpack stores its chunk registry on `self`
 // and later reads it back. They are the same object reference.

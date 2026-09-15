@@ -4879,6 +4879,13 @@ window.globalThis    = globalThis;
 window.frames        = window;   // no real framesets; self-reference like browsers
 window.parent        = window;   // no parent frame
 window.length        = 0;        // number of child browsing contexts (frames)
+// BUG-588: default for every context, including ones never involved in any
+// frame relationship — `_lumen_frame_install_hierarchy` (frame_bridge.rs)
+// only runs for a context that turns out to be an embedded frame, so a plain
+// top-level page never reaches it and `frameElement` stayed `undefined`
+// instead of `null`. A plain assignment here is configurable, so that later
+// `Object.defineProperty` override for real child frames still applies.
+window.frameElement  = null;
 
 // BUG-587: `window` and `top` are `[LegacyUnforgeable] readonly` own
 // properties of the global object (HTML LS) — same defect and same fix
