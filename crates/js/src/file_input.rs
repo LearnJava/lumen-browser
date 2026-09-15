@@ -491,6 +491,23 @@ File.prototype.slice = function(start, end, contentType) {
 
 window.File = File;
 
+// ── [Serializable] (BUG-593: File API §4/§7 -- File survives structuredClone) ─
+// A token-backed File clones by sharing the same read grant rather than
+// copying bytes: the underlying data lives on disk (or nowhere, for a
+// programmatically-built `_content` File), not in this object.
+if (globalThis.__lumen_platform_cloners) {
+  globalThis.__lumen_platform_cloners.register(
+    function(v) { return v instanceof File; },
+    function(v) {
+      var clone = new File([], v.name, { type: v.type, lastModified: v.lastModified });
+      clone.size = v.size;
+      clone._content = v._content;
+      var token = FILE_TOKENS.get(v);
+      if (typeof token === 'string') FILE_TOKENS.set(clone, token);
+      return clone;
+    });
+}
+
 // ── Token-bearing File factory (internal) ────────────────────────────────────
 // The only way a read grant gets attached to a File. Used below by
 // `_lumen_deliver_file_list` and, through the `__lumen_fs_internal` bridge, by
