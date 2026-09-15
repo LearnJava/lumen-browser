@@ -934,3 +934,89 @@ XML §2.7, где CDATA-секция легальна в любом месте c
 
 Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
 как таковая.
+
+## Срез 27 (2026-09-15): `<?xml-stylesheet ...?>` разбирался в реальный PI-узел (срез 23), но не подключал лист к каскаду (`p1-gap-xmldoc-srez27`)
+
+Взял следующую невычеркнутую строку `STATUS-P1.md` (`ROADMAP.md:896`).
+Предыдущие срезы этого класса (22/23/25/26) закрыли DOM-сторону
+processing instruction — синтаксис, `instanceof`, `.target`/`.data`,
+detached-документы. Ни один не трогал главную практическую причину, ради
+которой `<?xml-stylesheet?>` вообще существует: реальный XHTML/SVG-документ
+подключает внешний CSS через эту конструкцию, а не через `<link>` в
+`<head>` (сам PI стоит раньше `<html>`, часто это единственная таблица
+стилей документа). Найден живым тестом корпуса
+`html/the-xhtml-syntax/parsing-xhtml-documents/xml-stylesheet-blocking.xhtml`
+— testharness-проверка на то, что PI-лист применяется и блокирует скрипт,
+идущий следом (`getComputedStyle(document.documentElement).zIndex` должен
+увидеть `z-index: 3`, заданный внешним `.css`).
+
+**Причина.** `crates/shell/src/stylesheets.rs::collect_link_hrefs` —
+единственная точка, которая решает, какие внешние листы попадают в
+каскад (`load_linked_stylesheets` их потом качает и склеивает) — обходит
+дерево и матчит только `NodeData::Element { name: "link", .. }`.
+`NodeData::ProcessingInstruction { target, data }` (срез 23) при обходе
+просто падает в generic-ветку «нет детей — рекурсия в children ничего не
+находит» и молча игнорируется. Никакого другого потребителя PI-узла для
+целей CSS в кодовой базе не было вовсе — `grep -rn "xml-stylesheet"
+crates/` до этого среза находил только токенизацию (`tokenizer.rs`) и её
+юнит-тесты.
+
+**Фикс.** Новая ветка в начале `collect_link_hrefs`: PI с
+`target == "xml-stylesheet"` — псевдо-атрибуты в `data` (`type=".." href=".."
+media=".." alternate=".."`, та же XML `Name="value"`-грамматика, что и у
+обычных атрибутов тега, но синтаксически живущая внутри PI, поэтому обычный
+токенизаторный атрибут-парсер к ней не подключить — новый
+`parse_pi_pseudo_attrs`, ручной сканер `name=`/`'…'`/`"…"`) решают, входит
+ли лист в каскад: `type` пуст или `text/css`, `href` не пуст,
+`alternate` не `"yes"` (тот же гейт, что и у обычного `<link
+rel="alternate stylesheet">` — не входит в каскад по умолчанию без выбора
+пользователя), `media` проходит тот же `link_media_matches`, что и `<link
+media=…>` (BUG-268). Совпавший узел уходит в тот же список `(NodeId,
+String, Option<String>)`, что и `<link>`-узлы (`charset` — всегда `None`,
+у PI такого псевдо-атрибута по спеке нет) — дальше по конвейеру
+(`load_linked_stylesheets`, порядок каскада, `<link>`/PI-исход через
+`_lumen_deliver_parser_link_events`) PI неотличим от `<link>`, никакого
+нового кода на этом конце не потребовалось.
+
+**Блокировка скрипта — бесплатно из архитектуры, не отдельная фича.**
+Lumen не стримит документ построчно: весь парсинг заканчивается раньше,
+чем `load_linked_stylesheets`, а та — раньше, чем `run_scripts_with_dom`
+(`page_pipeline.rs::parse_and_layout`). Любой внешний лист, попавший в
+`collect_link_hrefs` (через `<link>` или теперь через PI), уже применён к
+каскаду и посчитан в layout до того, как исполнится первый `<script>` —
+ровно то поведение, которое требует тест («PI блокирует скрипт и рендер»),
+без отдельной реализации блокировки.
+
+Проверено вживую (`--screenshot`, вне тестового набора): `.xhtml` с
+`<?xml-stylesheet type="text/css" href="style.css"?>` перед `<html>`,
+внешний `style.css` красит `body`/текст — снимок показывает применённый
+лист (залитый фон, увеличенный текст), лог печатает `Загружен CSS:
+…/style.css`.
+
+Тесты (`crates/shell/src/tests/page_resources.rs`):
+- `collect_link_hrefs_finds_xml_stylesheet_pi` — PI перед `<html>` в
+  `parse_xml_flavoured` даёт ровно один href в списке кандидатов каскада.
+- `collect_link_hrefs_ignores_non_css_or_alternate_xml_stylesheet_pi` —
+  `type="text/xsl"` и `alternate="yes"` оба не проходят гейт, тот же
+  принцип, что у обычного `<link>`.
+
+Обычный `parse()` (не `xml_mode`) не регрессирует — он никогда не строит
+`ProcessingInstruction`-узел (срез 22/23), так что новой ветке
+`collect_link_hrefs` нечего матчить на plain-HTML-документах.
+
+`cargo test -p lumen-shell --profile dev-release` — стилевой фильтр
+`stylesheet` даёт 11/11 зелёных (было 9, +2 новых). `cargo clippy
+--workspace --all-targets --profile dev-release -- -D warnings` — чисто.
+`scripts/scoped-test.sh crates/shell/src/stylesheets.rs` — зелёный, кроме
+того же чужого дрейфа CPU-эталонов (`lumen-driver::cases::snapshot_cpu`,
+идентичная сигнатура из тех же 7 файлов, [BUG-1008](BUG-1008-OPEN.md)).
+`scripts/check_file_sizes.py` не отмечает ни `stylesheets.rs`, ни
+`page_resources.rs` — оба ниже собственного baseline, 12 файлов в отчёте
+— чужой недокоммиченный дрейф (тот же принцип, что срезы 17/19: не
+подтверждаю чужие записи своим коммитом).
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая. Не в этом срезе: PI-заданный `title`/`alternate`-набор
+предпочтительных таблиц стилей (HTML LS §4.2.4 «preferred stylesheet
+sets») — тест корпуса его не требует, и обычный `<link title=…>` тоже
+этого не реализует нигде в кодовой базе (не регрессия этого среза).
