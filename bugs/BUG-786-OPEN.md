@@ -648,3 +648,68 @@ warnings` — чисто. `tree_builder.rs` пересёк собственны�
 Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
 как таковая — она не закрывается точечными срезами и остаётся GAP-XMLDOC
 как задачей ROADMAP, а не конкретным пунктом-тегом.
+
+## GAP-XMLDOC срез 21 (2026-09-15): `<!DOCTYPE html [ ... ]>` internal subset в xml_mode (`p1-gap-xmldoc-srez21`)
+
+Срез 20 закрыл последний известный push-сайт self-closing-класса; следующая
+невычеркнутая строка `STATUS-P1.md` (`ROADMAP.md:896`) снова потребовала
+новый измеренный случай, не «ещё один тег». Найден им же приёмом grep по
+вендоренному корпусу (`<!DOCTYPE[^>]*\[`) — **11 файлов**, из которых три
+реальные testharness-проверки, не reftest/manual-фикстуры:
+`dom/nodes/ProcessingInstruction-in-doctype.xhtml`,
+`dom/nodes/Comment-in-doctype.xhtml`, `css/cssom/xml-stylesheet-pi-in-doctype.xhtml`
+— все три с телом вида `<!DOCTYPE html [<?x y?>]><html ...>` /
+`<!DOCTYPE html [<!--x-->]><html ...>`.
+
+**Причина — отдельный класс от self-closing (срезы 2/16-20): не push-сайт
+дерева, а сам токенизатор DOCTYPE.** `Tokenizer::consume_doctype`'s bogus
+DOCTYPE state (ветка «съесть всё до `>`») по HTML5 спеке безусловно
+останавливается на первом `>` — верно для HTML, где internal subset не
+существует вовсе, но `<?x y?>` или `<!--x-->` внутри `[...]` несут свой
+собственный `>` раньше настоящего конца DOCTYPE-токена. Результат до
+фикса: `<!DOCTYPE html [<?x y?>]>` токенизируется как DOCTYPE, оборванный
+на `?>`, а `]>` остаётся отдельной, ничем не защищённой разметкой на
+верхнем уровне документа — `documentElement` перестаёт быть прямым
+соседом doctype-узла.
+
+**Фикс — только в xml_mode, тем же приёмом изоляции, что CDATA/self-closing
+(флаг, не смена поведения `parse()` по умолчанию).** Новое поле
+`Tokenizer::xml_mode` (сеттер `set_xml_mode`, по аналогии с
+`cdata_allowed`, но взводится один раз, не перед каждым токеном — режим
+документа не меняется по ходу разбора) добавлено в `Tokenizer` и
+`PushTokenizer` (тот создаёт внутренний `Tokenizer` заново на каждый
+`tokenize()`-вызов, так же, как уже делает с `cdata_allowed`). `run_pull`
+взводит его из `builder.xml_mode` сразу после создания токенизатора;
+`parse_xml_flavoured` синхронизирует то же на `builder.tokenizer` (push
+путь `IncrementalTreeBuilder::feed`), хотя реальный вызывающий сейчас
+всегда использует pull (`page_pipeline.rs`) — тот же принцип, что держит
+pull/push паритетными по всем предыдущим срезам GAP-XMLDOC.
+
+В `xml_mode`, после имени/PUBLIC/SYSTEM identifiers, если следующий
+непробельный символ — `[`, токенизатор пропускает internal subset:
+считает вложенность `<...>`-конструкций (глубина растёт на `<`, падает на
+`>` только если глубина > 0) и ищет `]` именно на глубине 0 — тот самый
+случай, когда `>` внутри `<?...?>`/`<!--...-->` не может преждевременно
+закрыть subset. После него — обычный поиск финального `>`, не тронутый.
+
+Тесты: три в `tokenizer.rs`
+(`doctype_internal_subset_with_pi_ignored_without_xml_mode` — регрессионный
+якорь на HTML5-поведение без флага,
+`doctype_internal_subset_with_pi_in_xml_mode`,
+`doctype_internal_subset_with_comment_in_xml_mode`) и один в
+`tree_builder.rs`
+(`xml_flavoured_doctype_internal_subset_with_pi_does_not_break_root_structure`
+— строит документ целиком через `parse_xml_flavoured` и проверяет, что
+корень — ровно `[doctype, html]`, без разбитых остатков subset). `cargo
+test -p lumen-html-parser --lib` — 480/480 зелёные (было 476). `cargo
+clippy -p lumen-html-parser --all-targets -- -D warnings` — чисто.
+`tree_builder.rs` пересёк собственный baseline (5657 → 5684),
+`scripts/file-size-baseline.tsv` обновлён тем же коммитом только для этой
+строки. `scripts/scoped-test.sh` (все обратные зависимости) — тот же
+чужой дрейф CPU-эталонов, что и предыдущие срезы (7 файлов,
+[BUG-1008](BUG-1008-OPEN.md)), плюс `lumen-network --lib` упал в общем
+прогоне и прошёл 2207/2207 изолированно — флак, не связанный с этим
+срезом.
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая.

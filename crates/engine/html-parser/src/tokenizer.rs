@@ -74,6 +74,13 @@ pub struct Tokenizer<'a> {
     /// `true`, когда adjusted current node сейчас foreign (SVG/MathML) и не
     /// является integration point. См. module docs.
     cdata_allowed: bool,
+    /// GAP-XMLDOC срез 21 (BUG-786): взводится вызывающим один раз, когда
+    /// документ разбирается [`parse_xml_flavoured`][crate::tree_builder::parse_xml_flavoured]-путём.
+    /// Меняет только [`consume_doctype`][Self::consume_doctype]: включает
+    /// понимание `<!DOCTYPE html [ ... ]>` — internal subset с
+    /// вложенными `<?PI?>`/`<!--comment-->`, которых обычный HTML5 bogus
+    /// DOCTYPE state (безусловный стоп на первом `>`) не знает вовсе.
+    xml_mode: bool,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -83,6 +90,7 @@ impl<'a> Tokenizer<'a> {
             pos: 0,
             text_only: None,
             cdata_allowed: false,
+            xml_mode: false,
         }
     }
 
@@ -97,6 +105,7 @@ impl<'a> Tokenizer<'a> {
             pos: 0,
             text_only,
             cdata_allowed: false,
+            xml_mode: false,
         }
     }
 
@@ -107,6 +116,14 @@ impl<'a> Tokenizer<'a> {
     /// меняется по ходу разбора.
     pub fn set_cdata_allowed(&mut self, allowed: bool) {
         self.cdata_allowed = allowed;
+    }
+
+    /// Взводит [`xml_mode`][Self::xml_mode] (GAP-XMLDOC срез 21, BUG-786).
+    /// В отличие от [`set_cdata_allowed`][Self::set_cdata_allowed], зовётся
+    /// один раз (документ либо XML-flavoured целиком, либо нет), не перед
+    /// каждым токеном.
+    pub fn set_xml_mode(&mut self, xml_mode: bool) {
+        self.xml_mode = xml_mode;
     }
 
     /// Текущая позиция курсора (в байтах от начала `input`). Используется
@@ -542,6 +559,29 @@ impl<'a> Tokenizer<'a> {
             system_id = Some(self.consume_quoted_string().unwrap_or_default());
         }
 
+        // GAP-XMLDOC срез 21 (BUG-786): `<!DOCTYPE html [<?x y?>]>` — internal
+        // subset. Обычный HTML5 bogus DOCTYPE state (ветка ниже) стоп на
+        // первом `>`, а он лежит ВНУТРИ `<?x y?>` (`?>`), обрывая токен на
+        // `]>` уже как отдельную разметку — только в `xml_mode` умеем найти
+        // настоящий конец: пропустить сбалансированные `<...>`-конструкции
+        // до закрывающего `]`, не в глубине ни одной из них.
+        if self.xml_mode {
+            self.skip_whitespace();
+            if self.peek() == Some('[') {
+                self.consume();
+                let mut depth: u32 = 0;
+                while let Some(c) = self.consume() {
+                    match c {
+                        '<' => depth += 1,
+                        '>' if depth > 0 => depth -= 1,
+                        ']' if depth == 0 => break,
+                        _ => {}
+                    }
+                }
+                self.skip_whitespace();
+            }
+        }
+
         // Съесть всё до '>' (на случай мусора / несколько идентификаторов).
         while let Some(c) = self.consume() {
             if c == '>' {
@@ -921,6 +961,42 @@ mod tests {
         let t = tok("<!ENTITY foo \"bar\"><p>x</p>");
         // Первый токен должен быть от `<p>`, декларация пропущена.
         assert!(matches!(&t[0], Token::StartTag { name, .. } if name == "p"));
+    }
+
+    #[test]
+    fn doctype_internal_subset_with_pi_ignored_without_xml_mode() {
+        // Обычный HTML5-разбор (xml_mode == false, регрессионный якорь):
+        // bogus DOCTYPE state стоп на первом '>' — он лежит внутри `<?x y?>`
+        // ("?>"), поэтому `]>` остаётся отдельной разметкой снаружи токена.
+        let t = tok("<!DOCTYPE html [<?x y?>]><p>x</p>");
+        assert!(matches!(&t[0], Token::Doctype { name, .. } if name == "html"));
+        // `]` — текст, `>` внутри него открывает bogus comment/что угодно,
+        // но НЕ должен склеиться в единый DOCTYPE-токен с `<p>`.
+        assert!(!matches!(&t[1], Token::StartTag { name, .. } if name == "p"));
+    }
+
+    #[test]
+    fn doctype_internal_subset_with_pi_in_xml_mode() {
+        // GAP-XMLDOC срез 21 (BUG-786): в xml_mode внутренний subset
+        // `[<?x y?>]` пропускается целиком (сбалансированные `<...>`), и
+        // следующий реальный `>` завершает DOCTYPE-токен — `<html>`
+        // остаётся `document.firstChild`'s соседом, не текстом внутри него.
+        let mut t = Tokenizer::new("<!DOCTYPE html [<?x y?>]><html>x</html>");
+        t.set_xml_mode(true);
+        let tokens: Vec<Token> = t.collect();
+        assert!(matches!(&tokens[0], Token::Doctype { name, .. } if name == "html"));
+        assert!(matches!(&tokens[1], Token::StartTag { name, .. } if name == "html"));
+    }
+
+    #[test]
+    fn doctype_internal_subset_with_comment_in_xml_mode() {
+        // Тот же класс, вторая форма из WPT (Comment-in-doctype.xhtml):
+        // `[<!--x-->]` — вложенный `<!--...-->`, а не `<?...?>`.
+        let mut t = Tokenizer::new("<!DOCTYPE html [<!--x-->]><html>x</html>");
+        t.set_xml_mode(true);
+        let tokens: Vec<Token> = t.collect();
+        assert!(matches!(&tokens[0], Token::Doctype { name, .. } if name == "html"));
+        assert!(matches!(&tokens[1], Token::StartTag { name, .. } if name == "html"));
     }
 
     #[test]

@@ -52,6 +52,11 @@ pub struct PushTokenizer {
     /// которому namespace безразличен) держат его всегда `false`, что
     /// совпадает с их прежним поведением.
     cdata_allowed: bool,
+    /// [`Tokenizer::xml_mode`][crate::tokenizer::Tokenizer] (GAP-XMLDOC срез
+    /// 21, BUG-786) — в отличие от `cdata_allowed`, не меняется по ходу
+    /// разбора, поэтому переносится в каждый внутренний `Tokenizer`
+    /// напрямую из этого поля, не через `on_token`.
+    xml_mode: bool,
 }
 
 impl PushTokenizer {
@@ -63,7 +68,14 @@ impl PushTokenizer {
             ended: false,
             partial_utf8: Vec::new(),
             cdata_allowed: false,
+            xml_mode: false,
         }
+    }
+
+    /// Взводит [`xml_mode`][Self::xml_mode] — зовётся один раз, документ
+    /// либо XML-flavoured целиком, либо нет.
+    pub fn set_xml_mode(&mut self, xml_mode: bool) {
+        self.xml_mode = xml_mode;
     }
 
     /// Скармливает chunk токенизатору и возвращает токены, ставшие
@@ -289,6 +301,7 @@ impl PushTokenizer {
         {
             let slice = &self.buf[..safe_end];
             let mut tokenizer = Tokenizer::with_state(slice, self.text_only.take());
+            tokenizer.set_xml_mode(self.xml_mode);
             tokenizer.set_cdata_allowed(cdata_allowed);
             while let Some(tok) = tokenizer.next() {
                 let opened_text_only =
