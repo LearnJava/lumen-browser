@@ -1020,3 +1020,89 @@ Lumen не стримит документ построчно: весь парс
 предпочтительных таблиц стилей (HTML LS §4.2.4 «preferred stylesheet
 sets») — тест корпуса его не требует, и обычный `<link title=…>` тоже
 этого не реализует нигде в кодовой базе (не регрессия этого среза).
+
+## Срез 29 (2026-09-16): `xml_mode` не взводился на живом стриминговом builder-е (`p1-gap-xmldoc-srez29-push-entities`)
+
+Найдено не корпусным grep, а разбором архитектуры (по следу заметки
+среза 28 «push-tokenizer не видит объявленные entity»): `xml_mode`
+взводился ровно в одном месте всего воркспейса —
+`parse_xml_flavoured` (pull, whole-document `&str`). Живой стриминговый
+`IncrementalTreeBuilder` (`crates/shell/src/app/user_event.rs`,
+`LoadEvent::HtmlChunk`), который красит прогрессивный кадр во время
+загрузки, всегда создавался `IncrementalTreeBuilder::new()` без каких-
+либо признаков XML-flavour — то есть буквально **ни один** из срезов
+1–28 (CDATA-обёртка, self-closing не-void теги, DOCTYPE internal
+subset, `<?target data?>`) не применялся к DOM, который показывался
+пользователю, пока `.xhtml`/`.xht`/`.svg`-страница ещё грузилась; они
+доставались только финальному документу, который `parse_and_layout`
+пересобирает с нуля через pull `parse_xml_flavoured` уже ПОСЛЕ
+`LoadDone`.
+
+**Фикс.** Новый `IncrementalTreeBuilder::new_xml_flavoured()`
+(`tree_builder.rs`) — то же, что `new()`, но сразу взводит `xml_mode`
+на builder-е и на его push-токенизаторе; `parse_xml_flavoured` теперь
+сам его использует вместо ручного `builder.xml_mode = true;
+builder.tokenizer.set_xml_mode(true);`. `user_event.rs`'s
+`HtmlChunk`-обработчик решает, каким конструктором создать
+`stream_builder`, по `is_xml_flavoured_document(None, &base)` —
+Content-Type ещё не известен на этой стадии стрима, поэтому только по
+расширению адреса (`self.document_resource_base()`), тот же fallback,
+которым сама `is_xml_flavoured_document` пользуется при отсутствующем/
+generic заголовке.
+
+**Попутно найдены и исправлены два бага `find_safe_split`,** которых
+ни один прежний срез не мог обнаружить — их тесты гоняли
+`IncrementalTreeBuilder`/`PushTokenizer` напрямую с `xml_mode = true`,
+но не через `feed`/`feed_bytes` на chunk-размерах, ловящих именно эти
+границы (новый тест `new_xml_flavoured_streams_the_same_dom_as_parse_xml_flavoured`
+их поймал сразу):
+
+1. **DOCTYPE internal subset вложен, а скан «только последний `<` в
+   буфере» — нет.** `<!DOCTYPE html [<?px y?>]>` — `<?px y?>` внутри
+   `[...]` сам по себе `<...>`-конструкция; она может выглядеть
+   полностью закрытой (её `?>` уже пришёл), пока внешний DOCTYPE ещё
+   ждёт `]>` — тот же класс нарушения допущения «top-level конструкции
+   не вкладываются», что срез 15 чинил для `<![CDATA[`. Фикс — тот же
+   приём: новая `last_unterminated_doctype_subset_start` (зеркалит
+   depth-scan `Tokenizer::consume_doctype`/`parse_declared_entities`),
+   проверяется ДО общего скана.
+2. **RAWTEXT/RCDATA-закрытие судило «закрыто» по одной только длине
+   хвоста** («хватает ли байт под форму `</tag>`+терминатор»), не по
+   тому, что там реально есть. `</style><?target d` — истинный
+   `</style>` уже закрылся РАНЬШЕ последнего `<` в буфере, а сам
+   последний `<` — начало ещё не закрытого `<?target d` (11 байт,
+   больше «needed», но без `?>`) — старый код решал «места хватает»,
+   резал буфер прямо там, и pull-токенизатор (lenient, дочитывает
+   слайс до конца) обрубал PI на EOF слайса вместо ожидания. Фикс —
+   `is_tag_closed` (та же проверка, что уже использует generic
+   Data-state-хвост) вместо длины; тег-агностична (не сверяет имя),
+   тем же консервативным принципом модуля это безопасно.
+
+Оба бага не специфичны для этого среза архитектурно (могли бы
+воспроизвестись и для `xml_mode = false` builder-ов на достаточно
+странных chunk-границах для DOCTYPE/PI), но были недостижимы до сих
+пор — ни один прежний тест не гонял `xml_mode` push-путь на
+byte-chunked входе вообще.
+
+**Не в этом срезе:** entity expansion (срез 28) по-прежнему не
+работает в стриминге — это текстовый pre-pass над ЦЕЛЫМ документом,
+которого у chunked push-вызывающего просто нет в руках заранее;
+`new_xml_flavoured()` документирует это ограничение явно.
+
+Тесты: `new_xml_flavoured_streams_the_same_dom_as_parse_xml_flavoured`,
+`new_xml_flavoured_does_not_expand_custom_general_entities`
+(`tree_builder.rs`),
+`xml_mode_pi_right_after_rawtext_close_is_not_split_by_length_heuristic`
+(`push_tokenizer.rs`). `cargo test -p lumen-html-parser --lib` —
+500/500 зелёные. `cargo clippy -p lumen-html-parser -p lumen-shell
+--all-targets --profile dev-release -- -D warnings` — чисто.
+`scripts/scoped-test.sh` (все обратные зависимости, включая
+`lumen-driver --test all`) — зелёный, кроме того же чужого дрейфа
+CPU-эталонов (`lumen-driver::cases::snapshot_cpu`, идентичная сигнатура
+из тех же 7 файлов, [BUG-1008](BUG-1008-OPEN.md)). `tree_builder.rs`
+пересёк собственный baseline (5858 → 5942),
+`scripts/file-size-baseline.tsv` обновлён тем же коммитом только для
+этой строки.
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая.

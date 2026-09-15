@@ -115,9 +115,7 @@ pub fn parse_xml_flavoured(input: &str) -> Document {
     // no-op (borrows `input` unchanged) for the overwhelming majority of
     // documents, which declare none.
     let expanded = crate::xml_entities::expand_custom_general_entities(input);
-    let mut builder = IncrementalTreeBuilder::new();
-    builder.xml_mode = true;
-    builder.tokenizer.set_xml_mode(true);
+    let mut builder = IncrementalTreeBuilder::new_xml_flavoured();
     run_pull(&mut builder, &expanded);
     builder.finish()
 }
@@ -330,6 +328,33 @@ impl IncrementalTreeBuilder {
             xml_mode: false,
             fragment_context: None,
         }
+    }
+
+    /// Same as [`new`][Self::new], but starts in XML-flavoured mode
+    /// (`xml_mode` armed on both the builder and its push tokenizer) —
+    /// for a caller that already knows, before the first `feed`/`feed_bytes`
+    /// chunk, that the document is `.xhtml`/`.xht`/`.svg`/
+    /// `application/xhtml+xml` (GAP-XMLDOC срез 29, BUG-786/BUG-685).
+    /// Before this срез, only [`parse_xml_flavoured`] (pull, whole-document)
+    /// ever armed `xml_mode` — every streaming/push consumer, including the
+    /// shell's progressive-paint `stream_builder`, built a plain [`new`]
+    /// builder regardless of document type, so none of the xml_mode-gated
+    /// GAP-XMLDOC fixes (self-closing non-void tags, CDATA wrapper/section
+    /// handling, DOCTYPE internal subset, `<?target data?>` processing
+    /// instructions) applied to the DOM shown while a page was still
+    /// loading — only to the final document rebuilt from scratch via
+    /// [`parse_xml_flavoured`] at load completion.
+    ///
+    /// Does **not** cover [`parse_xml_flavoured`]'s custom general-entity
+    /// expansion (GAP-XMLDOC срез 28) — that is a textual pre-pass over the
+    /// whole document string, which a chunked push caller does not have in
+    /// hand up front; `&name;` references to a DOCTYPE-declared entity are
+    /// still left unexpanded in a document parsed with this constructor.
+    pub fn new_xml_flavoured() -> Self {
+        let mut builder = Self::new();
+        builder.xml_mode = true;
+        builder.tokenizer.set_xml_mode(true);
+        builder
     }
 
     /// Builder для §13.4 fragment parsing: синтетический `<html>` уже создан и
@@ -4195,6 +4220,65 @@ mod tests {
         b.feed(head);
         b.feed(tail);
         assert_eq!(b.finish().to_string(), pull);
+    }
+
+    fn parse_xml_flavoured_feed_bytes_chunks(input: &str, chunk_size: usize) -> Document {
+        let mut b = IncrementalTreeBuilder::new_xml_flavoured();
+        let bytes = input.as_bytes();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let end = (pos + chunk_size).min(bytes.len());
+            b.feed_bytes(&bytes[pos..end]);
+            pos = end;
+        }
+        b.finish()
+    }
+
+    #[test]
+    fn new_xml_flavoured_streams_the_same_dom_as_parse_xml_flavoured() {
+        // GAP-XMLDOC срез 29 (BUG-786/BUG-685): before this срез, `xml_mode`
+        // was armed only inside `parse_xml_flavoured` (pull, whole-document
+        // string) — every push (`feed`/`feed_bytes`) caller, including the
+        // shell's streaming/progressive-paint builder, built a plain `new()`
+        // builder regardless of document type, so none of the xml_mode-gated
+        // fixes below applied to the DOM shown while a page was still
+        // loading. `new_xml_flavoured()` gives push callers the same
+        // `xml_mode` a pull caller gets from `parse_xml_flavoured`. Each line
+        // below exercises one already-landed xml_mode срез (self-closing
+        // non-void tags — срез 2/16-20; CDATA wrapper stripped off RAWTEXT —
+        // срез 1; DOCTYPE internal subset with a `<?PI?>` inside it — срез
+        // 21; a real `<?target data?>` processing instruction — срез 23).
+        let input = concat!(
+            "<!DOCTYPE html [<?px y?>]>",
+            "<html><body>",
+            "<div class=\"a\"/><div class=\"b\"/>",
+            "<style><![CDATA[\ndiv { color: red; }\n]]></style>",
+            "<?target data?>",
+            "</body></html>",
+        );
+        let pull = parse_xml_flavoured(input).to_string();
+        for chunk_size in [1usize, 3, 7, 16, 100] {
+            let chunked = parse_xml_flavoured_feed_bytes_chunks(input, chunk_size).to_string();
+            assert_eq!(chunked, pull, "chunk_size={chunk_size}");
+        }
+    }
+
+    #[test]
+    fn new_xml_flavoured_does_not_expand_custom_general_entities() {
+        // Documented limitation, not a regression: `parse_xml_flavoured`'s
+        // entity expansion (срез 28) is a textual pre-pass over the whole
+        // document string, which a chunked push caller never has in hand up
+        // front. `new_xml_flavoured()` still parses everything else the same
+        // as pull — it just leaves `&tree;` as a literal, unexpanded text
+        // reference instead of splicing in its declared replacement markup.
+        let input = "<!DOCTYPE html [\n<!ENTITY tree \"<span id='x'>unknown.</span>\">\n]>\n<p>result: &tree;</p>";
+        let pull = parse_xml_flavoured(input).to_string();
+        assert!(pull.contains("<span"), "pull should expand the entity: {pull}");
+        let mut b = IncrementalTreeBuilder::new_xml_flavoured();
+        b.feed(input);
+        let streamed = b.finish().to_string();
+        assert!(!streamed.contains("<span"), "push should NOT expand the entity: {streamed}");
+        assert!(streamed.contains("&tree;") || streamed.contains("tree;"), "got: {streamed}");
     }
 
     // ──────── <template> element ────────
