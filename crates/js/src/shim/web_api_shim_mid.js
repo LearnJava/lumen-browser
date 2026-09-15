@@ -10677,6 +10677,24 @@ for (var _dohi = 0; _dohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _dohi++) {
 // which shadow it.
 Object.setPrototypeOf(document, Document.prototype);
 
+// BUG-587: `document` is a `[LegacyUnforgeable] readonly` own property of the
+// global object (HTML LS, `Window.document`) — the ECMAScript
+// `[[DefineOwnProperty]]` algorithm only enforces "unforgeable" (rejects an
+// incompatible redefinition, accepts a compatible one) for a non-configurable
+// ACCESSOR property; the plain `var document = {...}` above instead created an
+// ordinary configurable, writable data property, so any redefinition — even
+// one that changed its type or value — silently succeeded
+// (`windowproxy-define-own-property-unforgeable-same-origin.html`). The
+// document object itself is unchanged, only the global binding to it.
+(function() {
+    var _lumen_document_singleton = document;
+    Object.defineProperty(globalThis, 'document', {
+        get: function() { return _lumen_document_singleton; },
+        enumerable: true,
+        configurable: false,
+    });
+})();
+
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
 var confirm  = function()  { return false; };
 var prompt   = function()  { return null; };

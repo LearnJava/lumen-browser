@@ -991,3 +991,50 @@ fn bounded_document_lock_gives_up_on_a_lock_that_never_frees() {
     release.store(true, Ordering::SeqCst);
     holder.join().unwrap();
 }
+
+// BUG-587: `window`/`document`/`location`/`top` must be non-configurable
+// accessor own properties of the WindowProxy so ECMAScript's own
+// `[[DefineOwnProperty]]` algorithm enforces the HTML LS "unforgeable"
+// restriction — a compatible redefinition (same getter/setter, same
+// enumerability, configurable left/set to `false`) succeeds, any
+// incompatible one (flip `[[Configurable]]` back to `true`, change
+// `[[Enumerable]]`, swap the getter/setter, or turn it into a plain data
+// property) is rejected. Mirrors
+// `windowproxy-define-own-property-unforgeable-same-origin.html`, which
+// exercises exactly this pair of cases per key.
+#[test]
+fn window_document_location_top_are_unforgeable_own_properties() {
+    let rt = runtime_with_dom(make_doc(), "");
+    let script = r#"
+(function(){
+    var out = [];
+    ['window','document','location','top'].forEach(function(key) {
+        var d0 = Object.getOwnPropertyDescriptor(window, key);
+        var get = d0.get, set = d0.set;
+        Object.defineProperty(window, key, {});
+        if (!Reflect.defineProperty(window, key, { configurable: false })) out.push(key + ':conf-false-failed');
+        Object.defineProperty(window, key, { enumerable: true });
+        if (!Reflect.defineProperty(window, key, { get: get })) out.push(key + ':get-unchanged-failed');
+        Object.defineProperty(window, key, { set: set });
+        if (!Reflect.defineProperty(window, key, { get: get, set: set })) out.push(key + ':get-set-unchanged-failed');
+        Object.defineProperty(window, key, { get: get, set: set, enumerable: true, configurable: false });
+
+        var threw1 = false;
+        try { Object.defineProperty(window, key, { configurable: true }); } catch (e) { threw1 = true; }
+        if (!threw1) out.push(key + ':conf-true-did-not-throw');
+        if (Reflect.defineProperty(window, key, { enumerable: false })) out.push(key + ':enum-false-should-fail');
+        var threw2 = false;
+        try { Object.defineProperty(window, key, { get: function(){}, set: set }); } catch(e) { threw2 = true; }
+        if (!threw2) out.push(key + ':get-changed-did-not-throw');
+        if (Reflect.defineProperty(window, key, { get: get, set: function(){} })) out.push(key + ':set-changed-should-fail');
+        var threw3 = false;
+        try { Object.defineProperty(window, key, { writable: false, configurable: true }); } catch(e) { threw3 = true; }
+        if (!threw3) out.push(key + ':writable-conf-did-not-throw');
+        if (Reflect.defineProperty(window, key, { value: window[key], enumerable: true })) out.push(key + ':value-enum-should-fail');
+    });
+    return out.join(', ');
+})()
+"#;
+    let r = rt.eval(script).unwrap();
+    assert_eq!(r, JsValue::String("".into()));
+}
