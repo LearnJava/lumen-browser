@@ -299,7 +299,12 @@ fn build_box_inner(
     let kind = match &doc.get(id).data {
         // Shadow root nodes are infrastructure — never rendered directly.
         // The flat tree already maps host children to shadow root's children.
-        NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => BoxKind::Skip,
+        NodeData::Text(_)
+        | NodeData::Comment(_)
+        | NodeData::ProcessingInstruction { .. }
+        | NodeData::Doctype { .. }
+        | NodeData::ShadowRoot { .. }
+        | NodeData::DocumentFragment => BoxKind::Skip,
         NodeData::Document | NodeData::Element { .. } => {
             if style.display == Display::None || is_closed_popover(doc, id) || is_svg_defs(doc, id) {
                 BoxKind::Skip

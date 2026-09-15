@@ -59,6 +59,16 @@ pub enum Token {
         public_id: Option<String>,
         system_id: Option<String>,
     },
+    /// `<?target data?>` (GAP-XMLDOC срез 23, BUG-786) — only emitted in
+    /// [`Tokenizer::xml_mode`], and only when `target` case-insensitively
+    /// differs from `"xml"` (that prefix is the XML declaration, XML §2.8,
+    /// not a processing instruction — it stays a bogus [`Token::Comment`],
+    /// srez 22). Outside `xml_mode`, every `<?...?>` remains a bogus
+    /// comment regardless of target, matching real HTML5 parsers.
+    ProcessingInstruction {
+        target: String,
+        data: String,
+    },
 }
 
 pub struct Tokenizer<'a> {
@@ -302,6 +312,14 @@ impl<'a> Iterator for Tokenizer<'a> {
             // «протекает» в дерево как видимый текстовый узел (GAP-XMLDOC
             // срез 22, BUG-786/BUG-685) — не XML-специфичный фикс, гейт
             // xml_mode не нужен, это базовая коррекция HTML5-токенизатора.
+            //
+            // GAP-XMLDOC срез 23 (BUG-786): в xml_mode `<?target data?>`
+            // с target != "xml" — настоящий XML processing instruction
+            // (`dom/nodes/ProcessingInstruction-literal-2.xhtml` и др.
+            // требуют `instanceof ProcessingInstruction`), не bogus
+            // comment. `consume_processing_instruction` сама разбирает
+            // target и заворачивает случай "xml" обратно в bogus comment.
+            Some('?') if self.xml_mode => self.consume_processing_instruction(),
             Some('?') => self.consume_bogus_comment_with_prefix(""),
             _ => {
                 // Битый '<' — отдаём как текст.
@@ -522,6 +540,51 @@ impl<'a> Tokenizer<'a> {
             data.push(c);
         }
         Some(Token::Comment(data))
+    }
+
+    /// XML §2.6 processing instruction, called only from `xml_mode`'s tag
+    /// open state after `<?` (GAP-XMLDOC срез 23, BUG-786). Target is the
+    /// leading `Name` production (here: ASCII-alnum/`-`/`_`/`:`, same char
+    /// class as [`consume_tag_name`][Self::consume_tag_name] minus
+    /// lower-casing — PI targets are case-sensitive); the rest up to `?>`
+    /// (single leading whitespace run stripped, spec §2.6) is `data`. If
+    /// the target turns out to be `"xml"` (case-insensitive) it is the XML
+    /// declaration, not a PI (spec §2.8) — that case is detected here, by
+    /// lookahead, after the target is already parsed, and redirected to
+    /// [`consume_bogus_comment_with_prefix`] to keep srez 22's behavior.
+    /// Lenient on EOF like that function: an unterminated PI still yields a
+    /// token with whatever was captured.
+    fn consume_processing_instruction(&mut self) -> Option<Token> {
+        self.consume(); // '?', still unconsumed by the tag-open-state dispatch
+        let mut target = String::new();
+        while let Some(c) = self.peek() {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':' {
+                target.push(c);
+                self.consume();
+            } else {
+                break;
+            }
+        }
+        if target.eq_ignore_ascii_case("xml") {
+            // XML declaration, not a PI (spec §2.8) — same bogus-comment
+            // shape as the non-xml_mode branch (srez 22), whose data starts
+            // with the '?' this function already consumed, so re-supply it
+            // as part of the prefix.
+            return self.consume_bogus_comment_with_prefix(&format!("?{target}"));
+        }
+        self.skip_whitespace();
+        let mut data = String::new();
+        loop {
+            if self.rest().starts_with("?>") {
+                self.pos += 2;
+                break;
+            }
+            match self.consume() {
+                Some(c) => data.push(c),
+                None => break,
+            }
+        }
+        Some(Token::ProcessingInstruction { target, data })
     }
 
     /// HTML5 §13.2.5.53–72: после `<!DOCTYPE` парсим имя, опционально
@@ -1031,6 +1094,48 @@ mod tests {
         let t = tok("<?xml version=\"1.0\"?><html>x</html>");
         assert!(matches!(&t[0], Token::Comment(data) if data == "?xml version=\"1.0\"?"));
         assert!(matches!(&t[1], Token::StartTag { name, .. } if name == "html"));
+    }
+
+    #[test]
+    fn processing_instruction_becomes_bogus_comment_without_xml_mode() {
+        // GAP-XMLDOC срез 23 (BUG-786): outside xml_mode, `<?target
+        // data?>` stays a bogus comment exactly as before this срез — the
+        // real-PI-token branch is gated on `xml_mode`, same discipline as
+        // every prior XML-only срез (2/9/16-21).
+        let t = tok("<?xml-stylesheet href=\"a.css\"?><p>x</p>");
+        assert!(matches!(&t[0], Token::Comment(data) if data == "?xml-stylesheet href=\"a.css\"?"));
+        assert!(matches!(&t[1], Token::StartTag { name, .. } if name == "p"));
+    }
+
+    #[test]
+    fn processing_instruction_in_xml_mode_becomes_real_pi_token() {
+        // GAP-XMLDOC срез 23 (BUG-786): `dom/nodes/ProcessingInstruction-literal-2.xhtml`
+        // requires `document.firstChild instanceof ProcessingInstruction`
+        // with `.target`/`.data` split on the first whitespace run — in
+        // xml_mode this must no longer collapse into a bogus comment.
+        let mut t = Tokenizer::new("<?xml-stylesheet href=\"support/style.css\" type=\"text/css\"?><html/>");
+        t.set_xml_mode(true);
+        let tokens: Vec<Token> = t.collect();
+        assert!(matches!(
+            &tokens[0],
+            Token::ProcessingInstruction { target, data }
+                if target == "xml-stylesheet" && data == "href=\"support/style.css\" type=\"text/css\""
+        ));
+        assert!(matches!(&tokens[1], Token::StartTag { name, .. } if name == "html"));
+    }
+
+    #[test]
+    fn xml_declaration_still_bogus_comment_in_xml_mode() {
+        // GAP-XMLDOC срез 23 (BUG-786): target "xml" (case-insensitive) is
+        // the XML declaration (spec §2.8), never a real PI, even in
+        // xml_mode where other targets now produce a real token — srez 22's
+        // regression test (`xml_flavoured_leading_xml_declaration_does_not_leak_as_text`)
+        // depends on this staying a bogus comment.
+        let mut t = Tokenizer::new("<?xml version=\"1.0\"?><html/>");
+        t.set_xml_mode(true);
+        let tokens: Vec<Token> = t.collect();
+        assert!(matches!(&tokens[0], Token::Comment(data) if data == "?xml version=\"1.0\"?"));
+        assert!(matches!(&tokens[1], Token::StartTag { name, .. } if name == "html"));
     }
 
     #[test]

@@ -4615,7 +4615,7 @@ _lumen_remove_child = function(parent, child) {
 var _orig_set_text_content = _lumen_set_text_content;
 _lumen_set_text_content = function(nid, text) {
     if (_mo_observers.length === 0) { _orig_set_text_content(nid, text); return; }
-    if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) {
+    if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid) || _lumen_is_processing_instruction_node(nid)) {
         var old = _lumen_get_text_content(nid);
         _orig_set_text_content(nid, text);
         _mo_notify(nid, 'characterData', null, old, null, null);
@@ -5143,6 +5143,7 @@ var NodeFilter = {
     SHOW_ELEMENT:        0x1,
     SHOW_TEXT:           0x4,
     SHOW_CDATA_SECTION:  0x8,
+    SHOW_PROCESSING_INSTRUCTION: 0x40,
     SHOW_COMMENT:        0x80,
     SHOW_DOCUMENT:       0x100,
     SHOW_DOCUMENT_TYPE:  0x200,
@@ -5153,8 +5154,8 @@ var NodeFilter = {
 // whatToShow bitmask and an optional filter callback or NodeFilter object.
 function _nf_accepts(nid, whatToShow, filter) {
     // whatToShow bitmask check
-    var nt = _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : 1); // 1=element, 3=text, 8=comment
-    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : (nt === 8 ? NodeFilter.SHOW_COMMENT : NodeFilter.SHOW_ELEMENT);
+    var nt = _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : (_lumen_is_processing_instruction_node(nid) ? 7 : 1)); // 1=element, 3=text, 7=PI, 8=comment
+    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : (nt === 8 ? NodeFilter.SHOW_COMMENT : (nt === 7 ? NodeFilter.SHOW_PROCESSING_INSTRUCTION : NodeFilter.SHOW_ELEMENT));
     if (!(whatToShow & bit)) return NodeFilter.FILTER_SKIP;
     if (!filter) return NodeFilter.FILTER_ACCEPT;
     var el = _lumen_make_element(nid);

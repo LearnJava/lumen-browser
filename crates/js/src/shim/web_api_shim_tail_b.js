@@ -1827,7 +1827,7 @@ var _lumen_click_in_progress = {};
 function _lumen_descendant_elements(nid, out) {
     var kids = _lumen_get_children(nid);
     for (var i = 0; i < kids.length; i++) {
-        if (_lumen_is_text_node(kids[i]) || _lumen_is_comment_node(kids[i])) continue;
+        if (_lumen_is_text_node(kids[i]) || _lumen_is_comment_node(kids[i]) || _lumen_is_processing_instruction_node(kids[i])) continue;
         out.push(kids[i]);
         _lumen_descendant_elements(kids[i], out);
     }

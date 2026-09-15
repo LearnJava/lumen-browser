@@ -764,3 +764,58 @@ lumen-html-parser --all-targets -- -D warnings` — чисто. `tree_builder.rs
 
 Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
 как таковая.
+
+## Срез 23 (2026-09-15): `<?target data?>` в xml_mode оставался bogus comment вместо настоящего ProcessingInstruction (`p1-gap-xmldoc-srez23`)
+
+Срез 22 завёл `Some('?') => consume_bogus_comment_with_prefix("")` без
+гейта `xml_mode` — правильно для plain HTML, но для XML-путей это
+недобор: `<?xml-stylesheet ...?>` и любой другой non-"xml" target в
+`.xhtml`/`.xht`/`.svg` — настоящий processing instruction (XML §2.6), а
+не bogus comment. WPT `dom/nodes/ProcessingInstruction-literal-2.xhtml`
+и соседние требуют `document.firstChild instanceof ProcessingInstruction`
+с `.target`/`.data`, разложенными по первому пробелу.
+
+**Фикс:** в `xml_mode` `<?` ведёт в новую `consume_processing_instruction`
+(`tokenizer.rs`) — парсит `target` (XML Name-подобный класс символов,
+регистр не нормализуется), затем `data` до `?>`. Если `target`
+регистронезависимо равен `"xml"` — это XML-декларация (XML §2.8), не PI,
+и функция сама перенаправляет в `consume_bogus_comment_with_prefix`,
+сохраняя поведение среза 22. Новый `Token::ProcessingInstruction { target,
+data }` заведён во все ветки `tree_builder.rs`, что уже принимают
+`Token::Comment` (insertion modes `initial`/`before_html`/`in_head`/
+`in_body`/`after_body`/`after_after_body` и т.д.) через общий
+`insert_processing_instruction`.
+
+`lumen-dom`: новый вариант `NodeData::ProcessingInstruction { target,
+data }` с арена-обвязкой (`create_processing_instruction` — без лимита,
+как `create_comment`, вызывается только из парсера; и
+`try_create_processing_instruction` — с проверкой `MAX_DOM_NODES`, для
+будущих JS-мутаций живого дерева). `box_tree/build.rs` и
+`layout/counters.rs` пропускают узел как `Skip`/чистый, в той же группе,
+что `Comment`/`Doctype`. `inspector.rs` — метка `?target` в дереве
+devtools.
+
+JS-сторона: живой PI получил прототипную обвязку `_LUMEN_WRAPPER_PI_MEMBERS`
+(`CharacterData`-поверхность + readonly `target`), отдельную от уже
+существующего detached JS-only `document.createProcessingInstruction`
+(тот остаётся как был — без арена-обвязки, для скриптово созданных PI).
+`_lumen_build_element` выбирает `kind: 'pi'` по новому нативному хелперу
+`_lumen_is_processing_instruction_node`; `nodeType` (7),
+`NodeFilter.SHOW_PROCESSING_INSTRUCTION`, `nodeName`
+(dom_core.rs — target), `textContent`/`serializeNode`/`importNode`
+(dom_helpers.rs) и `MutationObserver`/`appendChild`-CharacterData-guard
+(web_api_shim_mid*.js) — все обучены новому виду узла тем же путём, что
+уже проведён для Comment.
+
+Тесты: `processing_instruction_in_xml_mode_becomes_real_pi_token`,
+`processing_instruction_becomes_bogus_comment_without_xml_mode`,
+`xml_declaration_still_bogus_comment_in_xml_mode` (`tokenizer.rs`).
+`cargo test -p lumen-html-parser -p lumen-dom -p lumen-js` — зелёные.
+`cargo clippy --workspace --all-targets -- -D warnings` — чисто.
+`scripts/scoped-test.sh`: тот же чужой дрейф CPU-эталонов
+([BUG-1008](BUG-1008-OPEN.md), те же 7 файлов). `dump_golden.py` — тот же
+базовый дрейф 4/12, что и на `main` (не связан с этим срезом).
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая — self-closing SVG `<script href>`, HTML-breakout внутри
+foreign `<script>`, unclosed foreign `<script>` исполняется.

@@ -133,8 +133,12 @@ pub(super) fn find_first_matching(
 /// descendants entirely per spec, so that exclusion has to stay narrow to the
 /// recursive case only).
 pub(super) fn collect_text_content(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> String {
-    if let lumen_dom::NodeData::Comment(s) = &doc.get(id).data {
-        return s.clone();
+    match &doc.get(id).data {
+        lumen_dom::NodeData::Comment(s) => return s.clone(),
+        // GAP-XMLDOC срез 23: PI's `data`/`nodeValue`/`textContent` are all the
+        // same field (DOM §4.5), same "own string verbatim" rule as Comment.
+        lumen_dom::NodeData::ProcessingInstruction { data, .. } => return data.clone(),
+        _ => {}
     }
     let mut out = String::new();
     collect_text_inner(doc, id, &mut out);
@@ -192,6 +196,10 @@ pub(super) fn set_text_content(doc: &mut lumen_dom::Document, id: lumen_dom::Nod
     match &mut doc.get_mut(id).data {
         lumen_dom::NodeData::Text(s) | lumen_dom::NodeData::Comment(s) => {
             *s = text.to_string();
+            return;
+        }
+        lumen_dom::NodeData::ProcessingInstruction { data, .. } => {
+            *data = text.to_string();
             return;
         }
         _ => {}
@@ -369,6 +377,16 @@ pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, o
                     out.push_str(s);
                     out.push_str("-->");
                 }
+                lumen_dom::NodeData::ProcessingInstruction { target, data } => {
+                    out.push_str("<?");
+                    out.push_str(target);
+                    if !data.is_empty() {
+                        out.push(' ');
+                        out.push_str(data);
+                    }
+                    out.push('?');
+                    out.push('>');
+                }
                 lumen_dom::NodeData::Element { name, attrs } => {
                     let tag = name.local.to_ascii_lowercase();
                     out.push('<');
@@ -449,6 +467,9 @@ pub(super) fn import_node(
             }
             lumen_dom::NodeData::Text(s) => (dst.create_text(s.clone()), true),
             lumen_dom::NodeData::Comment(s) => (dst.create_comment(s.clone()), true),
+            lumen_dom::NodeData::ProcessingInstruction { target, data } => {
+                (dst.create_processing_instruction(target.clone(), data.clone()), true)
+            }
             // Doctype/Document/ShadowRoot/DocumentFragment cannot occur among a
             // parsed fragment's top-level children (`in body` ignores a DOCTYPE
             // token) — fall back to an inert, unused fragment node rather than

@@ -261,6 +261,15 @@ pub enum NodeData {
     },
     Text(String),
     Comment(String),
+    /// XML processing instruction, e.g. `<?xml-stylesheet href="a.css"?>`.
+    ///
+    /// Only constructed by the html-parser's xml_mode tokenizer (GAP-XMLDOC
+    /// srez 23) — the default HTML5 parse path never produces this variant;
+    /// `<?...?>` there stays a bogus comment (srez 22).
+    ProcessingInstruction {
+        target: String,
+        data: String,
+    },
     /// Inert subtree used as the content container for `<template>` elements.
     ///
     /// DOM Living Standard §4.5: a DocumentFragment has no parent and is not
@@ -1092,6 +1101,36 @@ impl Document {
         Ok(self.alloc(NodeData::Comment(content.into())))
     }
 
+    /// Create a processing-instruction node unconditionally. Used by the html-parser's
+    /// xml_mode tokenizer — does **not** enforce [`MAX_DOM_NODES`]. JS-driven mutations
+    /// should use [`try_create_processing_instruction`][Self::try_create_processing_instruction].
+    pub fn create_processing_instruction(
+        &mut self,
+        target: impl Into<String>,
+        data: impl Into<String>,
+    ) -> NodeId {
+        self.alloc(NodeData::ProcessingInstruction {
+            target: target.into(),
+            data: data.into(),
+        })
+    }
+
+    /// Create a processing-instruction node, returning `Err(`[`NodeLimitExceeded`]`)` if the
+    /// arena already holds [`MAX_DOM_NODES`] or more nodes.
+    pub fn try_create_processing_instruction(
+        &mut self,
+        target: impl Into<String>,
+        data: impl Into<String>,
+    ) -> Result<NodeId, NodeLimitExceeded> {
+        if self.nodes.len() >= MAX_DOM_NODES {
+            return Err(NodeLimitExceeded);
+        }
+        Ok(self.alloc(NodeData::ProcessingInstruction {
+            target: target.into(),
+            data: data.into(),
+        }))
+    }
+
     /// Allocate a `DocumentFragment` node in the arena.
     ///
     /// Used by the tree builder to hold `<template>` content. The fragment is
@@ -1399,6 +1438,7 @@ fn write_tree(doc: &Document, id: NodeId, depth: usize, f: &mut fmt::Formatter<'
         }
         NodeData::Text(s) => writeln!(f, "\"{}\"", s.replace('\n', "\\n"))?,
         NodeData::Comment(s) => writeln!(f, "<!--{s}-->")?,
+        NodeData::ProcessingInstruction { target, data } => writeln!(f, "<?{target} {data}?>")?,
     }
     for &child in &node.children {
         write_tree(doc, child, depth + 1, f)?;

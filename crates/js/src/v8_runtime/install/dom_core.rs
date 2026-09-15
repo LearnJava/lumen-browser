@@ -445,6 +445,8 @@ pub(crate) fn install_node_properties(
                 NodeData::Text(_) => "#text".into(),
                 NodeData::Document => "#document".into(),
                 NodeData::Comment(_) => "#comment".into(),
+                // DOM LS §4.9 nodeName: for a ProcessingInstruction, the target.
+                NodeData::ProcessingInstruction { target, .. } => target.clone(),
                 NodeData::Doctype { .. } => "html".into(),
                 NodeData::ShadowRoot { .. } => "#shadow-root".into(),
                 NodeData::DocumentFragment => "#document-fragment".into(),
@@ -480,12 +482,24 @@ pub(crate) fn install_node_properties(
             }
         );
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_is_comment_node",
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Comment(_)))
+            }
+        );
+        let d = Arc::clone(&doc);
+        // GAP-XMLDOC срез 23 (BUG-786): a live, parser-created `<?target data?>`
+        // node — distinguishes it from a Comment for the wrapper's `nodeType`/
+        // prototype selection below, same role `_lumen_is_comment_node` plays.
+        reg!(scope, ctx, store,
+            "_lumen_is_processing_instruction_node",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::ProcessingInstruction { .. }))
             }
         );
         // BUG-321: DocumentType support (mirrors the rquickjs registration in
