@@ -2276,6 +2276,463 @@ function Option(text, value, defaultSelected, selected) {
 }
 window.Option = Option;
 
+// ── <table>/<tr>/<thead>/<tbody>/<tfoot> (HTML LS §4.9.11, BUG-581) ──────────
+// The four table interfaces (`HTMLTableElement`, `HTMLTableSectionElement` —
+// shared by thead/tbody/tfoot, `HTMLTableRowElement`, `HTMLTableCellElement`)
+// plus `HTMLTableCaptionElement` were generated as bare non-constructible
+// stubs (`web_api_shim_mid.js`'s interface loop) with zero table-specific
+// members. Every helper below is namespace- and tag-aware because the tests
+// deliberately plant foreign-namespace/`createElementNS` lookalikes (a `<tr>`
+// in namespace "foo" must not count as a row) — `_lumen_get_tag_name` upper-
+// cases regardless of namespace (BUG-322), so a bare tag compare is not
+// enough; `_lumen_is_html_tag` folds in the `_lumen_is_html_namespace` check
+// already used by `_lumen_html_collection_named` above.
+function _lumen_is_html_tag(nid, tag) {
+    return _lumen_is_html_namespace(nid) && (_lumen_get_tag_name(nid) || '').toUpperCase() === tag;
+}
+// Row group used by both `HTMLTableElement.rows` (sandwiched between thead's
+// and tfoot's own rows) and `HTMLTableRowElement.sectionRowIndex` (a `tr`
+// that is a direct child of `table`, HTML LS's "table" bucket, shares this
+// group's numbering with `tbody` children rather than getting its own).
+function _lumen_table_middle_rows(table_nid) {
+    var kids = _lumen_element_child_nids(table_nid);
+    var out = [];
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_html_tag(kids[i], 'TR')) {
+            out.push(kids[i]);
+        } else if (_lumen_is_html_tag(kids[i], 'TBODY')) {
+            var trs = _lumen_element_child_nids(kids[i]);
+            for (var j = 0; j < trs.length; j++) {
+                if (_lumen_is_html_tag(trs[j], 'TR')) out.push(trs[j]);
+            }
+        }
+    }
+    return out;
+}
+// The rows a `thead`/`tbody`/`tfoot` element itself directly owns — used both
+// for that section's own `.rows` and as one third of the table's `.rows`.
+function _lumen_section_rows(section_nid) {
+    var kids = _lumen_element_child_nids(section_nid);
+    var out = [];
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_html_tag(kids[i], 'TR')) out.push(kids[i]);
+    }
+    return out;
+}
+// HTML LS §4.9.11 `HTMLTableElement.rows`: thead's rows, then the "table or
+// tbody" middle bucket, then tfoot's rows — each section contributing in tree
+// order among possibly-multiple same-kind sections.
+function _lumen_table_rows(table_nid) {
+    var kids = _lumen_element_child_nids(table_nid);
+    var theadRows = [], tfootRows = [];
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_html_tag(kids[i], 'THEAD')) {
+            var arr = theadRows;
+        } else if (_lumen_is_html_tag(kids[i], 'TFOOT')) {
+            arr = tfootRows;
+        } else {
+            continue;
+        }
+        var trs = _lumen_element_child_nids(kids[i]);
+        for (var j = 0; j < trs.length; j++) {
+            if (_lumen_is_html_tag(trs[j], 'TR')) arr.push(trs[j]);
+        }
+    }
+    return theadRows.concat(_lumen_table_middle_rows(table_nid), tfootRows);
+}
+function _lumen_row_cells(row_nid) {
+    var kids = _lumen_element_child_nids(row_nid);
+    var out = [];
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_html_tag(kids[i], 'TD') || _lumen_is_html_tag(kids[i], 'TH')) out.push(kids[i]);
+    }
+    return out;
+}
+// First direct child of `parent_nid` (any node type — text nodes included,
+// see the `caption` getter/setter below, whose spec insertion point is "the
+// first child", not "the first element child") whose tag is `tag`.
+function _lumen_table_child_of_tag(parent_nid, tag) {
+    var kids = _lumen_get_children(parent_nid);
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_html_tag(kids[i], tag)) return kids[i];
+    }
+    return -1;
+}
+// HTML LS §4.9.1 `createTHead`/the `tHead` setter: insertion point is
+// immediately before the first ELEMENT child that is neither caption nor
+// colgroup (intervening text nodes stay where they are), or the end of the
+// table if there is no such element.
+function _lumen_table_thead_insert_ref(table_nid) {
+    var kids = _lumen_element_child_nids(table_nid);
+    for (var i = 0; i < kids.length; i++) {
+        if (!_lumen_is_html_tag(kids[i], 'CAPTION') && !_lumen_is_html_tag(kids[i], 'COLGROUP')) {
+            return kids[i];
+        }
+    }
+    return -1;
+}
+// `createTBody`: inserted immediately after the last tbody child, or at the
+// end of the table if there is none.
+function _lumen_table_tbody_insert_ref(table_nid) {
+    var kids = _lumen_element_child_nids(table_nid);
+    var lastIdx = -1;
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_html_tag(kids[i], 'TBODY')) lastIdx = i;
+    }
+    if (lastIdx === -1) return -1;
+    return (lastIdx + 1 < kids.length) ? kids[lastIdx + 1] : -1;
+}
+
+Object.defineProperty(HTMLTableElement.prototype, 'rows', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return _lumen_make_nid_collection(function() { return n === -1 ? [] : _lumen_table_rows(n); },
+                                          HTMLCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLTableElement.prototype, 'tBodies', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return _lumen_make_nid_collection(function() {
+            if (n === -1) return [];
+            return _lumen_element_child_nids(n).filter(function(c) { return _lumen_is_html_tag(c, 'TBODY'); });
+        }, HTMLCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+// The `caption`/`tHead`/`tFoot` setters mirror the WebIDL binding for a
+// nullable interface-typed attribute: the interface-membership check
+// (`instanceof`) runs first and throws TypeError on mismatch (a plain `div`
+// is not even an `HTMLTableSectionElement`); only once that passes does the
+// spec-prose "is its local name actually thead/tfoot" check run, and THAT one
+// throws HierarchyRequestError -- a `tbody` passed as `tHead` IS an
+// `HTMLTableSectionElement` (thead/tbody/tfoot share one interface), so it
+// clears the TypeError gate and fails at the second, DOM-level gate instead
+// (`tHead.html`/`tFoot.html` assert exactly this split).
+Object.defineProperty(HTMLTableElement.prototype, 'caption', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var c = _lumen_table_child_of_tag(n, 'CAPTION');
+        return c === -1 ? null : _lumen_make_element(c);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        if (v !== null && !(v instanceof HTMLTableCaptionElement)) {
+            throw new TypeError("HTMLTableElement.caption: value must be a caption element or null");
+        }
+        // BUG-325-style pre-insert validity: `v` would become both an ancestor
+        // and a descendant of `this` if it already contains this table
+        // (`caption-methods.html`'s "rethrows exception" case builds exactly
+        // that cycle before assigning).
+        if (v !== null && _lumen_node_contains(v, this)) {
+            throw new DOMException("HTMLTableElement.caption: the new caption contains this table", 'HierarchyRequestError');
+        }
+        var existing = _lumen_table_child_of_tag(n, 'CAPTION');
+        if (existing !== -1) _lumen_remove_child(n, existing);
+        if (v !== null) {
+            var kids = _lumen_get_children(n);
+            if (kids.length > 0) _lumen_insert_before(n, v.__nid__, kids[0]);
+            else _lumen_append_child(n, v.__nid__);
+        }
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLTableElement.prototype, 'tHead', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var t = _lumen_table_child_of_tag(n, 'THEAD');
+        return t === -1 ? null : _lumen_make_element(t);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        if (v !== null && !(v instanceof HTMLTableSectionElement)) {
+            throw new TypeError("HTMLTableElement.tHead: value must be a thead element or null");
+        }
+        if (v !== null && (_lumen_get_tag_name(v.__nid__) || '').toUpperCase() !== 'THEAD') {
+            throw new DOMException("HTMLTableElement.tHead: value is not a thead element", 'HierarchyRequestError');
+        }
+        if (v !== null && _lumen_node_contains(v, this)) {
+            throw new DOMException("HTMLTableElement.tHead: the new thead contains this table", 'HierarchyRequestError');
+        }
+        var existing = _lumen_table_child_of_tag(n, 'THEAD');
+        if (existing !== -1) _lumen_remove_child(n, existing);
+        if (v !== null) {
+            var ref = _lumen_table_thead_insert_ref(n);
+            if (ref === -1) _lumen_append_child(n, v.__nid__);
+            else _lumen_insert_before(n, v.__nid__, ref);
+        }
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLTableElement.prototype, 'tFoot', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var t = _lumen_table_child_of_tag(n, 'TFOOT');
+        return t === -1 ? null : _lumen_make_element(t);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        if (v !== null && !(v instanceof HTMLTableSectionElement)) {
+            throw new TypeError("HTMLTableElement.tFoot: value must be a tfoot element or null");
+        }
+        if (v !== null && (_lumen_get_tag_name(v.__nid__) || '').toUpperCase() !== 'TFOOT') {
+            throw new DOMException("HTMLTableElement.tFoot: value is not a tfoot element", 'HierarchyRequestError');
+        }
+        if (v !== null && _lumen_node_contains(v, this)) {
+            throw new DOMException("HTMLTableElement.tFoot: the new tfoot contains this table", 'HierarchyRequestError');
+        }
+        var existing = _lumen_table_child_of_tag(n, 'TFOOT');
+        if (existing !== -1) {
+            // Replace in place when one is already present, matching `tFoot.html`'s
+            // expectation that reassigning keeps the same sibling position.
+            if (v !== null) _lumen_insert_before(n, v.__nid__, existing);
+            _lumen_remove_child(n, existing);
+        } else if (v !== null) {
+            _lumen_append_child(n, v.__nid__);
+        }
+    },
+    enumerable: true, configurable: true,
+});
+HTMLTableElement.prototype.createCaption = function() {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) throw new TypeError('createCaption: not a live table element');
+    var existing = _lumen_table_child_of_tag(n, 'CAPTION');
+    if (existing !== -1) return _lumen_make_element(existing);
+    var capNid = _lumen_create_element('caption');
+    var kids = _lumen_get_children(n);
+    if (kids.length > 0) _lumen_insert_before(n, capNid, kids[0]);
+    else _lumen_append_child(n, capNid);
+    return _lumen_make_element(capNid);
+};
+HTMLTableElement.prototype.deleteCaption = function() {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return;
+    var existing = _lumen_table_child_of_tag(n, 'CAPTION');
+    if (existing !== -1) _lumen_remove_child(n, existing);
+};
+HTMLTableElement.prototype.createTHead = function() {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) throw new TypeError('createTHead: not a live table element');
+    var existing = _lumen_table_child_of_tag(n, 'THEAD');
+    if (existing !== -1) return _lumen_make_element(existing);
+    var theadNid = _lumen_create_element('thead');
+    var ref = _lumen_table_thead_insert_ref(n);
+    if (ref === -1) _lumen_append_child(n, theadNid);
+    else _lumen_insert_before(n, theadNid, ref);
+    return _lumen_make_element(theadNid);
+};
+HTMLTableElement.prototype.deleteTHead = function() {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return;
+    var existing = _lumen_table_child_of_tag(n, 'THEAD');
+    if (existing !== -1) _lumen_remove_child(n, existing);
+};
+HTMLTableElement.prototype.createTFoot = function() {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) throw new TypeError('createTFoot: not a live table element');
+    var existing = _lumen_table_child_of_tag(n, 'TFOOT');
+    if (existing !== -1) return _lumen_make_element(existing);
+    var tfootNid = _lumen_create_element('tfoot');
+    _lumen_append_child(n, tfootNid);
+    return _lumen_make_element(tfootNid);
+};
+HTMLTableElement.prototype.deleteTFoot = function() {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return;
+    var existing = _lumen_table_child_of_tag(n, 'TFOOT');
+    if (existing !== -1) _lumen_remove_child(n, existing);
+};
+// `createTBody` always mints a new element -- unlike caption/thead/tfoot it
+// never returns an existing one (`createTBody.html`: two pre-existing tbodies
+// still get a third one appended after them).
+HTMLTableElement.prototype.createTBody = function() {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) throw new TypeError('createTBody: not a live table element');
+    var tbodyNid = _lumen_create_element('tbody');
+    var ref = _lumen_table_tbody_insert_ref(n);
+    if (ref === -1) _lumen_append_child(n, tbodyNid);
+    else _lumen_insert_before(n, tbodyNid, ref);
+    return _lumen_make_element(tbodyNid);
+};
+// HTML LS §4.9.11 `insertRow(index)`: `rows`-relative index; an empty table
+// gets a fresh (or the last existing) tbody, everything else keeps the target
+// row's own parent (a table-direct `tr` stays a table-direct `tr`).
+HTMLTableElement.prototype.insertRow = function(index) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) throw new TypeError('insertRow: not a live table element');
+    var idx = Math.trunc(Number(index === undefined ? -1 : index));
+    if (!isFinite(idx)) idx = -1;
+    var rows = _lumen_table_rows(n);
+    if (idx < -1 || idx > rows.length) {
+        throw new DOMException('insertRow: index out of range', 'IndexSizeError');
+    }
+    var trNid = _lumen_create_element('tr');
+    if (rows.length === 0) {
+        var kids = _lumen_element_child_nids(n);
+        var lastTbody = -1;
+        for (var i = 0; i < kids.length; i++) {
+            if (_lumen_is_html_tag(kids[i], 'TBODY')) lastTbody = kids[i];
+        }
+        if (lastTbody === -1) {
+            lastTbody = _lumen_create_element('tbody');
+            _lumen_append_child(n, lastTbody);
+        }
+        _lumen_append_child(lastTbody, trNid);
+    } else if (idx === -1 || idx === rows.length) {
+        var lastParent = _lumen_u2n(_lumen_get_parent(rows[rows.length - 1]));
+        _lumen_append_child(lastParent, trNid);
+    } else {
+        var ithParent = _lumen_u2n(_lumen_get_parent(rows[idx]));
+        _lumen_insert_before(ithParent, trNid, rows[idx]);
+    }
+    return _lumen_make_element(trNid);
+};
+HTMLTableElement.prototype.deleteRow = function(index) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return;
+    var idx = Math.trunc(Number(index === undefined ? -1 : index));
+    if (!isFinite(idx)) idx = -1;
+    var rows = _lumen_table_rows(n);
+    if (idx < -1 || idx >= rows.length) {
+        throw new DOMException('deleteRow: index out of range', 'IndexSizeError');
+    }
+    var target = (idx === -1) ? rows[rows.length - 1] : rows[idx];
+    if (target === undefined) return;
+    var parent = _lumen_u2n(_lumen_get_parent(target));
+    if (parent !== null) _lumen_remove_child(parent, target);
+};
+
+// ── <thead>/<tbody>/<tfoot> (shared `HTMLTableSectionElement` interface) ─────
+Object.defineProperty(HTMLTableSectionElement.prototype, 'rows', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return _lumen_make_nid_collection(function() { return n === -1 ? [] : _lumen_section_rows(n); },
+                                          HTMLCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+HTMLTableSectionElement.prototype.insertRow = function(index) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) throw new TypeError('insertRow: not a live element');
+    var idx = Math.trunc(Number(index === undefined ? -1 : index));
+    if (!isFinite(idx)) idx = -1;
+    var rows = _lumen_section_rows(n);
+    if (idx < -1 || idx > rows.length) {
+        throw new DOMException('insertRow: index out of range', 'IndexSizeError');
+    }
+    var trNid = _lumen_create_element('tr');
+    if (idx === -1 || idx === rows.length) _lumen_append_child(n, trNid);
+    else _lumen_insert_before(n, trNid, rows[idx]);
+    return _lumen_make_element(trNid);
+};
+HTMLTableSectionElement.prototype.deleteRow = function(index) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return;
+    var idx = Math.trunc(Number(index === undefined ? -1 : index));
+    if (!isFinite(idx)) idx = -1;
+    var rows = _lumen_section_rows(n);
+    if (idx < -1 || idx >= rows.length) {
+        throw new DOMException('deleteRow: index out of range', 'IndexSizeError');
+    }
+    var target = (idx === -1) ? rows[rows.length - 1] : rows[idx];
+    if (target !== undefined) _lumen_remove_child(n, target);
+};
+
+// ── <tr> (HTMLTableRowElement) ────────────────────────────────────────────
+Object.defineProperty(HTMLTableRowElement.prototype, 'cells', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return _lumen_make_nid_collection(function() { return n === -1 ? [] : _lumen_row_cells(n); },
+                                          HTMLCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+// `rowIndex`: position within the OWNING TABLE's whole `.rows` (thead+middle+
+// tfoot); -1 if the row is not part of a table at all (`rowIndex.html`).
+Object.defineProperty(HTMLTableRowElement.prototype, 'rowIndex', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return -1;
+        var parent = _lumen_u2n(_lumen_get_parent(n));
+        if (parent === null) return -1;
+        var table = -1;
+        if (_lumen_is_html_tag(parent, 'TABLE')) {
+            table = parent;
+        } else if (_lumen_is_html_tag(parent, 'THEAD') || _lumen_is_html_tag(parent, 'TBODY')
+                   || _lumen_is_html_tag(parent, 'TFOOT')) {
+            var grandparent = _lumen_u2n(_lumen_get_parent(parent));
+            if (grandparent !== null && _lumen_is_html_tag(grandparent, 'TABLE')) table = grandparent;
+        }
+        return table === -1 ? -1 : _lumen_table_rows(table).indexOf(n);
+    },
+    enumerable: true, configurable: true,
+});
+// `sectionRowIndex`: position within the immediately-enclosing group -- the
+// section's own rows for thead/tbody/tfoot children, but the table-wide
+// "middle bucket" (§`_lumen_table_middle_rows`) for a `tr` that is a direct
+// child of `table` itself (`sectionRowIndex.html`'s "implicit tbody" cases).
+Object.defineProperty(HTMLTableRowElement.prototype, 'sectionRowIndex', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return -1;
+        var parent = _lumen_u2n(_lumen_get_parent(n));
+        if (parent === null) return -1;
+        if (_lumen_is_html_tag(parent, 'TABLE')) return _lumen_table_middle_rows(parent).indexOf(n);
+        if (_lumen_is_html_tag(parent, 'THEAD') || _lumen_is_html_tag(parent, 'TBODY')
+            || _lumen_is_html_tag(parent, 'TFOOT')) {
+            return _lumen_section_rows(parent).indexOf(n);
+        }
+        return -1;
+    },
+    enumerable: true, configurable: true,
+});
+HTMLTableRowElement.prototype.insertCell = function(index) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) throw new TypeError('insertCell: not a live element');
+    var idx = Math.trunc(Number(index === undefined ? -1 : index));
+    if (!isFinite(idx)) idx = -1;
+    var cells = _lumen_row_cells(n);
+    if (idx < -1 || idx > cells.length) {
+        throw new DOMException('insertCell: index out of range', 'IndexSizeError');
+    }
+    var tdNid = _lumen_create_element('td');
+    if (idx === -1 || idx === cells.length) _lumen_append_child(n, tdNid);
+    else _lumen_insert_before(n, tdNid, cells[idx]);
+    return _lumen_make_element(tdNid);
+};
+HTMLTableRowElement.prototype.deleteCell = function(index) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return;
+    var idx = Math.trunc(Number(index === undefined ? -1 : index));
+    if (!isFinite(idx)) idx = -1;
+    var cells = _lumen_row_cells(n);
+    if (idx < -1 || idx >= cells.length) {
+        throw new DOMException('deleteCell: index out of range', 'IndexSizeError');
+    }
+    var target = (idx === -1) ? cells[cells.length - 1] : cells[idx];
+    if (target !== undefined) _lumen_remove_child(n, target);
+};
+// HTML LS §4.9.10 `HTMLTableCellElement.cellIndex`: -1 without a `tr` parent
+// (own or via an intervening non-HTML/non-tr element), else this cell's
+// position among the row's OWN td/th children (`cellIndex.html`).
+Object.defineProperty(HTMLTableCellElement.prototype, 'cellIndex', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return -1;
+        var parent = _lumen_u2n(_lumen_get_parent(n));
+        if (parent === null || !_lumen_is_html_tag(parent, 'TR')) return -1;
+        return _lumen_row_cells(parent).indexOf(n);
+    },
+    enumerable: true, configurable: true,
+});
+
 // ── Text selection on <input>/<textarea> (HTML LS §4.10.5.4) ─────────────────
 function _lumen_selection_applies(nid) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
