@@ -2613,7 +2613,17 @@ impl IncrementalTreeBuilder {
     /// [Self::resolve_content_namespace] with `tag_name = ""` — CDATA isn't
     /// a start tag, so the MathML `mglyph`/`malignmark` exception (which
     /// only ever concerns an incoming tag name) never applies here.
+    ///
+    /// In `xml_mode` (GAP-XMLDOC срез 26, BUG-786) this is unconditionally
+    /// `true`: HTML LS §13.2.5.5 "cdata-in-html-content" only forbids CDATA
+    /// outside foreign content because HTML5 has no XML parsing mode of its
+    /// own, but a real `.xhtml`/`.xht`/`.svg` document follows XML §2.7,
+    /// where a CDATA section is legal wherever character data is —
+    /// `<div><![CDATA[E]]></div>` is ordinary XML, not an SVG/MathML trick.
     fn cdata_sections_allowed(&self) -> bool {
+        if self.xml_mode {
+            return true;
+        }
         let content_ns = if self.open_elements.len() == 1 {
             match &self.fragment_context {
                 Some(ctx) => {
@@ -4969,6 +4979,44 @@ mod tests {
         let doc = parse_xml_flavoured("<style>div { color: red; }</style>");
         let s = doc.to_string();
         assert!(s.contains("div { color: red; }"));
+    }
+
+    #[test]
+    fn xml_flavoured_cdata_in_ordinary_html_element_becomes_text() {
+        // GAP-XMLDOC срез 26 (BUG-786): `cdata_sections_allowed` used to
+        // gate real CDATA sections on the current node being foreign
+        // (SVG/MathML) — correct for plain HTML5, but real XML (XML §2.7)
+        // allows a CDATA section anywhere character data is, e.g.
+        // `css/CSS2/selectors/first-letter-selector-000.xht`'s
+        // `<div class="test"><![CDATA[E]]></div>`. Before this fix "E"
+        // never reached the tree — it collapsed into a bogus comment.
+        let doc = parse_xml_flavoured(r#"<div class="test"><![CDATA[E]]></div>"#);
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let text_children: Vec<&lumen_dom::NodeData> = doc
+            .get(div)
+            .children
+            .iter()
+            .map(|&c| &doc.get(c).data)
+            .collect();
+        assert!(
+            text_children
+                .iter()
+                .any(|d| matches!(d, lumen_dom::NodeData::Text(t) if t == "E")),
+            "CDATA text lost or turned into a comment: {}",
+            doc
+        );
+    }
+
+    #[test]
+    fn plain_parse_cdata_in_ordinary_html_element_stays_bogus_comment() {
+        // Regression anchor: outside xml_mode, HTML5's "cdata-in-html-content"
+        // parse error must keep firing on a plain, non-foreign element — only
+        // parse_xml_flavoured opts into treating `<![CDATA[` as real CDATA
+        // everywhere.
+        let doc = parse(r#"<div class="test"><![CDATA[E]]></div>"#);
+        let s = doc.to_string();
+        assert!(!s.contains(">E<"), "plain HTML parse must not surface CDATA as bare text: {s}");
     }
 
     // --- parse_xml_flavoured / GAP-XMLDOC срез 2: self-closing non-void tags ---
