@@ -1853,14 +1853,25 @@ impl IncrementalTreeBuilder {
     fn mode_in_row(&mut self, token: Token) {
         match token {
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if matches!(name.as_str(), "th" | "td") => {
                 self.clear_stack_to_table_row_context();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.insertion_mode = InsertionMode::InCell;
-                self.active_formatting.push(ActiveFormattingEntry::Marker);
+                // GAP-XMLDOC срез 18 (BUG-786): same self_closing-dropping
+                // shape as the `<table>`/`<select>`/`<button>` arms (срез
+                // 16) — this used to push straight onto `open_elements` and
+                // ignore `self_closing` entirely, so a self-closing `<td/>`
+                // in an XML-flavoured document (measured on
+                // `css/CSS2/syntax/colors-006-ref.xht`, 32 occurrences)
+                // stayed open forever and swallowed every sibling cell.
+                self.push_open_element(el, self_closing);
+                if !(self.xml_mode && self_closing) {
+                    self.insertion_mode = InsertionMode::InCell;
+                    self.active_formatting.push(ActiveFormattingEntry::Marker);
+                }
             }
             Token::EndTag { ref name } if name == "tr" => {
                 if self.has_element_in_table_scope("tr") {
@@ -4859,6 +4870,26 @@ mod tests {
         let body = doc.body().expect("body");
         let children: Vec<NodeId> = doc.get(body).children.clone();
         assert_eq!(children.len(), 3, "three self-closed divs must be siblings: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_td_does_not_nest_siblings() {
+        // GAP-XMLDOC срез 18 (BUG-786): same class of defect as the
+        // `<table>`/`<select>`/`<button>` arm above (срез 16), this time in
+        // `mode_in_row` — measured on `css/CSS2/syntax/colors-006-ref.xht`
+        // (32 self-closing `<td/>` in the vendored WPT corpus).
+        let doc = parse_xml_flavoured(
+            r#"<table><tr><td class="a"/><td class="b"/><td class="c"/></tr></table>"#,
+        );
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let tbody_or_tr = doc.get(table).children[0];
+        // Depending on whether an implied <tbody> was inserted, walk down to
+        // the <tr>.
+        let is_tr = matches!(&doc.get(tbody_or_tr).data, NodeData::Element { name, .. } if name.local == "tr");
+        let tr = if is_tr { tbody_or_tr } else { doc.get(tbody_or_tr).children[0] };
+        let cells: Vec<NodeId> = doc.get(tr).children.clone();
+        assert_eq!(cells.len(), 3, "three self-closed <td> must be siblings: {}", doc);
     }
 
     #[test]
