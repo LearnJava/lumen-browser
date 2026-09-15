@@ -2008,7 +2008,9 @@ impl IncrementalTreeBuilder {
             Token::Text(s) => self.insert_text(&s),
             Token::Comment(s) => self.insert_comment(s),
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "option" => {
                 if let Some(&top) = self.open_elements.last()
                     && self.element_local(top) == "option"
@@ -2017,10 +2019,17 @@ impl IncrementalTreeBuilder {
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                // GAP-XMLDOC срез 20 (BUG-786): same push-straight-onto-
+                // `open_elements`, ignore-`self_closing` shape as
+                // table/select/button (срез 16), the formatting elements
+                // (срез 17) and th/td (срез 18) — `mode_in_select` was the
+                // last unconverted `mode_in_body`-family push site.
+                self.push_open_element(el, self_closing);
             }
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "optgroup" => {
                 if let Some(&top) = self.open_elements.last()
                     && self.element_local(top) == "option"
@@ -2034,7 +2043,7 @@ impl IncrementalTreeBuilder {
                 }
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
+                self.push_open_element(el, self_closing);
             }
             Token::EndTag { ref name } if name == "option" => {
                 if let Some(&top) = self.open_elements.last()
@@ -4973,6 +4982,30 @@ mod tests {
             children.len(),
             3,
             "self-closed table/select/button must be siblings, not nested: {}",
+            doc
+        );
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_option_optgroup_do_not_nest_siblings() {
+        // GAP-XMLDOC срез 20 (BUG-786): `mode_in_select`'s `option`/
+        // `optgroup` arms were the last unconverted `mode_in_body`-family
+        // push site of this class (table/select/button — срез 16, th/td —
+        // срез 18) — a plain `self.open_elements.push(el)` with no
+        // `self_closing` handling. Like срезы 16/19, this is unproven on
+        // the vendored corpus (0 grep hits), fixed on the strength of the
+        // same mechanism already shown live on other tags.
+        let doc = parse_xml_flavoured(
+            r#"<select><optgroup label="a"><option class="x"/><option class="y"/></optgroup></select>"#,
+        );
+        let body = doc.body().expect("body");
+        let select = doc.get(body).children[0];
+        let optgroup = doc.get(select).children[0];
+        let options: Vec<NodeId> = doc.get(optgroup).children.clone();
+        assert_eq!(
+            options.len(),
+            2,
+            "self-closed <option> siblings must not nest inside each other: {}",
             doc
         );
     }
