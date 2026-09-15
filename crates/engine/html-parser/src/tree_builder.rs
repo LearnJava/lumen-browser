@@ -108,10 +108,17 @@ pub fn parse(input: &str) -> Document {
 /// XML document handling (foreign content, self-closing non-void tags, …) —
 /// this covers only the CDATA slice, still driven by the HTML5 tree builder.
 pub fn parse_xml_flavoured(input: &str) -> Document {
+    // GAP-XMLDOC срез 28 (BUG-786): a DOCTYPE internal subset may declare
+    // custom general entities (`<!ENTITY name "value">`); expand `&name;`
+    // references to their literal replacement text — which may itself be
+    // markup — before tokenization, same as any XML processor does. A
+    // no-op (borrows `input` unchanged) for the overwhelming majority of
+    // documents, which declare none.
+    let expanded = crate::xml_entities::expand_custom_general_entities(input);
     let mut builder = IncrementalTreeBuilder::new();
     builder.xml_mode = true;
     builder.tokenizer.set_xml_mode(true);
-    run_pull(&mut builder, input);
+    run_pull(&mut builder, &expanded);
     builder.finish()
 }
 

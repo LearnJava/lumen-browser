@@ -23,6 +23,7 @@ pub mod srcset;
 pub mod tokenizer;
 pub mod tree_builder;
 mod xml_cdata;
+mod xml_entities;
 
 pub use picture::{PickedSource, PictureParams, pick_img_source, pick_picture_source};
 pub use preload_scanner::{PreloadHint, PreloadScanner, scan_preload_hints};
