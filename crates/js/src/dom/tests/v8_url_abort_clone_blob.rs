@@ -385,6 +385,102 @@ fn structured_clone_symbol_throws_data_clone_error() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-593: `Blob`/`File`/`ImageData`/`Error` are `[Serializable]` platform
+// objects (HTML LS §2.7.2) that used to fall through to the generic
+// "plain object" path and lose their class entirely.
+
+#[test]
+fn structured_clone_blob() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var orig = new Blob(['hello'], { type: 'text/plain' });
+                     var c = structuredClone(orig);
+                     c instanceof Blob && c !== orig &&
+                     c.size === orig.size && c.type === 'text/plain' &&
+                     !(c instanceof File)",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_file() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var orig = new File(['foo'], 'bar.txt', { type: 'text/x-bar', lastModified: 42 });
+                     var c = structuredClone(orig);
+                     c instanceof File && c instanceof Blob && c !== orig &&
+                     c.name === 'bar.txt' && c.lastModified === 42 &&
+                     c.size === orig.size && c.type === 'text/x-bar'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_file_subclass_deserializes_as_file() {
+    // "A subclass instance will deserialize as its closest serializable
+    // superclass" (WPT structured-clone-battery-of-tests.js).
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "class FileSubclass extends File {}
+                     var c = structuredClone(new FileSubclass([], ''));
+                     Object.getPrototypeOf(c) === File.prototype",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_image_data() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var orig = new ImageData(2, 2);
+                     orig.data[0] = 10;
+                     var c = structuredClone(orig);
+                     c instanceof ImageData && c !== orig &&
+                     c.width === 2 && c.height === 2 &&
+                     c.data !== orig.data && c.data[0] === 10 &&
+                     (c.data[0] = 99, orig.data[0] === 10)",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_error() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var orig = new TypeError('bad', { cause: 'root cause' });
+                     orig.foo = 'testing';
+                     var c = structuredClone(orig);
+                     c instanceof TypeError && c !== orig &&
+                     c.name === 'TypeError' && c.message === 'bad' &&
+                     c.cause === 'root cause' && c.foo === undefined",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_error_without_message_has_no_own_message() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var orig = new Error();
+                     var c = structuredClone(orig);
+                     c instanceof Error &&
+                     c.hasOwnProperty('message') === orig.hasOwnProperty('message')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn structured_clone_bigint_primitive() {
     // BigInt round-trips as a value.

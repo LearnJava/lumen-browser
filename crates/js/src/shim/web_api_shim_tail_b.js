@@ -471,11 +471,12 @@ if (typeof _lumen_idb_load === 'function') {
 // ── structuredClone (HTML LS §2.7 — StructuredSerialize/Deserialize) ─────────
 // Handles: primitives (incl. BigInt), plain objects, arrays, Date, RegExp,
 // Map, Set, Boolean/Number/String wrapper objects, ArrayBuffer, typed arrays
-// (Int8..Float64, BigInt64/BigUint64), DataView. Preserves shared references
+// (Int8..Float64, BigInt64/BigUint64), DataView, Error (incl. the six native
+// subclasses and `cause`), Blob/File, ImageData. Preserves shared references
 // and cycles via a memory map (same original → same clone). Throws a
 // DataCloneError DOMException for non-serializable values (functions, symbols).
 // Not handled: the `transfer` option (transferables are copied, not detached),
-// Blob/File/ImageData/Error and other platform objects.
+// and other platform objects beyond the ones listed above.
 // Extension point for `[Serializable]` platform interfaces (HTML LS §2.7.2).
 // A platform object is not a plain object: cloned as one it loses its class and
 // its internal slots, which for a File System Access handle means the clone is
@@ -521,6 +522,52 @@ function structuredClone(val) {
         if (v instanceof Boolean) return new Boolean(v.valueOf());
         if (v instanceof Number) return new Number(v.valueOf());
         if (v instanceof String) return new String(v.valueOf());
+        // Error (HTML LS §2.7.2): clones as the closest matching native error
+        // type, carrying only `message`/`cause`/`stack` — never a subclass's
+        // own custom properties (`error.foo = ...` must not survive).
+        if (v instanceof Error) {
+            var ERROR_CTORS = [EvalError, RangeError, ReferenceError,
+                SyntaxError, TypeError, URIError, Error];
+            var ErrCtor = Error;
+            for (var ec = 0; ec < ERROR_CTORS.length; ec++) {
+                if (v instanceof ERROR_CTORS[ec]) { ErrCtor = ERROR_CTORS[ec]; break; }
+            }
+            var hasMessage = Object.prototype.hasOwnProperty.call(v, 'message');
+            var errClone = hasMessage ? new ErrCtor(v.message) : new ErrCtor();
+            memory.set(v, errClone);
+            if (Object.prototype.hasOwnProperty.call(v, 'cause')) {
+                errClone.cause = clone(v.cause);
+            }
+            if (typeof v.stack === 'string') errClone.stack = v.stack;
+            return errClone;
+        }
+        // Blob (File API §4): copy the byte buffer. `File` (§7) is not handled
+        // here -- `file_input.rs`'s shim overrides the global `File` after this
+        // script runs with a token-backed implementation (a real file-input
+        // selection carries no in-memory bytes at all) and registers its own
+        // `__lumen_platform_cloners` entry, the same extension point
+        // `filesystem_access.rs`'s handles use, checked further below.
+        if (typeof Blob !== 'undefined' && v instanceof Blob &&
+            !(typeof File !== 'undefined' && v instanceof File)) {
+            var blobClone = Object.create(Blob.prototype);
+            blobClone._bytes = v._bytes.slice(0);
+            blobClone._type = v._type;
+            memory.set(v, blobClone);
+            return blobClone;
+        }
+        // ImageData (HTML LS §2.7.2, Canvas §4.15): copy the pixel buffer into
+        // a fresh internal slot, mirroring the constructor's own storage.
+        if (typeof ImageData !== 'undefined' && v instanceof ImageData) {
+            var srcSlot = v.__image_data__;
+            var imgClone = Object.create(ImageData.prototype);
+            _lumen_slot(imgClone, '__image_data__', {
+                width: srcSlot.width, height: srcSlot.height,
+                data: srcSlot.data.slice(0),
+                colorSpace: srcSlot.colorSpace, pixelFormat: srcSlot.pixelFormat,
+            });
+            memory.set(v, imgClone);
+            return imgClone;
+        }
         // Binary data: copy the backing buffer, then re-view it.
         if (v instanceof ArrayBuffer) {
             var abClone = v.slice(0);
