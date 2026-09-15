@@ -4875,12 +4875,32 @@ function _lumen_fire_window_resize_event() {
 window = globalThis;
 var self = window;
 window.self          = window;
-window.window        = window;   // window.window === window (HTML LS)
 window.globalThis    = globalThis;
 window.frames        = window;   // no real framesets; self-reference like browsers
-window.top           = window;   // top-level browsing context is itself
 window.parent        = window;   // no parent frame
 window.length        = 0;        // number of child browsing contexts (frames)
+
+// BUG-587: `window` and `top` are `[LegacyUnforgeable] readonly` own
+// properties of the global object (HTML LS) — same defect and same fix
+// shape as `document` above (`web_api_shim_mid.js`). `self`/`frames`/`parent`
+// stay plain data properties: `frames`/`parent` are `[Replaceable]` per spec
+// (ordinary overridable properties are the correct shape), and `self` is out
+// of this bug's scope (untested by the WPT file this fixes).
+//
+// The getters read `globalThis`, not the bare `window` identifier: a global
+// `var` binding resolves through a [[Get]] on the global object itself, so a
+// getter that read `window` would call right back into itself and blow the
+// stack the first time anything touched `window.window` or `window.top`.
+Object.defineProperty(window, 'window', {
+    get: function() { return globalThis; },
+    enumerable: true,
+    configurable: false,
+});
+Object.defineProperty(window, 'top', {
+    get: function() { return globalThis; },   // top-level browsing context is itself
+    enumerable: true,
+    configurable: false,
+});
 
 // addEventListener/removeEventListener/dispatchEvent now resolve as bare
 // identifiers because `window` (just reassigned above) IS the global object —
