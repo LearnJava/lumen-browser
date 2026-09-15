@@ -1011,6 +1011,13 @@ window.blur  = function() {};
 //   tristate-bool — `hidden`-shaped: getter returns `false`/`true`/`"until-found"`,
 //            setter takes a boolean-ish value or the case-insensitive string
 //            "until-found" (BUG-594).
+//   onoff-bool — `autocorrect`-shaped (HTML LS §4.10.20.1): getter is `true`
+//            unless the attribute is present and case-insensitively "off"
+//            (missing or any other value, incl. invalid, means "on"); setter
+//            takes `ToBoolean(v)` and writes the keyword "on"/"off" (BUG-595).
+//            Element-tree/form-owner autocorrection inheritance (HTML LS
+//            §4.10.20.1 step 2 onward) and the input-type exclusion list are
+//            not implemented -- only the element's own attribute is read.
 
 // HTML LS §4.2.3 «document base URL»: the `href` of the first <base> element
 // resolved against the document URL, falling back to the document URL itself.
@@ -1116,6 +1123,17 @@ function _lumen_define_reflection(proto, entry) {
             } else {
                 _lumen_remove_attr(n, attr);
             }
+        };
+    } else if (kind === 'onoff-bool') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return true;
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            return !(v !== null && String(v).toLowerCase() === 'off');
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, v ? 'on' : 'off');
         };
     } else if (kind === 'enum') {
         get = function() {
@@ -1229,7 +1247,43 @@ _lumen_install_reflection(HTMLElement.prototype, [
     // for `:heading`, hence `ulong` (not `long`).
     ['headingOffset',  'headingoffset',  'ulong', 0],
     ['headingReset',   'headingreset',   'bool'],
+    ['autocorrect',    'autocorrect',    'onoff-bool'],
 ]);
+
+// `writingSuggestions` (HTML LS §4.10.20.2) is a tristate enumerated
+// attribute ("true"/"false", any other own value invalid) whose *effective*
+// value inherits up the element tree when the element's own attribute is
+// absent or invalid -- unlike every entry in the table above, so it cannot go
+// through the generic kind dispatch (BUG-595). The getter walks `parentElement`
+// (which already stops at the document per BUG-557) until it finds an
+// ancestor with a valid own value, defaulting to "true" at the root. The
+// setter is a plain string reflect: HTML LS defines this IDL attribute as
+// "limited to only known values" only for the *getter* -- writing an invalid
+// string still lands on the content attribute verbatim (confirmed by
+// `writingsuggestions.html`'s `testSetAttributeDirectly('foo', ...)` cases).
+Object.defineProperty(HTMLElement.prototype, 'writingSuggestions', {
+    get: function() {
+        var el = this;
+        while (el) {
+            var n = _lumen_reflect_nid(el);
+            if (n !== -1) {
+                var v = _lumen_u2n(_lumen_get_attr(n, 'writingsuggestions'));
+                if (v !== null) {
+                    v = String(v).toLowerCase();
+                    if (v === 'true' || v === '') return 'true';
+                    if (v === 'false') return 'false';
+                }
+            }
+            el = el.parentElement;
+        }
+        return 'true';
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_attr(n, 'writingsuggestions', String(v));
+    },
+    enumerable: true, configurable: true,
+});
 
 _lumen_install_reflection(HTMLAnchorElement.prototype, [
     ['href',           'href',           'url'],
