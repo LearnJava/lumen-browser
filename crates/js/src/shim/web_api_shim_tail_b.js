@@ -4917,3 +4917,31 @@ Object.defineProperty(window, 'top', {
 var addEventListener    = window.addEventListener.bind(window);
 var removeEventListener = window.removeEventListener.bind(window);
 var dispatchEvent       = window.dispatchEvent.bind(window);
+
+// BUG-589: `window` must be a proper WebIDL exotic object — instanceof
+// `EventTarget`, `Object.prototype.toString.call(window) === "[object
+// Window]"`, and a "global scope polluter" object in its prototype chain
+// tagged `[object WindowProperties]` (WebIDL §3.9 named-properties-object,
+// HTML LS §7.3.3). Up to now `window`'s own methods (addEventListener &co,
+// copied above) made it *behave* like an `EventTarget` without the identity
+// ever showing up in the prototype chain — same gap
+// `worker_location_navigator_shim.js`'s `WorkerGlobalScope` already closes
+// for workers with an identical `Object.setPrototypeOf(globalThis, …)` move;
+// own properties shadow the chain, so repointing the prototype here changes
+// nothing observable except `instanceof`/`toString`/`getPrototypeOf`.
+(function() {
+    var windowProperties = Object.create(EventTarget.prototype);
+    Object.defineProperty(windowProperties, Symbol.toStringTag, {
+        value: 'WindowProperties', writable: false, enumerable: false, configurable: true,
+    });
+    function Window() { throw new TypeError('Illegal constructor'); }
+    Window.prototype = Object.create(windowProperties);
+    Object.defineProperty(Window.prototype, Symbol.toStringTag, {
+        value: 'Window', writable: false, enumerable: false, configurable: true,
+    });
+    Object.defineProperty(Window.prototype, 'constructor', {
+        value: Window, writable: true, enumerable: false, configurable: true,
+    });
+    Object.setPrototypeOf(window, Window.prototype);
+    globalThis.Window = Window;
+})();

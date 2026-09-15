@@ -37,7 +37,7 @@ against the `Window` interface itself — not specific to `merchant-validation`
 (PaymentRequest, 🚫-scope); the underlying gap is engine-wide since `Window`
 never exists as a binding regardless of which category's test references it.
 Same class of missing-interface-object defect as [BUG-624](BUG-624-OPEN.md)
-(`Navigator`) and [BUG-589](BUG-589-OPEN.md) (the `window` instance itself
+(`Navigator`) and [BUG-589](BUG-589-FIXED.md) (the `window` instance itself
 isn't a proper WebIDL exotic object) — three symptoms of the same root cause:
 the `window` global is installed as a plain object/`WindowProperties`-style
 bag rather than backed by an actual `Window` interface prototype chain. Not

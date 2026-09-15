@@ -60,7 +60,7 @@ Object.defineProperty(Event.prototype, Symbol.toStringTag, {
 `speech.rs`, …), каждый из которых — собственный `rt.eval` и правку в
 `WEB_API_SHIM` не наследует (урок BUG-780).
 
-Смежный дефект того же класса, но на другом объекте — [BUG-589](BUG-589-OPEN.md)
+Смежный дефект того же класса, но на другом объекте — [BUG-589](BUG-589-FIXED.md)
 (`window` не отвечает `[object Window]`).
 
 ## Как проверить фикс
