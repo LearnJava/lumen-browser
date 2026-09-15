@@ -4931,6 +4931,32 @@ mod tests {
     }
 
     #[test]
+    fn xml_flavoured_leading_xml_declaration_does_not_leak_as_text() {
+        // GAP-XMLDOC срез 22 (BUG-786/BUG-685): every `.xhtml`/`.xht`/`.svg`
+        // document normally opens with `<?xml version="1.0"?>`. Before this
+        // срез the '<?' fell through the tokenizer's catch-all branch and
+        // re-entered data state, so the declaration surfaced as a visible
+        // text node ahead of `<html>` instead of becoming a comment (HTML
+        // LS §13.2.5.6, "?" branch).
+        let doc = parse_xml_flavoured(
+            r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>x</body></html>"#,
+        );
+        let root = doc.root();
+        let children: Vec<NodeId> = doc.get(root).children.clone();
+        assert_eq!(
+            children.len(),
+            2,
+            "root must be exactly [comment, html], no leaked text node: {}",
+            doc
+        );
+        assert!(matches!(doc.get(children[0]).data, lumen_dom::NodeData::Comment { .. }));
+        assert!(matches!(
+            &doc.get(children[1]).data,
+            lumen_dom::NodeData::Element { name, .. } if name.local == "html"
+        ));
+    }
+
+    #[test]
     fn xml_flavoured_self_closing_td_does_not_nest_siblings() {
         // GAP-XMLDOC срез 18 (BUG-786): same class of defect as the
         // `<table>`/`<select>`/`<button>` arm above (срез 16), this time in

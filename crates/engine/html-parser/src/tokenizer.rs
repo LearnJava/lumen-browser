@@ -295,6 +295,14 @@ impl<'a> Iterator for Tokenizer<'a> {
                 }
             }
             Some(c) if c.is_ascii_alphabetic() => self.consume_start_tag(),
+            // HTML LS §13.2.5.6 tag open state, ветка "?": `<?xml
+            // version="1.0"?>` и любая другая processing instruction — это
+            // parse error, но токен всё равно bogus comment, не текст.
+            // Без этого XML-декларация в начале `.xhtml`/`.xht`/`.svg`
+            // «протекает» в дерево как видимый текстовый узел (GAP-XMLDOC
+            // срез 22, BUG-786/BUG-685) — не XML-специфичный фикс, гейт
+            // xml_mode не нужен, это базовая коррекция HTML5-токенизатора.
+            Some('?') => self.consume_bogus_comment_with_prefix(""),
             _ => {
                 // Битый '<' — отдаём как текст.
                 Some(Token::Text("<".to_string()))
@@ -1008,6 +1016,21 @@ mod tests {
         let t = tok("<![CDATA[ignore this]]><p>x</p>");
         assert!(matches!(&t[0], Token::Comment(data) if data == "[CDATA[ignore this]]"));
         assert!(matches!(&t[1], Token::StartTag { name, .. } if name == "p"));
+    }
+
+    #[test]
+    fn xml_declaration_processing_instruction_becomes_bogus_comment() {
+        // GAP-XMLDOC срез 22 (BUG-786/BUG-685): `<?xml version="1.0"?>` at
+        // the top of an `.xhtml`/`.xht`/`.svg` document used to fall into
+        // the catch-all "malformed '<'" branch and re-tokenize as a bare
+        // `Token::Text("<")` followed by literal character data, leaking a
+        // visible text node into the tree. HTML LS §13.2.5.6 tag open
+        // state, the `?` branch: reconsume in bogus comment state instead.
+        // Not gated behind `xml_mode` — `<?php ?>`-shaped input in plain
+        // HTML gets the same treatment in every real browser.
+        let t = tok("<?xml version=\"1.0\"?><html>x</html>");
+        assert!(matches!(&t[0], Token::Comment(data) if data == "?xml version=\"1.0\"?"));
+        assert!(matches!(&t[1], Token::StartTag { name, .. } if name == "html"));
     }
 
     #[test]
