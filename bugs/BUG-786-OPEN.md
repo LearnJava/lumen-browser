@@ -881,3 +881,56 @@ data)`; вызывается и с главного `document`, и из
 JS-side тестовый Rust-файл — не паяльный/layout/paint код,
 `scoped-test.sh`/`dump_golden.py` не запускались руками (`docs/commands.md`:
 полный гейт — один раз, внутри `/lumen-task-finish`).
+
+## Срез 26 (2026-09-15): CDATA-секция вне `<style>`/`<script>` (обычный HTML-элемент) всё ещё падала в bogus comment (`p1-gap-xmldoc-srez26`)
+
+Найдено тем же приёмом grep по вендоренному WPT-корпусу, каким искали
+предыдущие срезы, но с уточнённым классификатором: для каждого
+`<![CDATA[` в `.xhtml`/`.xht`/`.svg`-корпусе (4866 файлов) взят ближайший
+предшествующий открывающий тег. Подавляющее большинство (4334 — `style`,
+656 — `script`, 15 — `h:script`, 1 — `html:script`) уже покрыто срезом 1;
+но один хит — `div` в
+`css/CSS2/selectors/first-letter-selector-000.xht`:
+`<div class="test"><![CDATA[E]]></div>`.
+
+**Причина.** `cdata_sections_allowed()` (уже существовавшая с среза 14,
+BUG-685) возвращает `true` только когда текущий узел — foreign
+(SVG/MathML), не integration point: это корректно для чистого HTML5,
+где `<![CDATA[` — это "cdata-in-html-content" parse error всюду, кроме
+foreign content (HTML LS §13.2.5.5). Но реальный XML-документ следует
+XML §2.7, где CDATA-секция легальна в любом месте character data —
+`<div>` в неймспейсе HTML не должен быть исключением. До фикса
+`<![CDATA[E]]>` внутри `<div>` уходило в `consume_bogus_comment_with_prefix`
+и текст `E` не попадал в дерево вовсе (реф-тест сравнивает с эталоном,
+где `E` есть).
+
+**Фикс.** `cdata_sections_allowed()` в `xml_mode` возвращает `true`
+безусловно, до проверки неймспейса текущего узла — тот же флаг, что
+управляет CDATA-обёрткой (срез 1) и self-closing-тегами (срезы 2/16-20).
+Вне `xml_mode` поведение не изменилось: HTML5 "cdata-in-html-content"
+по-прежнему срабатывает на любом не-foreign элементе.
+
+Тесты (`tree_builder.rs`):
+- `xml_flavoured_cdata_in_ordinary_html_element_becomes_text` — `<div
+  class="test"><![CDATA[E]]></div>` в `parse_xml_flavoured` даёт текстовый
+  узел `"E"` внутри `div`.
+- `plain_parse_cdata_in_ordinary_html_element_stays_bogus_comment` —
+  регрессионный якорь: тот же ввод через обычный `parse()` не должен
+  давать голый текст `E` в сериализации (bogus comment, как и раньше).
+
+`cargo test -p lumen-html-parser --lib` — 490/490 зелёные (было 488).
+`cargo clippy -p lumen-html-parser --all-targets -- -D warnings` — чисто.
+`tree_builder.rs` пересёк собственный baseline (5803 → 5851),
+`scripts/file-size-baseline.tsv` обновлён тем же коммитом только для этой
+строки — остальные 11 файлов в отчёте `check_file_sizes.py` уже были выше
+своих baseline-чисел до этого среза (чужой дрейф, не трогаю их записи,
+тот же принцип, что срез 17). `scripts/scoped-test.sh` (все обратные
+зависимости) — зелёный, кроме того же чужого дрейфа CPU-эталонов
+(`lumen-driver::cases::snapshot_cpu`, идентичная сигнатура из 7 файлов,
+[BUG-1008](BUG-1008-OPEN.md)) и `lumen-network --lib`, упавшего в общем
+прогоне и прошедшего 2207/2207 изолированно в том же логе — флак, не
+связанный с этим срезом. `dump_golden.py` — 4/12 несовпадений, идентичный
+базовый дрейф, что и на чистом `main` без этого среза.
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая.
