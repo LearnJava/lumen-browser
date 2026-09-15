@@ -345,11 +345,14 @@ impl IncrementalTreeBuilder {
     /// loading — only to the final document rebuilt from scratch via
     /// [`parse_xml_flavoured`] at load completion.
     ///
-    /// Does **not** cover [`parse_xml_flavoured`]'s custom general-entity
-    /// expansion (GAP-XMLDOC срез 28) — that is a textual pre-pass over the
-    /// whole document string, which a chunked push caller does not have in
-    /// hand up front; `&name;` references to a DOCTYPE-declared entity are
-    /// still left unexpanded in a document parsed with this constructor.
+    /// Also covers [`parse_xml_flavoured`]'s custom general-entity expansion
+    /// (GAP-XMLDOC срез 31, BUG-786) — but only as a fallback to the same
+    /// whole-document pre-pass pull uses: a document whose DOCTYPE declares
+    /// entities cannot stream progressively (splicing expanded replacement
+    /// text into an already-tokenized prefix has no well-defined resume
+    /// offset — see `PushTokenizer`'s `EntityGate`), so its DOM stays empty
+    /// until `finish()`. A document with no declared entities (the common
+    /// case) still streams exactly as срез 29 left it.
     pub fn new_xml_flavoured() -> Self {
         let mut builder = Self::new();
         builder.xml_mode = true;
@@ -4264,21 +4267,59 @@ mod tests {
     }
 
     #[test]
-    fn new_xml_flavoured_does_not_expand_custom_general_entities() {
-        // Documented limitation, not a regression: `parse_xml_flavoured`'s
-        // entity expansion (срез 28) is a textual pre-pass over the whole
-        // document string, which a chunked push caller never has in hand up
-        // front. `new_xml_flavoured()` still parses everything else the same
-        // as pull — it just leaves `&tree;` as a literal, unexpanded text
-        // reference instead of splicing in its declared replacement markup.
+    fn new_xml_flavoured_expands_custom_general_entities_at_finish() {
+        // GAP-XMLDOC срез 31 (BUG-786): the streaming/push path (real network
+        // loading — `IncrementalTreeBuilder::feed`/`feed_bytes`) now also
+        // expands DOCTYPE-declared entities, matching `parse_xml_flavoured`
+        // (pull). It cannot splice an expanded replacement text into an
+        // already-tokenized prefix (no well-defined resume offset), so a
+        // document that declares entities falls back to whole-document
+        // expansion at `finish()`/EOF — see `PushTokenizer`'s `EntityGate`.
         let input = "<!DOCTYPE html [\n<!ENTITY tree \"<span id='x'>unknown.</span>\">\n]>\n<p>result: &tree;</p>";
         let pull = parse_xml_flavoured(input).to_string();
         assert!(pull.contains("<span"), "pull should expand the entity: {pull}");
+        for chunk_size in [1usize, 3, 7, 100] {
+            let streamed = parse_xml_flavoured_feed_bytes_chunks(input, chunk_size).to_string();
+            assert_eq!(streamed, pull, "chunk_size={chunk_size}");
+        }
+    }
+
+    #[test]
+    fn new_xml_flavoured_does_not_buffer_documents_without_entities() {
+        // The whole-document buffering `new_xml_flavoured_expands_custom_
+        // general_entities_at_finish` measures is a fallback for the rare
+        // entity-declaring document, not the default: a document with no
+        // `<!ENTITY` at all (the overwhelming majority of `.xhtml`/`.svg`
+        // files) must still see its DOM populated chunk by chunk, exactly
+        // as срез 29 established, not held back until `finish()`.
         let mut b = IncrementalTreeBuilder::new_xml_flavoured();
-        b.feed(input);
-        let streamed = b.finish().to_string();
-        assert!(!streamed.contains("<span"), "push should NOT expand the entity: {streamed}");
-        assert!(streamed.contains("&tree;") || streamed.contains("tree;"), "got: {streamed}");
+        b.feed("<html><body><p>first");
+        assert!(
+            b.as_doc().to_string().contains("first"),
+            "no-entity document must stream progressively: {}",
+            b.as_doc()
+        );
+        b.feed("</p></body></html>");
+        b.finish();
+    }
+
+    #[test]
+    fn new_xml_flavoured_entity_declared_after_a_split_doctype_still_expands() {
+        // The prolog scan (`xml_entities::scan_prolog`) must correctly say
+        // "need more bytes" while a chunk boundary lands inside the still-
+        // open `<!DOCTYPE ... [` internal subset, rather than concluding too
+        // early that no entity is coming.
+        let input = "<!DOCTYPE html [\n<!ENTITY t \"X\">\n]>\n<p>&t;</p>";
+        let pull = parse_xml_flavoured(input).to_string();
+        for split in 1..input.len() {
+            if !input.is_char_boundary(split) {
+                continue;
+            }
+            let mut b = IncrementalTreeBuilder::new_xml_flavoured();
+            b.feed(&input[..split]);
+            b.feed(&input[split..]);
+            assert_eq!(b.finish().to_string(), pull, "split at byte {split}");
+        }
     }
 
     // ──────── <template> element ────────
