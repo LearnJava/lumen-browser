@@ -5,6 +5,7 @@
 //! (`super`) как есть; параметр `_event_loop` в теле не использовался
 //! и в переходнике не передаётся.
 
+use crate::page_pipeline::is_xml_flavoured_document;
 use crate::*;
 
 impl Lumen {
@@ -27,8 +28,28 @@ impl Lumen {
             }
             LoadEvent::HtmlChunk(chunk, generation) => {
                 if generation != self.load_generation { return; }
-                let builder = self.stream_builder
-                    .get_or_insert_with(lumen_html_parser::IncrementalTreeBuilder::new);
+                // GAP-XMLDOC срез 29 (BUG-786/BUG-685): an XML-flavoured document
+                // (`.xhtml`/`.xht`/`.svg`) needs `xml_mode` armed on the streaming
+                // builder too — without it, none of the xml_mode-gated GAP-XMLDOC
+                // fixes (self-closing non-void tags, CDATA, DOCTYPE internal
+                // subset, `<?target data?>` processing instructions) apply to the
+                // DOM shown while the page is still loading, only to the final
+                // document `parse_and_layout` rebuilds from scratch at load
+                // completion. Content-Type isn't known this early in the stream —
+                // decided purely by URL/path extension, the same fallback
+                // `is_xml_flavoured_document` itself uses when the header is
+                // absent or generic.
+                let xml_flavoured = self.stream_builder.is_none()
+                    && self
+                        .document_resource_base()
+                        .is_some_and(|base| is_xml_flavoured_document(None, &base));
+                let builder = self.stream_builder.get_or_insert_with(|| {
+                    if xml_flavoured {
+                        lumen_html_parser::IncrementalTreeBuilder::new_xml_flavoured()
+                    } else {
+                        lumen_html_parser::IncrementalTreeBuilder::new()
+                    }
+                });
                 builder.feed_bytes(&chunk);
                 if self.stream_last_paint.elapsed().as_millis() >= STREAM_PAINT_INTERVAL_MS {
                     // Клонируем снапшот для layout — builder остаётся живым.

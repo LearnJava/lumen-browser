@@ -336,19 +336,28 @@ impl PushTokenizer {
             return 0;
         }
 
-        if let Some((tag, decode)) = &self.text_only {
+        if let Some((_tag, decode)) = &self.text_only {
             // text-only режим (RAWTEXT/RCDATA). Прерывается только
             // последовательностью `</tag` + терминатор (whitespace / `/` / `>`).
             // Безопасная точка — последний `<`, который МОЖЕТ начать
             // незавершённый `</tag…`. Если такого `<` нет — split до конца.
-            // Если он есть и хвост уже полностью покрывает `</tag` +
-            // терминатор — пусть pull-токенизатор сам разберётся,
-            // безопасно split до конца.
-            let needed = 2 + tag.len() + 1; // '</' + tag + терминатор
+            //
+            // GAP-XMLDOC срез 29: раньше «закрыт ли он» проверялось только
+            // длиной («хватает ли байт под форму `</tag>`+терминатор») —
+            // не тем, что там ДЕЙСТВИТЕЛЬНО есть. Это ломалось, если
+            // `</tag>` уже закрылся РАНЬШЕ последнего `<` в буфере, а сам
+            // последний `<` — не он, а начало СЛЕДУЮЩЕЙ, ещё не закрытой
+            // Data-state конструкции (`<?target d`, длиннее «needed» байт,
+            // но без `?>`) — код решал «хватает места», хотя реального
+            // терминатора там не было. `is_tag_closed` — та же проверка,
+            // что уже используют Data-state-хвосты ниже; тег-агностична
+            // (не сверяет имя с `tag`, только форму `</…>` вообще), что
+            // тем же самым консервативным принципом модуля безопасно и
+            // здесь: при сомнении подождать лишний байт не вредно.
             let mut split = match bytes.iter().rposition(|&b| b == b'<') {
                 None => n,
                 Some(pos) => {
-                    if n - pos >= needed {
+                    if is_tag_closed(&bytes[pos..], self.xml_mode) {
                         n
                     } else {
                         pos
@@ -383,6 +392,17 @@ impl PushTokenizer {
             // не в `<![CDATA[`). Ждать `]]>` всегда безопасно — вопрос
             // прежний: срез 15 не срезает по первому `>` внутри секции.
             open_pos
+        } else if let Some(open_pos) = last_unterminated_doctype_subset_start(bytes, self.xml_mode) {
+            // GAP-XMLDOC срез 29: то же нарушение допущения, что чинила
+            // ветка CDATA выше, только у другого XML-mode-специфичного
+            // вложенного `<...>` (срез 21) — `<!DOCTYPE html [<?PI?>]>`'s
+            // internal subset can hold its own `<?target data?>`/
+            // `<!--comment-->`, which the scan below's "check only the
+            // LAST `<` in the buffer" shortcut would find fully closed on
+            // its own (its `?>`/`-->` arrived) while the outer DOCTYPE is
+            // still waiting for `]>` — the shortcut would then never look
+            // back at the DOCTYPE's own still-open `<` at all.
+            open_pos
         } else {
             // Data state. Опасные хвосты:
             //   * `<…` без правильного терминатора (любой тег / комментарий
@@ -404,7 +424,7 @@ impl PushTokenizer {
                 if bytes[pos] != b'<' {
                     continue;
                 }
-                if !is_tag_closed(&bytes[pos..]) {
+                if !is_tag_closed(&bytes[pos..], self.xml_mode) {
                     split = pos;
                 }
                 break;
@@ -456,6 +476,46 @@ fn last_unterminated_cdata_start(bytes: &[u8]) -> Option<usize> {
     None
 }
 
+/// Case-insensitive ASCII substring search — `needle_lower` must already be
+/// lowercase. Same narrowing as `xml_entities::find_ci`, reimplemented here
+/// (over `&[u8]`, not `&str`) since `feed_bytes` may call this before a
+/// chunk boundary lands on a UTF-8 code point boundary.
+fn find_ci_ascii(haystack: &[u8], needle_lower: &[u8]) -> Option<usize> {
+    if needle_lower.is_empty() || haystack.len() < needle_lower.len() {
+        return None;
+    }
+    haystack.windows(needle_lower.len()).position(|w| w.eq_ignore_ascii_case(needle_lower))
+}
+
+/// Finds a `<!DOCTYPE ... [` in `xml_mode` whose internal subset (and the
+/// DOCTYPE's own closing `>` after it) has not fully arrived in `bytes` yet
+/// — GAP-XMLDOC срез 29. `find_safe_split`'s generic scan below only ever
+/// checks the LAST `<` in the buffer, which is safe for plain HTML (no
+/// top-level construct nests another) but not for a DOCTYPE internal
+/// subset (срез 21): a `<?PI?>`/`<!--comment-->` *inside* `[ ... ]` is
+/// itself a nested `<...>` construct that can look fully closed (its own
+/// `?>`/`-->` arrived) while the outer DOCTYPE is still open, the same
+/// nesting problem [`last_unterminated_cdata_start`] already solves for
+/// `<![CDATA[`. `false` from `xml_mode` means every `<!DOCTYPE` here is
+/// plain HTML5 bogus-DOCTYPE (stops at the first `>`, no subset concept at
+/// all) — same behaviour as before this срез.
+fn last_unterminated_doctype_subset_start(bytes: &[u8], xml_mode: bool) -> Option<usize> {
+    if !xml_mode {
+        return None;
+    }
+    const KEYWORD: &[u8] = b"<!doctype";
+    let mut pos = 0;
+    while pos < bytes.len() {
+        let rel = find_ci_ascii(&bytes[pos..], KEYWORD)?;
+        let start = pos + rel;
+        if !doctype_bang_closed(&bytes[start..], true) {
+            return Some(start);
+        }
+        pos = start + KEYWORD.len();
+    }
+    None
+}
+
 /// Проверяет, закрыта ли конструкция, начинающаяся с `<` в начале
 /// `tail`. Используется `find_safe_split` для решения, безопасно ли
 /// скармливать `tail` pull-токенизатору в текущем виде, или нужно
@@ -470,7 +530,7 @@ fn last_unterminated_cdata_start(bytes: &[u8]) -> Option<usize> {
 /// `<math>`), может обнаружиться позже в ТОМ ЖЕ буфере, до которого этот
 /// статический анализ не заглядывает; ждать дольше здесь всегда безопасно
 /// (тот же консервативный принцип, что у `find_safe_split` в целом).
-fn is_tag_closed(tail: &[u8]) -> bool {
+fn is_tag_closed(tail: &[u8], xml_mode: bool) -> bool {
     debug_assert!(tail.first() == Some(&b'<'));
     if tail.len() < 2 {
         return false;
@@ -486,16 +546,56 @@ fn is_tag_closed(tail: &[u8]) -> bool {
         // префикс (`<![CDA`) падает в generic-ветку ниже, что верно: без
         // `>` вообще она и так не «закрыта».
         b'!' if tail.starts_with(b"<![CDATA[") => tail[9..].windows(3).any(|w| w == b"]]>"),
-        // `<!DOCTYPE…>` и прочее — терминатор `>`.
-        b'!' => tail[2..].contains(&b'>'),
+        // `<!DOCTYPE…>` и прочее — терминатор `>` (GAP-XMLDOC срез 29:
+        // но не самый ПЕРВЫЙ `>`, если это DOCTYPE с internal subset —
+        // см. `doctype_bang_closed`).
+        b'!' => doctype_bang_closed(tail, xml_mode),
         // `</tag…>` или `<tag…>` — терминатор `>`.
         b'/' => tail[2..].contains(&b'>'),
         c if c.is_ascii_alphabetic() => tail[2..].contains(&b'>'),
+        // `<?target data?>` — GAP-XMLDOC срез 29. Terminator depends on what
+        // the real tokenizer does with it: in `xml_mode` it's a real
+        // processing instruction (срез 23) or, for the `target == "xml"`
+        // case, an XML-declaration bogus comment (срез 22's redirect inside
+        // срез 23's `consume_processing_instruction`) — either way the scan
+        // stops at `?>`, since a leading `<?xml …?>` also always ends in
+        // `?>`. Outside `xml_mode`, `<?` unconditionally becomes an ordinary
+        // bogus comment (срез 22, not gated on `xml_mode`), whose terminator
+        // is a lone `>` like any other bogus comment.
+        b'?' if xml_mode => tail.windows(2).any(|w| w == b"?>"),
+        b'?' => tail[1..].contains(&b'>'),
         // `<` + что-то странное (цифра / пробел) — pull-токенизатор
         // считает такой `<` литералом и эмитит `Text("<")`. Это
         // безопасно даже без `>` — split в конце буфера.
         _ => true,
     }
+}
+
+/// Terminator check for `<!DOCTYPE…>`/other bogus `<!…>` markup, aware of a
+/// DOCTYPE internal subset (`<!DOCTYPE html [ ... ]>`) in `xml_mode`
+/// (GAP-XMLDOC срез 29) — mirrors the balanced-`<...>` walk
+/// `Tokenizer::consume_doctype` (срез 21) and `xml_entities::parse_declared_entities`
+/// already do: a `<?PI?>`/`<!--comment-->` inside the subset may contain its
+/// own `>`, which must not be mistaken for the subset's (or the DOCTYPE's)
+/// end. Outside `xml_mode` — or when there is no `[` at all — the terminator
+/// is simply the first `>`, same as before this срез.
+fn doctype_bang_closed(tail: &[u8], xml_mode: bool) -> bool {
+    let body = &tail[2..];
+    if xml_mode && let Some(bracket_rel) = body.iter().position(|&b| b == b'[') {
+        let mut depth: i32 = 0;
+        let mut i = bracket_rel + 1;
+        while i < body.len() {
+            match body[i] {
+                b'<' => depth += 1,
+                b'>' if depth > 0 => depth -= 1,
+                b']' if depth == 0 => return body[i + 1..].contains(&b'>'),
+                _ => {}
+            }
+            i += 1;
+        }
+        return false;
+    }
+    body.contains(&b'>')
 }
 
 /// Возвращает наибольший индекс `<= n`, лежащий на границе code point-а
@@ -1102,4 +1202,37 @@ mod tests {
         });
         assert_eq!(normalize(&out), pull_tokens(input));
     }
+
+    #[test]
+    fn xml_mode_pi_right_after_rawtext_close_is_not_split_by_length_heuristic() {
+        // GAP-XMLDOC срез 29: `find_safe_split`'s RAWTEXT/RCDATA branch used
+        // to decide "safe" purely by whether enough trailing bytes existed
+        // after the buffer's LAST `<` to fit a `</tag>`-shaped pattern — not
+        // whether that tail was actually closed. Here the true `</style>`
+        // closes early in the buffer, and the LAST `<` is instead the start
+        // of a still-unterminated `<?target d` (long enough to satisfy the
+        // old length check, `?>` never arrived) — the old heuristic handed
+        // the whole buffer to the pull tokenizer anyway, which (lenient,
+        // reads its slice to the end) truncated the PI at EOF instead of
+        // waiting for more bytes.
+        let input = concat!(
+            "<html><body><style><![CDATA[a]]></style>",
+            "<?target data?></body></html>",
+        );
+        let mut pt = PushTokenizer::new();
+        pt.set_xml_mode(true);
+        let split_at = input.find("<?target d").unwrap() + "<?target d".len();
+        let (head, tail) = input.split_at(split_at);
+        let mut out = pt.feed(head);
+        out.extend(pt.feed(tail));
+        out.extend(pt.end());
+        assert!(
+            out.iter().any(
+                |t| matches!(t, Token::ProcessingInstruction { target, data }
+                    if target == "target" && data == "data")
+            ),
+            "PI must not be truncated at the chunk boundary: {out:?}"
+        );
+    }
 }
+
