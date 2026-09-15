@@ -55,10 +55,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-14",
+ "generated": "2026-09-15",
  "counts": {
-  "open": 353,
-  "fixed": 646,
+  "open": 348,
+  "fixed": 651,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4828,7 +4828,7 @@
        "title": "WPT: прогнать подсрез `html/semantics/{interactive-elements,popovers,permission-element,links,interestfor,selectors,the-button-element,tabular-data,menu,grouping-content,text-level-semantics,disabled-elements,edits,sections}` + 2 корневых файла",
        "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-FIXED.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-OPEN.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-DUPLICATE.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-OPEN.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-OPEN.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-OPEN.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-FIXED.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-FIXED.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-DUPLICATE.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-FIXED.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-FIXED.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-OPEN.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
        "bugs": [
         "BUG-577",
         "BUG-578",
@@ -6884,6 +6884,16 @@
        "bugs": [
         "BUG-563"
        ]
+      },
+      {
+       "id": "GAP-INTERESTINVOKER",
+       "title": "GAP: Interest Invokers API (`interestfor`/`InterestEvent`/hover-delay) отсутствует целиком",
+       "status": "planned",
+       "size": "M",
+       "note": "Interest Invokers API (WHATWG HTML draft, `.tentative.`, hover/focus-triggered \"preview\" аналог существующего BUG-582 Invoker Commands API) не реализован вовсе: нет `interestForElement` IDL-рефлексии (`commandForElement`-подобный паттерн, `crates/js/src/shim/web_api_shim_tail_b.js:1404-1447`, есть куда встроить), нет `InterestEvent` (`CommandEvent`-подобный шаблон, `web_api_shim_mid.js:303-325`), нет `interest`/`loseinterest` диспатча и hover-delay/focus-delay/Escape таймер-модели. В отличие от BUG-582 (реализован целиком в JS-шиме, без CSS/layout), поведенческие тесты (`interestfor-basic-delays`, `interestfor-delay-start`, `interestfor-delay-end`.tentative.html; `createPopoverAndInvokerForHoverTests`, `tests/wpt/html/semantics/interestfor/resources/invoker-utils.js:96-121`) читают реальные CSS-свойства `interest-delay-start`/`interest-delay-end` через `getComputedStyle` — `grep` по `crates/layout`, `crates/css`, `CSS-SPECS.md` на `interest-delay` даёт ноль совпадений, это новая пара CSS-свойств (не заглушка), плюс `interestfor-pseudo-classes.tentative.html` требует псевдоклассов `:has-interest`/`:target-of-interest`. Найден P2, WPT-VENDOR-html-semantics-misc, 2026-08-04; реклассифицировано из BUG-584 2026-09-15 (P3) по тому же правилу, что BUG-553/554/562/568/583 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект). Не W3C Candidate Recommendation — приоритет по решению, не автоматически.",
+       "bugs": [
+        "BUG-584"
+       ]
       }
      ]
     },
@@ -7449,34 +7459,6 @@
    "status": "open",
    "title": "`document.write()`/`.writeln()`/`.open()`/`.close()` do not exist -- `TypeError` on every call, not a broken stub. Low direct count in the originating category…",
    "component": "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln`/`open`/`close` member at all)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-576": {
-   "status": "open",
-   "title": "`select.options.add()` missing (mirror `select.add()` at `dom.rs:14401` does work). 4 subtests/2 files. Найден P2, WPT-VENDOR-html-semantics-forms, 2026-08-04",
-   "component": "js (`crates/js/src/dom.rs:14124-14128` `HTMLOptionsCollection.prototype`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-579": {
-   "status": "open",
-   "title": "`HTMLDialogElement.prototype.requestClose()` missing entirely -- `show`/`showModal`/`close`/`returnValue` exist, `requestClose` (fires cancelable `cancel` then…",
-   "component": "js (`crates/js/src/dom.rs:5667-5702` `<dialog>` API block)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-581": {
-   "status": "open",
-   "title": "`HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` have zero spec API (`rows`/`tBodies`/`tHead`/`tFoot`/`caption`, `createTBody`/`createCaption`…",
-   "component": "js (`crates/js/src/dom.rs:4608-4625` -- table interfaces generated as bare non-constructible stubs, no table-specific members anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-582": {
-   "status": "open",
-   "title": "Invoker Commands API (`<button command=… commandfor=…>`, `CommandEvent`) not implemented at all -- the older, narrower `popovertarget`/`popovertargetaction` pai…",
-   "component": "js (`crates/js/src/dom.rs` -- no `command`/`commandFor` reflection, no `CommandEvent`, no invoke-action dispatch anywhere)",
    "date": null,
    "debtor": false
   },
@@ -9297,13 +9279,6 @@
    "status": "open",
    "title": "Read/dispatch-цикл BiDi-соединения отвечает `Pong` на входящий `Ping` только внутри `read_text_frame`, а не пока выполняется `dispatch()` — команда `browsingCon…",
    "component": "bidi-server (`crates/bidi-server/src/transport.rs::handle`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-983": {
-   "status": "open",
-   "title": "Токенайзер переводит в text-only режим только четыре тега: RAWTEXT `<script>`/`<style>`, RCDATA `<title>`/`<textarea>`. По HTML LS §13.2.6.4.7 RAWTEXT — это ещё…",
-   "component": "engine (`crates/engine/html-parser/src/tokenizer.rs:561` — `is_raw_text_element`)",
    "date": null,
    "debtor": false
   },
@@ -13976,6 +13951,13 @@
    "date": "2026-09-14",
    "debtor": false
   },
+  "BUG-582": {
+   "status": "fixed",
+   "title": "Invoker Commands API (`<button command=… commandfor=…>`, `CommandEvent`) not implemented at all -- the older, narrower `popovertarget`/`popovertargetaction` pai…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `CommandEvent`, `once`-listener fix; `crates/js/src/shim/web_api_shim_tail_b.js` -- `HTMLButtonElement.command`/`.commandForElement`/`.type`, invoke-dispatch click handler)",
+   "date": "2026-09-15",
+   "debtor": false
+  },
   "BUG-755": {
    "status": "fixed",
    "title": "Forced Colors Mode включался ЕДИНСТВЕННЫМ способом — тумблером в a11y-панели живого окна; хранилище настройки in-memory с дефолтом `false`, персистентного пути…",
@@ -14051,6 +14033,34 @@
    "title": "`Element.prototype.localName` does not exist at all. Surfaces in `form-submission-target/resources/reltester.js` (`submitter.localName !== \"form\"` always true)…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `_LUMEN_WRAPPER_MEMBERS` element getter block)",
    "date": "2026-09-14",
+   "debtor": false
+  },
+  "BUG-576": {
+   "status": "fixed",
+   "title": "`select.options.add()` missing entirely -- `TypeError`, contrast `select.add()` which does work. 4 subtests/2 files. Найден P2, WPT-VENDOR-html-semantics-forms,…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- `HTMLOptionsCollection.prototype`)",
+   "date": "2026-09-15",
+   "debtor": false
+  },
+  "BUG-579": {
+   "status": "fixed",
+   "title": "`HTMLDialogElement.prototype.requestClose()` missing entirely -- `show`/`showModal`/`close`/`returnValue` exist, `requestClose` (fires cancelable `cancel` then…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `<dialog>` API block; `crates/js/src/shim/web_api_shim_tail_b.js` -- modal-dialog helpers)",
+   "date": "2026-09-15",
+   "debtor": false
+  },
+  "BUG-581": {
+   "status": "fixed",
+   "title": "`HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` had zero spec API (`rows`/`tBodies`/`tHead`/`tFoot`/`caption`, `createTBody`/`createCaption`/…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`/`web_api_shim_tail_b.js` -- table interfaces generated as bare non-constructible stubs, no table-specific members anywhere)",
+   "date": "2026-09-15",
+   "debtor": false
+  },
+  "BUG-983": {
+   "status": "fixed",
+   "title": "Токенайзер переводил в text-only режим только четыре тега: RAWTEXT `<script>`/`<style>`, RCDATA `<title>`/`<textarea>`. По HTML LS §13.2.6.4.7 RAWTEXT — это ещё…",
+   "component": "engine (`crates/engine/html-parser/src/tokenizer.rs` — `is_raw_text_element`)",
+   "date": "2026-09-15",
    "debtor": false
   }
  },
@@ -14217,7 +14227,7 @@
   "encoding": [
    "BUG-162"
   ],
-  "engine (`crates/engine/html-parser/src/tokenizer.rs:561` — `is_raw_text_element`)": [
+  "engine (`crates/engine/html-parser/src/tokenizer.rs` — `is_raw_text_element`)": [
    "BUG-983"
   ],
   "font": [
