@@ -3867,6 +3867,18 @@ function _lumen_build_detached_document(proto, contentType) {
     Object.defineProperty(doc, 'inputEncoding', { get: function() { return 'UTF-8'; },       enumerable: true });
     Object.defineProperty(doc, 'contentType',   { get: function() { return contentType; },   enumerable: true });
     Object.defineProperty(doc, 'location',      { get: function() { return null; },          enumerable: true });
+    // BUG-586: a document with no browsing context has no effective domain —
+    // the getter reports the empty string and the setter always throws,
+    // mirroring the live document's opaque-origin branch above.
+    Object.defineProperty(doc, 'domain', {
+        get: function() { return ''; },
+        set: function() {
+            throw new DOMException(
+                'document.domain cannot be set: this document has no browsing context',
+                'SecurityError');
+        },
+        enumerable: true,
+    });
     doc.createElement = function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
@@ -10031,6 +10043,34 @@ var document = {
     set title(v) { _lumen_set_document_title(String(v)); },
     get cookie()  { return _lumen_cookie_get(); },
     set cookie(v) { _lumen_cookie_set(String(v)); },
+    // BUG-586 (HTML LS "relaxing the same-origin restriction"): getter reports
+    // the effective domain, which starts out as the page's host and can only
+    // be narrowed towards a registrable suffix of itself. `hasAuthority` false
+    // means an opaque-origin document (`data:`, `about:blank` with no creator
+    // to inherit from, …) — no effective domain, so it throws rather than
+    // silently accepting a value that can never take effect.
+    get domain() { return _lumen_document_domain; },
+    set domain(v) {
+        if (!_lumen_loc_parts.hasAuthority) {
+            throw new DOMException(
+                "document.domain cannot be set: this document's origin is opaque",
+                'SecurityError');
+        }
+        var newValue = String(v).toLowerCase();
+        var effective = _lumen_document_domain;
+        if (newValue !== effective) {
+            var suffixStart = effective.length - newValue.length;
+            if (newValue.length === 0 || suffixStart <= 0 ||
+                effective.charAt(suffixStart - 1) !== '.' ||
+                effective.slice(suffixStart) !== newValue) {
+                throw new DOMException(
+                    "'" + v + "' is not the same as, or a registrable suffix of, " +
+                    "the document's effective domain ('" + effective + "')",
+                    'SecurityError');
+            }
+        }
+        _lumen_document_domain = newValue;
+    },
     // DOM §7.3 / DOM §4.5 (BUG-358): document-metadata IDL attributes — the live
     // `document` never defined these at all (mirrors `_lumen_build_detached_document`'s
     // hardcoded block above, but reads real per-load state). `charset`/`inputEncoding`

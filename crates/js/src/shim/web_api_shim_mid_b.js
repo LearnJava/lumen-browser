@@ -2,6 +2,14 @@
 var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ? _LUMEN_PAGE_URL : '');
 var _lumen_loc_href  = _lumen_loc_parts.href;
 var _lumen_loc_hash  = _lumen_loc_parts.hash;
+// BUG-586: `document.domain`'s backing store (HTML LS "relaxing the
+// same-origin restriction"). Separate from `_lumen_loc_parts.hostname`
+// because the two diverge the moment a page relaxes its domain — `location`
+// must keep reporting the real host, `document.domain` the relaxed one.
+// Persists across a same-document navigation (`_lumen_location_update` never
+// touches it); a real cross-document navigation gets a fresh JS context, so
+// this re-initializes for free rather than needing an explicit reset.
+var _lumen_document_domain = _lumen_loc_parts.hostname;
 
 // BUG-765: single source of truth for every `[SecureContext]`-gated surface
 // installed below and by the per-module shims that run after `WEB_API_SHIM`
