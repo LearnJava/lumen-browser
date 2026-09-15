@@ -3581,6 +3581,16 @@ ShadowRoot.prototype.dispatchEvent = function(evt) {
     evt.target = this; evt.currentTarget = this;
     return _lumen_dispatch(this.__nid__, evt);
 };
+// ── setHTMLUnsafe / getHTML (WHATWG HTML LS §14.5, BUG-592) ──────────────────
+// Same Element/ShadowRoot mixin the spec places these two on — `Element`'s
+// object-literal copy lives further down this file; `ShadowRoot` shares the
+// same `_lumen_get_inner_html`/`_lumen_set_inner_html` natives via `__nid__`.
+ShadowRoot.prototype.setHTMLUnsafe = function(html) {
+    _lumen_set_inner_html(this.__nid__, String(html));
+};
+ShadowRoot.prototype.getHTML = function(opts) {
+    return _lumen_get_inner_html(this.__nid__);
+};
 // DOM LS §4.9 Node.cloneNode() — a ShadowRoot is explicitly not clonable: the
 // spec calls this out by name, so it must throw rather than be absent
 // (previously `sr.cloneNode` didn't exist at all — BUG-676).

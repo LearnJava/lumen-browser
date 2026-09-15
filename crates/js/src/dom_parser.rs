@@ -1000,6 +1000,21 @@ DOMParser.prototype.parseFromString = function(str, type) {
   return _vBuildDocument(str, mimeType);
 };
 
+// ── Document.parseHTMLUnsafe (WHATWG HTML LS §14.5, BUG-592) ──────────────────
+// Static factory: parses html with the HTML parser (scripting disabled, no
+// sanitization) into a new detached Document. `_vBuildDocument` already
+// builds exactly that shape for `DOMParser().parseFromString(html,
+// 'text/html')`, so this is the same call under a different entry point, not
+// a second parser. Options (sanitizer/encoding) are unhandled — same Phase 0
+// scope as `Element`/`ShadowRoot.setHTMLUnsafe` above. Guarded: this module's
+// own unit tests eval against a minimal stub runtime with no `Document`
+// constructor at all (only a bare `document` object literal).
+if (typeof Document !== 'undefined') {
+  Document.parseHTMLUnsafe = function(html) {
+    return _vBuildDocument(String(html != null ? html : ''), 'text/html');
+  };
+}
+
 // ── XMLSerializer ─────────────────────────────────────────────────────────────
 // W3C DOM Parsing and Serialization §2.4
 
@@ -1085,6 +1100,36 @@ mod tests_v8 {
     fn dom_parser_constructor() {
         let rt = setup();
         assert!(bool_eval(&rt, "new DOMParser() instanceof DOMParser"));
+    }
+
+    // BUG-592: `Document.parseHTMLUnsafe` is a static, so it must attach to
+    // whatever `Document` constructor the surrounding shim defines — this
+    // module's own `setup()` stub has none, hence the extra `Document`
+    // function evaluated before installing the shim (mirrors what
+    // `web_api_shim_mid.js` provides in the full browser runtime).
+    #[test]
+    fn document_parse_html_unsafe_is_static_and_returns_document() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            var document = {};
+            function Document() {}
+            "#,
+        )
+        .unwrap();
+        install_dom_parser_v8(&rt).unwrap();
+        assert!(bool_eval(&rt, "typeof Document.parseHTMLUnsafe === 'function'"));
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = Document.parseHTMLUnsafe('<html id="root"><head></head><body></body></html>');
+            doc !== null && typeof doc === 'object' && doc.nodeType === 9
+                && doc.documentElement.getAttribute('id') === 'root'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]

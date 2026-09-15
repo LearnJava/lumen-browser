@@ -1,8 +1,17 @@
 # BUG-663 — Sanitizer API implements an obsolete draft: no `Document.parseHTML`/`parseHTMLUnsafe`, no config-object methods (`get`/`allowElement`/`removeElement`/`allowAttribute`/`removeAttribute`/`removeUnsafe`/`replaceElementWithChildren`), no `ShadowRoot.setHTML`/`setHTMLUnsafe`, and `setHTML({sanitizer: <plain config>})` crashes instead of implicitly constructing a `Sanitizer`
 
 **Статус:** OPEN
-**Компонент:** js (`crates/js/src/sanitizer.rs` — JS shim, `install_sanitizer_bindings_v8`, evaluated by the V8 install path per `CLAUDE.md`; `Element.prototype.setHTMLUnsafe` at `crates/js/src/dom.rs:3499`)
+**Компонент:** js (`crates/js/src/sanitizer.rs` — JS shim, `install_sanitizer_bindings_v8`, evaluated by the V8 install path per `CLAUDE.md`; `Element.prototype.setHTMLUnsafe` at `crates/js/src/shim/web_api_shim_mid.js`)
 **Найден:** P2, WPT-VENDOR-sanitizer-api (2026-08-05), `run_report.py --all --root sanitizer-api --recursive` real run
+
+**Ревизия P3 2026-09-16:** items 1 и 3 ниже наполовину закрыты
+[BUG-592](BUG-592-FIXED.md) — `Document.parseHTMLUnsafe` (static factory) и
+`ShadowRoot.prototype.setHTMLUnsafe`/`getHTML` теперь существуют. Остаток по
+этому багу: **безопасные** варианты (`Document.parseHTML`,
+`ShadowRoot.prototype.setHTML`) всё ещё отсутствуют — они требуют пункт 2
+(config-object `Sanitizer`) первым, поскольку "safe" значит "прогнать через
+реальный санитайзер", а не просто позвать тот же парсер. Пункт 4
+(implicit-`Sanitizer`-construction crash) не тронут.
 
 ## Механизм
 
