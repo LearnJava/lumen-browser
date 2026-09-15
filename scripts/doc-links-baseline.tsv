@@ -45,6 +45,7 @@ ROADMAP.md	bugs/BUG-552-OPEN.md	stale-status-suffix	bugs/BUG-552-DUPLICATE.md
 ROADMAP.md	bugs/BUG-569-OPEN.md	stale-status-suffix	bugs/BUG-569-FIXED.md
 ROADMAP.md	bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 ROADMAP.md	bugs/BUG-575-OPEN.md	stale-status-suffix	bugs/BUG-575-FIXED.md
+ROADMAP.md	bugs/BUG-576-OPEN.md	stale-status-suffix	bugs/BUG-576-FIXED.md
 ROADMAP.md	bugs/BUG-803-OPEN.md	stale-status-suffix	bugs/BUG-803-FIXED.md
 ROADMAP.md	bugs/BUG-850-OPEN.md	stale-status-suffix	bugs/BUG-850-FIXED.md
 ROADMAP.md	docs/tasks/p2-wpt-status-sync.md	missing	
@@ -209,6 +210,7 @@ docs/wpt-status.md	../bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXE
 docs/wpt-status.md	../bugs/BUG-569-OPEN.md	stale-status-suffix	bugs/BUG-569-FIXED.md
 docs/wpt-status.md	../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 docs/wpt-status.md	../bugs/BUG-575-OPEN.md	stale-status-suffix	bugs/BUG-575-FIXED.md
+docs/wpt-status.md	../bugs/BUG-576-OPEN.md	stale-status-suffix	bugs/BUG-576-FIXED.md
 docs/wpt-status.md	wpt-vendor-notes/<slug>.md	missing	
 docs/wpt-vendor-notes/css.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 docs/wpt-vendor-notes/css.md	../../bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
