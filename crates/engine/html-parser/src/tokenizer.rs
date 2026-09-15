@@ -762,6 +762,13 @@ impl<'a> Tokenizer<'a> {
 /// Элементы, чьё содержимое в HTML5 — RAWTEXT (литеральный текст до
 /// `</tag` + терминатор; character references **не** декодируются).
 ///
+/// `iframe`/`noembed`/`noframes`/`xmp` — HTML LS §13.2.6.4.7 в дополнение к
+/// `script`/`style` (BUG-983: таблица несла только эти два тега, так что
+/// разметка внутри четырёх остальных токенизировалась как обычный HTML и
+/// давала живой DOM вместо одного текстового узла). `noscript` намеренно не
+/// включён — это отдельный, зависящий от scripting-флага случай, не часть
+/// этого бага.
+///
 /// `html:script`/`h:script` — namespace-префиксные варианты, встреченные в
 /// вендоренном WPT-корпусе (`xmlns:h="…/1999/xhtml"` на `<svg>`-корне,
 /// GAP-XMLDOC срез 5, BUG-685 «Третья грань, случай 1») — токенизатор не
@@ -770,7 +777,10 @@ impl<'a> Tokenizer<'a> {
 /// `"script"`; `tree_builder::dispatch_foreign_content` снимает префикс и
 /// заводит элемент в HTML-неймспейсе отдельно.
 fn is_raw_text_element(name: &str) -> bool {
-    matches!(name, "script" | "style" | "html:script" | "h:script")
+    matches!(
+        name,
+        "script" | "style" | "iframe" | "noembed" | "noframes" | "xmp" | "html:script" | "h:script"
+    )
 }
 
 /// Элементы, чьё содержимое — RCDATA (литеральный текст до `</tag` +
@@ -1367,6 +1377,32 @@ mod tests {
         let t = tok("<script/><b>x</b>");
         assert!(matches!(t[0], Token::StartTag { ref name, self_closing: true, .. } if name == "script"));
         assert!(matches!(t[1], Token::StartTag { ref name, .. } if name == "b"));
+    }
+
+    #[test]
+    fn iframe_noembed_noframes_xmp_are_rawtext() {
+        // BUG-983: до фикса эта четвёрка вообще не входила в
+        // is_raw_text_element, так что вложенная разметка/entity внутри них
+        // токенизировались как обычный HTML.
+        for tag in ["iframe", "noembed", "noframes", "xmp"] {
+            let input = format!("<{tag}>&lt;/{tag}&gt;&lt;img></{tag}>");
+            let t = tok(&input);
+            assert!(
+                matches!(&t[0], Token::StartTag { name, .. } if name == tag),
+                "{tag}: expected a start tag first, got {:?}",
+                t.first()
+            );
+            assert_eq!(
+                t[1],
+                Token::Text(format!("&lt;/{tag}&gt;&lt;img>")),
+                "{tag}: RAWTEXT content must stay literal, entities undecoded"
+            );
+            assert!(
+                matches!(&t[2], Token::EndTag { name } if name == tag),
+                "{tag}: expected a matching end tag, got {:?}",
+                t.get(2)
+            );
+        }
     }
 
     // --- RCDATA mode для <title> и <textarea> ---
