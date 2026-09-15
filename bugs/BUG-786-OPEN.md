@@ -504,7 +504,57 @@ formatting-старт-тег, всё ещё триггерит `reconstruct_acti
 Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
 как таковая.
 
-**Не в этом срезе:** формирующие элементы (`<a>`, `<b>`, …) из того же
-списка «сознательно не тронуто» среза 2 — они трогают active-formatting
-list, отдельный, необследованный класс правки; сама архитектура
-полноценного XML-парсера.
+**Не в этом срезе:** сама архитектура полноценного XML-парсера. (Строка
+выше про «формирующие элементы» — стейл-остаток шаблона от среза 2, не
+вычищенный при написании этого раздела: сам срез 17 их и закрыл, тесты
+`xml_flavoured_self_closing_formatting_elements_do_not_nest_siblings`/
+`xml_flavoured_self_closing_formatting_element_reconstructs_for_trailing_text`
+зелёные.)
+
+## GAP-XMLDOC срез 18 (2026-09-15): self-closing `<th>`/`<td>` в xml_mode — четвёртый по счёту необобщённый push-сайт (`p1-gap-xmldoc-srez18`)
+
+Взял следующую невычеркнутую строку `STATUS-P1.md` (`ROADMAP.md:896`).
+Перед правкой перепроверил все «известные остатки», оставленные срезами
+11–17 (self-closing SVG `<script href>`, «SVG scripts without/ended by
+breakout should not run», MathML/SVG integration-point прототипы,
+`NamedNodeMap.getNamedItemNS`, произвольные `xmlns:*`) — все закрыты уже
+сделанными срезами (13/8/срез 10 сознательно не трогал `NamedNodeMap` как
+неизмеренный, замер повторён — по-прежнему 0 хитов на реальной SVG/XHTML
+разметке). Найден новый измеренный случай тем же приёмом grep по
+вендоренному WPT-корпусу, каким срезы 9/11/16 искали свои: `<td\b[^>]*/>`
+даёт **2 файла** — `css/CSS2/syntax/colors-006-ref.xht` (**32**
+self-closing `<td/>`, 16 строк по 2 ячейки) и
+`css/CSS2/visufx/visibility-collapse-001.xht` (1). Оба — reftest-эталоны:
+если self-closing `<td/>` не остаётся соседом, а вкладывается (тот же
+класс дефекта, что «Вторая грань» BUG-786 для `<div/>`), эталонная
+таблица рендерится сломанной и любое сравнение по ней заведомо неверно.
+
+**Причина и фикс — тот же приём, что срезы 16/17.** `mode_in_row`'s
+рукав `th`/`td` (`tree_builder.rs`) — один из немногих ещё не
+обобщённых push-сайтов `mode_in_body`/table-режимов: деструктурировал
+токен без `self_closing`, безусловно толкал элемент голым
+`self.open_elements.push(el)` и безусловно переключал
+`insertion_mode = InCell` + пушил маркер active-formatting. Правка:
+деструктурировать `self_closing`, заменить на
+`push_open_element(el, self_closing)`, переключать `insertion_mode` и
+пушить маркер только если `!(self.xml_mode && self_closing)` — иначе
+маркер остался бы висеть в active-formatting без парной ячейки, которая
+его снимет по `</td>`.
+
+Соседние рукава того же класса (`caption`/`colgroup`, `tbody`/`thead`/
+`tfoot`, `tr`, `option`/`optgroup` в `mode_in_select`) дали **0** хитов
+тем же grep по корпусу — сознательно не тронуты, тот же принцип, что
+держал `<table>`/`<select>`/`<button>` неизмеренными до среза 16.
+
+Тест: `xml_flavoured_self_closing_td_does_not_nest_siblings`
+(`tree_builder.rs`) — `<table><tr><td/><td/><td/></tr></table>` в
+xml_mode даёт три ячейки-соседа под одним `<tr>`, не вложенные друг в
+друга. `cargo test -p lumen-html-parser --lib` — 473/473 зелёные (было
+472). `cargo clippy -p lumen-html-parser --all-targets -- -D warnings` —
+чисто. `tree_builder.rs` пересёк собственный baseline (5527 → 5558),
+`scripts/file-size-baseline.tsv` обновлён тем же коммитом только для
+этой строки.
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая — следующему срезу снова нужен новый измеренный корпусом
+случай.
