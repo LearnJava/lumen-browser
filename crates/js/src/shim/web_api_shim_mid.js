@@ -5551,6 +5551,9 @@ function _lumen_html_collection_own_names(ids) {
     return names;
 }
 
+// See `_lumen_make_nid_collection` below.
+var _LUMEN_COLLECTION_OWNER_NID = Symbol('lumenCollectionOwnerNid');
+
 // Live HTMLCollection over `owner_nid`'s element children (DOM §4.2.10.2).
 // Backed by a Proxy so `length`, indices and named lookups all re-query the
 // live tree on every access — the collection stays correct across
@@ -5572,8 +5575,12 @@ function _lumen_make_html_collection(owner_nid) {
 // (default `_lumen_make_element`) builds the JS value for a member id — only
 // `document.childNodes` needs a different one (`_lumen_make_node`, BUG-321:
 // a doctype child must come back as a `DocumentType`, not an element).
-function _lumen_make_nid_collection(idsFn, protoObj, noNamed, mapFn) {
+// `ownerNid` (BUG-576) stashes the node id `HTMLOptionsCollection.prototype.add`
+// needs to delegate to the owning `<select>`'s own `add` — stored under a
+// Symbol key so it never collides with an indexed/named collection member.
+function _lumen_make_nid_collection(idsFn, protoObj, noNamed, mapFn, ownerNid) {
     var proto = Object.create(protoObj);
+    if (ownerNid !== undefined) proto[_LUMEN_COLLECTION_OWNER_NID] = ownerNid;
     var toValue = mapFn || _lumen_make_element;
     function ids() { return idsFn(); }
     return new Proxy(proto, {

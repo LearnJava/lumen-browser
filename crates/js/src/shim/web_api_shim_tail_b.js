@@ -2091,10 +2091,18 @@ Object.defineProperty(HTMLSelectElement.prototype, 'options', {
         var n = _lumen_reflect_nid(this);
         if (n === -1) return null;
         return _lumen_make_nid_collection(function() { return _lumen_select_options(n); },
-                                          HTMLOptionsCollection.prototype);
+                                          HTMLOptionsCollection.prototype, undefined, undefined, n);
     },
     enumerable: true, configurable: true,
 });
+// HTML LS §4.10.7: `add(element, before)` also lives on `HTMLOptionsCollection`
+// (BUG-576) as a mirror of `HTMLSelectElement.prototype.add` below — the
+// owning <select>'s nid was stashed on the collection by the getter above.
+HTMLOptionsCollection.prototype.add = function(element, before) {
+    var sel = this[_LUMEN_COLLECTION_OWNER_NID];
+    if (sel === undefined || sel === -1) return;
+    HTMLSelectElement.prototype.add.call(_lumen_make_element(sel), element, before);
+};
 Object.defineProperty(HTMLSelectElement.prototype, 'selectedOptions', {
     get: function() {
         var n = _lumen_reflect_nid(this);
