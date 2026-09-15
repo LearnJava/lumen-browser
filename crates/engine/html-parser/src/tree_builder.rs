@@ -76,6 +76,7 @@ fn attrs_have_html_encoding(attrs: &[(String, String)]) -> bool {
 /// разошлись бы, реализуй каждая свою копию цикла.
 fn run_pull(builder: &mut IncrementalTreeBuilder, input: &str) {
     let mut tokenizer = Tokenizer::new(input);
+    tokenizer.set_xml_mode(builder.xml_mode);
     tokenizer.set_cdata_allowed(builder.cdata_sections_allowed());
     while let Some(token) = tokenizer.next() {
         let is_open_start_tag = matches!(&token, Token::StartTag { self_closing: false, .. });
@@ -109,6 +110,7 @@ pub fn parse(input: &str) -> Document {
 pub fn parse_xml_flavoured(input: &str) -> Document {
     let mut builder = IncrementalTreeBuilder::new();
     builder.xml_mode = true;
+    builder.tokenizer.set_xml_mode(true);
     run_pull(&mut builder, input);
     builder.finish()
 }
@@ -4901,6 +4903,31 @@ mod tests {
         let body = doc.body().expect("body");
         let children: Vec<NodeId> = doc.get(body).children.clone();
         assert_eq!(children.len(), 3, "three self-closed divs must be siblings: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_doctype_internal_subset_with_pi_does_not_break_root_structure() {
+        // GAP-XMLDOC срез 21 (BUG-786), measured on
+        // `dom/nodes/ProcessingInstruction-in-doctype.xhtml`: без xml_mode
+        // the bogus DOCTYPE state stops at the '>' inside `<?x y?>`, leaving
+        // `]>` as stray markup at the document root — a real regression this
+        // pins against, not just a tokenizer-level check.
+        let doc = parse_xml_flavoured(
+            r#"<!DOCTYPE html [<?x y?>]><html xmlns="http://www.w3.org/1999/xhtml"><body>x</body></html>"#,
+        );
+        let root = doc.root();
+        let children: Vec<NodeId> = doc.get(root).children.clone();
+        assert_eq!(
+            children.len(),
+            2,
+            "root must be exactly [doctype, html], no stray subset leftovers: {}",
+            doc
+        );
+        assert!(matches!(doc.get(children[0]).data, lumen_dom::NodeData::Doctype { .. }));
+        assert!(matches!(
+            &doc.get(children[1]).data,
+            lumen_dom::NodeData::Element { name, .. } if name.local == "html"
+        ));
     }
 
     #[test]
