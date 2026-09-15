@@ -36,6 +36,10 @@ fn log_of(rt: &V8JsRuntime) -> String {
     }
 }
 
+fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
+    rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
+}
+
 #[test]
 fn dispatch_event_bubbles_to_every_ancestor() {
     // The core of BUG-873: `inner.dispatchEvent(new Event(t, {bubbles: true}))`
@@ -394,4 +398,68 @@ fn engine_delivered_readystatechange_reaches_document_on_handler() {
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::String("interactive".into()));
+}
+
+// ── `addEventListener(type, fn, { once: true })` (BUG-582 discovery) ────────
+// `_lumen_add_listener` stored every listener as a bare function and never
+// looked at `options.once` at all, so a `{once: true}` listener fired on
+// every dispatch forever instead of exactly once — found while chasing why
+// several `command-and-commandfor` WPT subtests (which lean on this idiom to
+// install a one-shot `preventDefault()`) kept cancelling every dispatch after
+// the first, not just the one the test meant to cancel.
+
+#[test]
+fn once_listener_fires_only_on_first_dispatch() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.getElementById('main'); \
+             var n = 0; \
+             el.addEventListener('click', function() { n++; }, { once: true }); \
+             el.dispatchEvent(new Event('click')); \
+             el.dispatchEvent(new Event('click')); \
+             n;",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(1.0));
+}
+
+#[test]
+fn once_listener_self_removes_so_remove_event_listener_is_a_noop_after() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 var n = 0; \
+                 function fn() { n++; } \
+                 el.addEventListener('click', fn, { once: true }); \
+                 el.dispatchEvent(new Event('click')); \
+                 el.removeEventListener('click', fn); \
+                 el.dispatchEvent(new Event('click')); \
+                 n === 1"));
+}
+
+#[test]
+fn once_listener_can_be_removed_before_it_ever_fires() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 var n = 0; \
+                 function fn() { n++; } \
+                 el.addEventListener('click', fn, { once: true }); \
+                 el.removeEventListener('click', fn); \
+                 el.dispatchEvent(new Event('click')); \
+                 n === 0"));
+}
+
+#[test]
+fn once_capture_listener_is_independent_of_bubble_listener() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 var order = []; \
+                 el.addEventListener('click', function() { order.push('bubble'); }); \
+                 el.addEventListener('click', function() { order.push('capture'); }, { once: true, capture: true }); \
+                 el.dispatchEvent(new Event('click')); \
+                 el.dispatchEvent(new Event('click')); \
+                 order.join(',') === 'capture,bubble,bubble'"));
 }

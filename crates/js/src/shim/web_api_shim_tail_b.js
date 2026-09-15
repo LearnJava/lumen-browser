@@ -1310,13 +1310,131 @@ _lumen_install_reflection(HTMLOptGroupElement.prototype, [
 _lumen_install_reflection(HTMLButtonElement.prototype, [
     ['name',           'name',           'string'],
     ['disabled',       'disabled',       'bool'],
-    ['type',           'type',           'enum',   { def: 'submit', keys: ['submit', 'reset', 'button'] }],
     ['formAction',     'formaction',     'url'],
     ['formEnctype',    'formenctype',    'string'],
     ['formMethod',     'formmethod',     'enum',   { def: '', keys: ['get', 'post', 'dialog'] }],
     ['formTarget',     'formtarget',     'string'],
     ['formNoValidate', 'formnovalidate', 'bool'],
 ]);
+
+// `type` is NOT a plain enum reflection (BUG-582): HTML LS §4.10.5.1 says the
+// missing/invalid-value default is "button", not "submit", when the button
+// carries a `command` or `commandfor` content attribute at all (regardless of
+// whether that attribute's own value is valid) — the Invoker Commands API
+// opts a button out of the implicit submit behaviour so a plain `<button
+// commandfor=x>` doesn't also submit its form. `button-type-reflection.html`
+// pins this exact interaction.
+Object.defineProperty(HTMLButtonElement.prototype, 'type', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return 'submit';
+        var v = _lumen_u2n(_lumen_get_attr(n, 'type'));
+        if (v !== null) {
+            var lv = String(v).toLowerCase();
+            if (lv === 'submit' || lv === 'reset' || lv === 'button') return lv;
+        }
+        if (_lumen_has_attr(n, 'command') || _lumen_has_attr(n, 'commandfor')) return 'button';
+        return 'submit';
+    },
+    set: function(v) { var n = _lumen_reflect_nid(this); if (n !== -1) _lumen_set_attr(n, 'type', String(v)); },
+    enumerable: true, configurable: true,
+});
+
+// Known Invoker Commands keywords (HTML LS §4.10.9.1). Anything else is only
+// valid as a "custom command" when it starts with two hyphen-minus characters
+// (author-defined, case preserved); everything not matching either shape
+// reflects as the empty string, same as an absent/invalid enumerated
+// attribute. The audio/video/details/fullscreen/scroll/input-number commands
+// from the still-`.tentative.` half of the spec are deliberately not wired up
+// here — WPT keeps their tests in separate `.tentative.html` files.
+var _LUMEN_COMMAND_KEYWORDS = ['show-modal', 'close', 'request-close', 'show-popover', 'hide-popover', 'toggle-popover'];
+var _LUMEN_DIALOG_COMMANDS  = { 'show-modal': 1, 'close': 1, 'request-close': 1 };
+var _LUMEN_POPOVER_COMMANDS = { 'show-popover': 1, 'hide-popover': 1, 'toggle-popover': 1 };
+
+function _lumen_normalize_command(raw) {
+    if (raw === null || raw === undefined) return '';
+    var v = String(raw);
+    if (v.length === 0) return '';
+    var lv = v.toLowerCase();
+    for (var i = 0; i < _LUMEN_COMMAND_KEYWORDS.length; i++) {
+        if (_LUMEN_COMMAND_KEYWORDS[i] === lv) return lv;
+    }
+    if (v.length >= 2 && v.charAt(0) === '-' && v.charAt(1) === '-') return v;
+    return '';
+}
+
+Object.defineProperty(HTMLButtonElement.prototype, 'command', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return '';
+        return _lumen_normalize_command(_lumen_u2n(_lumen_get_attr(n, 'command')));
+    },
+    set: function(v) { var n = _lumen_reflect_nid(this); if (n !== -1) _lumen_set_attr(n, 'command', String(v)); },
+    enumerable: true, configurable: true,
+});
+
+// DOM LS §4.4 shadow-including reachability, restricted to the one direction
+// the Invoker Commands API actually allows an explicit `commandForElement` to
+// cross: OUT of a shadow tree (a button rendered inside a shadow root may
+// target an element in the enclosing light DOM, since the shadow tree already
+// has visibility outward through its own host chain) but never INTO one the
+// invoker has no standing to reach (a light-DOM button pointing at a
+// descendant's shadow root) — `interface.html`'s "does not reflect ... inside
+// shadowroot" case.
+function _lumen_command_target_reachable(sourceNid, targetNid) {
+    var cur = targetNid, guard = 0;
+    while (guard++ < 1024) {
+        var p = _lumen_u2n(_lumen_get_parent(cur));
+        if (p === null) break;
+        cur = p;
+    }
+    if (_lumen_u2n(_lumen_get_shadow_root_host(cur)) === null) return true; // ordinary document tree
+    var s = sourceNid;
+    guard = 0;
+    while (s !== null && s !== undefined && guard++ < 1024) {
+        if (s === cur) return true;
+        var sp = _lumen_u2n(_lumen_get_parent(s));
+        if (sp === null) sp = _lumen_u2n(_lumen_get_shadow_root_host(s));
+        s = sp;
+    }
+    return false;
+}
+
+// `commandForElement` is an explicit-attr-element reference (same shape as
+// `popoverTargetElement`/`ariaActiveDescendantElement` elsewhere in the spec):
+// once set via the IDL property it wins over the `commandfor` content
+// attribute, which is simultaneously forced to `""` so `getAttribute` still
+// reports "set" (`interface.html`). Keyed by the (interned, stable-by-nid)
+// wrapper object rather than an expando so it never becomes an own enumerable
+// property of the element.
+var _LUMEN_COMMAND_FOR_EXPLICIT = new WeakMap();
+
+Object.defineProperty(HTMLButtonElement.prototype, 'commandForElement', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        if (_LUMEN_COMMAND_FOR_EXPLICIT.has(this)) {
+            var explicit = _LUMEN_COMMAND_FOR_EXPLICIT.get(this);
+            if (explicit === null || explicit.__nid__ === undefined) return null;
+            return _lumen_command_target_reachable(n, explicit.__nid__) ? explicit : null;
+        }
+        var idStr = _lumen_u2n(_lumen_get_attr(n, 'commandfor'));
+        if (idStr === null || idStr === '') return null;
+        var targetNid = _lumen_u2n(_lumen_get_element_by_id(String(idStr)));
+        return targetNid === null ? null : _lumen_make_element(targetNid);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        if (v !== null && !(v && typeof v === 'object' && v.__nid__ !== undefined && v.nodeType === 1)) {
+            throw new TypeError("Failed to set the 'commandForElement' property on 'HTMLButtonElement': "
+                + "the provided value is not of type 'Element'.");
+        }
+        _LUMEN_COMMAND_FOR_EXPLICIT.set(this, v);
+        _lumen_set_attr(n, 'commandfor', '');
+    },
+    enumerable: true, configurable: true,
+});
 
 _lumen_install_reflection(HTMLFormElement.prototype, [
     ['name',           'name',           'string'],
@@ -3534,6 +3652,78 @@ document.addEventListener('click', function(evt) {
         }
         el = el.parentElement;
     }
+});
+
+// Invoker Commands API (HTML LS §4.10.9): a `<button command commandfor>`
+// click fires a cancelable `command` event on the resolved target, then
+// (unless preventDefault()ed) runs that command's built-in default action.
+// Only `<button>` counts — `<input type=button>` never gets this behaviour
+// (`invalid-element-types.html`). A button with a form owner only runs the
+// command steps when its `type` CONTENT ATTRIBUTE is literally "button" —
+// note this deliberately does NOT read the `.type` IDL getter above: that
+// getter's own missing/invalid-value default becomes "button" once
+// `command`/`commandfor` is present (so introspection and CSS see a plain
+// button), but `button-type-behavior.html` pins that the classic
+// missing/invalid-value default for the *activation* algorithm stays
+// "submit" — a commandfor-bearing button sitting in a form with no (or an
+// invalid) `type` attribute neither submits nor invokes on click; it takes an
+// explicit `type=button` for either the type-reflection default switch or
+// the command steps to actually run inside a form. Outside any form, the
+// literal type attribute doesn't matter at all — HTML LS's actual button
+// activation behavior algorithm always considers it the button candidate.
+document.addEventListener('click', function(evt) {
+    if (evt.defaultPrevented) return;
+    var el = evt.target;
+    while (el && el.__nid__ !== undefined && (_lumen_get_tag_name(el.__nid__) || '').toUpperCase() !== 'BUTTON') {
+        el = el.parentElement;
+    }
+    if (!el || el.__nid__ === undefined) return;
+    var nid = el.__nid__;
+    if (_lumen_has_attr(nid, 'disabled')) return;
+    if (_lumen_form_owner(nid) !== -1) {
+        var literalType = (_lumen_u2n(_lumen_get_attr(nid, 'type')) || '').toLowerCase();
+        if (literalType !== 'button') return;
+    }
+    var command = el.command;
+    if (command === '') return;
+    var target = el.commandForElement;
+    if (!target || target.__nid__ === undefined) return;
+    var isDialogCmd  = _LUMEN_DIALOG_COMMANDS[command]  === 1;
+    var isPopoverCmd = _LUMEN_POPOVER_COMMANDS[command] === 1;
+    // Known built-in commands only fire on a compatible target — a `<dialog>`
+    // for the dialog family, any `HTMLElement` (excluding SVG/MathML) for the
+    // popover family; a custom (`--foo`) command fires on any `Element`.
+    if (isDialogCmd && !(target instanceof HTMLDialogElement)) return;
+    if (isPopoverCmd && !(target instanceof HTMLElement)) return;
+    var targetNid = target.__nid__;
+    var ce = new CommandEvent('command', {
+        command: command, source: el, bubbles: false, cancelable: true, composed: true, isTrusted: true,
+    });
+    var notCancelled = _lumen_dispatch(targetNid, ce);
+    if (!notCancelled) return;
+    // A `command` listener may have removed the target from the document
+    // entirely (`on-popover-disconnect.html`/`on-dialog-disconnect.html`) —
+    // the default action is then a no-op, same as every other DOM default
+    // action that checks connectedness after an event a listener could have
+    // reacted to.
+    if (!_lumen_resource_is_connected(targetNid)) return;
+    try {
+        if (command === 'toggle-popover')      { _lumen_popover_toggle(targetNid, undefined); }
+        else if (command === 'show-popover')   { _lumen_popover_show(targetNid); }
+        else if (command === 'hide-popover')   { _lumen_popover_hide(targetNid); }
+        else if (command === 'show-modal') {
+            // No-op on an already-open dialog (modal or not) — showModal()
+            // itself doesn't guard this (BUG-579's `requestClose()` neighbour
+            // does check `open`, this one never grew the check).
+            if (_lumen_get_attr(targetNid, 'open') === undefined) { target.showModal(); }
+        } else if (command === 'close') {
+            target.close.apply(target, _lumen_has_attr(nid, 'value') ? [_lumen_get_attr(nid, 'value')] : []);
+        } else if (command === 'request-close') {
+            target.requestClose.apply(target, _lumen_has_attr(nid, 'value') ? [_lumen_get_attr(nid, 'value')] : []);
+        }
+        // Custom (`--foo`) commands have no built-in default action — the
+        // `command` event itself is the whole point.
+    } catch (e) { _lumen_report_exception(e); }
 });
 
 // ── Fullscreen API helpers ────────────────────────────────────────────────────

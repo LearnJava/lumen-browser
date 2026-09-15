@@ -300,6 +300,33 @@ function ToggleEvent(type, init) {
 ToggleEvent.prototype = Object.create(Event.prototype);
 ToggleEvent.prototype.constructor = ToggleEvent;
 
+// CommandEvent — HTML LS §4.10.9 Invoker Commands API. `command` is a plain
+// DOMString member (author-supplied init values go through ordinary WebIDL
+// string coercion, including `String(null) === 'null'`), `source` is a
+// nullable `Element` member, so anything else (including `true`/`{}`, which a
+// bare `String()` coercion would happily accept) must throw at construction
+// time per WebIDL interface-typed dictionary members.
+function CommandEvent(type, init) {
+    if (!new.target) throw new TypeError("Failed to construct 'CommandEvent': Please use the 'new' operator.");
+    Event.call(this, type, init);
+    var command = (init == null || init.command === undefined) ? '' : String(init.command);
+    var source;
+    if (init == null || init.source === undefined || init.source === null) {
+        source = null;
+    } else if (init.source && typeof init.source === 'object' && init.source.__nid__ !== undefined
+               && init.source.nodeType === 1) {
+        source = init.source;
+    } else {
+        throw new TypeError("Failed to construct 'CommandEvent': member source is not of type Element.");
+    }
+    Object.defineProperty(this, 'command', { get: function() { return command; }, enumerable: true, configurable: true });
+    Object.defineProperty(this, 'source',  { get: function() { return source;  }, enumerable: true, configurable: true });
+}
+CommandEvent.prototype = Object.create(Event.prototype);
+CommandEvent.prototype.constructor = CommandEvent;
+Object.defineProperty(CommandEvent.prototype, Symbol.toStringTag,
+    { value: 'CommandEvent', writable: false, enumerable: false, configurable: true });
+
 // ContentVisibilityAutoStateChangeEvent — CSS Contain L2 §4.1 (BUG-852).
 // `skipped` is a readonly WebIDL boolean with a `false` default, so a member
 // left out (or set to `undefined`) counts as absent, and anything else goes
@@ -713,6 +740,8 @@ var _LUMEN_EVENT_HANDLER_ATTRS = [
     'onabort', 'onauxclick', 'onbeforeinput', 'onbeforematch', 'onbeforetoggle',
     'onblur', 'oncancel', 'oncanplay', 'oncanplaythrough', 'onchange', 'onclick',
     'onclose', 'oncontextlost', 'oncontextmenu', 'oncontextrestored', 'oncopy',
+    // HTML LS §4.10.9 Invoker Commands API (BUG-582).
+    'oncommand',
     'oncuechange', 'oncut', 'ondblclick', 'ondrag', 'ondragend', 'ondragenter',
     'ondragleave', 'ondragover', 'ondragstart', 'ondrop', 'ondurationchange',
     // CSS Contain L2 §4.1 — the `content-visibility: auto` state change. The
@@ -757,19 +786,46 @@ function _lumen_capture_flag(options) {
     return !!(options === true || (options && options.capture));
 }
 
+// `{once: true}` (BUG-582 discovery — every consumer of `_lumen_listeners`/
+// `_lumen_capture_listeners` calls the stored entry directly as a function,
+// so honoring `once` without touching every one of those call sites means
+// never storing the author's `fn` itself for a once-listener: store a
+// self-removing wrapper instead. `_lumen_once_wrappers` (`fn` → per
+// `nid:type:capture` wrapper) lets `removeEventListener(type, fn)` still find
+// and remove it by the ORIGINAL function identity, same as a plain listener.
+var _lumen_once_wrappers = new WeakMap();
+
 function _lumen_add_listener(nid, type, fn, options) {
     if (typeof fn !== 'function') return;
-    var store = _lumen_capture_flag(options) ? _lumen_capture_listeners : _lumen_listeners;
+    var capture = _lumen_capture_flag(options);
+    var store = capture ? _lumen_capture_listeners : _lumen_listeners;
     var key = String(nid) + ':' + String(type);
     if (!store[key]) store[key] = [];
-    store[key].push(fn);
+    var target = fn;
+    if (options && options.once) {
+        var wrapperKey = (capture ? '1:' : '0:') + key;
+        var wrapper = function() {
+            _lumen_rm_listener(nid, type, fn, options);
+            return fn.apply(this, arguments);
+        };
+        var perFn = _lumen_once_wrappers.get(fn);
+        if (!perFn) { perFn = {}; _lumen_once_wrappers.set(fn, perFn); }
+        perFn[wrapperKey] = wrapper;
+        target = wrapper;
+    }
+    store[key].push(target);
 }
 function _lumen_rm_listener(nid, type, fn, options) {
-    var store = _lumen_capture_flag(options) ? _lumen_capture_listeners : _lumen_listeners;
+    var capture = _lumen_capture_flag(options);
+    var store = capture ? _lumen_capture_listeners : _lumen_listeners;
     var key = String(nid) + ':' + String(type);
     var arr = store[key];
     if (!arr) return;
-    var idx = arr.indexOf(fn);
+    var wrapperKey = (capture ? '1:' : '0:') + key;
+    var perFn = _lumen_once_wrappers.get(fn);
+    var target = (perFn && perFn[wrapperKey] !== undefined) ? perFn[wrapperKey] : fn;
+    if (perFn) delete perFn[wrapperKey];
+    var idx = arr.indexOf(target);
     if (idx >= 0) arr.splice(idx, 1);
 }
 

@@ -807,3 +807,221 @@ fn auto_show_closes_hint() {
                        && document.getElementById('auto').hasAttribute('data-lumen-popover-open'); \
                  })()"));
 }
+
+// ── Invoker Commands API (HTML LS §4.10.9, BUG-582) ─────────────────────────
+
+/// Wires up `<button id="btn" commandfor="TARGET" command="COMMAND">` plus a
+/// `TARGET` element built by `target_html`, appended to `<body>`.
+fn install_invoker(rt: &V8JsRuntime, target_html: &str, command: &str) {
+    rt.eval(&format!(
+        "document.body.insertAdjacentHTML('beforeend', {:?}); \
+         var btn = document.createElement('button'); \
+         btn.id = 'btn'; \
+         btn.setAttribute('commandfor', 'target'); \
+         btn.setAttribute('command', {:?}); \
+         document.body.appendChild(btn);",
+        target_html, command
+    )).unwrap();
+}
+
+#[test]
+fn command_reflects_known_keyword_case_insensitively() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.createElement('button'); \
+                 el.command = 'sHoW-mOdAl'; \
+                 el.command === 'show-modal'"));
+}
+
+#[test]
+fn command_reflects_custom_command_case_preserved() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.command = '--cUsToM'; \
+                 el.command === '--cUsToM'"));
+}
+
+#[test]
+fn command_invalid_value_reflects_empty() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.createElement('button'); \
+                 el.command = 'foo-bar'; \
+                 el.command === ''"));
+}
+
+#[test]
+fn command_for_element_resolves_by_id() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<div id='target'></div>", "--x");
+    assert!(bool_eval(&rt,
+        "document.getElementById('btn').commandForElement === document.getElementById('target')"));
+}
+
+#[test]
+fn command_for_element_property_overrides_attribute() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var btn = document.createElement('button'); \
+                 var other = document.createElement('div'); \
+                 document.body.appendChild(other); \
+                 btn.commandForElement = other; \
+                 btn.commandForElement === other && btn.getAttribute('commandfor') === ''"));
+}
+
+#[test]
+fn command_for_element_rejects_non_element() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var btn = document.createElement('button'); \
+                 var threw = false; \
+                 try { btn.commandForElement = {}; } catch (e) { threw = e instanceof TypeError; } \
+                 threw"));
+}
+
+#[test]
+fn command_event_constructor_defaults() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var e = new CommandEvent('command'); \
+                 e.command === '' && e.source === null && e.type === 'command'"));
+}
+
+#[test]
+fn command_event_constructor_reads_init() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 var e = new CommandEvent('command', { command: 'close', source: el }); \
+                 e.command === 'close' && e.source === el"));
+}
+
+#[test]
+fn button_type_defaults_to_button_when_commandfor_present() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var btn = document.createElement('button'); \
+                 btn.setAttribute('commandfor', 'x'); \
+                 btn.type === 'button'"));
+}
+
+#[test]
+fn button_type_stays_submit_without_commandfor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "document.createElement('button').type === 'submit'"));
+}
+
+#[test]
+fn click_fires_command_event_on_target() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<div id='target'></div>", "--custom");
+    assert!(bool_eval(&rt,
+        "var got = null; \
+                 document.getElementById('target').addEventListener('command', function(e) { got = e; }); \
+                 document.getElementById('btn').click(); \
+                 got instanceof CommandEvent && got.command === '--custom' \
+                 && got.source === document.getElementById('btn') \
+                 && got.target === document.getElementById('target')"));
+}
+
+#[test]
+fn click_toggle_popover_command_opens_popover() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<div id='target' popover></div>", "toggle-popover");
+    assert!(bool_eval(&rt,
+        "document.getElementById('btn').click(); \
+                 document.getElementById('target').hasAttribute('data-lumen-popover-open')"));
+}
+
+#[test]
+fn click_show_modal_command_opens_dialog_as_modal() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<dialog id='target'></dialog>", "show-modal");
+    assert!(bool_eval(&rt,
+        "document.getElementById('btn').click(); \
+                 document.getElementById('target').hasAttribute('open')"));
+}
+
+#[test]
+fn click_show_modal_is_noop_on_already_open_dialog() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<dialog id='target'></dialog>", "show-modal");
+    assert!(bool_eval(&rt,
+        "var dlg = document.getElementById('target'); \
+                 dlg.show(); \
+                 document.getElementById('btn').click(); \
+                 dlg.hasAttribute('open') && !dlg.matches(':modal')"));
+}
+
+#[test]
+fn click_close_command_closes_dialog_with_value() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<dialog id='target'></dialog>", "close");
+    assert!(bool_eval(&rt,
+        "var dlg = document.getElementById('target'); \
+                 dlg.show(); \
+                 document.getElementById('btn').setAttribute('value', 'ok'); \
+                 document.getElementById('btn').click(); \
+                 !dlg.hasAttribute('open') && dlg.returnValue === 'ok'"));
+}
+
+#[test]
+fn click_dialog_command_on_non_dialog_target_does_not_fire() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<div id='target'></div>", "close");
+    assert!(bool_eval(&rt,
+        "var got = false; \
+                 document.getElementById('target').addEventListener('command', function() { got = true; }); \
+                 document.getElementById('btn').click(); \
+                 !got"));
+}
+
+#[test]
+fn click_command_event_preventable() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<div id='target' popover></div>", "toggle-popover");
+    assert!(bool_eval(&rt,
+        "document.getElementById('target').addEventListener('command', function(e) { e.preventDefault(); }); \
+                 document.getElementById('btn').click(); \
+                 !document.getElementById('target').hasAttribute('data-lumen-popover-open')"));
+}
+
+#[test]
+fn click_does_not_fire_when_button_disabled() {
+    let rt = v8_runtime_with_dom(make_doc());
+    install_invoker(&rt, "<div id='target' popover></div>", "toggle-popover");
+    assert!(bool_eval(&rt,
+        "document.getElementById('btn').setAttribute('disabled', ''); \
+                 document.getElementById('btn').click(); \
+                 !document.getElementById('target').hasAttribute('data-lumen-popover-open')"));
+}
+
+#[test]
+fn click_skips_command_for_submit_button_with_form_owner() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "document.body.insertAdjacentHTML('beforeend', \
+                 '<form id=\"f\"></form><div id=\"target\" popover></div>'); \
+                 var btn = document.createElement('button'); \
+                 btn.id = 'btn'; \
+                 btn.setAttribute('type', 'submit'); \
+                 btn.setAttribute('form', 'f'); \
+                 btn.setAttribute('commandfor', 'target'); \
+                 btn.setAttribute('command', 'toggle-popover'); \
+                 document.getElementById('f').appendChild(btn);"
+    ).unwrap();
+    assert!(bool_eval(&rt,
+        "document.getElementById('btn').click(); \
+                 !document.getElementById('target').hasAttribute('data-lumen-popover-open')"));
+}
+
+#[test]
+fn oncommand_content_attribute_installs_handler() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('oncommand', 'this.dataset.fired = \"1\"'); \
+                 typeof el.oncommand === 'function'"));
+}
