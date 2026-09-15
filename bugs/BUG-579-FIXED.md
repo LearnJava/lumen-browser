@@ -1,8 +1,8 @@
 # BUG-579: `HTMLDialogElement.prototype.requestClose()` missing entirely
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:5667-5702` — the `<dialog>` API
-block has `show`/`showModal`/`close`/`returnValue` but no `requestClose`)
+**Статус:** FIXED 2026-09-15 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — the `<dialog>`
+API block; `crates/js/src/shim/web_api_shim_tail_b.js` — modal-dialog helpers)
 **Найден:** P2, WPT-VENDOR-html-semantics-misc, 2026-08-04
 
 ## Симптом
@@ -35,3 +35,23 @@ management it would need already exist and are exercised by the Escape-key
 path, so this is additive (new method delegating into the same close
 machinery `close()` already uses at `dom.rs:5685-5701`), not a new
 subsystem.
+
+## Исправление
+
+The shared "close the dialog" steps (set `returnValue`, remove `open`/
+`data-lumen-modal`, pop the modal stack, restore previously-focused element,
+fire `close`) were factored out of `close()`'s body into a new function
+`_lumen_dialog_close_steps(wrapper, nid, rv)` in `web_api_shim_tail_b.js`,
+next to the Escape-key handler that already implements the same
+cancel→(maybe)close sequence. `requestClose([returnValue])` dispatches a
+cancelable `cancel` event and, only if it was not prevented, calls the shared
+steps; `close()` calls them unconditionally (no `cancel` event, per spec).
+
+New tests in `crates/js/src/dom/tests/v8_details_dialog_popover.rs`:
+`dialog_request_close_removes_open`, `dialog_request_close_fires_cancel_then_close`,
+`dialog_request_close_sets_return_value`, `dialog_request_close_preventable`,
+`dialog_request_close_noop_when_not_open`.
+
+`cargo test -p lumen-js --features v8-backend` green (dialog-related tests
+17/17), `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+clean.
