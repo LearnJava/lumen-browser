@@ -1608,23 +1608,37 @@ impl IncrementalTreeBuilder {
             Token::Comment(s) => self.insert_comment(s),
             Token::Doctype { .. } => { /* parse error */ }
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "caption" => {
                 self.clear_stack_to_table_context();
-                self.active_formatting.push(ActiveFormattingEntry::Marker);
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.insertion_mode = InsertionMode::InCaption;
+                // GAP-XMLDOC срез 19 (BUG-786): same self_closing-dropping
+                // shape as the `<td>`/`<th>` arm (срез 18) — this used to
+                // push straight onto `open_elements` and ignore
+                // `self_closing` entirely, so a self-closing `<caption/>`
+                // in an XML-flavoured document stayed open forever and
+                // swallowed every sibling table element.
+                self.push_open_element(el, self_closing);
+                if !(self.xml_mode && self_closing) {
+                    self.active_formatting.push(ActiveFormattingEntry::Marker);
+                    self.insertion_mode = InsertionMode::InCaption;
+                }
             }
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "colgroup" => {
                 self.clear_stack_to_table_context();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.insertion_mode = InsertionMode::InColumnGroup;
+                self.push_open_element(el, self_closing);
+                if !(self.xml_mode && self_closing) {
+                    self.insertion_mode = InsertionMode::InColumnGroup;
+                }
             }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -1641,13 +1655,17 @@ impl IncrementalTreeBuilder {
                 });
             }
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if matches!(name.as_str(), "tbody" | "thead" | "tfoot") => {
                 self.clear_stack_to_table_context();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.insertion_mode = InsertionMode::InTableBody;
+                self.push_open_element(el, self_closing);
+                if !(self.xml_mode && self_closing) {
+                    self.insertion_mode = InsertionMode::InTableBody;
+                }
             }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -1810,13 +1828,17 @@ impl IncrementalTreeBuilder {
     fn mode_in_table_body(&mut self, token: Token) {
         match token {
             Token::StartTag {
-                ref name, ref attrs, ..
+                ref name,
+                ref attrs,
+                self_closing,
             } if name == "tr" => {
                 self.clear_stack_to_table_body_context();
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
-                self.open_elements.push(el);
-                self.insertion_mode = InsertionMode::InRow;
+                self.push_open_element(el, self_closing);
+                if !(self.xml_mode && self_closing) {
+                    self.insertion_mode = InsertionMode::InRow;
+                }
             }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -4890,6 +4912,50 @@ mod tests {
         let tr = if is_tr { tbody_or_tr } else { doc.get(tbody_or_tr).children[0] };
         let cells: Vec<NodeId> = doc.get(tr).children.clone();
         assert_eq!(cells.len(), 3, "three self-closed <td> must be siblings: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_tr_does_not_nest_siblings() {
+        // GAP-XMLDOC срез 19 (BUG-786): same push-straight-onto-`open_elements`,
+        // ignore-`self_closing` shape as срез 18's `<td>`/`<th>` fix, one mode
+        // up in `mode_in_table_body`. Grepping the vendored WPT corpus for
+        // `<tr\b[^>]*/>` gives 0 hits (unlike срез 18's `<td>`, which had 32 in
+        // one file) — same as срез 16 found for `<table>`/`<select>`/`<button>`
+        // before proving it live: an unexercised corpus is not evidence the
+        // push site is safe, since it is structurally the same defect already
+        // measured for `<div>`/`<td>`. Fixed on the same principle, not on
+        // fresh corpus evidence.
+        let doc = parse_xml_flavoured(
+            r#"<table><tbody><tr class="a"/><tr class="b"/><tr class="c"/></tbody></table>"#,
+        );
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let tbody = doc.get(table).children[0];
+        let rows: Vec<NodeId> = doc.get(tbody).children.clone();
+        assert_eq!(rows.len(), 3, "three self-closed <tr> must be siblings: {}", doc);
+    }
+
+    #[test]
+    fn xml_flavoured_self_closing_caption_colgroup_tbody_do_not_nest_siblings() {
+        // GAP-XMLDOC срез 19 (BUG-786): `caption`/`colgroup`/`tbody`(+`thead`/
+        // `tfoot`) in `mode_in_table` had the identical unguarded-push shape.
+        // `caption` additionally used to push an `ActiveFormattingEntry::Marker`
+        // unconditionally before the element existed — moved after the
+        // self-closing check, mirroring how срез 18 guarded `<td>`'s marker
+        // push, so a self-closed `<caption/>` doesn't leave a marker dangling
+        // with no matching `</caption>` to pop it.
+        let doc = parse_xml_flavoured(
+            r#"<table><caption class="a"/><colgroup class="b"/><tbody class="c"/></table>"#,
+        );
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let children: Vec<NodeId> = doc.get(table).children.clone();
+        assert_eq!(
+            children.len(),
+            3,
+            "self-closed caption/colgroup/tbody must be table siblings, not nested: {}",
+            doc
+        );
     }
 
     #[test]

@@ -558,3 +558,54 @@ xml_mode даёт три ячейки-соседа под одним `<tr>`, н�
 Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
 как таковая — следующему срезу снова нужен новый измеренный корпусом
 случай.
+
+## GAP-XMLDOC срез 19 (2026-09-15): self-closing `<caption>`/`<colgroup>`/`<tbody>`/`<thead>`/`<tfoot>`/`<tr>` в xml_mode — пятый и шестой по счёту необобщённые push-сайты (`p1-gap-xmldoc-srez19`)
+
+Взял следующую невычеркнутую строку `STATUS-P1.md` (`ROADMAP.md:896`).
+Остальные пять table-контекстных push-сайтов `mode_in_table`/
+`mode_in_table_body`, что срез 18 закрыл для `td`/`th`, несли тот же
+необобщённый паттерн: деструктуризация токена без `self_closing`,
+безусловный голый `self.open_elements.push(el)`, безусловное
+переключение `insertion_mode`.
+
+**Корпус не дал ни одного хита.** `grep -rlE "<(caption|colgroup|tbody|thead|tfoot|tr)([[:space:]][^>]*)?/>"`
+по вендоренному `.xht`/`.xhtml`/`.svg` — **0** совпадений на все шесть
+тегов (для сравнения: `<td/>` срез 18 нашёл 32 хита в одном файле).
+Тот же случай, что был у `<table>`/`<select>`/`<button>` до среза 16:
+«0 хитов» — не доказательство, что push-сайт безопасен, раз он
+структурно идентичен уже подтверждённому на `<div>`/`<td>` классу
+дефекта. Как и срез 16, чиню на основании доказанного механизма
+(юнит-тест на сам паттерн вложения), не на свежей корпусной улике.
+
+**Фикс — тот же приём, что срезы 16/17/18.** Все шесть рукавов
+переведены на `push_open_element(el, self_closing)`, переключение
+`insertion_mode` — только при `!(self.xml_mode && self_closing)`.
+У `caption` тот же нюанс, что у `td`/`th` в срезе 18: `push`
+`ActiveFormattingEntry::Marker` тоже перенесён под то же условие —
+раньше маркер клался безусловно ДО создания элемента, и самозакрытый
+`<caption/>` оставлял бы маркер висеть в active-formatting без парной
+`</caption>`, которая должна его снять.
+
+Тесты (`tree_builder.rs`):
+- `xml_flavoured_self_closing_tr_does_not_nest_siblings` —
+  `<tr/><tr/><tr/>` внутри `<tbody>` в xml_mode дают три соседних `<tr>`.
+- `xml_flavoured_self_closing_caption_colgroup_tbody_do_not_nest_siblings` —
+  `<caption/><colgroup/><tbody/>` внутри `<table>` в xml_mode дают три
+  соседних ребёнка `<table>`, не цепочку вложенности.
+
+`cargo test -p lumen-html-parser --lib` — 475/475 зелёные (было 473,
+включая два новых теста). `cargo clippy -p lumen-html-parser
+--all-targets -- -D warnings` — чисто. `tree_builder.rs` пересёк
+собственный baseline (5558 → 5624), `scripts/file-size-baseline.tsv`
+обновлён тем же коммитом только для этой строки. `scripts/scoped-test.sh`
+(все обратные зависимости) — зелёный, кроме того же чужого дрейфа
+CPU-эталонов (`lumen-driver::cases::snapshot_cpu`, сигнатура из тех же
+7 файлов — `55-text-rendering`/`57-canvas-2d`/`32-list-markers`/
+`34-forms`/`45-multiple-backgrounds`/`51-scrollbar-rendering`/
+`1000000-final`), подтверждённого идентичным на `main` предыдущими
+срезами ([BUG-1008](BUG-1008-OPEN.md)).
+
+Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
+как таковая. Оставшиеся необобщённые push-сайты того же семейства —
+`option`/`optgroup` в `mode_in_select` (тоже 0 хитов по корпусу тем же
+грепом) — на следующий срез.
