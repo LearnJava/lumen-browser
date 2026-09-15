@@ -2893,12 +2893,42 @@ function _lumen_make_processing_instruction(target, data) {
         insertBefore: function()  { throw _lumen_character_data_insertion_error(); },
         replaceChild: function()  { throw _lumen_character_data_insertion_error(); },
         removeChild:  function()  { throw _lumen_character_data_insertion_error(); },
+        // GAP-XMLDOC срез 25 (BUG-786): DOM §4.4 Node.cloneNode() — a fresh,
+        // independently-mutable PI with the same target/data (there are no
+        // children to deep/shallow-copy either way).
+        cloneNode: function() { return _lumen_make_processing_instruction(target, _data); },
+        // DOM §4.4 Node.getRootNode() — this object never tracks a real
+        // parent (it stays detached even after `Node.appendChild`, see
+        // BUG-786 срез 25 notes), so its root is always itself.
+        getRootNode: function() { return this; },
     };
     // BUG-314: give the PI object the ProcessingInstruction → CharacterData →
     // Node prototype chain so `pi instanceof ProcessingInstruction` holds. The
     // literal's own accessors above take precedence over anything on the chain.
     Object.setPrototypeOf(pi, ProcessingInstruction.prototype);
     return pi;
+}
+
+// DOM LS §4.5 createProcessingInstruction(target, data) validation, shared by
+// every document flavour that exposes it (GAP-XMLDOC срез 25, BUG-786): the
+// live `document`, and detached documents (`DOMImplementation.createDocument`/
+// `createHTMLDocument`, `DOMParser().parseFromString`) built by
+// `_lumen_build_detached_document`. Throws InvalidCharacterError if `target`
+// is not a valid XML Name or `data` contains the PI-closing sequence `?>`.
+function _lumen_create_processing_instruction_checked(target, data) {
+    var t = String(target);
+    var d = String(data);
+    if (!_lumen_is_xml_name(t)) {
+        throw new DOMException(
+            'createProcessingInstruction: the target is not a valid XML name: ' + t,
+            'InvalidCharacterError');
+    }
+    if (d.indexOf('?>') !== -1) {
+        throw new DOMException(
+            'createProcessingInstruction: the data must not contain the sequence ?>',
+            'InvalidCharacterError');
+    }
+    return _lumen_make_processing_instruction(t, d);
 }
 
 // ── DOM interface constructors (DOM Standard §4, HTML §4) ────────────────────
@@ -3801,6 +3831,15 @@ function _lumen_build_detached_document(proto, contentType) {
         var nid = _lumen_create_comment(t === undefined ? '' : String(t));
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
         return _lumen_make_element(nid);
+    };
+    // GAP-XMLDOC срез 25 (BUG-786): was missing entirely on every detached
+    // document (DOMImplementation.createDocument/createHTMLDocument,
+    // DOMParser().parseFromString) — only the live `document` had it, so
+    // `doc.createProcessingInstruction` threw `is not a function` on the very
+    // first line of most XML-DOM WPT tests (processing-instruction-attributes.html,
+    // Node-replaceChild.html, Node-normalize.html).
+    doc.createProcessingInstruction = function(target, data) {
+        return _lumen_create_processing_instruction_checked(target, data);
     };
     doc.createDocumentFragment = function() { return _lumen_make_document_fragment(_lumen_create_fragment()); };
     // -- BUG-415: Node / ParentNode over the document's own child list ------
@@ -10165,19 +10204,7 @@ var document = {
     // contains the PI-closing sequence ?> . Returns a ProcessingInstruction
     // node (BUG-313).
     createProcessingInstruction: function(target, data) {
-        var t = String(target);
-        var d = String(data);
-        if (!_lumen_is_xml_name(t)) {
-            throw new DOMException(
-                'createProcessingInstruction: the target is not a valid XML name: ' + t,
-                'InvalidCharacterError');
-        }
-        if (d.indexOf('?>') !== -1) {
-            throw new DOMException(
-                'createProcessingInstruction: the data must not contain the sequence ?>',
-                'InvalidCharacterError');
-        }
-        return _lumen_make_processing_instruction(t, d);
+        return _lumen_create_processing_instruction_checked(target, data);
     },
     // ── DOM §4.4 Node mutation, over the document's own children (BUG-557) ──
     // `ReactDOM.hydrateRoot(document, …)` — the form every Next.js 14 App

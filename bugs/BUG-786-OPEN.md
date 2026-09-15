@@ -817,5 +817,67 @@ JS-сторона: живой PI получил прототипную обвя�
 базовый дрейф 4/12, что и на `main` (не связан с этим срезом).
 
 Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера»
-как таковая — self-closing SVG `<script href>`, HTML-breakout внутри
-foreign `<script>`, unclosed foreign `<script>` исполняется.
+как таковая (self-closing SVG `<script href>`, HTML-breakout внутри foreign
+`<script>` и unclosed foreign `<script>` — все три уже закрыты срезом 13,
+эта строка держалась в файле по инерции копипаста; исправлено срезом 25
+ниже).
+
+## Срез 25 (2026-09-15): `document.createProcessingInstruction` — второсортный узел (`p1-gap-xmldoc-srez25`)
+
+Найдено живым прогоном `tests/wpt/run_report.py --all --root dom/nodes`
+(168 файлов) — предыдущий срез (24, BUG-983) исчерпал лёгкую жилу
+корпусного grep для GAP-XMLDOC, поэтому следующий кандидат искался живым
+замером вместо статического поиска. Три независимых симптома у одного и
+того же объекта (`_lumen_make_processing_instruction`, детач JS-only
+ProcessingInstruction, заведён срезом 23):
+
+1. `document.createProcessingInstruction` существовал только на главном
+   `document` — детач-документы (`DOMImplementation.createDocument`/
+   `createHTMLDocument`, `DOMParser().parseFromString`, все три строятся
+   `_lumen_build_detached_document`) не имели метода вовсе
+   (`doc.createProcessingInstruction is not a function`). Взорвалось на
+   `dom/nodes/processing-instruction-attributes.html` (весь файл, ~30
+   сабтестов), `Node-replaceChild.html`, `Node-normalize.html`.
+2. Сам PI-объект не имел `cloneNode`/`getRootNode` — в отличие от
+   `document.createComment`/`createTextNode` (арена-backed, получают обе
+   функции бесплатно через `_LUMEN_WRAPPER_MEMBERS`), детач-PI — вручную
+   собранный литерал без этой пары. `dom/nodes/Node-cloneNode.html`
+   (`createProcessingInstruction` сабтест) и три из четырёх сабтестов
+   `dom/nodes/rootNode.html`.
+
+**Фикс:** валидация target/data (уже существовавшая на главном document)
+вынесена в общую `_lumen_create_processing_instruction_checked(target,
+data)`; вызывается и с главного `document`, и из
+`_lumen_build_detached_document` (новый `doc.createProcessingInstruction`,
+сразу после `doc.createComment`). PI-литералу добавлены `cloneNode()`
+(новый независимый PI с тем же `target`/`data`, глубина не имеет значения —
+детей нет) и `getRootNode()` (всегда `this` — согласовано с тем, что этот
+объект в принципе не отслеживает родителя, см. ниже).
+
+**Не в этом срезе:** `DOMParser().parseFromString(...)` строит документ на
+совершенно отдельной вирт-узловой системе (`VDocument`/`VElement`/
+`VComment`/`VText`, `crates/js/src/dom_parser.rs`, Phase 0 — ни один из её
+узлов не резолвится через `instanceof` к глобальным интерфейсам вообще),
+не через `_lumen_build_detached_document` — добавить туда
+`createProcessingInstruction` значит сперва завести `VProcessingInstruction`
+в той же системе; отдельная задача, не GAP-XMLDOC-специфичная сама по себе.
+Четвёртый сабтест `rootNode.html` («getRootNode после appendChild в живое
+дерево») по-прежнему падает — не PI-специфично: живой `appendChild`
+молча роняет ЛЮБОЙ детач-узел без `__nid__` (`new Comment()`/`new Text()`
+туда же), заведено отдельно как [BUG-1055](BUG-1055-OPEN.md). Заодно
+найден и заведён отдельно (тоже не XML-специфично, Text/Comment/PI
+одинаково) [BUG-1054](BUG-1054-OPEN.md) — `nodeValue = null` не
+приводится к `""`.
+
+Тесты: `crates/js/tests/cases/bug786_srez25_pi_api.rs`, 5 новых
+(`pi_clone_node_makes_an_independent_copy`,
+`pi_get_root_node_without_a_parent_returns_itself`,
+`create_document_document_has_create_processing_instruction`,
+`create_html_document_has_create_processing_instruction`,
+`create_processing_instruction_still_validates_target_and_data`).
+`cargo test -p lumen-js --features v8-backend` — 149/149 зелёные (было
+144). `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings` — чисто. Только JS shim (`.js`, читается verbatim) плюс
+JS-side тестовый Rust-файл — не паяльный/layout/paint код,
+`scoped-test.sh`/`dump_golden.py` не запускались руками (`docs/commands.md`:
+полный гейт — один раз, внутри `/lumen-task-finish`).
