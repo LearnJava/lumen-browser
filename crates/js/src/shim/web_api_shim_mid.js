@@ -6366,7 +6366,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // what `'prefix' in el` feature checks look for, not absent (BUG-367).
         get localName()      { var nid = this.__nid__; return _lumen_u2n(_lumen_get_local_name(nid)); },
         get prefix()         { var nid = this.__nid__; return null; },
-        get nodeType()       { var nid = this.__nid__; return _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : 1); },
+        get nodeType()       { var nid = this.__nid__; return _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : (_lumen_is_processing_instruction_node(nid) ? 7 : 1)); },
         // DOM LS §4.9.1: XHTML namespace for HTML elements, `null` for non-element nodes
         // (text/comment). react-dom's root-listening bootstrap (BUG-281) reads this.
         get namespaceURI()   { var nid = this.__nid__; return _lumen_u2n(_lumen_get_namespace_uri(nid)); },
@@ -6711,10 +6711,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return false;
         },
         appendChild:     function(c) { var nid = this.__nid__;
-            // BUG-325: DOM §4.2.3 pre-insert validity — Text/Comment (both
+            // BUG-325: DOM §4.2.3 pre-insert validity — Text/Comment/PI (all
             // wrapped here via `_lumen_make_element`, sharing this literal)
             // are CharacterData and can never have children.
-            if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) {
+            if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid) || _lumen_is_processing_instruction_node(nid)) {
                 throw _lumen_character_data_insertion_error();
             }
             if (!c || c.__nid__ === undefined) return c;
@@ -7935,6 +7935,19 @@ var _LUMEN_WRAPPER_CD_MEMBERS = {
     set nodeValue(v)  { _lumen_set_text_content(this.__nid__, String(v)); },
 };
 
+// GAP-XMLDOC срез 23 (BUG-786): a live ProcessingInstruction is CharacterData
+// plus a readonly `target` (DOM §4.5) — everything `_LUMEN_WRAPPER_CD_MEMBERS`
+// gives Text/Comment, plus `target`. `target` is the tokenizer-parsed PI target
+// (same string `nodeName`/`_lumen_get_tag_name` already report), never
+// reassigned after parsing — no setter, matching the WebIDL readonly attribute.
+var _LUMEN_WRAPPER_PI_MEMBERS = {
+    get data()        { return _lumen_get_text_content(this.__nid__); },
+    set data(v)       { _lumen_set_text_content(this.__nid__, String(v)); },
+    get nodeValue()   { return _lumen_get_text_content(this.__nid__); },
+    set nodeValue(v)  { _lumen_set_text_content(this.__nid__, String(v)); },
+    get target()      { return _lumen_get_tag_name(this.__nid__); },
+};
+
 // BUG-360: `el.on<type>` IDL attributes (GlobalEventHandlers, elements only —
 // Text/Comment nodes do not implement it). One curated accessor pair per NAME,
 // shared by every element, instead of one pair per node.
@@ -7945,6 +7958,7 @@ for (var _ehi = 0; _ehi < _LUMEN_EVENT_HANDLER_ATTRS.length; _ehi++) {
 
 var _LUMEN_WRAPPER_DESCRIPTORS    = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_MEMBERS);
 var _LUMEN_WRAPPER_CD_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_CD_MEMBERS);
+var _LUMEN_WRAPPER_PI_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_PI_MEMBERS);
 var _LUMEN_WRAPPER_ON_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_ON_MEMBERS);
 var _lumen_wrapper_protos = new Map();
 
@@ -7955,13 +7969,18 @@ var _lumen_wrapper_protos = new Map();
 // old own-property layout gave for free — e.g. `remove` here still wins over
 // `HTMLSelectElement.prototype`'s (BUG-383) — while costing one object per
 // interface instead of one property set per node.
-function _lumen_wrapper_proto_for(iface, isCharacterData) {
+//
+// `kind`: 'cd' for Text/Comment, 'pi' for ProcessingInstruction (GAP-XMLDOC
+// срез 23 — same CharacterData surface plus `target`), anything else
+// (including omitted) falls back to the plain element/event-handler members.
+function _lumen_wrapper_proto_for(iface, kind) {
     var proto = _lumen_wrapper_protos.get(iface);
     if (proto !== undefined) return proto;
     proto = Object.create(iface);
     Object.defineProperties(proto, _LUMEN_WRAPPER_DESCRIPTORS);
-    Object.defineProperties(proto, isCharacterData ? _LUMEN_WRAPPER_CD_DESCRIPTORS
-                                                   : _LUMEN_WRAPPER_ON_DESCRIPTORS);
+    Object.defineProperties(proto, kind === 'cd' ? _LUMEN_WRAPPER_CD_DESCRIPTORS
+                                  : kind === 'pi' ? _LUMEN_WRAPPER_PI_DESCRIPTORS
+                                                  : _LUMEN_WRAPPER_ON_DESCRIPTORS);
     _lumen_wrapper_protos.set(iface, proto);
     return proto;
 }
@@ -7972,7 +7991,7 @@ function _lumen_wrapper_proto_for(iface, isCharacterData) {
 // now that BUG-849 has moved them off the instance.
 function _lumen_retarget_wrapper(el, iface) {
     if (!el || !iface) { return el; }
-    Object.setPrototypeOf(el, _lumen_wrapper_proto_for(iface, false));
+    Object.setPrototypeOf(el, _lumen_wrapper_proto_for(iface, null));
     return el;
 }
 
@@ -7996,9 +8015,14 @@ function _lumen_wrapper_set_slot(obj, key, value) {
 function _lumen_build_element(nid) {
     var isText    = _lumen_is_text_node(nid);
     var isComment = isText ? false : _lumen_is_comment_node(nid);
+    // GAP-XMLDOC срез 23 (BUG-786): a live parser-created PI node — only
+    // possible when `_lumen_is_text_node`/`_lumen_is_comment_node` both miss.
+    var isPI      = (isText || isComment) ? false : _lumen_is_processing_instruction_node(nid);
     var iface     = isText ? Text.prototype
-                  : (isComment ? Comment.prototype : _lumen_element_prototype_for(nid));
-    var _obj = Object.create(_lumen_wrapper_proto_for(iface, isText || isComment));
+                  : (isComment ? Comment.prototype
+                  : (isPI ? ProcessingInstruction.prototype : _lumen_element_prototype_for(nid)));
+    var kind      = (isText || isComment) ? 'cd' : (isPI ? 'pi' : null);
+    var _obj = Object.create(_lumen_wrapper_proto_for(iface, kind));
     // BUG-367: `__nid__` is the wrapper's internal arena handle, not a DOM
     // member — non-enumerable (an enumerable one was the first key of
     // `Object.keys`/`for…in`/spread/`JSON.stringify` on every node, a Lumen

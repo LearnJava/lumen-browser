@@ -466,6 +466,7 @@ pub fn element_label(doc: &Document, node: NodeId) -> String {
         }
         NodeData::Text(_) => "#text".to_string(),
         NodeData::Comment(_) => "#comment".to_string(),
+        NodeData::ProcessingInstruction { target, .. } => format!("?{target}"),
         NodeData::Document => "#document".to_string(),
         NodeData::Doctype { .. } => "#doctype".to_string(),
         NodeData::ShadowRoot { .. } => "#shadow-root".to_string(),

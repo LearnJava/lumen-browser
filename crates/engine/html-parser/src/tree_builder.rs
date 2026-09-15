@@ -655,6 +655,11 @@ impl IncrementalTreeBuilder {
                 let c = self.doc.create_comment(s);
                 self.doc.append_child(root, c);
             }
+            Token::ProcessingInstruction { target, data } => {
+                let root = self.doc.root();
+                let pi = self.doc.create_processing_instruction(target, data);
+                self.doc.append_child(root, pi);
+            }
             Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
                 // Игнорируем whitespace.
             }
@@ -673,6 +678,11 @@ impl IncrementalTreeBuilder {
                 let root = self.doc.root();
                 let c = self.doc.create_comment(s);
                 self.doc.append_child(root, c);
+            }
+            Token::ProcessingInstruction { target, data } => {
+                let root = self.doc.root();
+                let pi = self.doc.create_processing_instruction(target, data);
+                self.doc.append_child(root, pi);
             }
             Token::Text(ref s) if s.chars().all(is_html_whitespace) => { /* ignore */ }
             Token::StartTag {
@@ -707,6 +717,9 @@ impl IncrementalTreeBuilder {
             Token::Text(ref s) if s.chars().all(is_html_whitespace) => { /* ignore */ }
             Token::Comment(s) => {
                 self.insert_comment(s);
+            }
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data);
             }
             Token::Doctype { .. } => { /* parse error */ }
             Token::StartTag {
@@ -752,6 +765,9 @@ impl IncrementalTreeBuilder {
                 }
             }
             Token::Comment(s) => self.insert_comment(s),
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data)
+            }
             Token::Doctype { .. } => { /* parse error */ }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -930,6 +946,9 @@ impl IncrementalTreeBuilder {
                 }
             }
             Token::Comment(s) => self.insert_comment(s),
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data)
+            }
             Token::Doctype { .. } => { /* parse error */ }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -1043,6 +1062,9 @@ impl IncrementalTreeBuilder {
                 self.insert_text(&s);
             }
             Token::Comment(s) => self.insert_comment(s),
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data)
+            }
             Token::Doctype { .. } => { /* parse error */ }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -1608,6 +1630,9 @@ impl IncrementalTreeBuilder {
                 self.apply_token(Token::Text(s));
             }
             Token::Comment(s) => self.insert_comment(s),
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data)
+            }
             Token::Doctype { .. } => { /* parse error */ }
             Token::StartTag {
                 ref name,
@@ -2009,6 +2034,9 @@ impl IncrementalTreeBuilder {
         match token {
             Token::Text(s) => self.insert_text(&s),
             Token::Comment(s) => self.insert_comment(s),
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data)
+            }
             Token::StartTag {
                 ref name,
                 ref attrs,
@@ -2126,7 +2154,7 @@ impl IncrementalTreeBuilder {
             Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
                 self.mode_in_head(token);
             }
-            Token::Comment(_) => {
+            Token::Comment(_) | Token::ProcessingInstruction { .. } => {
                 self.mode_in_head(token);
             }
             Token::StartTag { ref name, .. }
@@ -2170,6 +2198,9 @@ impl IncrementalTreeBuilder {
                 self.insert_text(s);
             }
             Token::Comment(s) => self.insert_comment(s),
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data)
+            }
             Token::Doctype { .. } => { /* parse error: ignore */ }
             Token::StartTag { ref name, ref attrs, .. } if name == "html" => {
                 self.in_body_start_html_attrs(attrs);
@@ -2219,6 +2250,9 @@ impl IncrementalTreeBuilder {
                 self.insert_text(s);
             }
             Token::Comment(s) => self.insert_comment(s),
+            Token::ProcessingInstruction { target, data } => {
+                self.insert_processing_instruction(target, data)
+            }
             Token::Doctype { .. } => { /* parse error: ignore */ }
             Token::StartTag { ref name, ref attrs, .. } if name == "html" => {
                 self.in_body_start_html_attrs(attrs);
@@ -2248,6 +2282,12 @@ impl IncrementalTreeBuilder {
                     self.doc.append_child(html, c);
                 }
             }
+            Token::ProcessingInstruction { target, data } => {
+                if let Some(&html) = self.open_elements.first() {
+                    let pi = self.doc.create_processing_instruction(target, data);
+                    self.doc.append_child(html, pi);
+                }
+            }
             Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
                 // Process in InBody.
                 self.mode_in_body(token);
@@ -2271,6 +2311,11 @@ impl IncrementalTreeBuilder {
                 let c = self.doc.create_comment(s);
                 self.doc.append_child(root, c);
             }
+            Token::ProcessingInstruction { target, data } => {
+                let root = self.doc.root();
+                let pi = self.doc.create_processing_instruction(target, data);
+                self.doc.append_child(root, pi);
+            }
             Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
                 self.mode_in_body(token);
             }
@@ -2288,6 +2333,11 @@ impl IncrementalTreeBuilder {
                 let root = self.doc.root();
                 let c = self.doc.create_comment(s);
                 self.doc.append_child(root, c);
+            }
+            Token::ProcessingInstruction { target, data } => {
+                let root = self.doc.root();
+                let pi = self.doc.create_processing_instruction(target, data);
+                self.doc.append_child(root, pi);
             }
             Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
                 self.mode_in_body(token);
@@ -2695,6 +2745,16 @@ impl IncrementalTreeBuilder {
         let parent = self.current_insertion_parent();
         let c = self.doc.create_comment(s);
         self.doc.append_child(parent, c);
+    }
+
+    /// Вставка processing instruction — в текущий open insertion point.
+    /// Только `xml_mode` (GAP-XMLDOC срез 23, BUG-786): [`Token::ProcessingInstruction`]
+    /// не эмитится токенизатором вне `xml_mode`, так что вызывающему не
+    /// нужно проверять флаг повторно.
+    fn insert_processing_instruction(&mut self, target: String, data: String) {
+        let parent = self.current_insertion_parent();
+        let pi = self.doc.create_processing_instruction(target, data);
+        self.doc.append_child(parent, pi);
     }
 
     // ─────────────────────────────────────────────────────────────

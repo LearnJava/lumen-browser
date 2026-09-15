@@ -1311,7 +1311,7 @@ fn walk(
         // `dom_content_stable`; now the delta names the individual mutated text
         // nodes, and a named one reports itself dirty so its parent element
         // (whose box embeds this text) drops out of `clean_subtrees`.
-        NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. }
+        NodeData::Text(_) | NodeData::Comment(_) | NodeData::ProcessingInstruction { .. } | NodeData::Doctype { .. }
         | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => {
             return !incr.is_some_and(|d| d.content_dirty.contains(id));
         }
