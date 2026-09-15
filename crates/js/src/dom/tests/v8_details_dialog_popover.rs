@@ -118,6 +118,102 @@ fn hidden_setter_number_follows_tobool() {
                  a && b"));
 }
 
+// ── BUG-595: `autocorrect`/`writingSuggestions` global attributes ────────
+
+#[test]
+fn autocorrect_absent_is_true() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 'autocorrect' in el && el.autocorrect === true"));
+}
+
+#[test]
+fn autocorrect_off_is_false() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('autocorrect', 'OFF'); \
+                 el.autocorrect === false"));
+}
+
+#[test]
+fn autocorrect_invalid_value_is_true() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('autocorrect', 'invalid_value'); \
+                 el.autocorrect === true"));
+}
+
+#[test]
+fn autocorrect_setter_writes_on_off_keyword() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.autocorrect = 'hello'; \
+                 var a = el.getAttribute('autocorrect') === 'on' && el.autocorrect === true; \
+                 el.autocorrect = false; \
+                 var b = el.getAttribute('autocorrect') === 'off' && el.autocorrect === false; \
+                 a && b"));
+}
+
+#[test]
+fn writing_suggestions_available_on_every_element() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "'writingSuggestions' in document.createElement('div')"));
+}
+
+#[test]
+fn writing_suggestions_default_is_true() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.writingSuggestions === 'true'"));
+}
+
+#[test]
+fn writing_suggestions_own_false_overrides_default() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('writingsuggestions', 'false'); \
+                 el.writingSuggestions === 'false' && \
+                 el.getAttribute('writingsuggestions') === 'false'"));
+}
+
+#[test]
+fn writing_suggestions_invalid_own_value_falls_back_to_true() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var el = document.getElementById('main'); \
+                 el.setAttribute('writingsuggestions', 'foo'); \
+                 el.writingSuggestions === 'true'"));
+}
+
+#[test]
+fn writing_suggestions_inherits_from_ancestor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var parent = document.getElementById('main'); \
+                 var child = parent.querySelector('.highlight'); \
+                 parent.setAttribute('writingsuggestions', 'false'); \
+                 child.writingSuggestions === 'false' && \
+                 child.getAttribute('writingsuggestions') === null"));
+}
+
+#[test]
+fn writing_suggestions_own_value_overrides_inherited() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var parent = document.getElementById('main'); \
+                 var child = parent.querySelector('.highlight'); \
+                 parent.setAttribute('writingsuggestions', 'false'); \
+                 child.setAttribute('writingsuggestions', 'true'); \
+                 child.writingSuggestions === 'true' && parent.writingSuggestions === 'false'"));
+}
+
 // ── <details>/<summary> + <dialog> tests ─────────────────────────────────
 
 /// Build a doc with <details id="d"><summary id="s">Sum</summary><p>Body</p></details>
