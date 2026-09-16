@@ -1428,3 +1428,46 @@ lumen-html-parser` — 514 юнит (было 510) + 15 + 8 интеграцио
 Не в этом срезе: параметрические энтити/внешний DTD/`SYSTEM`-энтити —
 по-прежнему 0 на корпусе. Остаток по-прежнему открыт: сама область «нет
 настоящего XML-парсера» как таковая.
+
+## GAP-XMLDOC срез 34 (2026-09-16): `mathml:`/`m:`/`xhtml:` namespace-префиксы не резолвились (`p1-gap-xmldoc-srez34`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Продолжение
+среза 33: тот же дефектный класс, три соседних префикса из того же
+корпуса, которые срез 33 не закрыл.
+
+**Измерение.** `grep` по вендоренному `.xht`/`.xhtml`/`.svg` на реальное
+использование элемента (не только `xmlns:*`-декларацию): `xmlns:m="…/1998/
+Math/MathML"` с элементами вида `<m:maction>` — 5 файлов
+(`mathml/crashtests/mozilla/{403156-1,405187-1,413063-1,420420-1,
+541620-1}.xhtml`); `xmlns:mathml="…/1998/Math/MathML"` с `<mathml:math>`/
+`<mathml:munder>` — 4 файла с расширением `.xhtml` (один пятый,
+`467914-1.html`, — XUL-контент под `.html`, `xml_mode` для него не
+взводится, недостижим этим путём); `xmlns:xhtml="…/1999/xhtml"` с
+`<xhtml:div>` — 1 файл (`shadow-dom/host-with-namespace.xhtml`). Итого
+10 файлов через `xml_mode`.
+
+**Фикс — тот же приём, что срез 33.** `foreign_content::strip_known_html_prefix`
+снимает третий вариант, `xhtml:` (форсирует HTML-неймспейс и breakout,
+как `h:`/`html:`); `strip_known_mathml_prefix` снимает `mathml:` и `m:`
+в дополнение к `math:` (не форсирует неймспейс — голое имя резолвится
+обычным путём). Никакой новой логики резолюции не потребовалось, вызов
+в `tree_builder.rs` не менялся (те же три ветки `if`/`else if`).
+
+Тесты (`tree_builder.rs`): `xml_flavoured_mathml_and_m_prefixes_resolve_to_mathml_namespace`
+(`<mathml:math><m:mrow/></mathml:math>` — оба элемента получают
+`Namespace::MathMl`), `xml_flavoured_xhtml_prefix_breaks_out_to_html_namespace`
+(`<svg><xhtml:div>a</xhtml:div></svg>` — `div` уходит в `Namespace::Html`);
+плюс расширенные юнит-тесты `strips_known_html_prefixes`/
+`strips_known_mathml_prefix` (`foreign_content.rs`). `cargo test -p
+lumen-html-parser --profile dev-release` — 516 юнит (было 514) + 5 + 15 + 8
+интеграционных зелёные. `cargo clippy --workspace --all-targets --profile
+dev-release -- -D warnings` — чисто. `tree_builder.rs` пересёк собственный
+baseline (6051 → 6091), `scripts/file-size-baseline.tsv` обновлён тем же
+коммитом только для этой строки (остальные 10 строк файла — чужой
+недокоммиченный дрейф на `main`, не тронуты). `scripts/scoped-test.sh` —
+тот же чужой дрейф CPU-эталонов ([BUG-1008](BUG-1008-OPEN.md), идентичные
+7 файлов/байт-дельты), не связан с этим срезом.
+
+Не в этом срезе: параметрические энтити/внешний DTD/`SYSTEM`-энтити —
+по-прежнему 0 на корпусе. Остаток по-прежнему открыт: сама область «нет
+настоящего XML-парсера» как таковая.
