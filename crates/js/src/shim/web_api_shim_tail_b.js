@@ -1631,6 +1631,7 @@ _lumen_install_reflection(HTMLImageElement.prototype, [
     ['decoding',       'decoding',       'string'],
     ['loading',        'loading',        'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+    ['align',          'align',          'string'],
 ]);
 
 // BUG-630: decoded-image state (HTML LS §4.8.3) — not content-attribute
@@ -1721,11 +1722,22 @@ HTMLImageElement.prototype.decode = function decode() {
 _lumen_install_reflection(HTMLTableCellElement.prototype, [
     ['width',          'width',          'string'],
     ['height',         'height',         'string'],
+    ['align',          'align',          'string'],
 ]);
 // `width` alone — these three carry no obsolete `height` IDL attribute.
 [HTMLTableColElement.prototype, HTMLTableElement.prototype,
  HTMLHRElement.prototype].forEach(function(_p) {
     _lumen_install_reflection(_p, [['width', 'width', 'string']]);
+});
+// BUG-602: obsolete-but-conforming `align` IDL attribute (HTML LS §obsolete),
+// plain string reflection with no keyword restriction. `HTMLTableColElement`
+// (`<col>`/`<colgroup>`) is deliberately absent — the living standard gives it
+// no `align` reflection, unlike its `width` neighbor above.
+[HTMLTableElement.prototype, HTMLHRElement.prototype, HTMLTableCaptionElement.prototype,
+ HTMLTableSectionElement.prototype, HTMLTableRowElement.prototype, HTMLDivElement.prototype,
+ HTMLHeadingElement.prototype, HTMLLegendElement.prototype,
+ HTMLParagraphElement.prototype].forEach(function(_p) {
+    _lumen_install_reflection(_p, [['align', 'align', 'string']]);
 });
 _lumen_install_reflection(HTMLPreElement.prototype, [['width', 'width', 'long', 0]]);
 
@@ -1835,6 +1847,7 @@ _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['allowFullscreen','allowfullscreen','bool'],
     ['loading',        'loading',        'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+    ['align',          'align',          'string'],
 ]);
 
 // BUG-854 — HTML LS §16.3.3 `HTMLFrameElement`. Obsolete, still parsed, and a

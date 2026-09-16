@@ -1,7 +1,7 @@
 # BUG-602: legacy `align` content attribute has no IDL reflection on any HTML element — `el.align` is `undefined` everywhere
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — IDL reflection table introduced by [BUG-383](BUG-383-FIXED.md))
+**Статус:** FIXED 2026-09-16 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js` — reflection table introduced by BUG-383)
 **Найден:** P2, WPT-VENDOR-html-rendering, 2026-08-04
 
 ## Симптом
@@ -37,3 +37,21 @@ covers every affected interface at once, per the pattern BUG-383 already
 established — no per-element special-casing needed unless a specific
 interface constrains `align`'s value set (none of the WPT tests seen so far
 require that).
+
+## Исправлено
+
+`['align', 'align', 'string']` added to `_lumen_install_reflection` calls on
+every interface the living standard actually gives an obsolete-but-conforming
+`align` IDL attribute (checked against `html.spec.whatwg.org/multipage/obsolete.html`,
+not just this bug's original grep-based list): `HTMLTableCaptionElement`,
+`HTMLDivElement`, `HTMLHeadingElement`, `HTMLHRElement`, `HTMLIFrameElement`,
+`HTMLImageElement`, `HTMLLegendElement`, `HTMLParagraphElement`,
+`HTMLTableElement`, `HTMLTableSectionElement`, `HTMLTableCellElement`,
+`HTMLTableRowElement`. `HTMLTableColElement` (`<col>`/`<colgroup>`) is
+deliberately **not** in the list — the spec gives it `width` but not `align`,
+unlike this bug's original write-up assumed by analogy; `HTMLObjectElement`
+was also in the original write-up but is not in the spec's obsolete-`align`
+table either, so it was left alone. Plain `string` reflection, no keyword
+restriction — matches the spec's IDL, and is what `legend-align-justify-self.html`
+needs (`legend.align.toLowerCase()` no longer throws). New tests:
+`crates/js/src/dom/tests/v8_bug602_align_reflection.rs`.
