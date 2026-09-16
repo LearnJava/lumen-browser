@@ -1,6 +1,6 @@
 # BUG-613: `HTMLInputElement.capture` reflects as plain string, not enum limited to known values
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-16 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — IDL reflection table for `HTMLInputElement.prototype`, line ~10775)
 **Найден:** P2, WPT-VENDOR-html-media-capture, 2026-08-04
 

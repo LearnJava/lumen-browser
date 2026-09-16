@@ -1439,7 +1439,7 @@ _lumen_install_reflection(HTMLInputElement.prototype, [
     ['accept',         'accept',         'string'],
     ['alt',            'alt',            'string'],
     ['autocomplete',   'autocomplete',   'string'],
-    ['capture',        'capture',        'string'],
+    ['capture',        'capture',        'enum',   { def: '', keys: ['user', 'environment'] }],
     ['min',            'min',            'string'],
     ['max',            'max',            'string'],
     ['step',           'step',           'string'],
