@@ -11,6 +11,14 @@ function UIEvent(type, init) {
 }
 UIEvent.prototype = Object.create(Event.prototype);
 UIEvent.prototype.constructor = UIEvent;
+// UI Events §3.6 legacy "initialize a UI event" -- reinitializes via the
+// inherited Event.prototype.initEvent (BUG-596) and fills in the two
+// UIEvent-specific legacy-settable fields on top.
+UIEvent.prototype.initUIEvent = function(type, bubbles, cancelable, view, detail) {
+    this.initEvent(type, bubbles, cancelable);
+    this.view = (view !== undefined) ? view : null;
+    this.detail = (detail !== undefined) ? (detail | 0) : 0;
+};
 
 function MouseEvent(type, init) {
     UIEvent.call(this, type, init);
@@ -75,6 +83,27 @@ MouseEvent.prototype.getModifierState = function(key) {
     if (key === 'Alt')     return this.altKey;
     if (key === 'Meta')    return this.metaKey;
     return false;
+};
+// UI Events §4.5 legacy "initialize a mouse event" -- reinitializes via
+// initUIEvent (BUG-596) and fills in the MouseEvent-specific legacy-settable
+// fields; screenY/clientY/etc. left at 0 for an omitted positional argument,
+// matching the spec's "if not given" default rather than the constructor's
+// own init-dict truthiness checks.
+MouseEvent.prototype.initMouseEvent = function(type, bubbles, cancelable, view, detail,
+        screenX, screenY, clientX, clientY, ctrlKey, altKey, shiftKey, metaKey, button, relatedTarget) {
+    this.initUIEvent(type, bubbles, cancelable, view, detail);
+    this.screenX = (screenX !== undefined) ? +screenX : 0;
+    this.screenY = (screenY !== undefined) ? +screenY : 0;
+    this.clientX = (clientX !== undefined) ? +clientX : 0;
+    this.clientY = (clientY !== undefined) ? +clientY : 0;
+    this.x = this.clientX;
+    this.y = this.clientY;
+    this.ctrlKey  = !!ctrlKey;
+    this.altKey   = !!altKey;
+    this.shiftKey = !!shiftKey;
+    this.metaKey  = !!metaKey;
+    this.button   = (button !== undefined) ? (button | 0) : 0;
+    this.relatedTarget = (relatedTarget !== undefined) ? relatedTarget : null;
 };
 
 function KeyboardEvent(type, init) {

@@ -45,6 +45,30 @@ fn mouseevent_modifier_keys() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-596: DOM §2.5 / UI Events §3.6/§4.5 legacy `init*Event` methods --
+/// `document.createEvent()`-style objects (and any script that mutates an
+/// already-constructed event in place) must still be able to call these,
+/// exactly `dnd/synthetic/001.html`'s `DragEvent` case.
+#[test]
+fn legacy_init_event_methods_reinitialize_and_dispatch() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var e1 = new Event('a'); \
+                 e1.initEvent('b', true, true); \
+                 var okEvent = e1.type === 'b' && e1.bubbles && e1.cancelable && e1.isTrusted === false; \
+                 var e2 = new UIEvent('a'); \
+                 e2.initUIEvent('c', true, false, window, 7); \
+                 var okUI = e2.type === 'c' && e2.bubbles && !e2.cancelable && e2.view === window && e2.detail === 7; \
+                 var e3 = new MouseEvent('a'); \
+                 e3.initMouseEvent('d', true, true, window, 1, 2, 3, 4, 5, false, true, false, true, 1, null); \
+                 var okMouse = e3.type === 'd' && e3.screenX === 2 && e3.screenY === 3 && \
+                     e3.clientX === 4 && e3.clientY === 5 && e3.altKey && e3.metaKey && \
+                     !e3.ctrlKey && !e3.shiftKey && e3.button === 1 && e3.relatedTarget === null; \
+                 okEvent && okUI && okMouse"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn mouseevent_page_coords_default_to_client() {
     let rt = v8_runtime_with_dom(make_doc());
