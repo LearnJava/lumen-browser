@@ -4143,6 +4143,9 @@ function MessageEvent(data, init) {
     this.data = data;
     this.origin = '';
     this.lastEventId = '';
+    // HTML LS §9.3.4 MessageEventInit.userActivation -- spec default is null,
+    // not silently dropped (BUG-610).
+    this.userActivation = (init && init.userActivation !== undefined) ? init.userActivation : null;
 }
 MessageEvent.prototype = Object.create(Event.prototype);
 MessageEvent.prototype.constructor = MessageEvent;
