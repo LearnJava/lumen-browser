@@ -628,10 +628,13 @@ DataTransfer.prototype.setDragImage = function(_image, _x, _y) {
 // DragEvent — drag-and-drop events (HTML LS §9.10.5)
 function DragEvent(type, init) {
     MouseEvent.call(this, type, init);
-    // If no DataTransfer provided, create a fresh one for new drag operations
-    this.dataTransfer = (init && init.dataTransfer != null)
-        ? init.dataTransfer
-        : new DataTransfer();
+    // DragEventInit.dataTransfer is `DataTransfer?` with spec default `null` —
+    // absent/undefined both mean null, an explicit non-DataTransfer value throws.
+    var dt = (init && init.dataTransfer !== undefined) ? init.dataTransfer : null;
+    if (dt !== null && !(dt instanceof DataTransfer)) {
+        throw new TypeError("Failed to construct 'DragEvent': member dataTransfer is not of type DataTransfer.");
+    }
+    this.dataTransfer = dt;
 }
 DragEvent.prototype = Object.create(MouseEvent.prototype);
 DragEvent.prototype.constructor = DragEvent;
@@ -6826,7 +6829,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // HTML LS §9.10 — drag-and-drop IDL attributes
         get draggable() { var nid = this.__nid__;
             var v = _lumen_get_attr(nid, 'draggable');
-            if (v === undefined || v === null) return false;
+            if (v === undefined || v === null) {
+                // HTML LS §9.10.1 — "auto" state (attribute absent): true for
+                // img elements and a elements with an href attribute, else false.
+                var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+                if (tag === 'IMG') return true;
+                if (tag === 'A' && _lumen_get_attr(nid, 'href') != null) return true;
+                return false;
+            }
             return String(v).toLowerCase() !== 'false';
         },
         set draggable(v) { var nid = this.__nid__;
