@@ -536,6 +536,12 @@ pub(super) fn parse_html_fragment_with_context(
             namespace: name.namespace.clone(),
             local: name.local.clone(),
             attrs: attrs.iter().map(|a| (a.name.local.clone(), a.value.clone())).collect(),
+            // GAP-XMLDOC срез 39 (BUG-685): the context element's own `xmlns`
+            // (if any) or its nearest real ancestor's — the fragment parser's
+            // own ancestor walk can never see past its synthetic root into
+            // *this* `doc`, since the context element never joins the
+            // fragment's tree (see `FragmentContext`'s struct doc).
+            default_namespace: doc.nearest_xmlns_default(nid),
         }),
         _ => None,
     });

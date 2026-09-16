@@ -160,6 +160,17 @@ pub struct FragmentContext {
     /// `<annotation-xml encoding="text/html">`, единственного integration
     /// point, чья принадлежность зависит не только от имени тега.
     pub attrs: Vec<(String, String)>,
+    /// XML Namespaces §6 default namespace in scope AT the context element
+    /// (its own `xmlns` if it has one, else the nearest real ancestor's) —
+    /// GAP-XMLDOC срез 39 (BUG-685). `None` when no ancestor ever declared
+    /// `xmlns`: the fragment parser then keeps its pre-existing
+    /// foreign-content-heuristic default untouched. The context element
+    /// itself never enters the fragment's tree (see the struct doc above),
+    /// so this is the only way real ancestor `xmlns` declarations — which
+    /// live in a different `Document` from the one the fragment parses
+    /// into — reach the resolver in [`IncrementalTreeBuilder::
+    /// default_namespace_override`].
+    pub default_namespace: Option<Namespace>,
 }
 
 /// Same as [`parse_fragment`], but with a real HTML LS §13.4 context
@@ -304,6 +315,33 @@ pub struct IncrementalTreeBuilder {
     /// node", the one place namespace/CDATA decisions must see the context
     /// element instead of the always-HTML synthetic root.
     fragment_context: Option<FragmentContext>,
+    /// `true` once any element created so far in this parse carried its own
+    /// `xmlns` attribute — a cheap gate so [`default_namespace_override`]
+    /// [Self::default_namespace_override] can skip walking `open_elements`
+    /// entirely for the overwhelming majority of documents that never use
+    /// an explicit namespace declaration (GAP-XMLDOC срез 39, BUG-685):
+    /// without it, every single element creation in an ordinary deep HTML
+    /// document would pay an O(depth) attribute scan for a lookup that can
+    /// only ever find something in documents that actually declare `xmlns`.
+    saw_own_xmlns: bool,
+    /// Set right before routing a `StartTag` token (ordinary or foreign
+    /// dispatch) to whether `apply_token`'s xml-mode prefix stripping fired
+    /// for it (any of `strip_known_html_prefix`/`_svg_prefix`/`_mathml_prefix`/
+    /// `strip_unknown_prefix`) — GAP-XMLDOC срез 39 (BUG-685). Consumed
+    /// (read-and-cleared) by the next [`create_element_with_attrs`]
+    /// [Self::create_element_with_attrs] call: an element whose original
+    /// markup used an explicit prefix (`h:div`, `svg:rect`, ...) resolves
+    /// its namespace through that prefix, not through the default-namespace
+    /// walk — [`resolve_element_name`][Self::resolve_element_name] must
+    /// leave it exactly as the pre-срез-39 heuristic already did. Read-and-
+    /// clear (rather than a parameter threaded through the whole insertion-
+    /// mode call graph) means a synthetic element inserted before the real
+    /// one within the same token (an implied `<tbody>` ahead of a
+    /// prefixed `<tr>`, say) consumes the flag first and leaves the real
+    /// element reading `false` — accepted as out of scope: no vendored
+    /// corpus file combines a namespace-prefixed tag with table foster
+    /// parenting.
+    pending_prefixed_start_tag: bool,
 }
 
 impl IncrementalTreeBuilder {
@@ -327,6 +365,8 @@ impl IncrementalTreeBuilder {
             is_fragment: false,
             xml_mode: false,
             fragment_context: None,
+            saw_own_xmlns: false,
+            pending_prefixed_start_tag: false,
         }
     }
 
@@ -488,25 +528,40 @@ impl IncrementalTreeBuilder {
         // tag as always-foreign and resolves unprefixed descendants by
         // inheriting the current node's namespace.
         let mut had_html_prefix = false;
+        // GAP-XMLDOC срез 39 (BUG-685): generalized over all four branches
+        // below (not just the html one) — any explicit prefix in the
+        // original markup means this tag's namespace comes from prefix
+        // resolution, not from `default_namespace_override`'s ancestor
+        // walk. See `pending_prefixed_start_tag`'s doc for why this is a
+        // flag consumed by the next element creation rather than a
+        // parameter threaded through `dispatch`.
+        let mut had_any_prefix = false;
         if self.xml_mode {
             match &mut token {
                 Token::StartTag { name, .. } | Token::EndTag { name } => {
                     if let Some(stripped) = foreign_content::strip_known_html_prefix(name) {
                         *name = stripped.to_string();
                         had_html_prefix = true;
+                        had_any_prefix = true;
                     } else if let Some(stripped) = foreign_content::strip_known_svg_prefix(name) {
                         *name = stripped.to_string();
+                        had_any_prefix = true;
                     } else if let Some(stripped) = foreign_content::strip_known_mathml_prefix(name) {
                         *name = stripped.to_string();
+                        had_any_prefix = true;
                     } else if let Some(stripped) = foreign_content::strip_unknown_prefix(name) {
                         // GAP-XMLDOC срез 35 (BUG-685): any other user-declared
                         // prefix — recovers `.localName` only, no namespace
                         // forcing, same as the SVG/MathML branches above.
                         *name = stripped.to_string();
+                        had_any_prefix = true;
                     }
                 }
                 _ => {}
             }
+        }
+        if matches!(token, Token::StartTag { .. }) {
+            self.pending_prefixed_start_tag = had_any_prefix;
         }
         // GAP-XMLDOC срез 8 (BUG-685): a start tag routes through the
         // integration-point-aware `start_tag_namespace` (the current node
@@ -2483,7 +2538,11 @@ impl IncrementalTreeBuilder {
 
     /// Создаёт DOM-элемент с заданными атрибутами; не вставляет.
     fn create_element_with_attrs(&mut self, name: &str, attrs: &[(String, String)]) -> NodeId {
-        let qname = self.resolve_element_name(name);
+        let had_prefix = std::mem::take(&mut self.pending_prefixed_start_tag);
+        if attrs.iter().any(|(k, _)| k == "xmlns") {
+            self.saw_own_xmlns = true;
+        }
+        let qname = self.resolve_element_name(name, attrs, had_prefix);
         let namespace = qname.namespace.clone();
         let id = self.doc.create_element(qname);
         if let NodeData::Element {
@@ -2533,7 +2592,60 @@ impl IncrementalTreeBuilder {
     /// `<math>` itself, or neither and an integration point overrides back
     /// to HTML) (HTML LS §13.2.6.5 "insert a foreign element", GAP-XMLDOC
     /// срезы 3, 6 и 8, BUG-685).
-    fn resolve_element_name(&self, name: &str) -> QualName {
+    ///
+    /// GAP-XMLDOC срез 39 (BUG-685) adds two XML Namespaces §6 "default
+    /// namespace" hooks — the resolver срезы 36/38 deferred as "a
+    /// separately designed subsystem, not a patch" — scoped narrowly to
+    /// leave every existing arm untouched for a prefixed tag or a literal
+    /// `svg`/`math` root:
+    ///
+    /// * an unprefixed tag's OWN `xmlns` attribute wins outright, checked
+    ///   before `start_tag_namespace` runs at all — this is what lets
+    ///   `<f xmlns=''>`/`<f xmlns='...'>` override or reset the namespace
+    ///   even while genuinely inside SVG/MathML content (where
+    ///   `start_tag_namespace` would otherwise just inherit the current
+    ///   foreign namespace and never reach the fallback branch below).
+    /// * failing that, the final "otherwise HTML" fallback consults
+    ///   [`default_namespace_override`][Self::default_namespace_override]
+    ///   — but only when the *real* current node's own namespace
+    ///   ([`current_namespace`][Self::current_namespace]) isn't already
+    ///   foreign. That guard is load-bearing: `start_tag_namespace` also
+    ///   lands here for a tag inside an SVG/MathML "integration point"
+    ///   (`<foreignObject><body>`, MathML text integration points, HTML-
+    ///   encoded `annotation-xml`), where HTML LS §13.2.6.5 mandates HTML
+    ///   unconditionally — an ancestor's `xmlns` must not resurrect the
+    ///   foreign default there. It's the `h:`/`svg:`/`math:`-prefix-forced
+    ///   case (`<h:body>`'s unprefixed `<g>` child) that the guard must
+    ///   *not* exclude: the forcing there already turned the current node's
+    ///   own stored namespace genuinely `Html` (or, after a nested reset,
+    ///   genuinely [`Namespace::None`]/[`Namespace::Other`]) — not foreign
+    ///   — so `<g>` still needs to walk past it to the real SVG default.
+    ///
+    /// Not in this срез: a *prefixed* element's own `xmlns` establishing a
+    /// new default-namespace scope for its unprefixed children (only its
+    /// own qualified name is prefix-resolved here, unchanged from срез 5/33/
+    /// 34) and prefix rebinding via a nested `xmlns:h='...'` (still the
+    /// hardcoded pairs from срезы 5/33/34/35) — both need real per-prefix
+    /// binding tracking, not just the single default-namespace slot this
+    /// срез adds. See `bugs/BUG-685-OPEN.md` "срез 39" for the measured
+    /// boundary.
+    fn resolve_element_name(&self, name: &str, attrs: &[(String, String)], had_prefix: bool) -> QualName {
+        if !had_prefix
+            && name != "svg"
+            && name != "math"
+            && let Some((_, v)) = attrs.iter().find(|(k, _)| k == "xmlns")
+        {
+            return match Namespace::from_uri(Some(v)) {
+                Namespace::Svg => QualName {
+                    namespace: Namespace::Svg,
+                    local: foreign_content::adjust_svg_tag_name(name).to_string(),
+                },
+                ns => QualName {
+                    namespace: ns,
+                    local: name.to_string(),
+                },
+            };
+        }
         match self.start_tag_namespace(name) {
             Namespace::Svg => QualName {
                 namespace: Namespace::Svg,
@@ -2551,8 +2663,55 @@ impl IncrementalTreeBuilder {
                 namespace: Namespace::MathMl,
                 local: "math".to_string(),
             },
-            _ => QualName::html(name),
+            inherited => {
+                let eligible = !had_prefix && !is_foreign_namespace(self.current_namespace());
+                match eligible.then(|| self.default_namespace_override()).flatten() {
+                    Some(Namespace::Svg) => QualName {
+                        namespace: Namespace::Svg,
+                        local: foreign_content::adjust_svg_tag_name(name).to_string(),
+                    },
+                    Some(ns) => QualName {
+                        namespace: ns,
+                        local: name.to_string(),
+                    },
+                    None => QualName {
+                        namespace: inherited,
+                        local: name.to_string(),
+                    },
+                }
+            }
         }
+    }
+
+    /// XML Namespaces §6 "default namespace" lookup consulted by
+    /// [`resolve_element_name`][Self::resolve_element_name]'s fallback arm
+    /// — GAP-XMLDOC срез 39 (BUG-685). Nearest declaration wins: the real
+    /// open-elements ancestor chain (each entry's own `xmlns`, if it has
+    /// one — this also picks up whatever an earlier call to
+    /// `resolve_element_name`'s own-attribute fast path already stored),
+    /// then — only once that chain is exhausted, i.e. the fragment's
+    /// synthetic root — the fragment context's precomputed
+    /// [`FragmentContext::default_namespace`], which carries whatever a
+    /// real ancestor declared in the *other* `Document` the context element
+    /// actually lives in (the context element itself never enters the
+    /// fragment's tree, see the struct doc).
+    ///
+    /// Returns `None` when nothing anywhere in scope ever declared `xmlns`
+    /// — the overwhelmingly common case for both plain HTML documents and
+    /// inline SVG/MathML that never resets or re-declares its default
+    /// namespace, where the caller must fall back to the pre-срез-39
+    /// foreign-content heuristic verbatim.
+    fn default_namespace_override(&self) -> Option<Namespace> {
+        if self.saw_own_xmlns {
+            for &id in self.open_elements.iter().rev() {
+                if let NodeData::Element { attrs, .. } = &self.doc.get(id).data
+                    && let Some(a) = attrs.iter().find(|a| a.name.local == "xmlns")
+                {
+                    return Some(Namespace::from_uri(Some(a.value.as_str())));
+                }
+            }
+        }
+        self.fragment_context.as_ref().and_then(|c| c.default_namespace.clone())
     }
 
     /// Namespace of the current node (`open_elements` top), or `Html` for
@@ -5875,6 +6034,133 @@ mod tests {
             .find(|a| a.name.local == "xml:lang")
             .unwrap_or_else(|| panic!("xml:lang attribute: {doc}"));
         assert_eq!(xml_lang.name.namespace, Namespace::Xml);
+    }
+
+    #[test]
+    fn unprefixed_child_of_a_prefix_forced_element_still_inherits_the_real_svg_default() {
+        // GAP-XMLDOC срез 39 (BUG-685), reduced from the vendored WPT
+        // `html/webappapis/dynamic-markup-insertion/the-innerhtml-property/
+        // innerhtml-and-xml-namespaces.svg` "prerequisites" test (`<h:div>`
+        // there, not `<h:body>` — a literal `body` start tag anywhere in
+        // "in body" merges into the document's real `<body>` instead of
+        // creating an element at all, a separate pre-existing gap in how
+        // that merge rule ignores integration-point context; out of scope
+        // here, see BUG-685 "срез 39"). `<h:div>` is forced into the HTML
+        // namespace by the `h:`-prefix breakout (срез 5) — but that forcing
+        // must not leak into the DEFAULT namespace used to resolve `<g>`,
+        // its unprefixed child: `<g>` still inherits the `xmlns="…svg"`
+        // declared on the real `<svg>` ancestor two levels up, not
+        // `<h:div>`'s own (prefix-derived) namespace. Before срез 39, `<g>`
+        // fell into the ordinary "otherwise HTML" catch-all and became
+        // `Html`.
+        let doc = parse_xml_flavoured(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">
+                 <foreignObject><h:div><g></g></h:div></foreignObject>
+               </svg>"#,
+        );
+        let g = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "g"))
+            .unwrap_or_else(|| panic!("g element: {doc}"));
+        let NodeData::Element { name, .. } = &g.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Svg);
+    }
+
+    #[test]
+    fn integration_point_forced_html_is_not_reopened_by_an_ancestor_default_namespace() {
+        // Regression guard for the fix above: `<body>` here sits DIRECTLY
+        // under `<foreignObject>`, a genuine SVG-namespaced HTML
+        // integration point (срез 8) — HTML LS §13.2.6.5 mandates `Html`
+        // unconditionally for its children, and that must keep winning
+        // even though the `<svg>` ancestor declares a default namespace.
+        // Unlike the test above, `<foreignObject>`'s own namespace is
+        // genuinely `Svg` (not already forced to `Html` by a prefix), so
+        // `default_namespace_override`'s guard (`current_namespace()` not
+        // foreign) must exclude this case.
+        let doc = parse_xml_flavoured(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><body></body></foreignObject></svg>"#,
+        );
+        let body = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "body"))
+            .unwrap_or_else(|| panic!("body element: {doc}"));
+        let NodeData::Element { name, .. } = &body.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html);
+    }
+
+    #[test]
+    fn own_xmlns_resets_and_redeclares_the_default_namespace_even_inside_foreign_content() {
+        // Same WPT file's `<element xmlns=""/>`/`<element xmlns="…"/>`
+        // siblings, plus the "unsetting default namespace works inside
+        // parse of fragment" cases — reduced to plain (non-fragment)
+        // parsing. Tag names are deliberately inert made-up strings, not
+        // `a`/`b`/`c`/`d`: those collide with HTML5's own machinery (`a` is
+        // an active-formatting-elements entry, invoking the Adoption Agency
+        // Algorithm on its end tag) that has nothing to do with namespace
+        // resolution and was making an earlier version of this test fail
+        // for an unrelated reason.
+        //
+        // `<zzreset>`'s own `xmlns=""` resets to no namespace even though
+        // it's a direct, otherwise-ordinary descendant of `<svg>`
+        // (ordinarily resolved by the ordinary Svg-inheritance arm in
+        // `resolve_element_name`, which never even looks at `attrs` — the
+        // own-attribute fast path has to run BEFORE that arm, not just in
+        // the "otherwise HTML" fallback). `<zzchild>`, its child, then
+        // inherits the reset (`None`, not `Svg`) from its real parent, not
+        // from the outer `<svg>`. `<zzsibling>`, created after
+        // `<zzreset>` is closed and popped off `open_elements`, is
+        // unaffected — the reset must not leak past the element that
+        // declared it. `<zznewns>` redeclares an arbitrary URI instead of
+        // resetting to null.
+        let doc = parse_xml_flavoured(
+            r#"<svg xmlns="http://www.w3.org/2000/svg">
+                 <zzreset xmlns=""><zzchild></zzchild></zzreset>
+                 <zzsibling></zzsibling>
+                 <zznewns xmlns="https://example.org/ns"></zznewns>
+               </svg>"#,
+        );
+        let ns_of = |local: &str| {
+            let node = doc
+                .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == local))
+                .unwrap_or_else(|| panic!("{local} element: {doc}"));
+            let NodeData::Element { name, .. } = &node.data else {
+                unreachable!()
+            };
+            name.namespace.clone()
+        };
+        assert_eq!(ns_of("zzreset"), Namespace::None);
+        assert_eq!(ns_of("zzchild"), Namespace::None);
+        assert_eq!(ns_of("zzsibling"), Namespace::Svg);
+        assert_eq!(ns_of("zznewns"), Namespace::Other("https://example.org/ns".to_string()));
+    }
+
+    #[test]
+    fn fragment_context_default_namespace_reaches_a_genuinely_unprefixed_child() {
+        // `FragmentContext::default_namespace` is how `Element.innerHTML=`
+        // carries a real ancestor's `xmlns` across the document boundary
+        // (GAP-XMLDOC срез 39, BUG-685): the context element never joins
+        // the fragment's own, separate `Document`, so without this field
+        // the fragment parser's own `open_elements` walk could never see
+        // it. `local`/`namespace` here mimic an `<h:div>` context element
+        // (itself HTML-namespaced via the prefix breakout) whose real
+        // ancestor declared the SVG default — same shape as
+        // `prefixedContainer.innerHTML = "<e></e>"` in the corpus test.
+        let context = FragmentContext {
+            namespace: Namespace::Html,
+            local: "div".to_string(),
+            attrs: Vec::new(),
+            default_namespace: Some(Namespace::Svg),
+        };
+        let (doc, _root) = parse_fragment_with_context("<e></e>", Some(context));
+        let e = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "e"))
+            .unwrap_or_else(|| panic!("e element: {doc}"));
+        let NodeData::Element { name, .. } = &e.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Svg);
     }
 
     #[test]

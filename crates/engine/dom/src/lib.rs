@@ -945,6 +945,30 @@ impl Document {
         &mut self.nodes[id.index()]
     }
 
+    /// XML Namespaces §6 default-namespace lookup starting at `start`
+    /// (inclusive) and walking real ancestors via [`Node::parent`] — GAP-XMLDOC
+    /// срез 39 (BUG-685). Used to precompute [`crate` fragment-parsing
+    /// callers'] context before HTML LS §13.4 fragment parsing (`Element.
+    /// innerHTML=`) starts: the context element never enters the fragment's
+    /// own, separate `Document`, so any `xmlns` declared on it or one of its
+    /// real ancestors would otherwise be invisible to the fragment parser's
+    /// own ancestor walk. `None` means no element from `start` up to the
+    /// document root ever declared `xmlns` — callers should treat that as
+    /// "no override", not as "null namespace".
+    pub fn nearest_xmlns_default(&self, start: NodeId) -> Option<Namespace> {
+        let mut cur = Some(start);
+        while let Some(id) = cur {
+            let node = self.get(id);
+            if let NodeData::Element { attrs, .. } = &node.data
+                && let Some(a) = attrs.iter().find(|a| a.name.local == "xmlns")
+            {
+                return Some(Namespace::from_uri(Some(a.value.as_str())));
+            }
+            cur = node.parent;
+        }
+        None
+    }
+
     #[cold]
     #[track_caller]
     #[allow(clippy::panic)]  // BUG-986: см. docs/lint-policy.md §10 (реестр)

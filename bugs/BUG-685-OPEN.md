@@ -1238,3 +1238,129 @@ v8-backend -- -D warnings` — чисто.
 есть, теперь реальны), но не закрыто целиком — тот файл структурно требует
 именно парсерного резолвера, не только query-API; параметрические entity/
 внешний DTD/`SYSTEM`-entity — по-прежнему 0 на корпусе.
+
+## GAP-XMLDOC срез 39 (2026-09-16): XML Namespaces §6 «default namespace» — первая половина настоящего резолвера (`p1-gap-xmldoc-srez39`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Срезы 36/38
+оба остановились на одном и том же выводе: живой корпусный тест
+(`html/webappapis/dynamic-markup-insertion/the-innerhtml-property/
+innerhtml-and-xml-namespaces.svg`) требует не точечной правки, а «отдельного,
+не зависящего от `open_elements`/`node_namespace` стека `(default_ns,
+prefix → uri)`». Этот срез строит ПОЛОВИНУ этого стека — `default_ns` без
+`prefix → uri` — и явно проводит границу, где именно кончается half-done и
+начинается настоящий пробел.
+
+**Измерение.** Первый же под-тест файла (`"prerequisites"`) уже требовал
+default-namespace резолвинга без единого `innerHTML` вызова:
+`<element xmlns=""/>` внутри `<svg>` обязан дать `namespaceURI === null`,
+`<element xmlns="…arbitrary…"/>` — произвольный URI; ни то, ни другое не
+проходило, потому что `resolve_element_name` до этого среза вообще не смотрел
+на атрибуты создаваемого элемента — только на текущий namespace стека.
+Более тонкий случай, тоже из «prerequisites»: `<g>` — прямой child
+`<h:body>` (тот форсится в `Html` префиксным брейкаутом среза 5) — обязан
+получить `SVG_NS`, унаследованный от настоящего `<svg xmlns="…">` предка
+двумя уровнями выше, а не `Html` от `<h:body>`. Это доказывает то, что
+срезы 36/38 формулировали абстрактно: собственный namespace элемента
+(через префикс) и «текущий default namespace в области видимости» (для
+резолвинга непрефиксованных потомков) — это два структурно разных понятия,
+и HTML5 foreign-content эвристика (наследование `node_namespace` реального
+родителя) путает их в один.
+
+**Фикс.** `resolve_element_name` (`tree_builder.rs`) получил два новых
+параметра (`attrs`, `had_prefix` — последний генерализует старый
+`had_html_prefix` на все четыре ветки `apply_token`'s xml_mode
+prefix-стриппинга, не только `html:`/`h:`/`xhtml:`) и два новых хука:
+
+1. Непрефиксованный тег (`!had_prefix`, не литеральный `svg`/`math`) — своё
+   собственное `xmlns="…"` атрибут побеждает БЕЗУСЛОВНО, до всякого обращения
+   к `start_tag_namespace` — иначе элемент, генуинно вложенный в SVG/MathML
+   (резолвится через существующую Svg/MathMl-ветку матча раньше, чем матч
+   вообще доходит до чего-то нового), никогда не показал бы новый код своих
+   атрибутов.
+2. Иначе, финальная «otherwise HTML» ветка (единственная, которую трогает
+   этот срез — `Svg`/`MathMl`-ветки и литеральные `svg`/`math` остаются
+   ровно как их оставили срезы 3/6/8) консультируется с новым
+   `default_namespace_override()`: ближайший `xmlns` вверх по
+   `open_elements` (реальному стеку открытых элементов, не парсерной
+   эвристике), с fallback на `FragmentContext::default_namespace` (новое
+   поле) для fragment-парсинга.
+
+Ключевой guard, без которого фикс тихо ломает integration points
+(`<foreignObject><body>` обязан остаться `Html` несмотря на предка со
+`SVG`-default): override применяется, только когда
+`current_namespace()` (реальный/adjusted namespace ТЕКУЩЕГО узла) сам НЕ
+foreign. Для `<h:body>`'s ребёнка `<g>` это условие истинно (`<h:body>` —
+генуинно `Html`, форсинг префиксом уже случился и осел в самом узле); для
+`<foreignObject>`'s ребёнка `<body>` — ложно (`<foreignObject>` генуинно
+`Svg`, а `Html` для `<body>` — integration-point форсинг конкретно ЭТОГО
+тега, не унаследованный default). Без этого различения проверка `!==
+Html` слишком узкая (реально нужна `!is_foreign_namespace`, не `== Html`
+— иначе вложенный `xmlns=""`-сброс, сам по себе `Namespace::None`, а не
+`Html`/`Svg`/`MathMl`, ломал резолвинг СВОИХ ЖЕ детей: `resolve_content_namespace`
+теперь может вернуть `None`/`Other` там, где раньше видел только `Html`/
+`Svg`/`MathMl`, и «otherwise HTML» ветка обязана пропускать унаследованное
+значение (`inherited`), а не жёстко `QualName::html(name)`).
+
+Дешёвый общий случай (документ/фрагмент, ни один элемент которого никогда
+не пишет `xmlns`) остаётся O(1): `saw_own_xmlns` — булев флаг, взводимый
+один раз при первом встреченном `xmlns`-атрибуте где угодно в разборе —
+гейтит сам обход `open_elements`, так что обычный глубокий HTML-документ
+не платит O(depth) за проверку, которая для него никогда не найдёт
+совпадения.
+
+`FragmentContext` (используется `Element.innerHTML=`) получил поле
+`default_namespace: Option<Namespace>`, вычисляемое в
+`dom_helpers::parse_html_fragment_with_context` новым
+`Document::nearest_xmlns_default` (реальный, живой обход предков ЦЕЛЕВОГО
+документа, не парсерного фрагмента) — контекстный элемент сам никогда не
+попадает в дерево фрагмента (см. доку структуры), так что без этого поля
+`xmlns`, объявленный где-то выше него в реальном документе, был бы просто
+невидим фрагментному парсеру, у которого свой собственный, отдельный
+`Document`.
+
+**Сознательно не в этом срезе (вторая половина резолвера — `prefix → uri`
+не начата).** Три под-теста корпусного файла остаются непройденными,
+все три требуют настоящего отслеживания ПРЕФИКСНЫХ биндингов, не только
+default namespace:
+* префиксованный элемент (`<h:template xmlns=''>`), объявляющий СВОЙ
+  `xmlns`, обязан завести новую область видимости для НЕПРЕФИКСОВАННЫХ
+  потомков несмотря на то, что его СОБСТВЕННЫЙ namespace резолвится через
+  префикс, а не через это `xmlns` (этот срез специально пропускает
+  own-attribute fast path для `had_prefix == true` — правильно для
+  собственного namespace элемента, неполно для его роли в качестве
+  scope-объявителя для потомков);
+* `xmlns:h='…'` внутри фрагмента, переопределяющий, во что резолвится
+  префикс `h:` НИЖЕ этой точки (жёсткие пары срезов 5/33/34/35 не читают
+  `xmlns:*` атрибуты вообще);
+* как следствие первых двух — WPT тест «declaring namespace with prefix
+  inside of fragment parsed by innerHTML» падает.
+
+Настоящий `Node.lookupPrefix`-style обход (срез 38) для ЭТОЙ работы не
+переиспользуется: тот резолвит статически, по готовому дереву, постфактум;
+этому срезу нужно то же самое, но ВО ВРЕМЯ построения дерева, до того как
+следующий тег придёт резолвиться. Также без изменений: параметрические
+entity/внешний DTD/`SYSTEM`-entity (0 на корпусе); `<h:body>`-специфичный
+баг (не срез-39: буквальный `<body>` start tag внутри "in body" сливается
+в реальный документный `<body>` через существующее правило "merge
+attributes", не создавая элемент вовсе, и это правило не смотрит,
+исполняется ли оно внутри integration point — отдельный, более узкий
+дефект, найденный только потому, что регресс-тест сначала попытался
+использовать `<h:body>` как в оригинальном корпусном файле и получил
+пустое дерево).
+
+Тесты: `crates/engine/html-parser/src/tree_builder.rs` — 4 новых
+(`unprefixed_child_of_a_prefix_forced_element_still_inherits_the_real_svg_default`,
+`integration_point_forced_html_is_not_reopened_by_an_ancestor_default_namespace`,
+`own_xmlns_resets_and_redeclares_the_default_namespace_even_inside_foreign_content`,
+`fragment_context_default_namespace_reaches_a_genuinely_unprefixed_child`);
+`crates/js/src/dom/tests/v8_bug685_default_namespace_resolver.rs` — 2 новых,
+живой V8-прогон через настоящий `Element.innerHTML=` (не только
+in-crate парсер), подтверждающий и наследование через `FragmentContext::
+default_namespace`, и сброс/переобъявление внутри содержимого самого
+фрагмента. `cargo test -p lumen-html-parser --profile dev-release` —
+523/523 юнит (было 519) + 5/5 + 15/15 + 8/8 интеграционных. `cargo test -p
+lumen-dom --profile dev-release` — 300/300 (без изменений). `cargo test -p
+lumen-js --lib --profile dev-release --features v8-backend` — 3733/3733
+(было 3731). `cargo clippy -p lumen-dom -p lumen-html-parser -p lumen-js
+--all-targets --profile dev-release --features v8-backend -- -D warnings`
+— чисто.
