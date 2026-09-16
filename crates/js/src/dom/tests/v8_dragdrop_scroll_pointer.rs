@@ -49,6 +49,23 @@ fn data_transfer_types_reflect_set_data() {
 }
 
 #[test]
+fn data_transfer_types_is_cached_frozen_array() {
+    // BUG-598: `types` must return the same reference until the data store
+    // list changes, and a fresh one only after a mutation.
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var dt = new DataTransfer();
+                dt.setData('text/plain', 'a');
+                var before = dt.types;
+                var same_ref = dt.types === before;
+                dt.setData('text/html', '<b>a</b>');
+                var after = dt.types;
+                same_ref && after !== before && after.length === 2
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn data_transfer_clear_data_single_format() {
     let rt = v8_runtime_with_dom(make_doc());
     let v = rt.eval(r#"
