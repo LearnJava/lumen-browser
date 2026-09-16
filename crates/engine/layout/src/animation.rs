@@ -123,6 +123,35 @@ impl AnimationFrame {
         }
         frame
     }
+
+    /// Computed-style text patches for this frame's `opacity`/`transform`
+    /// overrides (GAP-CSSANIM срез 3) — keyed the same way as
+    /// `lumen_layout::collect_computed_styles`'s output (`NodeId::index()`
+    /// as `u32`, property name -> CSS text via the same
+    /// `opacity_to_css`/`transform_list_to_css` helpers `computed_style_to_map`
+    /// uses), so the shell can merge them straight into the JS-visible
+    /// snapshot `getComputedStyle()` reads. Properties this scheduler
+    /// doesn't track (`color`/`background-color`/`height`) are intentionally
+    /// left out — those still only show up in the display list, not here.
+    pub fn to_computed_style_patches(&self) -> HashMap<u32, HashMap<String, String>> {
+        let mut out = HashMap::new();
+        for (&node, style) in &self.overrides {
+            let mut props = HashMap::new();
+            if let Some(opacity) = style.opacity {
+                props.insert("opacity".to_string(), crate::selector_query::opacity_to_css(opacity));
+            }
+            if let Some(transform) = &style.transform {
+                props.insert(
+                    "transform".to_string(),
+                    crate::selector_query::transform_list_to_css(transform),
+                );
+            }
+            if !props.is_empty() {
+                out.insert(node.index() as u32, props);
+            }
+        }
+        out
+    }
 }
 
 /// Compositor-offloadable overrides for one element.
@@ -1565,6 +1594,58 @@ mod tests {
             ..Default::default()
         });
         assert!(frame.to_compositor_frame().is_empty());
+    }
+
+    // GAP-CSSANIM срез 3: opacity/transform overrides become computed-style
+    // text patches, keyed by node index like `collect_computed_styles`.
+    #[test]
+    fn computed_style_patches_carry_opacity_and_transform() {
+        let mut frame = AnimationFrame::default();
+        let node = lumen_dom::NodeId::from_index(5usize);
+        frame.overrides.insert(node, AnimatedStyle {
+            opacity: Some(0.5),
+            transform: Some(vec![TransformFn::TranslateX(10.0)]),
+            ..Default::default()
+        });
+        let patches = frame.to_computed_style_patches();
+        let props = patches.get(&5).expect("node 5 must have patches");
+        assert_eq!(props.get("opacity").map(String::as_str), Some("0.5"));
+        assert_eq!(props.get("transform").map(String::as_str), Some("translateX(10px)"));
+    }
+
+    // Integral opacity serializes without a decimal point, matching
+    // `computed_style_to_map`'s static formatting exactly.
+    #[test]
+    fn computed_style_patches_integral_opacity_has_no_decimal_point() {
+        let mut frame = AnimationFrame::default();
+        let node = lumen_dom::NodeId::from_index(1usize);
+        frame.overrides.insert(node, AnimatedStyle { opacity: Some(1.0), ..Default::default() });
+        let patches = frame.to_computed_style_patches();
+        assert_eq!(patches[&1].get("opacity").map(String::as_str), Some("1"));
+    }
+
+    // An empty transform list still patches `transform`, to `"none"` — the
+    // same value a static `transform: none` would compute to.
+    #[test]
+    fn computed_style_patches_empty_transform_list_is_none() {
+        let mut frame = AnimationFrame::default();
+        let node = lumen_dom::NodeId::from_index(2usize);
+        frame.overrides.insert(node, AnimatedStyle { transform: Some(vec![]), ..Default::default() });
+        let patches = frame.to_computed_style_patches();
+        assert_eq!(patches[&2].get("transform").map(String::as_str), Some("none"));
+    }
+
+    // A node with only a color/background-color/height override (properties
+    // this snapshot doesn't cover) produces no patch entry at all.
+    #[test]
+    fn computed_style_patches_skip_node_with_no_opacity_or_transform() {
+        let mut frame = AnimationFrame::default();
+        let node = lumen_dom::NodeId::from_index(9usize);
+        frame.overrides.insert(node, AnimatedStyle {
+            color: Some(Color { r: 1, g: 2, b: 3, a: 255 }),
+            ..Default::default()
+        });
+        assert!(frame.to_computed_style_patches().is_empty());
     }
 
     #[test]

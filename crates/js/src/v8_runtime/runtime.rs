@@ -768,6 +768,25 @@ impl V8JsRuntime {
         *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
     }
 
+    /// Merge per-frame animated `opacity`/`transform` overrides into
+    /// [`Self::computed_styles`] in place (GAP-CSSANIM срез 3), so
+    /// `getComputedStyle()` reflects the live interpolated value during an
+    /// active CSS transition/animation instead of only the last full-layout
+    /// snapshot [`Self::update_computed_styles`] replaced wholesale. Called
+    /// once per frame, right after the schedulers tick — a subsequent
+    /// `update_computed_styles` (from the next real relayout) naturally
+    /// overwrites these entries with the settled value, which is correct
+    /// once the animation is no longer ticking.
+    pub fn patch_animated_computed_styles(&self, patches: &HashMap<u32, HashMap<String, String>>) {
+        let mut styles = self.computed_styles.lock().unwrap_or_else(|e| e.into_inner());
+        for (node, props) in patches {
+            let entry = styles.entry(*node).or_default();
+            for (prop, value) in props {
+                entry.insert(prop.clone(), value.clone());
+            }
+        }
+    }
+
     /// Push a fresh snapshot of computed CSS pseudo-element styles into the JS
     /// runtime (CSSOM-6/BUG-490), keyed by `(node, pseudo name)`. Published
     /// from the same places as [`Self::update_computed_styles`].

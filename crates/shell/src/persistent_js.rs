@@ -309,6 +309,20 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `window.getComputedStyle()` and CSS property reads.
     #[allow(dead_code)]
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>);
+    /// Merge per-frame animated `opacity`/`transform` overrides into the
+    /// computed-style snapshot in place (GAP-CSSANIM срез 3), so
+    /// `getComputedStyle()` reflects the live interpolated value during an
+    /// active CSS transition/animation.
+    ///
+    /// Called once per frame, right after the schedulers tick — same
+    /// single-delivery-point shape as `deliver_transition_events`/
+    /// `deliver_animation_events`, but this patches the snapshot directly
+    /// rather than dispatching an event: `getComputedStyle()` reads the
+    /// snapshot synchronously and has no listener to notify. `patches` maps
+    /// node index -> property name -> computed CSS text, e.g.
+    /// `{5: {"opacity": "0.5"}}`.
+    #[allow(dead_code)]
+    fn patch_animated_computed_styles(&self, patches: &HashMap<u32, HashMap<String, String>>);
     /// Push a fresh snapshot of computed CSS *pseudo-element* styles into the
     /// JS runtime (CSSOM-6/BUG-490), keyed by `(node, pseudo name)` —
     /// `"before"`/`"after"`/`"first-line"`/`"first-letter"`.
@@ -1027,6 +1041,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         self.rt.update_computed_styles(styles);
+    }
+    fn patch_animated_computed_styles(&self, patches: &HashMap<u32, HashMap<String, String>>) {
+        self.rt.patch_animated_computed_styles(patches);
     }
     fn update_pseudo_computed_styles(&self, styles: PseudoComputedStyles) {
         self.rt.update_pseudo_computed_styles(styles);

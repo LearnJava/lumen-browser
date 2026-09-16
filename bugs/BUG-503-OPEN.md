@@ -167,3 +167,12 @@ static `opacity 1`, not falling — same gap symptom 3 documented for
 transitions in [BUG-536](BUG-536-OPEN.md)). 6 new unit tests in
 `crates/shell/src/animation_scheduler.rs`
 (`tick_fires_start_on_first_active_frame` and siblings).
+
+## Срез 3 (GAP-CSSANIM, 2026-09-16, `p1-gap-cssanim-srez3`)
+
+`getComputedStyle()` mid-animation now reflects the live `opacity`/
+`transform` — `--variant css-animation-progress` prints `opacity 1, opacity
+0.709377, …` instead of a static `1`. Full mechanism documented in
+[BUG-536](BUG-536-OPEN.md#срез-3-gap-cssanim-2026-09-16-p1-gap-cssanim-srez3--getcomputedstyle-now-reflects-the-live-interpolated-opacitytransform)
+(same fix, both bugs share this symptom). `getAnimations()` still returns
+nothing for a CSS-triggered animation — untouched by this slice.
