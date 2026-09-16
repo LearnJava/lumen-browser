@@ -1368,3 +1368,63 @@ lumen-shell page_source::` — 6/6 зелёных. `cargo clippy -p lumen-shell
 
 Не в этом срезе: параметрические энтити/внешний DTD/`SYSTEM`-энтити —
 по-прежнему 0 на корпусе, без изменений с срезов 30/31.
+
+## GAP-XMLDOC срез 33 (2026-09-16): `svg:`/`math:` namespace-префиксы не резолвились вовсе (`p1-gap-xmldoc-srez33`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Перед правкой
+заново перепроверил остаток срезов 30–32 (параметрические энтити, внешний
+DTD, `SYSTEM`-энтити) — по-прежнему 0 файлов на корпусе, без изменений.
+Вместо этого нашёлся новый измеренный случай той же природы, что срез 5
+(`html:`/`h:`), но незакрытый им: срез 5 научил `apply_token` снимать
+префиксы `html:`/`h:`, ничего не сделав с `svg:`/`math:`.
+
+**Дефект.** `resolve_element_name`/`start_tag_namespace` решают, что тег
+`<svg>`/`<math>` — всегда-иностранный, сравнением ИМЕНИ ЦЕЛИКОМ (`name ==
+"svg"`/`name == "math"`, `tree_builder.rs:2526/2530`). Тег `<svg:svg>` этому
+сравнению не удовлетворяет буквально (имя токена — `"svg:svg"` с
+двоеточием) — namespace-переключение никогда не срабатывало, и весь
+поддерева `<svg:svg>...<svg:rect/>...</svg:svg>` парсилось как обычные
+неизвестные HTML-элементы: ни геометрия, ни заливка не рендерились.
+
+**Измерение.** `grep -rlE '<svg:(svg|rect|circle|path|line|g|polygon|
+ellipse|text)\b'` по вендоренному `.xht`/`.xhtml`/`.svg` — **54 файла**,
+большинство — `css/CSS2/{floats-clear,positioning}/*-replaced-*.xht`,
+где `<svg:svg><svg:rect .../></svg:svg>` — сам проверяемый replaced-элемент
+(`css/CSS2/floats-clear/float-replaced-height-006.xht`: `<svg:rect
+fill="blue">` рисует заливку, которую тест сравнивает). Тот же приём для
+`<math:...>` (`grep -rl "<math:"`) — **18 файлов**, все —
+`mathml/crashtests/mozilla/*.xhtml` (`<math:math><mrow>...`).
+
+**Фикс — тот же приём, что срез 5, третий вариант того же хардкод-парного
+класса.** `foreign_content::strip_known_svg_prefix`/`strip_known_mathml_prefix`
+(зеркало `strip_known_html_prefix`, тот же коммент про границу "точечный
+фикс, не резолвер") снимают буквальные префиксы `svg:`/`math:`. **Важное
+отличие от `html:`/`h:`:** снятие префикса НЕ форсирует пространство имён
+(`had_html_prefix`-аналог не заводился) — после снятия остаётся голое имя
+(`svg`, `rect`, `math`, `mrow`, ...), которое дальше идёт по уже
+существующему namespace-пути без изменений: `<svg>`/`<math>` уже
+безусловно резолвятся в SVG/MathML тем же `name == "svg"`/`"math"`
+хвостом `resolve_element_name`, а непрефиксованные/прочие потомки
+(`<svg:rect>` после снятия — просто `rect`) наследуют пространство имён
+родителя через уже рабочий `start_tag_namespace` — ровно тот же механизм,
+что уже резолвит `<rect>` без префикса внутри обычного `<svg>`. Никакой
+новой логики резолюции пространства имён не потребовалось.
+
+Тесты (`tree_builder.rs`): `xml_flavoured_svg_prefix_resolves_to_svg_namespace`
+(`<div><svg:svg><svg:rect fill="blue"/></svg:svg></div>` — оба элемента
+получают `Namespace::Svg`, атрибут `fill` выживает снятие префикса) и
+`xml_flavoured_math_prefix_resolves_to_mathml_namespace` (аналогично для
+`Namespace::MathMl`); плюс юнит-тесты `strips_known_svg_prefix`/
+`strips_known_mathml_prefix` (`foreign_content.rs`). `cargo test -p
+lumen-html-parser` — 514 юнит (было 510) + 15 + 8 интеграционных зелёные.
+`cargo clippy -p lumen-html-parser --all-targets --profile dev-release --
+-D warnings` — чисто. `tree_builder.rs` пересёк собственный baseline
+(5983 → 6051), `scripts/file-size-baseline.tsv` обновлён тем же коммитом
+только для этой строки (остальные записи файла — чужой недокоммиченный
+дрейф, не тронут). `scripts/scoped-test.sh` (обратные зависимости) — тот
+же чужой дрейф CPU-эталонов ([BUG-1008](BUG-1008-OPEN.md), идентичные
+7 файлов/байт-дельты), не связан с этим срезом (парсер, не paint/layout).
+
+Не в этом срезе: параметрические энтити/внешний DTD/`SYSTEM`-энтити —
+по-прежнему 0 на корпусе. Остаток по-прежнему открыт: сама область «нет
+настоящего XML-парсера» как таковая.

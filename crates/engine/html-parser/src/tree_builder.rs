@@ -476,6 +476,16 @@ impl IncrementalTreeBuilder {
         // `dispatch_foreign_content` can force a breakout even for names
         // (`script`, `link`, ...) absent from the ordinary §13.2.6.5
         // breakout list.
+        //
+        // GAP-XMLDOC срез 33 (BUG-685): `svg:`/`math:` — the same
+        // hardcoded-pair treatment for the two namespace prefixes SVG/MathML
+        // content is bound to in the corpus (`<svg:svg><svg:rect .../>
+        // </svg:svg>`, `<math:math><mrow>...`). Unlike `html:`/`h:` this
+        // does NOT force a breakout: the stripped bare name (`svg`, `rect`,
+        // `math`, `mrow`, ...) is left to the ordinary namespacing path
+        // below, which already treats a literal `<svg>`/`<math>` start tag
+        // as always-foreign and resolves unprefixed descendants by
+        // inheriting the current node's namespace.
         let mut had_html_prefix = false;
         if self.xml_mode {
             match &mut token {
@@ -483,6 +493,10 @@ impl IncrementalTreeBuilder {
                     if let Some(stripped) = foreign_content::strip_known_html_prefix(name) {
                         *name = stripped.to_string();
                         had_html_prefix = true;
+                    } else if let Some(stripped) = foreign_content::strip_known_svg_prefix(name) {
+                        *name = stripped.to_string();
+                    } else if let Some(stripped) = foreign_content::strip_known_mathml_prefix(name) {
+                        *name = stripped.to_string();
                     }
                 }
                 _ => {}
@@ -5463,6 +5477,60 @@ mod tests {
             |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "rect"),
         );
         assert!(has_rect.is_some(), "<rect/> after self-closing <h:script/> must survive: {doc}");
+    }
+
+    #[test]
+    fn xml_flavoured_svg_prefix_resolves_to_svg_namespace() {
+        // GAP-XMLDOC срез 33 (BUG-685): `<svg:svg>...</svg:svg>` embedded in
+        // an ordinary XHTML page (54 corpus files, e.g.
+        // `css/CSS2/floats-clear/float-replaced-height-006.xht`, used as a
+        // CSS replaced element). Before this срез neither `svg:svg` nor
+        // `svg:rect` matched the bare-name checks the SVG-namespacing path
+        // is keyed on, so both stayed plain (unknown) HTML elements and
+        // nothing rendered.
+        let doc = parse_xml_flavoured(
+            r#"<div><svg:svg version="1.1" height="50%"><svg:rect x="0" y="0" width="200" height="100" fill="blue"/></svg:svg></div>"#,
+        );
+        let svg = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "svg"))
+            .unwrap_or_else(|| panic!("svg element: {doc}"));
+        let NodeData::Element { name, .. } = &svg.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Svg, "svg:svg namespace: {doc}");
+        let rect = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "rect"))
+            .unwrap_or_else(|| panic!("rect element: {doc}"));
+        let NodeData::Element { name, attrs, .. } = &rect.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Svg, "svg:rect namespace: {doc}");
+        assert!(
+            attrs.iter().any(|a| a.name.local == "fill" && a.value == "blue"),
+            "attributes must survive the prefix strip: {doc}"
+        );
+    }
+
+    #[test]
+    fn xml_flavoured_math_prefix_resolves_to_mathml_namespace() {
+        // GAP-XMLDOC срез 33 (BUG-685): `<math:math>` (18 corpus crashtests,
+        // e.g. `mathml/crashtests/mozilla/397518-1.xhtml`) — same class of
+        // defect as `svg:`, fixed by the same mechanism.
+        let doc = parse_xml_flavoured(r#"<math:math><math:mrow/></math:math>"#);
+        let math = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "math"))
+            .unwrap_or_else(|| panic!("math element: {doc}"));
+        let NodeData::Element { name, .. } = &math.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "math:math namespace: {doc}");
+        let mrow = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "mrow"))
+            .unwrap_or_else(|| panic!("mrow element: {doc}"));
+        let NodeData::Element { name, .. } = &mrow.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "math:mrow namespace: {doc}");
     }
 
     #[test]

@@ -7,7 +7,7 @@
 9915	crates/network/src/lib.rs
 6693	crates/engine/paint/src/backends/femtovg_backend.rs
 5984	crates/engine/paint/src/renderer.rs
-5983	crates/engine/html-parser/src/tree_builder.rs
+6051	crates/engine/html-parser/src/tree_builder.rs
 5466	crates/engine/dom/src/lib.rs
 5368	crates/engine/paint/src/cpu_raster.rs
 4666	crates/core/src/ext.rs
