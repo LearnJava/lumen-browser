@@ -245,3 +245,6 @@ mod v8_bug589_window_exotic_object;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug602_align_reflection;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug605_marquee_reflection;
