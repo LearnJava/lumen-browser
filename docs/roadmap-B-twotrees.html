@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-16",
  "counts": {
-  "open": 331,
-  "fixed": 672,
+  "open": 330,
+  "fixed": 673,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3253,7 +3253,7 @@
        "title": "WPT: прогнать срез `html/misc`",
        "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по всем 14 под-каталогам (`--processes=4`) — **49/531 harness OK, 148/636 сабтестов**. Четыре https-тяжёлых под-каталога (`cross-origin-opener-policy`/`cross-origin-embedder-policy`/`document-isolation-policy`/`anonymous-iframe`, 321 id) почти целиком провалились на уже известном TLS-гэпе `UnknownIssuer` (см. `docs/wpt-status.md:26`) — не новые находки. Реальный сигнал дали лёгкие под-каталоги: `infrastructure` (22/146, 137/546 сабтестов) подтвердил уже заведённый [BUG-377](bugs/BUG-377-FIXED.md) (`document.baseURI`) и невендоренные `/common/utils.js`/`subset-tests-by-key.js`-хелперы; `obsolete` (14/14 harness OK, 5/53 сабтестов) дал самый плотный кластер новых багов — легаси-API секции HTML LS §obsolete целиком не реализованы. Семь новых багов: [BUG-605](bugs/BUG-605-OPEN.md) (`<marquee>` без `HTMLMarqueeElement`, `loop`/`scrollAmount`/`scrollDelay` не рефлексируют, нет UA `overflow:hidden`), [BUG-606](bugs/BUG-606-OPEN.md) (шесть независимых легаси-заглушек — `document.clear/captureEvents/releaseEvents`, `window.captureEvents/releaseEvents`, `document.all` unusual behaviors, `document.applets`, `HTMLScriptElement.event/htmlFor` — отсутствуют целиком), [BUG-607](bugs/BUG-607-FIXED.md) (`document.fgColor/linkColor/alinkColor/vlinkColor/bgColor` не реализованы), [BUG-608](bugs/BUG-608-FIXED.md) (`fetchPriority` отсутствует на `<script>`/`<img>`), [BUG-609](bugs/BUG-609-FIXED.md) (`HTMLOptionsCollection.length`-сеттер не растит `<select>` для валидных больших значений), [BUG-610](bugs/BUG-610-FIXED.md) (`MessageEvent.userActivation` отсутствует), [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` не реализован). Попутно подтверждены без новых номеров: BUG-485/BUG-565 (`document.head` отсутствует, `links/icon/*`), BUG-384 (именованный доступ на `window`, маскирует первый сабтест `fetchpriority`-тестов), BUG-601 (`DOMTokenList`-конструктор — соседствует, но не тот же дефект, что BUG-611). `the-xhtml-syntax` (0/12) — все TIMEOUT на XHTML-парсинге DTD-сущностей (`xhtml-mathml-dtd-entity-N.htm`), нишевая XML-фича, не расследовано глубже",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по всем 14 под-каталогам (`--processes=4`) — **49/531 harness OK, 148/636 сабтестов**. Четыре https-тяжёлых под-каталога (`cross-origin-opener-policy`/`cross-origin-embedder-policy`/`document-isolation-policy`/`anonymous-iframe`, 321 id) почти целиком провалились на уже известном TLS-гэпе `UnknownIssuer` (см. `docs/wpt-status.md:26`) — не новые находки. Реальный сигнал дали лёгкие под-каталоги: `infrastructure` (22/146, 137/546 сабтестов) подтвердил уже заведённый [BUG-377](bugs/BUG-377-FIXED.md) (`document.baseURI`) и невендоренные `/common/utils.js`/`subset-tests-by-key.js`-хелперы; `obsolete` (14/14 harness OK, 5/53 сабтестов) дал самый плотный кластер новых багов — легаси-API секции HTML LS §obsolete целиком не реализованы. Семь новых багов: [BUG-605](bugs/BUG-605-OPEN.md) (`<marquee>` без `HTMLMarqueeElement`, `loop`/`scrollAmount`/`scrollDelay` не рефлексируют, нет UA `overflow:hidden`), [BUG-606](bugs/BUG-606-OPEN.md) (шесть независимых легаси-заглушек — `document.clear/captureEvents/releaseEvents`, `window.captureEvents/releaseEvents`, `document.all` unusual behaviors, `document.applets`, `HTMLScriptElement.event/htmlFor` — отсутствуют целиком), [BUG-607](bugs/BUG-607-FIXED.md) (`document.fgColor/linkColor/alinkColor/vlinkColor/bgColor` не реализованы), [BUG-608](bugs/BUG-608-FIXED.md) (`fetchPriority` отсутствует на `<script>`/`<img>`), [BUG-609](bugs/BUG-609-FIXED.md) (`HTMLOptionsCollection.length`-сеттер не растит `<select>` для валидных больших значений), [BUG-610](bugs/BUG-610-FIXED.md) (`MessageEvent.userActivation` отсутствует), [BUG-611](bugs/BUG-611-FIXED.md) (`HTMLLinkElement.relList` не реализован). Попутно подтверждены без новых номеров: BUG-485/BUG-565 (`document.head` отсутствует, `links/icon/*`), BUG-384 (именованный доступ на `window`, маскирует первый сабтест `fetchpriority`-тестов), BUG-601 (`DOMTokenList`-конструктор — соседствует, но не тот же дефект, что BUG-611). `the-xhtml-syntax` (0/12) — все TIMEOUT на XHTML-парсинге DTD-сущностей (`xhtml-mathml-dtd-entity-N.htm`), нишевая XML-фича, не расследовано глубже",
        "bugs": [
         "BUG-605",
         "BUG-606",
@@ -3892,7 +3892,7 @@
        "title": "WPT: вендорить + прогнать категорию `preload`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root preload --recursive`, ~8 мин, 79 id) — **36/79 harness OK, 10/203 сабтестов**. Доминирующая причина отказа — реконфирмация [BUG-485](bugs/BUG-485-FIXED.md)/[BUG-565](bugs/BUG-565-FIXED.md) (`document.head` всегда `undefined`, ~60 хитов на `document.head.appendChild`/`.append`); остальной сигнал — реконфирмации [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` отсутствует), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует), [BUG-380](bugs/BUG-380-FIXED.md) (переиспользование browsing context), TLS-гэп `UnknownIssuer` на 5 `.https.`-файлах, и невендоренные общие ресурсы (`/common/utils.js`, `/common/get-host-info.sub.js`, `/common/dispatcher/dispatcher.js`) — документированный пробел вендоринга, не баг движка. Новых багов не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root preload --recursive`, ~8 мин, 79 id) — **36/79 harness OK, 10/203 сабтестов**. Доминирующая причина отказа — реконфирмация [BUG-485](bugs/BUG-485-FIXED.md)/[BUG-565](bugs/BUG-565-FIXED.md) (`document.head` всегда `undefined`, ~60 хитов на `document.head.appendChild`/`.append`); остальной сигнал — реконфирмации [BUG-611](bugs/BUG-611-FIXED.md) (`HTMLLinkElement.relList` отсутствует), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует), [BUG-380](bugs/BUG-380-FIXED.md) (переиспользование browsing context), TLS-гэп `UnknownIssuer` на 5 `.https.`-файлах, и невендоренные общие ресурсы (`/common/utils.js`, `/common/get-host-info.sub.js`, `/common/dispatcher/dispatcher.js`) — документированный пробел вендоринга, не баг движка. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-presentation-api",
@@ -7559,13 +7559,6 @@
    "status": "open",
    "title": "`document.all`'s spec-mandated `[[IsHTMLDDA]]` \"unusual behaviors\" (`typeof` reads `\"undefined\"`, loose equality to `null`/`undefined`, falsy, callable-returns-…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `document.all`; `rusty_v8` binding -- no `MarkAsUndetectable` exposed)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-611": {
-   "status": "open",
-   "title": "`HTMLLinkElement.relList` (live `DOMTokenList` with `.supports()`) not implemented -- `link.relList` is `undefined`, distinct from BUG-601 (missing global `DOMT…",
-   "component": "js (`crates/js/src/dom.rs` -- `HTMLLinkElement.prototype`, no `relList` accessor)",
    "date": null,
    "debtor": false
   },
@@ -14146,6 +14139,13 @@
    "status": "fixed",
    "title": "`MessageEvent.userActivation` attribute missing -- `MessageEventInit.userActivation` dict member silently ignored by the constructor, no getter on the prototype…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` -- `MessageEvent` constructor)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-611": {
+   "status": "fixed",
+   "title": "`HTMLLinkElement.relList` (live `DOMTokenList` with `.supports()`) not implemented -- `link.relList` is `undefined`, distinct from BUG-601 (missing global `DOMT…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- `HTMLLinkElement.prototype`/`HTMLAnchorElement.prototype` `relList`)",
    "date": "2026-09-16",
    "debtor": false
   }
