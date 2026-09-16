@@ -686,8 +686,8 @@ pub(crate) fn parse_and_layout(
         let mut module_items = Vec::new();
         collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
         (
-            resolve_script_sources(&classic_items, base, sink, cookie_jar.clone()),
-            resolve_script_sources(&module_items, base, sink, cookie_jar.clone()),
+            resolve_script_sources(&classic_items, base, sink, cookie_jar.clone(), &doc),
+            resolve_script_sources(&module_items, base, sink, cookie_jar.clone(), &doc),
         )
     };
     // BUG-443: the cascade is built BEFORE the page's scripts run, and so is the

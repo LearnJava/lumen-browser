@@ -5,10 +5,13 @@
 //! только keyword). Срез 5 добавил заголовок `Content-Security-Policy`
 //! ответа: он доезжает до документа (`Document::csp_header`) и сливается с
 //! `<meta>`-политиками в [`document_csp_policy`], поэтому все точки
-//! enforcement видят его без изменений в них самих.
+//! enforcement видят его без изменений в них самих. Срез 6 добавил
+//! `script-src`/`default-src` против внешнего `<script src>` — та же
+//! host/scheme/`'self'` проверка, что срез 4 сделал для `img-src`, теперь
+//! останавливает fetch внешнего скрипта до сети.
 //!
-//! Что НЕ покрыто этим срезом (следующие срезы): внешние `<script src>`
-//! против host/scheme источников, директивы кроме `script-src`/`img-src`
+//! Что НЕ покрыто этим срезом (следующие срезы): директивы кроме
+//! `script-src`/`img-src`
 //! (`connect-src`/`style-src`/…), `report-uri`/`report-to`, hash-источники
 //! (только `'unsafe-inline'` и `'nonce-…'`), CSP на путях загрузки картинок
 //! помимо eager-пайплайна (lazy-load, стриминговый progressive loader),
@@ -101,18 +104,32 @@ pub(crate) fn inline_script_blocked(policy: &CspPolicy, nonce: Option<&str>) -> 
 
 /// Вызвать уже определённый JS-хук `_lumen_dispatch_csp_violation`
 /// (`crates/js/src/csp.rs`) — единственная точка диспетчеризации
-/// `securitypolicyviolation`, срез 1 зовёт её впервые.
+/// `securitypolicyviolation`, срез 1 зовёт её впервые для инлайна
+/// (`blocked_uri = "inline"`); срез 6 обобщил на внешний `<script src>`
+/// (`blocked_uri` = резолвленный адрес файла).
 pub(crate) fn fire_script_src_violation(
     rt: &lumen_js::v8_runtime::V8JsRuntime,
+    blocked_uri: &str,
     original_policy: &str,
 ) {
     use lumen_core::ext::JsRuntime as _;
     let _ = rt.eval(&format!(
         "_lumen_dispatch_csp_violation({}, {}, {}, 'enforce');",
         js_string_literal("script-src"),
-        js_string_literal("inline"),
+        js_string_literal(blocked_uri),
         js_string_literal(original_policy),
     ));
+}
+
+/// `true` if `script-src` (or `default-src`) forbids fetching the external
+/// `<script src>` at `url` — срез 6, external counterpart to
+/// [`inline_script_blocked`]. Same "don't invent a violation" stance as
+/// [`img_src_blocked`]: a `url` that fails to parse is treated as allowed.
+pub(crate) fn script_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    !policy.fetch_directive_allows(&CspDirective::ScriptSrc, &parsed, self_origin)
 }
 
 /// `true` if `img-src` (or `default-src`) forbids fetching `url` — срез 4.
@@ -211,5 +228,31 @@ mod tests {
     fn img_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
         assert!(!img_src_blocked(&p, "not a url", None));
+    }
+
+    /// GAP-CSPENF срез 6: `script-src` against an external `<script src>`.
+    #[test]
+    fn no_script_src_allows_external() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(!script_src_blocked(&p, "https://example.com/a.js", None));
+    }
+
+    #[test]
+    fn script_src_none_blocks_external() {
+        let p = lumen_network::csp::parse_csp_header("script-src 'none'");
+        assert!(script_src_blocked(&p, "https://example.com/a.js", None));
+    }
+
+    #[test]
+    fn script_src_allowed_host_passes() {
+        let p = lumen_network::csp::parse_csp_header("script-src cdn.example.com");
+        assert!(!script_src_blocked(&p, "https://cdn.example.com/a.js", None));
+        assert!(script_src_blocked(&p, "https://other.example.com/a.js", None));
+    }
+
+    #[test]
+    fn script_src_unparseable_url_not_blocked() {
+        let p = lumen_network::csp::parse_csp_header("script-src 'none'");
+        assert!(!script_src_blocked(&p, "not a url", None));
     }
 }

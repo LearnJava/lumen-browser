@@ -1769,8 +1769,8 @@ pub(crate) fn spawn_frame(
         let mut module_items = Vec::new();
         collect_scripts_ordered(&child_doc, child_doc.root(), &mut classic_items, &mut module_items);
         (
-            resolve_script_sources(&classic_items, &child_base, sink, cookie_jar.clone()),
-            resolve_script_sources(&module_items, &child_base, sink, cookie_jar.clone()),
+            resolve_script_sources(&classic_items, &child_base, sink, cookie_jar.clone(), &child_doc),
+            resolve_script_sources(&module_items, &child_base, sink, cookie_jar.clone(), &child_doc),
         )
     };
     // Opaque origin (sandbox без allow-same-origin) — без персистентных
