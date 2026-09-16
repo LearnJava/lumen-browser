@@ -1664,6 +1664,7 @@ _lumen_install_reflection(HTMLImageElement.prototype, [
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
     ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
     ['align',          'align',          'string'],
+    ['longDesc',       'longdesc',       'url'],
 ]);
 
 // BUG-630: decoded-image state (HTML LS §4.8.3) — not content-attribute
@@ -1929,6 +1930,7 @@ _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
     ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
     ['align',          'align',          'string'],
+    ['longDesc',       'longdesc',       'url'],
 ]);
 
 // BUG-854 — HTML LS §16.3.3 `HTMLFrameElement`. Obsolete, still parsed, and a
