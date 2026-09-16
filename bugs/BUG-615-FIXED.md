@@ -1,6 +1,6 @@
 # BUG-615: `IdleDetector` (and sibling `EventTarget`-subclass shims) leak private `this._x` state as own enumerable JS properties
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-16 (P3)
 **Компонент:** js (`crates/js/src/idle_detection.rs::IDLE_DETECTION_SHIM`, the pattern also appears in `bluetooth.rs`/`document_pip.rs`/`navigation_api.rs`/`serial.rs`/`webhid.rs`/`webusb.rs`/`webxr.rs`)
 **Найден:** P2, WPT-VENDOR-idle-detection, 2026-08-04
 
@@ -74,3 +74,31 @@ class one level deeper than the failing run" step was applied. Fix for
 variables inside the constructor, exposed only through the existing
 getters); auditing the other 7 files for the same pattern is a separate,
 broader follow-up.
+
+## Исправление
+
+The 5 `this._x` fields (`_userState`/`_screenState`/`_started`/`_threshold`/
+`_timer`) moved out of the `IdleDetector` instance into a module-private
+`WeakMap<IdleDetector, State>` (`idleState` in `IDLE_DETECTION_SHIM`,
+`crates/js/src/idle_detection.rs`) keyed by `this`, closing over that map
+from `start()`/`stop()`/the getters instead of touching `this` directly.
+`Object.keys`/`JSON.stringify`/`for...in` now see zero own enumerable
+properties on an `IdleDetector` instance, and the fields are no longer
+externally writable (`detector._threshold = 1` is now a no-op own-property
+assignment that never reaches the real state).
+
+Test coverage: new `idle_detection::tests::instance_has_no_own_enumerable_properties`
+asserts `Object.keys(d)` is empty after `start()`. Three existing tests
+(`poll_interval_is_half_threshold`, `poll_interval_minimum_is_30s`,
+`stop_clears_interval_timer`) inspected the timer id via the now-removed
+`d._timer` — updated to read the mock `__timers` array directly instead,
+which is what they actually needed.
+
+Scope: fixed only for `IdleDetector`, as filed. The same `this._x` pattern
+in `bluetooth.rs`/`document_pip.rs`/`navigation_api.rs`/`serial.rs`/
+`webhid.rs`/`webusb.rs`/`webxr.rs` is unaudited and unfixed — a separate
+follow-up, not filed as its own bug yet.
+
+`cargo test -p lumen-js --features v8-backend idle_detection` — 18/18
+green. `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings` clean.
