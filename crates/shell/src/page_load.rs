@@ -580,6 +580,9 @@ impl Lumen {
                 self.cv_skipped.clear();
                 self.cv_auto_state.clear();
                 self.refresh_cv_state();
+                // GAP-CSSANIM срез 1: stale transitions from the previous
+                // document must not surface as events on the new one.
+                self.transition_events.clear();
                 self.update_snap_containers();
         self.update_scroll_containers();
                 // Push initial layout geometry so JS can query bounding rects
@@ -1269,6 +1272,9 @@ impl Lumen {
         self.cv_skipped.clear();
         self.cv_auto_state.clear();
         self.refresh_cv_state();
+        // GAP-CSSANIM срез 1: stale transitions from the previous document
+        // must not surface as events on the new one.
+        self.transition_events.clear();
         self.update_snap_containers();
         self.update_scroll_containers();
         // BUG-382: publish the primary layout's geometry + computed styles into the

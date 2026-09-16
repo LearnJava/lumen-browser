@@ -652,6 +652,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn deliver_cv_state_changes(&self, payload: &str);
 
+    /// Deliver a batch of CSS Transitions L1 §3 lifecycle events to JS as
+    /// `TransitionEvent`s (`transitionrun`/`transitionstart`/`transitionend`/
+    /// `transitioncancel`, GAP-CSSANIM срез 1).
+    ///
+    /// `payload` is a JSON array of `[node_index, kind, property_name,
+    /// elapsed_time]` tuples, `kind` one of `"run"`/`"start"`/`"end"`/`"cancel"`.
+    #[allow(dead_code)]
+    fn deliver_transition_events(&self, payload: &str);
+
     /// Pause the JS event loop (T0 → T1 lifecycle transition).
     ///
     /// Sets `document.visibilityState = "hidden"`, fires `visibilitychange`.
@@ -1190,6 +1199,12 @@ impl PersistentJs for V8PersistentJs {
         self.eval_js(&format!(
             "if(typeof _lumen_deliver_cv_state_changes==='function')\
              _lumen_deliver_cv_state_changes({payload});"
+        ));
+    }
+    fn deliver_transition_events(&self, payload: &str) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_deliver_transition_events==='function')\
+             _lumen_deliver_transition_events({payload});"
         ));
     }
     fn pause_event_loop(&self) {

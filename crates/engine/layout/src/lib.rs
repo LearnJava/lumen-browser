@@ -78,7 +78,7 @@ pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
     CompositorAnimFrame, CompositorOverride,
-    AnimationScheduler, TransitionScheduler,
+    AnimationScheduler, TransitionScheduler, TransitionEventInfo, TransitionEventKind,
 };
 pub use box_tree::{
     apply_container_styles, apply_intrinsic_size, build_iframe_document, canvas_background_color,

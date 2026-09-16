@@ -108,3 +108,16 @@ transform-01x.html`: у них два выхода — колбэк `ResizeObser
 --variant css-transition --variant css-animation-progress
 --variant css-animation-layout` — первые две печатают события, третья
 показывает падающий `opacity`, четвёртая — растущий `left`.
+
+---
+
+## Срез 1 (GAP-CSSANIM, 2026-09-16, `p1-gap-cssanim-srez1`) — `transitionend` (CSS Transitions half) закрыт, `animationend` (CSS Animations half) остаётся
+
+Живой замер этого среза (`verify_event_delivery_gaps.py --variant
+css-transition`) подтверждает: `transitionrun`/`transitionstart`/
+`transitionend` теперь диспатчатся автономно — см. подробности механизма в
+[BUG-536](BUG-536-OPEN.md#срез-1-gap-cssanim-2026-09-16-p1-gap-cssanim-srez1--css-transitions-lifecycle-events-now-dispatch).
+Файлы этого бага, ждущие `'transitionend'` (см. «Симптом» выше), закрыты этим
+срезом; файлы, ждущие `'animationend'` от `@keyframes`-анимации, — нет:
+`--variant css-animation` по-прежнему печатает «— nothing», `AnimationScheduler`
+не тронут. Остаток бага — именно эта половина.

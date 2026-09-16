@@ -133,3 +133,45 @@ reached via the Web Animations API entry point instead of a CSS-Transitions-
 triggered one. Confirms the bug's title ("CSS Transitions/**Animations**")
 rather than being a distinct API gap — not re-scoped, no new bug filed.
 `.ini` under each category's own `tests/wpt/metadata/css/<category>/`.
+
+## Срез 1 (GAP-CSSANIM, 2026-09-16, `p1-gap-cssanim-srez1`) — CSS Transitions lifecycle events now dispatch
+
+Closed symptom 2 for CSS Transitions specifically (not yet CSS Animations,
+symptom 1 `getAnimations()`, or symptom 3 `getComputedStyle()` mid-transition —
+those stay open). `TransitionScheduler` (`crates/engine/layout/src/
+animation.rs`) tracked interpolated values only, with no notion of JS or
+events; it now also returns `TransitionEventInfo` (`Run`/`Start`/`End`/
+`Cancel`) from `sync()`/`tick()`:
+
+- `Run` fires in `sync()` the instant the transition is generated (even while
+  still in its delay), matching CSS Transitions L1 §3.
+- `Start` fires once in `tick()` when the transition leaves its delay period
+  (`started_fired` guards against re-firing every subsequent frame).
+- `End` fires once on completion (`completed` guards a `fill-mode: forwards/
+  both` entry, which stays in `active` afterward to keep applying the end
+  value, from re-firing `transitionend` on every following frame).
+- `Cancel` fires in `sync()` for a still-running (not yet completed) entry
+  that a newer transition supersedes before it could finish — reusing the
+  `interrupted_value` detection the scheduler already had.
+
+The shell collects these into `Lumen::transition_events` (same
+cross-producer/single-delivery-point shape as `cv_events`, BUG-852: fed from
+`apply_relayout_result`'s `sync()` calls and `RedrawRequested`'s `tick()`,
+drained once per frame by `Lumen::deliver_transition_events` once a JS context
+exists) and pushes them into JS via a new `PersistentJs::deliver_transition_events`
+→ `_lumen_deliver_transition_events()` (`web_api_shim_mid_b.js`), which
+dispatches real `TransitionEvent`s (`transitionrun`/`transitionstart`/
+`transitionend`/`transitioncancel`) using the constructor that already existed
+but nothing fired autonomously (`web_api_shim_mid.js`).
+
+Live confirmation: `verify_event_delivery_gaps.py --variant css-transition`
+(dev-release) now prints `transitionrun, transitionstart, transitionend`
+(was "— nothing"). `--variant css-animation` still prints nothing, as
+expected — `AnimationScheduler`/`@keyframes` events are a separate, not yet
+wired path (BUG-503's part of this gap). Not in this slice: `getAnimations()`
+returning a `CSSTransition` object (still `undefined`, so `.target`/`.effect`
+reads on the dispatched event's `target` element still won't chain into a
+Web Animations `Animation`), `getComputedStyle()` mid-transition, and
+`transitioncancel` on node removal (`remove_node()` does not emit events).
+8 new unit tests in `crates/engine/layout/src/animation.rs`
+(`sync_fires_run_event_for_new_transition` and siblings).

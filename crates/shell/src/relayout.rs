@@ -627,7 +627,9 @@ impl Lumen {
         collect_box_styles(&lb, &mut new_styles);
         for (node, new_style) in &new_styles {
             if let Some(old_style) = self.prev_styles.get(node) {
-                self.transition_scheduler.sync(*node, old_style, new_style, now_s);
+                self.transition_events.extend(
+                    self.transition_scheduler.sync(*node, old_style, new_style, now_s),
+                );
             }
         }
         // @starting-style (CSS Transitions L2 §3.4): newly visible nodes (not in
@@ -656,12 +658,12 @@ impl Lumen {
                 // MutexGuard dropped — apply entry transitions outside the lock.
                 for (node, starting_style) in &entry_styles {
                     if let Some(new_style) = new_styles.get(node) {
-                        self.transition_scheduler.sync(
+                        self.transition_events.extend(self.transition_scheduler.sync(
                             *node,
                             starting_style,
                             new_style,
                             now_s,
-                        );
+                        ));
                     }
                 }
             }

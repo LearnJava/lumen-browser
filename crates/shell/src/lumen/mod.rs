@@ -48,6 +48,7 @@ mod state;
 mod tabs_cmd;
 mod text_drag_select;
 mod text_input;
+mod transition_events;
 mod viewport;
 mod viewport_sync;
 

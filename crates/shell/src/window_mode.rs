@@ -289,6 +289,7 @@ pub(crate) fn run_window_mode(
         cv_relevant: std::collections::HashSet::new(),
         cv_auto_state: std::collections::HashMap::new(),
         cv_events: Vec::new(),
+        transition_events: Vec::new(),
         dark_mode: false,
         cursor_position: None,
         pending_pointer_moves: Vec::new(),

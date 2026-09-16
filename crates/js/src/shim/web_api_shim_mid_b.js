@@ -4908,6 +4908,34 @@ function _lumen_deliver_cv_state_changes(changes) {
     }
 }
 
+// CSS Transitions L1 §3 (GAP-CSSANIM срез 1) — deliver the shell's batch of
+// transition lifecycle events. `events` is an array of `[node_index, kind,
+// property_name, elapsed_time]` tuples, `kind` one of "run"/"start"/"end"/
+// "cancel", computed by `TransitionScheduler::sync`/`tick` inside the shell's
+// «update the rendering» step (Step 2, before rAF per spec §8.1.5.1) — same
+// queued-task shape as `_lumen_deliver_cv_state_changes` above.
+//
+// `transitionrun`/`transitionstart`/`transitioncancel` are not cancelable;
+// `transitionend` is (CSS Transitions L1 §3, "Firing Transition Events").
+var _LUMEN_TRANSITION_EVENT_TYPES = {
+    run: 'transitionrun', start: 'transitionstart',
+    end: 'transitionend', cancel: 'transitioncancel'
+};
+function _lumen_deliver_transition_events(events) {
+    if (!events || events.length === 0) return;
+    for (var i = 0; i < events.length; i++) {
+        var nid = events[i][0];
+        var type = _LUMEN_TRANSITION_EVENT_TYPES[events[i][1]];
+        if (!type) continue;
+        var evt = new TransitionEvent(type, {
+            bubbles: true, cancelable: type === 'transitionend', isTrusted: true,
+            propertyName: events[i][2], elapsedTime: events[i][3]
+        });
+        evt.target = _lumen_make_element(nid);
+        _lumen_dispatch(nid, evt);
+    }
+}
+
 function _lumen_deliver_resize_observers() {
     if (_ro_observers.length === 0) return;
     var dpr = (typeof devicePixelRatio === 'number' && devicePixelRatio > 0) ? devicePixelRatio : 1;
