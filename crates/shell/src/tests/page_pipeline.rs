@@ -1075,6 +1075,23 @@ fn parse_time_script_reads_computed_style_and_rect() {
     assert_eq!(probe_attr(&page, "data-r"), "300x120");
 }
 
+/// BUG-658: `offsetWidth`/`offsetHeight` share the same
+/// `_lumen_get_bounding_rect` native as `getBoundingClientRect`, which
+/// BUG-443 already fixed for parse-time reads — this pins the offset*
+/// surface to the identical publish-before-scripts timing.
+#[cfg(feature = "v8")]
+#[test]
+fn parse_time_script_reads_offset_width_and_height() {
+    let page = parse_and_layout_for_test(
+        "<html><head><style>#t{width:300px;height:120px}</style></head>\
+         <body><div id=t>t</div>\
+         <script>var e=document.getElementById('t');\
+         document.documentElement.setAttribute('data-o',e.offsetWidth+'x'+e.offsetHeight);</script>\
+         </body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-o"), "300x120");
+}
+
 /// CSSOM-7 (BUG-977): a fully synchronous parse-time `<script>` — no relayout
 /// has run yet — that flips `overflow` to `clip` and immediately requests a
 /// scroll on the same node must see it zeroed, same as

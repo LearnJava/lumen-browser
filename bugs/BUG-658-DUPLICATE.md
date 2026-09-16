@@ -1,8 +1,9 @@
 # BUG-658 — `offsetWidth`/`offsetHeight`/`getBoundingClientRect()` return `0` (not the real box, not a thrown error) when read from an inline `<script>` that runs during the initial HTML parse — same timing gap as BUG-555, different API surface
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-443](BUG-443-FIXED.md)
 **Компонент:** js (`crates/js/src/dom.rs:3196` `get offsetWidth()`/sibling `offsetHeight`/`getBoundingClientRect()`, all backed by the native `_lumen_get_bounding_rect(nid)`), shell (`crates/shell/src/main.rs::apply_loaded_page` — same layout-snapshot publish path as BUG-555/BUG-382)
 **Найден:** P2, WPT-VENDOR-quirks (2026-08-05), `run_report.py --all --root quirks --recursive` real run + `--dump-layout` cross-check
+**Закрыт как дубликат:** P3, 2026-09-17
 
 ## Механизм
 
@@ -80,3 +81,36 @@ continuing script execution for that navigation, rather than only after
 full-document `apply_loaded_page` — fixing the snapshot-publish timing fixes
 both `getComputedStyle` and `_lumen_get_bounding_rect` at once, since they
 share the same publish path.
+
+## Ревизия P3 2026-09-17
+
+Заявка (2026-08-05) предсказала this exact mechanism would also hit
+`offsetWidth`/`offsetHeight`/`getBoundingClientRect`, sharing the publish path
+with [BUG-555](BUG-555-DUPLICATE.md). [BUG-443](BUG-443-FIXED.md) (найден P1
+2026-07-29, исправлен P3 2026-08-30 — **после** подачи этой заявки, but never
+back-marked against it) reordered `build_page_cascade` + the first
+`layout_page`/`JsLayoutSnapshot` ahead of `run_scripts_with_dom` and publishes
+the snapshot right after `install_dom` — before the page's first line of
+script — which covers `_lumen_get_bounding_rect` exactly as it covers
+`getComputedStyle`, since both read the same published snapshot.
+
+New regression test
+`crates/shell/src/tests/page_pipeline.rs::parse_time_script_reads_offset_width_and_height`
+reproduces this заявка's own repro shape (`offsetWidth`/`offsetHeight` read by
+an inline `<script>` immediately after a styled element, in the same parse
+tick) and is green on current `main`
+(`cargo test -p lumen-shell --profile dev-release --features v8
+parse_time_script_reads_offset_width_and_height` → `ok`, `300x120` instead of
+`0x0`). Live check of the заявка's own repro
+(`quirks/table-cell-width-calculation-applies-to.html`) would need a WPT
+re-run to confirm the harness result, but the mechanism-level test above
+pins the same native (`_lumen_get_bounding_rect`) the failing assertion used
+(`node.offsetWidth`), so this is closed as a duplicate rather than left open
+awaiting a slow re-run.
+
+## Связанные
+
+* [BUG-443](BUG-443-FIXED.md) — реальный фикс порядка фаз (каскад/раскладка до
+  скриптов), закрывает механизм этой заявки.
+* [BUG-555](BUG-555-DUPLICATE.md) — тот же механизм на `getComputedStyle`,
+  уже закрыт дубликатом BUG-443.
