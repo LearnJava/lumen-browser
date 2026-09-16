@@ -233,7 +233,7 @@ fn load_linked_stylesheets_reports_one_outcome_per_element() {
     let base = ResourceBase::File(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
-    let (css, outcomes) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx);
+    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx);
     assert!(css.is_empty(), "neither sheet exists on disk");
     assert_eq!(outcomes.len(), 2, "rel=alternate is not a cascade sheet");
     assert!(outcomes.iter().all(|(_, ok)| !ok));
@@ -646,7 +646,7 @@ fn load_linked_stylesheets_falls_back_to_document_encoding() {
     let base = ResourceBase::File(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, outcomes) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
 
     assert!(outcomes[0].1, "a.css must be fetched");
     assert!(
@@ -674,7 +674,7 @@ fn load_linked_stylesheets_uses_link_charset_attribute() {
     let base = ResourceBase::File(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
 
     assert!(
         css.contains('\u{418}'),
@@ -703,7 +703,7 @@ fn load_linked_stylesheets_bom_wins_over_document_encoding() {
     let base = ResourceBase::File(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
-    let (css, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
 
     assert!(
         css.contains('\u{418}') && !css.contains('\u{FEFF}'),

@@ -472,7 +472,13 @@ pub(crate) fn fetch_frame_subresources(
         0,
         crate::stylesheets::document_encoding(doc),
     );
-    let (linked, links) = load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
+    // GAP-CSPENF срез 7: `style-src` still gates the fetch here (blocked sheets
+    // return the same `false` outcome a network failure would), but frames do
+    // not yet dispatch `securitypolicyviolation` for it — same scope limit
+    // `img-src` already has in this function (no `blocked_by_img_src` wiring
+    // either).
+    let (linked, links, _blocked_by_style_src) =
+        load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
     css.push_str(&linked);
 
     let (requests, lazy_requests): (Vec<lumen_layout::ImageRequest>, Vec<lumen_layout::ImageRequest>) =

@@ -369,3 +369,42 @@ top-level документа (у скриптов внутри фрейма по
 независимая проверка заголовка и `<meta>` вместо их слияния; hash-источники;
 `report-uri`/`report-to`; дедупликация двойного `securitypolicyviolation` для
 картинок (не менялось этим срезом).
+
+## Срез 7 (2026-09-17, P6) — `style-src`/`default-src` против внешнего `<link rel=stylesheet>`
+
+Реализовано:
+
+- `crates/shell/src/csp_enforce.rs`: `style_src_blocked(policy, url, self_origin)` —
+  тот же host/scheme/`'self'` фетч-гейт (`CspPolicy::fetch_directive_allows`), что
+  срезы 4/6 дали `img-src`/`script-src`, теперь применён к `CspDirective::StyleSrc`;
+  +5 unit-тестов.
+- `crates/shell/src/stylesheets.rs::load_linked_stylesheets` получила третий элемент
+  возврата — `Vec<String>` заблокированных resolved URL — и считает политику
+  документа один раз до параллельного фетча (та же одноразовая точка, что
+  `fetch_and_decode_images`/`resolve_script_sources` уже используют), резолвит `href`
+  ДО обращения к `fetch_stylesheet_text`: заблокированный лист не читается ни с диска,
+  ни из сети. Заблокированный `<link>` даёт тот же `false`-исход, что сетевая
+  неудача — `error` на элементе (BUG-804) срабатывает без изменений в этом коде.
+- `page_pipeline.rs::PageCascade` получила поле `blocked_by_style_src`; после
+  `link_outcomes` диспатчит `securitypolicyviolation` по каждому заблокированному
+  URL — та же одноразовая схема, что `blocked_by_img_src` (срез 4).
+- `frames.rs` (CSS под-документа `<iframe>`) уже вызывает
+  `load_linked_stylesheets` и потому тоже блокирует фетч заблокированных листов, но
+  не диспатчит `securitypolicyviolation` для этого — тот же пробел, что `img-src`
+  уже имеет в этой функции (там тоже нет `blocked_by_img_src`-провода).
+
+Не покрыто этим срезом: инлайновые `<style>`/атрибут `style` (не блокируются,
+только внешний `<link>`); `@import` внутри уже загруженного листа наследует
+политику владельца без отдельной проверки; директивы кроме `script-src`/
+`img-src`/`style-src` (`connect-src`/`worker-src`/…); `securitypolicyviolation`
+для листов, заблокированных внутри `<iframe>` (см. выше); честная независимая
+проверка заголовка и `<meta>` вместо их слияния; hash-источники;
+`report-uri`/`report-to`.
+
+Подтверждено unit-тестами `csp_enforce.rs` (`no_style_src_allows_external`,
+`style_src_none_blocks_external`, `style_src_allowed_host_passes`,
+`style_src_default_src_fallback_blocks`, `style_src_unparseable_url_not_blocked`)
+и `cargo clippy -p lumen-shell --all-targets -- -D warnings` (чисто) +
+`scripts/scoped-test.sh` (единственный красный тест — `cases::snapshot_cpu::
+cpu_snapshots_match_references`, тот же 7-файловый дрейф эталонов, что уже
+числится на `main` до этой ветки, не регрессия этого среза).
