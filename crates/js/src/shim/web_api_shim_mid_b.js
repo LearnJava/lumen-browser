@@ -4939,6 +4939,34 @@ function _lumen_deliver_transition_events(events) {
     }
 }
 
+// CSS Animations L1 §4.5.1 (GAP-CSSANIM срез 2) — deliver the shell's batch
+// of CSS Animations lifecycle events. `events` is an array of `[node_index,
+// kind, animation_name, elapsed_time]` tuples, `kind` one of
+// "start"/"iteration"/"end"/"cancel", computed by
+// `animation_scheduler::AnimationScheduler::tick` — same queued-task shape
+// as `_lumen_deliver_transition_events` above.
+//
+// None of the four `AnimationEvent`s are cancelable (CSS Animations L1
+// §4.5.1, "Event dispatch").
+var _LUMEN_ANIMATION_EVENT_TYPES = {
+    start: 'animationstart', iteration: 'animationiteration',
+    end: 'animationend', cancel: 'animationcancel'
+};
+function _lumen_deliver_animation_events(events) {
+    if (!events || events.length === 0) return;
+    for (var i = 0; i < events.length; i++) {
+        var nid = events[i][0];
+        var type = _LUMEN_ANIMATION_EVENT_TYPES[events[i][1]];
+        if (!type) continue;
+        var evt = new AnimationEvent(type, {
+            bubbles: true, cancelable: false, isTrusted: true,
+            animationName: events[i][2], elapsedTime: events[i][3]
+        });
+        evt.target = _lumen_make_element(nid);
+        _lumen_dispatch(nid, evt);
+    }
+}
+
 function _lumen_deliver_resize_observers() {
     if (_ro_observers.length === 0) return;
     var dpr = (typeof devicePixelRatio === 'number' && devicePixelRatio > 0) ? devicePixelRatio : 1;

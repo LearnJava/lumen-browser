@@ -200,7 +200,7 @@ impl Lumen {
                 width: self.viewport_width_css(),
                 height: self.viewport_height_css(),
             };
-            let mut frame = self.animation_scheduler.tick(
+            let (mut frame, anim_events) = self.animation_scheduler.tick(
                 timestamp_ms,
                 lb,
                 &src.stylesheet,
@@ -208,6 +208,7 @@ impl Lumen {
                 self.scroll_y,
                 vp,
             );
+            self.animation_events.extend(anim_events);
             let now_s = (timestamp_ms / 1000.0) as f32;
             let (trans_frame, trans_events) = self.transition_scheduler.tick(now_s);
             self.transition_events.extend(trans_events);
@@ -229,6 +230,10 @@ impl Lumen {
         // handler and must not dispatch before a JS context exists.
         #[cfg(feature = "v8")]
         self.deliver_transition_events();
+        // GAP-CSSANIM срез 2: same single-delivery-point shape, for
+        // `animationstart`/`animationiteration`/`animationend`/`animationcancel`.
+        #[cfg(feature = "v8")]
+        self.deliver_animation_events();
 
         // Step 2b (CC-11, docs/tasks/p1-css-chrome.md): the chrome
         // document's own Animations + Transitions tick — separate
@@ -244,7 +249,10 @@ impl Lumen {
                 width: self.viewport_width_css(),
                 height: self.viewport_height_css(),
             };
-            let mut c_frame = self.chrome_animation_scheduler.tick(
+            // Chrome document (browser UI) has no page-visible JS to dispatch
+            // events to — only the interpolated frame is used from either
+            // scheduler's tick.
+            let (mut c_frame, _c_anim_events) = self.chrome_animation_scheduler.tick(
                 timestamp_ms,
                 c_lb,
                 c_sheet,
@@ -253,8 +261,6 @@ impl Lumen {
                 vp,
             );
             let now_s = (timestamp_ms / 1000.0) as f32;
-            // Chrome document (browser UI) transitions have no page-visible JS
-            // to dispatch events to — only the interpolated frame is used.
             let (c_trans_frame, _c_trans_events) = self.chrome_transition_scheduler.tick(now_s);
             c_frame.merge_from(c_trans_frame);
             if c_frame.has_active {

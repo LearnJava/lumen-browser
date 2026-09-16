@@ -231,6 +231,7 @@ impl Lumen {
         self.cv_auto_state.clear();
         self.refresh_cv_state();
         self.transition_events.clear();
+        self.animation_events.clear();
         self.set_js_ctx(js_ctx);
         // ADR-016 M2.2c-2b: зеркалим восстановленный хэндл + DOM в движковый поток.
         self.sync_engine_js_state();

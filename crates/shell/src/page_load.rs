@@ -583,6 +583,8 @@ impl Lumen {
                 // GAP-CSSANIM срез 1: stale transitions from the previous
                 // document must not surface as events on the new one.
                 self.transition_events.clear();
+                // GAP-CSSANIM срез 2: same for stale CSS Animations events.
+                self.animation_events.clear();
                 self.update_snap_containers();
         self.update_scroll_containers();
                 // Push initial layout geometry so JS can query bounding rects
@@ -1275,6 +1277,8 @@ impl Lumen {
         // GAP-CSSANIM срез 1: stale transitions from the previous document
         // must not surface as events on the new one.
         self.transition_events.clear();
+        // GAP-CSSANIM срез 2: same for stale CSS Animations events.
+        self.animation_events.clear();
         self.update_snap_containers();
         self.update_scroll_containers();
         // BUG-382: publish the primary layout's geometry + computed styles into the

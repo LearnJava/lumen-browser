@@ -661,6 +661,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn deliver_transition_events(&self, payload: &str);
 
+    /// Deliver a batch of CSS Animations L1 §4.5.1 lifecycle events to JS as
+    /// `AnimationEvent`s (`animationstart`/`animationiteration`/`animationend`/
+    /// `animationcancel`, GAP-CSSANIM срез 2).
+    ///
+    /// `payload` is a JSON array of `[node_index, kind, animation_name,
+    /// elapsed_time]` tuples, `kind` one of `"start"`/`"iteration"`/`"end"`/
+    /// `"cancel"`.
+    #[allow(dead_code)]
+    fn deliver_animation_events(&self, payload: &str);
+
     /// Advance the SMIL timing model one frame (GAP-SMIL, SVG Animation §3).
     ///
     /// Unlike CSS transitions/animations, SMIL's active-interval bookkeeping
@@ -1219,6 +1229,12 @@ impl PersistentJs for V8PersistentJs {
         self.eval_js(&format!(
             "if(typeof _lumen_deliver_transition_events==='function')\
              _lumen_deliver_transition_events({payload});"
+        ));
+    }
+    fn deliver_animation_events(&self, payload: &str) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_deliver_animation_events==='function')\
+             _lumen_deliver_animation_events({payload});"
         ));
     }
     fn tick_smil(&self, now_s: f32) {

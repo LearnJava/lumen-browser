@@ -121,3 +121,49 @@ css-transition`) подтверждает: `transitionrun`/`transitionstart`/
 срезом; файлы, ждущие `'animationend'` от `@keyframes`-анимации, — нет:
 `--variant css-animation` по-прежнему печатает «— nothing», `AnimationScheduler`
 не тронут. Остаток бага — именно эта половина.
+
+## Срез 2 (GAP-CSSANIM, 2026-09-16, `p1-gap-cssanim-srez2`) — `animationend`/`animationstart`/`animationiteration` for CSS Animations now dispatch
+
+Closed the remaining half. The shell's `AnimationScheduler`
+(`crates/shell/src/animation_scheduler.rs`, distinct from the unused
+`lumen_layout::animation::AnimationScheduler` — the tree-walking one wired
+into `RedrawRequested` is the one that matters) tracked interpolated
+keyframe values per `(node, animation-index)` in a `RunState`, with no
+notion of JS or lifecycle events. `RunState` now also carries
+`started_fired`/`iterations_completed`/`completed`/`last_local_time_s`, and
+`tick()` returns `Vec<AnimationEventInfo>` alongside the render frame:
+
+- `Start` fires the first tick where the local time (after delay) is `>= 0`.
+- `Iteration` fires once per completed loop boundary crossed since the last
+  tick, except the final one (whose completion is `End`, not `Iteration`,
+  per CSS Animations L1 §4.5.1).
+- `End` fires once when the active period completes (`local_time_s >=
+  duration * iteration_count`), independent of `fill-mode` — an entry with
+  `fill-mode: none` still logically ends even though `compute_t` stops
+  returning an override for it that frame.
+- `Cancel` fires for any instance still tracked but not visited by the
+  current frame's tree walk (`animation-name` changed away, node removed) —
+  detected via a per-tick visited-set diff against `self.running`, skipped
+  for instances that already fired `End` (a re-render after completion must
+  not look like a cancellation).
+
+The shell collects these into `Lumen::animation_events` (same
+cross-producer/single-delivery-point shape as `transition_events`, срез 1)
+and pushes them into JS via `PersistentJs::deliver_animation_events` →
+`_lumen_deliver_animation_events()` (`web_api_shim_mid_b.js`), which
+dispatches real `AnimationEvent`s using the constructor that already existed
+(`web_api_shim_mid.js`) but nothing fired autonomously.
+
+Live confirmation: `verify_event_delivery_gaps.py --variant css-animation`
+(dev-release) now prints `animationstart, animationiteration, animationend`
+(was «— nothing»); `--variant css-transition` unaffected (still `run+start+
+end`). Not in this slice: `document.getAnimations()`/`element.getAnimations()`
+still return nothing for a CSS-triggered animation (no `Animation`/
+`CSSAnimation` object exists to return — `.target`/`.effect` reads chained
+off the dispatched event's `target` still won't reach a Web Animations
+object), and `getComputedStyle()` mid-animation still doesn't reflect the
+interpolated value (`--variant css-animation-progress` still reports a
+static `opacity 1`, not falling — same gap symptom 3 documented for
+transitions in [BUG-536](BUG-536-OPEN.md)). 6 new unit tests in
+`crates/shell/src/animation_scheduler.rs`
+(`tick_fires_start_on_first_active_frame` and siblings).
