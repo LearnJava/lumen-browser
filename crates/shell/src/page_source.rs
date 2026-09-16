@@ -93,7 +93,14 @@ impl PageSource {
                 html: chrome_preview::HTML.to_owned(),
                 url: chrome_preview::URL.to_owned(),
             },
-            Some(s) => PageSource::File(PathBuf::from(s)),
+            // BUG-651: a `file://` CLI arg must go through the same
+            // scheme-stripping/drive-letter rule as `page_source_for_automation_url`
+            // (`crate::resource_base::file_url_to_path`), or `PathBuf::from` sees the
+            // whole `file://...` string and fails to open on Windows.
+            Some(s) => match crate::resource_base::file_url_to_path(s) {
+                Some(path) => PageSource::File(path),
+                None => PageSource::File(PathBuf::from(s)),
+            },
             None => PageSource::Empty,
         }
     }

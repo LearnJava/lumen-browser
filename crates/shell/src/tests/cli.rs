@@ -29,6 +29,29 @@ fn page_source_from_arg_none_is_empty() {
     assert!(matches!(PageSource::from_arg(None), PageSource::Empty));
 }
 
+// ---- BUG-651: `file://` CLI arg must strip the scheme like
+// `page_source_for_automation_url` does, not hand the whole URL to `PathBuf`. ----
+
+#[test]
+fn page_source_from_arg_file_url_strips_scheme() {
+    let s = PageSource::from_arg(Some("file:///D:/RustProjects/lumen-browser/samples/page.html"));
+    match s {
+        PageSource::File(p) => {
+            assert_eq!(p, PathBuf::from("D:/RustProjects/lumen-browser/samples/page.html"))
+        }
+        _ => panic!("expected File"),
+    }
+}
+
+#[test]
+fn page_source_from_arg_file_url_posix_style() {
+    let s = PageSource::from_arg(Some("file:///abs/path/page.html"));
+    match s {
+        PageSource::File(p) => assert_eq!(p, PathBuf::from("/abs/path/page.html")),
+        _ => panic!("expected File"),
+    }
+}
+
 #[test]
 fn page_source_describe() {
     assert_eq!(PageSource::Empty.describe(), "(пустая вкладка)");
