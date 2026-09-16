@@ -381,6 +381,13 @@ pub(crate) struct Lumen {
     /// между layout-проходами. Дренируется раз в кадр в `RedrawRequested` и
     /// уходит в JS как `contentvisibilityautostatechange`. Кап 256 записей.
     pub(crate) cv_events: Vec<ContentVisibilityChange>,
+    /// GAP-CSSANIM срез 1: queue of `transitionrun`/`transitionstart`/
+    /// `transitionend`/`transitioncancel` events the page's `TransitionScheduler`
+    /// produced (`sync()` in `apply_relayout_result`, `tick()` in
+    /// `RedrawRequested`) and not yet dispatched to JS. Same cross-producer
+    /// single-delivery-point shape as `cv_events` — drained once per frame in
+    /// `Lumen::deliver_transition_events`.
+    pub(crate) transition_events: Vec<lumen_layout::TransitionEventInfo>,
     /// OS-level `prefers-color-scheme` preference. `true` — система в тёмной теме.
     /// Читается из winit `Window::theme()` при создании окна и обновляется на
     /// `WindowEvent::ThemeChanged`. Прокидывается в JS `matchMedia` через

@@ -82,13 +82,13 @@ fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node
     // Only the page's #box transitions opacity 0 → 1 at t=0; chrome's own
     // node with the same NodeId is never synced (nothing changed there).
     page_sched.sync(node, &old, &new, 0.0);
-    let chrome_frame = chrome_sched.tick(0.5);
+    let (chrome_frame, _chrome_events) = chrome_sched.tick(0.5);
     assert!(
         !chrome_frame.overrides.contains_key(&node),
         "chrome scheduler must not see the page's transition for the same NodeId"
     );
 
-    let page_frame = page_sched.tick(0.5);
+    let (page_frame, _page_events) = page_sched.tick(0.5);
     let op = page_frame.overrides[&node]
         .opacity
         .expect("page transition must be active at t=0.5");

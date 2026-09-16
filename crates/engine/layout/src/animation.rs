@@ -1153,6 +1153,47 @@ struct TransitionState {
     /// Read by P4 when gating keyword-size transitions on `interpolate-size: allow-keywords`.
     #[allow(dead_code)]
     auto_resolved_px: Option<f32>,
+    /// Set once `tick()` has fired `transitionstart` for this transition (i.e.
+    /// it left its delay period). Guards against firing the event again on
+    /// every subsequent frame while the transition stays active.
+    started_fired: bool,
+    /// Set once `tick()` has fired `transitionend` for this transition. A
+    /// `fill-mode: forwards`/`both` entry stays in `active` after completion
+    /// (to keep applying the end value), so this guards against re-firing
+    /// `transitionend` on every following frame.
+    completed: bool,
+}
+
+/// GAP-CSSANIM срез 1 — CSS Transitions L1 §3 lifecycle events, the JS-visible
+/// surface `TransitionScheduler` itself has no notion of (it only tracks
+/// interpolated values). One entry per `transitionrun`/`transitionstart`/
+/// `transitionend`/`transitioncancel` the shell must dispatch this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionEventKind {
+    /// Fired synchronously when the transition is generated (`sync()`), even
+    /// if it is still in its delay period.
+    Run,
+    /// Fired when the transition leaves its delay period and starts applying
+    /// interpolated values.
+    Start,
+    /// Fired once when the transition completes (`elapsed >= duration`).
+    End,
+    /// Fired when a still-active (not yet completed) transition is superseded
+    /// by a new one on the same `(node, property)` before it could finish.
+    Cancel,
+}
+
+/// One lifecycle event a `TransitionScheduler::sync`/`tick` call produced —
+/// the shell turns each of these into a DOM `TransitionEvent` dispatch.
+#[derive(Debug, Clone)]
+pub struct TransitionEventInfo {
+    pub node: NodeId,
+    /// CSS property name the transition ran on (`TransitionEvent.propertyName`).
+    pub property: String,
+    pub kind: TransitionEventKind,
+    /// `TransitionEvent.elapsedTime` — seconds into the transition's active
+    /// period at the moment the event fired (0 for `Run`/`Start`).
+    pub elapsed_time: f32,
 }
 
 /// CSS Transitions L1 §2 — detects property value changes and interpolates
@@ -1201,9 +1242,16 @@ impl TransitionScheduler {
     /// instead of the node's prior computed style. After substitution call
     /// `tracker.consume(node)`. This enables enter-animations per CSS Transitions L2 §3.4.
     /// See `crate::starting_style::{StartingStyleTracker, resolve_starting_style}`.
-    pub fn sync(&mut self, node: NodeId, old: &ComputedStyle, new: &ComputedStyle, now: f32) {
+    pub fn sync(
+        &mut self,
+        node: NodeId,
+        old: &ComputedStyle,
+        new: &ComputedStyle,
+        now: f32,
+    ) -> Vec<TransitionEventInfo> {
+        let mut events = Vec::new();
         if new.transition_properties.is_empty() {
-            return;
+            return events;
         }
         let check_all = new
             .transition_properties
@@ -1246,7 +1294,11 @@ impl TransitionScheduler {
                 .copied()
                 .unwrap_or(0.0);
             if dur <= 0.0 {
-                self.active.remove(&(node, prop_name.to_string()));
+                if let Some(removed) = self.active.remove(&(node, prop_name.to_string()))
+                    && !removed.completed
+                {
+                    events.push(cancel_event(node, prop_name, &removed, now));
+                }
                 continue;
             }
 
@@ -1254,10 +1306,12 @@ impl TransitionScheduler {
 
             // Check if there's an active transition that will be interrupted.
             // If interrupted, use the previous `to` value as the starting point for smooth continuation.
-            let interrupted_value = self
-                .active
-                .get(&(node, prop_name.to_string()))
-                .map(|state| state.to.clone());
+            let interrupted = self.active.get(&(node, prop_name.to_string()));
+            let interrupted_value = interrupted.map(|state| state.to.clone());
+            let cancel_of_interrupted =
+                interrupted.filter(|state| !state.completed).map(|state| {
+                    cancel_event(node, prop_name, state, now)
+                });
 
             let from_val = interrupted_value.clone().unwrap_or_else(|| extract(old));
 
@@ -1289,6 +1343,9 @@ impl TransitionScheduler {
                 .copied()
                 .unwrap_or(AnimationFillMode::None);
 
+            if let Some(cancel) = cancel_of_interrupted {
+                events.push(cancel);
+            }
             self.active.insert(
                 (node, prop_name.to_string()),
                 TransitionState {
@@ -1301,15 +1358,28 @@ impl TransitionScheduler {
                     fill_mode,
                     interrupted_value,
                     auto_resolved_px,
+                    started_fired: false,
+                    completed: false,
                 },
             );
+            // CSS Transitions L1 §3: `transitionrun` fires as soon as the
+            // transition is generated, even while it is still in its delay.
+            events.push(TransitionEventInfo {
+                node,
+                property: prop_name.to_string(),
+                kind: TransitionEventKind::Run,
+                elapsed_time: 0.0,
+            });
         }
+        events
     }
 
     /// Remove all transition state for `node` (called when node leaves DOM).
     pub fn remove_node(&mut self, node: NodeId) {
         self.active.retain(|(n, _), _| *n != node);
     }
+
+
 
     /// Apply a transition value to the animated style entry.
     fn apply_transition_value_to_entry(val: &AnimValue, prop: &str, entry: &mut AnimatedStyle) {
@@ -1343,10 +1413,13 @@ impl TransitionScheduler {
         }
     }
 
-    /// Compute interpolated style overrides for the current frame.
-    /// Completed transitions are removed unless fill_mode preserves them.
-    pub fn tick(&mut self, now: f32) -> AnimationFrame {
+    /// Compute interpolated style overrides for the current frame, plus the
+    /// `transitionstart`/`transitionend` lifecycle events this tick crossed
+    /// into (GAP-CSSANIM срез 1). Completed transitions are removed unless
+    /// fill_mode preserves them.
+    pub fn tick(&mut self, now: f32) -> (AnimationFrame, Vec<TransitionEventInfo>) {
         let mut frame = AnimationFrame::default();
+        let mut events = Vec::new();
         let interp = LinearInterpolator;
 
         self.active.retain(|(node, prop), state| {
@@ -1364,7 +1437,28 @@ impl TransitionScheduler {
                 frame.has_active = true;
                 return true;
             }
+            // Left the delay period: `transitionstart` fires exactly once,
+            // whether or not this same tick also completes the transition
+            // (a near-zero-duration transition can do both in one frame).
+            if !state.started_fired {
+                state.started_fired = true;
+                events.push(TransitionEventInfo {
+                    node: *node,
+                    property: prop.clone(),
+                    kind: TransitionEventKind::Start,
+                    elapsed_time: 0.0,
+                });
+            }
             if elapsed >= state.duration {
+                if !state.completed {
+                    state.completed = true;
+                    events.push(TransitionEventInfo {
+                        node: *node,
+                        property: prop.clone(),
+                        kind: TransitionEventKind::End,
+                        elapsed_time: state.duration,
+                    });
+                }
                 // Transition complete.
                 // Apply fill-mode forwards if enabled.
                 if matches!(
@@ -1393,7 +1487,25 @@ impl TransitionScheduler {
             true
         });
 
-        frame
+        (frame, events)
+    }
+}
+
+/// Build the `Cancel` event for a transition state that a newer transition
+/// (or a `transition-duration: 0`/removed-property `sync()`) superseded
+/// before it could reach `elapsed >= duration`.
+fn cancel_event(
+    node: NodeId,
+    prop_name: &str,
+    state: &TransitionState,
+    now: f32,
+) -> TransitionEventInfo {
+    let elapsed_time = (now - state.start_time - state.delay).clamp(0.0, state.duration);
+    TransitionEventInfo {
+        node,
+        property: prop_name.to_string(),
+        kind: TransitionEventKind::Cancel,
+        elapsed_time,
     }
 }
 
@@ -2624,7 +2736,7 @@ mod tests {
         let old = make_opacity_transition_style(0.0, 1.0);
         let new = make_opacity_transition_style(1.0, 1.0);
         sched.sync(node, &old, &new, 0.0);
-        let frame = sched.tick(0.5);
+        let (frame, _events) = sched.tick(0.5);
         assert!(frame.has_active);
         let op = frame.overrides[&node].opacity.unwrap();
         assert!((op - 0.5).abs() < 0.01, "expected ~0.5, got {op}");
@@ -2637,7 +2749,7 @@ mod tests {
         let old = make_opacity_transition_style(0.0, 1.0);
         let new = make_opacity_transition_style(1.0, 1.0);
         sched.sync(node, &old, &new, 0.0);
-        let frame = sched.tick(2.0); // past duration=1.0
+        let (frame, _events) = sched.tick(2.0); // past duration=1.0
         assert!(!frame.has_active);
         assert!(frame.overrides.is_empty());
         assert!(sched.active.is_empty());
@@ -2664,7 +2776,7 @@ mod tests {
         new.transition_delays = vec![0.5];
         sched.sync(node, &old, &new, 0.0);
         // At t=0.3 we are still inside the delay — no override.
-        let frame = sched.tick(0.3);
+        let (frame, _events) = sched.tick(0.3);
         assert!(frame.has_active);
         assert!(!frame.overrides.contains_key(&node));
     }
@@ -2704,7 +2816,7 @@ mod tests {
         }
 
         // At t=1.0 (after duration), should preserve the end value
-        let frame = sched.tick(1.0);
+        let (frame, _events) = sched.tick(1.0);
         assert!(frame.has_active); // Still active due to fill-mode
         let op = frame.overrides[&node].opacity.unwrap();
         assert!((op - 1.0).abs() < 0.01, "expected ~1.0, got {op}");
@@ -2726,7 +2838,7 @@ mod tests {
         }
 
         // At t=0.1 (during delay), should apply the start value (0.0) due to fill-mode
-        let frame = sched.tick(0.1);
+        let (frame, _events) = sched.tick(0.1);
         assert!(frame.has_active);
         let op = frame.overrides[&node].opacity.unwrap();
         assert!((op - 0.0).abs() < 0.01, "expected ~0.0, got {op}");
@@ -2765,7 +2877,7 @@ mod tests {
         let old_s = make_height_transition_style(Some(Length::Px(0.0)), 1.0);
         let new_s = make_height_transition_style(Some(Length::Px(100.0)), 1.0);
         sched.sync(node, &old_s, &new_s, 0.0);
-        let frame = sched.tick(0.5);
+        let (frame, _events) = sched.tick(0.5);
         assert!(frame.has_active);
         let h = frame.overrides[&node].height.as_ref().expect("height override");
         assert!(
@@ -2785,7 +2897,7 @@ mod tests {
         let mut new_s = make_height_transition_style(None, 1.0); // None = auto
         new_s.interpolate_size = InterpolateSizeMode::AllowKeywords;
         sched.sync(node, &old_s, &new_s, 0.0);
-        let frame = sched.tick(0.5);
+        let (frame, _events) = sched.tick(0.5);
         assert!(frame.has_active);
         let h = frame.overrides[&node].height.as_ref().expect("height override");
         // At t=0.5: lerp(0, 80) = 40.
@@ -2805,7 +2917,7 @@ mod tests {
         let old_s = make_height_transition_style(Some(Length::Px(0.0)), 1.0);
         let new_s = make_height_transition_style(None, 1.0); // None = auto, NumericOnly default
         sched.sync(node, &old_s, &new_s, 0.0);
-        let frame = sched.tick(0.5);
+        let (frame, _events) = sched.tick(0.5);
         // No numeric override at t=0.5 — the auto endpoint stays a discrete keyword.
         let no_px_override = frame
             .overrides
@@ -2813,5 +2925,125 @@ mod tests {
             .and_then(|o| o.height.as_ref())
             .is_none_or(|h| !matches!(h, Length::Px(v) if (*v - 40.0).abs() < 0.5));
         assert!(no_px_override, "auto must not interpolate without allow-keywords");
+    }
+
+    // ─── GAP-CSSANIM срез 1: transition lifecycle events ─────────────────────
+
+    #[test]
+    fn sync_fires_run_event_for_new_transition() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(30usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        let events = sched.sync(node, &old, &new, 0.0);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransitionEventKind::Run);
+        assert_eq!(events[0].property, "opacity");
+        assert_eq!(events[0].elapsed_time, 0.0);
+    }
+
+    #[test]
+    fn sync_skips_unchanged_fires_no_events() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(31usize);
+        let style = make_opacity_transition_style(0.5, 1.0);
+        assert!(sched.sync(node, &style, &style, 0.0).is_empty());
+    }
+
+    #[test]
+    fn tick_fires_start_once_when_leaving_delay() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(32usize);
+        let mut old = make_opacity_transition_style(0.0, 1.0);
+        old.transition_delays = vec![0.2];
+        let mut new = make_opacity_transition_style(1.0, 1.0);
+        new.transition_delays = vec![0.2];
+        sched.sync(node, &old, &new, 0.0);
+
+        // Still in delay — no `transitionstart` yet.
+        let (_frame, events) = sched.tick(0.1);
+        assert!(events.is_empty(), "must not fire start during delay");
+
+        // Left the delay — exactly one `transitionstart`.
+        let (_frame, events) = sched.tick(0.3);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransitionEventKind::Start);
+
+        // Next frame, still active — must not fire start again.
+        let (_frame, events) = sched.tick(0.4);
+        assert!(events.is_empty(), "must not re-fire start on later frames");
+    }
+
+    #[test]
+    fn tick_fires_end_once_on_completion() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(33usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+
+        let (_frame, events) = sched.tick(1.5); // past duration=1.0
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        // Zero delay: start and end land in the same tick.
+        assert_eq!(kinds, vec![TransitionEventKind::Start, TransitionEventKind::End]);
+        assert!(sched.active.is_empty(), "no fill-mode — entry is removed");
+    }
+
+    #[test]
+    fn tick_fires_end_once_with_fill_mode_forwards() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(34usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        if let Some(state) = sched.active.get_mut(&(node, "opacity".to_string())) {
+            state.fill_mode = AnimationFillMode::Forwards;
+        }
+
+        let (_frame, events) = sched.tick(1.5);
+        assert!(events.iter().any(|e| e.kind == TransitionEventKind::End));
+        assert_eq!(sched.active.len(), 1, "fill-mode keeps the entry alive");
+
+        // A later frame must not re-fire `transitionend`.
+        let (_frame, events) = sched.tick(2.5);
+        assert!(events.is_empty(), "must not re-fire end while fill-mode retains the entry");
+    }
+
+    #[test]
+    fn sync_fires_cancel_for_interrupted_running_transition() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(35usize);
+        let s0 = make_opacity_transition_style(0.0, 2.0);
+        let s1 = make_opacity_transition_style(1.0, 2.0);
+        sched.sync(node, &s0, &s1, 0.0);
+
+        // Interrupt at t=1.0, halfway through the still-running transition.
+        let s2 = make_opacity_transition_style(0.5, 2.0);
+        let events = sched.sync(node, &s1, &s2, 1.0);
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, vec![TransitionEventKind::Cancel, TransitionEventKind::Run]);
+    }
+
+    #[test]
+    fn sync_does_not_cancel_an_already_completed_fill_mode_transition() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(36usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        if let Some(state) = sched.active.get_mut(&(node, "opacity".to_string())) {
+            state.fill_mode = AnimationFillMode::Forwards;
+        }
+        // Run it to completion — entry stays alive (fill-mode), marked completed.
+        sched.tick(1.5);
+
+        // A later, unrelated style recompute must not cancel an already-finished
+        // transition just because its (filled) entry is still in `active`.
+        let newer = make_opacity_transition_style(1.0, 1.0);
+        let events = sched.sync(node, &new, &newer, 2.0);
+        assert!(
+            events.iter().all(|e| e.kind != TransitionEventKind::Cancel),
+            "a completed fill-mode transition must not fire transitioncancel"
+        );
     }
 }

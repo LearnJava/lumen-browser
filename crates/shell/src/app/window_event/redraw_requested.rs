@@ -209,13 +209,21 @@ impl Lumen {
                 vp,
             );
             let now_s = (timestamp_ms / 1000.0) as f32;
-            let trans_frame = self.transition_scheduler.tick(now_s);
+            let (trans_frame, trans_events) = self.transition_scheduler.tick(now_s);
+            self.transition_events.extend(trans_events);
             frame.merge_from(trans_frame);
             if frame.has_active {
                 self.request_redraw();
             }
             self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
         }
+        // Step 2 (cont.): deliver transitionrun/transitionstart/transitionend/
+        // transitioncancel queued by this tick's `sync()`/`tick()` calls — same
+        // single-delivery-point shape as `deliver_cv_state_changes` (BUG-852),
+        // since `sync()` also runs from `apply_relayout_result` outside this
+        // handler and must not dispatch before a JS context exists.
+        #[cfg(feature = "v8")]
+        self.deliver_transition_events();
 
         // Step 2b (CC-11, docs/tasks/p1-css-chrome.md): the chrome
         // document's own Animations + Transitions tick — separate
@@ -240,7 +248,9 @@ impl Lumen {
                 vp,
             );
             let now_s = (timestamp_ms / 1000.0) as f32;
-            let c_trans_frame = self.chrome_transition_scheduler.tick(now_s);
+            // Chrome document (browser UI) transitions have no page-visible JS
+            // to dispatch events to — only the interpolated frame is used.
+            let (c_trans_frame, _c_trans_events) = self.chrome_transition_scheduler.tick(now_s);
             c_frame.merge_from(c_trans_frame);
             if c_frame.has_active {
                 self.request_redraw();
