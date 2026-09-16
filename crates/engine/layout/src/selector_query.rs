@@ -762,6 +762,25 @@ fn align_value_to_css(a: AlignValue) -> &'static str {
     }
 }
 
+/// Serialize a CSS `opacity` computed value — shared with
+/// `AnimationFrame::to_computed_style_patches` (GAP-CSSANIM срез 3) so a
+/// live interpolated `opacity` reads back identically to a static one.
+pub(crate) fn opacity_to_css(v: f32) -> String {
+    if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
+}
+
+/// Serialize one CSS `transform` function to its computed-style text —
+/// shared with `AnimationFrame::to_computed_style_patches` (GAP-CSSANIM
+/// срез 3) so a live interpolated `transform` reads back identically to a
+/// static one.
+pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
+    if list.is_empty() {
+        "none".into()
+    } else {
+        list.iter().map(transform_fn_to_css).collect::<Vec<_>>().join(" ")
+    }
+}
+
 fn transform_fn_to_css(f: &TransformFn) -> String {
     match f {
         TransformFn::Translate(x, y) => format!("translate({}, {})", px_str(*x), px_str(*y)),
@@ -1310,14 +1329,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         let (h, v) = (style.border_spacing_h, style.border_spacing_v);
         if h == v { px_str(h) } else { format!("{} {}", px_str(h), px_str(v)) }
     });
-    m.insert("opacity".into(), {
-        let v = style.opacity;
-        if v.fract() == 0.0 {
-            format!("{}", v as i64)
-        } else {
-            format!("{}", v)
-        }
-    });
+    m.insert("opacity".into(), opacity_to_css(style.opacity));
 
     // ── Typography ────────────────────────────────────────────────
     m.insert("font-size".into(), px_str(style.font_size / z));
@@ -1546,11 +1558,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
 
     // ── Transform / filter ───────────────────────────────────────
-    m.insert("transform".into(), if style.transform.is_empty() {
-        "none".into()
-    } else {
-        style.transform.iter().map(transform_fn_to_css).collect::<Vec<_>>().join(" ")
-    });
+    m.insert("transform".into(), transform_list_to_css(&style.transform));
     m.insert("filter".into(), if style.filter.is_empty() {
         "none".into()
     } else {

@@ -234,6 +234,11 @@ impl Lumen {
         // `animationstart`/`animationiteration`/`animationend`/`animationcancel`.
         #[cfg(feature = "v8")]
         self.deliver_animation_events();
+        // GAP-CSSANIM срез 3: patch getComputedStyle()'s snapshot with this
+        // tick's interpolated opacity/transform, so it reflects the running
+        // value instead of only the last full-relayout snapshot.
+        #[cfg(feature = "v8")]
+        self.patch_animated_computed_styles();
 
         // Step 2b (CC-11, docs/tasks/p1-css-chrome.md): the chrome
         // document's own Animations + Transitions tick — separate

@@ -175,3 +175,46 @@ Web Animations `Animation`), `getComputedStyle()` mid-transition, and
 `transitioncancel` on node removal (`remove_node()` does not emit events).
 8 new unit tests in `crates/engine/layout/src/animation.rs`
 (`sync_fires_run_event_for_new_transition` and siblings).
+
+## Срез 3 (GAP-CSSANIM, 2026-09-16, `p1-gap-cssanim-srez3`) — `getComputedStyle()` now reflects the live interpolated `opacity`/`transform`
+
+Closed symptom 3 for the two properties the schedulers already track for
+compositor offload — `opacity` and `transform`. `getComputedStyle()` used
+to answer from `V8JsRuntime::computed_styles`, a snapshot refreshed only on
+a real relayout or a lazy same-tick flush (`FlushHandles::maybe_flush`,
+CSSOM-4/BUG-493) — neither fires just because an already-running CSS
+transition/animation ticks its clock, so a page polling
+`getComputedStyle(el).opacity` mid-animation always read the pre-animation
+(or post-relayout) value. `AnimationFrame` (`crates/engine/layout/src/
+animation.rs`) now has `to_computed_style_patches()`, serializing its
+per-node `opacity`/`transform` overrides through the same
+`opacity_to_css`/`transform_list_to_css` helpers `computed_style_to_map`
+uses (factored out of `selector_query.rs` for this reuse, so a live value
+reads back byte-identical to a static one). The shell calls this once per
+frame, right after the schedulers tick (`crates/shell/src/lumen/
+animated_computed_style.rs`, same single-delivery-point shape as
+`deliver_transition_events`/`deliver_animation_events`), and merges the
+result straight into `computed_styles` via a new `V8JsRuntime::
+patch_animated_computed_styles` — no JS event dispatch involved, since
+`getComputedStyle()` reads the snapshot synchronously and has no listener
+to notify. A subsequent real relayout's `update_computed_styles` naturally
+overwrites these entries with the settled value once the animation stops
+ticking.
+
+Live confirmation: `verify_event_delivery_gaps.py --variant
+css-animation-progress` (dev-release) now prints `opacity 1, opacity
+0.709377, opacity 0.55937105, …` (was static `opacity 1`); a manual
+`translateX` probe over the same harness showed `transform: none` →
+`translateX(28.98px)` → `translateX(44.00px)` → `translateX(59.00px)`.
+`--variant css-animation`/`css-transition` (event dispatch, срезы 1/2)
+unaffected. Not in this slice: `color`/`background-color`/`height`
+overrides (tracked by the same schedulers but not wired into this
+snapshot), `getAnimations()` still returning nothing for a CSS-triggered
+animation/transition (separate, architecturally larger gap — no
+`Animation`/`CSSAnimation` object exists to return `.effect`/`.currentTime`
+from), and `getBoundingClientRect()`/other geometry reads mid-animation
+(untouched — `transform` is compositor-offloaded by design and does not
+affect layout geometry; a layout-affecting animated property like
+`margin-left` already goes through a real relayout each tick and was not
+re-verified as broken here). 4 new unit tests in `crates/engine/layout/src/
+animation.rs` (`computed_style_patches_*`).

@@ -9,6 +9,7 @@
 
 mod a11y_media;
 mod ai_answer;
+mod animated_computed_style;
 mod animation_events;
 mod automation;
 mod bfcache;
