@@ -1,7 +1,7 @@
 # BUG-598: `DataTransfer.types` returns a fresh array on every access instead of a cached `FrozenArray`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:737-739`, `DataTransfer.prototype.types` getter)
+**Статус:** FIXED 2026-09-16 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` -- `DataTransfer.prototype.types` getter)
 **Найден:** P2, WPT-VENDOR-html-editing, 2026-08-04
 
 ## Симптом
@@ -37,3 +37,16 @@ on `dt.types` being cacheable (e.g. comparing before/after a mutation via
 reference equality, as this very WPT file's other passing subtests already
 do for the *contents*-changed case) is affected; contents-correctness itself
 is not in question, only identity/caching.
+
+## Исправлено
+
+Новое поле `_types_frozen` на `DataTransfer` кеширует результат
+`Object.freeze(this._types.slice())`; геттер `types` возвращает кеш, если он
+не `null`, иначе строит его один раз. Единственная точка, где `_types` может
+измениться, -- `_sync_from_items` (вызывается из `setData`/`clearData`/
+`DataTransferItemList.add`/`.remove`/`.clear`), и именно там кеш сбрасывается
+в `null`. Новый тест `dom::tests::v8_dragdrop_scroll_pointer::
+data_transfer_types_is_cached_frozen_array` проверяет и стабильность
+ссылки между чтениями, и её смену после мутации. `cargo test -p lumen-js
+--features v8-backend v8_dragdrop_scroll_pointer` зелёный, `cargo clippy
+--workspace --all-targets -- -D warnings` чист.

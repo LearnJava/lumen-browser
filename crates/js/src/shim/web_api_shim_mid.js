@@ -563,6 +563,7 @@ DataTransferItemList.prototype[Symbol.iterator] = function() {
 function DataTransfer() {
     this._data = {};         // format → string
     this._types = [];        // read-only types list
+    this._types_frozen = null; // cached FrozenArray, invalidated by _sync_from_items
     this.effectAllowed = 'uninitialized';
     this.dropEffect = 'none';
     this.items = new DataTransferItemList(this);
@@ -580,9 +581,15 @@ DataTransfer.prototype._sync_from_items = function() {
         }
     }
     this.items._rebuild_indices();
+    this._types_frozen = null; // store changed — next `.types` read rebuilds the FrozenArray
 };
 Object.defineProperty(DataTransfer.prototype, 'types', {
-    get: function() { return Object.freeze(this._types.slice()); }
+    // WebIDL FrozenArray<T>: same reference across calls until the data store
+    // list changes (BUG-598) — only `_sync_from_items` may invalidate the cache.
+    get: function() {
+        if (this._types_frozen === null) this._types_frozen = Object.freeze(this._types.slice());
+        return this._types_frozen;
+    }
 });
 DataTransfer.prototype.setData = function(format, data) {
     var fmt = String(format || '').toLowerCase();
