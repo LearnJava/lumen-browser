@@ -1306,3 +1306,65 @@ DTD-подсет и `<!ENTITY … SYSTEM "…">` по-прежнему не ре
 
 Остаток по-прежнему открыт: сама область «нет настоящего XML-парсера» как
 таковая.
+
+## GAP-XMLDOC срез 32 (2026-09-16): `Content-Type` ответа игнорировался обоими сетевыми конструкторами `RawPage` (`p1-gap-xmldoc-srez32`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Перед правкой
+заново измерил остаток срезов 30/31 («параметрические энтити, внешний DTD,
+`SYSTEM`-энтити») по вендоренному корпусу — по-прежнему 0 файлов
+(`grep -rl "<!ENTITY %"`/`"ENTITY.*SYSTEM"` по `tests/wpt`), без изменений с
+прошлого замера. Вместо этого нашёлся живой, измеримый дефект в механизме,
+от которого зависит САМ вход в `xml_mode` для любого сетевого документа.
+
+**Дефект.** `is_xml_flavoured_document` (`page_pipeline.rs:567`) сперва
+смотрит на MIME-тип ответа и только при его отсутствии/generic-значении
+падает на расширение URL — именно так задумано, чтобы `wptserve`, отдающий
+`.xht` как `application/xhtml+xml`, распознавался по заголовку, а не только
+по хвосту адреса. Но оба конструктора `RawPage` для сетевых источников
+(`PageSource::load_bytes`/`load_bytes_streaming`, `page_source.rs`) отдавали
+`content_type: Some("text/html")` **безусловно**, не читая ни байта из
+`resp_headers` — при том, что `resp_headers` уже лежит в скоупе и используется
+двумя строками ниже для `Cross-Origin-Opener-Policy`/`-Embedder-Policy`. Итог:
+MIME-ветка `is_xml_flavoured_document` была мёртвым кодом для любой сетевой
+загрузки — работало только распознавание по расширению (`.xhtml`/`.xht`/
+`.svg`), ради которого изначально и заводился GAP-XMLDOC, но которое
+покрывает не весь корпус.
+
+**Измерение.** `grep` по `.headers`-сайдкарам вендоренного WPT-корпуса на
+`Content-Type: (application/xhtml+xml|image/svg+xml|application/xml|text/xml)`
+у файлов БЕЗ соответствующего расширения — 4 попадания: `acid/acid3/
+xhtml.{1,2,3}.headers` и `svg/struct/reftests/support/html-resource-with-
+symbol-and-content-type-svg.html.headers` — последний специально называется
+`.html` и содержит `Content-Type: image/svg+xml`, то есть сам тест целиком о
+том, что MIME важнее расширения; до этого среза он гарантированно парсился
+как HTML.
+
+**Фикс.** `RawPage::content_type` сменил тип с `Option<&'static str>`
+(жёстко зашитая строка) на `Option<String>` — заголовок ответа теперь
+владеемый. Новый `page_source::response_content_type(&[(String, String)])`
+(та же форма, что уже был `cache_control_no_store`) ищет `Content-Type`
+регистронезависимо и клонирует значение. Оба сетевых конструктора
+(`load_bytes`, `load_bytes_streaming`) зовут его вместо жёсткой строки;
+не-сетевые источники (`AboutBlank`/`Snapshot`/`Static`) по-прежнему честно
+`Some("text/html".to_owned())` — они и есть HTML безусловно, `File` — по-
+прежнему `None` (файловая система заголовков не даёт, дальше работает
+только расширение). Смена типа поля на владеемую строку потянула за собой
+`.as_deref()` на десяти сайтах вызова (`render_bytes`/`parse_and_layout`/
+`lumen_encoding::detect` принимают `Option<&str>`, сигнатуры не менялись).
+
+Побочный эффект того же фикса за пределами GAP-XMLDOC: `lumen_encoding::
+detect(bytes, content_type)` тоже получает реальный заголовок вместо вечного
+`"text/html"` — charset, объявленный только в HTTP-заголовке (без `<meta
+charset>`), теперь тоже виден кодировке; отдельно не измерялось, тот же
+корень чинится тем же коммитом.
+
+Тесты (`page_source.rs`): `response_content_type_reads_the_real_header`,
+`_is_case_insensitive_on_the_header_name`, `_none_when_header_absent`,
+`xml_mime_wins_over_a_non_matching_extension_like_the_corpus_fixture` —
+последний воспроизводит ровно измеренный файл (`.html`-путь +
+`image/svg+xml`) через `is_xml_flavoured_document`. `cargo test -p
+lumen-shell page_source::` — 6/6 зелёных. `cargo clippy -p lumen-shell
+--all-targets --profile dev-release -- -D warnings` — чисто.
+
+Не в этом срезе: параметрические энтити/внешний DTD/`SYSTEM`-энтити —
+по-прежнему 0 на корпусе, без изменений с срезов 30/31.

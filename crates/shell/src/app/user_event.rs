@@ -257,7 +257,7 @@ impl Lumen {
                     .spawn(move || {
                     let result = render_bytes(
                         &raw.bytes,
-                        raw.content_type,
+                        raw.content_type.as_deref(),
                         &raw.base,
                         sink,
                         viewport,

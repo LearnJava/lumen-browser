@@ -168,7 +168,7 @@ impl PageSource {
             PageSource::AboutBlank => Ok(RawPage {
                 bytes: b"<!DOCTYPE html><html><head></head><body></body></html>".to_vec(),
                 base: ResourceBase::Url("about:blank".to_owned()),
-                content_type: Some("text/html"),
+                content_type: Some("text/html".to_owned()),
                 cross_origin_isolated: false,
                 cache_control_no_store: false,
                 status: 0,
@@ -231,7 +231,7 @@ impl PageSource {
                     // `location.*`/`document.baseURI`, разрешение
                     // относительных подресурсов и origin хранилищ.
                     base: ResourceBase::Url(final_url.to_string()),
-                    content_type: Some("text/html"),
+                    content_type: response_content_type(&resp_headers),
                     cross_origin_isolated,
                     cache_control_no_store: cache_control_no_store(&resp_headers),
                     status,
@@ -243,7 +243,7 @@ impl PageSource {
                 Ok(RawPage {
                     bytes: html.as_bytes().to_vec(),
                     base: ResourceBase::Url(base_url.clone()),
-                    content_type: Some("text/html"),
+                    content_type: Some("text/html".to_owned()),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     status: 0,
@@ -255,7 +255,7 @@ impl PageSource {
                 Ok(RawPage {
                     bytes: html.as_bytes().to_vec(),
                     base: ResourceBase::Url(url.clone()),
-                    content_type: Some("text/html"),
+                    content_type: Some("text/html".to_owned()),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     status: 0,
@@ -321,7 +321,7 @@ impl PageSource {
             // preload-хинты из потока резолвятся от той же базы, что документ.
             base: ResourceBase::Url(final_url.to_string()),
             bytes,
-            content_type: Some("text/html"),
+            content_type: response_content_type(&resp_headers),
             cross_origin_isolated,
             cache_control_no_store: cache_control_no_store(&resp_headers),
             status,
@@ -346,7 +346,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected)?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -356,7 +356,7 @@ impl PageSource {
 pub(crate) struct RawPage {
     pub(crate) bytes: Vec<u8>,
     pub(crate) base: ResourceBase,
-    pub(crate) content_type: Option<&'static str>,
+    pub(crate) content_type: Option<String>,
     /// True when the server sent `Cross-Origin-Opener-Policy: same-origin` +
     /// `Cross-Origin-Embedder-Policy: require-corp` on this document, enabling
     /// `window.crossOriginIsolated` and unlocking SharedArrayBuffer / high-res timers.
@@ -384,6 +384,22 @@ pub(crate) fn cache_control_no_store(resp_headers: &[(String, String)]) -> bool 
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("cache-control"))
         .is_some_and(|(_, v)| lumen_storage::http_cache::CacheControl::parse(v).no_store)
+}
+
+/// The response's own `Content-Type` header (GAP-XMLDOC срез 32, BUG-786/
+/// BUG-685): both network `RawPage` constructors used to hardcode
+/// `Some("text/html")` regardless of what the server actually sent, which made
+/// `is_xml_flavoured_document`'s Content-Type branch dead code for every
+/// network load — an `.xhtml`/`.svg`-flavoured response was only ever
+/// recognised by its URL's extension, never by this header, even though the
+/// header was already sitting in `resp_headers` for COOP/COEP to read two
+/// lines below each call site. `None` (missing header) falls through to the
+/// same URL-extension heuristic `is_xml_flavoured_document` already has.
+pub(crate) fn response_content_type(resp_headers: &[(String, String)]) -> Option<String> {
+    resp_headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.clone())
 }
 
 /// Resolve an `AutomationCommand::Navigate` URL string to a `PageSource` (SDC-2/SDC-3).
@@ -469,5 +485,47 @@ mod tests {
         assert_eq!(javascript_url_code("data:text/html,x"), None);
         assert_eq!(javascript_url_code("java"), None);
         assert_eq!(javascript_url_code(""), None);
+    }
+
+    // ---- GAP-XMLDOC срез 32 (BUG-786/BUG-685): response_content_type ----
+
+    #[test]
+    fn response_content_type_reads_the_real_header() {
+        let headers = vec![
+            ("Server".to_owned(), "nginx".to_owned()),
+            ("Content-Type".to_owned(), "image/svg+xml".to_owned()),
+        ];
+        assert_eq!(response_content_type(&headers).as_deref(), Some("image/svg+xml"));
+    }
+
+    #[test]
+    fn response_content_type_is_case_insensitive_on_the_header_name() {
+        let headers = vec![("content-type".to_owned(), "application/xhtml+xml".to_owned())];
+        assert_eq!(response_content_type(&headers).as_deref(), Some("application/xhtml+xml"));
+    }
+
+    #[test]
+    fn response_content_type_none_when_header_absent() {
+        let headers = vec![("Server".to_owned(), "nginx".to_owned())];
+        assert_eq!(response_content_type(&headers), None);
+    }
+
+    /// Corpus-measured regression: `svg/struct/reftests/support/
+    /// html-resource-with-symbol-and-content-type-svg.html` is served with
+    /// `Content-Type: image/svg+xml` despite its `.html` extension — before
+    /// this срез, both network `RawPage` constructors hardcoded
+    /// `content_type: Some("text/html")`, so `is_xml_flavoured_document`
+    /// never saw this header and fell through to the (non-matching)
+    /// extension check.
+    #[test]
+    fn xml_mime_wins_over_a_non_matching_extension_like_the_corpus_fixture() {
+        let base = ResourceBase::Url(
+            "http://example.test/svg/struct/reftests/support/html-resource-with-symbol-and-content-type-svg.html".to_owned(),
+        );
+        let headers = vec![("Content-Type".to_owned(), "image/svg+xml".to_owned())];
+        assert!(crate::page_pipeline::is_xml_flavoured_document(
+            response_content_type(&headers).as_deref(),
+            &base
+        ));
     }
 }
