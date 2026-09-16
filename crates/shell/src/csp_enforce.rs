@@ -10,13 +10,21 @@
 //! host/scheme/`'self'` проверка, что срез 4 сделал для `img-src`, теперь
 //! останавливает fetch внешнего скрипта до сети.
 //!
+//! Срез 7 добавил `style-src`/`default-src` против внешнего `<link
+//! rel=stylesheet>` — тот же host/scheme/`'self'` фетч-гейт, что срезы 4 и 6
+//! дали `img-src`/`script-src`, применённый к `load_linked_stylesheets`
+//! (`crates/shell/src/stylesheets.rs`); заблокированный лист не фетчится и
+//! становится тем же `error`-исходом, что уже даёт сетевая неудача (BUG-804).
+//!
 //! Что НЕ покрыто этим срезом (следующие срезы): директивы кроме
-//! `script-src`/`img-src`
-//! (`connect-src`/`style-src`/…), `report-uri`/`report-to`, hash-источники
+//! `script-src`/`img-src`/`style-src`
+//! (`connect-src`/`worker-src`/…), `report-uri`/`report-to`, hash-источники
 //! (только `'unsafe-inline'` и `'nonce-…'`), CSP на путях загрузки картинок
 //! помимо eager-пайплайна (lazy-load, стриминговый progressive loader),
-//! честная независимая проверка заголовка и `<meta>` вместо их слияния.
-//! См. `bugs/BUG-811-OPEN.md`.
+//! инлайновые `<style>`/атрибут `style` (не блокируются, только внешний
+//! `<link>`), `@import` внутри уже загруженного листа (наследует политику
+//! владельца, отдельно не проверяется), честная независимая проверка
+//! заголовка и `<meta>` вместо их слияния. См. `bugs/BUG-811-OPEN.md`.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;
@@ -144,6 +152,18 @@ pub(crate) fn img_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option
     !policy.fetch_directive_allows(&CspDirective::ImgSrc, &parsed, self_origin)
 }
 
+/// `true` if `style-src` (or `default-src`) forbids fetching the external
+/// `<link rel=stylesheet>` at `url` — срез 7, same fetch-gate shape as
+/// [`img_src_blocked`]/[`script_src_blocked`]: absence of a policy is not
+/// checked here (the caller only calls this when a policy exists), and a
+/// `url` that fails to parse is treated as allowed.
+pub(crate) fn style_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    !policy.fetch_directive_allows(&CspDirective::StyleSrc, &parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +274,38 @@ mod tests {
     fn script_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("script-src 'none'");
         assert!(!script_src_blocked(&p, "not a url", None));
+    }
+
+    /// GAP-CSPENF срез 7: `style-src` against an external `<link
+    /// rel=stylesheet>`.
+    #[test]
+    fn no_style_src_allows_external() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(!style_src_blocked(&p, "https://example.com/a.css", None));
+    }
+
+    #[test]
+    fn style_src_none_blocks_external() {
+        let p = lumen_network::csp::parse_csp_header("style-src 'none'");
+        assert!(style_src_blocked(&p, "https://example.com/a.css", None));
+    }
+
+    #[test]
+    fn style_src_allowed_host_passes() {
+        let p = lumen_network::csp::parse_csp_header("style-src cdn.example.com");
+        assert!(!style_src_blocked(&p, "https://cdn.example.com/a.css", None));
+        assert!(style_src_blocked(&p, "https://other.example.com/a.css", None));
+    }
+
+    #[test]
+    fn style_src_default_src_fallback_blocks() {
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(style_src_blocked(&p, "https://example.com/a.css", None));
+    }
+
+    #[test]
+    fn style_src_unparseable_url_not_blocked() {
+        let p = lumen_network::csp::parse_csp_header("style-src 'none'");
+        assert!(!style_src_blocked(&p, "not a url", None));
     }
 }

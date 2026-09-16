@@ -76,10 +76,27 @@ pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
 /// ли лист`) в порядке объявления, для BUG-804: `load`/`error` принадлежат
 /// элементу `<link>`, а знает исход только этот проход. Раньше провал просто
 /// логировался, и страница не могла отличить загруженный лист от 404.
-pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (String, Vec<(NodeId, bool)>) {
+///
+/// Третий элемент — GAP-CSPENF срез 7: resolved URL каждого `<link>`, чей
+/// фетч `style-src`/`default-src` документа запретил. Фетч для них не
+/// выполнялся вовсе (сеть их не видела), поэтому такой лист даёт тот же
+/// `false`-исход, что и сетевая неудача — вызывающая сторона уже диспатчит
+/// `error` по этому исходу (BUG-804); `securitypolicyviolation` — отдельно,
+/// той же схемой, что `blocked_by_img_src` в `subresources.rs` (здесь для
+/// него нет JS-рантайма).
+pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (String, Vec<(NodeId, bool)>, Vec<String>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
     let doc_encoding = document_encoding(doc);
+
+    // GAP-CSPENF срез 7: посчитать политику один раз здесь же, до параллельной
+    // фазы — та же одноразовая точка, что срез 4 использует в
+    // `fetch_and_decode_images` для `img-src`.
+    let csp_gate = {
+        let root = doc.root();
+        crate::csp_enforce::document_csp_policy(doc, root)
+    };
+    let self_origin = base.origin();
 
     // Загружаем все таблицы параллельно (сеть — главный тормоз), затем
     // конкатенируем строго в порядке объявления, чтобы каскад не нарушился.
@@ -87,15 +104,16 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
     // `@import "b.css"` = `/css/b.css`) разрешались корректно.
     let parts = parallel_map(&hrefs, |_, (_, href, charset_attr)| {
-        let (text, sheet_base, encoding) = fetch_stylesheet_text(
-            href,
-            base,
-            sink,
-            cookie_jar.clone(),
-            charset_attr.as_deref(),
-            doc_encoding,
-        )?;
-        Some(inline_css_imports(
+        if let Some((policy, _original)) = &csp_gate {
+            let resolved_url = base.resolve_str(href);
+            if crate::csp_enforce::style_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
+                return Err(Some(resolved_url));
+            }
+        }
+        let (text, sheet_base, encoding) =
+            fetch_stylesheet_text(href, base, sink, cookie_jar.clone(), charset_attr.as_deref(), doc_encoding)
+                .ok_or(None)?;
+        Ok(inline_css_imports(
             &text,
             &sheet_base,
             sink,
@@ -109,14 +127,23 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
 
     let mut css = String::new();
     let mut outcomes = Vec::with_capacity(parts.len());
+    let mut blocked_by_style_src = Vec::new();
     for ((node, _, _), part) in hrefs.iter().zip(parts) {
-        outcomes.push((*node, part.is_some()));
-        if let Some(part) = part {
-            css.push_str(&part);
-            css.push('\n');
+        match part {
+            Ok(text) => {
+                outcomes.push((*node, true));
+                css.push_str(&text);
+                css.push('\n');
+            }
+            Err(blocked_url) => {
+                outcomes.push((*node, false));
+                if let Some(blocked_url) = blocked_url {
+                    blocked_by_style_src.push(blocked_url);
+                }
+            }
         }
     }
-    (css, outcomes)
+    (css, outcomes, blocked_by_style_src)
 }
 
 /// Загружает текст одной таблицы стилей, разрешённой относительно `base`.

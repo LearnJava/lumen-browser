@@ -351,6 +351,10 @@ pub(crate) struct PageCascade {
     pub(crate) dynamic_css: DynamicCssBase,
     /// Per-`<link rel=stylesheet>` load outcome, for BUG-804's `load`/`error`.
     pub(crate) link_outcomes: Vec<(NodeId, bool)>,
+    /// GAP-CSPENF срез 7: resolved URL of every `<link rel=stylesheet>`
+    /// `style-src`/`default-src` blocked — mirrors `blocked_by_img_src`
+    /// (срез 4), fired as `securitypolicyviolation` once a JS runtime exists.
+    pub(crate) blocked_by_style_src: Vec<String>,
     /// Parsed cascade.
     pub(crate) sheet: lumen_css_parser::Stylesheet,
     /// CSSOM-1 срез 2: один [`StylesheetNodeEntry`] на `<style>`/`<link
@@ -380,7 +384,7 @@ fn build_page_cascade(
     dark_mode: bool,
     media_print: bool,
 ) -> Result<PageCascade, Box<dyn Error>> {
-    let (css, dynamic_css, link_outcomes) = {
+    let (css, dynamic_css, link_outcomes, blocked_by_style_src) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
         let link_media_ctx = if media_print {
             print_media_context(viewport, dark_mode)
@@ -406,7 +410,7 @@ fn build_page_cascade(
         // единого сетевого запроса. `inline_css_imports` возвращает
         // `<импорты> + <исходный текст>`, поэтому префикс = всё до хвоста.
         let imports_prefix = css[..css.len() - inline.len()].to_owned();
-        let (linked, link_outcomes) = load_linked_stylesheets(
+        let (linked, link_outcomes, blocked_by_style_src) = load_linked_stylesheets(
             doc,
             base,
             sink,
@@ -421,7 +425,7 @@ fn build_page_cascade(
             // CSSOM-5 срез 2: placeholder — see the field's doc comment.
             adopted_fp: 0,
         };
-        (css, dyn_css, link_outcomes)
+        (css, dyn_css, link_outcomes, blocked_by_style_src)
     };
 
     let sheet = {
@@ -491,7 +495,8 @@ fn build_page_cascade(
     }
 
     Ok(PageCascade {
-        dynamic_css, link_outcomes, sheet, stylesheet_nodes, font_registry, pending_web_fonts, measurer,
+        dynamic_css, link_outcomes, blocked_by_style_src, sheet, stylesheet_nodes, font_registry,
+        pending_web_fonts, measurer,
     })
 }
 
@@ -1042,7 +1047,8 @@ pub(crate) fn parse_and_layout(
     // right after them if they touched `<style>`/`<link>`), so there is nothing
     // left to fetch or parse here — only to hand out.
     let PageCascade {
-        dynamic_css, link_outcomes, sheet, stylesheet_nodes, font_registry, pending_web_fonts, measurer,
+        dynamic_css, link_outcomes, blocked_by_style_src, sheet, stylesheet_nodes, font_registry,
+        pending_web_fonts, measurer,
     } = cascade;
 
     // BUG-804: HTML LS §4.6.7 «process the linked resource» — каждый
@@ -1068,6 +1074,25 @@ pub(crate) fn parse_and_layout(
         }
         arg.push_str("]);");
         js.eval_js(&arg);
+    }
+
+    // GAP-CSPENF срез 7: `securitypolicyviolation` for every `style-src`-
+    // blocked `<link rel=stylesheet>` — same one-shot-push shape as the
+    // `img-src` push above (`blocked_by_img_src`, срез 4).
+    #[cfg(feature = "v8")]
+    if !blocked_by_style_src.is_empty()
+        && let Some(js) = &js_ctx
+    {
+        let original_policy = {
+            let d = doc_arc.lock().unwrap();
+            let root = d.root();
+            crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
+        };
+        if let Some(original_policy) = original_policy {
+            for url in &blocked_by_style_src {
+                js.fire_csp_violation("style-src", url, &original_policy);
+            }
+        }
     }
 
     let font_provider = Arc::new(font_registry);
