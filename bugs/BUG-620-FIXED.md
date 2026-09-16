@@ -1,7 +1,7 @@
 # BUG-620: `Selection.prototype.toString()` always returns an empty string even when a valid Range is selected
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — `Selection` shim, `toString`/stringifier)
+**Статус:** FIXED 2026-09-17 (P3)
+**Компонент:** dom (`crates/engine/dom/src/selection.rs::range_text`)
 **Найден:** P2, WPT-VENDOR-inert, 2026-08-04
 
 ## Симптом
@@ -90,3 +90,24 @@ also bottoms out in `range_text` — so `range.toString()` has the exact
 same gap independent of `Selection`, for any Range whose start/end
 container is an Element rather than a Text node (not just ones produced
 via `selectAllChildren`).
+
+## Исправлено (2026-09-17, P3)
+
+`range_text`'s same-container fast path (`crates/engine/dom/src/selection.rs`)
+получила ровно предложенную выше Element-ветку: когда общий контейнер — не
+`NodeData::Text`, `start.offset`/`end.offset` берутся как DOM-spec
+child-индексы, клампятся к `doc.get(container).children.len()` и режут срез
+`children[from..to]`; каждый ребёнок стрингифицируется (текстовый узел —
+напрямую, элемент — через уже существующий `dom_collect_text`, тот же
+обход, что у `node_text_content`), результат конкатенируется. Ветка чинит и
+`Selection.toString()`, и `Range.toString()` одним изменением — оба бьются в
+общий `range_text`, как и предполагалось в анализе выше.
+
+Новые тесты в `crates/engine/dom/src/selection.rs::tests`:
+`range_text_element_container_child_index_offsets` (плоский случай,
+`selectAllChildren`-форма), `range_text_element_container_nested_elements`
+(элемент внутри элемента), плюс регрессионный
+`range_text_same_text_container_still_works` на исходном Text-пути.
+
+`cargo test -p lumen-dom --lib selection::` 3/3,
+`cargo clippy -p lumen-dom --all-targets -- -D warnings` чист.
