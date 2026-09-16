@@ -10152,6 +10152,23 @@ var document = {
         var bid = _lumen_u2n(_lumen_get_body());
         return bid !== null ? _lumen_make_element(bid) : null;
     },
+    // HTML LS §obsolete "requirements for implementations" (BUG-607): five
+    // legacy Document color attributes, transparent forwards to the
+    // same-named obsolete IDL attributes on the body element (`text`/
+    // `bgColor`/`link`/`vLink`/`aLink`, installed on `HTMLBodyElement.prototype`
+    // below) -- empty string on read and a no-op on write when there is no
+    // body element, matching `document.fgColor = ...` with a frameset or a
+    // body-less document.
+    get fgColor()     { var b = this.body; return b !== null ? b.text    : ''; },
+    set fgColor(v)    { var b = this.body; if (b !== null) b.text    = v; },
+    get bgColor()     { var b = this.body; return b !== null ? b.bgColor : ''; },
+    set bgColor(v)    { var b = this.body; if (b !== null) b.bgColor = v; },
+    get linkColor()   { var b = this.body; return b !== null ? b.link    : ''; },
+    set linkColor(v)  { var b = this.body; if (b !== null) b.link    = v; },
+    get vlinkColor()  { var b = this.body; return b !== null ? b.vLink   : ''; },
+    set vlinkColor(v) { var b = this.body; if (b !== null) b.vLink   = v; },
+    get alinkColor()  { var b = this.body; return b !== null ? b.aLink   : ''; },
+    set alinkColor(v) { var b = this.body; if (b !== null) b.aLink   = v; },
     // BUG-482 (CSSOM View §5.2): the root element in no-quirks mode; in
     // quirks mode, the body element unless it is "potentially scrollable"
     // (both it and the root have non-default overflow), in which case `null`.
