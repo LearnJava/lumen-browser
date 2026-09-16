@@ -86,11 +86,49 @@ fn data_transfer_item_get_as_string() {
 }
 
 #[test]
-fn drag_event_has_fresh_data_transfer() {
+fn drag_event_data_transfer_defaults_to_null_not_a_fresh_instance() {
+    // BUG-597: `DragEventInit.dataTransfer` is `DataTransfer?` with spec
+    // default `null` -- omitting it (or passing null/undefined) must not
+    // synthesize a fresh DataTransfer, only `_lumen_dispatch_drag_event`
+    // (the internal dispatch helper) does that.
     let rt = v8_runtime_with_dom(make_doc());
     let v = rt.eval(r#"
                 var e = new DragEvent('dragstart', { bubbles: true });
-                e.dataTransfer instanceof DataTransfer
+                e.dataTransfer === null
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn drag_event_data_transfer_null_and_undefined_both_resolve_to_null() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var a = new DragEvent('drop', { dataTransfer: null });
+                var b = new DragEvent('drop', { dataTransfer: undefined });
+                a.dataTransfer === null && b.dataTransfer === null
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn drag_event_data_transfer_rejects_non_data_transfer_object() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var threw = false;
+                try { new DragEvent('drop', { dataTransfer: {} }); }
+                catch (e) { threw = e instanceof TypeError; }
+                threw
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn drag_event_data_transfer_accepts_real_data_transfer() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var dt = new DataTransfer();
+                var e = new DragEvent('drop', { dataTransfer: dt });
+                e.dataTransfer === dt
             "#).unwrap();
     assert_eq!(v, lumen_core::JsValue::Bool(true));
 }
@@ -103,6 +141,36 @@ fn draggable_attribute_getter_setter() {
                 document.body.appendChild(el);
                 el.draggable = true;
                 el.draggable === true && el.getAttribute('draggable') === 'true'
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn draggable_defaults_true_for_img_and_a_with_href() {
+    // HTML LS §9.10.1 "auto" state: img and a[href] default to draggable=true
+    // absent the content attribute; a plain div (or a without href) stays false.
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var img = document.createElement('img');
+                var a1 = document.createElement('a');
+                a1.setAttribute('href', 'x');
+                var a2 = document.createElement('a');
+                var div = document.createElement('div');
+                img.draggable === true &&
+                a1.draggable === true &&
+                a2.draggable === false &&
+                div.draggable === false
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn draggable_explicit_attribute_overrides_default() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var img = document.createElement('img');
+                img.setAttribute('draggable', 'false');
+                img.draggable === false
             "#).unwrap();
     assert_eq!(v, lumen_core::JsValue::Bool(true));
 }
@@ -444,6 +512,19 @@ fn window_onscrollend_handler_is_invoked() {
     rt.fire_window_scrollend();
     let v = rt.eval("__viaProp").unwrap();
     assert_eq!(v, lumen_core::JsValue::Number(1.0));
+}
+
+/// BUG-597: `GlobalEventHandlers`' seven `ondrag*` members must be declared
+/// (not merely assignable) on both `window` and `document`.
+#[test]
+fn ondrag_handlers_are_detectable_on_window_and_document() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt.eval(r#"
+                var names = ['ondragstart', 'ondrag', 'ondragend', 'ondragenter',
+                             'ondragover', 'ondragleave', 'ondrop'];
+                names.every(function(n) { return (n in window) && (n in document); })
+            "#).unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
 }
 
 #[test]

@@ -1,7 +1,7 @@
 # BUG-597: Drag-and-drop surface incomplete -- `DragEvent` constructor defaults/validates wrong, `draggable` ignores `<a>`/`<img>` default-true, `window`/`document` missing `ondrag*` handlers
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:781-790` `DragEvent`; `dom.rs:2776-2782` per-element `draggable` getter/setter; `dom.rs:7639` `window` object literal)
+**Статус:** FIXED 2026-09-16 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` -- `DragEvent` constructor, `HTMLElement.prototype` `draggable` getter; `crates/js/src/shim/web_api_shim_mid_b.js` -- `window`/`document` `ondrag*`)
 **Найден:** P2, WPT-VENDOR-html-editing, 2026-08-04
 
 ## Симптом
@@ -60,3 +60,39 @@ code read:
 default (`dnd/dom/draggable.html`) and window/document handler gaps
 (`dnd/dom/specials.html`, 14 subtests: 7 handlers x window+document) each
 confirmed via dedicated subtests in the two files above.
+
+## Исправлено (2026-09-16, P3)
+
+`dom.rs` was long since split (`crates/js/src/dom/`); the three gaps live in
+the shared shim (`crates/js/src/shim/*.js`), not in the Rust file the report
+named:
+
+1. **`DragEvent` constructor** (`web_api_shim_mid.js`): now defaults
+   `dataTransfer` to `null` when `init.dataTransfer` is absent/`null`/
+   `undefined` (spec default of the nullable `DragEventInit.dataTransfer`
+   member), instead of synthesizing a fresh `DataTransfer`. A non-`null`
+   value that isn't a `DataTransfer` instance now throws `TypeError`, per
+   WebIDL. The internal `_lumen_dispatch_drag_event` helper is unaffected --
+   it always passes an explicit `DataTransfer` instance.
+2. **`draggable` default** (`web_api_shim_mid.js`, `HTMLElement.prototype`
+   getter): when the `draggable` content attribute is absent, the getter now
+   checks the tag name and returns `true` for `<img>` and `<a href>` (HTML LS
+   §9.10.1's "auto" state), `false` otherwise. An explicit attribute value
+   still wins.
+3. **`window`/`document` `ondrag*` handlers**: already fixed as a side effect
+   of BUG-874 (`_LUMEN_EVENT_HANDLER_ATTRS` already lists all seven
+   `ondrag*` names and is looped over both `window` and `document` to declare
+   any name from the curated list not already present) -- confirmed still
+   correct, not re-implemented.
+
+New/updated tests in `dom::tests::v8_dragdrop_scroll_pointer`:
+`drag_event_data_transfer_defaults_to_null_not_a_fresh_instance`,
+`drag_event_data_transfer_null_and_undefined_both_resolve_to_null`,
+`drag_event_data_transfer_rejects_non_data_transfer_object`,
+`drag_event_data_transfer_accepts_real_data_transfer`,
+`draggable_defaults_true_for_img_and_a_with_href`,
+`draggable_explicit_attribute_overrides_default`,
+`ondrag_handlers_are_detectable_on_window_and_document` (regression guard for
+point 3). `cargo test -p lumen-js --features v8-backend` green (3713/3713),
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+clean.

@@ -1016,7 +1016,7 @@ Baseline 223 → 225 категорий (351 новых `.ini`: 189 `html/dom` +
   укладываются в уже открытые тикеты того же ручного аудита WPT-VENDOR-html-editing
   (2026-08-04): весь `dnd/*` (крупнейшие `.ini` среза — `dnd/drop/029.html`/`030.html`,
   273 строки каждый, все query-варианты `dropEffect`×`effectAllowed`) —
-  [BUG-596](../../bugs/BUG-596-OPEN.md)/[BUG-597](../../bugs/BUG-597-OPEN.md)/
+  [BUG-596](../../bugs/BUG-596-OPEN.md)/[BUG-597](../../bugs/BUG-597-FIXED.md)/
   [BUG-598](../../bugs/BUG-598-OPEN.md) (DragEvent/DataTransfer недореализованы);
   `the-hidden-attribute/*` (включая `hidden-until-found-text-fragment.html`, TIMEOUT) —
   [BUG-594](../../bugs/BUG-594-OPEN.md) (`hidden` не тристейт, `until-found`/
