@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-16",
  "counts": {
-  "open": 337,
-  "fixed": 666,
+  "open": 332,
+  "fixed": 671,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3253,7 +3253,7 @@
        "title": "WPT: прогнать срез `html/misc`",
        "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по всем 14 под-каталогам (`--processes=4`) — **49/531 harness OK, 148/636 сабтестов**. Четыре https-тяжёлых под-каталога (`cross-origin-opener-policy`/`cross-origin-embedder-policy`/`document-isolation-policy`/`anonymous-iframe`, 321 id) почти целиком провалились на уже известном TLS-гэпе `UnknownIssuer` (см. `docs/wpt-status.md:26`) — не новые находки. Реальный сигнал дали лёгкие под-каталоги: `infrastructure` (22/146, 137/546 сабтестов) подтвердил уже заведённый [BUG-377](bugs/BUG-377-FIXED.md) (`document.baseURI`) и невендоренные `/common/utils.js`/`subset-tests-by-key.js`-хелперы; `obsolete` (14/14 harness OK, 5/53 сабтестов) дал самый плотный кластер новых багов — легаси-API секции HTML LS §obsolete целиком не реализованы. Семь новых багов: [BUG-605](bugs/BUG-605-OPEN.md) (`<marquee>` без `HTMLMarqueeElement`, `loop`/`scrollAmount`/`scrollDelay` не рефлексируют, нет UA `overflow:hidden`), [BUG-606](bugs/BUG-606-OPEN.md) (шесть независимых легаси-заглушек — `document.clear/captureEvents/releaseEvents`, `window.captureEvents/releaseEvents`, `document.all` unusual behaviors, `document.applets`, `HTMLScriptElement.event/htmlFor` — отсутствуют целиком), [BUG-607](bugs/BUG-607-OPEN.md) (`document.fgColor/linkColor/alinkColor/vlinkColor/bgColor` не реализованы), [BUG-608](bugs/BUG-608-OPEN.md) (`fetchPriority` отсутствует на `<script>`/`<img>`), [BUG-609](bugs/BUG-609-OPEN.md) (`HTMLOptionsCollection.length`-сеттер не растит `<select>` для валидных больших значений), [BUG-610](bugs/BUG-610-OPEN.md) (`MessageEvent.userActivation` отсутствует), [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` не реализован). Попутно подтверждены без новых номеров: BUG-485/BUG-565 (`document.head` отсутствует, `links/icon/*`), BUG-384 (именованный доступ на `window`, маскирует первый сабтест `fetchpriority`-тестов), BUG-601 (`DOMTokenList`-конструктор — соседствует, но не тот же дефект, что BUG-611). `the-xhtml-syntax` (0/12) — все TIMEOUT на XHTML-парсинге DTD-сущностей (`xhtml-mathml-dtd-entity-N.htm`), нишевая XML-фича, не расследовано глубже",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по всем 14 под-каталогам (`--processes=4`) — **49/531 harness OK, 148/636 сабтестов**. Четыре https-тяжёлых под-каталога (`cross-origin-opener-policy`/`cross-origin-embedder-policy`/`document-isolation-policy`/`anonymous-iframe`, 321 id) почти целиком провалились на уже известном TLS-гэпе `UnknownIssuer` (см. `docs/wpt-status.md:26`) — не новые находки. Реальный сигнал дали лёгкие под-каталоги: `infrastructure` (22/146, 137/546 сабтестов) подтвердил уже заведённый [BUG-377](bugs/BUG-377-FIXED.md) (`document.baseURI`) и невендоренные `/common/utils.js`/`subset-tests-by-key.js`-хелперы; `obsolete` (14/14 harness OK, 5/53 сабтестов) дал самый плотный кластер новых багов — легаси-API секции HTML LS §obsolete целиком не реализованы. Семь новых багов: [BUG-605](bugs/BUG-605-OPEN.md) (`<marquee>` без `HTMLMarqueeElement`, `loop`/`scrollAmount`/`scrollDelay` не рефлексируют, нет UA `overflow:hidden`), [BUG-606](bugs/BUG-606-OPEN.md) (шесть независимых легаси-заглушек — `document.clear/captureEvents/releaseEvents`, `window.captureEvents/releaseEvents`, `document.all` unusual behaviors, `document.applets`, `HTMLScriptElement.event/htmlFor` — отсутствуют целиком), [BUG-607](bugs/BUG-607-FIXED.md) (`document.fgColor/linkColor/alinkColor/vlinkColor/bgColor` не реализованы), [BUG-608](bugs/BUG-608-FIXED.md) (`fetchPriority` отсутствует на `<script>`/`<img>`), [BUG-609](bugs/BUG-609-FIXED.md) (`HTMLOptionsCollection.length`-сеттер не растит `<select>` для валидных больших значений), [BUG-610](bugs/BUG-610-OPEN.md) (`MessageEvent.userActivation` отсутствует), [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` не реализован). Попутно подтверждены без новых номеров: BUG-485/BUG-565 (`document.head` отсутствует, `links/icon/*`), BUG-384 (именованный доступ на `window`, маскирует первый сабтест `fetchpriority`-тестов), BUG-601 (`DOMTokenList`-конструктор — соседствует, но не тот же дефект, что BUG-611). `the-xhtml-syntax` (0/12) — все TIMEOUT на XHTML-парсинге DTD-сущностей (`xhtml-mathml-dtd-entity-N.htm`), нишевая XML-фича, не расследовано глубже",
        "bugs": [
         "BUG-605",
         "BUG-606",
@@ -6619,9 +6619,9 @@
       {
        "id": "GAP-XMLDOC",
        "title": "GAP: XML-путь разбора документа и foreign content",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "XML-пути разбора документа нет вовсе: `.xhtml`/`.xht`/`.svg` разбираются HTML-парсером, из-за чего открывающий CDATA-маркер съедается как prelude плохого правила вместе с первым правилом каждого блока `<style>` — 736 блоков корпуса из 4 327 несут единственное правило и теряют встроенный стиль целиком (BUG-786). Ниже лежит вторая половина: парсер не реализует HTML LS §13.2.6.5 foreign content — всё разобранное из разметки, включая содержимое `<svg>`, безусловно попадает в неймспейс XHTML и апперкейсится как HTML-тег (BUG-685). Цена измерена на корпусе: срез 14 WPT-RUN-5 показал, что потерянный стиль даёт ещё и ЛОЖНЫЕ PASS у рефтестов, когда обе стороны пары рендерятся одинаково голыми.",
+       "note": "ЗАКРЫТ 2026-09-16 (P1, срезы 1-40, финал `p1-gap-xmldoc-srez40`): CDATA-обёртка в `<style>`/`<script>` для XHTML pull/push-парсинга (BUG-786) и HTML LS §13.2.6.5 foreign content (SVG/MathML namespace, апперкейс-исключения, integration points, прототип-цепочка parser-built элементов, foreign-attribute namespacing, namespace-префиксы, `Namespace::Other`, живой xmlns-резолвер default_ns+prefix→uri, `lookupNamespaceURI`/`lookupPrefix`/`isDefaultNamespace`) реализованы (BUG-685). Оставлено вне скоупа: параметрические entity/внешний DTD/`SYSTEM`-entity — стабильно 0 попаданий на корпусе (срезы 30-40). XML-пути разбора документа нет вовсе: `.xhtml`/`.xht`/`.svg` разбираются HTML-парсером, из-за чего открывающий CDATA-маркер съедается как prelude плохого правила вместе с первым правилом каждого блока `<style>` — 736 блоков корпуса из 4 327 несут единственное правило и теряют встроенный стиль целиком (BUG-786). Ниже лежит вторая половина: парсер не реализует HTML LS §13.2.6.5 foreign content — всё разобранное из разметки, включая содержимое `<svg>`, безусловно попадает в неймспейс XHTML и апперкейсится как HTML-тег (BUG-685). Цена измерена на корпусе: срез 14 WPT-RUN-5 показал, что потерянный стиль даёт ещё и ЛОЖНЫЕ PASS у рефтестов, когда обе стороны пары рендерятся одинаково голыми.",
        "bugs": [
         "BUG-786",
         "BUG-685"
@@ -7562,27 +7562,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-607": {
-   "status": "open",
-   "title": "`document.fgColor`/`linkColor`/`alinkColor`/`vlinkColor`/`bgColor` not implemented -- should reflect onto `<body>`'s `text`/`link`/`alink`/`vlink`/`bgcolor` att…",
-   "component": "js (`crates/js/src/dom.rs` -- no reflection entries for any of the five)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-608": {
-   "status": "open",
-   "title": "`fetchPriority` IDL attribute missing on `<script>`/`<img>` (default should reflect `\"auto\"`, currently `undefined`); likely also missing on `<link>`/`<iframe>`…",
-   "component": "js (`crates/js/src/dom.rs` -- IDL reflection table from BUG-383, no `fetchPriority` entry)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-609": {
-   "status": "open",
-   "title": "`select.options.length = N` setter correctly rejects out-of-range `N` but never implements the in-range growth path (appending empty `<option>`s up to `N`) -- `…",
-   "component": "js (`crates/js/src/dom.rs` -- `HTMLOptionsCollection.prototype` `length` setter)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-610": {
    "status": "open",
    "title": "`MessageEvent.userActivation` attribute missing -- `MessageEventInit.userActivation` dict member silently ignored by the constructor, no getter on the prototype…",
@@ -8031,13 +8010,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-685": {
-   "status": "open",
-   "title": "The HTML parser never implements HTML LS §13.2.6.5 foreign content — every element parsed from markup, including everything inside `<svg>…</svg>`, is unconditio…",
-   "component": "engine (`crates/engine/html-parser/src/tree_builder.rs:1879` — `create_element_with_attrs` always builds `QualName::html(name)`, no foreign-content branch in the crate at all); knock-on in js (`crates/js/src/dom.rs:1673`, `crates/js/src/svg.rs:905-921`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-686": {
    "status": "open",
    "title": "`implicit_role` maps only HTML tag local names (`nav`/`main`/`button`/`img`/…) and never checks `node.namespace()` — no arm exists for any SVG tag (`svg`/`circl…",
@@ -8385,13 +8357,6 @@
    "status": "open",
    "title": "**Детерминированный CPU-снапшот на деле недетерминирован:** два прогона `ubuntu-latest` на одном и том же коде (второй коммит ветки правит только `.md`) дали FA…",
    "component": "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-786": {
-   "status": "open",
-   "title": "`<style><![CDATA[ ... ]]></style>` в `.xht`/XHTML-документах теряет **первое правило каждого блока** (при единственном правиле — весь встроенный стиль; уточнено…",
-   "component": "движковый парсинг документов (нет XML-пути для `application/xhtml+xml`, вероятно `crates/engine/html-parser`)",
    "date": null,
    "debtor": false
   },
@@ -14146,6 +14111,41 @@
    "status": "fixed",
    "title": "`<marquee>` has no dedicated interface -- `loop`/`scrollAmount`/`scrollDelay` IDL attributes all `undefined` instead of reflecting with spec defaults (`-1`/`6`/…",
    "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js`) + layout (`crates/engine/layout/src/style/cascade.rs`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-607": {
+   "status": "fixed",
+   "title": "`document.fgColor`/`linkColor`/`alinkColor`/`vlinkColor`/`bgColor` not implemented -- should reflect onto `<body>`'s `text`/`link`/`alink`/`vlink`/`bgcolor` att…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `document` object literal; `crates/js/src/shim/web_api_shim_tail_b.js` -- `HTMLBodyElement.prototype` reflection table, new `string-null2empty` kind)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-608": {
+   "status": "fixed",
+   "title": "`fetchPriority` IDL attribute missing on `<script>`/`<img>` (default should reflect `\"auto\"`, currently `undefined`); likely also missing on `<link>`/`<iframe>`…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- reflection tables for `HTMLImageElement`/`HTMLScriptElement`/`HTMLLinkElement`/`HTMLIFrameElement`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-609": {
+   "status": "fixed",
+   "title": "`select.options.length = N` setter correctly rejects out-of-range `N` but never implements the in-range growth path (appending empty `<option>`s up to `N`) -- `…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `_lumen_make_nid_collection`'s Proxy; `crates/js/src/shim/web_api_shim_tail_b.js` -- `_lumen_options_set_length`, `HTMLOptionsCollection`'s `options` getter, `HTMLSelectElement.prototype.length`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-685": {
+   "status": "fixed",
+   "title": "The HTML parser never implements HTML LS §13.2.6.5 foreign content — every element parsed from markup, including everything inside `<svg>…</svg>`, is unconditio…",
+   "component": "engine (`crates/engine/html-parser/src/tree_builder.rs:1879` — `create_element_with_attrs` always builds `QualName::html(name)`, no foreign-content branch in the crate at all); knock-on in js (`crates/js/src/dom.rs:1673`, `crates/js/src/svg.rs:905-921`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-786": {
+   "status": "fixed",
+   "title": "`<style><![CDATA[ ... ]]></style>` в `.xht`/XHTML-документах теряет **первое правило каждого блока** (при единственном правиле — весь встроенный стиль; уточнено…",
+   "component": "движковый парсинг документов (нет XML-пути для `application/xhtml+xml`, вероятно `crates/engine/html-parser`)",
    "date": "2026-09-16",
    "debtor": false
   }
