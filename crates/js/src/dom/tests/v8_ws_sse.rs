@@ -1905,6 +1905,24 @@ fn message_event_constructor() {
 }
 
 #[test]
+fn message_event_user_activation_defaults_to_null() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("var me = new MessageEvent('payload'); me.userActivation === null")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn message_event_user_activation_reflects_init() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("var ua = { isActive: true }; var me = new MessageEvent('payload', { userActivation: ua }); me.userActivation === ua")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn websocket_has_buffered_amount() {
     let rt = v8_runtime_with_ws(make_doc());
     let r = rt
