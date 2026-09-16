@@ -1469,6 +1469,18 @@ pub fn compute_style(
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
 
+    // HTML LS §obsolete (BUG-605): `<marquee>` forces `overflow: hidden` in
+    // the UA stylesheet as `!important`, unconditionally overriding any
+    // author `overflow` (even inline `style=""`) — a pre-cascade UA hint
+    // would still lose to author declarations, so this runs post-cascade
+    // like `apply_forced_colors_mode` above.
+    if let NodeData::Element { name, .. } = &doc.get(node).data
+        && name.local.as_str() == "marquee"
+    {
+        style.overflow_x = Overflow::Hidden;
+        style.overflow_y = Overflow::Hidden;
+    }
+
     // CSS Overscroll Behavior L1 §2 (BUG-516) — resolve `overscroll-behavior-
     // block`/`-inline` to `overscroll_behavior_x`/`_y`, same writing-mode
     // axis swap as `overflow-block`/`-inline` above.

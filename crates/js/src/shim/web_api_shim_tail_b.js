@@ -1207,7 +1207,12 @@ function _lumen_install_reflection(proto, entries) {
  'HTMLTableColElement','HTMLTableCaptionElement','HTMLDListElement','HTMLMenuElement',
  // BUG-854: `<frame>` is obsolete but still parsed and still interface-bearing
  // (HTML LS §16.3.3), while `<frameset>` next door already had its interface.
- 'HTMLFrameElement'
+ 'HTMLFrameElement',
+ // BUG-605: obsolete `<marquee>` (HTML LS §obsolete) -- deliberately no
+ // `onstart`/`onfinish`/`onbounce` event handler IDL attributes (the spec
+ // requires the interface to omit them; this engine never fires those events
+ // at all, so omission is free).
+ 'HTMLMarqueeElement'
 ].forEach(function(_name) {
     if (_name in globalThis) return;
     var _ctor = function() { throw new TypeError('Illegal constructor'); };
@@ -1244,6 +1249,7 @@ _lumen_html_tag_prototypes['CAPTION']   = HTMLTableCaptionElement;
 _lumen_html_tag_prototypes['DL']        = HTMLDListElement;
 _lumen_html_tag_prototypes['MENU']      = HTMLMenuElement;
 _lumen_html_tag_prototypes['FRAME']     = HTMLFrameElement;
+_lumen_html_tag_prototypes['MARQUEE']   = HTMLMarqueeElement;
 
 // `referrerpolicy` shares one keyword set across <a>/<area>/<img>/<iframe>/…
 var _LUMEN_REFERRER_POLICY = { def: '', keys: [
@@ -1710,14 +1716,43 @@ HTMLImageElement.prototype.decode = function decode() {
 // `<iframe>` is patched per element by `iframe_element.rs` with the same string
 // semantics; that own property keeps shadowing this row, which exists for the
 // iframes that patch never reaches (`innerHTML`, `createElementNS`).
-// (`HTMLMarqueeElement` owns the pair too but has no interface in this engine,
-// so `<marquee>` is left without it rather than growing an interface here.)
+// (`HTMLMarqueeElement` owns the pair too, per HTML LS, but BUG-605 only
+// scoped `loop`/`scrollAmount`/`scrollDelay` -- `width`/`height` on
+// `<marquee>` remain unreflected until a future slice asks for them.)
 [HTMLIFrameElement.prototype, HTMLEmbedElement.prototype,
  HTMLObjectElement.prototype].forEach(function(_p) {
     _lumen_install_reflection(_p, [
         ['width',      'width',      'string'],
         ['height',     'height',     'string'],
     ]);
+});
+// BUG-605: `scrollAmount`/`scrollDelay` are ordinary `unsigned long`
+// reflections (negative or unparseable falls back to the default), but
+// `loop` cannot go through the generic `long` kind -- the spec's parsed
+// value must fall back to -1 not just when out of the i32 range but for
+// *any* value less than 1 (`loop="-2"` -> -1, confirmed by marquee-loop.html),
+// unlike a plain `long` which would let -2 through verbatim.
+_lumen_install_reflection(HTMLMarqueeElement.prototype, [
+    ['scrollAmount', 'scrollamount', 'ulong', 6],
+    ['scrollDelay',  'scrolldelay',  'ulong', 85],
+]);
+Object.defineProperty(HTMLMarqueeElement.prototype, 'loop', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return -1;
+        var p = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(n, 'loop')));
+        if (p === null || p < 1 || p > _LUMEN_LONG_MAX) return -1;
+        return p;
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var p = Number(v);
+        p = isFinite(p) ? Math.trunc(p) : 0;
+        if (p < _LUMEN_LONG_MIN || p > _LUMEN_LONG_MAX) p = -1;
+        _lumen_set_attr(n, 'loop', String(p));
+    },
+    enumerable: true, configurable: true,
 });
 _lumen_install_reflection(HTMLTableCellElement.prototype, [
     ['width',          'width',          'string'],

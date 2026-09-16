@@ -1279,3 +1279,49 @@ use super::*;
         assert_eq!(style.color.g, 0);
         assert_eq!(style.color.b, 0);
     }
+
+    // ── BUG-605: `<marquee>` UA `overflow: hidden !important` ──────────────
+
+    #[test]
+    fn marquee_overflow_forced_hidden_with_no_author_style() {
+        let doc = lumen_html_parser::parse("<marquee>x</marquee>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let m = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, m, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.overflow_x, Overflow::Hidden);
+        assert_eq!(style.overflow_y, Overflow::Hidden);
+    }
+
+    /// `!important`-strength UA behaviour: even an inline `style="overflow: ..."`
+    /// must not win — this is a post-cascade forced override, not a regular
+    /// UA hint that the author cascade could beat.
+    #[test]
+    fn marquee_overflow_forced_hidden_overrides_inline_author_style() {
+        for value in ["visible", "scroll", "clip", "auto"] {
+            let doc = lumen_html_parser::parse(&format!(
+                "<marquee style=\"overflow: {value}\">x</marquee>"
+            ));
+            let sheet = lumen_css_parser::parse("");
+            let root = ComputedStyle::root();
+            let m = doc.get(doc.body().unwrap()).children[0];
+            let style = compute_style(&doc, m, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!(
+                style.overflow_x,
+                Overflow::Hidden,
+                "author overflow:{value} must not override marquee's forced UA overflow"
+            );
+            assert_eq!(style.overflow_y, Overflow::Hidden);
+        }
+    }
+
+    #[test]
+    fn non_marquee_overflow_not_forced() {
+        let doc = lumen_html_parser::parse("<div style=\"overflow: visible\"></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.overflow_x, Overflow::Visible);
+        assert_eq!(style.overflow_y, Overflow::Visible);
+    }
