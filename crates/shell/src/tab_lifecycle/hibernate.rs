@@ -83,8 +83,8 @@ pub(crate) fn restore_js_context(
         let mut module_items = Vec::new();
         crate::collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
         (
-            crate::resolve_script_sources(&classic_items, &base, &event_sink, cookie_jar.clone()),
-            crate::resolve_script_sources(&module_items, &base, &event_sink, cookie_jar.clone()),
+            crate::resolve_script_sources(&classic_items, &base, &event_sink, cookie_jar.clone(), &doc),
+            crate::resolve_script_sources(&module_items, &base, &event_sink, cookie_jar.clone(), &doc),
         )
     };
 

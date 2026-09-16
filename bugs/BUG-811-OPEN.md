@@ -326,3 +326,46 @@ csp-meta-img` теперь печатает `img-onerror` вместо `img-onlo
 (`connect-src`/`style-src`/`media-src`/…); картинки внутри `<iframe>`;
 `background-image`/`@font-face url()`; hash-источники; `report-uri`/
 `report-to`; дедупликация двойного `securitypolicyviolation`.
+
+## Срез 6 (2026-09-17, P6) — `script-src`/`default-src` против внешнего `<script src>`
+
+Реализовано:
+
+- `crates/network/src/csp.rs`/`crates/shell/src/csp_enforce.rs`: `script_src_blocked(policy, url, self_origin)` —
+  та же host/scheme/`'self'` проверка (`CspPolicy::fetch_directive_allows`), которую
+  срез 4 уже сделал для `img-src`, теперь применена к `CspDirective::ScriptSrc`; +4
+  unit-теста в `csp_enforce.rs`.
+- `crates/shell/src/scripts.rs::resolve_script_sources` получила параметр `doc:
+  &Document` — та же одноразовая точка пересчёта политики, что и у `subresources.rs`
+  (`document_csp_policy` заново по документу), и резолвит абсолютный URL (`base.
+  resolve_str(src)`) ДО обеих веток (`ResolvedResource::File`/`Url`): заблокированный
+  URL не читается ни с диска, ни из сети — тот же принцип «ни одного исходящего
+  байта», что срез 4 применил к картинкам. `ResolvedScript` получила поле
+  `csp_blocked: bool`, отличающее «файл не пришёл из-за CSP» от «файл не пришёл из-за
+  сети» — оба случая дают `external_ok: Some(false)` (и потому `error` на элементе,
+  BUG-804), но только первый обязан ещё и диспатчить `securitypolicyviolation`.
+- `run_scripts_with_dom` (обе точки исполнения — classic и module) диспатчит
+  `securitypolicyviolation` при `csp_blocked`, используя резолвленный `url` как
+  `blockedURI` — `fire_script_src_violation` (срез 1, был захардкожен на
+  `blocked_uri = "inline"`) обобщена на произвольный `blockedURI`, вызовы для
+  инлайна передают `"inline"` явно.
+- Три места, вызывавшие `resolve_script_sources` без документа
+  (`page_pipeline.rs`, `frames.rs` — своя политика для каждого фрейма, не
+  top-level, в отличие от ограничения среза 4 для картинок, — и
+  `tab_lifecycle/hibernate.rs`), обновлены на новую сигнатуру.
+
+Подтверждено unit-тестами `csp_enforce.rs` (`script_src_none_blocks_external`,
+`script_src_allowed_host_passes`, `no_script_src_allows_external`,
+`script_src_unparseable_url_not_blocked`) и полным `cargo build -p lumen-shell`
++ `cargo clippy -p lumen-shell --all-targets -- -D warnings` (оба чисто) +
+`scripts/scoped-test.sh` (единственный красный тест — `cases::snapshot_cpu::
+cpu_snapshots_match_references`, тот же 7-файловый дрейф эталонов, что уже
+числится на `main` до этой ветки, не регрессия этого среза).
+
+Ещё не покрыто (следующие срезы): директивы кроме `script-src`/`img-src`
+(`connect-src`/`style-src`/`media-src`/…); картинки/скрипты внутри `<iframe>`
+top-level документа (у скриптов внутри фрейма политика теперь своя, см. выше,
+но top-level картинки по-прежнему не видят политику подфрейма); честная
+независимая проверка заголовка и `<meta>` вместо их слияния; hash-источники;
+`report-uri`/`report-to`; дедупликация двойного `securitypolicyviolation` для
+картинок (не менялось этим срезом).

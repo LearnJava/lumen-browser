@@ -157,6 +157,11 @@ pub(crate) struct ResolvedScript {
     /// `None` не диспатчит ничего: у инлайнового скрипта «from an external
     /// file» ложно, и события по спецификации нет вовсе.
     pub(crate) external_ok: Option<bool>,
+    /// GAP-CSPENF срез 6: `true` when `external_ok == Some(false)` because
+    /// `script-src`/`default-src` blocked the fetch (not a network/decode
+    /// failure) — the caller uses this to fire `securitypolicyviolation`
+    /// alongside the element's `error` event, with `url` as `blockedURI`.
+    pub(crate) csp_blocked: bool,
 }
 
 impl ResolvedScript {
@@ -167,7 +172,15 @@ impl ResolvedScript {
     /// сообщить странице об отказе. Заодно узел остаётся границей отрезка в
     /// [`ParserInsertLog`] — настоящий парсер тоже вставил его в дерево.
     fn failed(node: NodeId) -> Self {
-        Self { node, source: String::new(), url: None, external_ok: Some(false) }
+        Self { node, source: String::new(), url: None, external_ok: Some(false), csp_blocked: false }
+    }
+
+    /// Внешний `<script src>`, чей fetch `script-src`/`default-src`
+    /// запретил до сети (GAP-CSPENF срез 6) — тот же "нет тела → `error`"
+    /// исход, что и [`Self::failed`], плюс резолвленный `url` для
+    /// `securitypolicyviolation.blockedURI`.
+    fn blocked_by_csp(node: NodeId, url: String) -> Self {
+        Self { node, source: String::new(), url: Some(url), external_ok: Some(false), csp_blocked: true }
     }
 }
 
@@ -294,12 +307,26 @@ pub(crate) fn flush_parser_inserts(
 /// the list with an empty body and `external_ok: Some(false)` — one broken
 /// script must not abort the rest of the page, but it still owes its element an
 /// `error` event (BUG-804), so it may not be dropped here.
+///
+/// `doc` is used only to compute the CSP gate (GAP-CSPENF срез 6) — the same
+/// "recompute the policy at every enforcement point" pattern already used by
+/// `subresources.rs::fetch_and_decode_images`/`scripts.rs::run_scripts_with_dom`
+/// (see `bugs/BUG-811-OPEN.md` срез 5's rationale). A `script-src`/
+/// `default-src` mismatch is checked against the resolved URL before either
+/// branch below touches the filesystem or the network.
 pub(crate) fn resolve_script_sources(
     items: &[ScriptSource],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    doc: &Document,
 ) -> Vec<ResolvedScript> {
+    let csp_gate = {
+        let root = doc.root();
+        crate::csp_enforce::document_csp_policy(doc, root)
+    };
+    let self_origin = base.origin();
+
     // Внешние `<script src>` грузятся параллельно (сеть — главный тормоз), но
     // результат собирается строго в исходном порядке: классические скрипты
     // обязаны выполняться в порядке документа (HTML LS §8.1.3.1). Inline-тела
@@ -310,8 +337,16 @@ pub(crate) fn resolve_script_sources(
             source: body.clone(),
             url: None,
             external_ok: None,
+            csp_blocked: false,
         }),
-        ScriptSource::External(nid, src) => match base.resolve(src) {
+        ScriptSource::External(nid, src) => {
+            let resolved_url = base.resolve_str(src);
+            if let Some((policy, _)) = &csp_gate
+                && crate::csp_enforce::script_src_blocked(policy, &resolved_url, self_origin.as_ref())
+            {
+                return Some(ResolvedScript::blocked_by_csp(*nid, resolved_url));
+            }
+            match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     eprintln!("Загружен скрипт: {}", path.display());
@@ -320,6 +355,7 @@ pub(crate) fn resolve_script_sources(
                         source: content,
                         url: None,
                         external_ok: Some(true),
+                        csp_blocked: false,
                     })
                 }
                 Err(e) => {
@@ -361,6 +397,7 @@ pub(crate) fn resolve_script_sources(
                             // относительных импортов внутри модуля.
                             url: Some(url.clone()),
                             external_ok: Some(true),
+                            csp_blocked: false,
                         })
                     }
                     Err(e) => {
@@ -369,7 +406,8 @@ pub(crate) fn resolve_script_sources(
                     }
                 }
             }
-        },
+            }
+        }
     });
     fetched.into_iter().flatten().collect()
 }
@@ -711,7 +749,7 @@ pub(crate) fn run_scripts_with_dom(
                     let _ = rt.eval(&format!("setTimeout(function() {{ {action}; }}, {delay_ms});"));
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
-                for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
+                for ResolvedScript { node: nid, source: src, url, external_ok, csp_blocked } in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
                     // что стоит в документе выше этого скрипта, и сам его
                     // элемент — наблюдатель, поставленный предыдущим скриптом,
@@ -719,14 +757,25 @@ pub(crate) fn run_scripts_with_dom(
                     flush_parser_inserts(&mut parser_inserts, Some(*nid), &rt);
                     // BUG-804: внешний файл не пришёл — исполнять нечего, но
                     // элемент обязан сообщить об отказе на своём месте в
-                    // порядке документа.
+                    // порядке документа. GAP-CSPENF срез 6: если файл не
+                    // пришёл потому, что `script-src`/`default-src` запретил
+                    // сам fetch (`resolve_script_sources`), это ещё и
+                    // нарушение — `securitypolicyviolation` с резолвленным
+                    // `url` как `blockedURI`.
                     if *external_ok == Some(false) {
+                        if *csp_blocked
+                            && let Some((_, original_policy)) = &csp_policy
+                        {
+                            let blocked_uri = url.as_deref().unwrap_or("");
+                            crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, original_policy);
+                        }
                         fire_parser_script_event(&rt, *nid, *external_ok);
                         continue;
                     }
                     // GAP-CSPENF срез 1: `script-src` против инлайна — только
                     // инлайновые классические скрипты (`external_ok ==
-                    // None`), внешние `<script src>` не покрыты этим срезом.
+                    // None`); внешний `<script src>` покрыт срезом 6 выше,
+                    // до этого места (fetch не выполнялся вовсе).
                     if external_ok.is_none()
                         && let Some((policy, original_policy)) = &csp_policy
                     {
@@ -735,7 +784,7 @@ pub(crate) fn run_scripts_with_dom(
                             doc.get(*nid).get_attr("nonce").map(str::to_owned)
                         };
                         if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref()) {
-                            crate::csp_enforce::fire_script_src_violation(&rt, original_policy);
+                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", original_policy);
                             fire_parser_script_event(&rt, *nid, *external_ok);
                             continue;
                         }
@@ -777,7 +826,15 @@ pub(crate) fn run_scripts_with_dom(
                 for item in &module_scripts {
                     // BUG-804: внешний модуль, чей файл не пришёл, обязан
                     // выстрелить `error` ровно так же, как классический.
+                    // GAP-CSPENF срез 6: та же CSP-разметка, что у
+                    // классических скриптов выше.
                     if item.external_ok == Some(false) {
+                        if item.csp_blocked
+                            && let Some((_, original_policy)) = &csp_policy
+                        {
+                            let blocked_uri = item.url.as_deref().unwrap_or("");
+                            crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, original_policy);
+                        }
                         fire_parser_script_event(&rt, item.node, item.external_ok);
                         continue;
                     }
@@ -792,7 +849,7 @@ pub(crate) fn run_scripts_with_dom(
                             doc.get(item.node).get_attr("nonce").map(str::to_owned)
                         };
                         if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref()) {
-                            crate::csp_enforce::fire_script_src_violation(&rt, original_policy);
+                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", original_policy);
                             fire_parser_script_event(&rt, item.node, item.external_ok);
                             continue;
                         }

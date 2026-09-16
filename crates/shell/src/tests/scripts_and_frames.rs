@@ -46,7 +46,7 @@ fn resolve_script_sources_keeps_a_failed_external_for_its_error_event() {
     collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
     let base = ResourceBase::File(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
-    let resolved = resolve_script_sources(&classic, &base, &sink, None);
+    let resolved = resolve_script_sources(&classic, &base, &sink, None, &doc);
     assert_eq!(resolved.len(), 2, "the failed script keeps its slot");
     assert_eq!(resolved[0].external_ok, Some(false));
     assert!(resolved[0].source.is_empty(), "no body to execute");
@@ -65,7 +65,7 @@ fn resolved_for_test(items: &[ScriptSource]) -> Vec<ResolvedScript> {
             let (node, source) = match s {
                 ScriptSource::Inline(n, src) | ScriptSource::External(n, src) => (*n, src),
             };
-            ResolvedScript { node, source: source.clone(), url: None, external_ok: None }
+            ResolvedScript { node, source: source.clone(), url: None, external_ok: None, csp_blocked: false }
         })
         .collect()
 }
@@ -219,7 +219,7 @@ fn resolve_script_sources_passes_inline_through() {
     collect_scripts_ordered(&doc, doc.root(), &mut items, &mut modules);
     let base = ResourceBase::Url("https://example.com/".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
-    let out = resolve_script_sources(&items, &base, &sink, None);
+    let out = resolve_script_sources(&items, &base, &sink, None, &doc);
     let bodies: Vec<&str> = out.iter().map(|r| r.source.as_str()).collect();
     assert_eq!(bodies, vec!["var a = 1;", "var b = 2;"]);
     // BUG-486: each body keeps the id of its own `<script>` element, so the
