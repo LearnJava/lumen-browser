@@ -553,9 +553,7 @@ pub(crate) fn install_node_properties(
                 let nid = NodeId::from_index(node_id as usize);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 match doc.try_get(nid).map(|n| &n.data) {
-                    Some(NodeData::Element { name, .. }) => {
-                        namespace_uri(name.namespace).map(|s| s.to_string())
-                    }
+                    Some(NodeData::Element { name, .. }) => namespace_uri(&name.namespace),
                     _ => None,
                 }
             }
@@ -589,8 +587,7 @@ pub(crate) fn install_node_properties(
                     Some(NodeData::Element { attrs, .. }) => attrs
                         .iter()
                         .find(|a| a.name.local.eq_ignore_ascii_case(&name))
-                        .and_then(|a| namespace_uri(a.name.namespace))
-                        .map(|s| s.to_string()),
+                        .and_then(|a| namespace_uri(&a.name.namespace)),
                     _ => None,
                 }
             }
@@ -1018,19 +1015,13 @@ pub(crate) fn install_tree_mutation(
                 // handled elsewhere); the empty string means "no namespace" per DOM
                 // §4.5 "validate and extract" (BUG-328, e.g. `createElementNS(null/"",
                 // name)` — the JS shim normalizes `null`/`undefined` to `""` before
-                // this call), distinct from HTML; any other namespace URI falls back
-                // to HTML (BUG-830 — no general namespace registry yet). Returns -1
-                // on overflow (see `_lumen_create_element` above for why this must be
-                // i32, not u32).
-                let namespace = if ns == "http://www.w3.org/2000/svg" {
-                    Namespace::Svg
-                } else if ns == "http://www.w3.org/1998/Math/MathML" {
-                    Namespace::MathMl
-                } else if ns.is_empty() {
-                    Namespace::None
-                } else {
-                    Namespace::Html
-                };
+                // this call), distinct from HTML. Any other namespace URI is now kept
+                // verbatim via `Namespace::Other` instead of silently collapsing to
+                // HTML (GAP-XMLDOC срез 36, BUG-830's element-creation half — the
+                // attribute half, `resolve_attribute_namespace`, is unrelated and
+                // unchanged). Returns -1 on overflow (see `_lumen_create_element`
+                // above for why this must be i32, not u32).
+                let namespace = Namespace::from_uri(if ns.is_empty() { None } else { Some(ns.as_str()) });
                 match doc.try_create_element(QualName { namespace, local }) {
                     Ok(nid) => nid.index() as i32,
                     Err(_) => -1,
