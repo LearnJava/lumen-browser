@@ -232,6 +232,30 @@ pub(crate) fn strip_known_html_prefix(lower_name: &str) -> Option<&str> {
         .filter(|suffix| !suffix.is_empty())
 }
 
+/// Strips the `svg:` namespace prefix bound to SVG
+/// (`xmlns:svg="…/2000/svg"`) measured live in the vendored WPT corpus
+/// (54 `.xht`/`.xhtml` files, e.g. `<svg:svg><svg:rect .../></svg:svg>`
+/// embedded as a CSS replaced element — GAP-XMLDOC срез 33, BUG-685). Same
+/// hardcoded-pair boundary as [`strip_known_html_prefix`]: real XML
+/// namespace resolution is out of scope, only the one prefix actually seen
+/// in the corpus is recognized. Unlike the HTML prefix, stripping this one
+/// does not force a namespace by itself — the caller still runs the
+/// stripped name (`svg`, `rect`, ...) through the ordinary SVG-namespacing
+/// path, which already treats a bare `<svg>` start tag as always-SVG and
+/// resolves its unprefixed children by inheritance.
+pub(crate) fn strip_known_svg_prefix(lower_name: &str) -> Option<&str> {
+    lower_name.strip_prefix("svg:").filter(|suffix| !suffix.is_empty())
+}
+
+/// Strips the `math:` namespace prefix bound to MathML
+/// (`xmlns:math="…/1998/Math/MathML"`) measured live in the vendored WPT
+/// corpus (18 `.xhtml` crashtests, e.g. `<math:math><mrow>...`) — GAP-XMLDOC
+/// срез 33, BUG-685. Same boundary and same "caller still resolves the
+/// stripped name normally" behavior as [`strip_known_svg_prefix`].
+pub(crate) fn strip_known_mathml_prefix(lower_name: &str) -> Option<&str> {
+    lower_name.strip_prefix("math:").filter(|suffix| !suffix.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +367,24 @@ mod tests {
         assert_eq!(strip_known_html_prefix("h:script"), Some("script"));
         assert_eq!(strip_known_html_prefix("html:link"), Some("link"));
         assert_eq!(strip_known_html_prefix("h:div"), Some("div"));
+    }
+
+    #[test]
+    fn strips_known_svg_prefix() {
+        assert_eq!(strip_known_svg_prefix("svg:svg"), Some("svg"));
+        assert_eq!(strip_known_svg_prefix("svg:rect"), Some("rect"));
+        assert_eq!(strip_known_svg_prefix("svg:lineargradient"), Some("lineargradient"));
+        assert_eq!(strip_known_svg_prefix("svg:"), None);
+        assert_eq!(strip_known_svg_prefix("rect"), None);
+        assert_eq!(strip_known_svg_prefix("h:script"), None);
+    }
+
+    #[test]
+    fn strips_known_mathml_prefix() {
+        assert_eq!(strip_known_mathml_prefix("math:math"), Some("math"));
+        assert_eq!(strip_known_mathml_prefix("math:mrow"), Some("mrow"));
+        assert_eq!(strip_known_mathml_prefix("math:"), None);
+        assert_eq!(strip_known_mathml_prefix("mrow"), None);
     }
 
     #[test]
