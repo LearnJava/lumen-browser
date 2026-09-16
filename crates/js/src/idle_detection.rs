@@ -96,25 +96,32 @@ const IDLE_DETECTION_SHIM: &str = r#"
 (function(global) {
   'use strict';
 
+  // Private state lives outside the instance (WeakMap keyed by `this`) so no
+  // own enumerable property leaks through Object.keys/JSON.stringify/for...in
+  // — the spec models this as internal slots, not instance fields (BUG-615).
+  var idleState = new WeakMap();
+
   // IdleDetector — detects user/screen idle state (WICG Idle Detection API).
   // Extends EventTarget so callers can use addEventListener('change', ...).
   class IdleDetector extends EventTarget {
     constructor() {
       super();
-      this._userState   = null;
-      this._screenState = null;
-      this._started     = false;
-      this._threshold   = 60000;
-      this._timer       = null;
+      idleState.set(this, {
+        userState:   null,
+        screenState: null,
+        started:     false,
+        threshold:   60000,
+        timer:       null,
+      });
     }
 
     // WICG §4.2: current user-activity state.
     // Returns 'active' | 'idle' | null (null before start()).
-    get userState()   { return this._userState;   }
+    get userState()   { return idleState.get(this).userState;   }
 
     // WICG §4.2: current screen-lock state.
     // Returns 'locked' | 'unlocked' | null (null before start()).
-    get screenState() { return this._screenState; }
+    get screenState() { return idleState.get(this).screenState; }
 
     // WICG §4.3: request permission to observe idle state.
     // Auto-granted — Lumen does not expose a permission prompt for this API.
@@ -133,19 +140,20 @@ const IDLE_DETECTION_SHIM: &str = r#"
         );
       }
 
-      this._threshold   = threshold;
-      this._userState   = 'active';
-      this._screenState = 'unlocked';
-      this._started     = true;
+      var state = idleState.get(this);
+      state.threshold   = threshold;
+      state.userState   = 'active';
+      state.screenState = 'unlocked';
+      state.started     = true;
 
       // Poll at half the threshold (minimum 30 s per spec minimum threshold).
       var pollMs = Math.max(30000, Math.floor(threshold / 2));
       var self = this;
 
-      this._timer = setInterval(function() {
-        if (!self._started) {
-          clearInterval(self._timer);
-          self._timer = null;
+      state.timer = setInterval(function() {
+        if (!state.started) {
+          clearInterval(state.timer);
+          state.timer = null;
           return;
         }
 
@@ -154,9 +162,9 @@ const IDLE_DETECTION_SHIM: &str = r#"
           ? __lumen_idle_get_idle_ms()
           : 0;
 
-        var newUserState = (idleMs >= self._threshold) ? 'idle' : 'active';
-        if (newUserState !== self._userState) {
-          self._userState = newUserState;
+        var newUserState = (idleMs >= state.threshold) ? 'idle' : 'active';
+        if (newUserState !== state.userState) {
+          state.userState = newUserState;
           self.dispatchEvent(new Event('change'));
         }
       }, pollMs);
@@ -166,13 +174,14 @@ const IDLE_DETECTION_SHIM: &str = r#"
 
     // WICG §4.5: stop observing idle state.
     stop() {
-      this._started = false;
-      if (this._timer != null) {
-        clearInterval(this._timer);
-        this._timer = null;
+      var state = idleState.get(this);
+      state.started = false;
+      if (state.timer != null) {
+        clearInterval(state.timer);
+        state.timer = null;
       }
-      this._userState   = null;
-      this._screenState = null;
+      state.userState   = null;
+      state.screenState = null;
     }
   }
 
@@ -293,6 +302,26 @@ mod tests {
     }
 
     #[test]
+    fn instance_has_no_own_enumerable_properties() {
+        // BUG-615: internal state must not leak as own enumerable props.
+        // (The test harness's mock EventTarget owns `_listeners` itself —
+        // that's a fixture detail, not part of what this bug fixes, so it's
+        // excluded here.)
+        with_idle_api(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    var d = new IdleDetector();
+                    d.start({ threshold: 60000 });
+                    Object.keys(d).filter(function(k) { return k !== '_listeners'; }).length === 0
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    #[test]
     fn start_resolves_and_sets_active_state() {
         with_idle_api(|rt| {
             let ok = rt
@@ -351,9 +380,10 @@ mod tests {
                     r#"
                     var d = new IdleDetector();
                     d.start({ threshold: 60000 });
-                    var hadTimer = d._timer != null;
+                    var timer = __timers[__timers.length - 1];
+                    var hadTimer = timer && !timer.cleared;
                     d.stop();
-                    hadTimer && d._timer === null
+                    hadTimer && timer.cleared === true
                     "#,
                 )
                 .unwrap();
@@ -500,7 +530,7 @@ mod tests {
                     var d = new IdleDetector();
                     d.start({ threshold: 120000 }); // 2-minute threshold
                     // Expected poll: max(30000, 120000/2) = 60000 ms.
-                    var timer = __timers.find(function(t){ return t.id === d._timer; });
+                    var timer = __timers[__timers.length - 1];
                     timer && timer.ms === 60000
                     "#,
                 )
@@ -518,7 +548,7 @@ mod tests {
                     var d = new IdleDetector();
                     d.start({ threshold: 60000 }); // minimum threshold
                     // Expected poll: max(30000, 60000/2) = 30000 ms.
-                    var timer = __timers.find(function(t){ return t.id === d._timer; });
+                    var timer = __timers[__timers.length - 1];
                     timer && timer.ms === 30000
                     "#,
                 )
