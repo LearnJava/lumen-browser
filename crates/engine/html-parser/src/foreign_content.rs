@@ -266,6 +266,28 @@ pub(crate) fn strip_known_mathml_prefix(lower_name: &str) -> Option<&str> {
         .filter(|suffix| !suffix.is_empty())
 }
 
+/// Splits an arbitrary, user-declared namespace prefix (`xmlns:pickle="…"`)
+/// off a qualified name, XML §3 `Name ::= (Prefix ':')? LocalPart` grammar —
+/// unlike [`strip_known_html_prefix`]/[`strip_known_svg_prefix`]/
+/// [`strip_known_mathml_prefix`] this is not a hardcoded pair, it fires for
+/// ANY remaining colon once those three have already had their chance. It
+/// recovers only the local-name half of the grammar: Lumen has no
+/// namespace-binding table at all (`Element.prefix` is always reported
+/// `null`, see the comment on `get prefix()` in `web_api_shim_mid.js`), so
+/// the stripped name still resolves through the ordinary (HTML/inherited)
+/// namespacing path exactly like an unprefixed name would — this only fixes
+/// `.localName`, not `.prefix`/`.namespaceURI` for the custom binding itself.
+/// Measured live in the vendored WPT corpus (GAP-XMLDOC срез 35, BUG-685):
+/// `dom/nodes/Element-firstElementChild-namespace-{xhtml.xhtml,svg.svg}`,
+/// both asserting `<pickle:dill/>.localName === "dill"` (`xmlns:pickle=
+/// "http://ns.example.org/pickle"`, a namespace WPT invents specifically to
+/// be unrecognized by anything).
+pub(crate) fn strip_unknown_prefix(name: &str) -> Option<&str> {
+    let colon = name.rfind(':')?;
+    let (prefix, local) = (&name[..colon], &name[colon + 1..]);
+    (!prefix.is_empty() && !local.is_empty()).then_some(local)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +424,16 @@ mod tests {
         assert_eq!(strip_known_mathml_prefix("mathml:"), None);
         assert_eq!(strip_known_mathml_prefix("m:"), None);
         assert_eq!(strip_known_mathml_prefix("mrow"), None);
+    }
+
+    #[test]
+    fn strips_unknown_prefix() {
+        assert_eq!(strip_unknown_prefix("pickle:dill"), Some("dill"));
+        assert_eq!(strip_unknown_prefix("d:testDescription"), Some("testDescription"));
+        assert_eq!(strip_unknown_prefix("a:b:c"), Some("c"));
+        assert_eq!(strip_unknown_prefix("pickle:"), None);
+        assert_eq!(strip_unknown_prefix(":dill"), None);
+        assert_eq!(strip_unknown_prefix("dill"), None);
     }
 
     #[test]
