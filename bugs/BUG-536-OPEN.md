@@ -232,3 +232,34 @@ reasons as above. 2 new unit tests in `crates/engine/layout/src/
 animation.rs` (`computed_style_patches_carry_color_background_and_height`,
 plus a rename of the now-stale `..._skip_node_with_no_opacity_or_transform`
 to `..._skip_node_with_no_overrides`).
+
+**Срез 5 (2026-09-17, `p1-gap-cssanim-srez5`):** `@keyframes height` now
+interpolates and reaches `getComputedStyle()` — `KeyframeStyle` gained a
+`height: Option<Length>` field, `parse_keyframe_style` parses the `height`
+declaration via `crate::style::parse_length` (literal length/percentage
+only — `auto`/keyword endpoints are the `TransitionScheduler::
+auto_height_cache` path and stay out of scope here), `keyframe_interpolate`
+lerps it through a new `interp_optional_length` (mirrors
+`interp_optional_color` exactly), and `AnimationScheduler::tick` merges it
+into `AnimatedStyle::height` the same way it already merges `color`/
+`background_color`. No shell-side change was needed: `AnimationFrame::
+merge_from` (srez 4) already merges `height` from either scheduler
+generically, so the existing `to_computed_style_patches()` path picks it up
+unchanged. Also corrects a mischaracterization from срезы 3/4 above:
+**`getAnimations()` is not missing** — `Element.prototype.animate`/
+`getAnimations`/`document.getAnimations`/`document.timeline` are fully
+implemented in the JS shim (`crates/js/src/shim/web_api_shim_mid.js`,
+`web_api_shim_tail_b.js`'s `_wa_animations` registry and `Animation`
+constructor). The real remaining gap is narrower: `TransitionScheduler`/
+`AnimationScheduler` (the Rust CSS-transition/animation tickers) never
+register a `CSSTransition`/`CSSAnimation` entry into `_wa_animations`, so
+`getAnimations()` called on an element with a live CSS transition/animation
+returns `[]` — a registration gap, not an API gap. `getBoundingClientRect()`/
+geometry mid-animation is also confirmed broken (not merely unverified):
+the per-frame compositor path (`AnimationFrame::to_compositor_frame()`)
+excludes `height` by design (needs relayout) and nothing in the tick path
+triggers that relayout, so a height/margin/width animation is invisible to
+geometry reads while `getComputedStyle()` already shows the live value —
+a real split between CSSOM-view geometry and computed style. 1 new unit
+test in `crates/engine/layout/src/animation.rs`
+(`scheduler_tick_height_midpoint`).

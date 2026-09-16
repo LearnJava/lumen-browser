@@ -180,8 +180,22 @@ nothing for a CSS-triggered animation — untouched by this slice.
 ## Срез 4 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez4`)
 
 `getComputedStyle()` now also reflects live `color`/`background-color`/
-`height` during a transition (not `@keyframes` animations — that scheduler
-never interpolates `height`). Full mechanism documented in
+`height` during a transition (not `@keyframes` animations — at the time,
+that scheduler never interpolated `height`). Full mechanism documented in
 [BUG-536](BUG-536-OPEN.md#срез-4-2026-09-17-p1-gap-cssanim-srez4). `getAnimations()`
 still returns nothing for a CSS-triggered animation/transition — untouched
 by this slice.
+
+## Срез 5 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez5`)
+
+`@keyframes height` now interpolates too — `AnimationScheduler` (the
+`@keyframes` ticker) gained the same `height` plumbing `TransitionScheduler`
+already had. Full mechanism in
+[BUG-536](BUG-536-OPEN.md#срез-5-2026-09-17-p1-gap-cssanim-srez5). Also:
+`getAnimations()` turned out to already be fully implemented in the JS shim
+(`_wa_animations`/`Animation`/`CSSAnimation`) — the actual gap is that
+CSS-driven transitions/animations never register into that registry, so it
+returns `[]` for them specifically, narrower than "still returns nothing"
+implied above. `getBoundingClientRect()`/geometry mid-animation confirmed
+broken for layout-affecting properties (height/margin/width) — the
+per-frame compositor path skips relayout by design.
