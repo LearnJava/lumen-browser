@@ -218,3 +218,17 @@ affect layout geometry; a layout-affecting animated property like
 `margin-left` already goes through a real relayout each tick and was not
 re-verified as broken here). 4 new unit tests in `crates/engine/layout/src/
 animation.rs` (`computed_style_patches_*`).
+
+**Срез 4 (2026-09-17, `p1-gap-cssanim-srez4`):** the `color`/
+`background-color`/`height` gap left open above is closed —
+`AnimationFrame::to_computed_style_patches()` now serializes all three via
+the same `color_to_css`/`length_to_css` helpers `computed_style_to_map`
+uses, so `getComputedStyle()` reflects the live interpolated value during a
+transition (the only scheduler that populates these three fields —
+`@keyframes` animations only interpolate `opacity`/`transform`/`color`/
+`background-color`, and `KeyframeStyle` never carried `height` to begin
+with). `getAnimations()` and geometry mid-animation remain open — same
+reasons as above. 2 new unit tests in `crates/engine/layout/src/
+animation.rs` (`computed_style_patches_carry_color_background_and_height`,
+plus a rename of the now-stale `..._skip_node_with_no_opacity_or_transform`
+to `..._skip_node_with_no_overrides`).

@@ -176,3 +176,12 @@ transitions in [BUG-536](BUG-536-OPEN.md)). 6 new unit tests in
 [BUG-536](BUG-536-OPEN.md#срез-3-gap-cssanim-2026-09-16-p1-gap-cssanim-srez3--getcomputedstyle-now-reflects-the-live-interpolated-opacitytransform)
 (same fix, both bugs share this symptom). `getAnimations()` still returns
 nothing for a CSS-triggered animation — untouched by this slice.
+
+## Срез 4 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez4`)
+
+`getComputedStyle()` now also reflects live `color`/`background-color`/
+`height` during a transition (not `@keyframes` animations — that scheduler
+never interpolates `height`). Full mechanism documented in
+[BUG-536](BUG-536-OPEN.md#срез-4-2026-09-17-p1-gap-cssanim-srez4). `getAnimations()`
+still returns nothing for a CSS-triggered animation/transition — untouched
+by this slice.
