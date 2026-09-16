@@ -222,6 +222,7 @@ pub struct KeyframeStyle {
     pub transform: Option<Vec<TransformFn>>,
     pub color: Option<Color>,
     pub background_color: Option<Color>,
+    pub height: Option<Length>,
 }
 
 /// Parse the `declarations` of one `@keyframes` frame into a [`KeyframeStyle`].
@@ -250,6 +251,12 @@ pub fn parse_keyframe_style(declarations: &[Declaration]) -> KeyframeStyle {
                 if let Some(c) = crate::style::parse_color(decl.value.as_str()) {
                     ks.background_color = Some(c);
                 }
+            }
+            // `auto`/keyword heights are out of scope here (see
+            // `TransitionScheduler::auto_height_cache` for that path) —
+            // `@keyframes` height only interpolates a literal length/percentage.
+            "height" => {
+                ks.height = crate::style::parse_length(decl.value.as_str());
             }
             _ => {}
         }
@@ -912,6 +919,9 @@ impl AnimationScheduler {
             if let Some(bg) = ks.background_color {
                 entry.background_color = Some(bg);
             }
+            if let Some(h) = ks.height {
+                entry.height = Some(h);
+            }
             frame.has_active = true;
         }
 
@@ -1079,6 +1089,7 @@ fn keyframe_interpolate(kf: &KeyframesRule, t: f32) -> Option<KeyframeStyle> {
             local_t,
             &interp,
         ),
+        height: interp_optional_length(from_ks.height, to_ks.height, local_t, &interp),
     })
 }
 
@@ -1108,6 +1119,22 @@ fn interp_optional_color(
         (Some(f), Some(t_val)) => interp
             .interpolate(&AnimValue::Color(f), &AnimValue::Color(t_val), t)
             .and_then(|v| if let AnimValue::Color(c) = v { Some(c) } else { None }),
+        (Some(f), None) => Some(f),
+        (None, Some(t_val)) => Some(t_val),
+        (None, None) => None,
+    }
+}
+
+fn interp_optional_length(
+    from: Option<Length>,
+    to: Option<Length>,
+    t: f32,
+    interp: &impl AnimationInterpolator,
+) -> Option<Length> {
+    match (from, to) {
+        (Some(f), Some(t_val)) => interp
+            .interpolate(&AnimValue::Length(f), &AnimValue::Length(t_val), t)
+            .and_then(|v| if let AnimValue::Length(l) = v { Some(l) } else { None }),
         (Some(f), None) => Some(f),
         (None, Some(t_val)) => Some(t_val),
         (None, None) => None,
@@ -2759,6 +2786,33 @@ mod tests {
         let entry = frame.overrides.get(&node).expect("node should have overrides");
         let op = entry.opacity.expect("opacity should be set");
         assert!((op - 0.5).abs() < 0.01, "expected ~0.5, got {op}");
+    }
+
+    fn make_sheet_height(name: &str) -> lumen_css_parser::Stylesheet {
+        let css = format!(
+            "@keyframes {name} {{ \
+                from {{ height: 0px; }} \
+                to   {{ height: 100px; }} \
+            }}"
+        );
+        lumen_css_parser::parse(&css)
+    }
+
+    #[test]
+    fn scheduler_tick_height_midpoint() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(4usize);
+        let style = make_style_with_anim("grow", 1.0);
+        sched.sync(node, &style, 0.0);
+        let sheet = make_sheet_height("grow");
+        let frame = sched.tick(&sheet, |_| Some(make_style_with_anim("grow", 1.0)), 0.5);
+        assert!(frame.has_active);
+        let entry = frame.overrides.get(&node).expect("node should have overrides");
+        let h = entry.height.as_ref().expect("height should be set");
+        assert!(
+            matches!(h, Length::Px(v) if (*v - 50.0).abs() < 0.5),
+            "expected ~50px, got {h:?}"
+        );
     }
 
     #[test]
