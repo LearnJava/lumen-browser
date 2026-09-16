@@ -162,3 +162,51 @@ fn draw_image_of_a_noised_canvas_reads_back_with_the_same_noise() {
     );
     assert_eq!(direct, via_draw_image);
 }
+
+// BUG-616: `createImageBitmap(source)` rejected every `HTMLCanvasElement`
+// with "unsupported source type" -- only OffscreenCanvas/ImageData/
+// HTMLImageElement/Blob were matched, missing an nid-keyed branch reading a
+// DOM canvas's current pixels the way the OffscreenCanvas branch reads
+// `__canvas_id__`.
+#[test]
+fn create_image_bitmap_accepts_an_on_page_canvas_element() {
+    let rt = v8_runtime_with_dom(make_doc());
+    painted_canvas(&rt);
+    rt.eval(
+        "globalThis._b616_result = null; globalThis._b616_error = null;\
+         createImageBitmap(c).then(function(bm) { _b616_result = bm; })\
+           .catch(function(e) { _b616_error = e; });",
+    )
+    .unwrap();
+    for _ in 0..20 {
+        let _ = rt.eval("_lumen_drain_microtasks();");
+        if bool_(&rt, "_b616_result !== null || _b616_error !== null") {
+            break;
+        }
+    }
+    assert!(
+        bool_(&rt, "_b616_error === null"),
+        "createImageBitmap(canvas) must not reject: {}",
+        s(&rt, "_b616_error && _b616_error.message")
+    );
+    assert!(bool_(&rt, "_b616_result !== null"), "createImageBitmap(canvas) never resolved");
+    assert_eq!(num(&rt, "_b616_result.width"), 60.0);
+    assert_eq!(num(&rt, "_b616_result.height"), 30.0);
+
+    // ImageBitmap has no pixel-reading method of its own; the raw native
+    // getter behind `_lumen_offscreen_canvas2d_get_image_data` (same wire
+    // format the OffscreenCanvas snapshot branch above already relies on) is
+    // the least indirect way to inspect what the bitmap actually carries.
+    // `getImageData` applies BUG-454's per-read anti-fingerprinting noise
+    // (±1/channel), so compare against the painted color, not bit-for-bit
+    // against a second independently-noised read.
+    let raw = s(&rt, "_lumen_offscreen_canvas2d_get_image_data(_b616_result.__canvas_id__)");
+    let hex = raw.rsplit(',').next().unwrap();
+    let px: Vec<i64> = (0..4)
+        .map(|i| i64::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+        .collect();
+    assert!((px[0] - 18).abs() <= 1, "R out of range: {px:?}");
+    assert!((px[1] - 52).abs() <= 1, "G out of range: {px:?}");
+    assert!((px[2] - 86).abs() <= 1, "B out of range: {px:?}");
+    assert_eq!(px[3], 255, "alpha must never be perturbed");
+}

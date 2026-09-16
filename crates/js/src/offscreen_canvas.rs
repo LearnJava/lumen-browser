@@ -9,8 +9,10 @@
 //! and the original canvas becomes empty (reusable with `resize`).
 //!
 //! `globalThis.createImageBitmap(source[, sx, sy, sw, sh])` accepts ImageData,
-//! OffscreenCanvas (non-destructive snapshot), `<img>` (via [`crate::img_bitmap_store`])
-//! and `Blob` (decoded via [`lumen_image::decode`]) sources; every source resolves to
+//! OffscreenCanvas (non-destructive snapshot), on-page `<canvas>` (non-destructive
+//! snapshot via `canvas2d.rs`'s `_lumen_canvas2d_get_image_data`), `<img>` (via
+//! [`crate::img_bitmap_store`]) and `Blob` (decoded via [`lumen_image::decode`])
+//! sources; every source resolves to
 //! the same bitmap shape, `{width, height, __canvas_id__, close()}`, backed by an
 //! entry in [`OFFSCREEN_CANVASES`]. `ImageBitmapRenderingContext` (`canvas.getContext
 //! ('bitmaprenderer')`, HTML LS §4.12.5.1) and its `transferFromImageBitmap` are wired
@@ -1827,7 +1829,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
   }
 
   // createImageBitmap(source[, sx, sy, sw, sh])
-  // Supports: ImageData, OffscreenCanvas, Blob, HTMLImageElement (HTML LS §4.12.5.4).
+  // Supports: ImageData, OffscreenCanvas, HTMLCanvasElement, Blob, HTMLImageElement (HTML LS §4.12.5.4).
   // All sources resolve to the same bitmap shape: {width, height, __canvas_id__, close()}.
   if (!globalThis.createImageBitmap) {
     globalThis.createImageBitmap = function(source, sx, sy, sw, sh) {
@@ -1904,6 +1906,32 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           var srcParsed = _parseWHHex(srcRaw);
           var snapCid = _lumen_offscreen_canvas_from_image_data(srcParsed.w, srcParsed.h, srcParsed.hex);
           finish(snapCid, srcParsed.w, srcParsed.h);
+          return;
+        }
+
+        // HTMLCanvasElement: pixels come straight off the on-page canvas, via the
+        // same native binding CanvasRenderingContext2D.getImageData() uses
+        // (`_lumen_canvas2d_get_image_data`, canvas2d.rs), keyed by the element's
+        // own nid (not a context nid, unlike the OffscreenCanvas branch above).
+        if (source.__nid__ !== undefined && typeof _lumen_get_tag_name === 'function' && _lumen_get_tag_name(source.__nid__) === 'CANVAS') {
+          var cw = source.width >>> 0;
+          var ch = source.height >>> 0;
+          if (cw === 0 || ch === 0) {
+            reject(new Error('createImageBitmap: HTMLCanvasElement has zero dimensions'));
+            return;
+          }
+          var craw = _lumen_canvas2d_get_image_data(source.__nid__, 0, 0, cw, ch);
+          var chex = '';
+          for (var ci = 0; ci < craw.length; ci++) {
+            var cb = craw[ci] & 0xff;
+            chex += (cb < 16 ? '0' : '') + cb.toString(16);
+          }
+          var ccid = _lumen_offscreen_canvas_from_image_data(cw, ch, chex);
+          if (!ccid) {
+            reject(new Error('createImageBitmap: unable to snapshot HTMLCanvasElement'));
+            return;
+          }
+          finish(ccid, cw, ch);
           return;
         }
 
