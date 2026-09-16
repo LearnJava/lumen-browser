@@ -168,6 +168,91 @@ fn parser_built_svg_gets_typed_prototype() {
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
+// GAP-SVGDOM (BUG-889): a parser-built SVG element's animatable attributes
+// (`x`/`width`/…) used to read `undefined` because `svg.rs`'s typed classes
+// set them as constructor-body fields, and a real element never runs that
+// constructor (`_lumen_build_element` uses `Object.create`, srez 4 above).
+// They are now live prototype accessors reflecting the content attribute —
+// verify both the read and the write-back round-trip through `setAttribute`.
+#[test]
+fn parser_built_svg_reflects_animatable_length_attributes() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "document.getElementById('main').innerHTML = \
+                       '<svg><rect id=\"r\" x=\"10\" y=\"20\" width=\"30\" height=\"40\"/></svg>';\
+                     var rect = document.getElementById('r');\
+                     var readOk = rect.x.baseVal.value === 10 && rect.y.baseVal.value === 20 \
+                       && rect.width.baseVal.value === 30 && rect.height.baseVal.value === 40;\
+                     rect.width.baseVal.value = 99;\
+                     var writeOk = rect.getAttribute('width') === '99' && rect.width.baseVal.value === 99;\
+                     readOk && writeOk",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
+// GAP-SVGDOM (BUG-889): `getBBox()` on a parser-built shape used to be
+// hardcoded to a zero rect regardless of geometry. Concrete shapes now derive
+// it from their own reflected attributes (SVG 2 §10.6.2).
+#[test]
+fn parser_built_svg_get_bbox_uses_shape_geometry() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "document.getElementById('main').innerHTML = \
+                       '<svg><rect id=\"r\" x=\"1\" y=\"2\" width=\"3\" height=\"4\"/>\
+                        <circle id=\"c\" cx=\"10\" cy=\"10\" r=\"5\"/></svg>';\
+                     var r = document.getElementById('r').getBBox();\
+                     var c = document.getElementById('c').getBBox();\
+                     r.x === 1 && r.y === 2 && r.width === 3 && r.height === 4 \
+                       && c.x === 5 && c.y === 5 && c.width === 10 && c.height === 10",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
+// GAP-SVGDOM (BUG-889): `viewBox`/`transform` were the same dead-field
+// pattern as the length attributes above — verify both reflect live markup.
+#[test]
+fn parser_built_svg_reflects_viewbox_and_transform() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "document.getElementById('main').innerHTML = \
+                       '<svg id=\"s\" viewBox=\"0 0 100 50\">\
+                        <g id=\"g\" transform=\"translate(5,6) scale(2)\"></g></svg>';\
+                     var svg = document.getElementById('s');\
+                     var g = document.getElementById('g');\
+                     var vb = svg.viewBox.baseVal;\
+                     var vbOk = vb.x === 0 && vb.y === 0 && vb.width === 100 && vb.height === 50;\
+                     var tl = g.transform.baseVal;\
+                     var tOk = tl.numberOfItems === 2 && tl.getItem(0).matrix.e === 5 \
+                       && tl.getItem(0).matrix.f === 6 && tl.getItem(1).matrix.a === 2;\
+                     vbOk && tOk",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
+// GAP-SVGDOM (BUG-889): `ownerSVGElement` was a constructor field frozen at
+// `null` — a real element never runs the constructor, so it stayed `null`
+// even when nested inside a real `<svg>`. Now a live walk up `parentNode`.
+#[test]
+fn parser_built_svg_owner_svg_element_walks_ancestors() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "document.getElementById('main').innerHTML = \
+                       '<svg id=\"s\"><g><rect id=\"r\"/></g></svg>';\
+                     var svg = document.getElementById('s');\
+                     var rect = document.getElementById('r');\
+                     rect.ownerSVGElement === svg && svg.ownerSVGElement === null",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-243: installing the SVG shim must not abort. It previously threw at
 // `class SVGElement extends Element` because no global `Element` class exists,
 // which killed the whole shim (and silently disabled SVG typed interfaces).

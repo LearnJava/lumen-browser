@@ -22,22 +22,22 @@ fn s(rt: &crate::v8_runtime::V8JsRuntime, expr: &str) -> String {
 /// Шесть членов `HTMLCanvasElement` стояли на КАЖДОМ элементе DOM: фабрика
 /// обёрток ставила их в общую таблицу `_LUMEN_WRAPPER_MEMBERS`, а она лежит на
 /// прототипе, через который проходит любая обёртка.
+///
+/// `width`/`height` are checked against `<g>`, not `<svg>`, since GAP-SVGDOM
+/// gave `SVGSVGElement.prototype` its own spec-correct `width`/`height`
+/// (`SVGAnimatedLength`, reflecting the content attribute) — a legitimate
+/// member, not a canvas-interface leak. `<g>` has neither the SVG nor the
+/// canvas version, so it stays a clean negative for the shared-wrapper leak.
 #[test]
 fn canvas_members_are_absent_from_other_elements() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(
         "var d = document.createElement('div');\
-         var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');",
+         var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');\
+         var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');",
     )
     .unwrap();
-    for member in [
-        "getContext",
-        "toDataURL",
-        "toBlob",
-        "transferControlToOffscreen",
-        "width",
-        "height",
-    ] {
+    for member in ["getContext", "toDataURL", "toBlob", "transferControlToOffscreen"] {
         assert_eq!(
             s(&rt, &format!("'{member}' in d")),
             "false",
@@ -47,6 +47,18 @@ fn canvas_members_are_absent_from_other_elements() {
             s(&rt, &format!("'{member}' in svg")),
             "false",
             "<svg> must not carry HTMLCanvasElement.{member}"
+        );
+    }
+    for member in ["width", "height"] {
+        assert_eq!(
+            s(&rt, &format!("'{member}' in d")),
+            "false",
+            "<div> must not carry HTMLCanvasElement.{member}"
+        );
+        assert_eq!(
+            s(&rt, &format!("'{member}' in g")),
+            "false",
+            "<g> must not carry HTMLCanvasElement.{member}"
         );
     }
 }

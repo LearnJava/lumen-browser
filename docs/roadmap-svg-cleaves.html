@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-16",
  "counts": {
-  "open": 332,
-  "fixed": 671,
+  "open": 331,
+  "fixed": 672,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6612,9 +6612,9 @@
       {
        "id": "GAP-SVGDOM",
        "title": "GAP: SVG DOM у элементов из разметки и отражения атрибутов",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "SVG-элемент, написанный парсером, — это `HTMLUnknownElement`: `instanceof SVGElement` даёт `false`, `getBBox`/`getCTM` отсутствуют, тогда как у элемента из `createElementNS` они есть. Отражений анимируемых атрибутов нет на ОБОИХ путях — `text.x`, `rect.width`, `svg.viewBox`, `g.transform`, `g.className` дают `undefined`, потому что `svg.rs` объявляет их телами конструкторов, а патч `createElementNS` только переставляет прототип. Зависит от foreign content (GAP-XMLDOC): пока парсер не заводит элементы в SVG-неймспейсе, чинить нечего.",
+       "note": "ЗАКРЫТ 2026-09-16 (P1, ветка `p1-gap-svgdom`). Симптом (1) — `instanceof SVGElement`/`getBBox`/`getCTM` на парсерном элементе — был уже закрыт GAP-XMLDOC срезом 4 (BUG-685) до старта этой задачи. Симптом (2) — отражение анимируемых атрибутов (`x`/`width`/`viewBox`/`transform`/`className`) — перенесено из мёртвых полей конструктора в живые геттеры прототипа каждого `SVG*Element`, читающие/пишущие контентный атрибут на каждый доступ (`svg.rs`); `getBBox()` геометрических элементов (`rect`/`circle`/`ellipse`/`line`/`polyline`/`polygon`) считает реальный прямоугольник, `ownerSVGElement`/`viewportElement` — живой обход `parentNode`. Вне скоупа: `<path>`/`<text>`/`<g>` bbox из геометрии, `SVGLengthList` (текстовые `x`/`y` как список) и unit-aware разрешение длин (`lh`/`rem`/…) — подробности [BUG-889](bugs/BUG-889-FIXED.md).",
        "bugs": [
         "BUG-889"
        ]
@@ -8605,13 +8605,6 @@
    "status": "open",
    "title": "`document.open()` и `document.close()` отсутствуют целиком (`TypeError: document.open is not a function`), при живых `document.write`/`writeln`. Поведение `writ…",
    "component": "js (`crates/js/src/dom.rs:6212-6240` — блок `document.write`/`writeln`, `open`/`close` в нём не определены)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-889": {
-   "status": "open",
-   "title": "SVG-элемент, написанный парсером, — это `HTMLUnknownElement`: `instanceof SVGElement` = `false`, `getBBox`/`getCTM` отсутствуют (у элемента из `createElementNS`…",
-   "component": "js (`crates/js/src/svg.rs:901-918` — типизированные классы навешиваются только патчем `createElementNS`; поля `x`/`width`/`viewBox` объявлены телами конструкторов, `:308-311`)",
    "date": null,
    "debtor": false
   },
@@ -14128,6 +14121,13 @@
    "status": "fixed",
    "title": "`<style><![CDATA[ ... ]]></style>` в `.xht`/XHTML-документах теряет **первое правило каждого блока** (при единственном правиле — весь встроенный стиль; уточнено…",
    "component": "движковый парсинг документов (нет XML-пути для `application/xhtml+xml`, вероятно `crates/engine/html-parser`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-889": {
+   "status": "fixed",
+   "title": "SVG-элемент, написанный парсером, — это `HTMLUnknownElement`: `instanceof SVGElement` = `false`, `getBBox`/`getCTM` отсутствуют (у элемента из `createElementNS`…",
+   "component": "js (`crates/js/src/svg.rs`)",
    "date": "2026-09-16",
    "debtor": false
   }
