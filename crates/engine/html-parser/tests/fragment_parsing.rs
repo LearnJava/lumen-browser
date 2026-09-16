@@ -33,6 +33,7 @@ fn shape_with_context(src: &str, namespace: Namespace, local: &str) -> Vec<Strin
         namespace,
         local: local.to_string(),
         attrs: Vec::new(),
+        default_namespace: None,
     };
     let (doc, root) = lumen_html_parser::parse_fragment_with_context(src, Some(context));
     doc.get(root)
