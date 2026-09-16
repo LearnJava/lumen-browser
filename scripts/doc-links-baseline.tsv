@@ -48,6 +48,8 @@ ROADMAP.md	bugs/BUG-575-OPEN.md	stale-status-suffix	bugs/BUG-575-FIXED.md
 ROADMAP.md	bugs/BUG-576-OPEN.md	stale-status-suffix	bugs/BUG-576-FIXED.md
 ROADMAP.md	bugs/BUG-594-OPEN.md	stale-status-suffix	bugs/BUG-594-FIXED.md
 ROADMAP.md	bugs/BUG-596-OPEN.md	stale-status-suffix	bugs/BUG-596-FIXED.md
+ROADMAP.md	bugs/BUG-598-OPEN.md	stale-status-suffix	bugs/BUG-598-FIXED.md
+ROADMAP.md	bugs/BUG-602-OPEN.md	stale-status-suffix	bugs/BUG-602-FIXED.md
 ROADMAP.md	bugs/BUG-803-OPEN.md	stale-status-suffix	bugs/BUG-803-FIXED.md
 ROADMAP.md	bugs/BUG-850-OPEN.md	stale-status-suffix	bugs/BUG-850-FIXED.md
 ROADMAP.md	docs/tasks/p2-wpt-status-sync.md	missing	
@@ -134,6 +136,7 @@ bugs/BUG-584-OPEN.md	BUG-582-OPEN.md	stale-status-suffix	bugs/BUG-582-FIXED.md
 bugs/BUG-590-FIXED.md	bugs/BUG-871-OPEN.md	wrong-relative-path	bugs/BUG-871-OPEN.md
 bugs/BUG-599-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-604-OPEN.md	BUG-351-OPEN.md	stale-status-suffix	bugs/BUG-351-FIXED.md
+bugs/BUG-612-OPEN.md	BUG-602-OPEN.md	stale-status-suffix	bugs/BUG-602-FIXED.md
 bugs/BUG-618-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 bugs/BUG-618-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-630-OPEN.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
@@ -204,6 +207,7 @@ docs/tasks/README.md	ph3-websockets-sse-fetch.md	missing
 docs/tasks/README.md	ph3-woff2-webfonts.md	missing	
 docs/tasks/p2-test-track.md	../../bugs/BUG-594-OPEN.md	stale-status-suffix	bugs/BUG-594-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-596-OPEN.md	stale-status-suffix	bugs/BUG-596-FIXED.md
+docs/tasks/p2-test-track.md	../../bugs/BUG-598-OPEN.md	stale-status-suffix	bugs/BUG-598-FIXED.md
 docs/tasks/p2-test-track.md	bugs/BUG-986-FIXED.md	wrong-relative-path	bugs/BUG-986-FIXED.md
 docs/tasks/p2-test-track.md	bugs/BUG-995-FIXED.md	wrong-relative-path	bugs/BUG-995-FIXED.md
 docs/tasks/ph3-tier2-web-apis.md	ph3-navigation-history-api.md	missing	
@@ -237,6 +241,7 @@ docs/wpt-vendor-notes/css.md	../../bugs/BUG-501-OPEN.md	stale-status-suffix	bugs
 docs/wpt-vendor-notes/css.md	../../bugs/BUG-502-OPEN.md	stale-status-suffix	bugs/BUG-502-FIXED.md
 docs/wpt-vendor-notes/css.md	../../bugs/BUG-504-OPEN.md	stale-status-suffix	bugs/BUG-504-FIXED.md
 docs/wpt-vendor-notes/dom.md	../../bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
+docs/wpt-vendor-notes/html-longdesc.md	../../bugs/BUG-602-OPEN.md	stale-status-suffix	bugs/BUG-602-FIXED.md
 docs/wpt-vendor-notes/inert.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 docs/wpt-vendor-notes/inert.md	../../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 docs/wpt-vendor-notes/input-events.md	../../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
