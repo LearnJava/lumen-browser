@@ -661,6 +661,20 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn deliver_transition_events(&self, payload: &str);
 
+    /// Advance the SMIL timing model one frame (GAP-SMIL, SVG Animation §3).
+    ///
+    /// Unlike CSS transitions/animations, SMIL's active-interval bookkeeping
+    /// and `beginEvent`/`repeatEvent`/`endEvent` dispatch live entirely in
+    /// the JS shim (`_lumen_tick_smil`, `crates/js/src/svg.rs`) — the timing
+    /// model is DOM-structural (target = parent element, no ComputedStyle
+    /// involvement), so there is nothing for a Rust-side scheduler to own.
+    /// `now_s` is the same rAF timestamp (seconds) CSS transitions tick with.
+    /// The JS side no-ops in a single boolean check when no `<animate>`/
+    /// `<set>`/`<animateTransform>`/`<animateMotion>` element has ever been
+    /// constructed, so this call is free on pages without SMIL.
+    #[allow(dead_code)]
+    fn tick_smil(&self, now_s: f32);
+
     /// Pause the JS event loop (T0 → T1 lifecycle transition).
     ///
     /// Sets `document.visibilityState = "hidden"`, fires `visibilitychange`.
@@ -1205,6 +1219,11 @@ impl PersistentJs for V8PersistentJs {
         self.eval_js(&format!(
             "if(typeof _lumen_deliver_transition_events==='function')\
              _lumen_deliver_transition_events({payload});"
+        ));
+    }
+    fn tick_smil(&self, now_s: f32) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_tick_smil==='function')_lumen_tick_smil({now_s});"
         ));
     }
     fn pause_event_loop(&self) {

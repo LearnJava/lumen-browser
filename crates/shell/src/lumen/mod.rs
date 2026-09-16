@@ -43,6 +43,7 @@ mod printing;
 mod resize_grip;
 mod scrolling;
 mod session;
+mod smil;
 mod spell_menu;
 mod state;
 mod tabs_cmd;

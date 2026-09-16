@@ -290,7 +290,21 @@ const SVG_SHIM: &str = r#"
   function _lumen_svg_animated_length(nid, attr, dflt) {
     var al = Object.create(SVGAnimatedLength.prototype);
     al.baseVal = _lumen_svg_reflected_length(nid, attr, dflt);
-    al.animVal = al.baseVal; // Phase 1: no separate SMIL/CSS animation value yet
+    // GAP-SMIL: `animVal` is `baseVal` unless a running `<animate>`/`<set>`
+    // targeting this exact attribute has a value queued in the SMIL override
+    // map (`_lumen_smil_overrides`, populated by `_lumen_tick_smil`) — the
+    // override never touches the content attribute, so `getAttribute`/
+    // `baseVal` stay unaffected, matching the animVal/baseVal split SVG 2 §3
+    // requires. No override map yet (SMIL never ticked) reads as `undefined`.
+    Object.defineProperty(al, 'animVal', {
+      get: function() {
+        var ov = (typeof _lumen_smil_overrides !== 'undefined')
+          ? _lumen_smil_overrides[nid + '|' + attr] : undefined;
+        if (ov !== undefined) return new SVGLength(_lumen_svg_parse_number(ov, dflt));
+        return al.baseVal;
+      },
+      enumerable: true, configurable: true,
+    });
     return al;
   }
 
@@ -943,38 +957,289 @@ const SVG_SHIM: &str = r#"
   });
   window.SVGForeignObjectElement = SVGForeignObjectElement;
 
-  // SVGAnimateElement — <animate> (stub)
-  class SVGAnimateElement extends SVGElement {
-    constructor() { super(); this.tagName = 'animate'; }
-    beginElement() {}
-    endElement() {}
-    beginElementAt(offset) {}
-    endElementAt(offset) {}
+  // ── SMIL timing model (GAP-SMIL, BUG-806) ───────────────────────────────
+  // Minimal slice: numeric-offset `begin`/`end` (`0s`, `500ms`, `indefinite`
+  // + explicit `beginElement()`/`endElement()`), `dur` in the same grammar
+  // (`indefinite`/`media` → no natural end), integer/fractional/`indefinite`
+  // `repeatCount`, `fill="remove"|"freeze"`, and `to`/`from`/`values`
+  // applied into a shadow "animVal" override — never the content attribute,
+  // so `getAttribute()` stays truthful (SVG 2 §3 animVal/baseVal split).
+  // Deliberately out of scope: syncbase/event/repeat begin-value forms
+  // (`id.end`, `id.repeat(2)`, `click`), `min`/`max`, `restart`,
+  // <animateMotion> path following, <animateTransform> matrix composition —
+  // those two still fire correct begin/repeat/end events and IDL methods,
+  // they just don't change what paints. All state lives in JS: the timing
+  // model is DOM-structural (target = parentNode), not CSS-cascade-derived,
+  // so there is nothing for the Rust layout scheduler to own (unlike
+  // `TransitionScheduler`/`AnimationScheduler` for CSS transitions and
+  // animations, in `crates/engine/layout/src/animation.rs`).
+
+  // `true` once any `<animate>`/`<set>`/`<animateTransform>`/
+  // `<animateMotion>` element has ever been constructed — lets
+  // `_lumen_tick_smil` (called from Rust every frame, see
+  // `crates/shell/src/lumen/smil.rs`) no-op in one boolean check on the
+  // overwhelming majority of pages that have no SMIL at all.
+  var _lumen_smil_seen = false;
+  // Document-timeline zero point (seconds, same domain as the rAF timestamp
+  // `_lumen_tick_smil` receives) — the `now_s` of the first tick that finds
+  // any SMIL element. `begin="0s"` resolves relative to this, not to
+  // wall-clock zero.
+  var _lumen_smil_doc_epoch = null;
+  var _lumen_smil_last_now = 0;
+  // Per-node (`__nid__`) timing state — begin/end instance times, repeat
+  // count fired so far, one-shot latches so begin/end fire exactly once.
+  var _lumen_smil_states = {};
+  // `"<nid>|<attributeName>"` → applied value string, consulted by
+  // `_lumen_svg_animated_length`'s `animVal` getter. Cleared on `fill:
+  // "remove"` (the default); left in place on `fill: "freeze"`. Exposed on
+  // `window` (same object, not a copy) purely so the crate's own unit tests
+  // can assert on it from a separate `rt.eval()` call — production code
+  // only ever reaches it as the closed-over `_lumen_smil_overrides` above.
+  var _lumen_smil_overrides = {};
+  window._lumen_smil_overrides = _lumen_smil_overrides;
+
+  // Minimal SMIL clock-value grammar: a plain number (seconds) or one with
+  // an `s`/`ms` suffix. `min`/`h`/`:`-clock forms are out of scope.
+  function _lumen_smil_parse_clock(tok) {
+    if (tok == null) return null;
+    var m = /^([+-]?[0-9]*\.?[0-9]+)(ms|s)?$/.exec(String(tok).trim());
+    if (!m) return null;
+    var n = parseFloat(m[1]);
+    if (isNaN(n)) return null;
+    return m[2] === 'ms' ? n / 1000 : n;
   }
+
+  // `begin` — first comma-separated token only (multiple begin instances are
+  // out of scope). Absent → spec default `0s`. `indefinite` or any
+  // unsupported (syncbase/event/repeat) form → `null`, meaning "only
+  // `beginElement()`/`beginElementAt()` can start this animation".
+  function _lumen_smil_parse_begin_offset(nid) {
+    var raw = _lumen_u2n(_lumen_get_attr(nid, 'begin'));
+    if (raw == null || raw.trim() === '') return 0;
+    var tok = raw.split(',')[0].trim();
+    if (tok === 'indefinite') return null;
+    return _lumen_smil_parse_clock(tok);
+  }
+
+  // `end` — first token, resolved as an absolute document-timeline instant
+  // (not spec-accurate for the general case, but matches the common
+  // "explicit cutoff independent of begin" usage, e.g. `end="2s"`).
+  function _lumen_smil_parse_end_offset(nid) {
+    var raw = _lumen_u2n(_lumen_get_attr(nid, 'end'));
+    if (raw == null || raw.trim() === '') return null;
+    return _lumen_smil_parse_clock(raw.split(',')[0].trim());
+  }
+
+  function _lumen_smil_parse_dur(nid) {
+    var raw = _lumen_u2n(_lumen_get_attr(nid, 'dur'));
+    if (raw == null || raw.trim() === '' || raw === 'indefinite' || raw === 'media') return Infinity;
+    var v = _lumen_smil_parse_clock(raw.trim());
+    return (v === null || v <= 0) ? Infinity : v;
+  }
+
+  function _lumen_smil_parse_repeat_count(nid) {
+    var raw = _lumen_u2n(_lumen_get_attr(nid, 'repeatCount'));
+    if (raw == null || raw.trim() === '') return 1;
+    if (raw.trim() === 'indefinite') return Infinity;
+    var n = parseFloat(raw);
+    return (isNaN(n) || n <= 0) ? 1 : n;
+  }
+
+  function _lumen_smil_parse_fill(nid) {
+    return _lumen_u2n(_lumen_get_attr(nid, 'fill')) === 'freeze' ? 'freeze' : 'remove';
+  }
+
+  // Builds the value list to animate across from `values` (semicolon list)
+  // or `from`/`to` (falling back to a single-value `to`-only list).
+  function _lumen_smil_value_list(nid) {
+    var raw = _lumen_u2n(_lumen_get_attr(nid, 'values'));
+    if (raw != null) {
+      return raw.split(';').map(function(s) { return s.trim(); });
+    }
+    var toRaw = _lumen_u2n(_lumen_get_attr(nid, 'to'));
+    var fromRaw = _lumen_u2n(_lumen_get_attr(nid, 'from'));
+    if (toRaw == null) return null;
+    return fromRaw != null ? [fromRaw, toRaw] : [toRaw];
+  }
+
+  // Numeric attribute types get linear interpolation across the value list;
+  // anything else (colors, keywords) steps discretely, holding each value
+  // for an equal fraction of the simple duration (SMIL Animation §3.2.1
+  // default `calcMode` behaviour, simplified to equal-length steps).
+  function _lumen_smil_compute_value(nid, fraction) {
+    var list = _lumen_smil_value_list(nid);
+    if (!list || list.length === 0) return null;
+    if (list.length === 1) return list[0];
+    var allNumeric = list.every(function(v) {
+      return v !== '' && isFinite(parseFloat(v)) && /^[+-]?[0-9]*\.?[0-9]+$/.test(v);
+    });
+    if (allNumeric) {
+      var nums = list.map(parseFloat);
+      var seg = fraction * (nums.length - 1);
+      var i0 = Math.min(Math.floor(seg), nums.length - 2);
+      var t = seg - i0;
+      return String(nums[i0] + (nums[i0 + 1] - nums[i0]) * t);
+    }
+    var idx = Math.min(Math.floor(fraction * list.length), list.length - 1);
+    return list[idx];
+  }
+
+  function _lumen_smil_get_state(nid) {
+    var st = _lumen_smil_states[nid];
+    if (!st) {
+      st = {
+        beginTime: null, resolvedOnce: false, cycle: 0, ended: false,
+        beginFired: false, manualBegin: null, manualEnd: null,
+      };
+      _lumen_smil_states[nid] = st;
+    }
+    return st;
+  }
+
+  // `beginElementAt`/`endElementAt` (SVG SMIL Animation §3.4): queue an
+  // instance time resolved against "now" on the *next* tick, matching the
+  // spec's "current time + offset" semantics closely enough for the
+  // explicit-trigger case (`begin="indefinite"` + a script call).
+  function _lumen_smil_begin_now(nid, offset) { _lumen_smil_get_state(nid).manualBegin = offset || 0; }
+  function _lumen_smil_end_now(nid, offset) { _lumen_smil_get_state(nid).manualEnd = offset || 0; }
+
+  function _lumen_smil_dispatch(nid, type) {
+    _lumen_dispatch(nid, new Event(type, { bubbles: false, cancelable: false }));
+  }
+
+  function _lumen_smil_tick_one(el, now_s, epoch) {
+    var nid = el.__nid__;
+    if (nid == null) return;
+    var st = _lumen_smil_get_state(nid);
+
+    if (st.manualBegin !== null) {
+      var mb = now_s + st.manualBegin;
+      st.manualBegin = null;
+      if (st.beginTime === null || st.ended) {
+        st.beginTime = mb; st.ended = false; st.cycle = 0; st.beginFired = false;
+      }
+    }
+    if (st.beginTime === null && !st.resolvedOnce) {
+      st.resolvedOnce = true;
+      var off = _lumen_smil_parse_begin_offset(nid);
+      if (off !== null) st.beginTime = epoch + off;
+    }
+    var manualEndNow = null;
+    if (st.manualEnd !== null) {
+      manualEndNow = now_s + st.manualEnd;
+      st.manualEnd = null;
+    }
+
+    if (st.beginTime === null || st.ended || now_s < st.beginTime) return;
+
+    if (!st.beginFired) {
+      st.beginFired = true;
+      _lumen_smil_dispatch(nid, 'beginEvent');
+    }
+
+    var dur = _lumen_smil_parse_dur(nid);
+    var repeatCount = _lumen_smil_parse_repeat_count(nid);
+    var endAttrOff = _lumen_smil_parse_end_offset(nid);
+    var endAttrAbs = endAttrOff === null ? Infinity : (epoch + endAttrOff);
+    var activeDur = (dur === Infinity || repeatCount === Infinity) ? Infinity : dur * repeatCount;
+    var naturalEnd = (activeDur === Infinity) ? Infinity : st.beginTime + activeDur;
+    var effectiveEnd = Math.min(naturalEnd, endAttrAbs, manualEndNow === null ? Infinity : manualEndNow);
+    var elapsed = now_s - st.beginTime;
+
+    if (dur !== Infinity) {
+      var completedCycles = Math.floor(elapsed / dur);
+      var maxCycles = (repeatCount === Infinity) ? completedCycles : Math.min(completedCycles, Math.ceil(repeatCount) - 1);
+      while (st.cycle < maxCycles && (st.beginTime + dur * (st.cycle + 1)) < effectiveEnd) {
+        st.cycle++;
+        _lumen_smil_dispatch(nid, 'repeatEvent');
+      }
+    }
+
+    var fraction = 0;
+    if (dur !== Infinity) {
+      var withinCycle = elapsed - dur * Math.floor(elapsed / dur);
+      fraction = Math.max(0, Math.min(1, withinCycle / dur));
+    }
+    var attrName = _lumen_u2n(_lumen_get_attr(nid, 'attributeName'));
+    if (attrName) {
+      var valueStr = _lumen_smil_compute_value(nid, fraction);
+      if (valueStr !== null) _lumen_smil_overrides[nid + '|' + attrName] = valueStr;
+    }
+
+    if (now_s >= effectiveEnd) {
+      st.ended = true;
+      if (attrName && _lumen_smil_parse_fill(nid) !== 'freeze') {
+        delete _lumen_smil_overrides[nid + '|' + attrName];
+      }
+      _lumen_smil_dispatch(nid, 'endEvent');
+    }
+  }
+
+  // Called once per rendering frame from the Rust shell
+  // (`PersistentJs::tick_smil`, `crates/shell/src/lumen/smil.rs`), in the
+  // same spec step CSS transitions/animations tick, before rAF callbacks.
+  window._lumen_tick_smil = function(now_s) {
+    if (!_lumen_smil_seen) return;
+    if (_lumen_smil_doc_epoch === null) _lumen_smil_doc_epoch = now_s;
+    _lumen_smil_last_now = now_s;
+    if (typeof document === 'undefined' || typeof document.getElementsByTagName !== 'function') return;
+    var all = document.getElementsByTagName('*');
+    for (var i = 0; i < all.length; i++) {
+      if (all[i] instanceof SVGAnimationElement) {
+        _lumen_smil_tick_one(all[i], now_s, _lumen_smil_doc_epoch);
+      }
+    }
+  };
+
+  // SVGAnimationElement — shared base of the four SMIL element interfaces
+  // (SVG2 §3: SVGAnimateElement/SVGSetElement/SVGAnimateMotionElement/
+  // SVGAnimateTransformElement all implement it).
+  class SVGAnimationElement extends SVGElement {
+    beginElement() { _lumen_smil_begin_now(this.__nid__, 0); }
+    endElement() { _lumen_smil_end_now(this.__nid__, 0); }
+    beginElementAt(offset) { _lumen_smil_begin_now(this.__nid__, offset || 0); }
+    endElementAt(offset) { _lumen_smil_end_now(this.__nid__, offset || 0); }
+    getStartTime() {
+      var st = _lumen_smil_states[this.__nid__];
+      return (st && st.beginTime !== null && _lumen_smil_doc_epoch !== null)
+        ? st.beginTime - _lumen_smil_doc_epoch : 0;
+    }
+    getCurrentTime() {
+      return _lumen_smil_doc_epoch === null ? 0 : _lumen_smil_last_now - _lumen_smil_doc_epoch;
+    }
+    getSimpleDuration() {
+      var d = _lumen_smil_parse_dur(this.__nid__);
+      return d === Infinity ? 0 : d;
+    }
+    get targetElement() { return this.parentNode; }
+  }
+  // Guarded: the crate's own unit tests install this shim over a minimal
+  // `Element`/`document` stub without the full `web_api_shim_mid.js` (which
+  // defines this helper) — only the real browser runtime needs onbegin/
+  // onend/onrepeat to be live IDL accessors.
+  if (typeof _lumen_define_on_handler_prop === 'function') {
+    _lumen_define_on_handler_prop(SVGAnimationElement.prototype, 'onbegin');
+    _lumen_define_on_handler_prop(SVGAnimationElement.prototype, 'onend');
+    _lumen_define_on_handler_prop(SVGAnimationElement.prototype, 'onrepeat');
+  }
+  window.SVGAnimationElement = SVGAnimationElement;
+
+  // SVGAnimateElement — <animate>
+  class SVGAnimateElement extends SVGAnimationElement {}
   window.SVGAnimateElement = SVGAnimateElement;
 
-  // SVGAnimateTransformElement — <animateTransform> (stub)
-  class SVGAnimateTransformElement extends SVGElement {
-    constructor() { super(); this.tagName = 'animateTransform'; }
-    beginElement() {}
-    endElement() {}
-  }
+  // SVGAnimateTransformElement — <animateTransform> (events/timing only —
+  // matrix composition onto the `transform` attribute is out of scope).
+  class SVGAnimateTransformElement extends SVGAnimateElement {}
   window.SVGAnimateTransformElement = SVGAnimateTransformElement;
 
-  // SVGAnimateMotionElement — <animateMotion> (stub)
-  class SVGAnimateMotionElement extends SVGElement {
-    constructor() { super(); this.tagName = 'animateMotion'; }
-    beginElement() {}
-    endElement() {}
-  }
+  // SVGAnimateMotionElement — <animateMotion> (events/timing only — path
+  // following is out of scope).
+  class SVGAnimateMotionElement extends SVGAnimationElement {}
   window.SVGAnimateMotionElement = SVGAnimateMotionElement;
 
-  // SVGSetElement — <set> (stub)
-  class SVGSetElement extends SVGElement {
-    constructor() { super(); this.tagName = 'set'; }
-    beginElement() {}
-    endElement() {}
-  }
+  // SVGSetElement — <set>
+  class SVGSetElement extends SVGAnimateElement {}
   window.SVGSetElement = SVGSetElement;
 
   // SVGViewElement — <view>
@@ -1088,7 +1353,14 @@ const SVG_SHIM: &str = r#"
   // typed prototype as one from `createElementNS('rect')` — both fall back to
   // the bare `SVGElement` for a tag `SVG_TAG_MAP` does not know.
   window._lumen_svg_ctor_for_local = function(local) {
-    return SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] || SVGElement;
+    var ctor = SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] || SVGElement;
+    // GAP-SMIL perf gate: flip once, the first time any SMIL element (of
+    // either markup or `createElementNS` origin) is resolved, so
+    // `_lumen_tick_smil` can no-op in one boolean check on every other page.
+    if (!_lumen_smil_seen && (ctor === SVGAnimationElement || ctor.prototype instanceof SVGAnimationElement)) {
+      _lumen_smil_seen = true;
+    }
+    return ctor;
   };
 
   // Decorate document.createElementNS: keep the AUTHORITATIVE native implementation
@@ -1401,5 +1673,134 @@ mod tests_v8 {
             typeof window.SVGMarkerElement     === 'function'
         "#);
         assert!(ok);
+    }
+
+    // ── GAP-SMIL ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn svg_smil_class_hierarchy() {
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            (new SVGAnimateElement()) instanceof SVGAnimationElement &&
+            (new SVGSetElement()) instanceof SVGAnimateElement &&
+            (new SVGAnimateTransformElement()) instanceof SVGAnimateElement &&
+            (new SVGAnimateMotionElement()) instanceof SVGAnimationElement &&
+            typeof SVGAnimationElement.prototype.beginElement === 'function' &&
+            typeof SVGAnimationElement.prototype.beginElementAt === 'function' &&
+            typeof SVGAnimationElement.prototype.endElement === 'function' &&
+            typeof SVGAnimationElement.prototype.endElementAt === 'function'
+        "#);
+        assert!(ok);
+    }
+
+    /// Installs the SMIL-capable native stubs `_lumen_tick_smil` needs
+    /// (`_lumen_get_attr`/`_lumen_u2n`/`_lumen_dispatch`,
+    /// `document.getElementsByTagName('*')`) on top of `with_svg()`, then
+    /// builds one `<animate>`-shaped node with `__nid__ = 1` reachable
+    /// through that stub. Attributes are set via `_lumen_smil_set_attr`
+    /// (a test-only helper, not a real DOM method) to avoid re-implementing
+    /// attribute reflection in the stub.
+    fn with_smil_node(local: &str, attrs: &[(&str, &str)]) -> V8JsRuntime {
+        let rt = with_svg();
+        let attrs_js: String = attrs
+            .iter()
+            .map(|(k, v)| format!("{k:?}:{v:?}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        rt.eval(&format!(
+            r#"
+            class Event {{
+                constructor(type, opts) {{
+                    this.type = type;
+                    this.bubbles = !!(opts && opts.bubbles);
+                    this.cancelable = !!(opts && opts.cancelable);
+                }}
+            }}
+            window.Event = Event;
+            window._lumen_smil_attrs = {{1: {{{attrs_js}}}}};
+            window._lumen_get_attr = function(nid, attr) {{
+                var a = window._lumen_smil_attrs[nid];
+                return (a && Object.prototype.hasOwnProperty.call(a, attr)) ? a[attr] : undefined;
+            }};
+            window._lumen_u2n = function(v) {{ return v === undefined ? null : v; }};
+            window._lumen_dispatch_log = [];
+            window._lumen_dispatch = function(nid, event) {{ window._lumen_dispatch_log.push(event.type); return true; }};
+            var node = new (_lumen_svg_ctor_for_local({local:?}))();
+            node.__nid__ = 1;
+            window._lumen_smil_node = node;
+            var _allEls = [node];
+            document.getElementsByTagName = function(tag) {{ return _allEls; }};
+            "#
+        ))
+        .unwrap();
+        rt
+    }
+
+    #[test]
+    fn svg_smil_begin_end_events_and_numeric_interpolation() {
+        // `<animate attributeName="width" begin="0s" dur="2s" from="0" to="100">`
+        let rt = with_smil_node(
+            "animate",
+            &[
+                ("attributeName", "width"),
+                ("begin", "0s"),
+                ("dur", "2s"),
+                ("from", "0"),
+                ("to", "100"),
+            ],
+        );
+        // t = 0s: begin fires, value starts at "0".
+        rt.eval("_lumen_tick_smil(0.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('beginEvent') !== -1"));
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|width'] === '0'"));
+
+        // t = 1s: halfway through the 2s duration, linear interpolation.
+        rt.eval("_lumen_tick_smil(1.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|width'] === '50'"));
+
+        // t = 2s: duration elapsed, endEvent fires, fill="remove" (default)
+        // clears the override.
+        rt.eval("_lumen_tick_smil(2.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') !== -1"));
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|width'] === undefined"));
+    }
+
+    #[test]
+    fn svg_smil_fill_freeze_keeps_value_after_end() {
+        let rt = with_smil_node(
+            "set",
+            &[("attributeName", "visibility"), ("begin", "0s"), ("to", "visible"), ("end", "1s"), ("fill", "freeze")],
+        );
+        rt.eval("_lumen_tick_smil(0.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|visibility'] === 'visible'"));
+        rt.eval("_lumen_tick_smil(1.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') !== -1"));
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|visibility'] === 'visible'"));
+    }
+
+    #[test]
+    fn svg_smil_indefinite_begin_waits_for_begin_element_call() {
+        let rt = with_smil_node("set", &[("attributeName", "width"), ("begin", "indefinite"), ("to", "100")]);
+        rt.eval("_lumen_tick_smil(5.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.length === 0"));
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|width'] === undefined"));
+        rt.eval("window._lumen_smil_node.beginElement(); _lumen_tick_smil(5.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('beginEvent') !== -1"));
+        assert!(bool_eval(&rt, "_lumen_smil_overrides['1|width'] === '100'"));
+    }
+
+    #[test]
+    fn svg_smil_repeat_count_fires_repeat_event() {
+        let rt = with_smil_node(
+            "animate",
+            &[("attributeName", "x"), ("begin", "0s"), ("dur", "1s"), ("repeatCount", "3"), ("to", "10")],
+        );
+        rt.eval("_lumen_tick_smil(0.0);").unwrap();
+        rt.eval("_lumen_tick_smil(1.5);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('repeatEvent') !== -1"));
+        // Still active (2nd of 3 cycles) — no endEvent yet.
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') === -1"));
+        rt.eval("_lumen_tick_smil(3.0);").unwrap();
+        assert!(bool_eval(&rt, "_lumen_dispatch_log.indexOf('endEvent') !== -1"));
     }
 }

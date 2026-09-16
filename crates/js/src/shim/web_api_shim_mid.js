@@ -939,6 +939,15 @@ function _lumen_invoke_at_window(event, capture) {
     }
 }
 
+// SMIL Animation §3.3 (GAP-SMIL): `onbegin`/`onrepeat`/`onend` are the odd
+// ones out in the `on<type>` convention — the content/IDL attribute names
+// don't match the event type they fire for (`beginEvent`, not `begin`).
+// Real browsers special-case exactly these three; every other event type in
+// the engine still follows the generic `'on' + event.type` rule below.
+var _LUMEN_ON_ATTR_TYPE_ALIAS = {
+    beginEvent: 'onbegin', repeatEvent: 'onrepeat', endEvent: 'onend',
+};
+
 // Run the listeners of one path entry in one phase. `on<type>` handlers have no
 // capture flag, so they run only in the non-capture pass and, per BUG-360,
 // after the explicit listeners of that same entry. `stopPropagation` is NOT
@@ -951,11 +960,12 @@ function _lumen_invoke_at(nid, event, capture) {
     var arr = capture ? _lumen_capture_listeners[key] : _lumen_listeners[key];
     var onFn = null;
     if (!capture) {
+        var onAttrName = _LUMEN_ON_ATTR_TYPE_ALIAS[event.type] || ('on' + event.type);
         if (isDoc) {
-            var docFn = document['on' + event.type];
+            var docFn = document[onAttrName];
             onFn = (typeof docFn === 'function') ? docFn : null;
         } else {
-            onFn = _lumen_get_on_handler(nid, 'on' + event.type);
+            onFn = _lumen_get_on_handler(nid, onAttrName);
         }
     }
     if (!arr && !onFn) return;
