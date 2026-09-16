@@ -92,17 +92,11 @@ pub(super) fn find_element_by_tag(doc: &lumen_dom::Document, tag: &str) -> Optio
 /// Mirrors `dom::namespace_uri`. DOM LS §4.9.1 `Node.namespaceURI` value for a
 /// given `Namespace`. Backs `_lumen_get_namespace_uri` (BUG-281). `None` means
 /// "no namespace" (`Namespace::None`, BUG-328) — callers must surface that as
-/// JS `null`, not the empty string.
-pub(super) fn namespace_uri(ns: Namespace) -> Option<&'static str> {
-    match ns {
-        Namespace::Html => Some("http://www.w3.org/1999/xhtml"),
-        Namespace::Svg => Some("http://www.w3.org/2000/svg"),
-        Namespace::MathMl => Some("http://www.w3.org/1998/Math/MathML"),
-        Namespace::Xml => Some("http://www.w3.org/XML/1998/namespace"),
-        Namespace::XmlNs => Some("http://www.w3.org/2000/xmlns/"),
-        Namespace::XLink => Some("http://www.w3.org/1999/xlink"),
-        Namespace::None => None,
-    }
+/// JS `null`, not the empty string. Owned, not `&'static str` (GAP-XMLDOC
+/// срез 36): `Namespace::Other` carries an arbitrary URI, so this can no
+/// longer borrow from a fixed set of string literals.
+pub(super) fn namespace_uri(ns: &Namespace) -> Option<String> {
+    ns.uri().map(str::to_string)
 }
 
 /// Mirrors `dom::find_first_matching`.
@@ -530,7 +524,7 @@ pub(super) fn parse_html_fragment_with_context(
 ) -> Vec<lumen_dom::NodeId> {
     let context = context_nid.and_then(|nid| match &doc.get(nid).data {
         lumen_dom::NodeData::Element { name, attrs } => Some(lumen_html_parser::FragmentContext {
-            namespace: name.namespace,
+            namespace: name.namespace.clone(),
             local: name.local.clone(),
             attrs: attrs.iter().map(|a| (a.name.local.clone(), a.value.clone())).collect(),
         }),

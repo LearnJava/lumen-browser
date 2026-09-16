@@ -217,6 +217,29 @@ fn create_element_ns_mathml_gets_typed_prototype() {
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
+// GAP-XMLDOC срез 36 (BUG-685/BUG-830): `document.createElementNS` on a
+// namespace URI Lumen has no dedicated `Namespace` variant for used to
+// silently collapse to HTML (`Namespace::Other` did not exist) — a real
+// browser preserves it verbatim per DOM §4.5 "validate and extract".
+// `Namespace::Other` fixes the element-creation half of BUG-830; the
+// attribute half (`setAttributeNS`/`getAttributeNS` on an unknown namespace)
+// is unrelated and stays on its documented by-name fallback.
+#[test]
+fn create_element_ns_arbitrary_namespace_round_trips_its_uri() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "var el = document.createElementNS('https://example.org/ns', 'widget');\
+                     el.namespaceURI === 'https://example.org/ns' \
+                       && el.localName === 'widget' \
+                       && el.tagName === 'widget' \
+                       && !(el instanceof HTMLElement) \
+                       && el instanceof Element",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-233: `self` must be defined as a global aliasing `window`
 // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
 // without this they throw `ReferenceError: self is not defined`.

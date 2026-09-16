@@ -2484,7 +2484,7 @@ impl IncrementalTreeBuilder {
     /// Создаёт DOM-элемент с заданными атрибутами; не вставляет.
     fn create_element_with_attrs(&mut self, name: &str, attrs: &[(String, String)]) -> NodeId {
         let qname = self.resolve_element_name(name);
-        let namespace = qname.namespace;
+        let namespace = qname.namespace.clone();
         let id = self.doc.create_element(qname);
         if let NodeData::Element {
             attrs: dom_attrs, ..
@@ -2564,7 +2564,7 @@ impl IncrementalTreeBuilder {
         if self.open_elements.len() == 1
             && let Some(ctx) = &self.fragment_context
         {
-            return ctx.namespace;
+            return ctx.namespace.clone();
         }
         self.real_current_namespace()
     }
@@ -2617,7 +2617,7 @@ impl IncrementalTreeBuilder {
             && let Some(ctx) = &self.fragment_context
         {
             let has_html_encoding = attrs_have_html_encoding(&ctx.attrs);
-            return Self::resolve_content_namespace(ctx.namespace, &ctx.local, has_html_encoding, name);
+            return Self::resolve_content_namespace(ctx.namespace.clone(), &ctx.local, has_html_encoding, name);
         }
         let Some(&top) = self.open_elements.last() else {
             return Namespace::Html;
@@ -2683,7 +2683,7 @@ impl IncrementalTreeBuilder {
             match &self.fragment_context {
                 Some(ctx) => {
                     let has_html_encoding = attrs_have_html_encoding(&ctx.attrs);
-                    Self::resolve_content_namespace(ctx.namespace, &ctx.local, has_html_encoding, "")
+                    Self::resolve_content_namespace(ctx.namespace.clone(), &ctx.local, has_html_encoding, "")
                 }
                 None => Namespace::Html,
             }
@@ -2723,7 +2723,7 @@ impl IncrementalTreeBuilder {
     /// function rather than one more `unwrap()`).
     fn node_namespace(&self, id: NodeId) -> Namespace {
         match &self.doc.get(id).data {
-            NodeData::Element { name, .. } => name.namespace,
+            NodeData::Element { name, .. } => name.namespace.clone(),
             _ => Namespace::Html,
         }
     }

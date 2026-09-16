@@ -1053,3 +1053,105 @@ to_string()` с pull `parse()`). `cargo test -p lumen-html-parser` —
 
 Не в этом срезе (без изменений): self-closing `<table>`/`<select>`/
 `<button>`; сама XML-парсер-архитектура.
+
+## GAP-XMLDOC срез 36 (2026-09-16): `Namespace::Other` — закрытый enum больше не теряет произвольный namespace URI на элементах (`p1-gap-xmldoc-srez36`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Пере-замерил
+остаток срезов 30–35 (параметрические entity/внешний DTD/`SYSTEM`-entity) —
+по-прежнему 0 файлов на корпусе, без изменений. Вместо этого нашёл и закрыл
+ровно один пласт **настоящего** резолвера namespace, о котором срезы 11/35
+писали «отдельная, более крупная подсистема»: живой, не 0-хитовый WPT-тест
+(`html/webappapis/dynamic-markup-insertion/the-innerhtml-property/
+innerhtml-and-xml-namespaces.svg`, testharness, не reftest) явно требует
+`document.createElementNS`/элементный `.namespaceURI` для **произвольного**
+URI, не только шести уже известных Lumen'у.
+
+**Причина.** `lumen_dom::Namespace` (`crates/engine/dom/src/lib.rs:160`) был
+закрытым enum — `Html`/`Svg`/`MathMl`/`Xml`/`XmlNs`/`XLink`/`None`, без
+варианта для «URI, которого Lumen не знает». `_lumen_create_element_ns`
+(`crates/js/src/v8_runtime/install/dom_core.rs`) на любом нераспознанном `ns`
+молча откатывался на `Namespace::Html` (BUG-830 — «нет общего реестра
+namespace», задокументированный, но не устранённый предыдущими срезами).
+Живое подтверждение (`--mcp-port`, до правки):
+
+```js
+document.createElementNS('https://example.org/ns', 'widget').namespaceURI
+// "http://www.w3.org/1999/xhtml"  — ждём "https://example.org/ns"
+```
+
+**Фикс.** Добавлен `Namespace::Other(String)` — enum больше не `Copy` (несёт
+владеющую строку), только `Clone`; пересобраны все точки, где компилятор
+терял неявный `Copy` (`tree_builder.rs` ×5 клонов namespace при чтении
+текущего/контекстного, `dom_helpers.rs` ×2). Два новых метода на `Namespace`
+сами по себе не добавляют нового поведения — они переносят уже существовавшую,
+но раскиданную по вызывающим точкам логику «URI → variant»/«variant → URI»
+в одно место:
+
+- `Namespace::from_uri(Option<&str>) -> Namespace` — `None`/`""` → `None`;
+  шесть известных URI → их variant; что угодно ещё → `Other(uri)` вместо
+  молчаливого отката.
+- `Namespace::uri(&self) -> Option<&str>` — обратное отображение,
+  `Other(s)` отдаёт `s.as_str()`.
+
+`_lumen_create_element_ns` теперь ровно `Namespace::from_uri(...)` вместо
+ручной if-цепочки с Html-фоллбэком — заодно и `xml:`/`xmlns:`/`xlink:`
+URI-константы для **элементов** (не только атрибутов, которые их уже
+поддерживали с среза 10) перестали откатываться на Html, хотя измеренной
+надобности в этом не было, только побочный эффект использования единой
+функции. `dom_helpers::namespace_uri` (бэкенд `_lumen_get_namespace_uri`/
+`_lumen_get_attr_namespace_uri`) сменил сигнатуру с `Namespace -> Option<&'static
+str>` на `&Namespace -> Option<String>` — `Other`'s строка не `'static`.
+
+**Сознательно не тронуто (JS-шим уже был готов, живым замером проверено, что
+ничего не сломалось и ничего не нужно было чинить):** `_lumen_element_prototype_for`
+(`web_api_shim_mid.js:3458`) уже отдавал `Element.prototype` для любого
+`ns !== xhtml/svg/mathml` — произвольный namespace корректно даёт
+`instanceof Element`, не `HTMLElement`/`HTMLUnknownElement`; `_lumen_qualified_tag_name`
+уже не аплкейсит tag name для `ns !== xhtml` — `.tagName` на `Other`-элементе
+уже сохранял регистр правильно. `resolve_attribute_namespace`
+(`setAttributeNS`'s атрибутная половина BUG-830) не тронута — её откат на
+`Html` для неизвестного `ns` документирован отдельно и имеет другой набор
+вызывающих мест (весь обычный, ненамеспейсенный путь атрибутов держится на
+этом же фоллбэке), трогать не входило в измеренный скоуп этого среза.
+
+**Что осталось открытым и НЕ было закрыто, несмотря на анализ до конца.**
+Живой разбор `innerhtml-and-xml-namespaces.svg` (вложенное `<svg
+xmlns="…svg" xmlns:h="…xhtml"><foreignObject><h:body>…`) показал: даже с
+`Namespace::Other` тест не пройдёт, потому что элементный namespace в Lumen
+по-прежнему выводится из **модели HTML5 foreign-content** (наследование от
+`node_namespace` текущего открытого элемента + integration-point/breakout
+эвристики по имени тега, срезы 3–20), а не из настоящего XML Namespaces §6
+резолвинга (`xmlns="…"`/`xmlns:foo="…"` — лексическая область видимости
+деклараций по предкам, независимая от того, что это за тег). Для теста это
+не одно и то же: `<g/>` внутри `<h:body>` (которое само форсируется в
+Html-неймспейс по правилу «`html:`-префикс — брейкаут», срез 5) обязано по
+XML-правилам оставаться в SVG-неймспейсе (унаследовав `xmlns="…svg"` с
+корневого `<svg>`, который ничем не перекрыт) — а по текущей HTML-модели
+Lumen наследует именно `Namespace::Html` от реального DOM-родителя `<h:body>`.
+Это два структурно разных алгоритма, а не один пробел с недостающим кейсом:
+нужен отдельный, независимый от `open_elements`/`node_namespace` стек
+`(default_ns, prefix → uri)`, обновляемый по фактическим `xmlns`/`xmlns:*`
+атрибутам каждого элемента (включая его собственные — `xmlns` на себе самом
+меняет и собственный namespace элемента, не только потомков), а integration-
+point/breakout-эвристики тег-по-тегу должны перестать быть единственным
+источником для этой части. Попытка сделать это точечной правкой поверх
+существующих 35 срезов рискует тихо сломать что-то из уже измеренного и
+зелёного корпуса — следующему срезу нужен явный, отдельно спроектированный
+резолвер, не заплатка.
+
+Тесты: `crates/engine/dom/src/lib.rs::tests` — три новых
+(`from_uri_maps_known_uris_to_their_dedicated_variant`,
+`from_uri_preserves_an_unrecognized_uri_verbatim`,
+`uri_is_the_inverse_of_from_uri_for_every_known_variant`); `crates/js/src/dom/
+tests/v8_core/mod.rs::create_element_ns_arbitrary_namespace_round_trips_its_uri`
+(живой V8-прогон: `namespaceURI`/`localName`/`tagName`/`instanceof`). `cargo
+test -p lumen-dom` — 300/300. `cargo test -p lumen-html-parser` — 519/519
+юнит + 8/8 (`xml_entity_expansion`) + 15/15 (`fragment_parsing`) интеграционных.
+`cargo test -p lumen-js --lib --features v8-backend` — 3720/3720. `cargo
+clippy --workspace --all-targets --profile dev-release --features v8-backend
+-- -D warnings` — чисто.
+
+Не в этом срезе: настоящий `xmlns`/`xmlns:*`-резолвер описан выше как
+отдельная подсистема, не начат; `resolve_attribute_namespace`'s Html-фоллбэк
+для setAttributeNS с неизвестным ns; параметрические entity/внешний
+DTD/`SYSTEM`-entity — по-прежнему 0 на корпусе.

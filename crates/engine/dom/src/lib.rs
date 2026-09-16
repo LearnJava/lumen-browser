@@ -156,7 +156,7 @@ impl NodeId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Namespace {
     Html,
     Svg,
@@ -168,6 +168,51 @@ pub enum Namespace {
     /// "validate and extract", e.g. `createElementNS(null, name)` /
     /// `createElementNS("", name)`). Distinct from `Html`: BUG-328.
     None,
+    /// A namespace URI Lumen has no dedicated variant for (GAP-XMLDOC срез
+    /// 36, BUG-685/BUG-830) — `createElementNS`/XML namespace declarations
+    /// accept an arbitrary URI per DOM §4.5 "validate and extract", not just
+    /// the six well-known ones above. Before this variant existed, every
+    /// unrecognized URI silently collapsed to [`Namespace::Html`] (element
+    /// creation) or was rejected (attribute namespacing stayed on that
+    /// fallback — out of scope here, see `dom_helpers::resolve_attribute_namespace`).
+    Other(String),
+}
+
+impl Namespace {
+    /// DOM §4.5 "validate and extract" — resolve a namespace URI argument
+    /// (`createElementNS`, real XML namespace declarations) into a
+    /// `Namespace`. `None`/empty is the DOM "no namespace" case; a URI this
+    /// enum has a dedicated name for gets it; anything else is preserved
+    /// verbatim via [`Namespace::Other`] instead of being discarded (GAP-XMLDOC
+    /// срез 36).
+    pub fn from_uri(uri: Option<&str>) -> Self {
+        match uri {
+            None | Some("") => Namespace::None,
+            Some("http://www.w3.org/1999/xhtml") => Namespace::Html,
+            Some("http://www.w3.org/2000/svg") => Namespace::Svg,
+            Some("http://www.w3.org/1998/Math/MathML") => Namespace::MathMl,
+            Some("http://www.w3.org/XML/1998/namespace") => Namespace::Xml,
+            Some("http://www.w3.org/2000/xmlns/") => Namespace::XmlNs,
+            Some("http://www.w3.org/1999/xlink") => Namespace::XLink,
+            Some(other) => Namespace::Other(other.to_string()),
+        }
+    }
+
+    /// Inverse of [`Namespace::from_uri`] — the URI web-visible code
+    /// (`Node.namespaceURI`, `Attr.namespaceURI`, serialization) should
+    /// surface. `None` means "no namespace" (JS `null`).
+    pub fn uri(&self) -> Option<&str> {
+        match self {
+            Namespace::Html => Some("http://www.w3.org/1999/xhtml"),
+            Namespace::Svg => Some("http://www.w3.org/2000/svg"),
+            Namespace::MathMl => Some("http://www.w3.org/1998/Math/MathML"),
+            Namespace::Xml => Some("http://www.w3.org/XML/1998/namespace"),
+            Namespace::XmlNs => Some("http://www.w3.org/2000/xmlns/"),
+            Namespace::XLink => Some("http://www.w3.org/1999/xlink"),
+            Namespace::Other(s) => Some(s.as_str()),
+            Namespace::None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1955,6 +2000,45 @@ mod tests {
         let doc = Document::new();
         assert_eq!(doc.len(), 1);
         assert!(matches!(doc.get(doc.root()).data, NodeData::Document));
+    }
+
+    // ── GAP-XMLDOC срез 36: Namespace::Other for an arbitrary URI ───────────
+
+    #[test]
+    fn from_uri_maps_known_uris_to_their_dedicated_variant() {
+        assert_eq!(Namespace::from_uri(None), Namespace::None);
+        assert_eq!(Namespace::from_uri(Some("")), Namespace::None);
+        assert_eq!(
+            Namespace::from_uri(Some("http://www.w3.org/1999/xhtml")),
+            Namespace::Html
+        );
+        assert_eq!(Namespace::from_uri(Some("http://www.w3.org/2000/svg")), Namespace::Svg);
+        assert_eq!(
+            Namespace::from_uri(Some("http://www.w3.org/1998/Math/MathML")),
+            Namespace::MathMl
+        );
+    }
+
+    #[test]
+    fn from_uri_preserves_an_unrecognized_uri_verbatim() {
+        let ns = Namespace::from_uri(Some("https://example.org/ns"));
+        assert_eq!(ns, Namespace::Other("https://example.org/ns".to_string()));
+        assert_eq!(ns.uri(), Some("https://example.org/ns"));
+    }
+
+    #[test]
+    fn uri_is_the_inverse_of_from_uri_for_every_known_variant() {
+        for ns in [
+            Namespace::Html,
+            Namespace::Svg,
+            Namespace::MathMl,
+            Namespace::Xml,
+            Namespace::XmlNs,
+            Namespace::XLink,
+        ] {
+            assert_eq!(Namespace::from_uri(ns.uri()), ns);
+        }
+        assert_eq!(Namespace::None.uri(), None);
     }
 
     // ── BUG-986: NodeId из чужого документа не должен ронять процесс ────────
