@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-16",
  "counts": {
-  "open": 340,
-  "fixed": 661,
+  "open": 339,
+  "fixed": 663,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1001,
+ "total_bugs": 1002,
  "phases": [
   {
    "id": "P0",
@@ -7521,20 +7521,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-598": {
-   "status": "open",
-   "title": "`types` getter `.slice()`s a fresh array on every access instead of caching a `FrozenArray` until the data store changes -- `dt.types === dt.types` always `fals…",
-   "component": "js (`dom.rs:737-739` `DataTransfer.prototype.types` getter)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-600": {
-   "status": "open",
-   "title": "HTML \"focus fixup rule\" not implemented -- when the focused element becomes non-focusable (disabled/hidden/detached/loses tabindex/contentEditable turned off),…",
-   "component": "js/shell focus pipeline (`crates/js/src/dom.rs` focus install path)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-601": {
    "status": "open",
    "title": "`DOMTokenList` constructor not exposed on `window` -- `instanceof DOMTokenList` throws `ReferenceError` even though the underlying object (`classList`/`focusGro…",
@@ -9506,6 +9492,13 @@
    "status": "open",
    "title": "`element.appendChild(x)` молча ничего не делает (не бросает, не вставляет) для любого детач-узла без `__nid__` — `new Comment()`, `new Text()`, `document.create…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — арена-элементный `appendChild`, `~6718`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1056": {
+   "status": "open",
+   "title": "`ResizeObserver` доставка идёт через таймерную задачу (`_lumen_timers`), а не как часть общего шага \"update the rendering\" (`_lumen_run_raf_callbacks`) — порядо…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_ro_schedule_initial`/`_ro_initial_pass`, `_lumen_timers`)",
    "date": null,
    "debtor": false
   },
@@ -14114,6 +14107,20 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `DragEvent` constructor, `draggable` getter; `web_api_shim_mid_b.js` -- `window`/`document` `ondrag*`)",
    "date": "2026-09-16",
    "debtor": false
+  },
+  "BUG-598": {
+   "status": "fixed",
+   "title": "`types` getter `.slice()`s a fresh array on every access instead of caching a `FrozenArray` until the data store changes -- `dt.types === dt.types` always `fals…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `DataTransfer.prototype.types` getter)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-600": {
+   "status": "fixed",
+   "title": "HTML \"focus fixup rule\" not implemented -- when the focused element becomes non-focusable (disabled/hidden/loses tabindex/contentEditable turned off/enclosing `…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- `_lumen_is_focusable`, new `_lumen_focus_fixup`; `web_api_shim_mid_b.js` -- `_lumen_run_raf_callbacks`)",
+   "date": "2026-09-16",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14708,6 +14715,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_mc.js`, `web_api_shim_head.js`)": [
    "BUG-479"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_ro_schedule_initial`/`_ro_initial_pass`, `_lumen_timers`)": [
+   "BUG-1056"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b.js`, `web_api_shim_tail_b.js`, `web_api_shim_tail_mc.js`; `crates/js/src/generic_sensor.rs`, `geolocation.rs`, `wake_lock.rs`)": [
    "BUG-765"
