@@ -5832,7 +5832,10 @@ function _lumen_make_html_collection(owner_nid) {
 // `ownerNid` (BUG-576) stashes the node id `HTMLOptionsCollection.prototype.add`
 // needs to delegate to the owning `<select>`'s own `add` — stored under a
 // Symbol key so it never collides with an indexed/named collection member.
-function _lumen_make_nid_collection(idsFn, protoObj, noNamed, mapFn, ownerNid) {
+// `lengthSetFn` (BUG-609), when given, backs a `set` trap for `length` —
+// only `HTMLOptionsCollection` passes one, since a bare `HTMLCollection` has
+// no settable `length` in the spec.
+function _lumen_make_nid_collection(idsFn, protoObj, noNamed, mapFn, ownerNid, lengthSetFn) {
     var proto = Object.create(protoObj);
     if (ownerNid !== undefined) proto[_LUMEN_COLLECTION_OWNER_NID] = ownerNid;
     var toValue = mapFn || _lumen_make_element;
@@ -5904,6 +5907,11 @@ function _lumen_make_nid_collection(idsFn, protoObj, noNamed, mapFn, ownerNid) {
                 }
             }
             return undefined;
+        },
+        set: function(target, prop, value) {
+            if (prop === 'length' && lengthSetFn) { lengthSetFn(value); return true; }
+            target[prop] = value;
+            return true;
         },
     });
 }

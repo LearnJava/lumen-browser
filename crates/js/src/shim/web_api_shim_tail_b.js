@@ -2431,6 +2431,22 @@ function _lumen_select_options(select_nid) {
     }
     return out;
 }
+// HTML LS §4.10.7: the `length` setting algorithm shared by
+// `HTMLSelectElement.length` and `HTMLOptionsCollection.length` (BUG-609) --
+// out-of-range `v` (not `0 <= v <= 100000`) is silently ignored; in range,
+// shrinking removes trailing options and growing appends bare `<option>`s.
+function _lumen_options_set_length(select_nid, v) {
+    var want = Number(v);
+    if (!isFinite(want) || want < 0 || want > 100000) return;
+    want = Math.trunc(want);
+    var opts = _lumen_select_options(select_nid);
+    if (want < opts.length) {
+        for (var i = opts.length - 1; i >= want; i--) _lumen_make_element(opts[i]).remove();
+    } else if (want > opts.length) {
+        var sel = _lumen_make_element(select_nid);
+        for (var j = opts.length; j < want; j++) sel.appendChild(new Option());
+    }
+}
 function _lumen_option_owner_select(option_nid) {
     var cur = _lumen_u2n(_lumen_get_parent(option_nid));
     for (var guard = 0; guard < 8 && cur !== null; guard++) {
@@ -2482,7 +2498,8 @@ Object.defineProperty(HTMLSelectElement.prototype, 'options', {
         var n = _lumen_reflect_nid(this);
         if (n === -1) return null;
         return _lumen_make_nid_collection(function() { return _lumen_select_options(n); },
-                                          HTMLOptionsCollection.prototype, undefined, undefined, n);
+                                          HTMLOptionsCollection.prototype, undefined, undefined, n,
+                                          function(v) { _lumen_options_set_length(n, v); });
     },
     enumerable: true, configurable: true,
 });
@@ -2510,13 +2527,11 @@ Object.defineProperty(HTMLSelectElement.prototype, 'length', {
         return n === -1 ? 0 : _lumen_select_options(n).length;
     },
     set: function(v) {
-        // Truncating via `select.length = N` removes trailing options; growing
-        // it is a no-op here (it would require minting bare <option>s).
+        // HTML LS: `select.length = N` runs the same length-setting algorithm
+        // as `select.options.length = N` (BUG-609).
         var n = _lumen_reflect_nid(this);
         if (n === -1) return;
-        var opts = _lumen_select_options(n);
-        var want = Number(v); if (!isFinite(want) || want < 0) want = 0;
-        for (var i = opts.length - 1; i >= want; i--) _lumen_make_element(opts[i]).remove();
+        _lumen_options_set_length(n, v);
     },
     enumerable: true, configurable: true,
 });
