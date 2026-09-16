@@ -32,3 +32,26 @@ Narrow and mechanical: add `window.DOMTokenList = <the internal
 constructor/class>` (or an equivalent global binding) next to the existing
 `DOMTokenList (classList)` implementation. Only the identity-check subtests
 fail; no functional regression in `classList`/`focusGroup` themselves.
+
+## Ревизия P3 2026-09-16
+
+Заявка описывала состояние до BUG-715 (2026-09-05), который уже дал
+`DOMTokenList` реальный глобальный конструктор/прототип
+(`crates/js/src/shim/web_api_shim_mid.js:1303-1365`,
+`globalThis.DOMTokenList = DOMTokenList`) — сама заявленная причина закрыта
+чужим срезом, но перепроверка живым прогоном
+(`tests/wpt/run_report.py --binary <bin> --all --root
+html/interaction/focus/focusgroup/tentative --recursive --offset 13 --limit
+1`) на `focusgroup/tentative/idl-reflection.html` даёт **1/21** сабтестов,
+не «17/20 проходят кроме identity-проверок», как утверждала заявка. `grep`
+по `focusGroup`/`focusgroup` (регистронезависимо) в `crates/js/src` и во
+всех JS-шимах — **ноль совпадений**: `element.focusGroup`/`.focusGroupStart`
+не заведены вовсе, `classList`/`relList` — единственные существующие
+IDL-члены на базе `DOMTokenList`. Заявленный «функционально корректный,
+просто без глобального конструктора» объект никогда не существовал для
+`focusGroup` — это не идентификационный дефект, а целиком отсутствующая
+IDL-рефлексия HTML LS `focusgroup`/`focusgroupstart` content-атрибутов
+(new-element-content-attribute reflection + сам `DOMTokenList`-объект
+над атрибутом `focusgroup`, PutForwards-семантика, `supports()` со списком
+из 12 стандартных токенов). Переквалифицировано в ДОРАБОТКУ →
+[GAP-FOCUSGROUP](../ROADMAP.md). Указатель убран из `STATUS-P3.md`.

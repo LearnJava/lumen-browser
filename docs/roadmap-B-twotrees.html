@@ -6924,6 +6924,16 @@
        ]
       },
       {
+       "id": "GAP-FOCUSGROUP",
+       "title": "GAP: `focusGroup`/`focusGroupStart` IDL-рефлексия отсутствует целиком",
+       "status": "planned",
+       "size": "M",
+       "note": "HTML LS `focusgroup`/`focusgroupstart` content-атрибуты не заведены вовсе — `grep` по `focusGroup`/`focusgroup` (регистронезависимо) в `crates/js/src` и во всех JS-шимах даёт ноль. Заявка BUG-601 описывала это как точечный дефект («глобальный `DOMTokenList`-конструктор не привязан, сам объект рабочий»), но живой прогон `focusgroup/tentative/idl-reflection.html` даёт 1/21, а не 17/20 — единственный проходящий сабтест тривиален (`focusGroupStart` на элементе без атрибута читается как `undefined`, что и так falsy). Нужно с нуля: (1) `element.focusGroup` — live `DOMTokenList` над атрибутом `focusgroup` с PutForwards-семантикой (присваивание строки не заменяет объект, `_lumen_wrapper_slot`-паттерн из `classList`, `crates/js/src/shim/web_api_shim_mid.js:6542`, подходит как есть); (2) `.supports()` со списком из 12 спецификационных токенов (`toolbar`/`tablist`/`radiogroup`/`listbox`/`menu`/`menubar`/`wrap`/`nowrap`/`inline`/`block`/`nomemory`/`none`) — `DOMTokenList.prototype.supports` на `classList` сейчас не существует вовсе (у `class` нет своего `supports`), паттерн ближе к `relList.supports()` (BUG-826); (3) `element.focusGroupStart` — обычная boolean-рефлексия через существующую IDL-таблицу (BUG-383); (4) экспозиция на `SVGElement`/`MathMLElement` через `HTMLOrSVGOrMathMLElement`-миксин, не только на `HTMLElement`. Сама фокус-навигационная семантика (стрелки внутри `focusgroup`, wrap/nowrap, вложенность) вне этой задачи — тестовый файл проверяет только IDL, не поведение. Найден P2, WPT-VENDOR-html-interaction, 2026-08-04; реклассифицировано из BUG-601 2026-09-16 (P3) по тому же правилу, что BUG-553/554/562/568/583/584/585 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект).",
+       "bugs": [
+        "BUG-601"
+       ]
+      },
+      {
        "id": "GAP-BEFOREMATCH",
        "title": "GAP: `hidden=\"until-found\"` reveal-алгоритм и `beforematch`-событие отсутствуют целиком",
        "status": "done",
@@ -7524,7 +7534,7 @@
   "BUG-601": {
    "status": "open",
    "title": "`DOMTokenList` constructor not exposed on `window` -- `instanceof DOMTokenList` throws `ReferenceError` even though the underlying object (`classList`/`focusGro…",
-   "component": "js (`crates/js/src/dom.rs`, `DOMTokenList (classList)` section ~line 1191)",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- no `focusGroup`/`focusGroupStart` anywhere)",
    "date": null,
    "debtor": false
   },
