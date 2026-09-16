@@ -1,7 +1,7 @@
 # BUG-619: `inert` on a shadow host doesn't propagate to non-slotted shadow-tree children (ancestor walk never crosses the shadow-root→host boundary)
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs::_lumen_is_focusable`, ancestor loop at `dom.rs:10415-10419`, specifically `_lumen_get_parent` on line 10418)
+**Статус:** FIXED (2026-09-16, P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js::_lumen_is_focusable`, ancestor loop)
 **Найден:** P2, WPT-VENDOR-inert, 2026-08-04
 
 ## Симптом
@@ -64,3 +64,21 @@ from its host instead of stopping. Not investigated whether other
 ancestor-walking code in the shim (e.g. any other §6.7-adjacent check,
 composed-path building) has the same shadow-boundary gap — worth grepping
 `_lumen_get_parent(` callers if picked up.
+
+## Фикс (2026-09-16)
+
+The code had already moved to `web_api_shim_tail_b.js::_lumen_is_focusable`
+by the time this was picked up (the `dom.rs` line numbers in this bug's
+header were stale) — same loop, same gap. Added the same
+shadow-boundary crossing already used by `_lumen_command_target_reachable`
+(BUG's Invoker Commands flat-tree walk, same file): when
+`_lumen_get_parent` returns nothing, try `_lumen_get_shadow_root_host` on
+the current node before giving up, so the walk continues from a
+`ShadowRoot` to its host instead of stopping there. `_lumen_get_parent`
+callers elsewhere in the shim were not audited for the same gap (out of
+scope for this single-cause fix) — flagged for a future pass if picked up.
+
+Regression coverage: `crates/js/src/dom/tests/v8_bug619_inert_shadow_host.rs`
+— non-slotted shadow child now correctly unfocusable under an inert host,
+slotted child (the already-working path) stays unfocusable, and a
+non-inert host still allows focus on its shadow children.

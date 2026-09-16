@@ -865,10 +865,17 @@ function _lumen_is_focusable(nid) {
     // HTML LS §6.7: nothing inside an inert subtree is focusable. Same walk
     // also catches the `hidden` attribute (BUG-600) — it takes an element and
     // its whole subtree out of rendering, so no descendant is focusable either.
+    // Walks the *flat tree* (BUG-619): a light-DOM parent pointer stops dead
+    // at a ShadowRoot, so once it's exhausted, cross to the root's host and
+    // keep walking — inertness on a shadow host must reach non-slotted
+    // shadow-tree children too, not just slotted ones (which keep their
+    // light-DOM parent pointer to the host already).
     var anc = nid;
     for (var guard = 0; guard < 512 && anc !== null && anc !== undefined; guard++) {
         if (_lumen_has_attr(anc, 'inert') || _lumen_has_attr(anc, 'hidden')) return false;
-        anc = _lumen_u2n(_lumen_get_parent(anc));
+        var next = _lumen_u2n(_lumen_get_parent(anc));
+        if (next === null) next = _lumen_u2n(_lumen_get_shadow_root_host(anc));
+        anc = next;
     }
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(nid, 'disabled')) {

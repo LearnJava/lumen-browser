@@ -269,3 +269,6 @@ mod v8_bug685_lookup_namespace_apis;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug685_default_namespace_resolver;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug619_inert_shadow_host;
