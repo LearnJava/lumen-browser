@@ -1364,3 +1364,81 @@ lumen-js --lib --profile dev-release --features v8-backend` — 3733/3733
 (было 3731). `cargo clippy -p lumen-dom -p lumen-html-parser -p lumen-js
 --all-targets --profile dev-release --features v8-backend -- -D warnings`
 — чисто.
+
+## GAP-XMLDOC срез 40 (2026-09-16): XML Namespaces §6 «prefix → uri» — вторая половина резолвера (`p1-gap-xmldoc-srez40`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Срез 39
+закрыл `default_ns`-половину стека `(default_ns, prefix → uri)` и явно
+отложил вторую — эта отложенная половина закрыта здесь: живой
+`xmlns:<prefix>='...'` теперь реально отслеживается во время построения
+дерева и побеждает над жёстко закодированными парами срезов 5/33/34/35,
+а не только по ним.
+
+**Измерение.** Прежде чем проектировать резолвер, эмпирически проверил
+обе оставшиеся под-под-задачи, которые срез 39 перечислил как «не в этом
+срезе», отдельными пробными тестами (структура зеркалит реальный
+корпусный файл: `<svg xmlns=… xmlns:h=…><foreignObject><h:body>…`, чтобы
+задействовать тот же брейкаут-путь среза 5, что и живой WPT-тест):
+* «префиксованный элемент, объявляющий свой `xmlns=''`, заводит новую
+  область видимости для непрефиксованных потомков» — оказалось УЖЕ
+  РАБОТАЕТ: `default_namespace_override` (срез 39) обходит
+  `open_elements` и читает атрибут `xmlns` элемента независимо от того,
+  был ли сам этот элемент резолвен через префикс — он просто не знал,
+  что могло быть иначе. Регресс-тест добавлен
+  (`prefixed_elements_own_xmlns_scopes_unprefixed_descendants`), код не
+  тронут.
+* «`xmlns:h='…'` внутри фрагмента, переопределяющий резолвинг префикса
+  `h:` ниже этой точки» — подтверждено сломанным: `<h:f
+  xmlns:h='https://example.com/new-h'><g><h:d></h:d></g></h:f>` давало
+  `f=Html d=Html` (жёсткая пара срезов 5/39) вместо ожидаемого по WPT
+  `f=Other(new-h) d=Other(new-h)` — единственный реальный пробел, который
+  этот срез закрывает.
+
+**Фикс.** `pending_prefixed_start_tag: bool` (срез 39) стал
+`pending_prefix: Option<String>` (`tree_builder.rs`) — тот же приём
+read-and-clear между `apply_token` и `create_element_with_attrs`, но
+теперь несёт САМ текст префикса (`"h"`, `"svg"`, произвольный
+пользовательский), а не только факт его наличия: захватывается из
+ОРИГИНАЛЬНОГО имени тега до того, как `strip_known_html_prefix`/
+`_svg_prefix`/`_mathml_prefix`/`strip_unknown_prefix` его вырежут — все
+четыре режут по одной и той же грамматике `prefix:local`, так что
+подстрока до первой двоеточия верна независимо от того, какая из
+четырёх сработала.
+
+Новый `resolve_prefix_namespace(prefix, self_attrs)` — точный аналог
+`default_namespace_override`, но по конкретному префиксу вместо
+default-namespace слота: сперва проверяет СОБСТВЕННЫЕ атрибуты токена
+(`xmlns:h` на самом `<h:f>` резолвит и его же СОБСТВЕННОЕ имя — XML
+Namespaces §6: область видимости объявления начинается с того же
+start-tag, что его несёт), затем — реальный `open_elements` предков
+(ближайшее объявление побеждает), с тем же дешёвым гейтом
+`saw_prefix_xmlns: bool` (аналог `saw_own_xmlns`), чтобы обычный
+документ без единого `xmlns:*` не платил за обход. `resolve_element_name`
+теперь пробует эту живую привязку ПЕРВОЙ, когда `prefix` — `Some`, и
+только при `None` (ни объявления на самом токене, ни выше по стеку)
+падает на прежние жёстко закодированные пары срезов 5/33/34/35 —
+ветка `!had_prefix`-own-xmlns-fast-path и eligibility-гейт
+`default_namespace_override`'а переименованы под `Option<&str>`, но
+не изменены в поведении, когда живой привязки нет (все тесты срезов
+5–39 зелёные без изменений).
+
+**Сознательно не в этом срезе.** Область видимости привязки внутри
+`pending_prefix` при `</prefix:x>`, случайно совпадающем по префиксу с
+другим элементом того же токена (тот же принятый компромисс, что и у
+среза 39 для `pending_prefixed_start_tag` — не встречается в корпусе).
+Параметрические entity/внешний DTD/`SYSTEM`-entity (0 на корпусе,
+без изменений с среза 31/38) остаются открытыми, но GAP-XMLDOC как
+задача (`BUG-786`/`BUG-685`) этим срезом фактически исчерпана: обе
+половины стека `(default_ns, prefix → uri)` реализованы, WPT-тест
+`innerhtml-and-xml-namespaces.svg` покрыт по обеим осям.
+
+Тесты: `crates/engine/html-parser/src/tree_builder.rs` — 2 новых
+(`prefixed_elements_own_xmlns_scopes_unprefixed_descendants`,
+`nested_xmlns_prefix_rebinding_overrides_the_hardcoded_pair`).
+`cargo test -p lumen-html-parser --profile dev-release` — 525/525 юнит
+(было 523) + 5/5 + 15/15 + 8/8 интеграционных. `cargo test -p lumen-dom
+--profile dev-release` — 300/300 (без изменений). `cargo test -p
+lumen-js --lib --profile dev-release --features v8-backend` — 3737/3737
+(было 3733). `cargo clippy -p lumen-dom -p lumen-html-parser -p lumen-js
+--all-targets --profile dev-release --features v8-backend -- -D warnings`
+— чисто.
