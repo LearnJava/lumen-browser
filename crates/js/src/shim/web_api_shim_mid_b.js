@@ -869,11 +869,20 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     var ts = timestamp_ms < 0 ? performance.now() : +timestamp_ms;
     _wa_current_time = ts;
     var callbacks = _lumen_raf_callbacks.splice(0);
-    if (callbacks.length === 0) return false;
-    for (var i = 0; i < callbacks.length; i++) {
-        try { callbacks[i].fn(ts); } catch(e) { _lumen_report_exception(e); }
+    var ran = false;
+    if (callbacks.length !== 0) {
+        ran = true;
+        for (var i = 0; i < callbacks.length; i++) {
+            try { callbacks[i].fn(ts); } catch(e) { _lumen_report_exception(e); }
+        }
     }
-    return true;
+    // BUG-600: the focus fixup rule runs at the very end of "update the
+    // rendering" — after rAF callbacks (and, since `ResizeObserver`'s own
+    // delivery loop is itself queued through this same callback array, after
+    // resize observations too) — so a callback that reads
+    // `document.activeElement` still sees the pre-fixup value.
+    _lumen_focus_fixup();
+    return ran;
 }
 
 var _popstate_listeners = [];

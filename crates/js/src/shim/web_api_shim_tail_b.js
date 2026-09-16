@@ -862,14 +862,24 @@ function _lumen_nearest_element_nid(nid) {
 function _lumen_is_focusable(nid) {
     if (nid === null || nid === undefined || nid === -1) return false;
     if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) return false;
-    // HTML LS §6.7: nothing inside an inert subtree is focusable.
+    // HTML LS §6.7: nothing inside an inert subtree is focusable. Same walk
+    // also catches the `hidden` attribute (BUG-600) — it takes an element and
+    // its whole subtree out of rendering, so no descendant is focusable either.
     var anc = nid;
     for (var guard = 0; guard < 512 && anc !== null && anc !== undefined; guard++) {
-        if (_lumen_has_attr(anc, 'inert')) return false;
+        if (_lumen_has_attr(anc, 'inert') || _lumen_has_attr(anc, 'hidden')) return false;
         anc = _lumen_u2n(_lumen_get_parent(anc));
     }
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(nid, 'disabled')) {
+        return false;
+    }
+    // BUG-600: a form control disabled via an ancestor `<fieldset disabled>`
+    // (not itself carrying `disabled`) is equally unfocusable, except inside
+    // that fieldset's first `<legend>` child (HTML5 §4.10.16). Reuses the
+    // `:disabled` selector matcher (`forms.rs::is_actually_disabled`) rather
+    // than re-walking the fieldset/legend exemption in JS.
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_node_matches_selector(nid, ':disabled')) {
         return false;
     }
     // An explicit, parseable `tabindex` makes any element focusable.
@@ -953,6 +963,22 @@ function _lumen_focus_update(newNid) {
     }
 }
 window._lumen_focus_update = _lumen_focus_update;
+
+// HTML LS §6.6.2 "focus fixup rule" (BUG-600): whenever the element holding
+// focus stops being a focusable area (gets `disabled`, `hidden`, loses its
+// `tabindex`, has `contentEditable` turned off, or its enclosing `<fieldset>`
+// becomes disabled), the UA must move focus away at the next "update the
+// rendering" step. No dialog/popover-aware target selection here (none of
+// this bug's subtests nest a `<dialog>`), so the fallback is always
+// `document.body` — exactly what `_lumen_focus_update(-1)` already produces
+// via `activeElement`'s no-focus branch. Called from `_lumen_run_raf_callbacks`
+// (`web_api_shim_mid_b.js`), the shim's stand-in for that per-frame step.
+function _lumen_focus_fixup() {
+    var nid = _lumen_last_focused_nid;
+    if (nid === null || nid === undefined || nid === -1) return;
+    if (!_lumen_is_focusable(nid)) _lumen_focus_update(-1);
+}
+window._lumen_focus_fixup = _lumen_focus_fixup;
 
 // HTML LS §6.6.3 — `HTMLElement.focus(options)` / `HTMLElement.blur()`. The
 // shell is notified through the very `_lumen_request_focus`/`_lumen_request_blur`

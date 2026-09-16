@@ -1038,3 +1038,58 @@ fn window_document_location_top_are_unforgeable_own_properties() {
     let r = rt.eval(script).unwrap();
     assert_eq!(r, JsValue::String("".into()));
 }
+
+// BUG-600: the HTML "focus fixup rule" — when the focused element stops
+// being a focusable area, the next "update the rendering" step (modelled
+// here by `_lumen_run_raf_callbacks`, the shim's per-frame rAF pump) must
+// move focus to `document.body`. One scenario per `test_focus_fixup` case in
+// `focus-fixup-rule-one-no-dialogs.html` that isn't the `.remove()`/
+// `visibility: hidden` pair the bug excludes (those go through a different,
+// synchronous path per the bug writeup).
+#[test]
+fn focus_fixup_rule_moves_focus_to_body() {
+    let rt = runtime_with_dom(make_focus_doc(), "");
+    let script = r#"
+(function() {
+    document.body.innerHTML =
+        '<button id="disabled-btn">a</button>' +
+        '<button id="hidden-btn">b</button>' +
+        '<fieldset id="fs1"><button id="fs-child">c</button></fieldset>' +
+        '<fieldset id="fs2" disabled><legend><button id="legend-child">d</button></legend></fieldset>' +
+        '<div id="tabbed" tabindex="0">e</div>' +
+        '<div id="editable" contenteditable="true">f</div>';
+
+    var out = [];
+    function check(id, mutate) {
+        var el = document.getElementById(id);
+        el.focus();
+        if (document.activeElement !== el) { out.push(id + ':did-not-focus'); return; }
+        mutate(el);
+        if (document.activeElement !== el) { out.push(id + ':fixed-up-too-early'); return; }
+        _lumen_run_raf_callbacks(0);
+        if (document.activeElement !== document.body) { out.push(id + ':not-fixed-up'); return; }
+        out.push(id + ':ok');
+    }
+
+    check('disabled-btn', function(el) { el.disabled = true; });
+    check('hidden-btn', function(el) { el.hidden = true; });
+    check('fs-child', function() { document.getElementById('fs1').disabled = true; });
+    check('legend-child', function() {
+        var fs = document.getElementById('fs2');
+        fs.insertBefore(document.createElement('legend'), fs.firstChild);
+    });
+    check('tabbed', function(el) { el.removeAttribute('tabindex'); });
+    check('editable', function(el) { el.contentEditable = 'false'; });
+
+    return out.join(',');
+})()
+"#;
+    let r = rt.eval(script).unwrap();
+    assert_eq!(
+        r,
+        JsValue::String(
+            "disabled-btn:ok,hidden-btn:ok,fs-child:ok,legend-child:ok,tabbed:ok,editable:ok"
+                .into()
+        )
+    );
+}
