@@ -1007,7 +1007,7 @@ impl Lumen {
         // streaming) and on its own images, not the eager pipeline's.
         let csp_gate = {
             let root = doc.root();
-            crate::csp_enforce::document_meta_csp_policy(doc, root)
+            crate::csp_enforce::document_csp_policy(doc, root)
         };
         self.spawn_image_requests(requests, csp_gate);
     }
@@ -1035,7 +1035,7 @@ impl Lumen {
             // a script-inserted `<img>` is just as subject to `img-src` as a
             // parser-inserted one.
             let root = doc.root();
-            let csp_gate = crate::csp_enforce::document_meta_csp_policy(&doc, root);
+            let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
             (requests, csp_gate)
         };
         self.spawn_image_requests(requests, csp_gate);

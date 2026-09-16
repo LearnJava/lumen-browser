@@ -42,8 +42,12 @@ pub(crate) fn render_bytes(
     // `nav_timing`'s doc comment for what these two can and can't express.
     response_status: u16,
     redirected: bool,
+    // GAP-CSPENF срез 5: raw `Content-Security-Policy` response header, stamped
+    // onto the parsed document so every enforcement point sees it next to the
+    // document's `<meta>` policies.
+    csp_header: Option<&str>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false, csp_header)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -606,6 +610,12 @@ pub(crate) fn parse_and_layout(
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     target: lumen_core::ColorSpace,
     media_print: bool,
+    // GAP-CSPENF срез 5: the response's `Content-Security-Policy` header, or
+    // `None` for a non-network source. Stamped onto the document right after
+    // parsing — before any script runs — so that the enforcement points,
+    // which only ever receive a `&Document`, can combine it with the
+    // document's `<meta>` policies.
+    csp_header: Option<&str>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -638,6 +648,10 @@ pub(crate) fn parse_and_layout(
             doc.set_content_type(mime.to_string());
         }
     }
+    // GAP-CSPENF срез 5: the response header travels on the document, the same
+    // way `character_set`/`content_type` above do, because CSP is enforced from
+    // several places that hold nothing but a `&Document`.
+    doc.set_csp_header(csp_header.map(str::to_owned));
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
@@ -959,7 +973,7 @@ pub(crate) fn parse_and_layout(
         let original_policy = {
             let d = doc_arc.lock().unwrap();
             let root = d.root();
-            crate::csp_enforce::document_meta_csp_policy(&d, root).map(|(_, original)| original)
+            crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
         };
         if let Some(original_policy) = original_policy {
             for url in &blocked_by_img_src {

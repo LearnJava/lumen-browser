@@ -2,15 +2,18 @@
 //! против инлайновых `<script>`/module-скриптов, взятых из `<meta
 //! http-equiv="Content-Security-Policy">`. Срез 4 добавил `img-src`/
 //! `default-src` против `<img src>` (host/scheme/`'self'`-источники, не
-//! только keyword).
+//! только keyword). Срез 5 добавил заголовок `Content-Security-Policy`
+//! ответа: он доезжает до документа (`Document::csp_header`) и сливается с
+//! `<meta>`-политиками в [`document_csp_policy`], поэтому все точки
+//! enforcement видят его без изменений в них самих.
 //!
-//! Что НЕ покрыто этим срезом (следующие срезы): заголовок
-//! `Content-Security-Policy` ответа (только `<meta>`), внешние `<script
-//! src>` против host/scheme источников, директивы кроме `script-src`/
-//! `img-src` (`connect-src`/`style-src`/…), `report-uri`/`report-to`,
-//! hash-источники (только `'unsafe-inline'` и `'nonce-…'`), CSP на путях
-//! загрузки картинок помимо eager-пайплайна (lazy-load, стриминговый
-//! progressive loader). См. `bugs/BUG-811-OPEN.md`.
+//! Что НЕ покрыто этим срезом (следующие срезы): внешние `<script src>`
+//! против host/scheme источников, директивы кроме `script-src`/`img-src`
+//! (`connect-src`/`style-src`/…), `report-uri`/`report-to`, hash-источники
+//! (только `'unsafe-inline'` и `'nonce-…'`), CSP на путях загрузки картинок
+//! помимо eager-пайплайна (lazy-load, стриминговый progressive loader),
+//! честная независимая проверка заголовка и `<meta>` вместо их слияния.
+//! См. `bugs/BUG-811-OPEN.md`.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;
@@ -43,25 +46,35 @@ fn collect_meta_csp(doc: &Document, id: NodeId, out: &mut Vec<String>) {
     }
 }
 
-/// Политика документа для `script-src` — только из `<meta>` (срез 1).
+/// Действующая политика документа: заголовок `Content-Security-Policy` ответа
+/// (срез 5, `Document::csp_header`) плюс каждая `<meta
+/// http-equiv="Content-Security-Policy">` (срез 1), в порядке «заголовок,
+/// затем документ».
 ///
-/// Несколько `<meta>` CSP по спецификации (CSP3 §3.4) — независимые
-/// политики, каждая проверяется отдельно; здесь они упрощённо сливаются в
-/// одну строку через `;` — для одиночной политики (подавляющее большинство
-/// случаев) результат совпадает, для нескольких политик со связанными
-/// ослаблениями (например, `'unsafe-inline'` в одной и `'self'` в другой)
-/// это может дать более мягкий эффективный результат, чем спецификация.
+/// Заголовок и каждая `<meta>` по спецификации (CSP3 §3.4) — независимые
+/// политики, каждая проверяется отдельно, и нарушение любой из них —
+/// нарушение; здесь они упрощённо сливаются в одну строку через `;` — для
+/// одиночной политики (подавляющее большинство случаев) результат совпадает,
+/// для нескольких политик со связанными ослаблениями (например,
+/// `'unsafe-inline'` в одной и `'self'` в другой) это может дать более мягкий
+/// эффективный результат, чем спецификация. Честная независимая проверка —
+/// отдельная работа (`bugs/BUG-811-OPEN.md`).
+///
+/// `Content-Security-Policy-Report-Only` не учитывается ни с той, ни с другой
+/// стороны: у `<meta>` репортинг-вариант недопустим по HTML LS, а заголовок
+/// отфильтрован в `page_source::content_security_policy_header` — здесь
+/// enforcement, а report-only по определению ничего не блокирует.
 ///
 /// The returned `String` is the combined raw policy text — carried through to
 /// `SecurityPolicyViolationEvent.originalPolicy` (CSP3 §7.8), which the
 /// parsed [`CspPolicy`] itself does not retain.
-pub(crate) fn document_meta_csp_policy(doc: &Document, root: NodeId) -> Option<(CspPolicy, String)> {
-    let mut metas = Vec::new();
-    collect_meta_csp(doc, root, &mut metas);
-    if metas.is_empty() {
+pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(CspPolicy, String)> {
+    let mut parts: Vec<String> = doc.csp_header().map(str::to_owned).into_iter().collect();
+    collect_meta_csp(doc, root, &mut parts);
+    if parts.is_empty() {
         return None;
     }
-    let combined = metas.join("; ");
+    let combined = parts.join("; ");
     let policy = lumen_network::csp::parse_csp_header(&combined);
     Some((policy, combined))
 }
@@ -171,6 +184,27 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header("img-src cdn.example.com");
         assert!(!img_src_blocked(&p, "https://cdn.example.com/x.png", None));
         assert!(img_src_blocked(&p, "https://other.example.com/x.png", None));
+    }
+
+    /// GAP-CSPENF срез 5: a document with no `<meta>` CSP still has a policy
+    /// when the response carried the header.
+    #[test]
+    fn response_header_alone_is_a_policy() {
+        let mut doc = Document::new();
+        doc.set_csp_header(Some("script-src 'none'".to_owned()));
+        let root = doc.root();
+        let (policy, original) =
+            document_csp_policy(&doc, root).expect("header alone must produce a policy");
+        assert!(inline_script_blocked(&policy, None));
+        assert_eq!(original, "script-src 'none'");
+    }
+
+    /// No header and no `<meta>` — no policy at all, so nothing is blocked.
+    #[test]
+    fn no_header_and_no_meta_is_no_policy() {
+        let doc = Document::new();
+        let root = doc.root();
+        assert!(document_csp_policy(&doc, root).is_none());
     }
 
     #[test]
