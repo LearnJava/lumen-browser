@@ -34,7 +34,15 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         "a" | "span" | "b" | "i" | "em" | "strong" | "code" | "small" | "sub" | "sup"
         | "label" | "abbr" | "cite" | "q" | "mark" | "u"
         // HTML §15.3.7: <del>, <ins>, <s> — flow content, UA display = inline.
-        | "del" | "ins" | "s" => Display::Inline,
+        | "del" | "ins" | "s"
+        // BUG-614: <ruby>/<rb>/<rt>/<rp>/<rtc> have no dedicated box-tree wiring
+        // (`RubyBox`/`lay_out_ruby` exist but no pipeline caller). Falling
+        // through to the `_ => Display::Block` catch-all splits base +
+        // annotation onto separate lines, corrupting reading order — worse
+        // than plain "no ruby support". Treating them as inline restores the
+        // spec-required fallback (base + annotation flow as sequential inline
+        // text) until the full ruby box model is wired (tracked separately).
+        | "ruby" | "rb" | "rt" | "rp" | "rtc" => Display::Inline,
         // HTML rendering §15.3.1 — `<img>` is inline-level replaced content, so
         // it shares the line box with the text around it (icon in a button, logo
         // next to a title, avatar in a comment). It never becomes an `InlineRun`

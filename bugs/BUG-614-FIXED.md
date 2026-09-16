@@ -1,7 +1,7 @@
 # BUG-614: `<ruby>`/`<rt>`/`<rb>`/`<rp>`/`<rtc>` default to `display: block`, breaking even no-ruby-support fallback rendering
 
-**Статус:** OPEN
-**Компонент:** layout (`crates/engine/layout/src/style.rs::default_display`, ~line 10484)
+**Статус:** FIXED 2026-09-16 (P3)
+**Компонент:** layout (`crates/engine/layout/src/style/ua.rs::default_display`)
 **Найден:** P2, WPT-VENDOR-html-ruby-extensions, 2026-08-04
 
 ## Симптом
@@ -58,3 +58,19 @@ reftest", no automated signal). `<rp>`/`<rtc>` group syntax appears in
 `html-ruby-101`+ / `html-ruby-301`+ respectively — same `default_display`
 gap applies, not independently re-tested. Category otherwise gives no
 automatable output; this is the run's only concrete finding.
+
+## Исправлено
+
+Ruby-теги (`ruby`/`rb`/`rt`/`rp`/`rtc`) добавлены в тот же inline-arm
+`default_display` (`crates/engine/layout/src/style/ua.rs`), что и `del`/
+`ins`/`s`, восстанавливая fallback-поведение всех браузеров при отсутствии
+ruby-специфичного layout. Полный `RubyBox`/`lay_out_ruby` pipeline остаётся
+без вызова из конвейера — отдельная, более крупная P1-задача.
+
+Подтверждено `--dump-layout` на `tests/wpt/html-ruby-extensions/
+html-ruby-001.html`: база + аннотация теперь один `InlineRun` вместо двух
+`Block`. `dump_golden.py` даёт тот же базовый дрейф 4/12, что и main (ни
+один golden не использует ruby-теги); `cpu_snapshots_match_references`
+FAILED (7 файлов) — задокументированный посторонний дрейф эталонов
+(BUG-1008), не связанный с этим изменением. `cargo clippy --workspace
+--all-targets -- -D warnings` чист.
