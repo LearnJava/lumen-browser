@@ -124,15 +124,14 @@ impl AnimationFrame {
         frame
     }
 
-    /// Computed-style text patches for this frame's `opacity`/`transform`
-    /// overrides (GAP-CSSANIM срез 3) — keyed the same way as
-    /// `lumen_layout::collect_computed_styles`'s output (`NodeId::index()`
-    /// as `u32`, property name -> CSS text via the same
-    /// `opacity_to_css`/`transform_list_to_css` helpers `computed_style_to_map`
-    /// uses), so the shell can merge them straight into the JS-visible
-    /// snapshot `getComputedStyle()` reads. Properties this scheduler
-    /// doesn't track (`color`/`background-color`/`height`) are intentionally
-    /// left out — those still only show up in the display list, not here.
+    /// Computed-style text patches for this frame's `opacity`/`transform`/
+    /// `color`/`background-color`/`height` overrides (GAP-CSSANIM срезы 3-4)
+    /// — keyed the same way as `lumen_layout::collect_computed_styles`'s
+    /// output (`NodeId::index()` as `u32`, property name -> CSS text via the
+    /// same `opacity_to_css`/`transform_list_to_css`/`color_to_css`/
+    /// `length_to_css` helpers `computed_style_to_map` uses), so the shell
+    /// can merge them straight into the JS-visible snapshot
+    /// `getComputedStyle()` reads.
     pub fn to_computed_style_patches(&self) -> HashMap<u32, HashMap<String, String>> {
         let mut out = HashMap::new();
         for (&node, style) in &self.overrides {
@@ -145,6 +144,18 @@ impl AnimationFrame {
                     "transform".to_string(),
                     crate::selector_query::transform_list_to_css(transform),
                 );
+            }
+            if let Some(color) = style.color {
+                props.insert("color".to_string(), crate::selector_query::color_to_css(color));
+            }
+            if let Some(bg) = style.background_color {
+                props.insert(
+                    "background-color".to_string(),
+                    crate::selector_query::color_to_css(bg),
+                );
+            }
+            if let Some(height) = &style.height {
+                props.insert("height".to_string(), crate::selector_query::length_to_css(height));
             }
             if !props.is_empty() {
                 out.insert(node.index() as u32, props);
@@ -1635,17 +1646,36 @@ mod tests {
         assert_eq!(patches[&2].get("transform").map(String::as_str), Some("none"));
     }
 
-    // A node with only a color/background-color/height override (properties
-    // this snapshot doesn't cover) produces no patch entry at all.
+    // A node with no override at all produces no patch entry.
     #[test]
-    fn computed_style_patches_skip_node_with_no_opacity_or_transform() {
+    fn computed_style_patches_skip_node_with_no_overrides() {
         let mut frame = AnimationFrame::default();
         let node = lumen_dom::NodeId::from_index(9usize);
+        frame.overrides.insert(node, AnimatedStyle::default());
+        assert!(frame.to_computed_style_patches().is_empty());
+    }
+
+    // GAP-CSSANIM срез 4: color/background-color/height overrides become
+    // computed-style text patches too, via the same `color_to_css`/
+    // `length_to_css` helpers the static snapshot uses.
+    #[test]
+    fn computed_style_patches_carry_color_background_and_height() {
+        let mut frame = AnimationFrame::default();
+        let node = lumen_dom::NodeId::from_index(7usize);
         frame.overrides.insert(node, AnimatedStyle {
-            color: Some(Color { r: 1, g: 2, b: 3, a: 255 }),
+            color: Some(Color { r: 0x11, g: 0x22, b: 0x33, a: 255 }),
+            background_color: Some(Color { r: 0x44, g: 0x55, b: 0x66, a: 128 }),
+            height: Some(crate::style::Length::Px(42.0)),
             ..Default::default()
         });
-        assert!(frame.to_computed_style_patches().is_empty());
+        let patches = frame.to_computed_style_patches();
+        let props = patches.get(&7).expect("node 7 must have patches");
+        assert_eq!(props.get("color").map(String::as_str), Some("rgb(17, 34, 51)"));
+        assert_eq!(
+            props.get("background-color").map(String::as_str),
+            Some("rgba(68, 85, 102, 0.502)")
+        );
+        assert_eq!(props.get("height").map(String::as_str), Some("42px"));
     }
 
     #[test]
