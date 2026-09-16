@@ -1,8 +1,9 @@
 # BUG-616: `createImageBitmap()` rejects `HTMLCanvasElement`/`HTMLImageElement`-cropped sources — only OffscreenCanvas/ImageData/whole-HTMLImageElement/Blob are handled
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-16
 **Компонент:** js (`crates/js/src/offscreen_canvas.rs`, `createImageBitmap` global installed near line 646)
 **Найден:** P2, WPT-VENDOR-imagebitmap-renderingcontext, 2026-08-04
+**Исправлен:** P3, 2026-09-16
 
 ## Симптом
 
@@ -66,7 +67,9 @@ first argument is `CanvasImageSource` — `HTMLImageElement | SVGImageElement
 | HTMLVideoElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas |
 VideoFrame` — plus the `ImageBitmapSource` extension (`Blob | ImageData`).
 `HTMLCanvasElement` (and by the same gap `HTMLVideoElement`/`ImageBitmap`
-itself as a re-croppable source) is simply missing a branch.
+itself as a re-croppable source) is simply missing a branch. (`ImageBitmap`
+as a source already worked before this fix — it carries the same
+`__canvas_id__` shape as `OffscreenCanvas` and matched that branch.)
 
 ## Масштаб
 
@@ -83,3 +86,38 @@ style native, keyed by `nid` instead of `__canvas_id__`) before falling
 through to the `unsupported source type` rejection. `HTMLVideoElement` as a
 source is out of scope for this bug (no test in this category exercises
 it) but shares the same gap and is worth checking when this is fixed.
+
+## Фикс P3 2026-09-16
+
+Added an `HTMLCanvasElement` branch to `createImageBitmap`'s JS shim
+(`crates/js/src/offscreen_canvas.rs`), inserted between the existing
+`OffscreenCanvas` and `HTMLImageElement` branches: detects the source via
+`source.__nid__` + `_lumen_get_tag_name(nid) === 'CANVAS'` (every DOM
+element already carries `__nid__`; canvas contexts are otherwise looked up
+purely by that node id, matching `getImageData`'s own `_lumen_c2d(this,
+...).nid`), reads the canvas's current pixels via the same native binding
+the element context's own `getImageData()` uses
+(`_lumen_canvas2d_get_image_data(nid, 0, 0, w, h)`, `canvas2d.rs`) — a
+non-destructive read, per spec — hex-encodes the raw byte array (same
+per-byte encoding the pre-existing `ImageData` branch already used) and
+feeds it through `_lumen_offscreen_canvas_from_image_data` to mint a new
+backing canvas, then resolves through the shared `finish()` helper (crop
+support, `close()`) like every other source. Zero-dimension canvases reject
+per spec (mirrors the `ImageData` branch's zero-dimension check).
+
+### Проверка фикса
+
+New test `create_image_bitmap_accepts_an_on_page_canvas_element`
+(`crates/js/src/dom/tests/v8_core/bug454_canvas_noise.rs`, alongside the
+existing canvas-noise coverage since it needs a full `install_dom` runtime
+with a real `<canvas>`+`2d` context) paints a 60×30 canvas, resolves
+`createImageBitmap(c)`, checks `width`/`height` and reads the bitmap's own
+canvas back through the raw native getter — within BUG-454's documented
+±1-per-channel noise tolerance, since two independent noised reads would
+otherwise legitimately disagree by up to ±2. `cargo test -p lumen-js
+--features v8-backend` (module `bug454_canvas_noise` and `offscreen_canvas`,
+60 tests total) and `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` both clean. Not confirmed live against the
+actual WPT category in this pass (no `--mcp-live-port` session run) — the
+fix mirrors the existing, already-live-confirmed `OffscreenCanvas`
+snapshot branch line for line, module-adjacent to it in the same file.
