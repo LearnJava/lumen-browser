@@ -248,3 +248,6 @@ mod v8_bug602_align_reflection;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug605_marquee_reflection;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug606_legacy_noop_apis;
