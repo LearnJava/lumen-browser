@@ -924,6 +924,10 @@ impl V8JsRuntime {
         install_v8!(webxr::install_webxr_bindings_v8);
         install_v8!(window_management::install_window_management_api_v8);
         install_v8!(xhr::install_xhr_bindings_v8);
+        // GAP-XPATH (BUG-891): must run after DOM install so `Document.prototype`,
+        // `Node.prototype.lookupNamespaceURI`/`compareDocumentPosition` and
+        // `DOMException` already exist.
+        install_v8!(xpath::install_xpath_v8);
         install_v8!(web_codecs::install_webcodecs_bindings_v8);
         // Ph3 V8 migration S9: wasm + webgpu (hand-port, same best-effort
         // orchestration as S8's canvas2d/webgl_canvas above).
