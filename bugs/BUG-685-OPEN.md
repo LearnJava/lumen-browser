@@ -1155,3 +1155,86 @@ clippy --workspace --all-targets --profile dev-release --features v8-backend
 отдельная подсистема, не начат; `resolve_attribute_namespace`'s Html-фоллбэк
 для setAttributeNS с неизвестным ns; параметрические entity/внешний
 DTD/`SYSTEM`-entity — по-прежнему 0 на корпусе.
+
+## GAP-XMLDOC срез 37 (2026-09-16): `setAttributeNS` сохраняет произвольный namespace-URI (`p1-gap-xmldoc-srez37`)
+
+*(запись добавлена срезом 38 задним числом — срез 37 влился без записи в
+этот файл; текст ниже реконструирован из коммита `1a8821c3b`, без повторного
+запуска его гейта.)*
+
+Атрибутная половина среза 36: `resolve_attribute_namespace` (`dom_helpers.rs`)
+для нераспознанного непустого `ns` схлопывал его в `Namespace::Html` вместо
+сохранения — та же проблема, что `_lumen_create_element_ns` имел до среза 36.
+Непустой нераспознанный URI теперь проходит через `Namespace::from_uri` и
+round-trip'ится верно (`getAttributeNS`/`.namespaceURI` на атрибуте); `null`/
+пустой `ns` по-прежнему схлопывается в `Namespace::Html` (сознательное
+отклонение от DOM §4.5, тот же трейдофф, что уже был у
+`known_attribute_namespace`, не тронут этим срезом). Тесты: `crates/js/src/
+dom/tests/v8_core/mod.rs` — 2 новых (по diffstat коммита).
+
+Не в этом срезе (без изменений): настоящий `xmlns`/`xmlns:*`-резолвер;
+параметрические entity/внешний DTD/`SYSTEM`-entity — по-прежнему 0 на корпусе.
+
+## GAP-XMLDOC срез 38 (2026-09-16): `Node.lookupNamespaceURI`/`lookupPrefix`/`isDefaultNamespace` не существовали вовсе (`p1-gap-xmldoc-srez38`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Пере-замерил
+остаток (параметрические entity/внешний DTD/`SYSTEM`-entity — по-прежнему 0
+файлов на корпусе, без изменений; настоящий `xmlns`-резолвер для парсинга —
+по-прежнему не начат, единственный живой корпусный хит,
+`innerhtml-and-xml-namespaces.svg`, требует отдельного стека деклараций в
+`tree_builder.rs`, не заплатки, см. срез 36). Вместо парсерной стороны взял
+соседний, но структурно отдельный пласт: три DOM-метода
+(`Node.lookupNamespaceURI`/`.lookupPrefix`/`.isDefaultNamespace`, DOM §4.4
+"locate a namespace"/"locate a prefix") — чистая query-API над уже
+распарсенными атрибутами, не участвует в резолюции namespace во время
+парсинга.
+
+**Измерение.** Grep по `lookupPrefix`/`lookupNamespaceURI`/`isDefaultNamespace`
+во всём `crates/js/src/` (Rust-биндинги и все `.js`-шимы) — 0 хитов: методы
+не существовали вообще, ни в каком виде (падение как "не функция", не
+неверный ответ). Живой корпусный хит: `dom/nodes/Node-lookupPrefix.xhtml`
+(testharness, не reftest) — прямой тест `Node.lookupPrefix()` с вложенными
+`xmlns:x`/`xmlns:s`/`xmlns:t` на разных уровнях предков.
+
+**Фикс.** `_lumen_locate_namespace(node, prefix)`/`_lumen_locate_prefix(node, ns)`
+(`web_api_shim_mid.js`) — рекурсивный обход по `nodeType`, зеркалящий DOM §4.4
+буква в букву: Element проверяет свой `namespaceURI`/`prefix`, затем
+`xmlns`/`xmlns:*`-атрибуты (через уже существующие `Attr.prefix`/`.localName`,
+текстовое разбиение qualified-имени), затем рекурсия на `.parentElement`;
+Document делегирует на `.documentElement`; DocumentType/DocumentFragment
+всегда `null`; Attr делегирует на `.ownerElement`; всё прочее (Text/Comment/
+ProcessingInstruction) — на `.parentElement`. `Node.prototype.lookupNamespaceURI`/
+`.lookupPrefix`/`.isDefaultNamespace` — тонкие обёртки с нормализацией
+аргумента (`''`/`null`/`undefined` → `null`). Поскольку `.prefix` на любой
+живой обёртке всегда `null` (Lumen не выделяет префикс из имени тега — см.
+`get prefix()`), шаг 1 алгоритма («если свой namespace не null и свой prefix
+совпадает с искомым») срабатывает только для искомого `prefix === null` и в
+этом случае просто возвращает уже резолвленный `namespaceURI` элемента — тот
+же шорткат, на который идёт настоящий браузер с корректно распарсенным
+namespace. Любой непустой искомый prefix всегда проваливается в
+`xmlns:*`-атрибутный обход — это и есть то, что реально покрывает корпусный
+тест.
+
+DocumentFragment — отдельный случай: `_lumen_make_document_fragment` строит
+плоский объектный литерал без `[[Prototype]]` (BUG-377 уже документирует это
+для `baseURI`), так что `Node.prototype`'ные методы до него не доходят;
+добавлены три собственные копии на самом литерале, делегирующие в те же
+`_lumen_locate_namespace`/`_lumen_locate_prefix` (которые для `nodeType === 11`
+и так сразу возвращают `null` по спеке — просто чтобы вызов не падал как
+"не функция").
+
+Тесты: `crates/js/src/dom/tests/v8_bug685_lookup_namespace_apis.rs` — 4 новых
+(`lookup_namespace_uri_walks_ancestor_xmlns_attributes`,
+`lookup_prefix_finds_the_nearest_ancestor_binding`,
+`is_default_namespace_matches_the_elements_own_namespace`,
+`document_and_document_fragment_delegate_or_stop`). `cargo test -p lumen-js
+--lib --profile dev-release --features v8-backend` — 3731/3731 (было 3727).
+`cargo clippy -p lumen-js --all-targets --profile dev-release --features
+v8-backend -- -D warnings` — чисто.
+
+Не в этом срезе: настоящий `xmlns`/`xmlns:*`-резолвер для самого парсинга
+(отдельная, более крупная подсистема, срез 36); `innerhtml-and-xml-namespaces.svg`
+продвинулось (его `lookupNamespaceURI`/`lookupPrefix`-сабтесты, если такие
+есть, теперь реальны), но не закрыто целиком — тот файл структурно требует
+именно парсерного резолвера, не только query-API; параметрические entity/
+внешний DTD/`SYSTEM`-entity — по-прежнему 0 на корпусе.

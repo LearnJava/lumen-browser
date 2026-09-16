@@ -251,3 +251,6 @@ mod v8_bug605_marquee_reflection;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug606_legacy_noop_apis;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug685_lookup_namespace_apis;
