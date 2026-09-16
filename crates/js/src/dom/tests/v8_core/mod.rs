@@ -240,6 +240,24 @@ fn create_element_ns_arbitrary_namespace_round_trips_its_uri() {
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
+// GAP-XMLDOC срез 37 (BUG-685/BUG-830): `setAttributeNS`'s namespace
+// resolution had the same closed-enum fallback `createElementNS` had before
+// срез 36 — any URI without a dedicated `Namespace` variant silently
+// collapsed to `Namespace::Html` instead of round-tripping verbatim.
+#[test]
+fn set_attribute_ns_arbitrary_namespace_round_trips_its_uri() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "var el = document.createElement('div');\
+                     el.setAttributeNS('https://example.org/ns', 'widget', 'v');\
+                     el.getAttributeNS('https://example.org/ns', 'widget') === 'v' \
+                       && el.attributes[0].namespaceURI === 'https://example.org/ns'",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-233: `self` must be defined as a global aliasing `window`
 // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
 // without this they throw `ReferenceError: self is not defined`.

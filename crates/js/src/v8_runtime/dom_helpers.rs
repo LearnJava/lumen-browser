@@ -252,11 +252,20 @@ fn known_attribute_namespace(ns: Option<&str>) -> Option<lumen_dom::Namespace> {
 }
 
 /// `setAttributeNS`'s namespace resolution — like [`known_attribute_namespace`],
-/// but a `null`/empty/unrecognized `ns` falls back to `Namespace::Html`
-/// instead of "unknown", matching every already-existing plain attribute and
-/// `_lumen_create_element_ns`'s own fallback, rather than being rejected.
+/// but `null`/empty falls back to `Namespace::Html` instead of "unknown",
+/// matching every already-existing plain attribute (a deliberate deviation
+/// from DOM §4.5, which would say "no namespace" — kept for compatibility
+/// with the rest of the plain-attribute model, same tradeoff `known_attribute_namespace`
+/// documents). An unrecognized but non-empty `ns`, previously collapsed into
+/// that same `Html` fallback, now round-trips verbatim via [`lumen_dom::Namespace::Other`]
+/// instead of being silently discarded (GAP-XMLDOC срез 37, BUG-685/BUG-830) —
+/// the attribute-side half of the element-creation fix `_lumen_create_element_ns`
+/// already got in срез 36.
 pub(super) fn resolve_attribute_namespace(ns: Option<&str>) -> lumen_dom::Namespace {
-    known_attribute_namespace(ns).unwrap_or(lumen_dom::Namespace::Html)
+    match ns {
+        None | Some("") => lumen_dom::Namespace::Html,
+        Some(uri) => lumen_dom::Namespace::from_uri(Some(uri)),
+    }
 }
 
 /// `getAttributeNS`/`hasAttributeNS`/`removeAttributeNS` (GAP-XMLDOC срез 10,
