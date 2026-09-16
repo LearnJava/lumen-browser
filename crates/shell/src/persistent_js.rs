@@ -625,6 +625,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn fire_image_error(&self, nid: u32);
 
+    /// Dispatch a `securitypolicyviolation` Event for a blocked fetch
+    /// directive (CSP3 §5.5) — `directive` is the violated directive name
+    /// (`"img-src"`, …), `blocked_uri` the request URL that was denied,
+    /// `original_policy` the raw policy text (`SecurityPolicyViolationEvent.
+    /// originalPolicy`). GAP-CSPENF срез 4: first caller outside the
+    /// script-src path (see `crates/shell/src/csp_enforce.rs`).
+    #[allow(dead_code)]
+    fn fire_csp_violation(&self, directive: &str, blocked_uri: &str, original_policy: &str);
+
     /// Whether the viewport owes a `scrollend` on this rendering update
     /// (BUG-822). Delegates to the runtime, which holds the debt per document —
     /// see `V8JsRuntime::page_scrollend_due` for the `moved`/`settled` contract.
@@ -1194,6 +1203,14 @@ impl PersistentJs for V8PersistentJs {
     fn fire_image_error(&self, nid: u32) {
         self.eval_js(&format!(
             "if(typeof _lumen_fire_image_error==='function')_lumen_fire_image_error({nid});"
+        ));
+    }
+    fn fire_csp_violation(&self, directive: &str, blocked_uri: &str, original_policy: &str) {
+        self.eval_js(&format!(
+            "_lumen_dispatch_csp_violation({}, {}, {}, 'enforce');",
+            crate::js_escape::js_string_literal(directive),
+            crate::js_escape::js_string_literal(blocked_uri),
+            crate::js_escape::js_string_literal(original_policy),
         ));
     }
     fn page_scrollend_due(&self, moved: bool, settled: bool) -> bool {

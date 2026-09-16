@@ -1,14 +1,19 @@
 //! Content Security Policy enforcement — срез 1 (GAP-CSPENF): `script-src`
 //! против инлайновых `<script>`/module-скриптов, взятых из `<meta
-//! http-equiv="Content-Security-Policy">`.
+//! http-equiv="Content-Security-Policy">`. Срез 4 добавил `img-src`/
+//! `default-src` против `<img src>` (host/scheme/`'self'`-источники, не
+//! только keyword).
 //!
 //! Что НЕ покрыто этим срезом (следующие срезы): заголовок
 //! `Content-Security-Policy` ответа (только `<meta>`), внешние `<script
-//! src>` против host/scheme источников, все директивы кроме `script-src`,
-//! `report-uri`/`report-to`, hash-источники (только `'unsafe-inline'` и
-//! `'nonce-…'`). См. `bugs/BUG-811-OPEN.md`.
+//! src>` против host/scheme источников, директивы кроме `script-src`/
+//! `img-src` (`connect-src`/`style-src`/…), `report-uri`/`report-to`,
+//! hash-источники (только `'unsafe-inline'` и `'nonce-…'`), CSP на путях
+//! загрузки картинок помимо eager-пайплайна (lazy-load, стриминговый
+//! progressive loader). См. `bugs/BUG-811-OPEN.md`.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
+use lumen_network::Origin;
 
 use crate::*;
 
@@ -97,6 +102,18 @@ pub(crate) fn fire_script_src_violation(
     ));
 }
 
+/// `true` if `img-src` (or `default-src`) forbids fetching `url` — срез 4.
+/// Absence of a policy is not checked here (the caller only calls this when
+/// a policy exists); a `url` that fails to parse is treated as allowed — the
+/// fetch proceeds and hits the normal network-failure path instead of a CSP
+/// one, same "don't invent a violation" stance as the rest of this module.
+pub(crate) fn img_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    !policy.fetch_directive_allows(&CspDirective::ImgSrc, &parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +152,30 @@ mod tests {
     fn mismatched_nonce_blocks() {
         let p = lumen_network::csp::parse_csp_header("script-src 'nonce-abc123'");
         assert!(inline_script_blocked(&p, Some("other")));
+    }
+
+    #[test]
+    fn no_img_src_allows() {
+        let p = lumen_network::csp::parse_csp_header("script-src 'self'");
+        assert!(!img_src_blocked(&p, "https://example.com/x.png", None));
+    }
+
+    #[test]
+    fn img_src_none_blocks() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(img_src_blocked(&p, "https://example.com/x.png", None));
+    }
+
+    #[test]
+    fn img_src_allowed_host_passes() {
+        let p = lumen_network::csp::parse_csp_header("img-src cdn.example.com");
+        assert!(!img_src_blocked(&p, "https://cdn.example.com/x.png", None));
+        assert!(img_src_blocked(&p, "https://other.example.com/x.png", None));
+    }
+
+    #[test]
+    fn img_src_unparseable_url_not_blocked() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(!img_src_blocked(&p, "not a url", None));
     }
 }

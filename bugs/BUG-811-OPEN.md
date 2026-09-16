@@ -189,3 +189,76 @@ Function`, атрибуты-обработчики событий через `se
 (`DedicatedWorker`/`SharedWorker` эквиваленты `setTimeout`/`setInterval` —
 шим общий, но флаг сегодня выставляется только для документа, не для
 воркер-рантайма, так что sink-строка `'Window …'` там пока не годится).
+
+## Срез 4 (2026-09-16, P6) — `img-src`/`default-src` против `<img src>`
+
+Реализовано:
+
+- `crates/network/src/csp.rs`: `CspPolicy::fetch_directive_allows(directive,
+  url, self_origin)` — первое реальное URL-сопоставление источников (до сих
+  пор `effective_sources` отдавал список токенов, а сравнение с URL нигде не
+  делалось). Поддержаны `'none'`, `'self'` (через уже существующий
+  `network::Origin::same_origin`), scheme-source (`https:`) и host-source
+  (`example.com`, `*.example.com`, `scheme://host[:port]`) по грамматике
+  CSP3 §6.7.2.4. Path-компонент host-source сознательно не матчится (шире
+  спеки, никогда не уже — см. doc-comment `host_source_matches`); +14
+  unit-тестов.
+- `crates/shell/src/csp_enforce.rs`: `img_src_blocked(policy, url,
+  self_origin)` — тонкая обёртка (`Url::parse` + `fetch_directive_allows`),
+  URL, который не парсится, не считается нарушением (сохраняет обычный
+  network-failure путь); +4 unit-теста.
+- `crates/shell/src/persistent_js.rs`: обобщённый `PersistentJs::
+  fire_csp_violation(directive, blocked_uri, original_policy)` —
+  `fire_script_src_violation` (срез 1) был захардкожен на `script-src`/
+  `inline`; новый метод — тот же `_lumen_dispatch_csp_violation` под любую
+  директиву/URL.
+- Три независимых места, где `<img src>` инициирует сетевой запрос, заведены
+  под гейт (BUG-172 уже называл `decode_image` общей точкой fetch+decode для
+  первых двух, но точка **решения фетчить или нет** у каждого — своя, до
+  входа в `decode_image`):
+  - `crates/shell/src/subresources.rs::fetch_and_decode_images` (eager-пайплайн,
+    после `DOMContentLoaded`) — добавлен вариант `ImgOutcome::Blocked`,
+    диспатчит `securitypolicyviolation` (через `PersistentJs::
+    fire_csp_violation`, JS-рантайм к этому моменту уже существует).
+  - `crates/shell/src/page_load.rs::spawn_image_requests` (общий продюсер
+    `spawn_stream_image_loads`/`spawn_dynamic_image_loads` — streaming-парсинг
+    и скриптовая вставка `<img>`) — блокирует до `std::thread::spawn`, шлёт
+    `LoadEvent::ImageDecodeFailed`, чтобы `error` пришёл тем же путём, что и
+    обычный сетевой отказ. Здесь `securitypolicyviolation` не диспатчится —
+    это фоновый поток без JS-рантайма; событие всё равно приходит из
+    eager-пайплайна ниже, который пересчитывает тот же гейт независимо (см.
+    «Известное дублирование» ниже).
+  - `crates/shell/src/frames.rs`/`frame_lazy.rs` (картинки внутри `<iframe>`)
+    — **не тронуты этим срезом**: политика подфрейма своя, а гейт сейчас
+    видит только политику top-level документа.
+
+Ловушка, из-за которой первая живая проверка молчала: `lumen_layout::
+ImageRequest.url` — сырое значение атрибута `src` (`.cspgap-pixel.png`),
+не резолвленный URL; `Url::parse` тихо проваливался и гейт "fail open"-ил.
+Фикс — `base.resolve_str(&req.url)` перед проверкой (то же самое место,
+где `decode_image`/`fetch_image_bytes` резолвят его для реального фетча).
+
+Подтверждено живым окном (`img-src 'none'`, `file://`-документ): сетевой
+лог не содержит `→ GET …pixel.png` вовсе (принцип №4 «каждый исходящий байт
+виден» — теперь пуст для заблокированного ресурса, а не просто неуспешен);
+`securitypolicyviolation` приходит с `violatedDirective=img-src`,
+`blockedURI` = резолвленный URL, `originalPolicy=img-src 'none'`; `<img
+onerror>` срабатывает. `tests/wpt/verify_csp_url_worker_gaps.py --variant
+csp-meta-img` теперь печатает `img-onerror` вместо `img-onload` (было
+наоборот — срез 1 оставлял `img-src` полностью непроверенным).
+
+Известное дублирование (не регрессия, существовавший паттерн): страница, где
+`<img>` виден И streaming-, И eager-проходу, получает `error` дважды —
+`spawn_image_requests` шлёт его первым (без CSP-события), `fetch_and_decode_images`
+пересчитывает тот же URL и шлёт `error` + `securitypolicyviolation` второй раз.
+Тот же паттерн двойной доставки уже существовал для обычных decode-отказов до
+этого среза (оба пути независимо решают, фетчить ли URL, и оба сообщают о
+неудаче) — CSP ничего не меняет в этом отношении, чинить отдельно от GAP-CSPENF.
+
+Ещё не покрыто (следующие срезы): заголовок `Content-Security-Policy`
+ответа (только `<meta>`); директивы кроме `script-src`/`img-src`
+(`connect-src`/`style-src`/`media-src`/…); картинки внутри `<iframe>`;
+`background-image`/`@font-face url()` (используют `fetch_image_bytes`
+напрямую, не `decode_image` — не гейтятся вовсе); hash-источники;
+`report-uri`/`report-to`; дедупликация двойного `securitypolicyviolation`
+выше.

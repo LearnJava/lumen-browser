@@ -256,12 +256,17 @@ pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
 /// intrinsic dimensions из декодированного изображения (HTML5 §10 mapped
 /// attributes). Author CSS затем перекроет при необходимости.
 ///
-/// Возвращает `(images, animated_gifs, lazy_pairs)`:
+/// Возвращает `(images, animated_gifs, lazy_pairs, blocked_by_img_src)`:
 /// - `images` — декодированные картинки для немедленной регистрации в renderer-е
 ///   (включает frame 0 каждого анимированного GIF);
 /// - `animated_gifs` — многокадровые GIF-анимации для тиканья в `RedrawRequested`;
 /// - `lazy_pairs` — `(node_id_u32, url)` для `<img loading="lazy">`, которые
-///   не загружаются сейчас и будут зарегистрированы через `_lumen_init_lazy_images`.
+///   не загружаются сейчас и будут зарегистрированы через `_lumen_init_lazy_images`;
+/// - `blocked_by_img_src` — GAP-CSPENF срез 4: URL, которые `img-src`/
+///   `default-src` документа запретил; фетч для них не выполнялся вовсе
+///   (сеть их не видела). Вызывающая сторона диспатчит
+///   `securitypolicyviolation` по этому списку — здесь для этого нет JS-рантайма
+///   (fetch идёт параллельно, до его создания).
 #[allow(clippy::type_complexity)]
 pub(crate) fn fetch_and_decode_images(
     doc: &mut Document,
@@ -270,8 +275,22 @@ pub(crate) fn fetch_and_decode_images(
     viewport: lumen_core::geom::Size,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
+) -> (
+    Vec<(String, Arc<lumen_image::Image>)>,
+    Vec<(String, lumen_image::AnimatedGif)>,
+    Vec<(u32, String)>,
+    Vec<String>,
+) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
+
+    // GAP-CSPENF срез 4: посчитать политику один раз здесь же, до параллельной
+    // фазы — та же одноразовая точка, что `crate::csp_enforce::document_meta_csp_policy`
+    // уже использует в `scripts.rs` для script-src.
+    let csp_gate = {
+        let root = doc.root();
+        crate::csp_enforce::document_meta_csp_policy(doc, root)
+    };
+    let self_origin = base.origin();
 
     /// Результат параллельной фазы fetch+decode одной картинки. Применение к
     /// документу (intrinsic size) и сборка выходных векторов — отдельной
@@ -281,6 +300,8 @@ pub(crate) fn fetch_and_decode_images(
         Lazy,
         /// Пропуск (ошибка сети/декодирования) — уже залогировано.
         Skip,
+        /// `img-src`/`default-src` запретил этот URL — фетч не выполнялся.
+        Blocked,
         /// Статическая картинка (включая 1-кадровый GIF). `Arc<Image>` (BUG-272
         /// срез 17): разделяет аллокацию пикселей с `IMAGE_CACHE`, а не копирует.
         Static {
@@ -304,6 +325,12 @@ pub(crate) fn fetch_and_decode_images(
     let outcomes = parallel_map(&requests, |_, req| {
         if req.is_lazy {
             return ImgOutcome::Lazy;
+        }
+        if let Some((policy, _original)) = &csp_gate {
+            let resolved_url = base.resolve_str(&req.url);
+            if crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
+                return ImgOutcome::Blocked;
+            }
         }
         // BUG-269: apply intrinsic size whenever the author left AT LEAST ONE
         // dimension unset (not only when BOTH are unset). A replaced element
@@ -332,10 +359,12 @@ pub(crate) fn fetch_and_decode_images(
     let mut out: Vec<(String, Arc<lumen_image::Image>)> = Vec::new();
     let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
     let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
+    let mut blocked_by_img_src: Vec<String> = Vec::new();
     for (req, outcome) in requests.into_iter().zip(outcomes) {
         match outcome {
             ImgOutcome::Lazy => lazy_pairs.push((req.node_id.index() as u32, req.url)),
             ImgOutcome::Skip => {}
+            ImgOutcome::Blocked => blocked_by_img_src.push(base.resolve_str(&req.url)),
             ImgOutcome::Static { image, intrinsic } => {
                 if let Some((w, h)) = intrinsic {
                     apply_intrinsic_size(doc, req.node_id, w, h);
@@ -351,7 +380,7 @@ pub(crate) fn fetch_and_decode_images(
             }
         }
     }
-    (out, anim_gifs, lazy_pairs)
+    (out, anim_gifs, lazy_pairs, blocked_by_img_src)
 }
 
 pub(crate) fn fetch_image_bytes(

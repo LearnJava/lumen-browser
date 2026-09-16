@@ -9,6 +9,9 @@
 
 use std::collections::HashMap;
 
+use crate::origin::Origin;
+use lumen_core::url::Url;
+
 /// Hash algorithm used in a CSP hash source expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashAlgorithm {
@@ -167,6 +170,103 @@ impl CspPolicy {
             .get(directive)
             .or_else(|| self.directives.get(&CspDirective::DefaultSrc))
     }
+
+    /// `true` if a fetch of `url` for `directive` is allowed by this policy
+    /// (CSP3 §6.7.2.8 "Does url match source list in origin with redirect
+    /// count?", simplified — no redirect-count tracking, since a blocked
+    /// request never starts and so never redirects).
+    ///
+    /// No directive and no `default-src` fallback — nothing restricts this
+    /// fetch, so it is allowed (the same "absence is not a violation" rule
+    /// the shell's `script-src` inline check already uses).
+    pub fn fetch_directive_allows(
+        &self,
+        directive: &CspDirective,
+        url: &Url,
+        self_origin: Option<&Origin>,
+    ) -> bool {
+        let Some(sources) = self.effective_sources(directive) else {
+            return true;
+        };
+        sources
+            .iter()
+            .any(|s| source_matches_url(s, url, self_origin))
+    }
+}
+
+/// `true` if `source` (one token of a fetch-directive source list) matches
+/// `url`. Keyword sources that gate inline content rather than network
+/// requests (`'unsafe-inline'`, nonces, hashes, …) never match a URL.
+fn source_matches_url(source: &CspSource, url: &Url, self_origin: Option<&Origin>) -> bool {
+    match source {
+        CspSource::None => false,
+        CspSource::SelfOrigin => self_origin.is_some_and(|origin| {
+            Origin::from_url(url).is_ok_and(|target| target.same_origin(origin))
+        }),
+        CspSource::Scheme(scheme) => url.scheme().eq_ignore_ascii_case(scheme.trim_end_matches(':')),
+        CspSource::Url(pattern) => host_source_matches(pattern, url),
+        CspSource::UnsafeInline
+        | CspSource::UnsafeEval
+        | CspSource::StrictDynamic
+        | CspSource::UnsafeHashes
+        | CspSource::Nonce(_)
+        | CspSource::Hash { .. } => false,
+    }
+}
+
+/// Match a CSP3 host-source expression (§6.7.2.4) against `url`.
+///
+/// Grammar: `[ scheme "://" ] host [ ":" port ] [ "/" path ]`, `host` is
+/// `*` or `[ "*." ] label ( "." label )*`.
+///
+/// Path is intentionally not matched by this slice: a source with a path
+/// component (`https://example.com/scripts/`) is treated as if it named the
+/// whole host. That is broader than the spec — a URL outside the path still
+/// matches here — never narrower, so it cannot turn an allowed fetch into a
+/// blocked one; see `bugs/BUG-811-OPEN.md` GAP-CSPENF срез 4 for the scope
+/// note.
+fn host_source_matches(pattern: &str, url: &Url) -> bool {
+    let (scheme_part, rest) = match pattern.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, pattern),
+    };
+    if let Some(scheme) = scheme_part
+        && !url.scheme().eq_ignore_ascii_case(scheme)
+    {
+        return false;
+    }
+    let host_port = rest.split_once('/').map_or(rest, |(hp, _path)| hp);
+    let (host_pattern, port_pattern) = match host_port.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (host_port, None),
+    };
+    if !host_matches(host_pattern, url.host()) {
+        return false;
+    }
+    if let Some(port_pattern) = port_pattern
+        && port_pattern != "*"
+    {
+        let want: Option<u16> = port_pattern.parse().ok();
+        if want != url.port().or_else(|| url.effective_port()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// `host` matches host-source `pattern`: exact match, `*` (any host), or
+/// `*.example.com` (that host or any subdomain, not the bare apex per
+/// CSP3 §6.7.2.4).
+fn host_matches(pattern: &str, host: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        return host.len() > suffix.len()
+            && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+            && host[host.len() - suffix.len()..].eq_ignore_ascii_case(suffix);
+    }
+    pattern.eq_ignore_ascii_case(host)
 }
 
 /// Parse a `Content-Security-Policy` header value into a [`CspPolicy`].
@@ -467,5 +567,84 @@ mod tests {
     fn report_only_flag() {
         let p = parse_csp_report_only_header("default-src 'self'");
         assert!(p.report_only);
+    }
+
+    fn img_url(s: &str) -> Url {
+        Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn no_img_src_directive_allows_anything() {
+        let p = parse_csp_header("script-src 'self'");
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://evil.example/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_none_blocks_everything() {
+        let p = parse_csp_header("img-src 'none'");
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://example.com/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_self_matches_same_origin() {
+        let p = parse_csp_header("img-src 'self'");
+        let origin = Origin::from_url(&img_url("https://example.com/")).unwrap();
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://example.com/x.png"), Some(&origin)));
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://evil.example/x.png"), Some(&origin)));
+    }
+
+    #[test]
+    fn img_src_self_without_document_origin_never_matches() {
+        // No self_origin known (e.g. a file:// document) — 'self' can't match anything.
+        let p = parse_csp_header("img-src 'self'");
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://example.com/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_scheme_source() {
+        let p = parse_csp_header("img-src https:");
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://cdn.example/x.png"), None));
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("http://cdn.example/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_host_source_exact() {
+        let p = parse_csp_header("img-src cdn.example.com");
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://cdn.example.com/x.png"), None));
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://other.example.com/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_host_source_wildcard_subdomain() {
+        let p = parse_csp_header("img-src *.example.com");
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://cdn.example.com/x.png"), None));
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://example.com/x.png"), None));
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://notexample.com/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_host_source_with_scheme_prefix() {
+        let p = parse_csp_header("img-src https://cdn.example.com");
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://cdn.example.com/x.png"), None));
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("http://cdn.example.com/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_host_source_with_port() {
+        let p = parse_csp_header("img-src cdn.example.com:8443");
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://cdn.example.com:8443/x.png"), None));
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://cdn.example.com:9000/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_default_src_fallback() {
+        let p = parse_csp_header("default-src 'none'");
+        assert!(!p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://example.com/x.png"), None));
+    }
+
+    #[test]
+    fn img_src_wildcard_host_allows_any() {
+        let p = parse_csp_header("img-src *");
+        assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://anything.example/x.png"), None));
     }
 }
