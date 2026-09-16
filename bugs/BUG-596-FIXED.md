@@ -1,7 +1,7 @@
 # BUG-596: Legacy `initEvent`/`initUIEvent`/`initMouseEvent` missing entirely on `Event`/`UIEvent`/`MouseEvent`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` -- `Event.prototype`/`UIEvent.prototype`/`MouseEvent.prototype`, no `init*Event` method anywhere: `grep -rn "initEvent\|initUIEvent\|initMouseEvent" crates/` zero-hit)
+**Статус:** FIXED 2026-09-16 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_head.js` -- `Event.prototype`; `crates/js/src/shim/web_api_shim_mid.js` -- `UIEvent.prototype`/`MouseEvent.prototype`)
 **Найден:** P2, WPT-VENDOR-html-editing, 2026-08-04
 
 ## Симптом
@@ -43,3 +43,22 @@ Confirmed via one fully self-contained file (`dnd/synthetic/001.html`, zero
 external dependencies): 15 of 16 subtests fail, all downstream of these three
 missing methods. Any WPT file anywhere in the vendored tree that uses the
 legacy init pattern inherits the same failure -- not specific to drag events.
+
+## Исправлено (2026-09-16, P3)
+
+`Event.prototype.initEvent` was already present in
+`web_api_shim_head.js` by the time this session picked up the bug -- the
+"zero-hit" grep in the original triage was stale, not a live gap.
+`UIEvent.prototype.initUIEvent` and `MouseEvent.prototype.initMouseEvent`
+were genuinely missing; added to `web_api_shim_mid.js`, each delegating to
+its parent's legacy init method and then overwriting only the
+fields the spec adds at that level (`initUIEvent`: `view`/`detail`;
+`initMouseEvent`: `screenX`/`screenY`/`clientX`/`clientY`/`ctrlKey`/`altKey`/
+`shiftKey`/`metaKey`/`button`/`relatedTarget`, plus the `x`/`y` legacy
+aliases). Living on the shared prototype chain, both are inherited for free
+by every subclass (`DragEvent`, `WheelEvent`, `PointerEvent`, …) -- exactly
+what `dnd/synthetic/001.html`'s `DragEvent` case exercises. New test:
+`dom::tests::v8_event_classes::legacy_init_event_methods_reinitialize_and_dispatch`.
+`cargo test -p lumen-js --lib --features v8-backend` green (3707/3707),
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+clean.
