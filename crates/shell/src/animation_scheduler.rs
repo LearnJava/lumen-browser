@@ -44,6 +44,54 @@ struct RunState {
     start_ms: f64,
     /// Если `Some(ts)` — анимация стоит на паузе с момента `ts`.
     paused_at: Option<f64>,
+    /// `animation-name` в момент регистрации — переживает удаление узла из
+    /// текущего кадра ровно настолько, чтобы `animationcancel` мог назвать,
+    /// какая анимация отменена (GAP-CSSANIM срез 2).
+    name: String,
+    /// Взводится, когда `animationstart` уже отправлен — не даёт послать его
+    /// повторно на каждом следующем кадре активного периода.
+    started_fired: bool,
+    /// Число уже пройденных и отражённых `animationiteration` итераций.
+    /// Последняя итерация не считается — её завершение даёт `animationend`,
+    /// а не `animationiteration` (CSS Animations L1 §4.5.1).
+    iterations_completed: u64,
+    /// Взводится, когда `animationend` уже отправлен — активный период
+    /// длится один раз, повторный проход того же кадра (fill-mode
+    /// forwards/both держит t=1) не должен слать событие снова.
+    completed: bool,
+    /// Последнее вычисленное локальное время (сек, с учётом задержки) —
+    /// используется как `elapsedTime`, если экземпляр окажется отменён
+    /// (узел/анимация исчезли из следующего кадра).
+    last_local_time_s: f64,
+}
+
+/// CSS Animations L1 §4.5.1 — один из четырёх событий жизненного цикла
+/// CSS-анимации, которые планировщик должен отправить этим кадром.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationEventKind {
+    /// Анимация вошла в активный период (после задержки).
+    Start,
+    /// Завершилась очередная итерация, кроме последней.
+    Iteration,
+    /// Активный период завершился (последняя итерация доиграна).
+    End,
+    /// Активный экземпляр анимации исчез до завершения — сменилось
+    /// `animation-name`, элемент убран из дерева, или `@keyframes`/
+    /// `animation-duration` перестали описывать активную анимацию.
+    Cancel,
+}
+
+/// Одно событие, которое `AnimationScheduler::tick` вернул этим кадром —
+/// оболочка превращает его в настоящий DOM `AnimationEvent`.
+#[derive(Debug, Clone)]
+pub struct AnimationEventInfo {
+    pub node: NodeId,
+    /// `AnimationEvent.animationName`.
+    pub animation_name: String,
+    pub kind: AnimationEventKind,
+    /// `AnimationEvent.elapsedTime` — секунды в активном периоде на момент
+    /// события (0 для `Start`).
+    pub elapsed_time: f32,
 }
 
 /// Scroll-context для одного тика: всё, что нужно резолверам прогресса
@@ -130,6 +178,11 @@ impl AnimationScheduler {
     /// `scroll_x`/`scroll_y`/`viewport` дают контекст для scroll-driven анимаций
     /// (`animation-timeline: scroll()|view()|<custom-ident>`): их прогресс берётся
     /// из положения скролла/вьюпорта, а не из часов `@keyframes`.
+    ///
+    /// Возвращает вместе с кадром список событий жизненного цикла
+    /// (`animationstart`/`animationiteration`/`animationend`/`animationcancel`,
+    /// GAP-CSSANIM срез 2) — только для time-based (`animation-timeline: auto`)
+    /// анимаций; scroll-driven таймлайны вне охвата этого среза.
     pub fn tick(
         &mut self,
         timestamp_ms: f64,
@@ -138,8 +191,10 @@ impl AnimationScheduler {
         scroll_x: f32,
         scroll_y: f32,
         viewport: Viewport,
-    ) -> AnimationFrame {
+    ) -> (AnimationFrame, Vec<AnimationEventInfo>) {
         let mut frame = AnimationFrame::default();
+        let mut events = Vec::new();
+        let mut visited: std::collections::HashSet<AnimKey> = std::collections::HashSet::new();
         let ctx = ScrollCtx {
             root: layout,
             scroll_x,
@@ -148,8 +203,29 @@ impl AnimationScheduler {
             named_scroll: collect_named_scroll_timelines(layout),
             named_view: collect_named_view_timelines(layout),
         };
-        self.tick_box(timestamp_ms, layout, stylesheet, &ctx, &mut frame);
-        frame
+        self.tick_box(timestamp_ms, layout, stylesheet, &ctx, &mut frame, &mut events, &mut visited);
+        // Экземпляры, не встреченные этим обходом дерева, больше не описаны
+        // текущим стилем (animation-name сменился/исчез, узел убран) — те из
+        // них, что ещё не успели доиграть, отменены.
+        let stale: Vec<AnimKey> = self
+            .running
+            .keys()
+            .filter(|k| !visited.contains(k))
+            .cloned()
+            .collect();
+        for key in stale {
+            if let Some(state) = self.running.remove(&key)
+                && !state.completed
+            {
+                events.push(AnimationEventInfo {
+                    node: key.node,
+                    animation_name: state.name,
+                    kind: AnimationEventKind::Cancel,
+                    elapsed_time: state.last_local_time_s.max(0.0) as f32,
+                });
+            }
+        }
+        (frame, events)
     }
 
     /// Удалить все записи для элементов, которых больше нет в дереве.
@@ -158,6 +234,7 @@ impl AnimationScheduler {
         self.running.clear();
     }
 
+    #[allow(clippy::too_many_arguments)] // внутренний рекурсивный обход, не публичный API
     fn tick_box(
         &mut self,
         ts: f64,
@@ -165,14 +242,17 @@ impl AnimationScheduler {
         ss: &Stylesheet,
         ctx: &ScrollCtx,
         frame: &mut AnimationFrame,
+        events: &mut Vec<AnimationEventInfo>,
+        visited: &mut std::collections::HashSet<AnimKey>,
     ) {
-        self.process_node(ts, lb, ss, ctx, frame);
+        self.process_node(ts, lb, ss, ctx, frame, events, visited);
         for child in &lb.children {
-            self.tick_box(ts, child, ss, ctx, frame);
+            self.tick_box(ts, child, ss, ctx, frame, events, visited);
         }
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    #[allow(clippy::too_many_arguments)] // внутренний рекурсивный обход, не публичный API
     fn process_node(
         &mut self,
         ts: f64,
@@ -180,6 +260,8 @@ impl AnimationScheduler {
         ss: &Stylesheet,
         ctx: &ScrollCtx,
         frame: &mut AnimationFrame,
+        events: &mut Vec<AnimationEventInfo>,
+        visited: &mut std::collections::HashSet<AnimKey>,
     ) {
         let style = &lb.style;
         if style.animation_names.is_empty() {
@@ -241,11 +323,17 @@ impl AnimationScheduler {
                         node: lb.node,
                         index: i,
                     };
+                    visited.insert(key.clone());
 
                     // Регистрируем новую анимацию — начало отсчёта = сейчас.
                     self.running.entry(key.clone()).or_insert(RunState {
                         start_ms: ts,
                         paused_at: None,
+                        name: name.clone(),
+                        started_fired: false,
+                        iterations_completed: 0,
+                        completed: false,
+                        last_local_time_s: 0.0,
                     });
 
                     let state = self.running.get_mut(&key).unwrap();
@@ -271,6 +359,54 @@ impl AnimationScheduler {
                         None => ts - state.start_ms,
                     };
                     let local_time_s = elapsed_ms / 1000.0 - delay as f64;
+                    state.last_local_time_s = local_time_s;
+
+                    // CSS Animations L1 §4.5.1 — события жизненного цикла.
+                    // `animationstart` фиксирует момент входа в активный
+                    // период (задержка прошла), один раз.
+                    if local_time_s >= 0.0 && !state.started_fired {
+                        state.started_fired = true;
+                        events.push(AnimationEventInfo {
+                            node: lb.node,
+                            animation_name: name.clone(),
+                            kind: AnimationEventKind::Start,
+                            elapsed_time: 0.0,
+                        });
+                    }
+
+                    let max_iters_f64: f64 = match &iter_count {
+                        IterationCount::Infinite => f64::INFINITY,
+                        IterationCount::Finite(n) => *n as f64,
+                    };
+                    let total_s = duration as f64 * max_iters_f64;
+                    let finished = !total_s.is_infinite() && local_time_s >= total_s;
+
+                    if !finished && local_time_s >= 0.0 && duration > 0.0 {
+                        // `animationiteration` — за каждую пройденную итерацию,
+                        // кроме последней (её завершение — уже `animationend`).
+                        let current_iter = (local_time_s / duration as f64).floor() as u64;
+                        if current_iter > state.iterations_completed {
+                            for k in (state.iterations_completed + 1)..=current_iter {
+                                events.push(AnimationEventInfo {
+                                    node: lb.node,
+                                    animation_name: name.clone(),
+                                    kind: AnimationEventKind::Iteration,
+                                    elapsed_time: k as f32 * duration,
+                                });
+                            }
+                            state.iterations_completed = current_iter;
+                        }
+                    }
+
+                    if finished && !state.completed {
+                        state.completed = true;
+                        events.push(AnimationEventInfo {
+                            node: lb.node,
+                            animation_name: name.clone(),
+                            kind: AnimationEventKind::End,
+                            elapsed_time: total_s as f32,
+                        });
+                    }
 
                     // Вычислить t ∈ [0,1] для текущего момента.
                     let Some(t) = compute_t(
@@ -710,5 +846,122 @@ mod tests {
             .progress_for(&AnimationTimeline::Named("--missing".into()), node(1))
             .unwrap();
         assert_eq!(p, 0.0);
+    }
+
+    // ── AnimationScheduler::tick — GAP-CSSANIM срез 2 lifecycle events ───────
+
+    fn make_animated_box(id: u32, name: &str, duration_s: f32, iterations: IterationCount) -> LayoutBox {
+        let mut lb = make_box(id, 0.0, 0.0, 50.0, 50.0);
+        let style = std::sync::Arc::make_mut(&mut lb.style);
+        style.animation_names = vec![name.to_string()];
+        style.animation_durations = vec![duration_s];
+        style.animation_iteration_counts = vec![iterations];
+        lb
+    }
+
+    fn fade_keyframes_sheet(name: &str) -> Stylesheet {
+        lumen_css_parser::parse(&format!(
+            "@keyframes {name} {{ from {{ opacity: 1; }} to {{ opacity: 0; }} }}"
+        ))
+    }
+
+    fn tick_at(
+        sched: &mut AnimationScheduler,
+        ts: f64,
+        root: &LayoutBox,
+        sheet: &Stylesheet,
+    ) -> Vec<AnimationEventInfo> {
+        sched
+            .tick(ts, root, sheet, 0.0, 0.0, Viewport { width: 1024.0, height: 720.0 })
+            .1
+    }
+
+    #[test]
+    fn tick_fires_start_on_first_active_frame() {
+        let mut sched = AnimationScheduler::new();
+        let root = make_animated_box(1, "fade", 1.0, IterationCount::Finite(1.0));
+        let sheet = fade_keyframes_sheet("fade");
+        let events = tick_at(&mut sched, 0.0, &root, &sheet);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimationEventKind::Start);
+        assert_eq!(events[0].animation_name, "fade");
+
+        // A second tick still inside the active period must not refire it.
+        let events = tick_at(&mut sched, 100.0, &root, &sheet);
+        assert!(events.is_empty(), "start must fire once, got {events:?}");
+    }
+
+    #[test]
+    fn tick_fires_iteration_between_completed_loops() {
+        let mut sched = AnimationScheduler::new();
+        let root = make_animated_box(1, "fade", 1.0, IterationCount::Finite(3.0));
+        let sheet = fade_keyframes_sheet("fade");
+        tick_at(&mut sched, 0.0, &root, &sheet); // Start.
+        // 1.5s in: one full iteration (0..1s) completed, second in progress.
+        let events = tick_at(&mut sched, 1500.0, &root, &sheet);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimationEventKind::Iteration);
+        assert!((events[0].elapsed_time - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn tick_does_not_fire_iteration_for_the_last_loop() {
+        let mut sched = AnimationScheduler::new();
+        let root = make_animated_box(1, "fade", 1.0, IterationCount::Finite(2.0));
+        let sheet = fade_keyframes_sheet("fade");
+        tick_at(&mut sched, 0.0, &root, &sheet); // Start.
+        // 2.5s in: total duration is 2s — animation already finished by then,
+        // so the boundary at 1s must have produced Iteration, not the End.
+        let events = tick_at(&mut sched, 2500.0, &root, &sheet);
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, vec![AnimationEventKind::End]);
+    }
+
+    #[test]
+    fn tick_fires_end_once_on_completion() {
+        let mut sched = AnimationScheduler::new();
+        let root = make_animated_box(1, "fade", 1.0, IterationCount::Finite(1.0));
+        let sheet = fade_keyframes_sheet("fade");
+        tick_at(&mut sched, 0.0, &root, &sheet); // Start.
+        let events = tick_at(&mut sched, 1500.0, &root, &sheet);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimationEventKind::End);
+        assert!((events[0].elapsed_time - 1.0).abs() < 1e-4);
+
+        // Re-ticking a finished (no fill-mode) animation must not refire End.
+        let events = tick_at(&mut sched, 2000.0, &root, &sheet);
+        assert!(events.is_empty(), "end must fire once, got {events:?}");
+    }
+
+    #[test]
+    fn tick_fires_cancel_when_animation_disappears_before_completion() {
+        let mut sched = AnimationScheduler::new();
+        let root = make_animated_box(1, "fade", 2.0, IterationCount::Finite(1.0));
+        let sheet = fade_keyframes_sheet("fade");
+        tick_at(&mut sched, 0.0, &root, &sheet); // Start, still mid-animation.
+
+        // Next frame the element no longer declares the animation (e.g.
+        // `animation-name` changed or the node left the tree).
+        let plain_root = make_box(1, 0.0, 0.0, 50.0, 50.0);
+        let events = tick_at(&mut sched, 500.0, &plain_root, &sheet);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimationEventKind::Cancel);
+        assert_eq!(events[0].animation_name, "fade");
+    }
+
+    #[test]
+    fn tick_does_not_cancel_an_already_completed_animation() {
+        let mut sched = AnimationScheduler::new();
+        let root = make_animated_box(1, "fade", 1.0, IterationCount::Finite(1.0));
+        let sheet = fade_keyframes_sheet("fade");
+        tick_at(&mut sched, 0.0, &root, &sheet); // Start.
+        let events = tick_at(&mut sched, 1500.0, &root, &sheet); // End.
+        assert_eq!(events[0].kind, AnimationEventKind::End);
+
+        // Element removed only after the animation had already finished —
+        // no spurious Cancel for an instance that already ran to completion.
+        let plain_root = make_box(1, 0.0, 0.0, 50.0, 50.0);
+        let events = tick_at(&mut sched, 2000.0, &plain_root, &sheet);
+        assert!(events.is_empty(), "no cancel after completion, got {events:?}");
     }
 }

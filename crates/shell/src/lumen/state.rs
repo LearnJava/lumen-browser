@@ -388,6 +388,13 @@ pub(crate) struct Lumen {
     /// single-delivery-point shape as `cv_events` — drained once per frame in
     /// `Lumen::deliver_transition_events`.
     pub(crate) transition_events: Vec<lumen_layout::TransitionEventInfo>,
+    /// GAP-CSSANIM срез 2: queue of `animationstart`/`animationiteration`/
+    /// `animationend`/`animationcancel` events the page's
+    /// `animation_scheduler::AnimationScheduler` produced (`tick()` in
+    /// `RedrawRequested`) and not yet dispatched to JS. Same cross-producer
+    /// single-delivery-point shape as `transition_events` — drained once per
+    /// frame in `Lumen::deliver_animation_events`.
+    pub(crate) animation_events: Vec<crate::animation_scheduler::AnimationEventInfo>,
     /// OS-level `prefers-color-scheme` preference. `true` — система в тёмной теме.
     /// Читается из winit `Window::theme()` при создании окна и обновляется на
     /// `WindowEvent::ThemeChanged`. Прокидывается в JS `matchMedia` через
