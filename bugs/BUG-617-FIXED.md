@@ -1,7 +1,7 @@
 # BUG-617: `ImageBitmapRenderingContext` has no global constructor (plain object literal instead of a class) and `OffscreenCanvas.getContext()` ignores `'bitmaprenderer'`/`'webgpu'` entirely
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` `getContext` factory ~line 3083, `crates/js/src/offscreen_canvas.rs::getContext` ~line 454)
+**Статус:** FIXED (2026-09-16, P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js::HTMLCanvasElement.prototype.getContext`, `crates/js/src/offscreen_canvas.rs::getContext`)
 **Найден:** P2, WPT-VENDOR-imagebitmap-renderingcontext, 2026-08-04
 
 ## Симптом
@@ -81,3 +81,45 @@ broader risk: any future WPT category doing `x instanceof
 object literal — worth an audit of `dom.rs`'s other `getContext` branches
 (`'2d'`, `'webgpu'`) for the same missing-constructor gap when picked up.
 Not investigated here (out of scope for this category's vendoring pass).
+
+## Фикс (2026-09-16)
+
+**Gap 1.** `web_api_shim_mid.js`'s `CanvasRenderingContext2D` section gained
+an `ImageBitmapRenderingContext` global next to it (same "throws on direct
+`new`, tagged via `_lumen_idl_tag`" pattern). The `'bitmaprenderer'` branch of
+`HTMLCanvasElement.prototype.getContext` now builds its context object via
+`Object.create(ImageBitmapRenderingContext.prototype)` instead of a bare
+`{...}` literal, so `instanceof`/`constructor.name`/`Symbol.toStringTag`
+all resolve correctly for the on-page `<canvas>` path.
+
+**Gap 2.** `OffscreenCanvas.getContext()` (`offscreen_canvas.rs`) gained a
+`'bitmaprenderer'` branch mirroring the on-page one. Its own JS shim
+(`OFFSCREEN_CANVAS_SHIM`) defines `ImageBitmapRenderingContext`
+self-containedly — reusing the page's global when present (same
+reuse-or-define-locally shape already used there for
+`CanvasGradient`/`CanvasPattern`/`TextMetrics`/`ImageData`), since this
+module's own bindings can in principle be installed without the page shim
+having run first (its own V8 unit-test harness does exactly that, and
+`OffscreenCanvas` is not yet wired into real Worker threads at all —
+`worker.rs::run_worker_thread_v8`'s doc comment). `transferFromImageBitmap`
+on the offscreen side is backed by a new native,
+`_lumen_offscreen_bitmaprenderer_transfer_from_image_bitmap`
+(`offscreen_canvas.rs`), which replaces the target `OffscreenCanvas`'s whole
+backing `Context2D` with the source bitmap's pixels — the offscreen-side
+counterpart of `canvas2d.rs::bitmaprenderer_transfer_native`, which presents
+onto a page `<canvas>` by `nid` instead.
+
+`'webgpu'` on `OffscreenCanvas` stays unimplemented — real feature work
+(a `GPUCanvasContext` bound to an off-DOM backing store), not this bug's
+missing-constructor/missing-branch shape, and not exercised by this
+category's tests.
+
+Tests: `offscreen_canvas.rs::tests_v8` (context is a real class instance,
+cached, `transferFromImageBitmap` round-trips pixels dst←src, `null`
+clears, invalid-argument throws) and
+`dom/tests/v8_core/canvas_interface_membership.rs`
+(`bitmaprenderer_context_is_an_instance_of_its_global_interface`, on-page
+path). Gate: `cargo clippy --workspace --all-targets -- -D warnings` чист;
+`scripts/scoped-test.sh` — единственный красный,
+`cases::snapshot_cpu::cpu_snapshots_match_references`, посторонний дрейф
+(BUG-1008, побайтово та же сигнатура 7 файлов).

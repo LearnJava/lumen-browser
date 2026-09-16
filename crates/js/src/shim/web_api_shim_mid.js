@@ -4898,6 +4898,14 @@ function CanvasRenderingContext2D() {
 }
 _lumen_idl_tag(CanvasRenderingContext2D, 'CanvasRenderingContext2D');
 
+// ── ImageBitmapRenderingContext (HTML LS §4.12.5.1, canvas.getContext('bitmaprenderer')) ──
+// Named global so `instanceof ImageBitmapRenderingContext` (a routine WebIDL-conformance
+// idiom) resolves instead of throwing `ReferenceError` — BUG-617.
+function ImageBitmapRenderingContext() {
+    throw new TypeError("Illegal constructor");
+}
+_lumen_idl_tag(ImageBitmapRenderingContext, 'ImageBitmapRenderingContext');
+
 // Every member below starts here: the state slot doubles as the brand check.
 function _lumen_c2d(v, member) {
     if (!v || v.__canvas2d__ === undefined) {
@@ -7792,20 +7800,19 @@ HTMLCanvasElement.prototype.getContext = function(contextType) {
         if (_canvas_bitmaprenderer_ctxs[nid]) return _canvas_bitmaprenderer_ctxs[nid];
         var bd = _lumen_canvas_dims(nid);
         _lumen_canvas2d_create(nid, bd[0], bd[1]);
-        var brctx = {
-            canvas: this,
-            transferFromImageBitmap: function(bitmap) {
-                if (bitmap === null) {
-                    _lumen_canvas2d_clear_rect(nid, 0, 0, _lumen_canvas_dims(nid)[0], _lumen_canvas_dims(nid)[1]);
-                    return;
-                }
-                if (!bitmap || typeof bitmap.__canvas_id__ !== 'number') {
-                    throw new TypeError('transferFromImageBitmap: argument is not an ImageBitmap');
-                }
-                var ok = _lumen_bitmaprenderer_transfer_from_image_bitmap(nid, bitmap.__canvas_id__);
-                if (!ok) {
-                    throw new DOMException('transferFromImageBitmap: the ImageBitmap has been detached', 'InvalidStateError');
-                }
+        var brctx = Object.create(ImageBitmapRenderingContext.prototype);
+        brctx.canvas = this;
+        brctx.transferFromImageBitmap = function(bitmap) {
+            if (bitmap === null) {
+                _lumen_canvas2d_clear_rect(nid, 0, 0, _lumen_canvas_dims(nid)[0], _lumen_canvas_dims(nid)[1]);
+                return;
+            }
+            if (!bitmap || typeof bitmap.__canvas_id__ !== 'number') {
+                throw new TypeError('transferFromImageBitmap: argument is not an ImageBitmap');
+            }
+            var ok = _lumen_bitmaprenderer_transfer_from_image_bitmap(nid, bitmap.__canvas_id__);
+            if (!ok) {
+                throw new DOMException('transferFromImageBitmap: the ImageBitmap has been detached', 'InvalidStateError');
             }
         };
         _canvas_bitmaprenderer_ctxs[nid] = brctx;
