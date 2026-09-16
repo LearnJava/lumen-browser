@@ -563,6 +563,19 @@ pub struct Document {
     /// the `content_type` hint `parse_and_layout` already receives.
     #[serde(default = "default_content_type")]
     content_type: String,
+    /// Raw text of the response's `Content-Security-Policy` header, if the
+    /// server sent one (GAP-CSPENF срез 5). Set once by the shell in
+    /// `parse_and_layout`, next to `character_set`/`content_type`, because CSP
+    /// enforcement happens in several places that only ever receive a
+    /// `&Document` (inline scripts, `<img>` fetches on three different
+    /// producers) and each of them re-derives the policy from the document at
+    /// the moment it enforces.
+    ///
+    /// Serialised like `content_type`: a fact about the response that produced
+    /// this document, which must stay readable after a bfcache restore.
+    /// `None` for every non-network source (file / snapshot / `about:` page).
+    #[serde(default)]
+    csp_header: Option<String>,
 }
 
 /// Default for [`Document::character_set`] — matches [`Document::new`] and
@@ -612,6 +625,7 @@ impl Document {
             design_mode: false,
             character_set: default_character_set(),
             content_type: default_content_type(),
+            csp_header: None,
         }
     }
 
@@ -645,6 +659,20 @@ impl Document {
     /// `content_type` hint already passed into `parse_and_layout`.
     pub fn set_content_type(&mut self, content_type: String) {
         self.content_type = content_type;
+    }
+
+    /// Raw `Content-Security-Policy` response header of this document, if any
+    /// (GAP-CSPENF срез 5). Combined with the document's `<meta
+    /// http-equiv="Content-Security-Policy">` policies by the shell's
+    /// enforcement points.
+    pub fn csp_header(&self) -> Option<&str> {
+        self.csp_header.as_deref()
+    }
+
+    /// Set the document's `Content-Security-Policy` response header. Called
+    /// once by the shell right after parsing, before any script runs.
+    pub fn set_csp_header(&mut self, csp_header: Option<String>) {
+        self.csp_header = csp_header;
     }
 
     pub fn root(&self) -> NodeId {

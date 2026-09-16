@@ -278,6 +278,7 @@ impl Lumen {
                         raw.cache_control_no_store,
                         raw.status,
                         raw.redirected,
+                        raw.csp_header.as_deref(),
                     )
                     .map_err(|e| e.to_string());
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)

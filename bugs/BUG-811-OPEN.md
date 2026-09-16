@@ -262,3 +262,67 @@ csp-meta-img` теперь печатает `img-onerror` вместо `img-onlo
 напрямую, не `decode_image` — не гейтятся вовсе); hash-источники;
 `report-uri`/`report-to`; дедупликация двойного `securitypolicyviolation`
 выше.
+
+## Срез 5 (2026-09-16, P6) — заголовок `Content-Security-Policy` ответа
+
+Реализовано:
+
+- `crates/shell/src/page_source.rs`: `content_security_policy_header(
+  resp_headers)` — свободная функция рядом с `cache_control_no_store` и
+  `response_content_type`, поэтому unit-тестируется без сети (+6 тестов:
+  есть/нет/регистр имени/повтор/пустое значение/`-Report-Only`). Имя
+  сравнивается точным `eq_ignore_ascii_case`, а не префиксом — иначе
+  `Content-Security-Policy-Report-Only` (который по определению ничего не
+  блокирует) попал бы в enforcement. Повторный заголовок — независимая
+  политика по CSP3 §3.4; здесь он сливается через `"; "`, тем же
+  упрощением, которое срез 1 уже применял к нескольким `<meta>`.
+- `RawPage.csp_header: Option<String>` заполняется в обоих сетевых
+  конструкторах (`load_bytes`, `load_bytes_streaming`) и равен `None` во
+  всех несетевых (`AboutBlank`/`File`/`Snapshot`/`Static`).
+- `crates/engine/dom/src/lib.rs`: `Document::csp_header()`/`set_csp_header()`
+  — поле рядом с `character_set`/`content_type` (`#[serde(default)]`, живёт
+  через bfcache, как и они). Заголовок нужен **не один раз при парсинге**, а
+  в каждый момент enforcement: пять точек (`scripts.rs`, `subresources.rs`,
+  `page_load.rs` ×2, `page_pipeline.rs`) пересчитывают политику по `&Document`
+  заново, и ни у одной из них нет доступа ни к `RawPage`, ни к `LayoutSource`.
+  Поэтому заголовок едет на самом документе; ни одна из пяти точек при этом
+  не изменилась.
+- `render_bytes`/`parse_and_layout` получили параметр `csp_header:
+  Option<&str>`; `parse_and_layout` штампует его на документ сразу после
+  парсинга — до исполнения любого скрипта, тем же куском кода, что
+  `set_character_set`/`set_content_type`.
+- `crates/shell/src/csp_enforce.rs`: `document_meta_csp_policy` →
+  `document_csp_policy` (имя больше не врёт — источников теперь два).
+  Заголовок идёт первым, затем `<meta>` в порядке документа; слияние —
+  то же `"; "`. По CSP3 §3 это независимые политики и нарушение любой
+  из них — нарушение; честная двойная проверка вместо слияния остаётся
+  отдельной работой (см. «Ещё не покрыто»).
+
+Подтверждено живым окном (`--screenshot`, локальный HTTP-сервер, dev-release):
+
+- `Content-Security-Policy: script-src 'self'` в заголовке + внешний
+  `/listener.js` (разрешён `'self'`) + инлайновый `<script>`: `PROBE
+  inline-ran` не печатается вовсе, а слушатель печатает `PROBE spv
+  directive=script-src policy=script-src 'self'` — то есть заголовок
+  блокирует инлайн и `originalPolicy` — именно текст заголовка.
+- Слияние заголовка и `<meta>`: заголовок `img-src 'none'` + `<meta>`
+  `script-src 'unsafe-inline'` на одной странице — инлайновый скрипт
+  выполняется (его разрешила `<meta>`), и он же ловит `PROBE spv
+  directive=img-src uri=http://…/pixel.png` от заголовка; `onload`
+  картинки не срабатывает. Обе политики действуют одновременно.
+- `tests/wpt/verify_csp_url_worker_gaps.py --variant csp-header-spv` больше
+  не печатает `header-seen`: инлайновый скрипт этой страницы заблокирован
+  заголовочным `script-src 'self'` (до среза он выполнялся). Оставшийся в
+  этом варианте `img-loaded-anyway` — не свидетельство о CSP: сам скрипт
+  probe-а оговаривает (BUG-804), что `<img>`, написанный парсером, шлёт
+  `load`/`error` независимо от политики, и картинку здесь успевает забрать
+  streaming-продюсер, который заголовка не видит (см. ниже).
+
+Ещё не покрыто (следующие срезы): честная независимая проверка заголовка и
+`<meta>` вместо их слияния в одну строку; streaming-продюсер картинок
+(`spawn_stream_image_loads`) — он работает над частичным DOM от
+`IncrementalTreeBuilder`, у которого заголовка нет вовсе (`<meta>` он видит,
+заголовок — нет), плюс lazy-путь; директивы кроме `script-src`/`img-src`
+(`connect-src`/`style-src`/`media-src`/…); картинки внутри `<iframe>`;
+`background-image`/`@font-face url()`; hash-источники; `report-uri`/
+`report-to`; дедупликация двойного `securitypolicyviolation`.

@@ -652,7 +652,7 @@ pub(crate) fn run_scripts_with_dom(
                 let csp_policy = {
                     let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
                     let root = doc.root();
-                    crate::csp_enforce::document_meta_csp_policy(&doc, root)
+                    crate::csp_enforce::document_csp_policy(&doc, root)
                 };
                 // TRUSTEDTYPES-1 срез 1: `require-trusted-types-for 'script'`
                 // must be visible to the shim's `setTimeout`/`setInterval`

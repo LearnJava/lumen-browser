@@ -284,11 +284,11 @@ pub(crate) fn fetch_and_decode_images(
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
     // GAP-CSPENF срез 4: посчитать политику один раз здесь же, до параллельной
-    // фазы — та же одноразовая точка, что `crate::csp_enforce::document_meta_csp_policy`
+    // фазы — та же одноразовая точка, что `crate::csp_enforce::document_csp_policy`
     // уже использует в `scripts.rs` для script-src.
     let csp_gate = {
         let root = doc.root();
-        crate::csp_enforce::document_meta_csp_policy(doc, root)
+        crate::csp_enforce::document_csp_policy(doc, root)
     };
     let self_origin = base.origin();
 
