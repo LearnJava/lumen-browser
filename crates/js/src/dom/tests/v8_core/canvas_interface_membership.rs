@@ -144,6 +144,26 @@ fn get_context_matches_the_context_id_exactly() {
     );
 }
 
+/// BUG-617 gap 1: `getContext('bitmaprenderer')` used to hand out a bare
+/// object literal — `instanceof ImageBitmapRenderingContext` threw
+/// `ReferenceError` because no such global existed at all (contrast '2d',
+/// checked by `get_context_matches_the_context_id_exactly` above, which
+/// already had a real `CanvasRenderingContext2D` global).
+#[test]
+fn bitmaprenderer_context_is_an_instance_of_its_global_interface() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var c = document.createElement('canvas');").unwrap();
+    assert_eq!(s(&rt, "typeof ImageBitmapRenderingContext"), "function");
+    assert_eq!(
+        s(&rt, "c.getContext('bitmaprenderer') instanceof ImageBitmapRenderingContext"),
+        "true"
+    );
+    assert_eq!(
+        s(&rt, "c.getContext('bitmaprenderer').constructor.name"),
+        "ImageBitmapRenderingContext"
+    );
+}
+
 /// `contextId` объявлен `required DOMString`: отсутствующий аргумент — это
 /// `TypeError`, а не `null`. Конверсия тоже WebIDL-евская: `|| ''` превращал
 /// `getContext(0)` в `getContext('')` вместо строки `'0'`.

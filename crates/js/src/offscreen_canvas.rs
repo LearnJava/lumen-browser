@@ -806,6 +806,36 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         }),
     )?;
 
+    // ── ImageBitmapRenderingContext.transferFromImageBitmap (BUG-617 gap 2) ──
+    // `OffscreenCanvas.getContext('bitmaprenderer')`'s native counterpart to
+    // `canvas2d.rs::bitmaprenderer_transfer_native` (which presents onto a
+    // page `<canvas>` by `nid`): replaces `target_canvas_id`'s whole backing
+    // store with the transferred bitmap's pixels, wholesale, per HTML LS
+    // §4.12.5.1. Returns `false` (caller throws `InvalidStateError`) when
+    // either the target canvas or the source bitmap no longer exists.
+    rt.register_native(
+        "_lumen_offscreen_bitmaprenderer_transfer_from_image_bitmap",
+        into_v8_fn2(|target_canvas_id: u32, source_canvas_id: u32| -> bool {
+            let target_exists = OFFSCREEN_CANVASES
+                .with(|c| c.try_borrow().is_ok_and(|m| m.contains_key(&target_canvas_id)));
+            if !target_exists {
+                return false;
+            }
+            match take_offscreen_pixels(source_canvas_id) {
+                Some((w, h, pixels)) => {
+                    OFFSCREEN_CANVASES.with(|c| {
+                        if let Ok(mut map) = c.try_borrow_mut() {
+                            map.insert(target_canvas_id, Context2D::from_pixels(w, h, pixels));
+                        }
+                    });
+                    mark_offscreen_dirty(target_canvas_id);
+                    true
+                }
+                None => false,
+            }
+        }),
+    )?;
+
     // ── Text / Font (BUG-456 симптом 1, remaining scope) ─────────────────────
     // Same natives as the element context's (`canvas2d.rs`), reusing its font
     // parsing/measurement/glyph-rasterization helpers (`parse_canvas_font_size`,
@@ -1122,6 +1152,21 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
     return ImageData;
   })();
 
+  // BUG-617 gap 2: same reuse-when-present / self-contained-fallback shape as
+  // CanvasGradient/CanvasPattern/TextMetrics/ImageData above — the page shim
+  // (`web_api_shim_mid.js`) defines this too (BUG-617 gap 1), evaluated
+  // before this module on a page, but this module's own V8 unit-test harness
+  // and a future worker-side install (this module is not wired into workers
+  // yet — `worker.rs::run_worker_thread_v8`) install nothing but itself.
+  var ImageBitmapRenderingContext = (typeof globalThis.ImageBitmapRenderingContext === 'function')
+    ? globalThis.ImageBitmapRenderingContext
+    : (function() {
+        function ImageBitmapRenderingContext() { throw new TypeError('Illegal constructor'); }
+        _offscreen_idl_tag(ImageBitmapRenderingContext, 'ImageBitmapRenderingContext');
+        globalThis.ImageBitmapRenderingContext = ImageBitmapRenderingContext;
+        return ImageBitmapRenderingContext;
+      })();
+
   function _offscreen_make_gradient(gid) {
     var g = Object.create(CanvasGradient.prototype);
     _offscreen_slot(g, '__gid__', gid);
@@ -1160,6 +1205,34 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
     }
 
     getContext(contextType, options) {
+      // 'bitmaprenderer' (BUG-617 gap 2): mirrors the on-page `<canvas>` branch
+      // in `web_api_shim_mid.js` — `transferFromImageBitmap` replaces this
+      // canvas's own backing store wholesale via the offscreen-side native.
+      if (contextType === 'bitmaprenderer') {
+        if (this._bitmaprenderer_context) {
+          return this._bitmaprenderer_context;
+        }
+        const canvasId = this.__canvas_id__;
+        const canvasRef = this;
+        const brctx = Object.create(ImageBitmapRenderingContext.prototype);
+        brctx.canvas = this;
+        brctx.transferFromImageBitmap = function(bitmap) {
+          if (bitmap === null) {
+            _lumen_offscreen_canvas2d_clear_rect(canvasId, 0, 0, canvasRef.width, canvasRef.height);
+            return;
+          }
+          if (!bitmap || typeof bitmap.__canvas_id__ !== 'number') {
+            throw new TypeError('transferFromImageBitmap: argument is not an ImageBitmap');
+          }
+          const ok = _lumen_offscreen_bitmaprenderer_transfer_from_image_bitmap(canvasId, bitmap.__canvas_id__);
+          if (!ok) {
+            throw new DOMException('transferFromImageBitmap: the ImageBitmap has been detached', 'InvalidStateError');
+          }
+        };
+        this._bitmaprenderer_context = brctx;
+        return brctx;
+      }
+
       if (contextType !== '2d') {
         return null;
       }
@@ -2186,6 +2259,96 @@ mod tests_v8 {
 
                 id.constructor.name === 'ImageData' &&
                 id instanceof ImageData
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_bitmaprenderer_context_is_real_class_instance() {
+        // BUG-617 gap 1: `getContext('bitmaprenderer')` used to return a bare
+        // object literal — `instanceof ImageBitmapRenderingContext` threw
+        // `ReferenceError` (no such global existed at all), same defect BUG-932
+        // fixed for the 2D context/gradient/pattern/text-metrics/image-data set.
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(10, 10);
+                let ctx = canvas.getContext('bitmaprenderer');
+                ctx !== null &&
+                ctx.canvas === canvas &&
+                ctx.constructor.name === 'ImageBitmapRenderingContext' &&
+                ctx instanceof ImageBitmapRenderingContext &&
+                Object.prototype.toString.call(ctx) === '[object ImageBitmapRenderingContext]' &&
+                canvas.getContext('bitmaprenderer') === ctx  // cached, same instance
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_bitmaprenderer_transfer_from_image_bitmap() {
+        // BUG-617 gap 2: `OffscreenCanvas.getContext()` used to hard-code
+        // `contextType !== '2d' -> null`, so `'bitmaprenderer'` could never work
+        // here even though the on-page `<canvas>` factory already supported it.
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let src = new OffscreenCanvas(4, 4);
+                let sctx = src.getContext('2d');
+                sctx.fillStyle = 'rgb(10, 20, 30)';
+                sctx.fillRect(0, 0, 4, 4);
+                let bitmap = src.transferToImageBitmap();
+
+                let dst = new OffscreenCanvas(4, 4);
+                let brctx = dst.getContext('bitmaprenderer');
+                brctx.transferFromImageBitmap(bitmap);
+
+                let dctx = dst.getContext('2d');
+                let pixel = dctx.getImageData(0, 0, 1, 1).data;
+                pixel[0] === 10 && pixel[1] === 20 && pixel[2] === 30
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_bitmaprenderer_transfer_from_image_bitmap_null_clears() {
+        // `transferFromImageBitmap(null)` clears the context's output bitmap
+        // instead of throwing (HTML LS §4.12.5.1).
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let dst = new OffscreenCanvas(4, 4);
+                let dctx2d = dst.getContext('2d');
+                dctx2d.fillStyle = 'rgb(255, 0, 0)';
+                dctx2d.fillRect(0, 0, 4, 4);
+
+                let brctx = dst.getContext('bitmaprenderer');
+                brctx.transferFromImageBitmap(null);
+
+                let pixel = dctx2d.getImageData(0, 0, 1, 1).data;
+                pixel[0] === 0 && pixel[1] === 0 && pixel[2] === 0 && pixel[3] === 0
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_bitmaprenderer_transfer_from_image_bitmap_invalid_throws() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let dst = new OffscreenCanvas(4, 4);
+                let brctx = dst.getContext('bitmaprenderer');
+                let threw = false;
+                try { brctx.transferFromImageBitmap({}); }
+                catch (e) { threw = e instanceof TypeError; }
+                threw
             "#,
         );
         assert!(ok);

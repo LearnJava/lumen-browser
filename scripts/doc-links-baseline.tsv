@@ -58,6 +58,7 @@ ROADMAP.md	bugs/BUG-602-OPEN.md	stale-status-suffix	bugs/BUG-602-FIXED.md
 ROADMAP.md	bugs/BUG-605-OPEN.md	stale-status-suffix	bugs/BUG-605-FIXED.md
 ROADMAP.md	bugs/BUG-606-OPEN.md	stale-status-suffix	bugs/BUG-606-FIXED.md
 ROADMAP.md	bugs/BUG-616-OPEN.md	stale-status-suffix	bugs/BUG-616-FIXED.md
+ROADMAP.md	bugs/BUG-617-OPEN.md	stale-status-suffix	bugs/BUG-617-FIXED.md
 ROADMAP.md	bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 ROADMAP.md	bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
 ROADMAP.md	bugs/BUG-803-OPEN.md	stale-status-suffix	bugs/BUG-803-FIXED.md
@@ -253,6 +254,7 @@ docs/wpt-status.md	../bugs/BUG-588-OPEN.md	stale-status-suffix	bugs/BUG-588-FIXE
 docs/wpt-status.md	../bugs/BUG-612-OPEN.md	stale-status-suffix	bugs/BUG-612-FIXED.md
 docs/wpt-status.md	../bugs/BUG-615-OPEN.md	stale-status-suffix	bugs/BUG-615-FIXED.md
 docs/wpt-status.md	../bugs/BUG-616-OPEN.md	stale-status-suffix	bugs/BUG-616-FIXED.md
+docs/wpt-status.md	../bugs/BUG-617-OPEN.md	stale-status-suffix	bugs/BUG-617-FIXED.md
 docs/wpt-status.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 docs/wpt-status.md	wpt-vendor-notes/<slug>.md	missing	
 docs/wpt-vendor-notes/css.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
@@ -275,6 +277,7 @@ docs/wpt-vendor-notes/html-longdesc.md	../../bugs/BUG-602-OPEN.md	stale-status-s
 docs/wpt-vendor-notes/html-longdesc.md	../../bugs/BUG-612-OPEN.md	stale-status-suffix	bugs/BUG-612-FIXED.md
 docs/wpt-vendor-notes/idle-detection.md	../../bugs/BUG-615-OPEN.md	stale-status-suffix	bugs/BUG-615-FIXED.md
 docs/wpt-vendor-notes/imagebitmap-renderingcontext.md	../../bugs/BUG-616-OPEN.md	stale-status-suffix	bugs/BUG-616-FIXED.md
+docs/wpt-vendor-notes/imagebitmap-renderingcontext.md	../../bugs/BUG-617-OPEN.md	stale-status-suffix	bugs/BUG-617-FIXED.md
 docs/wpt-vendor-notes/inert.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 docs/wpt-vendor-notes/inert.md	../../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 docs/wpt-vendor-notes/input-events.md	../../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
