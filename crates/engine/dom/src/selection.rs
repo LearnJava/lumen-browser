@@ -375,7 +375,7 @@ pub fn range_text(doc: &Document, range: &Range) -> String {
     let start = range.start;
     let end = range.end;
 
-    // Fast path: single text node
+    // Fast path: shared container
     if start.container == end.container {
         if let NodeData::Text(s) = &doc.get(start.container).data {
             let from = utf8_floor(s, start.offset as usize);
@@ -383,7 +383,24 @@ pub fn range_text(doc: &Document, range: &Range) -> String {
             let (from, to) = if from <= to { (from, to) } else { (to, from) };
             return s[from..to].to_string();
         }
-        return String::new();
+        // Non-CharacterData container (e.g. an Element after `selectAllChildren`):
+        // offsets are DOM-spec child-indices, not byte offsets.
+        let children = &doc.get(start.container).children;
+        let (from, to) = if start.offset <= end.offset {
+            (start.offset as usize, end.offset as usize)
+        } else {
+            (end.offset as usize, start.offset as usize)
+        };
+        let to = to.min(children.len());
+        let mut out = String::new();
+        for &child in children.iter().take(to).skip(from) {
+            match &doc.get(child).data {
+                NodeData::Text(s) => out.push_str(s),
+                NodeData::Element { .. } => dom_collect_text(doc, child, &mut out),
+                _ => {}
+            }
+        }
+        return out;
     }
 
     let (first, last) = if start.container.index() < end.container.index() {
@@ -416,4 +433,56 @@ fn utf8_floor(s: &str, mut off: usize) -> usize {
         off -= 1;
     }
     off
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::QualName;
+
+    // ── BUG-620: Element-container Range (selectAllChildren) must stringify ──
+
+    #[test]
+    fn range_text_same_text_container_still_works() {
+        let mut doc = Document::new();
+        let text = doc.create_text("hello selection text");
+        doc.append_child(doc.root(), text);
+        let range = Range {
+            start: DomPosition { container: text, offset: 0 },
+            end: DomPosition { container: text, offset: 5 },
+        };
+        assert_eq!(range_text(&doc, &range), "hello");
+    }
+
+    #[test]
+    fn range_text_element_container_child_index_offsets() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        let text = doc.create_text("hello\nselection text");
+        doc.append_child(div, text);
+        // Mirrors `selectAllChildren(div)`: both endpoints share `div` as the
+        // container, offsets are child-indices (0 and node_length(div)).
+        let range = Range {
+            start: DomPosition { container: div, offset: 0 },
+            end: DomPosition { container: div, offset: node_length(&doc, div) as u32 },
+        };
+        assert_eq!(range_text(&doc, &range), "hello\nselection text");
+    }
+
+    #[test]
+    fn range_text_element_container_nested_elements() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        let span = doc.create_element(QualName::html("span"));
+        doc.append_child(div, span);
+        let inner = doc.create_text("world");
+        doc.append_child(span, inner);
+        let range = Range {
+            start: DomPosition { container: div, offset: 0 },
+            end: DomPosition { container: div, offset: node_length(&doc, div) as u32 },
+        };
+        assert_eq!(range_text(&doc, &range), "world");
+    }
 }
