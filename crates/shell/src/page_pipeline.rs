@@ -940,11 +940,33 @@ pub(crate) fn parse_and_layout(
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
-    let (images, animated_gifs, lazy_pairs) = {
+    let (images, animated_gifs, lazy_pairs, blocked_by_img_src) = {
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
     };
+    // GAP-CSPENF срез 4: `securitypolicyviolation` for every `img-src`-blocked
+    // URL. `blocked_by_img_src` came back from a fetch pass that ran before
+    // this runtime existed (parallel, off-thread), so this is the first point
+    // able to dispatch it — same one-shot-push shape as the `script-src` push
+    // in `scripts.rs`. Re-parsing the `<meta>` CSP here is cheap (a handful of
+    // attributes) and keeps `fetch_and_decode_images`'s return shape from
+    // having to carry the raw policy text just for this.
+    #[cfg(feature = "v8")]
+    if !blocked_by_img_src.is_empty()
+        && let Some(js) = &js_ctx
+    {
+        let original_policy = {
+            let d = doc_arc.lock().unwrap();
+            let root = d.root();
+            crate::csp_enforce::document_meta_csp_policy(&d, root).map(|(_, original)| original)
+        };
+        if let Some(original_policy) = original_policy {
+            for url in &blocked_by_img_src {
+                js.fire_csp_violation("img-src", url, &original_policy);
+            }
+        }
+    }
 
     // P3-webvtt срез 3: загрузка WebVTT-субтитров из <track> каждого <video>.
     // Ошибки фетча/парсинга не валят страницу — видео просто остаётся без cues.
@@ -985,9 +1007,11 @@ pub(crate) fn parse_and_layout(
         // (those are deferred to `fetch_and_register_lazy_images` and fire
         // their own events there) and made it out of `fetch_and_decode_images`
         // either found its URL decoded in `images` (success — same join
-        // `url_to_img` above already does) or was silently dropped as
-        // `ImgOutcome::Skip` (fetch/decode failure) — there is no third
-        // outcome, so "not in `url_to_img`" is exactly the failure case.
+        // `url_to_img` above already does) or was silently dropped, as a
+        // fetch/decode failure (`ImgOutcome::Skip`) or a CSP block
+        // (`ImgOutcome::Blocked`, GAP-CSPENF срез 4 — `securitypolicyviolation`
+        // for those already fired above) — either way "not in `url_to_img`"
+        // is exactly the failure case HTML LS §4.8.4.3 wants an `error` for.
         for req in &img_reqs {
             if req.is_lazy {
                 continue;

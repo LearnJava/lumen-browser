@@ -1002,7 +1002,14 @@ impl Lumen {
     /// (грузится по близости к viewport уже после `LoadDone`).
     pub(crate) fn spawn_stream_image_loads(&mut self, doc: &lumen_dom::Document, viewport: Size) {
         let requests = lumen_layout::collect_image_requests(doc, viewport);
-        self.spawn_image_requests(requests);
+        // GAP-CSPENF срез 4: same one-shot policy read `fetch_and_decode_images`
+        // uses — computed here too because this producer runs earlier (during
+        // streaming) and on its own images, not the eager pipeline's.
+        let csp_gate = {
+            let root = doc.root();
+            crate::csp_enforce::document_meta_csp_policy(doc, root)
+        };
+        self.spawn_image_requests(requests, csp_gate);
     }
 
     /// BUG-730: same pass over the **live** document, run after every relayout
@@ -1020,12 +1027,18 @@ impl Lumen {
     /// fetched during streaming is not re-fetched, and a URL is requested once
     /// per navigation no matter how many relayouts see it.
     pub(crate) fn spawn_dynamic_image_loads(&mut self, viewport: Size) {
-        let requests = {
+        let (requests, csp_gate) = {
             let Some(src) = self.layout_source.as_ref() else { return };
             let Ok(doc) = src.document.lock() else { return };
-            lumen_layout::collect_image_requests(&doc, viewport)
+            let requests = lumen_layout::collect_image_requests(&doc, viewport);
+            // GAP-CSPENF срез 4: same policy read as the streaming producer —
+            // a script-inserted `<img>` is just as subject to `img-src` as a
+            // parser-inserted one.
+            let root = doc.root();
+            let csp_gate = crate::csp_enforce::document_meta_csp_policy(&doc, root);
+            (requests, csp_gate)
         };
-        self.spawn_image_requests(requests);
+        self.spawn_image_requests(requests, csp_gate);
     }
 
     /// BUG-735: разнести intrinsic-размеры уже декодированных картинок по `<img>`
@@ -1132,8 +1145,13 @@ impl Lumen {
     /// own thread, reporting back through `LoadEvent::ImageDecoded`. Shared by
     /// the streaming ([`Self::spawn_stream_image_loads`]) and post-load
     /// ([`Self::spawn_dynamic_image_loads`]) producers.
-    pub(crate) fn spawn_image_requests(&mut self, requests: Vec<lumen_layout::ImageRequest>) {
+    pub(crate) fn spawn_image_requests(
+        &mut self,
+        requests: Vec<lumen_layout::ImageRequest>,
+        csp_gate: Option<(lumen_network::csp::CspPolicy, String)>,
+    ) {
         let Some(base) = self.document_resource_base() else { return };
+        let self_origin = base.origin();
         // BUG-172: stamp the decode with this navigation's generation so the cache
         // entry is shared with the final pipeline pass (same generation) and a
         // stale producer from a superseded navigation bypasses the cache.
@@ -1143,6 +1161,18 @@ impl Lumen {
                 continue;
             }
             if !self.stream_images_requested.insert(req.url.clone()) {
+                continue;
+            }
+            // GAP-CSPENF срез 4: the fetch must never start at all — unlike
+            // the eager pipeline's own gate (`fetch_and_decode_images`,
+            // which still runs after this and fires the actual
+            // `securitypolicyviolation` — this producer only needs to keep
+            // the request off the wire and let `onerror` follow the normal
+            // decode-failure path below).
+            if let Some((policy, _original)) = &csp_gate
+                && crate::csp_enforce::img_src_blocked(policy, &base.resolve_str(&req.url), self_origin.as_ref())
+            {
+                let _ = self.load_proxy.send_event(LoadEvent::ImageDecodeFailed { src: req.url });
                 continue;
             }
             let base = base.clone();
