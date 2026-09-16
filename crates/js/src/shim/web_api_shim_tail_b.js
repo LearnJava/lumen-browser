@@ -1181,6 +1181,20 @@ function _lumen_define_reflection(proto, entry) {
             var n = _lumen_reflect_nid(this);
             if (n !== -1) _lumen_set_attr(n, attr, String(v));
         };
+    } else if (kind === 'string-null2empty') {
+        // `[LegacyNullToEmptyString] DOMString` (BUG-607's `HTMLBodyElement`
+        // legacy color attributes) -- a bare `null` becomes '' rather than the
+        // literal string "null" the plain 'string' kind below would store.
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return '';
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            return v !== null ? String(v) : '';
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, v === null ? '' : String(v));
+        };
     } else {
         get = function() {
             var n = _lumen_reflect_nid(this);
@@ -1781,6 +1795,19 @@ _lumen_install_reflection(HTMLTableCellElement.prototype, [
     _lumen_install_reflection(_p, [['align', 'align', 'string']]);
 });
 _lumen_install_reflection(HTMLPreElement.prototype, [['width', 'width', 'long', 0]]);
+
+// BUG-607: `HTMLBodyElement`'s five obsolete legacy color IDL attributes
+// (HTML LS §obsolete), each `[LegacyNullToEmptyString]` over the body
+// element's own `text`/`bgcolor`/`link`/`vlink`/`alink` content attributes.
+// `Document.fgColor`/`bgColor`/`linkColor`/`vlinkColor`/`alinkColor` (see the
+// `document` object literal) are a thin forward onto these.
+_lumen_install_reflection(HTMLBodyElement.prototype, [
+    ['text',    'text',    'string-null2empty'],
+    ['bgColor', 'bgcolor', 'string-null2empty'],
+    ['link',    'link',    'string-null2empty'],
+    ['vLink',   'vlink',   'string-null2empty'],
+    ['aLink',   'alink',   'string-null2empty'],
+]);
 
 _lumen_install_reflection(HTMLScriptElement.prototype, [
     ['src',            'src',            'url'],
