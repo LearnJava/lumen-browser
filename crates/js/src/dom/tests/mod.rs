@@ -254,3 +254,6 @@ mod v8_bug606_legacy_noop_apis;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug607_document_color_attrs;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug685_lookup_namespace_apis;

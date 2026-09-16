@@ -2848,6 +2848,25 @@ function _lumen_make_document_fragment(nid) {
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
             return _lumen_make_document_fragment(clone_nid);
         },
+        // DOM §4.4 (GAP-XMLDOC срез 38, BUG-685) — own copies, same reason as
+        // `baseURI` above: this wrapper has no [[Prototype]], so the shared
+        // `Node.prototype.lookupNamespaceURI`/`lookupPrefix`/`isDefaultNamespace`
+        // never reach it. `_lumen_locate_namespace`/`_lumen_locate_prefix`
+        // dispatch on `nodeType` and return `null` immediately for `11`
+        // (DocumentFragment per spec has no namespace context of its own), so
+        // these delegate to the exact same functions Node.prototype uses.
+        lookupNamespaceURI:   function(prefix) {
+            var p = (prefix === undefined || prefix === null || prefix === '') ? null : String(prefix);
+            return _lumen_locate_namespace(frag, p);
+        },
+        lookupPrefix:         function(namespace) {
+            if (namespace === undefined || namespace === null || namespace === '') return null;
+            return _lumen_locate_prefix(frag, String(namespace));
+        },
+        isDefaultNamespace:   function(namespace) {
+            var ns = (namespace === undefined || namespace === null || namespace === '') ? null : String(namespace);
+            return _lumen_locate_namespace(frag, null) === ns;
+        },
         // Ниже — узловые операции, которых у фрагмента не было вовсе, хотя
         // именно во фрагмент (`template.content`) реактивные библиотеки
         // собирают разметку перед вставкой в документ.
@@ -3195,6 +3214,83 @@ function _lumen_node_compare_position(self, other) {
 Node.prototype.contains = function(other) { return _lumen_node_contains(this, other); };
 Node.prototype.compareDocumentPosition = function(other) {
     return _lumen_node_compare_position(this, other);
+};
+
+// DOM §4.4 "locate a namespace"/"locate a prefix": walks the node's own
+// resolved namespace/prefix, then its `xmlns`/`xmlns:*` attributes, then its
+// ancestor elements (GAP-XMLDOC срез 38, BUG-685) — the first corpus hit was
+// `Node.prefix`/`Node.namespaceURI` were both already live, but the three
+// lookup methods themselves did not exist at all (`dom/nodes/
+// Node-lookupPrefix.xhtml`). `.prefix` on every wrapper is always `null`
+// (Lumen never splits a tag's own prefix off its qualified name — see the
+// comment on `get prefix()` above), so step 1 of "locate a namespace" only
+// ever fires for a `null` target prefix, where it correctly short-circuits to
+// the node's own already-resolved `namespaceURI` — same shortcut a
+// conforming parser's assigned namespace lets a real browser take. A
+// non-null target prefix always falls through to the `xmlns:*` attribute
+// scan below, which is the part actually exercised by the corpus. This is a
+// query API over already-parsed attributes, independent of `foreign_content.rs`'s
+// own (still HTML5-foreign-content-based, not lexical-scope) namespace
+// resolution during parsing — срез 36's documented remaining gap there is
+// untouched by this.
+function _lumen_locate_namespace(node, prefix) {
+    if (!node) return null;
+    switch (node.nodeType) {
+        case 1: // Element
+            if (node.namespaceURI !== null && node.prefix === prefix) return node.namespaceURI;
+            var attrs = node.attributes;
+            for (var i = 0; i < attrs.length; i++) {
+                var a = attrs[i];
+                if (prefix !== null ? (a.prefix === 'xmlns' && a.localName === prefix)
+                                     : (a.prefix === null && a.localName === 'xmlns')) {
+                    return a.value !== '' ? a.value : null;
+                }
+            }
+            return _lumen_locate_namespace(node.parentElement, prefix);
+        case 9: // Document
+            return _lumen_locate_namespace(node.documentElement, prefix);
+        case 10: case 11: // DocumentType, DocumentFragment
+            return null;
+        case 2: // Attr
+            return _lumen_locate_namespace(node.ownerElement, prefix);
+        default: // Text, Comment, ProcessingInstruction, ...
+            return _lumen_locate_namespace(node.parentElement, prefix);
+    }
+}
+
+function _lumen_locate_prefix(node, ns) {
+    if (!node) return null;
+    switch (node.nodeType) {
+        case 1: // Element
+            if (node.namespaceURI === ns && node.prefix !== null) return node.prefix;
+            var attrs = node.attributes;
+            for (var i = 0; i < attrs.length; i++) {
+                var a = attrs[i];
+                if (a.prefix === 'xmlns' && a.value === ns) return a.localName;
+            }
+            return _lumen_locate_prefix(node.parentElement, ns);
+        case 9: // Document
+            return _lumen_locate_prefix(node.documentElement, ns);
+        case 10: case 11: // DocumentType, DocumentFragment
+            return null;
+        case 2: // Attr
+            return _lumen_locate_prefix(node.ownerElement, ns);
+        default: // Text, Comment, ProcessingInstruction, ...
+            return _lumen_locate_prefix(node.parentElement, ns);
+    }
+}
+
+Node.prototype.lookupNamespaceURI = function(prefix) {
+    var p = (prefix === undefined || prefix === null || prefix === '') ? null : String(prefix);
+    return _lumen_locate_namespace(this, p);
+};
+Node.prototype.lookupPrefix = function(namespace) {
+    if (namespace === undefined || namespace === null || namespace === '') return null;
+    return _lumen_locate_prefix(this, String(namespace));
+};
+Node.prototype.isDefaultNamespace = function(namespace) {
+    var ns = (namespace === undefined || namespace === null || namespace === '') ? null : String(namespace);
+    return _lumen_locate_namespace(this, null) === ns;
 };
 // The DOCUMENT_POSITION_* bit names (DOM §4.4) — a caller writes
 // `pos & Node.DOCUMENT_POSITION_CONTAINED_BY`, and an undefined constant there
