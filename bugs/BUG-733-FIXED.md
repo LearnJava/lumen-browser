@@ -241,7 +241,7 @@ right: 16px`), три прогона подряд дают одно и то же
 
 `lumen --mcp-live-port N about:blank` → `navigate` → `wait document_ready` →
 выдержка ≥25 с → `resources/read`. `file://`/`https://` стартовым CLI-аргументом
-не работают ([BUG-651](BUG-651-OPEN.md)).
+не работают ([BUG-651](BUG-651-FIXED.md)).
 
 Эталон: `msedge --headless=new --disable-gpu --hide-scrollbars
 --window-size=1024,720 --virtual-time-budget=25000 --screenshot=<абсолютный

@@ -189,7 +189,7 @@ target/dev-release/lumen.exe --dump-layout .tmp/mq_test.html | grep min-w=
 
 * **Heredoc в bash съедает `\\`** — Python-скрипты писать только через `Write`, не
   через `cat <<'EOF'`. Один скрипт уже сломался на `.replace('\\','/')`.
-* **`file://` как аргумент CLI не грузится** ([BUG-651](../../bugs/BUG-651-OPEN.md)) —
+* **`file://` как аргумент CLI не грузится** ([BUG-651](../../bugs/BUG-651-FIXED.md)) —
   стартовать с `about:blank` и потом звать `navigate`. При этом живой `eval` по
   `file://`-странице у меня отвечал `JS context not available`; для локальной
   синтетики надёжнее `--dump-layout`, он и быстрее.

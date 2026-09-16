@@ -113,4 +113,4 @@ inline-replaced (картинка в строке текста) — отдель
 
 `.tmp/img-repro/inline.html` из разбора (матрица выше) + локальный HTTP-сервер;
 `lumen --dump-display-list http://127.0.0.1:PORT/inline.html`. `file://` как стартовый
-аргумент не работает ([BUG-651](BUG-651-OPEN.md)).
+аргумент не работает ([BUG-651](BUG-651-FIXED.md)).
