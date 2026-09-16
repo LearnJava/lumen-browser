@@ -259,6 +259,9 @@ mod v8_bug607_document_color_attrs;
 mod v8_bug608_fetch_priority_reflection;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug609_options_length_growth;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug685_lookup_namespace_apis;
 
 #[cfg(feature = "v8-backend")]
