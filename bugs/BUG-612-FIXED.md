@@ -1,7 +1,7 @@
 # BUG-612: legacy `longdesc` content attribute has no IDL reflection — `img.longdesc` is `undefined`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — IDL reflection table introduced by [BUG-383](BUG-383-FIXED.md), extended for `align` by [BUG-602](BUG-602-OPEN.md))
+**Статус:** FIXED 2026-09-16 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js` — reflection table introduced by [BUG-383](BUG-383-FIXED.md), extended for `align` by [BUG-602](BUG-602-FIXED.md))
 **Найден:** P2, WPT-VENDOR-html-longdesc, 2026-08-04
 
 ## Симптом
@@ -42,3 +42,13 @@ string}`) on `HTMLImageElement` (and `HTMLIFrameElement`/`HTMLFrameElement`
 per spec) would close this the same way BUG-602 closes `align`. Low
 priority: `longdesc` itself is an obsolete, removed-from-living-standard
 feature with no current spec conformance requirement.
+
+## Исправлено
+
+`['longDesc', 'longdesc', 'url']` added to the `_lumen_install_reflection`
+call for `HTMLImageElement` and `HTMLIFrameElement`
+(`crates/js/src/shim/web_api_shim_tail_b.js`) — `HTMLFrameElement` already
+had this row. `url` reflection kind matches the spec IDL type
+(`[CEReactions] attribute USVString longDesc`) and the existing pattern used
+by `src`/`srcdoc`-adjacent URL attributes on the same interfaces. New tests:
+`crates/js/src/dom/tests/v8_bug612_longdesc_reflection.rs`.
