@@ -1011,6 +1011,12 @@ HTMLElement.prototype.blur = function() {
 window.focus = function() {};
 window.blur  = function() {};
 
+// HTML LS §obsolete (BUG-606): `window.captureEvents()`/`releaseEvents()` are
+// historical no-ops kept only so old feature-detection code calling them
+// unconditionally doesn't die on `is not a function`.
+window.captureEvents = function() {};
+window.releaseEvents = function() {};
+
 // ── Declarative IDL attribute reflection (HTML LS §2.6.1, BUG-383) ───────────
 // Until this block the live-element factory hand-listed the few reflected
 // attributes some earlier fix happened to need (`value`, `name`, `type`,
@@ -1785,6 +1791,10 @@ _lumen_install_reflection(HTMLScriptElement.prototype, [
     ['crossOrigin',    'crossorigin',    'string'],
     ['integrity',      'integrity',      'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+    // HTML LS §obsolete (BUG-606): legacy IDL attributes reflecting `event`/
+    // `for` verbatim as plain strings, no special parsing.
+    ['event',          'event',          'string'],
+    ['htmlFor',        'for',            'string'],
 ]);
 
 _lumen_install_reflection(HTMLLinkElement.prototype, [

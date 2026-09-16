@@ -10285,6 +10285,18 @@ var document = {
             function() { return _lumen_query_selector_all('img'); },
             HTMLCollection.prototype);
     },
+    // HTML LS §obsolete (BUG-606): `document.applets` -- a legacy Java-applet
+    // collection that a spec-compliant implementation (no applet support)
+    // must still expose, always empty, as a live HTMLCollection.
+    get applets() {
+        return _lumen_make_nid_collection(function() { return []; }, HTMLCollection.prototype);
+    },
+    // HTML LS §obsolete (BUG-606): `document.clear()`/`captureEvents()`/
+    // `releaseEvents()` are historical no-ops kept only for compatibility with
+    // old feature-detection code that calls them unconditionally.
+    clear:          function() {},
+    captureEvents:  function() {},
+    releaseEvents:  function() {},
     createElement:     function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
         // QuickJS truncates the Rust u32::MAX sentinel to -1 (signed FFI
