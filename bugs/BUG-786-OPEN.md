@@ -1471,3 +1471,69 @@ baseline (6051 → 6091), `scripts/file-size-baseline.tsv` обновлён те
 Не в этом срезе: параметрические энтити/внешний DTD/`SYSTEM`-энтити —
 по-прежнему 0 на корпусе. Остаток по-прежнему открыт: сама область «нет
 настоящего XML-парсера» как таковая.
+
+## GAP-XMLDOC срез 35 (2026-09-16): произвольный (неизвестный) namespace-префикс терял localName целиком (`p1-gap-xmldoc-srez35`)
+
+Взял задачу с первой строки `STATUS-P1.md` (`ROADMAP.md:896`). Перепроверил
+остаток срезов 30–34 (параметрические энтити, внешний DTD, `SYSTEM`-энтити) —
+по-прежнему 0 файлов на корпусе, без изменений. Вместо ещё одного
+хардкод-префикса (срезы 5/33/34 закрыли все измеренные `html:`/`h:`/`xhtml:`/
+`svg:`/`math:`/`mathml:`/`m:`) взял соседний по духу, но отдельный класс:
+что происходит с префиксом, которого нет ни в одной из трёх хардкод-пар.
+
+**Дефект.** `apply_token`'s цепочка `strip_known_*_prefix` узнаёт ровно семь
+префиксов; любой другой (`<pickle:dill/>`, `<d:testDescription>`, …) не
+матчит ни один `if`/`else if` и доходит до `resolve_element_name`'s generic
+fallback `_ => QualName::html(name)` — `name` при этом целиком, с
+двоеточием, становится `local`. `.localName` в JS-DOM (`dom_core.rs:470`,
+`name.local.clone()`) читает это поле буквально — т.е.
+`<pickle:dill/>.localName` возвращал `"pickle:dill"` вместо `"dill"`.
+`web_api_shim_mid.js`'s `get prefix()` уже честно документирует смежную
+половину ограничения («Lumen never parses a prefix out of a tag name, so
+`prefix` is always `null`») — но `localName`-половина грамматики
+`Name ::= (Prefix ':')? LocalPart` (XML §3) при этом молча ломалась, а не
+документировалась как ограничение.
+
+**Измерение.** `dom/nodes/Element-firstElementChild-namespace-xhtml.xhtml`
+и `-svg.svg` — два реальных testharness-теста (не reftest/manual),
+специально придуманных для непризнанного префикса: `xmlns:pickle=
+"http://ns.example.org/pickle"`, `<pickle:dill id="first_element_child"/>`,
+`assert_equals(fec.localName, "dill")`. Оба входят через `xml_mode`
+(`.xhtml`/`.svg`), оба до фикса падали бы на этом ассерте.
+
+**Фикс — не резолвер, тот же приём, что и три предыдущих хардкод-пары, но
+универсальный.** `foreign_content::strip_unknown_prefix` — последний `else
+if` в цепочке `apply_token` (после трёх известных пар): если имя после них
+всё ещё содержит `:`, отрезает всё до ПОСЛЕДНЕГО двоеточия и оставляет
+голый local part, не форсируя namespace (та же половинчатость, что уже была
+у `svg:`/`math:` — резолюция пространства имён по `xmlns:*` как таковая
+по-прежнему не реализована, `.prefix` остаётся `null`, GAP-XMLDOC как
+подсистема остаётся открытым). Пустой prefix (`":dill"`) или пустой local
+(`"pickle:"`) не матчат — оставлены как есть, тот же lenient-принцип, что и
+у трёх хардкод-функций.
+
+Заодно вскрылся тест `other_namespace_prefixes_do_not_break_out`
+(`tree_builder.rs`), который до этого среза намеренно фиксировал старое
+поведение («`d:testDescription` остаётся ровно `d:testdescription`») —
+обновлён под новое, спецификационно более верное поведение (`local ==
+"testdescription"`, namespace остаётся `Svg`, как и раньше).
+
+Тесты: `strips_unknown_prefix` (`foreign_content.rs`, unit),
+`xml_flavoured_unknown_prefix_still_resolves_local_name` и
+`xml_flavoured_unknown_prefix_inside_svg_still_gets_svg_namespace`
+(`tree_builder.rs`, воспроизводят оба корпусных файла напрямую —
+HTML-контекст и SVG-контекст). `cargo test -p lumen-html-parser --lib
+--profile dev-release` — 519/519 зелёные (было 516, плюс 3 новых). `cargo
+clippy -p lumen-html-parser --all-targets --profile dev-release -- -D
+warnings` — чисто. `tree_builder.rs` пересёк собственный baseline
+(6091 → 6143), `scripts/file-size-baseline.tsv` обновлён тем же коммитом
+только для этой строки. `scripts/scoped-test.sh` (все обратные
+зависимости) — тот же чужой дрейф CPU-эталонов
+([BUG-1008](BUG-1008-OPEN.md), идентичные 7 файлов/байт-дельты), не
+связан с этим срезом.
+
+Не в этом срезе: параметрические энтити/внешний DTD/`SYSTEM`-энтити —
+по-прежнему 0 на корпусе; реальная резолюция `xmlns:*`-биндингов в
+`.prefix`/`.namespaceURI` (отдельная, более крупная подсистема — см.
+комментарий на `strip_unknown_prefix`). Остаток по-прежнему открыт: сама
+область «нет настоящего XML-парсера» как таковая.

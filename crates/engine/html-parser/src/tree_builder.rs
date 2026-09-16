@@ -498,6 +498,11 @@ impl IncrementalTreeBuilder {
                         *name = stripped.to_string();
                     } else if let Some(stripped) = foreign_content::strip_known_mathml_prefix(name) {
                         *name = stripped.to_string();
+                    } else if let Some(stripped) = foreign_content::strip_unknown_prefix(name) {
+                        // GAP-XMLDOC срез 35 (BUG-685): any other user-declared
+                        // prefix — recovers `.localName` only, no namespace
+                        // forcing, same as the SVG/MathML branches above.
+                        *name = stripped.to_string();
                     }
                 }
                 _ => {}
@@ -5574,6 +5579,47 @@ mod tests {
     }
 
     #[test]
+    fn xml_flavoured_unknown_prefix_still_resolves_local_name() {
+        // GAP-XMLDOC срез 35 (BUG-685): `dom/nodes/Element-firstElementChild-
+        // namespace-{xhtml.xhtml,svg.svg}` both declare an unrecognized
+        // prefix (`xmlns:pickle="http://ns.example.org/pickle"`) and assert
+        // `<pickle:dill/>.localName === "dill"`. Before this срез the whole
+        // qualified name (`pickle:dill`) landed in `local` verbatim — no
+        // known-pair strip matches an arbitrary prefix, so the generic
+        // fallback (`QualName::html(name)`) kept the colon.
+        let doc = parse_xml_flavoured(r#"<div><pickle:dill id="x"/></div>"#);
+        let dill = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "dill"))
+            .unwrap_or_else(|| panic!("dill element: {doc}"));
+        let NodeData::Element { name, attrs, .. } = &dill.data else {
+            unreachable!()
+        };
+        assert_eq!(name.local, "dill", "pickle:dill local name: {doc}");
+        assert!(
+            attrs.iter().any(|a| a.name.local == "id" && a.value == "x"),
+            "id attribute must survive: {doc}"
+        );
+    }
+
+    #[test]
+    fn xml_flavoured_unknown_prefix_inside_svg_still_gets_svg_namespace() {
+        // Same defect, SVG-context counterpart
+        // (`Element-firstElementChild-namespace-svg.svg`): the unknown-prefix
+        // strip must not disturb ordinary namespace inheritance —
+        // `pickle:dill` inside `<g>` stays in the SVG namespace, same as an
+        // unprefixed custom element would.
+        let doc = parse_xml_flavoured(r#"<svg><g><pickle:dill id="x"/></g></svg>"#);
+        let dill = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "dill"))
+            .unwrap_or_else(|| panic!("dill element: {doc}"));
+        let NodeData::Element { name, .. } = &dill.data else {
+            unreachable!()
+        };
+        assert_eq!(name.local, "dill", "pickle:dill local name: {doc}");
+        assert_eq!(name.namespace, Namespace::Svg, "pickle:dill namespace: {doc}");
+    }
+
+    #[test]
     fn plain_parse_self_closing_textarea_still_consumes_following_text() {
         // HTML5 semantics (default `parse`) — self-closing flag stays
         // ignored on non-void elements, so <textarea/> still opens a real
@@ -6058,18 +6104,24 @@ mod tests {
     #[test]
     fn other_namespace_prefixes_do_not_break_out() {
         // `d:` (SVG 1.1 test-metadata namespace) and `svg:` are not `h:`/
-        // `html:` — must stay untouched, still SVG-namespaced with the
-        // literal prefixed local name (no resolver, see
-        // `foreign_content::strip_known_html_prefix`).
+        // `html:` — must not break out to the HTML namespace like those do,
+        // still SVG-namespaced (no forced-namespace resolver, see
+        // `foreign_content::strip_known_html_prefix`). GAP-XMLDOC срез 35
+        // changed the LOCAL NAME half of this: `strip_unknown_prefix` now
+        // recovers `testdescription` from any unrecognized prefix (XML §3
+        // `Name ::= (Prefix ':')? LocalPart`), not just the three hardcoded
+        // html/svg/mathml pairs — same as `d:` sitting unbroken in the
+        // `dom/nodes/Element-firstElementChild-namespace-*` corpus fixtures'
+        // `pickle:dill`.
         let doc = parse_xml_flavoured("<svg><d:testDescription>note</d:testDescription></svg>");
         // Not on the SVG tag-name-casing table (`adjust_svg_tag_name` only
         // knows official SVG local names) — stays exactly as the tokenizer
         // lower-cased it, same as any other unrecognized foreign tag.
         let el = doc
             .find_first_element(
-                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "d:testdescription"),
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "testdescription"),
             )
-            .unwrap_or_else(|| panic!("d:testdescription element: {doc}"));
+            .unwrap_or_else(|| panic!("testdescription element: {doc}"));
         let NodeData::Element { name, .. } = &el.data else {
             unreachable!()
         };
