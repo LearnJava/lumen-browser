@@ -468,23 +468,24 @@ impl IncrementalTreeBuilder {
         }
         // GAP-XMLDOC срез 5 (BUG-685, «Третья грань, случай 1»): `html:`/
         // `h:` — the two XHTML-bound namespace prefixes measured in the
-        // vendored WPT corpus. Stripped unconditionally under `xml_mode`
-        // (not gated on `current_namespace`, since by the time a closing
-        // tag like `</html:div>` arrives the element it closes has already
-        // moved to the HTML namespace — see `strip_known_html_prefix` doc).
-        // `had_html_prefix` remembers the strip happened so
-        // `dispatch_foreign_content` can force a breakout even for names
-        // (`script`, `link`, ...) absent from the ordinary §13.2.6.5
-        // breakout list.
+        // vendored WPT corpus (срез 34 added a third, `xhtml:`). Stripped
+        // unconditionally under `xml_mode` (not gated on `current_namespace`,
+        // since by the time a closing tag like `</html:div>` arrives the
+        // element it closes has already moved to the HTML namespace — see
+        // `strip_known_html_prefix` doc). `had_html_prefix` remembers the
+        // strip happened so `dispatch_foreign_content` can force a breakout
+        // even for names (`script`, `link`, ...) absent from the ordinary
+        // §13.2.6.5 breakout list.
         //
         // GAP-XMLDOC срез 33 (BUG-685): `svg:`/`math:` — the same
         // hardcoded-pair treatment for the two namespace prefixes SVG/MathML
         // content is bound to in the corpus (`<svg:svg><svg:rect .../>
-        // </svg:svg>`, `<math:math><mrow>...`). Unlike `html:`/`h:` this
-        // does NOT force a breakout: the stripped bare name (`svg`, `rect`,
-        // `math`, `mrow`, ...) is left to the ordinary namespacing path
-        // below, which already treats a literal `<svg>`/`<math>` start tag
-        // as always-foreign and resolves unprefixed descendants by
+        // </svg:svg>`, `<math:math><mrow>...`). Срез 34 added two more
+        // MathML-bound aliases, `mathml:`/`m:`. Unlike `html:`/`h:`/`xhtml:`
+        // this does NOT force a breakout: the stripped bare name (`svg`,
+        // `rect`, `math`, `mrow`, ...) is left to the ordinary namespacing
+        // path below, which already treats a literal `<svg>`/`<math>` start
+        // tag as always-foreign and resolves unprefixed descendants by
         // inheriting the current node's namespace.
         let mut had_html_prefix = false;
         if self.xml_mode {
@@ -5531,6 +5532,45 @@ mod tests {
             unreachable!()
         };
         assert_eq!(name.namespace, Namespace::MathMl, "math:mrow namespace: {doc}");
+    }
+
+    #[test]
+    fn xml_flavoured_mathml_and_m_prefixes_resolve_to_mathml_namespace() {
+        // GAP-XMLDOC срез 34 (BUG-685): `mathml:`/`m:` — two more XHTML-bound
+        // prefixes for the same MathML namespace `math:` already covers
+        // (9 corpus files, e.g. `mathml/crashtests/mozilla/243159-2.xhtml`
+        // uses `mathml:math`, `mathml/crashtests/mozilla/dynamic-rowspan-
+        // mozilla-370692.xhtml` uses `m:maction`).
+        let doc = parse_xml_flavoured(r#"<mathml:math><m:mrow/></mathml:math>"#);
+        let math = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "math"))
+            .unwrap_or_else(|| panic!("math element: {doc}"));
+        let NodeData::Element { name, .. } = &math.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "mathml:math namespace: {doc}");
+        let mrow = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "mrow"))
+            .unwrap_or_else(|| panic!("mrow element: {doc}"));
+        let NodeData::Element { name, .. } = &mrow.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "m:mrow namespace: {doc}");
+    }
+
+    #[test]
+    fn xml_flavoured_xhtml_prefix_breaks_out_to_html_namespace() {
+        // GAP-XMLDOC срез 34 (BUG-685): `xhtml:` behaves like `h:`/`html:`
+        // (GAP-XMLDOC срез 5) — one corpus file,
+        // `shadow-dom/host-with-namespace.xhtml`, uses `<xhtml:div>`.
+        let doc = parse_xml_flavoured("<svg><xhtml:div>a</xhtml:div></svg>");
+        let div = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "div"))
+            .unwrap_or_else(|| panic!("div element: {doc}"));
+        let NodeData::Element { name, .. } = &div.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html, "xhtml:div namespace: {doc}");
     }
 
     #[test]

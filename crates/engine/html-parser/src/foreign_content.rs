@@ -212,22 +212,25 @@ pub(crate) fn is_mathml_text_integration_point(local: &str) -> bool {
 }
 
 /// Strips a namespace prefix bound to XHTML in the vendored WPT corpus
-/// (`xmlns:h="…/1999/xhtml"`, `xmlns:html="…/1999/xhtml"` — both forms
-/// occur, `h:` is by far the more common one) and returns the local name
+/// (`xmlns:h="…/1999/xhtml"`, `xmlns:html="…/1999/xhtml"`, `xmlns:xhtml=
+/// "…/1999/xhtml"` — `h:` is by far the most common form, `xhtml:` was
+/// added in GAP-XMLDOC срез 34, one measured file,
+/// `shadow-dom/host-with-namespace.xhtml`) and returns the local name
 /// beneath it, e.g. `strip_known_html_prefix("h:script") == Some("script")`.
 ///
-/// This is a hardcoded pair, not a resolver: real XML namespace resolution
-/// walks the ancestor chain for `xmlns:*` declarations, which is out of
-/// scope here (GAP-XMLDOC срез 5, same "point fix, not a resolver"
+/// This is a hardcoded pair (now trio), not a resolver: real XML namespace
+/// resolution walks the ancestor chain for `xmlns:*` declarations, which is
+/// out of scope here (GAP-XMLDOC срез 5, same "point fix, not a resolver"
 /// boundary as the rest of this module — see `bugs/BUG-685-OPEN.md`
 /// "Третья грань, случай 1"). Other prefixes seen in the same corpus
 /// (`d:testDescription`, `m:mi`, `rdf:li`, `svg:svg`) are bound to
 /// different namespaces (SVG 1.1 test metadata, MathML, RDF, SVG itself)
 /// and must NOT break out — `strip_known_html_prefix` only ever matches
-/// `h:`/`html:`.
+/// `h:`/`html:`/`xhtml:`.
 pub(crate) fn strip_known_html_prefix(lower_name: &str) -> Option<&str> {
     lower_name
         .strip_prefix("html:")
+        .or_else(|| lower_name.strip_prefix("xhtml:"))
         .or_else(|| lower_name.strip_prefix("h:"))
         .filter(|suffix| !suffix.is_empty())
 }
@@ -247,13 +250,20 @@ pub(crate) fn strip_known_svg_prefix(lower_name: &str) -> Option<&str> {
     lower_name.strip_prefix("svg:").filter(|suffix| !suffix.is_empty())
 }
 
-/// Strips the `math:` namespace prefix bound to MathML
-/// (`xmlns:math="…/1998/Math/MathML"`) measured live in the vendored WPT
-/// corpus (18 `.xhtml` crashtests, e.g. `<math:math><mrow>...`) — GAP-XMLDOC
-/// срез 33, BUG-685. Same boundary and same "caller still resolves the
-/// stripped name normally" behavior as [`strip_known_svg_prefix`].
+/// Strips the `math:`/`mathml:`/`m:` namespace prefixes bound to MathML
+/// (`xmlns:math="…/1998/Math/MathML"`, `xmlns:mathml="…"`, `xmlns:m="…"`)
+/// measured live in the vendored WPT corpus (`math:` — 18 `.xhtml`
+/// crashtests, e.g. `<math:math><mrow>...` — GAP-XMLDOC срез 33; `mathml:`/
+/// `m:` — 9 more `.xhtml` files, e.g. `<mathml:math>`/`<m:maction>` —
+/// GAP-XMLDOC срез 34, BUG-685). Same boundary and same "caller still
+/// resolves the stripped name normally" behavior as
+/// [`strip_known_svg_prefix`].
 pub(crate) fn strip_known_mathml_prefix(lower_name: &str) -> Option<&str> {
-    lower_name.strip_prefix("math:").filter(|suffix| !suffix.is_empty())
+    lower_name
+        .strip_prefix("mathml:")
+        .or_else(|| lower_name.strip_prefix("math:"))
+        .or_else(|| lower_name.strip_prefix("m:"))
+        .filter(|suffix| !suffix.is_empty())
 }
 
 #[cfg(test)]
@@ -367,6 +377,7 @@ mod tests {
         assert_eq!(strip_known_html_prefix("h:script"), Some("script"));
         assert_eq!(strip_known_html_prefix("html:link"), Some("link"));
         assert_eq!(strip_known_html_prefix("h:div"), Some("div"));
+        assert_eq!(strip_known_html_prefix("xhtml:div"), Some("div"));
     }
 
     #[test]
@@ -383,7 +394,13 @@ mod tests {
     fn strips_known_mathml_prefix() {
         assert_eq!(strip_known_mathml_prefix("math:math"), Some("math"));
         assert_eq!(strip_known_mathml_prefix("math:mrow"), Some("mrow"));
+        assert_eq!(strip_known_mathml_prefix("mathml:math"), Some("math"));
+        assert_eq!(strip_known_mathml_prefix("mathml:munder"), Some("munder"));
+        assert_eq!(strip_known_mathml_prefix("m:maction"), Some("maction"));
+        assert_eq!(strip_known_mathml_prefix("m:mi"), Some("mi"));
         assert_eq!(strip_known_mathml_prefix("math:"), None);
+        assert_eq!(strip_known_mathml_prefix("mathml:"), None);
+        assert_eq!(strip_known_mathml_prefix("m:"), None);
         assert_eq!(strip_known_mathml_prefix("mrow"), None);
     }
 
