@@ -1277,6 +1277,11 @@ var _LUMEN_REFERRER_POLICY = { def: '', keys: [
     'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin',
     'unsafe-url'] };
 
+// `fetchpriority` (HTML LS §2.5.3) shares one keyword set across
+// <img>/<script>/<link>/<iframe> -- unknown/missing values are the empty
+// state, which maps back to 'auto'.
+var _LUMEN_FETCH_PRIORITY = { def: 'auto', keys: ['high', 'low', 'auto'] };
+
 // Global attributes (HTML LS §3.2.6) — every HTML element has them.
 // `id`, `className`, `slot` and `draggable` stay own properties on the wrapper
 // (they predate this table and carry extra behaviour), so they are not repeated.
@@ -1657,6 +1662,7 @@ _lumen_install_reflection(HTMLImageElement.prototype, [
     ['decoding',       'decoding',       'string'],
     ['loading',        'loading',        'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+    ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
     ['align',          'align',          'string'],
 ]);
 
@@ -1818,6 +1824,7 @@ _lumen_install_reflection(HTMLScriptElement.prototype, [
     ['crossOrigin',    'crossorigin',    'string'],
     ['integrity',      'integrity',      'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+    ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
     // HTML LS §obsolete (BUG-606): legacy IDL attributes reflecting `event`/
     // `for` verbatim as plain strings, no special parsing.
     ['event',          'event',          'string'],
@@ -1837,6 +1844,7 @@ _lumen_install_reflection(HTMLLinkElement.prototype, [
     ['crossOrigin',    'crossorigin',    'string'],
     ['integrity',      'integrity',      'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+    ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
 ]);
 
 // BUG-826: `relList` is the DOMTokenList over the `rel` attribute, and its
@@ -1919,6 +1927,7 @@ _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['allowFullscreen','allowfullscreen','bool'],
     ['loading',        'loading',        'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+    ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
     ['align',          'align',          'string'],
 ]);
 
