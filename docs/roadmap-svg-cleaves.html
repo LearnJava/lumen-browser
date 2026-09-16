@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-16",
  "counts": {
-  "open": 328,
-  "fixed": 675,
+  "open": 327,
+  "fixed": 676,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6643,9 +6643,9 @@
       {
        "id": "GAP-SMIL",
        "title": "GAP: SMIL-анимация SVG",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "SMIL-анимации SVG нет нигде в воркспейсе: `<animate>`/`<animateTransform>`/`<animateMotion>`/`<set>` ничего не анимируют и не диспатчат `beginEvent`/`endEvent`/`repeatEvent`, поэтому тест, ждущий анимационного события, висит с пустым логом. Замерено `verify_event_delivery_gaps.py --variant smil-events` и `--variant smil-dom` в живом окне по http. Кандидат на явное решение о скоупе наравне с работой: SMIL — угасающая спека, и «не берём» здесь такой же законный исход, как реализация.",
+       "note": "ЗАКРЫТ 2026-09-16 (P6, ветка `p6-gap-smil`): минимальный срез модели времени SMIL — числовой `begin`/`end` (`0s`/`500ms`/`indefinite` + `beginElement()`/`beginElementAt()`/`endElement()`/`endElementAt()`), `dur`, целочисленный/дробный/`indefinite` `repeatCount`, `fill=\"remove\"\\|\"freeze\"`, линейная интерполяция числовых `to`/`from`/`values` в теневой `animVal` (не трогает контентный атрибут — `SVGAnimatedLength.animVal`/`baseVal` разведены геттером), диспатч `beginEvent`/`repeatEvent`/`endEvent` и алиасы `onbegin`/`onrepeat`/`onend` (единственные три типа события, где имя IDL-атрибута не совпадает с типом события). Новый общий класс `SVGAnimationElement` (SVG2 §3) — база `SVGAnimateElement`/`SVGSetElement`/`SVGAnimateTransformElement`/`SVGAnimateMotionElement`; тик из Rust — `crates/shell/src/lumen/smil.rs` → `PersistentJs::tick_smil`, один булев чек делает вызов бесплатным на страницах без SMIL. Вне скоупа: syncbase/event/repeat-формы `begin` (`id.end`, `click`), `min`/`max`/`restart`, композиция матрицы `<animateTransform>` и следование по пути `<animateMotion>` (события/тайминг у обоих есть, паинт не меняют) — тот же уровень решения о скоупе, что уже принят для CSS Animations в GAP-CSSANIM. Детали и 5 юнит-тестов — [BUG-806](bugs/BUG-806-FIXED.md).",
        "bugs": [
         "BUG-806"
        ]
@@ -8367,13 +8367,6 @@
    "status": "open",
    "title": "`scripts/scoped-test.sh` не может стать зелёным ни на одной правке, чьё замыкание втягивает `lumen-network` (то есть почти на любой правке движка): пакет даёт 1…",
    "component": "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-806": {
-   "status": "open",
-   "title": "**SMIL-анимация SVG отсутствует целиком:** `<animate>`/`<animateTransform>`/`<animateMotion>`/`<set>` ничего не анимируют и никогда не диспатчат `beginEvent`/`e…",
-   "component": "движок целиком (нет модели времени SMIL нигде в воркспейсе; в JS-слое `crates/js/src/svg.rs:762-795` — четыре класса анимационных элементов как явные заглушки с пустыми `beginElement()`/`endElement()`)",
    "date": null,
    "debtor": false
   },
@@ -14128,6 +14121,13 @@
    "status": "fixed",
    "title": "SVG-элемент, написанный парсером, — это `HTMLUnknownElement`: `instanceof SVGElement` = `false`, `getBBox`/`getCTM` отсутствуют (у элемента из `createElementNS`…",
    "component": "js (`crates/js/src/svg.rs`)",
+   "date": "2026-09-16",
+   "debtor": false
+  },
+  "BUG-806": {
+   "status": "fixed",
+   "title": "**SMIL-анимация SVG отсутствовала целиком:** `<animate>`/`<animateTransform>`/`<animateMotion>`/`<set>` ничего не анимировали и никогда не диспатчили `beginEven…",
+   "component": "js (`crates/js/src/svg.rs`, `crates/shell/src/lumen/smil.rs`)",
    "date": "2026-09-16",
    "debtor": false
   }

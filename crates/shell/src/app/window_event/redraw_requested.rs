@@ -216,6 +216,11 @@ impl Lumen {
                 self.request_redraw();
             }
             self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
+            // GAP-SMIL: SVG SMIL timing model tick (begin/dur/repeatCount,
+            // beginEvent/repeatEvent/endEvent) — owned entirely by the JS
+            // shim, see `crates/shell/src/lumen/smil.rs`.
+            #[cfg(feature = "v8")]
+            self.tick_smil(now_s);
         }
         // Step 2 (cont.): deliver transitionrun/transitionstart/transitionend/
         // transitioncancel queued by this tick's `sync()`/`tick()` calls — same
