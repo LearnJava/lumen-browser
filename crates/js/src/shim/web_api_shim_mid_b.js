@@ -1160,7 +1160,11 @@ function EventSource(url, opts) {
         // No provider, or the connection could not be established. Per spec
         // readyState stays CONNECTING synchronously (BUG-363 pt.7); the queued
         // failure task is what transitions it to CLOSED and fires 'error'.
+        // GAP-CSPENF срез 11: read the `connect-src` side channel before the
+        // queued task runs — same reasoning as the WebSocket branch above.
+        var sseCsp = (typeof _lumen_sse_last_csp_block === 'function') ? _lumen_sse_last_csp_block() : null;
         setTimeout(function() {
+            _lumen_fire_connect_src_violation(sseCsp);
             self._readyState = 2; // CLOSED
             var e = new Event('error', { isTrusted: true });
             e.message = 'EventSource connection failed';
@@ -4251,7 +4255,12 @@ function WebSocket(url, protocols) {
     var h = _lumen_ws_connect(this.url, protoCsv);
     if (!h) {
         this.readyState = 3;
+        // GAP-CSPENF срез 11: `_lumen_ws_connect` returning 0 can mean an
+        // ordinary connect failure or a `connect-src` refusal — read the
+        // side channel before it is overwritten by the next connect.
+        var wsCsp = (typeof _lumen_ws_last_csp_block === 'function') ? _lumen_ws_last_csp_block() : null;
         setTimeout(function() {
+            _lumen_fire_connect_src_violation(wsCsp);
             var e = new Event('error', { isTrusted: true }); e.message = 'WebSocket connection failed';
             _lumen_ws_fire(self, e);
             _lumen_ws_fire(self, new CloseEvent(1006, '', false, { isTrusted: true }));

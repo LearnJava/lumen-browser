@@ -4460,6 +4460,18 @@ impl JsWebSocketProvider for HttpClient {
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
+        // GAP-CSPENF срез 11: same one-time `connect_src_policy` gate that
+        // `fetch_request_impl` (срез 10) checks before any socket work — a
+        // WebSocket handshake is a `connect-src`-gated fetch (CSP3 §6.7.2) just
+        // like `fetch()`/XHR, it just does not share their call path.
+        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
+            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &parsed, self_origin.as_ref())
+        {
+            return Err(Error::CspConnectSrcBlocked {
+                blocked_uri: parsed.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
         // Always offer permessage-deflate (RFC 7692) — browsers do this by default.
         // compress=false: outgoing frames are uncompressed until JS sets WebSocket.compress.
         let ws = websocket::WebSocket::connect_deflate(
@@ -4596,6 +4608,17 @@ impl JsSseProvider for HttpClient {
     fn connect_sse(&self, url: &str) -> Result<Box<dyn JsSseSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("sse: invalid URL: {e}")))?;
+        // GAP-CSPENF срез 11: same `connect_src_policy` gate as `connect()`
+        // above (WebSocket) — `EventSource` is `connect-src`-gated per CSP3
+        // §6.7.2 and shares the same `HttpClient`-owned policy slot.
+        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
+            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &parsed, self_origin.as_ref())
+        {
+            return Err(Error::CspConnectSrcBlocked {
+                blocked_uri: parsed.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
         // The queue is built BEFORE the handshake so the sink can record the
         // initial `Open` from inside it — the same path every later reconnection
         // takes, instead of a hand-pushed first event that no reconnection has.
@@ -5391,6 +5414,67 @@ mod tests {
             token: None,
         });
         assert!(!matches!(result, Err(Error::CspConnectSrcBlocked { .. })));
+    }
+
+    // ── GAP-CSPENF срез 11: connect-src против WebSocket/EventSource ─────────
+
+    #[test]
+    fn connect_src_none_blocks_websocket_before_any_handshake() {
+        // Same "before any socket work" property as the fetch test above —
+        // an unroutable host would otherwise hang in the handshake, proving
+        // the gate in `JsWebSocketProvider::connect` really runs first.
+        let policy = csp::parse_csp_header("connect-src 'none'");
+        let client = HttpClient::new().with_connect_src_policy(
+            policy,
+            None,
+            "connect-src 'none'".to_owned(),
+        );
+        let result =
+            <HttpClient as lumen_core::ext::JsWebSocketProvider>::connect(&client, "wss://192.0.2.1.invalid/", &[]);
+        match result {
+            Err(Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "wss://192.0.2.1.invalid/");
+                assert_eq!(original_policy, "connect-src 'none'");
+            }
+            Ok(_) => panic!("expected CspConnectSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspConnectSrcBlocked, got {other}"),
+        }
+    }
+
+    #[test]
+    fn connect_src_none_blocks_event_source_before_any_handshake() {
+        let policy = csp::parse_csp_header("connect-src 'none'");
+        let client = HttpClient::new().with_connect_src_policy(
+            policy,
+            None,
+            "connect-src 'none'".to_owned(),
+        );
+        let result =
+            <HttpClient as lumen_core::ext::JsSseProvider>::connect_sse(&client, "https://192.0.2.1.invalid/");
+        match result {
+            Err(Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "https://192.0.2.1.invalid/");
+                assert_eq!(original_policy, "connect-src 'none'");
+            }
+            Ok(_) => panic!("expected CspConnectSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspConnectSrcBlocked, got {other}"),
+        }
+    }
+
+    #[test]
+    fn no_connect_src_policy_does_not_block_websocket_or_sse() {
+        // Mirrors `no_connect_src_policy_does_not_block` above for the two
+        // providers срез 11 gates — the default `HttpClient` must not invent
+        // a CSP block. Both attempt a real handshake against an address that
+        // refuses immediately, so the assertion is only about which error
+        // variant comes back, not about success.
+        let client = HttpClient::new();
+        let ws_result =
+            <HttpClient as lumen_core::ext::JsWebSocketProvider>::connect(&client, "not a url", &[]);
+        assert!(!matches!(ws_result, Err(Error::CspConnectSrcBlocked { .. })));
+        let sse_result =
+            <HttpClient as lumen_core::ext::JsSseProvider>::connect_sse(&client, "not a url");
+        assert!(!matches!(sse_result, Err(Error::CspConnectSrcBlocked { .. })));
     }
 
     #[test]

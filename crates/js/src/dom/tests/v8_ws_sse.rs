@@ -996,6 +996,65 @@ fn websocket_connect_fail_fires_onerror() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// GAP-CSPENF срез 11: mock provider that always refuses with
+/// `Error::CspConnectSrcBlocked`, the way `HttpClient::connect` (срез 11)
+/// does when the document's `connect-src` blocks the handshake — proves the
+/// native `_lumen_ws_connect` bridge surfaces the block through the
+/// `_lumen_ws_last_csp_block` side channel (mirroring `_lumen_fetch_last_csp_block`,
+/// срез 10) rather than swallowing it as a generic connect failure.
+struct CspBlockedWsProvider;
+impl lumen_core::ext::JsWebSocketProvider for CspBlockedWsProvider {
+    fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+        Err(lumen_core::error::Error::CspConnectSrcBlocked {
+            blocked_uri: "wss://blocked.example/x".into(),
+            original_policy: "connect-src 'none'".into(),
+        })
+    }
+}
+
+fn v8_runtime_with_csp_blocked_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(CspBlockedWsProvider);
+    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+    rt
+}
+
+#[test]
+fn websocket_connect_src_block_reaches_native_side_channel() {
+    let rt = v8_runtime_with_csp_blocked_ws(make_doc());
+    let r = rt
+        .eval("_lumen_ws_connect('wss://blocked.example/x', ''); _lumen_ws_last_csp_block()")
+        .unwrap();
+    match r {
+        lumen_core::JsValue::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], lumen_core::JsValue::String("wss://blocked.example/x".into()));
+            assert_eq!(arr[1], lumen_core::JsValue::String("connect-src 'none'".into()));
+        }
+        other => panic!("expected [uri, policy], got {other:?}"),
+    }
+}
+
+#[test]
+fn websocket_connect_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_ws(make_doc());
+    rt.eval(
+        "var seen = null; \
+         document.addEventListener('securitypolicyviolation', function(e) { \
+             seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
+         }); \
+         var ws = new WebSocket('wss://blocked.example/x'); \
+         _lumen_tick_timers();",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "connect-src|wss://blocked.example/x|connect-src 'none'".into()
+        )
+    );
+}
+
 // ── _lumen_bfcache_blocked: bfcache eligibility filters (Ph3 bfcache L1) ──
 
 #[test]
@@ -1370,6 +1429,64 @@ fn eventsource_no_provider_connect_returns_zero() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval("_lumen_sse_connect('https://x/sse')").unwrap();
     assert_eq!(r, lumen_core::JsValue::Number(0.0));
+}
+
+/// GAP-CSPENF срез 11: mock provider that always refuses with
+/// `Error::CspConnectSrcBlocked`, the way `HttpClient::connect_sse` (срез 11)
+/// does when the document's `connect-src` blocks the handshake — same shape
+/// as `CspBlockedWsProvider` above, proving `_lumen_sse_connect` surfaces the
+/// block through `_lumen_sse_last_csp_block` rather than a generic failure.
+struct CspBlockedSseProvider;
+impl lumen_core::ext::JsSseProvider for CspBlockedSseProvider {
+    fn connect_sse(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsSseSession>> {
+        Err(lumen_core::error::Error::CspConnectSrcBlocked {
+            blocked_uri: "https://blocked.example/sse".into(),
+            original_policy: "connect-src 'none'".into(),
+        })
+    }
+}
+
+fn v8_runtime_with_csp_blocked_sse(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let provider: Arc<dyn lumen_core::ext::JsSseProvider> = Arc::new(CspBlockedSseProvider);
+    rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, false).unwrap();
+    rt
+}
+
+#[test]
+fn eventsource_connect_src_block_reaches_native_side_channel() {
+    let rt = v8_runtime_with_csp_blocked_sse(make_doc());
+    let r = rt
+        .eval("_lumen_sse_connect('https://blocked.example/sse'); _lumen_sse_last_csp_block()")
+        .unwrap();
+    match r {
+        lumen_core::JsValue::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], lumen_core::JsValue::String("https://blocked.example/sse".into()));
+            assert_eq!(arr[1], lumen_core::JsValue::String("connect-src 'none'".into()));
+        }
+        other => panic!("expected [uri, policy], got {other:?}"),
+    }
+}
+
+#[test]
+fn eventsource_connect_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_sse(make_doc());
+    rt.eval(
+        "var seen = null; \
+         document.addEventListener('securitypolicyviolation', function(e) { \
+             seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
+         }); \
+         var es = new EventSource('https://blocked.example/sse'); \
+         _lumen_tick_timers();",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "connect-src|https://blocked.example/sse|connect-src 'none'".into()
+        )
+    );
 }
 
 #[test]

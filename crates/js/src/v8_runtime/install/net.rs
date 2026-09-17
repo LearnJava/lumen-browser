@@ -945,7 +945,16 @@ pub(crate) fn install_websocket(
             Arc::new(Mutex::new(HashMap::new()));
         let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
 
+        // GAP-CSPENF срез 11: same single-shared-slot side channel as
+        // `last_csp_block` above (fetch/XHR, срез 10) — the `WebSocket`
+        // constructor connects synchronously, one at a time, so one slot per
+        // runtime is enough. `(blocked_uri, original_policy)`, consumed (and
+        // cleared) by `_lumen_ws_last_csp_block` right after `_lumen_ws_connect`
+        // returns `0`.
+        let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+
         let (reg_c, nid_c, wp) = (Arc::clone(&registry), Arc::clone(&next_id), ws_provider);
+        let lcb_ws = Arc::clone(&last_csp_block);
         reg!(scope, ctx, store, "_lumen_ws_connect", move |url: String, proto_csv: String| -> u32 {
             let Some(ref provider) = wp else { return 0 };
             let protos: Vec<String> = proto_csv
@@ -964,12 +973,27 @@ pub(crate) fn install_websocket(
                     reg_c.lock().unwrap().insert(id, session);
                     id
                 }
+                Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                    *lcb_ws.lock().unwrap() = Some((blocked_uri, original_policy));
+                    0
+                }
                 Err(e) => {
                     eprintln!("[JS WebSocket] connect error: {e}");
                     0
                 }
             }
         });
+
+        // _lumen_ws_last_csp_block() → [blockedUri, originalPolicy] | []
+        {
+            let lcb_get = Arc::clone(&last_csp_block);
+            reg!(scope, ctx, store, "_lumen_ws_last_csp_block", move || -> Vec<String> {
+                match lcb_get.lock().unwrap().take() {
+                    Some((uri, policy)) => vec![uri, policy],
+                    None => Vec::new(),
+                }
+            });
+        }
 
         let reg_c = Arc::clone(&registry);
         reg!(scope, ctx, store, "_lumen_ws_send", move |handle: u32, text: String| -> bool {
@@ -1150,7 +1174,13 @@ pub(crate) fn install_sse(
             Arc::new(Mutex::new(HashMap::new()));
         let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
 
+        // GAP-CSPENF срез 11: same single-shared-slot side channel as
+        // WebSocket's `last_csp_block` above — `EventSource` also connects
+        // synchronously in its constructor.
+        let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+
         let (reg_c, nid_c, sp) = (Arc::clone(&registry), Arc::clone(&next_id), sse_provider);
+        let lcb_sse = Arc::clone(&last_csp_block);
         reg!(scope, ctx, store, "_lumen_sse_connect", move |url: String| -> u32 {
             let Some(ref provider) = sp else { return 0 };
             match provider.connect_sse(&url) {
@@ -1164,12 +1194,27 @@ pub(crate) fn install_sse(
                     reg_c.lock().unwrap().insert(id, session);
                     id
                 }
+                Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                    *lcb_sse.lock().unwrap() = Some((blocked_uri, original_policy));
+                    0
+                }
                 Err(e) => {
                     eprintln!("[JS SSE] connect error: {e}");
                     0
                 }
             }
         });
+
+        // _lumen_sse_last_csp_block() → [blockedUri, originalPolicy] | []
+        {
+            let lcb_get = Arc::clone(&last_csp_block);
+            reg!(scope, ctx, store, "_lumen_sse_last_csp_block", move || -> Vec<String> {
+                match lcb_get.lock().unwrap().take() {
+                    Some((uri, policy)) => vec![uri, policy],
+                    None => Vec::new(),
+                }
+            });
+        }
 
         let reg_c = Arc::clone(&registry);
         reg!(scope, ctx, store, "_lumen_sse_poll", move |handle: u32| -> Option<String> {
