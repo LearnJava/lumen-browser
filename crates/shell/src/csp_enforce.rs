@@ -21,15 +21,26 @@
 //! теперь гейтится тем же `img_src_blocked`, что срез 4 уже дал eager- и
 //! streaming-путям.
 //!
-//! Что НЕ покрыто этим срезом (следующие срезы): директивы кроме
-//! `script-src`/`img-src`/`style-src`
-//! (`connect-src`/`worker-src`/…), `report-uri`/`report-to`, hash-источники
-//! (только `'unsafe-inline'` и `'nonce-…'`), `background-image`/`@font-face
-//! url()` (используют `fetch_image_bytes` напрямую, не гейтятся вовсе),
-//! инлайновые `<style>`/атрибут `style` (не блокируются, только внешний
-//! `<link>`), `@import` внутри уже загруженного листа (наследует политику
-//! владельца, отдельно не проверяется), честная независимая проверка
-//! заголовка и `<meta>` вместо их слияния. См. `bugs/BUG-811-OPEN.md`.
+//! Срез 10 добавил `connect-src` против `fetch()`/`XMLHttpRequest` — не в
+//! этом файле: у JS-инициированного запроса нет точки кода с `&Document` под
+//! рукой (в отличие от парсер-/страница-производителей выше), поэтому гейт
+//! живёт в `lumen-network::HttpClient::fetch_request_impl`
+//! (`with_connect_src_policy`, `crates/network/src/lib.rs`), а
+//! `document_csp_policy` из этого модуля используется лишь один раз — в
+//! `page_pipeline.rs::parse_and_layout`, чтобы собрать политику для этого
+//! `HttpClient` перед тем, как он станет `fetch_provider`. Детали —
+//! `bugs/BUG-811-OPEN.md` срез 10.
+//!
+//! Что НЕ покрыто (следующие срезы): `worker-src` и остальные директивы,
+//! `connect-src` против WebSocket/EventSource/`sendBeacon` (те делят
+//! `HttpClient` с `fetch()`, но не гейтятся срезом 10), `report-uri`/
+//! `report-to`, hash-источники (только `'unsafe-inline'` и `'nonce-…'`),
+//! `background-image`/`@font-face url()` (используют `fetch_image_bytes`
+//! напрямую, не гейтятся вовсе), инлайновые `<style>`/атрибут `style` (не
+//! блокируются, только внешний `<link>`), `@import` внутри уже загруженного
+//! листа (наследует политику владельца, отдельно не проверяется), честная
+//! независимая проверка заголовка и `<meta>` вместо их слияния. См.
+//! `bugs/BUG-811-OPEN.md`.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;

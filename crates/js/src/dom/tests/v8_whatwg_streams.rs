@@ -158,6 +158,78 @@ fn xhr_set_request_header_reaches_the_provider() {
     assert_eq!(captured_headers(&capture), "x-probe:1;");
 }
 
+/// GAP-CSPENF срез 10: mock provider that always refuses with
+/// `Error::CspConnectSrcBlocked`, the way `HttpClient::fetch_request_impl`
+/// does when the document's `connect-src` blocks the request — proves the
+/// native fetch/XHR bridge in `crates/js/src/v8_runtime/install/net.rs`
+/// surfaces the block to the JS shim (which then fires
+/// `securitypolicyviolation`) rather than swallowing it as a generic
+/// network error.
+struct AlwaysCspBlockedFetch;
+impl lumen_core::ext::JsFetchProvider for AlwaysCspBlockedFetch {
+    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Err(lumen_core::error::Error::CspConnectSrcBlocked {
+            blocked_uri: "https://blocked.example/x".into(),
+            original_policy: "connect-src 'none'".into(),
+        })
+    }
+    fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.fetch_sync(_url, _method)
+    }
+}
+
+fn v8_runtime_with_csp_blocked_fetch() -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(AlwaysCspBlockedFetch);
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+    rt
+}
+
+/// `fetch()`'s default (no `AbortSignal`) path is synchronous under the hood,
+/// so the `securitypolicyviolation` dispatch and the promise rejection both
+/// land within the same `eval` call — no microtask pump needed.
+#[test]
+fn fetch_connect_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_fetch();
+    rt.eval(
+        "var seen = null; \
+         document.addEventListener('securitypolicyviolation', function(e) { \
+             seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
+         }); \
+         fetch('https://blocked.example/x').catch(function() {});",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "connect-src|https://blocked.example/x|connect-src 'none'".into()
+        )
+    );
+}
+
+/// Same block, `XMLHttpRequest` side — shares the synchronous
+/// `_lumen_fetch_sync*` bindings with `fetch()`'s default path.
+#[test]
+fn xhr_connect_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_fetch();
+    rt.eval(
+        "var seen = null; \
+         document.addEventListener('securitypolicyviolation', function(e) { \
+             seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
+         }); \
+         var x = new XMLHttpRequest(); \
+         x.open('GET', 'https://blocked.example/x'); \
+         x.send();",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "connect-src|https://blocked.example/x|connect-src 'none'".into()
+        )
+    );
+}
+
 /// Mock provider whose body is the URL's last path segment, so two
 /// responses in flight at once can be told apart by their bodies.
 struct EchoUrlFetch;

@@ -496,3 +496,68 @@ failed). `scripts/scoped-test.sh` не догнан до конца — изве
 гейт [BUG-805](BUG-805-OPEN.md) (виснет на
 `lumen-network::h3::udp::tests::udp_round_trip`, не связано с этой правкой,
 не регрессия этого среза).
+
+## Срез 10 (2026-09-17, P6) — `connect-src` против `fetch()`/`XMLHttpRequest`
+
+Первая директива этого GAP, применённая не к производителю сабресурсов
+парсера/страницы, а к запросу, который скрипт может выпустить в любой момент
+жизни документа — поэтому решение архитектурно другое, чем у срезов 4/6/7/9
+(`img-src`/`script-src`/`style-src`): там шелл держит URL и документ в одной
+точке кода (парсинг, вставка узла) и может проверить политику до вызова сети.
+`fetch()`/`XMLHttpRequest` вызываются из JS в произвольный момент через
+нативный мост (`crates/js/src/v8_runtime/install/net.rs`), у которого нет
+`&Document` — только `Arc<dyn JsFetchProvider>` (сам `HttpClient`). Поэтому
+гейт переехал в `lumen-network`:
+
+- `Error::CspConnectSrcBlocked { blocked_uri, original_policy }`
+  (`crates/core/src/error.rs`) — новый вариант, отдельный от `Error::Network`,
+  чтобы JS-мост мог отличить «CSP заблокировал» от обычного сетевого сбоя и
+  продиспетчить `securitypolicyviolation` с правильными `blockedURI`/
+  `originalPolicy`.
+- `HttpClient::with_connect_src_policy(policy, self_origin, original_policy)`
+  (`crates/network/src/lib.rs`) — билдер-метод, вызываемый один раз в
+  `page_pipeline.rs::parse_and_layout` сразу после того, как документ
+  посчитал `csp_enforce::document_csp_policy` (тот же агрегат заголовка +
+  `<meta>`, что и у остальных срезов), перед тем как `HttpClient` уходит в
+  `fetch_provider`/`ws_provider`/`sse_provider`. `fetch_request_impl` —
+  единственный путь и `fetch()`, и `XMLHttpRequest` (оба используют
+  `_lumen_fetch_sync*`/`_lumen_fetch_cancellable*`/`_lumen_fetch_async_*`) —
+  проверяет `connect-src` (или `default-src`) сразу после `Url::parse`, до
+  SW-перехвата и до любого DNS/сокета.
+- На JS-стороне пять нативных мостов (`_lumen_fetch_sync`,
+  `_lumen_fetch_sync_with_body`, `_lumen_fetch_cancellable[_with_body]`,
+  асинхронный `_lumen_fetch_async_start`/`_poll`) возвращали только
+  bool/u32 — недостаточно, чтобы пронести `blocked_uri`/`original_policy` до
+  шима. Синхронные/cancellable делят один side-channel слот
+  (`last_csp_block`, то же однослотовое допущение, что уже несёт `cache` —
+  JS вызывает их блокирующе, по одному за раз), читаемый и очищаемый новым
+  `_lumen_fetch_last_csp_block()`; асинхронный путь несёт `CspBlocked{..}`
+  прямо в `AsyncOutcome` (свой поток на хэндл, общий слот был бы гонкой) и
+  отдаёт через `_lumen_fetch_async_csp_info(handle)`, `poll` → `4`. Общий
+  JS-хелпер `_lumen_fire_connect_src_violation` (`web_api_shim_mid_b.js`)
+  зовёт уже существующий `_lumen_dispatch_csp_violation('connect-src', …)`
+  (срез 1) из всех точек отказа — `fetch()`'а (sync/cancellable/async) и
+  `xhr.rs` (отдельный `rt.eval`, делит нативы с `fetch()`, поэтому обошёлся
+  без собственного моста).
+- WebSocket/EventSource делят тот же `HttpClient`, но не гейтятся этим
+  срезом — `connect-src` по CSP3 §6.7.2 покрывает и их, это осознанно
+  оставлено следующему срезу (гейт только у `JsFetchProvider::fetch_request`,
+  не у `JsWebSocketProvider`/`JsSseProvider`).
+
+Не покрыто этим срезом: WebSocket/EventSource против `connect-src`;
+`sendBeacon` (свой путь `fetch_with_body_sync` в обход `fetch_request_impl`,
+не гейтится); директивы кроме `script-src`/`img-src`/`style-src`/
+`connect-src`; `report-uri`/`report-to`; hash-источники; честная независимая
+проверка заголовка и `<meta>`.
+
+Тесты: 3 юнит-теста в `crates/network/src/lib.rs` (блок до сети, разрешённый
+хост не гасится гейтом, отсутствие политики не изобретает нарушение — все три
+без реального сетевого ввода-вывода) + 2 интеграционных в
+`crates/js/src/dom/tests/v8_whatwg_streams.rs` (мок-провайдер, всегда
+возвращающий `CspConnectSrcBlocked`, доказывает, что `fetch()` и `XHR`
+реально диспетчат `securitypolicyviolation` с `connect-src`/`blockedURI`/
+`originalPolicy`). Подтверждено `cargo clippy --workspace --all-targets -- -D
+warnings` (чисто) + адресные `cargo test -p lumen-network`, `-p lumen-js
+--features v8-backend --lib`, `-p lumen-shell csp` (все зелёные).
+`scripts/scoped-test.sh` не догнан до конца — тот же известный сломанный
+гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого среза.

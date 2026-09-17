@@ -2797,6 +2797,15 @@ pub struct HttpClient {
     /// `Some` when [`Self::with_http3`] was called. The `Mutex` is held only
     /// during the HashMap lookup / insert — never across I/O.
     h3_pool: Option<Arc<std::sync::Mutex<h3::client_pool::H3ConnectionPool>>>,
+    /// GAP-CSPENF срез 10: CSP `connect-src` gate for JS-issued requests
+    /// (`fetch()`/`XMLHttpRequest`, both funnel through [`Self::fetch_request_impl`]).
+    /// `(policy, self_origin, original_policy)` — set once via
+    /// [`Self::with_connect_src_policy`] by the caller that owns the document
+    /// (`crates/shell/src/page_pipeline.rs`), never by a subresource loader:
+    /// `<img>`/`<script>`/`<link>` have their own gates in
+    /// `crates/shell/src/csp_enforce.rs` and construct their own `HttpClient`
+    /// per call, so this field never affects them.
+    connect_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
 }
 
 impl HttpClient {
@@ -2824,7 +2833,26 @@ impl HttpClient {
             http3_enabled: false,
             alt_svc_cache: Arc::new(std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new())),
             h3_pool: None,
+            connect_src_policy: None,
         }
+    }
+
+    /// Attach the document's CSP `connect-src` (or `default-src`) gate —
+    /// GAP-CSPENF срез 10. `original_policy` is the raw combined policy text
+    /// (`crate::csp_enforce::document_csp_policy`'s second element in the
+    /// shell), carried through to `SecurityPolicyViolationEvent.originalPolicy`
+    /// (CSP3 §7.8) — `CspPolicy` itself does not retain it. Only
+    /// [`Self::fetch_request_impl`] (the shared `fetch()`/`XMLHttpRequest`
+    /// path) checks this.
+    #[must_use]
+    pub fn with_connect_src_policy(
+        mut self,
+        policy: CspPolicy,
+        self_origin: Option<Origin>,
+        original_policy: String,
+    ) -> Self {
+        self.connect_src_policy = Some((policy, self_origin, original_policy));
+        self
     }
 
     /// Подключить EventSink. По умолчанию sink-а нет (события не эмитятся).
@@ -4161,6 +4189,14 @@ impl HttpClient {
         allow_sw_intercept: bool,
     ) -> Result<JsFetchResult> {
         let url = Url::parse(req.url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
+            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &url, self_origin.as_ref())
+        {
+            return Err(Error::CspConnectSrcBlocked {
+                blocked_uri: url.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
         let method_upper = req.method.to_ascii_uppercase();
         match (req.body.is_some(), method_upper.as_str()) {
             (false, "GET" | "HEAD") | (true, "POST" | "PUT" | "PATCH" | "DELETE") => {}
@@ -5295,6 +5331,66 @@ mod tests {
             client.h3_alt_svc().is_some(),
             "with_http3 → cache handle present, fetch path scans and dispatches"
         );
+    }
+
+    // ── GAP-CSPENF срез 10: connect-src против JS-инициированных запросов ────
+
+    #[test]
+    fn connect_src_none_blocks_fetch_before_any_network_io() {
+        // `connect-src 'none'` must reject before DNS/socket work — an
+        // unroutable host would otherwise hang or error differently, proving
+        // the gate really runs first.
+        let policy = csp::parse_csp_header("connect-src 'none'");
+        let client = HttpClient::new().with_connect_src_policy(
+            policy,
+            None,
+            "connect-src 'none'".to_owned(),
+        );
+        let result = client.fetch_request(&lumen_core::ext::JsFetchRequest {
+            url: "https://192.0.2.1.invalid/",
+            method: "GET",
+            headers: &[],
+            body: None,
+            token: None,
+        });
+        match result {
+            Err(Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "https://192.0.2.1.invalid/");
+                assert_eq!(original_policy, "connect-src 'none'");
+            }
+            Ok(_) => panic!("expected CspConnectSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspConnectSrcBlocked, got {other}"),
+        }
+    }
+
+    #[test]
+    fn connect_src_allowed_host_passes_the_directive_check() {
+        // Same "would the gate let this through" question as the blocked test
+        // above, without an actual `fetch_request` call — a permitted host
+        // still has to make it to the network, and this crate's tests must
+        // not depend on outbound connectivity (mirrors the img/script/style-src
+        // directive tests elsewhere in this module and in `csp.rs`).
+        let policy = csp::parse_csp_header("connect-src example.com");
+        let url = lumen_core::url::Url::parse("https://example.com/").unwrap();
+        assert!(policy.fetch_directive_allows(&CspDirective::ConnectSrc, &url, None));
+        let other = lumen_core::url::Url::parse("https://evil.example/").unwrap();
+        assert!(!policy.fetch_directive_allows(&CspDirective::ConnectSrc, &other, None));
+    }
+
+    #[test]
+    fn no_connect_src_policy_does_not_block() {
+        // `with_connect_src_policy` never called — the default `HttpClient` — so
+        // `fetch_request_impl`'s gate is a no-op and errors come only from the
+        // normal fetch path, never `CspConnectSrcBlocked`.
+        let client = HttpClient::new();
+        let result = client.fetch_request(&lumen_core::ext::JsFetchRequest {
+            url: "not a url",
+            method: "GET",
+            headers: &[],
+            body: None,
+            token: None,
+        });
+        assert!(!matches!(result, Err(Error::CspConnectSrcBlocked { .. })));
     }
 
     #[test]

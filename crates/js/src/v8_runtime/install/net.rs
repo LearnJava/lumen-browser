@@ -346,6 +346,13 @@ pub(crate) fn install_fetch(
 
         let cache: Arc<Mutex<Option<FetchCache>>> = Arc::new(Mutex::new(None));
 
+        // GAP-CSPENF срез 10: side-channel for the synchronous/cancellable fetch
+        // paths below, mirroring `cache`'s single-shared-slot design — JS calls
+        // these one at a time (blocking), so one slot per runtime is enough.
+        // `(blocked_uri, original_policy)`, consumed (and cleared) by
+        // `_lumen_fetch_last_csp_block` right after a call returns failure.
+        let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+
         let fp2 = fetch_provider.clone();
         let fp_beacon = fetch_provider.clone();
         let fp_cancel = fetch_provider.clone();
@@ -354,6 +361,7 @@ pub(crate) fn install_fetch(
         let c_cancel_body = Arc::clone(&cache);
         let fp_async = fetch_provider.clone();
         let c_async = Arc::clone(&cache);
+        let lcb_sync = Arc::clone(&last_csp_block);
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
         reg!(scope, ctx, store, "_lumen_fetch_sync", move |url: String, method: String, headers: Vec<String>| -> bool {
             let Some(ref provider) = fp else { return false };
@@ -378,6 +386,10 @@ pub(crate) fn install_fetch(
                         body: resp.body,
                     });
                     true
+                }
+                Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                    *lcb_sync.lock().unwrap() = Some((blocked_uri, original_policy));
+                    false
                 }
                 Err(e) => {
                     eprintln!("fetch error: {e}");
@@ -465,7 +477,8 @@ pub(crate) fn install_fetch(
         {
             let fetch_provider2 = fp2;
             let c2 = Arc::clone(&cache);
-            reg!(scope, ctx, store, 
+            let lcb_sync_body = Arc::clone(&last_csp_block);
+            reg!(scope, ctx, store,
                 "_lumen_fetch_sync_with_body",
                 move |url: String, method: String, content_type: String, body: Vec<u8>, headers: Vec<String>| -> bool {
                     let Some(ref provider) = fetch_provider2 else {
@@ -496,6 +509,10 @@ pub(crate) fn install_fetch(
                             });
                             true
                         }
+                        Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                            *lcb_sync_body.lock().unwrap() = Some((blocked_uri, original_policy));
+                            false
+                        }
                         Err(e) => {
                             eprintln!("fetch_with_body error: {e}");
                             false
@@ -505,12 +522,29 @@ pub(crate) fn install_fetch(
             );
         }
 
+        // _lumen_fetch_last_csp_block() → [blockedUri, originalPolicy] | []
+        // Reads (and clears) the `connect-src` violation info stashed by the two
+        // synchronous bindings above and by the cancellable ones below — checked
+        // by the shim right after a `false`/non-zero result, since that's the
+        // only way a `connect-src` block distinguishes itself from a generic
+        // network failure on this side of the boundary (GAP-CSPENF срез 10).
+        {
+            let lcb_get = Arc::clone(&last_csp_block);
+            reg!(scope, ctx, store, "_lumen_fetch_last_csp_block", move || -> Vec<String> {
+                match lcb_get.lock().unwrap().take() {
+                    Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
+                    None => Vec::new(),
+                }
+            });
+        }
+
         // _lumen_fetch_cancellable(url, method, timeout_ms, headers) → u32
         // In-flight-cancellable GET/HEAD. Returns 0 = ok (body in FetchCache),
         // 1 = network error, 2 = aborted/timed-out. When timeout_ms > 0 a detached
         // deadline thread flips the AbortToken; the network layer tears the socket
         // down, so a `fetch(url, {signal: AbortSignal.timeout(ms)})` against a slow
         // server actually aborts even though the JS thread is parked in the call.
+        let lcb_cancel = Arc::clone(&last_csp_block);
         reg!(scope, ctx, store, "_lumen_fetch_cancellable", move |url: String, method: String, timeout_ms: u32, headers: Vec<String>| -> u32 {
             let Some(ref provider) = fp_cancel else { return 1 };
             let token = AbortToken::new();
@@ -541,13 +575,18 @@ pub(crate) fn install_fetch(
                     0
                 }
                 Err(lumen_core::error::Error::Aborted(_)) => 2,
+                Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                    *lcb_cancel.lock().unwrap() = Some((blocked_uri, original_policy));
+                    1
+                }
                 Err(e) => { eprintln!("fetch error: {e}"); 1 }
             }
         });
 
         // _lumen_fetch_cancellable_with_body(url, method, content_type, body, timeout_ms, headers) → u32
         // Body-carrying (POST/PUT/...) sibling of _lumen_fetch_cancellable.
-        reg!(scope, ctx, store, 
+        let lcb_cancel_body = Arc::clone(&last_csp_block);
+        reg!(scope, ctx, store,
             "_lumen_fetch_cancellable_with_body",
             move |url: String, method: String, content_type: String, body: Vec<u8>, timeout_ms: u32, headers: Vec<String>| -> u32 {
                 let Some(ref provider) = fp_cancel_body else { return 1 };
@@ -582,6 +621,10 @@ pub(crate) fn install_fetch(
                         0
                     }
                     Err(lumen_core::error::Error::Aborted(_)) => 2,
+                    Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                        *lcb_cancel_body.lock().unwrap() = Some((blocked_uri, original_policy));
+                        1
+                    }
                     Err(e) => { eprintln!("fetch_with_body error: {e}"); 1 }
                 }
             }
@@ -607,6 +650,10 @@ pub(crate) fn install_fetch(
                 NetError,
                 /// Aborted in flight via the AbortToken.
                 Aborted,
+                /// Blocked by the document's CSP `connect-src` (GAP-CSPENF срез 10) —
+                /// distinct from `NetError` so the shim can dispatch
+                /// `securitypolicyviolation` with the right `blockedURI`/`originalPolicy`.
+                CspBlocked { blocked_uri: String, original_policy: String },
             }
             /// Per-handle state shared between the worker thread and the JS poll.
             struct AsyncFetchState {
@@ -657,6 +704,9 @@ pub(crate) fn install_fetch(
                                 body: r.body,
                             },
                             Err(lumen_core::error::Error::Aborted(_)) => AsyncOutcome::Aborted,
+                            Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                                AsyncOutcome::CspBlocked { blocked_uri, original_policy }
+                            }
                             Err(_) => AsyncOutcome::NetError,
                         };
                         if let Some(s) = map.lock().unwrap().get_mut(&id) {
@@ -667,7 +717,9 @@ pub(crate) fn install_fetch(
                 }
             );
 
-            // _lumen_fetch_async_poll(handle) → 0 pending, 1 ok, 2 net-error, 3 aborted
+            // _lumen_fetch_async_poll(handle) → 0 pending, 1 ok, 2 net-error, 3 aborted,
+            // 4 blocked by connect-src (GAP-CSPENF срез 10 — read the details via
+            // `_lumen_fetch_async_csp_info` before freeing the handle).
             let am_poll = Arc::clone(&async_map);
             reg!(scope, ctx, store, "_lumen_fetch_async_poll", move |id: u32| -> u32 {
                 let map = am_poll.lock().unwrap();
@@ -678,7 +730,20 @@ pub(crate) fn install_fetch(
                         Some(AsyncOutcome::Ok { .. }) => 1,
                         Some(AsyncOutcome::NetError) => 2,
                         Some(AsyncOutcome::Aborted) => 3,
+                        Some(AsyncOutcome::CspBlocked { .. }) => 4,
                     },
+                }
+            });
+
+            // _lumen_fetch_async_csp_info(handle) → [blockedUri, originalPolicy] | []
+            // Only meaningful right after `_lumen_fetch_async_poll` returned 4.
+            let am_csp = Arc::clone(&async_map);
+            reg!(scope, ctx, store, "_lumen_fetch_async_csp_info", move |id: u32| -> Vec<String> {
+                match am_csp.lock().unwrap().get(&id) {
+                    Some(AsyncFetchState { outcome: Some(AsyncOutcome::CspBlocked { blocked_uri, original_policy }), .. }) => {
+                        vec![blocked_uri.clone(), original_policy.clone()]
+                    }
+                    _ => Vec::new(),
                 }
             });
 
