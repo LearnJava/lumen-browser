@@ -123,8 +123,35 @@ const WEBRTC_SHIM: &str = r#"(function() {
 
   // ── RTCPeerConnection ────────────────────────────────────────────────────
 
+  // Validate `RTCConfiguration.iceServers` per the WebRTC spec's constructor/
+  // setConfiguration steps: URL scheme must be a STUN/TURN scheme, and a TURN
+  // `username` must fit in 512 UTF-16 code units. Throws on the first bad entry.
+  function _validateIceServers(iceServers) {
+    if (iceServers === null) throw new TypeError('iceServers must not be null');
+    if (iceServers === undefined) return;
+    for (var i = 0; i < iceServers.length; i++) {
+      var server = iceServers[i];
+      var urls = server && server.urls !== undefined ? server.urls : [];
+      if (!Array.isArray(urls)) urls = [urls];
+      for (var j = 0; j < urls.length; j++) {
+        var url = urls[j];
+        var scheme = typeof url === 'string' ? url.split(':')[0] : '';
+        if (['stun', 'stuns', 'turn', 'turns'].indexOf(scheme) === -1) {
+          throw new DOMException(
+            "Malformed URL: '" + url + "'", 'SyntaxError');
+        }
+      }
+      if (server && typeof server.username === 'string' && server.username.length > 512) {
+        throw new DOMException(
+          'TURN username exceeds 512 UTF-16 code units', 'InvalidAccessError');
+      }
+    }
+  }
+
   function RTCPeerConnection(config) {
-    this._config            = config || {};
+    config = config || {};
+    _validateIceServers(config.iceServers);
+    this._config            = config;
     this._localDescription  = null;
     this._remoteDescription = null;
     this._signalingState    = 'stable';
@@ -233,6 +260,31 @@ const WEBRTC_SHIM: &str = r#"(function() {
   RTCPeerConnection.prototype.addIceCandidate = function(_cand) {
     return _resolved(undefined);
   };
+
+  RTCPeerConnection.prototype.getConfiguration = function() {
+    var c = this._config;
+    return {
+      iceServers: c.iceServers ? c.iceServers.slice() : [],
+      iceTransportPolicy: c.iceTransportPolicy || 'all',
+      bundlePolicy: c.bundlePolicy || 'balanced',
+      rtcpMuxPolicy: c.rtcpMuxPolicy || 'require',
+      certificates: c.certificates ? c.certificates.slice() : [],
+      iceCandidatePoolSize: c.iceCandidatePoolSize || 0
+    };
+  };
+  RTCPeerConnection.prototype.setConfiguration = function(config) {
+    config = config || {};
+    if (config.certificates !== undefined) {
+      throw new DOMException(
+        'certificates cannot be changed after construction', 'InvalidModificationError');
+    }
+    _validateIceServers(config.iceServers);
+    var merged = {};
+    for (var k in this._config) merged[k] = this._config[k];
+    for (var k2 in config) merged[k2] = config[k2];
+    this._config = merged;
+  };
+
   RTCPeerConnection.prototype.close = function() {
     this._closed = true;
     this._signalingState = 'closed';
@@ -289,7 +341,9 @@ mod tests {
         rt.eval(
             "function setTimeout(fn, d) { fn(); return 0; } \
              function clearTimeout(id) {} \
-             function queueMicrotask(fn) { fn(); }",
+             function queueMicrotask(fn) { fn(); } \
+             function DOMException(msg, name) { this.message = msg; this.name = name; } \
+             DOMException.prototype = Object.create(Error.prototype);",
         )
         .unwrap();
     }
@@ -546,6 +600,96 @@ mod tests {
              })()",
         );
         assert!(fired, "addEventListener('icecandidate') must also receive the candidate");
+    }
+
+    #[test]
+    fn get_configuration_reflects_constructor_arg() {
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let url = js_str(
+            &rt,
+            "new RTCPeerConnection({iceServers:[{urls:'stun:stun.example.com'}]}) \
+               .getConfiguration().iceServers[0].urls",
+        );
+        assert_eq!(url, "stun:stun.example.com");
+    }
+
+    #[test]
+    fn set_configuration_merges_into_config() {
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let policy = js_str(
+            &rt,
+            "(function() { \
+               var pc = new RTCPeerConnection(); \
+               pc.setConfiguration({iceTransportPolicy: 'relay'}); \
+               return pc.getConfiguration().iceTransportPolicy; \
+             })()",
+        );
+        assert_eq!(policy, "relay");
+    }
+
+    #[test]
+    fn constructor_throws_on_invalid_ice_server_scheme() {
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let name = js_str(
+            &rt,
+            "(function() { \
+               try { new RTCPeerConnection({iceServers:[{urls:'not-a-valid-url'}]}); return ''; } \
+               catch(e) { return e.name; } \
+             })()",
+        );
+        assert_eq!(name, "SyntaxError");
+    }
+
+    #[test]
+    fn constructor_throws_type_error_on_null_ice_servers() {
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let name = js_str(
+            &rt,
+            "(function() { \
+               try { new RTCPeerConnection({iceServers: null}); return ''; } \
+               catch(e) { return e.name; } \
+             })()",
+        );
+        assert_eq!(name, "TypeError");
+    }
+
+    #[test]
+    fn constructor_throws_on_overlong_turn_username() {
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let name = js_str(
+            &rt,
+            "(function() { \
+               try { \
+                 new RTCPeerConnection({iceServers:[{urls:'turn:turn.example.com', \
+                   username: 'x'.repeat(513), credential: 'y'}]}); \
+                 return ''; \
+               } catch(e) { return e.name; } \
+             })()",
+        );
+        assert_eq!(name, "InvalidAccessError");
+    }
+
+    #[test]
+    fn set_configuration_rejects_certificates_change() {
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let name = js_str(
+            &rt,
+            "(function() { \
+               var pc = new RTCPeerConnection(); \
+               try { pc.setConfiguration({certificates: []}); return ''; } \
+               catch(e) { return e.name; } \
+             })()",
+        );
+        assert_eq!(name, "InvalidModificationError");
     }
 
     #[test]
