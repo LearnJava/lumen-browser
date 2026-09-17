@@ -23,7 +23,32 @@ impl Lumen {
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
         };
+        // GAP-CSPENF срез 9: this is the deferred `loading="lazy"` path — the
+        // only image producer left with no `img-src` gate at all (the eager
+        // pipeline gates in `fetch_and_decode_images`, the streaming/dynamic
+        // producer in `spawn_image_requests`, срез 4 both). A page whose
+        // policy blocks an origin could still pull bytes from it just by
+        // marking the `<img>` lazy. Same one-shot policy read as those two
+        // callers; `self.layout_source` is the live document this JS-queued
+        // request came from.
+        let csp_gate = self.layout_source.as_ref().and_then(|src| {
+            let doc = src.document.lock().unwrap();
+            let root = doc.root();
+            crate::csp_enforce::document_csp_policy(&doc, root)
+        });
+        let self_origin = base.origin();
         for (nid, url) in requests {
+            if let Some((policy, original_policy)) = &csp_gate {
+                let resolved = base.resolve_str(&url);
+                if crate::csp_enforce::img_src_blocked(policy, &resolved, self_origin.as_ref()) {
+                    let original_policy = original_policy.clone();
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.fire_csp_violation("img-src", &resolved, &original_policy);
+                        j.fire_image_error(nid);
+                    });
+                    continue;
+                }
+            }
             let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
