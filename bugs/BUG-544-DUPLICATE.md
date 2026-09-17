@@ -65,7 +65,7 @@ assertion already failed) — the single largest failure cluster of the
 slice, spanning `css-fonts`, `css-transforms`, `css-ui`, `css-text`, and
 `css-flexbox` simultaneously. Given `interpolation-testcommon.js` is shared
 verbatim across the entire CSS corpus (already seen driving part of
-[BUG-536](BUG-536-OPEN.md)'s CSS-Transitions-specific findings), this gap
+[BUG-536](BUG-536-FIXED.md)'s CSS-Transitions-specific findings), this gap
 is expected to recur in every future WPT-RUN-3 slice that touches a CSS
 value's interpolation tests, not just these five categories.
 

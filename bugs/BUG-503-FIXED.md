@@ -77,7 +77,7 @@ instead (see those files' `.ini` headers, which cite both).
 (`crates/js/src/dom.rs:610`) и имя атрибута в списке `on*`-свойств
 (`dom.rs:998`); ни одной строки, которая бы событие *отправляла*, в
 воркспейсе нет. То же для `transitionend`/`transitionrun`/`transitioncancel`
-(смыкается с [BUG-536](BUG-536-OPEN.md), где то же сказано про переходы).
+(смыкается с [BUG-536](BUG-536-FIXED.md), где то же сказано про переходы).
 
 **Замер** — `tests/wpt/verify_event_delivery_gaps.py` (живое окно, http,
 улики из stderr; dev-release, Linux, коммит `a7ee9468f`):
@@ -116,7 +116,7 @@ transform-01x.html`: у них два выхода — колбэк `ResizeObser
 Живой замер этого среза (`verify_event_delivery_gaps.py --variant
 css-transition`) подтверждает: `transitionrun`/`transitionstart`/
 `transitionend` теперь диспатчатся автономно — см. подробности механизма в
-[BUG-536](BUG-536-OPEN.md#срез-1-gap-cssanim-2026-09-16-p1-gap-cssanim-srez1--css-transitions-lifecycle-events-now-dispatch).
+[BUG-536](BUG-536-FIXED.md#срез-1-gap-cssanim-2026-09-16-p1-gap-cssanim-srez1--css-transitions-lifecycle-events-now-dispatch).
 Файлы этого бага, ждущие `'transitionend'` (см. «Симптом» выше), закрыты этим
 срезом; файлы, ждущие `'animationend'` от `@keyframes`-анимации, — нет:
 `--variant css-animation` по-прежнему печатает «— nothing», `AnimationScheduler`
@@ -164,7 +164,7 @@ off the dispatched event's `target` still won't reach a Web Animations
 object), and `getComputedStyle()` mid-animation still doesn't reflect the
 interpolated value (`--variant css-animation-progress` still reports a
 static `opacity 1`, not falling — same gap symptom 3 documented for
-transitions in [BUG-536](BUG-536-OPEN.md)). 6 new unit tests in
+transitions in [BUG-536](BUG-536-FIXED.md)). 6 new unit tests in
 `crates/shell/src/animation_scheduler.rs`
 (`tick_fires_start_on_first_active_frame` and siblings).
 
@@ -173,7 +173,7 @@ transitions in [BUG-536](BUG-536-OPEN.md)). 6 new unit tests in
 `getComputedStyle()` mid-animation now reflects the live `opacity`/
 `transform` — `--variant css-animation-progress` prints `opacity 1, opacity
 0.709377, …` instead of a static `1`. Full mechanism documented in
-[BUG-536](BUG-536-OPEN.md#срез-3-gap-cssanim-2026-09-16-p1-gap-cssanim-srez3--getcomputedstyle-now-reflects-the-live-interpolated-opacitytransform)
+[BUG-536](BUG-536-FIXED.md#срез-3-gap-cssanim-2026-09-16-p1-gap-cssanim-srez3--getcomputedstyle-now-reflects-the-live-interpolated-opacitytransform)
 (same fix, both bugs share this symptom). `getAnimations()` still returns
 nothing for a CSS-triggered animation — untouched by this slice.
 
@@ -182,7 +182,7 @@ nothing for a CSS-triggered animation — untouched by this slice.
 `getComputedStyle()` now also reflects live `color`/`background-color`/
 `height` during a transition (not `@keyframes` animations — at the time,
 that scheduler never interpolated `height`). Full mechanism documented in
-[BUG-536](BUG-536-OPEN.md#срез-4-2026-09-17-p1-gap-cssanim-srez4). `getAnimations()`
+[BUG-536](BUG-536-FIXED.md#срез-4-2026-09-17-p1-gap-cssanim-srez4). `getAnimations()`
 still returns nothing for a CSS-triggered animation/transition — untouched
 by this slice.
 
@@ -191,7 +191,7 @@ by this slice.
 `@keyframes height` now interpolates too — `AnimationScheduler` (the
 `@keyframes` ticker) gained the same `height` plumbing `TransitionScheduler`
 already had. Full mechanism in
-[BUG-536](BUG-536-OPEN.md#срез-5-2026-09-17-p1-gap-cssanim-srez5). Also:
+[BUG-536](BUG-536-FIXED.md#срез-5-2026-09-17-p1-gap-cssanim-srez5). Also:
 `getAnimations()` turned out to already be fully implemented in the JS shim
 (`_wa_animations`/`Animation`/`CSSAnimation`) — the actual gap is that
 CSS-driven transitions/animations never register into that registry, so it
@@ -203,7 +203,7 @@ per-frame compositor path skips relayout by design.
 ## Срез 6 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez6`)
 
 `getAnimations()` now returns something for a running `@keyframes` animation.
-Full mechanism in [BUG-536](BUG-536-OPEN.md#срез-6-2026-09-17-p1-gap-cssanim-srez6)
+Full mechanism in [BUG-536](BUG-536-FIXED.md#срез-6-2026-09-17-p1-gap-cssanim-srez6)
 — `_lumen_deliver_animation_events` (`web_api_shim_mid_b.js`) registers a
 shadow `Animation` into `_wa_animations` on `animationstart`, keeps it there
 (`playState: 'finished'`) past `animationend` per CSS Animations L1 §4.5.1,
@@ -219,4 +219,14 @@ Full mechanism and the remaining, architecturally larger geometry gap
 (`getBoundingClientRect()` during height/margin/width animation, which needs a
 real relayout pass fed an animated override — not present anywhere in the
 layout pipeline today) in
-[BUG-536](BUG-536-OPEN.md#срез-8-gap-cssanim-2026-09-17-p1-gap-cssanim-srez8--correction-keyframes-height-did-not-reach-getcomputedstyle-in-the-live-path-now-it-does-geometry-mid-animation-remains-open-and-is-architecturally-larger-than-a-slice).
+[BUG-536](BUG-536-FIXED.md#срез-8-gap-cssanim-2026-09-17-p1-gap-cssanim-srez8--correction-keyframes-height-did-not-reach-getcomputedstyle-in-the-live-path-now-it-does-geometry-mid-animation-remains-open-and-is-architecturally-larger-than-a-slice).
+
+## Срез 9 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez9`) — geometry mid-animation closed; `GAP-CSSANIM` fully closed
+
+`getBoundingClientRect()`/`getClientRects()` now track an animated `height`
+(thread-local `ANIMATED_HEIGHTS` patched into the layout tree before the one
+"full" layout pass, plus a forced relayout each tick a height animation runs
+without a DOM mutation). Full mechanism in
+[BUG-536](BUG-536-FIXED.md#срез-9-gap-cssanim-2026-09-17-p1-gap-cssanim-srez9--getboundingclientrectgeometry-now-tracks-an-animated-height-task-closed).
+This was the last open item under `GAP-CSSANIM` — the task (and this bug) is
+now closed.
