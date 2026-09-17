@@ -114,6 +114,26 @@ requestAnimationFrame(function () { t.style.opacity = "0"; });
 setTimeout(function () { t.style.opacity = "0"; }, 100);
 </script>
 """, "run+start+end"),
+    "css-transitioncancel-remove": ("""
+<style>#t { width:50px; height:50px; background:blue; transition: opacity 2s linear; }</style>
+<div id=t></div>
+<script>
+var t = document.getElementById("t");
+["transitionrun", "transitionstart", "transitioncancel", "transitionend"]
+    .forEach(function (type) {
+        t.addEventListener(type, function () { console.log("PROBE " + type); });
+    });
+getComputedStyle(t).opacity;
+requestAnimationFrame(function () { t.style.opacity = "0"; });
+setTimeout(function () {
+    console.log("PROBE getAnimations-before-remove=" + t.getAnimations().length);
+    t.remove();
+}, 300);
+setTimeout(function () {
+    console.log("PROBE getAnimations-after-remove=" + document.getAnimations().length);
+}, 800);
+</script>
+""", "run+start, then transitioncancel (not transitionend) after remove(); getAnimations drops to 0"),
     "css-animation-progress": ("""
 <style>
 @keyframes fadeout { from { opacity: 1 } to { opacity: 0 } }
