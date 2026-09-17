@@ -6,7 +6,7 @@
 
 ## Симптом
 
-Same live probe as [BUG-719](BUG-719-OPEN.md) (`webmidi`, run gives no
+Same live probe as [BUG-719](BUG-719-FIXED.md) (`webmidi`, run gives no
 functional signal — infra gap, `WebIDLParser.js`/`idlharness.js` not
 vendored):
 
@@ -48,5 +48,5 @@ Fix scope: split into two named classes (`MIDIInputMap extends MIDIPortMap`,
 `MIDIOutputMap extends MIDIPortMap`, or two independent classes sharing a
 private mixin) and export both on `window`; construct `MIDIAccess.inputs`/
 `.outputs` from the matching one. Independent of
-[BUG-719](BUG-719-OPEN.md) (constructor guard) — can be fixed separately.
+[BUG-719](BUG-719-FIXED.md) (constructor guard) — can be fixed separately.
 Does not require the infra gap to reproduce or verify.

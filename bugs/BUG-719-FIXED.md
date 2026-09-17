@@ -1,6 +1,6 @@
 # BUG-719 — `MIDIPort`/`MIDIInput`/`MIDIOutput`/`MIDIAccess` are directly constructible with `new`, though the spec defines no constructor
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)
 **Найден:** P2, WPT-VENDOR-webmidi, 2026-08-09
 
@@ -71,7 +71,35 @@ construction originated from the engine rather than page script.
 
 Fix scope: block public `new MIDIPort(...)`/`new MIDIInput(...)`/
 `new MIDIOutput(...)`/`new MIDIAccess(...)` (same guard pattern proposed for
-[BUG-672](BUG-672-OPEN.md)/[BUG-713](BUG-713-OPEN.md); worth fixing all five
+[BUG-672](BUG-672-OPEN.md)/[BUG-713](BUG-713-FIXED.md); worth fixing all five
 surfaces together once a guard helper exists — common root, same V8-port
 era). Does not require the infra gap (`WebIDLParser.js`/`idlharness.js`) to
 reproduce or verify — the live `--mcp-live-port` probe is sufficient.
+
+## Исправление (2026-09-17, P3)
+
+Добавлен приватный `BRAND`-токен (объект, недостижимый со страницы) —
+тот же паттерн, что уже принят в `filesystem_access.rs` для BUG-374 и
+повторно применён в `webhid.rs` для BUG-713. `MIDIPort`/`MIDIInput`/
+`MIDIOutput`/`MIDIAccess` теперь требуют его первым аргументом
+конструктора и бросают `TypeError: Illegal constructor`, если он не
+совпадает; единственная легитимная точка конструирования —
+`navigator.requestMIDIAccess()` внутри самого шима (только `MIDIAccess`
+строится сейчас — Phase 0 отдаёт пустые `inputs`/`outputs`, так что
+`MIDIPort`/`MIDIInput`/`MIDIOutput` не конструируются нигде до
+Phase 1 OS MIDI-интеграции, но guard уже на месте).
+
+Тест `midi_access_sysex_enabled_false_by_default`, полагавшийся на
+публичную конструируемость `MIDIAccess`, переписан через
+`requestMIDIAccess()`. Добавлен `midi_constructors_are_illegal`,
+проверяющий `TypeError` на `new` для всех четырёх классов.
+
+`cargo test -p lumen-js --lib web_midi:: --features v8-backend` — 12/12.
+`cargo clippy --workspace --all-targets -- -D warnings` — чист.
+`scripts/scoped-test.sh` — единственные красные тесты в затронутых
+крейтах не связаны с правкой: `frame_bridge::tests::
+inaccessible_bridge_mutation_does_not_mark_dirty` (флак, проходит в
+одиночном прогоне) и `cases::snapshot_cpu::cpu_snapshots_match_references`
+(чужой дрейф эталонов [BUG-1008](BUG-1008-OPEN.md), тот же набор из
+7 файлов); прогон не дошёл до `lumen-network` из-за известного гейта
+[BUG-805](BUG-805-OPEN.md). Только JS-шим, пиксели не затронуты.
