@@ -39,7 +39,7 @@ in the shim ever calls `_dispatch` or invokes `this.ontrack`/`this.ondatachannel
 
 - `addTrack`/`addTransceiver` are no-ops returning `null` — no `track` event
   is synthesized on either peer (own finding, see [BUG-1058](BUG-1058-FIXED.md)/
-  [BUG-726](BUG-726-OPEN.md) for the object-shape half of the same methods).
+  [BUG-726](BUG-726-FIXED.md) for the object-shape half of the same methods).
 - `createDataChannel` returns a plain detached object with its own dead
   `addEventListener`/`onopen` — it is never associated with the *other*
   peer's connection, so `remotePc.ondatachannel` has no trigger at all.

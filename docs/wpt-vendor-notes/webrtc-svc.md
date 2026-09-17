@@ -35,7 +35,7 @@ failure traces to one of two already-documented gaps, nothing new:
 - **4 subtests** (`RTCRtpParameters-scalability.html`): `pc.addTransceiver`
   returning `null` unconditionally (`webrtc_stub.rs:243`) — the same
   documented no-op stub already covered by
-  [BUG-1058](../../bugs/BUG-1058-FIXED.md)/[BUG-726](../../bugs/BUG-726-OPEN.md).
+  [BUG-1058](../../bugs/BUG-1058-FIXED.md)/[BUG-726](../../bugs/BUG-726-FIXED.md).
   Two subtests throw `TypeError: Cannot destructure property 'sender' of
   'pc.addTransceiver(...)' as it is null.`, one throws `TypeError: Cannot
   read properties of null (reading 'sender')`, and one
@@ -60,5 +60,5 @@ into it already dead-ends at the documented `addTransceiver` stub.
 `NotAllowedError: Video capture is not available in Lumen Phase 1`
 (ожидаемое ограничение Phase 1, нет захвата камеры); 4 сабтеста — каскад от
 `addTransceiver()`, возвращающего `null` безусловно, тот же дефект, что
-[BUG-1058](../bugs/BUG-1058-FIXED.md)/[BUG-726](../../bugs/BUG-726-OPEN.md).
+[BUG-1058](../bugs/BUG-1058-FIXED.md)/[BUG-726](../../bugs/BUG-726-FIXED.md).
 Новый BUG-NNN не заводился.
