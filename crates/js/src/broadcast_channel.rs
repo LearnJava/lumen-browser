@@ -212,9 +212,17 @@ const BROADCAST_CHANNEL_SHIM: &str = r#"(function() {
     if (this._closed) {
       throw new DOMException("BroadcastChannel is closed", "InvalidStateError");
     }
+    if (arguments.length === 0) {
+      throw new TypeError("Failed to execute 'postMessage' on 'BroadcastChannel': 1 argument required, but only 0 present.");
+    }
+    // Validate cloneability through the spec-correct structuredClone (throws
+    // DataCloneError on Symbol/function, unlike JSON.stringify which silently
+    // drops them) before falling back to JSON to cross the mpsc::Sender<String>
+    // thread boundary (BUG-718).
+    var cloned = structuredClone(message);
     var json;
     try {
-      json = JSON.stringify(message === undefined ? null : message);
+      json = JSON.stringify(cloned === undefined ? null : cloned);
       if (json === undefined) json = 'null';
     } catch (e) {
       throw new DOMException("Failed to execute 'postMessage' on 'BroadcastChannel': value could not be cloned.", "DataCloneError");
@@ -514,6 +522,34 @@ mod tests {
             rt.eval("got.s").unwrap(),
             lumen_core::JsValue::String("x".into())
         );
+    }
+
+    #[test]
+    fn post_without_argument_throws_type_error() {
+        let rt = runtime();
+        let r = rt
+            .eval(
+                "var c = new BroadcastChannel('room-11'); \
+                 var isTypeError = false; \
+                 try { c.postMessage(); } catch(e){ isTypeError = e instanceof TypeError; } \
+                 isTypeError",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn post_symbol_throws_data_clone_error() {
+        let rt = runtime();
+        let r = rt
+            .eval(
+                "var c = new BroadcastChannel('room-12'); \
+                 var name = null; \
+                 try { c.postMessage(Symbol()); } catch(e){ name = e.name; } \
+                 name",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("DataCloneError".into()));
     }
 
     #[test]
