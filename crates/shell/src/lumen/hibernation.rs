@@ -42,7 +42,7 @@ impl Lumen {
 
         let url = match &snap.source {
             PageSource::Url { url, .. } => url.clone(),
-            PageSource::File(p) => format!("file://{}", p.display()),
+            PageSource::File(p) => path_to_file_url(p),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => String::new(),
         };

@@ -116,6 +116,16 @@ impl Url {
         })
     }
 
+    /// This URL as a filesystem path, if it is a `file:` URL the platform can
+    /// open — delegates to `inner`'s own OS-aware conversion (Windows
+    /// drive-letter host, POSIX absolute path), the same algorithm every
+    /// `file://` consumer in this codebase would otherwise have to
+    /// reimplement (BUG-723). `None` for any other scheme or an opaque-path
+    /// `file:` URL `to_file_path` itself rejects (UNC/non-local host).
+    pub fn to_file_path(&self) -> Option<std::path::PathBuf> {
+        self.inner.to_file_path().ok()
+    }
+
     /// Path + `?query` (без fragment) — для HTTP request line.
     pub fn path_and_query(&self) -> String {
         match self.inner.query() {
@@ -283,6 +293,25 @@ mod tests {
     #[test]
     fn parse_no_scheme_fails() {
         assert!(Url::parse("example.com").is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn to_file_path_windows_drive_letter() {
+        // BUG-723: this is the exact shape `file_url_to_path`/`path_to_file_url`
+        // in `lumen-shell` round-trip a Windows path through — three slashes,
+        // drive letter with its colon kept intact.
+        let u = Url::parse("file:///D:/RustProjects/lumen-browser/.tmp/b723.html").unwrap();
+        assert_eq!(
+            u.to_file_path().unwrap(),
+            std::path::PathBuf::from("D:\\RustProjects\\lumen-browser\\.tmp\\b723.html")
+        );
+    }
+
+    #[test]
+    fn to_file_path_non_file_scheme_is_none() {
+        let u = Url::parse("https://example.com/a.html").unwrap();
+        assert_eq!(u.to_file_path(), None);
     }
 
     #[test]

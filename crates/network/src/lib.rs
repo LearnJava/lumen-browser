@@ -293,6 +293,42 @@ use pool::PoolKey;
 /// state на первом же непроцентированном `?` в исходной строке — склейка
 /// восстанавливает его на прежнем месте), а fragment уже отброшен `Url`.
 /// Дальше ищем первую запятую вручную, как того требует сама data-схема.
+/// Best-effort `Content-Type` for a `file:` fetch (BUG-723) — covers the
+/// extensions a page's own subresources realistically use (script, style,
+/// data, image, font); anything else gets the same generic value a plain
+/// static file server would send. Not a MIME sniffing database — content
+/// sniffing from bytes is a separate, much larger spec surface this does not
+/// attempt.
+fn guess_file_content_type(path: &std::path::Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" => "text/javascript",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "svg" => "image/svg+xml",
+        "txt" => "text/plain",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "wasm" => "application/wasm",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+    .to_owned()
+}
+
 fn parse_data_url(url: &Url) -> Result<(String, Vec<u8>)> {
     let opaque = url.path_and_query();
     let comma = opaque
@@ -2157,6 +2193,25 @@ fn fetch_with_redirect(
     // и навигация приходят сюда через один и тот же `fetch_with_redirect`.
     if url.scheme() == "data" {
         let (content_type, body) = parse_data_url(url)?;
+        return Ok((
+            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body },
+            url.clone(),
+        ));
+    }
+
+    // BUG-723: `file:` тоже никогда не шло в сеть — до этой ветки страница
+    // по схеме `file://` резолвила свой собственный `fetch()`/динамический
+    // `<script src>`/`<link>` через этот же `JsFetchProvider` и падала ниже
+    // на `require_http_scheme` ("unsupported scheme: file"), хотя байты уже
+    // лежат на диске и ходить в сеть за ними незачем — тот же принцип, что
+    // у `data:` двумя ветками выше.
+    if url.scheme() == "file" {
+        let path = url
+            .to_file_path()
+            .ok_or_else(|| Error::Network(format!("file: not a local path: {}", url.as_str())))?;
+        let body = std::fs::read(&path)
+            .map_err(|e| Error::Network(format!("file: {}: {e}", path.display())))?;
+        let content_type = guess_file_content_type(&path);
         return Ok((
             Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body },
             url.clone(),
@@ -10498,5 +10553,54 @@ mod proxy_tests {
         let url = Url::parse("data:text/html,%3Ch1%3Ehi%3C%2Fh1%3E").unwrap();
         let page = client.fetch_page(&url, None).unwrap();
         assert_eq!(page.body, b"<h1>hi</h1>");
+    }
+
+    #[test]
+    fn guess_file_content_type_covers_script_and_style() {
+        assert_eq!(guess_file_content_type(std::path::Path::new("a.js")), "text/javascript");
+        assert_eq!(guess_file_content_type(std::path::Path::new("a.css")), "text/css");
+        assert_eq!(guess_file_content_type(std::path::Path::new("a.unknownext")), "application/octet-stream");
+    }
+
+    #[test]
+    fn fetch_request_file_url_reads_local_disk_without_network() {
+        // BUG-723: before the fix, any `file:` URL died on
+        // `require_http_scheme` ("unsupported scheme: file") — a page opened
+        // from disk could never `fetch()`/dynamically `<script src>`/`<link>`
+        // its own neighbouring files. Port 0 would fail to connect, so a pass
+        // here proves the network was never touched.
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-bug723-{:?}-{}",
+            std::thread::current().id(),
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("b723.js");
+        std::fs::write(&file_path, b"window.__b723_ran = true;").unwrap();
+
+        let url = lumen_core::url::Url::parse(
+            &format!("file:///{}", file_path.display().to_string().replace('\\', "/")),
+        )
+        .unwrap();
+        let client = HttpClient::new();
+        let result = client
+            .fetch_request(&JsFetchRequest {
+                url: url.as_str(),
+                method: "GET",
+                headers: &[],
+                body: None,
+                token: None,
+            })
+            .unwrap();
+        assert_eq!(result.status, 200);
+        assert_eq!(result.body, b"window.__b723_ran = true;");
+        assert!(
+            result.headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("content-type")
+                && v == "text/javascript"),
+            "headers: {:?}",
+            result.headers
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

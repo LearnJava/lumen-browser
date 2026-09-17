@@ -757,9 +757,7 @@ impl Lumen {
         }
         // Преобразовать PageSource в URL для WinitSession
         let url = match &self.source {
-            PageSource::File(path) => {
-                format!("file://{}", path.display())
-            }
+            PageSource::File(path) => path_to_file_url(path),
             PageSource::Url { url, .. } => url.clone(),
             _ => return None, // Snapshot и Empty обработаны отдельно
         };
