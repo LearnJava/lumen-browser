@@ -101,6 +101,9 @@ pub(crate) fn create(packed: String) -> String {
         require_user_verification: f[8] == "1",
         exclude_credentials: parse_b64_csv(f[9]),
     };
+    if !rp_id_matches_origin(&req.rp_id, &req.origin) {
+        return error_json("SecurityError");
+    }
     match provider.create(&req) {
         Ok(r) => {
             let mut s = String::from("{\"ok\":true");
@@ -147,6 +150,9 @@ pub(crate) fn get(packed: String) -> String {
         allow_credentials: parse_b64_csv(f[3]),
         require_user_verification: f[4] == "1",
     };
+    if !rp_id_matches_origin(&req.rp_id, &req.origin) {
+        return error_json("SecurityError");
+    }
     match provider.get(&req) {
         Ok(r) => {
             let mut s = String::from("{\"ok\":true");
@@ -172,6 +178,43 @@ pub(crate) fn get(packed: String) -> String {
 #[cfg(feature = "v8-backend")]
 pub(crate) fn uvpa_available() -> bool {
     provider().is_some_and(|p| p.is_user_verifying_platform_authenticator_available())
+}
+
+/// W3C WebAuthn L2 §5.1.3: `rp_id` must equal the calling origin's effective
+/// domain, or be a registrable-domain suffix of it. `origin` is the browser's
+/// own `location.origin` string (read by the shim, not attacker-suppliable
+/// like `rp.id`/`pk.rpId`), so this is a belt-and-suspenders check behind the
+/// JS-shim gate in [`CREDENTIALS_SHIM`] — a future non-shim caller of these
+/// native bindings can't bypass it. Suffix logic mirrors the existing
+/// `document.domain` relaxation check (`web_api_shim_mid.js`'s `set domain`).
+#[cfg(any(test, feature = "v8-backend"))]
+fn rp_id_matches_origin(rp_id: &str, origin: &str) -> bool {
+    let host = origin_host(origin);
+    if rp_id.is_empty() || host.is_empty() {
+        return false;
+    }
+    if rp_id == host {
+        return true;
+    }
+    let (host_len, rp_len) = (host.len(), rp_id.len());
+    rp_len < host_len
+        && host.as_bytes()[host_len - rp_len - 1] == b'.'
+        && &host[host_len - rp_len..] == rp_id
+}
+
+/// Extract the hostname from an `scheme://host[:port]` origin string.
+#[cfg(any(test, feature = "v8-backend"))]
+fn origin_host(origin: &str) -> &str {
+    let after_scheme = origin.split_once("://").map_or(origin, |(_, rest)| rest);
+    let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
+    if host_port.starts_with('[') {
+        // IPv6 literal (`[::1]:port`) — keep the bracketed form, drop any port suffix.
+        return host_port.find(']').map_or(host_port, |end| &host_port[..=end]);
+    }
+    match host_port.rfind(':') {
+        Some(idx) => &host_port[..idx],
+        None => host_port,
+    }
 }
 
 /// Build the `{ "ok": false, "error": <DOMException name> }` rejection payload.
@@ -383,6 +426,16 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   function currentOrigin(){ try { return location.origin; } catch(_) { return ''; } }
   function currentHost(){ try { return location.hostname; } catch(_) { return ''; } }
 
+  // W3C WebAuthn L2 §5.1.3: rpId must equal the calling document's effective
+  // domain, or be a registrable-domain suffix of it. Mirrors the suffix logic
+  // `document.domain`'s setter already enforces (web_api_shim_mid.js).
+  function rpIdMatchesHost(rpId, host){
+    if (!rpId || !host) return false;
+    if (rpId === host) return true;
+    var suffixStart = host.length - rpId.length;
+    return suffixStart > 0 && host.charAt(suffixStart - 1) === '.' && host.slice(suffixStart) === rpId;
+  }
+
   var container = Object.create(CredentialsContainer.prototype);
 
   // Methods live on the prototype (not the instance) so `Object.keys(navigator.credentials)`
@@ -393,15 +446,20 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
     return new Promise(function(resolve, reject){
       try {
         if (!options || !options.publicKey) { reject(mkErr('NotSupportedError', 'publicKey options required')); return; }
-        if (typeof _lumen_webauthn_create !== 'function') { reject(mkErr('NotAllowedError', 'no authenticator')); return; }
         var pk = options.publicKey, rp = pk.rp || {}, user = pk.user || {};
+        var rpId = rp.id || currentHost();
+        if (!rpIdMatchesHost(rpId, currentHost())) {
+          reject(mkErr('SecurityError', "'" + rpId + "' is not a registrable domain suffix of, or is not equal to, the calling origin's effective domain"));
+          return;
+        }
+        if (typeof _lumen_webauthn_create !== 'function') { reject(mkErr('NotAllowedError', 'no authenticator')); return; }
         var algs = (pk.pubKeyCredParams || []).map(function(p){ return p.alg; })
                      .filter(function(a){ return typeof a === 'number'; });
         if (!algs.length) algs = [-7];
         var uv = pk.authenticatorSelection && pk.authenticatorSelection.userVerification === 'required';
         var exclude = (pk.excludeCredentials || []).map(function(c){ return bufToB64url(c.id); }).join(',');
         var packed = [
-          strToB64url(rp.id || currentHost()),
+          strToB64url(rpId),
           strToB64url(rp.name || ''),
           bufToB64url(user.id),
           strToB64url(user.name || ''),
@@ -427,12 +485,17 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
         // FedCM §5 Phase 0: IDP flow not yet implemented; reject immediately.
         if (options.identity) { reject(mkErr('NotSupportedError', 'FedCM (identity) is not supported')); return; }
         if (!options.publicKey) { reject(mkErr('NotSupportedError', 'publicKey options required')); return; }
-        if (typeof _lumen_webauthn_get !== 'function') { reject(mkErr('NotAllowedError', 'no authenticator')); return; }
         var pk = options.publicKey;
+        var rpId = pk.rpId || currentHost();
+        if (!rpIdMatchesHost(rpId, currentHost())) {
+          reject(mkErr('SecurityError', "'" + rpId + "' is not a registrable domain suffix of, or is not equal to, the calling origin's effective domain"));
+          return;
+        }
+        if (typeof _lumen_webauthn_get !== 'function') { reject(mkErr('NotAllowedError', 'no authenticator')); return; }
         var allow = (pk.allowCredentials || []).map(function(c){ return bufToB64url(c.id); }).join(',');
         var uv = pk.userVerification === 'required';
         var packed = [
-          strToB64url(pk.rpId || currentHost()),
+          strToB64url(rpId),
           bufToB64url(pk.challenge),
           strToB64url(currentOrigin()),
           allow,
@@ -501,6 +564,36 @@ mod tests {
         let b = base64url_encode(&[9, 9]);
         assert_eq!(parse_b64_csv(&format!("{a},{b}")), vec![vec![1, 2, 3], vec![9, 9]]);
         assert!(parse_b64_csv("").is_empty());
+    }
+
+    #[test]
+    fn origin_host_strips_scheme_port_and_path() {
+        assert_eq!(origin_host("https://example.com"), "example.com");
+        assert_eq!(origin_host("https://example.com:8443"), "example.com");
+        assert_eq!(origin_host("https://example.com/login"), "example.com");
+        assert_eq!(origin_host("https://[::1]:8443"), "[::1]");
+        assert_eq!(origin_host("not-a-url"), "not-a-url");
+    }
+
+    #[test]
+    fn rp_id_matches_origin_accepts_same_origin_and_registrable_suffix() {
+        assert!(rp_id_matches_origin("example.com", "https://example.com"));
+        assert!(rp_id_matches_origin("example.com", "https://login.example.com"));
+        assert!(rp_id_matches_origin("login.example.com", "https://login.example.com"));
+    }
+
+    #[test]
+    fn rp_id_matches_origin_rejects_unrelated_and_partial_label_match() {
+        // BUG-709: a completely unrelated rp.id must not be accepted.
+        assert!(!rp_id_matches_origin("attacker-controlled-unrelated.example", "https://example.com"));
+        // `rp.id` must be a *label-boundary* suffix, not just a string suffix
+        // (`evil-example.com` shares a string suffix with `example.com` but is
+        // an unrelated registrable domain).
+        assert!(!rp_id_matches_origin("example.com", "https://evil-example.com"));
+        assert!(!rp_id_matches_origin("", "https://example.com"));
+        assert!(!rp_id_matches_origin("example.com", ""));
+        // rp_id longer than the host can never be a suffix of it.
+        assert!(!rp_id_matches_origin("login.example.com", "https://example.com"));
     }
 
     #[test]
@@ -582,6 +675,44 @@ mod tests {
         assert!(gout.contains("\"ok\":true"), "{gout}");
         assert!(gout.contains("\"signature\":\"Bwg\""));
         assert!(gout.contains("\"userHandle\":\"CQ\""));
+    }
+
+    #[test]
+    fn create_and_get_reject_rp_id_not_matching_origin() {
+        // BUG-709: `rp.id`/`pk.rpId` unrelated to the calling origin must be
+        // rejected as SecurityError, native-side, before ever reaching the
+        // provider — `Boom::create`/`get` panicking proves it is never called.
+        use lumen_core::ext::{
+            CredentialProvider, WebAuthnCreateRequest, WebAuthnCreateResponse, WebAuthnError,
+            WebAuthnGetRequest, WebAuthnGetResponse,
+        };
+        struct Boom;
+        impl CredentialProvider for Boom {
+            fn create(&self, _req: &WebAuthnCreateRequest) -> Result<WebAuthnCreateResponse, WebAuthnError> {
+                unreachable!("rp.id/origin mismatch must be rejected before the provider is called");
+            }
+            fn get(&self, _req: &WebAuthnGetRequest) -> Result<WebAuthnGetResponse, WebAuthnError> {
+                unreachable!("rp.id/origin mismatch must be rejected before the provider is called");
+            }
+        }
+        set_credential_provider(Arc::new(Boom));
+
+        let rp = base64url_encode(b"attacker-controlled-unrelated.example");
+        let name = base64url_encode(b"alice");
+        let uid = base64url_encode(&[0]);
+        let chal = base64url_encode(&[1]);
+        let origin = base64url_encode(b"https://example.com");
+
+        let packed = format!("{rp}|{rp}|{uid}|{name}|{name}|{chal}|{origin}|-7|1|");
+        let out = create(packed);
+        assert!(out.contains("\"ok\":false"), "{out}");
+        assert!(out.contains("SecurityError"), "{out}");
+
+        let allow = base64url_encode(&[1, 2, 3]);
+        let gpacked = format!("{rp}|{chal}|{origin}|{allow}|1");
+        let gout = get(gpacked);
+        assert!(gout.contains("\"ok\":false"), "{gout}");
+        assert!(gout.contains("SecurityError"), "{gout}");
     }
 }
 
@@ -749,6 +880,85 @@ mod v8_fedcm {
         assert!(
             js_bool(&rt, "OTPCredential.prototype.constructor === OTPCredential"),
             "OTPCredential.prototype.constructor must not fall through to Credential"
+        );
+    }
+
+    // BUG-709: `rp.id`/`pk.rpId` origin binding is enforced by the JS shim
+    // itself, before any native `_lumen_webauthn_*` call — so it must reject
+    // even with no authenticator installed at all.
+    //
+    // A promise rejected synchronously inside its executor only runs its
+    // `.then`/`.catch` reactions as a microtask, which V8's default "auto"
+    // policy drains once the *current top-level script* returns — not before
+    // a later statement in that same script reads the result. So each check
+    // below is split into two `eval()` calls: the first attaches `.then` and
+    // returns (letting the reaction drain), the second reads back the global
+    // it set.
+    fn settle_result(rt: &V8JsRuntime, promise_expr: &str) -> bool {
+        rt.eval(&format!(
+            "globalThis.__bug709_result = undefined; \
+             ({promise_expr}).then(\
+               function(){{ globalThis.__bug709_result = 'resolved'; }}, \
+               function(e){{ globalThis.__bug709_result = (e && e.name) || 'rejected'; }});"
+        ))
+        .unwrap();
+        matches!(rt.eval("globalThis.__bug709_result").unwrap(), JsValue::String(_))
+    }
+
+    fn result_string(rt: &V8JsRuntime) -> String {
+        match rt.eval("globalThis.__bug709_result").unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected the promise reaction to have settled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_rejects_rp_id_unrelated_to_calling_origin() {
+        let rt = with_credentials_shim();
+        rt.eval("location = { origin: 'https://example.com', hostname: 'example.com' };").unwrap();
+        assert!(settle_result(
+            &rt,
+            "navigator.credentials.create({ publicKey: { rp: { id: 'attacker-controlled-unrelated.example' } } })"
+        ));
+        assert_eq!(
+            result_string(&rt),
+            "SecurityError",
+            "create() with a cross-origin rp.id must reject with SecurityError, not resolve or \
+             reject with something else"
+        );
+    }
+
+    #[test]
+    fn get_rejects_rp_id_unrelated_to_calling_origin() {
+        let rt = with_credentials_shim();
+        rt.eval("location = { origin: 'https://example.com', hostname: 'example.com' };").unwrap();
+        assert!(settle_result(
+            &rt,
+            "navigator.credentials.get({ publicKey: { rpId: 'attacker-controlled-unrelated.example' } })"
+        ));
+        assert_eq!(
+            result_string(&rt),
+            "SecurityError",
+            "get() with a cross-origin rpId must reject with SecurityError"
+        );
+    }
+
+    #[test]
+    fn create_accepts_rp_id_that_is_registrable_suffix_of_origin() {
+        let rt = with_credentials_shim();
+        rt.eval("location = { origin: 'https://login.example.com', hostname: 'login.example.com' };").unwrap();
+        assert!(settle_result(
+            &rt,
+            "navigator.credentials.create({ publicKey: { rp: { id: 'example.com' } } })"
+        ));
+        // No native `_lumen_webauthn_create` binding in this bare shim, so a
+        // same-domain-family rp.id must fail *later*, on the missing
+        // authenticator (NotAllowedError) — not on the origin-binding gate.
+        assert_eq!(
+            result_string(&rt),
+            "NotAllowedError",
+            "create() with rp.id a registrable-domain suffix of the calling origin must not be \
+             rejected as SecurityError"
         );
     }
 }
