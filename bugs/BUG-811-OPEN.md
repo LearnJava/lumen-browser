@@ -561,3 +561,71 @@ warnings` (чисто) + адресные `cargo test -p lumen-network`, `-p lum
 --features v8-backend --lib`, `-p lumen-shell csp` (все зелёные).
 `scripts/scoped-test.sh` не догнан до конца — тот же известный сломанный
 гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого среза.
+
+## Срез 11 (2026-09-17, P6) — `connect-src` против WebSocket/EventSource
+
+Реализовано: тот же `connect_src_policy`-гейт, который срез 10 дал
+`fetch()`/`XMLHttpRequest`, теперь применён к двум оставшимся JS-инициированным
+сетевым API, явно отложенным срезом 10 («WebSocket/EventSource делят тот же
+`HttpClient`, но не гейтятся этим срезом»):
+
+- `crates/network/src/lib.rs`: `JsWebSocketProvider::connect` и
+  `JsSseProvider::connect_sse` для `HttpClient` получили ровно ту же проверку
+  `policy.fetch_directive_allows(&CspDirective::ConnectSrc, &url, self_origin)`,
+  что `fetch_request_impl` уже делает — до любой работы с сокетом
+  (`WebSocket::connect_deflate`/`SseProvider::connect_sse`), поэтому TCP-хендшейк
+  для заблокированного origin не начинается вовсе. `HttpClient` уже нёс
+  `connect_src_policy` одним полем на все три провайдера — новый код только
+  читает его, билдер (`with_connect_src_policy`) и точка установки
+  (`page_pipeline.rs::parse_and_layout`) не изменились.
+- `crates/js/src/v8_runtime/install/net.rs`: `install_websocket`/`install_sse`
+  получили каждый свой `last_csp_block: Arc<Mutex<Option<(String, String)>>>` —
+  тот же однослотовый side-channel паттерн, что срез 10 завёл для
+  `_lumen_fetch_last_csp_block` (оба API соединяются синхронно и по одному в
+  конструкторе, поэтому одного слота на рантайм достаточно). Новые нативы
+  `_lumen_ws_last_csp_block()`/`_lumen_sse_last_csp_block()` читают и очищают
+  слот; `_lumen_ws_connect`/`_lumen_sse_connect` при `Err(CspConnectSrcBlocked)`
+  пишут туда `(blocked_uri, original_policy)` и по-прежнему возвращают `0`
+  (тот же код ошибки, что и обычный сбой соединения — JS-сторона уже отличала
+  «провайдера нет» от «сокет не открылся» только по факту `h === 0`, поэтому
+  различение живёт в side-channel, а не в возвращаемом типе).
+- `crates/js/src/shim/web_api_shim_mid_b.js`: конструкторы `WebSocket` и
+  `EventSource` в ветке `if (!h)` читают свой side-channel **до** постановки
+  `setTimeout(fn, 0)` (слот однослотовый — следующий вызов `_lumen_ws_connect`
+  его перезапишет) и зовут уже существующий `_lumen_fire_connect_src_violation`
+  (срез 10) внутри самого таймера, перед диспатчем `error`/`close` — тот же
+  порядок «CSP-событие раньше сетевой ошибки», что срезы 4/6/9 уже
+  устанавливали для картинок/скриптов.
+
+Не архитектурно другое решение, в отличие от того, как срез 10 сам был
+архитектурно другим относительно срезов 4/6/7/9: `HttpClient` уже был общей
+точкой для всех трёх JS-сетевых API после среза 10, оставалось только
+продублировать одну и ту же проверку в двух оставшихся методах трейта.
+
+Подтверждено тестами (без реального сетевого ввода-вывода): 3 юнит-теста в
+`crates/network/src/lib.rs` (`connect_src_none_blocks_websocket_before_any_handshake`,
+`connect_src_none_blocks_event_source_before_any_handshake`,
+`no_connect_src_policy_does_not_block_websocket_or_sse` — тот же
+"before-any-network-io"/"no-policy-no-block" рисунок, что срез 10 уже
+проверял для `fetch()`) + 4 интеграционных в
+`crates/js/src/dom/tests/v8_ws_sse.rs` (`websocket_connect_src_block_reaches_native_side_channel`,
+`websocket_connect_src_block_fires_security_policy_violation_event`,
+`eventsource_connect_src_block_reaches_native_side_channel`,
+`eventsource_connect_src_block_fires_security_policy_violation_event` —
+последние два, в отличие от среза 10's fetch-тестов, реально прогоняют
+таймер (`_lumen_tick_timers()`, уже использованный существующим
+`eventsource_constructor_no_provider_stays_connecting_then_closes_async`) и
+проверяют полный `securitypolicyviolation` с `violatedDirective=connect-src`
+и правильными `blockedURI`/`originalPolicy`, а не только сам side-channel).
+Подтверждено `cargo clippy --workspace --all-targets -- -D warnings` (чисто)
++ `cargo test -p lumen-network connect_src` (6/6) + `cargo test -p lumen-js
+--features v8-backend --lib dom::tests::v8_ws_sse` (135/135, включая новые
+4) + `cargo build -p lumen-shell --features v8` + `cargo clippy -p
+lumen-shell --all-targets --features v8 -- -D warnings` (оба чисто).
+
+Не покрыто этим срезом: `sendBeacon` (свой путь `fetch_with_body_sync` в
+обход `fetch_request_impl`, всё ещё не гейтится — то же ограничение, что
+срез 10 уже называл); директивы кроме `script-src`/`img-src`/`style-src`/
+`connect-src`; `report-uri`/`report-to`; hash-источники; честная независимая
+проверка заголовка и `<meta>`; картинки/скрипты/листы внутри `<iframe>` не
+покрытые срезами 6/8.
