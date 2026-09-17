@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-17",
  "counts": {
-  "open": 310,
-  "fixed": 692,
+  "open": 305,
+  "fixed": 697,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4527,7 +4527,7 @@
        "title": "WPT: вендорить + прогнать категорию `webauthn`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebAuthn — отдельная крипто/платформенная интеграция. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webauthn --recursive --processes=4`, ~14 мин, 60 файлов, 54 отобранных id) — **1/54 harness OK, 0/1 сабтестов**. 53 TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)). Единственный исполнившийся не-`.https.` тест (`securecontext.http.html`) формально OK, но его сабтест FAIL — переподтверждение [BUG-399](bugs/BUG-399-FIXED.md). Код-ревью + временный локальный тест (удалён до коммита) нашли [BUG-709](bugs/BUG-709-OPEN.md): ни JS-шим, ни нативные биндинги, ни `VirtualAuthenticator` не проверяют `rp.id`/`rpId` против фактического origin страницы (WebAuthn L2 §5.1.3) — страница `https://example.com/login` успешно создаёт credential с чужим `rp.id`. Сейчас недостижимо в браузере (провайдер нигде не устанавливается под `crates/shell/`), но реальный дефект в полностью реализованном крипто-коде. Новый номер: BUG-709"
+       "note": "Скоуп: 🚫 (вне скоупа). WebAuthn — отдельная крипто/платформенная интеграция. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webauthn --recursive --processes=4`, ~14 мин, 60 файлов, 54 отобранных id) — **1/54 harness OK, 0/1 сабтестов**. 53 TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)). Единственный исполнившийся не-`.https.` тест (`securecontext.http.html`) формально OK, но его сабтест FAIL — переподтверждение [BUG-399](bugs/BUG-399-FIXED.md). Код-ревью + временный локальный тест (удалён до коммита) нашли [BUG-709](bugs/BUG-709-FIXED.md): ни JS-шим, ни нативные биндинги, ни `VirtualAuthenticator` не проверяют `rp.id`/`rpId` против фактического origin страницы (WebAuthn L2 §5.1.3) — страница `https://example.com/login` успешно создаёт credential с чужим `rp.id`. Сейчас недостижимо в браузере (провайдер нигде не устанавливается под `crates/shell/`), но реальный дефект в полностью реализованном крипто-коде. Новый номер: BUG-709"
       },
       {
        "id": "WPT-VENDOR-webcodecs",
@@ -4572,7 +4572,7 @@
        "title": "WPT: вендорить + прогнать категорию `webidl`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webidl --recursive`, ~1:43, 51 файл, 45 отобранных id, без HTTPS/testdriver/variant-гэпа) — **37/45 harness OK, 134/324 сабтестов**. Найдены [BUG-714](bugs/BUG-714-OPEN.md) (DOMException не соответствует WebIDL legacy-exception биндингу) и [BUG-715](bugs/BUG-715-FIXED.md) (DOMTokenList/CSSStyleDeclaration без глобального конструктора и индексного доступа). Остальной сигнал — переподтверждение BUG-480/BUG-529/BUG-694. Новые номера: BUG-714, BUG-715",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webidl --recursive`, ~1:43, 51 файл, 45 отобранных id, без HTTPS/testdriver/variant-гэпа) — **37/45 harness OK, 134/324 сабтестов**. Найдены [BUG-714](bugs/BUG-714-FIXED.md) (DOMException не соответствует WebIDL legacy-exception биндингу) и [BUG-715](bugs/BUG-715-FIXED.md) (DOMTokenList/CSSStyleDeclaration без глобального конструктора и индексного доступа). Остальной сигнал — переподтверждение BUG-480/BUG-529/BUG-694. Новые номера: BUG-714, BUG-715",
        "bugs": [
         "BUG-714",
         "BUG-715"
@@ -6818,7 +6818,7 @@
        "title": "GAP: origin-clean канвы",
        "status": "planned",
        "size": "M",
-       "note": "У канвы нет флага origin-clean ни в какой форме: картинка с чужого источника рисуется и читается обратно целиком — `getImageData` возвращает пиксели, `toDataURL` отдаёт data-URL, `SecurityError` не бросается никогда (замер 2026-09-01, срез 30 WPT-RUN-6: второй origin — второй порт собственного сервера пробы, результат одинаков с `crossorigin=anonymous` и без него). Атрибут `crossOrigin` отражается и ни на что не влияет; `grep` по `crates/js` за `origin.clean` в `canvas2d.rs`/`offscreen_canvas.rs` даёт ноль. Не точечная правка: нужен режим запроса по атрибуту, результат CORS-проверки ответа (сегодня запрос не несёт даже `Origin`, BUG-859), распространение флага через `drawImage`/`createPattern`/`ImageBitmap`/`transferToImageBitmap` и проверка на трёх читающих членах. Заявка на безопасность, а не на совместимость: сегодня движок разрешает больше любого браузера. **Ревизия 2026-09-17 (P1), срез 1:** origin-clean флаг заведён (`Context2D::origin_clean`/`taint()`, `crates/engine/canvas/src/lib.rs`), заражение сквозное через `drawImage`/`createPattern`/`ImageBitmap`/`transferToImageBitmap` (и элементная, и OffscreenCanvas стороны), `getImageData`/`toDataURL`/`toBlob` бросают `SecurityError` на затронутой канве (три читающих члена из объёма закрыты). Кросс-origin определяется простым сравнением origin `<img src>` резолвленного URL с `base.origin()` (`crates/shell/src/subresources.rs::fetch_and_decode_images`) — без реального CORS-хендшейка: запрос всё ещё не несёт `Origin` (BUG-859), поэтому `crossorigin=\"anonymous\"` по-прежнему ничего не меняет, и это консервативный дефолт (иностранный origin всегда красит), а не полная модель. Остаток объёма: режим запроса по атрибуту `crossorigin`, реальная CORS-проверка ответа. Статус остаётся `planned`.",
+       "note": "У канвы нет флага origin-clean ни в какой форме: картинка с чужого источника рисуется и читается обратно целиком — `getImageData` возвращает пиксели, `toDataURL` отдаёт data-URL, `SecurityError` не бросается никогда (замер 2026-09-01, срез 30 WPT-RUN-6: второй origin — второй порт собственного сервера пробы, результат одинаков с `crossorigin=anonymous` и без него). Атрибут `crossOrigin` отражается и ни на что не влияет; `grep` по `crates/js` за `origin.clean` в `canvas2d.rs`/`offscreen_canvas.rs` даёт ноль. Не точечная правка: нужен режим запроса по атрибуту, результат CORS-проверки ответа (сегодня запрос не несёт даже `Origin`, BUG-859), распространение флага через `drawImage`/`createPattern`/`ImageBitmap`/`transferToImageBitmap` и проверка на трёх читающих членах. Заявка на безопасность, а не на совместимость: сегодня движок разрешает больше любого браузера. **Ревизия 2026-09-17 (P1), срез 1:** origin-clean флаг заведён (`Context2D::origin_clean`/`taint()`, `crates/engine/canvas/src/lib.rs`), заражение сквозное через `drawImage`/`createPattern`/`ImageBitmap`/`transferToImageBitmap` (и элементная, и OffscreenCanvas стороны), `getImageData`/`toDataURL`/`toBlob` бросают `SecurityError` на затронутой канве (три читающих члена из объёма закрыты). Кросс-origin определяется простым сравнением origin `<img src>` резолвленного URL с `base.origin()` (`crates/shell/src/subresources.rs::fetch_and_decode_images`) — без реального CORS-хендшейка: запрос всё ещё не несёт `Origin` (BUG-859), поэтому `crossorigin=\"anonymous\"` по-прежнему ничего не меняет, и это консервативный дефолт (иностранный origin всегда красит), а не полная модель. Остаток объёма среза 1: режим запроса по атрибуту `crossorigin`, реальная CORS-проверка ответа. **Ревизия 2026-09-17 (P1), срез 2:** сделано — `<img crossorigin>` на cross-origin URL идёт через `lumen_network::HttpClient::fetch_cors` (реальный `Origin`-header + проверка `Access-Control-Allow-Origin`/`-Allow-Credentials`, инфраструктура была написана и покрыта тестами, но ни один caller её не вызывал); прошедшая проверку картинка не заражает canvas, не прошедшая — ошибка запроса целиком (не tainted-но-видимый fallback). Остаток: GAP-REFERRER/BUG-859 для прочих сабресурсов не тронут, `fetch_cors`'а Phase 0 credentials-лимит (doc-комментарий функции), живой WPT-повтор против сервера с реальным ACAO не сделан. Статус остаётся `planned`.",
        "bugs": [
         "BUG-941"
        ]
@@ -7975,24 +7975,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-699": {
-   "status": "open",
-   "title": "`Table`'s constructor coerces `descriptor.initial`/`descriptor.maximum` with `...",
-   "component": "js (`crates/js/src/webassembly.rs:112-125` — `WebAssembly.Table` constructor)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-705": {
    "status": "open",
    "title": "`document.scripts`/`.images`/`.forms`/`.links`/`.anchors`/`.embeds`/`.plugins` all `undefined` (`document.scripts.length` throws `TypeError`) — these are live,…",
    "component": "js (`crates/js/src/dom.rs` — `Document` object literal, none of these seven accessors exist)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-709": {
-   "status": "open",
-   "title": "WebAuthn `create()`/`get()` never validate `rp.id`/`rpId` against the calling document's origin (W3C WebAuthn L2 §5.1.3) — confirmed via a temporary local test…",
-   "component": "js (`crates/js/src/credentials.rs` — `CREDENTIALS_SHIM`) + network (`crates/network/src/webauthn.rs` — `VirtualAuthenticator`)",
    "date": null,
    "debtor": false
   },
@@ -8007,27 +7993,6 @@
    "status": "open",
    "title": "The WebGL context is a plain object literal with no reachable prototype — `WebGLRenderingContext`/`WebGL2RenderingContext` don't exist as globals anywhere in th…",
    "component": "js (`crates/js/src/webgl_canvas.rs` — `WEBGL_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-712": {
-   "status": "open",
-   "title": "`navigator.gpu` is a plain object literal with no `GPU` interface identity — `globalThis.GPU` doesn't exist anywhere in the shim, so `navigator.gpu instanceof G…",
-   "component": "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-713": {
-   "status": "open",
-   "title": "`HIDManager`/`HIDDevice` are plain `class X extends EventTarget` with no constructor guard — `new HIDManager()`/`new HIDDevice(1,2,'x')` both construct successf…",
-   "component": "js (`crates/js/src/webhid.rs` — `WEBHID_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-714": {
-   "status": "open",
-   "title": "`DOMException` doesn't match the WebIDL \"legacy exception\" binding shape: `name`/`message`/`code` are own instance data properties instead of prototype accessor…",
-   "component": "js (`crates/js/src/v8_runtime.rs:120-163` — `DOM_EXCEPTION_POLYFILL`)",
    "date": null,
    "debtor": false
   },
@@ -14141,6 +14106,41 @@
    "component": "js/layout (CSS Transitions runtime — owner file not yet located)",
    "date": "2026-09-17",
    "debtor": false
+  },
+  "BUG-709": {
+   "status": "fixed",
+   "title": "WebAuthn `create()`/`get()` never validate `rp.id`/`rpId` against the calling document's origin (W3C WebAuthn L2 §5.1.3) — confirmed via a temporary local test…",
+   "component": "js (`crates/js/src/credentials.rs` — `CREDENTIALS_SHIM`) + network (`crates/network/src/webauthn.rs` — `VirtualAuthenticator`)",
+   "date": "2026-09-17",
+   "debtor": false
+  },
+  "BUG-699": {
+   "status": "fixed",
+   "title": "`Table`'s constructor coerces `descriptor.initial`/`descriptor.maximum` with `...",
+   "component": "js (`crates/js/src/webassembly.rs:112-125` â `WebAssembly.Table` constructor)",
+   "date": "2026-09-17",
+   "debtor": false
+  },
+  "BUG-712": {
+   "status": "fixed",
+   "title": "`navigator.gpu` is a plain object literal with no `GPU` interface identity — `globalThis.GPU` doesn't exist anywhere in the shim, so `navigator.gpu instanceof G…",
+   "component": "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)",
+   "date": "2026-09-17",
+   "debtor": false
+  },
+  "BUG-713": {
+   "status": "fixed",
+   "title": "`HIDManager`/`HIDDevice` are plain `class X extends EventTarget` with no constructor guard — `new HIDManager()`/`new HIDDevice(1,2,'x')` both construct successf…",
+   "component": "js (`crates/js/src/webhid.rs` — `WEBHID_SHIM`)",
+   "date": "2026-09-17",
+   "debtor": false
+  },
+  "BUG-714": {
+   "status": "fixed",
+   "title": "`DOMException` doesn't match the WebIDL \"legacy exception\" binding shape: `name`/`message`/`code` are own instance data properties instead of prototype accessor…",
+   "component": "js (`crates/js/src/v8_runtime/command.rs` — `DOM_EXCEPTION_POLYFILL`)",
+   "date": "2026-09-17",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14833,7 +14833,7 @@
   "js (`crates/js/src/web_codecs.rs` — `webcodecs_shim`)": [
    "BUG-710"
   ],
-  "js (`crates/js/src/webassembly.rs:112-125` — `WebAssembly.Table` constructor)": [
+  "js (`crates/js/src/webassembly.rs:112-125` â `WebAssembly.Table` constructor)": [
    "BUG-699"
   ],
   "js (`crates/js/src/webgl_canvas.rs` — `WEBGL_SHIM`)": [

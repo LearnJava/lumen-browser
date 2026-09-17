@@ -1,7 +1,8 @@
 # BUG-714 — `DOMException` doesn't match the WebIDL "legacy exception" binding shape
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/v8_runtime.rs:120-163` — `DOM_EXCEPTION_POLYFILL`)
+**Статус:** FIXED 2026-09-17 (P3), кроме пункта 6 (`Error.isError`) — возможный
+upstream-потолок чисто-JS полифилла, не в fix scope
+**Компонент:** js (`crates/js/src/v8_runtime/command.rs` — `DOM_EXCEPTION_POLYFILL`)
 **Найден:** P2, WPT-VENDOR-webidl, 2026-08-09
 
 ## Симптом
@@ -99,3 +100,22 @@ enumerable: false, writable: true, configurable: true})`,
 `Object.defineProperty(DOMException, 'prototype', {writable: false, ...})`.
 Пункт 6 (`Error.isError`) — исследовать отдельно, возможен upstream-потолок
 чисто-JS реализации.
+
+## Починено
+
+`DOM_EXCEPTION_POLYFILL` (`command.rs`) переписан один-в-один по плану выше:
+`_name`/`_message`/`_code` — приватные non-enumerable инстанс-поля,
+`name`/`message`/`code` — accessor-геттеры на `DOMException.prototype` с
+brand-check через `WeakSet` (бросает `TypeError` на не-инстансе, в том числе
+на самом `DOMException.prototype`); `DOMStringSizeError`/`NoDataAllowedError`/
+`ValidationError` убраны из `LEGACY_CODES` (код `0` по умолчанию);
+конструктор бросает `TypeError` без `new.target`; `globalThis.DOMException`
+и `DOMException.prototype.constructor` — non-enumerable,
+`DOMException.prototype` — non-writable; `Symbol.toStringTag` даёт
+`"[object DOMException]"`. Пункт 6 не тронут — оставлен открытым upstream-
+потолком чисто-JS `Error.call(this, ...)` без нативного `[[ErrorData]]`
+слота, отдельная заявка не заведена (единственный сабтест, архитектурный
+класс проблемы, а не локализуемый баг). Верификация: 5 новых юнит-тестов
+`cargo test -p lumen-js --features v8-backend v8_runtime::command::tests`
+(5/5), `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings` чисто.

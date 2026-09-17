@@ -40,7 +40,7 @@ not a DOMException … property "code" is equal to undefined, expected 11» —
 пользуется.
 
 Отдельно и раньше: сам полифил не совпадает с WebIDL-формой legacy-исключения
-([BUG-714](BUG-714-OPEN.md)) — так что одной замены `new Error` на
+([BUG-714](BUG-714-FIXED.md)) — так что одной замены `new Error` на
 `new DOMException` может не хватить, эти два надо мерить вместе.
 
 ## Масштаб
