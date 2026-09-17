@@ -25,7 +25,7 @@
 
 - [BUG-390](BUG-390-FIXED.md) — `requestFullscreen()`;
 - [BUG-655](BUG-655-OPEN.md) — `requestPointerLock()`;
-- [BUG-667](BUG-667-OPEN.md) — `getScreenDetails()` (permission-state вариант того же класса).
+- [BUG-667](BUG-667-FIXED.md) — `getScreenDetails()` (permission-state вариант того же класса).
 
 ## Масштаб
 

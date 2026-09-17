@@ -22,7 +22,7 @@ idlharness infra gap (`/resources/WebIDLParser.js` + `/resources/idlharness.js` 
 vendored). Since the module-loading gate blocks 100% of the functional signal this category
 would otherwise produce, a direct `--mcp-live-port` probe of the live `screen.orientation`
 object was run instead (same "probe when the run gives nothing" convention as
-[BUG-666](BUG-666-FIXED.md)/[BUG-667](BUG-667-OPEN.md)).
+[BUG-666](BUG-666-FIXED.md)/[BUG-667](BUG-667-FIXED.md)).
 
 ## Probe and result
 

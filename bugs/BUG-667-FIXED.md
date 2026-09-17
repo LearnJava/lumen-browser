@@ -1,6 +1,6 @@
 # BUG-667 — `navigator.getScreenDetails()` never checks permission state or user activation
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/window_management.rs:112`-`136`, `navigator.getScreenDetails` JS shim — Phase 0 Window Management stub)
 **Найден:** P2, WPT-VENDOR-screen-details (2026-08-05), live `--mcp-live-port` probe (the WPT run itself gave zero signal — all 3 selected ids are `.https.` and TIMEOUT on the already-documented TLS gap `UnknownIssuer`, per `docs/wpt-status.md`'s `UnknownIssuer` class)
 
@@ -87,3 +87,44 @@ permission, so gate and grant path have to land together; (2) reject with
 activation, mirroring whatever activation-tracking primitive BUG-666's fix introduces for
 `getDisplayMedia` — the two bugs share the same missing primitive and should likely land
 together.
+
+## Исправлено
+
+Добавлены в `navigator.getScreenDetails` (`window_management.rs`), перед резолвом
+`ScreenDetails` (и Phase-0 стабом, и Phase-1 нативным хуком `_lumen_get_screen_details` —
+оба идут через один и тот же промис-чейн теперь), два синхронных геймплей-независимых
+чека, тем же паттерном, что `media_devices.rs::getDisplayMedia` (BUG-666) и
+`local_font_access.rs::queryLocalFonts`:
+
+1. `requireTransientActivation()` — `navigator.userActivation.isActive === false` →
+   `throw DOMException('...', 'InvalidStateError')` внутри `Promise.resolve().then(...)`
+   (WebIDL: promise-возвращающая операция сообщает об отказе прекондиции через
+   rejection, не через синхронный throw).
+2. `requireWindowManagementPermission()` — `navigator.permissions.query({name:
+   'window-management'})`; любое состояние, кроме `'granted'` (включая отсутствие
+   `navigator.permissions` вовсе), → `DOMException('...', 'NotAllowedError')`. Тот же
+   fail-closed паттерн, что `requireLocalFontsPermission`.
+
+Порядок — сначала activation, затем permission, как в `local_font_access.rs`; в этом
+движке оба чека почти всегда одновременно валят вызов (`window-management` статически
+`denied` в таблице разрешений — реального per-permission стора всё ещё нет, см. BUG-386),
+так как порядок здесь не наблюдаем ни одним завендоренным тестом.
+
+Ревизия при фиксе: завендоренный `tests/wpt/screen-details/getScreenDetails.tentative.https.window.js`
+не проверяет требование transient activation вовсе (WPT `test_driver.set_permission` не
+эмулирует клик), только permission-гейт (`denied` → `NotAllowedError`, строки 21-26).
+Activation-чек добавлен по прямому тексту спеки (W3C WMWPA §3.2 шаг 2) и по прецеденту
+BUG-666/queryLocalFonts, но не покрыт живым WPT-сигналом — риск отмечен явно, а не скрыт.
+
+Новые тесты в `crates/js/src/window_management.rs::tests`:
+`get_screen_details_requires_transient_activation`,
+`get_screen_details_requires_granted_permission`,
+`get_screen_details_resolves_when_gates_pass` (happy-path регрессия — оба гейта открыты).
+Существующий тестовый хелпер `with_window_management` расширен дефолтным
+`navigator.userActivation`/`navigator.permissions` (оба "granted"), чтобы старые тесты
+остались на happy-path, а не начали молча падать в `NotAllowedError`.
+
+`cargo test -p lumen-js --lib window_management --features v8-backend` — 11/11,
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` — чист.
+Изменение только в JS-шиме (raw-строке `WINDOW_MANAGEMENT_SHIM`), пиксели не затронуты —
+`graphic_tests`/`scoped-test.sh` не требуются сверх точечного `cargo test`/`clippy`.

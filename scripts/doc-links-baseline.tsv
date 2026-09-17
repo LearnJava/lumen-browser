@@ -312,6 +312,7 @@ docs/wpt-vendor-notes/webrtc-identity.md	../bugs/BUG-721-OPEN.md	stale-status-su
 docs/wpt-vendor-notes/webrtc-priority.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
 docs/wpt-vendor-notes/webrtc-svc.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
 docs/wpt-vendor-notes/webrtc.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
+docs/wpt-vendor-notes/window-management.md	../../bugs/BUG-667-OPEN.md	stale-status-suffix	bugs/BUG-667-FIXED.md
 docs/wpt/pass-rate.md	../../bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
 subsystems/html-parser.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 subsystems/js.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
