@@ -5254,6 +5254,13 @@ _lumen_c2d_method('getImageData', function(sx, sy, sw, sh) {
         throw new TypeError("getImageData: 4 arguments required, but only " +
             arguments.length + " present");
     }
+    // GAP-CANVASORIGIN (BUG-941, HTML LS §4.12.5.1.2): a tainted bitmap
+    // refuses to be read back, regardless of the requested rectangle.
+    if (!_lumen_canvas2d_is_origin_clean(nid)) {
+        throw new DOMException(
+            "Failed to execute 'getImageData' on 'CanvasRenderingContext2D': " +
+            "The canvas has been tainted by cross-origin data.", 'SecurityError');
+    }
     var x = _lumen_canvas_long(sx, 'getImageData', 'sx');
     var y = _lumen_canvas_long(sy, 'getImageData', 'sy');
     var w = _lumen_canvas_long(sw, 'getImageData', 'sw');
@@ -7870,10 +7877,21 @@ HTMLCanvasElement.prototype.transferControlToOffscreen = function() {
 // is idempotent, so this also gives a context — and therefore a real
 // transparent-black bitmap of the right size — to a canvas that was never
 // `getContext`-ed at all.
+// GAP-CANVASORIGIN (BUG-941, HTML LS §4.12.5.7 step 2): both `toDataURL` and
+// `toBlob` throw `SecurityError` synchronously on a tainted bitmap — neither
+// serializes anything nor invokes `toBlob`'s callback.
+function _lumen_canvas2d_throw_if_tainted(nid, method) {
+    if (!_lumen_canvas2d_is_origin_clean(nid)) {
+        throw new DOMException(
+            "Failed to execute '" + method + "' on 'HTMLCanvasElement': " +
+            "Tainted canvases may not be exported.", 'SecurityError');
+    }
+}
 HTMLCanvasElement.prototype.toDataURL = function(_type, _quality) {
     var nid = _lumen_canvas_nid(this);
     var d = _lumen_canvas_dims(nid);
     _lumen_canvas2d_create(nid, d[0], d[1]);
+    _lumen_canvas2d_throw_if_tainted(nid, 'toDataURL');
     return _lumen_canvas2d_to_data_url(nid);
 };
 // `callback` must be invoked as a queued task (HTML LS §4.12.5.7 step 3), not
@@ -7886,6 +7904,7 @@ HTMLCanvasElement.prototype.toBlob = function(cb, _type, _quality) {
     if (typeof cb !== 'function') return;
     var d = _lumen_canvas_dims(nid);
     _lumen_canvas2d_create(nid, d[0], d[1]);
+    _lumen_canvas2d_throw_if_tainted(nid, 'toBlob');
     var dataUrl = _lumen_canvas2d_to_data_url(nid);
     var fn = function() {
         var comma = dataUrl.indexOf(',');

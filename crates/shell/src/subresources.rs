@@ -256,7 +256,7 @@ pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
 /// intrinsic dimensions из декодированного изображения (HTML5 §10 mapped
 /// attributes). Author CSS затем перекроет при необходимости.
 ///
-/// Возвращает `(images, animated_gifs, lazy_pairs, blocked_by_img_src)`:
+/// Возвращает `(images, animated_gifs, lazy_pairs, blocked_by_img_src, cross_origin_urls)`:
 /// - `images` — декодированные картинки для немедленной регистрации в renderer-е
 ///   (включает frame 0 каждого анимированного GIF);
 /// - `animated_gifs` — многокадровые GIF-анимации для тиканья в `RedrawRequested`;
@@ -266,7 +266,15 @@ pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
 ///   `default-src` документа запретил; фетч для них не выполнялся вовсе
 ///   (сеть их не видела). Вызывающая сторона диспатчит
 ///   `securitypolicyviolation` по этому списку — здесь для этого нет JS-рантайма
-///   (fetch идёт параллельно, до его создания).
+///   (fetch идёт параллельно, до его создания);
+/// - `cross_origin_urls` — GAP-CANVASORIGIN (BUG-941): raw `req.url` (тот же
+///   ключ, что несёт `images`) картинок, чей резолвленный origin отличается от
+///   `base.origin()`. Простое same-origin сравнение, БЕЗ реальной CORS-проверки
+///   ответа (её нет нигде в сети — GAP-REFERRER, `Origin` не отправляется ни на
+///   один сабресурс), поэтому `crossorigin="anonymous"` сегодня ничего не
+///   меняет: canvas, нарисовавший такую картинку, помечается tainted так же,
+///   как без атрибута — консервативный, безопасный дефолт до появления
+///   настоящего CORS-хендшейка.
 #[allow(clippy::type_complexity)]
 pub(crate) fn fetch_and_decode_images(
     doc: &mut Document,
@@ -279,6 +287,7 @@ pub(crate) fn fetch_and_decode_images(
     Vec<(String, Arc<lumen_image::Image>)>,
     Vec<(String, lumen_image::AnimatedGif)>,
     Vec<(u32, String)>,
+    Vec<String>,
     Vec<String>,
 ) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
@@ -308,14 +317,35 @@ pub(crate) fn fetch_and_decode_images(
             image: Arc<lumen_image::Image>,
             /// Intrinsic-размеры для HTML-атрибутов, если их не задал автор.
             intrinsic: Option<(u32, u32)>,
+            /// GAP-CANVASORIGIN: резолвленный origin картинки отличается от
+            /// `self_origin`.
+            cross_origin: bool,
         },
         /// Многокадровый GIF: первый кадр + полная анимация.
         Animated {
             first: Arc<lumen_image::Image>,
             gif: lumen_image::AnimatedGif,
             intrinsic: Option<(u32, u32)>,
+            /// GAP-CANVASORIGIN — see [`ImgOutcome::Static::cross_origin`].
+            cross_origin: bool,
         },
     }
+
+    // GAP-CANVASORIGIN (BUG-941): plain same-origin comparison, no CORS
+    // response check (none exists yet — GAP-REFERRER). `self_origin` absent
+    // (opaque document origin, e.g. `file:`) never taints — matches the
+    // `img-src` gate's "don't invent a restriction" stance above.
+    let is_cross_origin = |resolved_url: &str| -> bool {
+        let Some(self_o) = self_origin.as_ref() else { return false; };
+        let Ok(parsed) = lumen_core::url::Url::parse(resolved_url) else { return false; };
+        match lumen_network::Origin::from_url(&parsed) {
+            Ok(img_o) => !self_o.same_origin(&img_o),
+            // Opaque scheme (data:/blob:) — HTML LS §4.12.5.1.2 explicitly
+            // exempts `data:` from tainting; blob: has no cross-document
+            // network fetch here either, so treat the same way.
+            Err(_) => false,
+        }
+    };
 
     // Фаза 1 (параллельно): сеть + декодирование. Не трогаем `doc`.
     // BUG-172: декод идёт через `IMAGE_CACHE` — картинки, уже загруженные
@@ -326,12 +356,13 @@ pub(crate) fn fetch_and_decode_images(
         if req.is_lazy {
             return ImgOutcome::Lazy;
         }
-        if let Some((policy, _original)) = &csp_gate {
-            let resolved_url = base.resolve_str(&req.url);
-            if crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
-                return ImgOutcome::Blocked;
-            }
+        let resolved_url = base.resolve_str(&req.url);
+        if let Some((policy, _original)) = &csp_gate
+            && crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref())
+        {
+            return ImgOutcome::Blocked;
         }
+        let cross_origin = is_cross_origin(&resolved_url);
         // BUG-269: apply intrinsic size whenever the author left AT LEAST ONE
         // dimension unset (not only when BOTH are unset). A replaced element
         // with a fixed width and `height: auto` must derive its height from the
@@ -346,11 +377,11 @@ pub(crate) fn fetch_and_decode_images(
             Some(image_cache::DecodedImage::Static(img)) => {
                 // BUG-272 срез 17: share the cache's Arc, not a pixel copy.
                 let intrinsic = wants_intrinsic.then_some((img.width, img.height));
-                ImgOutcome::Static { image: img, intrinsic }
+                ImgOutcome::Static { image: img, intrinsic, cross_origin }
             }
             Some(image_cache::DecodedImage::Animated { first, gif }) => {
                 let intrinsic = wants_intrinsic.then_some((first.width, first.height));
-                ImgOutcome::Animated { first, gif: (*gif).clone(), intrinsic }
+                ImgOutcome::Animated { first, gif: (*gif).clone(), intrinsic, cross_origin }
             }
         }
     });
@@ -360,27 +391,34 @@ pub(crate) fn fetch_and_decode_images(
     let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
     let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
     let mut blocked_by_img_src: Vec<String> = Vec::new();
+    let mut cross_origin_urls: Vec<String> = Vec::new();
     for (req, outcome) in requests.into_iter().zip(outcomes) {
         match outcome {
             ImgOutcome::Lazy => lazy_pairs.push((req.node_id.index() as u32, req.url)),
             ImgOutcome::Skip => {}
             ImgOutcome::Blocked => blocked_by_img_src.push(base.resolve_str(&req.url)),
-            ImgOutcome::Static { image, intrinsic } => {
+            ImgOutcome::Static { image, intrinsic, cross_origin } => {
                 if let Some((w, h)) = intrinsic {
                     apply_intrinsic_size(doc, req.node_id, w, h);
                 }
+                if cross_origin {
+                    cross_origin_urls.push(req.url.clone());
+                }
                 out.push((req.url, image));
             }
-            ImgOutcome::Animated { first, gif, intrinsic } => {
+            ImgOutcome::Animated { first, gif, intrinsic, cross_origin } => {
                 if let Some((w, h)) = intrinsic {
                     apply_intrinsic_size(doc, req.node_id, w, h);
+                }
+                if cross_origin {
+                    cross_origin_urls.push(req.url.clone());
                 }
                 out.push((req.url.clone(), first));
                 anim_gifs.push((req.url, gif));
             }
         }
     }
-    (out, anim_gifs, lazy_pairs, blocked_by_img_src)
+    (out, anim_gifs, lazy_pairs, blocked_by_img_src, cross_origin_urls)
 }
 
 pub(crate) fn fetch_image_bytes(

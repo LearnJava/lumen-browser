@@ -202,11 +202,29 @@ fn decode_image_to_canvas_native(bytes: Vec<u8>) -> u32 {
 /// decoded pixels in [`crate::img_bitmap_store`] (populated by the shell after
 /// `fetch_and_decode_images`) and stores them as a new offscreen canvas.
 /// Returns `0` when the image has not finished decoding yet.
+///
+/// GAP-CANVASORIGIN (BUG-941): a cross-origin source image's taint carries
+/// into the returned `ImageBitmap` — drawing it (or reading it back through
+/// `transferToImageBitmap`'s own canvas) taints the destination in turn.
 fn image_bitmap_from_img_nid_native(nid: u32) -> u32 {
-    crate::img_bitmap_store::with_img_bitmap(nid, |w, h, pixels| {
-        create_offscreen_from_pixels(w, h, pixels.to_vec())
-    })
-    .unwrap_or(0)
+    let Some((w, h, pixels, tainted)) =
+        crate::img_bitmap_store::with_img_bitmap(nid, |w, h, pixels, tainted| {
+            (w, h, pixels.to_vec(), tainted)
+        })
+    else {
+        return 0;
+    };
+    let id = create_offscreen_from_pixels(w, h, pixels);
+    if tainted {
+        OFFSCREEN_CANVASES.with(|c| {
+            if let Ok(mut map) = c.try_borrow_mut()
+                && let Some(ctx) = map.get_mut(&id)
+            {
+                ctx.taint();
+            }
+        });
+    }
+    id
 }
 
 /// Drain dirty offscreen canvases and return their RGBA buffers.
@@ -667,7 +685,10 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
             let pat = OFFSCREEN_CANVASES.with(|c| {
                 let map = c.try_borrow().ok()?;
                 let src = map.get(&src_canvas_id)?;
-                Some(CanvasPattern::new(src.pixels().to_vec(), src.width(), src.height(), repeat))
+                Some(CanvasPattern::new(
+                    src.pixels().to_vec(), src.width(), src.height(), repeat,
+                    !src.is_origin_clean(),
+                ))
             });
             let Some(p) = pat else { return 0; };
             let id = crate::canvas2d::next_paint_id();
@@ -688,8 +709,8 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
                 "no-repeat" => RepeatMode::NoRepeat,
                 _            => RepeatMode::Repeat,
             };
-            let pat = crate::img_bitmap_store::with_img_bitmap(img_nid, |w, h, pixels| {
-                CanvasPattern::new(pixels.to_vec(), w, h, repeat)
+            let pat = crate::img_bitmap_store::with_img_bitmap(img_nid, |w, h, pixels, tainted| {
+                CanvasPattern::new(pixels.to_vec(), w, h, repeat, tainted)
             });
             let Some(p) = pat else { return 0; };
             let id = crate::canvas2d::next_paint_id();
@@ -706,7 +727,13 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         into_v8_fn2(|canvas_id: u32, pat_id: u32| {
             let pat = crate::canvas2d::PATTERNS.with(|ps| ps.try_borrow().ok()?.get(&pat_id).cloned());
             if let Some(p) = pat {
-                with_offscreen_canvas(canvas_id, |c| c.fill_style = PaintSource::Pattern(p));
+                let tainted = p.tainted;
+                with_offscreen_canvas(canvas_id, |c| {
+                    c.fill_style = PaintSource::Pattern(p);
+                    if tainted {
+                        c.taint();
+                    }
+                });
             }
         }),
     )?;
@@ -715,7 +742,13 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         into_v8_fn2(|canvas_id: u32, pat_id: u32| {
             let pat = crate::canvas2d::PATTERNS.with(|ps| ps.try_borrow().ok()?.get(&pat_id).cloned());
             if let Some(p) = pat {
-                with_offscreen_canvas(canvas_id, |c| c.stroke_style = PaintSource::Pattern(p));
+                let tainted = p.tainted;
+                with_offscreen_canvas(canvas_id, |c| {
+                    c.stroke_style = PaintSource::Pattern(p);
+                    if tainted {
+                        c.taint();
+                    }
+                });
             }
         }),
     )?;
@@ -726,14 +759,17 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
     rt.register_native(
         "_lumen_offscreen_canvas2d_draw_image",
         into_v8_fn6(|dst_id: u32, src_canvas_id: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
-            let (pixels, sw, sh) = OFFSCREEN_CANVASES.with(|c| {
+            let (pixels, sw, sh, src_tainted) = OFFSCREEN_CANVASES.with(|c| {
                 let map = c.try_borrow().ok()?;
                 let src = map.get(&src_canvas_id)?;
-                Some((src.pixels().to_vec(), src.width(), src.height()))
+                Some((src.pixels().to_vec(), src.width(), src.height(), !src.is_origin_clean()))
             }).unwrap_or_default();
             if sw > 0 && sh > 0 {
                 with_offscreen_canvas(dst_id, |c| {
                     c.draw_image(&pixels, sw, sh, dx as f32, dy as f32, dw as f32, dh as f32);
+                    if src_tainted {
+                        c.taint();
+                    }
                 });
                 mark_offscreen_dirty(dst_id);
             }
@@ -746,10 +782,10 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
             if r.len() != 8 {
                 return;
             }
-            let (pixels, sw, sh) = OFFSCREEN_CANVASES.with(|c| {
+            let (pixels, sw, sh, src_tainted) = OFFSCREEN_CANVASES.with(|c| {
                 let map = c.try_borrow().ok()?;
                 let src = map.get(&src_canvas_id)?;
-                Some((src.pixels().to_vec(), src.width(), src.height()))
+                Some((src.pixels().to_vec(), src.width(), src.height(), !src.is_origin_clean()))
             }).unwrap_or_default();
             if sw > 0 && sh > 0 {
                 with_offscreen_canvas(dst_id, |c| {
@@ -758,6 +794,9 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
                         r[0], r[1], r[2], r[3],
                         r[4], r[5], r[6], r[7],
                     );
+                    if src_tainted {
+                        c.taint();
+                    }
                 });
                 mark_offscreen_dirty(dst_id);
             }
@@ -766,11 +805,14 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
     rt.register_native(
         "_lumen_offscreen_canvas2d_draw_image_from_img",
         into_v8_fn6(|dst_id: u32, img_nid: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
-            crate::img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+            crate::img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels, tainted| {
                 let w = if dw > 0.0 { dw as f32 } else { iw as f32 };
                 let h = if dh > 0.0 { dh as f32 } else { ih as f32 };
                 with_offscreen_canvas(dst_id, |c| {
                     c.draw_image(pixels, iw, ih, dx as f32, dy as f32, w, h);
+                    if tainted {
+                        c.taint();
+                    }
                 });
                 mark_offscreen_dirty(dst_id);
             });
@@ -783,13 +825,16 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
             if r.len() != 8 {
                 return;
             }
-            crate::img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+            crate::img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels, tainted| {
                 with_offscreen_canvas(dst_id, |c| {
                     c.draw_image_cropped(
                         pixels, iw, ih,
                         r[0], r[1], r[2], r[3],
                         r[4], r[5], r[6], r[7],
                     );
+                    if tainted {
+                        c.taint();
+                    }
                 });
                 mark_offscreen_dirty(dst_id);
             });
@@ -957,6 +1002,19 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         }),
     )?;
 
+    // GAP-CANVASORIGIN (BUG-941): the OffscreenCanvasRenderingContext2D twin of
+    // `_lumen_canvas2d_is_origin_clean` — gates the public `getImageData()`
+    // (below, `web_api_shim_mid.js`-independent, this context is its own
+    // standalone `rt.eval`). Unknown `canvas_id` reports clean, same stance as
+    // the element canvas's native.
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_is_origin_clean",
+        into_v8_fn1(|canvas_id: u32| -> bool {
+            OFFSCREEN_CANVASES.with(|c| {
+                c.try_borrow().ok().and_then(|m| m.get(&canvas_id).map(Context2D::is_origin_clean)).unwrap_or(true)
+            })
+        }),
+    )?;
     rt.register_native(
         "_lumen_offscreen_canvas_transfer_to_image_bitmap",
         into_v8_fn1(transfer_to_image_bitmap_native),
@@ -1674,6 +1732,13 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           if (arguments.length < 4) {
             throw new TypeError(
               'getImageData: 4 arguments required, but only ' + arguments.length + ' present');
+          }
+          // GAP-CANVASORIGIN (BUG-941, HTML LS §4.12.5.1.2): same origin-clean
+          // gate as the element canvas's `getImageData` (`web_api_shim_mid.js`).
+          if (!_lumen_offscreen_canvas2d_is_origin_clean(canvasId)) {
+            throw new DOMException(
+              "Failed to execute 'getImageData' on 'OffscreenCanvasRenderingContext2D': " +
+              "The canvas has been tainted by cross-origin data.", 'SecurityError');
           }
           var x = _offscreen_long(sx, 'getImageData', 'sx'), y = _offscreen_long(sy, 'getImageData', 'sy');
           var w = _offscreen_long(sw, 'getImageData', 'sw'), h = _offscreen_long(sh, 'getImageData', 'sh');

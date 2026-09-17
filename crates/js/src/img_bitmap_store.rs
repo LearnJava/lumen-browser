@@ -37,6 +37,12 @@ struct BitmapEntry {
     /// RGBA8 (tone-mapped) pixels, converted from `image` on the first canvas read
     /// and cached for subsequent reads. `None` until first drawn onto a canvas.
     rgba8: RefCell<Option<Vec<u8>>>,
+    /// `true` when this `<img>`'s resolved `src` is cross-origin with the
+    /// document (GAP-CANVASORIGIN, BUG-941) — computed once at fetch time
+    /// (`crates/shell/src/subresources.rs::fetch_and_decode_images`) from a
+    /// plain same-origin comparison, no CORS response check (none exists yet,
+    /// GAP-REFERRER). A canvas that draws a tainted bitmap must taint itself.
+    tainted: bool,
 }
 
 thread_local! {
@@ -47,27 +53,29 @@ thread_local! {
 ///
 /// Shares the shell's `Arc<Image>` — no pixel copy at registration.  The RGBA8
 /// view is materialised lazily on the first [`with_img_bitmap`] read.  Previous
-/// entry for `nid` is overwritten.
-pub fn set_img_bitmap(nid: u32, image: Arc<Image>) {
+/// entry for `nid` is overwritten. `tainted` — see [`BitmapEntry::tainted`].
+pub fn set_img_bitmap(nid: u32, image: Arc<Image>, tainted: bool) {
     IMG_BITMAPS.with(|m| {
         m.borrow_mut()
-            .insert(nid, BitmapEntry { image, rgba8: RefCell::new(None) });
+            .insert(nid, BitmapEntry { image, rgba8: RefCell::new(None), tainted });
     });
 }
 
-/// Call `f` with `(natural_width, natural_height, rgba8_slice)` for `nid`.
+/// Call `f` with `(natural_width, natural_height, rgba8_slice, tainted)` for `nid`.
 ///
 /// Returns `Some(f(…))` when the bitmap is registered, `None` otherwise
 /// (image not yet decoded or not an `<img>` element at all).  The RGBA8 slice is
 /// materialised from the shared `Arc<Image>` on the first call and cached, so the
-/// closure sees the same bytes the eager path used to provide.
-pub fn with_img_bitmap<R>(nid: u32, f: impl FnOnce(u32, u32, &[u8]) -> R) -> Option<R> {
+/// closure sees the same bytes the eager path used to provide. `tainted` is
+/// [`BitmapEntry::tainted`] — the caller must taint the destination canvas
+/// when it is `true` (GAP-CANVASORIGIN).
+pub fn with_img_bitmap<R>(nid: u32, f: impl FnOnce(u32, u32, &[u8], bool) -> R) -> Option<R> {
     IMG_BITMAPS.with(|m| {
         let m = m.borrow();
         let entry = m.get(&nid)?;
         let mut cache = entry.rgba8.borrow_mut();
         let pixels = cache.get_or_insert_with(|| entry.image.to_rgba8());
-        Some(f(entry.image.width, entry.image.height, pixels))
+        Some(f(entry.image.width, entry.image.height, pixels, entry.tainted))
     })
 }
 
@@ -90,16 +98,16 @@ mod tests {
     fn stores_and_reads_shared_bitmap() {
         clear_img_bitmaps();
         let px = vec![10u8, 20, 30, 40];
-        set_img_bitmap(7, rgba8_img(1, 1, px.clone()));
-        let got = with_img_bitmap(7, |w, h, pixels| (w, h, pixels.to_vec()));
-        assert_eq!(got, Some((1, 1, px)));
+        set_img_bitmap(7, rgba8_img(1, 1, px.clone()), false);
+        let got = with_img_bitmap(7, |w, h, pixels, tainted| (w, h, pixels.to_vec(), tainted));
+        assert_eq!(got, Some((1, 1, px, false)));
         clear_img_bitmaps();
     }
 
     #[test]
     fn missing_bitmap_returns_none() {
         clear_img_bitmaps();
-        assert!(with_img_bitmap(999, |_, _, _| ()).is_none());
+        assert!(with_img_bitmap(999, |_, _, _, _| ()).is_none());
     }
 
     #[test]
@@ -108,12 +116,21 @@ mod tests {
         // Rgba8 source with no ICC profile: to_rgba8() is a byte-identical copy,
         // so the store hands back exactly the source pixels.
         let px = vec![1u8, 2, 3, 255, 4, 5, 6, 255];
-        set_img_bitmap(3, rgba8_img(2, 1, px.clone()));
+        set_img_bitmap(3, rgba8_img(2, 1, px.clone()), false);
         // First read materialises the RGBA8 view; second read hits the cache.
-        let first = with_img_bitmap(3, |_, _, pixels| pixels.to_vec());
-        let second = with_img_bitmap(3, |_, _, pixels| pixels.to_vec());
+        let first = with_img_bitmap(3, |_, _, pixels, _| pixels.to_vec());
+        let second = with_img_bitmap(3, |_, _, pixels, _| pixels.to_vec());
         assert_eq!(first, Some(px.clone()));
         assert_eq!(second, Some(px));
+        clear_img_bitmaps();
+    }
+
+    #[test]
+    fn cross_origin_bitmap_reports_tainted() {
+        clear_img_bitmaps();
+        set_img_bitmap(9, rgba8_img(1, 1, vec![1, 2, 3, 4]), true);
+        let tainted = with_img_bitmap(9, |_, _, _, tainted| tainted);
+        assert_eq!(tainted, Some(true));
         clear_img_bitmaps();
     }
 
@@ -130,8 +147,8 @@ mod tests {
             data: rgb,
             icc_profile: None,
         });
-        set_img_bitmap(5, img);
-        let got = with_img_bitmap(5, |w, h, pixels| (w, h, pixels.to_vec()));
+        set_img_bitmap(5, img, false);
+        let got = with_img_bitmap(5, |w, h, pixels, _| (w, h, pixels.to_vec()));
         assert_eq!(got, Some((1, 1, vec![9u8, 8, 7, 255])));
         clear_img_bitmaps();
     }
