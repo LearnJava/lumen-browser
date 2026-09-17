@@ -1,8 +1,8 @@
 # BUG-744: `<style>`, созданный парсингом `innerHTML`, не становится элементом стилей
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-18 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)
-**Найден:** P3 попутно при разборе [BUG-743](BUG-743-OPEN.md), 2026-08-10
+**Найден:** P3 попутно при разборе [BUG-743](BUG-743-FIXED.md), 2026-08-10
 
 ## Что происходит
 
@@ -53,3 +53,34 @@ python .tmp/b733_style2.py .tmp/b733_style2.html
 пробы в живом окне: возможно, дефект уже закрыт целиком, возможно — сузился
 до одного шага (пересборка листа), но старая формулировка причины больше не
 верна.
+
+## Закрытие 2026-09-18 (P3) — дефект не воспроизводится
+
+Живая проба на `dev-release` (`lumen.exe --dump-layout <page>`, полный
+пайплайн: парсинг → скрипты → layout):
+
+```js
+var holder = document.createElement('div');
+holder.innerHTML = '<style>.c { position: fixed; }</style>';
+document.head.appendChild(holder.firstChild);
+console.log('STYLE_COUNT=' + document.getElementsByTagName('style').length);
+```
+
+`STYLE_COUNT=1` — узел учитывается `getElementsByTagName`. Финальный layout
+элемента `.c` показывает `position=fixed` — правило из динамически
+вставленного листа применено. Причина: [BUG-743](BUG-743-FIXED.md)'s
+`refresh_dynamic_css`/`inline_style_fingerprint`/`extract_style_blocks`
+(`crates/shell/src/doc_extract.rs`) обходят дерево документа по тегу
+`style`, не по способу создания узла — правка получилась обобщённой и
+закрыла этот баг как побочный эффект.
+
+Единственное найденное расхождение: **синхронный** `getComputedStyle()`
+сразу после вставки листа (до следующего relayout) отдаёт устаревшее
+значение (`static`), а не пересчитанное (`fixed`). Не специфично для
+`innerHTML` — идентично воспроизводится и через
+`document.createElement('style')` + `appendChild`. Это уже заведённый
+отдельно пробел [BUG-493](BUG-493-OPEN.md) (ДОРАБОТКА → CSSOM-4,
+«`getComputedStyle()` не форсирует синхронный пересчёт стиля»), не часть
+этого бага.
+
+Правок кода не потребовалось.
