@@ -299,11 +299,19 @@ const WEBRTC_SHIM: &str = r#"(function() {
   RTCPeerConnection.prototype.getSenders        = function() { return []; };
   RTCPeerConnection.prototype.getReceivers      = function() { return []; };
   RTCPeerConnection.prototype.getStats          = function() { return _resolved(new Map()); };
-  RTCPeerConnection.prototype.createDataChannel = function(label) {
+  RTCPeerConnection.prototype.createDataChannel = function(label, options) {
+    options = options || {};
     return {
       label: label || '',
       readyState: 'connecting',
       bufferedAmount: 0,
+      ordered: options.ordered !== undefined ? options.ordered : true,
+      priority: options.priority !== undefined ? options.priority : 'low',
+      protocol: options.protocol !== undefined ? options.protocol : '',
+      negotiated: options.negotiated !== undefined ? options.negotiated : false,
+      maxPacketLifeTime: options.maxPacketLifeTime !== undefined ? options.maxPacketLifeTime : null,
+      maxRetransmits: options.maxRetransmits !== undefined ? options.maxRetransmits : null,
+      id: options.id !== undefined ? options.id : null,
       send: function() {},
       close: function() {},
       onopen: null, onmessage: null, onerror: null, onclose: null,
