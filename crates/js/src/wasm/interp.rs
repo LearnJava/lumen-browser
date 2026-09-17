@@ -154,10 +154,13 @@ impl Instance {
                 continue;
             }
             let off = eval_const_expr(&seg.offset, &inst.globals)?.as_i32() as usize;
-            for (i, &fi) in seg.func_indices.iter().enumerate() {
+            for (i, expr) in seg.elems.iter().enumerate() {
                 let idx = off + i;
                 if idx < inst.table.len() {
-                    inst.table[idx] = Some(fi);
+                    inst.table[idx] = match eval_const_expr(expr, &inst.globals)? {
+                        Value::FuncRef(fi) => fi,
+                        _ => None,
+                    };
                 }
             }
         }

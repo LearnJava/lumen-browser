@@ -1,7 +1,7 @@
 # BUG-700: WASM element-segment decoder only implements flags 0/1/2 — rejects the majority of real-world modules
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)
+**Статус:** FIXED 2026-09-17 (P3)
+**Компонент:** js (`crates/js/src/wasm/parser.rs::parse_element_section`)
 **Найден:** P2, WPT-VENDOR-wasm, 2026-08-09
 
 ## Симптом
@@ -89,3 +89,56 @@ pass rate against **executable** SIMD code is not measurable from this
 run — most of their failures happen before a single SIMD instruction
 executes. Re-run `wasm` after both fixes land before revising
 `CAPABILITIES.md`'s SIMD/relaxed-SIMD claims up or down.
+
+## Исправлено
+
+`parse_element_section` (`crates/js/src/wasm/parser.rs`) теперь декодирует
+все восемь легальных значений `flags` (0-7) по §5.5.14 бинарного формата:
+бит 0 — passive/declarative, бит 1 — явный индекс таблицы (для
+active)/declarative (для non-active), бит 2 — expr-encoded вместо
+bare-func-index список элементов.
+
+`ElemSegment.func_indices: Vec<u32>` заменено на `elems: Vec<Vec<Instr>>` —
+каждый элемент теперь константное выражение (`ref.func`/`ref.null`/
+`global.get`), а не голый индекс функции. Бинарные func-index-списки
+(флаги 0/1/2/3) синтезируются в односимвольные `ref.func`-выражения через
+`read_func_index_exprs`, expr-списки (флаги 4/5/6/7) читаются напрямую
+через `read_elem_exprs` (переиспользует уже существующий `decode_expr`).
+Instantiation-код (`interp.rs`) теперь единообразно вызывает уже
+существующий `eval_const_expr` на каждом элементе вместо прямой записи
+`u32`-индекса в таблицу — тот же путь, что уже использовался для
+`global.init`/сегментных offset-выражений, так что `ref.null`/`global.get`
+внутри expr-списка корректно резолвятся без нового кода в интерпретаторе.
+
+Declarative-сегменты (флаги 3/7) трактуются как passive — оба инертны при
+инстанцировании (в интерпретаторе нет `table.init`/`elem.drop`, это
+отдельный, отсюда не охваченный пробел — declarative-сегменты и раньше
+были нужны только для `ref.func`-reachability-валидации, которую этот
+декодер не моделирует).
+
+Новые тесты `crates/js/src/wasm/tests.rs` покрывают все восемь флагов
+плюс вне-диапазонное значение и `ref.null`-элемент в expr-списке:
+`elem_flags0_active_implicit_table_func_indices`,
+`elem_flags1_passive_func_indices_decodes`,
+`elem_flags2_active_explicit_table_func_indices`,
+`elem_flags3_declarative_func_indices_decodes`,
+`elem_flags4_active_implicit_table_expr_list`,
+`elem_flags5_passive_reftype_expr_list_decodes`,
+`elem_flags6_active_explicit_table_expr_list`,
+`elem_flags7_declarative_reftype_expr_list_decodes`,
+`elem_flags_out_of_range_still_rejected`,
+`elem_ref_null_entry_leaves_table_slot_unset`.
+
+`cargo test -p lumen-js --lib wasm:: --features v8-backend` — 69/69.
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+чист. Только парсер/интерпретатор WASM, пиксели не затронуты — полный
+графический гейт не запускался.
+
+Вне скоупа: `table.init`/`elem.drop`/`table.copy` (bulk-memory 0xFC
+12-17) по-прежнему не реализованы (отдельный, ещё не заведённый дефект);
+[BUG-699](BUG-699-OPEN.md) (независимый `WebAssembly.Table` BigInt-краш в
+том же прогоне) остаётся OPEN; `br.wast:3`-подобные модули теперь успешно
+проходят `WebAssembly.compile()`, но полный корпусный `wasm`-прогон нужно
+повторить отдельно, чтобы измерить итоговый прирост pass rate (это не
+сделано в рамках этого фикса — WPT-запуск ~6 минут, не входит в
+scoped-gate).

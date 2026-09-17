@@ -189,15 +189,19 @@ pub struct DataSegment {
     pub bytes: Vec<u8>,
 }
 
-/// An active element segment for a table: offset expression + function indices.
+/// An active element segment for a table: offset expression + element list.
 #[derive(Clone, Debug)]
 pub struct ElemSegment {
-    /// `true` for passive/declarative segments.
+    /// `true` for passive/declarative segments (both are inert at
+    /// instantiation — declarative segments exist only to satisfy
+    /// `ref.func`-reachability validation, which this decoder doesn't model).
     pub passive: bool,
     /// Offset initialiser expression (for active segments).
     pub offset: Vec<Instr>,
-    /// Function indices placed into the table.
-    pub func_indices: Vec<u32>,
+    /// Element list: one constant expression per entry (`ref.func $x`,
+    /// `ref.null`, or a synthesized single-instruction expr for the
+    /// bare-func-index encodings).
+    pub elems: Vec<Vec<Instr>>,
 }
 
 /// A fully decoded module ready for instantiation.
@@ -549,56 +553,81 @@ fn parse_export_section(r: &mut Reader, m: &mut Module) -> DecodeResult<()> {
     Ok(())
 }
 
+/// Reads `vec(funcidx)` and wraps each index as a synthetic single-instruction
+/// `ref.func` constant expression, so callers can treat every encoding
+/// (bare func-index list or expr list) uniformly.
+fn read_func_index_exprs(r: &mut Reader) -> DecodeResult<Vec<Vec<Instr>>> {
+    let n = r.u32()?;
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        out.push(vec![Instr::RefFunc(r.u32()?)]);
+    }
+    Ok(out)
+}
+
+/// Reads `vec(expr)` — the expr-encoded element list used by flags 4-7.
+fn read_elem_exprs(r: &mut Reader) -> DecodeResult<Vec<Vec<Instr>>> {
+    let n = r.u32()?;
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        out.push(decode_expr(r)?);
+    }
+    Ok(out)
+}
+
 fn parse_element_section(r: &mut Reader, m: &mut Module) -> DecodeResult<()> {
     let count = r.u32()?;
     for _ in 0..count {
         let flags = r.u32()?;
-        // Common encodings: 0 = active table 0 with func indices.
-        match flags {
+        // Binary format §5.5.14: bit 0 = passive/declarative, bit 1 = explicit
+        // table index / declarative (only meaningful together with bit 0),
+        // bit 2 = expr-encoded element list instead of a bare func-index list.
+        let (passive, offset, elems) = match flags {
             0 => {
                 let offset = decode_expr(r)?;
-                let n = r.u32()?;
-                let mut func_indices = Vec::with_capacity(n as usize);
-                for _ in 0..n {
-                    func_indices.push(r.u32()?);
-                }
-                m.elems.push(ElemSegment {
-                    passive: false,
-                    offset,
-                    func_indices,
-                });
+                (false, offset, read_func_index_exprs(r)?)
             }
             1 => {
-                // passive, elemkind + func indices
                 let _elemkind = r.byte()?;
-                let n = r.u32()?;
-                let mut func_indices = Vec::with_capacity(n as usize);
-                for _ in 0..n {
-                    func_indices.push(r.u32()?);
-                }
-                m.elems.push(ElemSegment {
-                    passive: true,
-                    offset: Vec::new(),
-                    func_indices,
-                });
+                (true, Vec::new(), read_func_index_exprs(r)?)
             }
             2 => {
                 let _table_idx = r.u32()?;
                 let offset = decode_expr(r)?;
                 let _elemkind = r.byte()?;
-                let n = r.u32()?;
-                let mut func_indices = Vec::with_capacity(n as usize);
-                for _ in 0..n {
-                    func_indices.push(r.u32()?);
-                }
-                m.elems.push(ElemSegment {
-                    passive: false,
-                    offset,
-                    func_indices,
-                });
+                (false, offset, read_func_index_exprs(r)?)
+            }
+            3 => {
+                // declarative, elemkind + func indices
+                let _elemkind = r.byte()?;
+                (true, Vec::new(), read_func_index_exprs(r)?)
+            }
+            4 => {
+                let offset = decode_expr(r)?;
+                (false, offset, read_elem_exprs(r)?)
+            }
+            5 => {
+                let _reftype = r.val_type()?;
+                (true, Vec::new(), read_elem_exprs(r)?)
+            }
+            6 => {
+                let _table_idx = r.u32()?;
+                let offset = decode_expr(r)?;
+                let _reftype = r.val_type()?;
+                (false, offset, read_elem_exprs(r)?)
+            }
+            7 => {
+                // declarative, reftype + expr list
+                let _reftype = r.val_type()?;
+                (true, Vec::new(), read_elem_exprs(r)?)
             }
             _ => return Err(format!("unsupported element segment flags {flags}")),
-        }
+        };
+        m.elems.push(ElemSegment {
+            passive,
+            offset,
+            elems,
+        });
     }
     Ok(())
 }

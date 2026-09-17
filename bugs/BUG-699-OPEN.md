@@ -6,7 +6,7 @@
 
 ## Симптом
 
-Found while triaging the `wasm` category run (see [BUG-700](BUG-700-OPEN.md)
+Found while triaging the `wasm` category run (see [BUG-700](BUG-700-FIXED.md)
 for the run numbers). Every vendored `.wast.js` test file's shared harness
 (`tests/wpt/wasm/core/js/harness/async_index.js::reinitializeRegistry`)
 builds a default `spectest` import module once per file, including a
@@ -57,7 +57,7 @@ FAIL run - assert_true: unexpected runtime error, observed
 rejection **510 times** across the run's 373 test files (`grep -c
 'Reinitialize the default imports' /tmp/wpt_wasm.log`), each one capable of
 poisoning the rest of its own file's chain the same way — a second,
-independent multiplier on top of [BUG-700](BUG-700-OPEN.md) for the run's
+independent multiplier on top of [BUG-700](BUG-700-FIXED.md) for the run's
 depressed subtest pass rate (11314/179992).
 
 ## Причина
