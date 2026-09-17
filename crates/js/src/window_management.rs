@@ -109,29 +109,70 @@ const WINDOW_MANAGEMENT_SHIM: &str = r#"(function() {
     return new ScreenDetails([primary], 0);
   }
 
+  // W3C WMWPA §3.2 step 2 — transient activation is required. `navigator.userActivation`
+  // is the engine's own answer to that question, same source `getDisplayMedia`/
+  // `showOpenFilePicker`/`queryLocalFonts` consult (media_devices.rs, filesystem_access.rs,
+  // local_font_access.rs).
+  function requireTransientActivation() {
+    var activation = navigator.userActivation;
+    if (activation && activation.isActive === false) {
+      throw new DOMException(
+        'getScreenDetails() requires transient activation.', 'InvalidStateError');
+    }
+  }
+
+  // Fails closed, mirroring local_font_access.rs::requireLocalFontsPermission: no
+  // Permissions API, an unusable one, or anything other than an explicit `granted`
+  // all mean the screen list is withheld.
+  function requireWindowManagementPermission() {
+    var permissions = navigator.permissions;
+    if (!permissions || typeof permissions.query !== 'function') {
+      return Promise.reject(new DOMException(
+        'Permission to access screen details could not be requested.', 'NotAllowedError'));
+    }
+    return permissions.query({ name: 'window-management' }).then(
+      function(status) {
+        if (!status || status.state !== 'granted') {
+          throw new DOMException('Permission to access screen details was denied.', 'NotAllowedError');
+        }
+      },
+      function() {
+        throw new DOMException(
+          'Permission to access screen details could not be requested.', 'NotAllowedError');
+      });
+  }
+
   if (typeof navigator.getScreenDetails !== 'function') {
     navigator.getScreenDetails = function() {
-      // Phase 1 hook: if native binding provides multi-screen data, use it.
-      if (typeof _lumen_get_screen_details === 'function') {
-        return new Promise(function(resolve, reject) {
-          try {
-            _lumen_get_screen_details(function(screensJson) {
-              try {
-                var arr = JSON.parse(screensJson);
-                var screens = arr.map(function(d) { return new ScreenDetailed(d); });
-                var currentIdx = arr.findIndex(function(d) { return d.isPrimary; });
-                resolve(new ScreenDetails(screens, currentIdx >= 0 ? currentIdx : 0));
-              } catch(e) {
-                reject(new DOMException('Screen details parse error', 'InvalidStateError'));
-              }
-            });
-          } catch(e) {
-            reject(new DOMException('getScreenDetails failed', 'NotAllowedError'));
-          }
-        });
-      }
-      // Phase 0: single-screen stub.
-      return Promise.resolve(_buildPhase0ScreenDetails());
+      // A promise-returning operation reports precondition failures as a
+      // rejection, never as a synchronous throw (WebIDL) — same pattern as
+      // local_font_access.rs::queryLocalFonts.
+      return Promise.resolve().then(function() {
+        requireTransientActivation();
+        return requireWindowManagementPermission();
+      }).then(function() {
+        // Phase 1 hook: if native binding provides multi-screen data, use it.
+        if (typeof _lumen_get_screen_details === 'function') {
+          return new Promise(function(resolve, reject) {
+            try {
+              _lumen_get_screen_details(function(screensJson) {
+                try {
+                  var arr = JSON.parse(screensJson);
+                  var screens = arr.map(function(d) { return new ScreenDetailed(d); });
+                  var currentIdx = arr.findIndex(function(d) { return d.isPrimary; });
+                  resolve(new ScreenDetails(screens, currentIdx >= 0 ? currentIdx : 0));
+                } catch(e) {
+                  reject(new DOMException('Screen details parse error', 'InvalidStateError'));
+                }
+              });
+            } catch(e) {
+              reject(new DOMException('getScreenDetails failed', 'NotAllowedError'));
+            }
+          });
+        }
+        // Phase 0: single-screen stub.
+        return _buildPhase0ScreenDetails();
+      });
     };
   }
 })();
@@ -141,14 +182,22 @@ const WINDOW_MANAGEMENT_SHIM: &str = r#"(function() {
 mod tests {
     // Хелперы тестового модуля: исключение из clippy.toml покрывает
     // только тело `#[test]` (docs/lint-policy.md §10).
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
 
-    /// Install minimal prereqs: screen + navigator + Promise + DOMException.
+    /// Install minimal prereqs: screen + navigator (transient activation and
+    /// `window-management` permission both granted, the happy-path default) +
+    /// Promise + DOMException.
     fn with_window_management(f: impl FnOnce(&V8JsRuntime)) {
+        with_window_management_setup("", f);
+    }
+
+    /// Same harness with `extra` evaluated after the default `navigator` stub,
+    /// so a test can override `userActivation`/`permissions` before install.
+    fn with_window_management_setup(extra: &str, f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
         rt.eval(
             "var screen = { \
@@ -156,15 +205,44 @@ mod tests {
                availWidth: 1920, availHeight: 1080, \
                colorDepth: 24, pixelDepth: 24 \
              }; \
-             var navigator = {}; \
+             var navigator = { \
+               userActivation: { isActive: true }, \
+               permissions: { \
+                 query: function(d) { return Promise.resolve({ name: d.name, state: 'granted' }); } \
+               } \
+             }; \
              function DOMException(msg, name) { this.message = msg; this.name = name; } \
              DOMException.prototype = Object.create(Error.prototype); \
              globalThis.DOMException = DOMException; \
              globalThis.devicePixelRatio = 1;",
         )
         .unwrap();
+        if !extra.is_empty() {
+            rt.eval(extra).unwrap();
+        }
         install_window_management_api_v8(&rt).unwrap();
         f(&rt);
+    }
+
+    /// Resolves `expr` (a promise) and reports `"resolved"` or `"rejected|<name>|<message>"`.
+    fn settle(rt: &V8JsRuntime, expr: &str) -> String {
+        rt.eval(&format!(
+            r#"
+            var __out = 'never settled';
+            ({expr}).then(
+              function() {{ __out = 'resolved'; }},
+              function(e) {{ __out = 'rejected|' + e.name + '|' + e.message; }});
+            "#
+        ))
+        .unwrap();
+        s(rt, "String(__out)")
+    }
+
+    fn s(rt: &V8JsRuntime, expr: &str) -> String {
+        match rt.eval(expr).unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        }
     }
 
     #[test]
@@ -274,6 +352,47 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(v, JsValue::Bool(true), "navigator.getScreenDetails should be a function");
+        });
+    }
+
+    /// BUG-667 — W3C WMWPA §3.2 step 2: without transient activation the call
+    /// must reject with `InvalidStateError`, mirroring `getDisplayMedia` (BUG-666)
+    /// and `queryLocalFonts`.
+    #[test]
+    fn get_screen_details_requires_transient_activation() {
+        with_window_management_setup("navigator.userActivation = { isActive: false };", |rt| {
+            assert_eq!(
+                settle(rt, "navigator.getScreenDetails()"),
+                "rejected|InvalidStateError|getScreenDetails() requires transient activation."
+            );
+        });
+    }
+
+    /// BUG-667 — the `window-management` permission must be consulted:
+    /// anything other than `granted` (denied, no Permissions API at all) rejects
+    /// with `NotAllowedError` instead of silently resolving.
+    #[test]
+    fn get_screen_details_requires_granted_permission() {
+        with_window_management_setup(
+            "navigator.permissions.query = function(d) { \
+               return Promise.resolve({ name: d.name, state: 'denied' }); \
+             };",
+            |rt| {
+                assert_eq!(
+                    settle(rt, "navigator.getScreenDetails()"),
+                    "rejected|NotAllowedError|Permission to access screen details was denied."
+                );
+            },
+        );
+    }
+
+    /// Happy path stays green with both gates open — same fixture as every
+    /// other Phase 0 test in this module, made explicit so the two gates above
+    /// cannot regress into an unconditional rejection.
+    #[test]
+    fn get_screen_details_resolves_when_gates_pass() {
+        with_window_management(|rt| {
+            assert_eq!(settle(rt, "navigator.getScreenDetails()"), "resolved");
         });
     }
 }
