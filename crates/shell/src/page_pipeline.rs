@@ -968,7 +968,7 @@ pub(crate) fn parse_and_layout(
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
-    let (images, animated_gifs, lazy_pairs, blocked_by_img_src) = {
+    let (images, animated_gifs, lazy_pairs, blocked_by_img_src, cross_origin_img_urls) = {
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
@@ -1021,11 +1021,17 @@ pub(crate) fn parse_and_layout(
         // draws — images never used as a drawImage source cost zero extra bytes.
         let url_to_img: std::collections::HashMap<&str, &std::sync::Arc<lumen_image::Image>> =
             images.iter().map(|(url, img)| (url.as_str(), img)).collect();
-        let bitmaps: Vec<(u32, std::sync::Arc<lumen_image::Image>)> = img_reqs
+        // GAP-CANVASORIGIN (BUG-941): `cross_origin_img_urls` came back from
+        // the same fetch pass, keyed by the same raw `req.url` — carry the
+        // taint bit into `img_bitmap_store` alongside the pixels.
+        let cross_origin_set: std::collections::HashSet<&str> =
+            cross_origin_img_urls.iter().map(String::as_str).collect();
+        let bitmaps: Vec<(u32, std::sync::Arc<lumen_image::Image>, bool)> = img_reqs
             .iter()
             .filter_map(|req| {
                 let img = url_to_img.get(req.url.as_str())?;
-                Some((req.node_id.index() as u32, std::sync::Arc::clone(img)))
+                let tainted = cross_origin_set.contains(req.url.as_str());
+                Some((req.node_id.index() as u32, std::sync::Arc::clone(img), tainted))
             })
             .collect();
         if !bitmaps.is_empty() {

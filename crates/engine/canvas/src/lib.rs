@@ -412,12 +412,17 @@ pub struct CanvasPattern {
     pub height: u32,
     /// Tiling mode.
     pub repeat: RepeatMode,
+    /// `true` when the source this pattern was built from was itself
+    /// cross-origin/already-tainted (HTML LS §4.12.5.1.2). The caller taints
+    /// the `Context2D` this pattern is painted into — this struct only
+    /// carries the bit across `createPattern` → `fillStyle`/`strokeStyle`.
+    pub tainted: bool,
 }
 
 impl CanvasPattern {
     /// Create a new pattern from RGBA8 pixel data.
-    pub fn new(pixels: Vec<u8>, width: u32, height: u32, repeat: RepeatMode) -> Self {
-        Self { pixels, width, height, repeat }
+    pub fn new(pixels: Vec<u8>, width: u32, height: u32, repeat: RepeatMode, tainted: bool) -> Self {
+        Self { pixels, width, height, repeat, tainted }
     }
 
     /// Sample the pattern colour at device pixel `(x, y)`.
@@ -597,6 +602,17 @@ pub struct Context2D {
     /// Canvas color space: sRGB (default), Display P3, or Rec2020.
     /// Used for getImageData() to identify the color space of pixel data.
     color_space: ColorSpace,
+
+    /// Origin-clean flag (HTML LS §4.12.5.1.2). `true` until a cross-origin
+    /// source (image/canvas/pattern the caller has determined is tainted) is
+    /// drawn onto this bitmap via [`taint`]; never reset back to `true` —
+    /// the flag is monotonic for the lifetime of the canvas. Enforcement
+    /// (`SecurityError` on `getImageData`/`toDataURL`/`toBlob`) is the JS
+    /// binding layer's job (`crates/js/src/canvas2d.rs`); this crate only
+    /// tracks the bit.
+    ///
+    /// [`taint`]: Context2D::taint
+    origin_clean: bool,
 }
 
 impl Context2D {
@@ -630,6 +646,7 @@ impl Context2D {
             state_stack: Vec::new(),
             noise_generator: None,
             color_space: ColorSpace::Srgb,
+            origin_clean: true,
         }
     }
 
@@ -679,6 +696,19 @@ impl Context2D {
 
     /// Raw RGBA8 pixel data (no noise applied).
     pub fn pixels(&self) -> &[u8] { &self.pixels }
+
+    /// `true` while this canvas's bitmap has never been tainted by a
+    /// cross-origin source (HTML LS §4.12.5.1.2). Callers gate
+    /// `getImageData`/`toDataURL`/`toBlob` on this.
+    pub fn is_origin_clean(&self) -> bool { self.origin_clean }
+
+    /// Mark this canvas's bitmap as tainted — HTML LS §4.12.5.1.2 "set bitmap
+    /// origin-clean flag to false". Monotonic: once tainted, always tainted
+    /// for the life of this `Context2D`. The caller (`crates/js/src/canvas2d.rs`)
+    /// decides *when* a draw taints (cross-origin `<img>` source, a source
+    /// canvas/pattern that is itself already tainted, …) — this method only
+    /// flips the bit.
+    pub fn taint(&mut self) { self.origin_clean = false; }
 
     /// Resize the canvas (clears the buffer and resets the CTM to identity).
     pub fn resize(&mut self, width: u32, height: u32) {

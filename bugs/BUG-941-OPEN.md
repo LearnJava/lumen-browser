@@ -55,3 +55,28 @@ Origin-clean — единственное, что мешает странице 
 документа через канву (классический пример — приватная картинка, отданная по
 cookie пользователя). Сегодня такая проверка отсутствует, поэтому в этой
 части движок разрешает больше, чем любой браузер, а не просто отвечает не то.
+
+## Срез 1 (2026-09-17, P1)
+
+Origin-clean флаг заведён на `Context2D` (`crates/engine/canvas/src/lib.rs`:
+`origin_clean`/`is_origin_clean()`/`taint()`, монотонный на весь срок жизни
+канвы). Заражение проведено через все перечисленные в объёме пути:
+`drawImage`/`drawImage` с обрезкой/`createPattern` (обе стороны —
+`fillStyle`/`strokeStyle`) на элементной канве и на `OffscreenCanvas`,
+`ImageBitmap` (`image_bitmap_from_img_nid_native` переносит флаг источника).
+Все три читающих члена из объёма enforced: `getImageData` и
+`toDataURL`/`toBlob` бросают `SecurityError` (`crates/js/src/shim/web_api_shim_mid.js`
+для элементной канвы, `OffscreenCanvasRenderingContext2D.getImageData` в
+`crates/js/src/offscreen_canvas.rs` — `convertToBlob` там пока не
+реализован, гейтить нечего).
+
+Кросс-origin детектится простым сравнением origin резолвленного `<img src>` с
+`base.origin()` (`crates/shell/src/subresources.rs::fetch_and_decode_images`,
+новый параметр `cross_origin_urls`) — **не** настоящей CORS-проверкой ответа:
+`Origin` всё ещё не уходит ни на один сабресурс (BUG-859), поэтому
+`crossorigin="anonymous"` по-прежнему ничего не меняет и не отличается от
+его отсутствия. Консервативно и безопасно (чужой origin красит независимо от
+намерения автора), но не полная модель — остаётся вторым срезом.
+
+Не покрыто: запрос по атрибуту `crossorigin`/реальный CORS-хендшейк ответа
+(BUG-859), поэтому статус задачи в ROADMAP остаётся `planned`, а не `done`.

@@ -376,7 +376,7 @@ fn canvas_draw_image_from_img_element_3arg() {
     };
     // Inject decoded bitmap: 2×2 solid red RGBA8.
     let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
-    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8))]);
+    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8), false)]);
 
     let dest_nid = match rt
         .eval(
@@ -418,7 +418,7 @@ fn canvas_draw_image_from_img_element_5arg() {
     };
     // 1×1 solid blue.
     let rgba8 = vec![0u8, 0, 255, 255];
-    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8))]);
+    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8), false)]);
 
     let dest_nid = match rt
         .eval(
@@ -460,7 +460,7 @@ fn canvas_draw_image_from_img_element_9arg_crop() {
     };
     // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
     let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
-    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8))]);
+    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8), false)]);
 
     let dest_nid = match rt
         .eval(
@@ -506,6 +506,85 @@ fn canvas_draw_image_from_img_unregistered_is_noop() {
         rgba.chunks_exact(4).all(|px| px[3] == 0)
     });
     assert!(all_transparent, "drawImage with unregistered <img> must be a no-op");
+}
+
+#[test]
+fn canvas_draw_image_from_tainted_img_taints_canvas_get_image_data_throws() {
+    // GAP-CANVASORIGIN (BUG-941): drawing an <img> whose decoded bitmap is
+    // flagged cross-origin must taint the destination canvas — HTML LS
+    // §4.12.5.1.2 — so `getImageData`/`toDataURL` throw `SecurityError`.
+    let rt = v8_runtime_with_dom(make_doc());
+    let img_nid: u32 = match rt
+        .eval(
+            "var img = document.createElement('img');\
+                     img.setAttribute('src', 'https://other.example/x.png');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+        )
+        .unwrap()
+    {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("expected img nid, got {other:?}"),
+    };
+    let rgba8 = vec![255u8, 0, 0, 255];
+    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8), true)]);
+
+    let r = rt
+        .eval(
+            "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 0, 0);\
+                     var name1 = 'did-not-throw';\
+                     try { ctx.getImageData(0, 0, 1, 1); } catch (e) { name1 = e.name; }\
+                     name1",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("SecurityError".into()));
+
+    let r2 = rt
+        .eval(
+            "var name2 = 'did-not-throw';\
+                     try { c.toDataURL(); } catch (e) { name2 = e.name; }\
+                     name2",
+        )
+        .unwrap();
+    assert_eq!(r2, lumen_core::JsValue::String("SecurityError".into()));
+}
+
+#[test]
+fn canvas_draw_image_from_clean_img_get_image_data_does_not_throw() {
+    // Same shape as the tainted test above but `tainted: false` — origin-clean
+    // canvases must keep reading back normally (no regression from the taint
+    // gate above).
+    let rt = v8_runtime_with_dom(make_doc());
+    let img_nid: u32 = match rt
+        .eval(
+            "var img = document.createElement('img');\
+                     img.setAttribute('src', 'same.png');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+        )
+        .unwrap()
+    {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("expected img nid, got {other:?}"),
+    };
+    let rgba8 = vec![255u8, 0, 0, 255];
+    rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8), false)]);
+
+    let r = rt
+        .eval(
+            "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 0, 0);\
+                     var name = 'ok';\
+                     try { ctx.getImageData(0, 0, 1, 1); } catch (e) { name = e.name; }\
+                     name",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("ok".into()));
 }
 
 #[test]

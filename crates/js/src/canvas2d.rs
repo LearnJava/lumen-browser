@@ -910,7 +910,10 @@ pub(crate) fn install_canvas2d_bindings_v8(
             let pat = CANVASES.with(|c| {
                 let map = c.try_borrow().ok()?;
                 let src = map.get(&src_nid)?;
-                Some(CanvasPattern::new(src.pixels().to_vec(), src.width(), src.height(), repeat))
+                Some(CanvasPattern::new(
+                    src.pixels().to_vec(), src.width(), src.height(), repeat,
+                    !src.is_origin_clean(),
+                ))
             });
             let Some(p) = pat else { return 0; };
             let id = next_paint_id();
@@ -922,12 +925,23 @@ pub(crate) fn install_canvas2d_bindings_v8(
             id
         }),
     )?;
+    // GAP-CANVASORIGIN: a pattern built from an already-tainted source taints
+    // any canvas it is painted into. Approximated at `fillStyle`/`strokeStyle`
+    // assignment time rather than at the next actual fill/stroke — simpler,
+    // and no WPT-observable difference (both happen before any read of the
+    // destination bitmap in the test sequences this is scoped for).
     rt.register_native(
         "_lumen_canvas2d_set_fill_style_pattern",
         into_v8_fn2(|nid: u32, pat_id: u32| {
             let pat = PATTERNS.with(|ps| ps.try_borrow().ok()?.get(&pat_id).cloned());
             if let Some(p) = pat {
-                with_canvas(nid, |c| c.fill_style = PaintSource::Pattern(p));
+                let tainted = p.tainted;
+                with_canvas(nid, |c| {
+                    c.fill_style = PaintSource::Pattern(p);
+                    if tainted {
+                        c.taint();
+                    }
+                });
             }
         }),
     )?;
@@ -936,7 +950,13 @@ pub(crate) fn install_canvas2d_bindings_v8(
         into_v8_fn2(|nid: u32, pat_id: u32| {
             let pat = PATTERNS.with(|ps| ps.try_borrow().ok()?.get(&pat_id).cloned());
             if let Some(p) = pat {
-                with_canvas(nid, |c| c.stroke_style = PaintSource::Pattern(p));
+                let tainted = p.tainted;
+                with_canvas(nid, |c| {
+                    c.stroke_style = PaintSource::Pattern(p);
+                    if tainted {
+                        c.taint();
+                    }
+                });
             }
         }),
     )?;
@@ -984,17 +1004,23 @@ pub(crate) fn install_canvas2d_bindings_v8(
     )?;
 
     // ── drawImage ────────────────────────────────────────────────────────────
+    // GAP-CANVASORIGIN (BUG-941): drawing a canvas source that is itself
+    // already tainted taints the destination too (HTML LS §4.12.5.1.2) — the
+    // taint bit is monotonic and infectious across drawImage chains.
     rt.register_native(
         "_lumen_canvas2d_draw_image",
         into_v8_fn6(|dst_nid: u32, src_nid: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
-            let (pixels, sw, sh) = CANVASES.with(|c| {
+            let (pixels, sw, sh, src_tainted) = CANVASES.with(|c| {
                 let map = c.try_borrow().ok()?;
                 let src = map.get(&src_nid)?;
-                Some((src.pixels().to_vec(), src.width(), src.height()))
+                Some((src.pixels().to_vec(), src.width(), src.height(), !src.is_origin_clean()))
             }).unwrap_or_default();
             if sw > 0 && sh > 0 {
                 with_canvas(dst_nid, |c| {
                     c.draw_image(&pixels, sw, sh, dx as f32, dy as f32, dw as f32, dh as f32);
+                    if src_tainted {
+                        c.taint();
+                    }
                 });
                 mark_dirty(dst_nid);
             }
@@ -1007,10 +1033,10 @@ pub(crate) fn install_canvas2d_bindings_v8(
             if r.len() != 8 {
                 return;
             }
-            let (pixels, sw, sh) = CANVASES.with(|c| {
+            let (pixels, sw, sh, src_tainted) = CANVASES.with(|c| {
                 let map = c.try_borrow().ok()?;
                 let src = map.get(&src_nid)?;
-                Some((src.pixels().to_vec(), src.width(), src.height()))
+                Some((src.pixels().to_vec(), src.width(), src.height(), !src.is_origin_clean()))
             }).unwrap_or_default();
             if sw > 0 && sh > 0 {
                 with_canvas(dst_nid, |c| {
@@ -1019,6 +1045,9 @@ pub(crate) fn install_canvas2d_bindings_v8(
                         r[0], r[1], r[2], r[3],
                         r[4], r[5], r[6], r[7],
                     );
+                    if src_tainted {
+                        c.taint();
+                    }
                 });
                 mark_dirty(dst_nid);
             }
@@ -1027,11 +1056,14 @@ pub(crate) fn install_canvas2d_bindings_v8(
     rt.register_native(
         "_lumen_canvas2d_draw_image_from_img",
         into_v8_fn6(|dst_nid: u32, img_nid: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
-            img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+            img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels, tainted| {
                 let w = if dw > 0.0 { dw as f32 } else { iw as f32 };
                 let h = if dh > 0.0 { dh as f32 } else { ih as f32 };
                 with_canvas(dst_nid, |c| {
                     c.draw_image(pixels, iw, ih, dx as f32, dy as f32, w, h);
+                    if tainted {
+                        c.taint();
+                    }
                 });
                 mark_dirty(dst_nid);
             });
@@ -1044,13 +1076,16 @@ pub(crate) fn install_canvas2d_bindings_v8(
             if r.len() != 8 {
                 return;
             }
-            img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+            img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels, tainted| {
                 with_canvas(dst_nid, |c| {
                     c.draw_image_cropped(
                         pixels, iw, ih,
                         r[0], r[1], r[2], r[3],
                         r[4], r[5], r[6], r[7],
                     );
+                    if tainted {
+                        c.taint();
+                    }
                 });
                 mark_dirty(dst_nid);
             });
@@ -1137,6 +1172,20 @@ pub(crate) fn install_canvas2d_bindings_v8(
     rt.register_native(
         "_lumen_canvas2d_text_metrics",
         into_v8_fn2(|nid: u32, text: String| -> Vec<f64> { text_metrics(nid, &text) }),
+    )?;
+    // GAP-CANVASORIGIN (BUG-941): the shim consults this BEFORE calling
+    // `_lumen_canvas2d_get_image_data`/`_lumen_canvas2d_to_data_url` and
+    // throws `SecurityError` itself rather than this native — see
+    // `crates/js/src/canvas2d.rs`'s module doc and HTML LS §4.12.5.1.2. An
+    // unknown `nid` reports clean (matches every other native's "unknown
+    // canvas behaves like a freshly created one" stance).
+    rt.register_native(
+        "_lumen_canvas2d_is_origin_clean",
+        into_v8_fn1(|nid: u32| -> bool {
+            CANVASES.with(|c| {
+                c.try_borrow().ok().and_then(|m| m.get(&nid).map(Context2D::is_origin_clean)).unwrap_or(true)
+            })
+        }),
     )?;
     // BUG-448: the rectangle is a parameter, not a suggestion — the crop happens
     // here, where the bitmap already is, so a one-pixel read transports four

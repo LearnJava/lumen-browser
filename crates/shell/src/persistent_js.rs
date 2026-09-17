@@ -190,13 +190,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `deliver_lazy_images()` after each relayout.
     #[allow(dead_code)]
     fn register_lazy_images(&self, pairs: &[(u32, &str)]);
-    /// Push decoded `<img>` bitmaps `(nid, Arc<Image>)` into the JS canvas drawImage store.
+    /// Push decoded `<img>` bitmaps `(nid, Arc<Image>, cross_origin)` into the JS
+    /// canvas drawImage store.
     ///
     /// Call after `fetch_and_decode_images` so `drawImage(imgElement, …)` works.
     /// The `Arc` is shared with the decoded-image cache — no pixel copy (BUG-272
-    /// срез 20). Default no-op covers non-QuickJS builds and `NullPersistentJs`.
+    /// срез 20). `cross_origin` — GAP-CANVASORIGIN: taints a canvas that draws
+    /// this bitmap. Default no-op covers non-QuickJS builds and `NullPersistentJs`.
     #[allow(dead_code)]
-    fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {}
+    fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, Arc<lumen_image::Image>, bool)>) {}
     /// Check registered lazy images against the current viewport and enqueue load
     /// requests for those within the lazy-load margin (1 viewport ahead of the fold).
     ///
@@ -973,7 +975,7 @@ impl PersistentJs for V8PersistentJs {
     // BUG-447: this override was missing, so on the default V8 build the call fell
     // through to the trait's no-op default and the `img_bitmap_store` stayed empty
     // for the whole session — `drawImage(imgElement, …)` silently painted nothing.
-    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
+    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>, bool)>) {
         self.rt.register_img_bitmaps(bitmaps);
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {

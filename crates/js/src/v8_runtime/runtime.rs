@@ -964,12 +964,14 @@ impl V8JsRuntime {
     /// decoded pixels out of [`crate::img_bitmap_store`]. The store is
     /// `thread_local!`, so the writes must happen on the JS thread — hence `run`.
     /// The `Arc` is shared with the shell's decode cache (no pixel copy, BUG-272
-    /// срез 20); previous contents are cleared first (navigation-scoped).
-    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
+    /// срез 20); previous contents are cleared first (navigation-scoped). The
+    /// `bool` is GAP-CANVASORIGIN's cross-origin bit — `true` taints any
+    /// canvas that later draws this bitmap.
+    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>, bool)>) {
         self.run(move |_inner| {
             crate::img_bitmap_store::clear_img_bitmaps();
-            for (nid, image) in bitmaps {
-                crate::img_bitmap_store::set_img_bitmap(nid, image);
+            for (nid, image, tainted) in bitmaps {
+                crate::img_bitmap_store::set_img_bitmap(nid, image, tainted);
             }
         });
     }
