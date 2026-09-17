@@ -632,6 +632,14 @@ impl Lumen {
                 );
             }
         }
+        // GAP-CSSANIM срез 7: a node absent from this pass's layout tree (removed
+        // from the DOM, or stopped generating a box via `display: none`) never
+        // gets another `sync()` call, so any transition still `active` on it would
+        // otherwise leak forever and never fire `transitioncancel` (CSS Transitions
+        // L1 §3). `new_styles` already reflects exactly the current tree.
+        self.transition_events.extend(
+            self.transition_scheduler.cancel_missing(&new_styles, now_s),
+        );
         // @starting-style (CSS Transitions L2 §3.4): newly visible nodes (not in
         // prev_styles) use @starting-style rules as the before-change style so that
         // entry transitions start from the declared starting values.

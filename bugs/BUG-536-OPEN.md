@@ -302,3 +302,54 @@ tests; gated by `cargo test -p lumen-js`/`-p lumen-shell` (BUG-805 keeps
 `scripts/scoped-test.sh` from completing end to end) and `dump_golden.py`
 (pre-existing 4/12 drift unrelated to this change, per
 `project_dump_golden_nonzero_on_main_2026_09_09`).
+
+## Срез 7 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez7`) — `transitioncancel` now fires on node removal / `display: none`
+
+Closed the last item срез 6 left open: `transitioncancel` never fired when the
+transitioning element left the document, so its `_wa_animations`/JS-shim
+registry entry leaked. Root cause turned out narrower than expected:
+`TransitionScheduler::remove_node()` — the one method apparently built for
+this — was never called from any live code path (only its own unit test
+exercised it); nothing in the shell told the scheduler a node had disappeared.
+The sibling CSS Animations scheduler (`crates/shell/src/animation_scheduler.rs`)
+already had no equivalent gap: its `tick()` walks the whole layout tree every
+frame and cancels any `running` instance not visited that pass, which a
+removed (or `display: none`) node naturally satisfies — `animationcancel` on
+removal already worked, confirmed by inspection, not newly fixed here.
+
+Fix: a new `TransitionScheduler::cancel_missing(present, now)` compares the
+scheduler's active `(node, property)` set against `present` — the
+`ComputedStyle` map `apply_relayout_result` (`crates/shell/src/relayout.rs`)
+already builds every pass via `collect_box_styles(&lb, ...)` from the fresh
+layout tree — and cancels/drops any entry whose node is missing. Called once
+per relayout, right after the existing per-node `sync()` loop. Because
+`collect_box_styles` walks the *layout* tree, a `display: none` node is
+absent from `present` exactly like a DOM-removed one, and CSS Transitions L1
+§3 treats "stops generating a box" and "removed from the document" as the
+same cancellation trigger — so one check correctly covers both, no special
+case needed. An entry already past `transitionend` (kept alive only by
+`fill-mode: forwards/both`, `TransitionState.completed`) is dropped silently
+— it already fired its terminal event, so no `transitioncancel` follows.
+
+Live confirmation: new `--variant css-transitioncancel-remove` in
+`verify_event_delivery_gaps.py` — a page starts a 2 s opacity transition,
+reads `getAnimations().length` (1), calls `element.remove()` at 300 ms, reads
+`document.getAnimations().length` again at 800 ms. Observed:
+`transitionrun, transitionstart, getAnimations-before-remove=1,
+transitioncancel, getAnimations-after-remove=0` — `transitionend` never
+fires (correct: the transition was still 1.7 s from completion when
+canceled). 3 new unit tests in `crates/engine/layout/src/animation.rs`
+(`cancel_missing_fires_cancel_for_active_transition_on_missing_node`,
+`cancel_missing_leaves_present_nodes_untouched`,
+`cancel_missing_drops_completed_entry_silently`).
+
+Only remaining open item for the whole `GAP-CSSANIM` task:
+`getBoundingClientRect()`/geometry mid-animation (confirmed broken since
+срез 5 — `to_compositor_frame()` deliberately excludes `height`, and nothing
+triggers a relayout on an animation tick).
+
+`cargo clippy -p lumen-layout -p lumen-shell --all-targets -- -D warnings`
+clean; `cargo test -p lumen-layout`/`-p lumen-shell` (scoped subsets) green;
+`dump_golden.py` shows the same pre-existing 4/12 drift as `main`
+(`project_dump_golden_nonzero_on_main_2026_09_09`), none of it in a file this
+change touches.

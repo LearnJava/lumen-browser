@@ -1446,6 +1446,35 @@ impl TransitionScheduler {
         self.active.retain(|(n, _), _| *n != node);
     }
 
+    /// Cancel and drop every active transition whose node is absent from
+    /// `present` (GAP-CSSANIM срез 7) — CSS Transitions L1 §3 cancels a
+    /// transition both when its element is removed from the document and
+    /// when the element stops generating a box (e.g. `display: none`);
+    /// `present` (the current pass's `collect_box_styles` output) already
+    /// excludes both cases, so a single containment check covers them.
+    ///
+    /// A transition already past its active period but kept in `active` for
+    /// `fill-mode: forwards/both` (`state.completed`) is dropped silently —
+    /// it already fired `transitionend`, so no `transitioncancel` follows.
+    /// Call once per relayout, after the regular per-node `sync()` loop.
+    pub fn cancel_missing(
+        &mut self,
+        present: &HashMap<NodeId, ComputedStyle>,
+        now: f32,
+    ) -> Vec<TransitionEventInfo> {
+        let mut events = Vec::new();
+        self.active.retain(|(node, prop_name), state| {
+            if present.contains_key(node) {
+                return true;
+            }
+            if !state.completed {
+                events.push(cancel_event(*node, prop_name, state, now));
+            }
+            false
+        });
+        events
+    }
+
 
 
     /// Apply a transition value to the animated style entry.
@@ -2928,6 +2957,60 @@ mod tests {
         let new = make_opacity_transition_style(1.0, 1.0);
         sched.sync(node, &old, &new, 0.0);
         sched.remove_node(node);
+        assert!(sched.active.is_empty());
+    }
+
+    #[test]
+    fn cancel_missing_fires_cancel_for_active_transition_on_missing_node() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(16usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        assert!(!sched.active.is_empty());
+        // `present` is empty — the node no longer appears in the layout tree
+        // (removed from the DOM, or `display: none`).
+        let present = HashMap::new();
+        let events = sched.cancel_missing(&present, 0.3);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransitionEventKind::Cancel);
+        assert_eq!(events[0].node, node);
+        assert_eq!(events[0].property, "opacity");
+        assert!(sched.active.is_empty(), "cancelled entry must be dropped");
+    }
+
+    #[test]
+    fn cancel_missing_leaves_present_nodes_untouched() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(17usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        let mut present = HashMap::new();
+        present.insert(node, new);
+        let events = sched.cancel_missing(&present, 0.3);
+        assert!(events.is_empty());
+        assert!(!sched.active.is_empty(), "still-present node must not be cancelled");
+    }
+
+    #[test]
+    fn cancel_missing_drops_completed_entry_silently() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(18usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let mut new = make_opacity_transition_style(1.0, 1.0);
+        // `fill-mode: forwards` keeps the entry in `active` (marked
+        // `completed`) past `transitionend`, so this exercises the branch
+        // where `cancel_missing` must stay silent rather than the trivial
+        // "already gone" case a default fill-mode would produce.
+        new.transition_fill_modes = vec![AnimationFillMode::Forwards];
+        sched.sync(node, &old, &new, 0.0);
+        let (_frame, end_events) = sched.tick(2.0); // past duration=1.0
+        assert!(end_events.iter().any(|e| e.kind == TransitionEventKind::End));
+        assert!(!sched.active.is_empty(), "forwards fill-mode must keep the entry");
+        let present = HashMap::new();
+        let events = sched.cancel_missing(&present, 2.3);
+        assert!(events.is_empty(), "an already-ended transition must not fire transitioncancel");
         assert!(sched.active.is_empty());
     }
 
