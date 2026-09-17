@@ -39,7 +39,7 @@ explicitly-passed `'high'`.
 destructures `{ sender }` from `pc.addTransceiver(...)`, which returns
 `null` (the shim's `addTransceiver` is an unconditional no-op stub) — the
 destructure throws `TypeError` before any encoding/priority logic runs.
-Same root cause already filed as [BUG-721](../../bugs/BUG-721-OPEN.md)'s
+Same root cause already filed as [BUG-1058](../../bugs/BUG-1058-FIXED.md)'s
 sibling gap (`webrtc-extensions`' note: "no-op заглушки
 addTransceiver/getSenders/getReceivers"), not a distinct defect worth its
 own number.
@@ -59,5 +59,5 @@ variant-фан-аута, 0 `testdriver.js`, без `.https.`). `run_report.py --
 поле `RTCDataChannelInit`, `dc1.priority` читается как `undefined` вместо
 спекового значения по умолчанию `'low'`/явно переданного `'high'`. Остальные
 7 сабтестов падают на уже задокументированном
-[BUG-721](../bugs/BUG-721-OPEN.md)-смежном пробеле — `addTransceiver()`
+[BUG-1058](../bugs/BUG-1058-FIXED.md)-смежном пробеле — `addTransceiver()`
 безусловно отдаёт `null`. Новый номер: BUG-726.

@@ -22,7 +22,7 @@ already-documented gap, nothing new:
 - **`RTCConfiguration-*.html` + `RTCOAuthCredential.html`** (14 of the 49
   failing subtests): `pc.getConfiguration is not a function` /
   `property "setConfiguration" not found in prototype chain` — the exact
-  gap [BUG-721](../../bugs/BUG-721-OPEN.md) already catalogs
+  gap [BUG-1058](../../bugs/BUG-1058-FIXED.md) already catalogs
   (`RTCPeerConnection.prototype` has no `getConfiguration`/
   `setConfiguration` pair, constructor never validates `iceServers`). This
   category's tests are simply a second, independent surface hitting the
@@ -65,7 +65,7 @@ webrtc-extensions --recursive` — ~52 с, **6/10 harness OK, 2/51
 сабтестов**. Оба кластера падений уже задокументированы: 14 сабтестов —
 `pc.getConfiguration`/`setConfiguration` отсутствуют у
 `RTCPeerConnection.prototype`, тот же дефект, что
-[BUG-721](../bugs/BUG-721-OPEN.md); 31 сабтест (1 TIMEOUT + 1 ERROR) —
+[BUG-1058](../bugs/BUG-1058-FIXED.md); 31 сабтест (1 TIMEOUT + 1 ERROR) —
 каскад от `addTransceiver()`/`getSenders()`/`getReceivers()`, которые в
 `webrtc_stub.rs` — документированные no-op заглушки (`null`/`[]`), поэтому
 никакого `RTCRtpTransceiver`/`RTCRtpSender`/`RTCRtpReceiver` в шиме вообще

@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-17",
+ "generated": "2026-09-18",
  "counts": {
-  "open": 304,
-  "fixed": 698,
+  "open": 303,
+  "fixed": 700,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1002,
+ "total_bugs": 1003,
  "phases": [
   {
    "id": "P0",
@@ -4619,9 +4619,9 @@
        "title": "WPT: вендорить + прогнать категорию `webrtc`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (заметка «нет конвейера» была неточна — `crates/js/src/webrtc_stub.rs` реализует mDNS-only заглушку приватности, тот же дрейф, что у `webmidi`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc --recursive --processes=4`, ~17:42, 259 файлов, 224 id по глобу, 258 инстансов после variant-фан-аута) — **102/258 harness OK, 86/1126 сабтестов**. 112 исходов — уже задокументированный TLS-гэп BUG-657. Живая проба + прогон нашли [BUG-721](bugs/BUG-721-OPEN.md) (`setConfiguration`/`getConfiguration` отсутствуют у `RTCPeerConnection.prototype`, конструктор не валидирует `RTCConfiguration` — 129/1040 непройденных сабтестов). Новый номер: BUG-721",
+       "note": "Скоуп: 🚫 (заметка «нет конвейера» была неточна — `crates/js/src/webrtc_stub.rs` реализует mDNS-only заглушку приватности, тот же дрейф, что у `webmidi`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc --recursive --processes=4`, ~17:42, 259 файлов, 224 id по глобу, 258 инстансов после variant-фан-аута) — **102/258 harness OK, 86/1126 сабтестов**. 112 исходов — уже задокументированный TLS-гэп BUG-657. Живая проба + прогон нашли [BUG-1058](bugs/BUG-1058-FIXED.md) (`setConfiguration`/`getConfiguration` отсутствуют у `RTCPeerConnection.prototype`, конструктор не валидирует `RTCConfiguration` — 129/1040 непройденных сабтестов). Новый номер: BUG-1058",
        "bugs": [
-        "BUG-721"
+        "BUG-1058"
        ]
       },
       {
@@ -4636,7 +4636,7 @@
        "title": "WPT: вендорить + прогнать категорию `webrtc-extensions`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-extensions --recursive`, ~52с, 13 файлов, 10 id) — **6/10 harness OK, 2/51 сабтестов**. Все падения — уже задокументированные дефекты: BUG-721 (getConfiguration/setConfiguration), no-op заглушки addTransceiver/getSenders/getReceivers (документированный скоуп webrtc_stub.rs), Phase 1 \"нет захвата видео\", BUG-380 (переиспользование browsing context). Новых багов не заведено"
+       "note": "Скоуп: 🚫 (вне скоупа). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-extensions --recursive`, ~52с, 13 файлов, 10 id) — **6/10 harness OK, 2/51 сабтестов**. Все падения — уже задокументированные дефекты: BUG-1058 (getConfiguration/setConfiguration), no-op заглушки addTransceiver/getSenders/getReceivers (документированный скоуп webrtc_stub.rs), Phase 1 \"нет захвата видео\", BUG-380 (переиспользование browsing context). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-webrtc-ice",
@@ -4650,14 +4650,14 @@
        "title": "WPT: вендорить + прогнать категорию `webrtc-identity`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа, подтверждено точно). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-identity --recursive`, ~57с, 5 файлов, 4 id) — **1/4 harness OK, 0/1 сабтестов**. 3 `.https.` файла — TLS-гэп BUG-657 (один попутно словил BUG-380-паттерн). Единственный исполнившийся тест падает на отсутствии валидации `peerIdentity` в конструкторе — тот же корень, что BUG-721. Новых багов не заведено"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено точно). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-identity --recursive`, ~57с, 5 файлов, 4 id) — **1/4 harness OK, 0/1 сабтестов**. 3 `.https.` файла — TLS-гэп BUG-657 (один попутно словил BUG-380-паттерн). Единственный исполнившийся тест падает на отсутствии валидации `peerIdentity` в конструкторе — тот же корень, что BUG-1058. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-webrtc-priority",
        "title": "WPT: вендорить + прогнать категорию `webrtc-priority`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа, заметка «нет конвейера» была неточна — тот же дрейф, что у `webrtc`/`webrtc-extensions`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-priority --recursive`, 2 файла, 2 id) — **2/2 harness OK, 0/9 сабтестов**. Найден [BUG-726](bugs/BUG-726-OPEN.md) (`createDataChannel()` отбрасывает `options` целиком, `.priority` не отражается). Остальные 7 падений — уже задокументированный [BUG-721](bugs/BUG-721-OPEN.md)-смежный пробел (`addTransceiver()` no-op). Новый номер: BUG-726",
+       "note": "Скоуп: 🚫 (вне скоупа, заметка «нет конвейера» была неточна — тот же дрейф, что у `webrtc`/`webrtc-extensions`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-priority --recursive`, 2 файла, 2 id) — **2/2 harness OK, 0/9 сабтестов**. Найден [BUG-726](bugs/BUG-726-OPEN.md) (`createDataChannel()` отбрасывает `options` целиком, `.priority` не отражается). Остальные 7 падений — уже задокументированный [BUG-1058](bugs/BUG-1058-FIXED.md)-смежный пробел (`addTransceiver()` no-op). Новый номер: BUG-726",
        "bugs": [
         "BUG-726"
        ]
@@ -4677,7 +4677,7 @@
        "title": "WPT: вендорить + прогнать категорию `webrtc-svc`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа, подтверждено точно). DONE 2026-08-17: вендорена + прогнана целиком (`--all --root webrtc-svc --recursive`, ~41с, 6 файлов, 5 id) — **5/5 harness OK, 0/67 сабтестов**. Все падения — уже задокументированные гэпы: Phase 1 нет захвата видео (63 сабтеста), `addTransceiver()` no-op (4 сабтеста, тот же дефект что BUG-721/BUG-726). Новых багов не заведено"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено точно). DONE 2026-08-17: вендорена + прогнана целиком (`--all --root webrtc-svc --recursive`, ~41с, 6 файлов, 5 id) — **5/5 harness OK, 0/67 сабтестов**. Все падения — уже задокументированные гэпы: Phase 1 нет захвата видео (63 сабтеста), `addTransceiver()` no-op (4 сабтеста, тот же дефект что BUG-1058/BUG-726). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-websockets",
@@ -8003,25 +8003,11 @@
    "date": null,
    "debtor": false
   },
-  "BUG-719": {
-   "status": "open",
-   "title": "`MIDIPort`/`MIDIInput`/`MIDIOutput`/`MIDIAccess` are plain `class X extends EventTarget` exported directly on `window` with no constructor guard — `new window.M…",
-   "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-720": {
    "status": "open",
    "title": "`MIDIInputMap`/`MIDIOutputMap` (spec-mandated separate maplike globals) don't exist at all — `MIDIAccess.inputs`/`.outputs` are both built from one shared, non-…",
    "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
    "date": null,
-   "debtor": false
-  },
-  "BUG-721": {
-   "status": "fixed",
-   "title": "`fetch()` отдавал тело **чужого** ответа для любого тела до 64 КиБ: `_fromFetchCache` копирует тело в персональный слот, но eager pull в конструкторе `ReadableS…",
-   "component": "js (`crates/js/src/dom.rs` — `Response._fromFetchCache`, `Response.prototype._consumeBody`)",
-   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-723": {
@@ -12329,6 +12315,13 @@
    "date": "2026-08-22",
    "debtor": false
   },
+  "BUG-721": {
+   "status": "fixed",
+   "title": "`fetch()` отдавал тело **чужого** ответа для любого тела до 64 КиБ: `_fromFetchCache` копирует тело в персональный слот, но eager pull в конструкторе `ReadableS…",
+   "component": "js (`crates/js/src/dom.rs` — `Response._fromFetchCache`, `Response.prototype._consumeBody`)",
+   "date": "2026-08-09",
+   "debtor": false
+  },
   "BUG-722": {
    "status": "fixed",
    "title": "`<link rel=stylesheet>`, вставленный скриптом, загружался и применялся шеллом, но со стороны JS не давал ни `load`, ни `error` (ни через `link.onload`, ни через…",
@@ -14141,6 +14134,20 @@
    "component": "js (`crates/js/src/broadcast_channel.rs:193-219` — `BroadcastChannel.prototype.postMessage`)",
    "date": "2026-09-17",
    "debtor": false
+  },
+  "BUG-719": {
+   "status": "fixed",
+   "title": "`MIDIPort`/`MIDIInput`/`MIDIOutput`/`MIDIAccess` are plain `class X extends EventTarget` exported directly on `window` with no constructor guard — `new window.M…",
+   "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
+   "date": "2026-09-17",
+   "debtor": false
+  },
+  "BUG-1058": {
+   "status": "fixed",
+   "title": "Заведён как BUG-721; перенумерован — номер занят другим закрытым багом (fetch-cache body mixup, 2026-08-09). `RTCPeerConnection.prototype` has no `setConfigurat…",
+   "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
+   "date": "2026-09-18",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14520,6 +14527,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `HTMLFrameElement` не определён, при живом `HTMLFrameSetElement`) + shell (вложенный browsing context не создаётся вовсе, ср. BUG-480/BUG-798)": [
    "BUG-854"
+  ],
+  "js (`crates/js/src/dom.rs` — `Response._fromFetchCache`, `Response.prototype._consumeBody`)": [
+   "BUG-721"
   ],
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + layout/shell (снимок custom properties)": [
    "BUG-732"

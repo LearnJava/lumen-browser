@@ -30,7 +30,7 @@ new RTCPeerConnection().createDataChannel('x', {priority: 'high', ordered: false
 ```
 
 `RTCRtpParameters-encodings.html`'s remaining 7 subtests all fail on the
-already-documented [BUG-721](BUG-721-OPEN.md)-adjacent gap —
+already-documented [BUG-1058](BUG-1058-FIXED.md)-adjacent gap —
 `pc.addTransceiver()` returns `null` (no-op stub, per
 `WPT-VENDOR-webrtc-extensions`'s note), so `sender` destructuring throws —
 not a new finding, just the addTransceiver no-op paying its price here too.

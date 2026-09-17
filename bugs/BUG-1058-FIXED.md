@@ -1,8 +1,13 @@
-# BUG-721 — `RTCPeerConnection` has no `setConfiguration`/`getConfiguration`, and the constructor never validates `RTCConfiguration`
+# BUG-1058 — `RTCPeerConnection` has no `setConfiguration`/`getConfiguration`, and the constructor never validates `RTCConfiguration`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-18
 **Компонент:** js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)
 **Найден:** P2, WPT-VENDOR-webrtc, 2026-08-09
+
+**Заведён как BUG-721** — при разборе оказалось, что номер уже занят закрытым
+багом (`fetch()` отдавал тело чужого ответа, 2026-08-09), заведённым позже
+того же дня. Перенумерован в BUG-1058 при закрытии 2026-09-18; `BUG-721` в
+любой ссылке ниже — старое имя этой заявки, не смежная.
 
 ## Симптом
 
@@ -67,15 +72,25 @@ at line 126):
   `createDataChannel` — no `setConfiguration`/`getConfiguration` pair exists
   anywhere in the shim.
 
-## Дальше
+## Фикс
 
-Fix scope: add `getConfiguration()` (return a shallow copy of `this._config`
-merged with per-spec defaults) and `setConfiguration(config)` (merge into
-`this._config`, reject with `InvalidModificationError` for a
-`certificates` change) to the prototype; add constructor-time and
-`setConfiguration`-time `iceServers` validation (URL scheme is `stun:`/
-`stuns:`/`turn:`/`turns:` → else `SyntaxError`; TURN `username` ≤ 512 UTF-16
-code units → else `InvalidAccessError`; `iceServers: null` → `TypeError`).
-Independent of the mDNS-candidate privacy behavior (§12 Unique Features) —
-the candidate-gathering path is unaffected by config validation and does not
-need to change.
+`WEBRTC_SHIM` (`crates/js/src/webrtc_stub.rs`) gets `getConfiguration()`
+(shallow copy of `this._config` merged with spec defaults) and
+`setConfiguration(config)` (merges into `this._config`, throws
+`InvalidModificationError` DOMException on a `certificates` change) on
+`RTCPeerConnection.prototype`. A shared `_validateIceServers(iceServers)`
+helper is called from both the constructor and `setConfiguration`: `null` →
+`TypeError`; any `urls` entry whose scheme isn't `stun:`/`stuns:`/`turn:`/
+`turns:` → `SyntaxError` DOMException; a TURN `username` over 512 UTF-16
+code units → `InvalidAccessError` DOMException.
+
+6 new unit tests (`crates/js/src/webrtc_stub.rs::tests`) cover
+`getConfiguration` reflecting the constructor arg, `setConfiguration`
+merging, and all three validation error paths plus the
+`InvalidModificationError` rejection.
+`cargo test -p lumen-js --lib webrtc_stub:: --features v8-backend` — 23/23.
+`cargo clippy --workspace --all-targets -- -D warnings` — чист.
+`scripts/scoped-test.sh` — единственный красный
+`cases::snapshot_cpu::cpu_snapshots_match_references` — чужой дрейф эталонов
+([BUG-1008](BUG-1008-OPEN.md), тот же набор из 7 файлов), не связан с правкой
+(`git status --short` перед коммитом — изменён только `webrtc_stub.rs`).

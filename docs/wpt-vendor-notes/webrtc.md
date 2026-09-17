@@ -29,7 +29,7 @@ confirmed both directly (`typeof RTCPeerConnection.prototype.setConfiguration
 === 'undefined'`, and `new RTCPeerConnection({iceServers:[{urls:'not-a-valid-
 url'}]})` does not throw) and ruled out the BUG-629/374/672/713/719
 guard-less-constructor pattern (`RTCPeerConnection()` without `new` correctly
-throws `TypeError`). Filed as [BUG-721](../../bugs/BUG-721-OPEN.md).
+throws `TypeError`). Filed as [BUG-1058](../../bugs/BUG-1058-FIXED.md).
 
 ## Прогон и находки (`docs/wpt-status.md`)
 
@@ -52,4 +52,4 @@ throws `TypeError`). Filed as [BUG-721](../../bugs/BUG-721-OPEN.md).
 `InvalidAccessError` на слишком длинный TURN username, ни `TypeError` на
 `null`). Живая проба подтвердила оба факта напрямую и опровергла паттерн
 guard-less-конструктора (`RTCPeerConnection()` без `new` корректно бросает
-`TypeError`) — заведён [BUG-721](../bugs/BUG-721-OPEN.md).
+`TypeError`) — заведён [BUG-1058](../bugs/BUG-1058-FIXED.md).

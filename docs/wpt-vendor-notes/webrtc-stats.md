@@ -48,7 +48,7 @@ reference to any other instance, so no event could reach a "remote" peer
 even if one were fired. Every WPT test built on the standard two-peer
 pattern (`localPc`/`remotePc` exchange, then assert on a remote-side
 callback) hangs by construction — this is structural, not a per-property
-gap like [BUG-721](../../bugs/BUG-721-OPEN.md)/
+gap like [BUG-1058](../../bugs/BUG-1058-FIXED.md)/
 [BUG-726](../../bugs/BUG-726-OPEN.md). Root cause of 100% of this
 category's TIMEOUTs (5 of 8 files) and plausibly an uncounted contributor
 to some already-logged TIMEOUTs in `webrtc`/`webrtc-extensions`/
