@@ -26,7 +26,7 @@ Both calls resolved cleanly with the registration's `scriptURL` echoing back wha
 
 ## Симптом
 
-Any WPT test or real page asserting that `register()` rejects for a cross-origin or non-http(s) script URL fails silently (the promise resolves instead of rejecting) — this is the same "constructor/method performs no argument validation" defect class already filed for other APIs found by this backlog ([BUG-646](BUG-646-OPEN.md) `PaymentRequest`, [BUG-656](BUG-656-OPEN.md) `PresentationRequest`, [BUG-666](BUG-666-OPEN.md) `getDisplayMedia`, [BUG-667](BUG-667-OPEN.md) `getScreenDetails`), now confirmed for `ServiceWorkerContainer.register()` itself.
+Any WPT test or real page asserting that `register()` rejects for a cross-origin or non-http(s) script URL fails silently (the promise resolves instead of rejecting) — this is the same "constructor/method performs no argument validation" defect class already filed for other APIs found by this backlog ([BUG-646](BUG-646-OPEN.md) `PaymentRequest`, [BUG-656](BUG-656-OPEN.md) `PresentationRequest`, [BUG-666](BUG-666-FIXED.md) `getDisplayMedia`, [BUG-667](BUG-667-OPEN.md) `getScreenDetails`), now confirmed for `ServiceWorkerContainer.register()` itself.
 
 ## Что НЕ является причиной
 
