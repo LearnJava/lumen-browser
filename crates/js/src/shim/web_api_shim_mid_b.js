@@ -3893,6 +3893,17 @@ function _lumen_fire_connect_src_violation(csp) {
     }
 }
 
+// GAP-CSPENF срез 13: same shape as `_lumen_fire_connect_src_violation` above,
+// for `worker-src` — `new Worker(url)`/`new SharedWorker(url)` read their own
+// `_lumen_worker_last_csp_block`/`_lumen_sw_last_csp_block` side channel and
+// hand the `[blockedUri, originalPolicy]` pair (or `null`) here.
+function _lumen_fire_worker_src_violation(csp) {
+    if (!csp || csp.length !== 2) return;
+    if (typeof _lumen_dispatch_csp_violation === 'function') {
+        _lumen_dispatch_csp_violation('worker-src', csp[0], csp[1], 'enforce');
+    }
+}
+
 function _perf_rt_record_fetch(url, initiator, startMs, status) {
     if (typeof _lumen_record_resource_timing !== 'function') return;
     var len = 0;

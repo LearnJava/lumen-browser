@@ -853,3 +853,142 @@ fn shared_worker_error_addeventlistener_also_fires() {
     assert!(bool_eval(&rt, "gotViaListener !== null"));
     assert!(bool_eval(&rt, "gotViaListener.message === 'boom-listener'"));
 }
+
+// ── GAP-CSPENF срез 13: worker-src против new Worker()/new SharedWorker() ──
+
+/// Mock provider whose `check_worker_src` always refuses with
+/// `Error::CspWorkerSrcBlocked`, the way `HttpClient::check_worker_src`
+/// (срез 13) does when the document's `worker-src` forbids the worker's
+/// script URL — proves `_lumen_worker_fetch_script`/`_lumen_sw_fetch_script`
+/// run the check BEFORE ever reaching `fetch_sync` (this provider errors
+/// instead of panicking so a regression that skips the check shows up as a
+/// wrong message/empty side channel rather than a test-harness abort).
+struct CspBlockedWorkerProvider;
+impl lumen_core::ext::JsFetchProvider for CspBlockedWorkerProvider {
+    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Err(lumen_core::error::Error::Network("fetch_sync must not be reached — check_worker_src should short-circuit first".into()))
+    }
+    fn check_worker_src(&self, _url: &str) -> lumen_core::error::Result<()> {
+        Err(lumen_core::error::Error::CspWorkerSrcBlocked {
+            blocked_uri: "https://blocked.example/worker.js".into(),
+            original_policy: "worker-src 'none'".into(),
+        })
+    }
+}
+
+fn v8_runtime_with_csp_blocked_worker(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedWorkerProvider);
+    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, false).unwrap();
+    rt
+}
+
+#[test]
+fn worker_src_block_reaches_native_side_channel() {
+    let rt = v8_runtime_with_csp_blocked_worker(make_doc());
+    let r = rt
+        .eval("_lumen_worker_fetch_script('https://blocked.example/worker.js'); _lumen_worker_last_csp_block()")
+        .unwrap();
+    match r {
+        lumen_core::JsValue::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], lumen_core::JsValue::String("https://blocked.example/worker.js".into()));
+            assert_eq!(arr[1], lumen_core::JsValue::String("worker-src 'none'".into()));
+        }
+        other => panic!("expected [uri, policy], got {other:?}"),
+    }
+}
+
+#[test]
+fn worker_src_block_never_starts_worker_and_fires_onerror() {
+    let rt = v8_runtime_with_csp_blocked_worker(make_doc());
+    rt.eval(
+        "var w = new Worker('https://blocked.example/worker.js'); \
+                 var errEvent = null; \
+                 w.onerror = function(e){ errEvent = e; };",
+    )
+    .unwrap();
+    // `_id` stays null — same "worker never started" state a network failure
+    // leaves it in (HTML LS §10.2.6.1).
+    assert!(bool_eval(&rt, "w._id === null"));
+    rt.eval("_lumen_tick_timers()").unwrap();
+    assert!(bool_eval(&rt, "errEvent !== null"));
+    assert!(bool_eval(&rt, "errEvent.type === 'error'"));
+    assert!(bool_eval(
+        &rt,
+        "errEvent.message.indexOf('https://blocked.example/worker.js') !== -1"
+    ));
+}
+
+#[test]
+fn worker_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_worker(make_doc());
+    rt.eval(
+        "var seen = null; \
+         document.addEventListener('securitypolicyviolation', function(e) { \
+             seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
+         }); \
+         var w = new Worker('https://blocked.example/worker.js'); \
+         _lumen_tick_timers();",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "worker-src|https://blocked.example/worker.js|worker-src 'none'".into()
+        )
+    );
+}
+
+#[test]
+fn shared_worker_src_block_reaches_native_side_channel() {
+    let rt = v8_runtime_with_csp_blocked_worker(make_doc());
+    let r = rt
+        .eval("_lumen_sw_fetch_script('https://blocked.example/worker.js'); _lumen_sw_last_csp_block()")
+        .unwrap();
+    match r {
+        lumen_core::JsValue::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], lumen_core::JsValue::String("https://blocked.example/worker.js".into()));
+            assert_eq!(arr[1], lumen_core::JsValue::String("worker-src 'none'".into()));
+        }
+        other => panic!("expected [uri, policy], got {other:?}"),
+    }
+}
+
+#[test]
+fn shared_worker_src_block_fires_onerror() {
+    let rt = v8_runtime_with_csp_blocked_worker(make_doc());
+    rt.eval(
+        "var sw = new SharedWorker('https://blocked.example/worker.js'); \
+                 var errEvent = null; \
+                 sw.onerror = function(e){ errEvent = e; };",
+    )
+    .unwrap();
+    rt.eval("_lumen_tick_timers()").unwrap();
+    assert!(bool_eval(&rt, "errEvent !== null"));
+    assert!(bool_eval(
+        &rt,
+        "errEvent.message.indexOf('https://blocked.example/worker.js') !== -1"
+    ));
+}
+
+#[test]
+fn shared_worker_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_worker(make_doc());
+    rt.eval(
+        "var seen = null; \
+         document.addEventListener('securitypolicyviolation', function(e) { \
+             seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
+         }); \
+         var sw = new SharedWorker('https://blocked.example/worker.js'); \
+         _lumen_tick_timers();",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "worker-src|https://blocked.example/worker.js|worker-src 'none'".into()
+        )
+    );
+}

@@ -670,10 +670,17 @@ pub(crate) fn parse_and_layout(
             // `connect-src` (or `default-src`) — WebSocket/EventSource share this
             // `HttpClient` but are not gated here, that's a separate directive
             // (`connect-src` covers them too per CSP3 §6.7.2, left for a later срез).
+            // GAP-CSPENF срез 13: same merged document policy also gates
+            // `new Worker(url)`/`new SharedWorker(url)`'s classic script fetch
+            // against `worker-src` (or `default-src`) — `Worker`/`SharedWorker`
+            // share this `HttpClient` the same way WebSocket/EventSource/
+            // sendBeacon do (срезы 11/12), each checked against its own directive.
             let root = doc.root();
             if let Some((policy, original_policy)) = crate::csp_enforce::document_csp_policy(&doc, root) {
                 let self_origin = base.origin();
-                client = client.with_connect_src_policy(policy, self_origin, original_policy);
+                client = client
+                    .with_connect_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
+                    .with_worker_src_policy(policy, self_origin, original_policy);
             }
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =

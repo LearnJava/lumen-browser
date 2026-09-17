@@ -691,3 +691,116 @@ fire-and-forget, вызывающий скрипт не блокируется),
 проверка заголовка и `<meta>`; картинки/скрипты/листы внутри `<iframe>` не
 покрытые срезами 6/8; двойная доставка `securitypolicyviolation` для
 дублирующихся продюсеров картинок (существующий паттерн, см. срез 4).
+
+## Срез 13 (2026-09-17, P6) — `worker-src` против `new Worker()`/`new SharedWorker()`
+
+Реализовано: пятая директива этого GAP и первая направленная не на fetch/XHR/
+WS/SSE/beacon, а на конструирование воркера. `CspDirective::WorkerSrc` был
+распарсен с самого начала (`crates/network/src/csp.rs`), но нигде не
+проверялся — `grep -rn WorkerSrc crates/` до этого среза давал только парсер и
+doc-comment `csp_enforce.rs`, называвший директиву непокрытой.
+
+- Fallback-цепочка: CSP3 §6.4 формально даёт `worker-src` промежуточный шаг
+  через `child-src`, затем `script-src`, и только потом `default-src`.
+  `child-src` в этом кодовом дереве не распарсен вовсе (`grep -n child-src
+  crates/network/src/csp.rs` — 0 совпадений), и ни одна другая директива здесь
+  не проверяет многошаговый фолбэк — только прямой `effective_sources`,
+  который уже общий для любой директивы (`.or_else(|| default-src)`). Этот
+  срез не стал заводить `child-src` ради одного промежуточного звена: у
+  `worker-src` тот же однократный фолбэк на `default-src`, что и у всех
+  остальных директив в этом файле — уже, чем полный CSP3-алгоритм, но
+  единообразно с img-src/script-src/style-src/connect-src, и это осознанно
+  задокументированная граница, а не пропуск.
+- Архитектурно этот срез — не срез 4/6/7/9 (`&Document` есть в коде страницы) и
+  не 100% срез 10-12: `new Worker(url)`/`new SharedWorker(url)` резолвят и
+  фетчят свой классический скрипт синхронно из нативного байндинга
+  (`_lumen_worker_fetch_script`/`_lumen_sw_fetch_script`,
+  `crates/js/src/worker.rs`/`shared_worker.rs`), у которого нет `&Document` —
+  та же причина, по которой срез 10 переехал в `lumen-network`. Поэтому гейт
+  живёт там же:
+  - `crates/core/src/error.rs`: новый вариант `Error::CspWorkerSrcBlocked
+    { blocked_uri, original_policy }`, отдельный от `CspConnectSrcBlocked` —
+    разные директивы, разный `violatedDirective` на выходе.
+  - `crates/core/src/ext.rs`: `JsFetchProvider::check_worker_src(url) ->
+    Result<()>` — I/O-free пре-чек, тот же контракт, что `check_connect_src`
+    (срез 12) даёт `sendBeacon`; default-реализация `Ok(())` для двойников без
+    CSP.
+  - `crates/network/src/lib.rs`: `HttpClient` получила `worker_src_policy:
+    Option<(CspPolicy, Option<Origin>, String)>` — та же тройка, что и
+    `connect_src_policy`, но отдельное поле (проверяется против другой
+    директивы, `CspDirective::WorkerSrc` вместо `ConnectSrc`), новый билдер
+    `with_worker_src_policy`, приватный `worker_src_gate(&Url)` и
+    `check_worker_src` как override трейта.
+  - `crates/shell/src/page_pipeline.rs::parse_and_layout`: тот же
+    `document_csp_policy`, что срез 10 уже собирает для `connect_src_policy`,
+    теперь клонируется и на `with_worker_src_policy` — один расчёт политики,
+    два гейта.
+  - `crates/js/src/worker.rs`/`shared_worker.rs`: `_lumen_worker_fetch_script`/
+    `_lumen_sw_fetch_script` зовут `check_worker_src(&url)` **до**
+    `fetch_worker_script` — заблокированный URL не долетает до сети вовсе (тот
+    же принцип «ни одного исходящего байта», что и у всех предыдущих срезов).
+    Отказ пишется в однослотовый side-channel (`last_csp_block`, тот же паттерн,
+    что срезы 10/11/12 уже используют для `fetch`/WS/SSE/beacon — конструктор
+    синхронный и по одному вызову за раз), читаемый новыми нативами
+    `_lumen_worker_last_csp_block()`/`_lumen_sw_last_csp_block()`.
+  - `crates/js/src/shim/web_api_shim_mid_b.js`: новый тонкий хелпер
+    `_lumen_fire_worker_src_violation(csp)`, по образцу
+    `_lumen_fire_connect_src_violation` (срез 10) — зовёт тот же
+    `_lumen_dispatch_csp_violation('worker-src', …)`.
+  - `WORKER_SHIM`/`SHARED_WORKER_SHIM` (внутри `worker.rs`/`shared_worker.rs`,
+    не в общем шиме — у них своя JS-строка): в ветке «скрипт не загрузился»
+    (уже существующей с BUG-364 для обычного сетевого отказа) читают side
+    channel и зовут новый хелпер перед диспатчем `error` — тот же порядок
+    «CSP-событие раньше сетевой ошибки», что срезы 4/6/9/11 уже дают
+    картинкам/скриптам/WS. Отказ неотличим от обычного сетевого сбоя без
+    side channel: оба дают `undefined` от `_lumen_*_fetch_script`, поэтому
+    `Worker`/`SharedWorker` фейлится тем же путём, что и BUG-364 —
+    `error`-событие, `_id`/порт остаются «никогда не запущен».
+  - `HttpClient::fetch_sync`/`fetch_request` (через который
+    `fetch_worker_script` реально ходит в сеть) уже проверяет `connect-src`
+    в `fetch_request_impl` — то есть до этого среза классический воркер-скрипт
+    *случайно* гасился чужой директивой (`connect-src`), если она была строже.
+    После этого среза оба гейта действуют независимо: `worker-src` (или
+    `default-src`) — до входа в `fetch_worker_script`, `connect-src` (или свой
+    `default-src`) — внутри него, если первый пропустил. Не регрессия (страница
+    строже не станет), но означает, что заблокированный `connect-src`-политикой
+    воркер-скрипт по-прежнему не получит `violatedDirective=worker-src` —
+    получит `connect-src`, если это единственная сработавшая директива;
+    см. «Не покрыто» ниже.
+
+Подтверждено 5 юнит-тестов в `crates/network/src/lib.rs`
+(`worker_src_none_blocks_check_before_any_network_io`,
+`worker_src_allowed_host_passes_check`,
+`worker_src_falls_back_to_default_src`,
+`no_worker_src_policy_does_not_block_check`,
+`worker_src_unparseable_url_not_blocked` — тот же "before-any-network-io"/
+"no-policy-no-block"/"fail-open-on-parse-error" рисунок, что срезы 10-12 уже
+проверяли) + 7 интеграционных в `crates/js/src/dom/tests/v8_webworker.rs`
+(`worker_src_block_reaches_native_side_channel`,
+`worker_src_block_never_starts_worker_and_fires_onerror`,
+`worker_src_block_fires_security_policy_violation_event`,
+`shared_worker_src_block_reaches_native_side_channel`,
+`shared_worker_src_block_fires_onerror`,
+`shared_worker_src_block_fires_security_policy_violation_event` — полный
+`securitypolicyviolation` с `violatedDirective=worker-src` и правильными
+`blockedURI`/`originalPolicy`, не только сам side channel). Подтверждено
+`cargo clippy -p lumen-network --all-targets -- -D warnings` (чисто),
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+(чисто), `cargo build -p lumen-shell --features v8` + `cargo clippy -p
+lumen-shell --all-targets --features v8 -- -D warnings` (оба чисто).
+
+Не покрыто этим срезом: `importScripts()` внутри уже запущенного воркера
+(гейтится только начальный скрипт конструктора — `resolve_import_url` в
+`worker.rs` не тронут); `blob:`/`data:` worker-скрипты (уже опаковые URL,
+`worker-src` по CSP3 их не матчит источниками — вне логики фолбэка на
+`default-src`, отдельно не проверялось); `child-src`/`script-src`
+промежуточный фолбэк CSP3 §6.4 (см. выше — используется только прямой фолбэк
+на `default-src`, как и у всех остальных директив здесь); неразличимость
+`worker-src`- и `connect-src`-блокировки при срабатывании обеих (см. выше —
+`violatedDirective` может уйти как `connect-src`, если тот гейт сработал
+первым внутри `fetch_worker_script`); `ServiceWorker` (`sw_worker.rs` — своя
+регистрация, `worker-src` по CSP3 её не покрывает, это отдельная директива нет
+в этом кодовом дереве); директивы кроме `script-src`/`img-src`/`style-src`/
+`connect-src`/`worker-src`; `report-uri`/`report-to`; hash-источники; честная
+независимая проверка заголовка и `<meta>`; картинки/скрипты/листы внутри
+`<iframe>` не покрытые срезами 6/8.
