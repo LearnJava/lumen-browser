@@ -31,16 +31,34 @@
 //! `HttpClient` перед тем, как он станет `fetch_provider`. Детали —
 //! `bugs/BUG-811-OPEN.md` срез 10.
 //!
-//! Что НЕ покрыто (следующие срезы): `worker-src` и остальные директивы,
-//! `connect-src` против WebSocket/EventSource/`sendBeacon` (те делят
-//! `HttpClient` с `fetch()`, но не гейтятся срезом 10), `report-uri`/
-//! `report-to`, hash-источники (только `'unsafe-inline'` и `'nonce-…'`),
+//! Срезы 11/12 (тоже вне этого файла, по той же причине, что срез 10) добавили
+//! `connect-src` против WebSocket/EventSource (`crates/network/src/lib.rs`'s
+//! `JsWebSocketProvider`/`JsSseProvider`) и `sendBeacon` (`check_connect_src`,
+//! `crates/core/src/ext.rs`) — оба делят один `HttpClient` и один
+//! `connect_src_policy` с `fetch()`.
+//!
+//! Срез 13 добавил `worker-src` (falling back to `default-src` — `worker-src`
+//! не получил своего child-src/script-src промежуточного шага CSP3 §6.4, тот
+//! же однократный фолбэк на `default-src`, что и у всех директив здесь) против
+//! `new Worker(url)`/`new SharedWorker(url)`: тоже вне этого файла — у
+//! `_lumen_worker_fetch_script`/`_lumen_sw_fetch_script` (`crates/js/src/
+//! worker.rs`/`shared_worker.rs`) нет `&Document`, гейт живёт в
+//! `lumen-network::HttpClient::check_worker_src` (`with_worker_src_policy`),
+//! тот же `document_csp_policy` из `page_pipeline.rs::parse_and_layout`, что
+//! срез 10 уже собирает для `connect_src_policy`. Детали — `bugs/
+//! BUG-811-OPEN.md` срез 13.
+//!
+//! Что НЕ покрыто (следующие срезы): остальные директивы (`object-src`/
+//! `media-src`/`frame-src`/`manifest-src`/…), `report-uri`/`report-to`,
+//! hash-источники (только `'unsafe-inline'` и `'nonce-…'`),
 //! `background-image`/`@font-face url()` (используют `fetch_image_bytes`
 //! напрямую, не гейтятся вовсе), инлайновые `<style>`/атрибут `style` (не
 //! блокируются, только внешний `<link>`), `@import` внутри уже загруженного
 //! листа (наследует политику владельца, отдельно не проверяется), честная
-//! независимая проверка заголовка и `<meta>` вместо их слияния. См.
-//! `bugs/BUG-811-OPEN.md`.
+//! независимая проверка заголовка и `<meta>` вместо их слияния,
+//! `importScripts()` внутри уже запущенного воркера (`worker-src` гейтит
+//! только начальный скрипт конструктора, не последующие `importScripts`).
+//! См. `bugs/BUG-811-OPEN.md`.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;

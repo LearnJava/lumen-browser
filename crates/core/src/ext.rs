@@ -2054,6 +2054,23 @@ pub trait JsFetchProvider: Send + Sync {
         let _ = url;
         Ok(())
     }
+
+    /// I/O-free pre-check: would the document's `worker-src` (or `default-src`)
+    /// policy block a classic `new Worker(url)`/`new SharedWorker(url)` script
+    /// fetch, without issuing one (GAP-CSPENF срез 13).
+    ///
+    /// Mirrors [`check_connect_src`](Self::check_connect_src)'s shape, but for
+    /// a different directive: worker/shared-worker construction resolves and
+    /// fetches its script synchronously from a native binding
+    /// (`_lumen_worker_fetch_script` in `lumen-js`), which has no `&Document`
+    /// of its own — the same architectural reason srez 10 gave for moving
+    /// `connect-src` enforcement into `lumen-network`. Default implementation
+    /// never blocks, matching `HttpClient` with no `worker-src` policy
+    /// installed.
+    fn check_worker_src(&self, url: &str) -> Result<()> {
+        let _ = url;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

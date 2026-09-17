@@ -2806,6 +2806,15 @@ pub struct HttpClient {
     /// `crates/shell/src/csp_enforce.rs` and construct their own `HttpClient`
     /// per call, so this field never affects them.
     connect_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    /// GAP-CSPENF срез 13: CSP `worker-src` (falling back to `default-src`)
+    /// gate for `new Worker(url)`/`new SharedWorker(url)` classic script
+    /// fetches. Same `(policy, self_origin, original_policy)` shape as
+    /// [`Self::connect_src_policy`] and set from the same call site
+    /// (`crates/shell/src/page_pipeline.rs`) with the same merged document
+    /// policy — a separate field rather than reusing `connect_src_policy`
+    /// because the two are checked against different [`CspDirective`]s and a
+    /// future срез may need them to diverge (e.g. per-worker-flavour policy).
+    worker_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
 }
 
 impl HttpClient {
@@ -2834,6 +2843,7 @@ impl HttpClient {
             alt_svc_cache: Arc::new(std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new())),
             h3_pool: None,
             connect_src_policy: None,
+            worker_src_policy: None,
         }
     }
 
@@ -2852,6 +2862,22 @@ impl HttpClient {
         original_policy: String,
     ) -> Self {
         self.connect_src_policy = Some((policy, self_origin, original_policy));
+        self
+    }
+
+    /// Attach the document's CSP `worker-src` (falling back to `default-src`)
+    /// gate — GAP-CSPENF срез 13. Same argument shape and provenance as
+    /// [`Self::with_connect_src_policy`]; only [`Self::check_worker_src`]
+    /// (the `JsFetchProvider` override backing `new Worker(url)`/
+    /// `new SharedWorker(url)`'s classic script fetch) checks this.
+    #[must_use]
+    pub fn with_worker_src_policy(
+        mut self,
+        policy: CspPolicy,
+        self_origin: Option<Origin>,
+        original_policy: String,
+    ) -> Self {
+        self.worker_src_policy = Some((policy, self_origin, original_policy));
         self
     }
 
@@ -4188,6 +4214,16 @@ impl JsFetchProvider for HttpClient {
         let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
         self.connect_src_gate(&url)
     }
+
+    /// GAP-CSPENF срез 13: `worker-src`/`default-src` pre-check for
+    /// `new Worker(url)`/`new SharedWorker(url)`'s classic script fetch,
+    /// called by the native `_lumen_worker_fetch_script`/`_lumen_sw_fetch_script`
+    /// bindings before they touch `fetch_worker_script` — same "not a single
+    /// outgoing byte" shape as [`Self::check_connect_src`], different directive.
+    fn check_worker_src(&self, url: &str) -> Result<()> {
+        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        self.worker_src_gate(&url)
+    }
 }
 
 impl HttpClient {
@@ -4200,6 +4236,21 @@ impl HttpClient {
             && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, url, self_origin.as_ref())
         {
             return Err(Error::CspConnectSrcBlocked {
+                blocked_uri: url.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// `worker-src`/`default-src` gate backing [`JsFetchProvider::check_worker_src`]
+    /// (GAP-CSPENF срез 13) — same shape as [`Self::connect_src_gate`], checked
+    /// against [`Self::worker_src_policy`] and `CspDirective::WorkerSrc` instead.
+    fn worker_src_gate(&self, url: &Url) -> Result<()> {
+        if let Some((policy, self_origin, original_policy)) = &self.worker_src_policy
+            && !policy.fetch_directive_allows(&CspDirective::WorkerSrc, url, self_origin.as_ref())
+        {
+            return Err(Error::CspWorkerSrcBlocked {
                 blocked_uri: url.to_string(),
                 original_policy: original_policy.clone(),
             });
@@ -5549,6 +5600,103 @@ mod tests {
             "https://example.com/beacon",
         );
         assert!(result.is_ok());
+    }
+
+    // ── GAP-CSPENF срез 13: worker-src против new Worker()/new SharedWorker() ──
+
+    #[test]
+    fn worker_src_none_blocks_check_before_any_network_io() {
+        // `check_worker_src` is the I/O-free pre-check the native
+        // `_lumen_worker_fetch_script`/`_lumen_sw_fetch_script` bindings run
+        // before touching `fetch_worker_script` — mirrors
+        // `connect_src_none_blocks_beacon_check_before_any_thread_is_spawned`.
+        let policy = csp::parse_csp_header("worker-src 'none'");
+        let client = HttpClient::new().with_worker_src_policy(
+            policy,
+            None,
+            "worker-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_worker_src(
+            &client,
+            "https://192.0.2.1.invalid/worker.js",
+        );
+        match result {
+            Err(Error::CspWorkerSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "https://192.0.2.1.invalid/worker.js");
+                assert_eq!(original_policy, "worker-src 'none'");
+            }
+            Ok(()) => panic!("expected CspWorkerSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspWorkerSrcBlocked, got {other}"),
+        }
+    }
+
+    #[test]
+    fn worker_src_allowed_host_passes_check() {
+        let policy = csp::parse_csp_header("worker-src example.com");
+        let client = HttpClient::new().with_worker_src_policy(
+            policy,
+            None,
+            "worker-src example.com".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_worker_src(
+            &client,
+            "https://example.com/worker.js",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn worker_src_falls_back_to_default_src() {
+        // No explicit `worker-src` — `effective_sources` (generic over any
+        // directive) already falls back to `default-src`, so this is free:
+        // no new fallback logic was added for `CspDirective::WorkerSrc`.
+        let policy = csp::parse_csp_header("default-src 'none'");
+        let client = HttpClient::new().with_worker_src_policy(
+            policy,
+            None,
+            "default-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_worker_src(
+            &client,
+            "https://example.com/worker.js",
+        );
+        assert!(matches!(result, Err(Error::CspWorkerSrcBlocked { .. })));
+    }
+
+    #[test]
+    fn no_worker_src_policy_does_not_block_check() {
+        // Default `HttpClient` (`with_worker_src_policy` never called) must
+        // not invent a CSP block.
+        let client = HttpClient::new();
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_worker_src(
+            &client,
+            "https://example.com/worker.js",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn worker_src_unparseable_url_not_blocked() {
+        // A URL that fails to parse never matches `Error::CspWorkerSrcBlocked`
+        // — it comes back as `Error::InvalidUrl` instead (same contract as
+        // `check_connect_src`), which the native `_lumen_worker_fetch_script`/
+        // `_lumen_sw_fetch_script` bindings' `if let Err(CspWorkerSrcBlocked
+        // {..})` guard does not match, so no `securitypolicyviolation` is
+        // invented for it — the request falls through to the normal fetch
+        // path, which fails there with the same `InvalidUrl` instead. Mirrors
+        // the shell-side `*_unparseable_url_not_blocked` tests' "fail open on
+        // parse errors" rule (срезы 4/6/7), expressed at this layer's contract.
+        let policy = csp::parse_csp_header("worker-src 'none'");
+        let client = HttpClient::new().with_worker_src_policy(
+            policy,
+            None,
+            "worker-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_worker_src(
+            &client,
+            "not a url",
+        );
+        assert!(!matches!(result, Err(Error::CspWorkerSrcBlocked { .. })));
     }
 
     #[test]

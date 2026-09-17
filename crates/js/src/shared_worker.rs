@@ -461,10 +461,20 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
     var resolved = _resolveScript(url);
     if (resolved.script === null) {
       // Script fetch failed (BUG-364): never connect, only fire `error`.
+      //
+      // GAP-CSPENF срез 13: `_lumen_sw_fetch_script` (called by
+      // `_resolveScript` above) returning undefined can mean an ordinary
+      // fetch failure or a `worker-src` refusal — read the side channel now,
+      // before it is overwritten by the next `new SharedWorker(url)` call.
+      var _swCsp = (typeof _lumen_sw_last_csp_block === 'function')
+        ? _lumen_sw_last_csp_block() : null;
       this.port = _makeDeadClientPort();
       var self = this;
       var u = String(url || '');
       setTimeout(function() {
+        if (typeof _lumen_fire_worker_src_violation === 'function') {
+          _lumen_fire_worker_src_violation(_swCsp);
+        }
         self._deliverError({
           message: 'SharedWorker script failed to load: ' + u,
           filename: u, lineno: 0, colno: 0,
@@ -641,12 +651,18 @@ fn close_shared_worker_port_v8(key: &str, port_id: u32) {
 /// `errors` is this runtime's shared-worker uncaught-exception queue
 /// (BUG-591), drained by [`crate::v8_runtime::V8JsRuntime::pump_shared_workers`].
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_shared_worker_bindings_v8(
     rt: &V8JsRuntime,
     outbox: &SharedWorkerOutbox,
     errors: &crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
+    // GAP-CSPENF срез 13: same one-slot `(blocked_uri, original_policy)` side
+    // channel as `worker.rs::install_worker_bindings_v8`'s `last_csp_block` —
+    // `SharedWorker`'s classic script fetch is synchronous and one at a time
+    // from the JS thread, same as `Worker`'s.
+    let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
     // _lumen_sw_connect(key, script, script_url) → u32
     //
     // `script_url` is the resolved worker script URL (the opaque URL itself
@@ -683,12 +699,44 @@ pub(crate) fn install_shared_worker_bindings_v8(
     // Synchronous GET for an external SharedWorker script (BUG-364), mirroring
     // `worker.rs::fetch_worker_script`. `undefined` on network error / non-2xx
     // status tells the JS shim to fire `error` instead of connecting.
+    //
+    // GAP-CSPENF срез 13: `worker-src`/`default-src` checked first via the
+    // I/O-free `check_worker_src`, same as `worker.rs`'s twin — a blocked URL
+    // never reaches `fetch_worker_script`. The refusal is stashed in
+    // `last_csp_block` for `_lumen_sw_last_csp_block` below.
     {
         let fp = fetch_provider.clone();
+        let lcb = Arc::clone(&last_csp_block);
         rt.register_native(
             "_lumen_sw_fetch_script",
             into_v8_fn1(move |url: String| -> Option<String> {
+                if let Some(provider) = fp.as_deref()
+                    && let Err(lumen_core::error::Error::CspWorkerSrcBlocked {
+                        blocked_uri,
+                        original_policy,
+                    }) = provider.check_worker_src(&url)
+                {
+                    *lcb.lock().unwrap() = Some((blocked_uri, original_policy));
+                    return None;
+                }
                 crate::worker::fetch_worker_script(fp.as_deref(), &url)
+            }),
+        )?;
+    }
+
+    // _lumen_sw_last_csp_block() → [blockedUri, originalPolicy] | []
+    //
+    // Read-and-clear contract, same shape as `worker.rs`'s
+    // `_lumen_worker_last_csp_block`.
+    {
+        let lcb = Arc::clone(&last_csp_block);
+        rt.register_native(
+            "_lumen_sw_last_csp_block",
+            into_v8_fn0(move || -> Vec<String> {
+                match lcb.lock().unwrap().take() {
+                    Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
+                    None => Vec::new(),
+                }
             }),
         )?;
     }
