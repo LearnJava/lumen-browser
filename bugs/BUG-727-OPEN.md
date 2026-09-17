@@ -38,7 +38,7 @@ in the shim ever calls `_dispatch` or invokes `this.ontrack`/`this.ondatachannel
 `this.onconnectionstatechange`/`this.oniceconnectionstatechange` directly:
 
 - `addTrack`/`addTransceiver` are no-ops returning `null` — no `track` event
-  is synthesized on either peer (own finding, see [BUG-721](BUG-721-OPEN.md)/
+  is synthesized on either peer (own finding, see [BUG-1058](BUG-1058-FIXED.md)/
   [BUG-726](BUG-726-OPEN.md) for the object-shape half of the same methods).
 - `createDataChannel` returns a plain detached object with its own dead
   `addEventListener`/`onopen` — it is never associated with the *other*
@@ -49,7 +49,7 @@ in the shim ever calls `_dispatch` or invokes `this.ontrack`/`this.ondatachannel
   `close()` (→ `'closed'`) — so `oniceconnectionstatechange` has no state
   transition to report even if something called it, and nothing does.
 
-This is a structural gap, not a per-property omission like BUG-721/726: the
+This is a structural gap, not a per-property omission like BUG-1058/726: the
 stub models each `RTCPeerConnection` as fully independent (per its own
 module doc, `crates/js/src/webrtc_stub.rs:1-16` — deliberately no real
 media/candidate exchange, mDNS-privacy-only scope), so there is no code path
@@ -64,7 +64,7 @@ Confirmed as the root cause of 100% of `webrtc-stats`'s TIMEOUTs (5 of 8
 files use `ontrack` or a data-channel-pair helper). The same mechanism is
 very likely under some of the un-investigated TIMEOUTs already logged
 against `webrtc`/`webrtc-extensions`/`webrtc-priority` (not re-verified
-here — those runs stopped at their own dominant findings, BUG-721/726,
+here — those runs stopped at their own dominant findings, BUG-1058/726,
 before individually triaging every remaining TIMEOUT), so this may already
 be an uncounted contributor there too.
 

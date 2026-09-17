@@ -38,7 +38,7 @@ throws if the given peerIdentity getter throws" —
 `assert_throws_js: function "() => new RTCPeerConnection({ peerIdentity:
 toStringThrows })" did not throw`. This is an instance of the constructor
 never validating `RTCConfiguration` fields, already filed as
-[BUG-721](../../bugs/BUG-721-OPEN.md) (found on the parent `webrtc`
+[BUG-1058](../../bugs/BUG-1058-FIXED.md) (found on the parent `webrtc`
 category via `iceServers`/`setConfiguration`/`getConfiguration`) — same root
 cause (`webrtc_stub.rs` stores `config` verbatim, line ~126-145), not a
 distinct defect worth its own number.
@@ -61,5 +61,5 @@ No new `BUG-NNN` filed.
 результаты предыдущего теста из-за неудавшейся навигации). Единственный
 исполнившийся тест (`RTCPeerConnection-constructor.html`) падает на
 отсутствии валидации `peerIdentity` в конструкторе — тот же корень, что уже
-описан в [BUG-721](../bugs/BUG-721-OPEN.md) (конструктор не валидирует
+описан в [BUG-1058](../bugs/BUG-1058-FIXED.md) (конструктор не валидирует
 `RTCConfiguration`). Новый BUG-NNN не заводился.
