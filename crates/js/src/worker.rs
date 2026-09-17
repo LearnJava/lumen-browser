@@ -329,6 +329,18 @@ pub(crate) fn worker_base_url(script_url: &str) -> &str {
 /// not have ([BUG-768](bugs/BUG-768-OPEN.md)).
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> {
+    rt.register_native_scoped(
+        "_lumen_import_script",
+        Box::new(|scope: &mut v8::PinScope, args: &v8::FunctionCallbackArguments, _rv: &mut v8::ReturnValue| {
+            let Some(source) = args.get(0).to_string(scope) else {
+                return;
+            };
+            let Some(script) = v8::Script::compile(scope, source, None) else {
+                return;
+            };
+            let _ = script.run(scope);
+        }),
+    )?;
     rt.register_native(
         "_lumen_now_ms",
         into_v8_fn0(move || -> f64 {
@@ -614,7 +626,7 @@ fn worker_global_shim(worker_id: u32) -> String {
       if (script === null || script === undefined) {{
         throw new Error('importScripts: cannot load script: ' + resolved);
       }}
-      (1, eval)(script);
+      _lumen_import_script(script);
     }}
   }};
 

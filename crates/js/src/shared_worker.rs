@@ -318,7 +318,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
       if (script === null || script === undefined) {
         throw new Error('importScripts: cannot load script: ' + resolved);
       }
-      (1, eval)(script);
+      _lumen_import_script(script);
     }
   };
 
@@ -1219,6 +1219,46 @@ mod tests_v8 {
         )
         .unwrap();
         assert!(crate::worker::drain_errors(&client).is_empty());
+    }
+
+    #[test]
+    fn shared_worker_import_scripts_preserves_globals_and_exceptions() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_shared_worker_globals_v8(
+            &rt,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            None,
+            "http://example.test/worker.js",
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let helper = "'use strict'; function importedHelper() { return 40; } let importedLexical = 2;";
+        let url = serde_json::to_string(&format!("data:text/javascript,{}", urlencode(helper))).unwrap();
+        assert_eq!(
+            rt.eval(&format!("importScripts({url}); importedHelper() + importedLexical"))
+                .unwrap(),
+            JsValue::Number(42.0)
+        );
+        assert_eq!(
+            rt.eval(
+                "var sentinel = {}; var caughtSame = false; var ranLater = false; \
+                 try { importScripts('data:text/javascript,throw sentinel;', \
+                 'data:text/javascript,ranLater = true;'); } \
+                 catch (e) { caughtSame = e === sentinel; } caughtSame && !ranLater"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval(
+                "var caughtSyntax = false; try { importScripts('data:text/javascript,function ('); } \
+                 catch (e) { caughtSyntax = e instanceof SyntaxError; } caughtSyntax"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     fn runtime_with_shared_worker() -> (V8JsRuntime, SharedWorkerOutbox) {

@@ -115,6 +115,41 @@ fn worker_roundtrip_message_via_pump() {
 }
 
 #[test]
+fn worker_import_scripts_preserves_strict_global_declarations() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        r#"
+        var importScopeResult = null;
+        var helper = new Blob([
+            "'use strict'; self.helperRan = true; function importedHelper() { return 41; } " +
+            "var importedVar = 1; let importedLexical = 2;"
+        ], {type: 'text/javascript'});
+        var helperUrl = URL.createObjectURL(helper);
+        var workerSource = "importScripts(" + JSON.stringify(helperUrl) + ");" +
+            "postMessage([self.helperRan, typeof importedHelper, typeof importedVar, " +
+            "typeof importedLexical].join('|'));";
+        var workerUrl = URL.createObjectURL(new Blob([workerSource], {type: 'text/javascript'}));
+        var importWorker = new Worker(workerUrl);
+        importWorker.onmessage = function(e) { importScopeResult = e.data; };
+        importWorker.onerror = function(e) { importScopeResult = 'ERROR: ' + e.message; };
+        "#,
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        rt.pump_workers();
+        if rt.eval("importScopeResult !== null").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        rt.eval("importScopeResult").unwrap(),
+        lumen_core::JsValue::String("true|function|number|number".into())
+    );
+}
+
+#[test]
 fn worker_add_event_listener_fires_on_pump() {
     use std::time::Duration;
     let rt = v8_runtime_with_dom(make_doc());

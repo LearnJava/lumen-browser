@@ -23,6 +23,16 @@ the time — read dates.
 
 ## Done
 
+- Dedicated/shared-worker `importScripts` executes imported source as a classic
+  `v8::Script` in the current worker context, rather than indirect eval.
+  Strict-script function/var declarations and global lexical bindings survive
+  subsequent imports; thrown values and syntax errors propagate synchronously.
+  Regression coverage is in `worker_import_scripts_preserves_strict_global_declarations`
+  and `shared_worker_import_scripts_preserves_globals_and_exceptions`.
+  WPT `workers/WorkerGlobalScope_importScripts.htm` passes; IndexedDB's
+  `writer-starvation` helpers now resolve but still encounter missing worker
+  `self.indexedDB`. This does not close the WPT-RUN-7 stability debt.
+
 - **`history.pushState`/`replaceState` resolve their URL, and a traversal restores both halves
   of the entry ([BUG-829](../bugs/BUG-829-FIXED.md), P1, 2026-08-25).** One reported defect, three
   boundaries. **(1)** The `url` argument went into `_lumen_location_update` verbatim, so
