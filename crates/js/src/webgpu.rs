@@ -818,21 +818,21 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   // ── GPU (navigator.gpu) ──────────────────────────────────────────────────
 
-  var _gpu = {
-    // Returns a stub GPUAdapter. Phase 0: options ignored.
-    requestAdapter: function(opts) {
-      return Promise.resolve(new GPUAdapter());
-    },
-    // Returns preferred swap-chain texture format (spec §canvas-configuration).
-    getPreferredCanvasFormat: function() {
-      return 'bgra8unorm';
-    },
-    // wgslLanguageFeatures — empty set for Phase 0.
-    wgslLanguageFeatures: (function() {
-      var s = new GPUSupportedFeatures();
-      return s;
-    }())
+  // Per spec, `[Exposed=(Window, DedicatedWorker), SecureContext] interface GPU`
+  // — navigator.gpu must be an instance of a real GPU constructor, matching every
+  // other interface in this file (GPUAdapter/GPUDevice/GPUCanvasContext/...).
+  function GPU() {}
+  GPU.prototype.requestAdapter = function(opts) {
+    return Promise.resolve(new GPUAdapter());
   };
+  GPU.prototype.getPreferredCanvasFormat = function() {
+    return 'bgra8unorm';
+  };
+  globalThis.GPU = GPU;
+
+  var _gpu = new GPU();
+  // wgslLanguageFeatures — empty set for Phase 0.
+  _gpu.wgslLanguageFeatures = new GPUSupportedFeatures();
 
   // ── navigator.gpu ────────────────────────────────────────────────────────
 
@@ -846,7 +846,7 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   // ── GPU constants (GPUBufferUsage, GPUTextureUsage, etc.) ────────────────
 
-  globalThis.GPUBufferUsage = {
+  globalThis.GPUBufferUsage = Object.freeze({
     MAP_READ:      0x0001,
     MAP_WRITE:     0x0002,
     COPY_SRC:      0x0004,
@@ -857,34 +857,34 @@ const WEBGPU_SHIM: &str = r#"(function() {
     STORAGE:       0x0080,
     INDIRECT:      0x0100,
     QUERY_RESOLVE: 0x0200
-  };
+  });
 
-  globalThis.GPUTextureUsage = {
+  globalThis.GPUTextureUsage = Object.freeze({
     COPY_SRC:          0x01,
     COPY_DST:          0x02,
     TEXTURE_BINDING:   0x04,
     STORAGE_BINDING:   0x08,
     RENDER_ATTACHMENT: 0x10
-  };
+  });
 
-  globalThis.GPUShaderStage = {
+  globalThis.GPUShaderStage = Object.freeze({
     VERTEX:   0x1,
     FRAGMENT: 0x2,
     COMPUTE:  0x4
-  };
+  });
 
-  globalThis.GPUMapMode = {
+  globalThis.GPUMapMode = Object.freeze({
     READ:  0x1,
     WRITE: 0x2
-  };
+  });
 
-  globalThis.GPUColorWrite = {
+  globalThis.GPUColorWrite = Object.freeze({
     RED:   0x1,
     GREEN: 0x2,
     BLUE:  0x4,
     ALPHA: 0x8,
     ALL:   0xF
-  };
+  });
 })();
 "#;
 
@@ -1315,6 +1315,27 @@ mod tests_v8 {
         assert!(bool_eval(
             &rt,
             "typeof navigator.gpu !== 'undefined' && typeof navigator.gpu.requestAdapter === 'function'"
+        ));
+    }
+
+    #[test]
+    fn v8_navigator_gpu_is_gpu_instance() {
+        let rt = with_gpu();
+        assert!(bool_eval(
+            &rt,
+            "typeof GPU === 'function' && navigator.gpu instanceof GPU \
+             && navigator.gpu.constructor.name === 'GPU'"
+        ));
+    }
+
+    #[test]
+    fn v8_gpu_constant_namespaces_are_frozen() {
+        let rt = with_gpu();
+        assert!(bool_eval(
+            &rt,
+            "Object.isFrozen(GPUBufferUsage) && Object.isFrozen(GPUTextureUsage) \
+             && Object.isFrozen(GPUShaderStage) && Object.isFrozen(GPUMapMode) \
+             && Object.isFrozen(GPUColorWrite)"
         ));
     }
 

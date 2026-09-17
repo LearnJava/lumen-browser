@@ -1,6 +1,6 @@
 # BUG-712: `navigator.gpu` has no `GPU` interface identity — `globalThis.GPU` doesn't exist, so `instanceof`/WebIDL-shape checks on the top-level WebGPU entry point are impossible
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)
 **Найден:** WPT-VENDOR-webgpu (`ROADMAP.md`)
 
@@ -101,3 +101,24 @@ decision — the file's own doc comment (`webgpu.rs:3`) describes
    with a small inline Rust `#[test]` alongside the existing
    `bool_eval`-based tests already in this file (e.g. near `webgpu.rs:1314`)
    asserting `navigator.gpu instanceof GPU`.
+
+## Исправление (2026-09-17, P3)
+
+Реализовано ровно по плану выше: добавлена `function GPU() {}` с
+`GPU.prototype.requestAdapter`/`getPreferredCanvasFormat`, `globalThis.GPU
+= GPU`; `_gpu` теперь `new GPU()` вместо объектного литерала —
+`navigator.gpu instanceof GPU === true`, `navigator.gpu.constructor.name
+=== 'GPU'`. Пункт 2 из плана тоже сделан в этом же коммите: `GPUBufferUsage`/
+`GPUTextureUsage`/`GPUShaderStage`/`GPUMapMode`/`GPUColorWrite` обёрнуты в
+`Object.freeze(...)`.
+
+Новые тесты (`crates/js/src/webgpu.rs::tests_v8`):
+`v8_navigator_gpu_is_gpu_instance`, `v8_gpu_constant_namespaces_are_frozen`.
+
+`cargo test -p lumen-js --features v8-backend webgpu::` — 27/27.
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
+— чист. `scripts/scoped-test.sh` дал два красных теста, оба посторонние:
+`credentials::tests::create_and_get_through_installed_provider` (TOCTOU-флак
+[BUG-759](BUG-759-OPEN.md), прошёл на повторном запуске в изоляции) и
+`cases::snapshot_cpu::cpu_snapshots_match_references` (чужой дрейф эталонов
+[BUG-1008](BUG-1008-OPEN.md)). Только JS-шим, пиксели не затронуты.
