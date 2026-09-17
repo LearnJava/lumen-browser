@@ -1,6 +1,6 @@
 # BUG-699: `WebAssembly.Table` constructor throws on a BigInt `initial`/`maximum` (`address: "i64"`), poisoning the shared WPT harness setup for the whole file
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/webassembly.rs:112-125` — `WebAssembly.Table` constructor in `WEBASSEMBLY_SHIM`)
 **Найден:** P2, WPT-VENDOR-wasm, 2026-08-09
 
@@ -82,3 +82,21 @@ tests/wpt/run_report.py --binary <lumen.exe> --all --root wasm --recursive --pro
 ```
 grep the log for `Reinitialize the default imports` to see every poisoned
 file.
+
+## Исправление
+
+`Table.constructor` (`crates/js/src/webassembly.rs`) now runs `descriptor.initial`
+and `descriptor.maximum` through `Number(...)` before the bitwise-OR truncation
+(`Number(10n) === 10`, whereas `10n | 0` throws `TypeError` directly) — the
+constructor now accepts both a plain `Number` and a `BigInt` in the
+descriptor, including the harness's `address: "i64"` shape. `Global`'s
+constructor was already correct and untouched.
+
+New regression test: `v8_table_constructor_accepts_bigint_initial_and_maximum`
+(`crates/js/src/webassembly.rs`, `tests_v8` module) — constructs a `Table`
+with `BigInt` `initial`/`maximum`, then checks `.length`, `.grow()`'s return
+value and that growth past `maximum` returns `-1`.
+
+`cargo test -p lumen-js --features v8-backend webassembly::` 14/14,
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
+чист. Только JS-шим WebAssembly, пиксели не затронуты.
