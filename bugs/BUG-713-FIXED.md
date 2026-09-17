@@ -1,6 +1,6 @@
 # BUG-713 — `HIDManager`/`HIDDevice` are directly constructible with `new`, though the spec defines no constructor
 
-**Статус:** OPEN
+**Статус:** FIXED (2026-09-17, P3)
 **Компонент:** js (`crates/js/src/webhid.rs` — `WEBHID_SHIM`)
 **Найден:** P2, WPT-VENDOR-webhid, 2026-08-09
 
@@ -76,3 +76,24 @@ Fix scope: заблокировать публичный `new HIDManager()`/`new
 смысл чинить оба файла вместе — общий источник дефекта). Не требует
 TLS-гэпа для воспроизведения/фикса — живой `--mcp-live-port`-пробы
 достаточно для верификации.
+
+## Исправление (2026-09-17, P3)
+
+Добавлен приватный `BRAND`-токен (объект, недостижимый со страницы) —
+тот же паттерн, что уже принят в `filesystem_access.rs` для BUG-374.
+`HIDDevice`/`HIDManager` теперь требуют его первым аргументом
+конструктора и бросают `TypeError: Illegal constructor`, если он не
+совпадает; единственная легитимная точка конструирования —
+`new HIDManager(BRAND)` при установке `navigator.hid` внутри самого
+шима. `HIDDevice` в Phase 0 не строится вообще нигде (нет активного
+устройства-бэкенда), поэтому внутренней фабрики для него не заведено —
+добавится вместе с самим бэкендом.
+
+Тест `webhid_device_has_properties`, полагавшийся на публичную
+конструируемость `HIDDevice`, заменён на `webhid_constructors_are_illegal`
+(проверяет `TypeError` на `new window.HIDDevice(...)` и
+`new window.HIDManager()`).
+
+`cargo test -p lumen-js --features v8-backend webhid` — 7/7.
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
+— чист. Только JS-шим, пиксели не затронуты.
