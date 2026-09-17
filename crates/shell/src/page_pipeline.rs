@@ -665,7 +665,16 @@ pub(crate) fn parse_and_layout(
     // sse_provider — в new EventSource(). Все три используют один HttpClient.
     let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
-            let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar.clone());
+            let mut client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar.clone());
+            // GAP-CSPENF срез 10: gate JS-issued fetch()/XMLHttpRequest against
+            // `connect-src` (or `default-src`) — WebSocket/EventSource share this
+            // `HttpClient` but are not gated here, that's a separate directive
+            // (`connect-src` covers them too per CSP3 §6.7.2, left for a later срез).
+            let root = doc.root();
+            if let Some((policy, original_policy)) = crate::csp_enforce::document_csp_policy(&doc, root) {
+                let self_origin = base.origin();
+                client = client.with_connect_src_policy(policy, self_origin, original_policy);
+            }
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);

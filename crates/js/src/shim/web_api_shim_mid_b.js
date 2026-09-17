@@ -3870,6 +3870,19 @@ TextDecoder.prototype.decode = function(buf, options) {
 // `<script src>`, `<link rel=stylesheet>` and the `rel=preload` family all end
 // up calling `fetch()` (BUG-826/BUG-703), which is why the initiator type is a
 // parameter rather than the constant 'fetch' the URL alone would suggest.
+// GAP-CSPENF срез 10: dispatch `securitypolicyviolation` for a `fetch()`/XHR
+// request that `HttpClient` refused before any socket work because the
+// document's `connect-src` (or `default-src`) does not allow `url`. Reused by
+// both the async and synchronous/cancellable fetch paths below — `csp` is the
+// `[blockedUri, originalPolicy]` pair the native side hands back (empty when
+// the failure was not a CSP block).
+function _lumen_fire_connect_src_violation(csp) {
+    if (!csp || csp.length !== 2) return;
+    if (typeof _lumen_dispatch_csp_violation === 'function') {
+        _lumen_dispatch_csp_violation('connect-src', csp[0], csp[1], 'enforce');
+    }
+}
+
 function _perf_rt_record_fetch(url, initiator, startMs, status) {
     if (typeof _lumen_record_resource_timing !== 'function') return;
     var len = 0;
@@ -4043,6 +4056,14 @@ function _lumen_fetch(input) {
                         });
                         return;
                     }
+                    if (st === 4) {
+                        finish(function() {
+                            _lumen_fire_connect_src_violation(_lumen_fetch_async_csp_info(handle));
+                            _lumen_fetch_async_free(handle);
+                            reject(new TypeError('fetch: network error for ' + url));
+                        });
+                        return;
+                    }
                     if (st === 2) {
                         finish(function() {
                             _lumen_fetch_async_free(handle);
@@ -4094,6 +4115,7 @@ function _lumen_fetch(input) {
         }
 
         if (!ok) {
+            _lumen_fire_connect_src_violation(_lumen_fetch_last_csp_block());
             return Promise.reject(new TypeError('fetch: network error for ' + url));
         }
         var status = _lumen_fetch_get_status();

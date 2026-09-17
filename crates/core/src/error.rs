@@ -21,6 +21,17 @@ pub enum Error {
     /// Operation was cooperatively cancelled (e.g. an in-flight `fetch()` aborted
     /// via an `AbortSignal`). The JS layer maps this to a DOMException `AbortError`.
     Aborted(String),
+    /// GAP-CSPENF: a `fetch()`/`XMLHttpRequest` request was blocked before any
+    /// network I/O by the document's CSP `connect-src` (or `default-src`).
+    /// Raised by `lumen-network::HttpClient`, which has no JS runtime to fire
+    /// `securitypolicyviolation` itself — the native fetch binding in
+    /// `lumen-js` matches on this variant and dispatches from there, using
+    /// `blocked_uri`/`original_policy` as `SecurityPolicyViolationEvent`'s
+    /// `blockedURI`/`originalPolicy` (CSP3 §7.8).
+    CspConnectSrcBlocked {
+        blocked_uri: String,
+        original_policy: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -35,6 +46,9 @@ impl fmt::Display for Error {
             Self::NotFound(s) => write!(f, "not found: {s}"),
             Self::Other(s) => write!(f, "{s}"),
             Self::Aborted(s) => write!(f, "aborted: {s}"),
+            Self::CspConnectSrcBlocked { blocked_uri, original_policy } => {
+                write!(f, "connect-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
+            }
         }
     }
 }

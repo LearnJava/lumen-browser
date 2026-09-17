@@ -346,6 +346,13 @@ XMLHttpRequest.prototype.send = function(body) {
     }
 
     if (!ok) {
+        // GAP-CSPENF срез 10: XHR shares the sync `_lumen_fetch_sync*` bindings
+        // with fetch()'s non-async path, so a `connect-src` block surfaces the
+        // same way — via the side-channel getter, not a distinct `ok` value.
+        if (typeof _lumen_fire_connect_src_violation === 'function' &&
+            typeof _lumen_fetch_last_csp_block === 'function') {
+            _lumen_fire_connect_src_violation(_lumen_fetch_last_csp_block());
+        }
         self._sent = false;
         self._setReadyState(4);
         self._fireProgress('error', 0, 0);
