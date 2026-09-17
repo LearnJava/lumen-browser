@@ -4911,6 +4911,62 @@ function _lumen_deliver_cv_state_changes(changes) {
     }
 }
 
+// GAP-CSSANIM срез 6 — `getAnimations()` registration for CSS-triggered
+// transitions/animations. Срезы 1/2 below already dispatch real lifecycle
+// events; срез 5 found that the Web Animations machinery itself (`Animation`/
+// `KeyframeEffect`/`_wa_animations`, all in `web_api_shim_tail_b.js`) was
+// already complete — the only gap is that `TransitionScheduler`/
+// `AnimationScheduler` never register an entry there, so `getAnimations()`
+// on an element with a live CSS transition/animation returns `[]`.
+//
+// Each registered entry is a real `Animation` wrapping an empty
+// `KeyframeEffect(target, [], {})` — just enough for `.effect.target`/
+// `.playState`/`.id` to answer without throwing. It is never `play()`ed and
+// never ticks its own RAF: the visual value is driven natively by the Rust
+// scheduler, and letting this shadow object's `_tick` run would overwrite
+// `target.style` with its own (empty) keyframe computation on top of that.
+// Keyed by `(kind prefix, node index, property/animation name)` so a second
+// property transitioning on the same element gets its own entry, matching
+// one `CSSTransition`/`CSSAnimation` per (target, property) per spec.
+var _lumen_css_anim_registry = {};
+
+function _lumen_css_anim_key(prefix, nid, name) { return prefix + nid + ':' + name; }
+
+// CSS Transitions L1 §3 "creation" happens at the same time as `transitionrun`;
+// CSS Animations L1 has no dedicated creation event, so `animationstart` (the
+// earliest event this scheduler emits) is used as the approximation.
+function _lumen_css_anim_register(prefix, nid, name) {
+    var key = _lumen_css_anim_key(prefix, nid, name);
+    var anim = _lumen_css_anim_registry[key];
+    if (anim) return anim;
+    var eff = new KeyframeEffect(_lumen_make_element(nid), [], {});
+    anim = new Animation(eff, _wa_doc_timeline);
+    anim.id = name;
+    anim._state = 'running';
+    _lumen_css_anim_registry[key] = anim;
+    _wa_animations.push(anim);
+    return anim;
+}
+
+// `finalState === 'idle'` drops the entry from `_wa_animations` entirely
+// (CSS Transitions L1 §3: a completed/canceled transition is discarded);
+// any other value keeps it there with that `playState` (CSS Animations L1
+// §4.5.1: a finished CSS animation stays in `getAnimations()` until its
+// `animation-name` is removed or it is replaced/canceled) and drops only the
+// registry key, so a later restart under the same name creates a fresh entry.
+function _lumen_css_anim_unregister(prefix, nid, name, finalState) {
+    var key = _lumen_css_anim_key(prefix, nid, name);
+    var anim = _lumen_css_anim_registry[key];
+    if (!anim) return;
+    delete _lumen_css_anim_registry[key];
+    if (finalState === 'idle') {
+        var idx = _wa_animations.indexOf(anim);
+        if (idx >= 0) _wa_animations.splice(idx, 1);
+    } else {
+        anim._state = finalState;
+    }
+}
+
 // CSS Transitions L1 §3 (GAP-CSSANIM срез 1) — deliver the shell's batch of
 // transition lifecycle events. `events` is an array of `[node_index, kind,
 // property_name, elapsed_time]` tuples, `kind` one of "run"/"start"/"end"/
@@ -4928,14 +4984,18 @@ function _lumen_deliver_transition_events(events) {
     if (!events || events.length === 0) return;
     for (var i = 0; i < events.length; i++) {
         var nid = events[i][0];
-        var type = _LUMEN_TRANSITION_EVENT_TYPES[events[i][1]];
+        var kind = events[i][1];
+        var type = _LUMEN_TRANSITION_EVENT_TYPES[kind];
         if (!type) continue;
+        var propertyName = events[i][2];
+        if (kind === 'run') _lumen_css_anim_register('t:', nid, propertyName);
         var evt = new TransitionEvent(type, {
             bubbles: true, cancelable: type === 'transitionend', isTrusted: true,
-            propertyName: events[i][2], elapsedTime: events[i][3]
+            propertyName: propertyName, elapsedTime: events[i][3]
         });
         evt.target = _lumen_make_element(nid);
         _lumen_dispatch(nid, evt);
+        if (kind === 'end' || kind === 'cancel') _lumen_css_anim_unregister('t:', nid, propertyName, 'idle');
     }
 }
 
@@ -4956,14 +5016,19 @@ function _lumen_deliver_animation_events(events) {
     if (!events || events.length === 0) return;
     for (var i = 0; i < events.length; i++) {
         var nid = events[i][0];
-        var type = _LUMEN_ANIMATION_EVENT_TYPES[events[i][1]];
+        var kind = events[i][1];
+        var type = _LUMEN_ANIMATION_EVENT_TYPES[kind];
         if (!type) continue;
+        var animationName = events[i][2];
+        if (kind === 'start') _lumen_css_anim_register('a:', nid, animationName);
         var evt = new AnimationEvent(type, {
             bubbles: true, cancelable: false, isTrusted: true,
-            animationName: events[i][2], elapsedTime: events[i][3]
+            animationName: animationName, elapsedTime: events[i][3]
         });
         evt.target = _lumen_make_element(nid);
         _lumen_dispatch(nid, evt);
+        if (kind === 'end') _lumen_css_anim_unregister('a:', nid, animationName, 'finished');
+        else if (kind === 'cancel') _lumen_css_anim_unregister('a:', nid, animationName, 'idle');
     }
 }
 

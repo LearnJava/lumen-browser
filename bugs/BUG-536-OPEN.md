@@ -263,3 +263,42 @@ geometry reads while `getComputedStyle()` already shows the live value —
 a real split between CSSOM-view geometry and computed style. 1 new unit
 test in `crates/engine/layout/src/animation.rs`
 (`scheduler_tick_height_midpoint`).
+
+## Срез 6 (2026-09-17, `p1-gap-cssanim-srez6`)
+
+Closed the registration gap срез 5 narrowed symptom 1 down to: CSS-triggered
+transitions/animations now register into `_wa_animations`, so
+`getAnimations()` returns them instead of `[]`. `_lumen_deliver_transition_events`/
+`_lumen_deliver_animation_events` (`crates/js/src/shim/web_api_shim_mid_b.js`)
+— the same functions срезы 1/2 already use to dispatch `transitionrun`/
+`animationstart`/etc. — now also call a new `_lumen_css_anim_register`/
+`_lumen_css_anim_unregister` pair. Each registered entry is a real `Animation`
+wrapping an empty `KeyframeEffect(target, [], {})`: enough for `.effect.target`/
+`.playState`/`.id` to answer without throwing, but never `play()`ed and never
+ticks its own RAF — the visual value is still driven natively by
+`TransitionScheduler`/`AnimationScheduler`, and letting the shadow object's own
+`_tick` run would overwrite `target.style` with its own (empty) keyframe
+computation on top of that. Registration happens on `run` (transition) /
+`start` (animation) — CSS Transitions L1 §3 creates the `CSSTransition` at the
+same time as `transitionrun`; CSS Animations L1 has no earlier event than
+`animationstart` in this scheduler, so that is the approximation used.
+Unregistration: a transition is dropped from `_wa_animations` entirely on
+`end`/`cancel` (L1 §3: a completed/canceled transition is discarded); an
+animation is kept with `playState: 'finished'` after `end` (L1 §4.5.1: stays
+visible until removed/replaced/canceled) and dropped only on `cancel`.
+
+Live confirmation: a new `css-getanimations` variant in
+`verify_event_delivery_gaps.py` shows `document.getAnimations()` counting both
+a running transition and a running animation, `element.getAnimations()[0]
+.effect.target` pointing at the right node, and `playState: 'running'`; an
+ad-hoc manual probe (500 ms duration) confirmed the transition's entry drops
+out of `getAnimations()` at `transitionend` while the animation's stays at
+`playState: 'finished'`. Not in this slice: `getBoundingClientRect()`/geometry
+mid-animation (still open, срез 5); `transitioncancel` on node removal still
+does not fire (срез 1's note), so a removed node's registry entry also leaks
+until the next `run`/`start` under the same key overwrites it — same root
+cause, not newly introduced. No Rust changes — JS shim only, so no new unit
+tests; gated by `cargo test -p lumen-js`/`-p lumen-shell` (BUG-805 keeps
+`scripts/scoped-test.sh` from completing end to end) and `dump_golden.py`
+(pre-existing 4/12 drift unrelated to this change, per
+`project_dump_golden_nonzero_on_main_2026_09_09`).
