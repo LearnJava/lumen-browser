@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-17",
  "counts": {
-  "open": 305,
-  "fixed": 697,
+  "open": 304,
+  "fixed": 698,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4590,7 +4590,7 @@
        "title": "WPT: вендорить + прогнать категорию `webmessaging`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webmessaging --recursive`, ~11:30, 171 файл + 7 внекатегорийных зависимостей довендорены в этой же сессии — `common/get-host-info.sub.js`, `common/gc.js`, `common/utils.js`, `common/dispatcher/dispatcher.js`, `html/anonymous-iframe/resources/common.js`, `html/cross-origin-embedder-policy/credentialless/resources/common.js`, `service-workers/service-worker/resources/test-helpers.sub.js`, 136 отобранных id) — **77/136 harness OK, 82/206 сабтестов**. Большинство провалов — уже задокументированные TLS-гэп (BUG-657) и отсутствие browsing context у iframe/window.open (BUG-480/BUG-359). Найдены [BUG-717](bugs/BUG-717-OPEN.md) (`window.postMessage` не клонирует сообщение и не валидирует `targetOrigin`) и [BUG-718](bugs/BUG-718-OPEN.md) (`BroadcastChannel.postMessage` клонирует через `JSON.stringify` вместо `structuredClone`). Новые номера: BUG-717, BUG-718",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webmessaging --recursive`, ~11:30, 171 файл + 7 внекатегорийных зависимостей довендорены в этой же сессии — `common/get-host-info.sub.js`, `common/gc.js`, `common/utils.js`, `common/dispatcher/dispatcher.js`, `html/anonymous-iframe/resources/common.js`, `html/cross-origin-embedder-policy/credentialless/resources/common.js`, `service-workers/service-worker/resources/test-helpers.sub.js`, 136 отобранных id) — **77/136 harness OK, 82/206 сабтестов**. Большинство провалов — уже задокументированные TLS-гэп (BUG-657) и отсутствие browsing context у iframe/window.open (BUG-480/BUG-359). Найдены [BUG-717](bugs/BUG-717-OPEN.md) (`window.postMessage` не клонирует сообщение и не валидирует `targetOrigin`) и [BUG-718](bugs/BUG-718-FIXED.md) (`BroadcastChannel.postMessage` клонирует через `JSON.stringify` вместо `structuredClone`, FIXED). Новые номера: BUG-717, BUG-718",
        "bugs": [
         "BUG-717",
         "BUG-718"
@@ -6838,7 +6838,7 @@
        "title": "GAP: декодирование медиа",
        "status": "planned",
        "size": "L",
-       "note": "Декодируется ровно один медиаформат — анимированный GIF (module-docstring `crates/js/src/video_bindings.rs`), поэтому `canPlayType` отвечает `\"\"` на `video/mp4`, `video/webm` и `video/ogg`, а алгоритм выбора ресурса заканчивается «dedicated media source failure steps» БЕЗ единого запроса: сервер пробы не видит файла вовсе (замер 2026-09-01, срез 30, варианты `video-src-events`/`video-formats`). Наблюдаемо это `networkState=3`, `error.code=4` и полное отсутствие `loadstart`→`loadedmetadata`→`canplay`→`play`, то есть любой тест, ждущий воспроизведения, может только повиснуть. Механизм `media-no-decodable-format` в `timeout_audit.py` — его владелец.",
+       "note": "Декодируется ровно один медиаформат — анимированный GIF (module-docstring `crates/js/src/video_bindings.rs`), поэтому `canPlayType` отвечает `\"\"` на `video/mp4`, `video/webm` и `video/ogg`, а алгоритм выбора ресурса заканчивается «dedicated media source failure steps» БЕЗ единого запроса: сервер пробы не видит файла вовсе (замер 2026-09-01, срез 30, варианты `video-src-events`/`video-formats`). Наблюдаемо это `networkState=3`, `error.code=4` и полное отсутствие `loadstart`→`loadedmetadata`→`canplay`→`play`, то есть любой тест, ждущий воспроизведения, может только повиснуть. Механизм `media-no-decodable-format` в `timeout_audit.py` — его владелец. **Ревизия 2026-09-17 (P1):** объём подтверждён — в проекте нет ни одной видео/аудио-кодек-зависимости (`grep` по `Cargo.toml` за `symphonia`/`ffmpeg`/`vpx`/`dav1d`/`av1`/`mp4`/`webm` — ноль), и зрелого чистого Rust-декодера H.264/VP8/VP9/AV1 не существует — практический путь это FFmpeg-байндинги (`ffmpeg-next`/`ffmpeg-sys-next`), крупная C-зависимость с лицензионными последствиями (LGPL/GPL в зависимости от сборки). Это решение о кодек-стратегии (ADR-027 «own vs vendored»), а не инженерная деталь одной сессии — отложено без изменения кода до отдельного решения пользователя о стратегии (FFmpeg целиком / контейнер+подмножество кодеков / внешний процесс-декодер).",
        "bugs": [
         "—"
        ]
@@ -8000,13 +8000,6 @@
    "status": "open",
    "title": "`window.postMessage` passes the message through by reference instead of structured-cloning it (`assert_not_equals(e.data[0], x)` fails — same object comes back)…",
    "component": "js (`crates/js/src/dom.rs:8206-8224` — `window.postMessage`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-718": {
-   "status": "open",
-   "title": "`postMessage()` clones the payload via `JSON.stringify` instead of structured clone: calling with zero arguments doesn't throw (`message` is a required WebIDL a…",
-   "component": "js (`crates/js/src/broadcast_channel.rs:193-219` — `BroadcastChannel.prototype.postMessage`)",
    "date": null,
    "debtor": false
   },
@@ -14139,6 +14132,13 @@
    "status": "fixed",
    "title": "`DOMException` doesn't match the WebIDL \"legacy exception\" binding shape: `name`/`message`/`code` are own instance data properties instead of prototype accessor…",
    "component": "js (`crates/js/src/v8_runtime/command.rs` — `DOM_EXCEPTION_POLYFILL`)",
+   "date": "2026-09-17",
+   "debtor": false
+  },
+  "BUG-718": {
+   "status": "fixed",
+   "title": "`postMessage()` clones the payload via `JSON.stringify` instead of structured clone: calling with zero arguments doesn't throw (`message` is a required WebIDL a…",
+   "component": "js (`crates/js/src/broadcast_channel.rs:193-219` — `BroadcastChannel.prototype.postMessage`)",
    "date": "2026-09-17",
    "debtor": false
   }
