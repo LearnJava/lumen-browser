@@ -149,7 +149,7 @@ pub(crate) fn fetch_iframe_source(
     }
     match base.resolve(src) {
         ResolvedResource::File(path) => {
-            let attempted_url = format!("file://{}", path.display());
+            let attempted_url = path_to_file_url(&path);
             match std::fs::read_to_string(&path) {
                 Ok(html) => Ok(FrameSource::File { html, path }),
                 Err(e) => {
@@ -292,7 +292,7 @@ fn url_origin_str(url: &str) -> Option<String> {
 pub(crate) fn base_url_string(base: &ResourceBase) -> String {
     match base {
         ResourceBase::Url(u) => u.clone(),
-        ResourceBase::File(p) => format!("file://{}", p.display()),
+        ResourceBase::File(p) => path_to_file_url(p),
     }
 }
 
@@ -1775,7 +1775,7 @@ pub(crate) fn spawn_frame(
     {
         Some(Ok(FrameSource::Inline(html))) => (html, base.clone(), "about:blank".to_owned(), false),
         Some(Ok(FrameSource::File { html, path })) => {
-            let url = format!("file://{}", path.display());
+            let url = path_to_file_url(&path);
             (html, ResourceBase::File(path), url, false)
         }
         Some(Ok(FrameSource::Url { html, url })) => {

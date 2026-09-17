@@ -189,6 +189,24 @@ pub(crate) fn file_url_to_path(url: &str) -> Option<PathBuf> {
     Some(PathBuf::from(url_path_component(rest)))
 }
 
+/// A filesystem path as a `file://` URL string — the inverse of
+/// [`file_url_to_path`], and the fix for [BUG-723](../../../bugs/BUG-723-OPEN.md):
+/// a bare `format!("file://{}", path.display())` loses the drive-letter colon
+/// on Windows. `file_url_to_path` strips the URL's leading `/` before a drive
+/// letter (`/D:/foo` → `D:/foo`) so `PathBuf::from` accepts it; going back
+/// without re-adding that `/` hands `_lumen_parse_url` (the JS-side URL
+/// parser) `file://D:/foo`, which its `://`-authority scan reads as host
+/// `"D"` + port `""` — the port is empty so the colon is dropped entirely
+/// (`file://D/foo`), and every subresource fetch resolved against it 404s.
+pub(crate) fn path_to_file_url(path: &std::path::Path) -> String {
+    let s = path.display().to_string();
+    if s.as_bytes().get(1) == Some(&b':') {
+        format!("file:///{s}")
+    } else {
+        format!("file://{s}")
+    }
+}
+
 /// The path component of a URL reference, percent-decoded: everything before
 /// the first `?` or `#`, with `%XX` turned back into the byte it stands for.
 ///
