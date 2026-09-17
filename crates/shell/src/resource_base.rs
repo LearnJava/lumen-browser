@@ -113,7 +113,13 @@ impl ResourceBase {
             .with_sink(sink)
             .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
             .with_content_decoder(Arc::new(GzipContentDecoder::new()))
-            .with_content_decoder(Arc::new(DeflateContentDecoder::new()));
+            .with_content_decoder(Arc::new(DeflateContentDecoder::new()))
+            // GAP-CANVASORIGIN срез 2: `fetch_cors` (real `Origin`-header +
+            // ACAO validation for `<img crossorigin>`) refuses to run without
+            // a cache attached. One cache per built client — this function is
+            // called fresh per fetch batch, so cross-navigation preflight
+            // reuse is not the goal here, only enabling the call at all.
+            .with_cors_cache(Arc::new(lumen_network::PreflightCache::new()));
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(
                 Arc::new(lumen_storage::CookieJarProvider::new(jar)),
