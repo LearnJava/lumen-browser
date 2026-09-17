@@ -1,6 +1,6 @@
 # BUG-718 — `BroadcastChannel.postMessage` clones via `JSON.stringify` instead of structured clone
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/broadcast_channel.rs:193-219` — `BroadcastChannel.prototype.postMessage`)
 **Найден:** P2, WPT-VENDOR-webmessaging, 2026-08-09
 
@@ -75,3 +75,32 @@ Fix scope (для P3): (1) добавить проверку `arguments.length =
 (`_lumen_deliver_broadcast_messages`) — сейчас там, по всей видимости,
 простой `JSON.parse`, симметричный текущей отправке; вне разбора этой
 сессии, но стоит проверить при фиксе.
+
+## Исправлено (2026-09-17, P3)
+
+Оба пункта scope реализованы: `postMessage` бросает `TypeError` на
+`arguments.length === 0`, затем прогоняет `message` через существующий
+`structuredClone()` — он валидирует клонируемость и синхронно бросает
+`DataCloneError` на `Symbol`/`function`, до похода в mpsc-хаб. Результат
+клона сериализуется в JSON тем же путём, что и раньше (тип канала
+`mpsc::Sender<String>` не менялся).
+
+**Осталось не сделано** (не входило в scope этого фикса, отдельная заявка
+не заведена): восстановление типов `Map`/`Set`/`Date`/typed arrays на
+стороне получателя (`_lumen_deliver_broadcast_messages`) — провод остаётся
+чистым JSON, так что `structuredClone` на отправке спасает от
+`Symbol`/`function`/циклов, но не от потери этих типов при передаче между
+потоками; получатель видит их как обычные JSON-объекты, а не
+воссозданные `Map`/`Set`/`Date`.
+
+Новые тесты (`crates/js/src/broadcast_channel.rs`):
+`post_without_argument_throws_type_error`,
+`post_symbol_throws_data_clone_error`.
+`cargo test -p lumen-js --lib broadcast_channel:: --features v8-backend` —
+16/16. `cargo clippy --workspace --all-targets -- -D warnings` чист.
+`scripts/scoped-test.sh` (гейт лежит на BUG-805/`lumen-network`) прогнан
+адресно по затронутым крейтам: единственные красные —
+`cases::snapshot_cpu::cpu_snapshots_match_references` (чужой дрейф
+эталонов, [BUG-1008](BUG-1008-OPEN.md)) и два `v8_webworker`-теста, которые
+флакуют по-разному между прогонами (тайминг пула воркеров) — оба не
+связаны с этой правкой. Только JS-шим, пиксели не затронуты.
