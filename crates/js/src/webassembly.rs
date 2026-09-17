@@ -118,10 +118,10 @@ const WEBASSEMBLY_SHIM: &str = r#"
       if (element !== 'anyfunc' && element !== 'funcref' && element !== 'externref') {
         throw new TypeError('Table element must be "funcref" or "externref"');
       }
-      var initial = descriptor.initial | 0;
+      var initial = Number(descriptor.initial) | 0;
       this._element = element;
       this._entries = new Array(initial).fill(null);
-      this._max = (descriptor.maximum !== undefined) ? (descriptor.maximum | 0) : Infinity;
+      this._max = (descriptor.maximum !== undefined) ? (Number(descriptor.maximum) | 0) : Infinity;
     }
     get length() { return this._entries.length; }
     get(index) {
@@ -931,5 +931,21 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(ok, JsValue::Bool(true), "memory must stay coherent across mixed WASM/JS access");
+    }
+
+    /// BUG-699: the shared WPT harness builds a 64-bit-addressed `spectest`
+    /// table with `BigInt` `initial`/`maximum` (`address: "i64"`); the
+    /// bitwise-OR coercion used to throw `TypeError: Cannot mix BigInt and
+    /// other types` on that shape.
+    #[test]
+    fn v8_table_constructor_accepts_bigint_initial_and_maximum() {
+        let rt = rt_with_wasm();
+        let ok = rt
+            .eval(
+                "var t = new WebAssembly.Table({ initial: 10n, maximum: 20n, element: 'anyfunc' });\
+                 (t.length === 10) && (t.grow(5) === 10) && (t.length === 15) && (t.grow(10) === -1)",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true), "Table constructor must coerce BigInt initial/maximum");
     }
 }
