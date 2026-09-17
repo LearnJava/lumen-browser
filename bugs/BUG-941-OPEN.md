@@ -106,3 +106,31 @@ tainted-но-видимого fallback. Без атрибута — прежне
 сабресурсов — этот срез не трогает `fetch_subresource`. Статус задачи в ROADMAP
 остаётся `planned`: живой WPT-повтор (`canvas-taint-crossorigin`) против сервера,
 реально отдающего ACAO, не сделан в этом срезе — следующий шаг.
+
+## Срез 4 (2026-09-17, P1)
+
+Закрыт первый пункт остатка среза 2 — `fetch_cors`'а credentials-лимит.
+Раньше cookie-jar (если подключён через `with_cookie_jar`) прикладывал
+`Cookie`-header на actual-запрос независимо от `credentials_mode` — гейтился
+только `SameSite`/Total-Cookie-Protection логикой самого jar-а, не режимом
+CORS-запроса. Это означало, что `crossorigin="anonymous"` (дефолт,
+`CredentialsMode::SameOrigin`) на cross-origin hop-е мог утечь cookie, если
+у неё нет `SameSite=Strict/Lax` — обратное тому, что требует Fetch §4.7 шаг 3
+("HTTP fetch"): credentials должны прикладываться ТОЛЬКО при `Include`.
+
+Правка в `fetch_with_redirect` (`crates/network/src/lib.rs`): cookie-инъекция
+на actual cross-origin запросе теперь дополнительно гейтится
+`CredentialsMode::cross_origin_credentials()` — `Omit`/`SameOrigin` не
+прикладывают `Cookie` вовсе, `Include` (`crossorigin="use-credentials"`)
+прикладывает как раньше. Preflight (OPTIONS) credentials не несёт и без этой
+правки — Fetch §4.8.1, отдельного гейта не требовалось. Same-origin запросы и
+запросы без `cors_ctx` (обычная навигация/сабресурс) не затронуты — они
+прикладывали cookies всегда, это верно и для настоящих браузеров.
+Два новых теста в `crates/network/src/lib.rs`:
+`fetch_cors_default_credentials_omits_cookie`,
+`fetch_cors_include_credentials_sends_cookie`.
+
+Остаток: GAP-REFERRER/BUG-859 (все прочие сабресурсы кроме `<img crossorigin>`)
+и живой WPT-повтор `canvas-taint-crossorigin` против сервера с реальным ACAO —
+оба по-прежнему открыты, крупнее одного среза. Статус задачи в ROADMAP
+остаётся `planned`.
