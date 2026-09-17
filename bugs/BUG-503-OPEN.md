@@ -199,3 +199,13 @@ returns `[]` for them specifically, narrower than "still returns nothing"
 implied above. `getBoundingClientRect()`/geometry mid-animation confirmed
 broken for layout-affecting properties (height/margin/width) — the
 per-frame compositor path skips relayout by design.
+
+## Срез 6 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez6`)
+
+`getAnimations()` now returns something for a running `@keyframes` animation.
+Full mechanism in [BUG-536](BUG-536-OPEN.md#срез-6-2026-09-17-p1-gap-cssanim-srez6)
+— `_lumen_deliver_animation_events` (`web_api_shim_mid_b.js`) registers a
+shadow `Animation` into `_wa_animations` on `animationstart`, keeps it there
+(`playState: 'finished'`) past `animationend` per CSS Animations L1 §4.5.1,
+and drops it on `animationcancel`. `getBoundingClientRect()`/geometry
+mid-animation remains open — untouched by this slice.

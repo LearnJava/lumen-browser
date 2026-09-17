@@ -162,6 +162,30 @@ setTimeout(function () {
 }, 1000);
 </script>
 """, "beginEvent+repeatEvent+endEvent"),
+    "css-getanimations": ("""
+<style>
+@keyframes fade { from { opacity: 1 } to { opacity: 0 } }
+#tr { width:50px; height:50px; background:blue; transition: opacity 2s linear; }
+#an { width:50px; height:50px; background:red; animation: fade 2s linear; }
+</style>
+<div id=tr></div>
+<div id=an></div>
+<script>
+var tr = document.getElementById("tr");
+var an = document.getElementById("an");
+getComputedStyle(tr).opacity;
+requestAnimationFrame(function () { tr.style.opacity = "0"; });
+var seen = 0;
+var timer = setInterval(function () {
+    console.log("PROBE doc=" + document.getAnimations().length
+        + " tr=" + tr.getAnimations().length
+        + " an=" + an.getAnimations().length
+        + " state=" + (an.getAnimations()[0] ? an.getAnimations()[0].playState : "none")
+        + " target-ok=" + (an.getAnimations()[0] ? (an.getAnimations()[0].effect.target === an) : "n/a"));
+    if (++seen > 5) clearInterval(timer);
+}, 300);
+</script>
+""", "doc/tr/an counts, an playState+target"),
     "smil-dom": ("""
 <svg width="200" height="100">
   <rect width="10" height="10" fill="blue">
