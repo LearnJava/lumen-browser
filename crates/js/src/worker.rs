@@ -1280,9 +1280,19 @@ const WORKER_SHIM: &str = r#"(function() {
       // fails, queue a task to fire `error` at the worker and never start
       // it — `_id` stays null so postMessage/terminate become no-ops and
       // the worker is not registered for message delivery.
+      //
+      // GAP-CSPENF срез 13: `_lumen_worker_fetch_script` returning undefined
+      // can mean an ordinary fetch failure or a `worker-src` refusal — read
+      // the side channel now, before it is overwritten by the next
+      // `new Worker(url)` call.
+      var _workerCsp = (typeof _lumen_worker_last_csp_block === 'function')
+        ? _lumen_worker_last_csp_block() : null;
       this._id = null;
       var self = this;
       setTimeout(function() {
+        if (typeof _lumen_fire_worker_src_violation === 'function') {
+          _lumen_fire_worker_src_violation(_workerCsp);
+        }
         var ev = new ErrorEvent('error', {
           message: 'Worker script failed to load: ' + u,
           filename: u, lineno: 0, colno: 0,
@@ -1471,7 +1481,8 @@ const WORKER_SHIM: &str = r#"(function() {
 
 /// Install native bindings (`_lumen_create_worker`, `_lumen_worker_post`,
 /// `_lumen_worker_terminate`, `_lumen_register_worker_blob`,
-/// `_lumen_worker_fetch_script`) and the `Worker` JS class into `rt`.
+/// `_lumen_worker_fetch_script`, `_lumen_worker_last_csp_block`) and the
+/// `Worker` JS class into `rt`.
 ///
 /// Must be called after the core DOM shim so that `TextDecoder` and
 /// `_object_url_store` are available for blob-URL resolution in the constructor.
@@ -1486,6 +1497,13 @@ pub(crate) fn install_worker_bindings_v8(
     blob_store: &WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
+    // GAP-CSPENF срез 13: single-slot side channel carrying
+    // `(blocked_uri, original_policy)` from `_lumen_worker_fetch_script`'s
+    // `worker-src` refusal to `_lumen_worker_last_csp_block` — same one-slot
+    // shape as `_lumen_fetch_last_csp_block`/`_lumen_beacon_last_csp_block`
+    // (срезы 10/12), valid because a classic `new Worker(url)` fetches its
+    // script synchronously and one at a time from the JS thread.
+    let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
     // _lumen_create_worker(script: String, script_url: String, is_module: bool) → u32
     //
     // `script_url` is the worker's own resolved script URL (the opaque URL
@@ -1525,12 +1543,49 @@ pub(crate) fn install_worker_bindings_v8(
     // all and silently ran an empty comment). Returns `undefined` on any
     // network error or non-2xx status so the JS shim can fire `error` instead
     // of pretending the worker started.
+    //
+    // GAP-CSPENF срез 13: `worker-src`/`default-src` is checked synchronously
+    // FIRST, via the I/O-free `check_worker_src` — a blocked URL never reaches
+    // `fetch_worker_script` at all (same "not a single outgoing byte"
+    // principle every prior срез applies at its own gate). The refusal is
+    // stashed in `last_csp_block` so `_lumen_worker_last_csp_block` below can
+    // hand it to the JS shim, which cannot otherwise tell a CSP block apart
+    // from an ordinary network failure — both return `undefined` here.
     {
         let fp = fetch_provider.clone();
+        let lcb = Arc::clone(&last_csp_block);
         rt.register_native(
             "_lumen_worker_fetch_script",
             into_v8_fn1(move |url: String| -> Option<String> {
+                if let Some(provider) = fp.as_deref()
+                    && let Err(lumen_core::error::Error::CspWorkerSrcBlocked {
+                        blocked_uri,
+                        original_policy,
+                    }) = provider.check_worker_src(&url)
+                {
+                    *lcb.lock().unwrap() = Some((blocked_uri, original_policy));
+                    return None;
+                }
                 fetch_worker_script(fp.as_deref(), &url)
+            }),
+        )?;
+    }
+
+    // _lumen_worker_last_csp_block() → [blockedUri, originalPolicy] | []
+    //
+    // Read-and-clear contract, same shape as `_lumen_fetch_last_csp_block`/
+    // `_lumen_beacon_last_csp_block` (срезы 10/12) — the shim calls this right
+    // after `_lumen_worker_fetch_script` returns `undefined`, before it can be
+    // overwritten by the next `new Worker(url)` call.
+    {
+        let lcb = Arc::clone(&last_csp_block);
+        rt.register_native(
+            "_lumen_worker_last_csp_block",
+            into_v8_fn0(move || -> Vec<String> {
+                match lcb.lock().unwrap().take() {
+                    Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
+                    None => Vec::new(),
+                }
             }),
         )?;
     }

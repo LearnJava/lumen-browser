@@ -32,6 +32,17 @@ pub enum Error {
         blocked_uri: String,
         original_policy: String,
     },
+    /// GAP-CSPENF срез 13: a `new Worker(url)`/`new SharedWorker(url)` classic
+    /// script fetch was blocked before any network I/O by the document's CSP
+    /// `worker-src` (falling back to `default-src`). Raised by
+    /// `lumen-network::HttpClient::check_worker_src`, mirroring
+    /// [`Self::CspConnectSrcBlocked`] — the native worker-creation binding in
+    /// `lumen-js` matches on this variant and dispatches
+    /// `securitypolicyviolation` from there.
+    CspWorkerSrcBlocked {
+        blocked_uri: String,
+        original_policy: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -48,6 +59,9 @@ impl fmt::Display for Error {
             Self::Aborted(s) => write!(f, "aborted: {s}"),
             Self::CspConnectSrcBlocked { blocked_uri, original_policy } => {
                 write!(f, "connect-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
+            }
+            Self::CspWorkerSrcBlocked { blocked_uri, original_policy } => {
+                write!(f, "worker-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
             }
         }
     }
