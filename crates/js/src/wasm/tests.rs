@@ -989,3 +989,149 @@ fn atomic_relaxed_simd_still_rejected() {
     let m = atomic_module(&[], &[], code);
     assert!(parse_module(&m).is_err());
 }
+
+// ── Element segments (BUG-700: flags 0..=7, bare func-index and expr-encoded) ──
+
+/// Build a module with: type0 `() -> i32` (func0 body: `i32.const 42`), type1
+/// `(i32) -> i32` (func1, exported as `call`, body: `local.get 0;
+/// call_indirect type0 table0`), one funcref table of size 4, and an element
+/// section built from the raw (count-prefixed) `elem_section_content`.
+fn elem_module(elem_section_content: Vec<u8>) -> Vec<u8> {
+    let ty = section(
+        1,
+        vec![
+            0x02, // 2 types
+            0x60, 0x00, 0x01, 0x7F, // type0: () -> i32
+            0x60, 0x01, 0x7F, 0x01, 0x7F, // type1: (i32) -> i32
+        ],
+    );
+    let func = section(3, vec![0x02, 0x00, 0x01]); // func0:type0, func1:type1
+    let table = section(4, vec![0x01, 0x70, 0x00, 0x04]); // 1 table, funcref, min 4
+    let export = section(7, vec![0x01, 0x04, b'c', b'a', b'l', b'l', 0x00, 0x01]);
+    let elem = section(9, elem_section_content);
+    let body0 = vec![0x00, 0x41, 0x2A, 0x0B]; // no locals; i32.const 42; end
+    let body1 = vec![0x00, 0x20, 0x00, 0x11, 0x00, 0x00, 0x0B]; // local.get 0; call_indirect 0 0; end
+    module(vec![
+        ty,
+        func,
+        table,
+        export,
+        elem,
+        code_section(vec![body0, body1]),
+    ])
+}
+
+/// One `ref.func 0` constant expression: `ref.func 0 ; end`.
+fn ref_func_0_expr() -> Vec<u8> {
+    vec![0xD2, 0x00, 0x0B]
+}
+
+#[test]
+fn elem_flags0_active_implicit_table_func_indices() {
+    // 1 segment, flags=0, offset=i32.const 2, func indices=[0]
+    let mut content = vec![0x01, 0x00];
+    content.extend(i32c(2));
+    content.push(0x0B);
+    content.extend(vec![0x01, 0x00]); // vec(funcidx) = [0]
+    let m = elem_module(content);
+    assert_eq!(run(&m, "call", &[Value::I32(2)]).unwrap()[0].as_i32(), 42);
+}
+
+#[test]
+fn elem_flags1_passive_func_indices_decodes() {
+    // 1 segment, flags=1, elemkind=0x00, func indices=[0] — inert (passive).
+    let content = vec![0x01, 0x01, 0x00, 0x01, 0x00];
+    let m = elem_module(content);
+    assert!(parse_module(&m).is_ok());
+    // Table entry 0 was never populated by a passive segment.
+    let r = run(&m, "call", &[Value::I32(0)]);
+    assert!(r.is_err(), "call_indirect through an unset slot must trap");
+}
+
+#[test]
+fn elem_flags2_active_explicit_table_func_indices() {
+    // 1 segment, flags=2, table_idx=0, offset=i32.const 1, func indices=[0]
+    let mut content = vec![0x01, 0x02, 0x00];
+    content.extend(i32c(1));
+    content.push(0x0B);
+    content.extend(vec![0x00, 0x01, 0x00]); // elemkind + vec(funcidx) = [0]
+    let m = elem_module(content);
+    assert_eq!(run(&m, "call", &[Value::I32(1)]).unwrap()[0].as_i32(), 42);
+}
+
+#[test]
+fn elem_flags3_declarative_func_indices_decodes() {
+    // 1 segment, flags=3, elemkind=0x00, func indices=[0] — declarative, inert.
+    let content = vec![0x01, 0x03, 0x00, 0x01, 0x00];
+    let m = elem_module(content);
+    assert!(parse_module(&m).is_ok());
+}
+
+#[test]
+fn elem_flags4_active_implicit_table_expr_list() {
+    // 1 segment, flags=4, offset=i32.const 2, exprs=[ref.func 0]
+    let mut content = vec![0x01, 0x04];
+    content.extend(i32c(2));
+    content.push(0x0B);
+    content.push(0x01); // vec(expr) count
+    content.extend(ref_func_0_expr());
+    let m = elem_module(content);
+    assert_eq!(run(&m, "call", &[Value::I32(2)]).unwrap()[0].as_i32(), 42);
+}
+
+#[test]
+fn elem_flags5_passive_reftype_expr_list_decodes() {
+    // 1 segment, flags=5, reftype=funcref(0x70), exprs=[ref.func 0] — passive.
+    let mut content = vec![0x01, 0x05, 0x70, 0x01];
+    content.extend(ref_func_0_expr());
+    let m = elem_module(content);
+    assert!(parse_module(&m).is_ok());
+}
+
+#[test]
+fn elem_flags6_active_explicit_table_expr_list() {
+    // 1 segment, flags=6, table_idx=0, offset=i32.const 3, reftype=funcref,
+    // exprs=[ref.func 0]
+    let mut content = vec![0x01, 0x06, 0x00];
+    content.extend(i32c(3));
+    content.push(0x0B);
+    content.push(0x70); // reftype funcref
+    content.push(0x01); // vec(expr) count
+    content.extend(ref_func_0_expr());
+    let m = elem_module(content);
+    assert_eq!(run(&m, "call", &[Value::I32(3)]).unwrap()[0].as_i32(), 42);
+}
+
+#[test]
+fn elem_flags7_declarative_reftype_expr_list_decodes() {
+    // 1 segment, flags=7, reftype=funcref, exprs=[ref.func 0] — declarative.
+    let mut content = vec![0x01, 0x07, 0x70, 0x01];
+    content.extend(ref_func_0_expr());
+    let m = elem_module(content);
+    assert!(parse_module(&m).is_ok());
+}
+
+#[test]
+fn elem_flags_out_of_range_still_rejected() {
+    // flags=8 is outside the legal 0..=7 range — must still be a decode error,
+    // not silently accepted.
+    let content = vec![0x01, 0x08];
+    let m = elem_module(content);
+    assert!(parse_module(&m).is_err());
+}
+
+#[test]
+fn elem_ref_null_entry_leaves_table_slot_unset() {
+    // flags=4, offset=i32.const 2, exprs=[ref.null func] — the spec allows
+    // `ref.null` inside an expr-encoded element list; the slot must end up
+    // empty (call_indirect through it traps), not garbage.
+    let mut content = vec![0x01, 0x04];
+    content.extend(i32c(2));
+    content.push(0x0B);
+    content.push(0x01); // vec(expr) count
+    content.extend(vec![0xD0, 0x70, 0x0B]); // ref.null func ; end
+    let m = elem_module(content);
+    assert!(parse_module(&m).is_ok());
+    let r = run(&m, "call", &[Value::I32(2)]);
+    assert!(r.is_err(), "call_indirect through a ref.null slot must trap");
+}
