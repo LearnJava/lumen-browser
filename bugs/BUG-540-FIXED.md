@@ -31,7 +31,7 @@ FAIL Bounding client rect for #purple - assert_equals: #purple client rect.x exp
 
 `css/motion/offset-path-bounding-client-rect.html`, 2/2 subtests. Low
 subtest count but a real, distinct geometry defect — not folded into
-[BUG-536](BUG-536-OPEN.md) (CSS Transitions/Web Animations no-op), which is
+[BUG-536](BUG-536-FIXED.md) (CSS Transitions/Web Animations no-op), which is
 about *animated* interpolation never being observable; this is about the
 *static* (non-animated) `offset-path` transform never reaching geometry
 queries at all.

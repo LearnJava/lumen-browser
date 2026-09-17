@@ -406,13 +406,60 @@ canceled). 3 new unit tests in `crates/engine/layout/src/animation.rs`
 `cancel_missing_leaves_present_nodes_untouched`,
 `cancel_missing_drops_completed_entry_silently`).
 
-Only remaining open item for the whole `GAP-CSSANIM` task:
-`getBoundingClientRect()`/geometry mid-animation (confirmed broken since
-срез 5 — `to_compositor_frame()` deliberately excludes `height`, and nothing
-triggers a relayout on an animation tick).
-
 `cargo clippy -p lumen-layout -p lumen-shell --all-targets -- -D warnings`
 clean; `cargo test -p lumen-layout`/`-p lumen-shell` (scoped subsets) green;
 `dump_golden.py` shows the same pre-existing 4/12 drift as `main`
 (`project_dump_golden_nonzero_on_main_2026_09_09`), none of it in a file this
 change touches.
+
+## Срез 9 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez9`) — `getBoundingClientRect()`/geometry now tracks an animated `height`. Task closed.
+
+Closed the last open item: a `height` transition/`@keyframes` animation moved
+`getComputedStyle()` (срезы 4/5/8) but never `rect`/`content_rect` —
+`AnimationFrame::to_compositor_frame()` deliberately excludes `height` (needs
+relayout, unlike `opacity`/`transform`), and `apply_relayout_result()` was the
+only place feeding `collect_layout_rects`/`collect_client_rects`, unconditionally
+clearing `self.anim_frame` before every real relayout — so the box tree only
+ever saw the static cascade.
+
+Approach taken from срез 8's option (b): a new thread-local `ANIMATED_HEIGHTS`
+(`crates/engine/layout/src/style/env.rs`, `HashMap<NodeId, Length>`), installed
+by the shell (`set_animated_heights`/`clear_animated_heights`) right before the
+one "full" layout entry point that honors it
+(`layout_measured_hyp_with_counters`), patched into `LayoutBox.style.height`
+via `Arc::make_mut` between `build_box` and `lay_out()` — the same insertion
+point `apply_font_size_adjust` uses. `animated_heights_active()`'s `is_empty()`
+check keeps the cost at zero on the overwhelming common case (no active height
+animation on the page).
+
+The shell (`crates/shell/src/relayout.rs`) now forces a real relayout every
+tick a height animation is running without a DOM mutation this frame — both on
+the synchronous default path (`RedrawRequested` Step 4) and the engine-thread
+path (`pump_raf_engine_thread`, guarded by `engine_job_generation ==
+engine_applied_generation` so it does not spam a fresh job every wakeup). Same
+perf trade-off real browsers make (hence "only animate transform/opacity").
+
+Incidental correction: `apply_relayout_result()` unconditionally cleared
+`animation_scheduler` every pass — invisible before this slice because no
+relayout was ever triggered *by* a running `@keyframes` animation itself; now
+that a height animation's own tick forces a relayout every frame, the blanket
+`clear()` was resetting the interpolated height to 0 on every single frame.
+Removed (`AnimationScheduler::tick`'s own per-tick stale-entry cleanup already
+covers node-removal/animation-name-change cancellation, same as
+`transition_scheduler`'s note two lines above it).
+
+Live confirmation — new `css-animation-geometry` variant in
+`verify_event_delivery_gaps.py`: `getBoundingClientRect().height` climbs
+`0 → 56.8 → 87.1 → 117.1 → 147.2 → 177.4` over a 2 s linear `@keyframes
+height: 0px → 200px` (was stuck at `0` the whole run before this slice).
+
+`cargo clippy --workspace --all-targets -- -D warnings` clean;
+`scripts/scoped-test.sh main` green except two pre-existing, unrelated flakes
+confirmed independent by isolated rerun: `cpu_snapshots_match_references`
+(known drift, same 7-file signature as `project_bug1008_snapshot_cpu_recurs_unrelated`)
+and `dom_suspend_focus::bounded_document_lock_waits_out_another_thread`
+(timing-dependent lock test, passes alone).
+
+**`GAP-CSSANIM` is now fully closed** — all three original symptoms
+(`getAnimations()`, lifecycle events, `getComputedStyle()` mid-animation) plus
+the geometry follow-up are resolved across срезы 1–9.

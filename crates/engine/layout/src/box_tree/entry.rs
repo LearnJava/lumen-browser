@@ -168,6 +168,16 @@ pub fn layout_measured_hyp_with_counters(
     };
     propagate_canvas_background(doc, &mut root);
     let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
+    // GAP-CSSANIM срез 9: patch in this frame's animated `height` overrides
+    // (CSS transition/`@keyframes`) before layout resolves box sizes, so a
+    // real relayout — not just the paint-side compositor patch — propagates
+    // the live interpolated height to `rect`/`content_rect` and, through
+    // them, to `getBoundingClientRect()`/`getClientRects()`. `is_empty()`
+    // short-circuits the walk on the overwhelming common case (no animated
+    // height active anywhere on the page).
+    if crate::style::animated_heights_active() {
+        apply_animated_heights(&mut root);
+    }
     // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
     // before measurement, so both line wrapping and paint use the scaled size.
     apply_font_size_adjust(&mut root, measurer);
@@ -521,6 +531,26 @@ fn apply_font_size_adjust_to_style(style: &mut ComputedStyle, m: &dyn TextMeasur
     style.font_size = new_size;
     if !style.line_height_is_relative && new_size > 0.0 {
         style.line_height = style.line_height * old_size / new_size;
+    }
+}
+
+/// GAP-CSSANIM срез 9: post-build pass overriding `style.height` on every box
+/// with an active animated height (installed by
+/// [`crate::style::set_animated_heights`]), run after `build_box` and before
+/// `lay_out` — the same insertion point [`apply_font_size_adjust`] uses, for
+/// the same reason: mutating the style here, once, before layout resolves
+/// sizes, makes `lay_out` size the box itself off the animated value, which
+/// then flows into `rect`/`content_rect` like any other height.
+///
+/// The `Arc::make_mut` reach only happens for boxes actually named by the
+/// (typically tiny — the animation set of one frame) override map; every
+/// other box on the page keeps sharing its cascade-cached style unchanged.
+fn apply_animated_heights(b: &mut LayoutBox) {
+    if let Some(h) = crate::style::animated_height_for(b.node) {
+        Arc::make_mut(&mut b.style).height = Some(h);
+    }
+    for child in &mut b.children {
+        apply_animated_heights(child);
     }
 }
 

@@ -287,10 +287,12 @@ use parse::font_size::{FontSizeBasis, apply_font_size};
 // по старому пути), поэтому реэкспорт обязателен даже там, где вызывателя
 // внутри `style.rs` нет (правило §2.1).
 pub use env::{
-    clear_cq_context, clear_interactive_state, cq_context_active, forced_colors_active,
-    pop_ch_ex_context, print_media_active, push_ch_ex_context, set_cq_context, set_forced_colors,
-    set_interactive_state, set_print_media, StyleEnvSnapshot,
+    clear_animated_heights, clear_cq_context, clear_interactive_state, cq_context_active,
+    forced_colors_active, pop_ch_ex_context, print_media_active, push_ch_ex_context,
+    set_animated_heights, set_cq_context, set_forced_colors, set_interactive_state,
+    set_print_media, StyleEnvSnapshot,
 };
+pub(crate) use env::{animated_height_for, animated_heights_active};
 pub use restyle::{
     restyle_node_index, restyle_root_set_for_node_change, restyle_root_set_for_state_change,
     restyle_state_index, NodeChange, NodeRestyleIndex, StateRestyleIndex,

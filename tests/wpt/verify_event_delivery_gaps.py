@@ -180,6 +180,21 @@ var timer = setInterval(function () {
 }, 300);
 </script>
 """, "height climbing 0px→100px (GAP-CSSANIM срез 8: was static 0px, живой @keyframes height never reached getComputedStyle)"),
+    "css-animation-geometry": ("""
+<style>
+@keyframes grow { from { height: 0px } to { height: 200px } }
+#t { width:50px; background:blue; animation: grow 2s linear; }
+</style>
+<div id=t></div>
+<script>
+var t = document.getElementById("t");
+var seen = 0;
+var timer = setInterval(function () {
+    console.log("PROBE rect-height " + t.getBoundingClientRect().height);
+    if (++seen > 5) clearInterval(timer);
+}, 300);
+</script>
+""", "rect-height climbing 0→200 (GAP-CSSANIM срез 9: was stale 0 the whole run, box tree never relaid out mid-animation)"),
     "smil-events": ("""
 <svg width="200" height="100">
   <rect id=r width="10" height="10" fill="blue">

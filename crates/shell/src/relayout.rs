@@ -104,6 +104,26 @@ impl Lumen {
         true
     }
 
+    /// GAP-CSSANIM срез 9: this frame's `height` transition/`@keyframes`
+    /// overrides (if any), keyed by node — installed before a layout pass so
+    /// `layout_measured_hyp_with_counters` sizes the animated box off the
+    /// live interpolated value, the one way `getBoundingClientRect()`/
+    /// `getClientRects()` can see it mid-animation (height cannot be
+    /// compositor-offloaded the way `opacity`/`transform` are).
+    pub(crate) fn animated_heights_snapshot(
+        &self,
+    ) -> HashMap<lumen_dom::NodeId, lumen_layout::style::Length> {
+        self.anim_frame
+            .as_ref()
+            .map(|f| {
+                f.overrides
+                    .iter()
+                    .filter_map(|(node, o)| o.height.clone().map(|h| (*node, h)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     pub(crate) fn relayout(&mut self) {
@@ -141,8 +161,11 @@ impl Lumen {
         // чужой scroll/relevant.
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
+        // GAP-CSSANIM срез 9: see `animated_heights_snapshot` doc comment.
+        lumen_layout::set_animated_heights(self.animated_heights_snapshot());
         let (new_dl, lb) = relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
         lumen_layout::clear_interactive_state();
+        lumen_layout::clear_animated_heights();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         self.apply_relayout_result(new_dl, lb, viewport);
@@ -513,6 +536,35 @@ impl Lumen {
             self.poll_dynamic_frames();
             self.relayout_raf_dirty();
             submitted = true;
+        } else if self.engine_job_generation == self.engine_applied_generation
+            && self
+                .anim_frame
+                .as_ref()
+                .is_some_and(|f| f.overrides.values().any(|o| o.height.is_some()))
+        {
+            // GAP-CSSANIM срез 9: a `height` transition/`@keyframes` animation
+            // is running with no DOM mutation this pass — the branch above
+            // never fires for it, so `getBoundingClientRect()`/
+            // `getClientRects()` would otherwise keep reading the box tree
+            // from before the animation started (this is the default,
+            // ADR-023 engine-thread path — see `animated_heights_snapshot`
+            // and its installation in `make_relayout_job`). Same
+            // "animating height forces a real reflow" tradeoff real browsers
+            // make every such pass, mirroring the synchronous-fallback
+            // branch in `RedrawRequested` Step 4.
+            //
+            // Single-flight guard (`engine_job_generation ==
+            // engine_applied_generation`, i.e. no relayout already in
+            // flight): `pump_raf_engine_thread` runs far more often than
+            // once per rendered frame (every `about_to_wait` wakeup), and
+            // this condition stays true for the whole animation duration —
+            // without the guard each pass submits a fresh job that bumps
+            // `engine_job_generation` and immediately supersedes the
+            // previous one (`poll_engine_commit`'s generation check drops
+            // it), so the animated height was computed correctly off-thread
+            // but its commit never survived to land.
+            self.relayout_raf_dirty();
+            submitted = true;
         }
         // Drain gate: the first non-inflight pass after a turn completes is
         // reserved for the deferred `drain_query_js` queues (which run this pass,
@@ -712,10 +764,22 @@ impl Lumen {
         }
         self.update_snap_containers();
         self.update_scroll_containers();
-        self.animation_scheduler.clear();
-        // Do NOT reset transition_scheduler here: active transitions must survive
-        // relayout (viewport resize, DOM mutations) so that in-flight animations
-        // continue smoothly. reset happens only on page load (apply_loaded_page).
+        // GAP-CSSANIM срез 9 (correction): do NOT clear `animation_scheduler`
+        // here either, for the same reason the comment below already gives
+        // `transition_scheduler` — a running `@keyframes` animation must
+        // survive relayout (viewport resize, DOM mutations), not restart
+        // from t=0. Before this slice no relayout was ever triggered *by* an
+        // active `@keyframes` animation itself, so this unconditionally-run
+        // `clear()` went unnoticed; srez 9's height-geometry sync relayout
+        // (`pump_raf_engine_thread`/`RedrawRequested` Step 4) fires every
+        // tick while a height animation runs, so the reset happened on
+        // every single frame, permanently pinning the interpolated height
+        // near 0 — `AnimationScheduler::tick`'s own per-tick "stale"
+        // cleanup (nodes no longer visited get cancelled) already handles
+        // removal when a node's `animation-name` actually changes or the
+        // node leaves the tree; a blanket `clear()` on top of that was
+        // redundant even before this slice, just never exercised. Reset on
+        // navigation still happens via `apply_loaded_page`.
         self.anim_frame = None;
         self.scroll_y = clamp_scroll(self.scroll_y, self.max_scroll());
         self.scroll_x = clamp_scroll(self.scroll_x, self.max_scroll_x());
@@ -857,6 +921,10 @@ impl Lumen {
         let forced_colors = self.a11y_store.forced_colors();
         let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
         let cv_relevant = self.cv_relevant.clone();
+        // GAP-CSSANIM срез 9: see `animated_heights_snapshot` doc comment —
+        // same thread-local handoff as interactive state/forced-colors above,
+        // captured on the UI thread and installed on the engine thread.
+        let animated_heights = self.animated_heights_snapshot();
         let job = move || {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
@@ -864,9 +932,11 @@ impl Lumen {
             lumen_layout::set_forced_colors(forced_colors);
             lumen_layout::set_cv_scroll(cv_x, cv_y);
             lumen_layout::set_cv_relevant(cv_relevant);
+            lumen_layout::set_animated_heights(animated_heights);
             let (content, layout_box) =
                 compute_layout(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
             lumen_layout::clear_interactive_state();
+            lumen_layout::clear_animated_heights();
             lumen_layout::set_cv_scroll(0.0, 0.0);
             lumen_layout::set_cv_relevant(std::collections::HashSet::new());
             EngineCommit {
