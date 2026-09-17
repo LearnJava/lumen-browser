@@ -4406,6 +4406,7 @@ function Animation(effect, timeline) {
     this._holdTime    = null;
     this._pbRate      = 1;
     this._state       = 'idle';   // idle | running | paused | finished
+    this._replaceState = 'active'; // active | persisted | removed (§5.4)
     this._prevStyles  = {};
     this.onfinish     = null;
     this.oncancel     = null;
@@ -4499,6 +4500,14 @@ Object.defineProperty(Animation.prototype, 'pending', {
     get: function() { return false; },
     configurable: true,
 });
+// §5.4 "replace state" — active | persisted | removed. Read via `persist()`
+// (→ persisted, exempting the animation from auto-removal) or by the engine
+// itself when a higher-priority animation supersedes this one (→ removed,
+// see `_wa_process_replacements`).
+Object.defineProperty(Animation.prototype, 'replaceState', {
+    get: function() { return this._replaceState; },
+    configurable: true,
+});
 
 Animation.prototype.play = function() {
     var hold = this._holdTime !== null ? this._holdTime : (this._state === 'idle' ? 0 : null);
@@ -4548,6 +4557,7 @@ Animation.prototype.finish = function() {
     this._applyAtP(1);
     this._cancelRaf();
     this._onFinish();
+    _wa_process_replacements(this);
 };
 
 Animation.prototype.reverse = function() {
@@ -4557,6 +4567,45 @@ Animation.prototype.reverse = function() {
 
 Animation.prototype.updatePlaybackRate = function(rate) {
     this._pbRate = +rate || 1;
+};
+
+// §5.5.5 `commitStyles()` — writes the effect's currently computed values as
+// inline styles on its target, freezing the visual frame without needing the
+// animation to keep running. Simplified relative to the spec: no shorthand
+// expansion or logical-property resolution, since `KeyframeEffect` here only
+// ever stores the longhand properties the author gave it.
+Animation.prototype.commitStyles = function() {
+    var eff = this.effect;
+    if (!eff || !eff.target) {
+        throw new DOMException('Animation.commitStyles: effect has no target', 'InvalidStateError');
+    }
+    var ct = this.currentTime;
+    if (ct === null) {
+        throw new DOMException('Animation.commitStyles: no current time', 'InvalidStateError');
+    }
+    var p = _wa_iter_progress(eff._timing, ct);
+    var effectiveP;
+    if (p === -2) {
+        effectiveP = 1;
+    } else if (p === -1) {
+        var fillMode = (eff._timing && eff._timing.fill) || 'auto';
+        if (fillMode !== 'backwards' && fillMode !== 'both') {
+            throw new DOMException('Animation.commitStyles: effect is not in effect', 'InvalidStateError');
+        }
+        effectiveP = 0;
+    } else {
+        effectiveP = p;
+    }
+    var styles = _wa_compute_at_p(eff, effectiveP);
+    for (var prop in styles) {
+        try { eff.target.style[prop] = styles[prop]; } catch (e) { /* unsupported property — skip */ }
+    }
+};
+
+// §5.4 `persist()` — exempts the animation from automatic removal by a
+// later, higher-priority animation on the same (target, property) pair.
+Animation.prototype.persist = function() {
+    this._replaceState = 'persisted';
 };
 
 Animation.prototype._scheduleRaf = function() {
@@ -4589,6 +4638,7 @@ Animation.prototype._tick = function(now) {
         var idx = _wa_animations.indexOf(this);
         if (idx >= 0) _wa_animations.splice(idx, 1);
         this._onFinish();
+        _wa_process_replacements(this);
         return;
     }
     this._applyForIterProgress(p, eff);
@@ -4647,15 +4697,69 @@ Animation.prototype._onFinish = function() {
     if (typeof this._finishRes === 'function') { try { this._finishRes(this); } catch(e) {} this._finishRes = null; }
 };
 
-// §4.4.2 `remove` — dispatched when an animation is automatically replaced.
-// The engine has no replacement machinery yet (BUG-704), so nothing calls this
-// today; it exists so the event has one definition when replacement lands, and
-// so `addEventListener('remove', …)` is already wired to it. Non-enumerable
-// for the same reason as `_fire`.
+// §4.4.2 `remove` — dispatched when an animation is automatically replaced by
+// `_wa_process_replacements` below. Non-enumerable for the same reason as
+// `_fire`.
 Object.defineProperty(Animation.prototype, '_onRemove', {
     value: function() { this._fire('remove'); },
     writable: true, configurable: true,
 });
+
+// Property names (excluding the `offset`/`easing`/`composite` control keys)
+// animated by an effect's keyframes — used to find (target, property) pairs
+// shared between two effects for §5.4 replacement.
+function _wa_effect_props(effect) {
+    var props = {};
+    if (!effect || !effect._keyframes) return props;
+    for (var i = 0; i < effect._keyframes.length; i++) {
+        var kf = effect._keyframes[i];
+        for (var p in kf) {
+            if (p !== 'offset' && p !== 'easing' && p !== 'composite') props[p] = true;
+        }
+    }
+    return props;
+}
+
+// §5.4 "replaceable animation": finished, not already persisted/removed, and
+// driven by a timeline (a `null` timeline — a disconnected animation — can
+// never be superseded, since it has no notion of "later").
+function _wa_is_replaceable(anim) {
+    return anim._state === 'finished' &&
+           anim._replaceState === 'active' &&
+           anim.timeline != null &&
+           !!(anim.effect && anim.effect.target);
+}
+
+// Supersede `anim`: mark it removed, drop the inline styles it had committed,
+// take it out of the live registry and fire `remove` (§4.4.2).
+function _wa_remove_replaced(anim) {
+    anim._replaceState = 'removed';
+    anim._clearStyles();
+    var idx = _wa_animations.indexOf(anim);
+    if (idx >= 0) _wa_animations.splice(idx, 1);
+    anim._onRemove();
+}
+
+// §5.4 "remove replaced animations", run whenever `anim` becomes replaceable
+// (i.e. finishes): every other replaceable animation on the same target that
+// shares at least one animated property with `anim`'s effect is superseded.
+// Priority is approximated by creation order (`_wid`) — an animation only
+// supersedes older ones, never a peer that started after it.
+function _wa_process_replacements(anim) {
+    if (!_wa_is_replaceable(anim)) return;
+    var target = anim.effect.target;
+    var props = _wa_effect_props(anim.effect);
+    for (var i = _wa_animations.length - 1; i >= 0; i--) {
+        var other = _wa_animations[i];
+        if (other === anim || other._wid > anim._wid) continue;
+        if (!_wa_is_replaceable(other)) continue;
+        if (other.effect.target !== target) continue;
+        var otherProps = _wa_effect_props(other.effect);
+        var shared = false;
+        for (var p in otherProps) { if (props[p]) { shared = true; break; } }
+        if (shared) _wa_remove_replaced(other);
+    }
+}
 
 // element.animate() factory shortcut (Web Animations §3.3).
 function _wa_element_animate(target, keyframes, options) {

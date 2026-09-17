@@ -1,7 +1,7 @@
 # BUG-704 — `Animation.prototype.commitStyles`/`.persist` missing entirely
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:12954-13070`, Web Animations `WEB_API_SHIM` — `Animation.prototype`)
+**Статус:** FIXED 2026-09-17 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js` — Web Animations, `Animation.prototype`)
 **Найден:** P2, WPT-VENDOR-web-animations, 2026-08-09
 
 ## Симптом
@@ -91,3 +91,49 @@ wp-commit-throws  TypeError: b.commitStyles is not a function
 `keyframe-effects/effect-value-replaced-animations.html`. Соседние дыры того
 же объекта — [BUG-860](BUG-860-DUPLICATE.md) (не `EventTarget`) и
 [BUG-861](BUG-861-OPEN.md) (перемотка завершённой анимации).
+
+## Исправлено 2026-09-17 (P3)
+
+`crates/js/src/shim/web_api_shim_tail_b.js` (правится `.js`, не `dom.rs` — шим
+переехал туда до этого фикса):
+
+- `Animation.prototype.commitStyles()` — вычисляет прогресс через уже
+  существующий `_wa_iter_progress`/`_wa_compute_at_p` при текущем
+  `currentTime` и пишет результат в `effect.target.style`; бросает
+  `InvalidStateError`, если у эффекта нет таргета, нет `currentTime`, или
+  эффект вне действия (`fill` не покрывает точку "до задержки").
+- `Animation.prototype.persist()` — переводит `_replaceState` в `'persisted'`.
+- `Animation.prototype.replaceState` — readonly-аксессор поверх нового поля
+  `_replaceState` (`'active'` по умолчанию в конструкторе).
+- Процедура «remove replaced animations» (§5.4): `_wa_is_replaceable`
+  (finished, `_replaceState === 'active'`, есть timeline и target),
+  `_wa_effect_props` (множество анимируемых свойств эффекта),
+  `_wa_process_replacements` — при завершении анимации (вызвана и из явного
+  `finish()`, и из естественного завершения в `_tick`) вытесняет более старые
+  replaceable-анимации на том же таргете, делящие хотя бы одно свойство:
+  помечает их `removed`, снимает закоммиченные стили (`_clearStyles`),
+  убирает из `_wa_animations` и шлёт `remove` (уже существовавший `_onRemove`
+  наконец получил вызывающую сторону). Приоритет замены приближён порядком
+  создания (`_wid`), а не точной позицией в composite order (спека §4) —
+  этого достаточно для WPT-сценариев (последовательные `element.animate()`),
+  но не для явной пересборки composite order через `KeyframeEffect`
+  reparenting.
+
+Вне скоупа: развёртка shorthand/logical properties в `commitStyles` (эффекты
+здесь всегда хранят только то, что передал автор, без раскрытия), точный
+composite-order приоритет вместо приближения по `_wid`.
+
+Новые тесты (`crates/js/src/dom/tests/v8_dragdrop_scroll_pointer.rs`):
+`wa_animation_commit_styles_writes_inline_style`,
+`wa_animation_commit_styles_throws_without_current_time`,
+`wa_animation_persist_sets_replace_state`,
+`wa_animation_finish_removes_superseded_animation`,
+`wa_animation_persisted_animation_survives_replacement`.
+
+`cargo test -p lumen-js --features v8-backend wa_animation` — 14/14,
+`cargo clippy --workspace --all-targets -- -D warnings` — чист.
+`scripts/scoped-test.sh` — единственный красный тест
+(`cases::snapshot_cpu::cpu_snapshots_match_references`, те же 7 файлов)
+совпадает byte-for-byte с уже задокументированным чужим дрейфом
+[BUG-1008](BUG-1008-OPEN.md), не регрессия. Только JS-шим, пиксели не
+затронуты.

@@ -990,6 +990,99 @@ fn wa_animation_accessors_survive_event_target_prototype() {
     assert_eq!(v, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-704: `commitStyles()` writes the effect's computed value at the
+/// current time onto the target's inline style, without needing the
+/// animation to keep running.
+#[test]
+fn wa_animation_commit_styles_writes_inline_style() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt
+        .eval(
+            "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     a.finish(); \
+                     a.commitStyles(); \
+                     el.style.opacity",
+        )
+        .unwrap();
+    assert_eq!(v, lumen_core::JsValue::String("1".into()));
+}
+
+/// `commitStyles()` must throw `InvalidStateError` when the animation has no
+/// current time (Web Animations §5.5.5 applicability check).
+#[test]
+fn wa_animation_commit_styles_throws_without_current_time() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt
+        .eval(
+            "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     a.cancel(); \
+                     try { a.commitStyles(); 'no-throw'; } \
+                     catch (e) { e.name; }",
+        )
+        .unwrap();
+    assert_eq!(v, lumen_core::JsValue::String("InvalidStateError".into()));
+}
+
+/// BUG-704: `persist()` moves the animation to the `persisted` replace state.
+#[test]
+fn wa_animation_persist_sets_replace_state() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt
+        .eval(
+            "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     var before = a.replaceState; \
+                     a.persist(); \
+                     before + ':' + a.replaceState",
+        )
+        .unwrap();
+    assert_eq!(v, lumen_core::JsValue::String("active:persisted".into()));
+}
+
+/// §5.4 "remove replaced animations": a later, finished animation on the
+/// same (target, property) pair supersedes an earlier finished one — the
+/// older animation is marked `removed`, drops out of `getAnimations()` and
+/// fires `remove`.
+#[test]
+fn wa_animation_finish_removes_superseded_animation() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt
+        .eval(
+            "var el = document.getElementById('main'); \
+                     var a1 = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     var removed = false; \
+                     a1.addEventListener('remove', function() { removed = true; }); \
+                     a1.finish(); \
+                     var a2 = el.animate([{opacity:'1'},{opacity:'0'}], 200); \
+                     a2.finish(); \
+                     _lumen_tick_timers(); \
+                     a1.replaceState + ':' + removed + ':' + el.getAnimations().indexOf(a1)",
+        )
+        .unwrap();
+    assert_eq!(v, lumen_core::JsValue::String("removed:true:-1".into()));
+}
+
+/// A persisted animation is exempt from automatic removal even when a later
+/// animation targets the same (target, property) pair.
+#[test]
+fn wa_animation_persisted_animation_survives_replacement() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let v = rt
+        .eval(
+            "var el = document.getElementById('main'); \
+                     var a1 = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     a1.finish(); \
+                     a1.persist(); \
+                     var a2 = el.animate([{opacity:'1'},{opacity:'0'}], 200); \
+                     a2.finish(); \
+                     a1.replaceState",
+        )
+        .unwrap();
+    assert_eq!(v, lumen_core::JsValue::String("persisted".into()));
+}
+
 // ── Pointer Events Level 3 §4.1 — pointer capture ────────────────────────
 
 #[test]
