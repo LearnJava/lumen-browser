@@ -209,3 +209,14 @@ shadow `Animation` into `_wa_animations` on `animationstart`, keeps it there
 (`playState: 'finished'`) past `animationend` per CSS Animations L1 §4.5.1,
 and drops it on `animationcancel`. `getBoundingClientRect()`/geometry
 mid-animation remains open — untouched by this slice.
+
+## Срез 8 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez8`)
+
+Correction to срез 5: `@keyframes height` did **not** actually reach
+`getComputedStyle()` — срез 5 fixed/tested the wrong (unused) `AnimationScheduler`
+type. Now fixed in the live one (`crates/shell/src/animation_scheduler.rs`).
+Full mechanism and the remaining, architecturally larger geometry gap
+(`getBoundingClientRect()` during height/margin/width animation, which needs a
+real relayout pass fed an animated override — not present anywhere in the
+layout pipeline today) in
+[BUG-536](BUG-536-OPEN.md#срез-8-gap-cssanim-2026-09-17-p1-gap-cssanim-srez8--correction-keyframes-height-did-not-reach-getcomputedstyle-in-the-live-path-now-it-does-geometry-mid-animation-remains-open-and-is-architecturally-larger-than-a-slice).

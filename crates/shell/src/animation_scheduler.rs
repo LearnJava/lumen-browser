@@ -442,6 +442,9 @@ impl AnimationScheduler {
             if let Some(v) = animated.background_color {
                 entry.background_color = Some(v);
             }
+            if let Some(v) = animated.height {
+                entry.height = Some(v);
+            }
         }
     }
 }
@@ -581,6 +584,20 @@ fn interpolate_keyframe_styles(from: &KeyframeStyle, to: &KeyframeStyle, t: f32)
             interp.interpolate(&AnimValue::Color(a), &AnimValue::Color(b), t)
     {
         result.background_color = Some(v);
+    }
+
+    // GAP-CSSANIM срез 8: `height` was parsed by `parse_keyframe_style` (BUG-536
+    // срез 5 added that) but never interpolated here — the срез 5 writeup
+    // conflated this live scheduler with the unused twin in
+    // `lumen_layout::animation::AnimationScheduler`, which does interpolate it
+    // but is never instantiated (only `crate::animation_scheduler::AnimationScheduler`
+    // is wired into `RedrawRequested`). `@keyframes height` therefore never
+    // reached `getComputedStyle()` in practice.
+    if let (Some(a), Some(b)) = (from.height.clone(), to.height.clone())
+        && let Some(AnimValue::Length(v)) =
+            interp.interpolate(&AnimValue::Length(a), &AnimValue::Length(b), t)
+    {
+        result.height = Some(v);
     }
 
     result
@@ -963,5 +980,41 @@ mod tests {
         let plain_root = make_box(1, 0.0, 0.0, 50.0, 50.0);
         let events = tick_at(&mut sched, 2000.0, &plain_root, &sheet);
         assert!(events.is_empty(), "no cancel after completion, got {events:?}");
+    }
+
+    // GAP-CSSANIM срез 8: `@keyframes height` must reach `AnimationFrame.overrides`
+    // (and from there `getComputedStyle()`, via `to_computed_style_patches`) — the
+    // срез 5 writeup claimed this already worked, but tested the wrong (unused)
+    // `AnimationScheduler` twin; the one actually wired into `RedrawRequested`
+    // never interpolated `height` until this slice.
+    #[test]
+    fn tick_interpolates_height_midpoint() {
+        let mut sched = AnimationScheduler::new();
+        let mut root = make_animated_box(1, "grow", 1.0, IterationCount::Finite(1.0));
+        std::sync::Arc::make_mut(&mut root.style).animation_timing_functions =
+            vec![TimingFunction::Linear];
+        let sheet = lumen_css_parser::parse(
+            "@keyframes grow { from { height: 0px; } to { height: 100px; } }",
+        );
+        sched.tick(0.0, &root, &sheet, 0.0, 0.0, Viewport { width: 1024.0, height: 720.0 }); // Start.
+        let (frame, _) = sched.tick(
+            500.0,
+            &root,
+            &sheet,
+            0.0,
+            0.0,
+            Viewport { width: 1024.0, height: 720.0 },
+        );
+        let h = frame
+            .overrides
+            .get(&node(1))
+            .and_then(|s| s.height.as_ref())
+            .expect("height override at midpoint");
+        match h {
+            lumen_layout::style::Length::Px(px) => {
+                assert!((px - 50.0).abs() < 0.1, "expected ~50px, got {px}");
+            }
+            other => panic!("expected Length::Px, got {other:?}"),
+        }
     }
 }
