@@ -46,8 +46,15 @@ pub(crate) fn render_bytes(
     // onto the parsed document so every enforcement point sees it next to the
     // document's `<meta>` policies.
     csp_header: Option<&str>,
+    // GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition resolved from the
+    // response's `Document-Policy`/`Permissions-Policy` (+ `-Report-Only`)
+    // headers — see `page_source::document_policy_sync_xhr_disposition`/
+    // `permissions_policy_sync_xhr_disposition`. Neither policy has a `<meta>`
+    // form, so unlike `csp_header` these arrive already resolved, not raw.
+    sync_xhr_document_policy: Option<lumen_core::ext::PolicyDisposition>,
+    sync_xhr_permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false, csp_header)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false, csp_header, sync_xhr_document_policy, sync_xhr_permissions_policy)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -621,6 +628,11 @@ pub(crate) fn parse_and_layout(
     // which only ever receive a `&Document`, can combine it with the
     // document's `<meta>` policies.
     csp_header: Option<&str>,
+    // GAP-POLICYREPORT (BUG-953): see `render_bytes`'s doc comment on these
+    // same two parameters — passed straight through to the `HttpClient` built
+    // below, no per-document merge needed.
+    sync_xhr_document_policy: Option<lumen_core::ext::PolicyDisposition>,
+    sync_xhr_permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -682,6 +694,10 @@ pub(crate) fn parse_and_layout(
                     .with_connect_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
                     .with_worker_src_policy(policy, self_origin, original_policy);
             }
+            // GAP-POLICYREPORT (BUG-953): attach the precomputed sync-xhr
+            // disposition regardless of whether either header was present —
+            // `with_sync_xhr_policy(None, None)` is the same as never calling it.
+            client = client.with_sync_xhr_policy(sync_xhr_document_policy, sync_xhr_permissions_policy);
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);

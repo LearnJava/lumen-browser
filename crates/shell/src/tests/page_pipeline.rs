@@ -1031,6 +1031,8 @@ fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
         lumen_core::ColorSpace::Srgb,
         false,
         None,
+        None,
+        None,
     )
     .expect("pipeline must not fail on a well-formed page")
 }

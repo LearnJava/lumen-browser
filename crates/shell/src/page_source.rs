@@ -179,6 +179,8 @@ impl PageSource {
                 cross_origin_isolated: false,
                 cache_control_no_store: false,
                 csp_header: None,
+                sync_xhr_document_policy: None,
+                sync_xhr_permissions_policy: None,
                 status: 0,
                 redirected: false,
             }),
@@ -191,6 +193,8 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: None,
+                    sync_xhr_document_policy: None,
+                    sync_xhr_permissions_policy: None,
                     status: 0,
                     redirected: false,
                 })
@@ -244,6 +248,8 @@ impl PageSource {
                     cross_origin_isolated,
                     cache_control_no_store: cache_control_no_store(&resp_headers),
                     csp_header: content_security_policy_header(&resp_headers),
+                    sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
+                    sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
                     status,
                     redirected,
                 })
@@ -257,6 +263,8 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: None,
+                    sync_xhr_document_policy: None,
+                    sync_xhr_permissions_policy: None,
                     status: 0,
                     redirected: false,
                 })
@@ -270,6 +278,8 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: None,
+                    sync_xhr_document_policy: None,
+                    sync_xhr_permissions_policy: None,
                     status: 0,
                     redirected: false,
                 })
@@ -337,6 +347,8 @@ impl PageSource {
             cross_origin_isolated,
             cache_control_no_store: cache_control_no_store(&resp_headers),
             csp_header: content_security_policy_header(&resp_headers),
+            sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
+            sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
             status,
             redirected,
         })
@@ -359,7 +371,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, raw.csp_header.as_deref())?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, raw.csp_header.as_deref(), raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -384,6 +396,12 @@ pub(crate) struct RawPage {
     /// header alongside the document's `<meta>` policies. `None` for every
     /// non-network source (file / snapshot / `about:` page).
     pub(crate) csp_header: Option<String>,
+    /// `sync-xhr` disposition from the response's `Document-Policy`(`-Report-Only`)
+    /// headers (GAP-POLICYREPORT, BUG-953). `None` for every non-network source,
+    /// same as `csp_header`.
+    pub(crate) sync_xhr_document_policy: Option<lumen_core::ext::PolicyDisposition>,
+    /// Same, from `Permissions-Policy`(`-Report-Only`) (GAP-POLICYREPORT, BUG-953).
+    pub(crate) sync_xhr_permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
     /// HTTP status of the response, or `0` for a non-network source
     /// (`File`/`Snapshot`/`Static`/`AboutBlank`) or a fresh HTTP-cache hit.
     /// Threaded from `lumen_network::PageResponse::status` for
@@ -450,6 +468,76 @@ pub(crate) fn content_security_policy_header(
         return None;
     }
     Some(parts.join("; "))
+}
+
+/// Join every occurrence of `header_name` in `resp_headers` with `", "`, the
+/// Structured-Fields way multiple header instances of the same field combine
+/// (RFC 8941 §3.2) — unlike CSP3 policies (independently enforced, joined
+/// with `"; "` by [`content_security_policy_header`]), repeated
+/// `Document-Policy`/`Permissions-Policy` instances are one Dictionary whose
+/// members simply concatenate.
+fn joined_header(resp_headers: &[(String, String)], header_name: &str) -> Option<String> {
+    let parts: Vec<&str> = resp_headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case(header_name))
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join(", "))
+}
+
+/// Resolve the `sync-xhr` [`PolicyDisposition`](lumen_core::ext::PolicyDisposition)
+/// carried by the response's `Document-Policy`/`Document-Policy-Report-Only`
+/// headers (GAP-POLICYREPORT, BUG-953).
+///
+/// Unlike CSP, Document Policy has no `<meta>` form (WICG spec §3) — the
+/// response header is the only source, so this needs no later merge step the
+/// way `csp_enforce::document_csp_policy` merges `csp_header` with `<meta>`.
+/// Enforce takes priority over report-only per CSP3-style disposition
+/// semantics: a document that disables `sync-xhr` in the enforcing header is
+/// blocked regardless of what the report-only header says.
+pub(crate) fn document_policy_sync_xhr_disposition(
+    resp_headers: &[(String, String)],
+) -> Option<lumen_core::ext::PolicyDisposition> {
+    if joined_header(resp_headers, "document-policy")
+        .is_some_and(|v| lumen_network::document_policy::parse_document_policy_header(&v).feature_disabled("sync-xhr"))
+    {
+        return Some(lumen_core::ext::PolicyDisposition::Enforce);
+    }
+    if joined_header(resp_headers, "document-policy-report-only")
+        .is_some_and(|v| lumen_network::document_policy::parse_document_policy_header(&v).feature_disabled("sync-xhr"))
+    {
+        return Some(lumen_core::ext::PolicyDisposition::Report);
+    }
+    None
+}
+
+/// Resolve the `sync-xhr` [`PolicyDisposition`](lumen_core::ext::PolicyDisposition)
+/// carried by the response's `Permissions-Policy`/`Permissions-Policy-Report-Only`
+/// headers (GAP-POLICYREPORT, BUG-953). See
+/// [`document_policy_sync_xhr_disposition`] for why no `<meta>` merge is needed
+/// and why enforce wins over report-only.
+///
+/// `allows_feature("sync-xhr", None)` checks the allowlist against `"self"`
+/// (the document's own origin) — the only origin that matters for a
+/// same-document feature check like a synchronous `XMLHttpRequest.send()`.
+pub(crate) fn permissions_policy_sync_xhr_disposition(
+    resp_headers: &[(String, String)],
+) -> Option<lumen_core::ext::PolicyDisposition> {
+    if joined_header(resp_headers, "permissions-policy")
+        .is_some_and(|v| !lumen_network::permissions_policy::parse_permissions_policy_header(&v).allows_feature("sync-xhr", None))
+    {
+        return Some(lumen_core::ext::PolicyDisposition::Enforce);
+    }
+    if joined_header(resp_headers, "permissions-policy-report-only")
+        .is_some_and(|v| !lumen_network::permissions_policy::parse_permissions_policy_header(&v).allows_feature("sync-xhr", None))
+    {
+        return Some(lumen_core::ext::PolicyDisposition::Report);
+    }
+    None
 }
 
 /// Resolve an `AutomationCommand::Navigate` URL string to a `PageSource` (SDC-2/SDC-3).
@@ -635,5 +723,79 @@ mod tests {
     fn csp_header_empty_value_is_ignored() {
         let headers = vec![("Content-Security-Policy".to_owned(), "   ".to_owned())];
         assert_eq!(content_security_policy_header(&headers), None);
+    }
+
+    // ---- GAP-POLICYREPORT (BUG-953): sync-xhr disposition ----
+
+    #[test]
+    fn document_policy_no_header_is_none() {
+        let headers = vec![("Server".to_owned(), "nginx".to_owned())];
+        assert_eq!(document_policy_sync_xhr_disposition(&headers), None);
+    }
+
+    #[test]
+    fn document_policy_enforcing_header_blocks() {
+        let headers = vec![("Document-Policy".to_owned(), "sync-xhr=?0".to_owned())];
+        assert_eq!(
+            document_policy_sync_xhr_disposition(&headers),
+            Some(lumen_core::ext::PolicyDisposition::Enforce)
+        );
+    }
+
+    #[test]
+    fn document_policy_report_only_header_reports() {
+        let headers = vec![("Document-Policy-Report-Only".to_owned(), "sync-xhr=?0".to_owned())];
+        assert_eq!(
+            document_policy_sync_xhr_disposition(&headers),
+            Some(lumen_core::ext::PolicyDisposition::Report)
+        );
+    }
+
+    #[test]
+    fn document_policy_enforce_wins_over_report_only() {
+        let headers = vec![
+            ("Document-Policy".to_owned(), "sync-xhr=?0".to_owned()),
+            ("Document-Policy-Report-Only".to_owned(), "sync-xhr=?1".to_owned()),
+        ];
+        assert_eq!(
+            document_policy_sync_xhr_disposition(&headers),
+            Some(lumen_core::ext::PolicyDisposition::Enforce)
+        );
+    }
+
+    #[test]
+    fn document_policy_enabled_feature_is_none() {
+        let headers = vec![("Document-Policy".to_owned(), "sync-xhr=?1".to_owned())];
+        assert_eq!(document_policy_sync_xhr_disposition(&headers), None);
+    }
+
+    #[test]
+    fn permissions_policy_no_header_is_none() {
+        let headers = vec![("Server".to_owned(), "nginx".to_owned())];
+        assert_eq!(permissions_policy_sync_xhr_disposition(&headers), None);
+    }
+
+    #[test]
+    fn permissions_policy_enforcing_header_blocks() {
+        let headers = vec![("Permissions-Policy".to_owned(), "sync-xhr=()".to_owned())];
+        assert_eq!(
+            permissions_policy_sync_xhr_disposition(&headers),
+            Some(lumen_core::ext::PolicyDisposition::Enforce)
+        );
+    }
+
+    #[test]
+    fn permissions_policy_report_only_header_reports() {
+        let headers = vec![("Permissions-Policy-Report-Only".to_owned(), "sync-xhr=()".to_owned())];
+        assert_eq!(
+            permissions_policy_sync_xhr_disposition(&headers),
+            Some(lumen_core::ext::PolicyDisposition::Report)
+        );
+    }
+
+    #[test]
+    fn permissions_policy_allowed_feature_is_none() {
+        let headers = vec![("Permissions-Policy".to_owned(), "sync-xhr=*".to_owned())];
+        assert_eq!(permissions_policy_sync_xhr_disposition(&headers), None);
     }
 }
