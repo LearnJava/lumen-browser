@@ -1,6 +1,6 @@
 # BUG-668 — `screen.orientation` doesn't inherit `EventTarget` and `.lock()` has zero effect on reported orientation
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/screen_orientation.rs` — `SCREEN_ORIENTATION_SHIM`, Phase 0 Screen Orientation stub)
 **Найден:** P2, WPT-VENDOR-screen-orientation (2026-08-06), live `--mcp-live-port` probe (the WPT run itself gave zero functional signal — all 13 module-importing test files TIMEOUT on the already-documented [BUG-446](BUG-446-FIXED.md) module-graph gap, `idlharness.window.html` TIMEOUT on the already-documented recurring idlharness infra gap, `lock-bad-argument.html` — the one file that imports nothing — is the only one that ran, 2/2 subtests OK)
 
@@ -92,3 +92,36 @@ Two independent defects in `SCREEN_ORIENTATION_SHIM` (`screen_orientation.rs:20`
 
 Owner — P1/P3 (js). Both fixes are self-contained to `screen_orientation.rs` and its unit test
 module; no shell/native binding changes required for either.
+
+## Исправлено
+
+`ScreenOrientation` перестроен на реальном `EventTarget` — `EventTarget.call(this)` в
+конструкторе плюс `ScreenOrientation.prototype = Object.create(EventTarget.prototype)`,
+тот же паттерн, что уже используют `VisualViewport`/`Animation`/`EventSource` в
+`crates/js/src/shim/*.js`. Ручной `_listeners`-массив и собственные
+`addEventListener`/`removeEventListener` удалены — теперь оба унаследованы от
+`EventTarget.prototype`, `instanceof EventTarget` и `dispatchEvent` работают по спеке.
+`_fireChangeEvent` больше не перебирает `_listeners` вручную и не дёргает `onchange`
+отдельно — просто зовёт `this.dispatchEvent(evt)`, а `onchange` срабатывает через уже
+существующий `this['on' + type]`-лукап внутри `EventTarget.prototype.dispatchEvent`
+(`event_target_shim.js`). `ScreenOrientationEvent` теперь строится через
+`Event.call(this, type, init)` вместо ручной инициализации полей.
+
+`.lock(orientation)` теперь резолвит запрошенную ориентацию в конкретный тип
+(`resolveLockedType`: `'landscape'`/`'portrait'` → `-primary`-вариант, `'any'` оставляет
+текущий тип неизменным), назначает `type`/`angle` по таблице `ANGLE_BY_TYPE`
+(`portrait-primary`=0, `landscape-primary`=90, и т.д.) и зовёт `_fireChangeEvent` перед
+резолвом промиса — успешный `lock()` больше не наблюдательно эквивалентен no-op.
+
+Новые тесты (`crates/js/src/screen_orientation.rs::tests`): `screen_orientation_is_event_target`,
+`screen_orientation_dispatch_event_fires_change_listener`, `screen_orientation_lock_updates_type_and_angle`,
+`screen_orientation_lock_any_keeps_current_type`. Тестовый хелпер `with_screen_orientation` теперь
+поднимает реальный `EVENT_TARGET_SHIM` вместо голого `screen`-объекта.
+
+`cargo test -p lumen-js --lib screen_orientation --features v8-backend` 13/13,
+`cargo clippy --workspace --all-targets -- -D warnings` чист. `scripts/scoped-test.sh` — единственный
+красный тест (`cases::snapshot_cpu::cpu_snapshots_match_references`, те же 7 файлов) совпадает
+byte-for-byte с уже задокументированным чужим дрейфом [BUG-1008](BUG-1008-OPEN.md), не регрессия;
+`python graphic_tests/dump_golden.py` — 4/12 несовпадений, тот же baseline-дрейф, что уже есть на
+`main`. Только JS-шим, пиксели не затронуты; WPT-модульный гэп (BUG-446) и idlharness-инфра-гэп
+не в скоупе этого фикса.
