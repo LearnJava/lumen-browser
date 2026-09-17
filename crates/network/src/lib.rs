@@ -2374,7 +2374,20 @@ fn fetch_with_redirect(
         // Inject Cookie header (RFC 6265 §5.4). Cross-site is true when
         // top_level_site is set and differs from the request host (covers
         // both SameSite enforcement and Total Cookie Protection).
-        if let Some(jar) = cookie_jar {
+        //
+        // GAP-CANVASORIGIN срез 4: a CORS request's credentials mode gates
+        // this independently of SameSite — `Omit`/`SameOrigin` (the default,
+        // e.g. `crossorigin="anonymous"`) must not attach cookies to a
+        // cross-origin request at all (Fetch §4.7 "HTTP fetch" step 3), only
+        // `Include` (`crossorigin="use-credentials"`) may. Same-origin
+        // requests and requests with no `cors_ctx` (regular navigation/
+        // subresource fetch) are unaffected — they always carried cookies
+        // subject to SameSite, matching every browser's non-CORS behavior.
+        let credentials_allowed = match (cors_ctx, &cross_origin_target) {
+            (Some(cx), Some(_)) => cx.credentials_mode.cross_origin_credentials(),
+            _ => true,
+        };
+        if credentials_allowed && let Some(jar) = cookie_jar {
             let is_cross_site = match top_level_site {
                 Some(tls) => !host_ascii.ends_with(tls) && host_ascii != tls,
                 None => false,
@@ -3239,10 +3252,16 @@ impl HttpClient {
     /// - HttpClient в Phase 0 не поддерживает request body — POST/PUT/PATCH
     ///   уходят без body (Content-Length: 0). Для preflight + ACAO-проверки
     ///   это работает; для реальных XHR с JSON-body нужно body-pipeline.
-    /// - Cookie-jar не интегрирован, credentials_mode влияет только на
-    ///   ACAO=`*` rejection и ACAC=true requirement.
     /// - Forbidden request-headers caller обязан отфильтровать заранее
     ///   (`cors::is_forbidden_request_header`).
+    ///
+    /// Cookie-jar (если подключён через `with_cookie_jar`) шлёт `Cookie` на
+    /// actual-запрос только когда `credentials_mode == Include`
+    /// (`CredentialsMode::cross_origin_credentials`) — `Omit`/`SameOrigin`
+    /// (дефолт, т.е. `crossorigin="anonymous"`) на cross-origin hop-е
+    /// cookies не прикладывает вовсе, независимо от SameSite. Preflight
+    /// (OPTIONS) credentials не несёт никогда (Fetch §4.8.1) — это уже так
+    /// было, отдельного гейта не требует.
     pub fn fetch_cors(
         &self,
         request: cors::CorsRequest,
@@ -9931,6 +9950,82 @@ world\r\n\
         assert!(
             format!("{err:?}").contains("cors-response"),
             "got: {err:?}"
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_default_credentials_omits_cookie() {
+        // GAP-CANVASORIGIN срез 4: credentials_mode по умолчанию — SameOrigin
+        // (crossorigin="anonymous"/без атрибута) — не должен прикладывать
+        // Cookie на cross-origin actual-запрос, даже если jar её бы отдал.
+        struct FixedJar;
+        impl CookieProvider for FixedJar {
+            fn get_for_request(&self, _: &str, _: &str, _: bool, _: Option<&str>, _: bool) -> String {
+                "sid=leak".to_owned()
+            }
+            fn process_set_cookie(&self, _: &str, _: &str, _: &str, _: bool, _: Option<&str>) {}
+        }
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(1, captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\n\
+              Access-Control-Allow-Origin: https://app.example.com\r\n\
+              Content-Length: 2\r\n\
+              Connection: close\r\n\r\nok"
+                .to_vec()
+        });
+        let client = HttpClient::new()
+            .with_cors_cache(Arc::new(PreflightCache::new()))
+            .with_cookie_jar(Arc::new(FixedJar), None);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api")).unwrap();
+        client.fetch_cors(cors_request("GET", &url, &[]), None).expect("fetch");
+
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 1);
+        assert!(
+            !reqs[0].to_ascii_lowercase().contains("cookie:"),
+            "SameOrigin credentials must not leak cookies cross-origin: {:?}",
+            reqs[0]
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_include_credentials_sends_cookie() {
+        // Симметрично предыдущему: credentials_mode=Include (crossorigin=
+        // "use-credentials") обязан приложить Cookie на actual-запрос.
+        struct FixedJar;
+        impl CookieProvider for FixedJar {
+            fn get_for_request(&self, _: &str, _: &str, _: bool, _: Option<&str>, _: bool) -> String {
+                "sid=abc".to_owned()
+            }
+            fn process_set_cookie(&self, _: &str, _: &str, _: &str, _: bool, _: Option<&str>) {}
+        }
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(1, captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\n\
+              Access-Control-Allow-Origin: https://app.example.com\r\n\
+              Access-Control-Allow-Credentials: true\r\n\
+              Content-Length: 2\r\n\
+              Connection: close\r\n\r\nok"
+                .to_vec()
+        });
+        let client = HttpClient::new()
+            .with_cors_cache(Arc::new(PreflightCache::new()))
+            .with_cookie_jar(Arc::new(FixedJar), None);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api")).unwrap();
+        let mut request = cors_request("GET", &url, &[]);
+        request.credentials_mode = CredentialsMode::Include;
+        client.fetch_cors(request, None).expect("fetch");
+
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 1);
+        assert!(
+            reqs[0].to_ascii_lowercase().contains("cookie: sid=abc"),
+            "Include credentials must send cookies: {:?}",
+            reqs[0]
         );
 
         server.join().unwrap();
