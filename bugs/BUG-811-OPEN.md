@@ -457,3 +457,42 @@ cpu_snapshots_match_references`, тот же 7-файловый дрейф эт�
 (`55-text-rendering`, `57-canvas-2d`, `32-list-markers`, `34-forms`,
 `45-multiple-backgrounds`, `51-scrollbar-rendering`, `1000000-final`), что
 уже числится на `main` до этой ветки (BUG-1008), не регрессия этого среза).
+
+## Срез 9 (2026-09-17, P6) — `img-src` против `loading="lazy"` `<img>`
+
+Реализовано (`crates/shell/src/page_load.rs::fetch_and_register_lazy_images`):
+последний производитель картинок, у которого не было вообще никакого
+`img-src`-гейта, — eager-пайплайн (`fetch_and_decode_images`) и
+streaming/dynamic-продюсер (`spawn_image_requests`) получили его срезом 4, а
+деферренный `loading="lazy"`-путь (запросы, которые JS шлёт из
+`_lumen_deliver_lazy_images`, когда картинка входит в проксимити-маржу
+вьюпорта) фетчил байты безусловно. Страница, чья политика запрещает
+происхождение, могла обойти её, просто пометив `<img>` как `lazy`.
+
+- Один одноразовый `document_csp_policy` перед циклом (тот же документ, что
+  `spawn_dynamic_image_loads` уже читает через `self.layout_source`), а не на
+  каждый URL — то же обоснование, что и у остальных точек enforcement.
+- На каждый URL: `base.resolve_str` → `csp_enforce::img_src_blocked`.
+  Заблокированный URL не долетает до `fetch_image_bytes` вовсе (тот же
+  принцип «ни одного исходящего байта», что срез 4 дал eager-пути) —
+  `securitypolicyviolation` (`PersistentJs::fire_csp_violation`) и `error` на
+  элементе (`fire_image_error`) диспетчатся одним `route_task_js`-действием,
+  сохраняя порядок «CSP-событие раньше decode-ошибки», как в
+  `scripts.rs`/`page_pipeline.rs`.
+
+Не покрыто этим срезом: `background-image`/`@font-face url()` — используют
+`fetch_image_bytes` напрямую в обход и eager-, и lazy-, и streaming-гейтов, не
+проверяются вовсе; директивы кроме `script-src`/`img-src`/`style-src`;
+honest независимая проверка заголовка и `<meta>`; hash-источники;
+`report-uri`/`report-to`; дедупликация двойного `securitypolicyviolation` для
+картинок (существовавший паттерн, см. срез 4); `script-src`
+`securitypolicyviolation` внутри `<iframe>` не подтверждён живым пробом (см.
+срез 8).
+
+Подтверждено `cargo build -p lumen-shell --features v8` + `cargo clippy
+-p lumen-shell --all-targets --features v8 -- -D warnings` (оба чисто) +
+`cargo test -p lumen-shell --features v8 --bin lumen` (1822 passed, 0
+failed). `scripts/scoped-test.sh` не догнан до конца — известный сломанный
+гейт [BUG-805](BUG-805-OPEN.md) (виснет на
+`lumen-network::h3::udp::tests::udp_round_trip`, не связано с этой правкой,
+не регрессия этого среза).

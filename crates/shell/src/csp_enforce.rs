@@ -16,11 +16,16 @@
 //! (`crates/shell/src/stylesheets.rs`); заблокированный лист не фетчится и
 //! становится тем же `error`-исходом, что уже даёт сетевая неудача (BUG-804).
 //!
+//! Срез 9 закрыл последний непроверенный производитель картинок:
+//! `loading="lazy"` (`Lumen::fetch_and_register_lazy_images`, `page_load.rs`)
+//! теперь гейтится тем же `img_src_blocked`, что срез 4 уже дал eager- и
+//! streaming-путям.
+//!
 //! Что НЕ покрыто этим срезом (следующие срезы): директивы кроме
 //! `script-src`/`img-src`/`style-src`
 //! (`connect-src`/`worker-src`/…), `report-uri`/`report-to`, hash-источники
-//! (только `'unsafe-inline'` и `'nonce-…'`), CSP на путях загрузки картинок
-//! помимо eager-пайплайна (lazy-load, стриминговый progressive loader),
+//! (только `'unsafe-inline'` и `'nonce-…'`), `background-image`/`@font-face
+//! url()` (используют `fetch_image_bytes` напрямую, не гейтятся вовсе),
 //! инлайновые `<style>`/атрибут `style` (не блокируются, только внешний
 //! `<link>`), `@import` внутри уже загруженного листа (наследует политику
 //! владельца, отдельно не проверяется), честная независимая проверка
