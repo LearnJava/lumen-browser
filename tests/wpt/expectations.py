@@ -286,12 +286,20 @@ def classify(results: list, test_ids: list) -> dict:
     """
     regressions, improvements, other = [], [], []
 
-    def classify_one(test, subtest, expected, actual):
+    def classify_one(test, subtest, expected, actual, known_intermittent):
+        allowed = {expected, *known_intermittent}
+        if actual in allowed:
+            return
         good_statuses = SUBTEST_GOOD_STATUSES if subtest is not None else HARNESS_GOOD_STATUSES
-        was_good = expected in good_statuses
+        was_good = bool(allowed & good_statuses)
         is_good = actual in good_statuses
-        entry = {"test": test, "subtest": subtest, "expected": expected, "actual": actual}
-        if actual == "TIMEOUT" and expected != "TIMEOUT":
+        entry = {
+            "test": test,
+            "subtest": subtest,
+            "expected": sorted(allowed) if len(allowed) > 1 else expected,
+            "actual": actual,
+        }
+        if actual == "TIMEOUT":
             entry["reason"] = "new TIMEOUT"
             regressions.append(entry)
         elif was_good and not is_good:
@@ -306,10 +314,12 @@ def classify(results: list, test_ids: list) -> dict:
 
     for r in results:
         if "expected" in r:
-            classify_one(r["test"], None, r["expected"], r["status"])
+            classify_one(r["test"], None, r["expected"], r["status"],
+                         r.get("known_intermittent", []))
         for st in r.get("subtests", []):
             if "expected" in st and _expressible_heading(st.get("name", "")):
-                classify_one(r["test"], st.get("name"), st["expected"], st["status"])
+                classify_one(r["test"], st.get("name"), st["expected"], st["status"],
+                             st.get("known_intermittent", []))
 
     # A selected id is a bare file id (`all_vendored_test_ids`/`curated_test_ids`
     # never carry a `?query`), but a `results` entry may be one of several
