@@ -269,12 +269,16 @@ pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
 ///   (fetch идёт параллельно, до его создания);
 /// - `cross_origin_urls` — GAP-CANVASORIGIN (BUG-941): raw `req.url` (тот же
 ///   ключ, что несёт `images`) картинок, чей резолвленный origin отличается от
-///   `base.origin()`. Простое same-origin сравнение, БЕЗ реальной CORS-проверки
-///   ответа (её нет нигде в сети — GAP-REFERRER, `Origin` не отправляется ни на
-///   один сабресурс), поэтому `crossorigin="anonymous"` сегодня ничего не
-///   меняет: canvas, нарисовавший такую картинку, помечается tainted так же,
-///   как без атрибута — консервативный, безопасный дефолт до появления
-///   настоящего CORS-хендшейка.
+///   `base.origin()` AND либо не несут `crossorigin`, либо несут его и не
+///   прошли CORS-проверку ответа. Срез 2: `<img crossorigin>` на такой URL
+///   теперь идёт через `decode_image_cors` — реальный `Origin`-header плюс
+///   `Access-Control-Allow-Origin`/`-Allow-Credentials` (`lumen_network::
+///   HttpClient::fetch_cors`), а не только сравнение origin строк; прошедшая
+///   проверку картинка НЕ попадает в этот список (canvas не заражается).
+///   Credentials-режим фактически не влияет на то, летят ли cookies (Phase 0
+///   ограничение `fetch_cors`, см. его doc-комментарий) — известный остаток,
+///   не блокирующий большинство реальных `crossorigin="anonymous"` случаев.
+///   Без атрибута — прежнее консервативное поведение (всегда taint).
 #[allow(clippy::type_complexity)]
 pub(crate) fn fetch_and_decode_images(
     doc: &mut Document,
@@ -331,10 +335,12 @@ pub(crate) fn fetch_and_decode_images(
         },
     }
 
-    // GAP-CANVASORIGIN (BUG-941): plain same-origin comparison, no CORS
-    // response check (none exists yet — GAP-REFERRER). `self_origin` absent
-    // (opaque document origin, e.g. `file:`) never taints — matches the
-    // `img-src` gate's "don't invent a restriction" stance above.
+    // GAP-CANVASORIGIN: plain same-origin URL comparison. `self_origin`
+    // absent (opaque document origin, e.g. `file:`) never taints — matches
+    // the `img-src` gate's "don't invent a restriction" stance above. A
+    // cross-origin result from this closure is not final by itself any
+    // more (срез 2): `<img crossorigin>` on such a URL runs the real CORS
+    // check below (`decode_image_cors`) and only taints if that check fails.
     let is_cross_origin = |resolved_url: &str| -> bool {
         let Some(self_o) = self_origin.as_ref() else { return false; };
         let Ok(parsed) = lumen_core::url::Url::parse(resolved_url) else { return false; };
@@ -362,16 +368,41 @@ pub(crate) fn fetch_and_decode_images(
         {
             return ImgOutcome::Blocked;
         }
-        let cross_origin = is_cross_origin(&resolved_url);
+        let url_cross_origin = is_cross_origin(&resolved_url);
         // BUG-269: apply intrinsic size whenever the author left AT LEAST ONE
         // dimension unset (not only when BOTH are unset). A replaced element
         // with a fixed width and `height: auto` must derive its height from the
         // intrinsic aspect ratio (CSS 2.1 §10.6.2); `apply_intrinsic_size` fills
         // the missing slot from that ratio.
         let wants_intrinsic = !(req.has_explicit_width && req.has_explicit_height);
-        let decoded = image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
-            decode_image(&req.url, base, sink, cookie_jar.clone(), target)
-        });
+        // GAP-CANVASORIGIN срез 2 (BUG-941): `<img crossorigin>` on a
+        // cross-origin URL takes the real CORS-checked fetch instead of the
+        // plain cached one — see `decode_image_cors` doc comment for why it
+        // bypasses `IMAGE_CACHE`. A passing check untaints the canvas draw
+        // (`cross_origin = false` below); a failing one is a fetch error,
+        // same bucket as a network failure (`ImgOutcome::Skip`), not a
+        // tainted-but-visible image.
+        let (decoded, cross_origin) = match (url_cross_origin, req.crossorigin, self_origin.as_ref()) {
+            (true, Some(mode), Some(origin)) => (
+                decode_image_cors(CorsImageFetch {
+                    resolved_url: &resolved_url,
+                    raw_src: &req.url,
+                    self_origin: origin,
+                    mode,
+                    base,
+                    sink,
+                    cookie_jar: cookie_jar.clone(),
+                    target,
+                }),
+                false,
+            ),
+            _ => (
+                image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
+                    decode_image(&req.url, base, sink, cookie_jar.clone(), target)
+                }),
+                url_cross_origin,
+            ),
+        };
         match decoded {
             None => ImgOutcome::Skip,
             Some(image_cache::DecodedImage::Static(img)) => {
@@ -494,7 +525,6 @@ pub(crate) fn decode_image(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
 ) -> Option<image_cache::DecodedImage> {
-    use image_cache::DecodedImage;
     let bytes = match fetch_image_bytes(raw_src, base, sink, cookie_jar) {
         Ok(b) => b,
         Err(e) => {
@@ -502,6 +532,71 @@ pub(crate) fn decode_image(
             return None;
         }
     };
+    decode_image_bytes(raw_src, bytes, target)
+}
+
+/// GAP-CANVASORIGIN срез 2 (BUG-941): fetch+decode a cross-origin `<img
+/// crossorigin>` request through the real CORS protocol (Fetch §3-§4) —
+/// `Origin` header sent, response's `Access-Control-Allow-Origin`/
+/// `-Allow-Credentials` validated, not just the same-origin URL comparison
+/// `fetch_and_decode_images`'s `is_cross_origin` closure does for every other
+/// image. `None` on a network error OR a failed CORS check — HTML LS's media
+/// resource fetch algorithm treats both the same way (the request errors,
+/// no image loads), it does not fall back to a tainted-but-visible image.
+///
+/// Bypasses `image_cache::IMAGE_CACHE` deliberately: that cache is keyed by
+/// URL alone, with no axis for "was this fetched with credentials/Origin or
+/// without" — reusing a plain no-cors cache hit here would skip the very
+/// check this function exists to run. The cost is a duplicate network
+/// round-trip if the same cross-origin URL also appears as a plain `<img>`
+/// elsewhere on the page; acceptable for a first slice, not a correctness bug.
+/// Bundles [`decode_image_cors`]'s inputs — plain positional params would
+/// trip `clippy::too_many_arguments` at eight.
+struct CorsImageFetch<'a> {
+    resolved_url: &'a str,
+    raw_src: &'a str,
+    self_origin: &'a lumen_network::Origin,
+    mode: lumen_layout::CrossOriginMode,
+    base: &'a ResourceBase,
+    sink: &'a Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    target: lumen_core::ColorSpace,
+}
+
+fn decode_image_cors(req: CorsImageFetch<'_>) -> Option<image_cache::DecodedImage> {
+    let CorsImageFetch { resolved_url, raw_src, self_origin, mode, base, sink, cookie_jar, target } = req;
+    use lumen_core::url::Url;
+    let target_url = Url::parse(resolved_url).ok()?;
+    let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
+    let credentials_mode = match mode {
+        lumen_layout::CrossOriginMode::Anonymous => lumen_network::CredentialsMode::SameOrigin,
+        lumen_layout::CrossOriginMode::UseCredentials => lumen_network::CredentialsMode::Include,
+    };
+    let request = lumen_network::CorsRequest {
+        origin: self_origin.clone(),
+        target: target_url,
+        method: "GET".to_owned(),
+        headers: Vec::new(),
+        credentials_mode,
+    };
+    let bytes = match client.fetch_cors(request, Some(lumen_network::RequestDestination::Image)) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("CORS-проверка картинки {raw_src} не прошла: {e}");
+            return None;
+        }
+    };
+    decode_image_bytes(raw_src, bytes, target)
+}
+
+/// Shared decode step for [`decode_image`] and [`decode_image_cors`] — the
+/// two differ only in how `bytes` reached them (plain fetch vs CORS-checked).
+fn decode_image_bytes(
+    raw_src: &str,
+    bytes: Vec<u8>,
+    target: lumen_core::ColorSpace,
+) -> Option<image_cache::DecodedImage> {
+    use image_cache::DecodedImage;
 
     // Animated GIF detection: decode metadata lazily; keep the animation if >1 frame.
     if lumen_image::is_gif(&bytes) {

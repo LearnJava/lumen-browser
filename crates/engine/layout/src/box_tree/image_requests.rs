@@ -15,6 +15,37 @@ pub struct ImageRequest {
     /// `fetchpriority` (HTML LS §2.5.7): нормализованное `"high"`/`"low"`;
     /// `auto`, мусор и отсутствие атрибута → `None`.
     pub fetch_priority: Option<String>,
+    /// `crossorigin` (HTML LS §2.5.1 "CORS settings attribute"), только на
+    /// `<img>` — GAP-CANVASORIGIN срез 2. `None` — атрибут отсутствует (запрос
+    /// идёт no-cors, как раньше); `Some(_)` включает реальную CORS-проверку
+    /// ответа для cross-origin URL (shell, `fetch_and_decode_images`).
+    pub crossorigin: Option<CrossOriginMode>,
+}
+
+/// Значение CORS settings attribute (HTML LS §2.5.1). Отсутствие атрибута —
+/// `None` на [`ImageRequest::crossorigin`], а не вариант этого enum-а:
+/// keyword-таблица не содержит "нет CORS-режима вовсе".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrossOriginMode {
+    /// `crossorigin` / `crossorigin=""` / `crossorigin="anonymous"` / любое
+    /// нераспознанное значение — invalid value default такой же, как missing
+    /// value default (HTML LS §2.5.1).
+    Anonymous,
+    /// `crossorigin="use-credentials"`.
+    UseCredentials,
+}
+
+impl CrossOriginMode {
+    /// Разобрать значение атрибута `crossorigin`. Вызывать только когда
+    /// атрибут присутствует — отсутствие кодируется как `None` на
+    /// [`ImageRequest::crossorigin`], не как отдельная ветка здесь.
+    fn parse(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("use-credentials") {
+            Self::UseCredentials
+        } else {
+            Self::Anonymous
+        }
+    }
 }
 
 /// Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов.
@@ -223,6 +254,10 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
             .find(|a| a.name.local.eq_ignore_ascii_case("fetchpriority"))
             .map(|a| a.value.trim().to_ascii_lowercase())
             .filter(|v| v == "high" || v == "low");
+        let crossorigin = attrs
+            .iter()
+            .find(|a| a.name.local.eq_ignore_ascii_case("crossorigin"))
+            .map(|a| CrossOriginMode::parse(&a.value));
         let source = resolve_image_source(doc, id, viewport);
         if !source.url.is_empty() {
             out.push(ImageRequest {
@@ -232,6 +267,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
                 has_explicit_height,
                 is_lazy,
                 fetch_priority,
+                crossorigin,
             });
         }
         return; // void element — нет children
@@ -249,6 +285,11 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
             has_explicit_height: false,
             is_lazy: false,
             fetch_priority: None,
+            // `crossorigin` не определён для этих трёх тегов (`<video poster>`,
+            // `<input type=image>`, SVG `<image>`) — HTML LS §2.5.1 связывает
+            // атрибут только с `<img>`/`<link>`/`<script>`/`<video>`/`<audio>`,
+            // и здесь конкретно про сам ресурс-URL (poster/src/href), не тег.
+            crossorigin: None,
         });
     }
     for &child in &node.children {

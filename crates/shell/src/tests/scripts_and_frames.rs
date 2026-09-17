@@ -1761,6 +1761,7 @@ fn harvest_frame_lazy_requests_empty_without_js_or_requests() {
         has_explicit_height: true,
         is_lazy: true,
         fetch_priority: None,
+        crossorigin: None,
     };
     // `js: None` (фрейм без скриптов, срез 1) — тот же ранний выход.
     assert_eq!(crate::frames::harvest_frame_lazy_requests(None, &[req]), Vec::new());
@@ -1791,6 +1792,7 @@ fn fetch_frame_lazy_images_fetches_decodes_and_folds_into_frame() {
         has_explicit_height: true,
         is_lazy: true,
         fetch_priority: None,
+        crossorigin: None,
     }];
     handle.pending_lazy = vec![(0, "lazy.png".to_owned())];
 

@@ -80,3 +80,29 @@ Origin-clean флаг заведён на `Context2D` (`crates/engine/canvas/src
 
 Не покрыто: запрос по атрибуту `crossorigin`/реальный CORS-хендшейк ответа
 (BUG-859), поэтому статус задачи в ROADMAP остаётся `planned`, а не `done`.
+
+## Срез 2 (2026-09-17, P1)
+
+`<img crossorigin>` на cross-origin URL теперь идёт через реальный CORS-протокол
+(Fetch §3-§4): `Origin`-header, проверка ответных `Access-Control-Allow-Origin`/
+`-Allow-Credentials`. Использована уже существующая, но нигде не вызывавшаяся
+инфраструктура `lumen_network::HttpClient::fetch_cors`/`cors::check_cors_response_headers`
+(написана и покрыта тестами, но ни один caller её не вызывал — путь картинок шёл
+мимо, через `fetch_subresource`, который `Origin` не шлёт вовсе). Новый путь:
+`lumen_layout::ImageRequest::crossorigin` (парсинг `crossorigin` атрибута —
+`Anonymous`/`UseCredentials`, HTML LS §2.5.1) → `crates/shell/src/subresources.rs`,
+`decode_image_cors` — на cross-origin URL с `crossorigin` заданным, ACAO-проверка
+пройдена → canvas не заражается; проверка не пройдена или сеть недоступна →
+запрос ошибается целиком (`ImgOutcome::Skip`), как и обычная сетевая ошибка, без
+tainted-но-видимого fallback. Без атрибута — прежнее консервативное поведение
+(всегда taint на cross-origin URL).
+
+Известный остаток: `fetch_cors`'а собственный Phase 0-лимит — credentials-режим
+не решает, летят ли реально cookies (см. doc-комментарий `HttpClient::fetch_cors`);
+не блокирует основной случай `crossorigin="anonymous"` без cookies. `decode_image_cors`
+намеренно не проходит через `image_cache::IMAGE_CACHE` (та же картинка без
+`crossorigin` на той же странице фетчится второй раз) — см. doc-комментарий
+функции. GAP-REFERRER/BUG-859 остаётся открытым для всех остальных
+сабресурсов — этот срез не трогает `fetch_subresource`. Статус задачи в ROADMAP
+остаётся `planned`: живой WPT-повтор (`canvas-taint-crossorigin`) против сервера,
+реально отдающего ACAO, не сделан в этом срезе — следующий шаг.
