@@ -107,6 +107,22 @@ tainted-но-видимого fallback. Без атрибута — прежне
 остаётся `planned`: живой WPT-повтор (`canvas-taint-crossorigin`) против сервера,
 реально отдающего ACAO, не сделан в этом срезе — следующий шаг.
 
+## Срез 3 (2026-09-17, P1)
+
+Живой WPT-повтор среза 2: `canvas-taint-crossorigin` (`tests/wpt/verify_replaced_content_gaps.py`)
+расширен третьим `<img crossorigin>` против alt-сервера, реально отдающего
+`Access-Control-Allow-Origin` (не просто заголовок в комментарии — сервер
+пробы). Первый прогон ложно показал `SecurityError` на прошедшей CORS-проверку
+картинке — не регрессия движка, а баг самого пробника: все три `<img>`
+рисовались на одну `<canvas id=c>`, а taint-бит монотонен на канву (HTML LS
+§4.12.5.1.2), и более ранний непрошедший `cross`-draw уже заразил канву
+необратимо. После переноса прошедшей-CORS пары на отдельную `<canvas id=c2>`
+`corsed-read` возвращает пиксели без исключения — путь среза 2 подтверждён
+живым прогоном, не только модульными тестами `crates/network`.
+
+(Задокументировано ретроактивно в срезе 5 — сама правка вносилась в срезе 3,
+но эта заметка не попала в этот файл тогда, только в `ROADMAP.md`.)
+
 ## Срез 4 (2026-09-17, P1)
 
 Закрыт первый пункт остатка среза 2 — `fetch_cors`'а credentials-лимит.
@@ -131,6 +147,48 @@ CORS-запроса. Это означало, что `crossorigin="anonymous"` (
 `fetch_cors_include_credentials_sends_cookie`.
 
 Остаток: GAP-REFERRER/BUG-859 (все прочие сабресурсы кроме `<img crossorigin>`)
-и живой WPT-повтор `canvas-taint-crossorigin` против сервера с реальным ACAO —
-оба по-прежнему открыты, крупнее одного среза. Статус задачи в ROADMAP
-остаётся `planned`.
+— отдельная, самостоятельно ведущаяся задача (ROADMAP.md, GAP-REFERRER), не
+часть объёма GAP-CANVASORIGIN. Живой WPT-повтор `canvas-taint-crossorigin`
+против сервера с реальным ACAO уже сделан срезом 3 — эта строка была
+copy-paste остатком от среза 2 и не обновлялась; исправлено срезом 5. Статус
+задачи в ROADMAP остаётся `planned` до среза 5.
+
+## Срез 5 (2026-09-17, P1) — ревизия объёма, закрытие
+
+Ревизия объёма GAP-CANVASORIGIN целиком (не новый код): исходная заявка —
+флаг origin-clean, режим запроса по `crossorigin`, реальная CORS-проверка
+ответа, сквозное заражение через `drawImage`/`createPattern`/`ImageBitmap`/
+`transferToImageBitmap`, `SecurityError` на трёх читающих членах, на
+элементной канве и на `OffscreenCanvas` — реализовано целиком (срезы 1-4) и
+живо подтверждено (срез 3). `OffscreenCanvas`/`transferToImageBitmap`
+проверены отдельно: `crates/js/src/offscreen_canvas.rs` переиспользует тот же
+`img_bitmap_store`/tainted-флаг, который заполняет элементная сторона —
+источник заражения один, а не два расходящихся.
+
+Найдены и исправлены две доки-дрейфа, накопившиеся за срезы 2-4:
+- `crates/shell/src/subresources.rs` (doc-комментарий `fetch_and_decode_images`):
+  утверждал, что credentials-режим не влияет на отправку cookies («Phase 0
+  ограничение `fetch_cors`») — это было верно до среза 4, который как раз этот
+  лимит закрыл; комментарий не обновили. Исправлено здесь.
+- Строка «остаток» среза 4 в этом файле и в `ROADMAP.md` повторяла
+  «живой WPT-повтор... не сделан», хотя срез 3 (до среза 4 по номеру, но
+  landed раньше по времени) уже его сделал. Copy-paste из остатка среза 2.
+  Исправлено здесь и в `ROADMAP.md`.
+
+Живой WPT-регрессионный повтор именно среза 4 (credentials-лимит,
+`crossorigin="use-credentials"` действительно шлёт `Cookie`, `anonymous` —
+нет) НЕ добавлен в `verify_replaced_content_gaps.py`: сервер пробы — plain
+HTTP (`http.server` на `127.0.0.1`), а cookie jar (`crates/storage/src/cookies.rs:677`)
+требует `Secure` для `SameSite=None`, а `Secure`-cookie в принципе не
+отправляется не-HTTPS-запросом (`cookies.rs:681`/`269`) — кросс-сайтовый
+cookie в этом харнессе физически не может долететь ни при каком исходе
+`credentials_mode`, поэтому такой повтор доказывал бы только «HTTP не
+HTTPS», а не поведение среза 4. Проверено модульно и точечно —
+`fetch_cors_default_credentials_omits_cookie`/`fetch_cors_include_credentials_sends_cookie`
+(`crates/network/src/lib.rs`) бьют ровно по гейту `cross_origin_credentials()`
+без сетевого слоя вокруг; для утверждения о самом сетевом коде этого
+достаточно, TLS-стенд под один Set-Cookie-регрессион непропорционален.
+
+**Итог:** канвовый объём GAP-CANVASORIGIN закрыт. GAP-REFERRER/BUG-859
+остаётся открытым как отдельная задача (не сужает эту). Статус в ROADMAP —
+`done`.

@@ -275,10 +275,11 @@ pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
 ///   `Access-Control-Allow-Origin`/`-Allow-Credentials` (`lumen_network::
 ///   HttpClient::fetch_cors`), а не только сравнение origin строк; прошедшая
 ///   проверку картинка НЕ попадает в этот список (canvas не заражается).
-///   Credentials-режим фактически не влияет на то, летят ли cookies (Phase 0
-///   ограничение `fetch_cors`, см. его doc-комментарий) — известный остаток,
-///   не блокирующий большинство реальных `crossorigin="anonymous"` случаев.
-///   Без атрибута — прежнее консервативное поведение (всегда taint).
+///   Credentials-режим (`crossorigin="anonymous"` → `SameOrigin`,
+///   `"use-credentials"` → `Include`) гейтит `Cookie` на actual-запросе
+///   (срез 4, BUG-941: `CredentialsMode::cross_origin_credentials()` в
+///   `fetch_cors`) — раньше это не было так, теперь Fetch §4.7 шаг 3 не
+///   нарушается. Без атрибута — прежнее консервативное поведение (всегда taint).
 #[allow(clippy::type_complexity)]
 pub(crate) fn fetch_and_decode_images(
     doc: &mut Document,
