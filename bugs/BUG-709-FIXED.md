@@ -1,6 +1,6 @@
 # BUG-709: WebAuthn `create()`/`get()` never validate `rp.id`/`rpId` against the calling document's origin — no origin-binding enforcement at all
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/credentials.rs` — `CREDENTIALS_SHIM`'s `create`/`get` methods) and network (`crates/network/src/webauthn.rs` — `VirtualAuthenticator::create`/`get`)
 **Найден:** WPT-VENDOR-webauthn (`ROADMAP.md`), code read + a temporary local `#[test]` probe (removed before commit; `git diff` on the test file is empty)
 
@@ -94,3 +94,54 @@ reimplemented). Belt-and-suspenders: also add the check natively in
 would need an `effective_domain` field carrying the browser's own — not
 JS-supplied — notion of current origin) so a future non-shim caller of the
 native bindings can't bypass a JS-only gate.
+
+## Исправлено (2026-09-17, P3)
+
+Добавлена origin-binding проверка `rp.id`/`pk.rpId` в двух независимых
+местах, как и намечено в §Дальше выше:
+
+1. **JS-шим** (`CREDENTIALS_SHIM` в `credentials.rs`): новая функция
+   `rpIdMatchesHost(rpId, host)` — та же suffix-логика, что уже использует
+   сеттер `document.domain` (`web_api_shim_mid.js`, "relaxing the
+   same-origin restriction"): `rpId` обязан совпадать с эффективным доменом
+   документа или быть его registrable-domain суффиксом (граница по точке,
+   не просто строковый суффикс — `evil-example.com` не матчит
+   `example.com`). Проверка стоит ДО проверки `typeof _lumen_webauthn_create
+   !== 'function'`, так как это валидация входных данных, а не наличия
+   авторизатора — так что она отклоняет запрос `SecurityError` даже без
+   установленного `CredentialProvider`.
+2. **Native** (`credentials.rs::create`/`get`): `rp_id_matches_origin(rp_id,
+   origin)` — вместо отдельного поля `effective_domain`, для которого
+   потребовался бы новый плюмбинг через `WebAuthnCreateRequest`/
+   `WebAuthnGetRequest`, переиспользован уже существующий `req.origin`:
+   это `location.origin` шима, ReadOnly для страницы (в отличие от `rp.id`,
+   который приходит из caller-supplied `options`), так что доверять ему
+   безопасно. `origin_host()` вытаскивает хост из `scheme://host[:port]`
+   (включая IPv6-literal `[::1]:port`), затем та же label-boundary suffix
+   проверка. Это страховка независимая от JS-гейта — future non-shim
+   caller нативных биндингов её не обойдёт.
+
+Новые тесты (`crates/js/src/credentials.rs`):
+- `origin_host_strips_scheme_port_and_path`, `rp_id_matches_origin_accepts_same_origin_and_registrable_suffix`,
+  `rp_id_matches_origin_rejects_unrelated_and_partial_label_match` — юнит-тесты
+  на чистые функции, включая label-boundary edge case.
+- `create_and_get_reject_rp_id_not_matching_origin` — сквозной тест через
+  `create()`/`get()` с провайдером-паникером (`unreachable!` в `create`/`get`
+  трейта) — доказывает, что провайдер не вызывается при мисматче.
+- `create_rejects_rp_id_unrelated_to_calling_origin`,
+  `get_rejects_rp_id_unrelated_to_calling_origin`,
+  `create_accepts_rp_id_that_is_registrable_suffix_of_origin` (в
+  `v8_fedcm`-модуле) — гоняют сам JS-шим через `V8JsRuntime`; вскрыт нюанс
+  V8's `MicrotasksPolicy::Auto` — промис, синхронно отклонённый внутри
+  своего executor'а, доставляет реакцию `.then`/`.catch` только как
+  микротаск, который дренируется по возврату из ТЕКУЩЕГО top-level script —
+  поэтому синхронное чтение результата в том же `eval()` всегда читает
+  устаревшее значение; тест разбит на два вызова `eval()` (settle → read).
+
+`cargo test -p lumen-js --lib credentials:: --features v8-backend` — 30/30.
+`cargo clippy --workspace --all-targets -- -D warnings` — чисто.
+`scripts/scoped-test.sh` — единственный красный тест
+(`cases::snapshot_cpu::cpu_snapshots_match_references`, те же 7 файлов)
+совпадает byte-for-byte с уже задокументированным чужим дрейфом
+[BUG-1008](BUG-1008-OPEN.md), не регрессия. Только JS/native-биндинги,
+пиксели не затронуты.
