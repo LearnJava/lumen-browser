@@ -421,6 +421,20 @@ pub(crate) struct FrameSubresourceOutcomes {
     /// eager one — the registration key is stable from the first paint, only
     /// the pixels behind it arrive later.
     pub(crate) lazy_requests: Vec<lumen_layout::ImageRequest>,
+    /// GAP-CSPENF срез 8: resolved `<img src>` URLs the CHILD's own
+    /// `img-src`/`default-src` policy blocked — fetch never ran for them
+    /// (same "don't touch the network at all" shape as
+    /// `subresources.rs::fetch_and_decode_images`'s `blocked_by_img_src`).
+    /// The frame has no JS runtime yet at this point (`fetch_frame_subresources`
+    /// runs before `run_scripts_with_dom`), so dispatching
+    /// `securitypolicyviolation` for these is the caller's job, same as the
+    /// page-level counterpart.
+    pub(crate) blocked_by_img_src: Vec<String>,
+    /// GAP-CSPENF срез 8: resolved `<link rel=stylesheet>` URLs the CHILD's
+    /// own `style-src`/`default-src` policy blocked — `load_linked_stylesheets`
+    /// already computed this (срез 7), it was just discarded here before this
+    /// срез.
+    pub(crate) blocked_by_style_src: Vec<String>,
 }
 
 /// Запросить подресурсы парсерных элементов под-документа фрейма (BUG-480
@@ -472,12 +486,12 @@ pub(crate) fn fetch_frame_subresources(
         0,
         crate::stylesheets::document_encoding(doc),
     );
-    // GAP-CSPENF срез 7: `style-src` still gates the fetch here (blocked sheets
-    // return the same `false` outcome a network failure would), but frames do
-    // not yet dispatch `securitypolicyviolation` for it — same scope limit
-    // `img-src` already has in this function (no `blocked_by_img_src` wiring
-    // either).
-    let (linked, links, _blocked_by_style_src) =
+    // GAP-CSPENF срез 7: `style-src` gates the fetch here (blocked sheets
+    // return the same `false` outcome a network failure would); срез 8 stops
+    // discarding the blocked-URL list `load_linked_stylesheets` already
+    // computes and surfaces it via `FrameSubresourceOutcomes` for the caller
+    // to dispatch `securitypolicyviolation` on (no JS runtime exists yet here).
+    let (linked, links, blocked_by_style_src) =
         load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
     css.push_str(&linked);
 
@@ -485,15 +499,33 @@ pub(crate) fn fetch_frame_subresources(
         lumen_layout::collect_image_requests(doc, viewport)
             .into_iter()
             .partition(|req| !req.is_lazy);
+    // GAP-CSPENF срез 8: same one-shot policy computation as
+    // `subresources.rs::fetch_and_decode_images` — the CHILD document's OWN
+    // policy (`<meta>`/header of the sub-document, not the parent's), so a
+    // frame is gated by its own CSP.
+    let csp_gate = {
+        let root = doc.root();
+        crate::csp_enforce::document_csp_policy(doc, root)
+    };
+    let self_origin = base.origin();
     // Фаза 1 (параллельно): сеть + декодирование, `doc` не трогаем — форма
-    // `fetch_and_decode_images` страницы.
+    // `fetch_and_decode_images` страницы. Третий элемент кортежа — резолвленный
+    // URL, если `img-src` его заблокировал (`None` — не блокировался, фетч
+    // (не)успешен обычным путём); отличает CSP-блок от сетевой неудачи, чтобы
+    // фаза 2 могла отчитаться `securitypolicyviolation` только за первое.
     let decoded = parallel_map(&requests, |_, req| {
         let sink: &Arc<dyn EventSink> = &sink.clone();
         let key = frame_image_key(base, &req.url);
+        if let Some((policy, _)) = &csp_gate {
+            let resolved_url = base.resolve_str(&req.url);
+            if crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
+                return (key, None, Some(resolved_url));
+            }
+        }
         let img = crate::image_cache::IMAGE_CACHE.get_or_decode_current(&key, || {
             decode_image(&req.url, base, sink, cookie_jar.clone(), target)
         });
-        (key, img)
+        (key, img, None)
     });
     // Фаза 2 (последовательно): intrinsic-размеры в дерево ребёнка и сборка
     // выходных векторов в порядке DOM.
@@ -501,7 +533,11 @@ pub(crate) fn fetch_frame_subresources(
     let mut decoded_images = Vec::new();
     let mut image_keys = Vec::with_capacity(requests.len());
     let mut animated_gifs = Vec::new();
-    for (req, (key, img)) in requests.iter().zip(decoded) {
+    let mut blocked_by_img_src = Vec::new();
+    for (req, (key, img, blocked_url)) in requests.iter().zip(decoded) {
+        if let Some(url) = blocked_url {
+            blocked_by_img_src.push(url);
+        }
         image_keys.push((req.url.clone(), key.clone()));
         // BUG-269, как у страницы: intrinsic нужен, если автор не задал ХОТЯ БЫ
         // одно измерение — второе достраивается по соотношению сторон.
@@ -533,7 +569,17 @@ pub(crate) fn fetch_frame_subresources(
     for req in &lazy_requests {
         image_keys.push((req.url.clone(), frame_image_key(base, &req.url)));
     }
-    FrameSubresourceOutcomes { links, images, css, decoded_images, image_keys, animated_gifs, lazy_requests }
+    FrameSubresourceOutcomes {
+        links,
+        images,
+        css,
+        decoded_images,
+        image_keys,
+        animated_gifs,
+        lazy_requests,
+        blocked_by_img_src,
+        blocked_by_style_src,
+    }
 }
 
 /// Ключ регистрации картинки под-документа фрейма (BUG-480 срез 15):
@@ -1898,6 +1944,28 @@ pub(crate) fn spawn_frame(
     if let Some(js) = &child_js {
         js.notify_dom_content_loaded();
         deliver_frame_subresource_events(js, &subresources);
+        // GAP-CSPENF срез 8: `securitypolicyviolation` for every `img-src`/
+        // `style-src`-blocked URL `fetch_frame_subresources` collected before
+        // this runtime existed — same one-shot-push shape as
+        // `page_pipeline.rs`'s `blocked_by_img_src`/`blocked_by_style_src`
+        // dispatch, just against the CHILD's own runtime/policy instead of
+        // the page's.
+        #[cfg(feature = "v8")]
+        if !subresources.blocked_by_img_src.is_empty() || !subresources.blocked_by_style_src.is_empty() {
+            let original_policy = {
+                let d = child_doc_arc.lock().unwrap();
+                let root = d.root();
+                crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
+            };
+            if let Some(original_policy) = original_policy {
+                for url in &subresources.blocked_by_img_src {
+                    js.fire_csp_violation("img-src", url, &original_policy);
+                }
+                for url in &subresources.blocked_by_style_src {
+                    js.fire_csp_violation("style-src", url, &original_policy);
+                }
+            }
+        }
         js.notify_window_loaded();
     }
     // Вложенные фреймы ребёнка обрабатываем, пока известна его база.
