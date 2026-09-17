@@ -68,6 +68,49 @@ const CSP_SHIM: &str = r#"
       statusCode:         0
     });
     document.dispatchEvent(evt);
+    _lumen_send_csp_reports(originalPolicy, evt);
+  };
+
+  // ── report-uri delivery (CSP3 §5.5 "report violation") ──────────────────
+  // GAP-CSPENF срез 14: `CspPolicy.report_uri` is parsed on the Rust side
+  // (`crates/network/src/csp.rs`) but nothing crosses the Rust/JS boundary to
+  // carry it to every enforcement call site — script-src/img-src/style-src
+  // live in `crates/shell`, connect-src/worker-src live in `lumen-network`
+  // behind a native side channel (срезы 10-13). Every one of them already
+  // threads `originalPolicy` (the combined header+meta text) through to here,
+  // so re-extracting `report-uri` from that string avoids widening the
+  // boundary a sixth time. `report-to` (Reporting API) is NOT handled — it
+  // needs endpoint groups from a `Report-To` header this engine does not
+  // parse, a materially bigger feature; see `bugs/BUG-811-OPEN.md`.
+  window._lumen_send_csp_reports = function(originalPolicy, evt) {
+    if (typeof fetch !== 'function' || typeof URL !== 'function') { return; }
+    var m = /(?:^|;)\s*report-uri\s+([^;]+)/i.exec(originalPolicy || '');
+    if (!m) { return; }
+    var uris = m[1].trim().split(/\s+/).filter(Boolean);
+    if (!uris.length) { return; }
+    var base = (typeof document !== 'undefined' && document.baseURI) ||
+               (typeof location !== 'undefined' ? location.href : undefined);
+    var body = JSON.stringify({
+      'csp-report': {
+        'document-uri':       evt.documentURI,
+        'referrer':            evt.referrer,
+        'violated-directive':  evt.violatedDirective,
+        'effective-directive': evt.effectiveDirective,
+        'original-policy':     originalPolicy,
+        'disposition':         evt.disposition,
+        'blocked-uri':         evt.blockedURI,
+        'status-code':         evt.statusCode
+      }
+    });
+    uris.forEach(function(u) {
+      var target;
+      try { target = new URL(u, base).href; } catch (e) { return; }
+      fetch(target, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/csp-report' },
+        body:    body
+      }).catch(function() {});
+    });
   };
 })();
 "#;
@@ -104,6 +147,45 @@ mod tests {
               this.cancelable = (init && init.cancelable) || false;
             }
             globalThis.Event = Event;
+            "#,
+        )
+        .unwrap();
+        install_csp_bindings_v8(&rt).unwrap();
+        f(&rt);
+    }
+
+    /// Same rig as [`with_csp_api`] plus a mock `fetch`/`URL` that records
+    /// every call into `_reports` instead of touching the network — for the
+    /// report-uri delivery tests below. `URL` only resolves absolute and
+    /// root-relative (`/path`) inputs, the only shapes the tests use.
+    fn with_csp_api_and_report_mock(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            globalThis.window = globalThis;
+            globalThis.location = { href: 'https://example.com/page' };
+            globalThis._dispatched = [];
+            globalThis._reports = [];
+            globalThis.document = {
+              baseURI: 'https://example.com/page',
+              referrer: '',
+              dispatchEvent: function(e) { _dispatched.push(e); }
+            };
+            function Event(type, init) {
+              this.type = type;
+              this.bubbles    = (init && init.bubbles)    || false;
+              this.composed   = (init && init.composed)   || false;
+              this.cancelable = (init && init.cancelable) || false;
+            }
+            globalThis.Event = Event;
+            function URL(u, base) {
+              this.href = /^https?:\/\//.test(u) ? u : (base.match(/^(https?:\/\/[^/]+)/)[1] + u);
+            }
+            globalThis.URL = URL;
+            globalThis.fetch = function(target, init) {
+              _reports.push({ target: target, init: init });
+              return Promise.resolve({ ok: true });
+            };
             "#,
         )
         .unwrap();
@@ -198,6 +280,86 @@ mod tests {
                     r#"
                     _lumen_dispatch_csp_violation('script-src', 'inline', "script-src 'none'", 'enforce');
                     _dispatched.length === 1 && _dispatched[0].violatedDirective === 'script-src'
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// GAP-CSPENF срез 14: a policy with `report-uri` POSTs a `csp-report`
+    /// JSON body to it, resolved against `document.baseURI`.
+    #[test]
+    fn report_uri_posts_report_to_endpoint() {
+        with_csp_api_and_report_mock(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    _lumen_dispatch_csp_violation('script-src', 'inline',
+                      "script-src 'none'; report-uri /csp-report", 'enforce');
+                    _reports.length === 1 &&
+                    _reports[0].target === 'https://example.com/csp-report' &&
+                    _reports[0].init.method === 'POST' &&
+                    _reports[0].init.headers['Content-Type'] === 'application/csp-report' &&
+                    JSON.parse(_reports[0].init.body)['csp-report']['violated-directive'] === 'script-src' &&
+                    JSON.parse(_reports[0].init.body)['csp-report']['blocked-uri'] === 'inline' &&
+                    JSON.parse(_reports[0].init.body)['csp-report']['original-policy'] ===
+                      "script-src 'none'; report-uri /csp-report"
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// Multiple whitespace-separated URIs in `report-uri` each get their own
+    /// POST.
+    #[test]
+    fn report_uri_posts_to_every_listed_endpoint() {
+        with_csp_api_and_report_mock(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    _lumen_dispatch_csp_violation('img-src', 'https://evil.example/x.png',
+                      "img-src 'none'; report-uri /a /b", 'enforce');
+                    _reports.length === 2 &&
+                    _reports[0].target === 'https://example.com/a' &&
+                    _reports[1].target === 'https://example.com/b'
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// No `report-uri` directive in the policy — no reports sent.
+    #[test]
+    fn no_report_uri_sends_no_reports() {
+        with_csp_api_and_report_mock(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    _lumen_dispatch_csp_violation('script-src', 'inline', "script-src 'none'", 'enforce');
+                    _reports.length === 0
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// No `fetch`/`URL` in the runtime (the plain [`with_csp_api`] rig) — the
+    /// dispatch helper must not throw even though the policy has
+    /// `report-uri`.
+    #[test]
+    fn report_uri_without_fetch_does_not_throw() {
+        with_csp_api(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    _lumen_dispatch_csp_violation('script-src', 'inline',
+                      "script-src 'none'; report-uri /csp-report", 'enforce');
+                    _dispatched.length === 1
                     "#,
                 )
                 .unwrap();

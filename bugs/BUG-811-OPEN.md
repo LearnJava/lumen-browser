@@ -804,3 +804,54 @@ lumen-shell --all-targets --features v8 -- -D warnings` (оба чисто).
 `connect-src`/`worker-src`; `report-uri`/`report-to`; hash-источники; честная
 независимая проверка заголовка и `<meta>`; картинки/скрипты/листы внутри
 `<iframe>` не покрытые срезами 6/8.
+
+## Срез 14 (2026-09-17, P6) — доставка отчётов `report-uri`
+
+Реализовано (`crates/js/src/csp.rs`, JS-only — единственная точка изменений):
+`_lumen_dispatch_csp_violation` — уже единственная точка диспетчеризации
+`securitypolicyviolation` для всех пяти директив (срезы 1-13, script-src/
+img-src/style-src из `crates/shell`, connect-src/worker-src через
+side-channel `lumen-network`), и каждый вызывающий её путь уже передаёт
+`originalPolicy` (объединённый текст заголовка + `<meta>`, `document_csp_policy`
+из `csp_enforce.rs`). `CspPolicy.report_uri` разобран на Rust-стороне с самого
+начала (`crates/network/src/csp.rs:135`), но ни разу не пересекал границу
+Rust/JS ни к одной из пяти точек нарушения — плюс к самой границе прибавился
+бы шестой провод (после script-src/img-src/style-src/connect-src/worker-src).
+Вместо этого — переизвлечение `report-uri` из уже доехавшей строки
+`originalPolicy` регулярным выражением `/(?:^|;)\s*report-uri\s+([^;]+)/i`:
+одна точка изменений вместо пяти.
+
+Новая функция `_lumen_send_csp_reports(originalPolicy, evt)` строит JSON-тело
+`csp-report` (CSP2 §5, поля `document-uri`/`referrer`/`violated-directive`/
+`effective-directive`/`original-policy`/`disposition`/`blocked-uri`/
+`status-code` — те же, что уже несёт `SecurityPolicyViolationEvent`) и шлёт
+`fetch(..., {method:'POST', headers:{'Content-Type':'application/csp-report'}})`
+на каждый URI из директивы (несколько URI — несколько POST), резолвя их
+против `document.baseURI`. Отказ `fetch` (сеть недоступна, эндпоинт не
+отвечает) молча проглатывается (`.catch(() => {})`) — доставка отчёта не
+имеет наблюдаемого эффекта на странице по спеке. Если `fetch`/`URL` не
+определены в рантайме (воркер-контекст, тестовый стаб), функция тихо
+возвращается — тот же "no observable effect" принцип, не бросает.
+
+Живой пробой (`--mcp-live-port`, локальный HTTP-сервер, `dev-release`):
+страница с `<meta http-equiv="Content-Security-Policy" content="script-src
+'none'; report-uri /csp-report">` и инлайн-скриптом — сервер получает POST
+`/csp-report` с `Content-Type: application/csp-report` и телом
+`{"csp-report":{"document-uri":"http://127.0.0.1:8199/page","violated-directive":"script-src",
+"effective-directive":"script-src","original-policy":"script-src 'none'; report-uri /csp-report",
+"disposition":"enforce","blocked-uri":"inline","status-code":0}}` — `referrer`
+отсутствует в JSON, потому что `document.referrer` в этом движке сегодня
+`undefined`, не пустая строка, и `JSON.stringify` опускает `undefined`-поля;
+не регрессия этого среза. +5 unit-тестов в `crates/js/src/csp.rs`
+(`report_uri_posts_report_to_endpoint`, `report_uri_posts_to_every_listed_endpoint`,
+`no_report_uri_sends_no_reports`, `report_uri_without_fetch_does_not_throw`).
+
+Не покрыто этим срезом: `report-to` (Reporting API) — нужны группы эндпоинтов
+из заголовка `Report-To`, который этот движок не разбирает, заметно большая
+задача; `Content-Security-Policy-Report-Only` (report-only политика вообще не
+доезжает до `document_csp_policy` — см. `csp_enforce.rs`, отдельная задача);
+отчёты для нарушений, обнаруженных до появления JS-рантайма (streaming-продюсер
+картинок, `page_load.rs` — см. срез 4, тот же провал, что и у самого события);
+директивы кроме `script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`;
+hash-источники; честная независимая проверка заголовка и `<meta>`;
+картинки/скрипты/листы внутри `<iframe>` не покрытые срезами 6/8.
