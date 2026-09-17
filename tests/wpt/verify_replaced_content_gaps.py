@@ -581,6 +581,7 @@ window.addEventListener("load", function () {
 <img id=corsed crossorigin=anonymous
      src="__ALT_ORIGIN__/images/black-rectangle.png?taint=cors">
 <canvas id=c width="20" height="20"></canvas>
+<canvas id=c2 width="20" height="20"></canvas>
 """ + REPORT + """
 <script>
 // Parser-written on purpose: a script-built image is not registered in the
@@ -604,11 +605,25 @@ window.addEventListener("load", function () {
     rep("cross-toDataURL", function () {
       return document.getElementById("c").toDataURL().slice(0, 22);
     });
+    // `corsed` is served with a passing Access-Control-Allow-Origin (the
+    // alt server's `?taint=cors` case) — the whole point of `fetch_cors`
+    // (GAP-CANVASORIGIN срез 2) is that THIS draw must not taint the canvas,
+    // unlike `cross` above which has no ACAO and must. Drawn onto `c2`, a
+    // canvas the `cross` draw never touched — the taint bit is monotonic per
+    // canvas (HTML LS §4.12.5.1.2), so re-using `c` here would read as
+    // tainted no matter what `corsed` itself does, since `cross-draw` above
+    // already tainted it for good.
+    var ctx2 = document.getElementById("c2").getContext("2d");
+    rep("corsed-draw", function () { ctx2.drawImage(el("corsed"), 4, 4, 4, 4); return "ok"; });
+    rep("corsed-read", function () {
+      var d = ctx2.getImageData(5, 5, 1, 1).data;
+      return [d[0], d[1], d[2], d[3]].join(",");
+    });
     console.log("PROBE taint-done");
   }, 2500);
 });
 </script>
-""", "a cross-origin draw then read must throw SecurityError"),
+""", "cross w/o ACAO taints (SecurityError on read); corsed w/ ACAO does not"),
 
     "canvas-svg-foreignobject": ("""
 <canvas id=c width="20" height="20"></canvas>
@@ -1177,9 +1192,22 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
     #: one's in a single `served` list.
     origin_label = ""
 
+    #: Set on the alt-origin server only: the main server's origin, echoed
+    #: back as `Access-Control-Allow-Origin` for requests carrying
+    #: `?taint=cors` — the one request `canvas-taint-crossorigin`'s `corsed`
+    #: image needs a passing preflight-free CORS response on, so the
+    #: `fetch_cors` path (GAP-CANVASORIGIN срез 2) has something to untaint
+    #: against instead of erroring the whole request out.
+    acao_origin = None
+
     def _record(self, method):
         with _SERVED_LOCK:
             SERVED.append(f"{method} {self.origin_label}{self.path}")
+
+    def end_headers(self):
+        if self.acao_origin and "taint=cors" in self.path:
+            self.send_header("Access-Control-Allow-Origin", self.acao_origin)
+        super().end_headers()
 
     def do_GET(self):  # noqa: N802 — http.server's own casing
         self._record("GET")
@@ -1207,17 +1235,22 @@ def _free_port():
         return sock.getsockname()[1]
 
 
-def _serve(root, label=""):
+def _serve(root, label="", acao_origin=None):
     """Start a background http server on `root`, return (port, shutdown).
 
     `label` prefixes every path this server records, so the alternate-origin
     server's requests stay distinguishable inside the single `SERVED` list
-    that `canvas-taint-crossorigin` reads.
+    that `canvas-taint-crossorigin` reads. `acao_origin`, when given, is
+    echoed back as `Access-Control-Allow-Origin` on `?taint=cors` requests —
+    see `_Quiet.acao_origin`.
     """
     port = _free_port()
 
+    acao = acao_origin
+
     class _Labelled(_Quiet):
         origin_label = label
+        acao_origin = acao
 
     def handler(*args, **kwargs):
         return _Labelled(*args, directory=root, **kwargs)
@@ -1293,7 +1326,8 @@ def main():
         return 2
 
     http_port, shutdown = _serve(HERE)
-    alt_port, alt_shutdown = _serve(HERE, label="[alt]")
+    main_origin = f"http://127.0.0.1:{http_port}"
+    alt_port, alt_shutdown = _serve(HERE, label="[alt]", acao_origin=main_origin)
     alt_origin = f"http://127.0.0.1:{alt_port}"
     written = []
     #: `name -> server-relative page path`, for the replays whose copy does not
