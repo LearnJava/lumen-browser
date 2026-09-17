@@ -15,6 +15,13 @@ pub(crate) fn install_webhid_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) ->
 #[cfg(feature = "v8-backend")]
 const WEBHID_SHIM: &str = r#"
 (function() {
+  // WICG WebHID defines no constructor operation for `HIDDevice` (engine-issued
+  // only, via requestDevice()/getDevices()) or `HIDManager` (navigator.hid is a
+  // singleton) — BUG-713. Page script must get `TypeError: Illegal constructor`
+  // from `new`, so both classes require this private brand as their first
+  // argument; only the internal instantiation below holds a reference to it.
+  var BRAND = {};
+
   // HIDConnectionEvent class
   class HIDConnectionEvent extends Event {
     constructor(type, device) {
@@ -26,7 +33,8 @@ const WEBHID_SHIM: &str = r#"
 
   // HIDDevice class - represents a connected HID device
   class HIDDevice extends EventTarget {
-    constructor(vendorId, productId, productName, collections = []) {
+    constructor(brand, vendorId, productId, productName, collections = []) {
+      if (brand !== BRAND) throw new TypeError('Illegal constructor');
       super();
       this.vendorId = vendorId;
       this.productId = productId;
@@ -84,7 +92,8 @@ const WEBHID_SHIM: &str = r#"
 
   // HIDManager (navigator.hid)
   class HIDManager extends EventTarget {
-    constructor() {
+    constructor(brand) {
+      if (brand !== BRAND) throw new TypeError('Illegal constructor');
       super();
       this.onconnect = null;
       this.ondisconnect = null;
@@ -115,7 +124,7 @@ const WEBHID_SHIM: &str = r#"
 
   // Install navigator.hid singleton
   Object.defineProperty(navigator, 'hid', {
-    value: new HIDManager(),
+    value: new HIDManager(BRAND),
     writable: false,
     enumerable: true
   });
@@ -207,17 +216,18 @@ mod tests {
         });
     }
 
+    /// BUG-713: WICG WebHID defines no constructor for `HIDDevice` (engine-issued
+    /// only, via `requestDevice()`/`getDevices()`) or `HIDManager` (`navigator.hid`
+    /// is a singleton) — `new` on either must throw, not silently construct.
     #[test]
-    fn webhid_device_has_properties() {
+    fn webhid_constructors_are_illegal() {
         with_webhid_api(|rt| {
             let ok = rt
                 .eval(
                     r#"
-            const dev = new window.HIDDevice(0x1234, 0x5678, "TestDev");
-            dev.vendorId === 0x1234 &&
-            dev.productId === 0x5678 &&
-            dev.productName === "TestDev" &&
-            dev.opened === false
+            function threw(f) { try { f(); return false; } catch (e) { return e instanceof TypeError; } }
+            threw(function() { new window.HIDDevice(0x1234, 0x5678, "TestDev"); }) &&
+            threw(function() { new window.HIDManager(); })
             "#,
                 )
                 .unwrap();
