@@ -317,6 +317,69 @@ frame and cancels any `running` instance not visited that pass, which a
 removed (or `display: none`) node naturally satisfies — `animationcancel` on
 removal already worked, confirmed by inspection, not newly fixed here.
 
+## Срез 8 (GAP-CSSANIM, 2026-09-17, `p1-gap-cssanim-srez8`) — correction: `@keyframes height` did NOT reach `getComputedStyle()` in the live path; now it does. Geometry mid-animation remains open and is architecturally larger than a slice
+
+**Срез 5's claim was wrong for the code that actually runs.** There are two
+independent `AnimationScheduler` types in this codebase:
+`lumen_layout::animation::AnimationScheduler` (in `crates/engine/layout/src/
+animation.rs`, fully unit-tested, including `height` interpolation via
+`keyframe_interpolate`/`interp_optional_length`) and `crate::animation_scheduler::
+AnimationScheduler` (`crates/shell/src/animation_scheduler.rs`), which is the
+one actually instantiated (`Lumen::animation_scheduler`, wired into
+`RedrawRequested`). Срез 5 added `height: Option<Length>` to `KeyframeStyle`
+and wrote `scheduler_tick_height_midpoint` against the **first** (unused) type
+— `grep -rn "animation::AnimationScheduler" crates/shell/` finds zero call
+sites. The shell's own `interpolate_keyframe_styles()` (a different function,
+same file layout crate but separate from the dead type) never had a `height`
+branch at all, and its caller (`process_node`'s merge into `frame.overrides`)
+only copied `opacity`/`transform`/`color`/`background_color` from the
+interpolated result — two independent gaps stacked on the same field. Net
+effect: `@keyframes height` never reached `getComputedStyle()` for any real
+page, contrary to срез 5's writeup.
+
+**Fixed both gaps** in `crates/shell/src/animation_scheduler.rs`:
+`interpolate_keyframe_styles()` now interpolates `height` via the same
+`AnimValue::Length`/`LinearInterpolator` pattern the other fields already use,
+and `process_node()` now copies `animated.height` into `frame.overrides`'s
+entry. New unit test `tick_interpolates_height_midpoint`. Live confirmation —
+new `css-animation-height` variant in `verify_event_delivery_gaps.py`:
+`getComputedStyle(t).height` climbs `auto → 29px → 44px → 59px → 74px → 89px`
+over a 2s linear `@keyframes height: 0px → 100px` (was static `auto` the whole
+time before this slice).
+
+**Geometry mid-animation (`getBoundingClientRect()`, sibling reflow) remains
+open** and turns out to be a materially larger undertaking than any prior
+slice in this task, not a follow-up patch:
+
+- `AnimationFrame::to_compositor_frame()` deliberately excludes `height`
+  because `opacity`/`transform`/`color`/`background-color` can be patched into
+  the display list without relayout (BUG-231's compositor-offload contract);
+  `height` (and any hypothetical `width`/`margin`/`top`/`left`, none of which
+  any scheduler tracks today) changes box geometry, which in block flow
+  necessarily reflows every sibling below it — there is no way to patch a
+  single box's rect in isolation and have the rest of the tree stay correct.
+- `apply_relayout_result()` (`crates/shell/src/relayout.rs`) is the **only**
+  place that calls `collect_layout_rects`/`collect_client_rects` (the source
+  `getBoundingClientRect()`/`getClientRects()` read), and it unconditionally
+  clears `self.anim_frame` (line ~719) — a real relayout pass today always
+  recomputes style from the static cascade, with no path for an animated
+  override to survive into it.
+- Threading an animated-height override through to a real layout pass would
+  require either (a) a new parameter on every `layout*` entry point in
+  `crates/engine/layout/src/box_tree/entry.rs` (7 public functions, several
+  of which — `lay_out_incremental`, `layout_mutation_incremental*` — reuse a
+  cached box tree rather than rebuilding one, so a post-`build_box`
+  style-patch approach would not even apply to those call paths), or (b) a
+  narrower per-node `Arc::make_mut` patch of `LayoutBox.style.height` between
+  `build_box` and `lay_out()` for the handful of full-rebuild entry points
+  only — real relayout, run once per animation frame while `height` is
+  actively animating (i.e. the same perf trade-off real browsers accept: this
+  is *why* production advice is "only animate transform/opacity"). Both are
+  multi-file, cross-cutting changes properly sized as their own slice(s), not
+  foldable into this one alongside the `getComputedStyle()` fix above.
+
+Not attempted this slice; left as the sole remaining item under GAP-CSSANIM.
+
 Fix: a new `TransitionScheduler::cancel_missing(present, now)` compares the
 scheduler's active `(node, property)` set against `present` — the
 `ComputedStyle` map `apply_relayout_result` (`crates/shell/src/relayout.rs`)

@@ -165,6 +165,21 @@ var timer = setInterval(function () {
 new ResizeObserver(function () { console.log("PROBE ro-fired"); }).observe(t);
 </script>
 """, "left climbing 0→300"),
+    "css-animation-height": ("""
+<style>
+@keyframes grow { from { height: 0px } to { height: 100px } }
+#t { width:50px; background:blue; animation: grow 2s linear; }
+</style>
+<div id=t></div>
+<script>
+var t = document.getElementById("t");
+var seen = 0;
+var timer = setInterval(function () {
+    console.log("PROBE height " + getComputedStyle(t).height);
+    if (++seen > 5) clearInterval(timer);
+}, 300);
+</script>
+""", "height climbing 0px→100px (GAP-CSSANIM срез 8: was static 0px, живой @keyframes height never reached getComputedStyle)"),
     "smil-events": ("""
 <svg width="200" height="100">
   <rect id=r width="10" height="10" fill="blue">
