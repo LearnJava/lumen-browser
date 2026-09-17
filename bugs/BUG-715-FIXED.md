@@ -6,7 +6,7 @@
 
 ## Симптом
 
-Тот же прогон категории `webidl`, что и [BUG-714](BUG-714-OPEN.md)
+Тот же прогон категории `webidl`, что и [BUG-714](BUG-714-FIXED.md)
 (45 id, 37/45 harness OK, 134/324 сабтестов). Второй по величине кластер —
 все четыре файла `ecmascript-binding/legacy-platform-object/*.html`
 (`DefineOwnProperty`/`GetOwnProperty`/`OwnPropertyKeys`/`Set`, 0/4, 0/3, 0/5,
