@@ -847,12 +847,30 @@ pub(crate) fn install_fetch(
         // Beacon API (W3C Beacon §3): fire-and-forget POST; response is ignored.
         // Returns false if no network provider is available, true if the request was queued.
         // The actual POST runs on a detached background thread so the JS caller is not blocked.
+        //
+        // GAP-CSPENF срез 12: `connect-src`/`default-src` is checked synchronously,
+        // BEFORE the thread is spawned — `check_connect_src` is I/O-free (URL parse +
+        // policy match only), so this costs nothing on the hot path, and it is the
+        // only point left where the caller (still on the JS thread) can be told the
+        // request never left the queue. Blocked info is stashed in the same
+        // `last_csp_block` slot the synchronous fetch bindings above use — beacon
+        // fires like they do, one call at a time — and read back via
+        // `_lumen_beacon_last_csp_block` right after a `false` result.
         {
             let fp = fp_beacon;
-            reg!(scope, ctx, store, 
+            let lcb_beacon = Arc::clone(&last_csp_block);
+            reg!(scope, ctx, store,
                 "_lumen_send_beacon",
                 move |url: String, body: String, content_type: String| -> bool {
                     let Some(ref provider) = fp else { return false };
+                    if let Err(lumen_core::error::Error::CspConnectSrcBlocked {
+                        blocked_uri,
+                        original_policy,
+                    }) = provider.check_connect_src(&url)
+                    {
+                        *lcb_beacon.lock().unwrap() = Some((blocked_uri, original_policy));
+                        return false;
+                    }
                     let ct = if content_type.is_empty() {
                         "text/plain;charset=UTF-8".to_string()
                     } else {
@@ -865,6 +883,20 @@ pub(crate) fn install_fetch(
                     true
                 }
             );
+        }
+
+        // _lumen_beacon_last_csp_block() → [blockedUri, originalPolicy] | []
+        // Same read-and-clear contract as `_lumen_fetch_last_csp_block` above,
+        // shares the same slot — the shim calls this right after `sendBeacon`
+        // returns `false` (GAP-CSPENF срез 12).
+        {
+            let lcb_get = Arc::clone(&last_csp_block);
+            reg!(scope, ctx, store, "_lumen_beacon_last_csp_block", move || -> Vec<String> {
+                match lcb_get.lock().unwrap().take() {
+                    Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
+                    None => Vec::new(),
+                }
+            });
         }
     }
     Ok(())

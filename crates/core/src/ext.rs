@@ -2036,6 +2036,24 @@ pub trait JsFetchProvider: Send + Sync {
         }
         self.fetch_with_body_sync(url, method, content_type, body)
     }
+
+    /// I/O-free pre-check: would the document's `connect-src` (or `default-src`)
+    /// policy block a request to `url`, without issuing one.
+    ///
+    /// GAP-CSPENF: `navigator.sendBeacon()` dispatches its POST on a detached
+    /// background thread (W3C Beacon §3 is fire-and-forget — the caller must not
+    /// block), so by the time `fetch_with_body_sync` would normally catch a
+    /// `connect-src` violation the calling JS has already returned and there is
+    /// no synchronous point left to report from. This method lets the native
+    /// binding decide *before* spawning that thread, so the block is both silent
+    /// on the wire (no request ever built) and observable to script (the caller
+    /// can still fire `securitypolicyviolation` and return `false` per spec).
+    /// Default implementation never blocks, matching `HttpClient` with no
+    /// `connect-src` policy installed.
+    fn check_connect_src(&self, url: &str) -> Result<()> {
+        let _ = url;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -629,3 +629,65 @@ lumen-shell --all-targets --features v8 -- -D warnings` (оба чисто).
 `connect-src`; `report-uri`/`report-to`; hash-источники; честная независимая
 проверка заголовка и `<meta>`; картинки/скрипты/листы внутри `<iframe>` не
 покрытые срезами 6/8.
+
+## Срез 12 (2026-09-17, P6) — `connect-src` против `navigator.sendBeacon`
+
+Реализовано: последний JS-инициированный сетевой API, названный не покрытым
+срезом 10/11, — `sendBeacon` действительно шёл в обход `fetch_request_impl`
+(и потому в обход `connect_src_policy`), но не потому, что кто-то забыл
+гейт: `_lumen_send_beacon` (`crates/js/src/v8_runtime/install/net.rs`)
+специально спавнит `fetch_with_body_sync` на detached-потоке (W3C Beacon §3 —
+fire-and-forget, вызывающий скрипт не блокируется), а к тому моменту, когда
+поток дошёл бы до `fetch_request_impl`'s гейта, вызвавший JS уже получил
+`true` и продолжил выполнение — сообщать о блокировке уже некому и незачем.
+
+- `crates/core/src/ext.rs`: новый метод трейта `JsFetchProvider::
+  check_connect_src(url) -> Result<()>` — I/O-free пре-чек (только `Url::parse`
+  + сверка с политикой, без похода в сеть), с default-реализацией `Ok(())` для
+  двойников без CSP (совпадает с поведением `HttpClient` без установленной
+  `connect_src_policy`).
+- `crates/network/src/lib.rs`: `fetch_request_impl`'s инлайновая проверка
+  вынесена в `HttpClient::connect_src_gate(&Url)` — общий приватный хелпер;
+  `check_connect_src` — тонкая обёртка (`Url::parse` + `connect_src_gate`),
+  та же логика, что срезы 10/11 уже применяют к `fetch()`/XHR/WS/SSE.
+- `crates/js/src/v8_runtime/install/net.rs`: `_lumen_send_beacon` зовёт
+  `provider.check_connect_src(&url)` **до** `std::thread::spawn` — заблокированный
+  URL не доходит до `fetch_with_body_sync` вовсе (тот же принцип «ни одного
+  исходящего байта», что срезы 4/6/7/9/10 уже применяют к своим API), и вместо
+  спавна потока пишет `(blocked_uri, original_policy)` в тот же однослотовый
+  `last_csp_block: Arc<Mutex<Option<(String, String)>>>`, который срез 10 уже
+  завёл для синхронных путей `fetch()` (beacon соединяется синхронно и по
+  одному вызову за раз — тот же аргумент об одном слоте на рантайм). Новый
+  натив `_lumen_beacon_last_csp_block()` читает и очищает слот.
+- `crates/js/src/shim/web_api_shim_mid_b.js`: `navigator.sendBeacon` при
+  `!ok` читает `_lumen_beacon_last_csp_block()` и зовёт уже существующий
+  `_lumen_fire_connect_src_violation` (срез 10) — тот же общий хелпер, что
+  fetch/XHR/WS/SSE уже используют. `sendBeacon` при блокировке возвращает
+  `false` — по спеке "queue a request" внутри алгоритма беакона проваливается
+  на CSP-проверке, значит запрос не поставлен в очередь.
+
+Подтверждено тестами (без реального сетевого ввода-вывода): 3 юнит-теста в
+`crates/network/src/lib.rs` (`connect_src_none_blocks_beacon_check_before_any_thread_is_spawned`,
+`connect_src_allowed_host_passes_beacon_check`,
+`no_connect_src_policy_does_not_block_beacon_check` — тот же "no real I/O"/
+"no-policy-no-block" рисунок, что срезы 10/11 уже проверяли) + 4
+интеграционных в `crates/js/src/dom/tests/v8_page_visibility_beacon.rs`
+(`send_beacon_connect_src_block_returns_false`,
+`send_beacon_connect_src_block_reaches_native_side_channel`,
+`send_beacon_connect_src_block_fires_security_policy_violation_event`, плюс
+существующий `send_beacon_with_provider_returns_true` остался зелёным без
+изменений — не регрессия для незаблокированного пути). WPT
+`content-security-policy/connect-src/connect-src-beacon-blocked.sub.html`
+ожидает ровно это: `securitypolicyviolation` с
+`violatedDirective=connect-src`, что теперь и происходит.
+Подтверждено `cargo clippy -p lumen-network --all-targets -- -D warnings`
+(чисто), `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings` (чисто), `cargo build -p lumen-shell --features v8` +
+`cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings`
+(оба чисто).
+
+Не покрыто этим срезом: директивы кроме `script-src`/`img-src`/`style-src`/
+`connect-src`; `report-uri`/`report-to`; hash-источники; честная независимая
+проверка заголовка и `<meta>`; картинки/скрипты/листы внутри `<iframe>` не
+покрытые срезами 6/8; двойная доставка `securitypolicyviolation` для
+дублирующихся продюсеров картинок (существующий паттерн, см. срез 4).
