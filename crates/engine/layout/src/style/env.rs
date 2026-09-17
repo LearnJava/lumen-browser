@@ -8,13 +8,14 @@
 //! (анкер `thread_local! { CONTAINER_CQ }`) без правок тел: изменена только
 //! видимость тех items, которые продолжают звать `style.rs` и его тесты.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::MediaContext;
 use lumen_dom::{Document, NodeId};
 
-use crate::style::{matches_complex, SHADOW_SHEETS};
+use crate::style::{matches_complex, Length, SHADOW_SHEETS};
 
 thread_local! {
     /// CSS Container Queries L1 §6.2 — nearest container dimensions for `cq*` unit resolution.
@@ -164,6 +165,48 @@ pub fn set_print_media(active: bool) {
 /// True when the current layout pass renders for `print` media.
 pub fn print_media_active() -> bool {
     PRINT_MEDIA.with(|p| p.get())
+}
+
+thread_local! {
+    /// GAP-CSSANIM срез 9: this frame's live `height` overrides from the
+    /// active `AnimationScheduler`/`TransitionScheduler` tick, keyed by node.
+    /// Set by the shell via [`set_animated_heights`] right before the one
+    /// "full" layout entry point that honors it
+    /// ([`crate::layout_measured_hyp_with_counters`]); cleared afterwards.
+    /// Empty (the default) is the overwhelming common case — every layout
+    /// pass on a page with no active height animation/transition pays only
+    /// the cost of one `is_empty()` check (see `apply_animated_heights`).
+    static ANIMATED_HEIGHTS: RefCell<HashMap<NodeId, Length>> = RefCell::new(HashMap::new());
+}
+
+/// Installs this frame's animated `height` overrides for the next "full"
+/// layout pass on this thread (`layout_measured_hyp_with_counters`).
+///
+/// A `height` transition/`@keyframes` animation is the one CSS-animatable
+/// property that cannot be compositor-offloaded (unlike `opacity`/
+/// `transform`/`color`) — it changes a box's own size, which only a real
+/// relayout can propagate to `rect`/`content_rect` and, through them, to
+/// `getBoundingClientRect()`/`getClientRects()`. Call this right before
+/// triggering that relayout; call [`clear_animated_heights`] after.
+pub fn set_animated_heights(heights: HashMap<NodeId, Length>) {
+    ANIMATED_HEIGHTS.with(|h| *h.borrow_mut() = heights);
+}
+
+/// Clears the animated-height overrides installed by [`set_animated_heights`].
+pub fn clear_animated_heights() {
+    ANIMATED_HEIGHTS.with(|h| h.borrow_mut().clear());
+}
+
+/// Whether any animated-height override is currently installed — a cheap
+/// check so a layout pass on an unaffected page skips the per-box lookup
+/// entirely (same tradeoff as `apply_font_size_adjust`'s `None` short-circuit).
+pub(crate) fn animated_heights_active() -> bool {
+    ANIMATED_HEIGHTS.with(|h| !h.borrow().is_empty())
+}
+
+/// This frame's animated `height` override for `node`, if any.
+pub(crate) fn animated_height_for(node: NodeId) -> Option<Length> {
+    ANIMATED_HEIGHTS.with(|h| h.borrow().get(&node).cloned())
 }
 
 // ─── Parallel style environment (ADR-016 M4.1) ───────────────────────────────

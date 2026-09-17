@@ -398,11 +398,11 @@ impl Lumen {
             // Step 5 below reads `display_list.is_empty()` synchronously
             // (PerformancePaintTiming), so this reflow is the synchronous
             // `relayout` (no engine thread to defer to).
-            if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            let dom_dirty = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.take_dom_dirty()
             })
-            .unwrap_or(false)
-            {
+            .unwrap_or(false);
+            if dom_dirty {
                 // FRAME-8: тот же сигнал, что уже показал relayout-у мутацию
                 // страничного DOM — довесок, не отдельный опрос. Синхронный
                 // путь (`self.engine_thread.is_none()`) уже гарантирован веткой
@@ -410,6 +410,26 @@ impl Lumen {
                 // (см. doc-comment `frame_dynamic.rs`).
                 self.poll_dynamic_frames();
                 self.relayout_raf_dirty_readback();
+            } else if self
+                .anim_frame
+                .as_ref()
+                .is_some_and(|f| f.overrides.values().any(|o| o.height.is_some()))
+            {
+                // GAP-CSSANIM срез 9: a `height` transition/`@keyframes`
+                // animation is running with no DOM mutation this frame — the
+                // DOM-dirty branch above never fires for it, so
+                // `getBoundingClientRect()`/`getClientRects()` would
+                // otherwise keep reading the box tree from before the
+                // animation started. Force the plain full relayout (which
+                // installs `self.anim_frame`'s height overrides via
+                // `lumen_layout::set_animated_heights`, see `relayout()`)
+                // every such frame — the same "animating height forces a
+                // real reflow" tradeoff real browsers make (hence the
+                // standing advice to animate only transform/opacity).
+                // Scope of this slice: the synchronous default path only —
+                // `LUMEN_ENGINE_THREAD=1`'s `pump_raf_engine_thread` is not
+                // wired to this trigger yet.
+                self.relayout();
             }
         }
 
