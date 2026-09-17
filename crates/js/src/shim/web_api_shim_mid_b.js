@@ -637,7 +637,13 @@ var navigator = {
             body = typeof data._data === 'string' ? data._data : '';
             ct = data.type || 'application/octet-stream';
         }
-        try { return _lumen_send_beacon(url, body, ct); } catch(e) { return false; }
+        try {
+            var ok = _lumen_send_beacon(url, body, ct);
+            if (!ok && typeof _lumen_beacon_last_csp_block === 'function') {
+                _lumen_fire_connect_src_violation(_lumen_beacon_last_csp_block());
+            }
+            return ok;
+        } catch(e) { return false; }
     },
 };
 

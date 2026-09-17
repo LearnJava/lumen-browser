@@ -4178,9 +4178,35 @@ impl JsFetchProvider for HttpClient {
             token: Some(token),
         })
     }
+
+    /// GAP-CSPENF срез 12: `navigator.sendBeacon()`'s pre-spawn `connect-src` check
+    /// — same `connect_src_gate` that `fetch_request_impl` runs, called from the
+    /// native `_lumen_send_beacon` binding before it hands the request to a
+    /// detached background thread (see trait doc comment for why beacon needs its
+    /// own hook instead of relying on `fetch_with_body_sync`'s existing gate).
+    fn check_connect_src(&self, url: &str) -> Result<()> {
+        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        self.connect_src_gate(&url)
+    }
 }
 
 impl HttpClient {
+    /// `connect-src`/`default-src` gate shared by every JS-initiated network
+    /// path that owns a parsed `Url` — `fetch_request_impl` below and
+    /// [`JsFetchProvider::check_connect_src`]'s override (`sendBeacon`'s
+    /// pre-spawn check, GAP-CSPENF срез 12).
+    fn connect_src_gate(&self, url: &Url) -> Result<()> {
+        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
+            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, url, self_origin.as_ref())
+        {
+            return Err(Error::CspConnectSrcBlocked {
+                blocked_uri: url.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// Общее тело JS-запроса. `allow_sw_intercept = false` — для запросов,
     /// исходящих из самого service worker-а.
     fn fetch_request_impl(
@@ -4189,14 +4215,7 @@ impl HttpClient {
         allow_sw_intercept: bool,
     ) -> Result<JsFetchResult> {
         let url = Url::parse(req.url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
-        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
-            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &url, self_origin.as_ref())
-        {
-            return Err(Error::CspConnectSrcBlocked {
-                blocked_uri: url.to_string(),
-                original_policy: original_policy.clone(),
-            });
-        }
+        self.connect_src_gate(&url)?;
         let method_upper = req.method.to_ascii_uppercase();
         match (req.body.is_some(), method_upper.as_str()) {
             (false, "GET" | "HEAD") | (true, "POST" | "PUT" | "PATCH" | "DELETE") => {}
@@ -5475,6 +5494,61 @@ mod tests {
         let sse_result =
             <HttpClient as lumen_core::ext::JsSseProvider>::connect_sse(&client, "not a url");
         assert!(!matches!(sse_result, Err(Error::CspConnectSrcBlocked { .. })));
+    }
+
+    // ── GAP-CSPENF срез 12: connect-src против navigator.sendBeacon ──────────
+
+    #[test]
+    fn connect_src_none_blocks_beacon_check_before_any_thread_is_spawned() {
+        // `check_connect_src` is the I/O-free pre-check the native `sendBeacon`
+        // binding runs before spawning the detached POST thread — unlike the
+        // fetch/WS/SSE tests above, there is no handshake to observe "before":
+        // this asserts the gate answers from the parsed URL and policy alone.
+        let policy = csp::parse_csp_header("connect-src 'none'");
+        let client = HttpClient::new().with_connect_src_policy(
+            policy,
+            None,
+            "connect-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_connect_src(
+            &client,
+            "https://192.0.2.1.invalid/beacon",
+        );
+        match result {
+            Err(Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "https://192.0.2.1.invalid/beacon");
+                assert_eq!(original_policy, "connect-src 'none'");
+            }
+            Ok(()) => panic!("expected CspConnectSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspConnectSrcBlocked, got {other}"),
+        }
+    }
+
+    #[test]
+    fn connect_src_allowed_host_passes_beacon_check() {
+        let policy = csp::parse_csp_header("connect-src example.com");
+        let client = HttpClient::new().with_connect_src_policy(
+            policy,
+            None,
+            "connect-src example.com".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_connect_src(
+            &client,
+            "https://example.com/beacon",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn no_connect_src_policy_does_not_block_beacon_check() {
+        // Mirrors `no_connect_src_policy_does_not_block` above — default
+        // `HttpClient` must not invent a CSP block for `check_connect_src` either.
+        let client = HttpClient::new();
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_connect_src(
+            &client,
+            "https://example.com/beacon",
+        );
+        assert!(result.is_ok());
     }
 
     #[test]

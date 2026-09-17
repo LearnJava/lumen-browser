@@ -832,6 +832,78 @@ fn send_beacon_with_provider_returns_true() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// GAP-CSPENF срез 12: mock provider whose `check_connect_src` always refuses
+/// with `Error::CspConnectSrcBlocked`, the way `HttpClient::check_connect_src`
+/// (срез 12) does when the document's `connect-src` forbids the beacon target —
+/// proves `_lumen_send_beacon` runs the check BEFORE ever reaching
+/// `fetch_with_body_sync` (this provider would panic-via-`unimplemented!` if it
+/// did, but simply erroring is enough: a call reaching it would flip the
+/// returned bool and the side channel would stay empty).
+struct CspBlockedBeaconProvider;
+impl lumen_core::ext::JsFetchProvider for CspBlockedBeaconProvider {
+    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Err(lumen_core::error::Error::Network("fetch_sync must not be reached".into()))
+    }
+    fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Err(lumen_core::error::Error::Network("fetch_with_body_sync must not be reached — check_connect_src should short-circuit first".into()))
+    }
+    fn check_connect_src(&self, _url: &str) -> lumen_core::error::Result<()> {
+        Err(lumen_core::error::Error::CspConnectSrcBlocked {
+            blocked_uri: "https://blocked.example/beacon".into(),
+            original_policy: "connect-src 'none'".into(),
+        })
+    }
+}
+
+fn v8_runtime_with_csp_blocked_beacon(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedBeaconProvider);
+    rt.install_dom(doc, "", Some(p), None, None, None, None, None, None, None, false).unwrap();
+    rt
+}
+
+#[test]
+fn send_beacon_connect_src_block_returns_false() {
+    let rt = v8_runtime_with_csp_blocked_beacon(make_doc());
+    let r = rt.eval("navigator.sendBeacon('https://blocked.example/beacon', 'x')").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(false));
+}
+
+#[test]
+fn send_beacon_connect_src_block_reaches_native_side_channel() {
+    let rt = v8_runtime_with_csp_blocked_beacon(make_doc());
+    let r = rt
+        .eval("_lumen_send_beacon('https://blocked.example/beacon', 'x', ''); _lumen_beacon_last_csp_block()")
+        .unwrap();
+    match r {
+        lumen_core::JsValue::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], lumen_core::JsValue::String("https://blocked.example/beacon".into()));
+            assert_eq!(arr[1], lumen_core::JsValue::String("connect-src 'none'".into()));
+        }
+        other => panic!("expected [uri, policy], got {other:?}"),
+    }
+}
+
+#[test]
+fn send_beacon_connect_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_beacon(make_doc());
+    rt.eval(
+        "var seen = null; \
+         document.addEventListener('securitypolicyviolation', function(e) { \
+             seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
+         }); \
+         navigator.sendBeacon('https://blocked.example/beacon', 'x');",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "connect-src|https://blocked.example/beacon|connect-src 'none'".into()
+        )
+    );
+}
+
 // ─── fetch keepalive + priority tests (FF-5) ─────────────────────────────
 
 #[test]
