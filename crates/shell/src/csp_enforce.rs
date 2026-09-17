@@ -48,8 +48,14 @@
 //! срез 10 уже собирает для `connect_src_policy`. Детали — `bugs/
 //! BUG-811-OPEN.md` срез 13.
 //!
+//! Срез 14 (`crates/js/src/csp.rs`, вне этого файла — JS-only) добавил
+//! доставку отчётов `report-uri`: `_lumen_dispatch_csp_violation`
+//! переизвлекает директиву из уже доехавшей `originalPolicy` и шлёт
+//! `fetch(..., {method:'POST'})` на каждый URI. `report-to` не тронут.
+//!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`object-src`/
-//! `media-src`/`frame-src`/`manifest-src`/…), `report-uri`/`report-to`,
+//! `media-src`/`frame-src`/`manifest-src`/…), `report-to` (Reporting API,
+//! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
 //! hash-источники (только `'unsafe-inline'` и `'nonce-…'`),
 //! `background-image`/`@font-face url()` (используют `fetch_image_bytes`
 //! напрямую, не гейтятся вовсе), инлайновые `<style>`/атрибут `style` (не
