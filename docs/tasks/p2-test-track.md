@@ -1171,6 +1171,64 @@ worker/serviceworker-контекстов под нагрузкой — боль
 `*.sharedworker`/`*.serviceworker`-исполнении под нагрузкой, до повторного
 `--update-expected`.
 
+### TEST-3: диагностика IndexedDB (2026-09-17) — глобальные объявления importScripts
+
+WPT-RUN-7 остаётся открытым; baseline IndexedDB не создавался и не обновлялся.
+На фиксированной выборке из четырёх id сравнили `--processes=1` и `--processes=4`
+при `PYTHONHASHSEED=0`: `structured-clone.any.worker.html?21-40` и три
+`writer-starvation.any.{worker,sharedworker,serviceworker}.html`.
+Оба запуска дали 4 `test_start`, 4 `test_end`, один `suite_end`; статусы и
+сообщения подтестов совпали. TIMEOUT/MISSING среза 34 на этой малой выборке
+не воспроизвелись. Это не доказательство стабильности полного корпуса.
+
+Эти первоначальные замеры выполнялись на старом бинаре от 8 сентября,
+SHA256 `2290B4B3077CA9DA3FC0F94C0A1F19541B4CBBCEAFF0BF80226A4800E635402A`.
+`structured-clone` завершился ERROR (`DOMMatrix is not defined`) и 20 FAIL
+(`createDatabase is not defined`); dedicated/shared `writer-starvation` —
+harness OK и один FAIL (`createdb is not defined`). Serviceworker-вариант
+дал ERROR навигации: сертификат не покрывает `localhost`. Ни одна из этих
+устойчивых ошибок сама по себе не объясняет прежние плавающие TIMEOUT/MISSING.
+
+Изолированная HTTP-проба показала, что helper действительно загружается:
+сервер получил каждый запрос ровно один раз, strict-скрипт выставил маркер
+исполнения, но его функция была `undefined`; аналогичная non-strict-функция
+была видна. Неизменённый `IndexedDB/resources/support-promises.js` также
+исполнился без доступного `createDatabase`. Причина — `(1, eval)(script)` в
+реализациях dedicated/shared `importScripts`: strict-eval имеет собственную
+область объявлений, в отличие от classic script.
+
+В dedicated/shared worker импорт теперь исполняется через `v8::Script` в
+текущем контексте, без удаления `use strict` и без изменения WPT-файлов.
+Регрессионный тест на текущих исходниках до фикса получил
+`true|undefined|undefined|undefined`, после — `true|function|number|number`.
+Отдельный shared-worker тест проверяет глобальные объявления, сохранение
+идентичности брошенного значения, SyntaxError и остановку последующих импортов.
+Оба теста, прежний worker roundtrip и Clippy для `lumen-js` прошли.
+
+После пересборки `cargo build --profile dev-release -p lumen-shell`
+(SHA256 `31AF13F9ED655C7B11B7BDABB16879DAD97835DE96284353233BD8AE4B0DE426`)
+сквозной WPT `workers/WorkerGlobalScope_importScripts.htm` прошёл 1/1.
+Оба `writer-starvation` теперь входят в `createdb`, но падают на
+`self.indexedDB.open`: `Cannot read properties of undefined (reading 'open')`.
+Отсутствие IndexedDB в этих worker-глобалах — следующий отдельный блокер;
+shim не устанавливался, ожидания не ослаблялись. Ошибка линковки старых
+артефактов `lumen-mcp` устранена scoped-очисткой этого пакета и пересборкой,
+без изменений его исходников.
+
+**Уточнение проверки классификатора:** ранний запуск
+`run_report.py --root css/css-position --check` без `--all` проверил курированный
+`dom/nodes`, а не CSS. Утверждение о сквозной проверке многозначного CSS-baseline
+в сообщении коммита `01a8e84b4` неверно; доказательство обработки intermittent
+статусов — `verify_expectations.py` через штатные mozlog/WptreportFormatter.
+
+Локальные артефакты находятся в `.tmp/` слота P2: `idb-fixed-p1.json`,
+`idb-fixed-p4.json` и соответствующие raw/console-логи;
+`idb_import_scope_probe.py`, `idb-import-scope.log`; после фикса —
+`idb-after-fix.json`, `idb-after-fix.raw.log`, `idb-after-fix.console.log`.
+Следующее действие для закрытия среза 34 — получить воспроизводимый
+TIMEOUT/MISSING с предшествующей нагрузкой и точной последовательностью id;
+до этого повторная генерация baseline не обоснована.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
