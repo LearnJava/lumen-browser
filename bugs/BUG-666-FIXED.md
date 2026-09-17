@@ -1,6 +1,6 @@
 # BUG-666 — `getDisplayMedia()` never validates its constraints argument and never checks user activation
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-17 (P3)
 **Компонент:** js (`crates/js/src/media_devices.rs:326`-`386`, the `getDisplayMedia` JS shim method — Phase 1 PH3-17 Screen Capture stub)
 **Найден:** P2, WPT-VENDOR-screen-capture (2026-08-05), live `--mcp-live-port` probe (the WPT run itself gave zero signal — all 15 selected ids are `.https.` and TIMEOUT on the already-documented TLS gap `UnknownIssuer`, per `docs/wpt-status.md`'s `UnknownIssuer` class)
 
@@ -77,3 +77,42 @@ the same test file are a further, separable layer of `MediaTrackConstraints` sha
 — not required to close the two checks above, but worth a follow-up pass once real
 `applyConstraints()`/constraint enforcement exists (currently `getSettings()` returns fixed
 capture dimensions regardless of any `video` constraints passed in).
+
+## Исправлено
+
+Ревизия при фиксе: пункт 2 выше был сформулирован неверно относительно реального
+поведения спецификации. Сам же завендоренный `tests/wpt/screen-capture/getdisplaymedia.https.html`
+(строки 38-51) требует, чтобы `{}`/без аргумента/`{audio:false}` **успешно резолвились**
+с видео-треком — отсутствующий/`undefined` `video` по спеке по умолчанию `true`, а не
+повод для `TypeError`. `TypeError` спека требует только для явно ложного `video`
+(`{video:false}`, строка 53) и для отдельного слоя валидации формы
+`MediaTrackConstraints` (`advanced`/`width`/`height`/`frameRate` — строки 54-61),
+который эта заявка сама пометила как отдельный, не обязательный для закрытия слой.
+
+Добавлены в `getDisplayMedia` (`media_devices.rs:326`), синхронно, до вызова
+`__lumen_screen_capture_start`:
+1. Проверка transient activation через `navigator.userActivation.isActive` — тот же
+   источник и паттерн, что `filesystem_access.rs::requireUserActivation`/
+   `local_font_access.rs::requireTransientActivation`. Отклоняет с `InvalidStateError`
+   через `Promise.reject(...)` напрямую (не внутри `.then()`), иначе промис не будет
+   уже отклонённым к моменту гонки с `Promise.race([p, Promise.resolve()])` в тесте.
+2. Проверка `options.video === false` → `Promise.reject(new TypeError(...))`.
+   Отсутствующий/`undefined`/непустой `video` не отклоняется.
+
+Более глубокая валидация формы `MediaTrackConstraints` (advanced/width/height/frameRate)
+осталась вне скоупа этого фикса — как и отмечено в исходной заявке, это отдельный слой,
+требующий реальной модели ограничений (сейчас `getSettings()` всегда возвращает
+фиксированные размеры захвата).
+
+Новые тесты в `crates/js/src/media_devices.rs::tests`:
+`get_display_media_requires_transient_activation`,
+`get_display_media_rejects_explicit_false_video`,
+`get_display_media_defaults_video_when_unspecified` (проверяет, что `{}`/без
+аргумента/`{audio:false}` не дают `TypeError`, а идут дальше до `NotAllowedError`
+из-за отсутствующего провайдера захвата в тестовом окружении).
+
+`cargo test -p lumen-js --lib media_devices --features v8-backend` — 27/27,
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` — чист.
+Изменение только в JS-шиме (raw-строке `MEDIA_DEVICES_SHIM` в `media_devices.rs`),
+пиксели не затронуты — `graphic_tests`/`scoped-test.sh` не требуются сверх точечного
+`cargo test`/`clippy`.

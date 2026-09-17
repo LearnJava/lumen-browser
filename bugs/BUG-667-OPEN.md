@@ -52,7 +52,7 @@ performs neither of:
 2. **`getScreenDetails() must require transient user activation`** (W3C Multi-Screen Window
    Placement §3.2 step 2) — the promise resolves with zero prior user gesture (no
    `test_driver.click`, no synthesized click of any kind). Same defect class as
-   [BUG-666](BUG-666-OPEN.md) (`getDisplayMedia` — user-activation gate + constraints
+   [BUG-666](BUG-666-FIXED.md) (`getDisplayMedia` — user-activation gate + constraints
    validation both unchecked) and [BUG-646](BUG-646-OPEN.md)/[BUG-656](BUG-656-OPEN.md)
    (unchecked constructor arguments) — a recurring pattern across Phase 0/1 stubs of gesture-
    or permission-gated Web APIs: the JS shim implements the happy-path return shape but skips

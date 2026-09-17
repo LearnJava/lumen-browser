@@ -324,6 +324,27 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
     // is installed. Rejects with NotAllowedError when no provider is registered or
     // the provider denies access.
     getDisplayMedia: function(options) {
+      // §4.1 step 1 — transient activation is required; `navigator.userActivation`
+      // is the engine's own answer to that question, same source `showOpenFilePicker`/
+      // `queryLocalFonts` consult (filesystem_access.rs::requireUserActivation,
+      // local_font_access.rs::requireTransientActivation). Must reject synchronously
+      // (not inside a `.then()`) so an already-rejected promise wins a `Promise.race`
+      // against a freshly created `Promise.resolve()`.
+      var activation = navigator.userActivation;
+      if (activation && activation.isActive === false) {
+        return Promise.reject(
+          new DOMException('getDisplayMedia() requires transient activation.', 'InvalidStateError')
+        );
+      }
+      // §4.1 step 3 — an explicit falsy `video` constraint must fail with TypeError.
+      // Absent/undefined `video` defaults to `true` per spec and must NOT reject
+      // (confirmed by the vendored tests/wpt/screen-capture/getdisplaymedia.https.html,
+      // whose `{}` / `undefined` / `{audio:false}` cases are all "must succeed with video").
+      if (options && options.video === false) {
+        return Promise.reject(
+          new TypeError('getDisplayMedia() requires a truthy video constraint.')
+        );
+      }
       if (typeof __lumen_screen_capture_start !== 'function') {
         return Promise.reject(
           new DOMException('Screen capture is not available', 'NotAllowedError')
@@ -469,6 +490,20 @@ mod tests {
         }
     }
 
+    /// Resolves `expr` (a promise) and reports `"resolved"` or `"rejected|<name>|<message>"`.
+    fn settle(rt: &V8JsRuntime, expr: &str) -> String {
+        rt.eval(&format!(
+            r#"
+            var __out = 'never settled';
+            ({expr}).then(
+              function() {{ __out = 'resolved'; }},
+              function(e) {{ __out = 'rejected|' + e.name + '|' + e.message; }});
+            "#
+        ))
+        .unwrap();
+        s(rt, "String(__out)")
+    }
+
     #[test]
     fn install_succeeds_without_navigator() {
         let rt = V8JsRuntime::new().unwrap();
@@ -532,6 +567,58 @@ mod tests {
                return typeof p === 'object' && typeof p.then === 'function'; \
              })()",
         ));
+    }
+
+    /// BUG-666 — §4.1 step 1: without transient activation the call must reject
+    /// with `InvalidStateError`, mirroring `filesystem_access.rs`/`local_font_access.rs`.
+    #[test]
+    fn get_display_media_requires_transient_activation() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        rt.eval("navigator.userActivation = { isActive: false };").unwrap();
+        assert_eq!(
+            settle(&rt, "navigator.mediaDevices.getDisplayMedia({video:true})"),
+            "rejected|InvalidStateError|getDisplayMedia() requires transient activation."
+        );
+    }
+
+    /// BUG-666 — §4.1 step 3: an explicit falsy `video` constraint must fail with
+    /// `TypeError`. Confirmed against the vendored
+    /// `tests/wpt/screen-capture/getdisplaymedia.https.html` (`{video: false}` case).
+    #[test]
+    fn get_display_media_rejects_explicit_false_video() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        rt.eval("navigator.userActivation = { isActive: true };").unwrap();
+        assert_eq!(
+            settle(&rt, "navigator.mediaDevices.getDisplayMedia({video:false})"),
+            "rejected|TypeError|getDisplayMedia() requires a truthy video constraint."
+        );
+    }
+
+    /// BUG-666 — absent/undefined `video` must default to `true`, not reject.
+    /// Per the same vendored test, `{}` / `undefined` / `{audio:false}` must all
+    /// succeed with video; here there is no capture provider installed, so the
+    /// call still rejects, but it must reach the provider-missing branch
+    /// (`NotAllowedError`), never `TypeError`.
+    #[test]
+    fn get_display_media_defaults_video_when_unspecified() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        rt.eval("navigator.userActivation = { isActive: true };").unwrap();
+        for expr in [
+            "navigator.mediaDevices.getDisplayMedia({})",
+            "navigator.mediaDevices.getDisplayMedia()",
+            "navigator.mediaDevices.getDisplayMedia({audio:false})",
+        ] {
+            assert_eq!(
+                settle(&rt, expr),
+                "rejected|NotAllowedError|Screen capture is not available"
+            );
+        }
     }
 
     #[test]
