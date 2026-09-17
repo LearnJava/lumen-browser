@@ -408,3 +408,52 @@ top-level документа (у скриптов внутри фрейма по
 `scripts/scoped-test.sh` (единственный красный тест — `cases::snapshot_cpu::
 cpu_snapshots_match_references`, тот же 7-файловый дрейф эталонов, что уже
 числится на `main` до этой ветки, не регрессия этого среза).
+
+## Срез 8 (2026-09-17, P6) — `securitypolicyviolation` внутри `<iframe>` для `img-src`/`style-src`
+
+Реализовано (`crates/shell/src/frames.rs`): закрыт ровно пробел, названный
+срезами 4/7 («`frames.rs` уже блокирует фетч заблокированных ресурсов
+подфрейма, но не диспатчит `securitypolicyviolation` для этого») — но теперь
+против собственной политики ребёнка, а не top-level документа (в отличие от
+ограничения среза 4/6 для картинок/скриптов top-level страницы, у фрейма
+своя политика с самого начала, как и у скриптов внутри него, срез 6).
+
+- `fetch_frame_subresources` считает `img-src`/`default-src` гейт ребёнка
+  (`csp_enforce::document_csp_policy` по `doc` подфрейма) той же одноразовой
+  точкой, что и `subresources.rs::fetch_and_decode_images`, и резолвит URL
+  `<img>` (`base.resolve_str`) до входа в `decode_image` — заблокированный
+  ресурс не фетчится вовсе, тот же принцип «ни одного исходящего байта».
+  Заблокированный/сетевой исход различаются третьим элементом кортежа
+  параллельной фазы (`Option<String>` — резолвленный URL, если заблокирован
+  `img-src`), чтобы последовательная фаза 2 не путала CSP с обычным сетевым
+  отказом.
+- `load_linked_stylesheets` (срез 7) уже считала и отбрасывала список
+  заблокированных `style-src` URL для CSS подфрейма — список просто
+  перестал отбрасываться.
+- `FrameSubresourceOutcomes` получила `blocked_by_img_src`/
+  `blocked_by_style_src: Vec<String>`; `spawn_frame` после того, как рантайм
+  ребёнка создан (`js.notify_dom_content_loaded()`), диспатчит
+  `securitypolicyviolation` по каждому URL через `PersistentJs::
+  fire_csp_violation` — та же одноразовая схема, что `page_pipeline.rs` уже
+  применяет к top-level `blocked_by_img_src`/`blocked_by_style_src` (срезы
+  4/7), только политика читается заново с документа ребёнка
+  (`child_doc_arc`), а не с top-level.
+
+Не покрыто этим срезом: `script-src` внутри фрейма (срез 6 уже блокирует
+фетч через `resolve_script_sources(doc, …)` с политикой ребёнка, но диспатч
+`securitypolicyviolation` для скриптов фрейма не проверен отдельно — тот же
+путь исполнения, что и top-level, должен уже работать, но не подтверждён
+живым пробом в этом срезе); вложенные фреймы фрейма (рекурсия та же
+функция, не тестировалась); директивы кроме `script-src`/`img-src`/
+`style-src`; honest независимая проверка заголовка и `<meta>`;
+hash-источники; `report-uri`/`report-to`; дедупликация двойного
+`securitypolicyviolation` для картинок (не касается фреймов — там нет
+streaming-продюсера).
+
+Подтверждено `cargo build -p lumen-shell --features v8` + `cargo clippy
+-p lumen-shell --all-targets --features v8 -- -D warnings` (оба чисто) +
+`scripts/scoped-test.sh` (единственный красный тест — `cases::snapshot_cpu::
+cpu_snapshots_match_references`, тот же 7-файловый дрейф эталонов
+(`55-text-rendering`, `57-canvas-2d`, `32-list-markers`, `34-forms`,
+`45-multiple-backgrounds`, `51-scrollbar-rendering`, `1000000-final`), что
+уже числится на `main` до этой ветки (BUG-1008), не регрессия этого среза).

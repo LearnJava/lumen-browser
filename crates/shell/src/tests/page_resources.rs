@@ -325,6 +325,51 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
     assert_eq!(w.as_deref(), Some("4"), "intrinsic width из декодированной картинки");
 }
 
+/// GAP-CSPENF срез 8: `img-src`/`style-src` политика ребёнка `<iframe>`
+/// блокирует его собственные `<img>`/`<link rel=stylesheet>` (тот же
+/// host/scheme/`'self'` фетч-гейт, что уже применён к top-level документу
+/// срезами 4/7), и `fetch_frame_subresources` отчитывается об этом через
+/// `blocked_by_img_src`/`blocked_by_style_src` — раньше эти списки
+/// отбрасывались (`_blocked_by_style_src`) или не считались вовсе (`img-src`).
+/// `Url`-база нужна вместо `File`: `resolve_str` для файла отдаёт голый путь
+/// без схемы, а `img_src_blocked`/`style_src_blocked` считают такой URL
+/// непарсящимся и потому «не заблокированным» — сама проверка блокировки не
+/// была бы упражнена.
+#[test]
+fn frame_subresources_reports_csp_blocked_img_and_style_src() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                 <meta http-equiv="Content-Security-Policy" content="img-src 'none'; style-src 'none'">
+                 <link rel="stylesheet" href="ok.css">
+               </head><body>
+                 <img src="ok.png">
+               </body></html>"#,
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
+    let out = fetch_frame_subresources(
+        &mut doc,
+        &base,
+        &sink,
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
+    );
+
+    assert_eq!(out.blocked_by_img_src, vec!["https://example.com/frame/ok.png".to_owned()]);
+    assert_eq!(out.blocked_by_style_src, vec!["https://example.com/frame/ok.css".to_owned()]);
+    // Заблокированный фетч даёт тот же исход, что сетевая неудача (BUG-804) —
+    // `error` на элементе, без изменений в этом коде.
+    assert!(!out.images[0].1, "img-src 'none' must block the fetch, not just report it");
+    assert!(!out.links[0].1, "style-src 'none' must block the fetch, not just report it");
+}
+
 /// Настоящий PNG `w`×`h` (непрозрачный) для фикстур: `decode_image` обязан его
 /// разобрать, поэтому строка «bytes» тут больше не годится.
 ///
