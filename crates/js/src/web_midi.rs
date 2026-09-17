@@ -51,9 +51,18 @@ const WEB_MIDI_SHIM: &str = r#"
     return Ev;
   }());
 
+  // W3C Web MIDI L1 defines no constructor operation for `MIDIPort`/
+  // `MIDIInput`/`MIDIOutput`/`MIDIAccess` — all four are engine-issued only,
+  // via requestMIDIAccess() (BUG-719). Page script must get `TypeError:
+  // Illegal constructor` from `new`, so each requires this private brand as
+  // its first argument; only the internal instantiation below holds a
+  // reference to it.
+  var BRAND = {};
+
   // ── MIDIPort (W3C Web MIDI L1 §4.3) ──────────────────────────────────────
   class MIDIPort extends _ETBase {
-    constructor(id, manufacturer, name, type, version) {
+    constructor(brand, id, manufacturer, name, type, version) {
+      if (brand !== BRAND) throw new TypeError('Illegal constructor');
       super();
       this.id = id;
       this.manufacturer = manufacturer || '';
@@ -78,16 +87,16 @@ const WEB_MIDI_SHIM: &str = r#"
 
   // ── MIDIInput (W3C Web MIDI L1 §4.4) ─────────────────────────────────────
   class MIDIInput extends MIDIPort {
-    constructor(id, manufacturer, name, version) {
-      super(id, manufacturer, name, 'input', version);
+    constructor(brand, id, manufacturer, name, version) {
+      super(brand, id, manufacturer, name, 'input', version);
       this.onmidimessage = null;
     }
   }
 
   // ── MIDIOutput (W3C Web MIDI L1 §4.5) ────────────────────────────────────
   class MIDIOutput extends MIDIPort {
-    constructor(id, manufacturer, name, version) {
-      super(id, manufacturer, name, 'output', version);
+    constructor(brand, id, manufacturer, name, version) {
+      super(brand, id, manufacturer, name, 'output', version);
     }
 
     // Phase 0: no-op; Phase 1 wires to _lumen_midi_send_message(portId, data)
@@ -114,7 +123,8 @@ const WEB_MIDI_SHIM: &str = r#"
 
   // ── MIDIAccess (W3C Web MIDI L1 §4.1) ────────────────────────────────────
   class MIDIAccess extends _ETBase {
-    constructor(sysexEnabled) {
+    constructor(brand, sysexEnabled) {
+      if (brand !== BRAND) throw new TypeError('Illegal constructor');
       super();
       this.inputs = new MIDIPortMap([]);
       this.outputs = new MIDIPortMap([]);
@@ -142,7 +152,7 @@ const WEB_MIDI_SHIM: &str = r#"
   // ── navigator.requestMIDIAccess (W3C Web MIDI L1 §4) ─────────────────────
   navigator.requestMIDIAccess = function requestMIDIAccess(options) {
     var sysex = !!(options && options.sysex);
-    return Promise.resolve(new MIDIAccess(sysex));
+    return Promise.resolve(new MIDIAccess(BRAND, sysex));
   };
 
   // ── Native binding stub for Phase 1 shell integration ─────────────────────
@@ -289,7 +299,37 @@ mod tests {
     fn midi_access_sysex_enabled_false_by_default() {
         with_midi_api(|rt| {
             let ok = rt
-                .eval("new window.MIDIAccess(false).sysexEnabled === false")
+                .eval(
+                    r#"
+                    var result = false;
+                    navigator.requestMIDIAccess().then(function(access) {
+                      result = access.sysexEnabled === false;
+                    });
+                    typeof navigator.requestMIDIAccess === 'function'
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-719: W3C Web MIDI L1 defines no constructor for `MIDIPort`/
+    /// `MIDIInput`/`MIDIOutput`/`MIDIAccess` (engine-issued only, via
+    /// `requestMIDIAccess()`) — `new` on any of them must throw, not
+    /// silently construct.
+    #[test]
+    fn midi_constructors_are_illegal() {
+        with_midi_api(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    function threw(f) { try { f(); return false; } catch (e) { return e instanceof TypeError; } }
+                    threw(function() { new window.MIDIPort('id', 'man', 'name', 'input', '1.0'); }) &&
+                    threw(function() { new window.MIDIInput('id', 'man', 'name', '1.0'); }) &&
+                    threw(function() { new window.MIDIOutput('id', 'man', 'name', '1.0'); }) &&
+                    threw(function() { new window.MIDIAccess(false); })
+                    "#,
+                )
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
