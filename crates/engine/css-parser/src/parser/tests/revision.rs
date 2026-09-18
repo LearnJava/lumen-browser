@@ -562,6 +562,78 @@ fn set_mixin_result_style_fails_on_an_out_of_range_path() {
     );
 }
 
+// ── CSSOM-8 срез 12: `set_mixin_result_style` on a real nested rule must
+// reach the baked copy `collect_mixin_nested_rules` applies to the element
+// ────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn set_mixin_result_style_on_a_decls_child_does_not_touch_the_baked_tail() {
+    // The mutated node here is `@result`'s own leading declarations run, not
+    // a `NestedRule` — `collect_mixin_nested_rules` only ever bakes
+    // `NestedRule` items, so a mixin whose `@result` is decls-only produces
+    // no baked tail at all; the direct setter (not `replay_cssom_ops`, which
+    // is what would trigger a rerun) must leave that absence untouched.
+    let mut sheet = parse("@mixin --m() { @result { color: red; } } .e { @apply --m; }");
+    sheet.set_mixin_result_style(0, &[0], "color: blue").unwrap();
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn replay_cssom_ops_set_mixin_result_style_on_a_nested_rule_updates_the_baked_copy() {
+    // The remainder CSSOM-8 срез 11 left open: `mixin-invalidation.tentative
+    // .html`'s "invalidation of @mixin from same stylesheet" writes `.style`
+    // on a real `& {...}` nested rule inside `@result` and expects the
+    // element `.e` (reached only through the baked, already-selector-
+    // combined copy `collect_mixin_nested_rules` produced) to repaint.
+    let mut sheet = parse(
+        "@mixin --m() { @result { &.a { color: blue; } } } .e { @apply --m; }",
+    );
+    assert_eq!(sheet.rules.len(), 2);
+    assert_eq!(sheet.rules[1].declarations[0].property, "color");
+    assert_eq!(sheet.rules[1].declarations[0].value, "blue");
+
+    let ok = sheet.replay_cssom_ops(
+        0,
+        &[CssomOp::SetMixinResultStyle {
+            mixin_index: 0,
+            path: vec![0],
+            css_text: "color: purple".to_string(),
+        }],
+    );
+
+    assert!(ok);
+    assert_eq!(sheet.rules.len(), 2, "rerun must replace the stale tail, not append a second one");
+    assert_eq!(sheet.rules[1].declarations[0].value, "purple");
+    // The mixin-result tree itself (what `.cssText`/a re-read see) is
+    // updated too — the two views must never disagree.
+    let node = sheet.mixin_result_node_info(0, &[0]).unwrap();
+    assert_eq!(node.style_css_text, "color: purple;");
+}
+
+#[test]
+fn replay_cssom_ops_set_mixin_result_style_mints_a_new_revision() {
+    let mut sheet = parse("@mixin --m() { @result { &.a { color: blue; } } } .e { @apply --m; }");
+    let before = sheet.revision();
+    sheet.replay_cssom_ops(
+        0,
+        &[CssomOp::SetMixinResultStyle { mixin_index: 0, path: vec![0], css_text: "color: purple".to_string() }],
+    );
+    assert_ne!(before, sheet.revision());
+}
+
+#[test]
+fn replay_cssom_ops_without_a_mixin_result_write_leaves_the_baked_tail_alone() {
+    // A no-op sanity check for the new conditional rerun: an unrelated op
+    // (deleting an out-of-range rule, so it fails outright) must not trigger
+    // `rerun_mixin_nested_rules` and must not disturb the baked tail.
+    let mut sheet = parse("@mixin --m() { @result { &.a { color: blue; } } } .e { @apply --m; }");
+    let baked_before = sheet.rules[1].clone();
+    let ok = sheet.replay_cssom_ops(0, &[CssomOp::DeleteRule { index: 99 }]);
+    assert!(!ok);
+    assert_eq!(sheet.rules.len(), 2);
+    assert_eq!(sheet.rules[1], baked_before);
+}
+
 #[test]
 fn insert_rule_body_apply_adds_an_apply_marker_to_a_top_level_style_rule() {
     let mut sheet = parse("a { color: red; }");

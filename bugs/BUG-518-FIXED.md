@@ -1,6 +1,6 @@
 # BUG-518: CSS Mixins `@mixin`/`@apply`/`@contents` rules not implemented at all
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19
 **Дата:** 2026-08-03
 **Компонент:** css-parser (`grep -rn "\"mixin\"\|\"apply\"\|\"contents\"\|MixinRule\|
 ApplyRule\|ContentsRule" crates/engine/css-parser/src/*.rs` — zero hits.
@@ -823,3 +823,68 @@ entire remainder, and per the note left in срез 8, closing either is a
 separate architectural decision (cascade-on-CSSOM-mutation touches the
 same relayout-timing question `insertRule`/`deleteRule` already deferred;
 mixin-interior rule addressing has no existing precedent to extend).
+
+## Ревизия 2026-09-19 (P1), срезы 10-12 — CSSOM-8 закрыта, BUG-518 FIXED
+
+Три среза, каждый закрывающий один из двух пунктов среза 9's remainder плюс
+дефект, вскрытый в процессе.
+
+**Срез 10:** same-tick `getComputedStyle()` подключён к CSSOM-мутации
+владетельного листа (`cssom_dirty` — третий флаг гейта `FlushHandles::
+maybe_flush` рядом с `dom_dirty`/`focus_changed`, `cssom_patched_sheet`
+клонирует пришедший от шелла `cascade.sheet` и переигрывает записанный лог
+операций через `Stylesheet::replay_cssom_ops`, адресация — байтовый диапазон
+узла внутри склейки, `crates/js/src/v8_runtime/style_flush.rs`). Закрыл
+первую половину среза 9's remainder.
+
+**Срез 11:** адресация правил, вложенных внутрь `@mixin`'s `@result`
+(`Stylesheet::mixin_has_result`/`mixin_result_node_info`/
+`set_mixin_result_style`, `parser/mixins.rs`'s `group_result_children`/
+`resolve_result_node`; JS — `CSSMixinRule.cssRules`, рекурсивный `@result`
+node). `mixin-invalidation.tentative.html`: 0/3 → 2/3.
+
+**Срез 12 (закрытие):** третий сабтест ("invalidation of @mixin from same
+stylesheet") остался красным — `.style`-запись на РЕАЛЬНОМ вложенном
+`& {...}`-правиле (не на `@result`'s собственных decls) мутировала
+`mixin_rules[..].result` корректно, но не долетала до элемента, к которому
+это правило применяется через `@apply`: `lumen_css_parser::parse` один раз,
+при разборе, "запекает" каждое такое вложенное правило в отдельный
+top-level `Rule` со скомбинированным (по образцу CSS Nesting) селектором
+(`mixins::collect_mixin_nested_rules`) — а `set_mixin_result_style`/
+`replay_cssom_ops` меняли только исходное дерево `mixin_rules[..].result`,
+оставляя эту испечённую копию в `Stylesheet::rules` устаревшей. Правка
+видна в `.cssText`/самом дереве `@result` (что и объясняет, почему второй
+сабтест — мутация "decls"-узла верхнего уровня `@result`, не запекаемая
+вовсе — уже проходил), но не в каскаде.
+
+Новый `Stylesheet::rerun_mixin_nested_rules` (`crates/engine/css-parser/
+src/parser.rs`) усекает `self.rules` до префикса, реально адресуемого
+`top_level_order`'s `Style`-тегами (инвариант: тегированные правила всегда
+занимают этот префикс в том же относительном порядке — каждый мутатор,
+вставляющий/удаляющий `Style`-тег, держит оба вектора в синхроне по
+построению), затем пере-прогоняет `mixins::collect_mixin_nested_rules` и
+дописывает свежий хвост. Вызывается из `Stylesheet::replay_cssom_ops` при
+любом успешно применённом `CssomOp::SetMixinResultStyle` — идемпотентно,
+дёшево (гейтится на непустой лог CSSOM-дельт, как и весь путь среза 10).
+
+**Верификация:** 4 новых юнит-теста в `parser/tests/revision.rs`
+(decls-мутация не трогает хвост, replay обновляет запечённую копию, новая
+ревизия минтится, ops без `SetMixinResultStyle` не триггерят пере-прогон);
+1 сквозной через реальный V8-шим в `crates/js/src/dom/tests/
+v8_cssom_stylesheets.rs` (`set_style_on_a_mixin_nested_rule_is_visible_to_
+same_tick_get_computed_style_of_the_applying_element`) — мутация `.style`
+на вложенном правиле видна `getComputedStyle()` того же тика элемента,
+которому это правило применено. `cargo test -p lumen-css-parser --lib`:
+498/498 (было 494). `cargo test -p lumen-js --features v8-backend --lib`:
+3878/3878, `--test all`: 151/151, без регрессий. `cargo clippy -p
+lumen-css-parser -p lumen-js --features v8-backend --all-targets --
+-D warnings`: чисто. Живой `tests/wpt/run_report.py --root css/css-mixins/
+mixins --all` (пересобранный `dev-release lumen.exe`):
+`mixin-invalidation.tentative.html` — **3/3 PASS**. Не паинт/каскад-геометрия
+— `dump_golden.py`-поверхность не затронута.
+
+**CSSOM-8 закрыта целиком** — `mixin-invalidation.tentative.html` был её
+единственным оставшимся объёмом (`ROADMAP.md`). BUG-518's исходный
+15-файловый/~45-сабтестовый объём (`css/css-mixins/mixins/`) закрыт полностью
+через срезы 1-12 этого файла плюс CSSOM-8 срезы 8-12 (`ROADMAP.md`). Статус
+— `FIXED`.
