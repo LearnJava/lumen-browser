@@ -987,6 +987,72 @@ fn resolve_file_base_drive_letter_is_not_a_scheme() {
     }
 }
 
+// -- BUG-752: `<base href>` adjusts subresource resolution -------------------
+
+#[test]
+fn resolve_as_base_url_relative_href_becomes_new_base() {
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let based = page.resolve_as_base("/other/");
+    assert_eq!(
+        based.resolve_str("pic.png"),
+        "https://example.com/other/pic.png",
+        "a relative href now resolves against the <base href>, not the page URL"
+    );
+}
+
+#[test]
+fn resolve_as_base_url_absolute_href_switches_origin() {
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let based = page.resolve_as_base("https://cdn.example/assets/");
+    assert_eq!(based.resolve_str("pic.png"), "https://cdn.example/assets/pic.png");
+}
+
+#[test]
+fn resolve_as_base_file_relative_href_moves_directory() {
+    let page = ResourceBase::File(PathBuf::from("D:/site/a/page.html"));
+    let based = page.resolve_as_base("other/");
+    match based.resolve("pic.png") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/site/a/other/pic.png")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+#[test]
+fn effective_base_falls_back_to_page_base_without_a_base_element() {
+    let doc = lumen_html_parser::parse("<html><body></body></html>");
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let eff = effective_base(&doc, &page);
+    assert_eq!(eff.resolve_str("pic.png"), "https://example.com/a/pic.png");
+}
+
+#[test]
+fn effective_base_reads_base_href_from_the_document() {
+    let doc = lumen_html_parser::parse(
+        "<html><head><base href=\"/other/\"></head><body></body></html>",
+    );
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let eff = effective_base(&doc, &page);
+    assert_eq!(eff.resolve_str("pic.png"), "https://example.com/other/pic.png");
+}
+
+#[test]
+fn effective_base_does_not_change_page_origin() {
+    // <base href> to a different origin must resolve subresources there, but
+    // must not be mistaken for the document's own Origin (CSP / mixed content
+    // identity stays with the real page URL, per HTML LS — <base> only
+    // affects reference resolution, not the document's origin).
+    let doc = lumen_html_parser::parse(
+        "<html><head><base href=\"https://cdn.example/\"></head><body></body></html>",
+    );
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let eff = effective_base(&doc, &page);
+    assert_eq!(eff.resolve_str("pic.png"), "https://cdn.example/pic.png");
+    assert_ne!(
+        page.origin(), eff.origin(),
+        "the un-adjusted base's Origin must stay example.com, not follow <base> to cdn.example"
+    );
+}
+
 /// An automation `file://` URL goes through the same rule as a `file:` href
 /// (BUG-440 folded the two onto `file_url_to_path`), so a percent-escaped
 /// name navigates as well from BiDi/MCP as it resolves inside a page.

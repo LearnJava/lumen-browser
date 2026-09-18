@@ -172,7 +172,7 @@ use crate::doc_extract::{
 use crate::input::dnd::{DND_THRESHOLD, DndState};
 use crate::page_pipeline::{
     JsLayoutSnapshot, LayoutSource, LoadedPage, RenderOutcome, dispatch_preload_hints,
-    parse_and_layout, render_bytes,
+    effective_base, parse_and_layout, render_bytes,
 };
 #[cfg(test)]
 use crate::page_pipeline::is_xml_flavoured_document;

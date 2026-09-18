@@ -22,6 +22,10 @@ pub(crate) enum ResourceBase {
     Url(String),
 }
 
+/// Placeholder filename appended by [`ResourceBase::resolve_as_base`] when a
+/// `<base href>` names a directory — see that method's doc comment.
+const BASE_HREF_DIR_SENTINEL: &str = "_lumen_base_href_sentinel";
+
 impl ResourceBase {
     pub(crate) fn resolve(&self, href: &str) -> ResolvedResource {
         if href.starts_with("http://") || href.starts_with("https://") {
@@ -73,6 +77,35 @@ impl ResourceBase {
                     .unwrap_or_else(|_| href.to_owned());
                 ResolvedResource::Url(resolved)
             }
+        }
+    }
+
+    /// Резолвить `href` (значение атрибута `<base href>`) относительно этой
+    /// базы и вернуть результат как новую базу — реализация HTML LS §4.2.3
+    /// «base URL страницы» на стороне движка (BUG-752). Дальнейшие резолвы
+    /// подресурсов должны идти через возвращённое значение, а не через `self`;
+    /// эта база остаётся источником Origin/CORS-проверок — `<base>` их не меняет.
+    pub(crate) fn resolve_as_base(&self, href: &str) -> ResourceBase {
+        match self.resolve(href) {
+            ResolvedResource::File(p) => {
+                // `<base href>` typically names a *directory* (`<base
+                // href="/other/">`), but `ResourceBase::File` always treats
+                // its stored path as a *file* and resolves further hrefs
+                // against `.parent()` — same convention the page's own path
+                // uses. `Path::parent()` does not know a trailing `/` means
+                // anything, so handing it the directory verbatim would make
+                // it climb one level too high. Append a sentinel filename
+                // whose parent is exactly the resolved directory instead;
+                // nothing ever opens the sentinel itself, only `resolve()`'s
+                // `.parent()` call reads it.
+                let href_path = href.split(['?', '#']).next().unwrap_or(href);
+                if href_path.ends_with('/') {
+                    ResourceBase::File(p.join(BASE_HREF_DIR_SENTINEL))
+                } else {
+                    ResourceBase::File(p)
+                }
+            }
+            ResolvedResource::Url(u) => ResourceBase::Url(u),
         }
     }
 
