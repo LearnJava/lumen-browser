@@ -1,6 +1,6 @@
 # BUG-921 — имя вложенного browsing context читается из атрибута `name` хоста на каждое обращение, а не задаётся один раз при создании
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19 (P3)
 **Заведён:** 2026-08-25 (P1, прогоном категории WPT попутно к [BUG-854](BUG-854-FIXED.md))
 **Область:** `crates/js/src/frame_bridge.rs` (геттер `window.name` в контексте
 ребёнка — `_lumen_f_attr(p, host, 'name')` на каждое чтение)
@@ -65,3 +65,39 @@ FAIL same-origin <iframe name=initialvalue> - assert_equals: expected "initialva
 --recursive` — шесть перечисленных подтестов должны стать PASS (остальные
 `cross-origin`-варианты той же шестёрки блокируются отдельно: алиасы
 `www1.127.0.0.1` режутся как mixed content, `WPT-RUN-10`).
+
+## Фикс (2026-09-19, P3)
+
+Имя контекста теперь снимается СНИМКОМ в момент создания, а не читается
+живьём: `register_parent_document` (`crates/js/src/v8_runtime/runtime.rs`,
+`crates/shell/src/persistent_js.rs::PersistentJs`) получил параметр `name`,
+которым `load_frame_sub_documents` (`crates/shell/src/frames.rs`) передаёт то
+же значение `info.name`, что уже шло в `register_frame_document` для
+`window[name]` родителя — оба доступа теперь читают один и тот же снимок, как
+и требовалось. Хранится в `FrameDocBinding::name` слота `parent`; новый натив
+`_lumen_f_name(bid)` (`frame_bridge.rs`, аналог `_lumen_f_host`) отдаёт его
+без гейта на `accessible` — своё имя контекста не зависит от того, доступен
+ли документ родителя (в отличие от `.document`/`frameElement`, которые
+cross-origin прячет). Геттер `window.name` в `installHierarchyAccessors`
+переписан на `_lumen_f_name(p)` вместо цепочки `_lumen_f_host` +
+`_lumen_f_attr`.
+
+Тест `frame_bridge::tests::window_name_survives_host_attribute_mutation_after_creation`
+воспроизводит ровно сценарий из «Симптома» (правка/удаление атрибута `name`
+хоста после создания контекста не переименовывает `window.name`). Заодно
+исправлено ожидание `cross_origin_child_gets_window_but_no_documents` — было
+`window.name === ''` для `accessible=false`, что было побочным эффектом
+старого (ошибочного) гейта на доступность документа родителя; корректно
+`'hostframe'`, так как имя — собственное свойство контекста.
+
+**Живая проверка WPT не завершена**: `run_report.py --all --root
+html/browsers/windows/nested-browsing-contexts --recursive` на этой сессии
+виснет на `name-attribute.window.html` (`TestRunner hit external timeout`),
+рвёт BiDi-сессию и каскадом валит все следующие файлы в каталоге —
+воспроизведено ПОБАЙТНО идентично (`0/7 harness OK; subtests: 4/16 passed`) и
+на чистом `main` без этого фикса, то есть это независимая от правки
+нестабильность текущего окружения/harness (кандидат в отдельный баг, не
+заведён отдельно — не удалось локализовать за рамки этой сессии), а не
+регрессия. Корректность фикса подтверждена юнит-тестом выше, который
+воспроизводит точный ассерт WPT-подтеста средствами Rust-реестра биндингов
+напрямую, в обход зависшего harness'а.

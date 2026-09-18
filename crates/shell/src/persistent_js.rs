@@ -254,12 +254,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Вызывается из [`load_frame_sub_documents`] сразу после создания
     /// контекста ребёнка и до его DOMContentLoaded/load: обработчики ребёнка
     /// читают предков из любого события. `host_nid` — nid хоста в дереве
-    /// родителя. Default no-op покрывает сборки без v8.
+    /// родителя. `name` — значение атрибута `name` хоста НА МОМЕНТ вызова
+    /// (BUG-921): `window.name` ребёнка запоминает его один раз, а не
+    /// перечитывает атрибут при каждом обращении. Default no-op покрывает
+    /// сборки без v8.
     fn register_parent_document(
         &self,
         _host_nid: u32,
         _doc: Arc<Mutex<Document>>,
         _url: &str,
+        _name: Option<&str>,
         _accessible: bool,
     ) {
     }
@@ -1002,10 +1006,16 @@ impl PersistentJs for V8PersistentJs {
         host_nid: u32,
         doc: Arc<Mutex<Document>>,
         url: &str,
+        name: Option<&str>,
         accessible: bool,
     ) {
-        self.rt
-            .register_parent_document(host_nid, doc, url.to_owned(), accessible);
+        self.rt.register_parent_document(
+            host_nid,
+            doc,
+            url.to_owned(),
+            name.map(str::to_owned),
+            accessible,
+        );
     }
     fn register_top_document(&self, doc: Arc<Mutex<Document>>, url: &str, accessible: bool) {
         self.rt.register_top_document(doc, url.to_owned(), accessible);

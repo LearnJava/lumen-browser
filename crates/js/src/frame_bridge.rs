@@ -228,8 +228,11 @@ pub(crate) struct FrameDocBinding {
     pub(crate) doc: Arc<Mutex<lumen_dom::Document>>,
     /// Разрешённый адрес под-документа (`about:srcdoc`/`about:blank`/URL).
     pub(crate) url: String,
-    /// Значение атрибута `name` хоста, если задан — ключ именованного доступа
-    /// `window[name]` (срез 3).
+    /// Значение атрибута `name` хоста, снятое СНИМКОМ при регистрации
+    /// биндинга (не живое чтение). У биндингов дочерних фреймов (`frames`) —
+    /// ключ именованного доступа `window[name]` родителя (срез 3). У
+    /// биндинга-предка (`parent`, [`PARENT_BID`]) — имя СОБСТВЕННОГО
+    /// контекста, которое читает `window.name` ребёнка (BUG-921).
     pub(crate) name: Option<String>,
     /// `false` — cross-origin или opaque sandbox: нативы чтения отдают пустые
     /// результаты, `.document` фасада окна — `null`.
@@ -934,6 +937,20 @@ pub(crate) fn install_frame_bridge_v8(
                 resolve_slot(&reg, bid)
                     .filter(|b| b.accessible)
                     .map(|b| b.host_nid)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        // BUG-921: снимок имени контекста, сделанный при регистрации биндинга
+        // (`register_parent_document`/`register_frame_document`), а не живой
+        // атрибут хоста — не гейтится `accessible`, потому что это СВОЁ имя
+        // контекста, а не чтение чужого документа.
+        rt.register_native(
+            "_lumen_f_name",
+            into_v8_fn1(move |bid: u32| -> Option<String> {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                resolve_slot(&reg, bid).and_then(|b| b.name.clone())
             }),
         )?;
     }
@@ -2113,20 +2130,20 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         configurable: true,
       });
     } catch (e) {}
-    // window.name фрейма — атрибут name хоста (HTML LS §7.2.3); явное
-    // присваивание перекрывает атрибут до замены документа.
+    // window.name фрейма — имя контекста, запомненное ОДИН РАЗ при его
+    // создании из атрибута name хоста (HTML LS §7.2.3, BUG-921): дальнейшие
+    // правки атрибута контекст не переименовывают, только явное присваивание
+    // `window.name =` или новая навигация фрейма.
     var __customName = null;
     try {
       Object.defineProperty(window, 'name', {
         get: function() {
           if (__customName !== null) return __customName;
           var p = _lumen_parent_binding();
-          if (p === null || p === undefined || !_lumen_f_accessible(p)) {
+          if (p === null || p === undefined) {
             return __prevName === undefined ? '' : __prevName;
           }
-          var host = _lumen_f_host(p);
-          if (host === null || host === undefined) return '';
-          var a = _lumen_f_attr(p, host, 'name');
+          var a = _lumen_f_name(p);
           return (a === null || a === undefined) ? '' : a;
         },
         set: function(v) { __customName = String(v == null ? '' : v); },
@@ -2580,6 +2597,9 @@ mod tests {
         );
     }
 
+    /// BUG-921: `window.name` — свойство СВОЕГО контекста, снятое снимком при
+    /// его создании, а не чтение документа родителя — cross-origin (`accessible
+    /// = false`) не прячет его, в отличие от `.document`/`frameElement`.
     #[test]
     fn cross_origin_child_gets_window_but_no_documents() {
         with_child_context(
@@ -2595,7 +2615,7 @@ mod tests {
                      && p.document === null \
                      && window.top.document === null \
                      && window.frameElement === null \
-                     && window.name === ''"
+                     && window.name === 'hostframe'"
                 ));
             },
         );
@@ -2618,6 +2638,40 @@ mod tests {
                      && fe.getAttribute('name') === 'hostframe'"
                 ));
                 assert!(eval_bool(rt, "window.name === 'hostframe'"));
+            },
+        );
+    }
+
+    /// BUG-921: правка атрибута `name` хоста ПОСЛЕ создания контекста не
+    /// переименовывает уже созданный `window.name` (HTML LS §7.2.3 — атрибут
+    /// используется только в момент создания вложенного navigable).
+    #[test]
+    fn window_name_survives_host_attribute_mutation_after_creation() {
+        with_child_context(
+            "<html><body><iframe id='host' name='hostframe'></iframe></body></html>",
+            None,
+            4,
+            true,
+            |rt| {
+                assert!(eval_bool(rt, "window.name === 'hostframe'"));
+                assert!(eval_bool(
+                    rt,
+                    "var p = _lumen_parent_binding(); \
+                     _lumen_f_set_attr(p, _lumen_f_host(p), 'name', 'meh')"
+                ));
+                assert!(
+                    eval_bool(rt, "window.name === 'hostframe'"),
+                    "правка атрибута задним числом не должна переименовывать контекст"
+                );
+                assert!(eval_bool(
+                    rt,
+                    "var p = _lumen_parent_binding(); \
+                     _lumen_f_remove_attr(p, _lumen_f_host(p), 'name')"
+                ));
+                assert!(
+                    eval_bool(rt, "window.name === 'hostframe'"),
+                    "удаление атрибута задним числом не должно переименовывать контекст"
+                );
             },
         );
     }

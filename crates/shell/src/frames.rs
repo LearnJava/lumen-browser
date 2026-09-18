@@ -1916,10 +1916,14 @@ pub(crate) fn spawn_frame(
     // ограничение среза.
     if let Some(js) = &child_js {
         let accessible_parent = frame_access_allowed(base, &child_url, opaque);
+        // BUG-921: снимок атрибута `name` хоста на момент создания контекста —
+        // `window.name` ребёнка запоминает его один раз (HTML LS §7.2.3), а не
+        // перечитывает атрибут при каждом обращении.
         js.register_parent_document(
             info.node.index() as u32,
             Arc::clone(parent),
             &parent_url,
+            info.name.as_deref(),
             accessible_parent,
         );
         // Ребёнок глубины ≥ 2 получает отдельный слот top: его верх —
