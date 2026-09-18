@@ -865,8 +865,23 @@ impl Stylesheet {
     /// native called on the node's own sheet, so a replayed edit and the
     /// `cssRules` the page can read back cannot drift apart in semantics —
     /// only in index base.
+    ///
+    /// CSSOM-8 срез 12: a [`CssomOp::SetMixinResultStyle`] that lands on a
+    /// real nested `& {...}` rule (as opposed to `@result`'s own leading
+    /// declarations run) mutates [`Self::mixin_rules`]`[..].result`, but that
+    /// is not what the cascade sees — [`parse`] bakes every such nested rule
+    /// into a literal, already-combined-selector top-level [`Rule`] once, at
+    /// parse time ([`mixins::collect_mixin_nested_rules`]'s doc comment
+    /// explains why it cannot run incrementally). Left alone, the baked copy
+    /// goes stale the moment the source `result` item it was built from is
+    /// edited: the write is visible to `.cssText`/a re-read through the
+    /// mixin-result path, but never reaches the element `@apply` applied it
+    /// to. [`Self::rerun_mixin_nested_rules`] re-derives the whole baked tail
+    /// from the now-current `mixin_rules`, so this replays that step whenever
+    /// at least one op actually touched a mixin's `result`.
     pub fn replay_cssom_ops(&mut self, base: usize, ops: &[CssomOp]) -> bool {
         let mut all_ok = true;
+        let mut mixin_result_touched = false;
         for op in ops {
             let outcome = match op {
                 CssomOp::InsertRule { index, text } => {
@@ -880,7 +895,9 @@ impl Stylesheet {
                     self.set_media_child_style_text(base + media_index, *child_index, css_text)
                 }
                 CssomOp::SetMixinResultStyle { mixin_index, path, css_text } => {
-                    self.set_mixin_result_style(base + mixin_index, path, css_text)
+                    let outcome = self.set_mixin_result_style(base + mixin_index, path, css_text);
+                    mixin_result_touched |= outcome.is_ok();
+                    outcome
                 }
                 CssomOp::InsertRuleBodyApply { rule_index, index, text } => {
                     self.insert_rule_body_apply(base + rule_index, *index, text).map(|_| ())
@@ -888,7 +905,32 @@ impl Stylesheet {
             };
             all_ok &= outcome.is_ok();
         }
+        if mixin_result_touched {
+            self.rerun_mixin_nested_rules();
+        }
         all_ok
+    }
+
+    /// Re-derive every baked nested-rule copy [`mixins::collect_mixin_nested_rules`]
+    /// appended at parse time, discarding the stale tail first.
+    ///
+    /// [`Self::rules`]`[0..n]` always holds exactly the `n` tags
+    /// [`Self::top_level_order`] carries as [`TopLevelRuleKind::Style`], in the
+    /// same relative order (every mutator that inserts/removes a `Style` tag —
+    /// [`Self::insert_rule`]/[`Self::delete_rule`] — keeps the two in lockstep
+    /// by construction); anything past that prefix is baked, untagged output
+    /// of a previous [`mixins::collect_mixin_nested_rules`] run, safe to drop
+    /// and rebuild wholesale. Mints a new revision — see [`Self::mark_mutated`].
+    fn rerun_mixin_nested_rules(&mut self) {
+        let tagged = self
+            .top_level_order
+            .iter()
+            .filter(|k| **k == TopLevelRuleKind::Style)
+            .count();
+        self.rules.truncate(tagged);
+        let extra = mixins::collect_mixin_nested_rules(self);
+        self.rules.extend(extra);
+        self.mark_mutated();
     }
 }
 

@@ -1,7 +1,7 @@
 # BUG-1009 — regular (non-`:host`/`::slotted`) selectors in a shadow tree's own stylesheet never match its own descendants
 
 **Статус:** FIXED 2026-09-06
-**Заведён:** 2026-09-06 (P3, побочно при работе над [BUG-518](BUG-518-OPEN.md), срез `mixin-shadow-dom.html`)
+**Заведён:** 2026-09-06 (P3, побочно при работе над [BUG-518](BUG-518-FIXED.md), срез `mixin-shadow-dom.html`)
 **Компонент:** layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, the `SHADOW_SHEETS`
 `own_shadow`/`host_shadow` block; `crates/engine/layout/src/box_tree/entry.rs::build_shadow_sheets`)
 
@@ -60,7 +60,7 @@ own tree"), independent of any particular WPT category — it affects every
 shadow-root `<style>` block whose selectors aren't `:host`/`::slotted`, which
 is the dominant case in real-world shadow DOM usage (most component styles
 target the component's own internal markup, not the host or slotted
-content). Found via [BUG-518](BUG-518-OPEN.md)'s `mixin-shadow-dom.html`
+content). Found via [BUG-518](BUG-518-FIXED.md)'s `mixin-shadow-dom.html`
 follow-up (`#e1`/`#e2`/`#e3`/`#e4` in that file all use plain `id` selectors,
 not `:host`), but the gap is upstream of mixins entirely — a mixin can only
 be as visible as the plain declaration sharing its rule, and here the whole
@@ -160,7 +160,7 @@ next touches shadow-tree CSS):
   `compute_style`, which risks its own regressions and needs dedicated
   verification — out of scope for closing this specific gap.
 - `mixin-cssom.tentative`/`mixin-invalidation.tentative` in
-  [BUG-518](BUG-518-OPEN.md) (CSSOM-gated, unrelated to this cascade gap).
+  [BUG-518](BUG-518-FIXED.md) (CSSOM-gated, unrelated to this cascade gap).
 
 **Verification**: 3 new permanent unit tests in
 `crates/engine/layout/src/style/tests/shadow_dom_selectors.rs`
@@ -174,7 +174,7 @@ roots resolve to the nearest one). `cargo test -p lumen-layout --lib`:
 `enclosing_shadow_host` method, no existing test touched). `cargo clippy -p
 lumen-dom -p lumen-layout --all-targets -- -D warnings`: clean.
 `scripts/scoped-test.sh`: green except the two pre-existing unrelated
-failures already documented on [BUG-518](BUG-518-OPEN.md)'s slices
+failures already documented on [BUG-518](BUG-518-FIXED.md)'s slices
 (`cases::snapshot_cpu::cpu_snapshots_match_references` —
 [BUG-1008](BUG-1008-OPEN.md) CPU-snapshot drift; `native_binding_panic_does_not_abort_process`
 — [BUG-997](BUG-997-OPEN.md)). `python graphic_tests/dump_golden.py --build`:

@@ -103,7 +103,7 @@ mixin-parsing.html` (14, `@layer`/style-rule/`@media`/`@supports`/
 `@mixin` body, all routed through the same missing `CSSStyleSheet`
 global), `mixins/mixin-shadow-dom.html` (1 of 3 — "access to mixins from
 adopted stylesheets" needs `new CSSStyleSheet()`; the other 2 subtests in
-that file are [BUG-518](BUG-518-OPEN.md), mixins not applying at all).
+that file are [BUG-518](BUG-518-FIXED.md), mixins not applying at all).
 `.ini` under `tests/wpt/metadata/css/css-mixins/` for these 6 files.
 
 ## Срез 19 (`css/css-nesting`, 2026-08-03)

@@ -319,6 +319,30 @@ fn mixin_result_nested_rule_exposes_its_own_style() {
     assert_eq!(r, lumen_core::JsValue::String("color: blue;".to_string()));
 }
 
+/// CSSOM-8 срез 12: `mixin-invalidation.tentative.html`'s "invalidation of
+/// @mixin from same stylesheet" — a `.style` write on a real `& {...}`
+/// nested rule inside `@result` must reach the element the enclosing
+/// `@apply` call site applies it to, not just the mixin-result tree's own
+/// CSSOM view (see `mixin_result_node_style_setter_updates_css_text` right
+/// below, which only checks the latter). Before this slice `replay_cssom_ops`
+/// mutated `mixin_rules[..].result` and left `collect_mixin_nested_rules`'s
+/// baked, already-selector-combined copy in `Stylesheet::rules` stale.
+#[test]
+fn set_style_on_a_mixin_nested_rule_is_visible_to_same_tick_get_computed_style_of_the_applying_element() {
+    let (rt, _style_nid) = v8_runtime_with_flush_and_style_node(
+        "@mixin --m() { @result { &#main { width: 50px; } } } #main { @apply --m; }",
+    );
+    let r = rt
+        .eval(
+            "(function() {
+                document.styleSheets[0].cssRules[0].cssRules[0].cssRules[0].style.width = '123px';
+                return getComputedStyle(document.getElementById('main')).width;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("123px".to_string()));
+}
+
 #[test]
 fn mixin_result_node_style_setter_updates_css_text() {
     let (doc, style_nid) = make_doc_with_style();
