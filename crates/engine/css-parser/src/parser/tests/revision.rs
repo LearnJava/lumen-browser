@@ -214,6 +214,141 @@ fn set_media_child_style_text_rejects_child_index_past_the_end() {
     );
 }
 
+// ── CSSOM-8 вариант C: address translation between a `<style>`/`<link>`
+// node's own `cssRules` and the page cascade's concatenated parse ──
+
+#[test]
+fn locate_embedded_source_finds_the_needle_as_a_byte_range() {
+    let cascade = parse("a {} b { color: red; } c {}");
+    let (start, end) = cascade.locate_embedded_source("b { color: red; }", 0).unwrap();
+    assert_eq!(&cascade.source().unwrap()[start..end], "b { color: red; }");
+}
+
+#[test]
+fn locate_embedded_source_from_skips_an_earlier_occurrence() {
+    let cascade = parse("a {} a {} a {}");
+    let first = cascade.locate_embedded_source("a {}", 0).unwrap();
+    let second = cascade.locate_embedded_source("a {}", first.1).unwrap();
+    assert!(second.0 > first.0, "the second search must not re-find the first occurrence");
+}
+
+#[test]
+fn locate_embedded_source_retries_from_the_start_past_from() {
+    // `from` past every occurrence must still find the (only) one, not miss
+    // it — a node registry walk can pass a stale cursor when a page removed
+    // an earlier `<style>` since the cascade was last built.
+    let cascade = parse("a {}");
+    assert!(cascade.locate_embedded_source("a {}", 100).is_some());
+}
+
+#[test]
+fn locate_embedded_source_rejects_an_empty_needle() {
+    let cascade = parse("a {}");
+    assert_eq!(cascade.locate_embedded_source("", 0), None);
+}
+
+#[test]
+fn locate_embedded_source_misses_text_not_present() {
+    let cascade = parse("a {}");
+    assert_eq!(cascade.locate_embedded_source("b {}", 0), None);
+}
+
+#[test]
+fn cssom_range_for_source_span_finds_the_base_and_count_of_a_middle_contributor() {
+    let a = "a {}";
+    let b = "b {} c {}";
+    let d = "d {}";
+    let cascade = parse(&format!("{a} {b} {d}"));
+    let (start, end) = cascade.locate_embedded_source(b, 0).unwrap();
+    let (base, count) = cascade.cssom_range_for_source_span(start, end);
+    assert_eq!(base, 1, "one rule (`a {{}}`) precedes `b`'s contribution");
+    assert_eq!(count, 2, "`b`'s contribution is `b {{}}` and `c {{}}`");
+}
+
+#[test]
+fn cssom_range_for_source_span_of_the_first_contributor_has_base_zero() {
+    let cascade = parse("a {} b {}");
+    let (start, end) = cascade.locate_embedded_source("a {}", 0).unwrap();
+    assert_eq!(cascade.cssom_range_for_source_span(start, end), (0, 1));
+}
+
+#[test]
+fn replay_cssom_ops_insert_rule_lands_at_the_rebased_index() {
+    let mut cascade = parse("a {} b {}");
+    let ok = cascade.replay_cssom_ops(
+        1,
+        &[CssomOp::InsertRule { index: 0, text: "c {}".to_string() }],
+    );
+    assert!(ok);
+    assert_eq!(cascade.cssom_rules().len(), 3);
+    // Inserted at rebased index `1 + 0 = 1`, between `a {}` and `b {}`.
+    let CssomRuleRef::Style(rule) = &cascade.cssom_rules()[1] else {
+        panic!("expected a style rule at the rebased insertion point");
+    };
+    assert_eq!(rule.selector_text(), "c");
+}
+
+#[test]
+fn replay_cssom_ops_delete_rule_removes_the_rebased_index() {
+    let mut cascade = parse("a {} b {} c {}");
+    let ok = cascade.replay_cssom_ops(1, &[CssomOp::DeleteRule { index: 0 }]);
+    assert!(ok);
+    let kept: Vec<_> = cascade
+        .cssom_rules()
+        .iter()
+        .map(|r| match r {
+            CssomRuleRef::Style(s) => s.selector_text(),
+            _ => panic!("expected only style rules"),
+        })
+        .collect();
+    assert_eq!(kept, ["a", "c"], "rebased index 1 (`b {{}}`) was removed");
+}
+
+#[test]
+fn replay_cssom_ops_set_rule_style_targets_the_rebased_index() {
+    let mut cascade = parse("a {} b { color: red; }");
+    let ok = cascade.replay_cssom_ops(
+        1,
+        &[CssomOp::SetRuleStyle { index: 0, css_text: "color: blue".to_string() }],
+    );
+    assert!(ok);
+    assert_eq!(cascade.rules[1].style_css_text(), "color: blue;");
+    assert_eq!(cascade.rules[0].style_css_text(), "", "sibling `a {{}}` untouched");
+}
+
+#[test]
+fn replay_cssom_ops_set_media_child_style_does_not_rebase_the_child_index() {
+    // `media_index` is rebased (it addresses the node's own top-level
+    // `cssRules`); `child_index` is not — a `@media` block's children are
+    // always addressed relative to the block itself, regardless of where
+    // the block sits in the cascade.
+    let mut cascade = parse("a {} @media print { p {} q { color: red; } }");
+    let ok = cascade.replay_cssom_ops(
+        1,
+        &[CssomOp::SetMediaChildStyle {
+            media_index: 0,
+            child_index: 1,
+            css_text: "color: blue".to_string(),
+        }],
+    );
+    assert!(ok);
+    assert_eq!(cascade.media_rules[0].rules[1].style_css_text(), "color: blue;");
+}
+
+#[test]
+fn replay_cssom_ops_reports_failure_but_still_applies_the_rest() {
+    let mut cascade = parse("a {}");
+    let ok = cascade.replay_cssom_ops(
+        0,
+        &[
+            CssomOp::DeleteRule { index: 5 }, // out of range — fails
+            CssomOp::InsertRule { index: 1, text: "b {}".to_string() }, // still applies
+        ],
+    );
+    assert!(!ok);
+    assert_eq!(cascade.cssom_rules().len(), 2);
+}
+
 #[test]
 fn mark_mutated_mints_a_new_revision() {
     let mut sheet = parse("p { color: red }");

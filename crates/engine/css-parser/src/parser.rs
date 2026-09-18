@@ -251,7 +251,31 @@ pub struct Stylesheet {
     /// two kinds are tracked for now — CSSOM-1's `cssRules` does not yet
     /// expose `@import`/`@font-face`/`@supports`/etc. as `CSSRule` objects.
     pub top_level_order: Vec<TopLevelRuleKind>,
+    /// Byte offset into [`Self::source`] where each [`Self::top_level_order`]
+    /// entry's rule began, same length and order as that vec (CSSOM-8
+    /// вариант C). Ascending for a freshly parsed sheet; a rule inserted
+    /// through [`Self::insert_rule`] gets [`SYNTHETIC_SPAN`] instead, since it
+    /// never existed in `source`.
+    ///
+    /// Private on purpose: it is provenance, not content — the only supported
+    /// reader is [`Self::cssom_range_for_source_span`], which is what makes a
+    /// per-node CSSOM edit addressable inside the page's single concatenated
+    /// cascade parse without re-serialising anything (see that method).
+    top_level_spans: Vec<usize>,
+    /// The exact text [`parse`] was handed, kept so that a sheet parsed from
+    /// a concatenation of several `<style>`/`<link>` bodies can still say
+    /// which byte range came from which contributor — see
+    /// [`Self::cssom_range_for_source_span`]. `None` for a sheet that was
+    /// built rather than parsed ([`Self::default`]).
+    ///
+    /// `Arc<str>` so [`Self::clone`] stays cheap: the same-tick CSSOM flush
+    /// clones the whole cascade sheet on every mutated read.
+    source: Option<std::sync::Arc<str>>,
 }
+
+/// [`Stylesheet::top_level_spans`] entry for a rule that came from
+/// [`Stylesheet::insert_rule`] rather than from parsed source text.
+pub const SYNTHETIC_SPAN: usize = usize::MAX;
 
 /// Tag for [`Stylesheet::top_level_order`] — see that field's doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +352,8 @@ impl Default for Stylesheet {
             function_rules: Vec::new(),
             mixin_rules: Vec::new(),
             top_level_order: Vec::new(),
+            top_level_spans: Vec::new(),
+            source: None,
         }
     }
 }
@@ -362,6 +388,8 @@ impl Clone for Stylesheet {
             function_rules: self.function_rules.clone(),
             mixin_rules: self.mixin_rules.clone(),
             top_level_order: self.top_level_order.clone(),
+            top_level_spans: self.top_level_spans.clone(),
+            source: self.source.clone(),
         }
     }
 }
@@ -369,6 +397,13 @@ impl Clone for Stylesheet {
 impl PartialEq for Stylesheet {
     /// Content equality. The revision is identity, not content, and two sheets
     /// parsed from the same CSS must compare equal.
+    ///
+    /// `source`/`top_level_spans` are deliberately **excluded** for the same
+    /// reason: they are provenance. [`Stylesheet::insert_rule`] relies on this
+    /// — it checks a freshly parsed one-rule sheet against
+    /// [`Stylesheet::default`] to prove nothing else came out of the text, and
+    /// a parsed sheet always carries a `source` while `default()` never does,
+    /// so comparing it would make that check fail for every input.
     fn eq(&self, other: &Self) -> bool {
         self.rules == other.rules
             && self.properties == other.properties
@@ -438,6 +473,8 @@ impl Stylesheet {
             function_rules,
             mixin_rules,
             top_level_order,
+            top_level_spans: _,
+            source: _,
         } = other;
         self.rules.extend(rules);
         self.properties.extend(properties);
@@ -463,6 +500,14 @@ impl Stylesheet {
         // vecs grow together, so a reader counting tags of each kind from
         // the start of the (now-longer) list still lands on the right
         // `rules[N]`/`media_rules[N]` after the merge. See the field's doc.
+        // The merged-in tags carry no usable provenance: `other`'s spans are
+        // offsets into `other`'s own source, which is a different string from
+        // `self.source`. Tagging them `SYNTHETIC_SPAN` keeps the two vecs the
+        // same length (every reader indexes them in lockstep) and makes
+        // `cssom_range_for_source_span` simply never attribute a merged rule
+        // to a byte range of `self.source` — a miss, not a wrong answer.
+        self.top_level_spans
+            .extend(std::iter::repeat_n(SYNTHETIC_SPAN, top_level_order.len()));
         self.top_level_order.extend(top_level_order);
         self.mark_mutated();
     }
@@ -548,6 +593,8 @@ impl Stylesheet {
             _ => return Err(CssomRuleMutationError::Syntax),
         }
         self.top_level_order.insert(index, kind);
+        // Never existed in `source` — see `SYNTHETIC_SPAN`.
+        self.top_level_spans.insert(index, SYNTHETIC_SPAN);
         self.mark_mutated();
         Ok(index)
     }
@@ -564,6 +611,10 @@ impl Stylesheet {
         let sub_index =
             self.top_level_order[..index].iter().filter(|k| **k == kind).count();
         self.top_level_order.remove(index);
+        // Kept in lockstep with `top_level_order` — same index space.
+        if index < self.top_level_spans.len() {
+            self.top_level_spans.remove(index);
+        }
         match kind {
             TopLevelRuleKind::Style => {
                 self.rules.remove(sub_index);
@@ -647,6 +698,150 @@ impl Stylesheet {
         self.mark_mutated();
         Ok(())
     }
+
+    /// The exact text [`parse`] built this sheet from, if it was parsed at all
+    /// — see [`Self::source`].
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
+    /// Byte range of `needle` inside this sheet's [`Self::source`], searched
+    /// from `from` and retried from the start on a miss.
+    ///
+    /// This is how a per-node CSSOM edit finds itself inside the page's single
+    /// concatenated cascade parse: the shell builds that parse's input as
+    /// `imports_prefix + every <style> body + every <link> body`
+    /// (`crates/shell/src/page_pipeline.rs`'s `build_page_cascade`) and copies
+    /// each contributor in verbatim, so a node's own source text is a literal
+    /// substring of the cascade's source. `from` lets a caller walking the
+    /// node registry in document order keep a cursor, so two `<style>`
+    /// elements with byte-identical bodies resolve to their own occurrence
+    /// rather than both to the first one.
+    ///
+    /// An empty `needle` returns `None` rather than a zero-length match at
+    /// `from`: an empty `<style>` contributes no bytes at all, so there is no
+    /// occurrence to distinguish it from any other position, and answering
+    /// would silently anchor its edits onto a neighbour's rules.
+    pub fn locate_embedded_source(&self, needle: &str, from: usize) -> Option<(usize, usize)> {
+        if needle.is_empty() {
+            return None;
+        }
+        let src = self.source.as_deref()?;
+        let at = src
+            .get(from..)
+            .and_then(|tail| tail.find(needle).map(|i| i + from))
+            .or_else(|| src.find(needle))?;
+        Some((at, at + needle.len()))
+    }
+
+    /// Translate a byte range of [`Self::source`] into the `cssRules` index
+    /// range the rules from that range occupy — `(base, count)`.
+    ///
+    /// `base` is how many `cssRules` entries begin before `start`, i.e. the
+    /// index the first rule of that range sits at; `count` is how many begin
+    /// inside `[start, end)`. Together they are the address translation CSSOM-8
+    /// вариант C needs: a `<style>` element's own `cssRules[i]` is this
+    /// sheet's `cssRules[base + i]`, with no serialisation of anything and no
+    /// assumption about how many sheets or `@import`s preceded it.
+    ///
+    /// Only meaningful on a **freshly parsed** sheet, where
+    /// [`Self::top_level_spans`] is ascending and free of [`SYNTHETIC_SPAN`].
+    /// Callers that mutate (the same-tick flush) clone the pristine cascade
+    /// sheet, translate against the clone's untouched provenance, and throw
+    /// the clone away — they never translate against an already-patched sheet.
+    pub fn cssom_range_for_source_span(&self, start: usize, end: usize) -> (usize, usize) {
+        let mut base = 0usize;
+        let mut count = 0usize;
+        for &span in &self.top_level_spans {
+            if span == SYNTHETIC_SPAN {
+                continue;
+            }
+            if span < start {
+                base += 1;
+            } else if span < end {
+                count += 1;
+            }
+        }
+        (base, count)
+    }
+
+    /// Replay a node's recorded CSSOM edits onto this sheet, with every
+    /// top-level index shifted by `base` (from
+    /// [`Self::cssom_range_for_source_span`]).
+    ///
+    /// Returns `false` if any single op did not apply, having still applied
+    /// the rest. Each op goes through the very same public mutator the live
+    /// native called on the node's own sheet, so a replayed edit and the
+    /// `cssRules` the page can read back cannot drift apart in semantics —
+    /// only in index base.
+    pub fn replay_cssom_ops(&mut self, base: usize, ops: &[CssomOp]) -> bool {
+        let mut all_ok = true;
+        for op in ops {
+            let outcome = match op {
+                CssomOp::InsertRule { index, text } => {
+                    self.insert_rule(text, base + index).map(|_| ())
+                }
+                CssomOp::DeleteRule { index } => self.delete_rule(base + index),
+                CssomOp::SetRuleStyle { index, css_text } => {
+                    self.set_rule_style_text(base + index, css_text)
+                }
+                CssomOp::SetMediaChildStyle { media_index, child_index, css_text } => {
+                    self.set_media_child_style_text(base + media_index, *child_index, css_text)
+                }
+            };
+            all_ok &= outcome.is_ok();
+        }
+        all_ok
+    }
+}
+
+/// One recorded CSSOM write against an owned sheet — CSSOM-8 вариант C.
+///
+/// The page cascade is an independent parse of every `<style>`/`<link>` body
+/// concatenated together, so a write applied to one node's own
+/// `Stylesheet` (which is what `document.styleSheets[i]` hands out) does not
+/// reach it. Rather than serialising the mutated node back to CSS text and
+/// re-parsing the page — which would need a byte-exact writer for every
+/// at-rule CSSOM cannot represent, and would corrupt the whole page's styles
+/// if that writer were ever wrong — each write is also recorded here and
+/// **replayed** onto the freshly parsed cascade sheet on demand
+/// ([`Stylesheet::replay_cssom_ops`]). A wrong address can then only misplace
+/// the one edit it describes, and the page's own CSS is never rewritten.
+///
+/// Indices are in the owning node's own `cssRules` space; the base that maps
+/// them into the cascade's space is resolved at replay time, so a recorded op
+/// survives any number of cascade rebuilds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CssomOp {
+    /// `CSSStyleSheet.insertRule(text, index)`.
+    InsertRule {
+        /// Position in the owning node's own `cssRules`.
+        index: usize,
+        /// The rule text exactly as JS passed it.
+        text: String,
+    },
+    /// `CSSStyleSheet.deleteRule(index)`.
+    DeleteRule {
+        /// Position in the owning node's own `cssRules`.
+        index: usize,
+    },
+    /// A top-level `CSSStyleRule.style` write.
+    SetRuleStyle {
+        /// Position in the owning node's own `cssRules`.
+        index: usize,
+        /// The rule's whole new declaration list.
+        css_text: String,
+    },
+    /// A `CSSStyleRule.style` write on a rule nested in a top-level `@media`.
+    SetMediaChildStyle {
+        /// The `@media` block's own position in the node's `cssRules`.
+        media_index: usize,
+        /// The rule's position inside that block (not rebased — a `@media`
+        /// block's children are addressed relative to the block itself).
+        child_index: usize,
+        /// The rule's whole new declaration list.
+        css_text: String,
+    },
 }
 
 /// One `<style>`/`<link rel=stylesheet>` DOM node paired with its own parsed
@@ -679,7 +874,13 @@ pub fn parse(input: &str) -> Stylesheet {
     // `mixins::collect_mixin_nested_rules`'s doc comment for why the extra
     // rules are appended here rather than by that function itself.
     let extra = mixins::collect_mixin_nested_rules(&sheet);
+    // Appended without a `top_level_order` tag on purpose (they are not
+    // `cssRules` entries of their own), so `top_level_spans` stays aligned.
     sheet.rules.extend(extra);
+    // CSSOM-8 вариант C: remember the exact text, so a sheet parsed from
+    // several concatenated `<style>`/`<link>` bodies can still map a byte
+    // range back to a `cssRules` index range.
+    sheet.source = Some(std::sync::Arc::from(input));
     sheet
 }
 
@@ -790,9 +991,18 @@ impl<'a> Parser<'a> {
         let mut function_rules: Vec<FunctionRule> = Vec::new();
         let mut mixin_rules: Vec<MixinRule> = Vec::new();
         let mut top_level_order: Vec<TopLevelRuleKind> = Vec::new();
+        let mut top_level_spans: Vec<usize> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
+            // CSSOM-8 вариант C: one `rule_start` per top-level construct,
+            // stamped onto every tag that construct produced once the arms
+            // below are done. Recorded here rather than at each
+            // `top_level_order.push` site — there are eleven of them across
+            // two match arms (a style rule flat-expands its CSS-Nesting
+            // children and its bubbled at-rules into sibling tags), and they
+            // all share this one source position by construction.
+            let rule_start = self.pos;
             match self.peek() {
                 None => break,
                 Some('@') => {
@@ -916,6 +1126,12 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            // Stamp `rule_start` onto every tag this iteration appended. The
+            // `None => break` arm leaves the loop before reaching here, and it
+            // appends nothing, so the two vecs cannot drift apart.
+            while top_level_spans.len() < top_level_order.len() {
+                top_level_spans.push(rule_start);
+            }
         }
         Stylesheet {
             revision: StylesheetRevision::fresh(),
@@ -938,6 +1154,10 @@ impl<'a> Parser<'a> {
             function_rules,
             mixin_rules,
             top_level_order,
+            top_level_spans,
+            // Filled by `parse` — `parse_stylesheet` is also reached from
+            // contexts that have no standalone source string to attribute.
+            source: None,
         }
     }
 

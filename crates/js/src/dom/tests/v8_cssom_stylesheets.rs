@@ -190,3 +190,88 @@ fn media_child_rule_style_setter_updates_css_text() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::String("color: blue;".to_string()));
 }
+
+// ── CSSOM-8 вариант C: the page cascade a same-tick `getComputedStyle` reads
+// is an INDEPENDENT parse of the concatenated `<style>`/`<link>` text
+// (`page_pipeline.rs::build_page_cascade`), not the per-node `Stylesheet`
+// these CSSOM natives mutate above. `FlushHandles::maybe_flush` replays the
+// recorded ops onto a throwaway clone of the pushed cascade sheet
+// (`style_flush.rs::cssom_patched_sheet`), so both registries below carry the
+// SAME source text — that identity is what `Stylesheet::locate_embedded_source`
+// needs to find the node's contribution inside the cascade's concatenation.
+
+/// [`v8_runtime_with_dom`] plus the cascade/viewport push
+/// `FlushHandles::maybe_flush` needs to do anything, mirroring
+/// `v8_bug493_sync_flush.rs::v8_runtime_with_flush`.
+fn v8_runtime_with_flush_and_style_node(css: &str) -> (V8JsRuntime, u32) {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(style_nid, css));
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(css)));
+    rt.update_viewport_size(800.0, 600.0);
+    (rt, style_nid)
+}
+
+/// A same-tick `getComputedStyle` after `CSSStyleSheet.insertRule` must see
+/// the inserted rule — pre-slice, `insertRule` only reached the per-node
+/// `Stylesheet` CSSOM hands out, never the independent cascade parse layout
+/// reads.
+#[test]
+fn insert_rule_is_visible_to_same_tick_get_computed_style() {
+    let (rt, _style_nid) = v8_runtime_with_flush_and_style_node("#main { width: 50px; }");
+    let r = rt
+        .eval(
+            "(function() {
+                document.styleSheets[0].insertRule('#main { width: 123px; }', 1);
+                return getComputedStyle(document.getElementById('main')).width;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("123px".to_string()));
+}
+
+/// Sibling of the above for `deleteRule` — removing the overriding
+/// later rule must un-hide the earlier one in the very same read.
+#[test]
+fn delete_rule_is_visible_to_same_tick_get_computed_style() {
+    let (rt, _style_nid) =
+        v8_runtime_with_flush_and_style_node("#main { width: 50px; } #main { width: 123px; }");
+    let r = rt
+        .eval(
+            "(function() {
+                document.styleSheets[0].deleteRule(1);
+                return getComputedStyle(document.getElementById('main')).width;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("50px".to_string()));
+}
+
+/// Sibling of the above for the `.style` setter (BUG-518 срез 9) — that
+/// slice only ever proved the own-sheet `cssText` echoed the write, not that
+/// the cascade layout reads from picked it up.
+#[test]
+fn rule_style_setter_is_visible_to_same_tick_get_computed_style() {
+    let (rt, _style_nid) = v8_runtime_with_flush_and_style_node("#main { width: 50px; }");
+    let r = rt
+        .eval(
+            "(function() {
+                document.styleSheets[0].cssRules[0].style.width = '123px';
+                return getComputedStyle(document.getElementById('main')).width;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("123px".to_string()));
+}
+
+/// A page that never calls any CSSOM mutator must not pay the
+/// `cssom_patched_sheet` clone at all — same-tick reads stay on the plain
+/// pushed cascade sheet.
+#[test]
+fn get_computed_style_without_cssom_mutation_uses_pristine_cascade() {
+    let (rt, _style_nid) = v8_runtime_with_flush_and_style_node("#main { width: 50px; }");
+    let r = rt
+        .eval("getComputedStyle(document.getElementById('main')).width")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("50px".to_string()));
+}

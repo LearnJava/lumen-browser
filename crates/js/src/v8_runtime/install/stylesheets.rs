@@ -67,6 +67,8 @@ pub(crate) fn install_stylesheets(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     stylesheet_nodes: Arc<Mutex<Vec<lumen_css_parser::StylesheetNodeEntry>>>,
+    cssom_deltas: super::super::style_flush::CssomDeltaLog,
+    cssom_dirty: Arc<std::sync::atomic::AtomicBool>,
 ) -> JsResult<()> {
     // Owner node ids in document order — the JS side's "sheet index" is this
     // array's index, addressed fresh on every call rather than cached, so a
@@ -153,45 +155,56 @@ pub(crate) fn install_stylesheets(
     // `DOMException`. Mutates this entry's own `Arc<Stylesheet>` in place
     // (`Arc::make_mut`, copy-on-write since `cssom_rules()` readers elsewhere
     // hold a `&Stylesheet` only for the duration of one call, never a clone
-    // of the `Arc`) — **not** connected to the page cascade: `stylesheet_nodes`
-    // is built by `crates/shell/src/stylesheets.rs::build_stylesheet_node_registry`,
-    // whose only caller is `build_page_cascade` (`page_pipeline.rs:464`, plus
-    // at most one re-run at `:908` when parse-time scripts changed the
-    // `<style>`/`<link>` set). CSSOM-8 ревизия 2026-09-18 corrected what this
-    // comment used to claim: the interactive relayout path
-    // (`crates/shell/src/relayout.rs::refresh_dynamic_css`) never touches
-    // `stylesheet_nodes`, so a mutation made after load is NOT "discarded by
-    // the next relayout" — it survives here indefinitely. The real gap is the
-    // other direction, the mutation never reaching what layout reads:
-    // `cascade.sheet` is an INDEPENDENT parse of one concatenated string
-    // (`imports_prefix` + every `<style>`'s text + `linked`,
-    // `page_pipeline.rs:421-457`), and `getComputedStyle`'s same-tick flush
-    // (`crates/js/src/v8_runtime/style_flush.rs::maybe_flush`) re-lays out
-    // against the `Arc<Stylesheet>` the shell last pushed, behind a gate that
-    // only reads `dom_dirty`/`never_flushed`/`focus_changed` — a sheet
-    // revision bump is invisible to it. Closing this needs both a cascade that
-    // can absorb a per-node CSSOM edit and a new same-tick invalidation
-    // channel into that gate; `adoptedStyleSheets` (CSSOM-5 срез 2) has the
-    // same unclosed same-tick half. See `ROADMAP.md`'s CSSOM-8 line. No
-    // vendored test in this bug's
-    // scope needs the layout effect, only the correct `cssRules`/exception
-    // behaviour. `_lumen_stylesheet_rule_set_style`/`_lumen_stylesheet_
-    // media_child_set_style` below (CSSOM-8, BUG-518 срез 9) share this exact
-    // limitation — a same-tick `getComputedStyle()` after `.style.color = …`
-    // still answers from the pre-mutation cascade. Note that closing it would
-    // NOT flip `mixin-invalidation.tentative.html`: none of that file's three
-    // subtests addresses a top-level or `@media`-child rule — two mutate a
-    // rule inside a `@mixin`'s `@result`, and the third calls
-    // `CSSStyleRule.insertRule` (nested `@apply` into a style rule's body).
-    // All three need nested-rule CSSOM addressing first, which this registry
-    // has no address for.
+    // of the `Arc`) — this write alone still does not reach the page cascade:
+    // `stylesheet_nodes` is built by
+    // `crates/shell/src/stylesheets.rs::build_stylesheet_node_registry`, whose
+    // only caller is `build_page_cascade` (`page_pipeline.rs:464`, plus at
+    // most one re-run at `:908`), while `cascade.sheet` is an INDEPENDENT
+    // parse of one concatenated string (`imports_prefix` + every `<style>`'s
+    // text + `linked`, `page_pipeline.rs:421-457`). CSSOM-8 вариант C (this
+    // slice) closes that gap without writing anything back into either
+    // string: every op below is ALSO appended to `cssom_deltas`
+    // (`crates/js/src/v8_runtime/style_flush.rs::CssomDeltaLog`), addressed
+    // in this node's own `cssRules` index space. `FlushHandles::maybe_flush`
+    // replays the whole log onto a throwaway clone of the cascade sheet on
+    // every same-tick flush (`FlushHandles::cssom_patched_sheet`), rebasing
+    // each op's index via `Stylesheet::cssom_range_for_source_span` — this
+    // node's own parsed text is a literal substring of the cascade's, found
+    // by `Stylesheet::locate_embedded_source`. A steady-state (non-same-tick)
+    // relayout still lays out against the pristine, unpatched cascade sheet
+    // the shell last pushed — only `getComputedStyle`/geometry reads inside
+    // the same script turn as the mutation see the patched one; the next full
+    // relayout re-parses `<style>`/`<link>` text unchanged by any of this and
+    // does not durably absorb the edit either, so a page that reads back
+    // computed style only after a later user-driven relayout (not the same
+    // tick) still would not see it — no vendored test in this bug's scope
+    // needs that. `_lumen_stylesheet_rule_set_style`/`_lumen_stylesheet_
+    // media_child_set_style` below record the same way. This does NOT flip
+    // `mixin-invalidation.tentative.html`: none of that file's three subtests
+    // addresses a top-level or `@media`-child rule — two mutate a rule inside
+    // a `@mixin`'s `@result`, and the third calls `CSSStyleRule.insertRule`
+    // (nested `@apply` into a style rule's body). All three need nested-rule
+    // CSSOM addressing first, which this registry has no address for.
     {
         let s = Arc::clone(&stylesheet_nodes);
+        let deltas = Arc::clone(&cssom_deltas);
+        let dirty = Arc::clone(&cssom_dirty);
         reg!(scope, ctx, store, "_lumen_stylesheet_insert_rule", move |idx: u32, rule_text: String, index: u32| -> i32 {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
+            let node = entry.node;
             match std::sync::Arc::make_mut(&mut entry.sheet).insert_rule(&rule_text, index as usize) {
-                Ok(new_index) => new_index as i32,
+                Ok(new_index) => {
+                    // CSSOM-8 вариант C: recorded in the owning node's own
+                    // `cssRules` index space — `replay_cssom_ops` rebases it
+                    // onto the cascade sheet at flush time.
+                    deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
+                        node,
+                        lumen_css_parser::CssomOp::InsertRule { index: index as usize, text: rule_text },
+                    ));
+                    dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                    new_index as i32
+                }
                 Err(lumen_css_parser::CssomRuleMutationError::IndexSize) => -1,
                 Err(lumen_css_parser::CssomRuleMutationError::Syntax) => -2,
             }
@@ -199,11 +212,21 @@ pub(crate) fn install_stylesheets(
     }
     {
         let s = Arc::clone(&stylesheet_nodes);
+        let deltas = Arc::clone(&cssom_deltas);
+        let dirty = Arc::clone(&cssom_dirty);
         reg!(scope, ctx, store, "_lumen_stylesheet_delete_rule", move |idx: u32, index: u32| -> i32 {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
+            let node = entry.node;
             match std::sync::Arc::make_mut(&mut entry.sheet).delete_rule(index as usize) {
-                Ok(()) => 0,
+                Ok(()) => {
+                    deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
+                        node,
+                        lumen_css_parser::CssomOp::DeleteRule { index: index as usize },
+                    ));
+                    dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                    0
+                }
                 Err(_) => -1,
             }
         });
@@ -218,12 +241,23 @@ pub(crate) fn install_stylesheets(
     // doc comment.
     {
         let s = Arc::clone(&stylesheet_nodes);
+        let deltas = Arc::clone(&cssom_deltas);
+        let dirty = Arc::clone(&cssom_dirty);
         reg!(scope, ctx, store, "_lumen_stylesheet_rule_set_style", move |idx: u32, rule_idx: u32, css_text: String| -> bool {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return false };
-            std::sync::Arc::make_mut(&mut entry.sheet)
+            let node = entry.node;
+            let ok = std::sync::Arc::make_mut(&mut entry.sheet)
                 .set_rule_style_text(rule_idx as usize, &css_text)
-                .is_ok()
+                .is_ok();
+            if ok {
+                deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
+                    node,
+                    lumen_css_parser::CssomOp::SetRuleStyle { index: rule_idx as usize, css_text },
+                ));
+                dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            ok
         });
     }
     // Sibling of the native above for a style rule nested inside a
@@ -232,12 +266,27 @@ pub(crate) fn install_stylesheets(
     // position, `child_idx` its position inside that block).
     {
         let s = Arc::clone(&stylesheet_nodes);
+        let deltas = Arc::clone(&cssom_deltas);
+        let dirty = Arc::clone(&cssom_dirty);
         reg!(scope, ctx, store, "_lumen_stylesheet_media_child_set_style", move |idx: u32, rule_idx: u32, child_idx: u32, css_text: String| -> bool {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return false };
-            std::sync::Arc::make_mut(&mut entry.sheet)
+            let node = entry.node;
+            let ok = std::sync::Arc::make_mut(&mut entry.sheet)
                 .set_media_child_style_text(rule_idx as usize, child_idx as usize, &css_text)
-                .is_ok()
+                .is_ok();
+            if ok {
+                deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
+                    node,
+                    lumen_css_parser::CssomOp::SetMediaChildStyle {
+                        media_index: rule_idx as usize,
+                        child_index: child_idx as usize,
+                        css_text,
+                    },
+                ));
+                dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            ok
         });
     }
     Ok(())

@@ -275,6 +275,9 @@ impl V8JsRuntime {
                 scroll_states: Arc::clone(&scroll_states),
                 focused_nid: Arc::clone(&self.focused_nid),
                 last_flushed_focus: Arc::clone(&self.last_flushed_focus),
+                stylesheet_nodes: Arc::clone(&stylesheet_nodes),
+                cssom_deltas: Arc::clone(&self.cssom_deltas),
+                cssom_dirty: Arc::clone(&self.cssom_dirty),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
@@ -452,7 +455,14 @@ impl V8JsRuntime {
                 flush_handles.clone(),
             )?;
 
-            install::install_stylesheets(scope, ctx, store, Arc::clone(&stylesheet_nodes))?;
+            install::install_stylesheets(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&stylesheet_nodes),
+                Arc::clone(&self.cssom_deltas),
+                Arc::clone(&self.cssom_dirty),
+            )?;
 
             install::install_constructed_stylesheets(
                 scope,
