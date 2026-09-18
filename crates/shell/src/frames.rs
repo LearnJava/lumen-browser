@@ -1745,6 +1745,36 @@ pub(crate) fn spawn_frame(
     if dest.is_some() && matches!(js_url_result, Some(None)) {
         return Vec::new();
     }
+    // GAP-CSPENF срез 15: `frame-src`/`default-src` против навигации этого
+    // `<iframe>`/`<frame>` — считана один раз (та же форма, что срезы 4/9
+    // уже дают `img-src`), проверяется ниже перед КАЖДЫМ реальным фетчем
+    // (первичная вставка и навигация — оба пути идут через
+    // `fetch_iframe_source`). `about:blank`/пустой `src` не проверяются:
+    // CSP3 §6.5 их не ограничивает, они не долетают ни до сети, ни до диска.
+    let csp_gate = {
+        let doc = parent.lock().unwrap();
+        let root = doc.root();
+        crate::csp_enforce::document_csp_policy(&doc, root)
+    };
+    let self_origin = base.origin();
+    let frame_src_check = |src: &str, resolve_base: &ResourceBase| -> Option<FetchError> {
+        let lowered = src.trim_start().to_ascii_lowercase();
+        if lowered.is_empty() || lowered.starts_with("about:") {
+            return None;
+        }
+        let (policy, original_policy) = csp_gate.as_ref()?;
+        let resolved = resolve_base.resolve_str(src);
+        if !crate::csp_enforce::frame_src_blocked(policy, &resolved, self_origin.as_ref()) {
+            return None;
+        }
+        if let Some(js) = parent_js {
+            js.fire_csp_violation("frame-src", &resolved, original_policy);
+        }
+        Some(FetchError {
+            reason: format!("frame-src запрещает '{resolved}'"),
+            attempted_url: resolved,
+        })
+    };
     // Источник HTML + база ребёнка для его относительных URL.
     let fetched = match &js_url_result {
         // Строковое завершение — новый документ фрейма, тем же путём, что и
@@ -1756,14 +1786,17 @@ pub(crate) fn spawn_frame(
         // как если бы `src` не было вовсе), код уже отработал побочные эффекты.
         Some(None) => None,
         None => match dest {
-            Some((href, nav_base)) => {
-                Some(fetch_iframe_source(href, nav_base, sink, cookie_jar.clone()))
-            }
+            Some((href, nav_base)) => Some(
+                frame_src_check(href, nav_base)
+                    .map(Err)
+                    .unwrap_or_else(|| fetch_iframe_source(href, nav_base, sink, cookie_jar.clone())),
+            ),
             None if info.srcdoc.is_some() => None,
-            None => info
-                .src
-                .as_deref()
-                .map(|src| fetch_iframe_source(src, base, sink, cookie_jar.clone())),
+            None => info.src.as_deref().map(|src| {
+                frame_src_check(src, base)
+                    .map(Err)
+                    .unwrap_or_else(|| fetch_iframe_source(src, base, sink, cookie_jar.clone()))
+            }),
         },
     };
     // FRAME-4 срез 2: источник, который получить не удалось, больше не

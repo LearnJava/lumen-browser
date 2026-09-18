@@ -53,8 +53,17 @@
 //! переизвлекает директиву из уже доехавшей `originalPolicy` и шлёт
 //! `fetch(..., {method:'POST'})` на каждый URI. `report-to` не тронут.
 //!
+//! Срез 15 добавил `frame-src`/`default-src` против навигации `<iframe>`/
+//! `<frame>` — тот же host/scheme/`'self'` фетч-гейт, что срезы 4/6/7 дали
+//! `img-src`/`script-src`/`style-src`, применённый в `frames.rs::spawn_frame`
+//! перед вызовом `fetch_iframe_source` (не в этом файле — у гейта нет
+//! готового `&Document`/`ResourceBase` без явной проводки, тот же повод, что
+//! у срезов 10-13). Проверяются оба пути (первичная вставка и навигация,
+//! включая переприсваивание `.src`); `about:blank`/пустой `src` исключены
+//! заранее — CSP3 §6.5 их не ограничивает, они не долетают до сети/диска.
+//!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`object-src`/
-//! `media-src`/`frame-src`/`manifest-src`/…), `report-to` (Reporting API,
+//! `media-src`/`manifest-src`/…), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
 //! hash-источники (только `'unsafe-inline'` и `'nonce-…'`),
 //! `background-image`/`@font-face url()` (используют `fetch_image_bytes`
@@ -204,6 +213,22 @@ pub(crate) fn style_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
     !policy.fetch_directive_allows(&CspDirective::StyleSrc, &parsed, self_origin)
 }
 
+/// `true` if `frame-src` (or `default-src`) forbids navigating a nested
+/// `<iframe>`/`<frame>` to `url` — срез 15, same fetch-gate shape as
+/// [`img_src_blocked`]/[`script_src_blocked`]/[`style_src_blocked`]: absence
+/// of a policy is not checked here (the caller only calls this when a policy
+/// exists), and a `url` that fails to parse is treated as allowed (the
+/// caller's own scheme special-cases — `about:blank`, empty `src` — are
+/// expected to have already been filtered out before this is called, since
+/// those never reach the network/filesystem and CSP3 §6.5 does not restrict
+/// them).
+pub(crate) fn frame_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    !policy.fetch_directive_allows(&CspDirective::FrameSrc, &parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +372,37 @@ mod tests {
     fn style_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("style-src 'none'");
         assert!(!style_src_blocked(&p, "not a url", None));
+    }
+
+    /// GAP-CSPENF срез 15: `frame-src` against `<iframe>`/`<frame>` navigation.
+    #[test]
+    fn no_frame_src_allows_navigation() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(!frame_src_blocked(&p, "https://example.com/frame.html", None));
+    }
+
+    #[test]
+    fn frame_src_none_blocks_navigation() {
+        let p = lumen_network::csp::parse_csp_header("frame-src 'none'");
+        assert!(frame_src_blocked(&p, "https://example.com/frame.html", None));
+    }
+
+    #[test]
+    fn frame_src_allowed_host_passes() {
+        let p = lumen_network::csp::parse_csp_header("frame-src cdn.example.com");
+        assert!(!frame_src_blocked(&p, "https://cdn.example.com/frame.html", None));
+        assert!(frame_src_blocked(&p, "https://other.example.com/frame.html", None));
+    }
+
+    #[test]
+    fn frame_src_default_src_fallback_blocks() {
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(frame_src_blocked(&p, "https://example.com/frame.html", None));
+    }
+
+    #[test]
+    fn frame_src_unparseable_url_not_blocked() {
+        let p = lumen_network::csp::parse_csp_header("frame-src 'none'");
+        assert!(!frame_src_blocked(&p, "not a url", None));
     }
 }

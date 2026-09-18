@@ -855,3 +855,48 @@ Rust/JS ни к одной из пяти точек нарушения — пл�
 директивы кроме `script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`;
 hash-источники; честная независимая проверка заголовка и `<meta>`;
 картинки/скрипты/листы внутри `<iframe>` не покрытые срезами 6/8.
+
+## Срез 15 (2026-09-18, P6) — `frame-src` против навигации `<iframe>`/`<frame>`
+
+Ещё одна директива без гейта: `crates/shell/src/csp_enforce.rs` проверял
+`script-src`/`img-src`/`style-src`, но ни один код не читал `frame-src` — CSP
+любой строгости не мешала фрейму навигироваться на произвольный источник.
+Добавлена `frame_src_blocked` (`csp_enforce.rs`) — тот же host/scheme/`'self'`
+фетч-гейт, что уже даёт `img_src_blocked`/`script_src_blocked`/
+`style_src_blocked` (срезы 4/6/7), под директиву `CspDirective::FrameSrc`
+(fallback на `default-src`, уже разбирается `crates/network/src/csp.rs`).
+
+Гейт живёт не в `csp_enforce.rs`, а в `frames.rs::spawn_frame` (тот же повод,
+что у срезов 10-13 для `connect-src`/`worker-src`: у гейта нет готового
+`&Document`/`ResourceBase` внутри самого `csp_enforce.rs`, а `spawn_frame`
+уже держит и родительский `Document`, и обе `ResourceBase` для резолва
+относительного `src`). Проверяются оба пути, которыми фрейм получает адрес:
+первичная вставка разметки (`info.src`, база — `base` родителя) и навигация
+(`dest: Some((href, nav_base))` — клик по ссылке внутри старого под-документа,
+скриптовое переприсваивание `.src`) — оба идут через один и тот же
+`fetch_iframe_source`, гейт стоит перед обоими вызовами. `about:blank` и
+пустой `src` не проверяются: CSP3 §6.5 их не ограничивает, `fetch_iframe_source`
+и без гейта не долетает для них ни до сети, ни до диска (короткое замыкание
+раньше резолва). Заблокированная навигация не обрывает загрузку фрейма — тот
+же путь, что FRAME-4 срез 2 уже даёт сетевым неудачам: `FetchError` с текстом
+причины превращается в синтетическую страницу «Не удалось загрузить фрейм»,
+и `securitypolicyviolation` летит через уже существующий `PersistentJs::
+fire_csp_violation("frame-src", …)` (родительский `parent_js` — фрейм
+встроен в родительский документ, нарушение принадлежит ему).
+
++10 unit-тестов в `crates/shell/src/csp_enforce.rs` (симметрично `style_src_*`).
+Живой пробой (`--dump-layout`, headless): страница с `<meta http-equiv=
+"Content-Security-Policy" content="frame-src 'self'">` и двумя `<iframe>` —
+один на свой origin (`/local.html`), другой на чужой (`http://127.0.0.1:8299/
+other.html`) — лог фетчей показывает `GET /local.html`, но **ни одного**
+`GET` на порт 8299; без директивы (baseline-прогон той же страницы без CSP)
+оба фрейма фетчатся. Подтверждено `cargo clippy -p lumen-shell --all-targets
+--features v8 -- -D warnings` (чисто) и `cargo test -p lumen-shell --features
+v8 csp_enforce` (26/26 зелёных).
+
+Не покрыто этим срезом: `frame-src` на верхнеуровневую навигацию (директива
+относится только к вложенным browsing context, топ-уровня не касается);
+`frame-ancestors` (обратная директива — ограничивает, КТО может встраивать
+ЭТУ страницу, отдельная проверка на встраиваемой стороне, не тронута);
+остальные директивы (`object-src`/`media-src`/`manifest-src`/…); `report-to`;
+hash-источники; честная независимая проверка заголовка и `<meta>`.
