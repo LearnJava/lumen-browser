@@ -376,6 +376,22 @@ pub(crate) struct PageCascade {
     pub(crate) measurer: lumen_paint::MultiFontMeasurer,
 }
 
+/// BUG-752: the base every subresource (`<link>`, `<script src>`, `<img>`,
+/// `<iframe>`, `<track>`, CSS `url()`) resolves against — `base` adjusted by
+/// the document's current `<base href>`, if any. Recomputed at each call site
+/// from the live `doc` rather than cached once: a script can insert or change
+/// `<base>` after parsing, and the JS-side `_lumen_document_base_url()` this
+/// must agree with recomputes on every call too (a snapshot here would drift
+/// from it the moment a page does that). `base` itself — Origin/CORS/mixed
+/// content checks, `window.location`, cross-origin frame gates — is
+/// unaffected by `<base>` and must keep using the un-adjusted value.
+pub(crate) fn effective_base(doc: &Document, base: &ResourceBase) -> ResourceBase {
+    match doc.base_href() {
+        Some(href) => base.resolve_as_base(href),
+        None => base.clone(),
+    }
+}
+
 /// Fetch + parse the page CSS and build the matching font stack (BUG-443).
 ///
 /// Verbatim the code `parse_and_layout` used to run inline; the only change is
@@ -722,9 +738,10 @@ pub(crate) fn parse_and_layout(
         let mut classic_items = Vec::new();
         let mut module_items = Vec::new();
         collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
+        let eff_base = effective_base(&doc, base);
         (
-            resolve_script_sources(&classic_items, base, sink, cookie_jar.clone(), &doc),
-            resolve_script_sources(&module_items, base, sink, cookie_jar.clone(), &doc),
+            resolve_script_sources(&classic_items, &eff_base, sink, cookie_jar.clone(), &doc),
+            resolve_script_sources(&module_items, &eff_base, sink, cookie_jar.clone(), &doc),
         )
     };
     // BUG-443: the cascade is built BEFORE the page's scripts run, and so is the
@@ -750,7 +767,7 @@ pub(crate) fn parse_and_layout(
     };
     doc.set_target(page_fragment.as_deref());
     let mut cascade = build_page_cascade(
-        &doc, base, sink, cookie_jar.clone(), viewport, dark_mode, media_print,
+        &doc, &effective_base(&doc, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
     )?;
     // Fingerprints of the two stylesheet sources, so the rebuild below can tell
     // whether the scripts touched either. Cheap: two tree walks, no fetching.
@@ -889,7 +906,7 @@ pub(crate) fn parse_and_layout(
     if scripts_changed_css {
         let d = doc_arc.lock().unwrap();
         cascade = build_page_cascade(
-            &d, base, sink, cookie_jar.clone(), viewport, dark_mode, media_print,
+            &d, &effective_base(&d, base), sink, cookie_jar.clone(), viewport, dark_mode, media_print,
         )?;
     }
     #[cfg(feature = "v8")]
@@ -982,7 +999,8 @@ pub(crate) fn parse_and_layout(
     // фреймам не нужен — печать PDF под-документов вне среза).
     let mut frames = {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
-        load_frame_sub_documents(&doc_arc, 0, base, &doc_arc, &frame_env, js_ctx.as_ref())
+        let eff_base = effective_base(&doc_arc.lock().unwrap(), base);
+        load_frame_sub_documents(&doc_arc, 0, &eff_base, &doc_arc, &frame_env, js_ctx.as_ref())
     };
 
     // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
@@ -994,7 +1012,8 @@ pub(crate) fn parse_and_layout(
     let (images, animated_gifs, lazy_pairs, blocked_by_img_src, cross_origin_img_urls) = {
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
-        fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
+        let eff_base = effective_base(&d, base);
+        fetch_and_decode_images(&mut d, &eff_base, sink, viewport, cookie_jar.clone(), target)
     };
     // GAP-CSPENF срез 4: `securitypolicyviolation` for every `img-src`-blocked
     // URL. `blocked_by_img_src` came back from a fetch pass that ran before
@@ -1023,8 +1042,9 @@ pub(crate) fn parse_and_layout(
     // Ошибки фетча/парсинга не валят страницу — видео просто остаётся без cues.
     let page_tracks = {
         let d = doc_arc.lock().unwrap();
+        let eff_base = effective_base(&d, base);
         tracks::load_video_tracks(&d, &|src| {
-            fetch_vtt_text(src, base, sink, cookie_jar.clone())
+            fetch_vtt_text(src, &eff_base, sink, cookie_jar.clone())
         })
     };
 
@@ -1167,7 +1187,8 @@ pub(crate) fn parse_and_layout(
     let mut images = images;
     {
         let _s = lumen_core::trace::span("fetch-bg-images", "net");
-        for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone(), target) {
+        let eff_base = effective_base(&doc_arc.lock().unwrap(), base);
+        for (src, image) in fetch_and_decode_background_images(&layout, &eff_base, sink, cookie_jar.clone(), target) {
             images.push((src, image));
         }
     }

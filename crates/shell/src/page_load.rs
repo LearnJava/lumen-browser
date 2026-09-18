@@ -36,10 +36,22 @@ impl Lumen {
             let root = doc.root();
             crate::csp_enforce::document_csp_policy(&doc, root)
         });
+        // BUG-752: this deferred path re-reads `<base href>` on every batch
+        // (not once at page load), same as `_lumen_document_base_url()` on the
+        // JS side — a script can insert/change `<base>` well after the initial
+        // parse, and by the time a lazy image scrolls into view that is likely.
+        // `self_origin` (CSP/mixed-content identity) stays on the un-adjusted
+        // `base`: `<base>` changes what a relative URL resolves to, not the
+        // document's origin.
+        let eff_base = self
+            .layout_source
+            .as_ref()
+            .map(|src| effective_base(&src.document.lock().unwrap(), &base))
+            .unwrap_or_else(|| base.clone());
         let self_origin = base.origin();
         for (nid, url) in requests {
             if let Some((policy, original_policy)) = &csp_gate {
-                let resolved = base.resolve_str(&url);
+                let resolved = eff_base.resolve_str(&url);
                 if crate::csp_enforce::img_src_blocked(policy, &resolved, self_origin.as_ref()) {
                     let original_policy = original_policy.clone();
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -49,7 +61,7 @@ impl Lumen {
                     continue;
                 }
             }
-            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(self.active_cookie_jar())) {
+            let bytes = match fetch_image_bytes(&url, &eff_base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -230,13 +242,20 @@ impl Lumen {
             .collect();
 
         for (nid, src) in loads {
-            // Resolve URL relative to current page source.
+            // Resolve URL relative to current page source, adjusted for
+            // `<base href>` if the live document has one (BUG-752) — same
+            // deferred-load reasoning as `fetch_and_register_lazy_images`.
             let base = match &self.source {
                 PageSource::File(p) => ResourceBase::File(p.clone()),
                 PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
                 PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
                 PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
             };
+            let base = self
+                .layout_source
+                .as_ref()
+                .map(|ls| effective_base(&ls.document.lock().unwrap(), &base))
+                .unwrap_or(base);
 
             let bytes = match fetch_image_bytes(&src, &base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
