@@ -54,6 +54,17 @@ pub enum Error {
         blocked_uri: String,
         original_policy: String,
     },
+    /// GAP-CSPENF срез 17: a `<video src>`/`<audio src>`/`<track src>` resource
+    /// fetch was blocked before any network I/O by the document's CSP
+    /// `media-src` (falling back to `default-src`). Raised by
+    /// `lumen-network::HttpClient::check_media_src`, mirroring
+    /// [`Self::CspObjectSrcBlocked`] — the native media fetch-check binding in
+    /// `lumen-js` matches on this variant and dispatches
+    /// `securitypolicyviolation` from there.
+    CspMediaSrcBlocked {
+        blocked_uri: String,
+        original_policy: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -76,6 +87,9 @@ impl fmt::Display for Error {
             }
             Self::CspObjectSrcBlocked { blocked_uri, original_policy } => {
                 write!(f, "object-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
+            }
+            Self::CspMediaSrcBlocked { blocked_uri, original_policy } => {
+                write!(f, "media-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
             }
         }
     }

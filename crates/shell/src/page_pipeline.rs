@@ -714,7 +714,14 @@ pub(crate) fn parse_and_layout(
                 client = client
                     .with_connect_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
                     .with_worker_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
-                    .with_object_src_policy(policy, self_origin, original_policy);
+                    .with_object_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
+                    // GAP-CSPENF срез 17: and the same policy gates
+                    // `<video src>`/`<audio src>`/`<track src>` against
+                    // `media-src` (or `default-src`) — the JS media shims'
+                    // `_lumen_check_media_src` reads this via `check_media_src`,
+                    // same one-`HttpClient`-per-document approach as the three
+                    // gates above.
+                    .with_media_src_policy(policy, self_origin, original_policy);
             }
             // GAP-POLICYREPORT (BUG-953): attach the precomputed sync-xhr
             // disposition regardless of whether either header was present —
@@ -1046,13 +1053,51 @@ pub(crate) fn parse_and_layout(
 
     // P3-webvtt срез 3: загрузка WebVTT-субтитров из <track> каждого <video>.
     // Ошибки фетча/парсинга не валят страницу — видео просто остаётся без cues.
-    let page_tracks = {
+    // GAP-CSPENF срез 17: this is the *second* place a `<track src>` body is
+    // fetched — the JS shim's `readTrackBody` is the other, gated by the native
+    // `_lumen_check_media_src` binding. This one runs before any JS exists, has
+    // a `&Document`, and so is gated here in the shell instead, the same way
+    // img-src/style-src are (срезы 4/7). A live probe with `media-src 'none'`
+    // showed the shim's gate alone still let `GET /cap.vtt` onto the wire from
+    // here, so both halves are needed for the "not a single outgoing byte"
+    // invariant to actually hold for `<track>`.
+    let (page_tracks, media_src_original_policy, blocked_by_media_src) = {
         let d = doc_arc.lock().unwrap();
         let eff_base = effective_base(&d, base);
-        tracks::load_video_tracks(&d, &|src| {
+        let root = d.root();
+        let media_policy = crate::csp_enforce::document_csp_policy(&d, root);
+        let self_origin = base.origin();
+        let blocked = std::cell::RefCell::new(Vec::new());
+        let tracks = tracks::load_video_tracks(&d, &|src| {
+            if let Some((policy, _)) = &media_policy {
+                // Resolve first: a policy can only be matched against an
+                // absolute URL, and `fetch_vtt_text` resolves the same way.
+                if let ResolvedResource::Url(abs) = eff_base.resolve(src)
+                    && crate::csp_enforce::media_src_blocked(policy, &abs, self_origin.as_ref())
+                {
+                    blocked.borrow_mut().push(abs);
+                    return None;
+                }
+            }
             fetch_vtt_text(src, &eff_base, sink, cookie_jar.clone())
-        })
+        });
+        (tracks, media_policy.map(|(_, original)| original), blocked.into_inner())
     };
+
+    // Same deferred-dispatch shape as the `img-src` push above
+    // (`blocked_by_img_src`, срез 4): the violation is reported once the JS
+    // runtime exists, because the block itself happened before it did.
+    #[cfg(feature = "v8")]
+    if !blocked_by_media_src.is_empty()
+        && let Some(js) = &js_ctx
+        && let Some(original_policy) = &media_src_original_policy
+    {
+        for url in &blocked_by_media_src {
+            js.fire_csp_violation("media-src", url, original_policy);
+        }
+    }
+    #[cfg(not(feature = "v8"))]
+    let _ = (&blocked_by_media_src, &media_src_original_policy);
 
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM

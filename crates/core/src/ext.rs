@@ -2088,6 +2088,24 @@ pub trait JsFetchProvider: Send + Sync {
         Ok(())
     }
 
+    /// I/O-free pre-check: would the document's `media-src` (or `default-src`)
+    /// policy block a `<video src>`/`<audio src>`/`<track src>` resource fetch,
+    /// without issuing one (GAP-CSPENF срез 17).
+    ///
+    /// Mirrors [`check_object_src`](Self::check_object_src)'s shape: every one
+    /// of this engine's three real media-loading paths starts in a JS shim with
+    /// no `&Document` of its own — `startGifLoad` → `__lumen_video_load`
+    /// (`video_bindings.rs`), `startLoad` → `__lumen_audio_load`
+    /// (`audio_element.rs`) and `readTrackBody` → `fetch()`
+    /// (`video_bindings.rs`) — so the check is exposed as its own native
+    /// binding rather than living behind `&Document` in `lumen-shell`.
+    /// Default implementation never blocks, matching `HttpClient` with no
+    /// `media-src` policy installed.
+    fn check_media_src(&self, url: &str) -> Result<()> {
+        let _ = url;
+        Ok(())
+    }
+
     /// `sync-xhr` disposition from the document's `Document-Policy` (+
     /// `-Report-Only`) response headers (GAP-POLICYREPORT, BUG-953). `None`
     /// means synchronous `XMLHttpRequest.send()` is allowed. Checked by the

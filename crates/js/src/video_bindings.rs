@@ -774,6 +774,19 @@ const VIDEO_SHIM: &str = r#"(function() {
     }
     var abs = (typeof _url_resolve === 'function' && typeof _lumen_document_base_url === 'function')
       ? _url_resolve(url, _lumen_document_base_url()) : url;
+    // GAP-CSPENF срез 17: `media-src` covers text tracks as well as video and
+    // audio (CSP3 §6.1 «media-src»), so the same gate runs here — before the
+    // `fetch()` below, so a blocked track never reaches the network. Only this
+    // branch is gated: the `blob:`/`data:` branches above are read locally out
+    // of the object-URL store and never touch the network at all.
+    if (typeof _lumen_check_media_src === 'function' && !_lumen_check_media_src(abs)) {
+      if (typeof _lumen_fire_media_src_violation === 'function') {
+        _lumen_fire_media_src_violation(_lumen_media_src_last_csp_block());
+      }
+      // Rejecting routes through `failTrackLoad` exactly like a failed fetch:
+      // `readyState = ERROR` plus an `error` event on the `<track>` element.
+      return Promise.reject(new Error('blocked by Content Security Policy'));
+    }
     return fetch(abs).then(function(resp) {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       return resp.text();
@@ -1140,6 +1153,22 @@ const VIDEO_SHIM: &str = r#"(function() {
       _currentSrc = abs;
       _networkState = NETWORK_LOADING;
       queueEvent('loadstart');
+      // GAP-CSPENF срез 17: `media-src`/`default-src` gate, checked before the
+      // URL is queued for the shell's GIF fetch below — same "not a single
+      // outgoing byte" principle img-src/script-src/style-src already give
+      // their producers (срезы 4/6/7). `<video>` has no `&Document`-backed gate
+      // in `lumen-shell` (this whole path is JS-shim driven), so the check is a
+      // native binding instead. The gate sits ahead of the format check, not
+      // behind it: a blocked source is a CSP failure whatever its container
+      // would have been, so a non-GIF `src` now reports `media-src` rather than
+      // "unsupported media format".
+      if (typeof _lumen_check_media_src === 'function' && !_lumen_check_media_src(abs)) {
+        if (typeof _lumen_fire_media_src_violation === 'function') {
+          _lumen_fire_media_src_violation(_lumen_media_src_last_csp_block());
+        }
+        failResource(gen, candidate, 'blocked by Content Security Policy');
+        return;
+      }
       if (startGifLoad(gen, url)) return;
       failResource(gen, candidate, 'unsupported media format');
     }

@@ -356,6 +356,7 @@ pub(crate) fn install_fetch(
         let fp2 = fetch_provider.clone();
         let fp_beacon = fetch_provider.clone();
         let fp_object = fetch_provider.clone();
+        let fp_media = fetch_provider.clone();
         let fp_cancel = fetch_provider.clone();
         let fp_cancel_body = fetch_provider.clone();
         let c_cancel = Arc::clone(&cache);
@@ -960,6 +961,49 @@ pub(crate) fn install_fetch(
         {
             let lcb_get = Arc::clone(&object_src_last_csp_block);
             reg!(scope, ctx, store, "_lumen_object_src_last_csp_block", move || -> Vec<String> {
+                match lcb_get.lock().unwrap().take() {
+                    Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
+                    None => Vec::new(),
+                }
+            });
+        }
+
+        // _lumen_check_media_src(url) → bool
+        // GAP-CSPENF срез 17: I/O-free `media-src`/`default-src` pre-check for
+        // `<video src>`/`<audio src>`/`<track src>`. None of this engine's three
+        // real media-loading paths goes through a `&Document`-backed gate in
+        // `lumen-shell`: `<video>` queues its GIF with `__lumen_video_load` for
+        // the shell to fetch, `<audio>` hands its URL to `__lumen_audio_load`
+        // (which fetches on a background thread with an `HttpClient` of its
+        // own), and `<track>` uses a plain `fetch()`. All three ask this binding
+        // first and skip their loader entirely when it returns `false` — same
+        // "not a single outgoing byte" shape as `_lumen_check_object_src` above,
+        // own slot because it is a different directive.
+        let media_src_last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        {
+            let fp = fp_media;
+            let lcb_media = Arc::clone(&media_src_last_csp_block);
+            reg!(scope, ctx, store, "_lumen_check_media_src", move |url: String| -> bool {
+                let Some(ref provider) = fp else { return true };
+                if let Err(lumen_core::error::Error::CspMediaSrcBlocked {
+                    blocked_uri,
+                    original_policy,
+                }) = provider.check_media_src(&url)
+                {
+                    *lcb_media.lock().unwrap() = Some((blocked_uri, original_policy));
+                    return false;
+                }
+                true
+            });
+        }
+
+        // _lumen_media_src_last_csp_block() → [blockedUri, originalPolicy] | []
+        // Same read-and-clear contract as `_lumen_object_src_last_csp_block`
+        // above, own slot — each media shim calls this right after
+        // `_lumen_check_media_src` returns `false` (GAP-CSPENF срез 17).
+        {
+            let lcb_get = Arc::clone(&media_src_last_csp_block);
+            reg!(scope, ctx, store, "_lumen_media_src_last_csp_block", move || -> Vec<String> {
                 match lcb_get.lock().unwrap().take() {
                     Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
                     None => Vec::new(),

@@ -2894,6 +2894,17 @@ pub struct HttpClient {
     /// [`Self::worker_src_policy`] — a separate field because it is checked
     /// against a different [`CspDirective`].
     object_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    /// GAP-CSPENF срез 17: CSP `media-src` (falling back to `default-src`) gate
+    /// for `<video src>`/`<audio src>`/`<track src>` resource fetches, driven by
+    /// the native `_lumen_check_media_src` binding. All three of this engine's
+    /// media-loading paths are JS-shim driven and none of them routes its bytes
+    /// through this very client (`<video>` hands the URL to the shell's GIF
+    /// store, `<audio>` to a background fetch thread with its own `HttpClient`,
+    /// `<track>` to a plain `fetch()`), so the policy is consulted here as a
+    /// pre-check only. Same shape and provenance as [`Self::object_src_policy`]
+    /// — a separate field because it is checked against a different
+    /// [`CspDirective`].
+    media_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
     /// GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition from `Document-Policy`
     /// (+ `-Report-Only`) and `Permissions-Policy` (+ `-Report-Only`)
     /// respectively, precomputed once by `crate::document_policy`/
@@ -2933,6 +2944,7 @@ impl HttpClient {
             connect_src_policy: None,
             worker_src_policy: None,
             object_src_policy: None,
+            media_src_policy: None,
             sync_xhr_policy: (None, None),
         }
     }
@@ -2984,6 +2996,22 @@ impl HttpClient {
         original_policy: String,
     ) -> Self {
         self.object_src_policy = Some((policy, self_origin, original_policy));
+        self
+    }
+
+    /// Attach the document's CSP `media-src` (falling back to `default-src`)
+    /// gate — GAP-CSPENF срез 17. Same argument shape and provenance as
+    /// [`Self::with_object_src_policy`]; only [`Self::check_media_src`] (the
+    /// `JsFetchProvider` override backing `<video src>`/`<audio src>`/
+    /// `<track src>`) checks this.
+    #[must_use]
+    pub fn with_media_src_policy(
+        mut self,
+        policy: CspPolicy,
+        self_origin: Option<Origin>,
+        original_policy: String,
+    ) -> Self {
+        self.media_src_policy = Some((policy, self_origin, original_policy));
         self
     }
 
@@ -4364,6 +4392,16 @@ impl JsFetchProvider for HttpClient {
         self.object_src_gate(&url)
     }
 
+    /// GAP-CSPENF срез 17: `media-src`/`default-src` pre-check for
+    /// `<video src>`/`<audio src>`/`<track src>` resource fetches, called by the
+    /// native `_lumen_check_media_src` binding before the shim hands the URL to
+    /// its loader — same "not a single outgoing byte" shape as
+    /// [`Self::check_object_src`], different directive.
+    fn check_media_src(&self, url: &str) -> Result<()> {
+        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        self.media_src_gate(&url)
+    }
+
     /// GAP-POLICYREPORT (BUG-953): returns the `sync-xhr` disposition
     /// precomputed by `crate::document_policy` (resolved by the shell in
     /// `page_pipeline::parse_and_layout` and attached via
@@ -4422,6 +4460,21 @@ impl HttpClient {
             && !policy.fetch_directive_allows(&CspDirective::ObjectSrc, url, self_origin.as_ref())
         {
             return Err(Error::CspObjectSrcBlocked {
+                blocked_uri: url.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// `media-src`/`default-src` gate backing [`JsFetchProvider::check_media_src`]
+    /// (GAP-CSPENF срез 17) — same shape as [`Self::object_src_gate`], checked
+    /// against [`Self::media_src_policy`] and `CspDirective::MediaSrc` instead.
+    fn media_src_gate(&self, url: &Url) -> Result<()> {
+        if let Some((policy, self_origin, original_policy)) = &self.media_src_policy
+            && !policy.fetch_directive_allows(&CspDirective::MediaSrc, url, self_origin.as_ref())
+        {
+            return Err(Error::CspMediaSrcBlocked {
                 blocked_uri: url.to_string(),
                 original_policy: original_policy.clone(),
             });
@@ -5962,6 +6015,101 @@ mod tests {
             "not a url",
         );
         assert!(!matches!(result, Err(Error::CspObjectSrcBlocked { .. })));
+    }
+
+    // ── GAP-CSPENF срез 17: media-src против <video>/<audio>/<track> ──────────
+
+    #[test]
+    fn media_src_none_blocks_check_before_any_network_io() {
+        // `check_media_src` is the I/O-free pre-check the native
+        // `_lumen_check_media_src` binding runs before the media shim hands the
+        // URL to its loader — mirrors
+        // `object_src_none_blocks_check_before_any_network_io`.
+        let policy = csp::parse_csp_header("media-src 'none'");
+        let client = HttpClient::new().with_media_src_policy(
+            policy,
+            None,
+            "media-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_media_src(
+            &client,
+            "https://192.0.2.1.invalid/clip.gif",
+        );
+        match result {
+            Err(Error::CspMediaSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "https://192.0.2.1.invalid/clip.gif");
+                assert_eq!(original_policy, "media-src 'none'");
+            }
+            Ok(()) => panic!("expected CspMediaSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspMediaSrcBlocked, got {other}"),
+        }
+    }
+
+    #[test]
+    fn media_src_allowed_host_passes_check() {
+        let policy = csp::parse_csp_header("media-src example.com");
+        let client = HttpClient::new().with_media_src_policy(
+            policy,
+            None,
+            "media-src example.com".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_media_src(
+            &client,
+            "https://example.com/clip.gif",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn media_src_falls_back_to_default_src() {
+        // No explicit `media-src` — `effective_sources` (generic over any
+        // directive) already falls back to `default-src`, so this is free: no
+        // new fallback logic was added for `CspDirective::MediaSrc`.
+        let policy = csp::parse_csp_header("default-src 'none'");
+        let client = HttpClient::new().with_media_src_policy(
+            policy,
+            None,
+            "default-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_media_src(
+            &client,
+            "https://example.com/clip.gif",
+        );
+        assert!(matches!(result, Err(Error::CspMediaSrcBlocked { .. })));
+    }
+
+    #[test]
+    fn no_media_src_policy_does_not_block_check() {
+        // Default `HttpClient` (`with_media_src_policy` never called) must not
+        // invent a CSP block.
+        let client = HttpClient::new();
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_media_src(
+            &client,
+            "https://example.com/clip.gif",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn media_src_unparseable_url_not_blocked() {
+        // A URL that fails to parse never matches `Error::CspMediaSrcBlocked`
+        // — it comes back as `Error::InvalidUrl` instead (same contract as
+        // `check_object_src`), which the native `_lumen_check_media_src`
+        // binding's `if let Err(CspMediaSrcBlocked {..})` guard does not match,
+        // so no `securitypolicyviolation` is invented for it — the shim falls
+        // through to its normal load, which fails there instead. Mirrors
+        // `object_src_unparseable_url_not_blocked`.
+        let policy = csp::parse_csp_header("media-src 'none'");
+        let client = HttpClient::new().with_media_src_policy(
+            policy,
+            None,
+            "media-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_media_src(
+            &client,
+            "not a url",
+        );
+        assert!(!matches!(result, Err(Error::CspMediaSrcBlocked { .. })));
     }
 
     #[test]

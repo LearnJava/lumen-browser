@@ -278,6 +278,30 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
         _fired[name] = true;
         fireEvent(el, name);
       }
+      // GAP-CSPENF срез 17: `media-src`/`default-src` gate, checked before
+      // `__lumen_audio_load` — that binding spawns a background fetch thread in
+      // the shell (`PlatformAudioPlayer::load` → `fetch_audio_bytes`), so this
+      // is the last synchronous point at which nothing has been requested yet,
+      // the same reason срез 12's `sendBeacon` gate sits ahead of its
+      // `thread::spawn`. The URL is resolved against the document base for the
+      // check only: the attribute is handed to the loader raw (an existing
+      // limitation of this path, unrelated to CSP), but a policy must be
+      // matched against an absolute URL to mean anything.
+      var _abs = url;
+      if (typeof _url_resolve === 'function' && typeof _lumen_document_base_url === 'function') {
+        try { var _r = _url_resolve(url, _lumen_document_base_url()); if (_r) _abs = String(_r); }
+        catch (e) {}
+      }
+      if (typeof _lumen_check_media_src === 'function' && !_lumen_check_media_src(_abs)) {
+        if (typeof _lumen_fire_media_src_violation === 'function') {
+          _lumen_fire_media_src_violation(_lumen_media_src_last_csp_block());
+        }
+        // HTML §4.8.11.5 still owes the page a `loadstart` before the failure —
+        // the load algorithm did start, it is the resource fetch that did not.
+        fireEvent(el, 'loadstart');
+        setTimeout(function() { fireOnce('error'); }, 0);
+        return;
+      }
       __lumen_audio_load(_handle, url);
       fireEvent(el, 'loadstart');
       fireEvent(el, 'progress');

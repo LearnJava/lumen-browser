@@ -966,3 +966,150 @@ warnings` — все чисто.
 `page_pipeline.rs::parse_and_layout` строится только для top-level документа,
 подфрейм получает свой `HttpClient` отдельно (`frames.rs`), не тронутый этим
 срезом.
+
+## Срез 17 (2026-09-19, `p6-gap-cspenf-srez17`) — `media-src` против `<video>`/`<audio>`/`<track>`
+
+Реализовано: `media-src` (CSP3 §6.1, покрывает `<video>`, `<audio>` и связанные
+с ними текстовые дорожки `<track>`) разбиралась с самого начала
+(`crates/network/src/csp.rs:84`/`:354`), но нигде не проверялась — `grep -rn
+MediaSrc crates/` до этого среза давал только парсер и doc-comment
+`csp_enforce.rs`, называвший директиву непокрытой. Тем же паттерном, что срезы
+13/16 закрыли `worker-src`/`object-src`.
+
+Этот движок не несёт полного медиа-стека, поэтому первым шагом был поиск точек,
+которые реально выпускают байты, а не перечисление тегов. Их оказалось **четыре**
+у трёх разных владельцев, и одна из них — не та, что предполагалась:
+
+- `<video src>`/`<source src>`: `startFetch` → `startGifLoad` →
+  `__lumen_video_load(nid, src)` (`crates/js/src/video_bindings.rs`) —
+  реальное декодирование только GIF, фетчит шелл из `pending_loads`.
+- `<audio src>`: `startLoad` → `__lumen_audio_load(handle, url)`
+  (`crates/js/src/audio_element.rs`) → `PlatformAudioPlayer::load` →
+  `fetch_audio_bytes` на фоновом потоке шелла. Вопреки ожиданию «аудио
+  заглушено сильнее видео» — это полноценный сетевой путь.
+- `<track src>`: `readTrackBody` → обычный `fetch()` (`video_bindings.rs`).
+- `<track src>` **второй раз**: `tracks::load_video_tracks` через
+  `fetch_vtt_text` (`crates/shell/src/page_pipeline.rs`,
+  `crates/shell/src/subresources.rs`) — оверлейный снапшот шелла, который
+  ходит за тем же `.vtt` до появления JS вообще. В заявке на срез этой точки не
+  было; она вскрылась живым прогоном: гейт только в шиме давал `spv` с
+  `violatedDirective=media-src`, а `GET /cap.vtt` при этом всё равно уходил на
+  провод. Инвариант «ни одного исходящего байта» держится только когда
+  перекрыты обе половины.
+
+Первые три точки JS-шимовые и без `&Document`, поэтому их гейт живёт в
+`lumen-network`, той же тройкой, что срезы 10/12/13/16:
+
+- `crates/core/src/error.rs`: новый вариант `Error::CspMediaSrcBlocked
+  { blocked_uri, original_policy }`.
+- `crates/core/src/ext.rs`: `JsFetchProvider::check_media_src(url) -> Result<()>`
+  — I/O-free пре-чек, тот же контракт, что `check_object_src` (срез 16);
+  default-реализация `Ok(())` для двойников без CSP.
+- `crates/network/src/lib.rs`: `HttpClient` получила `media_src_policy:
+  Option<(CspPolicy, Option<Origin>, String)>`, билдер `with_media_src_policy`,
+  приватный `media_src_gate(&Url)` (против `CspDirective::MediaSrc`, fallback
+  на `default-src` — общий для любой директивы) и `check_media_src` как
+  override трейта; +5 unit-тестов (симметрично `object_src_*`). Отдельное поле,
+  а не переиспользование `object_src_policy`: другая директива. Заметная
+  особенность по сравнению с срезами 10-13 — ни один из трёх путей не гонит
+  свои байты через этот самый `HttpClient` (видео отдаёт URL GIF-стору шелла,
+  аудио — фоновому потоку с собственным `HttpClient`, трек — обычному
+  `fetch()`), так что политика здесь консультируется **только** как пре-чек.
+- `crates/js/src/v8_runtime/install/net.rs`: нативный биндинг
+  `_lumen_check_media_src(url) -> bool` в `install_fetch` — зовёт
+  `check_media_src` и при блокировке пишет `(blocked_uri, original_policy)` в
+  свой однослотовый side-channel, читаемый `_lumen_media_src_last_csp_block()`
+  (тот же паттерн, что `_lumen_check_object_src`). Слот один на все три
+  JS-точки: каждая вызывает пару «проверь — прочитай» синхронно и по одному
+  разу за загрузку ресурса.
+- `crates/js/src/shim/web_api_shim_mid_b2.js`:
+  `_lumen_fire_media_src_violation(csp)` — тот же тонкий хелпер, что
+  `_lumen_fire_object_src_violation` (срез 16), зовёт
+  `_lumen_dispatch_csp_violation('media-src', …)`. Живёт в общем шиме, а не в
+  `VIDEO_SHIM`/`AUDIO_SHIM` (у обоих своя JS-строка), именно потому что зовут
+  его все три.
+- `crates/js/src/video_bindings.rs::startFetch`: гейт после `loadstart` и
+  **до** `startGifLoad`, то есть до того, как URL попадёт в `pending_loads`;
+  отказ идёт уже существующим путём `failResource` (BUG-825) — `error` на
+  элементе либо на текущем `<source>` с переходом к следующему кандидату.
+  Гейт стоит впереди проверки формата, а не позади: заблокированный источник —
+  это отказ CSP независимо от того, какой у него был контейнер, поэтому
+  не-GIF `src` теперь сообщает `media-src`, а не «unsupported media format».
+- `crates/js/src/video_bindings.rs::readTrackBody`: гейт до `fetch(abs)`;
+  отказ — `Promise.reject`, который уходит в уже существующий
+  `failTrackLoad` (`readyState = ERROR` + `error` на `<track>`).
+- `crates/js/src/audio_element.rs::startLoad`: гейт до
+  `__lumen_audio_load` — это последняя синхронная точка, где ещё ничего не
+  запрошено (дальше шелл уходит в `thread::spawn`), та же причина, по которой
+  срез 12 поставил гейт `sendBeacon` перед его `thread::spawn`. URL резолвится
+  против базы документа **только для проверки**: в загрузчик атрибут уходит
+  сырым (существующее ограничение этого пути, к CSP отношения не имеющее — из-за
+  него относительный `<audio src>` в этом движке и так не доходит до сети,
+  `Url::parse` падает), но матчить политику имеет смысл только против
+  абсолютного URL.
+
+Четвёртая точка — в шелле, у неё есть `&Document`, поэтому она гейтится там же,
+где `img-src`/`style-src` (срезы 4/7):
+
+- `crates/shell/src/csp_enforce.rs`: новая `media_src_blocked` — тот же
+  host/scheme/`'self'` фетч-гейт, что `img_src_blocked`/`frame_src_blocked`.
+- `crates/shell/src/page_pipeline.rs`: замыкание `tracks::load_video_tracks`
+  резолвит `src`, спрашивает `media_src_blocked` и возвращает `None` вместо
+  вызова `fetch_vtt_text`; заблокированные URL копятся и диспатчатся через уже
+  существующий `PersistentJs::fire_csp_violation("media-src", …)` — тот же
+  отложенный диспатч, что срез 4 применил к `blocked_by_img_src`, потому что
+  блокировка произошла раньше, чем появился JS-рантайм.
+- `crates/shell/src/page_pipeline.rs::parse_and_layout`: тот же
+  `document_csp_policy`, что уже собирается для `connect_src_policy`/
+  `worker_src_policy`/`object_src_policy`, теперь клонируется и на
+  `with_media_src_policy` — один расчёт политики, четыре гейта на один
+  `HttpClient`.
+
+Подтверждено живым окном (`--mcp-live-port`, локальный HTTP-сервер с логом
+каждого запроса, `dev-release`), A/B двумя армами одной страницы. Арм с
+`<meta http-equiv="Content-Security-Policy" content="media-src 'none'">`:
+серверный лог содержит только `GET /page.html`, `resource://network` пуст, а
+консоль печатает три нарушения — `spv directive=media-src
+uri=http://127.0.0.1:8501/clip.gif`, и **дважды** `uri=.../cap.vtt` (по одному
+на каждую из двух заблокированных попыток фетча трека — шелловскую и шимовую).
+`new Audio('http://127.0.0.1:8501/tone.mp3')` на той же странице даёт
+`spv directive=media-src uri=http://127.0.0.1:8501/tone.mp3`, `networkState`
+остаётся `NETWORK_EMPTY` и на провод не уходит ничего. Baseline-арм той же
+страницы без директивы: `GET /clip.gif`, `GET /cap.vtt` (трижды — оба
+владельца плюс перезагрузка), `GET /tone.mp3`, событие `video-loadeddata`
+(GIF реально декодировался) и ни одного `securitypolicyviolation`.
+
+Юнит-тесты: `cargo test -p lumen-network media_src` (5/5 —
+`media_src_none_blocks_check_before_any_network_io`,
+`media_src_allowed_host_passes_check`, `media_src_falls_back_to_default_src`,
+`no_media_src_policy_does_not_block_check`,
+`media_src_unparseable_url_not_blocked`) и `cargo test -p lumen-shell
+--features v8 csp_enforce` (32/32, +6 новых `media_src_*`, включая
+`img_src_none_does_not_block_media` — строгая соседняя директива не должна
+подменять `media-src`). `cargo clippy -p lumen-core -p lumen-network
+--all-targets -- -D warnings`, `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings`, `cargo clippy -p lumen-shell
+--all-targets --features v8 -- -D warnings` — все чисто. Регрессий в
+существующих медиа-тестах нет: `cargo test -p lumen-js --features v8-backend
+audio` (50/50), `… video_bindings` (40/40).
+
+Не покрыто этим срезом: `securitypolicyviolation` для **разметочного**
+`<audio src>` — сам байт не уходит, но событие не наблюдаемо. `AUDIO_SHIM`
+патчит разметочные `<audio>` одним проходом `document.querySelectorAll('audio')`
+в момент установки шима, то есть `startLoad` (и вместе с ним синхронный
+диспатч нарушения) успевает раньше, чем страница может повесить слушатель;
+`error` при этом доезжает, потому что он на `setTimeout(0)`. Скриптовые пути
+(`new Audio(url)`, `audio.src = …`, `createElement('audio')`) наблюдаемы
+полностью — подтверждено выше. Это тот же класс провала, что срез 4
+задокументировал для потокового продюсера картинок, а не новое следствие
+гейта. Далее: `blob:`/`data:` тела `<track>` (читаются локально из
+object-URL-стора, до сети не доходят вовсе — гейтится только сетевая ветка
+`readTrackBody`); MSE/`srcObject` (в этом движке нет); `<video poster>`
+(по CSP3 это `img-src`, не `media-src` — отдельная поверхность, не тронута);
+директивы кроме `script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`/
+`frame-src`/`object-src`/`media-src` (`manifest-src`/`font-src`/`child-src`/…);
+`frame-src` top-level; `frame-ancestors`; `report-to`; hash-источники;
+честная независимая проверка заголовка и `<meta>`; медиа внутри `<iframe>` —
+`document_csp_policy` в `page_pipeline.rs::parse_and_layout` строится только
+для top-level документа, подфрейм получает свой `HttpClient` отдельно
+(`frames.rs`), не тронутый этим срезом.
