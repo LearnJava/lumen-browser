@@ -216,10 +216,8 @@ A/B по двум категориям WPT (dev-release, Windows, бинарни
 
 ### Остаток
 
-- `toggleEvent.html` остаётся TIMEOUT из-за одного подтеста: `<details open>`
-  внутри `new DOMParser().parseFromString(...)`. Такой документ не проходит ни
-  через хук записи атрибутов, ни через скан конца разбора — заведено
-  [BUG-919](BUG-919-OPEN.md).
+- Остаток `toggleEvent.html` — `<details open>` внутри
+  `new DOMParser().parseFromString(...)` — [BUG-919](BUG-919-FIXED.md), закрыт 2026-09-18.
 - `beforetoggle` у `<details>` не диспатчится вовсе (у popover'а — есть):
   `details-toggle-source.html` и `popover-toggle-source.html` упираются в
   отсутствующий `event.source` и `command`-атрибуты.

@@ -475,6 +475,68 @@ fn details_parser_open_scan_fires_once() {
                  log.length === 1 && log[0] === 'closed>open'"));
 }
 
+/// BUG-919: exclusivity (HTML LS §4.11.1.1) is a *connection*-time question,
+/// not just a write-time one. Two `<details name=x open>` built detached and
+/// only connected to each other via `appendChild(fragment)` never had a
+/// chance to conflict at write time — neither was in the document yet — so
+/// the first-write-time check found nothing (`details-name-exclusivity-
+/// fragment-insertion.html` in WPT).
+#[test]
+fn details_fragment_insertion_closes_detached_open_sibling() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    assert!(bool_eval(&rt,
+        "var container = document.createElement('div'); document.body.appendChild(container); \
+                 var frag = document.createDocumentFragment(); \
+                 var a = document.createElement('details'); \
+                 a.setAttribute('name', 'grp2'); a.setAttribute('open', ''); \
+                 var b = document.createElement('details'); \
+                 b.setAttribute('name', 'grp2'); b.setAttribute('open', ''); \
+                 frag.appendChild(a); frag.appendChild(b); \
+                 container.appendChild(frag); \
+                 a.hasAttribute('open') === true && b.hasAttribute('open') === false"));
+}
+
+/// BUG-919 remainder: `innerHTML =` parses with the native HTML parser
+/// directly (never the JS attribute-write hook, exactly like the page's own
+/// initial parse), so a `<details open>` it writes owes the same end-of-parse
+/// `toggle` the ready-state scan already pays for markup the shell parsed.
+#[test]
+fn details_inner_html_open_fires_toggle() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    assert!(bool_eval(&rt,
+        "var container = document.createElement('div'); document.body.appendChild(container); \
+                 container.innerHTML = '<details id=\"fresh\" open></details>'; \
+                 var el = document.getElementById('fresh'); \
+                 var log = []; \
+                 el.addEventListener('toggle', function(e) { log.push(e.oldState + '>' + e.newState); }); \
+                 _lumen_tick_timers(); \
+                 log.length === 1 && log[0] === 'closed>open' && el.open === true"));
+}
+
+/// BUG-919: the virtual document `DOMParser.parseFromString` builds has no
+/// native node behind it at all — its own tokenizer's `setAttribute` is a
+/// plain JS object write, never `_lumen_set_attr` — so it needs its own copy
+/// of the "queue a details toggle event task" step (`dom_parser.rs`'s
+/// `_vDetailsOpenScan`). Queued, not synchronous, matching HTML LS and
+/// `toggleEvent.html`'s own parser subtest, which attaches `ontoggle` right
+/// after `parseFromString` returns.
+#[test]
+fn dom_parser_details_open_fires_toggle_task_not_sync() {
+    let rt = v8_runtime_with_dom(make_details_doc());
+    let during = rt
+        .eval(
+            "var log = null; \
+             var doc = new DOMParser().parseFromString('<details open></details>', 'text/html'); \
+             var el = doc.querySelector('details'); \
+             el.ontoggle = function(e) { log = e.target.open; }; \
+             log",
+        )
+        .unwrap();
+    assert_eq!(during, lumen_core::JsValue::Null);
+    let after = rt.eval("log").unwrap();
+    assert_eq!(after, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn dialog_show_sets_open() {
     let rt = v8_runtime_with_dom(make_details_doc());
