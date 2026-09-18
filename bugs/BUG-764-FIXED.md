@@ -1,6 +1,6 @@
 # BUG-764 — Роли DPUB-ARIA (`doc-*`, 41 штука) не распознаются, откатываются к Generic
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-18 (P3)
 **Компонент:** a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`, `AXRole` enum;
 потребитель — `crates/engine/a11y/src/lib.rs::resolve_role`)
 **Найден:** P3, при закрытии [BUG-398](BUG-398-FIXED.md) 2026-08-11 — по прямому
@@ -56,6 +56,63 @@ Recommendation, словарь `doc-*` для digital-publishing/EPUB-семан
    пришлось учесть в BUG-398.
 4. Объём (41 роль + платформенные ветки) заметно больше, чем у BUG-398 — стоит
    рассмотреть таблицу-константу вместо ручных веток `eq_ignore_ascii_case`.
+
+## Фикс
+
+Все 41 варианта DPUB-ARIA добавлены в `AXRole` (`roles.rs`) с `as_str()`/`parse()`,
+именование `DocXxx` из `doc-xxx`. AT-маппинг извлечён не «по смыслу», а разбором
+всех 39 фикстур `tests/wpt/dpub-aam/manual/doc-*-manual.html` (единый Python-скрипт,
+парсинг `ATTAcomm`-JSON: поля `ATK.role`, `AXAPI.AXRole`/`AXSubrole`, `IAccessible2.role`,
+`UIA.ControlType`) — сгруппировано по фактическим суперклассам:
+`landmark`-регион (16 ролей), `landmark`-навигация (3: `doc-index`/`doc-pagelist`/`doc-toc`),
+`section` (8), `note` (2: `doc-notice`/`doc-tip`), `footnote` (1), `link` (4:
+`doc-backlink`/`doc-biblioref`/`doc-glossref`/`doc-noteref`), `listitem`-подобные
+депрекированные (2: `doc-biblioentry`/`doc-endnote`), `img` (`doc-cover`),
+`heading` (`doc-subtitle`), `separator` (`doc-pagebreak`).
+
+`doc-pagefooter`/`doc-pageheader` фикстур не имеют (только в `role/roles.html`,
+подтверждено: `grep -rn "pagefooter|pageheader" tests/wpt/dpub-aam/` не находит
+их ни в одном `manual/*.html`) — AAM для них пока не описан отдельно. Взяты как
+generic sectioning-контейнер (тот же MSAA/transparency-класс, что и `section`-роли);
+если апстрим фикстуры появятся, значения нужно будет свериться заново.
+
+MSAA-маппинг (`platform/windows.rs::ax_role_to_msaa`) — по тем же группам:
+container-роли (32 штуки, все `landmark`/`section`/`note`/`footnote`/pagefooter/pageheader)
+→ `ROLE_SYSTEM_GROUPING` (тот же упрощённый маппинг, что уже используют
+WAI-ARIA landmark-роли — своих `ROLE_SYSTEM_*` под `IA2_ROLE_LANDMARK`/`SECTION`/
+`NOTE`/`FOOTNOTE` в Windows MSAA нет), `link`-роли → `ROLE_SYSTEM_LINK`,
+`doc-biblioentry`/`doc-endnote` → `ROLE_SYSTEM_LISTITEM`, `doc-cover` →
+`ROLE_SYSTEM_GRAPHIC`, `doc-subtitle` → `ROLE_SYSTEM_COLUMNHEADER` (тот же
+условный «ближайший вариант», что уже применяется к `AXRole::Heading`),
+`doc-pagebreak` → `ROLE_SYSTEM_SEPARATOR`.
+
+Прозрачность (`lib.rs::build_node`, п.3 заявки): 32 container-роли (все, кроме
+4 `link`, 2 `listitem`-подобных, `doc-cover`, `doc-subtitle`, `doc-pagebreak`)
+добавлены в список прозрачных ролей рядом с `Group`/`GraphicsObject` — без этого
+`<div role="doc-bibliography"><div role="listitem">` ронял бы вложенный `listitem`
+в `Generic` (у `<div>` implicit-роль не зависит от контекста, а
+`is_role_valid_in_context` требовал бы прямого родителя `List`).
+
+Контекстные ограничения (`is_role_valid_in_context`) для новых ролей не добавлялись —
+спека не даёт для них WPT-фикстуры с проверкой родителя, а существующая таблица
+ограничивает только те роли, для которых такая проверка уже была нужна раньше
+(симметрично с тем, как это сделано для Graphics ARIA в BUG-398).
+
+**Тесты** (`cargo test -p lumen-a11y` — 143 интеграционных + 26 юнит, зелёные):
+4 новых в `tests/cases/ax_tree.rs` — `doc-chapter`/`doc-footnote` на реальной
+разметке из симптома заявки, регистронезависимость токена, round-trip
+`as_str()` → `parse()` по всем 41 вариантам (с проверкой, что их ровно 41),
+прозрачность `doc-bibliography` для вложенного `listitem` (тот же
+дифференциальный паттерн, что у аналогичного теста для `graphics-object`
+в BUG-398).
+
+**Гейт:** `cargo clippy -p lumen-a11y --all-targets -- -D warnings` — чисто.
+`scripts/scoped-test.sh` — единственный красный тест,
+`cases::snapshot_cpu::cpu_snapshots_match_references` (7 файлов:
+`55-text-rendering`/`57-canvas-2d`/`32-list-markers`/`34-forms`/
+`45-multiple-backgrounds`/`51-scrollbar-rendering`/`1000000-final`) — известный
+несвязанный дрейф CPU-эталонов на `main` (см. BUG-1008), a11y-роли на
+растеризацию не влияют.
 
 ## Связанные
 

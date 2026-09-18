@@ -321,6 +321,56 @@ pub fn ax_role_to_msaa(role: AXRole) -> u32 {
         AXRole::GraphicsObject   => 0x001C, // ROLE_SYSTEM_GROUPING
         AXRole::GraphicsSymbol   => 0x0028, // ROLE_SYSTEM_GRAPHIC
 
+        // ── DPUB-ARIA (W3C DPUB-ARIA Recommendation, `doc-*`) ──────────────────
+        // Values derived from the vendored ATTAcomm fixtures
+        // (`tests/wpt/dpub-aam/manual/doc-*-manual.html`): landmark/section/note/
+        // footnote superclasses all resolve to a plain container on MSAA (Lumen
+        // has no ROLE_SYSTEM_* equivalent for IA2_ROLE_LANDMARK/SECTION/NOTE/
+        // FOOTNOTE — same simplification already used for the WAI-ARIA landmark
+        // roles above). doc-pagefooter/doc-pageheader have no AAM fixture yet;
+        // treated as the same generic container as the section-superclass roles.
+        AXRole::DocAcknowledgments
+        | AXRole::DocAfterword
+        | AXRole::DocAppendix
+        | AXRole::DocBibliography
+        | AXRole::DocChapter
+        | AXRole::DocConclusion
+        | AXRole::DocCredits
+        | AXRole::DocEndnotes
+        | AXRole::DocEpilogue
+        | AXRole::DocErrata
+        | AXRole::DocForeword
+        | AXRole::DocGlossary
+        | AXRole::DocIndex
+        | AXRole::DocIntroduction
+        | AXRole::DocPagelist
+        | AXRole::DocPart
+        | AXRole::DocPreface
+        | AXRole::DocPrologue
+        | AXRole::DocToc
+        | AXRole::DocAbstract
+        | AXRole::DocColophon
+        | AXRole::DocCredit
+        | AXRole::DocDedication
+        | AXRole::DocEpigraph
+        | AXRole::DocExample
+        | AXRole::DocPullquote
+        | AXRole::DocQna
+        | AXRole::DocNotice
+        | AXRole::DocTip
+        | AXRole::DocFootnote
+        | AXRole::DocPagefooter
+        | AXRole::DocPageheader => 0x001C, // ROLE_SYSTEM_GROUPING
+        AXRole::DocBacklink
+        | AXRole::DocBiblioref
+        | AXRole::DocGlossref
+        | AXRole::DocNoteref  => 0x001E, // ROLE_SYSTEM_LINK
+        AXRole::DocBiblioentry
+        | AXRole::DocEndnote  => 0x0022, // ROLE_SYSTEM_LISTITEM
+        AXRole::DocCover      => 0x0028, // ROLE_SYSTEM_GRAPHIC
+        AXRole::DocSubtitle   => 0x0019, // ROLE_SYSTEM_COLUMNHEADER (closest match, mirrors AXRole::Heading)
+        AXRole::DocPagebreak  => 0x0015, // ROLE_SYSTEM_SEPARATOR
+
         // ── Fallback ─────────────────────────────────────────────────────────
         AXRole::Generic     => 0x001C,
         AXRole::None        => 0x001C,
