@@ -229,6 +229,24 @@ pub(crate) fn frame_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
     !policy.fetch_directive_allows(&CspDirective::FrameSrc, &parsed, self_origin)
 }
 
+/// `true` if `media-src` (or `default-src`) forbids fetching `url` as a
+/// `<track src>` WebVTT body — срез 17, same fetch-gate shape as
+/// [`img_src_blocked`]/[`style_src_blocked`]/[`frame_src_blocked`].
+///
+/// This is the shell's half of the `media-src` gate, and it exists because
+/// `<track>` bodies are fetched **twice** by this engine from two unrelated
+/// places: the JS shim's own `readTrackBody` (gated by the native
+/// `_lumen_check_media_src` binding, `lumen-network`) and — before any JS runs
+/// — `tracks::load_video_tracks`, the shell's overlay snapshot, which has a
+/// `&Document` and so is gated here instead. Gating only the shim's half left
+/// the bytes going out anyway.
+pub(crate) fn media_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    !policy.fetch_directive_allows(&CspDirective::MediaSrc, &parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,5 +422,45 @@ mod tests {
     fn frame_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("frame-src 'none'");
         assert!(!frame_src_blocked(&p, "not a url", None));
+    }
+
+    /// GAP-CSPENF срез 17: `media-src` against the shell's `<track src>` fetch.
+    #[test]
+    fn no_media_src_allows_track_fetch() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(!media_src_blocked(&p, "https://example.com/cap.vtt", None));
+    }
+
+    #[test]
+    fn media_src_none_blocks_track_fetch() {
+        let p = lumen_network::csp::parse_csp_header("media-src 'none'");
+        assert!(media_src_blocked(&p, "https://example.com/cap.vtt", None));
+    }
+
+    #[test]
+    fn media_src_allowed_host_passes() {
+        let p = lumen_network::csp::parse_csp_header("media-src cdn.example.com");
+        assert!(!media_src_blocked(&p, "https://cdn.example.com/cap.vtt", None));
+        assert!(media_src_blocked(&p, "https://other.example.com/cap.vtt", None));
+    }
+
+    #[test]
+    fn media_src_default_src_fallback_blocks() {
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(media_src_blocked(&p, "https://example.com/cap.vtt", None));
+    }
+
+    #[test]
+    fn media_src_unparseable_url_not_blocked() {
+        let p = lumen_network::csp::parse_csp_header("media-src 'none'");
+        assert!(!media_src_blocked(&p, "not a url", None));
+    }
+
+    /// A stricter sibling directive must not stand in for `media-src`: a page
+    /// that locks down `img-src` only has said nothing about its media.
+    #[test]
+    fn img_src_none_does_not_block_media() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'; media-src *");
+        assert!(!media_src_blocked(&p, "https://example.com/cap.vtt", None));
     }
 }

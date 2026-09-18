@@ -944,6 +944,20 @@ function _lumen_fire_object_src_violation(csp) {
     }
 }
 
+// GAP-CSPENF срез 17: same shape again, for `media-src` — the three media
+// shims (`<video>`/`<audio>` in `video_bindings.rs`/`audio_element.rs`, and
+// `<track>`'s `readTrackBody`) read the shared
+// `_lumen_media_src_last_csp_block` side channel and hand the
+// `[blockedUri, originalPolicy]` pair (or `null`) here. Lives in the common
+// shim rather than in any one of those three JS strings precisely because all
+// three call it.
+function _lumen_fire_media_src_violation(csp) {
+    if (!csp || csp.length !== 2) return;
+    if (typeof _lumen_dispatch_csp_violation === 'function') {
+        _lumen_dispatch_csp_violation('media-src', csp[0], csp[1], 'enforce');
+    }
+}
+
 function _perf_rt_record_fetch(url, initiator, startMs, status) {
     if (typeof _lumen_record_resource_timing !== 'function') return;
     var len = 0;
