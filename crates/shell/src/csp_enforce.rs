@@ -254,6 +254,18 @@ pub(crate) fn media_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
     !policy.fetch_directive_allows(&CspDirective::MediaSrc, &parsed, self_origin)
 }
 
+/// `true` if `font-src` (or `default-src`) forbids fetching `url` as an
+/// `@font-face url()` body — срез 19, same fetch-gate shape as
+/// [`img_src_blocked`]/[`media_src_blocked`]: absence of a policy is not
+/// checked here (the caller only calls this when a policy exists), and a
+/// `url` that fails to parse is treated as allowed.
+pub(crate) fn font_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    !policy.fetch_directive_allows(&CspDirective::FontSrc, &parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +481,44 @@ mod tests {
     fn img_src_none_does_not_block_media() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'; media-src *");
         assert!(!media_src_blocked(&p, "https://example.com/cap.vtt", None));
+    }
+
+    /// GAP-CSPENF срез 19: `font-src` against `@font-face url()`.
+    #[test]
+    fn no_font_src_allows_font_fetch() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(!font_src_blocked(&p, "https://example.com/font.woff2", None));
+    }
+
+    #[test]
+    fn font_src_none_blocks_font_fetch() {
+        let p = lumen_network::csp::parse_csp_header("font-src 'none'");
+        assert!(font_src_blocked(&p, "https://example.com/font.woff2", None));
+    }
+
+    #[test]
+    fn font_src_allowed_host_passes() {
+        let p = lumen_network::csp::parse_csp_header("font-src cdn.example.com");
+        assert!(!font_src_blocked(&p, "https://cdn.example.com/font.woff2", None));
+        assert!(font_src_blocked(&p, "https://other.example.com/font.woff2", None));
+    }
+
+    #[test]
+    fn font_src_default_src_fallback_blocks() {
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(font_src_blocked(&p, "https://example.com/font.woff2", None));
+    }
+
+    #[test]
+    fn font_src_unparseable_url_not_blocked() {
+        let p = lumen_network::csp::parse_csp_header("font-src 'none'");
+        assert!(!font_src_blocked(&p, "not a url", None));
+    }
+
+    /// A stricter sibling directive must not stand in for `font-src`.
+    #[test]
+    fn media_src_none_does_not_block_font() {
+        let p = lumen_network::csp::parse_csp_header("media-src 'none'; font-src *");
+        assert!(!font_src_blocked(&p, "https://example.com/font.woff2", None));
     }
 }
