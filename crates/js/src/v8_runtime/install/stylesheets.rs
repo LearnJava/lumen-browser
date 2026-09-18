@@ -154,19 +154,37 @@ pub(crate) fn install_stylesheets(
     // (`Arc::make_mut`, copy-on-write since `cssom_rules()` readers elsewhere
     // hold a `&Stylesheet` only for the duration of one call, never a clone
     // of the `Arc`) — **not** connected to the page cascade: `stylesheet_nodes`
-    // is rebuilt wholesale from each `<style>`/`<link>` node's own DOM text on
-    // every relayout (`crates/shell/src/stylesheets.rs::build_stylesheet_node_registry`),
-    // so an inserted/deleted rule here is visible to CSSOM reads until the
-    // next relayout silently discards it — same class of gap CSSOM-5 срез 1
-    // documented for constructed sheets before срез 2 wired
-    // `adoptedStyleSheets` into the cascade; no vendored test in this bug's
+    // is built by `crates/shell/src/stylesheets.rs::build_stylesheet_node_registry`,
+    // whose only caller is `build_page_cascade` (`page_pipeline.rs:464`, plus
+    // at most one re-run at `:908` when parse-time scripts changed the
+    // `<style>`/`<link>` set). CSSOM-8 ревизия 2026-09-18 corrected what this
+    // comment used to claim: the interactive relayout path
+    // (`crates/shell/src/relayout.rs::refresh_dynamic_css`) never touches
+    // `stylesheet_nodes`, so a mutation made after load is NOT "discarded by
+    // the next relayout" — it survives here indefinitely. The real gap is the
+    // other direction, the mutation never reaching what layout reads:
+    // `cascade.sheet` is an INDEPENDENT parse of one concatenated string
+    // (`imports_prefix` + every `<style>`'s text + `linked`,
+    // `page_pipeline.rs:421-457`), and `getComputedStyle`'s same-tick flush
+    // (`crates/js/src/v8_runtime/style_flush.rs::maybe_flush`) re-lays out
+    // against the `Arc<Stylesheet>` the shell last pushed, behind a gate that
+    // only reads `dom_dirty`/`never_flushed`/`focus_changed` — a sheet
+    // revision bump is invisible to it. Closing this needs both a cascade that
+    // can absorb a per-node CSSOM edit and a new same-tick invalidation
+    // channel into that gate; `adoptedStyleSheets` (CSSOM-5 срез 2) has the
+    // same unclosed same-tick half. See `ROADMAP.md`'s CSSOM-8 line. No
+    // vendored test in this bug's
     // scope needs the layout effect, only the correct `cssRules`/exception
     // behaviour. `_lumen_stylesheet_rule_set_style`/`_lumen_stylesheet_
     // media_child_set_style` below (CSSOM-8, BUG-518 срез 9) share this exact
     // limitation — a same-tick `getComputedStyle()` after `.style.color = …`
-    // still answers from the pre-mutation cascade; `mixin-invalidation.
-    // tentative.html` needs that gap closed (a follow-up срез), not just the
-    // setter existing.
+    // still answers from the pre-mutation cascade. Note that closing it would
+    // NOT flip `mixin-invalidation.tentative.html`: none of that file's three
+    // subtests addresses a top-level or `@media`-child rule — two mutate a
+    // rule inside a `@mixin`'s `@result`, and the third calls
+    // `CSSStyleRule.insertRule` (nested `@apply` into a style rule's body).
+    // All three need nested-rule CSSOM addressing first, which this registry
+    // has no address for.
     {
         let s = Arc::clone(&stylesheet_nodes);
         reg!(scope, ctx, store, "_lumen_stylesheet_insert_rule", move |idx: u32, rule_text: String, index: u32| -> i32 {
