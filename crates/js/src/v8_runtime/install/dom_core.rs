@@ -397,6 +397,13 @@ pub(crate) fn install_node_lookup(
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
                     let nid = NodeId::from_index(node_id as usize);
+                    // BUG-919: `_lumen_subtree_has_details`'s insertion-hook
+                    // pre-filter (`web_api_shim_tail_b.js`) can reach this
+                    // with a stale/foreign id — same class of input as
+                    // BUG-986's `_lumen_append_child` guard.
+                    if !doc.contains_id(nid) {
+                        return None;
+                    }
                     query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
                 })
             }
@@ -409,6 +416,10 @@ pub(crate) fn install_node_lookup(
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
                     let nid = NodeId::from_index(node_id as usize);
+                    // BUG-919: same stale-id guard as `_lumen_query_selector_scoped` above.
+                    if !doc.contains_id(nid) {
+                        return Vec::new();
+                    }
                     query_all_within(&doc, nid, &sel)
                         .into_iter()
                         .map(|n| n.index() as u32)

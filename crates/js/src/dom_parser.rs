@@ -72,6 +72,40 @@ function VNode(nodeType, doc) {
   this.childNodes  = [];
 }
 
+// Minimal EventTarget (BUG-919): the virtual tree has no full event model
+// (Phase 0), but `<details open>` written by this module's own tokenizer
+// (`setAttribute`, not the native `_lumen_set_attr`) owes a `toggle` the same
+// way the live page's parser does, and a page listens for it via
+// `el.ontoggle =` / `addEventListener` on the element it got back — so those
+// need to actually work for this one event, not stay a no-op stub.
+VNode.prototype.addEventListener = function(type, fn) {
+  if (typeof fn !== 'function') return;
+  if (!this._listeners) this._listeners = Object.create(null);
+  if (!this._listeners[type]) this._listeners[type] = [];
+  if (this._listeners[type].indexOf(fn) === -1) this._listeners[type].push(fn);
+};
+VNode.prototype.removeEventListener = function(type, fn) {
+  if (!this._listeners || !this._listeners[type]) return;
+  var idx = this._listeners[type].indexOf(fn);
+  if (idx !== -1) this._listeners[type].splice(idx, 1);
+};
+VNode.prototype.dispatchEvent = function(evt) {
+  if (!evt) return true;
+  evt.target = this;
+  evt.currentTarget = this;
+  var onHandler = this['on' + evt.type];
+  if (typeof onHandler === 'function') {
+    try { onHandler.call(this, evt); } catch (e) { /* Phase 0: no window.onerror path here */ }
+  }
+  if (this._listeners && this._listeners[evt.type]) {
+    var list = this._listeners[evt.type].slice();
+    for (var i = 0; i < list.length; i++) {
+      try { list[i].call(this, evt); } catch (e) { /* ditto */ }
+    }
+  }
+  return true;
+};
+
 // ── VElement ─────────────────────────────────────────────────────────────────
 function VElement(tagName, doc, isXML) {
   VNode.call(this, ELEMENT_NODE, doc);
@@ -122,10 +156,19 @@ Object.defineProperty(VElement.prototype, 'innerHTML', {
       frag.childNodes[i].parentNode = this;
       this.childNodes.push(frag.childNodes[i]);
     }
+    _vDetailsOpenScan(this);
   }
 });
 Object.defineProperty(VElement.prototype, 'outerHTML', {
   get: function() { return _vSerializeElement(this, false); }
+});
+// Reflected `open` boolean attribute (HTML LS §4.11.1 <details>/§4.11.7
+// <dialog>) — mirrors the shared getter/setter the native shim installs on
+// every real element (`web_api_shim_mid.js`), needed here so `e.target.open`
+// reads true after the parser's own `<details open>` is scanned below.
+Object.defineProperty(VElement.prototype, 'open', {
+  get: function() { return this.hasAttribute('open'); },
+  set: function(v) { if (v) this.setAttribute('open', ''); else this.removeAttribute('open'); }
 });
 Object.defineProperty(VElement.prototype, 'children', {
   get: function() { return this.childNodes.filter(function(n) { return n.nodeType === ELEMENT_NODE; }); }
@@ -227,10 +270,8 @@ VElement.prototype.closest               = function(sel) {
   }
   return null;
 };
-// Convenience: dispatchEvent / addEventListener no-ops (Phase 0)
-VElement.prototype.dispatchEvent      = function() { return true; };
-VElement.prototype.addEventListener   = function() {};
-VElement.prototype.removeEventListener = function() {};
+// dispatchEvent / addEventListener / removeEventListener: inherited from
+// `VNode.prototype` above (BUG-919) — no override here.
 
 // ── VText ─────────────────────────────────────────────────────────────────────
 function VText(data, doc) {
@@ -699,6 +740,7 @@ function _vBuildDocument(html, mimeType) {
   doc.head = headEl;
   doc.body = bodyEl;
   htmlEl.parentNode = doc;
+  _vDetailsOpenScan(doc);
   return doc;
 }
 
@@ -711,6 +753,41 @@ function _vParseFragment(html, doc) {
   frag.childNodes = result.childNodes;
   for (var i = 0; i < frag.childNodes.length; i++) frag.childNodes[i].parentNode = frag;
   return frag;
+}
+
+// ── <details open> toggle (BUG-919) ──────────────────────────────────────────
+// HTML LS §4.11.1 «queue a details toggle event task» — dispatched later, not
+// synchronously, which is why `toggleEvent.html`'s parser subtest can attach
+// `ontoggle` right after `parseFromString`/`innerHTML =` returns and still
+// observe it.
+function _vScheduleTask(fn) {
+  if (typeof queueMicrotask === 'function') { queueMicrotask(fn); return; }
+  if (typeof setTimeout === 'function') { setTimeout(fn, 0); return; }
+  fn();
+}
+
+// `root` is any node with `.childNodes` — a freshly built VDocument or a
+// fragment from `_vParseFragment` (innerHTML). Scans for `<details open>`
+// this module's own tokenizer wrote (`el.setAttribute`, never the native
+// `_lumen_set_attr`, so the live page's attribute-change-steps hook in
+// `web_api_shim_tail_b.js` never sees it either) and queues the one `toggle`
+// each of them owes. `__toggleOwed__` keeps a re-scan (e.g. a second
+// `innerHTML =` touching the same subtree) from queuing a second one.
+function _vDetailsOpenScan(root) {
+  var all = _vGetByTag(root, 'details');
+  for (var i = 0; i < all.length; i++) {
+    var el = all[i];
+    if (!el.hasAttribute('open') || el.__toggleOwed__) continue;
+    el.__toggleOwed__ = true;
+    (function(target) {
+      _vScheduleTask(function() {
+        var evt = typeof ToggleEvent === 'function'
+          ? new ToggleEvent('toggle', { bubbles: false, cancelable: false, oldState: 'closed', newState: 'open' })
+          : { type: 'toggle', bubbles: false, cancelable: false, oldState: 'closed', newState: 'open' };
+        target.dispatchEvent(evt);
+      });
+    })(el);
+  }
 }
 
 // ── Serialization helpers ─────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ CAPABILITIES.md	bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
 CAPABILITIES.md	bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 CAPABILITIES.md	bugs/BUG-699-OPEN.md	stale-status-suffix	bugs/BUG-699-FIXED.md
 CAPABILITIES.md	bugs/BUG-744-OPEN.md	stale-status-suffix	bugs/BUG-744-FIXED.md
+CAPABILITIES.md	bugs/BUG-752-OPEN.md	stale-status-suffix	bugs/BUG-752-FIXED.md
 CSS-SPECS.md	../bugs/BUG-1009-FIXED.md	wrong-relative-path	bugs/BUG-1009-FIXED.md
 CSS-SPECS.md	../bugs/BUG-897-OPEN.md	wrong-relative-path	bugs/BUG-897-OPEN.md
 ROADMAP.md	bugs/BUG-1026-OPEN.md	stale-status-suffix	bugs/BUG-1026-FIXED.md
@@ -346,5 +347,6 @@ docs/wpt-vendor-notes/window-management.md	../../bugs/BUG-667-OPEN.md	stale-stat
 docs/wpt/pass-rate.md	../../bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
 subsystems/html-parser.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 subsystems/js.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
+subsystems/js.md	../bugs/BUG-752-OPEN.md	stale-status-suffix	bugs/BUG-752-FIXED.md
 subsystems/shell.md	../bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
 subsystems/shell.md	../bugs/BUG-744-OPEN.md	stale-status-suffix	bugs/BUG-744-FIXED.md

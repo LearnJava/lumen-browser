@@ -3743,6 +3743,72 @@ function _lumen_details_open_scan() {
     }
 }
 
+// BUG-919: exclusivity (HTML LS §4.11.1.1) is a *connection*-time question,
+// independent of whether a `toggle` is already accounted for. A `<details
+// open name=x>` built detached (`createElement` + `setAttribute('open','')`)
+// runs the attribute-change-steps hook immediately, while `open`/`false —
+// `_lumen_details_ensure_exclusivity` only sees `document.getElementsByTagName`,
+// which a detached node never appears in, so no conflict is found and the
+// element is left `_details_known_open = true` before it ever had a real
+// chance to conflict. Appending such an element (or a fragment full of them)
+// into a live document never re-asks the question, because
+// `_lumen_details_open_scan` above skips anything already in that map. This
+// re-asks it for every currently-connected open `<details>`, regardless of
+// that map — `_lumen_details_ensure_exclusivity` only *acts* on a genuine
+// name conflict, and closing a loser runs the change steps once for it, so
+// re-running this on an already-settled document is a no-op.
+function _lumen_details_connected_scan() {
+    var all;
+    try { all = document.getElementsByTagName('details'); } catch (e) { return; }
+    if (!all) return;
+    for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el || el.__nid__ === undefined) continue;
+        var nid = el.__nid__;
+        if (_lumen_get_attr(nid, 'open') === undefined) continue;
+        _lumen_details_ensure_exclusivity(nid);
+    }
+}
+
+// Cheap pre-filter for the insertion hooks below: `<details>` is rare, and
+// `_lumen_details_open_scan`/`_lumen_details_connected_scan` each walk the
+// whole document, so callers only pay for that when the just-inserted
+// subtree could plausibly contain one.
+function _lumen_subtree_has_details(nid) {
+    if (nid === undefined || nid === null) return false;
+    try {
+        var tag = _lumen_get_tag_name(nid);
+        if (tag !== null && tag !== undefined && String(tag).toLowerCase() === 'details') return true;
+        return _lumen_u2n(_lumen_query_selector_scoped(nid, 'details')) !== null;
+    } catch (e) { return false; }
+}
+
+// Same two steps owed by every insertion path that never touches the
+// attribute-write hook above: native `appendChild`/`insertBefore` (a fragment
+// built detached, e.g. `details-name-exclusivity-fragment-insertion.html`)
+// and `innerHTML =` (markup the native HTML parser wrote directly, e.g. the
+// parser-owed `toggle` case `_lumen_details_open_scan` exists for).
+var _lumen_native_append_child_details   = _lumen_append_child;
+var _lumen_native_insert_before_details  = _lumen_insert_before;
+var _lumen_native_set_inner_html_details = _lumen_set_inner_html;
+_lumen_append_child = function(parent, child) {
+    var mayHaveDetails = _lumen_subtree_has_details(child);
+    _lumen_native_append_child_details(parent, child);
+    if (mayHaveDetails) { _lumen_details_open_scan(); _lumen_details_connected_scan(); }
+};
+_lumen_insert_before = function(parent, child, reference) {
+    var mayHaveDetails = _lumen_subtree_has_details(child);
+    _lumen_native_insert_before_details(parent, child, reference);
+    if (mayHaveDetails) { _lumen_details_open_scan(); _lumen_details_connected_scan(); }
+};
+_lumen_set_inner_html = function(nid, html) {
+    _lumen_native_set_inner_html_details(nid, html);
+    if (/<details/i.test(String(html))) {
+        _lumen_details_open_scan();
+        _lumen_details_connected_scan();
+    }
+};
+
 // Called by the shell (`main.rs`, `FormClickAction::ToggleDetails`) after it has
 // flipped `open` itself on a native mouse click. The flip stays on the shell
 // side so the attribute is in the document before the relayout that follows it;
