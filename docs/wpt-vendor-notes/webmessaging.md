@@ -20,7 +20,7 @@ Also pulled in 7 out-of-category dependencies discovered via `grep -rhoE '(src|h
 
 Новый, ранее не описанный сигнал — сам `postMessage`:
 
-- [BUG-717](../../bugs/BUG-717-OPEN.md): `window.postMessage` передаёт сообщение по ссылке вместо структурного клонирования (`new MessageEvent(message)` без `structuredClone`), никогда не валидирует `targetOrigin` как абсолютный URL (молча не доставляет вместо `SyntaxError`), не поддерживает двухаргументную `WindowPostMessageOptions`-форму. `MessagePort.postMessage` в том же файле делает клонирование правильно — асимметрия одного файла.
+- [BUG-717](../../bugs/BUG-717-FIXED.md): `window.postMessage` передавал сообщение по ссылке вместо структурного клонирования, никогда не валидировал `targetOrigin` как абсолютный URL, не поддерживал двухаргументную `WindowPostMessageOptions`-форму. FIXED 2026-09-18 (P3): клонирование через `structuredClone()`, валидация `targetOrigin` (включая `SyntaxError` на непарсящийся URL), options-форма.
 - [BUG-718](../../bugs/BUG-718-FIXED.md): `BroadcastChannel.postMessage` клонировал через `JSON.stringify` вместо `structuredClone` — не бросал на 0 аргументов, не бросал `DataCloneError` на `Symbol()`. FIXED 2026-09-17 (P3): валидация клонируемости теперь идёт через `structuredClone()`; типы (`Map`/`Set`/`Date`/typed arrays) через провод всё ещё сериализуются JSON-ом — вне скоупа этого фикса.
 
 Оба находятся живьём в исполнившихся тестах (не TLS/testdriver-заглушка) — `broadcastchannel/interface.any.html` (10/13) и три файла `with-options/*.html` (`resolving broken url`/`resolving 'example.org'`/`without-ports`/`without-ports/014.html`-паттерн "structured clone vs reference").

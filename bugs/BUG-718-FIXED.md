@@ -6,7 +6,7 @@
 
 ## Симптом
 
-Тот же прогон, что и [BUG-717](BUG-717-OPEN.md)
+Тот же прогон, что и [BUG-717](BUG-717-FIXED.md)
 (`webmessaging`, 136 id, 77/136 harness OK, 82/206 сабтестов).
 `broadcastchannel/interface.any.html` (10/13 passed) даёт три сабтеста,
 не объяснимых ни TLS-гэпом, ни отсутствием browsing context:
