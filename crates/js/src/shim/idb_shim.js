@@ -540,6 +540,10 @@ function _idb_restore_store(store, snap) {
     store.name = snap.name;
     store.keyPath = snap.keyPath;
     store.autoIncrement = snap.autoIncrement;
+    // Any createIndex/deleteIndex still queued when the transaction aborted was
+    // dropped, unrun, by _idb_abort_txn_requests — its "effective schema" view
+    // (BUG-916) must not keep predicting a mutation that will now never land.
+    store._pendingIndexOps = [];
 }
 
 // Takes the transaction's undo snapshot, once, before its first mutation.
@@ -827,7 +831,7 @@ function IDBObjectStore(store, txn) {
     this.autoIncrement = store.autoIncrement;
 }
 Object.defineProperty(IDBObjectStore.prototype, 'indexNames', {
-    get: function() { return _idb_string_list(Object.keys(this._store.indexes).sort()); }
+    get: function() { return _idb_string_list(_idb_effective_index_names(this._store)); }
 });
 
 // Binary search over the store's key-sorted records array.
@@ -980,24 +984,86 @@ IDBObjectStore.prototype.clear = function() {
     var store = this._store;
     return _idb_make_request(this, this.transaction, function() { store.records = []; return undefined; });
 };
+// What `name` resolves to on `store` if every createIndex/deleteIndex already
+// queued on it but not yet delivered were applied, in call order — undefined
+// for "does not exist". Indexed DB §3.2.9/§3.2.10 make createIndex/deleteIndex
+// transaction operations: the mutation itself lands at the call's own position
+// in the request queue (see createIndex below, BUG-916), but the synchronous
+// existence checks those two methods and .index() perform must not have to
+// wait for a flush to see a mutation made earlier in the very same script.
+function _idb_effective_index(store, name) {
+    var idx = store.indexes[name];
+    var pending = store._pendingIndexOps;
+    if (pending) {
+        for (var i = 0; i < pending.length; i++) {
+            if (pending[i].name === name) idx = pending[i].idx;
+        }
+    }
+    return idx;
+}
+// Same overlay as _idb_effective_index, but for the whole name set — backs
+// IDBObjectStore.indexNames, which Indexed DB §3.2 requires to reflect a
+// createIndex/deleteIndex made earlier in the same script even though the
+// underlying mutation is queued for delivery at flush time (BUG-916).
+function _idb_effective_index_names(store) {
+    var names = Object.keys(store.indexes);
+    var pending = store._pendingIndexOps;
+    if (pending) {
+        for (var i = 0; i < pending.length; i++) {
+            var op = pending[i];
+            var at = names.indexOf(op.name);
+            if (op.idx) {
+                if (at < 0) names.push(op.name);
+            } else if (at >= 0) {
+                names.splice(at, 1);
+            }
+        }
+    }
+    return names.sort();
+}
 IDBObjectStore.prototype.createIndex = function(name, keyPath, options) {
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'createIndex allowed only during a versionchange transaction');
     name = String(name);
-    if (this._store.indexes[name]) throw _idb_error('ConstraintError', 'index already exists: ' + name);
+    var store = this._store;
+    if (_idb_effective_index(store, name)) throw _idb_error('ConstraintError', 'index already exists: ' + name);
     _idb_txn_snapshot(this.transaction);
     options = options || {};
     var idx = { name: name, keyPath: keyPath, unique: !!options.unique, multiEntry: !!options.multiEntry };
-    this._store.indexes[name] = idx;
+    if (!store._pendingIndexOps) store._pendingIndexOps = [];
+    var pendingEntry = { name: name, idx: idx };
+    store._pendingIndexOps.push(pendingEntry);
+    // The index handle exists immediately, but the schema mutation — and with
+    // it the point from which add()/put() start enforcing its uniqueness —
+    // takes effect at this call's own position in the transaction's request
+    // queue, not synchronously: a data request queued before it must still see
+    // the old schema, one queued after must see the new one (BUG-916: a later
+    // deleteIndex written after a request must not retroactively undo that
+    // request's constraint check).
+    _idb_make_request(this, this.transaction, function() {
+        store.indexes[name] = idx;
+        var i = store._pendingIndexOps.indexOf(pendingEntry);
+        if (i >= 0) store._pendingIndexOps.splice(i, 1);
+        return undefined;
+    });
     return new IDBIndex(idx, this);
 };
 IDBObjectStore.prototype.deleteIndex = function(name) {
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'deleteIndex allowed only during a versionchange transaction');
-    if (!this._store.indexes[name]) throw _idb_error('NotFoundError', 'no index named ' + name);
+    var store = this._store;
+    if (!_idb_effective_index(store, name)) throw _idb_error('NotFoundError', 'no index named ' + name);
     _idb_txn_snapshot(this.transaction);
-    delete this._store.indexes[name];
+    if (!store._pendingIndexOps) store._pendingIndexOps = [];
+    var pendingEntry = { name: name, idx: undefined };
+    store._pendingIndexOps.push(pendingEntry);
+    _idb_make_request(this, this.transaction, function() {
+        delete store.indexes[name];
+        var i = store._pendingIndexOps.indexOf(pendingEntry);
+        if (i >= 0) store._pendingIndexOps.splice(i, 1);
+        return undefined;
+    });
 };
 IDBObjectStore.prototype.index = function(name) {
-    var idx = this._store.indexes[name];
+    var idx = _idb_effective_index(this._store, name);
     if (!idx) throw _idb_error('NotFoundError', 'no index named ' + name);
     return new IDBIndex(idx, this);
 };

@@ -1,8 +1,8 @@
 # BUG-916 — IndexedDB: запрос выполняется против схемы на момент ДОСТАВКИ, а не на момент постановки в очередь
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-18 (P3)
 **Заведён:** 2026-08-25 (P1, прогоном WPT при проверке [BUG-841](BUG-841-FIXED.md))
-**Область:** `crates/js/src/dom.rs` — отложенная модель выполнения: `_idb_make_request` кладёт замыкание, `_idb_dispatch_request` выполняет его при флаше; `IDBObjectStore.prototype.createIndex`/`deleteIndex` правят `store.indexes` **синхронно**
+**Область:** `crates/js/src/shim/idb_shim.js` — отложенная модель выполнения: `_idb_make_request` кладёт замыкание, `_idb_dispatch_request` выполняет его при флаше; `IDBObjectStore.prototype.createIndex`/`deleteIndex` правят `store.indexes` **синхронно**
 **Владелец:** P1 (`lumen-js`)
 
 ## Симптом
@@ -50,3 +50,29 @@ DB §3.2.9, §3.2.10) считает `createIndex`/`deleteIndex` тоже опе
 доставке), сохраняя синхронным только возврат обёртки `IDBIndex`/
 `IDBObjectStore` — так спека и устроена: объект существует сразу, операция
 применяется в очереди.
+
+## Исправлено
+
+`createIndex`/`deleteIndex` (`crates/js/src/shim/idb_shim.js`) теперь ставят
+мутацию `store.indexes` через `_idb_make_request` — то же замыкание,
+выполняемое при доставке в FIFO-порядке транзакции, что и `add`/`put`.
+Синхронным остался только возврат обёртки `IDBIndex`/`IDBObjectStore`, как и
+требует §3.2.9/§3.2.10.
+
+Синхронные проверки существования индекса — сам `createIndex`/`deleteIndex`,
+и `.index()` — не могут ждать флаша: они должны видеть мутацию, сделанную
+раньше в том же скрипте, немедленно. Оба метода и геттер `indexNames`
+поэтому читают не `store.indexes` напрямую, а через оверлей
+`_idb_effective_index`/`_idb_effective_index_names`, который накладывает ещё
+не доставленные операции (`store._pendingIndexOps`) на `store.indexes` в
+порядке вызова.
+
+Откат транзакции (`_idb_revert_txn` → `_idb_restore_store`) сбрасывает
+`_pendingIndexOps` вместе с остальной схемой — операция, для которой
+транзакция откатилась до доставки, никогда не применяется и не должна
+продолжать маячить в оверлее.
+
+Новый тест `idb_create_index_and_delete_index_are_ordered_with_data_requests`
+(`crates/js/tests/cases/indexed_db.rs`) воспроизводит сценарий из заявки
+внутри реального `upgradeneeded` (createIndex/deleteIndex разрешены только на
+versionchange-транзакции).
