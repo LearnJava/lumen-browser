@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 292,
-  "fixed": 711,
+  "open": 288,
+  "fixed": 715,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8517,34 +8517,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-917": {
-   "status": "open",
-   "title": "IndexedDB: любой «грязный» флаш пересериализует ВЕСЬ снапшот баз происхождения и перезеркаливает ВСЮ схему, O(все базы × все хранилища × все индексы) — инкремен…",
-   "component": "js (`crates/js/src/dom.rs` — `_idb_persist_if_dirty` в конце `_lumen_idb_flush`; `_idb_serialize` — `JSON.stringify` всего `_idb_databases`; `_idb_persist_schema` — обход всех баз/хранилищ/индексов с отдельным `_lumen_idb_schema_op` на строку)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-919": {
-   "status": "open",
-   "title": "`<details open>` внутри документа от `DOMParser.parseFromString` (и поддерева из `innerHTML`) не порождает `toggle`: у шагов изменения атрибута два входа — обёр…",
-   "component": "js (`crates/js/src/dom.rs` — `_lumen_details_open_scan()` зовётся только из `_lumen_apply_ready_state('interactive')`; обёртки над `_lumen_set_attr`/`_lumen_remove_attr` там же)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-920": {
-   "status": "open",
-   "title": "`iframe.src` отдаёт атрибут дословно (`/child.html`) вместо разрешённого URL, хотя IDL объявляет `[ReflectURL]`: корректная строка рефлексии стоит на прототипе,…",
-   "component": "js (`crates/js/src/iframe_element.rs` — `patchIframeElement`/`reflectAttr` ставит собственные свойства на элемент) поверх `crates/js/src/dom.rs` (`_lumen_install_reflection(HTMLIFrameElement.prototype, [['src','src','url'], …])`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-921": {
-   "status": "open",
-   "title": "Имя вложенного browsing context не хранится в контексте: `window.name` ребёнка на каждое обращение перечитывает атрибут `name` узла-хоста, поэтому правка атрибу…",
-   "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-922": {
    "status": "open",
    "title": "Ни одной из тринадцати констант типов узла нет ни на интерфейсе `Node`, ни на самих узлах: `Node.ELEMENT_NODE`/`Node.TEXT_NODE`/`el.ELEMENT_NODE` — `undefined`,…",
@@ -14130,6 +14102,34 @@
    "component": "js (`crates/js/src/dom.rs` — отложенная модель: `_idb_make_request` кладёт замыкание, `_idb_dispatch_request` выполняет его при флаше, тогда как `IDBObjectStore.prototype.createIndex`/`deleteIndex` правят `store.indexes` синхронно)",
    "date": "2026-09-18",
    "debtor": false
+  },
+  "BUG-917": {
+   "status": "fixed",
+   "title": "IndexedDB: любой «грязный» флаш пересериализовывал ВЕСЬ снапшот баз происхождения и перезеркаливал ВСЮ схему, O(все базы × все хранилища × все индексы). Сделал…",
+   "component": "js (`crates/js/src/shim/idb_shim.js` — `_idb_persist_if_dirty`/`_idb_serialize`/`_idb_persist_schema`)",
+   "date": "2026-09-18",
+   "debtor": false
+  },
+  "BUG-919": {
+   "status": "fixed",
+   "title": "`<details open>` внутри документа от `DOMParser.parseFromString` (и поддерева из `innerHTML`) не порождал `toggle`: у шагов изменения атрибута два входа — обёрт…",
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_details_open_scan()`; `crates/js/src/dom_parser.rs`; `crates/js/src/shim/web_api_shim_tail_b.js`; `crates/js/src/v8_runtime/install/dom_core.rs`)",
+   "date": "2026-09-18",
+   "debtor": false
+  },
+  "BUG-920": {
+   "status": "fixed",
+   "title": "`iframe.src` отдаёт атрибут дословно (`/child.html`) вместо разрешённого URL, хотя IDL объявляет `[ReflectURL]`: корректная строка рефлексии стоит на прототипе,…",
+   "component": "js (`crates/js/src/iframe_element.rs` — `patchIframeElement`/`reflectAttr` ставит собственные свойства на элемент) поверх `crates/js/src/dom.rs` (`_lumen_install_reflection(HTMLIFrameElement.prototype, [['src','src','url'], …])`)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-921": {
+   "status": "fixed",
+   "title": "Имя вложенного browsing context не хранилось в контексте: `window.name` ребёнка на каждое обращение перечитывал атрибут `name` узла-хоста, поэтому правка атрибу…",
+   "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
+   "date": "2026-09-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14531,10 +14531,7 @@
   "js (`crates/js/src/dom.rs` — `_idb_flush_txn`, ветка `_aborted`: гасит очередь и стреляет `abort`, но не трогает данные; `IDBObjectStore.prototype._write` и соседние мутирующие действия пишут в `store.records` без журнала отмены)": [
    "BUG-913"
   ],
-  "js (`crates/js/src/dom.rs` — `_idb_persist_if_dirty` в конце `_lumen_idb_flush`; `_idb_serialize` — `JSON.stringify` всего `_idb_databases`; `_idb_persist_schema` — обход всех баз/хранилищ/индексов с отдельным `_lumen_idb_schema_op` на строку)": [
-   "BUG-917"
-  ],
-  "js (`crates/js/src/dom.rs` — `_lumen_details_open_scan()` зовётся только из `_lumen_apply_ready_state('interactive')`; обёртки над `_lumen_set_attr`/`_lumen_remove_attr` там же)": [
+  "js (`crates/js/src/dom.rs` — `_lumen_details_open_scan()`; `crates/js/src/dom_parser.rs`; `crates/js/src/shim/web_api_shim_tail_b.js`; `crates/js/src/v8_runtime/install/dom_core.rs`)": [
    "BUG-919"
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_fetch`), core (`crates/core/src/ext.rs::JsFetchProvider`), network (`crates/network/src/lib.rs`)": [
@@ -14664,6 +14661,9 @@
   ],
   "js (`crates/js/src/shim/idb_shim.js` — `_idb_error(name, message)`)": [
    "BUG-915"
+  ],
+  "js (`crates/js/src/shim/idb_shim.js` — `_idb_persist_if_dirty`/`_idb_serialize`/`_idb_persist_schema`)": [
+   "BUG-917"
   ],
   "js (`crates/js/src/shim/performance_shim.js` — `Performance.prototype`)": [
    "BUG-767"
