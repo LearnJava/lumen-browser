@@ -2631,9 +2631,14 @@ function CSSStyleDeclaration() { throw new TypeError('Illegal constructor'); }
 function _lumen_style_get_parsed(target) {
     var loc = target.__loc__;
     if (loc) {
-        var raw = loc.child !== undefined
-            ? _lumen_stylesheet_media_child_json(loc.sheet, loc.rule, loc.child)
-            : _lumen_stylesheet_rule_json(loc.sheet, loc.rule);
+        var raw;
+        if (loc.mixinPath !== undefined) {
+            raw = _lumen_stylesheet_mixin_node_json(loc.sheet, loc.rule, loc.mixinPath);
+        } else if (loc.child !== undefined) {
+            raw = _lumen_stylesheet_media_child_json(loc.sheet, loc.rule, loc.child);
+        } else {
+            raw = _lumen_stylesheet_rule_json(loc.sheet, loc.rule);
+        }
         var t = raw ? JSON.parse(raw).styleCssText : '';
         return _lumen_parse_style(t !== undefined && t !== null ? t : '');
     }
@@ -2644,7 +2649,9 @@ function _lumen_style_set_parsed(target, obj) {
     var loc = target.__loc__;
     if (loc) {
         var text = _lumen_serialize_style(obj);
-        if (loc.child !== undefined) {
+        if (loc.mixinPath !== undefined) {
+            _lumen_stylesheet_mixin_set_node_style(loc.sheet, loc.rule, loc.mixinPath, text);
+        } else if (loc.child !== undefined) {
             _lumen_stylesheet_media_child_set_style(loc.sheet, loc.rule, loc.child, text);
         } else {
             _lumen_stylesheet_rule_set_style(loc.sheet, loc.rule, text);
@@ -2815,7 +2822,11 @@ function _lumen_make_style(nid) {
 // `_lumen_stylesheet_rule_set_style` (top-level) or their `_media_child_`
 // siblings (nested inside `@media`) instead of the `style=""` attribute.
 // `loc`: `{sheet, rule}` for a top-level rule, `{sheet, rule, child}` for
-// one nested inside `@media` (`rule` is that block's own top-level index).
+// one nested inside `@media` (`rule` is that block's own top-level index),
+// or `{sheet, rule, mixinPath}` for a node inside a top-level `@mixin`'s
+// `@result` tree (CSSOM-8, вложенные правила — `rule` is the `@mixin`'s own
+// top-level index, `mixinPath` the node's path from `@result`'s own
+// children, see `_lumen_stylesheet_mixin_node_json`).
 function _lumen_make_rule_style(loc) {
     var target = Object.create(CSSStyleDeclaration.prototype);
     Object.defineProperty(target, '__loc__',
@@ -9713,16 +9724,48 @@ function _lumen_build_css_style_rule(data, loc, parentRule) {
         parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(loc.sheet); }, enumerable: true, configurable: true },
         parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
     });
+    // `CSSGroupingRule.insertRule` (CSS Nesting's own CSSOM extension of a
+    // style rule), restricted to a TOP-LEVEL rule (`loc.child === undefined`
+    // — a rule nested inside `@media` is out of this slice's scope, same
+    // boundary `_lumen_stylesheet_media_child_set_style` already draws) and
+    // to inserting an `@apply` statement (CSS Mixins L1) — CSSOM-8's third
+    // and last nested-rule shape (`mixin-invalidation.tentative.html`'s
+    // "invalidation on adding @apply rule"). A general nested-style-rule
+    // insertion is not implemented — see `Rule::insert_apply_marker`'s doc
+    // comment (css-parser) for why.
+    if (loc.child === undefined) {
+        r.insertRule = function(ruleText, index) {
+            index = (index === undefined) ? 0 : (index >>> 0);
+            var result = _lumen_stylesheet_rule_insert_apply(loc.sheet, loc.rule, String(ruleText), index);
+            if (result === -2) {
+                throw new DOMException(
+                    "Failed to execute 'insertRule' on 'CSSStyleRule': the supplied text is not a valid rule.",
+                    'SyntaxError');
+            }
+            if (result < 0) {
+                throw new DOMException(
+                    "Failed to execute 'insertRule' on 'CSSStyleRule': the index provided is larger than the maximum index.",
+                    'IndexSizeError');
+            }
+            return result;
+        };
+    }
     return r;
 }
 
 // A top-level `@mixin` rule (`CSSMixinRule` — CSS Mixins L1 §cssom), built
-// from `mixin_rule_json`'s `{name, cssText}`. Read-only: no `.cssRules`
-// navigation into `@result`'s own children (nothing in this slice's scope
-// needs it — see `mixin_rule_json`'s doc comment), and `type` follows every
-// other newer CSSOM rule kind's legacy-attribute convention of `0` (CSSOM
-// §6.5.1 — the numeric constants stop at rules old enough to have needed one).
-function _lumen_build_css_mixin_rule(data, sheetIdx, parentRule) {
+// from `mixin_rule_json`'s `{name, cssText}`. `type` follows every other
+// newer CSSOM rule kind's legacy-attribute convention of `0` (CSSOM §6.5.1 —
+// the numeric constants stop at rules old enough to have needed one).
+// `.cssRules` (CSSOM-8, вложенные правила) is always length 0 or 1 — the
+// sole child is `@result` itself if present (`mixin-invalidation.
+// tentative.html`'s first two subtests: `ss.cssRules[0].cssRules.length ===
+// 1`), addressed as the empty `mixinPath` (`_lumen_stylesheet_mixin_node_
+// json`'s "path = []" case, `Stylesheet::mixin_result_child_count`'s doc
+// comment) — `@result` itself has no `.style` (see
+// `mixins::result_cssom_children`'s doc comment), so its wrapper below
+// exposes only `cssText`/`cssRules`, never `style`.
+function _lumen_build_css_mixin_rule(data, sheetIdx, ruleIdx, parentRule) {
     var r = Object.create(CSSMixinRule.prototype);
     Object.defineProperties(r, {
         type:    { get: function() { return 0; }, enumerable: true, configurable: true },
@@ -9730,8 +9773,73 @@ function _lumen_build_css_mixin_rule(data, sheetIdx, parentRule) {
         cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
         parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
         parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
+        cssRules: { get: function() {
+            return _lumen_make_css_rule_list(function() {
+                return _lumen_stylesheet_mixin_has_result(sheetIdx, ruleIdx)
+                    ? [_lumen_make_mixin_result_wrapper(sheetIdx, ruleIdx, r)]
+                    : [];
+            });
+        }, enumerable: true, configurable: true },
     });
     return r;
+}
+
+// `@result`'s own CSSOM wrapper (`path = []`) — not a real `CSSRule`
+// subtype (CSS Mixins L1 defines no public interface for it; nothing here
+// needs `instanceof` to hold), just `cssText`/`cssRules`/`parentRule`/
+// `parentStyleSheet` for symmetry with every other node in this tree. No
+// `.style`: `@result` is not selector-bearing, so its own leading
+// declaration run is exposed through `.cssRules[0]` like everything else in
+// its body (see `mixins::result_cssom_children`'s doc comment).
+function _lumen_make_mixin_result_wrapper(sheetIdx, ruleIdx, parentRule) {
+    var w = {};
+    Object.defineProperties(w, {
+        cssText: { get: function() {
+            var n = _lumen_stylesheet_mixin_node_count(sheetIdx, ruleIdx, []);
+            var parts = [];
+            for (var i = 0; i < n; i++) parts.push(_lumen_make_mixin_result_node(sheetIdx, ruleIdx, [i]).cssText);
+            return '@result {\n' + parts.map(function(p) { return '  ' + p; }).join('\n') + '\n}';
+        }, enumerable: true, configurable: true },
+        cssRules: { get: function() {
+            return _lumen_make_css_rule_list(function() {
+                var n = _lumen_stylesheet_mixin_node_count(sheetIdx, ruleIdx, []);
+                var out = [];
+                for (var i = 0; i < n; i++) out.push(_lumen_make_mixin_result_node(sheetIdx, ruleIdx, [i]));
+                return out;
+            });
+        }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
+        parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
+    });
+    return w;
+}
+
+// One node inside a `@mixin`'s `@result` tree, addressed by `path` (from
+// `@result`'s own children, `_lumen_stylesheet_mixin_node_json`'s shape) —
+// CSSOM-8, вложенные правила. A `"decls"` node (a synthesized declarations-
+// only child, real CSS Nesting's "CSSNestedDeclarations") has `.style` but
+// always an empty `.cssRules`; a `"nested"` node (an actual `& {...}` style
+// rule) has both, its own `.style` covering just its leading declaration
+// run (anything after it is `.cssRules`, one more hop of `path`).
+function _lumen_make_mixin_result_node(sheetIdx, ruleIdx, path) {
+    var raw = _lumen_stylesheet_mixin_node_json(sheetIdx, ruleIdx, path);
+    var data = raw ? JSON.parse(raw) : { kind: 'decls', cssText: '', styleCssText: '', childCount: 0 };
+    var loc = { sheet: sheetIdx, rule: ruleIdx, mixinPath: path };
+    var n = {};
+    Object.defineProperties(n, {
+        cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
+        style:   { get: function() { return _lumen_make_rule_style(loc); }, enumerable: true, configurable: true },
+        cssRules: { get: function() {
+            return _lumen_make_css_rule_list(function() {
+                var out = [];
+                for (var i = 0; i < data.childCount; i++) {
+                    out.push(_lumen_make_mixin_result_node(sheetIdx, ruleIdx, path.concat([i])));
+                }
+                return out;
+            });
+        }, enumerable: true, configurable: true },
+    });
+    return n;
 }
 
 // One nested style rule inside a `@media` block (`sheetIdx`'s top-level rule
@@ -9752,7 +9860,7 @@ function _lumen_make_css_rule(sheetIdx, ruleIdx) {
     var raw = _lumen_stylesheet_rule_json(sheetIdx, ruleIdx);
     if (raw === null || raw === undefined) return null;
     var data = JSON.parse(raw);
-    if (data.kind === 'mixin') return _lumen_build_css_mixin_rule(data, sheetIdx, null);
+    if (data.kind === 'mixin') return _lumen_build_css_mixin_rule(data, sheetIdx, ruleIdx, null);
     if (data.kind !== 'media') return _lumen_build_css_style_rule(data, { sheet: sheetIdx, rule: ruleIdx }, null);
     var mr = Object.create(CSSMediaRule.prototype);
     function childRules() {

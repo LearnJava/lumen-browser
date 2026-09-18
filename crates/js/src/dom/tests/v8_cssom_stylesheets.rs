@@ -275,3 +275,94 @@ fn get_computed_style_without_cssom_mutation_uses_pristine_cascade() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::String("50px".to_string()));
 }
+
+// ── CSSOM-8, вложенные правила: nested-rule addressing into a top-level
+// `@mixin`'s `@result` tree (`mixin-invalidation.tentative.html`) ──────────
+
+#[test]
+fn mixin_rule_css_rules_is_empty_without_a_result_block() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(style_nid, "@mixin --m() { color: red; }"));
+    let r = rt.eval("document.styleSheets[0].cssRules[0].cssRules.length").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+}
+
+#[test]
+fn mixin_rule_css_rules_has_one_result_child_with_a_result_block() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(
+        style_nid,
+        "@mixin --m() { @result { color: red; } }",
+    ));
+    let r = rt.eval("document.styleSheets[0].cssRules[0].cssRules.length").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    // `@result`'s own child is the sole declarations-only "decls" node.
+    let r = rt
+        .eval("document.styleSheets[0].cssRules[0].cssRules[0].cssRules[0].style.cssText")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("color: red;".to_string()));
+}
+
+#[test]
+fn mixin_result_nested_rule_exposes_its_own_style() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(
+        style_nid,
+        "@mixin --m() { @result { &.a { color: blue; } } }",
+    ));
+    let r = rt
+        .eval("document.styleSheets[0].cssRules[0].cssRules[0].cssRules[0].style.cssText")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("color: blue;".to_string()));
+}
+
+#[test]
+fn mixin_result_node_style_setter_updates_css_text() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(
+        style_nid,
+        "@mixin --m() { @result { color: red; } }",
+    ));
+    rt.eval("document.styleSheets[0].cssRules[0].cssRules[0].cssRules[0].style.color = 'blue'")
+        .unwrap();
+    let r = rt
+        .eval("document.styleSheets[0].cssRules[0].cssRules[0].cssRules[0].style.cssText")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("color: blue;".to_string()));
+}
+
+/// `mixin-invalidation.tentative.html`'s "invalidation on adding @apply
+/// rule" subtest shape — `CSSGroupingRule.insertRule` on a top-level style
+/// rule's own body, restricted to an `@apply` statement.
+#[test]
+fn top_level_rule_insert_rule_accepts_an_apply_statement() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(style_nid, "p { color: red; }"));
+    let r = rt
+        .eval("document.styleSheets[0].cssRules[0].insertRule('@apply --centered();', 0)")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+}
+
+#[test]
+fn top_level_rule_insert_rule_rejects_a_non_apply_rule_text() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(style_nid, "p { color: red; }"));
+    let r = rt.eval(
+        "(function() {
+            try {
+                document.styleSheets[0].cssRules[0].insertRule('b { color: red; }', 0);
+                return 'no-throw';
+            } catch (e) {
+                return e.name;
+            }
+        })()",
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("SyntaxError".to_string()));
+}

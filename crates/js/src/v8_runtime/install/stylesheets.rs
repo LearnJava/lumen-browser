@@ -11,7 +11,7 @@
 use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
-use lumen_css_parser::{CssomRuleRef, MediaRule, MixinRule, Rule};
+use lumen_css_parser::{CssomRuleRef, MediaRule, MixinResultNodeInfo, MixinRule, Rule};
 
 /// `CSSStyleRule.selectorText`/`style.cssText` as a JSON object — the shape
 /// `_lumen_make_css_rule` (JS) parses to build the wrapper.
@@ -56,6 +56,19 @@ pub(super) fn mixin_rule_json(r: &MixinRule) -> serde_json::Value {
         "kind": "mixin",
         "name": r.name,
         "cssText": r.css_text(),
+    })
+}
+
+/// One node inside a top-level `@mixin`'s `@result` tree (CSSOM-8, вложенные
+/// правила) as a JSON object — the shape
+/// `_lumen_make_mixin_result_node`/`_lumen_style_get_parsed` (JS) parse to
+/// build the wrapper / read `.style`'s current text.
+fn mixin_result_node_json(info: &MixinResultNodeInfo) -> serde_json::Value {
+    serde_json::json!({
+        "kind": info.kind,
+        "cssText": info.css_text,
+        "styleCssText": info.style_css_text,
+        "childCount": info.child_count,
     })
 }
 
@@ -287,6 +300,100 @@ pub(crate) fn install_stylesheets(
                 dirty.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             ok
+        });
+    }
+    // CSSOM-8, вложенные правила — nested-rule addressing into a top-level
+    // `@mixin`'s `@result` tree (`mixin-invalidation.tentative.html`'s first
+    // two subtests). `path` is a sequence of `.cssRules` indices, empty
+    // meaning "`@result` itself" (see `Stylesheet::mixin_result_child_count`'s
+    // doc comment) — JS builds it up one hop at a time
+    // (`_lumen_make_mixin_result_node`), so every native here takes it as a
+    // plain `Vec<u32>` rather than a JSON-encoded path.
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        reg!(scope, ctx, store, "_lumen_stylesheet_mixin_has_result", move |idx: u32, rule_idx: u32| -> bool {
+            let guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            guard.get(idx as usize).is_some_and(|e| e.sheet.mixin_has_result(rule_idx as usize))
+        });
+    }
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        reg!(scope, ctx, store, "_lumen_stylesheet_mixin_node_count", move |idx: u32, rule_idx: u32, path: Vec<u32>| -> u32 {
+            let guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get(idx as usize) else { return 0 };
+            let path: Vec<usize> = path.into_iter().map(|p| p as usize).collect();
+            entry.sheet.mixin_result_child_count(rule_idx as usize, &path).unwrap_or(0) as u32
+        });
+    }
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        reg!(scope, ctx, store, "_lumen_stylesheet_mixin_node_json", move |idx: u32, rule_idx: u32, path: Vec<u32>| -> Option<String> {
+            let guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = guard.get(idx as usize)?;
+            let path: Vec<usize> = path.into_iter().map(|p| p as usize).collect();
+            let info = entry.sheet.mixin_result_node_info(rule_idx as usize, &path)?;
+            Some(mixin_result_node_json(&info).to_string())
+        });
+    }
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        let deltas = Arc::clone(&cssom_deltas);
+        let dirty = Arc::clone(&cssom_dirty);
+        reg!(scope, ctx, store, "_lumen_stylesheet_mixin_set_node_style", move |idx: u32, rule_idx: u32, path: Vec<u32>, css_text: String| -> bool {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return false };
+            let node = entry.node;
+            let path: Vec<usize> = path.into_iter().map(|p| p as usize).collect();
+            let ok = std::sync::Arc::make_mut(&mut entry.sheet)
+                .set_mixin_result_style(rule_idx as usize, &path, &css_text)
+                .is_ok();
+            if ok {
+                deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
+                    node,
+                    lumen_css_parser::CssomOp::SetMixinResultStyle {
+                        mixin_index: rule_idx as usize,
+                        path,
+                        css_text,
+                    },
+                ));
+                dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            ok
+        });
+    }
+    // `CSSGroupingRule.insertRule` of an `@apply` statement into a TOP-LEVEL
+    // style rule's own body — CSSOM-8's third and last nested-rule shape
+    // (`mixin-invalidation.tentative.html`'s "invalidation on adding @apply
+    // rule"). Same sentinel-return convention as `_lumen_stylesheet_insert_rule`
+    // above (`-2` = `Syntax`, other negative = `IndexSize`).
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        let deltas = Arc::clone(&cssom_deltas);
+        let dirty = Arc::clone(&cssom_dirty);
+        reg!(scope, ctx, store, "_lumen_stylesheet_rule_insert_apply", move |idx: u32, rule_idx: u32, rule_text: String, index: u32| -> i32 {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
+            let node = entry.node;
+            match std::sync::Arc::make_mut(&mut entry.sheet).insert_rule_body_apply(
+                rule_idx as usize,
+                index as usize,
+                &rule_text,
+            ) {
+                Ok(new_index) => {
+                    deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
+                        node,
+                        lumen_css_parser::CssomOp::InsertRuleBodyApply {
+                            rule_index: rule_idx as usize,
+                            index: index as usize,
+                            text: rule_text,
+                        },
+                    ));
+                    dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                    new_index as i32
+                }
+                Err(lumen_css_parser::CssomRuleMutationError::IndexSize) => -1,
+                Err(lumen_css_parser::CssomRuleMutationError::Syntax) => -2,
+            }
         });
     }
     Ok(())
