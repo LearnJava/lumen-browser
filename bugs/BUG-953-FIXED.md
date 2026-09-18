@@ -1,6 +1,6 @@
 # BUG-953 — Document-Policy/Permissions-Policy никогда не генерируют violation-репорт: `ReportingObserver` есть, поставщика отчётов нет
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-POLICYREPORT](../ROADMAP.md))
+**Статус:** FIXED 2026-09-18 (P1, [GAP-POLICYREPORT](../ROADMAP.md)) — для найденного id (`sync-xhr`)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — та же форма, что [GAP-CSPENF](../ROADMAP.md) (BUG-811): интерфейс верхнего уровня (`ReportingObserver`) готов, но обнаружение и генерация нарушений политики — целая недостающая модель (парсинг заголовка политики, сверка фичи с политикой на каждом чувствительном вызове, формирование отчёта) — не один член.
 **Заведён:** 2026-09-01 (WPT-RUN-6, срез 32, статическое чтение — грепом, без варианта в `verify_slice32_gaps.py`)
 **Область:** js (`crates/js/src/reporting_api.rs` — класс `ReportingObserver` реализован; ни один Rust- или шим-файл нигде не конструирует отчёт с `type: 'document-policy-violation'`/`'permissions-policy-violation'`)
@@ -59,3 +59,36 @@ Policy.
 где фича реально используется (`sync-xhr` — в `xhr.rs`, синхронный путь
 `send()`), формирование и постановка в очередь `PolicyViolationReport` по
 тому же контракту, что уже есть у `ReportingObserver`.
+
+## Исправлено (2026-09-18, P1)
+
+Structured Fields-парсер `Document-Policy`/`-Report-Only`
+(`crates/network/src/document_policy.rs`, `sf-boolean` `?0`/`?1`, RFC 8941
+§3.2) плюс резолв disposition из обоих заголовков —
+`page_source::document_policy_sync_xhr_disposition`/
+`permissions_policy_sync_xhr_disposition` (`Permissions-Policy` через уже
+существующий `crates/network/src/permissions_policy.rs`), enforce
+приоритетнее report-only на каждом заголовке независимо. Проброшено через
+`parse_and_layout` → `HttpClient::with_sync_xhr_policy` →
+`JsFetchProvider::document_policy_sync_xhr_disposition`/
+`permissions_policy_sync_xhr_disposition` → нативный биндинг
+`_lumen_xhr_check_sync_policy`. Точка проверки — `xhr.rs::send()` перед
+синхронной отправкой: под `enforce` бросает `DOMException('...',
+'NetworkError')` (не блокирует запрос — не отправляет вовсе), под
+`report`/`enforce` доставляет `document-policy-violation`/
+`permissions-policy-violation` через `_lumen_deliver_report` с телом
+`{featureId: 'sync-xhr', disposition, sourceFile, lineNumber, columnNumber}`.
+
+Живой `run_report.py` подтвердил все 4 целевых WPT-файла зелёными:
+`document-policy/reporting/sync-xhr-{report-only,reporting}.html`,
+`permissions-policy/reporting/sync-xhr-{report-only,reporting}.html`
+(раньше — TIMEOUT/висли на `assert_throws_dom` без отчёта). `cargo test -p
+lumen-js --features v8-backend sync_xhr` 5/5, `cargo test -p lumen-shell
+page_source`/`cargo test -p lumen-network document_policy` зелёные,
+`cargo clippy --workspace --all-targets -- -D warnings` чист.
+
+Вне скоупа: три id, найденных отдельным замером 2026-09-04
+(`network-efficiency-guardrails*.tentative.html`) используют другую фичу
+Document Policy без собственной точки проверки — заводятся отдельной
+находкой, когда до них дойдёт очередь; таблица «фича → режим»
+(`DocumentPolicy::feature_disabled`) уже общая инфраструктура для них.
