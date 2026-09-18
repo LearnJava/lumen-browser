@@ -1235,14 +1235,45 @@ pub(crate) fn parse_and_layout(
     // после layout-а (картинки фона не влияют на расчёт коробок). Декодируем
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
+    //
+    // GAP-CSPENF срез 18: `img-src`/`default-src` теперь гейтит и этот
+    // производитель — до этого среза `fetch_and_decode_background_images`
+    // фетчила байты фона безусловно, в обход гейта, который срез 4 уже дал
+    // `<img src>`. Политика документа считается один раз (тот же
+    // `document_csp_policy`, что и остальные срезы), заблокированные URL
+    // диспатчат `securitypolicyviolation` после фетча, тем же отложенным
+    // one-shot-push, что срез 4 уже применяет к `blocked_by_img_src` — здесь
+    // это не "до JS-рантайма", а просто "после параллельного фетча".
     let mut images = images;
-    {
+    let (bg_original_policy, blocked_by_bg_img_src) = {
         let _s = lumen_core::trace::span("fetch-bg-images", "net");
-        let eff_base = effective_base(&doc_arc.lock().unwrap(), base);
-        for (src, image) in fetch_and_decode_background_images(&layout, &eff_base, sink, cookie_jar.clone(), target) {
+        let d = doc_arc.lock().unwrap();
+        let eff_base = effective_base(&d, base);
+        let root = d.root();
+        let bg_policy = crate::csp_enforce::document_csp_policy(&d, root);
+        let self_origin = base.origin();
+        drop(d);
+        let csp_gate = bg_policy
+            .as_ref()
+            .map(|(policy, _)| (policy, self_origin.as_ref()));
+        let (decoded, blocked) =
+            fetch_and_decode_background_images(&layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate);
+        for (src, image) in decoded {
             images.push((src, image));
         }
+        (bg_policy.map(|(_, original)| original), blocked)
+    };
+    #[cfg(feature = "v8")]
+    if !blocked_by_bg_img_src.is_empty()
+        && let Some(js) = &js_ctx
+        && let Some(original_policy) = &bg_original_policy
+    {
+        for url in &blocked_by_bg_img_src {
+            js.fire_csp_violation("img-src", url, original_policy);
+        }
     }
+    #[cfg(not(feature = "v8"))]
+    let _ = (blocked_by_bg_img_src, bg_original_policy);
     // BUG-480 срез 15: картинки под-документов фреймов едут в ОБЩИЙ список
     // страницы. Их ключи разрешены относительно базы ребёнка
     // (`frames::frame_image_key`), поэтому со своими ключами страницы они не
