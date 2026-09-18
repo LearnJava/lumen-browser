@@ -174,3 +174,58 @@ fn idb_records_survive_reload_via_snapshot() {
     let title = eval_str(&rt2, "String(window.__title)");
     assert_eq!(title, "Hyperion", "record written in session 1 must be readable after reload");
 }
+
+/// BUG-916: `createIndex`/`deleteIndex` must apply at their own position in the
+/// transaction's request queue, not synchronously — otherwise a `deleteIndex`
+/// written after a data request retroactively erases the constraint that
+/// request should have been checked against, and any request queued before an
+/// index is created is checked against an index it should never have seen.
+#[test]
+fn idb_create_index_and_delete_index_are_ordered_with_data_requests() {
+    let backend = Arc::new(MockIdb::default());
+    let rt = make_rt(backend as Arc<dyn IdbBackend>);
+    rt.eval(
+        r#"
+        var req = indexedDB.open('shop', 1);
+        req.onupgradeneeded = function(ev) {
+            ev.target.result.createObjectStore('animals');
+        };
+        req.onsuccess = function(ev) { window._db = ev.target.result; };
+        'ok'
+        "#,
+    )
+    .unwrap();
+    // createIndex/deleteIndex are only allowed on a versionchange transaction
+    // (Indexed DB §3.2.9/§3.2.10), so the ordering scenario itself must run
+    // inside a second upgrade, interleaved with data requests on that same
+    // transaction — exactly the shape BUG-916 was found in.
+    rt.eval(
+        r#"
+        window._log = [];
+        window._db.close();
+        var req2 = indexedDB.open('shop', 2);
+        req2.onupgradeneeded = function(ev) {
+            var s = ev.target.transaction.objectStore('animals');
+            s.add({ animal: 'Unicorn' }, 1).onsuccess = function() { window._log.push('add1: success'); };
+            s.createIndex('byAnimal', 'animal', { unique: true });
+            var rq2 = s.add({ animal: 'Unicorn' }, 2);
+            rq2.onsuccess = function() { window._log.push('add2: success'); };
+            rq2.onerror = function(e) { e.preventDefault(); window._log.push('add2: ' + this.error.name); };
+            s.deleteIndex('byAnimal');
+            var rq3 = s.add({ animal: 'Unicorn' }, 3);
+            rq3.onsuccess = function() { window._log.push('add3: success'); };
+            rq3.onerror = function(e) { e.preventDefault(); window._log.push('add3: ' + this.error.name); };
+        };
+        'ok'
+        "#,
+    )
+    .unwrap();
+    rt.eval("_lumen_idb_flush()").unwrap();
+    let log = eval_str(&rt, "window._log.join('|')");
+    assert_eq!(
+        log,
+        "add1: success|add2: ConstraintError|add3: success",
+        "add2 must be rejected by the unique index created before it and add3 must succeed \
+         once deleteIndex (queued before it) has removed that index"
+    );
+}
