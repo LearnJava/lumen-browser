@@ -3,16 +3,19 @@
 //! Installs `HTMLIFrameElement`-compatible properties and methods on `<iframe>`
 //! DOM elements so that pages can interact with them without JS errors.
 //!
+//! `src`/`name`/`srcdoc`/`allow`/`referrerPolicy`/`loading` are reflected on
+//! `HTMLIFrameElement.prototype` by `_lumen_install_reflection`
+//! (`web_api_shim_tail_b.js`) — that table does URL resolution (`[ReflectURL]`)
+//! and enum normalization that a plain own-property reflect here cannot
+//! reproduce, so this module must NOT redefine those as own properties
+//! (BUG-920: an own property always wins over the prototype accessor, so a
+//! duplicate own-property definition silently shadows the correct one).
+//!
 //! Scope:
-//! - `src` getter/setter (reflects `src` attribute)
-//! - `name` getter/setter (reflects `name` attribute)
-//! - `srcdoc` getter/setter (reflects `srcdoc` attribute)
-//! - `width` getter/setter (reflects `width` attribute)
-//! - `height` getter/setter (reflects `height` attribute)
-//! - `sandbox` getter/setter (reflects `sandbox` attribute)
-//! - `allow` getter/setter (reflects `allow` attribute)
-//! - `referrerPolicy` getter/setter (reflects `referrerpolicy` attribute)
-//! - `loading` getter/setter (reflects `loading` attribute)
+//! - `width` getter/setter (reflects `width` attribute; no prototype-level
+//!   entry exists for it, so an own property is the only definition)
+//! - `height` getter/setter (reflects `height` attribute; same as `width`)
+//! - `sandbox` getter/setter (reflects `sandbox` attribute; same as `width`)
 //! - `contentDocument` getter → фасад под-документа из [`crate::frame_bridge`]
 //!   (BUG-480 срез 2); `null` для фрейма без загруженного под-документа,
 //!   cross-origin и opaque-sandbox
@@ -63,15 +66,12 @@ const IFRAME_ELEMENT_SHIM: &str = r#"(function() {
       });
     }
 
-    reflectAttr('src',            'src');
-    reflectAttr('name',           'name');
-    reflectAttr('srcdoc',         'srcdoc');
-    reflectAttr('width',          'width');
-    reflectAttr('height',         'height');
-    reflectAttr('sandbox',        'sandbox');
-    reflectAttr('allow',          'allow');
-    reflectAttr('referrerPolicy', 'referrerpolicy');
-    reflectAttr('loading',        'loading');
+    // src/name/srcdoc/allow/referrerPolicy/loading are already reflected
+    // correctly on HTMLIFrameElement.prototype (web_api_shim_tail_b.js) —
+    // do NOT redefine them here, see module doc comment (BUG-920).
+    reflectAttr('width',   'width');
+    reflectAttr('height',  'height');
+    reflectAttr('sandbox', 'sandbox');
 
     // BUG-480 срез 2: доступ к под-документу через бридж (frame_bridge.rs).
     // До регистрации биндинга (фрейм не загружен / cross-origin для
@@ -171,18 +171,27 @@ var document = {
     }
 
     #[test]
-    fn src_getter_setter() {
+    fn does_not_shadow_prototype_reflected_properties() {
+        // BUG-920: src/name/srcdoc/allow/referrerPolicy/loading must be left to
+        // `HTMLIFrameElement.prototype`'s `_lumen_install_reflection` table
+        // (URL resolution, enum normalization) — patchIframeElement must not
+        // define its own competing property for any of them.
         with_minimal_dom(|rt| {
             let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
-el.src = 'https://example.com';
-el.src === 'https://example.com'
+['src', 'name', 'srcdoc', 'allow', 'referrerPolicy', 'loading'].every(function(p) {
+    return Object.getOwnPropertyDescriptor(el, p) === undefined;
+})
 "#,
                 )
                 .unwrap();
-            assert_eq!(result, JsValue::Bool(true), "src getter/setter should reflect attribute");
+            assert_eq!(
+                result,
+                JsValue::Bool(true),
+                "patchIframeElement must not shadow prototype-reflected properties"
+            );
         });
     }
 
@@ -213,22 +222,6 @@ el.contentWindow === null
                 )
                 .unwrap();
             assert_eq!(result, JsValue::Bool(true), "contentWindow should be null without a registered frame binding");
-        });
-    }
-
-    #[test]
-    fn name_getter_setter() {
-        with_minimal_dom(|rt| {
-            let result = rt
-                .eval(
-                    r#"
-var el = document.createElement('iframe');
-el.name = 'myframe';
-el.name === 'myframe'
-"#,
-                )
-                .unwrap();
-            assert_eq!(result, JsValue::Bool(true), "name getter/setter should reflect attribute");
         });
     }
 
@@ -280,18 +273,4 @@ el.getSVGDocument() === null
         });
     }
 
-    #[test]
-    fn src_default_is_empty_string() {
-        with_minimal_dom(|rt| {
-            let result = rt
-                .eval(
-                    r#"
-var el = document.createElement('iframe');
-el.src === ''
-"#,
-                )
-                .unwrap();
-            assert_eq!(result, JsValue::Bool(true), "src should default to empty string");
-        });
-    }
 }
