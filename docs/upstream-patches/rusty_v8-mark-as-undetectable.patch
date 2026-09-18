@@ -1,0 +1,66 @@
+# Target: denoland/rusty_v8, crate version 150.1.0 (vendored copy inspected at
+# D:\rust\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\v8-150.1.0)
+#
+# Purpose: exposes v8::ObjectTemplate::MarkAsUndetectable() (declared in the vendored
+# V8 headers at v8/include/v8-template.h:1099, already compiled into every prebuilt
+# static lib rusty_v8 ships) through the Rust binding surface. This is the missing
+# piece for Lumen's GAP-DOCALLDDA (docs/../ROADMAP.md, document.all [[IsHTMLDDA]]
+# semantics) — no local V8_FROM_SOURCE build is needed to submit or land this PR,
+# since it only adds one C++ wrapper function that calls an already-linked symbol.
+#
+# Suggested PR title: "Add ObjectTemplate::mark_as_undetectable() binding"
+# Suggested PR body:
+#   Exposes v8::ObjectTemplate::MarkAsUndetectable(), which marks instances of the
+#   template as "undetectable" objects per the ECMAScript [[IsHTMLDDA]] shape used by
+#   host objects like document.all: `typeof` reports "undefined", the object is falsy
+#   in boolean context and loosely equal to null/undefined, while property access and
+#   calls still work normally. The header already ships in the vendored V8 static libs
+#   (v8-template.h:1099); this only adds the missing Rust-callable wrapper, following
+#   the existing set_immutable_proto() pattern in the same file.
+#
+# Apply from a rusty_v8 checkout: git apply rusty_v8-mark-as-undetectable.patch
+
+diff --git a/src/binding.cc b/src/binding.cc
+index 0000000..0000000 100644
+--- a/src/binding.cc
++++ b/src/binding.cc
+@@ -1530,6 +1530,10 @@ void v8__ObjectTemplate__SetImmutableProto(const v8::ObjectTemplate& self) {
+   return ptr_to_local(&self)->SetImmutableProto();
+ }
+
++void v8__ObjectTemplate__MarkAsUndetectable(const v8::ObjectTemplate& self) {
++  return ptr_to_local(&self)->MarkAsUndetectable();
++}
++
+ const v8::Object* v8__Object__New(v8::Isolate* isolate) {
+   return local_to_ptr(v8::Object::New(isolate));
+ }
+diff --git a/src/template.rs b/src/template.rs
+index 0000000..0000000 100644
+--- a/src/template.rs
++++ b/src/template.rs
+@@ -153,6 +153,7 @@ extern "C" {
+   );
+
+   fn v8__ObjectTemplate__SetImmutableProto(this: *const ObjectTemplate);
++  fn v8__ObjectTemplate__MarkAsUndetectable(this: *const ObjectTemplate);
+ }
+
+ pub type AccessorNameGetterCallback = NamedGetterCallbackForAccessor;
+@@ -1062,4 +1063,15 @@ impl ObjectTemplate {
+   pub fn set_immutable_proto(&self) {
+     unsafe { v8__ObjectTemplate__SetImmutableProto(self) };
+   }
++
++  /// Marks instances of this template as "undetectable" objects — the
++  /// `[[IsHTMLDDA]]`-style shape used by legacy host objects like
++  /// `document.all`: `typeof` reports `"undefined"`, the object is falsy in
++  /// boolean context and loosely equal to `null`/`undefined`, while property
++  /// access and calls on it behave normally.
++  ///
++  /// See <https://tc39.es/ecma262/#sec-IsHTMLDDA-internal-slot-to-boolean>.
++  #[inline(always)]
++  pub fn mark_as_undetectable(&self) {
++    unsafe { v8__ObjectTemplate__MarkAsUndetectable(self) };
++  }
+ }
