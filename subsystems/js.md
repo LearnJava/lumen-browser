@@ -86,7 +86,7 @@ the time — read dates.
   object there). `Object.setPrototypeOf(el, Ctor.prototype)` on a live wrapper — what
   `svg.rs` does for `createElementNS` — would now drop the whole interface, so that goes
   through `_lumen_retarget_wrapper(el, iface)` instead. `'x' in Element.prototype` still
-  answers `false` for these members ([BUG-747](../bugs/BUG-747-OPEN.md)): the bundle is a
+  answers `false` for these members ([BUG-747](../bugs/BUG-747-FIXED.md)): the bundle is a
   private object below the interface prototype, not the interface prototype itself. Observable
   change, matching a real engine: `Object.keys(el)`/`for…in` no longer enumerate the interface.
 - **`permissions.query()` recognises names instead of saying yes to all of them
@@ -656,7 +656,7 @@ the time — read dates.
   reach: markup-parsed foreign content is still HTML-namespaced ([BUG-685](../bugs/BUG-685-OPEN.md)),
   so the case rule is only observable on `createElementNS`-built subtrees; and
   `'getElementsByTagName' in Element.prototype` stays `false` like every other member of this
-  wrapper factory ([BUG-747](../bugs/BUG-747-OPEN.md)).
+  wrapper factory ([BUG-747](../bugs/BUG-747-FIXED.md)).
 - **`getElementsByClassName(names)` on `document` + `Element` (BUG-302 fix, [P3] 2026-07-19).**
   Was missing from the main `WEB_API_SHIM` (only `dom_parser.rs`'s `VElement`/`VDocument` had it)
   — `news.ycombinator.com` scripts died wholesale on `el.getElementsByClassName is not a function`.
@@ -1352,7 +1352,7 @@ the time — read dates.
   unrecognized ones (→ `HTMLUnknownElement`, HTML LS §3.1.3), with hyphenated names (valid custom
   element names) staying `HTMLElement` per spec. Point 4 of the report — moving the wrapper's ~220 own
   members onto the prototypes — is a rewrite of the factory and is tracked separately as
-  [BUG-747](../bugs/BUG-747-OPEN.md). 4 unit tests; `create_document_builds_xml_document` was corrected
+  [BUG-747](../bugs/BUG-747-FIXED.md). 4 unit tests; `create_document_builds_xml_document` was corrected
   on the merits (it asserted `documentElement.tagName === 'SVG'`, encoding the very defect removed).
 
 - **Named access on Window (HTML LS §7.3.3, [BUG-384](../bugs/BUG-384-FIXED.md), 2026-08-10).** An

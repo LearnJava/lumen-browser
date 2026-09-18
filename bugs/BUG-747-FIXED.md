@@ -1,7 +1,7 @@
 # BUG-747 — все ~220 членов живой обёртки узла лежат собственными свойствами инстанса, а не операциями прототипа
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — объектный литерал в `_lumen_build_element`; почти пустые `Element.prototype`/`Node.prototype`)
+**Статус:** FIXED 2026-09-18 (P3) — побочный эффект [BUG-849](BUG-849-FIXED.md)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_build_element`, `_lumen_wrapper_proto_for`; почти пустые `Element.prototype`/`Node.prototype`)
 **Найден:** P2, WPT-VENDOR-fenced-frame (2026-07-28) как пункт 4 [BUG-367](BUG-367-FIXED.md); выделен в отдельную заявку P3 2026-08-10 при закрытии остальных четырёх пунктов
 
 ## Симптом
@@ -63,3 +63,32 @@ host own 'getAttribute' = true    Element.prototype own 'getAttribute' = false
   тега свойства навешиваются пост-фактум циклами) должно остаться на инстансе.
 - Порядок важен: `Object.setPrototypeOf` вызывается в хвосте функции, а часть
   членов навешивается до него.
+
+## Закрытие 2026-09-18 (P3) — побочный эффект BUG-849, не переклассифицировано вовремя
+
+Симптом этой заявки (~220 собственных свойств на инстансе, пустые
+`Element.prototype`/`Node.prototype`, `Object.keys(el)` выдаёт всю реализацию)
+не воспроизводится: [BUG-849](BUG-849-FIXED.md) (FIXED 2026-09-18 — на самом
+деле 2026-08-23, спустя две недели после этой заявки) перенесла интерфейс
+обёртки на общий прототип-на-интерфейс тем же ходом, который эта заявка
+просила («на прототип, а не на экземпляр»), но была заведена как отдельный
+дефект (перф/OOM на `createElement`) и не сослалась на BUG-747 при закрытии.
+
+Живая проверка (`cargo test -p lumen-js --features v8-backend wrapper_`,
+`dom/tests/v8_core/mod.rs`):
+
+- `wrapper_members_are_inherited_not_own` — `Object.keys(el).length === 0`,
+  `hasOwnProperty('tagName')` и `hasOwnProperty('onclick')` оба `false`,
+  `hasOwnProperty('__nid__')` `true`, `instanceof HTMLDivElement`/`Element`
+  не сломаны;
+- `wrapper_lazy_slots_are_per_node_and_stable` — `style`/`classList`/`dataset`/
+  `attributes` остались отдельными на узел и стабильными под `===`, ровно
+  как просил раздел «Что нужно сделать» этой заявки;
+- `wrapper_on_handlers_and_expandos_stay_per_node` — `on*`-обработчики общие
+  по имени на прототипе, значение и произвольный expando (`el.mine = 7`)
+  остаются собственностью инстанса.
+
+Все три зелёные на `main`. Код физически переехал из `dom.rs` в
+`crates/js/src/shim/web_api_shim_mid.js` (`_LUMEN_WRAPPER_MEMBERS`,
+`_lumen_wrapper_proto_for`) при том же BUG-849. Правок кода не потребовалось —
+только реклассификация в трекере.
