@@ -145,7 +145,7 @@ in the expected order»).
 | id | было | стало |
 |---|---|---|
 | `transaction-lifetime-empty.any.html` | TIMEOUT | **Test OK, 2/2 подтеста, 0 unexpected** |
-| `idbtransaction-objectStore-exception-order.any.html` | TIMEOUT | Test OK (харнесс доходит до конца), 0/1 — порядок `InvalidStateError` перед `NotFoundError` уже правильный, подтест валится только на форме исключения ([BUG-915](BUG-915-OPEN.md)) |
+| `idbtransaction-objectStore-exception-order.any.html` | TIMEOUT | Test OK (харнесс доходит до конца), 0/1 — порядок `InvalidStateError` перед `NotFoundError` уже правильный, подтест валится только на форме исключения ([BUG-915](BUG-915-FIXED.md)) |
 | `idbobjectstore_createIndex.any.html` | TIMEOUT | TIMEOUT, 8/21 подтестов; остаток — [BUG-914](BUG-914-OPEN.md) (`t.done()` висит на `db.onabort`) и BUG-915 |
 
 Прогон нашёл ещё два дефекта, к этому багу не относящихся и заведённых

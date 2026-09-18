@@ -1,8 +1,8 @@
 # BUG-915 — IndexedDB бросает обычный `Error` вместо `DOMException`, и `assert_throws_dom` отвергает его
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-18 (P3, ветка `p3-bug-915`)
 **Заведён:** 2026-08-25 (P1, прогоном WPT при проверке [BUG-841](BUG-841-FIXED.md))
-**Область:** `crates/js/src/dom.rs:14615` — `_idb_error(name, message)`: `new Error(message)` с присвоенным `name`
+**Область:** `crates/js/src/shim/idb_shim.js` — `_idb_error(name, message)`: `new Error(message)` с присвоенным `name`
 **Владелец:** P1 (`lumen-js`)
 
 ## Симптом
@@ -54,3 +54,27 @@ not a DOMException … property "code" is equal to undefined, expected 11» —
 `_idb_error` → `new DOMException(message, name)` с проверкой, что полифил
 доступен в scope (шим evaluate-ится и в service-worker-контексте), плюс замер
 против BUG-714: `code` заполняет сам полифил по legacy-таблице.
+
+## Исправлено
+
+`_idb_error(name, message)` в `crates/js/src/shim/idb_shim.js` теперь строит
+`new DOMException(message || name, name)` вместо `new Error` с подменённым
+`.name` — `code` заполняет сам `DOM_EXCEPTION_POLYFILL` по своей
+legacy-таблице (`NotFoundError` → 8, `InvalidStateError` → 11 и т.д.), так что
+второй половины из BUG-714 не потребовалось: полифил уже совпадал с
+WebIDL-формой. Единственный вызов `_idb_error` с не-DOM именем
+(`IDBCursor.prototype.advance` бросал `_idb_error('TypeError', …)`, а
+`TypeError` не входит в таблицу legacy-имён DOM) заменён на настоящий
+`throw new TypeError(...)`.
+
+Новый юнит-тест `idb_errors_are_dom_exceptions_with_legacy_code`
+(`crates/js/src/dom/tests/v8_idb.rs`) фиксирует все три свойства сразу:
+`e instanceof DOMException`, `e.name === 'NotFoundError'`, `e.code === 8`.
+`cargo test -p lumen-js --features v8-backend` — 42/42 IDB-тестов зелёные;
+полный прогон крейта 3856/3858 (два предсуществующих флака,
+`credentials::tests::create_and_get_through_installed_provider` (BUG-759,
+TOCTOU на общем слоте) и `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`,
+оба зелёные при `--test-threads=1`, к этому фиксу не относятся).
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+чист; `cargo clippy --workspace --all-targets -- -D warnings` (финальный гейт)
+чист.
