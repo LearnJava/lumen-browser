@@ -2945,15 +2945,45 @@ var window = {
         return !evt.defaultPrevented;
     },
     /// postMessage (HTML LS §7.7.4): dispatch a MessageEvent to this window.
-    /// targetOrigin '*' → always deliver; '/' → same-origin only;
-    /// any other string → must equal location.origin.
+    /// Two call shapes: legacy `(message, targetOrigin, transfer)` and the
+    /// current `(message, options)` where `options.targetOrigin` defaults to
+    /// '/'. `targetOrigin` '*' → always deliver; '/' → same-origin only;
+    /// any other string is parsed as an absolute URL and compared by origin
+    /// (a parse failure throws `SyntaxError`, per spec — a mismatch just
+    /// silently drops the message, it is not an error). `message` is
+    /// structured-cloned, not passed by reference (BUG-717).
     postMessage: function(message, targetOrigin) {
+        if (targetOrigin !== null && typeof targetOrigin === 'object') {
+            targetOrigin = ('targetOrigin' in targetOrigin) ? targetOrigin.targetOrigin : '/';
+        } else if (targetOrigin === undefined) {
+            targetOrigin = '/';
+        }
         var origin = location.origin;
         if (targetOrigin !== '*') {
-            var target = (targetOrigin === '/') ? origin : String(targetOrigin);
+            var target;
+            if (targetOrigin === '/') {
+                target = origin;
+            } else {
+                // `_lumen_parse_url` (url_parse_shim.js) splits an authority
+                // on its first '/'/'?'/'#' without validating what is inside
+                // it — no forbidden-host-code-point check like the URL
+                // Standard's host parser has, so `new URL('http://foo bar')`
+                // would build an origin instead of throwing. Reject those
+                // code points here so the SyntaxError WPT expects still
+                // fires; a real domain never contains them.
+                var parsedTarget;
+                try { parsedTarget = new URL(String(targetOrigin)); }
+                catch (e) { parsedTarget = null; }
+                if (parsedTarget === null || /[\x00-\x20#\/:<>?@\[\\\]^|]/.test(parsedTarget.hostname)) {
+                    throw new DOMException(
+                        "Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
+                        targetOrigin + "' in a call to 'postMessage'.", 'SyntaxError');
+                }
+                target = parsedTarget.origin;
+            }
             if (target !== origin) return;
         }
-        var ev = new MessageEvent(message);
+        var ev = new MessageEvent(structuredClone(message));
         ev.origin = origin;
         ev.source = window;
         // Spec §7.7.4 step 5: dispatch as a task (asynchronously).

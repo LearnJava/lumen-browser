@@ -1,8 +1,47 @@
 # BUG-717 — `window.postMessage` doesn't clone the message and never validates `targetOrigin`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:8206-8224` — `window.postMessage`)
+**Статус:** FIXED 2026-09-18
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid_b2.js` — `window.postMessage`)
 **Найден:** P2, WPT-VENDOR-webmessaging, 2026-08-09
+
+## Исправление (P3, 2026-09-18)
+
+`window.postMessage` (`crates/js/src/shim/web_api_shim_mid_b2.js`, метод
+`postMessage` на объекте, куда в своё время переехал бывший
+`dom.rs:8206-8224` — файл давно расщеплён на JS-шимы, SPLIT-JS3) теперь:
+
+1. Клонирует сообщение через уже существующий `structuredClone()` вместо
+   `new MessageEvent(message)` по прямой ссылке — неклонируемое значение
+   (функция/символ) бросает `DataCloneError DOMException`, как у
+   `MessagePort.postMessage`.
+2. Валидирует `targetOrigin`: `'*'` доставляет всегда, `'/'` и опущенный
+   аргумент — только same-origin, любая другая строка парсится как
+   абсолютный URL и сравнивается по origin. Отдельно проверяет hostname на
+   forbidden host code points (пробел и управляющие символы, `#/:<>?@[\]^|`)
+   — собственный `_lumen_parse_url` (`url_parse_shim.js`) такую проверку не
+   делает и не бросает на `http://foo bar`, поэтому без неё `new
+   URL('http://foo bar').origin` тихо строил бы origin вместо ошибки; это
+   единственный минимальный кусок host-валидации, добавленный ради этого
+   бага, полный переписывание `_lumen_parse_url` не входило в объём фикса.
+   Реальный parse-failure и forbidden-host-code-point случаи оба бросают
+   `SyntaxError DOMException`.
+3. Поддерживает двухаргументную `WindowPostMessageOptions`-форму —
+   `typeof targetOrigin === 'object'` читает `.targetOrigin` (по умолчанию
+   `'/'`, если ключа нет).
+
+Тесты — `crates/js/src/dom/tests/v8_window_anim_compress.rs`, блок
+`self_postmessage_*` (8 тестов): клонирование вместо ссылки, доставка по
+`'*'`/`'/'`/точному origin, тихий дроп при чужом origin, `SyntaxError` на
+`'http://foo bar'`, options-форма (`{}` / неизвестный ключ / явный
+`targetOrigin`), однoаргументный вызов (дефолт `'/'`), hostname с
+завершающими слэшами (путь, не host — доставляется), `DataCloneError` на
+функции.
+
+Не входит в объём: `transfer` по-прежнему игнорируется (см. `structuredClone`
+и [BUG-868](BUG-868-OPEN.md) — третий известный путь потери `transfer`),
+доставка через `<iframe>`/`window.open()` (`frame_bridge.rs`,
+`web_api_shim_tail_mc.js`) — отдельные, уже корректно валидирующие origin
+пути, этим фиксом не тронуты.
 
 ## Симптом
 

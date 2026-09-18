@@ -450,6 +450,116 @@ fn window_open_postmessage_rejects_uncloneable_value() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// ── window.postMessage (self, BUG-717) ─────────────────────────────────────
+
+#[test]
+fn self_postmessage_clones_the_message_instead_of_passing_by_reference() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var x = []; var y = [x, x]; \
+         var received = null; \
+         window.addEventListener('message', function(e) { received = e.data; }); \
+         window.postMessage(y, '*'); \
+         _lumen_tick_timers(); \
+         received[0] === received[1] && received[0] !== x"
+    ));
+}
+
+#[test]
+fn self_postmessage_wildcard_and_slash_and_exact_origin_deliver() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var n = 0; \
+         window.addEventListener('message', function(e) { n++; }); \
+         window.postMessage('a', '*'); \
+         window.postMessage('b', '/'); \
+         window.postMessage('c', 'https://example.com'); \
+         _lumen_tick_timers(); \
+         n === 3"
+    ));
+}
+
+#[test]
+fn self_postmessage_cross_origin_target_is_silently_dropped() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var received = 'untouched'; \
+         window.addEventListener('message', function(e) { received = e.data; }); \
+         window.postMessage('x', 'https://other.example'); \
+         _lumen_tick_timers(); \
+         received === 'untouched'"
+    ));
+}
+
+#[test]
+fn self_postmessage_unparseable_target_origin_throws_syntax_error() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var threw = false; \
+         try { window.postMessage('', 'http://foo bar'); } \
+         catch (e) { threw = e instanceof DOMException && e.name === 'SyntaxError'; } \
+         threw"
+    ));
+}
+
+#[test]
+fn self_postmessage_options_form_reads_target_origin_and_defaults_to_slash() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var n = 0; \
+         window.addEventListener('message', function(e) { n++; }); \
+         window.postMessage('', {}); \
+         window.postMessage('', {someBogusParameterOnThisDictionary: 'food'}); \
+         window.postMessage('', {targetOrigin: '/'}); \
+         _lumen_tick_timers(); \
+         n === 3"
+    ));
+}
+
+#[test]
+fn self_postmessage_one_argument_defaults_to_same_origin_delivery() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var received = null; \
+         window.addEventListener('message', function(e) { received = e.data; }); \
+         window.postMessage('d:one-arg'); \
+         _lumen_tick_timers(); \
+         received === 'd:one-arg'"
+    ));
+}
+
+#[test]
+fn self_postmessage_host_specific_trailing_slashes_still_resolve_same_origin() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var n = 0; \
+         window.addEventListener('message', function(e) { n++; }); \
+         window.postMessage('', 'https://example.com/'); \
+         window.postMessage('', 'https://example.com//'); \
+         _lumen_tick_timers(); \
+         n === 2"
+    ));
+}
+
+#[test]
+fn self_postmessage_uncloneable_value_throws_data_clone_error() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var threw = false; \
+         try { window.postMessage(function(){}, '*'); } \
+         catch (e) { threw = e instanceof DOMException && e.name === 'DataCloneError'; } \
+         threw"
+    ));
+}
+
 #[test]
 fn install_opener_replaces_null_default_with_a_working_handle() {
     let rt = v8_runtime_with_dom(make_doc());

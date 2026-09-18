@@ -43,7 +43,7 @@ wp-checked
 
 ## Отношение к соседям
 
-Это третий известный путь, где `transfer` теряется: [BUG-717](BUG-717-OPEN.md)
+Это третий известный путь, где `transfer` теряется: [BUG-717](BUG-717-FIXED.md)
 записал половину «окно → окно» (`window.postMessage` с `transfer` не
 порождает `e.ports`). Здесь другой код (`Worker.prototype.postMessage` и
 воркерный `globalThis.postMessage`), поэтому баг отдельный, но фикс
