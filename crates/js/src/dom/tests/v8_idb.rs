@@ -291,6 +291,35 @@ fn idb_transaction_rejects_invalid_mode() {
     );
 }
 
+/// BUG-915: IndexedDB errors must be real `DOMException` instances with the
+/// spec's legacy numeric `code` — `assert_throws_dom` in WPT's testharness.js
+/// checks both, and a plain `Error` with a reassigned `.name` satisfies
+/// neither.
+#[test]
+fn idb_errors_are_dom_exceptions_with_legacy_code() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                var out = [];
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                var txn = db.transaction('s', 'readonly');
+                try { txn.objectStore('nope'); out.push('none'); }
+                catch (e) {
+                    out.push(e instanceof DOMException);
+                    out.push(e.name);
+                    out.push(e.code);
+                }
+                out.join(',')
+            "#).unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("true,NotFoundError,8".into())
+    );
+}
+
 #[test]
 fn idb_abort_reverts_applied_writes() {
     let rt = v8_runtime_with_dom(make_doc());

@@ -193,9 +193,7 @@ function _idb_inject_key(value, keyPath, key) {
 }
 
 function _idb_error(name, message) {
-    var e = new Error(message || name);
-    e.name = name;
-    return e;
+    return new DOMException(message || name, name);
 }
 
 // Indexed DB §3.2 exposes `objectStoreNames`/`indexNames` as a `DOMStringList`
@@ -1186,7 +1184,7 @@ IDBCursor.prototype.continue = function(key) {
 };
 IDBCursor.prototype.advance = function(count) {
     count = count >>> 0;
-    if (count === 0) throw _idb_error('TypeError', 'advance count must be > 0');
+    if (count === 0) throw new TypeError('advance count must be > 0');
     var self = this;
     this._req._action = function() {
         for (var i = 0; i < count; i++) if (!self._step()) break;
