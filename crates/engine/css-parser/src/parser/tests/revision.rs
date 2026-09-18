@@ -449,6 +449,157 @@ fn every_stylesheet_mutation_in_the_workspace_announces_itself() {
     );
 }
 
+// ── CSSOM-8, вложенные правила: nested-rule addressing into a top-level
+// `@mixin`'s `@result` tree ────────────────────────────────────────────────
+
+#[test]
+fn mixin_has_result_is_false_without_a_result_block() {
+    let sheet = parse("@mixin --m() { color: red; }");
+    assert!(!sheet.mixin_has_result(0));
+}
+
+#[test]
+fn mixin_has_result_is_true_with_a_result_block() {
+    let sheet = parse("@mixin --m() { @result { color: red; } }");
+    assert!(sheet.mixin_has_result(0));
+}
+
+#[test]
+fn mixin_has_result_is_false_for_a_non_mixin_index() {
+    let sheet = parse("a {}");
+    assert!(!sheet.mixin_has_result(0));
+}
+
+#[test]
+fn mixin_result_child_count_at_the_empty_path_is_one_result_child() {
+    // `@result`'s own `.cssRules.length` — the sole child is `@result`
+    // itself, addressed as the empty path.
+    let sheet = parse("@mixin --m() { @result { color: red; } } a {}");
+    assert_eq!(sheet.mixin_result_child_count(0, &[]), Some(1));
+}
+
+#[test]
+fn mixin_result_child_count_is_zero_without_a_result_block() {
+    let sheet = parse("@mixin --m() { color: red; }");
+    assert_eq!(sheet.mixin_result_child_count(0, &[]), Some(0));
+}
+
+#[test]
+fn mixin_result_node_info_a_leading_declaration_run_is_one_decls_child() {
+    // A single plain declaration in `@result` is still reached through
+    // `.cssRules[0].style`, not `@result.style` directly (`@result` has no
+    // `.style` of its own — see `mixins::result_cssom_children`'s doc
+    // comment).
+    let sheet = parse("@mixin --m() { @result { color: red; font-weight: bold; } }");
+    assert_eq!(sheet.mixin_result_child_count(0, &[]), Some(1));
+    let node = sheet.mixin_result_node_info(0, &[0]).unwrap();
+    assert_eq!(node.kind, "decls");
+    assert_eq!(node.child_count, 0);
+    assert_eq!(node.style_css_text, "color: red; font-weight: bold;");
+    assert_eq!(node.css_text, node.style_css_text);
+}
+
+#[test]
+fn mixin_result_node_info_a_nested_rule_is_a_nested_child_with_its_own_style() {
+    let sheet = parse("@mixin --m() { @result { &.a { color: blue; } } }");
+    let node = sheet.mixin_result_node_info(0, &[0]).unwrap();
+    assert_eq!(node.kind, "nested");
+    assert_eq!(node.style_css_text, "color: blue;");
+    assert_eq!(node.child_count, 0);
+}
+
+#[test]
+fn mixin_result_node_info_descends_into_a_nested_rule_own_further_nesting() {
+    let sheet = parse("@mixin --m() { @result { &.a { color: blue; &.b { color: green; } } } }");
+    // `&.a`'s own body is a mix of its leading `.style` run and a further
+    // `NestedRule` — the latter is `&.a`'s child index 0.
+    let outer = sheet.mixin_result_node_info(0, &[0]).unwrap();
+    assert_eq!(outer.child_count, 1);
+    let inner = sheet.mixin_result_node_info(0, &[0, 0]).unwrap();
+    assert_eq!(inner.kind, "nested");
+    assert_eq!(inner.style_css_text, "color: green;");
+}
+
+#[test]
+fn mixin_result_node_info_a_decls_leaf_has_no_children_to_descend_into() {
+    let sheet = parse("@mixin --m() { @result { color: red; } }");
+    assert_eq!(sheet.mixin_result_node_info(0, &[0, 0]), None);
+}
+
+#[test]
+fn mixin_result_node_info_rejects_an_out_of_range_index() {
+    let sheet = parse("@mixin --m() { @result { color: red; } }");
+    assert_eq!(sheet.mixin_result_node_info(0, &[1]), None);
+}
+
+#[test]
+fn set_mixin_result_style_replaces_a_decls_child_declarations() {
+    let mut sheet = parse("@mixin --m() { @result { color: red; } }");
+    let before = sheet.revision();
+    sheet.set_mixin_result_style(0, &[0], "color: blue").unwrap();
+    assert_ne!(before, sheet.revision());
+    let node = sheet.mixin_result_node_info(0, &[0]).unwrap();
+    assert_eq!(node.style_css_text, "color: blue;");
+}
+
+#[test]
+fn set_mixin_result_style_replaces_a_nested_rule_own_leading_run_only() {
+    let mut sheet = parse("@mixin --m() { @result { &.a { color: blue; &.b { color: green; } } } }");
+    sheet.set_mixin_result_style(0, &[0], "color: purple").unwrap();
+    let outer = sheet.mixin_result_node_info(0, &[0]).unwrap();
+    assert_eq!(outer.style_css_text, "color: purple;");
+    // The nested `&.b` child is untouched by a write to its parent's `.style`.
+    let inner = sheet.mixin_result_node_info(0, &[0, 0]).unwrap();
+    assert_eq!(inner.style_css_text, "color: green;");
+}
+
+#[test]
+fn set_mixin_result_style_fails_on_an_out_of_range_path() {
+    let mut sheet = parse("@mixin --m() { @result { color: red; } }");
+    assert_eq!(
+        sheet.set_mixin_result_style(0, &[5], "color: blue"),
+        Err(CssomRuleMutationError::Syntax)
+    );
+}
+
+#[test]
+fn insert_rule_body_apply_adds_an_apply_marker_to_a_top_level_style_rule() {
+    let mut sheet = parse("a { color: red; }");
+    let before = sheet.revision();
+    let idx = sheet.insert_rule_body_apply(0, 0, "@apply --centered();").unwrap();
+    assert_eq!(idx, 0);
+    assert_ne!(before, sheet.revision());
+    assert_eq!(sheet.rules[0].declarations.len(), 2, "the marker joins the flat declaration list");
+    assert_eq!(sheet.rules[0].declarations[1].property, MIXIN_APPLY_MARKER);
+}
+
+#[test]
+fn insert_rule_body_apply_rejects_a_non_apply_rule_text() {
+    let mut sheet = parse("a {}");
+    assert_eq!(
+        sheet.insert_rule_body_apply(0, 0, "b { color: red; }"),
+        Err(CssomRuleMutationError::Syntax)
+    );
+}
+
+#[test]
+fn insert_rule_body_apply_rejects_a_media_block_index() {
+    let mut sheet = parse("@media print { p {} }");
+    assert_eq!(
+        sheet.insert_rule_body_apply(0, 0, "@apply --m();"),
+        Err(CssomRuleMutationError::Syntax)
+    );
+}
+
+#[test]
+fn insert_rule_body_apply_rejects_an_index_past_the_apply_marker_count() {
+    let mut sheet = parse("a {}");
+    assert_eq!(
+        sheet.insert_rule_body_apply(0, 1, "@apply --m();"),
+        Err(CssomRuleMutationError::IndexSize)
+    );
+}
+
 /// Every `.rs` file under `dir`, skipping build output.
 fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };

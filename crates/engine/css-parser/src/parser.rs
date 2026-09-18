@@ -699,6 +699,97 @@ impl Stylesheet {
         Ok(())
     }
 
+    /// Whether the top-level `@mixin` at `index` has an `@result` block at
+    /// all — `CSSMixinRule.cssRules.length` (CSS Mixins L1 §cssom) is `1`
+    /// when this is `true` (the sole child is `@result` itself, addressed as
+    /// the empty path — see [`Self::mixin_result_child_count`]), `0`
+    /// otherwise. `false` if `index` is out of range or not a `Mixin` tag.
+    pub fn mixin_has_result(&self, index: usize) -> bool {
+        let Some(&kind) = self.top_level_order.get(index) else { return false };
+        let TopLevelRuleKind::Mixin(midx) = kind else { return false };
+        self.mixin_rules.get(midx).is_some_and(|m| m.result.is_some())
+    }
+
+    /// `@result`'s own `.cssRules.length` (`path = []`, the entry point into
+    /// a `@mixin`'s result tree) — or, for a non-empty `path`, the resolved
+    /// node's own `childCount` ([`mixins::MixinResultNodeInfo::child_count`]).
+    /// `None` if `index` is out of range, not a `Mixin` tag, the mixin has no
+    /// `@result`, or a non-empty `path` does not resolve.
+    pub fn mixin_result_child_count(&self, index: usize, path: &[usize]) -> Option<usize> {
+        if !path.is_empty() {
+            return Some(self.mixin_result_node_info(index, path)?.child_count);
+        }
+        let &kind = self.top_level_order.get(index)?;
+        let TopLevelRuleKind::Mixin(midx) = kind else { return None };
+        Some(self.mixin_rules.get(midx)?.result_child_count())
+    }
+
+    /// One CSSOM-addressable node inside the `@result` tree of the top-level
+    /// `@mixin` at `index` — see [`mixins::resolve_result_node`]. `None` if
+    /// `index` is out of range, not a `Mixin` tag, or `path` does not
+    /// resolve.
+    pub fn mixin_result_node_info(&self, index: usize, path: &[usize]) -> Option<MixinResultNodeInfo> {
+        let &kind = self.top_level_order.get(index)?;
+        let TopLevelRuleKind::Mixin(midx) = kind else { return None };
+        self.mixin_rules.get(midx)?.result_node_info(path)
+    }
+
+    /// `.style`'s write half for a node inside a top-level `@mixin`'s
+    /// `@result` tree — CSSOM-8, вложенные правила (the remainder of the
+    /// slice that closed top-level/`@media` addressing: see
+    /// [`Self::set_rule_style_text`]'s doc comment for that half).
+    /// `path` — see [`mixins::resolve_result_node`].
+    pub fn set_mixin_result_style(
+        &mut self,
+        index: usize,
+        path: &[usize],
+        css_text: &str,
+    ) -> Result<(), CssomRuleMutationError> {
+        let Some(&kind) = self.top_level_order.get(index) else {
+            return Err(CssomRuleMutationError::IndexSize);
+        };
+        let TopLevelRuleKind::Mixin(midx) = kind else {
+            return Err(CssomRuleMutationError::Syntax);
+        };
+        let Some(mixin) = self.mixin_rules.get_mut(midx) else {
+            return Err(CssomRuleMutationError::Syntax);
+        };
+        if mixin.set_result_style(path, css_text) {
+            self.mark_mutated();
+            Ok(())
+        } else {
+            Err(CssomRuleMutationError::Syntax)
+        }
+    }
+
+    /// `CSSGroupingRule.insertRule` on a TOP-LEVEL style rule's own body,
+    /// restricted to inserting an `@apply` statement (CSS Mixins L1) — CSSOM-8's
+    /// third and last nested-rule shape (`mixin-invalidation.tentative.html`'s
+    /// "invalidation on adding @apply rule"). See
+    /// [`Rule::insert_apply_marker`] for why this is `@apply`-only rather
+    /// than a general nested-style-rule insertion, and for what `index`
+    /// addresses.
+    pub fn insert_rule_body_apply(
+        &mut self,
+        rule_index: usize,
+        index: usize,
+        rule_text: &str,
+    ) -> Result<usize, CssomRuleMutationError> {
+        let Some(&kind) = self.top_level_order.get(rule_index) else {
+            return Err(CssomRuleMutationError::IndexSize);
+        };
+        if kind != TopLevelRuleKind::Style {
+            return Err(CssomRuleMutationError::Syntax);
+        }
+        let sub_index = self.top_level_order[..rule_index].iter().filter(|k| **k == kind).count();
+        let Some(rule) = self.rules.get_mut(sub_index) else {
+            return Err(CssomRuleMutationError::Syntax);
+        };
+        let result = rule.insert_apply_marker(index, rule_text)?;
+        self.mark_mutated();
+        Ok(result)
+    }
+
     /// The exact text [`parse`] built this sheet from, if it was parsed at all
     /// — see [`Self::source`].
     pub fn source(&self) -> Option<&str> {
@@ -788,6 +879,12 @@ impl Stylesheet {
                 CssomOp::SetMediaChildStyle { media_index, child_index, css_text } => {
                     self.set_media_child_style_text(base + media_index, *child_index, css_text)
                 }
+                CssomOp::SetMixinResultStyle { mixin_index, path, css_text } => {
+                    self.set_mixin_result_style(base + mixin_index, path, css_text)
+                }
+                CssomOp::InsertRuleBodyApply { rule_index, index, text } => {
+                    self.insert_rule_body_apply(base + rule_index, *index, text).map(|_| ())
+                }
             };
             all_ok &= outcome.is_ok();
         }
@@ -841,6 +938,29 @@ pub enum CssomOp {
         child_index: usize,
         /// The rule's whole new declaration list.
         css_text: String,
+    },
+    /// A `.style` write on a node inside a top-level `@mixin`'s `@result`
+    /// tree (CSSOM-8, вложенные правила).
+    SetMixinResultStyle {
+        /// The `@mixin`'s own position in the node's `cssRules`.
+        mixin_index: usize,
+        /// Path from `@result`'s own children down to the target node —
+        /// not rebased, structural (see [`Stylesheet::set_mixin_result_style`]'s
+        /// doc comment).
+        path: Vec<usize>,
+        /// The node's whole new declaration list.
+        css_text: String,
+    },
+    /// `CSSGroupingRule.insertRule` of an `@apply` statement into a
+    /// TOP-LEVEL style rule's own body.
+    InsertRuleBodyApply {
+        /// The owning style rule's position in the node's `cssRules`.
+        rule_index: usize,
+        /// Position in that rule's own `@apply`-marker sub-list — see
+        /// [`Rule::insert_apply_marker`].
+        index: usize,
+        /// The rule text exactly as JS passed it.
+        text: String,
     },
 }
 

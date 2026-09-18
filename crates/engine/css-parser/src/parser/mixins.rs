@@ -110,6 +110,31 @@ impl MixinRule {
             }
         }
     }
+
+    /// `@mixin`'s own `.cssRules.length` (CSS Mixins L1 §cssom) — always `0`
+    /// or `1`: the single `@result` block if present, nothing otherwise
+    /// (`locals` has no CSSOM representation — see [`Self::css_text`]'s doc
+    /// comment). CSSOM-8's nested-rule addressing does not need this to
+    /// disambiguate `@result` from a `@result`-less mixin's `.cssRules[0]`;
+    /// kept `pub(super)` for the JS binding layer regardless, matching
+    /// `_lumen_stylesheet_rule_count`'s own top-level sibling.
+    pub(super) fn result_child_count(&self) -> usize {
+        self.result.as_deref().map(|r| result_cssom_children(r, false).len()).unwrap_or(0)
+    }
+
+    /// One node inside this mixin's `@result` tree, addressed by `path` — see
+    /// [`resolve_result_node`]. `None` if this mixin has no `@result` at all.
+    pub(super) fn result_node_info(&self, path: &[usize]) -> Option<MixinResultNodeInfo> {
+        resolve_result_node(self.result.as_deref()?, path)
+    }
+
+    /// Write half of [`Self::result_node_info`] — see [`set_result_node_style`].
+    pub(super) fn set_result_style(&mut self, path: &[usize], css_text: &str) -> bool {
+        match self.result.as_mut() {
+            Some(r) => set_result_node_style(r, path, css_text),
+            None => false,
+        }
+    }
 }
 
 /// One parameter of an `@mixin` rule: `--name [type(<syntax>)]? [: <default>]?`.
@@ -149,6 +174,60 @@ impl MixinParameter {
             s.push_str(def);
         }
         s
+    }
+}
+
+impl Rule {
+    /// `CSSGroupingRule.insertRule` (CSS Nesting's own CSSOM extension of a
+    /// style rule) restricted to inserting an `@apply` statement (CSS Mixins
+    /// L1) into THIS rule's own body — CSSOM-8's third and last nested-rule
+    /// shape (`mixin-invalidation.tentative.html`'s "invalidation on adding
+    /// @apply rule"). `index` addresses this rule's own `@apply`-marker
+    /// sub-list, i.e. skips over ordinary declarations the same way a real
+    /// `CSSGroupingRule.cssRules` would only enumerate nested rules, not
+    /// this rule's own `.style` — see [`MIXIN_APPLY_MARKER`]'s doc comment
+    /// for why an `@apply` and ordinary declarations share this rule's one
+    /// flat `Vec<Declaration>` instead of a separate list. `rule_text` must
+    /// parse as `@apply ...` ([`super::parse_apply_call`]); anything else (a
+    /// plain declaration, a real nested style rule, unparseable text) is out
+    /// of this slice's scope and returns `Syntax` — a general
+    /// `CSSGroupingRule.insertRule` accepting arbitrary nested style rules is
+    /// not implemented.
+    pub(super) fn insert_apply_marker(
+        &mut self,
+        index: usize,
+        rule_text: &str,
+    ) -> Result<usize, CssomRuleMutationError> {
+        let trimmed = rule_text.trim_start();
+        let Some(after_at) = trimmed.strip_prefix('@') else {
+            return Err(CssomRuleMutationError::Syntax);
+        };
+        let mut p = Parser::new(after_at);
+        let Some(ident) = p.parse_ident() else { return Err(CssomRuleMutationError::Syntax) };
+        if !ident.eq_ignore_ascii_case("apply") {
+            return Err(CssomRuleMutationError::Syntax);
+        }
+        let raw_start = p.pos;
+        if p.parse_apply_rule().is_none() {
+            return Err(CssomRuleMutationError::Syntax);
+        }
+        let value = after_at[raw_start..p.pos].to_string();
+        let marker_positions: Vec<usize> = self
+            .declarations
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.property == MIXIN_APPLY_MARKER)
+            .map(|(i, _)| i)
+            .collect();
+        if index > marker_positions.len() {
+            return Err(CssomRuleMutationError::IndexSize);
+        }
+        let splice_at = marker_positions.get(index).copied().unwrap_or(self.declarations.len());
+        self.declarations.insert(
+            splice_at,
+            Declaration { property: MIXIN_APPLY_MARKER.to_string(), value, important: false },
+        );
+        Ok(index)
     }
 }
 
@@ -702,6 +781,208 @@ impl<'a> Parser<'a> {
             self.consume();
         }
         Some(ApplyRule { name, args, block })
+    }
+}
+
+/// One child of a mixin `@result` block (or of a [`MixinResultItem::NestedRule`]'s
+/// own body) as CSSOM-8's nested-rule addressing sees it (CSS Mixins L1
+/// §cssom, `mixin-invalidation.tentative.html`) — either a synthesized,
+/// declarations-only child (real CSS Nesting's "CSSNestedDeclarations": a
+/// maximal contiguous run of `Decl`/`Apply`/`Contents` items with no
+/// `NestedRule` in between) or an actual nested style rule. `start`/`end`
+/// (byte-free — these are **item indices**, not source offsets) index
+/// straight into the `Vec<MixinResultItem>` this was grouped from, so a
+/// caller holding both can splice in place without re-deriving positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MixinResultChildKind {
+    /// `items[start..end]`, all `Decl`/`Apply`/`Contents`.
+    Decls { start: usize, end: usize },
+    /// `items[.0]`, guaranteed [`MixinResultItem::NestedRule`].
+    Nested(usize),
+}
+
+/// Groups `items` into [`MixinResultChildKind`]s in source order — the
+/// shared indexing scheme both the CSSOM read side
+/// ([`resolve_result_node`]) and the write side ([`set_result_node_style`])
+/// use, so a path resolved for a read is guaranteed to still address the
+/// same child for a same-tick write (both regroup from the same `items`
+/// slice/vec, no cached indices survive a mutation).
+fn group_result_children(items: &[MixinResultItem]) -> Vec<MixinResultChildKind> {
+    let mut out = Vec::new();
+    let mut run_start: Option<usize> = None;
+    for (i, it) in items.iter().enumerate() {
+        if matches!(it, MixinResultItem::NestedRule { .. }) {
+            if let Some(s) = run_start.take() {
+                out.push(MixinResultChildKind::Decls { start: s, end: i });
+            }
+            out.push(MixinResultChildKind::Nested(i));
+        } else if run_start.is_none() {
+            run_start = Some(i);
+        }
+    }
+    if let Some(s) = run_start {
+        out.push(MixinResultChildKind::Decls { start: s, end: items.len() });
+    }
+    out
+}
+
+/// [`group_result_children`], with the leading `Decls` run dropped when
+/// `has_own_style` — CSS Mixins L1's `@result` is not selector-bearing and
+/// has no `.style` of its own (its ENTIRE content, including a leading
+/// declaration run, is exposed through `.cssRules`, confirmed against
+/// `mixin-invalidation.tentative.html`'s second subtest: a `@result` with a
+/// single plain declaration is still reached via `.cssRules[0].style`, two
+/// levels, not `.style` directly); a [`MixinResultItem::NestedRule`] (`&
+/// {...}` — an actual selector-bearing style rule, same grammar CSS Nesting
+/// itself uses) does have one, same as any real `CSSStyleRule` — so its own
+/// leading run is `.style` and only anything after it is `.cssRules`. The
+/// caller passes `has_own_style` (`false` for `@result` itself, `true` when
+/// descending into a `NestedRule`'s own body) rather than this function
+/// guessing from context, since nothing here can tell an `@result`'s
+/// `Vec<MixinResultItem>` apart from a `NestedRule`'s own `body` — both are
+/// the same type.
+fn result_cssom_children(items: &[MixinResultItem], has_own_style: bool) -> Vec<MixinResultChildKind> {
+    let groups = group_result_children(items);
+    if has_own_style && matches!(groups.first(), Some(MixinResultChildKind::Decls { .. })) {
+        return groups[1..].to_vec();
+    }
+    groups
+}
+
+/// End index (exclusive) of `items`' own leading declaration run — the
+/// slice a [`MixinResultItem::NestedRule`]'s `.style` covers. `items.len()`
+/// if the whole body is declarations (no nested rule at all).
+fn leading_decls_end(items: &[MixinResultItem]) -> usize {
+    items.iter().position(|it| matches!(it, MixinResultItem::NestedRule { .. })).unwrap_or(items.len())
+}
+
+/// `"prop: value; prop2: value2;"` for `items[start..end]` — only `Decl`
+/// items contribute (an `Apply`/`Contents` sharing the same run has no
+/// `CSSStyleDeclaration` representation), same join convention as
+/// [`super::Rule::style_css_text`].
+fn decls_text_in_range(items: &[MixinResultItem], start: usize, end: usize) -> String {
+    items[start..end]
+        .iter()
+        .filter_map(|it| match it {
+            MixinResultItem::Decl(d) => Some(d.to_css_text()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Replaces `items[start..end]` wholesale with `css_text` reparsed as a bare
+/// declaration list ([`super::parse_inline_style`], the same grammar
+/// [`super::Stylesheet::set_rule_style_text`] uses) — CSSOM-8's `.style`
+/// setter is always a full-block reparse-and-replace (the JS shim's
+/// `_lumen_style_set_parsed` already merged the one changed property into
+/// the full `cssText` before calling down here, so no per-property merge
+/// belongs at this layer). Drops any `Apply`/`Contents` item that shared the
+/// replaced range — narrower than a real `.style` write on a run that mixed
+/// declarations with `@apply`/`@contents`, but no vendored test produces
+/// that shape, and this is CSS Mixins L1 Phase 0 territory already.
+fn replace_decls_range(items: &mut Vec<MixinResultItem>, start: usize, end: usize, css_text: &str) {
+    let new_items: Vec<MixinResultItem> =
+        parse_inline_style(css_text).into_iter().map(MixinResultItem::Decl).collect();
+    items.splice(start..end, new_items);
+}
+
+/// One CSSOM-addressable node inside a mixin's `@result` tree, as
+/// [`resolve_result_node`] reports it — the shape
+/// `crates/js/src/v8_runtime/install/stylesheets.rs`'s JSON payload for
+/// `_lumen_stylesheet_mixin_node_json` copies field-for-field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MixinResultNodeInfo {
+    /// `"decls"` for a synthesized declarations-only child, `"nested"` for
+    /// an actual nested style rule.
+    pub kind: &'static str,
+    /// This node's own `cssText` — the declarations text for a `"decls"`
+    /// node (no wrapping prelude, matching real CSSNestedDeclarations
+    /// serialization), the full `& {...}` block (own further nesting
+    /// included) for a `"nested"` one ([`MixinResultItem::css_text`]).
+    pub css_text: String,
+    /// This node's own `.style.cssText` — same text as `css_text` for a
+    /// `"decls"` node, just its OWN leading declaration run for a
+    /// `"nested"` one (anything after that run is this node's own
+    /// `cssRules`, not `.style`).
+    pub style_css_text: String,
+    /// Length of this node's own `.cssRules` — always `0` for a `"decls"`
+    /// node (a synthesized declarations-only child has no children of its
+    /// own, same as real CSSNestedDeclarations), the count of
+    /// [`result_cssom_children`] (with `has_own_style = true`) of a
+    /// `"nested"` node's body otherwise.
+    pub child_count: usize,
+}
+
+/// Resolves `path` (a sequence of `.cssRules` indices, first hop against
+/// `@result`'s own children, each further hop descending into the
+/// previously resolved `"nested"` node's own children) against `items` —
+/// `@result`'s `Vec<MixinResultItem>` on the first call. `None` on any
+/// out-of-range index, an empty `path`, or a `path` that runs past a
+/// `"decls"` leaf (which has no children to descend into).
+pub(super) fn resolve_result_node(items: &[MixinResultItem], path: &[usize]) -> Option<MixinResultNodeInfo> {
+    resolve_node(items, path, false)
+}
+
+fn resolve_node(items: &[MixinResultItem], path: &[usize], has_own_style: bool) -> Option<MixinResultNodeInfo> {
+    let (&first, rest) = path.split_first()?;
+    let children = result_cssom_children(items, has_own_style);
+    match *children.get(first)? {
+        MixinResultChildKind::Decls { start, end } if rest.is_empty() => {
+            let text = decls_text_in_range(items, start, end);
+            Some(MixinResultNodeInfo {
+                kind: "decls",
+                css_text: text.clone(),
+                style_css_text: text,
+                child_count: 0,
+            })
+        }
+        MixinResultChildKind::Decls { .. } => None, // a `Decls` leaf has no children to descend into.
+        MixinResultChildKind::Nested(idx) => {
+            let MixinResultItem::NestedRule { body, .. } = &items[idx] else { return None };
+            if rest.is_empty() {
+                let leading_end = leading_decls_end(body);
+                Some(MixinResultNodeInfo {
+                    kind: "nested",
+                    css_text: items[idx].css_text(),
+                    style_css_text: decls_text_in_range(body, 0, leading_end),
+                    child_count: result_cssom_children(body, true).len(),
+                })
+            } else {
+                resolve_node(body, rest, true)
+            }
+        }
+    }
+}
+
+/// Write half of [`resolve_result_node`] — replaces the target node's own
+/// declaration run (a `"decls"` child's whole range, or a `"nested"` one's
+/// own leading run) with `css_text` reparsed
+/// ([`replace_decls_range`]). `false` on the same conditions
+/// [`resolve_result_node`] answers `None` for.
+pub(super) fn set_result_node_style(items: &mut Vec<MixinResultItem>, path: &[usize], css_text: &str) -> bool {
+    set_node_style(items, path, css_text, false)
+}
+
+fn set_node_style(items: &mut Vec<MixinResultItem>, path: &[usize], css_text: &str, has_own_style: bool) -> bool {
+    let Some((&first, rest)) = path.split_first() else { return false };
+    let children = result_cssom_children(items, has_own_style);
+    match children.get(first).copied() {
+        Some(MixinResultChildKind::Decls { start, end }) if rest.is_empty() => {
+            replace_decls_range(items, start, end, css_text);
+            true
+        }
+        Some(MixinResultChildKind::Nested(idx)) => {
+            let Some(MixinResultItem::NestedRule { body, .. }) = items.get_mut(idx) else { return false };
+            if rest.is_empty() {
+                let leading_end = leading_decls_end(body);
+                replace_decls_range(body, 0, leading_end, css_text);
+                true
+            } else {
+                set_node_style(body, rest, css_text, true)
+            }
+        }
+        _ => false,
     }
 }
 
