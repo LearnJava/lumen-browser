@@ -1,8 +1,43 @@
 # BUG-748 — `Headers`/`Response` в скоупе service worker — отдельный мини-шим на объекте: нет `append`/`delete`/`forEach`/итерации, дубликаты имён теряются, внутреннее поле `_h` торчит наружу
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-18 (P3)
 **Компонент:** js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker: `Headers` ~строки 72-80, `Response` ~строки 82-104)
 **Найден:** P3, при закрытии [BUG-369](BUG-369-FIXED.md), 2026-08-10
+
+## Исправлено
+
+Реализация BUG-369 (`Headers` на приватном `WeakMap`-состоянии, guard,
+`sort and combine`) вынесена дословным срезом из `web_api_shim_mid_b.js` в
+общий `crates/js/src/shim/headers_shim.js` (`crate::dom::HEADERS_SHIM`,
+`pub(crate)`) — файл разбит на `web_api_shim_mid_b.js` (до класса) и
+`web_api_shim_mid_b2.js` (после), склейка в `web_api_shim()` даёт прежний
+текст страницы. `install_sw_globals_v8` (`sw_worker.rs`) теперь `eval`-ит
+`HEADERS_SHIM` отдельным вызовом перед шимом области worker — тем же
+приёмом, каким `crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM` уже делится
+между тремя видами воркера: top-level `var` отдельного `eval`-скрипта
+попадает в тот же глобальный объект, что и следующий. Мини-класс `Headers`
+внутри `sw_globals_shim` удалён целиком; `Response.prototype.clone` больше
+не читает приватное поле `_h` (`headers: this.headers._h`), а передаёт сам
+объект `Headers` — конструктор копирует список пар из существующего
+инстанса (тот же путь, что и для `Request`).
+
+Пункты 1–5 симптома закрыты: `append`/`delete`/`forEach`/`entries`/`keys`/
+`values`/`getSetCookie`/`Symbol.iterator` есть, хранилище — список пар
+(`Set-Cookie` не схлопывается), `get()`/`has()` согласованы, есть валидация
+имени/значения и Fetch-guard, `_h` как наблюдаемое поле исчез вместе со всем
+мини-классом. Пункт 6 (дефолт `statusText`/`arrayBuffer` `Response` этого же
+шима) — отдельный, более мелкий дефект `Response`, не `Headers`; в это
+исправление не входил.
+
+Новый тест `sw_headers_support_full_fetch_api` (`crates/js/src/sw_worker.rs`)
+покрывает `append`/`forEach`/итерацию/дубликаты `Set-Cookie`/`clone`.
+`cargo test -p lumen-js --lib --features v8-backend` 3848/3848 (не считая
+известного межтестового флака `frame_bridge::inaccessible_bridge_mutation_does_not_mark_dirty`
+при параллельном запуске — воспроизводится и изолированно от этой правки),
+`cargo clippy --workspace --all-targets -- -D warnings` чист. `scoped-test.sh`:
+единственный красный — `cpu_snapshots_match_references` (те же 7 файлов, что
+и [BUG-1008](BUG-1008-OPEN.md)) — предсуществующий дрейф эталонов, не
+регрессия (изменение только в JS-слое, пиксели не затронуты).
 
 ## Симптом
 

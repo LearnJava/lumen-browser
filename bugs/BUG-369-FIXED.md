@@ -242,7 +242,7 @@ Guard не выводится в публичный API, поэтому `Respons
   «корректным `Response.error()`/`redirect()`».
 - Мини-шим `Headers`/`Response` в скоупе service worker
   (`crates/js/src/sw_worker.rs`) — отдельный объект того же класса дефекта,
-  выделен в [BUG-748](BUG-748-OPEN.md).
+  выделен в [BUG-748](BUG-748-FIXED.md).
 
 ## Связанные
 
@@ -251,6 +251,6 @@ Guard не выводится в публичный API, поэтому `Respons
 - [BUG-694](BUG-694-FIXED.md) — ровно тот же класс на `URLSearchParams`: нет
   `Symbol.iterator`, `entries()` отдаёт массив, копирующий конструктор кладёт
   внутреннее поле `_p` отдельным параметром.
-- [BUG-748](BUG-748-OPEN.md) — тот же класс в шиме service worker.
+- [BUG-748](BUG-748-FIXED.md) — тот же класс в шиме service worker.
 - [BUG-367](BUG-367-FIXED.md), [BUG-366](BUG-366-FIXED.md) — тот же класс «внутренний
   слот торчит наружу перечислимым и записываемым», на `Element` и `navigator.credentials`.
