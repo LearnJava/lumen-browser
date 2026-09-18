@@ -175,6 +175,73 @@ fn idb_records_survive_reload_via_snapshot() {
     assert_eq!(title, "Hyperion", "record written in session 1 must be readable after reload");
 }
 
+/// BUG-917: a dirty flush must mirror only the database that actually changed,
+/// not re-walk every origin database's stores/indexes on every flush. Two
+/// databases are created, then only one is mutated again (a second store);
+/// the schema-op count contributed by the untouched database must not grow.
+#[test]
+fn idb_persist_schema_only_remirrors_dirty_databases() {
+    let backend = Arc::new(MockIdb::default());
+    let rt = make_rt(backend.clone() as Arc<dyn IdbBackend>);
+    rt.eval(
+        r#"
+        var reqA = indexedDB.open('shopA', 1);
+        reqA.onupgradeneeded = function(ev) { ev.target.result.createObjectStore('books'); };
+        reqA.onsuccess = function(ev) { window._dbA = ev.target.result; };
+        var reqB = indexedDB.open('shopB', 1);
+        reqB.onupgradeneeded = function(ev) { ev.target.result.createObjectStore('toys'); };
+        reqB.onsuccess = function(ev) { window._dbB = ev.target.result; };
+        'ok'
+        "#,
+    )
+    .unwrap();
+    rt.eval("_lumen_idb_flush()").unwrap();
+
+    let ops_after_create = backend.schema_ops.lock().unwrap().len();
+    let shop_b_ops_after_create = backend
+        .schema_ops
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|op| matches!(op,
+            IdbSchemaOp::SetVersion { db_name, .. } if db_name == "shopB")
+            || matches!(op, IdbSchemaOp::CreateStore { db_name, .. } if db_name == "shopB"))
+        .count();
+    assert!(ops_after_create > 0, "creating two databases should mirror at least their schema once");
+
+    // Mutate only shopA (a second version upgrade adding a store); shopB is
+    // never touched again.
+    rt.eval(
+        r#"
+        window._dbA.close();
+        var req2 = indexedDB.open('shopA', 2);
+        req2.onupgradeneeded = function(ev) { ev.target.transaction.db.createObjectStore('authors'); };
+        req2.onsuccess = function() {};
+        'ok'
+        "#,
+    )
+    .unwrap();
+    rt.eval("_lumen_idb_flush()").unwrap();
+
+    let shop_b_ops_after_mutation = backend
+        .schema_ops
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|op| matches!(op,
+            IdbSchemaOp::SetVersion { db_name, .. } if db_name == "shopB")
+            || matches!(op, IdbSchemaOp::CreateStore { db_name, .. } if db_name == "shopB"))
+        .count();
+    assert_eq!(
+        shop_b_ops_after_mutation, shop_b_ops_after_create,
+        "an untouched database must not be re-mirrored by a flush that only dirtied another database"
+    );
+    assert!(
+        backend.schema_ops.lock().unwrap().len() > ops_after_create,
+        "shopA's new store must still be mirrored"
+    );
+}
+
 /// BUG-916: `createIndex`/`deleteIndex` must apply at their own position in the
 /// transaction's request queue, not synchronously — otherwise a `deleteIndex`
 /// written after a data request retroactively erases the constraint that
