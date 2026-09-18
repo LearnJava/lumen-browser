@@ -132,3 +132,61 @@ fn instanceof_css_style_sheet_and_css_style_rule() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+// ── CSSOM-8 (BUG-518 срез 9): `.style`'s write half on an own sheet's rule ──
+
+#[test]
+fn top_level_rule_style_setter_updates_css_text() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(style_nid, "p { color: red; }"));
+    rt.eval("document.styleSheets[0].cssRules[0].style.color = 'blue'").unwrap();
+    let r = rt.eval("document.styleSheets[0].cssRules[0].style.cssText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("color: blue;".to_string()));
+}
+
+#[test]
+fn top_level_rule_style_setter_leaves_sibling_rule_untouched() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(
+        style_nid,
+        "p { color: red; } span { color: green; }",
+    ));
+    rt.eval("document.styleSheets[0].cssRules[0].style.setProperty('color', 'blue')")
+        .unwrap();
+    let r = rt.eval("document.styleSheets[0].cssRules[1].style.cssText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("color: green;".to_string()));
+}
+
+#[test]
+fn top_level_rule_style_css_text_setter_replaces_whole_declaration_list() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(style_nid, "p { color: red; }"));
+    rt.eval(
+        "document.styleSheets[0].cssRules[0].style.cssText = 'color: blue; font-weight: bold'",
+    )
+    .unwrap();
+    let r = rt.eval("document.styleSheets[0].cssRules[0].style.cssText").unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("color: blue; font-weight: bold;".to_string())
+    );
+}
+
+#[test]
+fn media_child_rule_style_setter_updates_css_text() {
+    let (doc, style_nid) = make_doc_with_style();
+    let rt = v8_runtime_with_dom(doc);
+    rt.update_stylesheet_nodes(one_sheet_entry(
+        style_nid,
+        "@media screen { div { color: red; } }",
+    ));
+    rt.eval("document.styleSheets[0].cssRules[0].cssRules[0].style.color = 'blue'")
+        .unwrap();
+    let r = rt
+        .eval("document.styleSheets[0].cssRules[0].cssRules[0].style.cssText")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("color: blue;".to_string()));
+}

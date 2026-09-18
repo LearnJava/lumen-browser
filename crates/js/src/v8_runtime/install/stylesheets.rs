@@ -161,7 +161,12 @@ pub(crate) fn install_stylesheets(
     // documented for constructed sheets before срез 2 wired
     // `adoptedStyleSheets` into the cascade; no vendored test in this bug's
     // scope needs the layout effect, only the correct `cssRules`/exception
-    // behaviour.
+    // behaviour. `_lumen_stylesheet_rule_set_style`/`_lumen_stylesheet_
+    // media_child_set_style` below (CSSOM-8, BUG-518 срез 9) share this exact
+    // limitation — a same-tick `getComputedStyle()` after `.style.color = …`
+    // still answers from the pre-mutation cascade; `mixin-invalidation.
+    // tentative.html` needs that gap closed (a follow-up срез), not just the
+    // setter existing.
     {
         let s = Arc::clone(&stylesheet_nodes);
         reg!(scope, ctx, store, "_lumen_stylesheet_insert_rule", move |idx: u32, rule_text: String, index: u32| -> i32 {
@@ -183,6 +188,38 @@ pub(crate) fn install_stylesheets(
                 Ok(()) => 0,
                 Err(_) => -1,
             }
+        });
+    }
+    // `CSSStyleRule.style`'s write half (CSSOM-8, BUG-518 срез 9) — a
+    // top-level style rule's own declaration block. Same "-1 sentinel on any
+    // error, no distinct error kinds" convention as insert/delete above
+    // (the JS wrapper never needs to tell `IndexSize` apart from `Syntax`
+    // here, since it only ever calls this with an index it just read back
+    // from `_lumen_stylesheet_rule_json`). Same not-yet-wired-to-the-cascade
+    // caveat as `_lumen_stylesheet_insert_rule` above — see that native's
+    // doc comment.
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        reg!(scope, ctx, store, "_lumen_stylesheet_rule_set_style", move |idx: u32, rule_idx: u32, css_text: String| -> bool {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return false };
+            std::sync::Arc::make_mut(&mut entry.sheet)
+                .set_rule_style_text(rule_idx as usize, &css_text)
+                .is_ok()
+        });
+    }
+    // Sibling of the native above for a style rule nested inside a
+    // top-level `@media` block (`_lumen_stylesheet_media_child_json`'s
+    // addressing: `rule_idx` is the `@media` block's own top-level
+    // position, `child_idx` its position inside that block).
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        reg!(scope, ctx, store, "_lumen_stylesheet_media_child_set_style", move |idx: u32, rule_idx: u32, child_idx: u32, css_text: String| -> bool {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return false };
+            std::sync::Arc::make_mut(&mut entry.sheet)
+                .set_media_child_style_text(rule_idx as usize, child_idx as usize, &css_text)
+                .is_ok()
         });
     }
     Ok(())

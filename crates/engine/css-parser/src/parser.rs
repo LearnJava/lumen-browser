@@ -588,6 +588,65 @@ impl Stylesheet {
         self.mark_mutated();
         Ok(())
     }
+
+    /// `CSSStyleRule.style`'s write half (CSSOM §6.7.2) for a TOP-LEVEL style
+    /// rule of THIS (owned, not constructed) sheet — CSSOM-8. Replaces the
+    /// rule's whole declaration list by reparsing `css_text` as a bare
+    /// declaration list ([`parse_inline_style`], the same grammar an
+    /// element's `style=""` attribute uses), mirroring [`Self::insert_rule`]'s
+    /// reparse-and-replace shape. Only a plain style rule at `index` is
+    /// addressable this way — a `@media`/`@mixin` slot answers `Syntax`
+    /// (media's own nested rules go through [`Self::set_media_child_style_text`]
+    /// instead; a mixin's `@result`/nested-rule declarations are out of this
+    /// slice's scope).
+    pub fn set_rule_style_text(
+        &mut self,
+        index: usize,
+        css_text: &str,
+    ) -> Result<(), CssomRuleMutationError> {
+        let Some(&kind) = self.top_level_order.get(index) else {
+            return Err(CssomRuleMutationError::IndexSize);
+        };
+        if kind != TopLevelRuleKind::Style {
+            return Err(CssomRuleMutationError::Syntax);
+        }
+        let sub_index = self.top_level_order[..index].iter().filter(|k| **k == kind).count();
+        let Some(rule) = self.rules.get_mut(sub_index) else {
+            return Err(CssomRuleMutationError::Syntax);
+        };
+        rule.declarations = parse_inline_style(css_text);
+        self.mark_mutated();
+        Ok(())
+    }
+
+    /// Sibling of [`Self::set_rule_style_text`] for a style rule nested
+    /// inside a top-level `@media` block: `media_index` is that block's own
+    /// top-level position (as in [`Self::cssom_rules`]), `child_index` its
+    /// position inside the block's own rule list.
+    pub fn set_media_child_style_text(
+        &mut self,
+        media_index: usize,
+        child_index: usize,
+        css_text: &str,
+    ) -> Result<(), CssomRuleMutationError> {
+        let Some(&kind) = self.top_level_order.get(media_index) else {
+            return Err(CssomRuleMutationError::IndexSize);
+        };
+        if kind != TopLevelRuleKind::Media {
+            return Err(CssomRuleMutationError::Syntax);
+        }
+        let sub_index =
+            self.top_level_order[..media_index].iter().filter(|k| **k == kind).count();
+        let Some(media_rule) = self.media_rules.get_mut(sub_index) else {
+            return Err(CssomRuleMutationError::Syntax);
+        };
+        let Some(child) = media_rule.rules.get_mut(child_index) else {
+            return Err(CssomRuleMutationError::IndexSize);
+        };
+        child.declarations = parse_inline_style(css_text);
+        self.mark_mutated();
+        Ok(())
+    }
 }
 
 /// One `<style>`/`<link rel=stylesheet>` DOM node paired with its own parsed

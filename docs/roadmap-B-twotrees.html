@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-18",
  "counts": {
-  "open": 298,
-  "fixed": 705,
+  "open": 297,
+  "fixed": 706,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5670,10 +5670,10 @@
       },
       {
        "id": "CSSOM-8",
-       "title": "CSSOM-8: .style-сеттер CSSOM-правил (insertRule/deleteRule на собственных листах уже сделаны)",
+       "title": "CSSOM-8: .style-сеттер CSSOM-правил (top-level/@media своих листов сделан среза 9; каскадная инвалидация и вложенные в @mixin правила — остаток)",
        "status": "planned",
        "size": "M",
-       "note": "Записывающая половина CSSOM для СОБСТВЕННЫХ (не constructed) листов. Найдено P3 2026-09-07 как остаток [BUG-518](bugs/BUG-518-OPEN.md) (мьксины сами реализованы полностью, срезы 2026-09-06/07 — блокирован только 6-й сабтест `mixin-cssom.tentative.html` и весь `mixin-invalidation.tentative.html`); реклассифицировано по правилу docs/probe-method.md §8 — функциональности нет вовсе (условие 1) и объём — новый реестр мутации плюс сеттер для семейства Rule-типов, не точечная правка (условие 2). **Сужено срезом 8 (BUG-518, тот же день):** `insertRule`/`deleteRule` на `document.styleSheets[i]`/`<style>`.`sheet` реализованы (переиспользован `Stylesheet::insert_rule`/`delete_rule` — тот же, что у constructed-листа) — закрыло 6-й сабтест `mixin-cssom.tentative.html`, весь файл теперь PASS. Единственное, что осталось в этой задаче: живого сеттера `.style` по-прежнему нет ни у одного CSSOM Rule-объекта (`CSSStyleRule`/`CSSMixinRule`/... — только чтение `cssText`), нужен для `mixin-invalidation.tentative.html`.",
+       "note": "Записывающая половина CSSOM для СОБСТВЕННЫХ (не constructed) листов. Найдено P3 2026-09-07 как остаток [BUG-518](bugs/BUG-518-OPEN.md) (мьксины сами реализованы полностью, срезы 2026-09-06/07 — блокирован только 6-й сабтест `mixin-cssom.tentative.html` и весь `mixin-invalidation.tentative.html`); реклассифицировано по правилу docs/probe-method.md §8 — функциональности нет вовсе (условие 1) и объём — новый реестр мутации плюс сеттер для семейства Rule-типов, не точечная правка (условие 2). **Сужено срезом 8 (BUG-518, тот же день):** `insertRule`/`deleteRule` на `document.styleSheets[i]`/`<style>`.`sheet` реализованы (переиспользован `Stylesheet::insert_rule`/`delete_rule` — тот же, что у constructed-листа) — закрыло 6-й сабтест `mixin-cssom.tentative.html`, весь файл теперь PASS. **Ревизия 2026-09-18 (P1), срез 9:** живой сеттер `CSSStyleRule.style` реализован для собственного листа — `Stylesheet::set_rule_style_text`/`set_media_child_style_text` (переиспользуют `parse_inline_style`, тот же грамматический разбор, что у `style=\"\"`) в `crates/engine/css-parser/src/parser.rs`, натив-пара `_lumen_stylesheet_rule_set_style`/`_lumen_stylesheet_media_child_set_style` (`crates/js/src/v8_runtime/install/stylesheets.rs`), общий `CSSStyleDeclaration.prototype` с элементным `.style` через `_lumen_make_rule_style`/`__loc__`-адресацию (`crates/js/src/shim/web_api_shim_mid.js`) — покрывает и топ-уровневый, и вложенный в `@media` `CSSStyleRule`. Остаток сознательно не тронут (обе части — отдельная архитектурная работа, не точечный сеттер): (1) сеттер не пробрасывается в каскад — `document.styleSheets` пересобирается whole-sale из DOM-текста при каждом relayout (та же природа пробела, что у `insertRule`/`deleteRule` среза 8), поэтому `getComputedStyle()` в тот же тик мутацию не видит, что и держит `mixin-invalidation.tentative.html` красным даже там, где сам сеттер сработал; (2) `.style` вложенного в `@mixin`'s `@result` правила (`mixin-invalidation.tentative.html`'s первые два сабтеста адресуют именно такое правило) вне объёма — эти правила не top-level и не `@media`-child, у них нет адреса в `stylesheet_nodes`. 7 новых unit-тестов в `parser/tests/revision.rs` (`cargo test -p lumen-css-parser --lib`: 465/465), 5 новых end-to-end через реальный V8-шим в `crates/js/src/dom/tests/v8_cssom_stylesheets.rs` (`cargo test -p lumen-js --features v8-backend --lib`: 3857/3857, `--test all`: 149/149, регрессий нет), `cargo clippy -p lumen-css-parser -p lumen-js --features v8-backend --all-targets -- -D warnings`: чисто. Не паинт/каскад — `dump_golden.py` не затронут. `mixin-invalidation.tentative.html` остаётся красным (обе причины выше вне этого среза); статус CSSOM-8 остаётся `planned` до отдельного решения по каскадной инвалидации CSSOM-мутаций (потенциально общий трек с `insertRule`/`deleteRule`).",
        "bugs": [
         "BUG-518",
         "BUG-897"
@@ -8021,13 +8021,6 @@
    "status": "open",
    "title": "`document.styleSheets` отсутствует целиком (`typeof === \"undefined\"`), а вместе с ним и весь CSSOM таблиц стилей: нет ни `StyleSheetList`, ни `CSSStyleSheet`/`C…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + shell/layout (публикация разобранных таблиц в JS-рантайм)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-748": {
-   "status": "open",
-   "title": "У скоупа service worker свой независимый мини-шим `Headers`/`Response`, оставшийся в дофиксовом виде ([BUG-369](bugs/BUG-369-FIXED.md)) и ещё беднее: хранилище…",
-   "component": "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)",
    "date": null,
    "debtor": false
   },
@@ -14146,6 +14139,13 @@
    "status": "fixed",
    "title": "`ReportingObserver` реализован, но ни один Rust- или шим-файл не генерировал `document-policy-violation`/`permissions-policy-violation` отчёт — сверки фичи с по…",
    "component": "js (`crates/js/src/reporting_api.rs`, `crates/js/src/xhr.rs`), network (`crates/network/src/document_policy.rs`), shell (`crates/shell/src/page_source.rs`)",
+   "date": "2026-09-18",
+   "debtor": false
+  },
+  "BUG-748": {
+   "status": "fixed",
+   "title": "У скоупа service worker свой независимый мини-шим `Headers`/`Response`, оставшийся в дофиксовом виде ([BUG-369](bugs/BUG-369-FIXED.md)) и ещё беднее: хранилище…",
+   "component": "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)",
    "date": "2026-09-18",
    "debtor": false
   }
