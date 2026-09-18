@@ -155,6 +155,66 @@ fn delete_rule_rejects_index_at_or_past_the_length() {
 }
 
 #[test]
+fn set_rule_style_text_replaces_the_top_level_rule_declarations() {
+    let mut sheet = parse("a { color: red } b { color: green }");
+    let before = sheet.revision();
+    sheet.set_rule_style_text(0, "color: blue; font-weight: bold").unwrap();
+    assert_ne!(before, sheet.revision());
+    assert_eq!(sheet.rules[0].style_css_text(), "color: blue; font-weight: bold;");
+    assert_eq!(sheet.rules[1].style_css_text(), "color: green;", "sibling rule untouched");
+}
+
+#[test]
+fn set_rule_style_text_rejects_a_media_block_index() {
+    let mut sheet = parse("@media print { p {} } a {}");
+    assert_eq!(
+        sheet.set_rule_style_text(0, "color: red"),
+        Err(CssomRuleMutationError::Syntax)
+    );
+}
+
+#[test]
+fn set_rule_style_text_rejects_index_past_the_end() {
+    let mut sheet = parse("a {}");
+    assert_eq!(
+        sheet.set_rule_style_text(1, "color: red"),
+        Err(CssomRuleMutationError::IndexSize)
+    );
+}
+
+#[test]
+fn set_media_child_style_text_replaces_the_nested_rule_declarations() {
+    let mut sheet = parse("@media print { p { color: red } span { color: green } }");
+    let before = sheet.revision();
+    sheet.set_media_child_style_text(0, 0, "color: blue").unwrap();
+    assert_ne!(before, sheet.revision());
+    assert_eq!(sheet.media_rules[0].rules[0].style_css_text(), "color: blue;");
+    assert_eq!(
+        sheet.media_rules[0].rules[1].style_css_text(),
+        "color: green;",
+        "sibling nested rule untouched"
+    );
+}
+
+#[test]
+fn set_media_child_style_text_rejects_a_top_level_style_rule_index() {
+    let mut sheet = parse("a {}");
+    assert_eq!(
+        sheet.set_media_child_style_text(0, 0, "color: red"),
+        Err(CssomRuleMutationError::Syntax)
+    );
+}
+
+#[test]
+fn set_media_child_style_text_rejects_child_index_past_the_end() {
+    let mut sheet = parse("@media print { p {} }");
+    assert_eq!(
+        sheet.set_media_child_style_text(0, 1, "color: red"),
+        Err(CssomRuleMutationError::IndexSize)
+    );
+}
+
+#[test]
 fn mark_mutated_mints_a_new_revision() {
     let mut sheet = parse("p { color: red }");
     let before = sheet.revision();

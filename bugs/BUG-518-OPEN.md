@@ -739,3 +739,87 @@ of this bug) needs a live per-declaration `.style` setter for CSSOM rule
 objects, not `insertRule`/`deleteRule` — that half is done as of this slice.
 `ROADMAP.md`'s CSSOM-8 entry should be re-scoped to drop the
 `insertRule`/`deleteRule`-on-owned-sheet line item accordingly.
+
+## Ревизия 2026-09-18 (P1), срез 9
+
+Implemented the remaining half named by срез 8: a live `.style` setter for
+`CSSStyleRule` of an **owned** (`document.styleSheets`) sheet — both a
+top-level style rule and one nested inside `@media`.
+
+**Parser** (`crates/engine/css-parser/src/parser.rs`): `Stylesheet::
+set_rule_style_text(index, css_text)` and `set_media_child_style_text(
+media_index, child_index, css_text)`, mirroring `insert_rule`/`delete_rule`'s
+own addressing (`top_level_order`-based index for the top-level case, the
+`@media` block's own child list for the nested one) and reusing
+`parse_inline_style` — the same grammar an element's `style=""` attribute
+already uses — to replace the whole declaration list, rather than a
+per-property native round-trip. Both reject a non-style-rule index with
+`CssomRuleMutationError::Syntax` (asking a `@media`/`@mixin` slot for its
+`.style` is a type error, not an out-of-range one) and an out-of-range
+index with `IndexSize`. 7 new unit tests in `parser/tests/revision.rs`
+(replace/reject-media-index/reject-out-of-range × 2 addressing shapes) —
+`cargo test -p lumen-css-parser --lib`: 465/465 (was 458).
+
+**JS bridge** (`crates/js/src/v8_runtime/install/stylesheets.rs`,
+`crates/js/src/shim/web_api_shim_mid.js`): two new natives,
+`_lumen_stylesheet_rule_set_style`/`_lumen_stylesheet_media_child_set_style`,
+same `Arc::make_mut`-then-delegate shape as `insert_rule`/`delete_rule`
+above them in the same file. On the JS side, `_lumen_make_rule_style(loc)`
+builds a `CSSStyleDeclaration` instance addressed by `loc` (`{sheet, rule}`
+or `{sheet, rule, child}`) instead of by `nid` — the **same**
+`CSSStyleDeclaration.prototype` an element's own live `.style` already uses,
+so every getter/setter/shorthand-expansion/`cssText` path behaves
+identically; `_lumen_style_get_parsed`/`_lumen_style_set_parsed` (the two
+functions every prototype method already funneled through) branch on
+`target.__loc__` vs `target.__nid__` to pick the backing read/write pair.
+`_lumen_build_css_style_rule`'s `style` getter now returns
+`_lumen_make_rule_style(loc)` instead of the old
+`_lumen_make_css_style_declaration_readonly(data.styleCssText)` wrapper —
+that read-only helper stays in place for the *constructed*-sheet twin
+(`_lumen_build_constructed_css_style_rule`), which is out of this bug's
+scope (CSSOM-8 was filed for owned sheets specifically). 5 new end-to-end
+tests through the real V8 shim in `crates/js/src/dom/tests/
+v8_cssom_stylesheets.rs` (top-level `.color =`/`.setProperty()`/`.cssText =`
+setters, a sibling-rule-untouched check, and the `@media`-nested case) —
+`cargo test -p lumen-js --features v8-backend --lib`: 3857/3857 (was 3846),
+`--test all`: 149/149, no regression.
+
+**Deliberately not closed, both are separate architectural work, not a
+point fix to this setter**:
+
+1. **No cascade invalidation.** Same pre-existing gap `insertRule`/
+   `deleteRule` (срез 8) already documented: `stylesheet_nodes` is rebuilt
+   wholesale from each `<style>`/`<link>` node's own DOM text on every
+   relayout, so a `.style`-mutated declaration is visible to a further
+   *CSSOM* read (`cssRules[i].style.cssText`) but not to `getComputedStyle()`
+   until the next unrelated relayout discards the mutation entirely. This is
+   why `mixin-invalidation.tentative.html`'s assertions (which all check
+   `getComputedStyle(target).color` right after the `.style.color = ...`
+   mutation, in the same tick) stay red even where the setter itself now
+   works correctly — confirmed directly: the CSSOM-side assertions
+   (`ss.cssRules[...].cssText` after the mutation) would pass, only the
+   `getComputedStyle` ones don't.
+2. **No `.style` for a rule nested inside `@mixin`'s `@result`.** The
+   file's first two subtests target exactly that shape
+   (`ss.cssRules[0].cssRules[0].cssRules[1].style.color = 'green'`, three
+   levels deep into a mixin's result). Those nested rules have no address
+   in `stylesheet_nodes` at all — they're synthesized per-element at
+   cascade time (`layout/style/substitute.rs`), not a fixed position in the
+   parsed `Stylesheet` the way a top-level or `@media`-child rule is. Giving
+   them a settable `.style` would need a new addressing scheme for
+   mixin-interior rules, a bigger and separate design question.
+
+Both gaps mean `mixin-invalidation.tentative.html` stays fully red this
+slice — not a partial pass. `cargo clippy -p lumen-css-parser -p lumen-js
+--features v8-backend --all-targets -- -D warnings`: clean. No
+parser/cascade/paint surface touched beyond the two new pure-mutation
+methods above — no `dump_golden.py`/graphic-test drift possible. No live
+WPT run (same recurring reason as every slice on this track — no `.venv`
+in this slot); confidence rests on the end-to-end V8-shim tests exercising
+the exact JS surface the vendored file calls.
+
+Status remains `OPEN (ДОРАБОТКА → CSSOM-8)` — the two gaps above are the
+entire remainder, and per the note left in срез 8, closing either is a
+separate architectural decision (cascade-on-CSSOM-mutation touches the
+same relayout-timing question `insertRule`/`deleteRule` already deferred;
+mixin-interior rule addressing has no existing precedent to extend).

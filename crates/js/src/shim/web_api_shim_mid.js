@@ -2620,15 +2620,43 @@ function _lumen_canonicalize_longhand(key, strVal) {
 // a factory (`element.style`).
 function CSSStyleDeclaration() { throw new TypeError('Illegal constructor'); }
 
-function _lumen_style_get_parsed(nid) {
-    var s = _lumen_get_attr(nid, 'style');
+// `target` is a `CSSStyleDeclaration` instance: either an element's live
+// style (carries `__nid__`, backed by the `style=""` attribute) or a
+// CSSOM-8 rule style (carries `__loc__`, backed by
+// `_lumen_stylesheet_rule_(set_)style`/`_lumen_stylesheet_media_child_
+// (set_)style` — `document.styleSheets`'s OWN, not constructed, sheets
+// only). Every prototype method below passes `this` through unchanged, so
+// this pair is the only place that needs to know which backing a given
+// instance uses.
+function _lumen_style_get_parsed(target) {
+    var loc = target.__loc__;
+    if (loc) {
+        var raw = loc.child !== undefined
+            ? _lumen_stylesheet_media_child_json(loc.sheet, loc.rule, loc.child)
+            : _lumen_stylesheet_rule_json(loc.sheet, loc.rule);
+        var t = raw ? JSON.parse(raw).styleCssText : '';
+        return _lumen_parse_style(t !== undefined && t !== null ? t : '');
+    }
+    var s = _lumen_get_attr(target.__nid__, 'style');
     return _lumen_parse_style(s !== undefined ? s : '');
 }
-function _lumen_style_set_parsed(nid, obj) { _lumen_set_attr(nid, 'style', _lumen_serialize_style(obj)); }
+function _lumen_style_set_parsed(target, obj) {
+    var loc = target.__loc__;
+    if (loc) {
+        var text = _lumen_serialize_style(obj);
+        if (loc.child !== undefined) {
+            _lumen_stylesheet_media_child_set_style(loc.sheet, loc.rule, loc.child, text);
+        } else {
+            _lumen_stylesheet_rule_set_style(loc.sheet, loc.rule, text);
+        }
+        return;
+    }
+    _lumen_set_attr(target.__nid__, 'style', _lumen_serialize_style(obj));
+}
 
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     var key = _lumen_camel_to_kebab(String(prop));
-    var obj = _lumen_style_get_parsed(this.__nid__);
+    var obj = _lumen_style_get_parsed(this);
     if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
     var shorthand = _lumen_shorthand_value(obj, key);
     if (shorthand !== undefined) return shorthand;
@@ -2647,7 +2675,7 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     return '';
 };
 CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
-    var nid = this.__nid__;
+    var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
     var strVal = String(val);
     var obj = _lumen_style_get_parsed(nid);
@@ -2742,7 +2770,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     _lumen_style_set_parsed(nid, obj);
 };
 CSSStyleDeclaration.prototype.removeProperty = function(prop) {
-    var nid = this.__nid__;
+    var nid = this;
     var obj = _lumen_style_get_parsed(nid);
     var key = _lumen_camel_to_kebab(String(prop));
     var old = obj[key] || '';
@@ -2753,8 +2781,8 @@ Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
     // serialization, not raw stored text — so it collapses shorthands
     // and normalizes formatting even for a style attribute that came
     // straight from HTML markup and was never touched via JS (BUG-473).
-    get: function() { return _lumen_serialize_style(_lumen_style_get_parsed(this.__nid__)); },
-    set: function(v) { _lumen_style_set_parsed(this.__nid__, _lumen_parse_style(String(v))); },
+    get: function() { return _lumen_serialize_style(_lumen_style_get_parsed(this)); },
+    set: function(v) { _lumen_style_set_parsed(this, _lumen_parse_style(String(v))); },
     enumerable: true, configurable: true,
 });
 Object.defineProperty(CSSStyleDeclaration.prototype, Symbol.toStringTag,
@@ -2765,6 +2793,33 @@ function _lumen_make_style(nid) {
     var target = Object.create(CSSStyleDeclaration.prototype);
     Object.defineProperty(target, '__nid__',
         { value: nid, enumerable: false, writable: false, configurable: false });
+    return new Proxy(target, {
+        get: function(t, prop, receiver) {
+            if (prop in t) return Reflect.get(t, prop, receiver);
+            return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
+        },
+        set: function(t, prop, value, receiver) {
+            if (prop in t) return Reflect.set(t, prop, value, receiver);
+            t.setProperty(_lumen_camel_to_kebab(String(prop)), value);
+            return true;
+        },
+    });
+}
+
+// CSSOM-8 (BUG-518 срез 9) — `CSSStyleRule.style`'s live, writable half for
+// a rule of an OWN (`document.styleSheets`, not constructed) sheet. Same
+// `CSSStyleDeclaration.prototype` as `_lumen_make_style` above (so
+// `instanceof`/every getter/setter/shorthand-expansion behaves identically —
+// `_lumen_style_get_parsed`/`_lumen_style_set_parsed` branch on `__loc__`
+// vs `__nid__`), just backed by `_lumen_stylesheet_rule_json`/
+// `_lumen_stylesheet_rule_set_style` (top-level) or their `_media_child_`
+// siblings (nested inside `@media`) instead of the `style=""` attribute.
+// `loc`: `{sheet, rule}` for a top-level rule, `{sheet, rule, child}` for
+// one nested inside `@media` (`rule` is that block's own top-level index).
+function _lumen_make_rule_style(loc) {
+    var target = Object.create(CSSStyleDeclaration.prototype);
+    Object.defineProperty(target, '__loc__',
+        { value: loc, enumerable: false, writable: false, configurable: false });
     return new Proxy(target, {
         get: function(t, prop, receiver) {
             if (prop in t) return Reflect.get(t, prop, receiver);
@@ -9645,14 +9700,17 @@ function _lumen_make_css_rule_list(itemsFn) {
 // selectorText + ' { ' + data.styleCssText + ' }'`) since CSS Mixins L1's
 // `@apply` needs a different, multi-line serialization once present among
 // this rule's declarations — see `Rule::css_text` (css-parser).
-function _lumen_build_css_style_rule(data, sheetIdx, parentRule) {
+// `loc` is this rule's `_lumen_make_rule_style` address (CSSOM-8) —
+// `{sheet, rule}` for a top-level rule, `{sheet, rule, child}` nested inside
+// `@media`; `loc.sheet` doubles as the owning sheet index for `parentStyleSheet`.
+function _lumen_build_css_style_rule(data, loc, parentRule) {
     var r = Object.create(CSSStyleRule.prototype);
     Object.defineProperties(r, {
         type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
         selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
         cssText:      { get: function() { return data.cssText; }, enumerable: true, configurable: true },
-        style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
+        style:        { get: function() { return _lumen_make_rule_style(loc); }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(loc.sheet); }, enumerable: true, configurable: true },
         parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
     });
     return r;
@@ -9683,7 +9741,9 @@ function _lumen_build_css_mixin_rule(data, sheetIdx, parentRule) {
 function _lumen_make_css_media_child_rule(sheetIdx, ruleIdx, childIdx) {
     var raw = _lumen_stylesheet_media_child_json(sheetIdx, ruleIdx, childIdx);
     if (raw === null || raw === undefined) return null;
-    return _lumen_build_css_style_rule(JSON.parse(raw), sheetIdx, _lumen_make_css_rule(sheetIdx, ruleIdx));
+    return _lumen_build_css_style_rule(
+        JSON.parse(raw), { sheet: sheetIdx, rule: ruleIdx, child: childIdx },
+        _lumen_make_css_rule(sheetIdx, ruleIdx));
 }
 
 // One top-level rule of sheet `sheetIdx` (`CSSStyleRule` or `CSSMediaRule`,
@@ -9693,7 +9753,7 @@ function _lumen_make_css_rule(sheetIdx, ruleIdx) {
     if (raw === null || raw === undefined) return null;
     var data = JSON.parse(raw);
     if (data.kind === 'mixin') return _lumen_build_css_mixin_rule(data, sheetIdx, null);
-    if (data.kind !== 'media') return _lumen_build_css_style_rule(data, sheetIdx, null);
+    if (data.kind !== 'media') return _lumen_build_css_style_rule(data, { sheet: sheetIdx, rule: ruleIdx }, null);
     var mr = Object.create(CSSMediaRule.prototype);
     function childRules() {
         var n = _lumen_stylesheet_media_child_count(sheetIdx, ruleIdx);
