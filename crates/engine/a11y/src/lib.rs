@@ -193,7 +193,52 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat
             // Children should skip these and see the actual semantic parent for context validation.
             // GraphicsObject is a subclass of `group` (Graphics ARIA Module) and is transparent
             // for the same reason: it imposes no required-child semantics of its own.
-            let effective_parent_role = if matches!(role, AXRole::Presentation | AXRole::None | AXRole::Generic | AXRole::Group | AXRole::GraphicsObject) {
+            // The DPUB-ARIA landmark/section/note container roles (doc-chapter, doc-bibliography,
+            // doc-footnote, …) are transparent too: without this, `<ol role="doc-bibliography">`
+            // would become the effective parent of `<li role="doc-biblioentry">`, is_role_valid_in_context
+            // would reject it (expects a `list`/`landmark` parent), and — for elements whose tag has
+            // no implicit role of its own (`<div>`) — the role would silently collapse to Generic
+            // instead of falling back to something meaningful (BUG-764).
+            let effective_parent_role = if matches!(
+                role,
+                AXRole::Presentation
+                    | AXRole::None
+                    | AXRole::Generic
+                    | AXRole::Group
+                    | AXRole::GraphicsObject
+                    | AXRole::DocAbstract
+                    | AXRole::DocAcknowledgments
+                    | AXRole::DocAfterword
+                    | AXRole::DocAppendix
+                    | AXRole::DocBibliography
+                    | AXRole::DocChapter
+                    | AXRole::DocColophon
+                    | AXRole::DocConclusion
+                    | AXRole::DocCredit
+                    | AXRole::DocCredits
+                    | AXRole::DocDedication
+                    | AXRole::DocEndnotes
+                    | AXRole::DocEpigraph
+                    | AXRole::DocEpilogue
+                    | AXRole::DocErrata
+                    | AXRole::DocExample
+                    | AXRole::DocFootnote
+                    | AXRole::DocForeword
+                    | AXRole::DocGlossary
+                    | AXRole::DocIndex
+                    | AXRole::DocIntroduction
+                    | AXRole::DocNotice
+                    | AXRole::DocPagefooter
+                    | AXRole::DocPageheader
+                    | AXRole::DocPagelist
+                    | AXRole::DocPart
+                    | AXRole::DocPreface
+                    | AXRole::DocPrologue
+                    | AXRole::DocPullquote
+                    | AXRole::DocQna
+                    | AXRole::DocTip
+                    | AXRole::DocToc
+            ) {
                 parent_role
             } else {
                 Some(role)

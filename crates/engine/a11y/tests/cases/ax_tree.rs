@@ -1363,3 +1363,65 @@ fn role_graphics_object_is_transparent_for_child_context() {
         .expect("listitem nested in a graphics-object must still resolve against the list");
     assert_eq!(item.name, "item");
 }
+
+// ── DPUB-ARIA roles (BUG-764) ────────────────────────────────────────────────
+
+#[test]
+fn role_doc_chapter_and_doc_footnote() {
+    let tree = build_tree(
+        r#"<div role="doc-chapter" aria-label="ch">
+             <div role="doc-footnote" aria-label="fn"></div>
+           </div>"#,
+    );
+    let chapter = find_role_dfs(&tree.root, AXRole::DocChapter).expect("doc-chapter");
+    assert_eq!(chapter.name, "ch");
+    let footnote = find_role_dfs(&tree.root, AXRole::DocFootnote).expect("doc-footnote");
+    assert_eq!(footnote.name, "fn");
+}
+
+#[test]
+fn role_doc_parse_is_case_insensitive() {
+    let tree = build_tree(r#"<div role="Doc-Glossary" aria-label="terms"></div>"#);
+    assert!(
+        find_role_dfs(&tree.root, AXRole::DocGlossary).is_some(),
+        "doc-* role token matching must stay case-insensitive"
+    );
+}
+
+#[test]
+fn role_doc_as_str_round_trips_through_parse() {
+    let roles = [
+        AXRole::DocAbstract, AXRole::DocAcknowledgments, AXRole::DocAfterword,
+        AXRole::DocAppendix, AXRole::DocBacklink, AXRole::DocBiblioentry,
+        AXRole::DocBibliography, AXRole::DocBiblioref, AXRole::DocChapter,
+        AXRole::DocColophon, AXRole::DocConclusion, AXRole::DocCover,
+        AXRole::DocCredit, AXRole::DocCredits, AXRole::DocDedication,
+        AXRole::DocEndnote, AXRole::DocEndnotes, AXRole::DocEpigraph,
+        AXRole::DocEpilogue, AXRole::DocErrata, AXRole::DocExample,
+        AXRole::DocFootnote, AXRole::DocForeword, AXRole::DocGlossary,
+        AXRole::DocGlossref, AXRole::DocIndex, AXRole::DocIntroduction,
+        AXRole::DocNoteref, AXRole::DocNotice, AXRole::DocPagebreak,
+        AXRole::DocPagefooter, AXRole::DocPageheader, AXRole::DocPagelist,
+        AXRole::DocPart, AXRole::DocPreface, AXRole::DocPrologue,
+        AXRole::DocPullquote, AXRole::DocQna, AXRole::DocSubtitle,
+        AXRole::DocTip, AXRole::DocToc,
+    ];
+    assert_eq!(roles.len(), 41, "DPUB-ARIA vocabulary has exactly 41 roles");
+    for role in roles {
+        assert_eq!(AXRole::parse(role.as_str()), Some(role), "{} must round-trip", role.as_str());
+    }
+}
+
+#[test]
+fn role_doc_bibliography_is_transparent_for_child_context() {
+    // doc-bibliography is a landmark-superclass container, treated as
+    // transparent for parent-context validation the same way `graphics-object`
+    // is: a required-parent role nested inside one must still see the real
+    // semantic ancestor (BUG-764) instead of collapsing to Generic.
+    let tree = build_tree(
+        r#"<ul><div role="doc-bibliography"><div role="listitem" aria-label="ref"></div></div></ul>"#,
+    );
+    let item = find_role_dfs(&tree.root, AXRole::ListItem)
+        .expect("listitem nested in a doc-bibliography must still resolve against the list");
+    assert_eq!(item.name, "ref");
+}

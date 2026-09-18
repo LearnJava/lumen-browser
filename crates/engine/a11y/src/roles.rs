@@ -2,9 +2,12 @@
 //!
 //! Covers all roles from WAI-ARIA 1.2 §5 (landmark, widget, document structure,
 //! and window roles) plus the three roles of the W3C Graphics ARIA Module
-//! (`graphics-document` / `graphics-object` / `graphics-symbol`). The
+//! (`graphics-document` / `graphics-object` / `graphics-symbol`) and the 41
+//! `doc-*` roles of the DPUB-ARIA Recommendation (digital-publishing/EPUB
+//! semantics — chapters, footnotes, bibliography, page navigation, …). The
 //! `implicit_role` function implements the "Implicit WAI-ARIA Semantics" table
-//! from the HTML-AAM specification.
+//! from the HTML-AAM specification; DPUB-ARIA roles have no implicit HTML
+//! mapping and are only reachable via an explicit `role="doc-*"` attribute.
 
 use serde::{Deserialize, Serialize};
 use lumen_dom::{InputType, Node};
@@ -181,6 +184,92 @@ pub enum AXRole {
     /// `role="graphics-symbol"` — graphic standing for a concept (superclass `img`).
     GraphicsSymbol,
 
+    // ── DPUB-ARIA roles (W3C DPUB-ARIA Recommendation, `doc-*`) ───────────────
+    // AT mappings below come from the vendored ATTAcomm fixtures
+    // (`tests/wpt/dpub-aam/manual/doc-*-manual.html`), not from intuition.
+    /// `role="doc-abstract"` — summary of the work's content (superclass `section`).
+    DocAbstract,
+    /// `role="doc-acknowledgments"` — acknowledgments section (superclass `landmark`).
+    DocAcknowledgments,
+    /// `role="doc-afterword"` — closing statement (superclass `landmark`).
+    DocAfterword,
+    /// `role="doc-appendix"` — supplemental information (superclass `landmark`).
+    DocAppendix,
+    /// `role="doc-backlink"` — link back to a referring `doc-noteref`/`doc-biblioref` (superclass `link`).
+    DocBacklink,
+    /// `role="doc-biblioentry"` — single entry in a bibliography (superclass `listitem`; deprecated in favor of `doc-biblioref`, kept for AT compatibility).
+    DocBiblioentry,
+    /// `role="doc-bibliography"` — list of bibliographic references (superclass `landmark`).
+    DocBibliography,
+    /// `role="doc-biblioref"` — reference to a bibliography entry (superclass `link`).
+    DocBiblioref,
+    /// `role="doc-chapter"` — major thematic section (superclass `landmark`).
+    DocChapter,
+    /// `role="doc-colophon"` — production notes (superclass `section`).
+    DocColophon,
+    /// `role="doc-conclusion"` — closing section (superclass `landmark`).
+    DocConclusion,
+    /// `role="doc-cover"` — cover image (superclass `img`).
+    DocCover,
+    /// `role="doc-credit"` — single individual credit (superclass `section`).
+    DocCredit,
+    /// `role="doc-credits"` — collection of credits (superclass `landmark`).
+    DocCredits,
+    /// `role="doc-dedication"` — dedication section (superclass `section`).
+    DocDedication,
+    /// `role="doc-endnote"` — single endnote (superclass `listitem`; deprecated in favor of `doc-footnote`, kept for AT compatibility).
+    DocEndnote,
+    /// `role="doc-endnotes"` — collection of endnotes (superclass `landmark`).
+    DocEndnotes,
+    /// `role="doc-epigraph"` — epigraph section (superclass `section`).
+    DocEpigraph,
+    /// `role="doc-epilogue"` — epilogue section (superclass `landmark`).
+    DocEpilogue,
+    /// `role="doc-errata"` — errata section (superclass `landmark`).
+    DocErrata,
+    /// `role="doc-example"` — example content (superclass `section`).
+    DocExample,
+    /// `role="doc-footnote"` — single footnote (superclass `note`, dedicated ATK/IA2 role).
+    DocFootnote,
+    /// `role="doc-foreword"` — foreword section (superclass `landmark`).
+    DocForeword,
+    /// `role="doc-glossary"` — collection of glossary terms (superclass `landmark`).
+    DocGlossary,
+    /// `role="doc-glossref"` — reference to a glossary definition (superclass `link`).
+    DocGlossref,
+    /// `role="doc-index"` — index of terms (superclass `landmark`, navigation subclass).
+    DocIndex,
+    /// `role="doc-introduction"` — introductory section (superclass `landmark`).
+    DocIntroduction,
+    /// `role="doc-noteref"` — reference to a footnote/endnote (superclass `link`).
+    DocNoteref,
+    /// `role="doc-notice"` — notice requiring attention (superclass `note`).
+    DocNotice,
+    /// `role="doc-pagebreak"` — position of a page break from print (superclass `separator`).
+    DocPagebreak,
+    /// `role="doc-pagefooter"` — running page footer (no AAM fixture yet; treated as a generic sectioning container).
+    DocPagefooter,
+    /// `role="doc-pageheader"` — running page header (no AAM fixture yet; treated as a generic sectioning container).
+    DocPageheader,
+    /// `role="doc-pagelist"` — list of page break references (superclass `landmark`, navigation subclass).
+    DocPagelist,
+    /// `role="doc-part"` — major structural division containing chapters (superclass `landmark`).
+    DocPart,
+    /// `role="doc-preface"` — preliminary section (superclass `landmark`).
+    DocPreface,
+    /// `role="doc-prologue"` — prologue section (superclass `landmark`).
+    DocPrologue,
+    /// `role="doc-pullquote"` — pull quote (superclass `section`).
+    DocPullquote,
+    /// `role="doc-qna"` — question-and-answer section (superclass `section`).
+    DocQna,
+    /// `role="doc-subtitle"` — subtitle/secondary title (superclass `heading`).
+    DocSubtitle,
+    /// `role="doc-tip"` — helpful hint (superclass `note`).
+    DocTip,
+    /// `role="doc-toc"` — table of contents (superclass `landmark`, navigation subclass).
+    DocToc,
+
     // ── Generic / fallback ────────────────────────────────────────────────────
     /// Any element with no meaningful ARIA role (div, span, p, etc.).
     Generic,
@@ -267,6 +356,47 @@ impl AXRole {
             Self::GraphicsDocument => "graphics-document",
             Self::GraphicsObject => "graphics-object",
             Self::GraphicsSymbol => "graphics-symbol",
+            Self::DocAbstract => "doc-abstract",
+            Self::DocAcknowledgments => "doc-acknowledgments",
+            Self::DocAfterword => "doc-afterword",
+            Self::DocAppendix => "doc-appendix",
+            Self::DocBacklink => "doc-backlink",
+            Self::DocBiblioentry => "doc-biblioentry",
+            Self::DocBibliography => "doc-bibliography",
+            Self::DocBiblioref => "doc-biblioref",
+            Self::DocChapter => "doc-chapter",
+            Self::DocColophon => "doc-colophon",
+            Self::DocConclusion => "doc-conclusion",
+            Self::DocCover => "doc-cover",
+            Self::DocCredit => "doc-credit",
+            Self::DocCredits => "doc-credits",
+            Self::DocDedication => "doc-dedication",
+            Self::DocEndnote => "doc-endnote",
+            Self::DocEndnotes => "doc-endnotes",
+            Self::DocEpigraph => "doc-epigraph",
+            Self::DocEpilogue => "doc-epilogue",
+            Self::DocErrata => "doc-errata",
+            Self::DocExample => "doc-example",
+            Self::DocFootnote => "doc-footnote",
+            Self::DocForeword => "doc-foreword",
+            Self::DocGlossary => "doc-glossary",
+            Self::DocGlossref => "doc-glossref",
+            Self::DocIndex => "doc-index",
+            Self::DocIntroduction => "doc-introduction",
+            Self::DocNoteref => "doc-noteref",
+            Self::DocNotice => "doc-notice",
+            Self::DocPagebreak => "doc-pagebreak",
+            Self::DocPagefooter => "doc-pagefooter",
+            Self::DocPageheader => "doc-pageheader",
+            Self::DocPagelist => "doc-pagelist",
+            Self::DocPart => "doc-part",
+            Self::DocPreface => "doc-preface",
+            Self::DocPrologue => "doc-prologue",
+            Self::DocPullquote => "doc-pullquote",
+            Self::DocQna => "doc-qna",
+            Self::DocSubtitle => "doc-subtitle",
+            Self::DocTip => "doc-tip",
+            Self::DocToc => "doc-toc",
             Self::Generic => "generic",
             Self::Document => "document",
             Self::None => "none",
@@ -351,6 +481,47 @@ impl AXRole {
             s if s.eq_ignore_ascii_case("graphics-document") => Self::GraphicsDocument,
             s if s.eq_ignore_ascii_case("graphics-object") => Self::GraphicsObject,
             s if s.eq_ignore_ascii_case("graphics-symbol") => Self::GraphicsSymbol,
+            s if s.eq_ignore_ascii_case("doc-abstract") => Self::DocAbstract,
+            s if s.eq_ignore_ascii_case("doc-acknowledgments") => Self::DocAcknowledgments,
+            s if s.eq_ignore_ascii_case("doc-afterword") => Self::DocAfterword,
+            s if s.eq_ignore_ascii_case("doc-appendix") => Self::DocAppendix,
+            s if s.eq_ignore_ascii_case("doc-backlink") => Self::DocBacklink,
+            s if s.eq_ignore_ascii_case("doc-biblioentry") => Self::DocBiblioentry,
+            s if s.eq_ignore_ascii_case("doc-bibliography") => Self::DocBibliography,
+            s if s.eq_ignore_ascii_case("doc-biblioref") => Self::DocBiblioref,
+            s if s.eq_ignore_ascii_case("doc-chapter") => Self::DocChapter,
+            s if s.eq_ignore_ascii_case("doc-colophon") => Self::DocColophon,
+            s if s.eq_ignore_ascii_case("doc-conclusion") => Self::DocConclusion,
+            s if s.eq_ignore_ascii_case("doc-cover") => Self::DocCover,
+            s if s.eq_ignore_ascii_case("doc-credit") => Self::DocCredit,
+            s if s.eq_ignore_ascii_case("doc-credits") => Self::DocCredits,
+            s if s.eq_ignore_ascii_case("doc-dedication") => Self::DocDedication,
+            s if s.eq_ignore_ascii_case("doc-endnote") => Self::DocEndnote,
+            s if s.eq_ignore_ascii_case("doc-endnotes") => Self::DocEndnotes,
+            s if s.eq_ignore_ascii_case("doc-epigraph") => Self::DocEpigraph,
+            s if s.eq_ignore_ascii_case("doc-epilogue") => Self::DocEpilogue,
+            s if s.eq_ignore_ascii_case("doc-errata") => Self::DocErrata,
+            s if s.eq_ignore_ascii_case("doc-example") => Self::DocExample,
+            s if s.eq_ignore_ascii_case("doc-footnote") => Self::DocFootnote,
+            s if s.eq_ignore_ascii_case("doc-foreword") => Self::DocForeword,
+            s if s.eq_ignore_ascii_case("doc-glossary") => Self::DocGlossary,
+            s if s.eq_ignore_ascii_case("doc-glossref") => Self::DocGlossref,
+            s if s.eq_ignore_ascii_case("doc-index") => Self::DocIndex,
+            s if s.eq_ignore_ascii_case("doc-introduction") => Self::DocIntroduction,
+            s if s.eq_ignore_ascii_case("doc-noteref") => Self::DocNoteref,
+            s if s.eq_ignore_ascii_case("doc-notice") => Self::DocNotice,
+            s if s.eq_ignore_ascii_case("doc-pagebreak") => Self::DocPagebreak,
+            s if s.eq_ignore_ascii_case("doc-pagefooter") => Self::DocPagefooter,
+            s if s.eq_ignore_ascii_case("doc-pageheader") => Self::DocPageheader,
+            s if s.eq_ignore_ascii_case("doc-pagelist") => Self::DocPagelist,
+            s if s.eq_ignore_ascii_case("doc-part") => Self::DocPart,
+            s if s.eq_ignore_ascii_case("doc-preface") => Self::DocPreface,
+            s if s.eq_ignore_ascii_case("doc-prologue") => Self::DocPrologue,
+            s if s.eq_ignore_ascii_case("doc-pullquote") => Self::DocPullquote,
+            s if s.eq_ignore_ascii_case("doc-qna") => Self::DocQna,
+            s if s.eq_ignore_ascii_case("doc-subtitle") => Self::DocSubtitle,
+            s if s.eq_ignore_ascii_case("doc-tip") => Self::DocTip,
+            s if s.eq_ignore_ascii_case("doc-toc") => Self::DocToc,
             s if s.eq_ignore_ascii_case("generic") => Self::Generic,
             s if s.eq_ignore_ascii_case("document") => Self::Document,
             _ => return None,
