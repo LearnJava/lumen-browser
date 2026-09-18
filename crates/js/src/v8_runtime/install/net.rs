@@ -355,6 +355,7 @@ pub(crate) fn install_fetch(
 
         let fp2 = fetch_provider.clone();
         let fp_beacon = fetch_provider.clone();
+        let fp_object = fetch_provider.clone();
         let fp_cancel = fetch_provider.clone();
         let fp_cancel_body = fetch_provider.clone();
         let c_cancel = Arc::clone(&cache);
@@ -917,6 +918,48 @@ pub(crate) fn install_fetch(
         {
             let lcb_get = Arc::clone(&last_csp_block);
             reg!(scope, ctx, store, "_lumen_beacon_last_csp_block", move || -> Vec<String> {
+                match lcb_get.lock().unwrap().take() {
+                    Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
+                    None => Vec::new(),
+                }
+            });
+        }
+
+        // _lumen_check_object_src(url) → bool
+        // GAP-CSPENF срез 16: I/O-free `object-src`/`default-src` pre-check for
+        // `<embed src>`/`<object data>` — unlike `<img>`/`<script>`/`<link>`
+        // (gated in `lumen-shell`, which holds `&Document`), embed/object
+        // loading is entirely JS-shim driven (`_lumen_embed_object_reload`,
+        // reusing the `<link>` hint's plain `fetch()` call), so the shim asks
+        // this binding first and skips the `fetch()` call entirely when it
+        // returns `false` — same "not a single outgoing byte" shape as
+        // `_lumen_send_beacon`'s pre-spawn `check_connect_src` call above, own
+        // slot because it is a different directive.
+        let object_src_last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        {
+            let fp = fp_object;
+            let lcb_object = Arc::clone(&object_src_last_csp_block);
+            reg!(scope, ctx, store, "_lumen_check_object_src", move |url: String| -> bool {
+                let Some(ref provider) = fp else { return true };
+                if let Err(lumen_core::error::Error::CspObjectSrcBlocked {
+                    blocked_uri,
+                    original_policy,
+                }) = provider.check_object_src(&url)
+                {
+                    *lcb_object.lock().unwrap() = Some((blocked_uri, original_policy));
+                    return false;
+                }
+                true
+            });
+        }
+
+        // _lumen_object_src_last_csp_block() → [blockedUri, originalPolicy] | []
+        // Same read-and-clear contract as `_lumen_beacon_last_csp_block` above,
+        // own slot — the shim calls this right after `_lumen_check_object_src`
+        // returns `false` (GAP-CSPENF срез 16).
+        {
+            let lcb_get = Arc::clone(&object_src_last_csp_block);
+            reg!(scope, ctx, store, "_lumen_object_src_last_csp_block", move || -> Vec<String> {
                 match lcb_get.lock().unwrap().take() {
                     Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
                     None => Vec::new(),

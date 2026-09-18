@@ -11696,6 +11696,19 @@ function _lumen_embed_object_reload(nid, tag) {
     var url;
     try { url = _url_resolve(raw, _lumen_document_base_url()); }
     catch (e) { setTimeout(function() { _lumen_resource_fire(nid, 'error'); }, 0); return; }
+    // GAP-CSPENF срез 16: `object-src`/`default-src` gate, checked before the
+    // resource fetch below — same "not a single outgoing byte" principle
+    // that img-src/script-src/style-src already give their producers
+    // (срезы 4/6/7). `<embed>`/`<object>` have no `&Document`-backed gate in
+    // `lumen-shell` (this whole path is JS-shim driven), so the check is a
+    // native binding instead.
+    if (typeof _lumen_check_object_src === 'function' && !_lumen_check_object_src(url)) {
+        if (typeof _lumen_fire_object_src_violation === 'function') {
+            _lumen_fire_object_src_violation(_lumen_object_src_last_csp_block());
+        }
+        setTimeout(function() { _lumen_resource_fire(nid, 'error'); }, 0);
+        return;
+    }
     // Reuses the <link> hint fetch verbatim — same resolve-fetch-dispatch
     // shape, no body handling needed.
     _lumen_link_hint_fetch(nid, url, null);

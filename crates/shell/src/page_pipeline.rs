@@ -703,12 +703,18 @@ pub(crate) fn parse_and_layout(
             // against `worker-src` (or `default-src`) — `Worker`/`SharedWorker`
             // share this `HttpClient` the same way WebSocket/EventSource/
             // sendBeacon do (срезы 11/12), each checked against its own directive.
+            // GAP-CSPENF срез 16: same merged document policy also gates
+            // `<embed src>`/`<object data>` against `object-src` (or
+            // `default-src`) — the JS shim's `_lumen_check_object_src` reads
+            // this via `check_object_src`, same one-`HttpClient`-per-document
+            // approach as connect-src/worker-src above.
             let root = doc.root();
             if let Some((policy, original_policy)) = crate::csp_enforce::document_csp_policy(&doc, root) {
                 let self_origin = base.origin();
                 client = client
                     .with_connect_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
-                    .with_worker_src_policy(policy, self_origin, original_policy);
+                    .with_worker_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
+                    .with_object_src_policy(policy, self_origin, original_policy);
             }
             // GAP-POLICYREPORT (BUG-953): attach the precomputed sync-xhr
             // disposition regardless of whether either header was present —
