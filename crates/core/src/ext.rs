@@ -2072,6 +2072,22 @@ pub trait JsFetchProvider: Send + Sync {
         Ok(())
     }
 
+    /// I/O-free pre-check: would the document's `object-src` (or `default-src`)
+    /// policy block an `<embed src>`/`<object data>` resource fetch, without
+    /// issuing one (GAP-CSPENF срез 16).
+    ///
+    /// Mirrors [`check_worker_src`](Self::check_worker_src)'s shape: `<embed>`/
+    /// `<object>` loading is entirely JS-shim driven
+    /// (`_lumen_embed_object_reload` in `web_api_shim_mid.js`, reusing the
+    /// `<link>` hint's `fetch()` call), so the check is exposed as its own
+    /// native binding rather than living behind `&Document` in `lumen-shell`.
+    /// Default implementation never blocks, matching `HttpClient` with no
+    /// `object-src` policy installed.
+    fn check_object_src(&self, url: &str) -> Result<()> {
+        let _ = url;
+        Ok(())
+    }
+
     /// `sync-xhr` disposition from the document's `Document-Policy` (+
     /// `-Report-Only`) response headers (GAP-POLICYREPORT, BUG-953). `None`
     /// means synchronous `XMLHttpRequest.send()` is allowed. Checked by the

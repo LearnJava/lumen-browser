@@ -2884,6 +2884,16 @@ pub struct HttpClient {
     /// because the two are checked against different [`CspDirective`]s and a
     /// future срез may need them to diverge (e.g. per-worker-flavour policy).
     worker_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    /// GAP-CSPENF срез 16: CSP `object-src` (falling back to `default-src`)
+    /// gate for `<embed src>`/`<object data>` resource fetches, driven by the
+    /// native `_lumen_check_object_src` binding rather than a `fetch()` call
+    /// itself — `<embed>`/`<object>` loading is entirely JS-shim driven
+    /// (`_lumen_embed_object_reload`, `web_api_shim_mid.js`), unlike
+    /// `<img>`/`<script>`/`<link>`, which have `&Document`-backed gates in
+    /// `crates/shell/src/csp_enforce.rs`. Same shape and provenance as
+    /// [`Self::worker_src_policy`] — a separate field because it is checked
+    /// against a different [`CspDirective`].
+    object_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
     /// GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition from `Document-Policy`
     /// (+ `-Report-Only`) and `Permissions-Policy` (+ `-Report-Only`)
     /// respectively, precomputed once by `crate::document_policy`/
@@ -2922,6 +2932,7 @@ impl HttpClient {
             h3_pool: None,
             connect_src_policy: None,
             worker_src_policy: None,
+            object_src_policy: None,
             sync_xhr_policy: (None, None),
         }
     }
@@ -2957,6 +2968,22 @@ impl HttpClient {
         original_policy: String,
     ) -> Self {
         self.worker_src_policy = Some((policy, self_origin, original_policy));
+        self
+    }
+
+    /// Attach the document's CSP `object-src` (falling back to `default-src`)
+    /// gate — GAP-CSPENF срез 16. Same argument shape and provenance as
+    /// [`Self::with_worker_src_policy`]; only [`Self::check_object_src`]
+    /// (the `JsFetchProvider` override backing `<embed src>`/`<object data>`)
+    /// checks this.
+    #[must_use]
+    pub fn with_object_src_policy(
+        mut self,
+        policy: CspPolicy,
+        self_origin: Option<Origin>,
+        original_policy: String,
+    ) -> Self {
+        self.object_src_policy = Some((policy, self_origin, original_policy));
         self
     }
 
@@ -4327,6 +4354,16 @@ impl JsFetchProvider for HttpClient {
         self.worker_src_gate(&url)
     }
 
+    /// GAP-CSPENF срез 16: `object-src`/`default-src` pre-check for
+    /// `<embed src>`/`<object data>` resource fetches, called by the native
+    /// `_lumen_check_object_src` binding before the shim's `fetch()` call —
+    /// same "not a single outgoing byte" shape as [`Self::check_worker_src`],
+    /// different directive.
+    fn check_object_src(&self, url: &str) -> Result<()> {
+        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        self.object_src_gate(&url)
+    }
+
     /// GAP-POLICYREPORT (BUG-953): returns the `sync-xhr` disposition
     /// precomputed by `crate::document_policy` (resolved by the shell in
     /// `page_pipeline::parse_and_layout` and attached via
@@ -4370,6 +4407,21 @@ impl HttpClient {
             && !policy.fetch_directive_allows(&CspDirective::WorkerSrc, url, self_origin.as_ref())
         {
             return Err(Error::CspWorkerSrcBlocked {
+                blocked_uri: url.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// `object-src`/`default-src` gate backing [`JsFetchProvider::check_object_src`]
+    /// (GAP-CSPENF срез 16) — same shape as [`Self::worker_src_gate`], checked
+    /// against [`Self::object_src_policy`] and `CspDirective::ObjectSrc` instead.
+    fn object_src_gate(&self, url: &Url) -> Result<()> {
+        if let Some((policy, self_origin, original_policy)) = &self.object_src_policy
+            && !policy.fetch_directive_allows(&CspDirective::ObjectSrc, url, self_origin.as_ref())
+        {
+            return Err(Error::CspObjectSrcBlocked {
                 blocked_uri: url.to_string(),
                 original_policy: original_policy.clone(),
             });
@@ -5816,6 +5868,100 @@ mod tests {
             "not a url",
         );
         assert!(!matches!(result, Err(Error::CspWorkerSrcBlocked { .. })));
+    }
+
+    // ── GAP-CSPENF срез 16: object-src против <embed src>/<object data> ────────
+
+    #[test]
+    fn object_src_none_blocks_check_before_any_network_io() {
+        // `check_object_src` is the I/O-free pre-check the native
+        // `_lumen_check_object_src` binding runs before the shim's `fetch()`
+        // call — mirrors `worker_src_none_blocks_check_before_any_network_io`.
+        let policy = csp::parse_csp_header("object-src 'none'");
+        let client = HttpClient::new().with_object_src_policy(
+            policy,
+            None,
+            "object-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_object_src(
+            &client,
+            "https://192.0.2.1.invalid/embed.swf",
+        );
+        match result {
+            Err(Error::CspObjectSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "https://192.0.2.1.invalid/embed.swf");
+                assert_eq!(original_policy, "object-src 'none'");
+            }
+            Ok(()) => panic!("expected CspObjectSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspObjectSrcBlocked, got {other}"),
+        }
+    }
+
+    #[test]
+    fn object_src_allowed_host_passes_check() {
+        let policy = csp::parse_csp_header("object-src example.com");
+        let client = HttpClient::new().with_object_src_policy(
+            policy,
+            None,
+            "object-src example.com".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_object_src(
+            &client,
+            "https://example.com/embed.swf",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn object_src_falls_back_to_default_src() {
+        // No explicit `object-src` — `effective_sources` (generic over any
+        // directive) already falls back to `default-src`, so this is free:
+        // no new fallback logic was added for `CspDirective::ObjectSrc`.
+        let policy = csp::parse_csp_header("default-src 'none'");
+        let client = HttpClient::new().with_object_src_policy(
+            policy,
+            None,
+            "default-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_object_src(
+            &client,
+            "https://example.com/embed.swf",
+        );
+        assert!(matches!(result, Err(Error::CspObjectSrcBlocked { .. })));
+    }
+
+    #[test]
+    fn no_object_src_policy_does_not_block_check() {
+        // Default `HttpClient` (`with_object_src_policy` never called) must
+        // not invent a CSP block.
+        let client = HttpClient::new();
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_object_src(
+            &client,
+            "https://example.com/embed.swf",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn object_src_unparseable_url_not_blocked() {
+        // A URL that fails to parse never matches `Error::CspObjectSrcBlocked`
+        // — it comes back as `Error::InvalidUrl` instead (same contract as
+        // `check_worker_src`), which the native `_lumen_check_object_src`
+        // binding's `if let Err(CspObjectSrcBlocked {..})` guard does not
+        // match, so no `securitypolicyviolation` is invented for it — the
+        // shim falls through to its normal `fetch()`, which fails there
+        // instead. Mirrors `worker_src_unparseable_url_not_blocked`.
+        let policy = csp::parse_csp_header("object-src 'none'");
+        let client = HttpClient::new().with_object_src_policy(
+            policy,
+            None,
+            "object-src 'none'".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_object_src(
+            &client,
+            "not a url",
+        );
+        assert!(!matches!(result, Err(Error::CspObjectSrcBlocked { .. })));
     }
 
     #[test]

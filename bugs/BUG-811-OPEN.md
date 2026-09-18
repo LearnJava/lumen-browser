@@ -900,3 +900,69 @@ v8 csp_enforce` (26/26 зелёных).
 ЭТУ страницу, отдельная проверка на встраиваемой стороне, не тронута);
 остальные директивы (`object-src`/`media-src`/`manifest-src`/…); `report-to`;
 hash-источники; честная независимая проверка заголовка и `<meta>`.
+
+## Срез 16 (2026-09-19, P6) — `object-src` против `<embed src>`/`<object data>`
+
+Реализовано: `object-src` (CSP3 §6.4, покрывает `<embed>`/`<object>`) была
+разобрана с самого начала (`crates/network/src/csp.rs`), но нигде не
+проверялась, тем же паттерном, что срез 13 уже закрыл для `worker-src`.
+
+Архитектурно этот срез — не срез 4/6/7/9/15 (`&Document` есть внутри шелла) и
+похож на срезы 10-13: `<embed src>`/`<object data>` целиком грузятся из
+JS-шима (`_lumen_embed_object_reload`, `crates/js/src/shim/web_api_shim_mid.js`,
+переиспользует `<link>`-хинтовый `fetch()` — BUG-798), у которого нет
+`&Document`. Поэтому гейт живёт в `lumen-network`, той же тройкой, что срезы
+10/12/13 уже дали `connect-src`/`worker-src`:
+
+- `crates/core/src/error.rs`: новый вариант `Error::CspObjectSrcBlocked
+  { blocked_uri, original_policy }`.
+- `crates/core/src/ext.rs`: `JsFetchProvider::check_object_src(url) ->
+  Result<()>` — I/O-free пре-чек, тот же контракт, что `check_worker_src`
+  (срез 13); default-реализация `Ok(())` для двойников без CSP.
+- `crates/network/src/lib.rs`: `HttpClient` получила `object_src_policy:
+  Option<(CspPolicy, Option<Origin>, String)>`, билдер `with_object_src_policy`,
+  приватный `object_src_gate(&Url)` (против `CspDirective::ObjectSrc`,
+  fallback на `default-src` — общий для любой директивы) и `check_object_src`
+  как override трейта; +5 unit-тестов (симметрично `worker_src_*`).
+- `crates/shell/src/page_pipeline.rs::parse_and_layout`: тот же
+  `document_csp_policy`, что уже собирается для `connect_src_policy`/
+  `worker_src_policy`, теперь клонируется и на `with_object_src_policy` — один
+  расчёт политики, три гейта на один `HttpClient`.
+- `crates/js/src/v8_runtime/install/net.rs`: новый нативный биндинг
+  `_lumen_check_object_src(url) -> bool` в `install_fetch` — зовёт
+  `check_object_src` и, если заблокировано, пишет `(blocked_uri,
+  original_policy)` в свой однослотовый side-channel (тот же паттерн, что
+  срезы 10/12 уже используют для `fetch`/beacon — вызывающий JS синхронный и
+  по одному разу за загрузку ресурса), читаемый `_lumen_object_src_last_csp_block()`.
+- `crates/js/src/shim/web_api_shim_mid_b2.js`: `_lumen_fire_object_src_violation(csp)`
+  — тот же тонкий хелпер, что `_lumen_fire_worker_src_violation` (срез 13),
+  зовёт `_lumen_dispatch_csp_violation('object-src', …)`.
+- `crates/js/src/shim/web_api_shim_mid.js::_lumen_embed_object_reload`: после
+  резолва URL и до вызова `_lumen_link_hint_fetch` зовёт
+  `_lumen_check_object_src(url)` — заблокированный URL не долетает до `fetch()`
+  вовсе (тот же принцип «ни одного исходящего байта», что и у всех
+  предыдущих срезов), диспатчит `securitypolicyviolation` и `error` на
+  элементе тем же путём, что и сетевой отказ (BUG-798).
+
+Подтверждено живым окном (`--mcp-live-port`, локальный HTTP-сервер,
+`dev-release`): страница с `<meta http-equiv="Content-Security-Policy"
+content="object-src 'none'">` и `<embed src="pixel.png">` — сетевой лог
+(`resource://network`) пуст (ни одного `GET /pixel.png`), консоль печатает
+`PROBE spv directive=object-src uri=http://127.0.0.1:8399/pixel.png
+policy=object-src 'none'` и `PROBE embed-error`. Та же страница без директивы
+(baseline) фетчит `pixel.png` (`GET` со статусом 200) и печатает
+`PROBE embed-load`. Юнит-тесты: `cargo test -p lumen-network object_src`
+(5/5). `cargo clippy -p lumen-core -p lumen-network --all-targets -- -D
+warnings`, `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings`, `cargo clippy -p lumen-shell --all-targets --features v8 -- -D
+warnings` — все чисто.
+
+Не покрыто этим срезом: `<applet>` (устаревший тег, не поддержан этим
+движком вовсе — вне области); директивы кроме `script-src`/`img-src`/
+`style-src`/`connect-src`/`worker-src`/`frame-src`/`object-src`
+(`media-src`/`manifest-src`/…); `frame-src` top-level; `frame-ancestors`;
+`report-to`; hash-источники; честная независимая проверка заголовка и
+`<meta>`; `<embed>`/`<object>` внутри `<iframe>` — `document_csp_policy` в
+`page_pipeline.rs::parse_and_layout` строится только для top-level документа,
+подфрейм получает свой `HttpClient` отдельно (`frames.rs`), не тронутый этим
+срезом.

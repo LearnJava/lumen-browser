@@ -933,6 +933,17 @@ function _lumen_fire_worker_src_violation(csp) {
     }
 }
 
+// GAP-CSPENF срез 16: same shape as `_lumen_fire_worker_src_violation` above,
+// for `object-src` — `<embed src>`/`<object data>` reads its own
+// `_lumen_object_src_last_csp_block` side channel and hands the
+// `[blockedUri, originalPolicy]` pair (or `null`) here.
+function _lumen_fire_object_src_violation(csp) {
+    if (!csp || csp.length !== 2) return;
+    if (typeof _lumen_dispatch_csp_violation === 'function') {
+        _lumen_dispatch_csp_violation('object-src', csp[0], csp[1], 'enforce');
+    }
+}
+
 function _perf_rt_record_fetch(url, initiator, startMs, status) {
     if (typeof _lumen_record_resource_timing !== 'function') return;
     var len = 0;

@@ -43,6 +43,17 @@ pub enum Error {
         blocked_uri: String,
         original_policy: String,
     },
+    /// GAP-CSPENF срез 16: an `<embed src>`/`<object data>` resource fetch was
+    /// blocked before any network I/O by the document's CSP `object-src`
+    /// (falling back to `default-src`). Raised by
+    /// `lumen-network::HttpClient::check_object_src`, mirroring
+    /// [`Self::CspWorkerSrcBlocked`] — the native embed/object fetch-check
+    /// binding in `lumen-js` matches on this variant and dispatches
+    /// `securitypolicyviolation` from there.
+    CspObjectSrcBlocked {
+        blocked_uri: String,
+        original_policy: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -62,6 +73,9 @@ impl fmt::Display for Error {
             }
             Self::CspWorkerSrcBlocked { blocked_uri, original_policy } => {
                 write!(f, "worker-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
+            }
+            Self::CspObjectSrcBlocked { blocked_uri, original_policy } => {
+                write!(f, "object-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
             }
         }
     }
