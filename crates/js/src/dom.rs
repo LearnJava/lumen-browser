@@ -384,6 +384,16 @@ pub(crate) const URL_PARSE_SHIM: &str = include_str!("shim/url_parse_shim.js");
 
 const WEB_API_SHIM_MID_B: &str = include_str!("shim/web_api_shim_mid_b.js");
 
+/// `Headers` (Fetch Standard §2.2, BUG-369) — split out of [`WEB_API_SHIM_MID_B`]
+/// (BUG-748) so the service-worker global scope ([`crate::sw_worker`]) can eval
+/// the same class instead of carrying its own second, poorer mini-shim. A
+/// verbatim slice, not a copy — the split point is exactly where the class
+/// sat in the original file, so nothing before or after it changes meaning.
+pub(crate) const HEADERS_SHIM: &str = include_str!("shim/headers_shim.js");
+
+/// Continuation of [`WEB_API_SHIM_MID_B`] after [`HEADERS_SHIM`] (BUG-748 split).
+const WEB_API_SHIM_MID_B2: &str = include_str!("shim/web_api_shim_mid_b2.js");
+
 /// Geometry Interfaces Module (BUG-522/GAP-GEOM) — `DOMPointReadOnly`/
 /// `DOMPoint`, `DOMRectReadOnly`/`DOMRect`, `DOMRectList`,
 /// `DOMMatrixReadOnly`/`DOMMatrix`, `WebKitCSSMatrix`, `DOMQuad`. Must come
@@ -494,7 +504,7 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
