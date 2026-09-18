@@ -34,7 +34,9 @@ const FETCH_TIMEOUT: Duration = Duration::from_millis(5_000);
 /// Pure JS (no engine-specific bits) — used by [`install_sw_globals_v8`].
 /// Provides `self`, `location`, `registration`, `skipWaiting`, `clients`,
 /// `addEventListener`/
-/// `removeEventListener`, minimal `Headers`/`Response` classes, the `caches`
+/// `removeEventListener`, minimal `Request`/`Response` classes (`Headers` is
+/// [`crate::dom::HEADERS_SHIM`], evaluated separately just before this shim —
+/// see [`install_sw_globals_v8`]), the `caches`
 /// API (backed by the Rust `CacheBackend` via `_lumen_sw_cache_*` natives),
 /// a cache-first `fetch` stub, `_sw_fire_event`/`_sw_fire_fetch` dispatch
 /// hooks called by the Rust message loop, `console`, and
@@ -117,18 +119,11 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     return out;
   }}
 
-  // Minimal Headers class.
-  function Headers(init) {{
-    this._h = {{}};
-    if (init) {{ for (var k in init) this._h[k.toLowerCase()] = String(init[k]); }}
-  }}
-  Headers.prototype.get = function(n) {{ return this._h[n.toLowerCase()] || null; }};
-  Headers.prototype.set = function(n, v) {{ this._h[n.toLowerCase()] = String(v); }};
-  Headers.prototype.has = function(n) {{ return n.toLowerCase() in this._h; }};
-  Headers.prototype.forEach = function(fn, thisArg) {{
-    for (var k in this._h) fn.call(thisArg, this._h[k], k, this);
-  }};
-  globalThis.Headers = Headers;
+  // `Headers` (BUG-748): the real class (`crate::dom::HEADERS_SHIM`, shared
+  // with the page and BUG-369), evaluated by `install_sw_globals_v8` just
+  // before this shim — not a second, independent mini-class. That second
+  // class used to store headers on a plain object, so `Set-Cookie` duplicates
+  // collapsed into one and `for..of`/`.append()`/`.forEach()` were missing.
 
   // Request (Fetch §5.1) — минимально, но с теми полями, по которым воркер
   // ветвится в обработчике `fetch`: без класса `new Request(url)` в теле
@@ -192,7 +187,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   Response.prototype.clone = function() {{
     return new Response(this._body, {{
       status: this.status, statusText: this.statusText,
-      headers: this.headers._h, url: this.url, _binary: this._binary,
+      headers: this.headers, url: this.url, _binary: this._binary,
     }});
   }};
   globalThis.Response = Response;
@@ -696,6 +691,9 @@ fn install_sw_globals_v8(
     // хосту молча выбирает не ту ветку.
     let origin_js = origin.trim_end_matches('/').replace('\'', "\\'");
     let origin_str = format!("'{origin_js}'");
+    // `Headers` (BUG-748): the real class shared with the page scope, ahead of
+    // the shim below whose `Request`/`Response` construct it via `new Headers`.
+    rt.eval(crate::dom::HEADERS_SHIM)?;
     rt.eval(&sw_globals_shim(&scope_str, &origin_str))?;
     // После шима области: блоки опираются на `_lumen_console_error`,
     // `queueMicrotask` и `setTimeout`, которые шим только что определил.
@@ -915,6 +913,43 @@ mod tests_v8 {
         assert_eq!(
             rt.eval("globalThis.__ct").unwrap(),
             lumen_core::JsValue::String("text/plain".into())
+        );
+    }
+
+    /// BUG-748: скоуп service worker получает тот же `Headers`, что и
+    /// страница (`crate::dom::HEADERS_SHIM`), а не отдельный мини-шим на
+    /// плоском объекте — `append`/`forEach`/итерация присутствуют,
+    /// одноимённые заголовки не схлопываются, а `clone()` переносит их
+    /// полностью (раньше опирался на приватное поле `_h`, которого больше нет).
+    #[test]
+    fn sw_headers_support_full_fetch_api() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+            .unwrap();
+        rt.eval(
+            "var h = new Headers();
+             h.append('Set-Cookie', 'a=1');
+             h.append('Set-Cookie', 'b=2');
+             globalThis.__hasIter = typeof h[Symbol.iterator] === 'function';
+             globalThis.__hasAppend = typeof h.append === 'function';
+             var seen = [];
+             h.forEach(function(v, k) { seen.push(k + '=' + v); });
+             globalThis.__forEach = seen.join('|');
+             globalThis.__getSetCookie = h.getSetCookie().join('|');
+             var r = new Response('body', { headers: h });
+             var c = r.clone();
+             globalThis.__cloneCookies = c.headers.getSetCookie().join('|');",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__hasIter").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(rt.eval("globalThis.__hasAppend").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("globalThis.__getSetCookie").unwrap(),
+            lumen_core::JsValue::String("a=1|b=2".into())
+        );
+        assert_eq!(
+            rt.eval("globalThis.__cloneCookies").unwrap(),
+            lumen_core::JsValue::String("a=1|b=2".into())
         );
     }
 
