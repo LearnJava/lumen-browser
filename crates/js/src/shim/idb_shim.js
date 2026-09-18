@@ -25,6 +25,7 @@ var _idb_parked_names = {};       // name -> true while that name's queue is blo
 var _idb_flush_scheduled = false; // a flush is pending (microtask or task)
 var _idb_flushing = false;        // a flush is running right now
 var _idb_dirty = false;           // set by any mutation; drives persistence at flush end
+var _idb_dirty_dbs = {};          // db name -> true; which databases' schema needs re-mirroring
 // Requests one flush dispatches before handing the remainder to the event loop.
 // Bounded work — a cursor walk, a batch of puts — still finishes inside the same
 // flush, which is what every caller of _lumen_idb_flush() expects; a request that
@@ -73,6 +74,13 @@ function _idb_persist_if_dirty() {
     _idb_persist_schema();
 }
 
+// Marks one database's schema as needing re-mirroring at the next persist —
+// see _idb_dirty_dbs (BUG-917: without this every dirty flush walked every
+// origin database's stores and indexes, not just the one that changed).
+function _idb_mark_db_dirty(name) {
+    if (name) _idb_dirty_dbs[name] = true;
+}
+
 // Encode a store keyPath (null | string | array) for IdbSchemaOp::CreateStore.key_path
 // (Option<String> on the Rust side): null stays null, arrays are JSON-stringified.
 function _idb_keypath_store(kp) {
@@ -93,10 +101,16 @@ function _idb_keypath_index(kp) {
 // structured backend is installed.
 function _idb_persist_schema() {
     if (typeof _lumen_idb_schema_op !== 'function') return;
+    var dirtyDbs = _idb_dirty_dbs;
+    _idb_dirty_dbs = {};
     try {
-        for (var dbName in _idb_databases) {
-            if (!_idb_databases.hasOwnProperty(dbName)) continue;
+        for (var dbName in dirtyDbs) {
+            if (!dirtyDbs.hasOwnProperty(dbName)) continue;
             var db = _idb_databases[dbName];
+            // A database whose only dirtying event was its own deletion has
+            // nothing left to mirror — DeleteDatabase isn't a schema op (the
+            // opaque snapshot stays authoritative for that), so skip it.
+            if (!db) continue;
             _lumen_idb_schema_op(JSON.stringify({kind:'SetVersion',db_name:db.name,version:db.version ? Number(db.version) : 1}));
             for (var storeName in db.stores) {
                 if (!db.stores.hasOwnProperty(storeName)) continue;
@@ -503,7 +517,7 @@ function _idb_flush_txn(txn, budget) {
         _idb_fire_txn(txn, 'abort');
     } else {
         // A committed write/versionchange transaction changed the stored data.
-        if (txn.mode !== 'readonly') _idb_dirty = true;
+        if (txn.mode !== 'readonly') { _idb_dirty = true; _idb_mark_db_dirty(txn.db.name); }
         _idb_fire_txn(txn, 'complete');
     }
     return budget;
@@ -590,6 +604,7 @@ function _idb_revert_txn(txn) {
     // The reverted state is what has to reach the backend, so a persist is owed
     // exactly as much as a commit would owe one.
     _idb_dirty = true;
+    _idb_mark_db_dirty(txn.db.name);
 }
 
 // Settles every request still queued when the transaction aborted (Indexed DB
@@ -1371,7 +1386,7 @@ function _idb_process_open(entry, budget) {
     }
     // A version upgrade (store/index creation, version bump) or a database
     // deletion mutates the persisted snapshot.
-    if (entry.upgrade || entry._delete) _idb_dirty = true;
+    if (entry.upgrade || entry._delete) { _idb_dirty = true; _idb_mark_db_dirty(name); }
     if (entry.upgrade) {
         var txn = entry._txn;
         if (!txn) {
