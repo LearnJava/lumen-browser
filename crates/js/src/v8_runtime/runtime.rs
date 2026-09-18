@@ -151,6 +151,16 @@ pub struct V8JsRuntime {
     /// success, `dom_dirty` alone (peeked, never cleared by the flush) gates
     /// every later one.
     pub(super) style_never_flushed: Arc<AtomicBool>,
+    /// CSSOM-8 вариант C: every CSSOM write against an owned sheet since the
+    /// last successful same-tick flush, tagged with its owner node — see
+    /// [`super::style_flush::CssomDeltaLog`]. Replayed onto a throwaway clone
+    /// of [`Self::flush_stylesheet`] by
+    /// [`super::style_flush::FlushHandles::cssom_patched_sheet`] rather than
+    /// ever written back into the page's own CSS text.
+    pub(super) cssom_deltas: super::style_flush::CssomDeltaLog,
+    /// CSSOM-8 вариант C: `true` when [`Self::cssom_deltas`] grew since the
+    /// last successful flush — see [`super::style_flush::FlushHandles::cssom_dirty`].
+    pub(super) cssom_dirty: Arc<AtomicBool>,
     /// Pending popup window requests queued by JS `window.open()`.
     pub(super) window_open_requests: Arc<Mutex<Vec<crate::dom::PopupRequest>>>,
     /// Console messages queued by `console.log/warn/error` calls in JS.
@@ -336,6 +346,8 @@ impl V8JsRuntime {
             adopted_stylesheets: Arc::new(Mutex::new(HashMap::new())),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
+            cssom_deltas: Arc::new(Mutex::new(Vec::new())),
+            cssom_dirty: Arc::new(AtomicBool::new(false)),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),

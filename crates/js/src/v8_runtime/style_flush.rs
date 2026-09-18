@@ -84,7 +84,30 @@ pub(crate) struct FlushHandles {
     /// `.focus()` apart from "nothing changed" even when it left `dom_dirty`
     /// untouched. Updated at the end of every successful flush.
     pub(crate) last_flushed_focus: Arc<Mutex<Option<u32>>>,
+    /// CSSOM-8 вариант C: the per-`<style>`/`<link>` registry, read here to
+    /// map a recorded CSSOM edit onto the cascade sheet — an entry's own
+    /// `Stylesheet::source` is the needle
+    /// [`lumen_css_parser::Stylesheet::locate_embedded_source`] looks for.
+    pub(crate) stylesheet_nodes: Arc<Mutex<Vec<lumen_css_parser::StylesheetNodeEntry>>>,
+    /// CSSOM-8 вариант C: every CSSOM write against an owned sheet, in the
+    /// order it happened, tagged with its owner node — see [`CssomDeltaLog`].
+    pub(crate) cssom_deltas: CssomDeltaLog,
+    /// CSSOM-8 вариант C: set when [`Self::cssom_deltas`] grows, cleared at
+    /// the end of a successful flush. A CSSOM write touches neither the DOM
+    /// nor the focus, so without this the gate below would serve the
+    /// pre-mutation snapshot to a same-tick `getComputedStyle()` — exactly
+    /// the half `.style`/`insertRule` was missing before this slice.
+    pub(crate) cssom_dirty: Arc<AtomicBool>,
 }
+
+/// Recorded CSSOM writes awaiting replay onto the cascade sheet, each paired
+/// with the `<style>`/`<link>` node whose own sheet it was applied to
+/// (CSSOM-8 вариант C).
+///
+/// A flat log rather than a map keyed by node because replay order matters
+/// within a node and the list is short (one entry per CSSOM write the page has
+/// ever made); grouping happens at replay time.
+pub(crate) type CssomDeltaLog = Arc<Mutex<Vec<(u32, lumen_css_parser::CssomOp)>>>;
 
 /// Bundled font for the flush's own measurer — the same file every other
 /// bundled-Inter call site in this crate uses (`crates/js/src/canvas2d.rs`),
@@ -121,6 +144,7 @@ impl FlushHandles {
         if !self.never_flushed.load(Ordering::Relaxed)
             && !self.dom_dirty.load(Ordering::Relaxed)
             && !focus_changed
+            && !self.cssom_dirty.load(Ordering::Relaxed)
         {
             return;
         }
@@ -132,6 +156,13 @@ impl FlushHandles {
         else {
             return;
         };
+        // CSSOM-8 вариант C: lay out against the cascade sheet *plus* every
+        // CSSOM edit the page has made, replayed onto a throwaway clone. The
+        // pushed sheet itself stays pristine — it is re-derived from the DOM
+        // text by the shell whenever `<style>` content changes, and the same
+        // log is replayed onto each new one, so an edit survives any number of
+        // cascade rebuilds without ever being written back into the page CSS.
+        let sheet = self.cssom_patched_sheet(&sheet).unwrap_or(sheet);
         let [vw, vh] = *self
             .viewport_size
             .lock()
@@ -219,5 +250,86 @@ impl FlushHandles {
             .last_flushed_focus
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = current_focus;
+        // CSSOM-8 вариант C: `cssom_deltas` itself is never cleared — it is
+        // replayed onto every future cascade rebuild too (see the field's doc
+        // comment) — only the "has something changed since the last flush"
+        // gate resets.
+        self.cssom_dirty.store(false, Ordering::Relaxed);
+    }
+
+    /// CSSOM-8 вариант C: replay every recorded CSSOM write
+    /// ([`Self::cssom_deltas`]) onto a throwaway clone of `sheet`, address-
+    /// translated through each owning node's own parsed source text. `None`
+    /// when there is nothing recorded (the common case — most pages never
+    /// call `CSSStyleSheet.insertRule`/`.deleteRule`/write `.style`), so the
+    /// caller can skip the clone and lay out against the pristine `sheet`
+    /// directly.
+    ///
+    /// Processes nodes in descending `cssRules`-base order so that an
+    /// earlier-in-page node's `insertRule`/`deleteRule` — which shifts every
+    /// `cssRules` index after it in the working clone — never invalidates a
+    /// `base` already computed for a node further down the page: every
+    /// `base` is computed once, up front, against the pristine `sheet`
+    /// (never against the working clone once it starts mutating), and a
+    /// later-in-page node's own edits can only ever shift indices *above*
+    /// its own `base`, never below it — see
+    /// [`lumen_css_parser::Stylesheet::cssom_range_for_source_span`]'s doc
+    /// comment for why the translation itself is only valid pristine.
+    fn cssom_patched_sheet(
+        &self,
+        sheet: &Arc<lumen_css_parser::Stylesheet>,
+    ) -> Option<Arc<lumen_css_parser::Stylesheet>> {
+        let deltas = self.cssom_deltas.lock().unwrap_or_else(|e| e.into_inner());
+        if deltas.is_empty() {
+            return None;
+        }
+        let nodes = self
+            .stylesheet_nodes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // `base` for every node carrying at least one recorded op, resolved
+        // against the pristine `sheet` while walking `nodes` in document
+        // order — the same cursor discipline `locate_embedded_source`'s doc
+        // comment describes, so two nodes with byte-identical bodies each
+        // resolve to their own occurrence rather than both to the first.
+        let mut bases: HashMap<u32, usize> = HashMap::new();
+        let mut cursor = 0usize;
+        for entry in nodes.iter() {
+            let Some(needle) = entry.sheet.source() else {
+                continue;
+            };
+            let Some((start, end)) = sheet.locate_embedded_source(needle, cursor) else {
+                continue;
+            };
+            cursor = end;
+            if deltas.iter().any(|(n, _)| *n == entry.node) {
+                let (base, _count) = sheet.cssom_range_for_source_span(start, end);
+                bases.insert(entry.node, base);
+            }
+        }
+        drop(nodes);
+        if bases.is_empty() {
+            // Every op's owner node has since disappeared from the registry
+            // (page navigated away from under it, or removed the `<style>`)
+            // or never resolved a byte range — nothing to replay.
+            return None;
+        }
+        let mut order: Vec<u32> = bases.keys().copied().collect();
+        order.sort_unstable_by_key(|n| std::cmp::Reverse(bases[n]));
+        let mut patched = (**sheet).clone();
+        for node in order {
+            let base = bases[&node];
+            let ops: Vec<lumen_css_parser::CssomOp> = deltas
+                .iter()
+                .filter(|(n, _)| *n == node)
+                .map(|(_, op)| op.clone())
+                .collect();
+            // Best-effort: an op that fails to apply (e.g. its recorded index
+            // is now out of range because a later native call already
+            // deleted the rule) leaves the rest of this node's ops applied —
+            // no error channel back to the JS call site that recorded it.
+            let _ = patched.replay_cssom_ops(base, &ops);
+        }
+        Some(Arc::new(patched))
     }
 }
