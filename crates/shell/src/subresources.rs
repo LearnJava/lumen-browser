@@ -39,24 +39,44 @@ pub(crate) fn fetch_vtt_text(
 /// (`collect_background_image_requests`). Ошибки скачивания / декодирования
 /// логируются в stderr — battle-tested fail-soft: битая bg-картинка не валит
 /// страницу, renderer всё равно отобразит background-color поверх.
+///
+/// GAP-CSPENF срез 18: `csp_gate` — политика top-level документа (то же
+/// `document_csp_policy`, что срезы 4/7/17 уже передают своим вызовам), если
+/// она есть. URL, запрещённый `img-src`/`default-src`, не доходит до
+/// `fetch_image_bytes` вовсе (тот же принцип «ни одного исходящего байта») и
+/// вместо этого попадает во второй элемент возврата — резолвленные URL для
+/// отложенного `securitypolicyviolation` (эта функция запускается до layout,
+/// поэтому у вызывающей стороны есть URL и до, и после фетча — здесь удобнее
+/// вернуть уже резолвленный, раз gate его всё равно резолвит).
 pub(crate) fn fetch_and_decode_background_images(
     layout: &LayoutBox,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-) -> Vec<(String, Arc<lumen_image::Image>)> {
+    csp_gate: Option<(&lumen_network::csp::CspPolicy, Option<&lumen_network::Origin>)>,
+) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<String>) {
     // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
     // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,
     // который эмиттер кладёт в `DrawBackgroundImage.src`.
     let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
-    let decoded = parallel_map(&urls, |_, url| {
+    let outcomes = parallel_map(&urls, |_, url| {
+        if let Some((policy, self_origin)) = csp_gate {
+            let resolved = base.resolve(url);
+            let abs = match &resolved {
+                ResolvedResource::Url(u) => u.clone(),
+                ResolvedResource::File(p) => p.display().to_string(),
+            };
+            if crate::csp_enforce::img_src_blocked(policy, &abs, self_origin) {
+                return Err(abs);
+            }
+        }
         let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск bg-картинки {url}: {e}");
-                return None;
+                return Ok(None);
             }
         };
         // LIB-4: SVG больше не особый случай — `decode_to` рисует его через
@@ -65,7 +85,7 @@ pub(crate) fn fetch_and_decode_background_images(
             Ok(i) => i,
             Err(e) => {
                 eprintln!("Не декодируется bg-картинка {url}: {e}");
-                return None;
+                return Ok(None);
             }
         };
         eprintln!(
@@ -73,9 +93,18 @@ pub(crate) fn fetch_and_decode_background_images(
             image.width, image.height, image.format
         );
         // BUG-272 срез 17: wrap once in Arc so `register_image` shares the buffer.
-        Some((url.clone(), Arc::new(image)))
+        Ok(Some((url.clone(), Arc::new(image))))
     });
-    decoded.into_iter().flatten().collect()
+    let mut decoded = Vec::new();
+    let mut blocked = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            Ok(Some(pair)) => decoded.push(pair),
+            Ok(None) => {}
+            Err(blocked_uri) => blocked.push(blocked_uri),
+        }
+    }
+    (decoded, blocked)
 }
 
 /// Загружает шрифты из @font-face правил таблицы стилей в `FontRegistry`.

@@ -1113,3 +1113,57 @@ object-URL-стора, до сети не доходят вовсе — гейт
 `document_csp_policy` в `page_pipeline.rs::parse_and_layout` строится только
 для top-level документа, подфрейм получает свой `HttpClient` отдельно
 (`frames.rs`), не тронутый этим срезом.
+
+## Срез 18 (2026-09-19, `p6-gap-cspenf-srez18`) — `img-src` против `background-image: url(...)`
+
+Реализовано: последний из трёх производителей, названных срезом 4 как не
+покрытые («`background-image`/`@font-face url()` — используют
+`fetch_image_bytes` напрямую, не `decode_image` — не гейтятся вовсе»), из
+которых `background-image` — единственный, что фетчит байты страницы (а не
+подресурс, к которому нет доступа `&Document`).
+
+- `crates/shell/src/subresources.rs::fetch_and_decode_background_images`
+  получила параметр `csp_gate: Option<(&CspPolicy, Option<&Origin>)>` и
+  второй элемент возврата — `Vec<String>` заблокированных резолвленных URL,
+  тем же контрактом, что срезы 7/17 уже дали `load_linked_stylesheets`/
+  `load_video_tracks`. Внутри `parallel_map` каждый URL сначала резолвится
+  (`base.resolve`), затем проверяется уже существующим
+  `csp_enforce::img_src_blocked` (срез 4) — тем же гейтом, что и `<img src>`,
+  раз CSP3 §6.7 не различает происхождение картинки внутри одной директивы;
+  заблокированный URL не доходит до `fetch_image_bytes` вовсе (тот же принцип
+  «ни одного исходящего байта»).
+- `crates/shell/src/page_pipeline.rs::parse_and_layout`: политика документа
+  считается один раз (тот же `document_csp_policy`, что срезы 4/7/9/17 уже
+  используют) перед вызовом фетч-функции; заблокированные URL диспатчат
+  `securitypolicyviolation` (`directive="img-src"`) после параллельного
+  фетча — та же отложенная one-shot-push схема, что срез 4 применяет к
+  `blocked_by_img_src`, только здесь "отложено" означает "после фетча",
+  а не "до JS-рантайма" (JS-рантайм к этому моменту уже существует).
+- `frames.rs::fetch_frame_background_images` (фон под-документа `<iframe>`) —
+  отдельная, не переиспользующая функция; не тронута этим срезом, тот же
+  пробел, что срезы 4/6/8 уже документировали для картинок/скриптов фрейма
+  до их собственного среза.
+
+Подтверждено живым окном (`--mcp-live-port`, локальный HTTP-сервер с логом
+каждого запроса, `dev-release`), A/B двумя страницами. Арм с `<meta
+http-equiv="Content-Security-Policy" content="img-src 'none'">` и
+`#bg { background-image: url(bg.png) }`: серверный лог содержит только `GET
+/page.html` (`bg.png` не запрошен вовсе), консоль печатает `PROBE spv
+directive=img-src uri=http://127.0.0.1:8511/bg.png`. Baseline-арм той же
+страницы без директивы: `GET /bg.png` уходит на провод, `securitypolicyviolation`
+не приходит.
+
+Тесты: новая логика — тонкая проводка (резолв + вызов уже протестированного
+`img_src_blocked`), отдельных unit-тестов не заводилось — тот же прецедент,
+что срез 9 уже принял для `loading="lazy"` картинок (гейт там тоже сведён к
+переиспользованию `img_src_blocked`, подтверждён только живым пробом и
+регрессионным прогоном). `cargo test -p lumen-shell --features v8 --bin
+lumen` без регрессий, `cargo build -p lumen-shell --features v8` + `cargo
+clippy -p lumen-shell --all-targets --features v8 -- -D warnings` — чисто.
+
+Не покрыто этим срезом: `@font-face url()` (использует `fetch_font_bytes`,
+отдельный путь, не тронут); `background-image` внутри `<iframe>`
+(`frames.rs`, см. выше); директивы кроме `script-src`/`img-src`/`style-src`/
+`connect-src`/`worker-src`/`frame-src`/`object-src`/`media-src`; `frame-src`
+top-level; `frame-ancestors`; `report-to`; hash-источники; честная
+независимая проверка заголовка и `<meta>`.
