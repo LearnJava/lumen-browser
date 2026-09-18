@@ -48,6 +48,7 @@ mod brotli;
 mod flate;
 pub mod coop;
 pub mod csp;
+pub mod document_policy;
 pub mod permissions_policy;
 mod cors;
 mod dns;
@@ -2883,6 +2884,15 @@ pub struct HttpClient {
     /// because the two are checked against different [`CspDirective`]s and a
     /// future срез may need them to diverge (e.g. per-worker-flavour policy).
     worker_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    /// GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition from `Document-Policy`
+    /// (+ `-Report-Only`) and `Permissions-Policy` (+ `-Report-Only`)
+    /// respectively, precomputed once by `crate::document_policy`/
+    /// `crate::permissions_policy` in the shell's `parse_and_layout`
+    /// (`crates/shell/src/page_pipeline.rs`) and set via
+    /// [`Self::with_sync_xhr_policy`]. Two independent fields, not one: the
+    /// two headers are separate policies per spec, each firing its own
+    /// `document-policy-violation`/`permissions-policy-violation` report.
+    sync_xhr_policy: (Option<lumen_core::ext::PolicyDisposition>, Option<lumen_core::ext::PolicyDisposition>),
 }
 
 impl HttpClient {
@@ -2912,6 +2922,7 @@ impl HttpClient {
             h3_pool: None,
             connect_src_policy: None,
             worker_src_policy: None,
+            sync_xhr_policy: (None, None),
         }
     }
 
@@ -2946,6 +2957,23 @@ impl HttpClient {
         original_policy: String,
     ) -> Self {
         self.worker_src_policy = Some((policy, self_origin, original_policy));
+        self
+    }
+
+    /// Attach the document's precomputed `sync-xhr` disposition — GAP-POLICYREPORT
+    /// (BUG-953). Unlike `with_connect_src_policy`/`with_worker_src_policy`, the
+    /// caller passes an already-resolved [`PolicyDisposition`](lumen_core::ext::PolicyDisposition)
+    /// pair rather than a raw policy, because the check has no URL to test —
+    /// `document_policy`/`permissions_policy` (`crates/shell/src/page_pipeline.rs`)
+    /// resolve enforcing-vs-report-only against the two header pairs once, before
+    /// this client is ever asked a question.
+    #[must_use]
+    pub fn with_sync_xhr_policy(
+        mut self,
+        document_policy: Option<lumen_core::ext::PolicyDisposition>,
+        permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
+    ) -> Self {
+        self.sync_xhr_policy = (document_policy, permissions_policy);
         self
     }
 
@@ -4297,6 +4325,23 @@ impl JsFetchProvider for HttpClient {
     fn check_worker_src(&self, url: &str) -> Result<()> {
         let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
         self.worker_src_gate(&url)
+    }
+
+    /// GAP-POLICYREPORT (BUG-953): returns the `sync-xhr` disposition
+    /// precomputed by `crate::document_policy` (resolved by the shell in
+    /// `page_pipeline::parse_and_layout` and attached via
+    /// [`Self::with_sync_xhr_policy`]). `None` means the document carried no
+    /// `Document-Policy`/`Document-Policy-Report-Only` header disabling the
+    /// feature.
+    fn document_policy_sync_xhr_disposition(&self) -> Option<lumen_core::ext::PolicyDisposition> {
+        self.sync_xhr_policy.0
+    }
+
+    /// Same as [`Self::document_policy_sync_xhr_disposition`], for
+    /// `Permissions-Policy`/`Permissions-Policy-Report-Only` — a separate
+    /// header, checked independently per spec (GAP-POLICYREPORT, BUG-953).
+    fn permissions_policy_sync_xhr_disposition(&self) -> Option<lumen_core::ext::PolicyDisposition> {
+        self.sync_xhr_policy.1
     }
 }
 

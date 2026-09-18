@@ -215,7 +215,11 @@ XMLHttpRequest.prototype._buildResponse = function(bodyBytes) {
 // ── XHR §4.5 — open() ──────────────────────────────────────────────────────
 XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
     // XHR spec: async defaults to true; sync (false) is deprecated.
-    // Phase 0: we always behave as async.
+    // Phase 0: we always behave as async — the underlying `_lumen_fetch_sync*`
+    // bindings block either way. `_async` is still tracked (GAP-POLICYREPORT,
+    // BUG-953): `send()` needs to know whether the caller asked for the
+    // sync mode `Document-Policy`/`Permissions-Policy` `sync-xhr` gates.
+    this._async = (async === undefined) ? true : Boolean(async);
     if (this.readyState === 4) {
         // Re-open after DONE: reset state.
         this.status       = 0;
@@ -267,6 +271,37 @@ XMLHttpRequest.prototype.send = function(body) {
     if (self._sent)           throw new DOMException('XHR already sent', 'InvalidStateError');
     self._sent    = true;
     self._aborted = false;
+
+    // GAP-POLICYREPORT (BUG-953): Document-Policy/Permissions-Policy gate XHR's
+    // synchronous mode (`async === false`) here, before the underlying
+    // `_lumen_fetch_sync*` bindings below ever touch the network. The two
+    // headers are independent policies per spec — each is checked and, if it
+    // disables `sync-xhr`, reported as its own `*-policy-violation` type; an
+    // "enforce" disposition on either throws instead of sending.
+    if (self._async === false && typeof _lumen_xhr_check_sync_policy === 'function') {
+        var _policyDisp = _lumen_xhr_check_sync_policy();
+        var _docDisp = _policyDisp[0], _permDisp = _policyDisp[1];
+        if (_docDisp || _permDisp) {
+            var _pageUrl = (typeof location !== 'undefined' && location) ? location.href : self._url;
+            var _reportSyncXhrViolation = function(type, disposition) {
+                if (typeof _lumen_deliver_report !== 'function') return;
+                _lumen_deliver_report(type, _pageUrl, JSON.stringify({
+                    featureId: 'sync-xhr',
+                    disposition: disposition,
+                    sourceFile: _pageUrl,
+                    lineNumber: 0,
+                    columnNumber: 0,
+                    message: 'Synchronous XMLHttpRequest is disabled by ' + type.replace('-violation', '')
+                }));
+            };
+            if (_docDisp) _reportSyncXhrViolation('document-policy-violation', _docDisp);
+            if (_permDisp) _reportSyncXhrViolation('permissions-policy-violation', _permDisp);
+            if (_docDisp === 'enforce' || _permDisp === 'enforce') {
+                self._sent = false;
+                throw new DOMException('Synchronous XMLHttpRequest is disabled by policy', 'NetworkError');
+            }
+        }
+    }
 
     self._fireProgress('loadstart', 0, 0);
 
@@ -773,6 +808,176 @@ mod tests {
             r.eval(
                 "var x = new XMLHttpRequest(); \
                  x.UNSENT === 0 && x.OPENED === 1 && x.DONE === 4"
+            )
+            .unwrap(),
+            bool_true()
+        );
+    }
+
+    // ── GAP-POLICYREPORT (BUG-953): Document-Policy/Permissions-Policy sync-xhr ──
+
+    /// Fetch provider with a configurable `sync-xhr` disposition pair, mirroring
+    /// `HttpClient::sync_xhr_policy` — lets tests drive the enforce/report/allow
+    /// split without going through the real `Document-Policy` header parser.
+    struct PolicyFetch {
+        document_disposition: Option<lumen_core::ext::PolicyDisposition>,
+        permissions_disposition: Option<lumen_core::ext::PolicyDisposition>,
+    }
+    impl PolicyFetch {
+        fn new(
+            document_disposition: Option<lumen_core::ext::PolicyDisposition>,
+            permissions_disposition: Option<lumen_core::ext::PolicyDisposition>,
+        ) -> Arc<Self> {
+            Arc::new(Self { document_disposition, permissions_disposition })
+        }
+    }
+    impl lumen_core::ext::JsFetchProvider for PolicyFetch {
+        fn fetch_sync(
+            &self,
+            _url: &str,
+            _method: &str,
+        ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: b"ok".to_vec(),
+            })
+        }
+        fn fetch_with_body_sync(
+            &self,
+            _url: &str,
+            _method: &str,
+            _content_type: &str,
+            _body: &[u8],
+        ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: b"ok".to_vec(),
+            })
+        }
+        fn document_policy_sync_xhr_disposition(
+            &self,
+        ) -> Option<lumen_core::ext::PolicyDisposition> {
+            self.document_disposition
+        }
+        fn permissions_policy_sync_xhr_disposition(
+            &self,
+        ) -> Option<lumen_core::ext::PolicyDisposition> {
+            self.permissions_disposition
+        }
+    }
+
+    fn rt_with_policy(
+        document_disposition: Option<lumen_core::ext::PolicyDisposition>,
+        permissions_disposition: Option<lumen_core::ext::PolicyDisposition>,
+    ) -> V8JsRuntime {
+        let r = V8JsRuntime::new().unwrap();
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> =
+            PolicyFetch::new(document_disposition, permissions_disposition);
+        r.install_dom(
+            make_doc(),
+            "https://example.com/",
+            Some(p),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        r
+    }
+
+    #[test]
+    fn sync_xhr_allowed_when_no_policy_disables_it() {
+        let r = rt_with_policy(None, None);
+        assert_eq!(
+            r.eval(
+                "var x = new XMLHttpRequest(); \
+                 x.open('GET', '/data', false); \
+                 x.send(); \
+                 x.status"
+            )
+            .unwrap(),
+            JsValue::Number(200.0)
+        );
+    }
+
+    #[test]
+    fn sync_xhr_async_true_ignores_policy() {
+        // Only `async === false` triggers the sync-xhr feature check (HTML LS
+        // §4.5.2 note: async requests never hit this gate).
+        let r = rt_with_policy(Some(lumen_core::ext::PolicyDisposition::Enforce), None);
+        assert_eq!(
+            r.eval(
+                "var threw = false; \
+                 try { \
+                     var x = new XMLHttpRequest(); \
+                     x.open('GET', '/data', true); \
+                     x.send(); \
+                 } catch (e) { threw = true; } \
+                 threw"
+            )
+            .unwrap(),
+            JsValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn sync_xhr_enforce_document_policy_throws_and_blocks_send() {
+        let r = rt_with_policy(Some(lumen_core::ext::PolicyDisposition::Enforce), None);
+        assert_eq!(
+            r.eval(
+                "var threw = false, name = ''; \
+                 try { \
+                     var x = new XMLHttpRequest(); \
+                     x.open('GET', '/data', false); \
+                     x.send(); \
+                 } catch (e) { threw = true; name = e.name; } \
+                 threw && name === 'NetworkError'"
+            )
+            .unwrap(),
+            bool_true()
+        );
+    }
+
+    #[test]
+    fn sync_xhr_enforce_permissions_policy_throws_and_blocks_send() {
+        let r = rt_with_policy(None, Some(lumen_core::ext::PolicyDisposition::Enforce));
+        assert_eq!(
+            r.eval(
+                "var threw = false; \
+                 try { \
+                     var x = new XMLHttpRequest(); \
+                     x.open('GET', '/data', false); \
+                     x.send(); \
+                 } catch (e) { threw = true; } \
+                 threw"
+            )
+            .unwrap(),
+            bool_true()
+        );
+    }
+
+    #[test]
+    fn sync_xhr_report_only_sends_but_delivers_report() {
+        let r = rt_with_policy(Some(lumen_core::ext::PolicyDisposition::Report), None);
+        assert_eq!(
+            r.eval(
+                "var observed = null; \
+                 var ro = new ReportingObserver(function(reports) { observed = reports; }, {types: ['document-policy-violation']}); \
+                 ro.observe(); \
+                 var x = new XMLHttpRequest(); \
+                 x.open('GET', '/data', false); \
+                 x.send(); \
+                 x.status === 200 && observed !== null && observed.length === 1 && \
+                 observed[0].type === 'document-policy-violation' && observed[0].body.featureId === 'sync-xhr'"
             )
             .unwrap(),
             bool_true()

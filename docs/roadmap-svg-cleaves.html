@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-18",
  "counts": {
-  "open": 303,
-  "fixed": 700,
+  "open": 298,
+  "fixed": 705,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4639,7 +4639,7 @@
        "title": "WPT: вендорить + прогнать категорию `webrtc-priority`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа, заметка «нет конвейера» была неточна — тот же дрейф, что у `webrtc`/`webrtc-extensions`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-priority --recursive`, 2 файла, 2 id) — **2/2 harness OK, 0/9 сабтестов**. Найден [BUG-726](bugs/BUG-726-OPEN.md) (`createDataChannel()` отбрасывает `options` целиком, `.priority` не отражается). Остальные 7 падений — уже задокументированный [BUG-1058](bugs/BUG-1058-FIXED.md)-смежный пробел (`addTransceiver()` no-op). Новый номер: BUG-726",
+       "note": "Скоуп: 🚫 (вне скоупа, заметка «нет конвейера» была неточна — тот же дрейф, что у `webrtc`/`webrtc-extensions`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-priority --recursive`, 2 файла, 2 id) — **2/2 harness OK, 0/9 сабтестов**. Найден [BUG-726](bugs/BUG-726-FIXED.md) (`createDataChannel()` отбрасывает `options` целиком, `.priority` не отражается). Остальные 7 падений — уже задокументированный [BUG-1058](bugs/BUG-1058-FIXED.md)-смежный пробел (`addTransceiver()` no-op). Новый номер: BUG-726",
        "bugs": [
         "BUG-726"
        ]
@@ -6828,9 +6828,9 @@
       {
        "id": "GAP-POLICYREPORT",
        "title": "GAP: репортинг нарушений Document/Permissions Policy",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "`ReportingObserver` реализован (`crates/js/src/reporting_api.rs`) и штатно принимает колбэк с фильтром по `types`, но ни один Rust- или шим-файл нигде не конструирует отчёт `document-policy-violation`/`permissions-policy-violation` — грепом по обеим строкам ноль совпадений. Объём та же форма, что `GAP-CSPENF`: нужны разбор заголовка `Document-Policy`/`Permissions-Policy` (и `-Report-Only`), таблица «фича → режим» и точки проверки в местах, где фича реально используется (для найденного id — синхронный `xhr.send()`), а не один член. Найден 2026-09-01 (WPT-RUN-6 срез 32, `document-policy/reporting/sync-xhr-report-only.html`, `permissions-policy/reporting/sync-xhr-report-only.html`).",
+       "note": "`ReportingObserver` реализован (`crates/js/src/reporting_api.rs`) и штатно принимает колбэк с фильтром по `types`, но ни один Rust- или шим-файл нигде не конструирует отчёт `document-policy-violation`/`permissions-policy-violation` — грепом по обеим строкам ноль совпадений. Объём та же форма, что `GAP-CSPENF`: нужны разбор заголовка `Document-Policy`/`Permissions-Policy` (и `-Report-Only`), таблица «фича → режим» и точки проверки в местах, где фича реально используется (для найденного id — синхронный `xhr.send()`), а не один член. Найден 2026-09-01 (WPT-RUN-6 срез 32, `document-policy/reporting/sync-xhr-report-only.html`, `permissions-policy/reporting/sync-xhr-report-only.html`). **Ревизия 2026-09-18 (P1):** объём закрыт для найденного id — Structured Fields-парсер `Document-Policy`/`-Report-Only` (`crates/network/src/document_policy.rs`), резолв disposition из обоих заголовков (`Permissions-Policy` через уже существующий парсер) в `crates/shell/src/page_source.rs` (enforce приоритетнее report-only), проброс до `HttpClient::with_sync_xhr_policy`/нативного `_lumen_xhr_check_sync_policy`, точка проверки в `xhr.rs::send()` перед синхронной отправкой — `NetworkError` под enforce, `PolicyViolationReport` с `featureId`/`disposition`/`sourceFile`/`lineNumber`/`columnNumber` под report-only, независимо для каждого заголовка. Живой `run_report.py` подтвердил все 4 целевых WPT-файла (`document-policy/permissions-policy` × `report-only/reporting`) зелёными. Остаток вне скоупа: другие фичи Document/Permissions Policy (например `network-efficiency-guardrails`, найденная BUG-953 отдельным замером) не имеют точки проверки — заводятся отдельной находкой при обнаружении, таблица «фича → режим» уже общая инфраструктура для них.",
        "bugs": [
         "BUG-953"
        ]
@@ -7992,20 +7992,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-723": {
-   "status": "open",
-   "title": "На странице по схеме `file://` всё, что шим грузит своим `fetch`, падает с `TypeError: fetch: network error`, и элемент получает `error` вместо `load`: воспроиз…",
-   "component": "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), network (провайдер `JsFetchProvider`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-726": {
-   "status": "open",
-   "title": "`RTCPeerConnection.prototype.createDataChannel(label, options)` отбрасывает второй аргумент целиком — возвращаемый объект не отражает ни одного поля `RTCDataCha…",
-   "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-727": {
    "status": "open",
    "title": "`RTCPeerConnection`-стаб никогда не диспатчит `ontrack`/`ondatachannel`/`onconnectionstatechange`/`oniceconnectionstatechange` — `_dispatch()` вызывается только…",
@@ -8013,24 +7999,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-744": {
-   "status": "open",
-   "title": "`<style>`, созданный разбором `innerHTML` (`div.innerHTML = '<style>…'`, затем узел переносится в `<head>`), не работает как таблица стилей и не виден `document…",
-   "component": "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-746": {
    "status": "open",
    "title": "`document.styleSheets` отсутствует целиком (`typeof === \"undefined\"`), а вместе с ним и весь CSSOM таблиц стилей: нет ни `StyleSheetList`, ни `CSSStyleSheet`/`C…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + shell/layout (публикация разобранных таблиц в JS-рантайм)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-747": {
-   "status": "open",
-   "title": "Все ~220 членов живой обёртки узла — собственные свойства инстанса, а не операции прототипа: `Object.getOwnPropertyNames(host).length` = 217 против 3 у `Element…",
-   "component": "js (`crates/js/src/dom.rs` — объектный литерал в `_lumen_build_element`; почти пустые `Element.prototype`/`Node.prototype`)",
    "date": null,
    "debtor": false
   },
@@ -8801,13 +8773,6 @@
    "status": "open",
    "title": "Исключение, брошенное внутри колбэка таймера, не попадает никуда: ни `script error:`/`[JS error]` в логе браузера (как для синхронных ошибок), ни `window.onerro…",
    "component": "js (V8-раннер — вызов колбэков `setTimeout`/`setInterval`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-953": {
-   "status": "open",
-   "title": "`ReportingObserver` реализован, но ни один Rust- или шим-файл не генерирует `document-policy-violation`/`permissions-policy-violation` отчёт — сверки фичи с пол…",
-   "component": "js (`crates/js/src/reporting_api.rs`)",
    "date": null,
    "debtor": false
   },
@@ -14130,6 +14095,41 @@
    "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
    "date": "2026-09-18",
    "debtor": false
+  },
+  "BUG-723": {
+   "status": "fixed",
+   "title": "На странице по схеме `file://` всё, что шим грузит своим `fetch`, падает с `TypeError: fetch: network error`, и элемент получает `error` вместо `load`: воспроиз…",
+   "component": "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), shell (`crates/shell/src/resource_base.rs`, `frames.rs`, `page_load.rs`, `lumen/hibernation.rs`), network (`crates/network/src/lib.rs::fetch_with_redirect`, `crates/core/src/url.rs::Url`)",
+   "date": "2026-09-18",
+   "debtor": false
+  },
+  "BUG-726": {
+   "status": "fixed",
+   "title": "`RTCPeerConnection.prototype.createDataChannel(label, options)` отбрасывает второй аргумент целиком — возвращаемый объект не отражает ни одного поля `RTCDataCha…",
+   "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
+   "date": "2026-09-18",
+   "debtor": false
+  },
+  "BUG-744": {
+   "status": "fixed",
+   "title": "`<style>`, созданный разбором `innerHTML` (`div.innerHTML = '<style>…'`, затем узел переносится в `<head>`), не работал как таблица стилей и не был виден `docum…",
+   "component": "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)",
+   "date": "2026-09-18",
+   "debtor": false
+  },
+  "BUG-747": {
+   "status": "fixed",
+   "title": "Все ~220 членов живой обёртки узла были собственными свойствами инстанса, а не операциями прототипа: `Object.getOwnPropertyNames(host).length` = 217 против 3 у…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_build_element`, `_lumen_wrapper_proto_for`; почти пустые `Element.prototype`/`Node.prototype`)",
+   "date": "2026-09-18",
+   "debtor": false
+  },
+  "BUG-953": {
+   "status": "fixed",
+   "title": "`ReportingObserver` реализован, но ни один Rust- или шим-файл не генерировал `document-policy-violation`/`permissions-policy-violation` отчёт — сверки фичи с по…",
+   "component": "js (`crates/js/src/reporting_api.rs`, `crates/js/src/xhr.rs`), network (`crates/network/src/document_policy.rs`), shell (`crates/shell/src/page_source.rs`)",
+   "date": "2026-09-18",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14555,7 +14555,7 @@
   "js (`crates/js/src/dom.rs` — `_sw_make_registration`, ~line 4843) + all seven `ServiceWorkerRegistration.prototype`-attaching modules (`push_api.rs`, `background_sync.rs`, `periodic_sync.rs`, `background_fetch.rs`, `cookie_store.rs`, `content_index.rs`, `notifications_bindings.rs`)": [
    "BUG-657"
   ],
-  "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), network (провайдер `JsFetchProvider`)": [
+  "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), shell (`crates/shell/src/resource_base.rs`, `frames.rs`, `page_load.rs`, `lumen/hibernation.rs`), network (`crates/network/src/lib.rs::fetch_with_redirect`, `crates/core/src/url.rs::Url`)": [
    "BUG-723"
   ],
   "js (`crates/js/src/dom.rs` — `createImageBitmap`, сообщение `unsupported source type`; глобального `ImageBitmap` нет)": [

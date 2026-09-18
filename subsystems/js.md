@@ -33,6 +33,23 @@ the time — read dates.
   `writer-starvation` helpers now resolve but still encounter missing worker
   `self.indexedDB`. This does not close the WPT-RUN-7 stability debt.
 
+- **`XMLHttpRequest.send()` gates its synchronous mode on `Document-Policy`/`Permissions-Policy`
+  `sync-xhr` and reports the outcome ([BUG-953](../bugs/BUG-953-FIXED.md), GAP-POLICYREPORT, P1,
+  2026-09-18).** `ReportingObserver` (`reporting_api.rs`) existed but nothing ever constructed a
+  `document-policy-violation`/`permissions-policy-violation` report. `xhr.rs::send()` now calls the
+  native `_lumen_xhr_check_sync_policy()` binding right before an `async === false` request reaches
+  `_lumen_fetch_sync*` — it returns the two headers' disposition (`enforce`/`report`/absent),
+  resolved shell-side from `lumen_network::document_policy`/`permissions_policy` against the
+  response headers. An enforcing disposition on either header throws `DOMException('...',
+  'NetworkError')` **before** the request is sent; a report-only disposition lets `send()` proceed
+  and delivers a report via `_lumen_deliver_report` with `{featureId: 'sync-xhr', disposition,
+  sourceFile, lineNumber, columnNumber}` — the two headers are checked and reported independently,
+  matching the spec's separate violation-report types. Confirmed live: all four
+  `document-policy`/`permissions-policy` `reporting/sync-xhr-*.html` WPT files pass under
+  `run_report.py` (previously TIMEOUT/uncaught-throw). No other Document/Permissions Policy feature
+  has a check point yet — the header parsers are feature-agnostic, so adding one is a
+  `page_source.rs`-side lookup, not a new parser.
+
 - **`history.pushState`/`replaceState` resolve their URL, and a traversal restores both halves
   of the entry ([BUG-829](../bugs/BUG-829-FIXED.md), P1, 2026-08-25).** One reported defect, three
   boundaries. **(1)** The `url` argument went into `_lumen_location_update` verbatim, so

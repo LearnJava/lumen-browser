@@ -2071,6 +2071,38 @@ pub trait JsFetchProvider: Send + Sync {
         let _ = url;
         Ok(())
     }
+
+    /// `sync-xhr` disposition from the document's `Document-Policy` (+
+    /// `-Report-Only`) response headers (GAP-POLICYREPORT, BUG-953). `None`
+    /// means synchronous `XMLHttpRequest.send()` is allowed. Checked by the
+    /// XHR native binding (`lumen-js`) before an `async=false` send — same
+    /// "ask before acting" shape as [`check_connect_src`](Self::check_connect_src),
+    /// because the disposition depends on the calling document, not on the
+    /// request URL. Default implementation always allows, matching
+    /// `HttpClient` with no Document-Policy installed.
+    fn document_policy_sync_xhr_disposition(&self) -> Option<PolicyDisposition> {
+        None
+    }
+
+    /// Same check via the document's `Permissions-Policy` (+ `-Report-Only`)
+    /// `sync-xhr=()` allowlist form (GAP-POLICYREPORT, BUG-953). Independent
+    /// of [`document_policy_sync_xhr_disposition`](Self::document_policy_sync_xhr_disposition) —
+    /// the two headers are separate policies per spec, each fires its own
+    /// `*-policy-violation` report type.
+    fn permissions_policy_sync_xhr_disposition(&self) -> Option<PolicyDisposition> {
+        None
+    }
+}
+
+/// Enforcing vs report-only outcome of a Document-Policy/Permissions-Policy
+/// feature check (GAP-POLICYREPORT). Mirrors CSP3's `disposition` field
+/// (`"enforce"` blocks, `"report"` only fires a violation report).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyDisposition {
+    /// The feature is blocked; the caller must not perform the action.
+    Enforce,
+    /// The feature is allowed, but a violation report must be dispatched.
+    Report,
 }
 
 #[cfg(test)]

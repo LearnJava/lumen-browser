@@ -361,6 +361,7 @@ pub(crate) fn install_fetch(
         let c_cancel_body = Arc::clone(&cache);
         let fp_async = fetch_provider.clone();
         let c_async = Arc::clone(&cache);
+        let fp_policy = fetch_provider.clone();
         let lcb_sync = Arc::clone(&last_csp_block);
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
         reg!(scope, ctx, store, "_lumen_fetch_sync", move |url: String, method: String, headers: Vec<String>| -> bool {
@@ -535,6 +536,30 @@ pub(crate) fn install_fetch(
                     Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
                     None => Vec::new(),
                 }
+            });
+        }
+
+        // _lumen_xhr_check_sync_policy() → [docDisposition, permDisposition]
+        // Each element is "enforce"/"report"/"" — GAP-POLICYREPORT (BUG-953).
+        // Checked by `xhr.rs`'s `send()` right before issuing a synchronous
+        // (`async === false`) request, since Document-Policy/Permissions-Policy
+        // `sync-xhr` has no URL to gate on (unlike `connect-src` above) — the
+        // disposition depends only on the calling document.
+        {
+            let fp = fp_policy;
+            reg!(scope, ctx, store, "_lumen_xhr_check_sync_policy", move || -> Vec<String> {
+                fn label(d: Option<lumen_core::ext::PolicyDisposition>) -> String {
+                    match d {
+                        Some(lumen_core::ext::PolicyDisposition::Enforce) => "enforce".to_owned(),
+                        Some(lumen_core::ext::PolicyDisposition::Report) => "report".to_owned(),
+                        None => String::new(),
+                    }
+                }
+                let Some(ref provider) = fp else { return vec![String::new(), String::new()] };
+                vec![
+                    label(provider.document_policy_sync_xhr_disposition()),
+                    label(provider.permissions_policy_sync_xhr_disposition()),
+                ]
             });
         }
 
