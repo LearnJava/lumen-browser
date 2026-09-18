@@ -610,7 +610,7 @@ fn frame_post_message_self_delivery_through_install_dom() {
     // одного изолята. Слот родителя с about:-URL даёт источнику события
     // унаследованный origin (self_origin страницы).
     rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
-    rt.register_parent_document(1, doc, "about:srcdoc".to_owned(), true);
+    rt.register_parent_document(1, doc, "about:srcdoc".to_owned(), None, true);
     rt.eval("window.__got = null; window.onmessage = function(e) { window.__got = e; };")
         .unwrap();
     rt.eval("_lumen_frame_content_window(1).postMessage({n: 5}, '*')").unwrap();
@@ -935,6 +935,7 @@ fn parent_child_pair(
         1,
         Arc::clone(&parent_doc),
         "https://parent.example/index.html".to_owned(),
+        None,
         true,
     );
     (parent, child, parent_doc, child_doc)
@@ -1077,6 +1078,7 @@ fn mirror_gates_top_level_non_element_and_missing_native() {
         1,
         make_doc(),
         "https://parent.example/index.html".to_owned(),
+        None,
         true,
     );
     // Текстовый узел — не элемент.
@@ -1123,6 +1125,7 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         1,
         Arc::clone(&parent_doc),
         "https://parent.example/index.html".to_owned(),
+        None,
         true,
     );
     parent

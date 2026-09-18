@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 288,
-  "fixed": 715,
+  "open": 287,
+  "fixed": 716,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8528,13 +8528,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-921": {
-   "status": "open",
-   "title": "Имя вложенного browsing context не хранится в контексте: `window.name` ребёнка на каждое обращение перечитывает атрибут `name` узла-хоста, поэтому правка атрибу…",
-   "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-922": {
    "status": "open",
    "title": "Ни одной из тринадцати констант типов узла нет ни на интерфейсе `Node`, ни на самих узлах: `Node.ELEMENT_NODE`/`Node.TEXT_NODE`/`el.ELEMENT_NODE` — `undefined`,…",
@@ -14146,6 +14139,13 @@
    "status": "fixed",
    "title": "ApplyRule\\",
    "component": "css-parser (`@mixin`/`@apply`/`@contents` не распознаются нигде, `grep -rn \"MixinRule\\",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-921": {
+   "status": "fixed",
+   "title": "Имя вложенного browsing context не хранилось в контексте: `window.name` ребёнка на каждое обращение перечитывал атрибут `name` узла-хоста, поэтому правка атрибу…",
+   "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
    "date": "2026-09-19",
    "debtor": false
   }

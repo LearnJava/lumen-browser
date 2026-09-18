@@ -1043,12 +1043,20 @@ impl V8JsRuntime {
     ///
     /// `host_nid` — nid хоста в дереве родителя (для `frameElement`);
     /// `accessible=false` (cross-origin / opaque sandbox) оставляет окно
-    /// предка доступным, но скрывает `.document` и содержимое.
+    /// предка доступным, но скрывает `.document` и содержимое. `name` —
+    /// значение атрибута `name` хоста НА МОМЕНТ создания этого контекста
+    /// (BUG-921): HTML LS §7.2.3 использует атрибут только при именовании
+    /// вложенного navigable, дальше это свойство самого контекста, а не
+    /// живое зеркало атрибута — сюда передаётся тот же снимок, что и
+    /// `register_frame_document` кладёт в биндинг для `window[name]`
+    /// родителя, только для СВОЕГО имени, читаемого через `window.name`
+    /// ребёнка (`frame_bridge.rs::installHierarchyAccessors`).
     pub fn register_parent_document(
         &self,
         host_nid: u32,
         doc: Arc<Mutex<lumen_dom::Document>>,
         url: String,
+        name: Option<String>,
         accessible: bool,
     ) {
         let registry = Arc::clone(&self.frame_docs);
@@ -1058,7 +1066,7 @@ impl V8JsRuntime {
                     host_nid,
                     doc,
                     url,
-                    name: None,
+                    name,
                     accessible,
                 });
         });
