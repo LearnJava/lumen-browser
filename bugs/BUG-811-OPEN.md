@@ -2313,3 +2313,68 @@ failed, 20 ignored) без регрессий; `cargo clippy -p lumen-shell
 уже обязан взвести для ЛЮБОЙ другой пост-скриптовой работы, поэтому отдельно
 не сужается); остальные пункты общего списка «не покрыто» (`report-to`,
 `manifest-src`, честная независимая проверка заголовка/`<meta>`).
+
+## Срез 40 (2026-09-19, `p6-gap-cspenf-srez40`) — заголовок и `<meta>` теперь проверяются как независимые политики
+
+Список «не покрыто» держал этот пункт с самого среза 1: заголовок
+`Content-Security-Policy` и каждая `<meta http-equiv="Content-Security-Policy">`
+по CSP3 §3.4 — независимые политики, нарушение ЛЮБОЙ из них — нарушение;
+движок сливал их в одну строку через `;` перед единственным парсингом, а
+`CspPolicy::directives` — `HashMap`, который при повторении одной директивы
+(например, `script-src` и в заголовке, и в `<meta>`) хранит только ПОСЛЕДНЕЕ
+встреченное значение. На практике это значило, что более поздняя из двух
+политик (обычно `<meta>`, идёт в тексте документа после ответа сервера) могла
+тихо ОСЛАБИТЬ более раннюю: строгий заголовок `script-src 'self'` плюс
+`<meta>` со `script-src 'unsafe-inline'` — по спеке инлайн обязан остаться
+заблокированным (заголовок его запрещает), а склеенная строка
+`"script-src 'self'; script-src 'unsafe-inline'"` парсится в одну политику, где
+`'unsafe-inline'` побеждает как последний записанный источник.
+
+- [`csp_enforce::document_csp_policy`](../crates/shell/src/csp_enforce.rs) —
+  единственная точка сборки политик документа — парсит заголовок и каждую
+  `<meta>` ПО ОТДЕЛЬНОСТИ вместо склейки, возвращая `Vec<CspPolicy>` вместо
+  одной `CspPolicy`. Каждая из 13 `_blocked`-функций этого файла
+  (`inline_script_blocked`, `inline_style_blocked`, `style_attribute_blocked`,
+  `script_src_blocked`, `img_src_blocked`, `style_src_blocked`,
+  `frame_src_blocked`, `media_src_blocked`, `font_src_blocked`,
+  `frame_ancestors_blocked`, `form_action_blocked`, `base_uri_blocked`,
+  `navigate_to_blocked`) теперь принимает `&[CspPolicy]` и блокирует, если
+  блокирует ХОТЯ БЫ ОДНА политика из списка (`policies.iter().any(...)`) —
+  ровно CSP3 §3.4's "any policy forbids it".
+- Изменение — механическое распространение нового типа через все точки
+  потребления в `crates/shell/src/` (`doc_extract.rs`, `stylesheets.rs`,
+  `subresources.rs`, `frames.rs`, `lumen/click.rs`, `lumen/form_submit.rs`,
+  `lumen/frame_form_submit.rs`, `lumen/frame_links.rs`, `page_load.rs`,
+  `page_pipeline.rs`, `relayout.rs`, `scripts.rs`) — компилятор нашёл каждый
+  сайт несовпадения типов, ни один тест логики самих `_blocked`-функций не
+  тронут (сигнатура сменилась, поведение для единственной политики — самый
+  частый случай — идентично).
+- НЕ мигрирован этим срезом: `lumen-network::HttpClient`'s
+  `connect-src`/`worker-src`/`object-src`/`media-src` (`with_connect_src_policy`
+  и три соседа, `crates/network/src/lib.rs`) — у `HttpClient` нет
+  `&Document`/точки парсинга по месту, а поле хранит ровно одну `CspPolicy` на
+  клиент; `page_pipeline.rs`'s единственный вызов, который их настраивает,
+  теперь читает новый `csp_enforce::document_csp_policy_combined` — тот же
+  склеенный-в-одну-строку способ, что был у ВСЕХ директив до этого среза,
+  сохранённый специально для этих четырёх. Threading `Vec<CspPolicy>` через
+  `HttpClient` — отдельная, более широкая работа (поле `Option<(CspPolicy,
+  Option<Origin>, String)>` нужно менять на `Vec<(...)>` в четырёх местах,
+  плюс порядка 20 юнит-тестов конструкторов `with_*_policy` в
+  `crates/network/src/lib.rs`).
+
+Новый юнит-тест `strict_header_is_not_loosened_by_a_lenient_meta_policy`
+(`csp_enforce.rs`) — строгий `script-src 'self'` через один "источник" и
+лояльный `script-src 'unsafe-inline'` через другой; `inline_script_blocked`
+над списком из обеих политик обязано остаться `true`. `cargo test -p
+lumen-shell --features v8 --bin lumen csp` (90 passed, 0 failed — было 89 до
+нового теста) без регрессий; `cargo clippy -p lumen-shell --all-targets
+--features v8 -- -D warnings` чисто.
+
+Не покрыто этим срезом: `lumen-network::HttpClient`'s четыре gate'а (см.
+выше), `report-to` (Reporting API, этот движок его не разбирает),
+`manifest-src` (нечем фетчить манифест — гейтить нечего), честная
+независимая проверка МЕЖДУ несколькими occurrences ОДНОГО И ТОГО ЖЕ
+заголовка (`page_source.rs::content_security_policy_header` уже склеивает
+повторный `Content-Security-Policy`-заголовок ответа в одну строку до того,
+как этот срез вообще видит текст — CSP3 §3.4 тоже требует независимости и
+здесь, но это отдельный, более редкий случай, не тронутый этим срезом).

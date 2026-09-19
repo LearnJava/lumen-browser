@@ -54,7 +54,7 @@ pub(crate) fn fetch_and_decode_background_images(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-    csp_gate: Option<(&lumen_network::csp::CspPolicy, Option<&lumen_network::Origin>)>,
+    csp_gate: Option<(&[lumen_network::csp::CspPolicy], Option<&lumen_network::Origin>)>,
 ) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<String>) {
     // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
     // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,

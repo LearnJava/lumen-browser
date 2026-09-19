@@ -187,7 +187,7 @@ impl Lumen {
     fn frame_navigate_to_link_blocked(
         &mut self,
         idx: usize,
-        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+        csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
         href: &str,
         nav_base: &ResourceBase,
     ) -> bool {
