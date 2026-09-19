@@ -18,9 +18,8 @@
 //!
 //! # Wiring status
 //!
-//! Nothing calls [`extract`] yet — the apply step that stages an update's
-//! binaries via this reader is UPD-8. Exercised only by this module's own
-//! tests until then.
+//! [`extract`] is called by `update.rs`'s `apply_staged_update` (UPD-8).
+//! Nothing calls that yet either — the UI trigger is UPD-9.
 #![allow(dead_code)]
 
 use std::io::Read;
@@ -284,7 +283,7 @@ pub fn extract(buf: &[u8], dest_dir: &Path) -> Result<Vec<PathBuf>, ZipError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use flate2::write::DeflateEncoder;
     use flate2::Compression;
@@ -294,8 +293,10 @@ mod tests {
     /// EOCD) from `entries` — `(name, body, store)`, `store == true` uses
     /// method 0, `false` runs `body` through a real `DeflateEncoder` (method
     /// 8). This is the only way to build fixtures without a ZIP-writing
-    /// dependency (the brief's whole point is not adding one).
-    fn build_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
+    /// dependency (the brief's whole point is not adding one). `pub(crate)`
+    /// so `update.rs`'s own apply-step tests (UPD-8) can build a fixture
+    /// archive without duplicating this logic.
+    pub(crate) fn build_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
         let mut buf = Vec::new();
         let mut central = Vec::new();
         let mut offsets = Vec::new();
