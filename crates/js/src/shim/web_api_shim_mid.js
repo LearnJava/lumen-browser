@@ -2850,7 +2850,17 @@ function _lumen_make_rule_style(loc) {
 // `DocumentFragment.prototype`'s own chain to `Node.prototype` is wired up —
 // see BUG-676. `mode` : 'open' | 'closed'; `host_nid` : NodeId of the host.
 
+// BUG-877: interned by nid in the same `_lumen_element_wrappers` cache every
+// other node wrapper uses (`_lumen_make_element`/`_lumen_make_doctype`), so
+// `host.shadowRoot === host.shadowRoot` and `attachShadow()`'s return value
+// are the SAME object — previously a fresh `{}`-derived instance was built on
+// every read, so `===` and identity-keyed structures (`WeakMap`, listener
+// registries) never matched. `mode`/`host_nid` are only consulted on the
+// first build; a later read that hits the cache keeps the mode recorded at
+// `attachShadow()` time, not whatever the caller happened to pass this time.
 function _lumen_make_shadow_root(nid, mode, host_nid) {
+    var cached = _lumen_element_wrappers[nid];
+    if (cached !== undefined) return cached;
     var sr = Object.create(ShadowRoot.prototype);
     Object.defineProperty(sr, '__nid__',
         { value: nid, enumerable: false, writable: false, configurable: false });
@@ -2860,6 +2870,7 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         { value: host_nid, enumerable: false, writable: false, configurable: false });
     Object.defineProperty(sr, '__mode__',
         { value: mode, enumerable: false, writable: false, configurable: false });
+    _lumen_element_wrappers[nid] = sr;
     return sr;
 }
 
@@ -3759,6 +3770,50 @@ Object.defineProperty(ShadowRoot.prototype, 'children', {
     get: function() { return _lumen_make_html_collection(this.__nid__); },
     enumerable: false, configurable: true,
 });
+// BUG-895: DOM LS §4.2.6 ParentNode mixin (`append`/`prepend`/`replaceChildren`)
+// — `ShadowRoot.prototype`'s chain (`DocumentFragment.prototype` →
+// `Node.prototype`) never carried these, because the actual ParentNode
+// convenience methods live only on the element wrapper's own object literal
+// and the ad hoc `DocumentFragment` instance literal, neither of which a
+// `ShadowRoot` goes through. Same string/multi-node argument handling as the
+// element wrapper's `append`/`prepend` above.
+ShadowRoot.prototype.append = function() {
+    var nid = this.__nid__;
+    for (var i = 0; i < arguments.length; i++) {
+        var n = arguments[i];
+        if (typeof n === 'string') {
+            _lumen_append_child(nid, _lumen_create_text_node(n));
+        } else if (n && n.__nid__ !== undefined) {
+            _lumen_append_child(nid, n.__nid__);
+        }
+    }
+};
+ShadowRoot.prototype.prepend = function() {
+    var nid = this.__nid__;
+    var ch = _lumen_get_children(nid);
+    var firstChild = ch.length > 0 ? ch[0] : null;
+    for (var i = 0; i < arguments.length; i++) {
+        var n = arguments[i];
+        var childNid = (typeof n === 'string') ? _lumen_create_text_node(n)
+            : (n && n.__nid__ !== undefined ? n.__nid__ : null);
+        if (childNid === null) { continue; }
+        if (firstChild !== null) { _lumen_insert_before(nid, childNid, firstChild); }
+        else { _lumen_append_child(nid, childNid); }
+    }
+};
+ShadowRoot.prototype.replaceChildren = function() {
+    var nid = this.__nid__;
+    var old = _lumen_get_children(nid).slice();
+    for (var i = 0; i < old.length; i++) { _lumen_remove_child(nid, old[i]); }
+    for (var j = 0; j < arguments.length; j++) {
+        var n = arguments[j];
+        if (typeof n === 'string') {
+            _lumen_append_child(nid, _lumen_create_text_node(n));
+        } else if (n && n.__nid__ !== undefined) {
+            _lumen_append_child(nid, n.__nid__);
+        }
+    }
+};
 // Scoped to this shadow tree's descendants — see BUG-291.
 ShadowRoot.prototype.querySelector = function(sel) {
     var n = _lumen_u2n(_lumen_query_selector_scoped(this.__nid__, _lumen_sel(sel)));
@@ -10760,6 +10815,36 @@ var document = {
         _lumen_doc_insertion_nid(newChild, 'replaceChild');
         document.insertBefore(newChild, oldChild);
         return document.removeChild(oldChild);
+    },
+    // BUG-895: DOM LS §4.2.6 ParentNode mixin — `document.append`/`.prepend`/
+    // `.replaceChildren` were absent entirely (only the Node-level
+    // `appendChild`/`insertBefore`/`removeChild` above existed), even though
+    // `document` is one of the three interfaces (`Document`/`DocumentFragment`/
+    // `Element`) the mixin is defined on. Delegates to the Node methods above
+    // so a string argument goes through the same `_lumen_doc_insertion_nid`
+    // text-node conversion `appendChild`/`insertBefore` already use.
+    append: function() {
+        for (var i = 0; i < arguments.length; i++) {
+            var n = arguments[i];
+            document.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
+        }
+    },
+    prepend: function() {
+        var first = document.firstChild;
+        for (var i = 0; i < arguments.length; i++) {
+            var n = arguments[i];
+            var node = typeof n === 'string' ? document.createTextNode(n) : n;
+            if (first !== null) { document.insertBefore(node, first); }
+            else { document.appendChild(node); }
+        }
+    },
+    replaceChildren: function() {
+        var old = _lumen_get_children(_lumen_root_nid).slice();
+        for (var i = 0; i < old.length; i++) { document.removeChild(_lumen_make_node(old[i])); }
+        for (var j = 0; j < arguments.length; j++) {
+            var n = arguments[j];
+            document.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
+        }
     },
     // ── DOM §4.4 Node tree accessors (BUG-557) ──────────────────────────────
     // Absent until now, so `document.firstChild` read `undefined` and the

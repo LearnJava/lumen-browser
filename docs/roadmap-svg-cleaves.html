@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 281,
-  "fixed": 724,
+  "open": 279,
+  "fixed": 726,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8301,13 +8301,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-877": {
-   "status": "open",
-   "title": "`host.shadowRoot !== host.shadowRoot`: каждое чтение отдаёт новую обёртку, и возвращённое `attachShadow` значение тоже не совпадает с ней. Слушатель, повешенный…",
-   "component": "js (`crates/js/src/dom.rs:5190` — геттер `shadowRoot` каждый раз строит свежий `_lumen_make_shadow_root`; то же у `attachShadow`, `:4715`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-879": {
    "status": "open",
    "title": "Относительное значение import map не резолвится против базового URL карты: `{\"m\": \"./x.js\"}` + `import('m')` даёт `Error: module './x.js' not found` и ни одного…",
@@ -8375,13 +8368,6 @@
    "status": "open",
    "title": "`Element.insertBefore` не проверяет, что опорный узел — ребёнок этого узла: `NotFoundError` (DOM LS §4.2.3 «pre-insert», шаг 2) не бросается никогда, узел встав…",
    "component": "js (`crates/js/src/dom.rs:5066` — `insertBefore` элемента; у `document`, `dom.rs:2526`, та же проверка есть)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-895": {
-   "status": "open",
-   "title": "У теневого корня нет `ParentNode`-примеси: `shadowRoot.append(...)` — `is not a function` (у элемента и `DocumentFragment` работает); у `document` нет `append`/…",
-   "component": "js (`crates/js/src/dom.rs:1577` — `_lumen_make_shadow_root` собирает объектный литерал без прототипа)",
    "date": null,
    "debtor": false
   },
@@ -14145,6 +14131,20 @@
    "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
    "date": "2026-09-19",
    "debtor": false
+  },
+  "BUG-877": {
+   "status": "fixed",
+   "title": "`host.shadowRoot !== host.shadowRoot`: геттер и `attachShadow()` строили новую обёртку теневого корня на каждое обращение вместо интернирования по nid. Найден P…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_make_shadow_root`)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-895": {
+   "status": "fixed",
+   "title": "У теневого корня и у `document` не было `ParentNode`-примеси (`append`/`prepend`/`replaceChildren`). Найден P2, WPT-RUN-6 срез 29, 2026-08-23",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `ShadowRoot.prototype`, `document`)",
+   "date": "2026-09-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14462,9 +14462,6 @@
   "js (`crates/js/src/dom.rs:15522` — единственный диспатч `toggle`, слушатель `click` на `document`; `:15377` — ветка `SUMMARY` в `_lumen_run_activation_behavior`, переключающая `open` второй раз)": [
    "BUG-851"
   ],
-  "js (`crates/js/src/dom.rs:1577` — `_lumen_make_shadow_root` собирает объектный литерал без прототипа)": [
-   "BUG-895"
-  ],
   "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)": [
    "BUG-865"
   ],
@@ -14473,9 +14470,6 @@
   ],
   "js (`crates/js/src/dom.rs:5066` — `insertBefore` элемента; у `document`, `dom.rs:2526`, та же проверка есть)": [
    "BUG-894"
-  ],
-  "js (`crates/js/src/dom.rs:5190` — геттер `shadowRoot` каждый раз строит свежий `_lumen_make_shadow_root`; то же у `attachShadow`, `:4715`)": [
-   "BUG-877"
   ],
   "js (`crates/js/src/dom.rs:6125` — единственный геттер `get images()` в литерале `document`)": [
    "BUG-892"
@@ -14689,11 +14683,17 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js:9390` — `get scrollingElement()`)": [
    "BUG-525"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_make_shadow_root`)": [
+   "BUG-877"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` -- литерал `var document`, обёртка doctype, геттер `parentNode` обёрток узлов)": [
    "BUG-557"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `MouseEvent` constructor)": [
    "BUG-558"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `ShadowRoot.prototype`, `document`)": [
+   "BUG-895"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS.getRootNode:7444`, `_lumen_make_shadow_root:2537`, `ShadowRoot.prototype:3197`) + нативный слой (`crates/js/src/v8_runtime/install/dom_core.rs::_lumen_get_shadow_root_host:1126`)": [
    "BUG-1045"
