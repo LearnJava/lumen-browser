@@ -42,10 +42,23 @@ fn walk_title(doc: &Document, id: NodeId, out: &mut String) -> bool {
     false
 }
 
-pub(crate) fn extract_style_blocks(doc: &Document) -> String {
+/// GAP-CSPENF срез 21: `csp_gate` — политика документа, если объявлена.
+/// Каждый `<style>`-узел проверяется независимо (собственный `nonce`, тело
+/// для `'sha256-…'`/nonce/`'unsafe-inline'` — `crate::csp_enforce::
+/// inline_style_blocked`, тот же гейт, что срез 1/20 уже дают инлайновым
+/// `<script>`), заблокированный узел не попадает в склеенный текст вовсе —
+/// тот же принцип «не применённый CSS», что уже применяется к заблокированным
+/// внешним `<link>` (срез 7). Возвращает и число заблокированных узлов —
+/// вызывающий код диспатчит `securitypolicyviolation` по одному на узел
+/// после того, как появляется JS-рантайм.
+pub(crate) fn extract_style_blocks(
+    doc: &Document,
+    csp_gate: Option<&lumen_network::csp::CspPolicy>,
+) -> (String, usize) {
     let mut out = String::new();
-    walk_style_blocks(doc, doc.root(), &mut out);
-    out
+    let mut blocked = 0;
+    walk_style_blocks(doc, doc.root(), csp_gate, &mut out, &mut blocked);
+    (out, blocked)
 }
 
 /// Хэш текста всех инлайновых `<style>` в порядке документа (BUG-743).
@@ -147,21 +160,36 @@ pub(crate) struct DynamicCssBase {
     pub(crate) adopted_fp: u64,
 }
 
-fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {
+fn walk_style_blocks(
+    doc: &Document,
+    id: NodeId,
+    csp_gate: Option<&lumen_network::csp::CspPolicy>,
+    out: &mut String,
+    blocked: &mut usize,
+) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "style"
     {
+        let mut text = String::new();
         for &child in &node.children {
             if let NodeData::Text(s) = &doc.get(child).data {
-                out.push_str(s);
-                out.push('\n');
+                text.push_str(s);
             }
         }
+        if let Some(policy) = csp_gate {
+            let nonce = node.get_attr("nonce");
+            if crate::csp_enforce::inline_style_blocked(policy, nonce, &text) {
+                *blocked += 1;
+                return;
+            }
+        }
+        out.push_str(&text);
+        out.push('\n');
         return;
     }
     for &child in &node.children {
-        walk_style_blocks(doc, child, out);
+        walk_style_blocks(doc, child, csp_gate, out, blocked);
     }
 }
 
@@ -175,3 +203,32 @@ pub(crate) fn window_title(page_title: Option<&str>) -> String {
 }
 
 // ── HTML5 Drag and Drop state (PH3-9) ────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GAP-CSPENF срез 21: two `<style>` blocks, one with a matching `nonce`,
+    /// one without — proves the DOM-walking plumbing (`get_attr("nonce")` +
+    /// per-node gate) rather than the match logic itself, which
+    /// `csp_enforce::tests` already covers exhaustively.
+    #[test]
+    fn extract_style_blocks_skips_only_the_blocked_node() {
+        let doc = lumen_html_parser::parse(
+            "<style nonce=\"abc\">a{color:red}</style><style>b{color:blue}</style>",
+        );
+        let policy = lumen_network::csp::parse_csp_header("style-src 'nonce-abc'");
+        let (css, blocked) = extract_style_blocks(&doc, Some(&policy));
+        assert!(css.contains("a{color:red}"));
+        assert!(!css.contains("b{color:blue}"));
+        assert_eq!(blocked, 1);
+    }
+
+    #[test]
+    fn extract_style_blocks_no_policy_keeps_everything() {
+        let doc = lumen_html_parser::parse("<style>a{color:red}</style>");
+        let (css, blocked) = extract_style_blocks(&doc, None);
+        assert!(css.contains("a{color:red}"));
+        assert_eq!(blocked, 0);
+    }
+}

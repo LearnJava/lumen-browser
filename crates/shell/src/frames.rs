@@ -475,7 +475,10 @@ pub(crate) fn fetch_frame_subresources(
     viewport: lumen_core::geom::Size,
     target: lumen_core::ColorSpace,
 ) -> FrameSubresourceOutcomes {
-    let inline = extract_style_blocks(doc);
+    // GAP-CSPENF срез 21: инлайновый `<style>` внутри `<iframe>` не гейтится
+    // этим срезом (та же граница, что срез 7 уже документирует для внешнего
+    // `<link>` подфрейма) — политика ребёнка здесь не считается.
+    let (inline, _blocked) = extract_style_blocks(doc, None);
     let mut css = inline_css_imports(
         &inline,
         base,

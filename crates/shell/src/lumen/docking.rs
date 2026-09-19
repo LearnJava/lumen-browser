@@ -194,7 +194,9 @@ impl Lumen {
         };
 
         // Collect inline <style> blocks (no external CSS fetch for sidebar).
-        let css_text = extract_style_blocks(&doc);
+        // GAP-CSPENF срез 21: sidebar has no CSP concept of its own (a
+        // separate navigable, not the main document's cascade) — not gated.
+        let (css_text, _blocked) = extract_style_blocks(&doc, None);
         let sheet = lumen_css_parser::parse(&css_text);
 
         let doc_arc = Arc::new(Mutex::new(doc));

@@ -1263,3 +1263,67 @@ csp_enforce` (42/42, +4 новых). Живой проб не делался —
 
 Не покрыто этим срезом: `'unsafe-hashes'`/событийные обработчики,
 `style-src`-хэши, остальное — без изменений (см. список выше).
+
+## Срез 21 (2026-09-19, `p6-gap-cspenf-srez21`) — `style-src` против инлайновых `<style>`
+
+Реализовано: последний класс инлайна, названный не покрытым срезом 7
+(«инлайновые `<style>`/атрибут `style` (не блокируются, только внешний
+`<link>`)») — инлайновый `<style>` до этого среза не проверялся вовсе, то
+есть страница со `style-src` любой строгости не могла запретить собственный
+`<style>`-блок, только внешний лист.
+
+- `crates/shell/src/csp_enforce.rs`: `inline_script_blocked` (срезы 1/20)
+  разложена на общий `inline_directive_blocked(policy, directive, nonce,
+  body)` — тот же `'unsafe-inline'`/`'nonce-…'`/`'sha256-…'`-набор
+  источников, что уже есть у скриптов, теперь под именем
+  `inline_style_blocked` применён к `CspDirective::StyleSrc`; +6 unit-тестов
+  (совпадающий/несовпадающий nonce, хэш, `'unsafe-inline'`, и один
+  cross-check — `'unsafe-inline'` в `script-src` не открывает `style-src`).
+- `crates/shell/src/doc_extract.rs`: `extract_style_blocks`
+  (`walk_style_blocks`) — единственное место, где текст всех инлайновых
+  `<style>` страницы склеивается в один каскад, — получила параметр
+  `csp_gate: Option<&CspPolicy>` и второй элемент возврата (`usize` —
+  число заблокированных узлов). Каждый `<style>`-узел проверяется
+  независимо (свой `nonce`, тело для хэша) **до** склейки: заблокированный
+  узел не попадает в текст, который парсит `lumen_css_parser`, вовсе — тот
+  же принцип «не применённый CSS», что срез 7 уже даёт заблокированному
+  внешнему `<link>`. +2 unit-теста (склейка пропускает только
+  заблокированный узел; без политики ничего не режется).
+- `crates/shell/src/page_pipeline.rs`: `build_page_cascade` считает
+  `document_csp_policy` той же одноразовой точкой, что остальные срезы уже
+  используют (не параметром — не нужно менять сигнатуру ради одного гейта),
+  передаёт её в `extract_style_blocks`; `PageCascade` получила
+  `blocked_inline_style_count: usize` (без URL — `blockedURI` для инлайна
+  всегда `"inline"`, как у скриптов, счётчика достаточно). После того как
+  JS-рантайм появляется, диспатчится `securitypolicyviolation` по одному на
+  заблокированный узел — та же one-shot-push схема, что `blocked_by_style_src`
+  (срез 7) уже применяет к внешним листам.
+- `crates/shell/src/relayout.rs::refresh_dynamic_css` (BUG-743, поздняя
+  CSS-in-JS вставка `<style>` после навигации) получила тот же гейт — без
+  него скрипт мог бы обойти `style-src`, просто вставив стиль после
+  парсинга вместо разметки. Здесь JS-рантайм уже существует, поэтому
+  нарушения диспатчатся сразу, без отложенной схемы.
+- Три места, читавшие `extract_style_blocks` без политики документа
+  (`frames.rs::fetch_frame_subresources` — каскад подфрейма, та же граница,
+  что срез 7 уже документирует для внешнего `<link>` ребёнка;
+  `lumen/docking.rs::open_sidebar_page` — sidebar-панель, отдельный
+  navigable без концепции CSP; `lumen/hibernation.rs` — снимок/восстановление
+  T3-гибернации, политика документа не сохраняется в `HibernatedTab`),
+  обновлены на новую сигнатуру с явным `None` и комментарием о причине.
+
+Подтверждено живым окном (`--screenshot`, три арма одной пробы): страница с
+`<meta ... content="style-src 'none'">` и `<style>#probe{color:red}</style>`
+даёт `getComputedStyle(#probe).color === rgb(0, 0, 0)` (стиль не применился)
+и `securitypolicyviolation` с `directive=style-src`; baseline той же
+страницы без директивы даёт `rgb(255, 0, 0)`; арм с `style-src
+'nonce-abc123'` и `<style nonce="abc123">` даёт `rgb(0, 128, 0)` — nonce
+пропускает совпавший блок. `cargo test -p lumen-shell --features v8 --bin
+lumen` без регрессий (1868 passed), `cargo clippy -p lumen-shell
+--all-targets --features v8 -- -D warnings` чисто.
+
+Не покрыто этим срезом: атрибут `style=` (не блокируется, только тело
+`<style>`); инлайновый `<style>` внутри `<iframe>`/sidebar/восстановленной
+после гибернации вкладки (см. выше); директивы кроме
+`script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`/`frame-src`/
+`object-src`/`media-src`/`font-src`; `frame-ancestors`; `report-to`;
+честная независимая проверка заголовка и `<meta>`.
