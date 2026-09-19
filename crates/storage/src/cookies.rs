@@ -28,6 +28,28 @@ use lumen_core::ext::{CookieProvider, PublicSuffixList};
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+            CREATE TABLE IF NOT EXISTS cookies (
+                top_level_site TEXT NOT NULL DEFAULT '',
+                domain         TEXT NOT NULL,
+                path           TEXT NOT NULL,
+                name           TEXT NOT NULL,
+                value          TEXT NOT NULL,
+                expires_at     INTEGER,
+                secure         INTEGER NOT NULL DEFAULT 0,
+                http_only      INTEGER NOT NULL DEFAULT 0,
+                same_site      TEXT NOT NULL DEFAULT 'Lax',
+                PRIMARY KEY (top_level_site, domain, path, name)
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS cookies_by_domain
+                ON cookies (domain, top_level_site);
+            "#,
+}];
+
 /// SameSite политика cookie. RFC 6265bis §4.1.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SameSite {
@@ -97,28 +119,10 @@ impl CookieJar {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS cookies (
-                top_level_site TEXT NOT NULL DEFAULT '',
-                domain         TEXT NOT NULL,
-                path           TEXT NOT NULL,
-                name           TEXT NOT NULL,
-                value          TEXT NOT NULL,
-                expires_at     INTEGER,
-                secure         INTEGER NOT NULL DEFAULT 0,
-                http_only      INTEGER NOT NULL DEFAULT 0,
-                same_site      TEXT NOT NULL DEFAULT 'Lax',
-                PRIMARY KEY (top_level_site, domain, path, name)
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS cookies_by_domain
-                ON cookies (domain, top_level_site);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("cookies init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("cookies pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("cookies init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

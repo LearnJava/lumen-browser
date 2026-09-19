@@ -21,6 +21,19 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+            CREATE TABLE IF NOT EXISTS csp_policies (
+                origin       TEXT PRIMARY KEY,
+                header_text  TEXT NOT NULL,
+                fetched_at   INTEGER NOT NULL
+            ) WITHOUT ROWID;
+            "#,
+}];
+
 /// Парсит CSP-заголовок в map `directive → sources`.
 /// Directive имена — ASCII case-insensitive (нормализуются в lower-case);
 /// source-значения сохраняются case-sensitive (URLs / scheme).
@@ -77,19 +90,11 @@ impl CspPolicies {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS csp_policies (
-                origin       TEXT PRIMARY KEY,
-                header_text  TEXT NOT NULL,
-                fetched_at   INTEGER NOT NULL
-            ) WITHOUT ROWID;
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("csp_policies init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("csp_policies pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("csp_policies init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
