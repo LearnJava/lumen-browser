@@ -1013,6 +1013,28 @@ pub(crate) fn parse_and_layout(
         let dom_touched = js
             .dom_dirty_flag()
             .is_none_or(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+        // GAP-CSPENF срез 37: `scripts_changed_css` above only re-derives
+        // `style_attr_csp_blocked` when a script touched `<style>`/`<link>`
+        // (срез 23's own trigger, `build_page_cascade`'s one-shot read) — a
+        // script that only sets `style=""` on an existing or newly created
+        // element (`setAttribute`/`style.cssText`/`style.setProperty`,
+        // without adding/removing a `<style>`/`<link>`) left this list at its
+        // parse-time snapshot even though `dom_touched` already says the tree
+        // moved. Re-walking here is cheap (no cascade/layout rebuild, just
+        // the attribute scan `build_page_cascade` already runs once) and
+        // widens the same срез 23 gate from "stylesheet set changed" to
+        // "the DOM changed at all" — still only this one post-script
+        // checkpoint, not a live per-mutation hook: a later async mutation
+        // (event handler, timer) after this point is unchanged and remains
+        // unenforced, same limitation срез 23 already documented.
+        if dom_touched && !scripts_changed_css {
+            let mut d = doc_arc.lock().unwrap();
+            let root = d.root();
+            let csp_policy = crate::csp_enforce::document_csp_policy(&d, root);
+            let (blocked_style_attr_nodes, _) =
+                collect_style_attr_csp_blocked(&d, csp_policy.as_ref().map(|(p, _)| p));
+            d.set_style_attr_csp_blocked(blocked_style_attr_nodes);
+        }
         if scripts_changed_css || dom_touched || adopted_changed {
             let snapshot = {
                 let d = doc_arc.lock().unwrap();

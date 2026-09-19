@@ -2118,3 +2118,62 @@ HTTP-сервер, dev-release, коммит текущего среза): ро�
 `cargo test -p lumen-shell --features v8 --bin lumen` (1951 passed, 0 failed,
 20 ignored) без регрессий; `cargo clippy -p lumen-shell --all-targets
 --features v8 -- -D warnings` чисто.
+
+## Срез 37 (2026-09-19, `p6-gap-cspenf-srez37`) — `style-src-attr` против точечной мутации `style=""` без затрагивания `<style>`/`<link>`
+
+Срез 23 дал top-level документу проверку атрибута `style=""`, но её
+пересчёт (`page_pipeline.rs::parse_and_layout`) был привязан к
+`scripts_changed_css` — триггеру «скрипт тронул `<style>`/`<link>`», а не к
+факту мутации DOM вообще. Скрипт, который создаёт новый узел с `style=""`
+(или меняет его на существующем через `setAttribute`/`style.cssText`) и не
+трогает ни одного `<style>`/`<link>`, оставлял `style_attr_csp_blocked`
+снимком ДО своей мутации — для нового узла это буквально пустой список
+(узла ещё не существовало на момент первого прохода `build_page_cascade`),
+так что запрещённый инлайн-стиль доезжал до layout незаблокированным.
+Разрыв назван самим срезом 23 («узел, получивший `style=""` другим путём
+после этого момента … гейт не видит») и подтверждён живым воспроизведением
+через `parse_and_layout_for_test` (см. регресс-тест ниже — падает на
+`main` без этого среза).
+
+- `crates/shell/src/page_pipeline.rs::parse_and_layout` — рядом с уже
+  существующим `dom_touched` (флаг «скрипты трогали DOM», до этого среза
+  использовался только для решения «пересчитывать layout-снимок или нет»):
+  если `dom_touched` истинен, а `scripts_changed_css` — нет, документ
+  перечитывается на `style-src-attr` заново (`document_csp_policy` +
+  `collect_style_attr_csp_blocked`, те же примитивы, что срез 23 уже
+  использует и что уже покрыты своими unit-тестами в `doc_extract.rs`) —
+  без пересборки каскада/layout, это отдельный дешёвый проход по дереву.
+  Условие исключает `scripts_changed_css`, чтобы не дублировать работу:
+  та ветка уже делает это как часть полной пересборки `cascade`.
+- Покрывает ровно один пост-скриптовый чекпойнт (тот же момент, что срез 23
+  уже перепроверял) — не живой хук на каждую мутацию. Более поздняя
+  асинхронная мутация (обработчик события, таймер, уже после этой точки)
+  по-прежнему не гейтится — та же граница, что срез 23 сам обозначил, шире
+  не стала и не сужалась специально этим срезом.
+- `<iframe>`-документы не тронуты (у них своя, ранее закрытая точка —
+  срез 24, — и своя отдельная схема пересчёта в `frames.rs`, не
+  `page_pipeline.rs`); та же граница «top-level документ отдельно от
+  фрейма», что срезы 21/22 и 23/24 уже провели.
+
+Регресс-тест `script_created_style_attr_is_csp_checked_without_stylesheet_touch`
+(`crates/shell/src/tests/page_pipeline.rs`) — страница с `style-src-attr
+'none'`, скрипт создаёт `<div style="color:rgb(255,0,0)">` и добавляет его в
+`document.body` БЕЗ единого `<style>`/`<link>`, `DOMContentLoaded`-хендлер
+читает `getComputedStyle` на этот узел; без фикса цвет доезжает
+(`rgb(255, 0, 0)`), с фиксом — блокируется. Проверено вручную откатом фикса
+(`git stash` только по `page_pipeline.rs`) — тест красный без него, зелёный
+с ним.
+
+`cargo test -p lumen-shell --features v8 --bin lumen` (1953 passed, 0
+failed, 20 ignored) без регрессий; `cargo clippy -p lumen-shell
+--all-targets --features v8 -- -D warnings` чисто. Полный
+`scripts/scoped-test.sh` не был доведён до конца — замыкание тянет
+`lumen-network`, и прогон упёрся в уже известный [BUG-805](BUG-805-OPEN.md)
+(бинарь виснет навсегда независимо от правки); до зависания видны только
+чужой дрейф — `cpu_snapshots_match_references` (BUG-1008, тот же
+7-файловый сигнатурный набор: `55-text-rendering`, `57-canvas-2d`,
+`32-list-markers`, `34-forms`, `45-multiple-backgrounds`,
+`51-scrollbar-rendering`, `1000000-final`) и два непроверенных отдельно
+падения `lumen-network --lib` (`http_cache_miss_fetches_and_stores`,
+`auth_digest_sha256_response_is_64_hex`) — ни один из трёх не связан с
+CSP/`page_pipeline.rs`, файлы этого среза их не трогают.

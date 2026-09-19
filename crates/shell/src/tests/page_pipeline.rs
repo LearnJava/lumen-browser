@@ -1254,6 +1254,36 @@ fn dom_content_loaded_handler_sees_post_script_geometry() {
     assert_eq!(probe_attr(&page, "data-r"), "250x70");
 }
 
+/// GAP-CSPENF срез 37: a script that creates a new element with a
+/// `style=""` attribute — without touching any `<style>`/`<link>` — must
+/// still have that attribute checked against `style-src-attr`. Before this
+/// slice `style_attr_csp_blocked` was only re-derived when
+/// `scripts_changed_css` fired (срез 23's own trigger); a script-created
+/// node with an inline `style=""` and no stylesheet mutation left the
+/// pre-script (empty, since the node didn't exist yet) snapshot in place, so
+/// its forbidden inline style reached layout unblocked.
+#[cfg(feature = "v8")]
+#[test]
+fn script_created_style_attr_is_csp_checked_without_stylesheet_touch() {
+    let page = parse_and_layout_for_test(
+        "<html><head>\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"style-src-attr 'none'\">\
+         </head><body>\
+         <script>var e=document.createElement('div');e.id='t';\
+         e.setAttribute('style','color:rgb(255,0,0)');e.textContent='t';\
+         document.body.appendChild(e);\
+         document.addEventListener('DOMContentLoaded',function(){\
+         document.documentElement.setAttribute('data-color',\
+         getComputedStyle(e).getPropertyValue('color'));});</script>\
+         </body></html>",
+    );
+    assert_ne!(
+        probe_attr(&page, "data-color"), "rgb(255, 0, 0)",
+        "style-src-attr 'none' must block a script-created node's style=\"\" \
+         even though no <style>/<link> was touched"
+    );
+}
+
 /// BUG-470: `prop in getComputedStyle(el)` used to be `false` for every
 /// property, not just `float`/`clear` — the returned `Proxy({}, handler)`
 /// had no `has` trap, so `in` fell through to `Reflect.has` on the empty
