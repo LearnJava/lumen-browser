@@ -120,3 +120,51 @@ principle as every other provisional entry in `docs/plan/tech-stack.md` §5.
   above, and landing a dependency that breaks `cargo build --workspace` is
   worse than landing none. `docs/plan/tech-stack.md` §5's provisional
   accelerators table carries this entry with status "blocked", not "adopted".
+
+## Revision 2026-09-19 (P1, срез 2)
+
+Two things landed this revision:
+
+- **`lumen_core::ext::VideoDecoder` / `VideoDecodeSession` trait-anchor**
+  (`crates/core/src/ext.rs`), mirroring `ImageDecoder`'s shape (sniff/probe +
+  a decode entry point, no field access on the caller side). Compiles clean
+  under `cargo clippy -p lumen-core --all-targets -- -D warnings`. Nothing
+  implements it yet — same status as `ImageDecoder` itself.
+- **The hand-written-FFI path this ADR's Consequences section flagged as
+  "most promising next step" is confirmed to work end-to-end**, live-tested
+  outside the repo (`D:\Temp\ffmpeg-ffi-poc`, a throwaway single-file crate,
+  not committed — working-boundary rule keeps experiments like this out of
+  the tracked tree). A hand-rolled `extern "C"` FFI layer — `AVFormatContext`
+  declared as `#[repr(C)] struct AVFormatContext { _private: [u8; 0] }`
+  (opaque, no `bindgen`, no field access) plus five function declarations
+  (`avformat_version`, `avformat_open_input`, `avformat_find_stream_info`,
+  `avformat_close_input`, `av_strerror`) — links against the same FFmpeg 7.1
+  shared-dev `.lib` files that broke `bindgen` (`avformat.lib`/`avcodec.lib`/
+  `avutil.lib`, `D:\ffmpeg-dev\ffmpeg-7.1-full_build-shared\lib`, resolved via
+  a two-line `build.rs` with `cargo:rustc-link-lib=dylib=…`, no `bindgen`
+  crate in the dependency tree at all) and, at runtime with the matching
+  `bin/` DLLs on `PATH`, successfully opened a real `.webm` file end-to-end:
+  `avformat_open_input` → `avformat_find_stream_info` (returns `0`, success)
+  → `avformat_close_input`, no crash, no layout assertion — because there is
+  no compile-time layout assertion to fail when the struct is opaque.
+
+This confirms the blocker is specifically `bindgen`'s AST→Rust-struct
+translation, not FFmpeg linking, header availability, or the MSVC target in
+general — exactly what the 2026-09-19 first-revision Consequences section
+inferred but had not tested directly.
+
+**Not done, still ahead:** the proof above only reaches `avformat_open_input`/
+`avformat_find_stream_info` — it does not decode a single video frame. The
+decode loop (`avcodec_find_decoder`, `avcodec_alloc_context3`,
+`avcodec_parameters_to_context`, `avcodec_open2`, `av_read_frame`,
+`avcodec_send_packet`, `avcodec_receive_frame`, `sws_getContext`/`sws_scale`
+into RGBA8) needs `AVFrame`/`AVCodecContext`/`AVPacket` declared too. Unlike
+`AVFormatContext` (fully opaque, accessed only through accessor functions in
+real FFmpeg-consumer code), `AVFrame` in particular is FFmpeg's own public,
+directly-field-accessed struct (`data`/`linesize`/`width`/`height`/`format`/
+`pts`) — the hand-rolled layer will have to declare those fields itself,
+matching FFmpeg's documented ABI order, rather than lean on opacity the way
+`AVFormatContext` does. That is real, unstarted work, not a formality — the
+next revision should attempt it before writing the real
+`crates/media-ffmpeg`-shaped crate and the `VideoDecoder` impl. Status
+remains `planned`.
