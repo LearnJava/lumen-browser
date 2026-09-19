@@ -25,6 +25,7 @@ use lumen_core::{Error, Result};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
 use crate::sqlite_store::SqliteStorage;
 
 /// Ключ внутри partition origin, под которым хранится JSON-снимок всех баз
@@ -150,46 +151,49 @@ pub struct NativeIdbStore {
     conn: Mutex<Connection>,
 }
 
+/// Schema migrations for [`NativeIdbStore`].
+const NATIVE_IDB_MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: "CREATE TABLE IF NOT EXISTS idb_meta(
+             db_name TEXT PRIMARY KEY,
+             version INTEGER NOT NULL DEFAULT 1
+         );
+         CREATE TABLE IF NOT EXISTS idb_stores(
+             db_name TEXT NOT NULL,
+             store_name TEXT NOT NULL,
+             key_path TEXT,
+             auto_inc INTEGER NOT NULL DEFAULT 0,
+             key_gen INTEGER NOT NULL DEFAULT 1,
+             PRIMARY KEY(db_name,store_name)
+         );
+         CREATE TABLE IF NOT EXISTS idb_indexes(
+             db_name TEXT NOT NULL,
+             store_name TEXT NOT NULL,
+             index_name TEXT NOT NULL,
+             key_path TEXT NOT NULL,
+             is_unique INTEGER NOT NULL DEFAULT 0,
+             multi_entry INTEGER NOT NULL DEFAULT 0,
+             PRIMARY KEY(db_name,store_name,index_name)
+         );
+         CREATE TABLE IF NOT EXISTS idb_records(
+             db_name TEXT NOT NULL,
+             store_name TEXT NOT NULL,
+             key_json TEXT NOT NULL,
+             value_json TEXT NOT NULL,
+             PRIMARY KEY(db_name,store_name,key_json)
+         ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS idb_snapshot(
+             id INTEGER PRIMARY KEY CHECK(id=0),
+             snapshot TEXT NOT NULL
+         );",
+}];
+
 impl NativeIdbStore {
     /// Run the schema-init batch on a fresh connection and wrap it.
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             CREATE TABLE IF NOT EXISTS idb_meta(
-                 db_name TEXT PRIMARY KEY,
-                 version INTEGER NOT NULL DEFAULT 1
-             );
-             CREATE TABLE IF NOT EXISTS idb_stores(
-                 db_name TEXT NOT NULL,
-                 store_name TEXT NOT NULL,
-                 key_path TEXT,
-                 auto_inc INTEGER NOT NULL DEFAULT 0,
-                 key_gen INTEGER NOT NULL DEFAULT 1,
-                 PRIMARY KEY(db_name,store_name)
-             );
-             CREATE TABLE IF NOT EXISTS idb_indexes(
-                 db_name TEXT NOT NULL,
-                 store_name TEXT NOT NULL,
-                 index_name TEXT NOT NULL,
-                 key_path TEXT NOT NULL,
-                 is_unique INTEGER NOT NULL DEFAULT 0,
-                 multi_entry INTEGER NOT NULL DEFAULT 0,
-                 PRIMARY KEY(db_name,store_name,index_name)
-             );
-             CREATE TABLE IF NOT EXISTS idb_records(
-                 db_name TEXT NOT NULL,
-                 store_name TEXT NOT NULL,
-                 key_json TEXT NOT NULL,
-                 value_json TEXT NOT NULL,
-                 PRIMARY KEY(db_name,store_name,key_json)
-             ) WITHOUT ROWID;
-             CREATE TABLE IF NOT EXISTS idb_snapshot(
-                 id INTEGER PRIMARY KEY CHECK(id=0),
-                 snapshot TEXT NOT NULL
-             );",
-        )
-        .map_err(|e| Error::Storage(format!("idb sqlite init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("idb sqlite pragmas: {e}")))?;
+        run_migrations(&mut conn, NATIVE_IDB_MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("idb sqlite init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

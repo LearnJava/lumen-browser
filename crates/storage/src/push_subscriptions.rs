@@ -21,6 +21,26 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id                 INTEGER PRIMARY KEY,
+        origin             TEXT NOT NULL,
+        scope              TEXT NOT NULL,
+        endpoint           TEXT NOT NULL,
+        p256dh             TEXT NOT NULL,
+        auth               TEXT NOT NULL,
+        user_visible_only  INTEGER NOT NULL DEFAULT 1,
+        created_at         INTEGER NOT NULL,
+        UNIQUE (origin, scope)
+    );
+    CREATE INDEX IF NOT EXISTS push_origin_idx ON push_subscriptions(origin);
+    "#,
+}];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushSubscription {
     pub id: i64,
@@ -61,26 +81,11 @@ impl PushSubscriptions {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS push_subscriptions (
-                id                 INTEGER PRIMARY KEY,
-                origin             TEXT NOT NULL,
-                scope              TEXT NOT NULL,
-                endpoint           TEXT NOT NULL,
-                p256dh             TEXT NOT NULL,
-                auth               TEXT NOT NULL,
-                user_visible_only  INTEGER NOT NULL DEFAULT 1,
-                created_at         INTEGER NOT NULL,
-                UNIQUE (origin, scope)
-            );
-            CREATE INDEX IF NOT EXISTS push_origin_idx ON push_subscriptions(origin);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("push_subscriptions init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("push_subscriptions pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("push_subscriptions init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

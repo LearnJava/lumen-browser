@@ -10,6 +10,17 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: "CREATE TABLE IF NOT EXISTS keyboard_shortcuts (
+        command  TEXT PRIMARY KEY NOT NULL,
+        modifier TEXT NOT NULL,
+        key      TEXT NOT NULL
+    );",
+}];
+
 /// A single keybinding: a command name paired with its modifier + key strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyboardShortcutEntry {
@@ -35,15 +46,10 @@ impl std::fmt::Debug for KeyboardShortcuts {
 }
 
 impl KeyboardShortcuts {
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS keyboard_shortcuts (
-                command  TEXT PRIMARY KEY NOT NULL,
-                modifier TEXT NOT NULL,
-                key      TEXT NOT NULL
-            );",
-        )
-        .map_err(|e| Error::Storage(e.to_string()))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("keyboard_shortcuts pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("keyboard_shortcuts init: {e}")))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 

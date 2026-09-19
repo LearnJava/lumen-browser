@@ -21,6 +21,25 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS search_queries (
+        id          INTEGER PRIMARY KEY,
+        query       TEXT NOT NULL,
+        normalized  TEXT NOT NULL UNIQUE,
+        frequency   INTEGER NOT NULL DEFAULT 1,
+        last_used   INTEGER NOT NULL,
+        first_used  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS sq_last_used_idx ON search_queries(last_used DESC);
+    CREATE INDEX IF NOT EXISTS sq_frequency_idx ON search_queries(frequency DESC);
+    CREATE INDEX IF NOT EXISTS sq_normalized_prefix_idx ON search_queries(normalized);
+    "#,
+}];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchQuery {
     pub id: i64,
@@ -56,25 +75,11 @@ impl SearchHistory {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS search_queries (
-                id          INTEGER PRIMARY KEY,
-                query       TEXT NOT NULL,
-                normalized  TEXT NOT NULL UNIQUE,
-                frequency   INTEGER NOT NULL DEFAULT 1,
-                last_used   INTEGER NOT NULL,
-                first_used  INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS sq_last_used_idx ON search_queries(last_used DESC);
-            CREATE INDEX IF NOT EXISTS sq_frequency_idx ON search_queries(frequency DESC);
-            CREATE INDEX IF NOT EXISTS sq_normalized_prefix_idx ON search_queries(normalized);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("search_history init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("search_history pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("search_history init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

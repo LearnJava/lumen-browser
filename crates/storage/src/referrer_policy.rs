@@ -19,6 +19,19 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS referrer_policies (
+        origin     TEXT PRIMARY KEY,
+        policy     TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    ) WITHOUT ROWID;
+    "#,
+}];
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ReferrerPolicy {
     /// `no-referrer` — Referer вообще не отправляется.
@@ -99,19 +112,11 @@ impl ReferrerPolicies {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS referrer_policies (
-                origin     TEXT PRIMARY KEY,
-                policy     TEXT NOT NULL,
-                updated_at INTEGER NOT NULL
-            ) WITHOUT ROWID;
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("referrer_policy init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("referrer_policy pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("referrer_policy init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

@@ -25,6 +25,25 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS plugins (
+        id                INTEGER PRIMARY KEY,
+        name              TEXT NOT NULL UNIQUE,
+        version           TEXT NOT NULL DEFAULT '0.0.0',
+        source            TEXT NOT NULL,
+        capabilities_json TEXT NOT NULL DEFAULT '[]',
+        enabled           INTEGER NOT NULL DEFAULT 1,
+        installed_at      INTEGER NOT NULL,
+        last_used_at      INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS plugins_enabled_idx ON plugins(enabled);
+    "#,
+}];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifest {
     pub id: i64,
@@ -62,25 +81,10 @@ impl Plugins {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS plugins (
-                id                INTEGER PRIMARY KEY,
-                name              TEXT NOT NULL UNIQUE,
-                version           TEXT NOT NULL DEFAULT '0.0.0',
-                source            TEXT NOT NULL,
-                capabilities_json TEXT NOT NULL DEFAULT '[]',
-                enabled           INTEGER NOT NULL DEFAULT 1,
-                installed_at      INTEGER NOT NULL,
-                last_used_at      INTEGER
-            );
-            CREATE INDEX IF NOT EXISTS plugins_enabled_idx ON plugins(enabled);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("plugins init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("plugins pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("plugins init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

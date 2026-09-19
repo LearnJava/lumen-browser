@@ -19,6 +19,23 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS permissions (
+        origin       TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        state        TEXT NOT NULL DEFAULT 'prompt',
+        expires_at   INTEGER,
+        last_used_at INTEGER,
+        PRIMARY KEY (origin, kind)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS permissions_origin_idx ON permissions(origin);
+    "#,
+}];
+
 /// Известные типы permissions. Произвольные строки тоже допустимы для
 /// forward-compat (хранятся как `Other(String)`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,23 +142,10 @@ impl Permissions {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS permissions (
-                origin       TEXT NOT NULL,
-                kind         TEXT NOT NULL,
-                state        TEXT NOT NULL DEFAULT 'prompt',
-                expires_at   INTEGER,
-                last_used_at INTEGER,
-                PRIMARY KEY (origin, kind)
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS permissions_origin_idx ON permissions(origin);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("permissions init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("permissions pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("permissions init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
