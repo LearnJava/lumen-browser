@@ -1315,6 +1315,59 @@ baseline регенерируется (`--update-expected` + три `--check`) �
 чистый кандидат выбирать так же — по счётчику файлов и предиктору (`RemoteContext`/`window.open`/
 `dispatcher`/`test_driver.*`) в оставшихся ~57 категориях.
 
+### TEST-3: срез 37 (2026-09-19) — `webidl` закрыт чисто, `encoding` отброшен, найден BUG-1066
+
+**Выбор кандидата.** Счётчик файлов с `testharness.js`/`.any.js` и предиктор
+(`RemoteContext`/`window.open`/`dispatcher`/`test_driver.*`/воркеры) по категориям верхнего
+уровня, у которых нет каталога в `tests/wpt/metadata/` (36 штук). Первым взят `encoding`
+(151 файл, 0 хитов, 1 `.https.`) — и это была ошибка выбора: файлы считались, а **id — нет**.
+`legacy-mb-*` порождают по десятку query-вариантов на файл (`?1-1000`, `?2001-3000`, …), раннер
+взял **1338 id** (в срезах 35–36 — 161 и 278). За 20 минут прогона закончено 108 id, из них
+44 `ERROR` + 52 `TIMEOUT` — все на диапазонных файлах; ~4 часа на категорию и таймаутные
+статусы, которые заведомо плавают между прогонами. Прогон остановлен (`taskkill /T` по
+дереву именно своего `run_report.py`, `.ini` не записаны — рабочее дерево осталось чистым).
+**Урок:** предиктор «сколько файлов» недостаточен, надо смотреть на число id после
+раскрытия query-вариантов (`running N all vendored …` в первых строках лога — и обрывать
+прогон сразу, если N на порядок выше прежних срезов). `encoding` брать только после отдельной
+пробы: `--exclude-prefix /encoding/legacy-mb-` или `--limit`.
+
+**`webidl`:** 62 id (второй кандидат: 45 файлов, 0 хитов, 1 `.https.`). `--update-expected
+--recursive --processes 4` — 2:20 (57/62 harness OK, 333/616 сабтестов, 38 новых `.ini`;
+бинарь `dev-release` от `origin/main` `cbc62cd67`, `cargo build` перед прогоном 1m58s). Три
+`--check` подряд — **0 регрессий, 0 unexpected pass, 0 других отклонений**; сужение
+known-intermittent не понадобилось. Baseline 242 → 243.
+
+Непройденные — 280 подтестов `FAIL`, 3 файла `ERROR`, 2 `TIMEOUT`, 1 `NOTRUN`:
+
+- **[BUG-1066](../../bugs/BUG-1066-OPEN.md)** — `DOMException` не определён в глобальной
+  области dedicated `Worker`: пять `DOMException-*.any.worker.html`
+  (`constants`/`constructor-behavior`/`custom-bindings`/`is-error`/`stack-accessor`) падают
+  целиком с `ReferenceError: DOMException is not defined`, их `.any.html`-варианты проходят.
+  В `worker.rs`/`shared_worker.rs`/`sw_worker.rs` слово `DOMException` не встречается.
+  `DOMException-constructor-behavior.any.js.ini` — самый крупный по числу записей (46).
+- **3 × `ERROR` — TLS:** `allow-shared.https.html` и два `*.any.serviceworker.html`
+  (`global-immutable-prototype`, `global-object-implicit-this-value`) — `navigate: … TLS
+  handshake: invalid peer certificate`. Это класс «вендоренный самоподписанный сертификат
+  wptserve не принят движком», а не дефект `webidl`; отдельного бага не заводилось (не
+  проверено, входит ли он в уже заведённые), в baseline записано как сегодняшняя правда.
+- Остальное (`current-realm.html` — 33 записи, `setter-argument.html` — 17, `idlharness.any.js` — 14,
+  `constructors.html` — 14, `window-named-properties-object.html` — 13) не разбиралось: срез про
+  охват baseline, а не про триаж категории.
+
+**Следствие для baseline.** `expected: FAIL` на `DOMException-*.any.worker.html` — записанная
+правда сегодняшнего движка; починка BUG-1066 даст unexpected-pass, и baseline регенерируется
+(`--update-expected` + три `--check`) в том же коммите или сразу следом.
+
+**Окружение.** Для запуска `run_report.py` нужен venv с `tests/wpt/requirements.txt`; в свежем
+слоте пула его нет, а без `typing_extensions` раннер падает на импорте. Создан
+`tests/wpt/.venv` (внутри слота; в коммит не попадает — `venv` кладёт в каталог собственный `.gitignore` с `*`): `python -m venv tests/wpt/.venv &&
+tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`.
+
+Дальше: следующий чистый кандидат выбирать по числу **id**, а не файлов; из оставшихся
+малых — `long-animation-frame` (41 файл, 10 хитов), `signed-exchange` (60), `connection-allowlist` (75),
+`fedcm` (81). `encoding` — только с `--exclude-prefix` на `legacy-mb-*`. `IndexedDB` (срез 34), долг
+среза 4, BUG-1006-класс и BUG-1038 не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
