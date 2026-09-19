@@ -16,7 +16,7 @@
 //! exercised only by its own tests.
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::url::Url;
@@ -455,6 +455,199 @@ pub fn check_for_update(client: &HttpClient, state: UpdateState) -> (UpdateState
     }
 }
 
+// ── Backup + first-run detect (UPD-5) ───────────────────────────────────────
+
+/// `<data>/update/backup` — root of every per-version DB snapshot taken by
+/// [`backup_before_migration_if_updated`].
+#[must_use]
+pub fn backup_root_dir() -> PathBuf {
+    update_dir().join("backup")
+}
+
+/// `<data>/update/backup/<version>` — where the DB snapshot taken just before
+/// the first run of the version *after* `version` lives.
+#[must_use]
+pub fn backup_dir_for(version: &str) -> PathBuf {
+    backup_root_dir().join(version)
+}
+
+/// Path to the marker file recording the version that last ran, distinct
+/// from [`state_path`] (that file is the update-checker's throttle/ETag
+/// cache, refreshed only when a check actually runs — first-run detection
+/// must work even with `auto_check_updates` off).
+#[must_use]
+pub fn last_run_version_path() -> PathBuf {
+    update_dir().join("last_run_version")
+}
+
+/// How many most-recent per-version backups [`rotate_backups`] keeps.
+/// `docs/tasks/ph3-self-update.md` §User-data safety says "last 1-2
+/// versions" — 2 is the generous end, since a backup is a few DB files and
+/// the whole point is a safety margin for a bad update.
+pub const BACKUP_RETENTION: usize = 2;
+
+/// Result of comparing the version recorded on the previous run against the
+/// one running now — decides whether [`backup_before_migration_if_updated`]
+/// needs to back anything up before `lumen_storage` opens a single database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FirstRunKind {
+    /// No marker on disk at all — a fresh install, not an update. Nothing to
+    /// back up; a prior version's data never existed.
+    FreshInstall,
+    /// Marker matches the running binary — an ordinary run, not a first run.
+    SameVersion,
+    /// Marker names a different version — first run after an update. The
+    /// data on disk was last written by `previous_version` and must be
+    /// snapshotted before anything touches it.
+    Updated { previous_version: String },
+}
+
+/// Pure decision logic behind [`backup_before_migration_if_updated`] — split
+/// out so the three cases are testable without touching the filesystem.
+fn detect_first_run(last_run_version: Option<&str>, current: &str) -> FirstRunKind {
+    match last_run_version {
+        None => FirstRunKind::FreshInstall,
+        Some(v) if v == current => FirstRunKind::SameVersion,
+        Some(v) => FirstRunKind::Updated { previous_version: v.to_string() },
+    }
+}
+
+/// Recursively collect every `*.db` file under `dir`, skipping `skip` (an
+/// absolute path compared by prefix) — used to exclude `data/update/` itself,
+/// since its `backup/` subtree holds previous snapshots, not live data.
+/// Best-effort: a subdirectory this process cannot read is silently skipped
+/// rather than aborting the whole walk — a partial backup of the databases
+/// that *were* readable is still strictly better than none.
+fn find_db_files(dir: &Path, skip: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == skip {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            out.extend(find_db_files(&path, skip));
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "db") {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Copy every `*.db` file under `data_dir` (except `data/update/`, see
+/// [`find_db_files`]) into `dest_dir`, preserving the path relative to
+/// `data_dir` — a store nested under a subfolder (`adblock/adblock.db`,
+/// `hsts/hsts.db`, `idb/<origin>.db`, …) lands at the same relative path
+/// under the backup, so the rollback procedure (`docs/tasks/ph3-self-update.md`
+/// §User-data safety) is "copy the backup tree back over `data/`", not a
+/// per-store lookup table.
+///
+/// Best-effort per file: one file that fails to copy (locked, permissions)
+/// does not abort the rest — `std::fs::copy` is not transactional the way
+/// SQLite's own migration-in-one-transaction is (UPD-4); this backup is a
+/// belt-and-suspenders safety margin on top of that, not the primary
+/// correctness mechanism, so a partial backup beats none.
+fn backup_databases(data_dir: &Path, dest_dir: &Path) {
+    let skip = data_dir.join("update");
+    for src in find_db_files(data_dir, &skip) {
+        let Ok(rel) = src.strip_prefix(data_dir) else {
+            continue;
+        };
+        let dest = dest_dir.join(rel);
+        if let Some(parent) = dest.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            continue;
+        }
+        if let Err(e) = std::fs::copy(&src, &dest) {
+            eprintln!("update: backup of {} failed: {e}", src.display());
+        }
+    }
+}
+
+/// Keep at most [`BACKUP_RETENTION`] per-version directories under
+/// `backup_root`, deleting the oldest by [`Version`] ordering — not by
+/// directory-listing order (OS-dependent) or mtime, since the update path is
+/// forward-only (`UpdateManifest::is_newer_than`) and a numerically newer
+/// version is always the more relevant backup to keep, independent of
+/// whatever order the filesystem happens to return entries in. A directory
+/// name that isn't a parseable [`Version`] is left alone rather than deleted
+/// — this function only ever removes backups it itself understands.
+fn rotate_backups(backup_root: &Path) {
+    let Ok(entries) = std::fs::read_dir(backup_root) else {
+        return;
+    };
+    let mut versioned: Vec<(Version, PathBuf)> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| {
+            let name = e.file_name();
+            let version = Version::parse(name.to_str()?)?;
+            Some((version, e.path()))
+        })
+        .collect();
+    versioned.sort_by_key(|(v, _)| *v);
+    let excess = versioned.len().saturating_sub(BACKUP_RETENTION);
+    for (_, path) in versioned.into_iter().take(excess) {
+        if let Err(e) = std::fs::remove_dir_all(&path) {
+            eprintln!("update: rotating old backup {} failed: {e}", path.display());
+        }
+    }
+}
+
+/// Load the version recorded by the previous run, or `None` if this is the
+/// first run ever (no marker file yet).
+fn load_last_run_version() -> Option<String> {
+    std::fs::read_to_string(last_run_version_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Persist `version` as the marker [`load_last_run_version`] reads on the
+/// next run. Best-effort, same policy as [`save_state`] — a write failure
+/// here just means the next run re-derives `Updated` from whatever marker
+/// (possibly stale, possibly absent) survives, which only costs a redundant
+/// backup, never a missed one silently treated as safe.
+fn save_last_run_version(version: &str) {
+    if std::fs::create_dir_all(update_dir()).is_err() {
+        return;
+    }
+    let _ = std::fs::write(last_run_version_path(), version);
+}
+
+/// Detect whether this is the first run of a new version and, if so, back up
+/// every `data/*.db` file to `data/update/backup/<old-version>/` **before**
+/// `lumen_storage` opens a single database — the mechanism
+/// `docs/tasks/ph3-self-update.md` §User-data safety requires ahead of UPD-4's
+/// migrations ever running. Idempotent per version (a second call the same
+/// run, or on a later run of the same binary, is a no-op via `SameVersion`)
+/// and infallible: every I/O step is best-effort and logged, never panics or
+/// returns an error, because a browser that fails to start over a backup
+/// directory it couldn't create is a worse outcome than one that starts
+/// without a backup.
+///
+/// **Must be called exactly once, at the very top of shell startup** — before
+/// `config::load()`'s lazy HTTP disk cache or any `lumen_storage` store is
+/// constructed. See `crates/shell/src/cli_args.rs::run_cli`.
+pub fn backup_before_migration_if_updated() {
+    let current = current_version().to_string();
+    match detect_first_run(load_last_run_version().as_deref(), &current) {
+        FirstRunKind::FreshInstall | FirstRunKind::SameVersion => {}
+        FirstRunKind::Updated { previous_version } => {
+            backup_databases(&crate::adblock::browser_data_dir(), &backup_dir_for(&previous_version));
+            rotate_backups(&backup_root_dir());
+        }
+    }
+    save_last_run_version(&current);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -884,5 +1077,143 @@ mod tests {
         let json = serde_json::to_string_pretty(&state).unwrap();
         let back: UpdateState = serde_json::from_str(&json).unwrap();
         assert_eq!(back, state);
+    }
+
+    // ── Backup + first-run detect (UPD-5) ────────────────────────────────────
+
+    /// Fresh, uniquely named scratch dir under the OS temp dir — same pattern
+    /// as `lumen_storage::hsts::tests::open_shared_store_persists_and_purges`,
+    /// since `update_dir()`/`browser_data_dir()` are derived from
+    /// `current_exe()` and cannot be pointed at a temp dir directly.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lumen_test_update_{tag}_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn detect_first_run_no_marker_is_fresh_install() {
+        assert_eq!(detect_first_run(None, "1.0.0"), FirstRunKind::FreshInstall);
+    }
+
+    #[test]
+    fn detect_first_run_matching_marker_is_same_version() {
+        assert_eq!(detect_first_run(Some("1.0.0"), "1.0.0"), FirstRunKind::SameVersion);
+    }
+
+    #[test]
+    fn detect_first_run_different_marker_is_updated() {
+        assert_eq!(
+            detect_first_run(Some("1.0.0"), "1.1.0"),
+            FirstRunKind::Updated { previous_version: "1.0.0".to_string() }
+        );
+    }
+
+    #[test]
+    fn find_db_files_recurses_and_skips_non_db() {
+        let dir = scratch_dir("find_db_files");
+        std::fs::write(dir.join("profiles.db"), b"a").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"b").unwrap();
+        std::fs::create_dir_all(dir.join("adblock")).unwrap();
+        std::fs::write(dir.join("adblock").join("adblock.db"), b"c").unwrap();
+        let skip = dir.join("update");
+        std::fs::create_dir_all(&skip).unwrap();
+        std::fs::write(skip.join("should_not_appear.db"), b"d").unwrap();
+
+        let mut found = find_db_files(&dir, &skip);
+        found.sort();
+        let mut expected = vec![dir.join("profiles.db"), dir.join("adblock").join("adblock.db")];
+        expected.sort();
+        assert_eq!(found, expected);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn backup_databases_preserves_relative_layout() {
+        let data_dir = scratch_dir("backup_src");
+        let dest_dir = scratch_dir("backup_dst");
+        std::fs::write(data_dir.join("profiles.db"), b"profiles").unwrap();
+        std::fs::create_dir_all(data_dir.join("hsts")).unwrap();
+        std::fs::write(data_dir.join("hsts").join("hsts.db"), b"hsts").unwrap();
+
+        backup_databases(&data_dir, &dest_dir);
+
+        assert_eq!(std::fs::read(dest_dir.join("profiles.db")).unwrap(), b"profiles");
+        assert_eq!(
+            std::fs::read(dest_dir.join("hsts").join("hsts.db")).unwrap(),
+            b"hsts"
+        );
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&dest_dir);
+    }
+
+    #[test]
+    fn backup_databases_skips_update_dir() {
+        let data_dir = scratch_dir("backup_skip_src");
+        let dest_dir = scratch_dir("backup_skip_dst");
+        std::fs::create_dir_all(data_dir.join("update").join("backup").join("1.0.0")).unwrap();
+        std::fs::write(
+            data_dir.join("update").join("backup").join("1.0.0").join("old.db"),
+            b"old backup",
+        )
+        .unwrap();
+
+        backup_databases(&data_dir, &dest_dir);
+
+        assert!(!dest_dir.join("update").exists(), "must not back up its own backup tree");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&dest_dir);
+    }
+
+    #[test]
+    fn rotate_backups_keeps_only_the_newest_by_version() {
+        let root = scratch_dir("rotate");
+        for v in ["1.0.0", "1.2.0", "1.1.0", "2.0.0"] {
+            std::fs::create_dir_all(root.join(v)).unwrap();
+        }
+
+        rotate_backups(&root);
+
+        let mut remaining: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining, vec!["1.2.0".to_string(), "2.0.0".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rotate_backups_ignores_unparseable_directory_names() {
+        let root = scratch_dir("rotate_unparseable");
+        std::fs::create_dir_all(root.join("not-a-version")).unwrap();
+        std::fs::create_dir_all(root.join("1.0.0")).unwrap();
+        std::fs::create_dir_all(root.join("2.0.0")).unwrap();
+
+        rotate_backups(&root);
+
+        let mut remaining: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec!["1.0.0".to_string(), "2.0.0".to_string(), "not-a-version".to_string()],
+            "an unparseable name is left alone, not counted against the retention budget"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -657,6 +657,16 @@ pub(crate) fn run_cli() -> ExitCode {
     {
         startup_profile.no_persistent_state = true;
     }
+    // UPD-5: first-run-after-update detection + `data/*.db` backup. Must run
+    // before any `lumen_storage` store is constructed — see
+    // `update::backup_before_migration_if_updated`. Skipped for
+    // `no_persistent_state` sessions (BiDi/MCP automation, Tor): same
+    // "never touch disk" rule as the HTTP cache above, and an automation
+    // harness that spins up this binary repeatedly must not pay a backup
+    // copy or leave a marker file behind.
+    if !startup_profile.no_persistent_state {
+        crate::update::backup_before_migration_if_updated();
+    }
     config::init_global(startup_profile);
     drop(cfg_phase);
 
