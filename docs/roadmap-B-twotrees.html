@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 279,
-  "fixed": 726,
+  "open": 278,
+  "fixed": 727,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -1984,9 +1984,9 @@
       {
        "id": "UPD-2",
        "title": "UPD-2: Checker новой версии",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Загрузка latest.json c releases/latest/download/ через fetch_conditional (ETag, редиректы есть), троттлинг 24 ч (state в data/update/), флаг auto_check_updates; строго фоновый поток (анти-паттерн adblock::refresh на UI-потоке); тесты на MockTransport"
+       "note": "Загрузка latest.json c releases/latest/download/ через fetch_conditional (ETag, редиректы есть), троттлинг 24 ч (state в data/update/), флаг auto_check_updates; строго фоновый поток (анти-паттерн adblock::refresh на UI-потоке); тесты на MockTransport. **Ревизия 2026-09-19 (P1):** `crates/shell/src/update.rs` — `UpdateState`/`state_path`/`load_state`/`save_state` (JSON в `data/update/state.json`, толерантный к недостающим полям), `check_for_update` (тонкая сетевая обёртка над `fetch_conditional`, throttle + `auto_check_updates`) и чистая `apply_check_result` (парсинг манифеста, сравнение версий) по образцу `adblock::refresh`/`apply_fetch_result`; тесты — не MockTransport (тот бьёт по `NetworkTransport`, а `fetch_conditional` работает поверх `HttpClient` напрямую, тем же путём, что и `adblock`), а прямые юнит-тесты чистой функции синтетическими `ConditionalFetch`, тот же паттерн, что уже применён в `adblock.rs`; +20 тестов. Не подключено к `window_mode.rs` — вызывающий код и UI остаются UPD-9."
       },
       {
        "id": "UPD-3",
@@ -8445,13 +8445,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-904": {
-   "status": "open",
-   "title": "URL, оканчивающийся на `?`, даёт `search === '?'` вместо `''`: разбор кладёт в `search` весь хвост вместе с вопросительным знаком, не отличая «запрос пустой» от…",
-   "component": "js (`crates/js/src/dom.rs::_lumen_parse_url`, `URL_PARSE_SHIM` — ветка `qIdx >= 0`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-905": {
    "status": "open",
    "title": "Runtime-ошибка shared-воркера рассылается всем подключённым клиентам, тогда как HTML LS §10.2.6 пробрасывает ошибку на объект-владелец **только** для выделенног…",
@@ -14163,6 +14156,13 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `ShadowRoot.prototype`, `document`)",
    "date": "2026-09-19",
    "debtor": false
+  },
+  "BUG-904": {
+   "status": "fixed",
+   "title": "URL, оканчивающийся на `?`, даёт `search === '?'` вместо `''`: разбор кладёт в `search` весь хвост вместе с вопросительным знаком, не отличая «запрос пустой» от…",
+   "component": "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)",
+   "date": "2026-09-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14522,9 +14522,6 @@
   "js (`crates/js/src/dom.rs::_lumen_link_hint_fetch` — тело только дренируется), shell (`dispatch_preload_hints` — сетевого запроса по-прежнему нет)": [
    "BUG-907"
   ],
-  "js (`crates/js/src/dom.rs::_lumen_parse_url`, `URL_PARSE_SHIM` — ветка `qIdx >= 0`)": [
-   "BUG-904"
-  ],
   "js (`crates/js/src/dom.rs` — 26 конструкторов событий шима; `Symbol.toStringTag` есть ровно у одного, `ErrorEvent` на `:737`)": [
    "BUG-912"
   ],
@@ -14694,6 +14691,9 @@
   ],
   "js (`crates/js/src/shim/performance_shim.js` — `Performance.prototype`)": [
    "BUG-767"
+  ],
+  "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)": [
+   "BUG-904"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js:7725-7744` — `_LUMEN_WRAPPER_MEMBERS.nextSibling`/`previousSibling`)": [
    "BUG-556"
