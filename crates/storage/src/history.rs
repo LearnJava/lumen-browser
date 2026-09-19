@@ -34,6 +34,25 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS history (
+        id           INTEGER PRIMARY KEY,
+        url          TEXT NOT NULL UNIQUE,
+        title        TEXT NOT NULL DEFAULT '',
+        visit_date   INTEGER NOT NULL,
+        visit_count  INTEGER NOT NULL DEFAULT 1,
+        favicon_hash BLOB,
+        text_sha256  BLOB
+    );
+    CREATE INDEX IF NOT EXISTS history_visit_date_idx
+        ON history (visit_date DESC);
+    "#,
+}];
+
 /// Запись истории. Возвращается при чтении / поиске.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryEntry {
@@ -70,25 +89,10 @@ impl History {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS history (
-                id           INTEGER PRIMARY KEY,
-                url          TEXT NOT NULL UNIQUE,
-                title        TEXT NOT NULL DEFAULT '',
-                visit_date   INTEGER NOT NULL,
-                visit_count  INTEGER NOT NULL DEFAULT 1,
-                favicon_hash BLOB,
-                text_sha256  BLOB
-            );
-            CREATE INDEX IF NOT EXISTS history_visit_date_idx
-                ON history (visit_date DESC);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("history init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("history pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("history init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

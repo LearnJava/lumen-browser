@@ -25,6 +25,24 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS tab_groups (
+        id         INTEGER PRIMARY KEY,
+        label      TEXT NOT NULL DEFAULT '',
+        color      INTEGER NOT NULL DEFAULT 0,
+        collapsed  INTEGER NOT NULL DEFAULT 0,
+        position   INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS tab_groups_position_idx
+        ON tab_groups(position ASC);
+    "#,
+}];
+
 /// One persisted tab group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedGroup {
@@ -68,24 +86,11 @@ impl TabGroups {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS tab_groups (
-                id         INTEGER PRIMARY KEY,
-                label      TEXT NOT NULL DEFAULT '',
-                color      INTEGER NOT NULL DEFAULT 0,
-                collapsed  INTEGER NOT NULL DEFAULT 0,
-                position   INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS tab_groups_position_idx
-                ON tab_groups(position ASC);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("tab_groups init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("tab_groups pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("tab_groups init: {e}")))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 

@@ -19,6 +19,37 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS session_snapshots (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS tab_sessions (
+        id            INTEGER PRIMARY KEY,
+        session_id    INTEGER NOT NULL,
+        url           TEXT NOT NULL,
+        title         TEXT NOT NULL DEFAULT '',
+        scroll_y      INTEGER NOT NULL DEFAULT 0,
+        form_values   TEXT NOT NULL DEFAULT '{}',
+        parent_tab_id INTEGER,
+        workspace_id  INTEGER,
+        is_active     INTEGER NOT NULL DEFAULT 0,
+        created_at    INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES session_snapshots(id)
+            ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS tab_sessions_session_idx
+        ON tab_sessions(session_id);
+    CREATE INDEX IF NOT EXISTS tab_sessions_workspace_idx
+        ON tab_sessions(workspace_id);
+    "#,
+}];
+
 /// Одна вкладка в сохранённой сессии.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabSession {
@@ -71,38 +102,13 @@ impl TabSessions {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS session_snapshots (
-                id          INTEGER PRIMARY KEY,
-                name        TEXT NOT NULL,
-                created_at  INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS tab_sessions (
-                id            INTEGER PRIMARY KEY,
-                session_id    INTEGER NOT NULL,
-                url           TEXT NOT NULL,
-                title         TEXT NOT NULL DEFAULT '',
-                scroll_y      INTEGER NOT NULL DEFAULT 0,
-                form_values   TEXT NOT NULL DEFAULT '{}',
-                parent_tab_id INTEGER,
-                workspace_id  INTEGER,
-                is_active     INTEGER NOT NULL DEFAULT 0,
-                created_at    INTEGER NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES session_snapshots(id)
-                    ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS tab_sessions_session_idx
-                ON tab_sessions(session_id);
-            CREATE INDEX IF NOT EXISTS tab_sessions_workspace_idx
-                ON tab_sessions(workspace_id);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("tab_sessions init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("tab_sessions pragmas: {e}")))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| Error::Storage(format!("tab_sessions pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("tab_sessions init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

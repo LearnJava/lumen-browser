@@ -24,6 +24,21 @@ use lumen_core::ext::StorageBackend;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS kv (
+        origin         TEXT NOT NULL DEFAULT '',
+        top_level_site TEXT NOT NULL DEFAULT '',
+        key            TEXT NOT NULL,
+        value          BLOB NOT NULL,
+        PRIMARY KEY (origin, top_level_site, key)
+    ) WITHOUT ROWID;
+    "#,
+}];
+
 /// Persistent KV-хранилище на SQLite. Создаёт таблицу `kv` при инициализации
 /// (idempotent через `IF NOT EXISTS`); WAL-режим + synchronous=NORMAL.
 pub struct SqliteStorage {
@@ -52,24 +67,14 @@ impl SqliteStorage {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(mut conn: Connection) -> Result<Self> {
         // PRAGMA-ы выставляем до создания таблиц. WAL — постоянное свойство
         // БД-файла (включается один раз), synchronous=NORMAL — per-connection.
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS kv (
-                origin         TEXT NOT NULL DEFAULT '',
-                top_level_site TEXT NOT NULL DEFAULT '',
-                key            TEXT NOT NULL,
-                value          BLOB NOT NULL,
-                PRIMARY KEY (origin, top_level_site, key)
-            ) WITHOUT ROWID;
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("sqlite init: {e}")))?;
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("sqlite pragmas: {e}")))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| Error::Storage(format!("sqlite pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("sqlite init: {e}")))?;
 
         Ok(Self {
             conn: Mutex::new(conn),

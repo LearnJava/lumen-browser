@@ -16,6 +16,16 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: "CREATE TABLE IF NOT EXISTS print_prefs (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );",
+}];
+
 // ── Setting keys ────────────────────────────────────────────────────────────
 
 const KEY_SCALE: &str = "scale";
@@ -98,18 +108,12 @@ impl PrintPrefs {
     /// Open (or create) the SQLite store for print preferences.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let conn = Connection::open(path)
+        let mut conn = Connection::open(path)
             .map_err(|e| Error::Storage(e.to_string()))?;
 
-        // Create table if it doesn't exist.
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS print_prefs (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )",
-            [],
-        )
-        .map_err(|e| Error::Storage(e.to_string()))?;
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("print_prefs pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("print_prefs init: {e}")))?;
 
         Ok(Self {
             conn: Mutex::new(conn),

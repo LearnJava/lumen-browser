@@ -26,6 +26,28 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS http_cache (
+        top_level_site TEXT NOT NULL DEFAULT '',
+        url            TEXT NOT NULL,
+        status         INTEGER NOT NULL,
+        content_type   TEXT NOT NULL DEFAULT '',
+        body           BLOB NOT NULL,
+        etag           TEXT,
+        last_modified  TEXT,
+        expires_at     INTEGER,
+        stored_at      INTEGER NOT NULL,
+        PRIMARY KEY (top_level_site, url)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS http_cache_expires_idx
+        ON http_cache(expires_at);
+    "#,
+}];
+
 /// Распарсенные директивы Cache-Control. Из RFC 9111 §5.2 берём только
 /// то, что нужно для базового storage-кеша; revalidation directives
 /// (must-revalidate, no-transform) пока игнорируем.
@@ -130,28 +152,10 @@ impl HttpCache {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS http_cache (
-                top_level_site TEXT NOT NULL DEFAULT '',
-                url            TEXT NOT NULL,
-                status         INTEGER NOT NULL,
-                content_type   TEXT NOT NULL DEFAULT '',
-                body           BLOB NOT NULL,
-                etag           TEXT,
-                last_modified  TEXT,
-                expires_at     INTEGER,
-                stored_at      INTEGER NOT NULL,
-                PRIMARY KEY (top_level_site, url)
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS http_cache_expires_idx
-                ON http_cache(expires_at);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("http_cache init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("http_cache pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("http_cache init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

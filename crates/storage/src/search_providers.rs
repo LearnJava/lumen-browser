@@ -21,6 +21,29 @@ use lumen_core::url::Url;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS search_providers (
+        id           INTEGER PRIMARY KEY,
+        name         TEXT NOT NULL UNIQUE,
+        url_template TEXT NOT NULL,
+        icon_url     TEXT,
+        created_at   INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS default_search_provider (
+        lock INTEGER PRIMARY KEY CHECK (lock = 0),
+        provider_id INTEGER,
+        FOREIGN KEY (provider_id) REFERENCES search_providers(id)
+            ON DELETE SET NULL
+    );
+    INSERT OR IGNORE INTO default_search_provider (lock, provider_id)
+        VALUES (0, NULL);
+    "#,
+}];
+
 /// Один поисковый провайдер.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchProviderEntry {
@@ -107,29 +130,11 @@ impl SearchProviders {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS search_providers (
-                id           INTEGER PRIMARY KEY,
-                name         TEXT NOT NULL UNIQUE,
-                url_template TEXT NOT NULL,
-                icon_url     TEXT,
-                created_at   INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS default_search_provider (
-                lock INTEGER PRIMARY KEY CHECK (lock = 0),
-                provider_id INTEGER,
-                FOREIGN KEY (provider_id) REFERENCES search_providers(id)
-                    ON DELETE SET NULL
-            );
-            INSERT OR IGNORE INTO default_search_provider (lock, provider_id)
-                VALUES (0, NULL);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("search_providers init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("search_providers pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("search_providers init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

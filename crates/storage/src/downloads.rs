@@ -16,6 +16,29 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS downloads (
+        id             INTEGER PRIMARY KEY,
+        url            TEXT NOT NULL,
+        file_path      TEXT NOT NULL DEFAULT '',
+        filename       TEXT NOT NULL DEFAULT '',
+        mime_type      TEXT NOT NULL DEFAULT '',
+        total_size     INTEGER,
+        bytes_received INTEGER NOT NULL DEFAULT 0,
+        status         TEXT NOT NULL DEFAULT 'pending',
+        started_at     INTEGER NOT NULL,
+        completed_at   INTEGER,
+        error          TEXT
+    );
+    CREATE INDEX IF NOT EXISTS downloads_status_idx ON downloads(status);
+    CREATE INDEX IF NOT EXISTS downloads_started_idx ON downloads(started_at DESC);
+    "#,
+}];
+
 /// Статус скачивания.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DownloadStatus {
@@ -93,29 +116,10 @@ impl Downloads {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS downloads (
-                id             INTEGER PRIMARY KEY,
-                url            TEXT NOT NULL,
-                file_path      TEXT NOT NULL DEFAULT '',
-                filename       TEXT NOT NULL DEFAULT '',
-                mime_type      TEXT NOT NULL DEFAULT '',
-                total_size     INTEGER,
-                bytes_received INTEGER NOT NULL DEFAULT 0,
-                status         TEXT NOT NULL DEFAULT 'pending',
-                started_at     INTEGER NOT NULL,
-                completed_at   INTEGER,
-                error          TEXT
-            );
-            CREATE INDEX IF NOT EXISTS downloads_status_idx ON downloads(status);
-            CREATE INDEX IF NOT EXISTS downloads_started_idx ON downloads(started_at DESC);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("downloads init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("downloads pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("downloads init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

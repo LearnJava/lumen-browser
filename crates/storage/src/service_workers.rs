@@ -22,6 +22,25 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS service_workers (
+        id               INTEGER PRIMARY KEY,
+        origin           TEXT NOT NULL,
+        scope            TEXT NOT NULL,
+        script_url       TEXT NOT NULL,
+        update_via_cache TEXT NOT NULL DEFAULT 'imports',
+        registered_at    INTEGER NOT NULL,
+        last_active      INTEGER,
+        UNIQUE (origin, scope)
+    );
+    CREATE INDEX IF NOT EXISTS sw_origin_idx ON service_workers(origin);
+    "#,
+}];
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum UpdateViaCache {
     /// `imports` (default) — SW-script всегда из network, imports могут из cache.
@@ -85,25 +104,11 @@ impl ServiceWorkers {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS service_workers (
-                id               INTEGER PRIMARY KEY,
-                origin           TEXT NOT NULL,
-                scope            TEXT NOT NULL,
-                script_url       TEXT NOT NULL,
-                update_via_cache TEXT NOT NULL DEFAULT 'imports',
-                registered_at    INTEGER NOT NULL,
-                last_active      INTEGER,
-                UNIQUE (origin, scope)
-            );
-            CREATE INDEX IF NOT EXISTS sw_origin_idx ON service_workers(origin);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("service_workers init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("service_workers pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("service_workers init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

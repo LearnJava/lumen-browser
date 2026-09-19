@@ -49,6 +49,22 @@ use lumen_core::url::Url;
 use lumen_core::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS safe_browsing (
+        list_name    TEXT NOT NULL,
+        full_hash    BLOB NOT NULL,
+        threat_type  TEXT NOT NULL,
+        added_at     INTEGER NOT NULL,
+        PRIMARY KEY (list_name, full_hash)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS safe_browsing_hash_idx ON safe_browsing(full_hash);
+    "#,
+}];
+
 // ── ThreatType ──────────────────────────────────────────────────────────────
 
 /// Категория угрозы для записи в Safe Browsing list. Имена совпадают с
@@ -307,22 +323,11 @@ impl SafeBrowsingList {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS safe_browsing (
-                list_name    TEXT NOT NULL,
-                full_hash    BLOB NOT NULL,
-                threat_type  TEXT NOT NULL,
-                added_at     INTEGER NOT NULL,
-                PRIMARY KEY (list_name, full_hash)
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS safe_browsing_hash_idx ON safe_browsing(full_hash);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("safe_browsing init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("safe_browsing pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("safe_browsing init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
