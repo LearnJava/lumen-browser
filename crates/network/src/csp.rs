@@ -270,6 +270,21 @@ impl CspPolicy {
             .iter()
             .any(|s| source_matches_url(s, &ancestor_url, self_origin))
     }
+
+    /// `true` if this policy's `form-action` directive allows a `<form>`
+    /// owned by this document to submit to `action_url` — CSP3 §6.4.3. Like
+    /// `frame-ancestors`, `form-action` is a navigation directive and does
+    /// **not** fall back to `default-src` (CSP3 §6.4): its absence means no
+    /// restriction. `self_origin` is the form-owning document's own origin,
+    /// matching `'self'`'s meaning in this directive.
+    pub fn form_action_allowed(&self, action_url: &Url, self_origin: Option<&Origin>) -> bool {
+        let Some(sources) = self.directives.get(&CspDirective::FormAction) else {
+            return true;
+        };
+        sources
+            .iter()
+            .any(|s| source_matches_url(s, action_url, self_origin))
+    }
 }
 
 /// `true` if `source` (one token of a fetch-directive source list) matches
@@ -819,5 +834,37 @@ mod tests {
         // inherit default-src — unlike every fetch directive above.
         let p = parse_csp_header("default-src 'none'");
         assert!(p.frame_ancestor_allowed(&origin("https://anything.example/"), None));
+    }
+
+    // ── GAP-CSPENF срез 29: `form-action` enforcement ───────────────────────
+
+    #[test]
+    fn form_action_allows_listed_host() {
+        let p = parse_csp_header("form-action example.com");
+        assert!(p.form_action_allowed(&img_url("https://example.com/submit"), None));
+        assert!(!p.form_action_allowed(&img_url("https://other.example/submit"), None));
+    }
+
+    #[test]
+    fn form_action_none_blocks_every_target() {
+        let p = parse_csp_header("form-action 'none'");
+        assert!(!p.form_action_allowed(&img_url("https://example.com/submit"), None));
+    }
+
+    #[test]
+    fn form_action_self_matches_form_owning_documents_own_origin() {
+        let p = parse_csp_header("form-action 'self'");
+        let doc_origin = origin("https://example.com/");
+        assert!(p.form_action_allowed(&img_url("https://example.com/submit"), Some(&doc_origin)));
+        assert!(!p.form_action_allowed(&img_url("https://other.example/submit"), Some(&doc_origin)));
+    }
+
+    #[test]
+    fn form_action_absent_does_not_fall_back_to_default_src() {
+        // CSP3 §6.4: navigation directives (form-action, frame-ancestors,
+        // sandbox) never inherit default-src — unlike every fetch directive
+        // above.
+        let p = parse_csp_header("default-src 'none'");
+        assert!(p.form_action_allowed(&img_url("https://anything.example/submit"), None));
     }
 }

@@ -52,13 +52,21 @@ impl Lumen {
         // call would deadlock the UI thread.
         let prepared = self.layout_source.as_ref().and_then(|src| {
             let doc = src.document.lock().ok()?;
+            let root = doc.root();
             let submit_event = lumen_dom::submit_form(&doc, form);
             let enctype = forms::enctype_of_form(&doc, form);
             let dialog_node =
                 lumen_dom::find_ancestor_dialog(&doc, submitter.unwrap_or(form));
-            Some((submit_event, enctype, dialog_node))
+            let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
+            Some((submit_event, enctype, dialog_node, csp_gate))
         });
-        if let Some((submit_event, enctype, dialog_node)) = prepared {
+        if let Some((submit_event, enctype, dialog_node, csp_gate)) = prepared {
+            // GAP-CSPENF срез 29: `form-action` — checked once the resolved
+            // navigation URL is known, right before the `get`/POST branches
+            // below hand it to `navigate_to`. `dialog` never reaches here
+            // (it closes a `<dialog>`, no navigation), so it is not gated —
+            // CSP3 §6.4.3 restricts submission *targets*, and a `dialog`
+            // submission has none.
             match submit_event {
                 lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
                     // HTML LS §4.10.21.4 step 11: fire a **cancelable**
@@ -136,6 +144,9 @@ impl Lumen {
                             };
                             let get_url = forms::make_get_url(&action, &url_body);
                             let resolved = self.source.resolve_href(&get_url);
+                            if self.form_action_navigation_blocked(csp_gate.as_ref(), &resolved) {
+                                return;
+                            }
                             self.navigate_to(PageSource::from_arg(Some(&resolved)));
                         }
                         _ => {
@@ -148,6 +159,9 @@ impl Lumen {
                             // stderr и никуда не шла — вход на любой сайт с
                             // POST-формой логина был невозможен.
                             let resolved = self.source.resolve_href(&action);
+                            if self.form_action_navigation_blocked(csp_gate.as_ref(), &resolved) {
+                                return;
+                            }
                             let mut nav = PageSource::from_arg(Some(&resolved));
                             if let PageSource::Url { body: slot, .. } = &mut nav {
                                 *slot = Some(Box::new(lumen_network::NavigationBody::post(
@@ -193,6 +207,32 @@ impl Lumen {
                 }
             }
         }
+    }
+
+    /// `true` if `form-action` forbids navigating to `resolved` — срез 29.
+    /// Fires `securitypolicyviolation` (same `route_task_js`/
+    /// `fire_csp_violation` shape every other fetch-gate above uses, e.g.
+    /// `page_load.rs`'s `img-src` gate) before returning, so the caller only
+    /// has to bail out of the `get`/POST navigation.
+    fn form_action_navigation_blocked(
+        &mut self,
+        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+        resolved: &str,
+    ) -> bool {
+        let Some((policy, original_policy)) = csp_gate else {
+            return false;
+        };
+        let self_origin = self.source.resource_base().and_then(|b| b.origin());
+        if !crate::csp_enforce::form_action_blocked(policy, resolved, self_origin.as_ref()) {
+            return false;
+        }
+        let resolved = resolved.to_owned();
+        let original_policy = original_policy.clone();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_csp_violation("form-action", &resolved, &original_policy);
+        });
+        eprintln!("forms: submit blocked by CSP form-action");
+        true
     }
 
     fn dispatch_submit_event(&mut self, form: NodeId, submitter: NodeId) -> bool {

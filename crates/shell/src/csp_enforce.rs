@@ -441,6 +441,23 @@ pub(crate) fn frame_ancestors_blocked(
     !policy.frame_ancestor_allowed(ancestor_origin, self_origin)
 }
 
+/// `true` if `form-action` forbids submitting a `<form>` owned by this
+/// document to `action_url` — срез 29, the second navigation directive this
+/// module enforces (see [`frame_ancestors_blocked`] for the first): no
+/// `default-src` fallback, absence of a policy is not checked here (the
+/// caller only calls this when a policy exists), and a `url` that fails to
+/// parse is treated as allowed, same as every fetch-gate above.
+pub(crate) fn form_action_blocked(
+    policy: &CspPolicy,
+    action_url: &str,
+    self_origin: Option<&Origin>,
+) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(action_url) else {
+        return false;
+    };
+    !policy.form_action_allowed(&parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -876,5 +893,33 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
         let ancestor = Origin::new("https", "anything.example", 443);
         assert!(!frame_ancestors_blocked(&p, &ancestor, None));
+    }
+
+    #[test]
+    fn form_action_blocks_unlisted_target() {
+        let p = lumen_network::csp::parse_csp_header("form-action example.com");
+        assert!(form_action_blocked(&p, "https://other.example/submit", None));
+    }
+
+    #[test]
+    fn form_action_allows_listed_target() {
+        let p = lumen_network::csp::parse_csp_header("form-action example.com");
+        assert!(!form_action_blocked(&p, "https://example.com/submit", None));
+    }
+
+    #[test]
+    fn form_action_does_not_fall_back_to_default_src() {
+        // Navigation directives (CSP3 §6.4) never inherit `default-src` —
+        // same rule already covered for `frame-ancestors` above.
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(!form_action_blocked(&p, "https://anything.example/submit", None));
+    }
+
+    #[test]
+    fn form_action_self_matches_document_origin() {
+        let p = lumen_network::csp::parse_csp_header("form-action 'self'");
+        let origin = Origin::new("https", "example.com", 443);
+        assert!(!form_action_blocked(&p, "https://example.com/submit", Some(&origin)));
+        assert!(form_action_blocked(&p, "https://other.example/submit", Some(&origin)));
     }
 }
