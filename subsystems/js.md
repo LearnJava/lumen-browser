@@ -620,10 +620,25 @@ the time — read dates.
   buffer stay one buffer after cloning); `SharedArrayBuffer` passed by reference.
   Non-serializable values (functions, symbols) now throw a `DataCloneError`
   `DOMException` per HTML LS §2.7, instead of the old silent passthrough/drop.
-  Still deferred: the `transfer` option (transferables aren't detached — they're
-  copied). Validated by 9 new `dom::tests::structured_clone_*` (rquickjs) plus a
+  Validated by 9 new `dom::tests::structured_clone_*` (rquickjs) plus a
   consolidated V8 mirror `v8_runtime::tests::structured_clone_cycles_typed_arrays_and_dataclone_error`
   (`--features v8-backend`, the default engine per ADR-018).
+- **`structuredClone`'s `transfer` option (`P3-structclone`, done, [P1] 2026-09-19).**
+  `web_api_shim_tail_b.js`: `structuredClone(value, {transfer: [...]})` now
+  detaches instead of copying. ArrayBuffer uses the engine's own
+  `ArrayBuffer.prototype.transfer()` — confirmed present in this V8 150.1.0 embed
+  (contradicts the older claim a few sections below in this file, at the BYOB
+  reader entry; that deviation could be revisited as separate follow-up work, not
+  done here). OffscreenCanvas/ImageBitmap have no native detach: both are thin JS
+  wrappers around an integer `__canvas_id__` handle (`offscreen_canvas.rs`), so
+  `_lumen_transfer_one` moves the handle to a fresh wrapper object and clears the
+  original's copy — no Rust change needed or made. Transferables are resolved into
+  `structuredClone`'s `memory` map *before* the value graph is walked, so the
+  existing `memory.has(v)` identity check picks up the moved-to object wherever
+  the original is referenced. Not in scope: MessagePort as a Transferable, and the
+  transfer list on `postMessage`/`Worker.postMessage` (neither accepts a second
+  argument at all today — separate task). 4 new tests in
+  `dom/tests/v8_url_abort_clone_blob.rs`.
 - **`_lumen_dispatch_pointer_move_coalesced` — real Pointer Events L3 §4.1
   `getCoalescedEvents()`/`getPredictedEvents()` (`P3-pointerfull`, 2026-07-17).**
   New engine-agnostic `WEB_API_SHIM` function (`dom.rs`, registered on
@@ -1680,9 +1695,13 @@ the time — read dates.
     `_readRequests` — its presence is also what marks the reader as BYOB for the controller —
     and both reader flavours share `closed`/`cancel`/`releaseLock` via
     `_rs_install_reader_common`. **Deliberate deviation:** the spec transfers (detaches) the
-    caller's buffer and answers with a view over the transferred copy;
-    `ArrayBuffer.prototype.transfer` is not wired in this engine, so the same buffer is
-    reused and a page holding the pre-read view still sees the bytes.
+    caller's buffer and answers with a view over the transferred copy; this BYOB path reuses
+    the same buffer instead, so a page holding the pre-read view still sees the bytes.
+    **Note (2026-09-19, landing `P3-structclone`'s `transfer` option):** `ArrayBuffer.prototype.transfer()`
+    *is* available in this V8 150.1.0 embed after all (used by `structuredClone`'s new
+    `transfer` option, `web_api_shim_tail_b.js`) — the claim above that it isn't wired
+    predates that discovery. Revisiting this BYOB deviation to use a real detach is
+    separate follow-up work, not done here.
   - **A stream as a `Response`/`Request` body.** `extractBody` no longer substitutes an empty
     body for a `ReadableStream`: the given stream *is* the body's stream (`resp.body === rs`),
     `consume()` drains it through the new `_rs_drain_to_bytes`, and `clone()` tees it — the
