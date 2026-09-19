@@ -57,6 +57,13 @@ ai = ["dep:lumen-ai", "lumen-ai/ollama"]
 # §14.3 for setup. `cargo run -p lumen-shell --features tracy`.
 tracy = ["dep:tracy-client", "lumen-layout/tracy"]
 
+# GAP-MEDIADECODE срез 7: shell-сторона FFmpeg-декодирования `<video>`.
+# Требует v8 (JS-путь `startFfmpegLoad`/`pending_ffmpeg_loads` заведён под
+# `lumen-js/ffmpeg-video`, срез 6) и `FFMPEG_DIR` в окружении сборки — см.
+# `crates/engine/media-ffmpeg/build.rs` и ADR-030. NOT в default: без неё
+# `cargo build --workspace` не трогает FFmpeg вовсе.
+ffmpeg-video = ["v8", "dep:lumen-media-ffmpeg", "lumen-media-ffmpeg/ffmpeg", "lumen-js/ffmpeg-video"]
+
 [dependencies]
 lumen-core.workspace = true
 # PH1-4: IPC to the out-of-process network service (NetworkServiceHandle, --network-service).
@@ -88,6 +95,8 @@ lumen-paint = { workspace = true, features = ["cpu-render"] }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
 lumen-image = { workspace = true, features = ["avif"] }
+# GAP-MEDIADECODE срез 7 (feature "ffmpeg-video"), see [features] above.
+lumen-media-ffmpeg = { workspace = true, optional = true }
 # cpu-render: DEVX-5 headless MCP (`--mcp`/`--mcp-port`) screenshots go through
 # InProcessSession's CPU rasterizer (tiny-skia), not the GPU headless renderer —
 # no GPU adapter required for `--mcp`.

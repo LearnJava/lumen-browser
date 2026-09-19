@@ -99,6 +99,9 @@ impl Lumen {
         self.video_gif_store.pending_loads.lock().unwrap().clear();
         self.video_gif_last_frame = HashMap::new();
         self.video_gif_frames = HashMap::new();
+        self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().clear();
+        self.video_ffmpeg_sessions = HashMap::new();
+        self.video_ffmpeg_last_ms = HashMap::new();
         self.image_cache = lumen_image::ImageDecodeCache::new();
         self.zoom_factor = zoom::ZOOM_DEFAULT;
         self.display_url = None;

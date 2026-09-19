@@ -377,6 +377,170 @@ impl Lumen {
         }
     }
 
+    /// Advance FFmpeg-container `<video>` playback: drain pending loads, open
+    /// decode sessions, register current frames, request redraws while playing.
+    ///
+    /// GAP-MEDIADECODE срез 7 — the FFmpeg-backed counterpart of
+    /// [`Lumen::tick_video_gifs`]; compiled only under the `ffmpeg-video`
+    /// feature (`lumen-media-ffmpeg` is an optional dependency gated the same
+    /// way, see `crates/shell/Cargo.toml`). Without the feature
+    /// `pending_ffmpeg_loads` never receives an entry
+    /// (`__lumen_video_ffmpeg_load` itself is feature-gated, срез 6), so the
+    /// no-op stub below is unreachable in a default build, not merely inert.
+    #[cfg(feature = "ffmpeg-video")]
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn tick_video_ffmpegs(&mut self, elapsed_ms: u64) {
+        use lumen_core::ext::VideoDecoder as _;
+
+        // Drain pending load requests queued by JS `__lumen_video_ffmpeg_load`.
+        let loads: Vec<(u32, String)> = self
+            .video_gif_store
+            .pending_ffmpeg_loads
+            .lock()
+            .unwrap()
+            .drain(..)
+            .collect();
+
+        for (nid, src) in loads {
+            let base = match &self.source {
+                PageSource::File(p) => ResourceBase::File(p.clone()),
+                PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
+                PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
+                PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
+            };
+            let base = self
+                .layout_source
+                .as_ref()
+                .map(|ls| effective_base(&ls.document.lock().unwrap(), &base))
+                .unwrap_or(base);
+
+            let bytes = match crate::subresources::fetch_video_bytes(
+                &src,
+                &base,
+                &self.event_sink,
+                Some(self.active_cookie_jar()),
+            ) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("video FFmpeg: пропуск {src}: {e}");
+                    continue;
+                }
+            };
+
+            let decoder = lumen_media_ffmpeg::FfmpegVideoDecoder;
+            let mut session = match decoder.open(&bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("video FFmpeg: ошибка декодирования {src}: {e}");
+                    continue;
+                }
+            };
+
+            let (width, height) = session.dimensions();
+            let rgba = match session.frame_at(0.0) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("video FFmpeg: не декодирован первый кадр {src}: {e}");
+                    continue;
+                }
+            };
+            let image = Arc::new(lumen_image::Image {
+                width,
+                height,
+                format: lumen_image::PixelFormat::Rgba8,
+                data: rgba,
+                icc_profile: None,
+            });
+            let key = format!("video:{nid}");
+            if let Some(r) = self.renderer.as_mut() {
+                if let Err(e) = r.register_image(key.clone(), Arc::clone(&image)) {
+                    eprintln!("video FFmpeg: не зарегистрирован {key}: {e}");
+                }
+            } else {
+                self.pending_images.push((key.clone(), image));
+            }
+            if let Some(src_ref) = self.layout_source.as_ref() {
+                let mut doc = src_ref.document.lock().unwrap();
+                let node_id = lumen_dom::NodeId::from_index(nid as usize);
+                apply_intrinsic_size(&mut doc, node_id, width, height);
+            }
+            let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
+            eprintln!("video FFmpeg: загружен nid={nid} ({width}×{height}, {cycle_ms}мс)");
+            self.video_gif_store.playback.lock().unwrap().insert(
+                nid,
+                lumen_js::video_gif_store::VideoPlaybackState {
+                    paused: true,
+                    position_ms: 0,
+                    play_epoch_ms: None,
+                    cycle_ms,
+                    loop_count: 1,
+                    width,
+                    height,
+                },
+            );
+            self.video_ffmpeg_sessions.insert(nid, session);
+            self.video_ffmpeg_last_ms.remove(&nid);
+            self.request_redraw();
+        }
+
+        // Advance frames for playing FFmpeg-backed videos. `playback` is the
+        // store shared with the GIF path (comment on `VideoGifStore::playback`),
+        // so filter to nodes this map actually owns a session for.
+        let playback = self.video_gif_store.playback.lock().unwrap();
+        let mut has_playing = false;
+        let mut due: Vec<(u32, u64)> = Vec::new();
+        for (nid, state) in playback.iter() {
+            if state.paused || !self.video_ffmpeg_sessions.contains_key(nid) {
+                continue;
+            }
+            has_playing = true;
+            let cur_ms = state.current_ms(elapsed_ms);
+            let last = self.video_ffmpeg_last_ms.get(nid).copied();
+            // Cap re-decode rate at roughly 30fps — `frame_at` reseeks and
+            // decodes on every call, unlike the GIF path's precomputed table.
+            if last.is_none_or(|l| cur_ms.saturating_sub(l) >= 33) {
+                due.push((*nid, cur_ms));
+            }
+        }
+        drop(playback);
+
+        for (nid, cur_ms) in due {
+            let Some(session) = self.video_ffmpeg_sessions.get_mut(&nid) else { continue };
+            let secs = cur_ms as f64 / 1000.0;
+            match session.frame_at(secs) {
+                Ok(rgba) => {
+                    let (width, height) = session.dimensions();
+                    let key = format!("video:{nid}");
+                    if let Some(r) = self.renderer.as_mut()
+                        && let Err(e) = r.register_image(
+                            key.clone(),
+                            Arc::new(lumen_image::Image {
+                                width,
+                                height,
+                                format: lumen_image::PixelFormat::Rgba8,
+                                data: rgba,
+                                icc_profile: None,
+                            }),
+                        )
+                    {
+                        eprintln!("video FFmpeg кадр {key}: {e}");
+                    }
+                    self.video_ffmpeg_last_ms.insert(nid, cur_ms);
+                }
+                Err(e) => eprintln!("video FFmpeg: ошибка кадра nid={nid}: {e}"),
+            }
+        }
+
+        if has_playing {
+            self.request_redraw();
+        }
+    }
+
+    /// No-op counterpart of the `ffmpeg-video` version above — kept unconditional
+    /// at the call site so `redraw_requested.rs` does not need a feature gate.
+    #[cfg(not(feature = "ffmpeg-video"))]
+    pub(crate) fn tick_video_ffmpegs(&mut self, _elapsed_ms: u64) {}
+
     /// Same-page fragment navigation: update `:target` CSS state and scroll to
     /// the target element. `fragment` is the id without the leading `#`; an empty
     /// string scrolls to the top and clears `:target`.
@@ -1522,6 +1686,10 @@ impl Lumen {
         self.video_gif_store.pending_loads.lock().unwrap().clear();
         self.video_gif_last_frame.clear();
         self.video_gif_frames.clear();
+        // GAP-MEDIADECODE срез 7: clear FFmpeg-backed video state from previous page.
+        self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().clear();
+        self.video_ffmpeg_sessions.clear();
+        self.video_ffmpeg_last_ms.clear();
 
         // Update shields panel domain and clear per-page blocked counts.
         {

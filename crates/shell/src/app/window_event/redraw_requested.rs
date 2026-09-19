@@ -329,6 +329,9 @@ impl Lumen {
         if !freeze_content_ticks {
             let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
             self.tick_video_gifs(video_elapsed_ms);
+            // GAP-MEDIADECODE срез 7: FFmpeg-backed counterpart, no-op stub
+            // without the `ffmpeg-video` feature.
+            self.tick_video_ffmpegs(video_elapsed_ms);
         }
 
         if let Some(t0) = frame_log_t0 {

@@ -94,6 +94,8 @@ impl Lumen {
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
             video_gif_last_frame: std::mem::take(&mut self.video_gif_last_frame),
             video_gif_frames: std::mem::take(&mut self.video_gif_frames),
+            video_ffmpeg_sessions: std::mem::take(&mut self.video_ffmpeg_sessions),
+            video_ffmpeg_last_ms: std::mem::take(&mut self.video_ffmpeg_last_ms),
             image_cache: std::mem::replace(
                 &mut self.image_cache,
                 lumen_image::ImageDecodeCache::new(),
@@ -180,8 +182,11 @@ impl Lumen {
         self.gif_last_frame = snap.gif_last_frame;
         self.video_gif_last_frame = snap.video_gif_last_frame;
         self.video_gif_frames = snap.video_gif_frames;
+        self.video_ffmpeg_sessions = snap.video_ffmpeg_sessions;
+        self.video_ffmpeg_last_ms = snap.video_ffmpeg_last_ms;
         // Rebuild playback state from restored frames; JS re-queues loads on restore.
         self.video_gif_store.pending_loads.lock().unwrap().clear();
+        self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().clear();
         {
             let mut pb = self.video_gif_store.playback.lock().unwrap();
             pb.clear();
@@ -199,6 +204,23 @@ impl Lumen {
                     loop_count,
                     width: gif.width,
                     height: gif.height,
+                });
+            }
+            // GAP-MEDIADECODE срез 7: same rebuild for FFmpeg-backed sessions —
+            // `playback` is the shared map (comment on `VideoGifStore::playback`),
+            // so skipping this would silently drop ffmpeg-backed videos' playback
+            // state on every tab switch.
+            for (nid, session) in &self.video_ffmpeg_sessions {
+                let (width, height) = session.dimensions();
+                let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
+                pb.insert(*nid, lumen_js::video_gif_store::VideoPlaybackState {
+                    paused: true,
+                    position_ms: 0,
+                    play_epoch_ms: None,
+                    cycle_ms,
+                    loop_count: 1,
+                    width,
+                    height,
                 });
             }
         }
