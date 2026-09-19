@@ -1,0 +1,25 @@
+[package]
+name = "lumen-media-ffmpeg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: декодер video/audio-контейнеров (mp4/webm/ogg) через hand-rolled FFI к FFmpeg (GAP-MEDIADECODE, ADR-030)"
+
+[features]
+# Выключено по умолчанию: без неё крейт компилируется (FFI-объявления не
+# требуют резолва символов на этапе rlib), но ничего не линкует и не
+# экспортирует decoder-тип — `cargo build --workspace` не трогает FFmpeg
+# и не требует FFMPEG_DIR ни на одной машине, кроме той, что явно просит
+# эту feature. См. docs/decisions/ADR-030-media-codec-strategy-ffmpeg.md.
+ffmpeg = []
+
+[dependencies]
+lumen-core.workspace = true
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true
