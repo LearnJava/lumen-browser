@@ -159,6 +159,7 @@ mod theme_tokens;
 mod toolbar;
 mod tracks;
 mod update;
+mod zip_reader;
 mod zoom;
 mod network_service;
 
