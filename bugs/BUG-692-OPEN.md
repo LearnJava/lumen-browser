@@ -93,3 +93,24 @@ scheme по spec §4.1) на non-loopback host, переписать схему 
 докстринг `csp_policies.rs` как место для более широкого CSP enforcement;
 реализовать здесь только scheme-rewrite шаг, не полный source-list fetch-блок
 (отдельная задача).
+
+## Обновление 2026-09-19 (GAP-CSPENF срез 43) — частично закрыт, статус остаётся OPEN
+
+Флаг перестал быть «мёртвым полем»: у него появился первый потребитель —
+`csp_enforce::upgrade_insecure_url` (`crates/shell/src/csp_enforce.rs`),
+подключённый во всех трёх producer'ах картинок ГЛАВНОГО документа (eager
+`subresources::fetch_and_decode_images`, streaming/dynamic
+`page_load::spawn_image_requests`, отложенный
+`page_load::fetch_and_register_lazy_images`). Апгрейд выполняется до гейта
+`img-src` — Fetch §4.1 ставит upgrade шагом 5, CSP-проверку шагом 6.
+Живая проба и точный список изменений — `bugs/BUG-811-OPEN.md`, раздел
+«Срез 43».
+
+Баг остаётся OPEN: не покрыты картинки `<iframe>`/`background-image`,
+`<script src>`, стили и `@import`, `@font-face`, media/`<track>`,
+`fetch()`/XHR, `ws:` → `wss:`, навигации и заголовок
+`Upgrade-Insecure-Requests: 1`. Точка интеграции оказалась НЕ
+`HttpClient::fetch_with_redirect` (как предполагал раздел «Дальше» выше), а
+место резолва URL подресурса в shell: там, где уже стоят гейты директив,
+есть `&Document` и, значит, действующие политики страницы; у `HttpClient`
+их нет — он получает политики отдельным билдером на навигацию (срезы 10-17).

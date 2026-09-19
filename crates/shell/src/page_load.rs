@@ -50,8 +50,13 @@ impl Lumen {
             .unwrap_or_else(|| base.clone());
         let self_origin = base.origin();
         for (nid, url) in requests {
+            // GAP-CSPENF срез 43: та же перезапись схемы до гейта, что в
+            // двух других producer'ах картинок (eager и streaming).
+            let upgraded = csp_gate.as_ref().and_then(|(policy, _)| {
+                crate::csp_enforce::upgrade_insecure_url(policy, &eff_base.resolve_str(&url))
+            });
             if let Some((policy, original_policy)) = &csp_gate {
-                let resolved = eff_base.resolve_str(&url);
+                let resolved = upgraded.clone().unwrap_or_else(|| eff_base.resolve_str(&url));
                 if crate::csp_enforce::img_src_blocked(policy, &resolved, self_origin.as_ref()) {
                     let original_policy = original_policy.clone();
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -61,7 +66,10 @@ impl Lumen {
                     continue;
                 }
             }
-            let bytes = match fetch_image_bytes(&url, &eff_base, &self.event_sink, Some(self.active_cookie_jar())) {
+            // Ключ реестра картинок остаётся сырым `url`; апгрейд (срез 43)
+            // меняет только адрес запроса.
+            let fetch_url: &str = upgraded.as_deref().unwrap_or(&url);
+            let bytes = match fetch_image_bytes(fetch_url, &eff_base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -1211,8 +1219,17 @@ impl Lumen {
             // `securitypolicyviolation` — this producer only needs to keep
             // the request off the wire and let `onerror` follow the normal
             // decode-failure path below).
+            // GAP-CSPENF срез 43: `upgrade-insecure-requests` переписывает
+            // схему до гейта (Fetch §4.1, шаг 5 раньше шага 6) — этот
+            // producer стартует раньше eager-прохода, поэтому без апгрейда
+            // здесь `http://`-байты успевали уйти в сеть первыми.
+            let resolved_url = base.resolve_str(&req.url);
+            let upgraded = csp_gate
+                .as_ref()
+                .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url));
+            let resolved_url = upgraded.clone().unwrap_or(resolved_url);
             if let Some((policy, _original)) = &csp_gate
-                && crate::csp_enforce::img_src_blocked(policy, &base.resolve_str(&req.url), self_origin.as_ref())
+                && crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref())
             {
                 let _ = self.load_proxy.send_event(LoadEvent::ImageDecodeFailed { src: req.url });
                 continue;
@@ -1225,8 +1242,11 @@ impl Lumen {
             std::thread::spawn(move || {
                 // Fill the shared cache so the final `fetch_and_decode_images` pass
                 // reuses these pixels instead of re-fetching+re-decoding (BUG-172).
+                // Ключ кэша — сырой `req.url` (его знают layout/рендерер);
+                // апгрейд меняет только адрес запроса (срез 43).
+                let fetch_url: &str = upgraded.as_deref().unwrap_or(&req.url);
                 let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, &req.url, || {
-                    decode_image(&req.url, &base, &sink, Some(cookie_jar), target)
+                    decode_image(fetch_url, &base, &sink, Some(cookie_jar), target)
                 });
                 match decoded {
                     // BUG-1048: was a silent drop ("streaming best-effort: финальный

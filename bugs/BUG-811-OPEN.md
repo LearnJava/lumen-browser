@@ -2478,3 +2478,80 @@ warnings` (оба чисто); `cargo test -p lumen-shell --profile dev-release
 (Reporting API, этот движок его не разбирает), `manifest-src` (нечем
 фетчить манифест — гейтить нечего), честная per-policy `originalPolicy`
 вместо одной склеенной строки (см. выше).
+
+## Срез 43 (2026-09-19, `p6-gap-cspenf-srez43`) — `upgrade-insecure-requests` переписывает `http://` картинки главного документа в `https://`
+
+Первая директива этой дорожки, которая ничего не БЛОКИРУЕТ: она меняет сам
+запрос. Поле `CspPolicy::upgrade_insecure_requests` парсится с самого начала
+(`crates/network/src/csp.rs:165`/`:440`, юнит-тест
+`parse_upgrade_insecure_requests`), но до этого среза не читалось нигде —
+ровно то, на что заведён отдельный [BUG-692](BUG-692-OPEN.md) (`rg
+upgrade_insecure_requests crates/` давал только сам `csp.rs`).
+
+Живая проба (`.tmp/srez43/serve.py` — python-сервер на `127.0.0.1`,
+логирующий каждую строку запроса; страница с `<meta
+http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">` и
+`<img src="http://127.0.0.1:<port>/pixel.png">`; `./target/dev-release/
+lumen.exe --dump-layout http://127.0.0.1:<port>/`):
+
+- ДО фикса лог сервера: `HIT /` и `HIT /pixel.png`, `"GET /pixel.png
+  HTTP/1.1" 200` — картинка уехала открытым `http://`, хотя политика
+  требует апгрейда.
+- ПОСЛЕ фикса `HIT /pixel.png` нет вовсе; вместо него сервер получает два
+  TLS ClientHello (`code 400, message Bad request version ('\x16...')`) —
+  по одному на каждого сработавшего producer'а, — а stderr браузера пишет
+  `Пропуск картинки https://127.0.0.1:<port>/pixel.png: network error: TLS
+  handshake…`. То есть запрос ушёл на `https://`, как требует спецификация
+  (простой http-сервер пробы, естественно, TLS не терминирует).
+
+Реализация:
+
+- [`csp_enforce::upgrade_insecure_url(policies, url) -> Option<String>`](../crates/shell/src/csp_enforce.rs)
+  — `Some(новый URL)`, если директива есть ХОТЯ БЫ в одной политике
+  документа (CSP3 §3.4, тот же `policies.iter().any(...)`, что у всех
+  гейтов файла с среза 40) И схема `url` — `http`. Порт руками не трогается:
+  дефолтный `:80` WHATWG-парсер (`lumen_core::url::Url`) сворачивает сам,
+  поэтому смена схемы даёт 443, а явный `:8080` спецификация сохраняет.
+  Исключений для loopback/IP нет умышленно — [UIR] §4.1 шаг 5 смотрит
+  только на схему, а «Should insecure requests be upgraded for client?» —
+  только на наличие директивы; то, что живые движки не апгрейдят
+  `http://localhost`, — их собственное решение, а не текст спецификации
+  (и именно поэтому проба на `127.0.0.1` вообще что-то показывает).
+- Порядок: апгрейд идёт ДО гейта `img-src`, а не после — Fetch §4.1 «main
+  fetch» ставит upgrade шагом 5, а «should request be blocked by Content
+  Security Policy» — шагом 6. Поэтому и `img-src`, и cross-origin-
+  классификация (GAP-CANVASORIGIN), и сам фетч видят уже `https://`-адрес.
+- Подключено во всех трёх producer'ах картинок ГЛАВНОГО документа — тех
+  же трёх, что срезы 4/9 уже гейтят по `img-src`:
+  [`subresources::fetch_and_decode_images`](../crates/shell/src/subresources.rs)
+  (eager-пайплайн), [`page_load::spawn_image_requests`](../crates/shell/src/page_load.rs)
+  (streaming/dynamic — стартует РАНЬШЕ eager-прохода, без него `http://`-
+  байты успевали уйти в сеть первыми) и
+  [`page_load::fetch_and_register_lazy_images`](../crates/shell/src/page_load.rs)
+  (отложенный `loading="lazy"`).
+- Ключ `IMAGE_CACHE`/реестра рендерера во всех трёх точках остаётся сырым
+  `req.url` (его знают layout и рендерер) — апгрейд меняет только адрес
+  запроса. Когда переписывать нечего, `upgrade_insecure_url` возвращает
+  `None` и все три точки работают строго как раньше, по сырому URL.
+
+Пять новых юнит-тестов (`csp_enforce.rs`): нет директивы — не переписывается;
+`http` → `https` с сохранением пути/запроса/фрагмента; явный `:8080`
+сохраняется, а `:80` сворачивается; `https`/`data:`/непарсящийся URL не
+трогаются; директива в любой из двух независимых политик включает апгрейд.
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen
+csp` — 96 passed, 0 failed (было 91 до этого среза, +5 новых, регрессий нет);
+`cargo clippy -p lumen-shell --profile dev-release --all-targets --features
+v8 -- -D warnings` — чисто.
+
+Не покрыто этим срезом (всё это — продолжение BUG-692, статус которого
+остаётся OPEN): `upgrade-insecure-requests` для картинок внутри `<iframe>`
+и для `background-image` (`frames.rs`, та же форма гейта — механическое
+продолжение), для `<script src>`, `<link rel=stylesheet>`/`@import`,
+`@font-face url()`, `<video>`/`<audio>`/`<track>`, `fetch()`/XHR/WebSocket
+(`ws://` → `wss://`), для навигаций верхнего документа и `<iframe>`, а также
+заголовок `Upgrade-Insecure-Requests: 1` на навигационном запросе и
+`upgrade insecure navigations set` (UIR §4.1 шаги 1-2). Остаток общего
+списка дорожки не изменился: `report-to`, `manifest-src`, честная
+per-policy `originalPolicy`.
+
+[UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
