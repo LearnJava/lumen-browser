@@ -18,6 +18,24 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS autofill (
+        origin     TEXT NOT NULL,
+        field_name TEXT NOT NULL,
+        value      TEXT NOT NULL,
+        frequency  INTEGER NOT NULL DEFAULT 1,
+        last_used  INTEGER NOT NULL,
+        PRIMARY KEY (origin, field_name, value)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS autofill_origin_field_idx
+        ON autofill(origin, field_name);
+    "#,
+}];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutofillEntry {
     pub origin: String,
@@ -50,26 +68,12 @@ impl Autofill {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(mut conn: Connection) -> Result<Self> {
         // Composite PK по (origin, field_name, value) — повторное
         // submit-нутое значение не дублируется, а инкрементит frequency.
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS autofill (
-                origin     TEXT NOT NULL,
-                field_name TEXT NOT NULL,
-                value      TEXT NOT NULL,
-                frequency  INTEGER NOT NULL DEFAULT 1,
-                last_used  INTEGER NOT NULL,
-                PRIMARY KEY (origin, field_name, value)
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS autofill_origin_field_idx
-                ON autofill(origin, field_name);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("autofill init: {e}")))?;
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("autofill pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("autofill init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

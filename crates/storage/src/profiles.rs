@@ -28,7 +28,64 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
 use crate::profile_vault;
+
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS profiles (
+            id                 INTEGER PRIMARY KEY,
+            name               TEXT NOT NULL UNIQUE,
+            storage_path       TEXT NOT NULL,
+            created_at         INTEGER NOT NULL,
+            settings_json      TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS active_profile (
+            lock INTEGER PRIMARY KEY CHECK (lock = 0),  -- singleton
+            profile_id INTEGER,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id)
+                ON DELETE SET NULL
+        );
+        -- Singleton-строка active_profile (только id=0). Если её нет — null active.
+        INSERT OR IGNORE INTO active_profile (lock, profile_id) VALUES (0, NULL);
+        "#,
+    },
+    Migration {
+        version: 2,
+        sql: "ALTER TABLE profiles ADD COLUMN encrypted_key_blob BLOB DEFAULT NULL;",
+    },
+];
+
+/// One-time bridge for databases created before this migration list existed:
+/// `user_version` reads as 0 (never stamped), but the schema may already be
+/// at v2 courtesy of the old ad-hoc `let _ = execute_batch(ALTER TABLE ...)`
+/// (which silently swallowed the "duplicate column" error) or a `CREATE
+/// TABLE` that already had the column baked in. Detects that state via
+/// `PRAGMA table_info` and stamps `user_version = 2` so [`run_migrations`]
+/// doesn't try to add the column again and fail on "duplicate column name".
+fn bridge_pre_migration_version(conn: &Connection) -> rusqlite::Result<()> {
+    let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version != 0 {
+        return Ok(());
+    }
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'profiles'",
+        [],
+        |r| r.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let has_column = conn
+        .prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'encrypted_key_blob'")?
+        .exists([])?;
+    if has_column {
+        conn.pragma_update(None, "user_version", 2)?;
+    }
+    Ok(())
+}
 
 /// Один профиль пользователя.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,38 +131,12 @@ impl ProfileRegistry {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS profiles (
-                id                 INTEGER PRIMARY KEY,
-                name               TEXT NOT NULL UNIQUE,
-                storage_path       TEXT NOT NULL,
-                created_at         INTEGER NOT NULL,
-                settings_json      TEXT NOT NULL DEFAULT '',
-                encrypted_key_blob BLOB DEFAULT NULL
-            );
-            CREATE TABLE IF NOT EXISTS active_profile (
-                lock INTEGER PRIMARY KEY CHECK (lock = 0),  -- singleton
-                profile_id INTEGER,
-                FOREIGN KEY (profile_id) REFERENCES profiles(id)
-                    ON DELETE SET NULL
-            );
-            -- Singleton-строка active_profile (только id=0). Если её нет — null active.
-            INSERT OR IGNORE INTO active_profile (lock, profile_id) VALUES (0, NULL);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("profiles init: {e}")))?;
-
-        // Schema migration: add encrypted_key_blob if the table was created
-        // by an older version that didn't have this column. ALTER TABLE ADD COLUMN
-        // is idempotent-ish — we catch the "duplicate column" error and ignore it.
-        let _ = conn.execute_batch(
-            "ALTER TABLE profiles ADD COLUMN encrypted_key_blob BLOB DEFAULT NULL;",
-        );
-
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("profiles pragmas: {e}")))?;
+        bridge_pre_migration_version(&conn)
+            .map_err(|e| Error::Storage(format!("profiles bridge: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("profiles init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -424,6 +455,37 @@ mod tests {
 
     fn make() -> ProfileRegistry {
         ProfileRegistry::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn reopen_of_pre_migration_database_with_column_already_present() {
+        // Симулирует БД, созданную до появления списка миграций: user_version
+        // никогда не выставлялся (= 0), но `encrypted_key_blob` уже есть
+        // (либо через старый ad-hoc ALTER, либо была запечена прямо в CREATE
+        // TABLE). v2 обязан быть no-op здесь, а не падать на "duplicate column".
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE profiles (
+                id                 INTEGER PRIMARY KEY,
+                name               TEXT NOT NULL UNIQUE,
+                storage_path       TEXT NOT NULL,
+                created_at         INTEGER NOT NULL,
+                settings_json      TEXT NOT NULL DEFAULT '',
+                encrypted_key_blob BLOB DEFAULT NULL
+            );
+            CREATE TABLE active_profile (
+                lock INTEGER PRIMARY KEY CHECK (lock = 0),
+                profile_id INTEGER,
+                FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL
+            );
+            INSERT OR IGNORE INTO active_profile (lock, profile_id) VALUES (0, NULL);
+            "#,
+        )
+        .unwrap();
+        let r = ProfileRegistry::init(conn).unwrap();
+        let id = r.create("Legacy", "/legacy/", "", 100).unwrap();
+        assert!(r.get(id).unwrap().is_some());
     }
 
     #[test]
