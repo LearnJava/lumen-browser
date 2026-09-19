@@ -1578,3 +1578,65 @@ src` не гейтится, потому что `<link rel=manifest>` вообщ
 `report-to`; честная независимая проверка заголовка и `<meta>`; атрибут
 `style=` внутри `<iframe>` после точечной DOM-мутации; вложенные фреймы
 фрейма; `importScripts()` внутри уже запущенного воркера.
+
+## Срез 27 (2026-09-19, `p6-gap-cspenf-srez27`) — директива `frame-ancestors`
+
+Закрыт ровно тот пробел, что срез 26 назвал не покрытым: `CspDirective::
+FrameAncestors` уже разбиралась парсером (`crates/network/src/csp.rs`), но
+ни одна точка кода её не проверяла — политика ребёнка `<iframe>` могла
+объявить `frame-ancestors 'none'` и всё равно быть встроена куда угодно.
+
+- `crates/network/src/csp.rs`: новый метод `CspPolicy::frame_ancestor_allowed`
+  — принимает origin встраивающего документа (`ancestor_origin`) и origin
+  защищаемого документа (`self_origin`, тот же смысл `'self'`, что уже несут
+  все fetch-директивы этого файла). В отличие от каждого fetch-гейта выше,
+  **без фолбэка на `default-src`** — CSP3 §6.4 явно исключает навигационные
+  директивы (`frame-ancestors`, `sandbox`) из наследования `default-src`;
+  отсутствие директивы значит «не ограничено», как и у остальных гейтов.
+- `crates/shell/src/csp_enforce.rs::frame_ancestors_blocked` — тонкая обёртка
+  той же формы (`policy`/`self_origin` → `bool`), что и `frame_src_blocked`/
+  `font_src_blocked` выше в файле, но читает политику ЗАЩИЩАЕМОГО документа
+  (ребёнка), а не встраивающего — единственная директива в этом модуле с
+  такой инверсией направления.
+- `crates/shell/src/frames.rs::fetch_frame_subresources` — новый параметр
+  `ancestor_origin`; проверка идёт СРАЗУ после вычисления `csp_gate` ребёнка,
+  до единого сетевого похода за `<img>`/`<link>`/инлайновым `<style>` —
+  заблокированный `frame-ancestors` не должен тратить сеть ни на что из
+  содержимого, которое всё равно не покажется (та же экономия, что срезы
+  8/18/19/25 уже дают отдельным `img-src`/`font-src` блокировкам, только
+  здесь она отменяет ВСЁ содержимое разом). Новое поле
+  `FrameSubresourceOutcomes::frame_ancestors_blocked: bool` — структура
+  получила `#[derive(Default)]`, чтобы ранний `return` с одним выставленным
+  полем не пришлось писать все 12 полей вручную.
+- `crates/shell/src/frames.rs::spawn_frame` — `ancestor_origin` передаётся
+  как уже посчитанный `self_origin` этой функции (origin РОДИТЕЛЯ,
+  `base.origin()` — тот же биндинг, что `frame_src_check` уже использует
+  чуть выше как `self_origin` для проверки политики РОДИТЕЛЯ против
+  навигации; здесь то же значение читается как «origin встраивающего», а
+  политика — ребёнка). При блокировке `child_doc` целиком заменяется тем же
+  синтетическим `frame_error_document`, что уже даёт ветка `Some(Err(e))`
+  сетевой неудачи — скрипты/раскладка/дальнейшие подресурсы ребёнка не
+  запускаются вовсе (эквивалент «резюме загрузки» настоящего браузера при
+  `X-Frame-Options`/`frame-ancestors`-отказе).
+
+Не в этом срезе (по спеке `frame-ancestors` — не fetch-исход, а отказ
+рендерить документ целиком, поэтому у заблокированного документа никогда не
+появляется JS-контекст): доставка `report-uri`/`securitypolicyviolation` для
+этого конкретного нарушения (нечему диспатчить событие — тот же класс
+решения, что уже принят для report-to во всём модуле); проверка ancestor
+ЦЕПОЧКИ целиком (top + все промежуточные предки) — проверяется только
+непосредственный родитель, чего достаточно для однократной вложенности,
+типичной для WPT-тестов этой категории, но не для `iframe` внутри `iframe`
+с разными origin на каждом уровне; заголовок ответа `X-Frame-Options`
+(отдельный, более старый механизм с похожей целью — не разбирается вовсе).
+
+Тесты: +4 в `crates/network/src/csp.rs` (`frame_ancestor_allowed` — host
+allow/deny, `'none'`, `'self'` относительно origin защищаемого документа,
+отсутствие директивы не наследует `default-src`), +3 в
+`crates/shell/src/csp_enforce.rs` (обёртка `frame_ancestors_blocked`), +2 в
+`crates/shell/src/tests/page_resources.rs` (`fetch_frame_subresources`
+блокирует и не трогает сеть при несовпадающем embedder-origin; пропускает
+при совпадающем). `cargo test -p lumen-network --lib` (2264 passed) и
+`cargo test -p lumen-shell --features v8 --bin lumen` (1900 passed, 0
+failed) без регрессий; `cargo clippy -p lumen-network -p lumen-shell
+--all-targets --features v8 -- -D warnings` чисто.

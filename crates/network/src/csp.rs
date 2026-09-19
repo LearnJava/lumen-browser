@@ -247,6 +247,29 @@ impl CspPolicy {
             .iter()
             .any(|s| source_matches_url(s, url, self_origin))
     }
+
+    /// `true` if this policy's `frame-ancestors` directive allows the
+    /// protected document to be embedded by a frame whose origin is
+    /// `ancestor_origin` — CSP3 §6.4.2. Unlike every fetch directive above,
+    /// `frame-ancestors` is a navigation directive and does **not** fall
+    /// back to `default-src` (CSP3 §6.4): its absence means no restriction.
+    /// `self_origin` is the protected document's own origin, matching
+    /// `'self'`'s meaning in this directive.
+    pub fn frame_ancestor_allowed(
+        &self,
+        ancestor_origin: &Origin,
+        self_origin: Option<&Origin>,
+    ) -> bool {
+        let Some(sources) = self.directives.get(&CspDirective::FrameAncestors) else {
+            return true;
+        };
+        let Ok(ancestor_url) = Url::parse(&ancestor_origin.serialize()) else {
+            return true;
+        };
+        sources
+            .iter()
+            .any(|s| source_matches_url(s, &ancestor_url, self_origin))
+    }
 }
 
 /// `true` if `source` (one token of a fetch-directive source list) matches
@@ -761,5 +784,40 @@ mod tests {
             &img_url("https://anything.example/frame.html"),
             None
         ));
+    }
+
+    // ── GAP-CSPENF срез 27: `frame-ancestors` enforcement ───────────────────
+
+    fn origin(s: &str) -> Origin {
+        Origin::from_url(&img_url(s)).unwrap()
+    }
+
+    #[test]
+    fn frame_ancestors_allows_listed_host() {
+        let p = parse_csp_header("frame-ancestors example.com");
+        assert!(p.frame_ancestor_allowed(&origin("https://example.com/"), None));
+        assert!(!p.frame_ancestor_allowed(&origin("https://other.example/"), None));
+    }
+
+    #[test]
+    fn frame_ancestors_none_blocks_every_ancestor() {
+        let p = parse_csp_header("frame-ancestors 'none'");
+        assert!(!p.frame_ancestor_allowed(&origin("https://example.com/"), None));
+    }
+
+    #[test]
+    fn frame_ancestors_self_matches_protected_documents_own_origin() {
+        let p = parse_csp_header("frame-ancestors 'self'");
+        let doc_origin = origin("https://example.com/");
+        assert!(p.frame_ancestor_allowed(&doc_origin, Some(&doc_origin)));
+        assert!(!p.frame_ancestor_allowed(&origin("https://other.example/"), Some(&doc_origin)));
+    }
+
+    #[test]
+    fn frame_ancestors_absent_does_not_fall_back_to_default_src() {
+        // CSP3 §6.4: navigation directives (frame-ancestors, sandbox) never
+        // inherit default-src — unlike every fetch directive above.
+        let p = parse_csp_header("default-src 'none'");
+        assert!(p.frame_ancestor_allowed(&origin("https://anything.example/"), None));
     }
 }

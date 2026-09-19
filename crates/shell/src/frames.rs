@@ -383,6 +383,7 @@ fn fire_iframe_load_event(parent_js: Option<&Arc<dyn PersistentJs>>, host: NodeI
 /// серой заглушки) и relayout при мутациях остаются в очереди среза.
 ///
 /// Исходы подресурсов парсерных элементов под-документа фрейма (BUG-480 срез 11).
+#[derive(Default)]
 pub(crate) struct FrameSubresourceOutcomes {
     /// `(узел <link rel=stylesheet>, лист получен)` в порядке объявления —
     /// форма [`load_linked_stylesheets`].
@@ -453,6 +454,14 @@ pub(crate) struct FrameSubresourceOutcomes {
     /// `securitypolicyviolation` per blocked node, same one-shot-push shape
     /// as `blocked_inline_style_count`.
     pub(crate) blocked_style_attr_count: usize,
+    /// GAP-CSPENF срез 27: `true` if the CHILD's own `frame-ancestors`
+    /// directive refuses embedding by `ancestor_origin` (the immediate
+    /// embedder — CSP3 §6.4.2). When set, every other field above is left
+    /// at its default: the check runs before any subresource fetch, the
+    /// same "don't touch the network at all" shape срез 8 already gives
+    /// `img-src`. The caller replaces the whole sub-document with a blocked
+    /// page instead of running scripts/layout on the fetched one.
+    pub(crate) frame_ancestors_blocked: bool,
 }
 
 /// Запросить подресурсы парсерных элементов под-документа фрейма (BUG-480
@@ -484,6 +493,7 @@ pub(crate) struct FrameSubresourceOutcomes {
 /// [`sync_frame_viewports`]/[`layout_frame_document`] (эта функция не знает
 /// ни его, ни JS-контекста ребёнка), а рендерер/image-кэш СТРАНИЦЫ — только у
 /// `&mut Lumen`, за пределами и этой функции, и `sync_frame_viewports`.
+#[allow(clippy::too_many_arguments)] // same debt as `spawn_frame` above, docs/lint-policy.md §10
 pub(crate) fn fetch_frame_subresources(
     doc: &mut Document,
     base: &ResourceBase,
@@ -492,6 +502,7 @@ pub(crate) fn fetch_frame_subresources(
     media_ctx: &lumen_css_parser::MediaContext,
     viewport: lumen_core::geom::Size,
     target: lumen_core::ColorSpace,
+    ancestor_origin: Option<&lumen_network::Origin>,
 ) -> FrameSubresourceOutcomes {
     // GAP-CSPENF срез 8: same one-shot policy computation as
     // `subresources.rs::fetch_and_decode_images` — the CHILD document's OWN
@@ -503,6 +514,20 @@ pub(crate) fn fetch_frame_subresources(
         let root = doc.root();
         crate::csp_enforce::document_csp_policy(doc, root)
     };
+    // GAP-CSPENF срез 27: `frame-ancestors` is a navigation directive, not a
+    // fetch directive — it governs whether this sub-document may be
+    // embedded AT ALL, not one of its own subresource fetches. Checked
+    // first and unconditionally short-circuits: no image/style fetch below
+    // is worth starting for a document that will not render.
+    if let (Some((policy, _)), Some(ancestor)) = (csp_gate.as_ref(), ancestor_origin) {
+        let self_origin = base.origin();
+        if crate::csp_enforce::frame_ancestors_blocked(policy, ancestor, self_origin.as_ref()) {
+            return FrameSubresourceOutcomes {
+                frame_ancestors_blocked: true,
+                ..Default::default()
+            };
+        }
+    }
     // GAP-CSPENF срез 22: инлайновый `<style>` внутри `<iframe>` теперь
     // гейтится по политике РЕБЁНКА — тот же `inline_style_blocked`, что срез
     // 21 уже применяет к top-level документу; до этого среза `<style>` внутри
@@ -619,6 +644,7 @@ pub(crate) fn fetch_frame_subresources(
         blocked_by_style_src,
         blocked_inline_style_count,
         blocked_style_attr_count,
+        frame_ancestors_blocked: false,
     }
 }
 
@@ -1929,8 +1955,22 @@ pub(crate) fn spawn_frame(
             &env.media_ctx,
             env.viewport,
             env.target,
+            self_origin.as_ref(),
         )
     };
+    // GAP-CSPENF срез 27: the child's own `frame-ancestors` directive
+    // refused this embedder (`self_origin` above — the PARENT's own origin,
+    // the same value `frame_src_check` already uses as the embedder side of
+    // a CSP comparison). Same synthetic error page the `Some(Err(e))` fetch
+    // failure branch above uses — no scripts/images/links to salvage, since
+    // `fetch_frame_subresources` short-circuited before touching the
+    // network for any of them.
+    if subresources.frame_ancestors_blocked {
+        child_doc = lumen_html_parser::parse(&frame_error_document(
+            &child_url,
+            "frame-ancestors запрещает встраивание этим родителем",
+        ));
+    }
     // Скрипты ребёнка собираются и (внешние) скачиваются ДО передачи
     // документа в рантайм: run_scripts_with_dom принимает doc по значению.
     let (classic_scripts, module_scripts) = {

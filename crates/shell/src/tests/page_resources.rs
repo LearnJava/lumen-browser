@@ -286,6 +286,7 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
         &screen_media_context(Size::new(1024.0, 720.0), false),
         Size::new(1024.0, 720.0),
         lumen_core::ColorSpace::Srgb,
+        None,
     );
 
     assert_eq!(out.links.len(), 2, "rel=alternate is not a cascade sheet");
@@ -360,6 +361,7 @@ fn frame_subresources_reports_csp_blocked_img_and_style_src() {
         &screen_media_context(Size::new(1024.0, 720.0), false),
         Size::new(1024.0, 720.0),
         lumen_core::ColorSpace::Srgb,
+        None,
     );
 
     assert_eq!(out.blocked_by_img_src, vec!["https://example.com/frame/ok.png".to_owned()]);
@@ -399,6 +401,7 @@ fn frame_subresources_reports_csp_blocked_inline_style() {
         &screen_media_context(Size::new(1024.0, 720.0), false),
         Size::new(1024.0, 720.0),
         lumen_core::ColorSpace::Srgb,
+        None,
     );
 
     assert_eq!(out.blocked_inline_style_count, 1, "the sole <style> node is blocked");
@@ -427,6 +430,7 @@ fn frame_subresources_no_policy_keeps_inline_style() {
         &screen_media_context(Size::new(1024.0, 720.0), false),
         Size::new(1024.0, 720.0),
         lumen_core::ColorSpace::Srgb,
+        None,
     );
 
     assert_eq!(out.blocked_inline_style_count, 0);
@@ -460,6 +464,7 @@ fn frame_subresources_reports_csp_blocked_style_attr() {
         &screen_media_context(Size::new(1024.0, 720.0), false),
         Size::new(1024.0, 720.0),
         lumen_core::ColorSpace::Srgb,
+        None,
     );
 
     assert_eq!(out.blocked_style_attr_count, 1, "the sole style= node is blocked");
@@ -493,9 +498,79 @@ fn frame_subresources_no_policy_keeps_style_attr() {
         &screen_media_context(Size::new(1024.0, 720.0), false),
         Size::new(1024.0, 720.0),
         lumen_core::ColorSpace::Srgb,
+        None,
     );
 
     assert_eq!(out.blocked_style_attr_count, 0);
+}
+
+/// GAP-CSPENF срез 27: `frame-ancestors` in the CHILD's own policy refuses an
+/// embedder whose origin does not match its source list — the check runs
+/// before any subresource fetch (`out.links`/`out.images` stay empty; the
+/// blocked flag is the only signal, since the caller replaces the whole
+/// sub-document rather than trying to salvage the fetched one).
+#[test]
+fn frame_subresources_reports_frame_ancestors_blocked() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                 <meta http-equiv="Content-Security-Policy" content="frame-ancestors other.example">
+                 <link rel="stylesheet" href="ok.css">
+               </head><body><img src="ok.png"></body></html>"#,
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
+    let ancestor = lumen_network::Origin::new("https", "parent.example", 443);
+    let out = fetch_frame_subresources(
+        &mut doc,
+        &base,
+        &sink,
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
+        Some(&ancestor),
+    );
+
+    assert!(out.frame_ancestors_blocked);
+    assert!(out.links.is_empty(), "no subresource fetch should have run");
+    assert!(out.images.is_empty(), "no subresource fetch should have run");
+}
+
+/// A matching embedder origin is not blocked — the gate must not misfire on
+/// the allowed case.
+#[test]
+fn frame_subresources_frame_ancestors_allows_matching_embedder() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                 <meta http-equiv="Content-Security-Policy" content="frame-ancestors parent.example">
+               </head><body><img src="ok.png"></body></html>"#,
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
+    let ancestor = lumen_network::Origin::new("https", "parent.example", 443);
+    let out = fetch_frame_subresources(
+        &mut doc,
+        &base,
+        &sink,
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
+        Some(&ancestor),
+    );
+
+    assert!(!out.frame_ancestors_blocked);
+    assert_eq!(out.images.len(), 1);
 }
 
 /// GAP-CSPENF срез 25: `font-src` политика ребёнка `<iframe>` блокирует его
