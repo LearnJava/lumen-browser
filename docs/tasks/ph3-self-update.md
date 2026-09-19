@@ -10,8 +10,8 @@
 
 ## Status
 
-This brief captures the full design agreed 2026-07-07. Slices UPD-1 and UPD-2 are
-done (`crates/shell/src/update.rs`); UPD-3 onward are planned. Per-slice status
+This brief captures the full design agreed 2026-07-07. Slices UPD-1 through UPD-3 are
+done (`crates/shell/src/update.rs`); UPD-4 onward are planned. Per-slice status
 lives in `ROADMAP.md`, not duplicated here.
 
 ---
