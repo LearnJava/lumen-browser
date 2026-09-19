@@ -203,6 +203,9 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     for (var i = 0; i < arguments.length; i++) {{
       var u = String(arguments[i]);
       var abs = (u.indexOf('://') !== -1) ? u : new URL(u, location.href).href;
+      if (_lumen_sw_check_worker_src(abs)) {{
+        throw new Error('importScripts: cannot load script: ' + abs);
+      }}
       var raw = _lumen_sw_net_fetch(abs, 'GET');
       if (!raw) throw new Error('importScripts: cannot load script: ' + abs);
       var res = JSON.parse(raw);
@@ -534,6 +537,27 @@ fn install_sw_globals_v8(
     // перехватчику, тот выбрал бы по scope ЭТОТ ЖЕ воркер и послал бы ему
     // сообщение, которого воркер не разберёт — он стоит внутри своего же
     // запроса. Поток ждал бы сам себя.
+    // _lumen_sw_check_worker_src(url) → true if `worker-src`/`default-src`
+    // would refuse `url` as an `importScripts()` target inside the SW's own
+    // execution.
+    //
+    // GAP-CSPENF срез 31: срез 28 gated `importScripts()` for dedicated/
+    // shared workers but explicitly left the Service Worker's own
+    // `importScripts` (this file, not `worker.rs`) unnarrowed — its
+    // constructor was never in scope for срез 13 either, so the whole call
+    // path had no precheck at all. Reuses `worker::import_scripts_csp_blocked`
+    // rather than re-deriving the `data:`/`blob:lumen/` skip logic — same
+    // I/O-free precheck shape, different runtime.
+    {
+        let provider = fetch_provider.clone();
+        rt.register_native(
+            "_lumen_sw_check_worker_src",
+            into_v8_fn1(move |url: String| -> bool {
+                crate::worker::import_scripts_csp_blocked(provider.as_deref(), &url)
+            }),
+        )?;
+    }
+
     {
         let provider = fetch_provider.clone();
         rt.register_native(
@@ -879,6 +903,61 @@ mod tests_v8 {
         let net = SwNet::new(&[]);
         let rt = sw_rt("https://example.com", "/", &net);
         assert!(rt.eval("importScripts('https://example.com/gone.js');").is_err());
+    }
+
+    /// GAP-CSPENF срез 31: `worker-src`/`default-src` gates the Service
+    /// Worker's own `importScripts()`, mirroring `worker.rs`'s
+    /// `CspBlockedImportNet` — `check_worker_src` refuses unconditionally
+    /// while `fetch_bypassing_sw` would succeed if reached, proving the
+    /// precheck short-circuits before any network I/O.
+    struct CspBlockedSwNet;
+    impl lumen_core::ext::JsFetchProvider for CspBlockedSwNet {
+        fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: b"globalThis.__unreachable = true;".to_vec(),
+                url: url.to_string(),
+            })
+        }
+        fn fetch_bypassing_sw(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            self.fetch_sync(url, _method)
+        }
+        fn check_worker_src(&self, _url: &str) -> lumen_core::error::Result<()> {
+            Err(lumen_core::error::Error::CspWorkerSrcBlocked {
+                blocked_uri: "https://blocked.example/lib.js".into(),
+                original_policy: "worker-src 'none'".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn sw_import_scripts_blocked_by_worker_src_never_reaches_fetch() {
+        let rt = V8JsRuntime::new().unwrap();
+        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedSwNet);
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), Some(provider), None).unwrap();
+
+        let err = rt.eval("importScripts('https://blocked.example/lib.js')");
+        assert!(err.is_err(), "a worker-src-blocked importScripts() must throw");
+        assert_eq!(
+            rt.eval("typeof __unreachable").unwrap(),
+            lumen_core::JsValue::String("undefined".into()),
+            "the blocked script body must never execute",
+        );
+    }
+
+    /// No `worker-src` policy installed at all (default `JsFetchProvider`
+    /// impl) must never be treated as a block.
+    #[test]
+    fn sw_import_scripts_allowed_when_no_worker_src_policy() {
+        let net = SwNet::new(&[("https://cdn.example.com/lib.js", "globalThis.__lib_loaded = 'да';")]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        rt.eval("importScripts('https://cdn.example.com/lib.js');").unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__lib_loaded").unwrap(),
+            lumen_core::JsValue::String("да".into())
+        );
     }
 
     /// `fetch` в воркере — настоящая сеть и мимо перехватчика. Прежняя версия
