@@ -2062,3 +2062,59 @@ navigate-to`. Оба случая — ЗЕЛЁНЫЙ. Чистых unit-тест
 новый метод — только проводка).
 
 `cargo clippy -p lumen-shell --all-targets -- -D warnings` чисто.
+
+## Срез 36 (2026-09-19, `p6-gap-cspenf-srez36`) — директива `navigate-to` против ссылок под-документа `<iframe>`
+
+Срезы 33/34/35 сами назвали ссылки/JS-навигацию ВНУТРИ фрейма отдельным
+пробелом — «политика ребёнка, тот же разрыв, что срезы 8/22/24 закрывали
+отдельными срезами для своих директив»: `frame_links.rs::frame_link_click`
+никогда не спрашивал CSP, поэтому `navigate-to 'self'`, объявленная РЕБЁНКОМ
+в его собственной `<meta>`, не мешала клику по его ссылке уйти на любой
+чужой origin — ни `grep -rn "navigate_to" crates/shell/src/lumen/frame_links.rs`,
+ни `frame_form_submit.rs` (тот покрыт `form-action`, срез 29, отдельной
+директивой) не находили ни одной точки применения `navigate-to` в этом файле.
+
+- Новый приватный `Lumen::frame_navigate_to_link_blocked(idx, csp_gate, href,
+  nav_base)` (`crates/shell/src/lumen/frame_links.rs`) — зеркало
+  `click.rs::navigate_to_link_blocked` (срез 33), но политика и origin
+  сравнения — собственные у РЕБЁНКА (`nav_base`, `handle.base`), а не у
+  страницы: ссылку написал ребёнок, поэтому именно его `navigate-to` решает,
+  куда ему можно, тем же принципом, что `frame_form_submit.rs`'s
+  `form_action_blocked`-вызов уже применяет для `form-action` (срез 29).
+- `frame_link_click`: политика ребёнка (`csp_enforce::document_csp_policy`)
+  читается ОДНИМ заимствованием вместе с `href`/`target`/`rel` — та же
+  причина, что уже даёт этой тройке единый лок (срез 24): отдельный проход
+  мог бы увидеть документ, изменённый скриптом ребёнка между двумя чтениями.
+  Гейт стоит ОДИН раз ПЕРЕД всем деревом ветвления `_blank`/именованный
+  фрейм/именованная вкладка/`_top`/`_self`/`_parent` — тот же порядок, что
+  срез 33 уже даёт `<a href>` страницы: каждая из веток `LinkTarget`
+  кончается навигацией на один и тот же резолвленный `href`, так что
+  проверка внутри каждой была бы пятью копиями одного ответа.
+- `securitypolicyviolation` уходит прямым `eval_js`-хэндлом ребёнка
+  (`fire_csp_violation`), не через `route_task_js` (тот адресует только
+  контекст СТРАНИЦЫ) — тот же путь, что `frame_form_submit.rs` уже
+  использует для `form-action` во фрейме.
+
+Не тронуто этим срезом: `javascript:`-ссылки ребёнка — `frame_link_click`
+никогда их не исполнял (`links::is_navigable_href` отфильтровывает схему
+раньше любой навигации), гейтить нечего; JS-навигация фрейма
+(`location.href=` и т.п. в контексте ребёнка) — ещё один разрыв той же формы,
+что срезы 34/35 закрыли для страницы, но для ребёнка отдельная точка
+потребления; `window.open()` из скрипта ребёнка — туда же, отдельный срез.
+
+Живая проверка —
+`tests/wpt/verify_gap_cspenf_frame_navigate_to.py` (`--mcp-live-port`,
+HTTP-сервер, dev-release, коммит текущего среза): родитель с двумя `<iframe>`,
+у каждого своя `navigate-to 'self'`; клик по ссылке на СВОЙ origin в первом —
+сервер видит запрос, окно фрейма меняет цвет; клик по ссылке на ДРУГОЙ origin
+(порт без поднятого сервера) во втором — ни один сервер не видит запроса
+(тишина, не connection-refused — сам факт этим не доказывался бы), а `stderr`
+содержит `iframe: navigation to … blocked by CSP navigate-to`. Оба случая —
+ЗЕЛЁНЫЙ. Чистых unit-тестов на сам `frame_navigate_to_link_blocked` не
+добавлено — та же причина, что у срезов 34/35: покрываемая логика
+(`navigate_to_blocked`/`document_csp_policy`) уже имеет 10 тестов среза 33, а
+новый метод — только проводка в ещё одну точку потребления.
+
+`cargo test -p lumen-shell --features v8 --bin lumen` (1951 passed, 0 failed,
+20 ignored) без регрессий; `cargo clippy -p lumen-shell --all-targets
+--features v8 -- -D warnings` чисто.
