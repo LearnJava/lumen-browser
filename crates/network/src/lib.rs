@@ -4437,12 +4437,14 @@ impl HttpClient {
         Ok(())
     }
 
-    /// `worker-src`/`default-src` gate backing [`JsFetchProvider::check_worker_src`]
-    /// (GAP-CSPENF срез 13) — same shape as [`Self::connect_src_gate`], checked
-    /// against [`Self::worker_src_policy`] and `CspDirective::WorkerSrc` instead.
+    /// `worker-src`/`child-src`/`default-src` gate backing
+    /// [`JsFetchProvider::check_worker_src`] (GAP-CSPENF срез 13, `child-src`
+    /// fallback step added срез 26) — same shape as [`Self::connect_src_gate`],
+    /// checked against [`Self::worker_src_policy`] and `CspDirective::WorkerSrc`
+    /// instead.
     fn worker_src_gate(&self, url: &Url) -> Result<()> {
         if let Some((policy, self_origin, original_policy)) = &self.worker_src_policy
-            && !policy.fetch_directive_allows(&CspDirective::WorkerSrc, url, self_origin.as_ref())
+            && !policy.fetch_directive_allows_via_child_src(&CspDirective::WorkerSrc, url, self_origin.as_ref())
         {
             return Err(Error::CspWorkerSrcBlocked {
                 blocked_uri: url.to_string(),
@@ -5871,9 +5873,10 @@ mod tests {
 
     #[test]
     fn worker_src_falls_back_to_default_src() {
-        // No explicit `worker-src` — `effective_sources` (generic over any
-        // directive) already falls back to `default-src`, so this is free:
-        // no new fallback logic was added for `CspDirective::WorkerSrc`.
+        // No explicit `worker-src`/`child-src` — falls through both
+        // fallback steps of `fetch_directive_allows_via_child_src` to
+        // `default-src` (срез 26 added the intermediate `child-src` step;
+        // this case never touches it since it is also absent).
         let policy = csp::parse_csp_header("default-src 'none'");
         let client = HttpClient::new().with_worker_src_policy(
             policy,
@@ -5885,6 +5888,25 @@ mod tests {
             "https://example.com/worker.js",
         );
         assert!(matches!(result, Err(Error::CspWorkerSrcBlocked { .. })));
+    }
+
+    /// GAP-CSPENF срез 26: `child-src` sits between `worker-src` and
+    /// `default-src` in the CSP3 §6.4 fallback chain — a `worker-src`-absent
+    /// policy must consult `child-src` before falling through to a stricter
+    /// `default-src`.
+    #[test]
+    fn worker_src_falls_back_to_child_src_before_default_src() {
+        let policy = csp::parse_csp_header("default-src 'none'; child-src example.com");
+        let client = HttpClient::new().with_worker_src_policy(
+            policy,
+            None,
+            "default-src 'none'; child-src example.com".to_owned(),
+        );
+        let result = <HttpClient as lumen_core::ext::JsFetchProvider>::check_worker_src(
+            &client,
+            "https://example.com/worker.js",
+        );
+        assert!(result.is_ok());
     }
 
     #[test]
