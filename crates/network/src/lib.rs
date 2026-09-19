@@ -2886,22 +2886,27 @@ pub struct HttpClient {
     h3_pool: Option<Arc<std::sync::Mutex<h3::client_pool::H3ConnectionPool>>>,
     /// GAP-CSPENF срез 10: CSP `connect-src` gate for JS-issued requests
     /// (`fetch()`/`XMLHttpRequest`, both funnel through [`Self::fetch_request_impl`]).
-    /// `(policy, self_origin, original_policy)` — set once via
+    /// `(policies, self_origin, original_policy)` — set once via
     /// [`Self::with_connect_src_policy`] by the caller that owns the document
     /// (`crates/shell/src/page_pipeline.rs`), never by a subresource loader:
     /// `<img>`/`<script>`/`<link>` have their own gates in
     /// `crates/shell/src/csp_enforce.rs` and construct their own `HttpClient`
-    /// per call, so this field never affects them.
-    connect_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    /// per call, so this field never affects them. GAP-CSPENF срез 42 widened
+    /// the policy from one merged `CspPolicy` to `Vec<CspPolicy>` — header and
+    /// each `<meta>` are independent policies per CSP3 §3.4, and blocking must
+    /// trigger if ANY of them forbids the request, the same `.any(...)` rule
+    /// `crates/shell/src/csp_enforce.rs`'s `_blocked` functions already use
+    /// since срез 40.
+    connect_src_policy: Option<(Vec<CspPolicy>, Option<Origin>, String)>,
     /// GAP-CSPENF срез 13: CSP `worker-src` (falling back to `default-src`)
     /// gate for `new Worker(url)`/`new SharedWorker(url)` classic script
-    /// fetches. Same `(policy, self_origin, original_policy)` shape as
+    /// fetches. Same `(policies, self_origin, original_policy)` shape as
     /// [`Self::connect_src_policy`] and set from the same call site
-    /// (`crates/shell/src/page_pipeline.rs`) with the same merged document
-    /// policy — a separate field rather than reusing `connect_src_policy`
-    /// because the two are checked against different [`CspDirective`]s and a
-    /// future срез may need them to diverge (e.g. per-worker-flavour policy).
-    worker_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    /// (`crates/shell/src/page_pipeline.rs`) with the same document policies
+    /// — a separate field rather than reusing `connect_src_policy` because the
+    /// two are checked against different [`CspDirective`]s and a future срез
+    /// may need them to diverge (e.g. per-worker-flavour policy).
+    worker_src_policy: Option<(Vec<CspPolicy>, Option<Origin>, String)>,
     /// GAP-CSPENF срез 16: CSP `object-src` (falling back to `default-src`)
     /// gate for `<embed src>`/`<object data>` resource fetches, driven by the
     /// native `_lumen_check_object_src` binding rather than a `fetch()` call
@@ -2911,7 +2916,7 @@ pub struct HttpClient {
     /// `crates/shell/src/csp_enforce.rs`. Same shape and provenance as
     /// [`Self::worker_src_policy`] — a separate field because it is checked
     /// against a different [`CspDirective`].
-    object_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    object_src_policy: Option<(Vec<CspPolicy>, Option<Origin>, String)>,
     /// GAP-CSPENF срез 17: CSP `media-src` (falling back to `default-src`) gate
     /// for `<video src>`/`<audio src>`/`<track src>` resource fetches, driven by
     /// the native `_lumen_check_media_src` binding. All three of this engine's
@@ -2922,7 +2927,7 @@ pub struct HttpClient {
     /// pre-check only. Same shape and provenance as [`Self::object_src_policy`]
     /// — a separate field because it is checked against a different
     /// [`CspDirective`].
-    media_src_policy: Option<(CspPolicy, Option<Origin>, String)>,
+    media_src_policy: Option<(Vec<CspPolicy>, Option<Origin>, String)>,
     /// GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition from `Document-Policy`
     /// (+ `-Report-Only`) and `Permissions-Policy` (+ `-Report-Only`)
     /// respectively, precomputed once by `crate::document_policy`/
@@ -2968,7 +2973,10 @@ impl HttpClient {
     }
 
     /// Attach the document's CSP `connect-src` (or `default-src`) gate —
-    /// GAP-CSPENF срез 10. `original_policy` is the raw combined policy text
+    /// GAP-CSPENF срез 10, widened to independent policies (срез 42).
+    /// `policies` — every policy in force for the document (response header
+    /// plus each `<meta>`, CSP3 §3.4); blocking triggers if ANY of them
+    /// forbids the request. `original_policy` is the raw combined policy text
     /// (`crate::csp_enforce::document_csp_policy`'s second element in the
     /// shell), carried through to `SecurityPolicyViolationEvent.originalPolicy`
     /// (CSP3 §7.8) — `CspPolicy` itself does not retain it. Only
@@ -2977,59 +2985,60 @@ impl HttpClient {
     #[must_use]
     pub fn with_connect_src_policy(
         mut self,
-        policy: CspPolicy,
+        policies: Vec<CspPolicy>,
         self_origin: Option<Origin>,
         original_policy: String,
     ) -> Self {
-        self.connect_src_policy = Some((policy, self_origin, original_policy));
+        self.connect_src_policy = Some((policies, self_origin, original_policy));
         self
     }
 
     /// Attach the document's CSP `worker-src` (falling back to `default-src`)
-    /// gate — GAP-CSPENF срез 13. Same argument shape and provenance as
-    /// [`Self::with_connect_src_policy`]; only [`Self::check_worker_src`]
-    /// (the `JsFetchProvider` override backing `new Worker(url)`/
-    /// `new SharedWorker(url)`'s classic script fetch) checks this.
+    /// gate — GAP-CSPENF срез 13, widened to independent policies (срез 42).
+    /// Same argument shape and provenance as [`Self::with_connect_src_policy`];
+    /// only [`Self::check_worker_src`] (the `JsFetchProvider` override backing
+    /// `new Worker(url)`/`new SharedWorker(url)`'s classic script fetch)
+    /// checks this.
     #[must_use]
     pub fn with_worker_src_policy(
         mut self,
-        policy: CspPolicy,
+        policies: Vec<CspPolicy>,
         self_origin: Option<Origin>,
         original_policy: String,
     ) -> Self {
-        self.worker_src_policy = Some((policy, self_origin, original_policy));
+        self.worker_src_policy = Some((policies, self_origin, original_policy));
         self
     }
 
     /// Attach the document's CSP `object-src` (falling back to `default-src`)
-    /// gate — GAP-CSPENF срез 16. Same argument shape and provenance as
-    /// [`Self::with_worker_src_policy`]; only [`Self::check_object_src`]
-    /// (the `JsFetchProvider` override backing `<embed src>`/`<object data>`)
-    /// checks this.
+    /// gate — GAP-CSPENF срез 16, widened to independent policies (срез 42).
+    /// Same argument shape and provenance as [`Self::with_worker_src_policy`];
+    /// only [`Self::check_object_src`] (the `JsFetchProvider` override backing
+    /// `<embed src>`/`<object data>`) checks this.
     #[must_use]
     pub fn with_object_src_policy(
         mut self,
-        policy: CspPolicy,
+        policies: Vec<CspPolicy>,
         self_origin: Option<Origin>,
         original_policy: String,
     ) -> Self {
-        self.object_src_policy = Some((policy, self_origin, original_policy));
+        self.object_src_policy = Some((policies, self_origin, original_policy));
         self
     }
 
     /// Attach the document's CSP `media-src` (falling back to `default-src`)
-    /// gate — GAP-CSPENF срез 17. Same argument shape and provenance as
-    /// [`Self::with_object_src_policy`]; only [`Self::check_media_src`] (the
-    /// `JsFetchProvider` override backing `<video src>`/`<audio src>`/
-    /// `<track src>`) checks this.
+    /// gate — GAP-CSPENF срез 17, widened to independent policies (срез 42).
+    /// Same argument shape and provenance as [`Self::with_object_src_policy`];
+    /// only [`Self::check_media_src`] (the `JsFetchProvider` override backing
+    /// `<video src>`/`<audio src>`/`<track src>`) checks this.
     #[must_use]
     pub fn with_media_src_policy(
         mut self,
-        policy: CspPolicy,
+        policies: Vec<CspPolicy>,
         self_origin: Option<Origin>,
         original_policy: String,
     ) -> Self {
-        self.media_src_policy = Some((policy, self_origin, original_policy));
+        self.media_src_policy = Some((policies, self_origin, original_policy));
         self
     }
 
@@ -4444,8 +4453,10 @@ impl HttpClient {
     /// [`JsFetchProvider::check_connect_src`]'s override (`sendBeacon`'s
     /// pre-spawn check, GAP-CSPENF срез 12).
     fn connect_src_gate(&self, url: &Url) -> Result<()> {
-        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
-            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, url, self_origin.as_ref())
+        if let Some((policies, self_origin, original_policy)) = &self.connect_src_policy
+            && policies
+                .iter()
+                .any(|policy| !policy.fetch_directive_allows(&CspDirective::ConnectSrc, url, self_origin.as_ref()))
         {
             return Err(Error::CspConnectSrcBlocked {
                 blocked_uri: url.to_string(),
@@ -4461,8 +4472,10 @@ impl HttpClient {
     /// checked against [`Self::worker_src_policy`] and `CspDirective::WorkerSrc`
     /// instead.
     fn worker_src_gate(&self, url: &Url) -> Result<()> {
-        if let Some((policy, self_origin, original_policy)) = &self.worker_src_policy
-            && !policy.fetch_directive_allows_via_child_src(&CspDirective::WorkerSrc, url, self_origin.as_ref())
+        if let Some((policies, self_origin, original_policy)) = &self.worker_src_policy
+            && policies.iter().any(|policy| {
+                !policy.fetch_directive_allows_via_child_src(&CspDirective::WorkerSrc, url, self_origin.as_ref())
+            })
         {
             return Err(Error::CspWorkerSrcBlocked {
                 blocked_uri: url.to_string(),
@@ -4476,8 +4489,10 @@ impl HttpClient {
     /// (GAP-CSPENF срез 16) — same shape as [`Self::worker_src_gate`], checked
     /// against [`Self::object_src_policy`] and `CspDirective::ObjectSrc` instead.
     fn object_src_gate(&self, url: &Url) -> Result<()> {
-        if let Some((policy, self_origin, original_policy)) = &self.object_src_policy
-            && !policy.fetch_directive_allows(&CspDirective::ObjectSrc, url, self_origin.as_ref())
+        if let Some((policies, self_origin, original_policy)) = &self.object_src_policy
+            && policies
+                .iter()
+                .any(|policy| !policy.fetch_directive_allows(&CspDirective::ObjectSrc, url, self_origin.as_ref()))
         {
             return Err(Error::CspObjectSrcBlocked {
                 blocked_uri: url.to_string(),
@@ -4491,8 +4506,10 @@ impl HttpClient {
     /// (GAP-CSPENF срез 17) — same shape as [`Self::object_src_gate`], checked
     /// against [`Self::media_src_policy`] and `CspDirective::MediaSrc` instead.
     fn media_src_gate(&self, url: &Url) -> Result<()> {
-        if let Some((policy, self_origin, original_policy)) = &self.media_src_policy
-            && !policy.fetch_directive_allows(&CspDirective::MediaSrc, url, self_origin.as_ref())
+        if let Some((policies, self_origin, original_policy)) = &self.media_src_policy
+            && policies
+                .iter()
+                .any(|policy| !policy.fetch_directive_allows(&CspDirective::MediaSrc, url, self_origin.as_ref()))
         {
             return Err(Error::CspMediaSrcBlocked {
                 blocked_uri: url.to_string(),
@@ -4780,8 +4797,10 @@ impl JsWebSocketProvider for HttpClient {
         // `fetch_request_impl` (срез 10) checks before any socket work — a
         // WebSocket handshake is a `connect-src`-gated fetch (CSP3 §6.7.2) just
         // like `fetch()`/XHR, it just does not share their call path.
-        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
-            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &parsed, self_origin.as_ref())
+        if let Some((policies, self_origin, original_policy)) = &self.connect_src_policy
+            && policies
+                .iter()
+                .any(|policy| !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &parsed, self_origin.as_ref()))
         {
             return Err(Error::CspConnectSrcBlocked {
                 blocked_uri: parsed.to_string(),
@@ -4927,8 +4946,10 @@ impl JsSseProvider for HttpClient {
         // GAP-CSPENF срез 11: same `connect_src_policy` gate as `connect()`
         // above (WebSocket) — `EventSource` is `connect-src`-gated per CSP3
         // §6.7.2 and shares the same `HttpClient`-owned policy slot.
-        if let Some((policy, self_origin, original_policy)) = &self.connect_src_policy
-            && !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &parsed, self_origin.as_ref())
+        if let Some((policies, self_origin, original_policy)) = &self.connect_src_policy
+            && policies
+                .iter()
+                .any(|policy| !policy.fetch_directive_allows(&CspDirective::ConnectSrc, &parsed, self_origin.as_ref()))
         {
             return Err(Error::CspConnectSrcBlocked {
                 blocked_uri: parsed.to_string(),
@@ -5681,7 +5702,7 @@ mod tests {
         // the gate really runs first.
         let policy = csp::parse_csp_header("connect-src 'none'");
         let client = HttpClient::new().with_connect_src_policy(
-            policy,
+            vec![policy],
             None,
             "connect-src 'none'".to_owned(),
         );
@@ -5732,6 +5753,38 @@ mod tests {
         assert!(!matches!(result, Err(Error::CspConnectSrcBlocked { .. })));
     }
 
+    #[test]
+    fn connect_src_strict_policy_is_not_loosened_by_a_lenient_one() {
+        // GAP-CSPENF срез 42: `with_connect_src_policy` now takes every policy
+        // in force for the document (response header + each `<meta>`, CSP3
+        // §3.4), not one merged `CspPolicy` — a lenient later policy must not
+        // loosen a strict earlier one. Mirrors
+        // `csp_enforce::strict_header_is_not_loosened_by_a_lenient_meta_policy`
+        // (срез 40), one layer down at the `HttpClient` gate.
+        let strict = csp::parse_csp_header("connect-src 'none'");
+        let lenient = csp::parse_csp_header("connect-src example.com");
+        let client = HttpClient::new().with_connect_src_policy(
+            vec![strict, lenient],
+            None,
+            "connect-src 'none'; connect-src example.com".to_owned(),
+        );
+        let result = client.fetch_request(&lumen_core::ext::JsFetchRequest {
+            url: "https://example.com/",
+            method: "GET",
+            headers: &[],
+            body: None,
+            token: None,
+        });
+        match result {
+            Err(Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, "https://example.com/");
+                assert_eq!(original_policy, "connect-src 'none'; connect-src example.com");
+            }
+            Ok(_) => panic!("expected CspConnectSrcBlocked, got Ok"),
+            Err(other) => panic!("expected CspConnectSrcBlocked, got {other}"),
+        }
+    }
+
     // ── GAP-CSPENF срез 11: connect-src против WebSocket/EventSource ─────────
 
     #[test]
@@ -5741,7 +5794,7 @@ mod tests {
         // the gate in `JsWebSocketProvider::connect` really runs first.
         let policy = csp::parse_csp_header("connect-src 'none'");
         let client = HttpClient::new().with_connect_src_policy(
-            policy,
+            vec![policy],
             None,
             "connect-src 'none'".to_owned(),
         );
@@ -5761,7 +5814,7 @@ mod tests {
     fn connect_src_none_blocks_event_source_before_any_handshake() {
         let policy = csp::parse_csp_header("connect-src 'none'");
         let client = HttpClient::new().with_connect_src_policy(
-            policy,
+            vec![policy],
             None,
             "connect-src 'none'".to_owned(),
         );
@@ -5803,7 +5856,7 @@ mod tests {
         // this asserts the gate answers from the parsed URL and policy alone.
         let policy = csp::parse_csp_header("connect-src 'none'");
         let client = HttpClient::new().with_connect_src_policy(
-            policy,
+            vec![policy],
             None,
             "connect-src 'none'".to_owned(),
         );
@@ -5825,7 +5878,7 @@ mod tests {
     fn connect_src_allowed_host_passes_beacon_check() {
         let policy = csp::parse_csp_header("connect-src example.com");
         let client = HttpClient::new().with_connect_src_policy(
-            policy,
+            vec![policy],
             None,
             "connect-src example.com".to_owned(),
         );
@@ -5858,7 +5911,7 @@ mod tests {
         // `connect_src_none_blocks_beacon_check_before_any_thread_is_spawned`.
         let policy = csp::parse_csp_header("worker-src 'none'");
         let client = HttpClient::new().with_worker_src_policy(
-            policy,
+            vec![policy],
             None,
             "worker-src 'none'".to_owned(),
         );
@@ -5880,7 +5933,7 @@ mod tests {
     fn worker_src_allowed_host_passes_check() {
         let policy = csp::parse_csp_header("worker-src example.com");
         let client = HttpClient::new().with_worker_src_policy(
-            policy,
+            vec![policy],
             None,
             "worker-src example.com".to_owned(),
         );
@@ -5899,7 +5952,7 @@ mod tests {
         // this case never touches it since it is also absent).
         let policy = csp::parse_csp_header("default-src 'none'");
         let client = HttpClient::new().with_worker_src_policy(
-            policy,
+            vec![policy],
             None,
             "default-src 'none'".to_owned(),
         );
@@ -5918,7 +5971,7 @@ mod tests {
     fn worker_src_falls_back_to_child_src_before_default_src() {
         let policy = csp::parse_csp_header("default-src 'none'; child-src example.com");
         let client = HttpClient::new().with_worker_src_policy(
-            policy,
+            vec![policy],
             None,
             "default-src 'none'; child-src example.com".to_owned(),
         );
@@ -5954,7 +6007,7 @@ mod tests {
         // parse errors" rule (срезы 4/6/7), expressed at this layer's contract.
         let policy = csp::parse_csp_header("worker-src 'none'");
         let client = HttpClient::new().with_worker_src_policy(
-            policy,
+            vec![policy],
             None,
             "worker-src 'none'".to_owned(),
         );
@@ -5974,7 +6027,7 @@ mod tests {
         // call — mirrors `worker_src_none_blocks_check_before_any_network_io`.
         let policy = csp::parse_csp_header("object-src 'none'");
         let client = HttpClient::new().with_object_src_policy(
-            policy,
+            vec![policy],
             None,
             "object-src 'none'".to_owned(),
         );
@@ -5996,7 +6049,7 @@ mod tests {
     fn object_src_allowed_host_passes_check() {
         let policy = csp::parse_csp_header("object-src example.com");
         let client = HttpClient::new().with_object_src_policy(
-            policy,
+            vec![policy],
             None,
             "object-src example.com".to_owned(),
         );
@@ -6014,7 +6067,7 @@ mod tests {
         // no new fallback logic was added for `CspDirective::ObjectSrc`.
         let policy = csp::parse_csp_header("default-src 'none'");
         let client = HttpClient::new().with_object_src_policy(
-            policy,
+            vec![policy],
             None,
             "default-src 'none'".to_owned(),
         );
@@ -6048,7 +6101,7 @@ mod tests {
         // instead. Mirrors `worker_src_unparseable_url_not_blocked`.
         let policy = csp::parse_csp_header("object-src 'none'");
         let client = HttpClient::new().with_object_src_policy(
-            policy,
+            vec![policy],
             None,
             "object-src 'none'".to_owned(),
         );
@@ -6069,7 +6122,7 @@ mod tests {
         // `object_src_none_blocks_check_before_any_network_io`.
         let policy = csp::parse_csp_header("media-src 'none'");
         let client = HttpClient::new().with_media_src_policy(
-            policy,
+            vec![policy],
             None,
             "media-src 'none'".to_owned(),
         );
@@ -6091,7 +6144,7 @@ mod tests {
     fn media_src_allowed_host_passes_check() {
         let policy = csp::parse_csp_header("media-src example.com");
         let client = HttpClient::new().with_media_src_policy(
-            policy,
+            vec![policy],
             None,
             "media-src example.com".to_owned(),
         );
@@ -6109,7 +6162,7 @@ mod tests {
         // new fallback logic was added for `CspDirective::MediaSrc`.
         let policy = csp::parse_csp_header("default-src 'none'");
         let client = HttpClient::new().with_media_src_policy(
-            policy,
+            vec![policy],
             None,
             "default-src 'none'".to_owned(),
         );
@@ -6143,7 +6196,7 @@ mod tests {
         // `object_src_unparseable_url_not_blocked`.
         let policy = csp::parse_csp_header("media-src 'none'");
         let client = HttpClient::new().with_media_src_policy(
-            policy,
+            vec![policy],
             None,
             "media-src 'none'".to_owned(),
         );
