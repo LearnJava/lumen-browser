@@ -872,6 +872,65 @@ impl Lumen {
             Arc::new(lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar reset"));
     }
 
+    /// BUG-934: the CC-5 chrome hit-test + `data-action` dispatch (originally
+    /// inline in `on_mouse_input`'s `Pressed` branch), shared with automation
+    /// clicks (`Lumen::handle_automation_click`) so `AutomationCommand::Click`/
+    /// `::Type` reach engine-drawn chrome (toolbar, tab strip, sidebar, …)
+    /// exactly like a real mouse click does, instead of always falling through
+    /// to page hit-testing.
+    ///
+    /// Safe to share as-is: this whole branch dispatches the chrome action
+    /// synchronously on press — unlike page clicks, it has no matching
+    /// `ElementState::Released` bookkeeping to miss (see BUG-934's "why not a
+    /// quick point-fix" for why the *page* click path can't be shared this
+    /// way).
+    ///
+    /// Returns `true` when `(x_css, y_css)` was over chrome (handled here,
+    /// however the hit-test itself resolved) — `false` means the caller
+    /// should fall through to page hit-testing.
+    pub(crate) fn try_dispatch_chrome_click(
+        &mut self,
+        x_css: f32,
+        y_css: f32,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) -> bool {
+        if !self.point_over_chrome(x_css, y_css) {
+            return false;
+        }
+        let hit = self.chrome_hit_test(x_css, y_css);
+        self.chrome_active_nid = hit.as_ref().map(|r| r.node);
+        self.relayout_chrome_host();
+        if let Some(hit) = hit {
+            // CC-7: `.omnibox`/`#omniInput` carries no `data-action` (nothing
+            // to translate an `onfocus` handler from — the frozen design
+            // reference has none either, see CC-7 in
+            // docs/tasks/p1-css-chrome.md) — special-cased here exactly like
+            // the legacy `toolbar::ToolbarHit::Omnibox` branch it mirrors: a
+            // no-op while already open so an in-progress edit/dropdown
+            // selection isn't reset.
+            let omni_input = self
+                .chrome_doc
+                .as_ref()
+                .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
+            if omni_input.is_some_and(|id| hit.path.contains(&id)) {
+                if !self.address_bar.is_open() {
+                    self.hint.close();
+                    let current = self.current_display_url().to_owned();
+                    self.address_bar.open(&current);
+                    // CC-7: the relayout above ran before `open()` — redo it
+                    // so the `:focus-within` ring/caret show on this same
+                    // click, not one input later (see the matching comment
+                    // in `Self::handle_address_bar_key`).
+                    self.relayout_chrome_host();
+                }
+            } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
+                self.dispatch_chrome_action(nid, action, event_loop);
+            }
+        }
+        self.request_redraw();
+        true
+    }
+
     pub(crate) fn dispatch_chrome_action(
         &mut self,
         nid: NodeId,

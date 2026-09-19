@@ -240,7 +240,7 @@ impl Lumen {
     /// `@history <query>` → FTS5-поиск по истории страниц.
     /// `@notes <query>` → FTS5-поиск по заметкам (§12.2).
     /// Обычный ввод → prefix-match по search_history + FTS5.
-    fn query_omnibox_suggestions(&self) -> Vec<address_bar::OmniboxSuggestion> {
+    pub(crate) fn query_omnibox_suggestions(&self) -> Vec<address_bar::OmniboxSuggestion> {
         use address_bar::{OmniboxPrefix, OmniboxSuggestion, parse_omnibox_prefix};
 
         let input = self.address_bar.input();

@@ -330,42 +330,11 @@ impl Lumen {
             // it — those stay positioned within the page-content rect)
             // is left unhandled here and falls through unchanged to the
             // panel checks below.
-            if self.point_over_chrome(x_css, y_css) {
-                let hit = self.chrome_hit_test(x_css, y_css);
-                self.chrome_active_nid = hit.as_ref().map(|r| r.node);
-                self.relayout_chrome_host();
-                if let Some(hit) = hit {
-                    // CC-7: `.omnibox`/`#omniInput` carries no
-                    // `data-action` (nothing to translate an
-                    // `onfocus` handler from — the frozen design
-                    // reference has none either, see CC-7 in
-                    // docs/tasks/p1-css-chrome.md) — special-cased
-                    // here exactly like the legacy
-                    // `toolbar::ToolbarHit::Omnibox` branch it
-                    // mirrors: a no-op while already open so an
-                    // in-progress edit/dropdown selection isn't reset.
-                    let omni_input = self
-                        .chrome_doc
-                        .as_ref()
-                        .and_then(|(doc, _)| doc.find_by_id(lumen_chrome::ids::OMNI_INPUT));
-                    if omni_input.is_some_and(|id| hit.path.contains(&id)) {
-                        if !self.address_bar.is_open() {
-                            self.hint.close();
-                            let current = self.current_display_url().to_owned();
-                            self.address_bar.open(&current);
-                            // CC-7: the relayout above ran before
-                            // `open()` — redo it so the
-                            // `:focus-within` ring/caret show on
-                            // this same click, not one input
-                            // later (see the matching comment in
-                            // `Self::handle_address_bar_key`).
-                            self.relayout_chrome_host();
-                        }
-                    } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
-                        self.dispatch_chrome_action(nid, action, event_loop);
-                    }
-                }
-                self.request_redraw();
+            // BUG-934: dispatch now shared with automation clicks via
+            // `try_dispatch_chrome_click` — see its doc comment for why this
+            // synchronous-on-press branch can be shared without a matching
+            // `Released`-side counterpart.
+            if self.try_dispatch_chrome_click(x_css, y_css, event_loop) {
                 return;
             }
             // CC-15-3: the legacy tab-bar/toolbar left-click dispatch

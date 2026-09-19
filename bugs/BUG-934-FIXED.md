@@ -1,11 +1,52 @@
 # BUG-934 — automation `Click`/`Type` never resolve into engine chrome (toolbar, tabs, sidebar), only into page content
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-20 (P3)
 **Компонент:** shell (`crates/shell/src/lumen/automation.rs::resolve_automation_target`,
-`crates/shell/src/lumen/click.rs::handle_click_at`/`handle_click_at_inner`)
+`crates/shell/src/lumen/click.rs::handle_click_at`/`handle_click_at_inner`,
+`crates/shell/src/chrome_ui.rs::try_dispatch_chrome_click`)
 **Заведён:** 2026-09-01 (P3), при срезе 53 BUG-405 — остаток срезов 51/52
 ("автоматизационный пробел... остаётся незаведённым отдельным тикетом")
 оформлен отдельной записью, как и было запланировано.
+
+## Исправление 2026-09-20 (P3)
+
+Точечный фикс без правки `handle_click_at_inner` (страничного пути — он
+остался нетронутым). Блок «CC-5 chrome hit-test + `data-action` dispatch»,
+раньше живший только внутри `on_mouse_input`'s `ElementState::Pressed`-ветки
+(`mouse_input.rs:333-370`), вынесен как есть в новый общий метод
+`Lumen::try_dispatch_chrome_click(x_css, y_css, event_loop) -> bool`
+(`chrome_ui.rs`) — `point_over_chrome` → `chrome_hit_test` →
+omnibox-спецкейс/`chrome_action_at`+`dispatch_chrome_action`, возвращает
+`true`, когда точка была над chrome (обработана здесь). `mouse_input.rs`
+теперь просто зовёт его и возвращает при `true` — поведение реального мышиного
+клика байт-в-байт то же, что было (тот же код, тот же порядок вызовов).
+
+Шаринг с automation безопасен именно потому, что весь этот блок диспатчит
+chrome-действие СИНХРОННО на press — секция «Why not a quick point-fix» ниже
+верна для `handle_click_at_inner` (страничного press/release-состояния), но
+не относится к chrome-ветке: там нет парного `Released`-хвоста, который
+нужно было бы синтезировать отдельно для одного синтетического
+automation-вызова.
+
+`about_to_wait.rs`: `AutomationCommand::Click`/`::Type` теперь сначала
+пробуют `try_dispatch_chrome_click(resolved.x, resolved.y, event_loop)` —
+при `true` шлют `Ack` и не идут в прежний `automation_hit_mismatch` +
+`handle_click_at` путь (тот остаётся для `Target::Selector`/`Target::NodeId`,
+которые в chrome-документ в принципе не резолвятся, и для `Target::Point` на
+странице). `AutomationCommand::Type` после открытия адресной строки чере
+chrome-клик вводит текст через `address_bar.append_str` +
+`query_omnibox_suggestions` (тот же путь, что `handle_address_bar_key` —
+`query_omnibox_suggestions` расширен с приватного до `pub(crate)`), а не
+через `inject_char`, который адресует только сфокусированный узел страничного
+DOM и ничего не знает про chrome-документ.
+
+Гейт: `cargo clippy --workspace --all-targets -- -D warnings` чист;
+`scripts/scoped-test.sh` — единственный красный таргет
+`-p lumen-driver --test all` (`cases::snapshot_cpu::cpu_snapshots_match_references`,
+BUG-1008 — посторонний дрейф CPU-эталонов, тот же набор из 7 файлов
+(`55-text-rendering`/`57-canvas-2d`/`32-list-markers`/`34-forms`/
+`45-multiple-backgrounds`/`51-scrollbar-rendering`/`1000000-final`), что и на
+`main` до этой правки — не регрессия).
 
 ## Симптом
 
