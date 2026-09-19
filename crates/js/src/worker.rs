@@ -282,7 +282,7 @@ pub(crate) fn resolve_import_url(
     } else if url.starts_with("blob:lumen/") {
         blob_store.lock().unwrap().get(url).cloned()
     } else {
-        fetch_worker_script(fetch_provider, url)
+        fetch_worker_script(fetch_provider, url).map(|(body, _final_url)| body)
     }
 }
 
@@ -1279,7 +1279,10 @@ const WORKER_SHIM: &str = r#"(function() {
       var abs = _url_resolve(u, _lumen_document_base_url());
       var fetched = _lumen_worker_fetch_script(abs);
       script = (typeof fetched === 'string') ? fetched : null;
-      scriptUrl = abs;
+      // BUG-984: `location` inside the worker must report the final URL
+      // after redirects, not the constructor URL the fetch was issued for.
+      scriptUrl = (script !== null && typeof _lumen_worker_fetch_script_url === 'function')
+        ? (_lumen_worker_fetch_script_url() || abs) : abs;
     }
 
     this._onmessage = null;
@@ -1516,6 +1519,11 @@ pub(crate) fn install_worker_bindings_v8(
     // (срезы 10/12), valid because a classic `new Worker(url)` fetches its
     // script synchronously and one at a time from the JS thread.
     let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    // BUG-984: single-slot side channel carrying the final URL (after
+    // redirects) of the last `_lumen_worker_fetch_script` success, read by
+    // `_lumen_worker_fetch_script_url` right after — same one-slot shape and
+    // justification as `last_csp_block` above.
+    let last_fetch_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     // _lumen_create_worker(script: String, script_url: String, is_module: bool) → u32
     //
     // `script_url` is the worker's own resolved script URL (the opaque URL
@@ -1566,6 +1574,7 @@ pub(crate) fn install_worker_bindings_v8(
     {
         let fp = fetch_provider.clone();
         let lcb = Arc::clone(&last_csp_block);
+        let lfu = Arc::clone(&last_fetch_url);
         rt.register_native(
             "_lumen_worker_fetch_script",
             into_v8_fn1(move |url: String| -> Option<String> {
@@ -1578,7 +1587,25 @@ pub(crate) fn install_worker_bindings_v8(
                     *lcb.lock().unwrap() = Some((blocked_uri, original_policy));
                     return None;
                 }
-                fetch_worker_script(fp.as_deref(), &url)
+                let (body, final_url) = fetch_worker_script(fp.as_deref(), &url)?;
+                *lfu.lock().unwrap() = Some(final_url);
+                Some(body)
+            }),
+        )?;
+    }
+
+    // _lumen_worker_fetch_script_url() → String
+    //
+    // Read (and clear) the final URL (BUG-984) stashed by the last successful
+    // `_lumen_worker_fetch_script` call — the classic-script sibling of
+    // `_lumen_worker_last_csp_block`'s read-and-clear contract. Empty string
+    // when nothing was fetched yet.
+    {
+        let lfu = Arc::clone(&last_fetch_url);
+        rt.register_native(
+            "_lumen_worker_fetch_script_url",
+            into_v8_fn0(move || -> String {
+                lfu.lock().unwrap().take().unwrap_or_default()
             }),
         )?;
     }
@@ -1645,13 +1672,19 @@ pub(crate) fn install_worker_bindings_v8(
 /// Returns `None` when there is no provider, the request fails, or the
 /// response status is not 2xx — the caller (`_lumen_worker_fetch_script`)
 /// surfaces that as `undefined` to JS, which fires `error` on the `Worker`
-/// instead of running an empty script.
-pub(crate) fn fetch_worker_script(provider: Option<&dyn lumen_core::ext::JsFetchProvider>, url: &str) -> Option<String> {
+/// instead of running an empty script. On success, returns `(body, final_url)`
+/// — `final_url` is the URL of the last hop after following redirects
+/// (BUG-984), which the caller uses for the worker's own `location` instead
+/// of the pre-fetch constructor URL.
+pub(crate) fn fetch_worker_script(
+    provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
+    url: &str,
+) -> Option<(String, String)> {
     let resp = provider?.fetch_sync(url, "GET").ok()?;
     if !(200..300).contains(&resp.status) {
         return None;
     }
-    Some(String::from_utf8_lossy(&resp.body).into_owned())
+    Some((String::from_utf8_lossy(&resp.body).into_owned(), resp.url))
 }
 
 /// Perform one synchronous network request for a worker's `fetch()`/
@@ -2911,12 +2944,14 @@ mod tests_v8 {
                     status_text: "OK".into(),
                     headers: vec![],
                     body: body.clone().into_bytes(),
+                    url: url.to_string(),
                 }),
                 None => Ok(lumen_core::ext::JsFetchResult {
                     status: 404,
                     status_text: "Not Found".into(),
                     headers: vec![],
                     body: Vec::new(),
+                    url: url.to_string(),
                 }),
             }
         }

@@ -1889,6 +1889,11 @@ pub struct JsFetchResult {
     pub headers: Vec<(String, String)>,
     /// Decoded response body bytes.
     pub body: Vec<u8>,
+    /// URL of the *final* hop after following every HTTP redirect
+    /// (BUG-984) — equal to the request URL when the request was not
+    /// redirected. Callers must not read the pre-redirect request URL back
+    /// as if it were this value.
+    pub url: String,
 }
 
 /// Request body of a JS-issued request: MIME type plus raw bytes.

@@ -371,7 +371,8 @@ XMLHttpRequest.prototype.send = function(body) {
     function commitResponse() {
         self.status     = _lumen_fetch_get_status();
         self.statusText = _lumen_fetch_get_status_text();
-        self.responseURL = self._url;
+        // BUG-984: the final URL after redirects, not the pre-fetch request URL.
+        self.responseURL = _lumen_fetch_get_url() || self._url;
         self._parseResponseHeaders(_lumen_fetch_get_headers());
 
         self._setReadyState(2); // HEADERS_RECEIVED
@@ -902,7 +903,7 @@ mod tests {
     impl lumen_core::ext::JsFetchProvider for PolicyFetch {
         fn fetch_sync(
             &self,
-            _url: &str,
+            url: &str,
             _method: &str,
         ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
             Ok(lumen_core::ext::JsFetchResult {
@@ -910,11 +911,12 @@ mod tests {
                 status_text: "OK".into(),
                 headers: vec![],
                 body: b"ok".to_vec(),
+                url: url.to_string(),
             })
         }
         fn fetch_with_body_sync(
             &self,
-            _url: &str,
+            url: &str,
             _method: &str,
             _content_type: &str,
             _body: &[u8],
@@ -924,6 +926,7 @@ mod tests {
                 status_text: "OK".into(),
                 headers: vec![],
                 body: b"ok".to_vec(),
+                url: url.to_string(),
             })
         }
         fn document_policy_sync_xhr_disposition(
@@ -936,6 +939,65 @@ mod tests {
         ) -> Option<lumen_core::ext::PolicyDisposition> {
             self.permissions_disposition
         }
+    }
+
+    /// Mock provider standing in for an HTTP redirect: `fetch_with_redirect`
+    /// (`lumen-network`) already follows redirects and reports the final URL
+    /// in `JsFetchResult::url` — this double mimics that by answering with a
+    /// URL different from the one it was asked for.
+    struct RedirectingFetch;
+    impl lumen_core::ext::JsFetchProvider for RedirectingFetch {
+        fn fetch_sync(
+            &self,
+            _url: &str,
+            _method: &str,
+        ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: b"ok".to_vec(),
+                url: "https://example.com/final.txt".into(),
+            })
+        }
+    }
+
+    fn rt_with_redirecting_fetch() -> V8JsRuntime {
+        let r = V8JsRuntime::new().unwrap();
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(RedirectingFetch);
+        r.install_dom(
+            make_doc(),
+            "https://example.com/",
+            Some(p),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        r
+    }
+
+    /// BUG-984: `XMLHttpRequest.responseURL` must report the URL of the
+    /// final hop after an HTTP redirect, not the URL `open()` was called
+    /// with.
+    #[test]
+    fn xhr_response_url_reflects_the_final_url_after_redirect() {
+        let r = rt_with_redirecting_fetch();
+        assert_eq!(
+            r.eval(
+                "var x = new XMLHttpRequest(); \
+                 x.open('GET', '/start.txt', false); \
+                 x.send(); \
+                 x.responseURL"
+            )
+            .unwrap(),
+            JsValue::String("https://example.com/final.txt".into())
+        );
     }
 
     fn rt_with_policy(

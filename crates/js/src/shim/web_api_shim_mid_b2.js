@@ -62,9 +62,12 @@ function _rs_drain_to_bytes(stream) {
 //
 // The shim's own fetch()/Cache code needs two of those slots, so the closure
 // assigns them to pre-declared globals:
-//   _lumen_response_from_fetch_cache(status, statusText, headers, url)
+//   _lumen_response_from_fetch_cache(status, statusText, headers, url, redirected)
 //        — the network-path factory: the body stays in the Rust FetchCache and
-//          is pulled lazily, so large bodies are never copied into JS eagerly;
+//          is pulled lazily, so large bodies are never copied into JS eagerly.
+//          `url` must be the FINAL URL after redirects (BUG-984) — read it
+//          from `_lumen_fetch_get_url()`, not the pre-fetch request URL;
+//
 //   _lumen_body_source(obj)
 //        — the unserialised body a Request/Response was built from. fetch()
 //          needs it because Request.body is now a ReadableStream (Body mixin),
@@ -407,11 +410,12 @@ var Request;
     // it is filled first and only then locked behind the 'response' guard.
     // _lumen_stream_alloc() copies the body out of the single FetchCache slot
     // into a dedicated entry, so later fetch() calls cannot clobber this body.
-    _lumen_response_from_fetch_cache = function(status, statusText, headers, url) {
+    _lumen_response_from_fetch_cache = function(status, statusText, headers, url, redirected) {
         var st = responseSlots(_lumen_headers_set_guard(new Headers(headers), 'response'));
         st.status = status;
         st.statusText = statusText;
         st.url = url;
+        st.redirected = !!redirected;
         st.bytes = null; // consumed via the stream slot
         st.fromFetchCache = true;
         var r = rawResponse(st);
@@ -1156,6 +1160,7 @@ function _lumen_fetch(input) {
                         var astatus = _lumen_fetch_get_status();
                         var astatusText = _lumen_fetch_get_status_text();
                         var arawHeaders = _lumen_fetch_get_headers();
+                        var afinalUrl = _lumen_fetch_get_url() || url;
                         if (integrity && !_lumen_check_sri_integrity(integrity)) {
                             reject(new TypeError('fetch: SRI integrity check failed for ' + url));
                             return;
@@ -1163,7 +1168,7 @@ function _lumen_fetch(input) {
                         var ahdrs = [];
                         for (var i = 0; i + 1 < arawHeaders.length; i += 2) { ahdrs.push([arawHeaders[i], arawHeaders[i + 1]]); }
                         _perf_rt_record_fetch(url, _rtInitiator, _rtStart, astatus);
-                        resolve(_lumen_response_from_fetch_cache(astatus, astatusText, ahdrs, url));
+                        resolve(_lumen_response_from_fetch_cache(astatus, astatusText, ahdrs, afinalUrl, afinalUrl !== url));
                     });
                 }
                 setTimeout(poll, 0);
@@ -1196,6 +1201,7 @@ function _lumen_fetch(input) {
         var status = _lumen_fetch_get_status();
         var statusText = _lumen_fetch_get_status_text();
         var rawHeaders = _lumen_fetch_get_headers();
+        var finalUrl = _lumen_fetch_get_url() || url;
         // SRI integrity check (W3C SRI §3.3.5): verify body hash before exposing response.
         // _lumen_check_sri_integrity reads directly from Rust FetchCache — no JS copy needed.
         if (integrity && !_lumen_check_sri_integrity(integrity)) {
@@ -1208,7 +1214,7 @@ function _lumen_fetch(input) {
         _perf_rt_record_fetch(url, _rtInitiator, _rtStart, status);
         // Use lazy Rust-side chunk reading: body stays in Rust FetchCache until consumed.
         // This avoids copying large response bodies into JS memory at response construction.
-        return Promise.resolve(_lumen_response_from_fetch_cache(status, statusText, hdrs, url));
+        return Promise.resolve(_lumen_response_from_fetch_cache(status, statusText, hdrs, finalUrl, finalUrl !== url));
     } catch(e) {
         return Promise.reject(e);
     }

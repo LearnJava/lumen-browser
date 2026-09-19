@@ -388,7 +388,12 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
     // body synchronously (previously never hit the network at all).
     var abs = _url_resolve(u, _lumen_document_base_url());
     var fetched = _lumen_sw_fetch_script(abs);
-    return { script: (typeof fetched === 'string') ? fetched : null, url: abs };
+    var ok = (typeof fetched === 'string');
+    // BUG-984: `location` inside the shared worker must report the final
+    // URL after redirects, not the constructor URL the fetch was issued for.
+    var finalUrl = (ok && typeof _lumen_sw_fetch_script_url === 'function')
+      ? (_lumen_sw_fetch_script_url() || abs) : abs;
+    return { script: ok ? fetched : null, url: finalUrl };
   }
 
   // A port for a SharedWorker whose script failed to fetch: never delivers
@@ -663,6 +668,11 @@ pub(crate) fn install_shared_worker_bindings_v8(
     // `SharedWorker`'s classic script fetch is synchronous and one at a time
     // from the JS thread, same as `Worker`'s.
     let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    // BUG-984: single-slot side channel carrying the final URL (after
+    // redirects) of the last `_lumen_sw_fetch_script` success — same shape
+    // and justification as `worker.rs::install_worker_bindings_v8`'s
+    // `last_fetch_url`.
+    let last_fetch_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     // _lumen_sw_connect(key, script, script_url) → u32
     //
     // `script_url` is the resolved worker script URL (the opaque URL itself
@@ -707,6 +717,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
     {
         let fp = fetch_provider.clone();
         let lcb = Arc::clone(&last_csp_block);
+        let lfu = Arc::clone(&last_fetch_url);
         rt.register_native(
             "_lumen_sw_fetch_script",
             into_v8_fn1(move |url: String| -> Option<String> {
@@ -719,7 +730,23 @@ pub(crate) fn install_shared_worker_bindings_v8(
                     *lcb.lock().unwrap() = Some((blocked_uri, original_policy));
                     return None;
                 }
-                crate::worker::fetch_worker_script(fp.as_deref(), &url)
+                let (body, final_url) = crate::worker::fetch_worker_script(fp.as_deref(), &url)?;
+                *lfu.lock().unwrap() = Some(final_url);
+                Some(body)
+            }),
+        )?;
+    }
+
+    // _lumen_sw_fetch_script_url() → String
+    //
+    // Read-and-clear contract, same shape as `worker.rs`'s
+    // `_lumen_worker_fetch_script_url` (BUG-984).
+    {
+        let lfu = Arc::clone(&last_fetch_url);
+        rt.register_native(
+            "_lumen_sw_fetch_script_url",
+            into_v8_fn0(move || -> String {
+                lfu.lock().unwrap().take().unwrap_or_default()
             }),
         )?;
     }
@@ -1472,12 +1499,14 @@ mod tests_v8 {
                     status_text: "OK".into(),
                     headers: vec![],
                     body: body.clone().into_bytes(),
+                    url: url.to_string(),
                 }),
                 None => Ok(lumen_core::ext::JsFetchResult {
                     status: 404,
                     status_text: "Not Found".into(),
                     headers: vec![],
                     body: Vec::new(),
+                    url: url.to_string(),
                 }),
             }
         }

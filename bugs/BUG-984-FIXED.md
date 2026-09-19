@@ -1,9 +1,46 @@
 # BUG-984: the final URL after an HTTP redirect never reaches JS — `Response.url`/`.redirected`, `XMLHttpRequest.responseURL` and `WorkerLocation` (dedicated/shared worker) all report the *pre-redirect* request URL
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19 (P3)
 **Дата:** 2026-09-04
 **Компонент:** network (`crates/network/src/lib.rs::HttpClient::fetch_request_impl`) / core (`crates/core/src/ext.rs::JsFetchResult`) / js (`crates/js/src/xhr.rs`, `crates/js/src/worker.rs::fetch_worker_script`, `crates/js/src/shim/web_api_shim_mid_b.js::_lumen_fetch`)
 **Найден:** P2, WPT-RUN-6 срез 62, живой пробой (`run_report.py` через реальный `wptrunner`+`wptserve`)
+
+## Исправлено (P3, 2026-09-19)
+
+`JsFetchResult` (`crates/core/src/ext.rs`) получил поле `url` — конечный URL
+после редиректов. `fetch_request_impl` (`crates/network/src/lib.rs`) больше не
+отбрасывает `final_url` из `fetch_with_redirect`, а кладёт его в это поле.
+
+Три читателя переведены на новое поле:
+
+- `Response.url`/`.redirected` — `_lumen_response_from_fetch_cache`
+  (`web_api_shim_mid_b2.js`) принял параметр `redirected` и читает финальный
+  URL через новый нативный биндинг `_lumen_fetch_get_url()`; `FetchCache` и
+  `AsyncOutcome::Ok` (`v8_runtime/install/net.rs`) пронесли `url` через все
+  четыре fetch-моста (sync / sync-with-body / cancellable ×2 / async).
+- `XMLHttpRequest.responseURL` — `xhr.rs::commitResponse` читает
+  `_lumen_fetch_get_url()` вместо `self._url`.
+- `WorkerLocation` (dedicated и shared worker) — `fetch_worker_script`
+  теперь возвращает `(body, final_url)`; финальный URL прокинут через
+  одно-слотовый side-channel (`_lumen_worker_fetch_script_url` /
+  `_lumen_sw_fetch_script_url`, по образцу уже существующего
+  `last_csp_block`) в конструктор `scriptUrl`, которым построен `location`.
+
+Регресс-тесты: 4 в `lumen-js`
+(`fetch_response_url_and_redirected_reflect_the_final_url_after_redirect`,
+`xhr_response_url_reflects_the_final_url_after_redirect`,
+`worker_external_url_redirect_updates_its_own_location`,
+`shared_worker_external_url_redirect_updates_its_own_location`) + 1 в
+`lumen-network` (`js_fetch_sync_reports_final_url_after_redirect`, тот же
+`mock_http_server`-харнесс, что и `fetch_page_reports_final_url_after_redirect`).
+
+`cargo clippy --workspace --all-targets -- -D warnings` чист. `scoped-test.sh`
+завис на предсуществующем [BUG-1060](BUG-1060-OPEN.md) (`lumen-layout`);
+адресно `cargo test -p lumen-core -p lumen-network -p lumen-js` зелёный;
+`cargo test -p lumen-driver --test all` — единственный красный
+`cpu_snapshots_match_references`, тот же 7-файловый предсуществующий дрейф,
+что и [BUG-1008](BUG-1008-OPEN.md) (эта задача не трогает
+paint/layout/display-list).
 
 ## Механизм
 

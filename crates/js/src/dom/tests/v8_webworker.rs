@@ -256,7 +256,7 @@ struct FixedFetch {
 impl lumen_core::ext::JsFetchProvider for FixedFetch {
     fn fetch_sync(
         &self,
-        _url: &str,
+        url: &str,
         _method: &str,
     ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         Ok(lumen_core::ext::JsFetchResult {
@@ -264,6 +264,31 @@ impl lumen_core::ext::JsFetchProvider for FixedFetch {
             status_text: "".into(),
             headers: vec![],
             body: self.body.as_bytes().to_vec(),
+            url: url.to_string(),
+        })
+    }
+}
+
+/// Mock provider standing in for an HTTP redirect: `fetch_with_redirect`
+/// (`lumen-network`) already follows redirects and reports the final URL in
+/// `JsFetchResult::url` — this double mimics that by answering with a URL
+/// different from the one it was asked for.
+struct RedirectingScriptFetch {
+    body: &'static str,
+    final_url: &'static str,
+}
+impl lumen_core::ext::JsFetchProvider for RedirectingScriptFetch {
+    fn fetch_sync(
+        &self,
+        _url: &str,
+        _method: &str,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "".into(),
+            headers: vec![],
+            body: self.body.as_bytes().to_vec(),
+            url: self.final_url.to_string(),
         })
     }
 }
@@ -753,6 +778,28 @@ fn worker_external_url_fetches_and_runs_script() {
     assert_eq!(result, lumen_core::JsValue::String("remote".into()));
 }
 
+/// BUG-984: a classic `Worker`'s own `location` must report the final URL
+/// after redirects, not the constructor URL the script was fetched from.
+#[test]
+fn worker_external_url_redirect_updates_its_own_location() {
+    use std::time::Duration;
+    let provider = Arc::new(RedirectingScriptFetch {
+        body: "postMessage(location.href);",
+        final_url: "https://example.com/final.js",
+    });
+    let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+    rt.eval(
+        "var w = new Worker('https://example.com/start.js'); \
+                 var got = null; \
+                 w.onmessage = function(e){ got = e.data; };",
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    rt.pump_workers();
+    let result = rt.eval("got").unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("https://example.com/final.js".into()));
+}
+
 #[test]
 fn worker_external_url_fetch_failure_fires_onerror() {
     let provider = Arc::new(FixedFetch { status: 404, body: "not found" });
@@ -794,6 +841,29 @@ fn shared_worker_external_url_connects_and_echoes() {
     rt.pump_shared_workers();
     let result = rt.eval("got").unwrap();
     assert_eq!(result, lumen_core::JsValue::Number(42.0));
+}
+
+/// BUG-984: the exact case measured in the bug report — a `SharedWorker`'s
+/// own `location` must report the final URL after redirects, not the
+/// constructor URL the script was fetched from.
+#[test]
+fn shared_worker_external_url_redirect_updates_its_own_location() {
+    use std::time::Duration;
+    let provider = Arc::new(RedirectingScriptFetch {
+        body: "onconnect = function(e){ e.ports[0].postMessage(location.href); };",
+        final_url: "https://example.com/final-sw.js",
+    });
+    let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+    rt.eval(
+        "var sw = new SharedWorker('https://example.com/start-sw.js'); \
+                 var got = null; \
+                 sw.port.onmessage = function(e){ got = e.data; };",
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    rt.pump_shared_workers();
+    let result = rt.eval("got").unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("https://example.com/final-sw.js".into()));
 }
 
 #[test]

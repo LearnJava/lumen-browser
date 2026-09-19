@@ -634,7 +634,7 @@ struct SlowFetch {
 impl lumen_core::ext::JsFetchProvider for SlowFetch {
     fn fetch_sync(
         &self,
-        _url: &str,
+        url: &str,
         _method: &str,
     ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         std::thread::sleep(std::time::Duration::from_millis(SLOW_FETCH_MS));
@@ -643,6 +643,7 @@ impl lumen_core::ext::JsFetchProvider for SlowFetch {
             status_text: "OK".into(),
             headers: vec![],
             body: self.body.clone(),
+            url: url.to_string(),
         })
     }
 

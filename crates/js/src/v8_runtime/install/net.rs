@@ -342,6 +342,10 @@ pub(crate) fn install_fetch(
             status_text: String,
             headers: Vec<String>, // flat: [name, value, name, value, ...]
             body: Vec<u8>,
+            // BUG-984: URL of the final hop after following redirects — the
+            // shim's `Response.url`/`.redirected` must read this back, not
+            // the pre-redirect request URL.
+            url: String,
         }
 
         let cache: Arc<Mutex<Option<FetchCache>>> = Arc::new(Mutex::new(None));
@@ -387,6 +391,7 @@ pub(crate) fn install_fetch(
                         status_text: resp.status_text,
                         headers: flat,
                         body: resp.body,
+                        url: resp.url,
                     });
                     true
                 }
@@ -415,6 +420,16 @@ pub(crate) fn install_fetch(
                 .unwrap()
                 .as_ref()
                 .map_or_else(String::new, |r| r.status_text.clone())
+        });
+
+        // _lumen_fetch_get_url() → the final URL after following redirects
+        // (BUG-984). Empty when no response is cached.
+        let c = Arc::clone(&cache);
+        reg!(scope, ctx, store, "_lumen_fetch_get_url", move || -> String {
+            c.lock()
+                .unwrap()
+                .as_ref()
+                .map_or_else(String::new, |r| r.url.clone())
         });
 
         let c = Arc::clone(&cache);
@@ -509,6 +524,7 @@ pub(crate) fn install_fetch(
                                 status_text: resp.status_text,
                                 headers: flat,
                                 body: resp.body,
+                                url: resp.url,
                             });
                             true
                         }
@@ -598,6 +614,7 @@ pub(crate) fn install_fetch(
                         status_text: resp.status_text,
                         headers: flat,
                         body: resp.body,
+                        url: resp.url,
                     });
                     0
                 }
@@ -644,6 +661,7 @@ pub(crate) fn install_fetch(
                             status_text: resp.status_text,
                             headers: flat,
                             body: resp.body,
+                            url: resp.url,
                         });
                         0
                     }
@@ -672,6 +690,7 @@ pub(crate) fn install_fetch(
                     status_text: String,
                     headers: Vec<String>,
                     body: Vec<u8>,
+                    url: String,
                 },
                 /// Network/transport error.
                 NetError,
@@ -729,6 +748,7 @@ pub(crate) fn install_fetch(
                                     .flat_map(|(k, v)| [k, v])
                                     .collect(),
                                 body: r.body,
+                                url: r.url,
                             },
                             Err(lumen_core::error::Error::Aborted(_)) => AsyncOutcome::Aborted,
                             Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
@@ -791,12 +811,13 @@ pub(crate) fn install_fetch(
                 match map.get_mut(&id) {
                     None => false,
                     Some(s) => match s.outcome.take() {
-                        Some(AsyncOutcome::Ok { status, status_text, headers, body }) => {
+                        Some(AsyncOutcome::Ok { status, status_text, headers, body, url }) => {
                             *c_async.lock().unwrap() = Some(FetchCache {
                                 status,
                                 status_text,
                                 headers,
                                 body,
+                                url,
                             });
                             true
                         }
