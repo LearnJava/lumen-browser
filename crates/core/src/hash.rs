@@ -226,6 +226,35 @@ pub fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Декодировать Base64 по RFC 4648 §4 (стандартный alphabet, опциональный
+/// `=`-padding, whitespace внутри запрещён). `None` при невалидном символе.
+#[must_use]
+pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim_end_matches('=');
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &b in bytes {
+        let v = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 /// `base64_encode(&sha1(key + WS_GUID))` — WebSocket Sec-WebSocket-Accept (RFC 6455 §4.1).
 pub const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -319,6 +348,29 @@ mod tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_decode_rfc4648_test_vectors() {
+        assert_eq!(base64_decode(""), Some(b"".to_vec()));
+        assert_eq!(base64_decode("Zg=="), Some(b"f".to_vec()));
+        assert_eq!(base64_decode("Zm8="), Some(b"fo".to_vec()));
+        assert_eq!(base64_decode("Zm9v"), Some(b"foo".to_vec()));
+        assert_eq!(base64_decode("Zm9vYg=="), Some(b"foob".to_vec()));
+        assert_eq!(base64_decode("Zm9vYmE="), Some(b"fooba".to_vec()));
+        assert_eq!(base64_decode("Zm9vYmFy"), Some(b"foobar".to_vec()));
+    }
+
+    #[test]
+    fn base64_decode_no_padding() {
+        // RFC 4648 §3.2: padding опционален.
+        assert_eq!(base64_decode("Zm9v"), Some(b"foo".to_vec()));
+    }
+
+    #[test]
+    fn base64_decode_rejects_url_safe_alphabet() {
+        // Стандартный alphabet (`+`/`/`); url-safe (`-`/`_`) не принимается.
+        assert!(base64_decode("ab-c").is_none());
     }
 
     #[test]

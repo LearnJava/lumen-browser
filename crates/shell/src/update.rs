@@ -3,9 +3,11 @@
 //!
 //! `latest.json` is the signed manifest a release publishes at the stable URL
 //! `.../releases/latest/download/latest.json` (chosen over the GitHub API to
-//! avoid its 60 req/h/IP rate limit — see the brief). Signature verification
-//! (UPD-3) and everything downstream (download, apply, UI) are separate
-//! slices.
+//! avoid its 60 req/h/IP rate limit — see the brief). [`apply_check_result`]
+//! rejects a manifest that fails [`verify_manifest`] before it ever reaches
+//! a caller — [`CheckOutcome::Available`] is only ever a signed, trusted
+//! manifest. Everything downstream of that (download, apply, UI) is still
+//! separate slices.
 //!
 //! # Wiring status
 //!
@@ -23,9 +25,8 @@ use serde::{Deserialize, Serialize};
 
 /// The `latest.json` manifest published alongside every GitHub Release.
 ///
-/// `signature` is an ed25519 signature over the canonical JSON body minus this
-/// field itself (verified in UPD-3, not here — this type only parses the
-/// wire format).
+/// `signature` is an ed25519 signature over [`UpdateManifest::signing_body`]
+/// (every field except `signature` itself), checked by [`verify_manifest`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateManifest {
     /// Release version, `x.y.z` — parsed via [`Version::parse`].
@@ -45,10 +46,24 @@ pub struct UpdateManifest {
 pub struct UpdateAsset {
     /// Asset file name as published on the release (e.g. `lumen-windows.zip`).
     pub name: String,
-    /// Hex-encoded SHA-256 of the asset body, checked after download.
+    /// Hex-encoded SHA-256 of the asset body, checked by [`UpdateAsset::verify_body`]
+    /// after download.
     pub sha256: String,
     /// Asset size in bytes.
     pub size: u64,
+}
+
+impl UpdateAsset {
+    /// Whether `body`'s SHA-256 matches [`Self::sha256`] (case-insensitive
+    /// hex). The manifest's signature already protects `sha256` from
+    /// tampering in transit; this is the second half — checking a downloaded
+    /// body actually hashes to what the (now-trusted) manifest claims,
+    /// against corruption or a compromised/wrong download source. Consumed
+    /// by the background download slice (UPD-6), not called anywhere yet.
+    #[must_use]
+    pub fn verify_body(&self, body: &[u8]) -> bool {
+        lumen_core::hash::sha256_hex(body).eq_ignore_ascii_case(&self.sha256)
+    }
 }
 
 impl UpdateManifest {
@@ -122,6 +137,116 @@ pub fn current_version() -> Version {
         minor: 0,
         patch: 0,
     })
+}
+
+// ── Signature verification (UPD-3) ──────────────────────────────────────────
+
+/// Public keys this build trusts to sign an [`UpdateManifest`], keyed by
+/// [`UpdateManifest::key_id`] so a future key rotation *adds* an entry
+/// instead of replacing one — an old client that only knows the retired key
+/// still verifies a manifest signed under it, and once the new key is added
+/// here any manifest signed under either verifies (`docs/tasks/ph3-self-update.md`
+/// §1, §Risks).
+///
+/// Empty until UPD-10 mints the production keypair and wires CI to sign
+/// releases with it. Empty is the correct default for a channel nothing has
+/// signed yet — [`verify_manifest`] rejects every manifest via
+/// [`ManifestVerifyError::UnknownKeyId`] rather than trusting anything.
+pub const TRUSTED_KEYS: &[(&str, [u8; 32])] = &[];
+
+/// Why [`verify_manifest`] rejected a manifest. Distinct from
+/// [`CheckOutcome::Malformed`] (bad JSON) — every variant here means the
+/// bytes parsed fine but the manifest is not attributable to a key this
+/// build trusts, which [`apply_check_result`] treats as a signal to ignore
+/// the response, not merely "no update".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestVerifyError {
+    /// `key_id` names no key in [`TRUSTED_KEYS`] — never issued, or retired
+    /// past this build's rotation window.
+    UnknownKeyId,
+    /// `signature` is not valid base64, or does not decode to exactly the 64
+    /// bytes an ed25519 signature is.
+    MalformedSignature,
+    /// The signature does not verify against [`UpdateManifest::signing_body`]
+    /// under the named key — tampering, corruption in transit, or a
+    /// wrong/compromised key.
+    SignatureMismatch,
+}
+
+impl UpdateManifest {
+    /// The exact bytes [`Self::signature`] is an ed25519 signature over.
+    ///
+    /// A dedicated type ([`SignedFields`]) rather than re-serializing `Self`
+    /// with `signature` blanked out, so a future field added to the wire
+    /// type does not silently start being covered by the signature (or not)
+    /// without a matching, deliberate change here.
+    fn signing_body(&self) -> Vec<u8> {
+        /// Mirrors [`UpdateManifest`] minus `signature` — see
+        /// [`UpdateManifest::signing_body`].
+        #[derive(Serialize)]
+        struct SignedFields<'a> {
+            version: &'a str,
+            assets: &'a [UpdateAsset],
+            key_id: &'a str,
+        }
+        // `serde_json::to_vec` on a plain struct (no `HashMap`) is
+        // deterministic field-order output, which is all a signer and this
+        // verifier sharing this same function need — no general
+        // canonical-JSON scheme required. `unwrap_or_default` never actually
+        // triggers (the fields are all directly serializable), but an empty
+        // body is a safe failure mode: it can never match a real signature.
+        serde_json::to_vec(&SignedFields {
+            version: &self.version,
+            assets: &self.assets,
+            key_id: &self.key_id,
+        })
+        .unwrap_or_default()
+    }
+}
+
+/// Verify `manifest`'s signature against `trusted_keys`.
+///
+/// Split from [`verify_manifest`] (which always uses [`TRUSTED_KEYS`]) so
+/// tests can exercise the actual verification logic — signature decoding,
+/// key lookup, ed25519 check — against a throwaway keypair instead of
+/// needing the real production key embedded here.
+fn verify_manifest_with_keys(
+    manifest: &UpdateManifest,
+    trusted_keys: &[(&str, [u8; 32])],
+) -> Result<(), ManifestVerifyError> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let key_bytes = trusted_keys
+        .iter()
+        .find(|(id, _)| *id == manifest.key_id)
+        .map(|(_, bytes)| *bytes)
+        .ok_or(ManifestVerifyError::UnknownKeyId)?;
+    // A key embedded in `trusted_keys` is a build-time invariant, not
+    // untrusted input reachable independently of `UnknownKeyId` above — the
+    // only way this fails is a malformed entry in the trusted-keys list
+    // itself, which is a programming error, not something a signature check
+    // should distinguish for a caller.
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_bytes) else {
+        return Err(ManifestVerifyError::UnknownKeyId);
+    };
+
+    let sig_bytes = lumen_core::hash::base64_decode(&manifest.signature)
+        .ok_or(ManifestVerifyError::MalformedSignature)?;
+    let sig_bytes: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| ManifestVerifyError::MalformedSignature)?;
+    let signature = Signature::from_bytes(&sig_bytes);
+
+    verifying_key
+        .verify(&manifest.signing_body(), &signature)
+        .map_err(|_| ManifestVerifyError::SignatureMismatch)
+}
+
+/// Verify `manifest`'s signature against [`TRUSTED_KEYS`] — the production
+/// entry point, always called by [`apply_check_result`] before a manifest is
+/// ever exposed as [`CheckOutcome::Available`].
+pub fn verify_manifest(manifest: &UpdateManifest) -> Result<(), ManifestVerifyError> {
+    verify_manifest_with_keys(manifest, TRUSTED_KEYS)
 }
 
 // ── Checker (UPD-2) ─────────────────────────────────────────────────────────
@@ -230,12 +355,33 @@ pub enum CheckOutcome {
     /// Check skipped (opted out or throttled), or ran and found no newer
     /// version (`304`, or `200` with a version that is not newer).
     UpToDate,
-    /// A strictly newer version is available.
+    /// A strictly newer version is available, and its signature verified
+    /// against [`TRUSTED_KEYS`] — this is the only variant a caller may act
+    /// on (e.g. proceed to download).
     Available(UpdateManifest),
     /// The manifest body was fetched but is not valid JSON, or its `version`
-    /// field does not parse — treated as "no update" rather than propagated,
-    /// since the manifest is untrusted network input until UPD-3 verifies it.
+    /// field does not parse.
     Malformed,
+    /// The manifest parsed and claimed a newer version, but failed
+    /// [`verify_manifest`] — unknown `key_id`, malformed signature, or a
+    /// signature that does not match. Never exposes the unverified manifest;
+    /// treated the same as "no update" by callers, distinctly logged by
+    /// [`check_for_update`] so a live attack/corruption attempt is visible.
+    Untrusted(ManifestVerifyError),
+}
+
+/// Apply one conditional-GET outcome to `state` and decide the [`CheckOutcome`],
+/// verifying against [`TRUSTED_KEYS`]. Thin wrapper over
+/// [`apply_check_result_with_keys`] — see that function for the actual logic;
+/// this split exists for the same reason [`verify_manifest`] is split from
+/// [`verify_manifest_with_keys`], so tests can supply a throwaway keypair.
+#[must_use]
+pub fn apply_check_result(
+    state: UpdateState,
+    result: ConditionalFetch,
+    now: i64,
+) -> (UpdateState, CheckOutcome) {
+    apply_check_result_with_keys(state, result, now, TRUSTED_KEYS)
 }
 
 /// Apply one conditional-GET outcome to `state` and decide the [`CheckOutcome`].
@@ -245,11 +391,11 @@ pub enum CheckOutcome {
 /// `adblock::apply_fetch_result`. Always bumps `last_checked_at` to `now`, so
 /// a network error upstream (which never reaches this function) is the only
 /// way a check does not reset the throttle.
-#[must_use]
-pub fn apply_check_result(
+fn apply_check_result_with_keys(
     mut state: UpdateState,
     result: ConditionalFetch,
     now: i64,
+    trusted_keys: &[(&str, [u8; 32])],
 ) -> (UpdateState, CheckOutcome) {
     state.last_checked_at = now;
     match result {
@@ -264,10 +410,12 @@ pub fn apply_check_result(
             let Ok(manifest) = serde_json::from_slice::<UpdateManifest>(&body) else {
                 return (state, CheckOutcome::Malformed);
             };
-            if manifest.is_newer_than(current_version()) {
-                (state, CheckOutcome::Available(manifest))
-            } else {
-                (state, CheckOutcome::UpToDate)
+            if !manifest.is_newer_than(current_version()) {
+                return (state, CheckOutcome::UpToDate);
+            }
+            match verify_manifest_with_keys(&manifest, trusted_keys) {
+                Ok(()) => (state, CheckOutcome::Available(manifest)),
+                Err(e) => (state, CheckOutcome::Untrusted(e)),
             }
         }
     }
@@ -293,7 +441,13 @@ pub fn check_for_update(client: &HttpClient, state: UpdateState) -> (UpdateState
         return (state, CheckOutcome::UpToDate);
     };
     match client.fetch_conditional(&url, state.etag.as_deref(), state.last_modified.as_deref()) {
-        Ok(result) => apply_check_result(state, result, now),
+        Ok(result) => {
+            let (state, outcome) = apply_check_result(state, result, now);
+            if let CheckOutcome::Untrusted(e) = &outcome {
+                eprintln!("update: manifest failed signature verification: {e:?}");
+            }
+            (state, outcome)
+        }
         Err(e) => {
             eprintln!("update: check failed: {e}");
             (state, CheckOutcome::UpToDate)
@@ -428,6 +582,142 @@ mod tests {
         serde_json::to_vec(&sample_manifest(version)).unwrap()
     }
 
+    // ── Signature verification (UPD-3) ───────────────────────────────────────
+
+    /// Fixed seed, not a random key — tests need the same keypair every run,
+    /// and this key never signs anything outside this test module.
+    fn test_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    /// `sample_manifest(version)` with `key_id` set to `key_id` and `signature`
+    /// a real ed25519 signature over its own [`UpdateManifest::signing_body`]
+    /// under `signing_key`.
+    fn signed_manifest(version: &str, key_id: &str, signing_key: &ed25519_dalek::SigningKey) -> UpdateManifest {
+        use ed25519_dalek::Signer;
+        let mut manifest = sample_manifest(version);
+        manifest.key_id = key_id.to_string();
+        let sig = signing_key.sign(&manifest.signing_body());
+        manifest.signature = lumen_core::hash::base64_encode(&sig.to_bytes());
+        manifest
+    }
+
+    #[test]
+    fn verify_manifest_accepts_valid_signature() {
+        let signing_key = test_signing_key();
+        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
+        let manifest = signed_manifest("1.2.3", "test-1", &signing_key);
+        assert_eq!(verify_manifest_with_keys(&manifest, &trusted), Ok(()));
+    }
+
+    #[test]
+    fn verify_manifest_rejects_unknown_key_id() {
+        let signing_key = test_signing_key();
+        let manifest = signed_manifest("1.2.3", "test-1", &signing_key);
+        // `trusted` only knows a different `key_id` — same key material, wrong name.
+        let trusted = [("other-key", signing_key.verifying_key().to_bytes())];
+        assert_eq!(
+            verify_manifest_with_keys(&manifest, &trusted),
+            Err(ManifestVerifyError::UnknownKeyId)
+        );
+    }
+
+    #[test]
+    fn verify_manifest_rejects_tampered_body() {
+        let signing_key = test_signing_key();
+        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
+        let mut manifest = signed_manifest("1.2.3", "test-1", &signing_key);
+        // Signature was computed over "1.2.3" — flip the version after signing,
+        // simulating a manifest tampered (or corrupted) in transit.
+        manifest.version = "999.0.0".to_string();
+        assert_eq!(
+            verify_manifest_with_keys(&manifest, &trusted),
+            Err(ManifestVerifyError::SignatureMismatch)
+        );
+    }
+
+    #[test]
+    fn verify_manifest_rejects_signature_from_wrong_key() {
+        let signing_key = test_signing_key();
+        let other_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        // Trusted list has the *other* key under the same `key_id` the manifest
+        // claims — models a compromised/mismatched key, not just an unknown id.
+        let trusted = [("test-1", other_key.verifying_key().to_bytes())];
+        let manifest = signed_manifest("1.2.3", "test-1", &signing_key);
+        assert_eq!(
+            verify_manifest_with_keys(&manifest, &trusted),
+            Err(ManifestVerifyError::SignatureMismatch)
+        );
+    }
+
+    #[test]
+    fn verify_manifest_rejects_malformed_signature_encoding() {
+        let signing_key = test_signing_key();
+        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
+        let mut manifest = signed_manifest("1.2.3", "test-1", &signing_key);
+        manifest.signature = "not valid base64!!".to_string();
+        assert_eq!(
+            verify_manifest_with_keys(&manifest, &trusted),
+            Err(ManifestVerifyError::MalformedSignature)
+        );
+    }
+
+    #[test]
+    fn verify_manifest_rejects_signature_of_wrong_length() {
+        let signing_key = test_signing_key();
+        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
+        let mut manifest = signed_manifest("1.2.3", "test-1", &signing_key);
+        // Valid base64, but decodes to fewer than the 64 bytes an ed25519
+        // signature is — not the "invalid character" case above.
+        manifest.signature = lumen_core::hash::base64_encode(b"too short");
+        assert_eq!(
+            verify_manifest_with_keys(&manifest, &trusted),
+            Err(ManifestVerifyError::MalformedSignature)
+        );
+    }
+
+    #[test]
+    fn signing_body_excludes_signature_field() {
+        // Two manifests differing only in `signature` must sign identically —
+        // otherwise a signer could never produce a signature that verifies
+        // (it would need to already know its own signature).
+        let mut a = sample_manifest("1.2.3");
+        let mut b = a.clone();
+        a.signature = "aaaa".to_string();
+        b.signature = "bbbb".to_string();
+        assert_eq!(a.signing_body(), b.signing_body());
+    }
+
+    #[test]
+    fn verify_body_accepts_matching_hash() {
+        let asset = UpdateAsset {
+            name: "lumen-windows.zip".to_string(),
+            sha256: lumen_core::hash::sha256_hex(b"the zip body"),
+            size: 12,
+        };
+        assert!(asset.verify_body(b"the zip body"));
+    }
+
+    #[test]
+    fn verify_body_rejects_mismatched_hash() {
+        let asset = UpdateAsset {
+            name: "lumen-windows.zip".to_string(),
+            sha256: lumen_core::hash::sha256_hex(b"the zip body"),
+            size: 12,
+        };
+        assert!(!asset.verify_body(b"a swapped, malicious body"));
+    }
+
+    #[test]
+    fn verify_body_hash_comparison_is_case_insensitive() {
+        let asset = UpdateAsset {
+            name: "lumen-windows.zip".to_string(),
+            sha256: lumen_core::hash::sha256_hex(b"the zip body").to_uppercase(),
+            size: 12,
+        };
+        assert!(asset.verify_body(b"the zip body"));
+    }
+
     #[test]
     fn apply_check_result_not_modified_bumps_timestamp_only() {
         let state = UpdateState {
@@ -444,13 +734,16 @@ mod tests {
 
     #[test]
     fn apply_check_result_modified_newer_version_available() {
+        let signing_key = test_signing_key();
+        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
+        let manifest = signed_manifest("999.0.0", "test-1", &signing_key);
         let state = UpdateState::default();
         let result = ConditionalFetch::Modified {
-            body: manifest_body("999.0.0"),
+            body: serde_json::to_vec(&manifest).unwrap(),
             etag: Some("\"v2\"".into()),
             last_modified: Some("Mon".into()),
         };
-        let (new_state, outcome) = apply_check_result(state, result, 500);
+        let (new_state, outcome) = apply_check_result_with_keys(state, result, 500, &trusted);
         assert_eq!(new_state.last_checked_at, 500);
         assert_eq!(new_state.etag.as_deref(), Some("\"v2\""));
         assert_eq!(new_state.last_modified.as_deref(), Some("Mon"));
@@ -458,6 +751,58 @@ mod tests {
             CheckOutcome::Available(m) => assert_eq!(m.version, "999.0.0"),
             other => panic!("expected Available, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn apply_check_result_rejects_unsigned_newer_manifest() {
+        // `manifest_body`/`sample_manifest` carry a placeholder `key_id`/
+        // `signature` that trusts nothing — a newer version alone must never
+        // reach `Available` without a verified signature, even against the
+        // real production `TRUSTED_KEYS` (empty until UPD-10).
+        let state = UpdateState::default();
+        let result = ConditionalFetch::Modified {
+            body: manifest_body("999.0.0"),
+            etag: None,
+            last_modified: None,
+        };
+        let (_, outcome) = apply_check_result(state, result, 500);
+        assert_eq!(outcome, CheckOutcome::Untrusted(ManifestVerifyError::UnknownKeyId));
+    }
+
+    #[test]
+    fn apply_check_result_rejects_tampered_newer_manifest() {
+        let signing_key = test_signing_key();
+        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
+        let mut manifest = signed_manifest("999.0.0", "test-1", &signing_key);
+        // Tamper with an asset hash after signing — the classic "swap the hash,
+        // keep the signature" attack this slice's brief calls out.
+        manifest.assets[0].sha256 = "f".repeat(64);
+        let state = UpdateState::default();
+        let result = ConditionalFetch::Modified {
+            body: serde_json::to_vec(&manifest).unwrap(),
+            etag: None,
+            last_modified: None,
+        };
+        let (_, outcome) = apply_check_result_with_keys(state, result, 500, &trusted);
+        assert_eq!(outcome, CheckOutcome::Untrusted(ManifestVerifyError::SignatureMismatch));
+    }
+
+    #[test]
+    fn apply_check_result_downgrade_is_rejected_before_signature_check() {
+        // A validly signed manifest for an older-or-equal version never even
+        // reaches signature verification — `UpToDate`, not `Untrusted` — the
+        // forward-only downgrade protection this slice's brief requires.
+        let signing_key = test_signing_key();
+        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
+        let manifest = signed_manifest(&current_version().to_string(), "test-1", &signing_key);
+        let state = UpdateState::default();
+        let result = ConditionalFetch::Modified {
+            body: serde_json::to_vec(&manifest).unwrap(),
+            etag: None,
+            last_modified: None,
+        };
+        let (_, outcome) = apply_check_result_with_keys(state, result, 500, &trusted);
+        assert_eq!(outcome, CheckOutcome::UpToDate);
     }
 
     #[test]

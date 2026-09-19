@@ -2552,6 +2552,7 @@ name = "lumen-shell"
 version = "0.5.0"
 dependencies = [
  "cpal",
+ "ed25519-dalek",
  "lumen-a11y",
  "lumen-ai",
  "lumen-bidi-server",

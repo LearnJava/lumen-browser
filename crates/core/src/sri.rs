@@ -140,7 +140,7 @@ fn parse_one_hash(s: &str) -> Option<SriHash> {
     let dash = s.find('-')?;
     let alg = SriAlgorithm::parse(&s[..dash])?;
     let b64 = &s[dash + 1..];
-    let digest = base64_decode(b64)?;
+    let digest = crate::hash::base64_decode(b64)?;
     if digest.len() != alg.digest_size() {
         return None;
     }
@@ -148,35 +148,6 @@ fn parse_one_hash(s: &str) -> Option<SriHash> {
         algorithm: alg,
         expected_digest: digest,
     })
-}
-
-/// Простая base64-декодеровка (RFC 4648 §4). Принимает стандартный
-/// alphabet + опционально `=`-padding. Whitespace внутри запрещён.
-/// Возвращает None при невалидном символе или некорректной длине.
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let s = s.trim_end_matches('=');
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for &b in bytes {
-        let v = match b {
-            b'A'..=b'Z' => b - b'A',
-            b'a'..=b'z' => b - b'a' + 26,
-            b'0'..=b'9' => b - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        };
-        acc = (acc << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-            acc &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
 }
 
 /// Constant-time сравнение двух byte-срезов одинаковой длины. Защита
@@ -285,23 +256,8 @@ mod tests {
         assert!(algorithm_strength(SriAlgorithm::Sha512) > algorithm_strength(SriAlgorithm::Sha384));
     }
 
-    #[test]
-    fn base64_decode_basic() {
-        assert_eq!(base64_decode("aGVsbG8="), Some(b"hello".to_vec()));
-        assert_eq!(base64_decode("aGVsbG8gd29ybGQ="), Some(b"hello world".to_vec()));
-    }
-
-    #[test]
-    fn base64_decode_no_padding() {
-        // RFC 4648 §3.2: padding опционален.
-        assert_eq!(base64_decode("aGVsbG8"), Some(b"hello".to_vec()));
-    }
-
-    #[test]
-    fn base64_decode_url_unsafe_rejected() {
-        // SRI uses standard alphabet (`+`/`/`); url-safe (`-`/`_`) не принимается.
-        assert!(base64_decode("ab-c").is_none());
-    }
+    // base64_decode сам по себе покрыт crate::hash's own tests; здесь
+    // проверяется только его использование внутри parse_one_hash (ниже).
 
     #[test]
     fn constant_time_eq_basic() {
