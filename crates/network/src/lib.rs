@@ -44,6 +44,24 @@ use lumen_core::url::Url;
 
 mod auth;
 mod bad_port;
+
+/// Биндит эфемерный TCP-порт, перебирая кандидатов у ОС, пока не получит
+/// порт вне списка «bad ports» Fetch §3.9 (`bad_port::is_bad_port`).
+/// Без этого мок-сервера тестов изредка (~4 % прогонов крейта на Windows,
+/// где эфемерный диапазон 1024…15000 пересекается с 19 запрещёнными
+/// портами) получают от ОС порт из списка, и `require_http_scheme`
+/// заворачивает клиента с `blocked port`, хотя ни клиент, ни мок-сервер
+/// не виноваты — см. BUG-911.
+#[cfg(test)]
+fn bind_ephemeral_listener() -> std::net::TcpListener {
+    loop {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        if !bad_port::is_bad_port(port) {
+            return listener;
+        }
+    }
+}
 mod brotli;
 mod flate;
 pub mod coop;
@@ -5057,7 +5075,7 @@ mod tests {
         use std::io::{BufRead, BufReader, Write};
         use std::time::{Duration, Instant};
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
 
         let server = thread::spawn(move || {
@@ -5131,7 +5149,7 @@ mod tests {
         use std::io::{BufRead, BufReader, Write};
         use std::time::Duration;
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
 
         let server = thread::spawn(move || {
@@ -5209,7 +5227,7 @@ mod tests {
     /// Handshake + text echo: a single Text frame round-trips intact.
     #[test]
     fn ws_handshake_and_text_echo() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
@@ -5247,7 +5265,7 @@ mod tests {
     /// Binary echo: a Binary frame (with high/zero bytes) round-trips intact.
     #[test]
     fn ws_binary_echo() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
@@ -5283,7 +5301,7 @@ mod tests {
     /// (fin=0) + a Continuation frame (fin=1) is reassembled by the client.
     #[test]
     fn ws_fragmented_message_reassembled() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
@@ -5303,7 +5321,7 @@ mod tests {
     /// client Pong with the same payload; the Ping is also surfaced to the caller.
     #[test]
     fn ws_ping_triggers_pong_autoreply() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || -> bool {
             let (mut sock, _) = listener.accept().unwrap();
@@ -5328,7 +5346,7 @@ mod tests {
     /// code/reason and echoed back by the client.
     #[test]
     fn ws_server_initiated_close_echoed() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || -> bool {
             let (mut sock, _) = listener.accept().unwrap();
@@ -5359,7 +5377,7 @@ mod tests {
     /// the intervening timeout (BUG-307).
     #[test]
     fn ws_recv_timeout_returns_none_when_idle_then_delivers_later() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
@@ -5393,7 +5411,7 @@ mod tests {
     /// solid. `recv_timeout` bounds that hold to `WS_RECV_POLL_INTERVAL`.
     #[test]
     fn ws_send_not_blocked_by_idle_recv_thread() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
@@ -5471,7 +5489,7 @@ mod tests {
     #[test]
     fn ws_permessage_deflate_roundtrip() {
         use lumen_core::ext::WebSocketSession;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || -> bool {
             let (mut sock, _) = listener.accept().unwrap();
@@ -6763,7 +6781,6 @@ mod tests {
 
     // ── EventSink ────────────────────────────────────────────────────────────
 
-    use std::net::TcpListener;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
@@ -6819,6 +6836,19 @@ mod tests {
         assert_eq!(Arc::strong_count(&pool), 3);
     }
 
+    // Регрессия BUG-911: без перебинда в `bind_ephemeral_listener` мок-серверы
+    // тестов изредка (~4 % прогонов крейта на Windows) получали от ОС порт из
+    // списка «bad ports» Fetch §3.9, и `require_http_scheme` заворачивал
+    // клиента с `blocked port`, хотя ни тест, ни мок-сервер не виноваты.
+    #[test]
+    fn bind_ephemeral_listener_never_returns_bad_port() {
+        for _ in 0..2000 {
+            let listener = bind_ephemeral_listener();
+            let port = listener.local_addr().unwrap().port();
+            assert!(!bad_port::is_bad_port(port));
+        }
+    }
+
     /// Однократный mock-сервер: каждое соединение обслуживается **отдельно**,
     /// после одного ответа socket закрывается. Удобен для прежних тестов и
     /// для проверки случая `Connection: close`.
@@ -6826,7 +6856,7 @@ mod tests {
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             for i in 1..=accept_count {
@@ -6863,7 +6893,7 @@ mod tests {
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut sock, _) = listener.accept().expect("accept");
@@ -6910,7 +6940,7 @@ mod tests {
     /// and yields `Error::Aborted`, delivering no body.
     #[test]
     fn fetch_cancellable_aborts_in_flight() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
 
         let server = thread::spawn(move || {
@@ -6958,7 +6988,7 @@ mod tests {
     /// tears the socket down and yields `Error::Aborted`, delivering no body.
     #[test]
     fn fetch_with_body_cancellable_aborts_in_flight() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
 
         let server = thread::spawn(move || {
@@ -7506,7 +7536,7 @@ mod tests {
         // Сервер прислал `Connection: close` → соединение в пул не вернулось.
         // Второй запрос требует свежий accept.
         let accept_counter = Arc::new(AtomicUsize::new(0));
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let counter = accept_counter.clone();
         let server = thread::spawn(move || {
@@ -7548,7 +7578,7 @@ mod tests {
         // нормальный ответ. Клиент должен заметить stale-write/read и сделать
         // retry на свежем connect-е. Ожидаем 2 accept-а, fetch проходит дважды.
         let accept_counter = Arc::new(AtomicUsize::new(0));
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let counter = accept_counter.clone();
         let server = thread::spawn(move || {
@@ -7675,7 +7705,7 @@ mod tests {
         use std::io::Read;
         use std::time::{Duration, Instant};
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             // Accept and hold the connection open without ever writing a
@@ -7807,7 +7837,7 @@ mod tests {
         // Bind→port→drop освобождает порт, на котором никто не слушает: connect
         // получает refused. Терминальное событие — RequestFailed(Tcp), а не
         // зависший RequestStarted.
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
@@ -7837,7 +7867,7 @@ mod tests {
         // 302 redirect на другой hostname → resolver должен вызваться дважды,
         // по одному на hop. Это инвариант симметричный с тем, как обрабатываются
         // sink-события и filter-проверки (per-hop).
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             for i in 1..=2u32 {
@@ -7966,7 +7996,7 @@ mod tests {
         // слушает HTTP (без TLS), поэтому upgrade-attempt падает на TLS
         // handshake — это доказывает, что upgrade действительно произошёл.
         // Иначе на mock HTTP-сервере мы бы получили 200 OK, а не error.
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         // Сервер просто принимает соединения и закрывает — нам важна сама
         // попытка TLS handshake клиента в момент, когда он считает, что
@@ -8031,7 +8061,7 @@ mod tests {
         // pathway: fetch к https://known-host даёт TLS-ошибку, и в Started
         // URL должен остаться https (НЕ повторно upgrade-нутый или какой-то
         // ещё).
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let _server = thread::spawn(move || {
             for _ in 0..3 {
@@ -8088,7 +8118,7 @@ mod tests {
     fn mock_range_server_full(
         responder: impl Fn(Option<String>, Option<String>) -> Vec<u8> + Send + 'static,
     ) -> (u16, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut sock, _) = listener.accept().expect("accept");
@@ -8642,7 +8672,7 @@ world\r\n\
     where
         F: Fn(usize, &str) -> Vec<u8> + Send + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             for i in 1..=accept_count {
@@ -8996,7 +9026,7 @@ world\r\n\
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut sock, _) = listener.accept().expect("accept");
@@ -9035,7 +9065,7 @@ world\r\n\
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             for i in 1..=accept_count {
@@ -10060,7 +10090,7 @@ world\r\n\
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             for i in 1..=accept_count {
@@ -10586,14 +10616,13 @@ mod interceptor_tests {
 mod http_cache_tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpListener;
     use std::thread;
 
     fn mock_server<F>(accept_count: usize, responder: F) -> (u16, thread::JoinHandle<()>)
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = bind_ephemeral_listener();
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             for i in 1..=accept_count {
