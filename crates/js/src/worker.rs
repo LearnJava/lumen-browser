@@ -3134,6 +3134,7 @@ mod tests_v8 {
                 status_text: "OK".into(),
                 headers: vec![],
                 body: b"globalThis._unreachable = true;".to_vec(),
+                url: _url.to_string(),
             })
         }
         fn check_worker_src(&self, _url: &str) -> lumen_core::error::Result<()> {

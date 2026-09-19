@@ -592,6 +592,23 @@ var _sw_container = Object.assign({
         if (existing && existing.active && existing.scriptURL === String(scriptUrl)) {
             return Promise.resolve(existing);
         }
+        // GAP-CSPENF срез 30: `worker-src` (falling back to `default-src`) gates
+        // the registration script itself — checked synchronously, before any
+        // registration state is created, so a blocked `register()` behaves as
+        // if it was never called (SW spec §register() step 3's CSP check).
+        if (typeof _lumen_sw_check_worker_src === 'function') {
+            var block = _lumen_sw_check_worker_src(String(scriptUrl));
+            if (block && block.length === 2) {
+                if (typeof _lumen_dispatch_csp_violation === 'function') {
+                    _lumen_dispatch_csp_violation('worker-src', block[0], block[1], 'enforce');
+                }
+                return Promise.reject(new DOMException(
+                    'Failed to register a ServiceWorker: worker-src directive of the '
+                    + 'Content Security Policy blocks the registration script.',
+                    'SecurityError'
+                ));
+            }
+        }
         var reg = _sw_make_registration(scope, scriptUrl);
         var sw = _sw_make_worker(scriptUrl, 'installing');
         reg.installing = sw;

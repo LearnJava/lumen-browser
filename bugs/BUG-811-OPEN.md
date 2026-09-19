@@ -1728,3 +1728,65 @@ allow/deny, `'none'`, `'self'` относительно origin документ�
 `cargo test -p lumen-shell --features v8 --bin lumen` (1906 passed, 0
 failed) без регрессий; `cargo clippy -p lumen-network -p lumen-shell
 --all-targets --features v8 -- -D warnings` чисто.
+
+## Срез 30 (2026-09-19, `p6-gap-cspenf-srez30`) — `worker-src` против `serviceWorker.register()`
+
+Закрыт пробел, оставшийся незамеченным срезами 13/28 (оба покрыли
+`new Worker()`/`new SharedWorker()`/`importScripts()`, но не третий
+конструктор воркерной области): `navigator.serviceWorker.register(url)`
+(`crates/js/src/shim/web_api_shim_mid_b.js::_sw_run_lifecycle`) забирает
+текст регистрационного скрипта обычным страничным `fetch(scriptURL)` — тем
+самым `fetch()`, который срез 10 уже гейтит по `connect-src`, но CSP3 §6.4
+явно относит SW-регистрацию к `worker-src` (с фолбэком на `default-src`), не
+к `connect-src`. Политика `worker-src 'none'` без отдельного ограничения
+`connect-src` регистрировала любой воркер беспрепятственно —
+`grep -rn WorkerSrc crates/js/src/shim` до этого среза не находил ничего в
+пути регистрации.
+
+- `crates/js/src/v8_runtime/install/net.rs::install_service_worker` — новый
+  натив `_lumen_sw_check_worker_src(url) -> [] | [blockedUri, originalPolicy]`,
+  тот же I/O-free `check_worker_src` (`crates/core/src/ext.rs`), что срезы
+  13/28 уже используют для конструктора воркера/`importScripts()`, здесь
+  вызванный из установщика Service Worker бindings (`fp_sw_net` — тот же
+  провайдер, что страница передаёт в `fetch()`/`XMLHttpRequest`/WebSocket/
+  SSE/`sendBeacon`). В отличие от однослотового side-channel паттерна
+  (`_lumen_worker_last_csp_block` и т.п.), здесь достаточно одного
+  синхронного вызова с прямым возвратом массива — `register()` зовёт его
+  один раз за вызов, конкурентных гонок между чтением и следующим вызовом
+  нет.
+- `crates/js/src/shim/web_api_shim_mid_b.js::register` — проверка
+  синхронно ПЕРВЫМ шагом, до создания `_sw_make_registration`/записи в
+  `_sw_registrations`/`_lumen_sw_register` — заблокированный вызов не
+  оставляет никакого состояния регистрации (SW spec §register() шаг о CSP
+  идёт раньше запуска job'а установки). При блокировке: диспатч
+  `securitypolicyviolation` через уже существующий `_lumen_dispatch_csp_violation`
+  (`'worker-src'`, `blockedUri`, `originalPolicy`, `'enforce'`) и
+  `Promise.reject(new DOMException(…, 'SecurityError'))` — тот же тип
+  исключения, что спека требует для CSP-отказа `register()`.
+- Не тронуто: сама доставка `fetch(scriptURL)` внутри `_sw_run_lifecycle`
+  (срабатывает уже ПОСЛЕ прохождения этой проверки, на активации) — её
+  `connect-src`-гейт (срез 10) остаётся дополнительной, а не единственной
+  преградой, ровно как для скриптов/картинок обе директивы могут действовать
+  одновременно; `ServiceWorker`'s собственный `importScripts()`
+  (`sw_worker.rs`) по-прежнему не гейтится — тот же остаток, что срез 28 сам
+  назвал не сузившимся этим классом решений.
+
+Тесты: +4 в `crates/js/src/dom/tests/v8_events_cache.rs`
+(`sw_register_worker_src_block_rejects_promise` — `SecurityError`;
+`sw_register_worker_src_block_never_registers` — `_lumen_sw_has_registration`
+остаётся `false`; `sw_register_worker_src_block_fires_security_policy_violation_event`;
+`sw_register_allowed_when_no_worker_src_policy` — тот же "no policy means no
+block" инвариант, что все предыдущие срезы этого GAP проверяют). Плюс
+попутный фикс дрейфа: `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` (запущенный до этого среза, для чистоты
+собственного гейта) уже был красным на `main` — `worker.rs`'s тестовый мок
+`CspBlockedImportNet::fetch_sync` не собирал `JsFetchResult` после того, как
+BUG-984 добавил туда поле `url` (мок написан срезом 28 раньше слияния
+BUG-984, ни один из них не задевал файл другого); однострочный фикс
+(`url: _url.to_string()`) в этом же коммите, не отдельным.
+
+`cargo test -p lumen-js --features v8-backend --lib` (3906 passed, 0 failed)
+и `cargo test -p lumen-shell --features v8 --bin lumen` (1916 passed, 0
+failed) без регрессий; `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` и `cargo clippy -p lumen-shell --all-targets
+--features v8 -- -D warnings` чисто.
