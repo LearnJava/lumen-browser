@@ -2800,4 +2800,51 @@ insecure navigations set` (UIR §4.1 шаги 1-2). Остаток общего 
 дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
 `originalPolicy`.
 
+## Срез 49 (2026-09-20, `p6-gap-cspenf-srez49`) — `upgrade-insecure-requests` для `fetch()`/`XMLHttpRequest`/WebSocket/EventSource
+
+Реализовано (`crates/network/src/lib.rs`): срез 48 назвал этот пункт
+непокрытым — переписывался только parser-driven трафик (`script src`/`link
+rel=stylesheet`/`@import`/`img src`/`@font-face url()`, срезы 43-48), а
+JS-инициированный сетевой слой (`HttpClient`) апгрейд не видел вовсе, хотя
+это тот же самый Fetch §4.1 шаг 5.
+
+- `HttpClient::upgrade_insecure_requests_url(url: Url) -> Url` — та же
+  схема, что `lumen_shell::csp_enforce::upgrade_insecure_url` уже применяет
+  parser-driven подресурсам (директивы нет → не трогать; схема не
+  `http`/`ws` → не трогать), продублированная здесь, а не переиспользованная:
+  `lumen-network` лежит ниже `lumen-shell` в графе крейтов и не может его
+  импортировать. Источник политик — уже существующий `connect_src_policy`
+  (тот же `Vec<CspPolicy>`, что `connect_src_gate` проверяет), новых полей
+  не потребовалось. В отличие от prose-версии в `csp_enforce.rs`, здесь два
+  исхода схемы: `http` → `https` и `ws` → `wss` — WebSocket-хендшейк тоже
+  `connect-src`-гейтится (CSP3 §6.7.2) и попадает под тот же алгоритм
+  апгрейда Mixed Content, на который ссылается UIR.
+- Вызывается сразу после `Url::parse`, до соответствующего гейта (UIR §4.1
+  шаг 5 обязан идти раньше блокирующей проверки, шаг 6) в четырёх точках:
+  `fetch_request_impl` (общее тело `fetch()`/XHR — синхронных, cancellable
+  и async вариантов), `check_connect_src` (I/O-free пре-чек
+  `sendBeacon` — сам беакон переиспользует `fetch_with_body_sync`, значит и
+  он проходит через `fetch_request_impl` без отдельной правки),
+  `JsWebSocketProvider::connect` и `JsSseProvider::connect_sse`.
+
+Не тронуто этим срезом: `check_worker_src`/`check_object_src`/
+`check_media_src` (`new Worker()`/`<embed>`/`<object>`/`<video>`/`<audio>`/
+`<track>` — свои директивы, свои сетевые пути, не связаны с
+`connect_src_policy`) — остаются в списке непокрытого наравне с
+навигациями и `report-to`.
+
+5 юнит-тестов на `upgrade_insecure_requests_url` (http→https, ws→wss,
+https/wss не трогаются, без директивы не трогает, без политики вовсе не
+трогает) в `crates/network/src/lib.rs`; `cargo test -p lumen-network --lib`
+(2285 passed, 0 failed) и `cargo test -p lumen-shell --features v8 --bin
+lumen csp` (96 passed) не регрессировали. `cargo clippy --workspace
+--all-targets -- -D warnings` — чисто.
+
+Не покрыто этим срезом (продолжение BUG-692): `<video>`/`<audio>`/`<track>`
+(отдельные директивы/пути, см. выше); навигации верхнего документа и
+`<iframe>`; заголовок `Upgrade-Insecure-Requests: 1` на навигационном
+запросе и `upgrade insecure navigations set` (UIR §4.1 шаги 1-2). Остаток
+общего списка дорожки не изменился: `report-to`, `manifest-src`, честная
+per-policy `originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
