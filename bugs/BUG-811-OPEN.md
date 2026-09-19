@@ -2648,15 +2648,42 @@ clippy -p lumen-shell --profile dev-release --all-targets --features v8 --
 известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого
 среза.
 
-Не покрыто этим срезом (продолжение BUG-692, не изменилось): `<script
-src>` внутри `<iframe>` (та же форма гейта — механическое продолжение,
-как срез 44 сделал для картинок), `<link rel=stylesheet>`/`@import`,
-`@font-face url()` (везде — и top-level, и `<iframe>`), `<video>`/
-`<audio>`/`<track>`, `fetch()`/XHR/WebSocket (`ws://` → `wss://`),
-навигации верхнего документа и `<iframe>`, заголовок
-`Upgrade-Insecure-Requests: 1` на навигационном запросе и `upgrade
-insecure navigations set` (UIR §4.1 шаги 1-2). Остаток общего списка
-дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
-`originalPolicy`.
+Не покрыто этим срезом (продолжение BUG-692, не изменилось): `<link
+rel=stylesheet>`/`@import`, `@font-face url()` (везде — и top-level, и
+`<iframe>`), `<video>`/`<audio>`/`<track>`, `fetch()`/XHR/WebSocket
+(`ws://` → `wss://`), навигации верхнего документа и `<iframe>`,
+заголовок `Upgrade-Insecure-Requests: 1` на навигационном запросе и
+`upgrade insecure navigations set` (UIR §4.1 шаги 1-2). Остаток общего
+списка дорожки не изменился: `report-to`, `manifest-src`, честная
+per-policy `originalPolicy`.
+
+## Срез 46 (2026-09-20, `p6-gap-cspenf-srez46`) — доки-уточнение: `<script src>` внутри `<iframe>` уже покрыт срезом 45
+
+Без нового кода. Срез 45 назвал `<script src>` внутри `<iframe>`
+непокрытым по аналогии с картинками (срез 44 добавлял отдельный call
+site в `frames.rs::fetch_frame_subresources` для чужого документа) — но
+у скриптов, в отличие от картинок, никогда не было раздельных
+top-level/frame реализаций: `resolve_script_sources`
+(`crates/shell/src/scripts.rs`) — одна и та же функция, которую
+`page_pipeline.rs` зовёт с top-level `&Document`, а `frames.rs:2024-2025`
+— с `child_doc` фрейма (то же разделение политик, что срез 6 дал
+`script-src`). Апгрейд, добавленный срезом 45 внутри этой функции,
+поэтому применился к обоим вызывающим кодам одновременно, без отдельной
+правки.
+
+Подтверждено живым пробой (`.tmp/srez46/serve.py`, простой HTTP-сервер
+на `127.0.0.1:8792`; `top.html` содержит `<iframe src=".../frame.html">`,
+`frame.html` несёт `<meta http-equiv="Content-Security-Policy"
+content="upgrade-insecure-requests">` и `<script
+src="http://127.0.0.1:8792/listener.js">`): сервер получает `GET
+/top.html` и `GET /frame.html`, но не `GET /listener.js` — stderr
+браузера пишет `GET https://127.0.0.1:8792/listener.js` с последующим
+`TLS handshake: received corrupt message` (простой http-сервер пробы TLS
+не терминирует, ожидаемо) — запрос скрипта фрейма реально ушёл на
+`https://` без какой-либо правки кода в этом срезе.
+
+Код не менялся, тестами подтверждать нечего; `cargo clippy -p
+lumen-shell --profile dev-release --all-targets --features v8 -- -D
+warnings` — чисто (без изменений в исходниках).
 
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
