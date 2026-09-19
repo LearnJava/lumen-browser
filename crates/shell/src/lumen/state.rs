@@ -176,6 +176,20 @@ pub(crate) struct Lumen {
     /// `chrome_layout` between passes — it is read-only until
     /// [`Self::relayout_chrome_host`] replaces it wholesale.
     pub(crate) chrome_content_area_detached: Option<ContentAreaDetachment>,
+    /// BUG-1059: the last [`Self::relayout_chrome_host`] pass's detached
+    /// `#demoBar`/`#infoPanel` boxes (CC-18), painted through
+    /// [`Self::chrome_floating_dl`] instead of the strip-clipped chrome
+    /// tree — see [`FloatingPanelDetachment`]'s doc comment. Restored into
+    /// the incremental basis at the top of the next pass, same S22 shape as
+    /// [`Self::chrome_content_area_detached`]. Empty (not detached-from-None)
+    /// whenever a listed id has no box this pass — e.g. `#infoPanel` closed
+    /// (`display:none`) produces no box at all.
+    pub(crate) chrome_floating_detached: Vec<FloatingPanelDetachment>,
+    /// BUG-1059: standalone display list for this pass's detached floating
+    /// chrome content (`#demoBar`/`#infoPanel`) — `None` when neither has a
+    /// box. Appended to `overlay_buf` in `RedrawRequested`, unclipped,
+    /// independent of [`ChromeOverlayFrameCache`]'s strip-segment cache.
+    pub(crate) chrome_floating_dl: Option<lumen_paint::DisplayList>,
     /// BUG-341 S5: the per-node `ComputedStyle` cascade cache
     /// ([`lumen_layout::CounterMap::styles`]) from the previous pass —
     /// `RestyleDelta::prev_styles` for the next incremental cascade. Distinct

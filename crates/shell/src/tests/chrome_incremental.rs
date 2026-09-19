@@ -1968,3 +1968,113 @@ fn bug1059_demo_bar_gets_a_correctly_positioned_layout_box() {
         b.rect,
     );
 }
+
+/// BUG-1059 срез 6: the other half — `take_floating_panel` must actually
+/// remove `#demoBar`'s box from the chrome tree (the fix's precondition:
+/// `build_chrome_overlay_strips` can only skip painting something it never
+/// receives) and the detached box must still paint real content on its own,
+/// and `restore_floating_panel` must put it back exactly where it was — the
+/// S22-shaped incremental-basis contract [`FloatingPanelDetachment`]'s doc
+/// comment describes.
+#[test]
+fn bug1059_take_floating_panel_detaches_and_restores_demo_bar() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let model = lumen_chrome::ChromeModel::default();
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+
+    let demo_bar = doc.find_by_id(lumen_chrome::ids::DEMO_BAR).expect("has #demoBar");
+    let before_rect = lumen_layout::find_box_by_node(&layout, demo_bar)
+        .expect("#demoBar must get a layout box")
+        .rect;
+
+    let (rect, detached) =
+        take_floating_panel(&mut layout, demo_bar).expect("#demoBar must be detachable");
+    assert_eq!(rect, before_rect, "detach must report the tree's own rect");
+    assert!(
+        lumen_layout::find_box_by_node(&layout, demo_bar).is_none(),
+        "#demoBar's box must be gone from the main tree after detach — this is exactly what keeps it \
+         out of build_chrome_overlay_strips's clipped chrome_dl"
+    );
+
+    let floating_dl = paint_ordered(&detached.removed);
+    assert!(!floating_dl.is_empty(), "the detached box must still paint real content standalone");
+
+    assert!(
+        restore_floating_panel(&mut layout, detached),
+        "restore must succeed against the tree it was detached from"
+    );
+    let restored_rect = lumen_layout::find_box_by_node(&layout, demo_bar)
+        .expect("#demoBar must be back in the tree after restore")
+        .rect;
+    assert_eq!(restored_rect, before_rect, "restore must put the box back at its original rect");
+}
+
+/// BUG-1059 срез 6: end-to-end shape of the actual fix — a chrome_dl built
+/// AFTER detaching `#demoBar` (mirroring `relayout_chrome_host`'s real
+/// order: prune `#contentArea`, then detach floating panels, then
+/// `paint_ordered`) must not contain `#demoBar`'s own background fill,
+/// while the standalone floating display list does. Without the fix both
+/// would be in the same (clipped-away) `chrome_dl` and neither assertion
+/// would distinguish this from the pre-fix behaviour, so the test checks
+/// both sides of the split, not just one.
+#[test]
+fn bug1059_chrome_dl_excludes_demo_bar_after_detach_but_floating_dl_includes_it() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let model = lumen_chrome::ChromeModel::default();
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+
+    let content_area = doc
+        .find_by_id(lumen_chrome::ids::CONTENT_AREA)
+        .expect("chrome preview must have #contentArea");
+    let _ = take_content_area(
+        &mut layout,
+        content_area,
+        &[
+            lumen_chrome::ids::FIND_BAR,
+            lumen_chrome::ids::DOWNLOADS_PANEL,
+            lumen_chrome::ids::CP_OVERLAY,
+            lumen_chrome::ids::CERT_OVERLAY,
+            lumen_chrome::ids::PRINT_OVERLAY,
+        ],
+        &doc,
+    )
+    .expect("#contentArea must have a box to prune");
+
+    let demo_bar = doc.find_by_id(lumen_chrome::ids::DEMO_BAR).expect("has #demoBar");
+    let (demo_rect, detached) =
+        take_floating_panel(&mut layout, demo_bar).expect("#demoBar must be detachable");
+    let floating_dl = paint_ordered(&detached.removed);
+    let chrome_dl = paint_ordered(&layout);
+
+    // `.demo-bar{background:#16161c; border-radius:14px}` — its own box fill
+    // at exactly the rect the tree had it at.
+    let demo_bar_fill = |dl: &lumen_paint::DisplayList| {
+        dl.iter().any(|cmd| {
+            matches!(
+                cmd,
+                lumen_paint::DisplayCommand::FillRect { rect, .. }
+                | lumen_paint::DisplayCommand::FillRoundedRect { rect, .. }
+                    if *rect == demo_rect
+            )
+        })
+    };
+    assert!(
+        demo_bar_fill(&floating_dl),
+        "the standalone floating display list must contain #demoBar's own box fill"
+    );
+    assert!(
+        !demo_bar_fill(&chrome_dl),
+        "chrome_dl (what build_chrome_overlay_strips clips around chrome_page_host_rect) must NOT \
+         contain #demoBar's box fill any more — it was detached before paint_ordered ran"
+    );
+}

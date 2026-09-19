@@ -113,13 +113,27 @@ impl Lumen {
         // call either way. Both fields are reassigned from this pass's own
         // result further down, on both arms; the display list is dropped with
         // the tree because this pass builds a new one.
-        let prev_pristine = match (self.chrome_layout.take(), self.chrome_content_area_detached.take()) {
+        let mut prev_pristine = match (self.chrome_layout.take(), self.chrome_content_area_detached.take()) {
             (Some((mut lb, _stale_dl)), Some(detached)) => restore_content_area(&mut lb, detached).then_some(lb),
             // No `#contentArea` in the chrome document (or it had no box):
             // nothing was pruned, so the live tree *is* the pristine one.
             (Some((lb, _stale_dl)), None) => Some(lb),
             (None, _) => None,
         };
+        // BUG-1059: undo the previous pass's `take_floating_panel` calls
+        // (below) the same way `restore_content_area` above undoes its
+        // `#contentArea` pruning — the incremental basis must be the FULL
+        // pristine tree, `#demoBar`/`#infoPanel` included, or the box-reuse
+        // graft below would find those nodes missing from `prev` and (per
+        // `ContentAreaDetachment`'s own doc comment) silently carry that
+        // absence forward every pass after. A restore failure discards the
+        // whole basis, same fallback `restore_content_area` uses.
+        let floating_detached = std::mem::take(&mut self.chrome_floating_detached);
+        if let Some(lb) = prev_pristine.as_mut()
+            && !floating_detached.into_iter().rev().all(|d| restore_floating_panel(lb, d))
+        {
+            prev_pristine = None;
+        }
         let (mut layout, cascade_styles) = match (
             viewport_stable && forced_colors_stable,
             prev_pristine,
@@ -240,6 +254,27 @@ impl Lumen {
         };
         self.chrome_page_host_rect = page_host_rect;
         self.chrome_content_area_detached = detached;
+        // BUG-1059: `#demoBar`/`#infoPanel` are `position:fixed` siblings of
+        // `#contentArea` (not descendants — chrome.html declares them
+        // directly under `<body>`), deliberately positioned inside
+        // `chrome_page_host_rect`. Detach them from `layout` before it is
+        // flattened into `chrome_dl` below, so `build_chrome_overlay_strips`'s
+        // 4-strip clip (cut around that same rect) never sees them — see
+        // `FloatingPanelDetachment`'s doc comment for why they'd otherwise be
+        // silently discarded. Painted separately, unclipped, via
+        // `chrome_floating_dl` (`RedrawRequested`).
+        let mut floating_dl = lumen_paint::DisplayList::new();
+        let mut floating_detached = Vec::new();
+        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL] {
+            if let Some(node) = doc.find_by_id(id)
+                && let Some((_rect, detached)) = take_floating_panel(&mut layout, node)
+            {
+                floating_dl.extend_from_slice(&paint_ordered(&detached.removed));
+                floating_detached.push(detached);
+            }
+        }
+        self.chrome_floating_dl = (!floating_dl.is_empty()).then_some(floating_dl);
+        self.chrome_floating_detached = floating_detached;
         // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
         // above) — these nodes stay in the tree and paint normally.
         self.chrome_omni_input_rect = omni_input
@@ -1711,6 +1746,74 @@ fn follow_box_path_mut<'a>(b: &'a mut LayoutBox, path: &[usize]) -> Option<&'a m
         cur = cur.children.get_mut(i)?;
     }
     Some(cur)
+}
+
+/// BUG-1059: what [`take_floating_panel`] removed from a chrome box tree —
+/// enough for [`restore_floating_panel`] to put it back exactly, mirroring
+/// [`ContentAreaDetachment`]'s shape but without a salvage step (a floating
+/// panel paints as a single unclipped unit; nothing needs to stay behind in
+/// the strip-clipped main tree).
+pub(crate) struct FloatingPanelDetachment {
+    /// Child-index path from the tree root down to the box that held this
+    /// node (empty when the root itself held it).
+    holder_path: Vec<usize>,
+    /// Index the node occupied among that holder's children.
+    slot: usize,
+    /// The node's own box, detached as-is.
+    pub(crate) removed: LayoutBox,
+}
+
+/// BUG-1059: `#demoBar`/`#infoPanel` (CC-18) are `position:fixed` chrome
+/// content deliberately positioned inside [`Lumen::chrome_page_host_rect`] —
+/// a floating panel over the live page. [`build_chrome_overlay_strips`]'s
+/// 4-strip clip discards anything entirely *inside* that rect by design (see
+/// that rect's own doc comment), so these nodes never reach the screen
+/// unless detached from the tree before the clip is built and painted
+/// through a separate, unclipped display list (`Lumen::chrome_floating_dl`,
+/// appended to `overlay_buf` in `RedrawRequested` the same way the omnibox
+/// caret already paints unclipped on top of the strip-clipped segment).
+/// Mirrors [`take_content_area`]'s walk, without its salvage step.
+pub(crate) fn take_floating_panel(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+) -> Option<(Rect, FloatingPanelDetachment)> {
+    let mut path = Vec::new();
+    take_floating_panel_at(lb, node, &mut path)
+}
+
+/// [`take_floating_panel`]'s recursion — same walk as [`take_content_area_at`].
+fn take_floating_panel_at(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+    path: &mut Vec<usize>,
+) -> Option<(Rect, FloatingPanelDetachment)> {
+    if let Some(slot) = lb.children.iter().position(|c| c.node == node) {
+        let removed = lb.children.remove(slot);
+        let rect = removed.rect;
+        return Some((rect, FloatingPanelDetachment { holder_path: path.clone(), slot, removed }));
+    }
+    for (i, child) in lb.children.iter_mut().enumerate() {
+        path.push(i);
+        if let Some(found) = take_floating_panel_at(child, node, path) {
+            return Some(found);
+        }
+        path.pop();
+    }
+    None
+}
+
+/// Inverse of [`take_floating_panel`] — re-inserts the detached box at its
+/// former slot. Returns `false` if the recorded path no longer addresses a
+/// box, mirroring [`restore_content_area`]'s same-shaped guard: the caller
+/// treats that as "no usable `prev`" and takes the full-layout path.
+pub(crate) fn restore_floating_panel(root: &mut LayoutBox, detached: FloatingPanelDetachment) -> bool {
+    let FloatingPanelDetachment { holder_path, slot, removed } = detached;
+    let Some(holder) = follow_box_path_mut(root, &holder_path) else { return false };
+    if slot > holder.children.len() {
+        return false;
+    }
+    holder.children.insert(slot, removed);
+    true
 }
 
 /// Depth-first: removes every descendant of `lb` whose element id is in
