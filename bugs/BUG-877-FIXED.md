@@ -1,6 +1,6 @@
 # BUG-877 — `host.shadowRoot` отдаёт новый объект на каждое чтение: `host.shadowRoot !== host.shadowRoot`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 27 — живой замер, вариант `slot-detail2`)
 **Область:** `crates/js/src/dom.rs:5190` — геттер `shadowRoot` каждый раз зовёт `_lumen_make_shadow_root(sr_nid, 'open', nid)`, то есть строит свежий литерал; та же беда у значения, возвращённого `attachShadow` (`:4715`)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
@@ -51,3 +51,26 @@ sd2-shadowRoot host.shadowRoot=object same=false stable=false
 `_lumen_element_wrappers`) и отдавать её из обоих мест — геттера и
 `attachShadow`. Чистка кэша — тем же `_lumen_gc_collect`, что и у элементов
 (осторожно: [BUG-849](BUG-849-FIXED.md) — он чистит только освобождённые nid).
+
+## Исправлено 2026-09-19 (P3)
+
+Найденная точка (`dom.rs`) с тех пор переехала в
+`crates/js/src/shim/web_api_shim_mid.js::_lumen_make_shadow_root` — сам
+дефект не поменялся: функция всегда строила новую обёртку. Сделано ровно то,
+что предлагал предыдущий срез: `_lumen_make_shadow_root` теперь интернирует
+результат в тот же `_lumen_element_wrappers`, которым уже пользуются
+`_lumen_make_element`/`_lumen_make_doctype` — та же карта, тот же
+`_lumen_gc_collect`, никакого нового кэша с собственной логикой очистки.
+`host.shadowRoot === host.shadowRoot` и `attachShadow(...) === host.shadowRoot`
+теперь оба `true`; захардкоженный `'open'` в геттере больше не проблема — при
+попадании в кэш аргумент `mode` игнорируется, отдаётся объект, построенный
+`attachShadow` с настоящим режимом. Живой фикс совпал с [BUG-895](BUG-895-FIXED.md)
+(тот же файл, соседняя строка) — обе правки в одном коммите. Регресс-тесты
+`shadow_root_getter_returns_same_object_on_repeated_reads`/
+`shadow_root_wrapper_survives_a_weak_map_key`
+(`crates/js/src/dom/tests/v8_bug877_895_shadow_root_wrapper.rs`). Гейты:
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+чисто, `cargo test -p lumen-js --features v8-backend` 3897/3899 (два
+предсуществующих флака `opener_postmessage_*` — общее состояние между
+параллельными тестами, проходят 3/3 при `--test-threads=1`, не регрессия
+этого фикса).
