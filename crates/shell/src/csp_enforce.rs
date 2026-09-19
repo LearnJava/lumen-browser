@@ -79,10 +79,22 @@
 //! что срез 9 уже даёт `loading="lazy"`. Шрифты внутри `<iframe>`
 //! (`frames.rs::load_frame_fonts`) не тронуты.
 //!
+//! Срез 20 добавил `'sha256-…'`/`'sha384-…'`/`'sha512-…'` (CSP3 §8.1) к
+//! [`inline_script_blocked`] — до этого среза `CspSource::Hash` разбирался
+//! (`crates/network/src/csp.rs`), но не участвовал в проверке: инлайновый
+//! скрипт под политикой, чей единственный разрешённый источник — хэш, читался
+//! как всегда заблокированный. Тело скрипта хэшируется новым
+//! `HashAlgorithm::digest_base64` (`sha2`, уже в дереве зависимостей
+//! `lumen-network` — TLS-цепочка сертификатов) и сравнивается со значением
+//! каждого `Hash`-источника директивы; совпадение любого допускает
+//! исполнение, тем же принципом «одного достаточно», что уже есть у
+//! nonce/`'unsafe-inline'`. Только классические/модульные инлайновые
+//! `<script>` (`scripts.rs`) — не событийные атрибуты (`onclick=…`, которых
+//! `'unsafe-hashes'` касается отдельно) и не `style`-src.
+//!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/
 //! `child-src`/…), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
-//! hash-источники (только `'unsafe-inline'` и `'nonce-…'`),
 //! `@font-face url()`/`background-image` внутри `<iframe>` (см. выше),
 //! инлайновые `<style>`/атрибут `style` (не блокируются, только
 //! внешний `<link>`), `@import` внутри уже загруженного листа (наследует
@@ -158,19 +170,24 @@ pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(CspPo
 
 /// `true`, если `script-src` (или `default-src`) документа запрещает
 /// инлайновое исполнение с данным `nonce` (атрибут `nonce` элемента
-/// `<script>`, `None` — атрибута нет).
+/// `<script>`, `None` — атрибута нет) и телом `body` — срез 20 добавил
+/// проверку `'sha256-…'`/`'sha384-…'`/`'sha512-…'` (CSP3 §8.1): тело
+/// хэшируется под КАЖДЫМ алгоритмом, названным хотя бы одним источником
+/// директивы (обычно один, но политика вправе перечислить несколько), а не
+/// только под первым встреченным — совпадение любого достаточно.
 ///
 /// Отсутствие директивы, применимой к скриптам, — не нарушение (страница не
-/// объявляла ограничения). `'strict-dynamic'` без совпавшего nonce НЕ
+/// объявляла ограничения). `'strict-dynamic'` без совпавшего nonce/хэша НЕ
 /// разрешает голый инлайн (CSP3 §8.2) — здесь не учитывается умышленно, тем
-/// самым инлайн без nonce остаётся заблокированным.
-pub(crate) fn inline_script_blocked(policy: &CspPolicy, nonce: Option<&str>) -> bool {
+/// самым инлайн без nonce/хэша остаётся заблокированным.
+pub(crate) fn inline_script_blocked(policy: &CspPolicy, nonce: Option<&str>, body: &str) -> bool {
     let Some(sources) = policy.effective_sources(&CspDirective::ScriptSrc) else {
         return false;
     };
     let allowed = sources.iter().any(|s| match s {
         CspSource::UnsafeInline => true,
         CspSource::Nonce(n) => nonce.is_some_and(|actual| actual == n),
+        CspSource::Hash { algorithm, value } => algorithm.digest_base64(body.as_bytes()) == *value,
         _ => false,
     });
     !allowed
@@ -283,37 +300,76 @@ mod tests {
     #[test]
     fn no_policy_allows_inline() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!inline_script_blocked(&p, None));
+        assert!(!inline_script_blocked(&p, None, ""));
     }
 
     #[test]
     fn script_src_none_blocks_inline() {
         let p = lumen_network::csp::parse_csp_header("script-src 'none'");
-        assert!(inline_script_blocked(&p, None));
+        assert!(inline_script_blocked(&p, None, ""));
     }
 
     #[test]
     fn script_src_unsafe_inline_allows() {
         let p = lumen_network::csp::parse_csp_header("script-src 'self' 'unsafe-inline'");
-        assert!(!inline_script_blocked(&p, None));
+        assert!(!inline_script_blocked(&p, None, ""));
     }
 
     #[test]
     fn default_src_fallback_blocks() {
         let p = lumen_network::csp::parse_csp_header("default-src 'self'");
-        assert!(inline_script_blocked(&p, None));
+        assert!(inline_script_blocked(&p, None, ""));
     }
 
     #[test]
     fn matching_nonce_allows() {
         let p = lumen_network::csp::parse_csp_header("script-src 'nonce-abc123'");
-        assert!(!inline_script_blocked(&p, Some("abc123")));
+        assert!(!inline_script_blocked(&p, Some("abc123"), ""));
     }
 
     #[test]
     fn mismatched_nonce_blocks() {
         let p = lumen_network::csp::parse_csp_header("script-src 'nonce-abc123'");
-        assert!(inline_script_blocked(&p, Some("other")));
+        assert!(inline_script_blocked(&p, Some("other"), ""));
+    }
+
+    /// GAP-CSPENF срез 20: `'sha256-…'` matching the actual inline body allows it.
+    #[test]
+    fn matching_sha256_hash_allows() {
+        let p = lumen_network::csp::parse_csp_header(
+            "script-src 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
+        );
+        assert!(!inline_script_blocked(&p, None, "alert(1)"));
+    }
+
+    /// A hash source for a *different* body still blocks — one match is not
+    /// "any hash source present".
+    #[test]
+    fn mismatched_hash_blocks() {
+        let p = lumen_network::csp::parse_csp_header(
+            "script-src 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
+        );
+        assert!(inline_script_blocked(&p, None, "alert(2)"));
+    }
+
+    /// `sha384`/`sha512` are matched too, not only `sha256` — CSP3 §8.1 does
+    /// not privilege one algorithm.
+    #[test]
+    fn matching_sha384_hash_allows() {
+        let p = lumen_network::csp::parse_csp_header(
+            "script-src 'sha384-HT2E9NfWiuQ/w1PRai+hTyqW16NIoCGA/m8VQDUopfAtcz6YQjtsMmQd5uRbVDpW'",
+        );
+        assert!(!inline_script_blocked(&p, None, "alert(1)"));
+    }
+
+    /// A policy naming both a nonce and a hash source accepts either — the
+    /// match loop must not short-circuit on the first source kind it sees.
+    #[test]
+    fn hash_matches_even_when_nonce_source_also_present() {
+        let p = lumen_network::csp::parse_csp_header(
+            "script-src 'nonce-unrelated' 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
+        );
+        assert!(!inline_script_blocked(&p, None, "alert(1)"));
     }
 
     #[test]
@@ -344,7 +400,7 @@ mod tests {
         let root = doc.root();
         let (policy, original) =
             document_csp_policy(&doc, root).expect("header alone must produce a policy");
-        assert!(inline_script_blocked(&policy, None));
+        assert!(inline_script_blocked(&policy, None, ""));
         assert_eq!(original, "script-src 'none'");
     }
 

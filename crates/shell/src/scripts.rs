@@ -783,7 +783,7 @@ pub(crate) fn run_scripts_with_dom(
                             let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
                             doc.get(*nid).get_attr("nonce").map(str::to_owned)
                         };
-                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref()) {
+                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref(), src) {
                             crate::csp_enforce::fire_script_src_violation(&rt, "inline", original_policy);
                             fire_parser_script_event(&rt, *nid, *external_ok);
                             continue;
@@ -848,7 +848,7 @@ pub(crate) fn run_scripts_with_dom(
                             let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
                             doc.get(item.node).get_attr("nonce").map(str::to_owned)
                         };
-                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref()) {
+                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref(), &item.source) {
                             crate::csp_enforce::fire_script_src_violation(&rt, "inline", original_policy);
                             fire_parser_script_event(&rt, item.node, item.external_ok);
                             continue;
