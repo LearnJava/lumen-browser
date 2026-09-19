@@ -370,6 +370,69 @@ fn frame_subresources_reports_csp_blocked_img_and_style_src() {
     assert!(!out.links[0].1, "style-src 'none' must block the fetch, not just report it");
 }
 
+/// GAP-CSPENF срез 22: `style-src` политика ребёнка `<iframe>` также блокирует
+/// его СОБСТВЕННЫЙ инлайновый `<style>`, не только внешний `<link>`
+/// (`frame_subresources_reports_csp_blocked_img_and_style_src` above) — до
+/// этого среза `fetch_frame_subresources` звала `extract_style_blocks(doc,
+/// None)`, то есть политика ребёнка для его собственных `<style>`-узлов не
+/// считалась вовсе, той же дырой, что срез 21 уже закрыл на top-level.
+#[test]
+fn frame_subresources_reports_csp_blocked_inline_style() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                 <meta http-equiv="Content-Security-Policy" content="style-src 'none'">
+                 <style>#probe{color:red}</style>
+               </head><body></body></html>"#,
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
+    let out = fetch_frame_subresources(
+        &mut doc,
+        &base,
+        &sink,
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
+    );
+
+    assert_eq!(out.blocked_inline_style_count, 1, "the sole <style> node is blocked");
+    assert!(!out.css.contains("color"), "blocked <style> text must not reach the cascade");
+}
+
+/// A document without a policy still cascades its own inline `<style>` — the
+/// gate must not misfire when there is nothing to enforce.
+#[test]
+fn frame_subresources_no_policy_keeps_inline_style() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head><style>#probe{color:red}</style></head><body></body></html>"#,
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
+    let out = fetch_frame_subresources(
+        &mut doc,
+        &base,
+        &sink,
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
+    );
+
+    assert_eq!(out.blocked_inline_style_count, 0);
+    assert!(out.css.contains("color"), "no policy must not block inline style");
+}
+
 /// Настоящий PNG `w`×`h` (непрозрачный) для фикстур: `decode_image` обязан его
 /// разобрать, поэтому строка «bytes» тут больше не годится.
 ///

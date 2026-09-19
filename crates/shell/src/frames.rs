@@ -435,6 +435,13 @@ pub(crate) struct FrameSubresourceOutcomes {
     /// already computed this (срез 7), it was just discarded here before this
     /// срез.
     pub(crate) blocked_by_style_src: Vec<String>,
+    /// GAP-CSPENF срез 22: number of inline `<style>` nodes the CHILD's own
+    /// `style-src`/`default-src` policy blocked — same gate srez 21 already
+    /// gives the top-level document's `extract_style_blocks` call, applied
+    /// to the frame's own `csp_gate` (computed above for `img-src` since срез
+    /// 8). No URL to report — `blockedURI` for inline is always `"inline"`,
+    /// same shape as `page_pipeline.rs`'s `blocked_inline_style_count`.
+    pub(crate) blocked_inline_style_count: usize,
 }
 
 /// Запросить подресурсы парсерных элементов под-документа фрейма (BUG-480
@@ -475,10 +482,23 @@ pub(crate) fn fetch_frame_subresources(
     viewport: lumen_core::geom::Size,
     target: lumen_core::ColorSpace,
 ) -> FrameSubresourceOutcomes {
-    // GAP-CSPENF срез 21: инлайновый `<style>` внутри `<iframe>` не гейтится
-    // этим срезом (та же граница, что срез 7 уже документирует для внешнего
-    // `<link>` подфрейма) — политика ребёнка здесь не считается.
-    let (inline, _blocked) = extract_style_blocks(doc, None);
+    // GAP-CSPENF срез 8: same one-shot policy computation as
+    // `subresources.rs::fetch_and_decode_images` — the CHILD document's OWN
+    // policy (`<meta>`/header of the sub-document, not the parent's), so a
+    // frame is gated by its own CSP. Срез 22 moved this above
+    // `extract_style_blocks` (it used to be computed only for `img-src`,
+    // further down) so the inline-`<style>` gate below can use it too.
+    let csp_gate = {
+        let root = doc.root();
+        crate::csp_enforce::document_csp_policy(doc, root)
+    };
+    // GAP-CSPENF срез 22: инлайновый `<style>` внутри `<iframe>` теперь
+    // гейтится по политике РЕБЁНКА — тот же `inline_style_blocked`, что срез
+    // 21 уже применяет к top-level документу; до этого среза `<style>` внутри
+    // `<iframe>` не проверялся вовсе (та же граница, что срез 7 документирует
+    // для внешнего `<link>` подфрейма до срез 8).
+    let (inline, blocked_inline_style_count) =
+        extract_style_blocks(doc, csp_gate.as_ref().map(|(p, _)| p));
     let mut css = inline_css_imports(
         &inline,
         base,
@@ -502,14 +522,6 @@ pub(crate) fn fetch_frame_subresources(
         lumen_layout::collect_image_requests(doc, viewport)
             .into_iter()
             .partition(|req| !req.is_lazy);
-    // GAP-CSPENF срез 8: same one-shot policy computation as
-    // `subresources.rs::fetch_and_decode_images` — the CHILD document's OWN
-    // policy (`<meta>`/header of the sub-document, not the parent's), so a
-    // frame is gated by its own CSP.
-    let csp_gate = {
-        let root = doc.root();
-        crate::csp_enforce::document_csp_policy(doc, root)
-    };
     let self_origin = base.origin();
     // Фаза 1 (параллельно): сеть + декодирование, `doc` не трогаем — форма
     // `fetch_and_decode_images` страницы. Третий элемент кортежа — резолвленный
@@ -582,6 +594,7 @@ pub(crate) fn fetch_frame_subresources(
         lazy_requests,
         blocked_by_img_src,
         blocked_by_style_src,
+        blocked_inline_style_count,
     }
 }
 
@@ -1990,8 +2003,15 @@ pub(crate) fn spawn_frame(
         // `page_pipeline.rs`'s `blocked_by_img_src`/`blocked_by_style_src`
         // dispatch, just against the CHILD's own runtime/policy instead of
         // the page's.
+        // GAP-CSPENF срез 22: same push, extended with the inline-`<style>`
+        // count `fetch_frame_subresources` now also collects for this CHILD
+        // (`blocked_uri = "inline"`, same convention as
+        // `page_pipeline.rs`'s `blocked_inline_style_count` push).
         #[cfg(feature = "v8")]
-        if !subresources.blocked_by_img_src.is_empty() || !subresources.blocked_by_style_src.is_empty() {
+        if !subresources.blocked_by_img_src.is_empty()
+            || !subresources.blocked_by_style_src.is_empty()
+            || subresources.blocked_inline_style_count > 0
+        {
             let original_policy = {
                 let d = child_doc_arc.lock().unwrap();
                 let root = d.root();
@@ -2003,6 +2023,9 @@ pub(crate) fn spawn_frame(
                 }
                 for url in &subresources.blocked_by_style_src {
                     js.fire_csp_violation("style-src", url, &original_policy);
+                }
+                for _ in 0..subresources.blocked_inline_style_count {
+                    js.fire_csp_violation("style-src", "inline", &original_policy);
                 }
             }
         }
