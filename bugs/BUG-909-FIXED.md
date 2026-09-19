@@ -1,6 +1,6 @@
 # BUG-909 — страничный `setTimeout(fn, delay, …args)` теряет хвостовые аргументы: обработчик получает `undefined`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19
 **Заведён:** 2026-08-25 (P1, попутно к [BUG-831](BUG-831-FIXED.md))
 **Область:** `crates/js/src/dom.rs` — `setTimeout`/`setInterval` кладут в очередь
 `{id, fn, deadline, interval, nesting}` и ничего больше, а `_lumen_tick_timers`
