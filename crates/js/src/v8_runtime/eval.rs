@@ -527,3 +527,87 @@ impl V8JsRuntime {
         })
     }
 }
+
+// ── BUG-979: FramePeerBridge — synchronous cross-isolate frame globals ─────
+
+use crate::frame_peer_bridge::{FramePeerBridge, envelope_error, envelope_tag, envelope_value};
+
+impl FramePeerBridge for V8JsRuntime {
+    fn peer_global_get(&self, name: &str) -> JsValue {
+        let name = name.to_owned();
+        self.run(move |inner| {
+            with_tc!(inner, |tc, ctx| {
+                let Some(key) = v8::String::new(tc, &name) else {
+                    return envelope_error("OOM: property name");
+                };
+                let global = ctx.global(tc);
+                let val = global.get(tc, key.into());
+                if tc.has_caught() {
+                    tc.reset();
+                    return envelope_tag("absent");
+                }
+                let Some(val) = val else {
+                    return envelope_tag("absent");
+                };
+                if val.is_undefined() {
+                    return envelope_tag("absent");
+                }
+                if val.is_function() {
+                    return envelope_tag("function");
+                }
+                match from_v8(tc, val) {
+                    Ok(v) => envelope_value(v),
+                    Err(e) => envelope_error(e.to_string()),
+                }
+            })
+        })
+    }
+
+    fn peer_global_call(&self, name: &str, args: &[JsValue]) -> JsValue {
+        let name = name.to_owned();
+        let args = args.to_vec();
+        self.run(move |inner| {
+            with_tc!(inner, |tc, ctx| {
+                let Some(key) = v8::String::new(tc, &name) else {
+                    return envelope_error("OOM: property name");
+                };
+                let global = ctx.global(tc);
+                let func_val = global.get(tc, key.into());
+                if tc.has_caught() {
+                    tc.reset();
+                    return envelope_error(format!("reading '{name}' threw"));
+                }
+                let Some(func_val) = func_val else {
+                    return envelope_error(format!("'{name}' not found in globals"));
+                };
+                let Ok(func) = v8::Local::<v8::Function>::try_from(func_val) else {
+                    return envelope_error(format!("'{name}' is not a function"));
+                };
+                let mut v8_args: Vec<v8::Local<v8::Value>> = Vec::with_capacity(args.len());
+                for a in args.iter().cloned() {
+                    match to_v8(tc, a) {
+                        Ok(v) => v8_args.push(v),
+                        Err(e) => return envelope_error(e.to_string()),
+                    }
+                }
+                let recv = v8::undefined(tc).into();
+                let result = func.call(tc, recv, &v8_args);
+                if tc.has_caught() {
+                    let msg = tc
+                        .exception()
+                        .and_then(|exc| exc.to_string(tc))
+                        .map(|s| s.to_rust_string_lossy(tc))
+                        .unwrap_or_else(|| "cross-frame call threw".to_owned());
+                    return envelope_error(msg);
+                }
+                match result {
+                    Some(val) => match from_v8(tc, val) {
+                        Ok(v) => envelope_value(v),
+                        Err(e) => envelope_error(e.to_string()),
+                    },
+                    None => envelope_value(JsValue::Null),
+                }
+            })
+        })
+    }
+}

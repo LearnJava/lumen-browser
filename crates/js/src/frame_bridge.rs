@@ -237,6 +237,12 @@ pub(crate) struct FrameDocBinding {
     /// `false` — cross-origin или opaque sandbox: нативы чтения отдают пустые
     /// результаты, `.document` фасада окна — `null`.
     pub(crate) accessible: bool,
+    /// BUG-979: хэндл для синхронного кросс-изолятного чтения/вызова
+    /// РЕАЛЬНЫХ глобалов этого под-документа (не только фиксированный
+    /// IDL-набор `winFacade`) — `None` у тестовых биндингов без рантайма и
+    /// когда `accessible == false` (глобалы читаются только same-origin,
+    /// натив дополнительно гейтит это явно, поле не единственная защита).
+    pub(crate) peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
 }
 
 /// Реестр биндингов одного V8-изолята: дочерние фреймы + ссылки на предков.
@@ -507,7 +513,7 @@ fn binding_origin(url: &str, fallback: &str) -> String {
 
 /// Разрешить `bid` (индекс или псевдо-bid предка) в слот реестра.
 #[cfg(feature = "v8-backend")]
-fn resolve_slot(slots: &FrameDocSlots, bid: u32) -> Option<&FrameDocBinding> {
+pub(crate) fn resolve_slot(slots: &FrameDocSlots, bid: u32) -> Option<&FrameDocBinding> {
     match bid {
         PARENT_BID => slots.parent.as_ref(),
         TOP_BID => slots.top.as_ref(),
@@ -1974,23 +1980,29 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       get: function() { return _lumen_f_accessible(bid) ? docFacade(bid) : null; },
       configurable: true,
     });
-    w.window = w;
-    w.self = w;
-    w.frames = w;
+    // BUG-979: self-references resolve to `wins[bid]` (the PROXY this
+    // function returns), not the raw `w` object being built here — a plain
+    // `w.window = w` would make `contentWindow.window !== contentWindow`
+    // once `winFacade` starts wrapping `w` in a Proxy below.  Safe as a
+    // getter: nothing reads these before `wins[bid]` is populated at the end
+    // of this same synchronous call.
+    Object.defineProperty(w, 'window', { get: function() { return wins[bid]; }, configurable: true });
+    Object.defineProperty(w, 'self', { get: function() { return wins[bid]; }, configurable: true });
+    Object.defineProperty(w, 'frames', { get: function() { return wins[bid]; }, configurable: true });
     // parent/top зависят от того, ЧЕЙ фасад читают и откуда. Фасад предка
     // (PARENT_BID/TOP_BID в изоляте ребёнка) сам себе parent/top: контекст,
     // в котором он построен, — его потомок. Фасад дочернего фрейма, читаемый
     // из родителя, отсылает к настоящему окну читающего контекста (срез 2).
     Object.defineProperty(w, 'parent', {
       get: function() {
-        if (isAncestorBid(bid)) return w;
+        if (isAncestorBid(bid)) return wins[bid];
         return typeof window !== 'undefined' ? window : null;
       },
       configurable: true,
     });
     Object.defineProperty(w, 'top', {
       get: function() {
-        if (isAncestorBid(bid)) return w;
+        if (isAncestorBid(bid)) return wins[bid];
         return topOfContext();
       },
       configurable: true,
@@ -2060,8 +2072,43 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       var to = (targetOrigin === undefined || targetOrigin === null) ? '/' : String(targetOrigin);
       _lumen_f_post_message(bid, json, to);
     };
-    wins[bid] = w;
-    return w;
+    var proxied = wrapWinFacadeGlobals(w, bid);
+    wins[bid] = proxied;
+    return proxied;
+  }
+
+  // BUG-979: `w` above only ever answers the fixed IDL-property set it was
+  // built with — same-origin script of the framed document can declare ANY
+  // other global (a function, a plain variable), and until this wrapper
+  // those were unreachable through `contentWindow.foo`/named-window access,
+  // even though HTML LS grants unrestricted same-origin access. `get`
+  // defers to the real own properties first (so `document`/`parent`/`top`/…
+  // above are untouched and no native round-trip happens for them, or for
+  // anything already on `Object.prototype` like `toString`), and only for a
+  // genuine miss asks the Rust bridge for the peer's real `globalThis[prop]`
+  // (`_lumen_f_global_get`/`_lumen_f_global_call` — `frame_bridge_globals.rs`).
+  // Symbols always fall through untouched (well-known symbols like
+  // `Symbol.toPrimitive`, WeakMap keys, …) — cross-isolate lookup only
+  // makes sense for string property names.
+  function wrapWinFacadeGlobals(w, bid) {
+    return new Proxy(w, {
+      get: function(target, prop, receiver) {
+        if (typeof prop === 'symbol' || Reflect.has(target, prop)) {
+          return Reflect.get(target, prop, receiver);
+        }
+        var r = _lumen_f_global_get(bid, String(prop));
+        if (r.kind === 'value') { return r.value; }
+        if (r.kind === 'function') {
+          return function() {
+            var args = Array.prototype.slice.call(arguments);
+            var cr = _lumen_f_global_call(bid, String(prop), args);
+            if (cr.kind === 'error') { throw new Error(cr.message); }
+            return cr.value;
+          };
+        }
+        return undefined;
+      },
+    });
   }
 
   globalThis._lumen_frame_content_document = function(hostNid) {
@@ -2335,6 +2382,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            peer: None,
         });
         f(&rt);
     }
@@ -2379,6 +2427,7 @@ mod tests {
                 url: "https://parent.example/".to_owned(),
                 name: Some("hostframe".to_owned()),
                 accessible,
+                peer: None,
             });
             if let Some(top) = top_html {
                 reg.top = Some(FrameDocBinding {
@@ -2387,6 +2436,7 @@ mod tests {
                     url: "https://top.example/".to_owned(),
                     name: None,
                     accessible,
+                    peer: None,
                 });
             }
         }
@@ -2707,6 +2757,7 @@ mod tests {
             url: "https://parent.example/".to_owned(),
             name: Some("hostframe".to_owned()),
             accessible: true,
+            peer: None,
         });
         rt.eval(
             "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
@@ -2764,6 +2815,7 @@ mod tests {
             url: "https://parent.example/".to_owned(),
             name: Some("hostframe".to_owned()),
             accessible: true,
+            peer: None,
         });
         rt.eval(
             "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
@@ -2805,6 +2857,7 @@ mod tests {
                 url: "about:blank".to_owned(),
                 name,
                 accessible: true,
+                peer: None,
             });
             rt.eval(&format!("_lumen_frame_install_index({i})")).unwrap();
         }
@@ -2872,6 +2925,7 @@ mod tests {
                 url: "about:srcdoc".to_owned(),
                 name: None,
                 accessible: child_accessible_to_parent,
+                peer: None,
             });
         }
         rt_parent
@@ -2892,6 +2946,7 @@ mod tests {
                 url: "https://parent.example/".to_owned(),
                 name: Some("hostframe".to_owned()),
                 accessible: parent_accessible_to_child,
+                peer: None,
             });
         }
         rt_child
@@ -3070,6 +3125,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            peer: None,
         });
         f(&rt, &doc);
     }
@@ -3088,6 +3144,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible: true,
+            peer: None,
         });
         rt
     }
@@ -3225,6 +3282,7 @@ mod tests {
             url: url.to_owned(),
             name: None,
             accessible: true,
+            peer: None,
         };
         let first = upsert_binding(
             &mut registry.lock().unwrap(),
@@ -3266,6 +3324,7 @@ mod tests {
                 url: "about:srcdoc".to_owned(),
                 name: None,
                 accessible: true,
+                peer: None,
             });
         }
         assert!(eval_bool(

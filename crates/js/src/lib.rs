@@ -140,6 +140,21 @@ pub mod sw_worker;
 #[cfg(feature = "v8-backend")]
 pub(crate) mod v8_compat;
 
+/// BUG-979: object-safe handle for a synchronous cross-isolate call into a
+/// peer frame's real `globalThis` — see module doc for why `frame_bridge`'s
+/// otherwise-always-async design makes a deliberate exception here. `pub`
+/// (not `pub(crate)`): `crates/shell`'s `PersistentJs::register_*_document`
+/// names [`frame_peer_bridge::FramePeerBridge`] in its own signature.
+#[cfg(feature = "v8-backend")]
+pub mod frame_peer_bridge;
+
+/// BUG-979: `_lumen_f_global_get`/`_lumen_f_global_call` natives — split out
+/// of `frame_bridge` (already over the file-size cap) rather than grown into
+/// it; registered against the same registry right after
+/// `frame_bridge::install_frame_bridge_v8`.
+#[cfg(feature = "v8-backend")]
+pub(crate) mod frame_bridge_globals;
+
 /// V8-based JS runtime (slices S1–S2: runtime skeleton + compat layer).
 ///
 /// Compiled only when the `v8-backend` feature is enabled. `V8JsRuntime` is

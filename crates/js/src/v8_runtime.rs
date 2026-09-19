@@ -845,6 +845,15 @@ impl V8JsRuntime {
         {
             eprintln!("v8: frame_bridge::install_frame_bridge_v8 failed: {e}");
         }
+        // BUG-979: `_lumen_f_global_get`/`_lumen_f_global_call` — winFacade's
+        // fallback onto a peer frame's real globals, against the SAME
+        // registry the bridge above just installed against.
+        if let Err(e) = crate::frame_bridge_globals::install_frame_bridge_globals_v8(
+            self,
+            Arc::clone(&self.frame_docs),
+        ) {
+            eprintln!("v8: frame_bridge_globals::install_frame_bridge_globals_v8 failed: {e}");
+        }
         install_v8!(iframe_element::install_iframe_element_bindings_v8);
         install_v8!(inert::install_inert_api_v8);
         install_v8!(intl_bindings::install_intl_bindings_v8);

@@ -105,7 +105,7 @@ impl Lumen {
                     ) {
                         eprintln!("bfcache thaw: JS DOM init failed: {e}");
                     }
-                    self.set_js_ctx(Some(Arc::new(V8PersistentJs { rt }) as Arc<dyn PersistentJs>));
+                    self.set_js_ctx(Some(Arc::new(V8PersistentJs { rt: Arc::new(rt) }) as Arc<dyn PersistentJs>));
                 }
                 Err(e) => {
                     eprintln!("bfcache thaw: V8 init failed: {e}");

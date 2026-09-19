@@ -908,7 +908,12 @@ pub(crate) fn run_scripts_with_dom(
                         JsNavigateRequest::SubmitForm { form, submitter },
                 });
                 // Keep rt alive: return as PersistentJs so event handlers work after load.
-                let ctx: Arc<dyn PersistentJs> = Arc::new(V8PersistentJs { rt });
+                // BUG-979: `rt` is `Arc`-wrapped (not owned by value) so a peer
+                // frame's registry can hold its own clone alongside the
+                // `Arc<Mutex<Document>>` it already keeps — `register_iframe_document`/
+                // `register_parent_document`/`register_top_document` hand that clone
+                // out for `FramePeerBridge`.
+                let ctx: Arc<dyn PersistentJs> = Arc::new(V8PersistentJs { rt: Arc::new(rt) });
                 return (doc_arc, nav_req, Some(ctx));
             }
             Err(e) => {
