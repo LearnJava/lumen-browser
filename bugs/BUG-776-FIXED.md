@@ -221,7 +221,7 @@ location=object`, `--variant worker-async-postmessage` — `async:<platform>,tru
   `deviceMemory`, `userAgentData` — последний прямо назван в
   `WorkerNavigator_userAgentData.http.html`).
 - **`search`/`hash` для URL, оканчивающегося на `?`/`#`** — единственный FAIL
-  из 19: [BUG-904](BUG-904-OPEN.md), дефект общего `_lumen_parse_url`, видимый
+  из 19: [BUG-904](BUG-904-FIXED.md), дефект общего `_lumen_parse_url`, видимый
   и на странице.
 - Кластеры `SharedWorker-extendedLifetime-*`/`constructors/*` этой правкой не
   сдвинулись — предположение раздела ниже о «попутном чтении `location`» не

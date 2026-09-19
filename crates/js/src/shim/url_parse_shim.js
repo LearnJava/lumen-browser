@@ -36,9 +36,12 @@ function _lumen_parse_url(url) {
         }
         host = port ? hostname + ':' + port : hostname;
         var hIdx = rest.indexOf('#');
-        if (hIdx >= 0) { hash = rest.slice(hIdx); rest = rest.slice(0, hIdx); }
+        // URL Standard §6.3: an empty fragment/query (nothing after '#'/'?')
+        // serializes as '', not as the bare delimiter — a trailing '?' or '#'
+        // with no content means "absent", same as never having one.
+        if (hIdx >= 0) { hash = rest.slice(hIdx); rest = rest.slice(0, hIdx); if (hash === '#') hash = ''; }
         var qIdx = rest.indexOf('?');
-        if (qIdx >= 0) { search = rest.slice(qIdx); rest = rest.slice(0, qIdx); }
+        if (qIdx >= 0) { search = rest.slice(qIdx); rest = rest.slice(0, qIdx); if (search === '?') search = ''; }
         pathname = rest || '/';
         origin = protocol + '//' + host;
     } else {
