@@ -2115,6 +2115,7 @@ the time — read dates.
   And **one file per const is the invariant, not an accident**: `web_api_shim()` concatenates the consts
   in source order — that order is the only thing making V8 compile one program with one hoisting scope —
   so subdividing a `.js` file further would break the eye-checkable correspondence between the two lists.
+- **`video_bindings.rs`'s `VIDEO_SHIM` followed the same split** (GAP-MEDIADECODE срез 5, 2026-09-19): the file had grown past the 2000-line cap on a large embedded raw string, so the JS moved verbatim to `shim/video_element.js` and `VIDEO_SHIM` became `include_str!("shim/video_element.js")` — same verbatim-read caveat as above, edit the `.js`.
 - **`v8_runtime.rs` is a module directory now** (SPLIT-JS4/JS-5, 2026-08-28): the tests live in
   `v8_runtime/tests/`, and the file's tail in `v8_runtime/{history_state,dom_helpers,code_cache,eval,value}.rs`.
   What stayed in `v8_runtime.rs` is the platform init, `V8JsRuntime` with its inherent `impl`s, and
