@@ -2752,4 +2752,52 @@ url()` (везде — и top-level, и `<iframe>`), `<video>`/`<audio>`/`<track
 общего списка дорожки не изменился: `report-to`, `manifest-src`, честная
 per-policy `originalPolicy`.
 
+## Срез 48 (2026-09-20, `p6-gap-cspenf-srez48`) — `upgrade-insecure-requests` для `@font-face url()`
+
+Механическое продолжение срезов 43-47, названное срезом 47 не покрытым:
+`csp_enforce::upgrade_insecure_url` применена к обоим существующим
+производителям `@font-face`-фетча — top-level (`page_load.rs`, async-поток
+FOUT-паттерна PH3-19) и `<iframe>` (`frames.rs::load_frame_fonts`,
+синхронный путь FRAME-5) — оба уже гейтили `font-src` срезами 19/25, но
+`http://`-адрес, который они гейтили и фетчили, был сырым.
+
+- [`page_load.rs`](../crates/shell/src/page_load.rs) — `resolved` (сырой
+  `base.resolve_str(&pf.url)`) сначала идёт через `upgrade_insecure_url`;
+  апгрейженный `gate_url` — то, что видит `font_src_blocked`, что несёт
+  `fire_csp_violation` при блокировке и что реально уходит в
+  `fetch_font_bytes` внутри спавненного потока (тот же порядок Fetch §4.1,
+  что срезы 43-47 уже дали остальным производителям).
+- [`frames.rs::load_frame_fonts`](../crates/shell/src/frames.rs) — тот же
+  приём: `gate_url` вместо `resolved` и в `font_src_blocked`, и в
+  `blocked_by_font_src`, и в `fetch_font_bytes`.
+- `local()`-источники (уже резолвленные `load_font_faces` до этого цикла,
+  системный шрифт по имени) апгрейд не видит — там нет URL со схемой
+  `http`, менять нечего, как и в предыдущих срезах.
+- Пять юнит-тестов `upgrade_insecure_url` (срез 43) переиспользованы без
+  изменений; `cargo test -p lumen-shell --profile dev-release --features
+  v8 --bin lumen csp` — 96 passed, 0 failed.
+
+Подтверждено двумя живыми пробами (простой HTTP-сервер на `127.0.0.1`,
+`<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">`
++ `@font-face { src: url("http://…/font.woff2") }`): top-level страница —
+stderr показывает `GET https://127.0.0.1:8794/font.woff2` с последующим
+`TLS handshake: received corrupt message`, сервер получает только `GET
+/top.html`; `<iframe>`-вариант (`top.html` → `<iframe src="frame.html">`,
+CSP и `@font-face` во фрейме) — та же картина: `GET /top.html`, `GET
+/frame.html`, TLS ClientHello на `/font.woff2`, ни одного `http://`-запроса
+шрифта не долетело до сервера ни в одном из двух случаев.
+
+`cargo clippy -p lumen-shell --profile dev-release --all-targets --features
+v8 -- -D warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца —
+тот же известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия
+этого среза.
+
+Не покрыто этим срезом (продолжение BUG-692, не изменилось):
+`<video>`/`<audio>`/`<track>`, `fetch()`/XHR/WebSocket (`ws://` → `wss://`),
+навигации верхнего документа и `<iframe>`, заголовок
+`Upgrade-Insecure-Requests: 1` на навигационном запросе и `upgrade
+insecure navigations set` (UIR §4.1 шаги 1-2). Остаток общего списка
+дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
+`originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
