@@ -68,13 +68,23 @@
 //! только на top-level документе; фон под-документа `<iframe>`
 //! (`frames.rs::fetch_frame_background_images`) не тронут этим срезом.
 //!
-//! Что НЕ покрыто (следующие срезы): остальные директивы (`object-src`/
-//! `media-src`/`manifest-src`/…), `report-to` (Reporting API,
+//! Срез 19 добавил `font-src`/`default-src` против `@font-face url()` — эта
+//! директива не была даже распарсена до этого среза (`CspDirective::FontSrc`
+//! — новый вариант). Тот же host/scheme/`'self'` фетч-гейт, что дают
+//! [`img_src_blocked`]/[`media_src_blocked`], под именем [`font_src_blocked`];
+//! вызывается не отсюда — единственный фетчер (`page_load.rs::
+//! apply_loaded_page`'s `pending_web_fonts`-цикл) грузит байты на детач-потоке
+//! без `&Document`, поэтому решение «фетчить или нет» принимается на главном
+//! потоке до `std::thread::spawn`, той же одноразовой схемой чтения политики,
+//! что срез 9 уже даёт `loading="lazy"`. Шрифты внутри `<iframe>`
+//! (`frames.rs::load_frame_fonts`) не тронуты.
+//!
+//! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/
+//! `child-src`/…), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
 //! hash-источники (только `'unsafe-inline'` и `'nonce-…'`),
-//! `@font-face url()` (использует `fetch_font_bytes`/`fetch_image_bytes`
-//! напрямую, не гейтится вовсе), `background-image` внутри `<iframe>`
-//! (см. выше), инлайновые `<style>`/атрибут `style` (не блокируются, только
+//! `@font-face url()`/`background-image` внутри `<iframe>` (см. выше),
+//! инлайновые `<style>`/атрибут `style` (не блокируются, только
 //! внешний `<link>`), `@import` внутри уже загруженного листа (наследует
 //! политику владельца, отдельно не проверяется), честная независимая
 //! проверка заголовка и `<meta>` вместо их слияния, `importScripts()`

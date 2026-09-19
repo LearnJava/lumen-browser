@@ -1167,3 +1167,49 @@ clippy -p lumen-shell --all-targets --features v8 -- -D warnings` — чисто
 `connect-src`/`worker-src`/`frame-src`/`object-src`/`media-src`; `frame-src`
 top-level; `frame-ancestors`; `report-to`; hash-источники; честная
 независимая проверка заголовка и `<meta>`.
+
+## Срез 19 (2026-09-19, `p6-gap-cspenf-srez19`) — `font-src` против `@font-face url()`
+
+Реализовано: `font-src` (CSP3 §6.1, покрывает `@font-face src`) не была даже
+распарсена — `grep -n FontSrc crates/network/src/csp.rs` до этого среза давал
+ноль совпадений, а не «распарсена, но не проверяется», как у предыдущих
+директив (срезы 13/16/17). Добавлена `CspDirective::FontSrc` (парсер, тот же
+generic-фолбэк на `default-src`, что и у всех остальных директив здесь — не
+нужно ничего сверх строки `"font-src" => CspDirective::FontSrc` в
+`crates/network/src/csp.rs`) и `csp_enforce::font_src_blocked` — тот же
+host/scheme/`'self'` фетч-гейт, что уже есть у `img_src_blocked`/
+`media_src_blocked` (срезы 4/17); +5 unit-тестов симметрично `media_src_*`.
+
+Единственная точка, реально фетчащая байты `@font-face url()` страницы, —
+`crates/shell/src/page_load.rs::apply_loaded_page`, PH3-19: цикл по
+`page.pending_web_fonts`, каждый источник грузится на детач-`std::thread::spawn`
+(асинхронно, чтобы не держать первый paint — FOUT). У детач-потока нет
+`&self`, то есть нет `js_ctx`/`engine_thread` для диспатча
+`securitypolicyviolation` изнутри него (та же причина, по которой срезы 10-13/
+16/17 переносили гейт в `lumen-network` — здесь переносить некуда, точка
+решения «фетчить или нет» синхронная и на главном потоке). Поэтому политика
+документа (`document_csp_policy`, тот же `self.layout_source`, что срез 9 уже
+читает для `loading="lazy"`) считается один раз до цикла, а сам
+`font_src_blocked`-чек стоит **до** `std::thread::spawn`: заблокированный URL
+не долетает до `fetch_font_bytes` вовсе (принцип «ни одного исходящего
+байта»), нарушение диспатчится через `route_task_js`/`fire_csp_violation`
+(тот же путь, что срез 9 использует для заблокированной lazy-картинки), и
+поток для этого источника просто не порождается — шрифт не регистрируется в
+`page_font_registry`, каскад падает на системный фолбэк тем же путём, что и
+любой другой `@font-face`, который не успел/не смог загрузиться.
+
+Не покрыто этим срезом: `@font-face url()` внутри `<iframe>`
+(`frames.rs::load_frame_fonts` — синхронная загрузка фреймовых шрифтов, не
+тронута, тот же пробел, что срезы 4/6/8/16 документировали для
+картинок/скриптов/object-src до их собственного среза); директивы кроме
+`script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`/`frame-src`/
+`object-src`/`media-src`/`font-src` (`manifest-src`/`child-src`/…);
+`frame-src` top-level; `frame-ancestors`; `report-to`; hash-источники;
+честная независимая проверка заголовка и `<meta>`.
+
+Подтверждено `cargo build -p lumen-shell --features v8` + `cargo clippy -p
+lumen-shell -p lumen-network --all-targets --features v8 -- -D warnings`
+(оба чисто) + `cargo test -p lumen-shell --features v8 csp_enforce` (38/38,
++6 новых `font_src_*`) + `cargo test -p lumen-network font_src` (без
+регрессий — новых Rust-тестов в `lumen-network` не заводилось, парсинг
+проверен через `csp_enforce`'s unit-тесты).
