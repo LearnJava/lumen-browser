@@ -2378,3 +2378,55 @@ lumen-shell --features v8 --bin lumen csp` (90 passed, 0 failed — было 89 
 повторный `Content-Security-Policy`-заголовок ответа в одну строку до того,
 как этот срез вообще видит текст — CSP3 §3.4 тоже требует независимости и
 здесь, но это отдельный, более редкий случай, не тронутый этим срезом).
+
+## Срез 41 (2026-09-19, `p6-gap-cspenf-srez41`) — несколько occurrences ОДНОГО заголовка `Content-Security-Policy` теперь тоже независимые политики
+
+Ровно тот пробел, что срез 40 сам назвал не покрытым в конце своего раздела
+выше. Живая проба (`/tmp`-сервер, два экземпляра заголовка:
+`Content-Security-Policy: script-src 'none'`, затем `Content-Security-Policy:
+script-src 'unsafe-inline'`, инлайновый `<script>`, меняющий текст `<p
+id="marker">`): до фикса `./target/dev-release/lumen.exe --dump-layout
+http://127.0.0.1:<port>/` показывал `"INLINE_SCRIPT_RAN"` — инлайн выполнился,
+хотя первая политика (`'none'`) обязана заблокировать его независимо от
+второй. Контроль (тот же сервер, только строгий заголовок один раз) корректно
+давал заблокированный текст `"before"`.
+
+Причина, буквально повторяющая срез 40 на один уровень раньше:
+`page_source::content_security_policy_header` фильтровала все вхождения
+заголовка и делала `parts.join("; ")` ДО того, как `document_csp_policy`
+вообще видело текст — то есть заголовок доезжал до `document_csp_policy` уже
+как один готовый "part" наравне с каждой `<meta>`, и `CspPolicy::directives`
+(`HashMap`) при повторении одной директивы в двух occurrences заголовка
+хранил только последнее значение.
+
+- [`page_source::content_security_policy_header`](../crates/shell/src/page_source.rs)
+  теперь возвращает `Vec<String>` — один элемент на occurrence заголовка —
+  вместо склеенного `Option<String>`.
+- [`Document::csp_header`](../crates/engine/dom/src/lib.rs) — поле, геттер
+  (`csp_header(&self) -> &[String]`) и сеттер (`set_csp_header(&mut self,
+  Vec<String>)`) сменили тип с `Option<String>`/`Option<&str>` на
+  `Vec<String>`/`&[String]`, той же механической заменой, что срез 40 уже
+  дал `CspPolicy` → `Vec<CspPolicy>`.
+- [`csp_enforce::document_csp_policy`](../crates/shell/src/csp_enforce.rs)/
+  `document_csp_policy_combined` теперь берут `doc.csp_header().to_vec()`
+  (весь список occurrences) вместо `doc.csp_header().map(str::to_owned)
+  .into_iter().collect()` (один опциональный элемент) — остальная логика
+  (добавить `<meta>`-части, распарсить каждую по отдельности) не изменилась.
+- Изменение распространилось через `page_pipeline.rs::{render_bytes,
+  parse_and_layout}` (параметр `csp_header: Option<&str>` →
+  `csp_header: &[String]`) и все вызывающие сайты — `page_source.rs::load`,
+  `app/user_event.rs`, `dump_mode.rs` (четыре точки: скриншот, PDF, PDF с
+  опциями, `--dump-layout`/`--dump-display-list`) — компилятор нашёл каждый
+  сайт несовпадения типов.
+- Новый юнит-тест `repeated_response_header_stays_independent`
+  (`csp_enforce.rs`) — два occurrences заголовка через `set_csp_header`,
+  первый строгий (`script-src 'none'`), второй лояльный (`'unsafe-inline'`);
+  `document_csp_policy` над результатом обязано остаться блокирующим. Плюс
+  `page_source.rs::csp_header_repeated_stays_independent` (переименован из
+  `csp_header_repeated_is_merged`, срез 5) проверяет сам список, а не
+  склеенную строку. `cargo test -p lumen-shell --profile dev-release csp`
+  (91 passed, 0 failed — было 90 до этого среза) без регрессий; `cargo
+  clippy -p lumen-shell -p lumen-dom --all-targets -- -D warnings` чисто.
+
+Не покрыто этим срезом: то же, что срез 40 оставил открытым —
+`lumen-network::HttpClient`'s четыре gate'а, `report-to`, `manifest-src`.

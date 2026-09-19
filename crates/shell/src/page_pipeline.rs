@@ -42,10 +42,11 @@ pub(crate) fn render_bytes(
     // `nav_timing`'s doc comment for what these two can and can't express.
     response_status: u16,
     redirected: bool,
-    // GAP-CSPENF срез 5: raw `Content-Security-Policy` response header, stamped
-    // onto the parsed document so every enforcement point sees it next to the
-    // document's `<meta>` policies.
-    csp_header: Option<&str>,
+    // GAP-CSPENF срез 5: raw `Content-Security-Policy` response header(s),
+    // stamped onto the parsed document so every enforcement point sees them
+    // next to the document's `<meta>` policies. срез 41: one entry per header
+    // occurrence, not joined — CSP3 §3.4 treats each as an independent policy.
+    csp_header: &[String],
     // GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition resolved from the
     // response's `Document-Policy`/`Permissions-Policy` (+ `-Report-Only`)
     // headers — see `page_source::document_policy_sync_xhr_disposition`/
@@ -702,12 +703,12 @@ pub(crate) fn parse_and_layout(
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     target: lumen_core::ColorSpace,
     media_print: bool,
-    // GAP-CSPENF срез 5: the response's `Content-Security-Policy` header, or
-    // `None` for a non-network source. Stamped onto the document right after
+    // GAP-CSPENF срез 5: the response's `Content-Security-Policy` header(s),
+    // empty for a non-network source. Stamped onto the document right after
     // parsing — before any script runs — so that the enforcement points,
-    // which only ever receive a `&Document`, can combine it with the
-    // document's `<meta>` policies.
-    csp_header: Option<&str>,
+    // which only ever receive a `&Document`, can combine them with the
+    // document's `<meta>` policies. срез 41: one entry per header occurrence.
+    csp_header: &[String],
     // GAP-POLICYREPORT (BUG-953): see `render_bytes`'s doc comment on these
     // same two parameters — passed straight through to the `HttpClient` built
     // below, no per-document merge needed.
@@ -745,10 +746,10 @@ pub(crate) fn parse_and_layout(
             doc.set_content_type(mime.to_string());
         }
     }
-    // GAP-CSPENF срез 5: the response header travels on the document, the same
-    // way `character_set`/`content_type` above do, because CSP is enforced from
-    // several places that hold nothing but a `&Document`.
-    doc.set_csp_header(csp_header.map(str::to_owned));
+    // GAP-CSPENF срез 5: the response header(s) travel on the document, the
+    // same way `character_set`/`content_type` above do, because CSP is
+    // enforced from several places that hold nothing but a `&Document`.
+    doc.set_csp_header(csp_header.to_vec());
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.

@@ -278,7 +278,7 @@ impl Lumen {
                         raw.cache_control_no_store,
                         raw.status,
                         raw.redirected,
-                        raw.csp_header.as_deref(),
+                        &raw.csp_header,
                         raw.sync_xhr_document_policy,
                         raw.sync_xhr_permissions_policy,
                     )
