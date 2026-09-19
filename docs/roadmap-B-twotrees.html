@@ -1971,15 +1971,15 @@
     {
      "id": "UPD",
      "title": "UPD: Самообновление браузера",
-     "status": "planned",
+     "status": "active",
      "note": "Самообновление через GitHub Releases (свой сервер не нужен): подписанный манифест latest.json (ed25519, ключи в клиенте), zip → mini-ZIP reader → rename-трюк для 2 бинарников; пользовательские данные апдейтер не трогает — миграции выполняет новый бинарник (user_version + бэкап). Дизайн 2026-07-07, бриф docs/tasks/ph3-self-update.md",
      "tasks": [
       {
        "id": "UPD-1",
        "title": "UPD-1: Манифест + версии",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Типы UpdateManifest (serde_json уже в shell) + парсер/компаратор версий x.y.z (без крейта semver)"
+       "note": "Типы UpdateManifest (serde_json уже в shell) + парсер/компаратор версий x.y.z (без крейта semver). **Ревизия 2026-09-19 (P1):** `crates/shell/src/update.rs` — `UpdateManifest`/`UpdateAsset` (serde-парсинг `latest.json`), `Version` (x.y.z, `Ord`), `UpdateManifest::is_newer_than` (downgrade-защита форвард-онли), `current_version()` из `CARGO_PKG_VERSION`; 10 юнит-тестов. Модуль пока не подключён к шеллу (`#![allow(dead_code)]`, по образцу `download.rs`) — первый вызывающий код появится в UPD-2 (fetch `latest.json`)."
       },
       {
        "id": "UPD-2",
