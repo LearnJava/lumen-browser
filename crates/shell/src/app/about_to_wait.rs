@@ -789,6 +789,20 @@ impl Lumen {
                 }
                 AutomationCommand::Click(target) => {
                     match self.resolve_automation_target(&target) {
+                        // BUG-934: a raw `Target::Point` may land on engine
+                        // chrome (toolbar/tab strip/sidebar) rather than page
+                        // content — try that dispatch first, exactly like a
+                        // real mouse click (`on_mouse_input`) does, before
+                        // falling through to the page hit-test/mismatch check
+                        // below. `resolved.node` is only `Some` for
+                        // `Target::Selector`/`Target::NodeId`, which never
+                        // resolve into the chrome document in the first
+                        // place, so this can't shadow a legitimate page miss.
+                        Some(resolved)
+                            if self.try_dispatch_chrome_click(resolved.x, resolved.y, event_loop) =>
+                        {
+                            let _ = reply_tx.send(AutomationReply::Ack);
+                        }
                         // BUG-1044: a resolved point is not yet a delivered
                         // click — check that the hit test at that point really
                         // reaches the named element (or its subtree) before
@@ -817,6 +831,29 @@ impl Lumen {
                     // an unresolvable target was half of BUG-436's "succeeds
                     // but does nothing" signature.
                     match self.resolve_automation_target(&target) {
+                        // BUG-934: same chrome-first dispatch as `Click`
+                        // above. Once the click opens e.g. the address bar,
+                        // route characters through `address_bar.append_str`
+                        // (the same plain-text path `handle_address_bar_key`
+                        // uses) instead of `inject_char`, which only ever
+                        // targets a focused *page* DOM node and knows nothing
+                        // about the chrome document.
+                        Some(resolved)
+                            if self.try_dispatch_chrome_click(resolved.x, resolved.y, event_loop) =>
+                        {
+                            if self.address_bar.is_open() {
+                                self.address_bar.append_str(&text);
+                                let sugg = self.query_omnibox_suggestions();
+                                self.address_bar.set_suggestions(sugg);
+                                self.relayout_chrome_host();
+                                self.request_redraw();
+                                let _ = reply_tx.send(AutomationReply::Ack);
+                            } else {
+                                let _ = reply_tx.send(AutomationReply::Error(
+                                    "Chrome target is not a text field".to_string(),
+                                ));
+                            }
+                        }
                         // BUG-1044: same hit check as `Click` — the focus this
                         // click sets is what the characters below go into, so a
                         // point that lands on a foreign element types into the
