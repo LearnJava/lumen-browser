@@ -1033,12 +1033,21 @@ fn install_shared_worker_globals_v8(
 
     // _lumen_import_scripts_resolve(url) → String | undefined — BUG-778, see
     // this function's own doc comment on the `blob:lumen/` limitation.
+    //
+    // GAP-CSPENF срез 28: same `worker-src`/`default-src` gate that
+    // `worker.rs`'s twin registration now applies — a `SharedWorker` shares
+    // the classic-script `worker-src` fetch gate (срез 13), so its
+    // `importScripts()` must reuse it for the same reason (CSP3 §6.4:
+    // `worker-src` governs both).
     {
         let no_blobs: crate::worker::WorkerBlobStore = Arc::new(Mutex::new(HashMap::new()));
         let fp = fetch_provider;
         rt.register_native(
             "_lumen_import_scripts_resolve",
             into_v8_fn1(move |url: String| -> Option<String> {
+                if crate::worker::import_scripts_csp_blocked(fp.as_deref(), &url) {
+                    return None;
+                }
                 crate::worker::resolve_import_url(&url, &no_blobs, fp.as_deref())
             }),
         )?;

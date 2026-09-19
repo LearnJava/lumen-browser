@@ -1640,3 +1640,47 @@ allow/deny, `'none'`, `'self'` относительно origin защищаем�
 `cargo test -p lumen-shell --features v8 --bin lumen` (1900 passed, 0
 failed) без регрессий; `cargo clippy -p lumen-network -p lumen-shell
 --all-targets --features v8 -- -D warnings` чисто.
+
+## Срез 28 (2026-09-19, `p6-gap-cspenf-srez28`) — `worker-src` против `importScripts()` внутри уже запущенного воркера
+
+Закрыт ровно тот пробел, что срез 13 сам назвал непокрытым в своей записи:
+`worker-src` гейтил только начальный классический скрипт конструктора
+(`_lumen_worker_fetch_script`/`_lumen_sw_fetch_script`), а последующие вызовы
+`importScripts(url)` внутри уже запущенного `Worker`/`SharedWorker` уходили
+прямиком в `fetch_worker_script` — тот же `fetch_sync` без единой проверки
+политики, хотя CSP3 §6.4 явно говорит: `worker-src` управляет «worker'а
+скриптом и его импортированными скриптами» как одним целым.
+
+- `crates/js/src/worker.rs`: новая `import_scripts_csp_blocked(provider, url)`
+  — `true`, если `url` не `data:`/`blob:lumen/` (эти никогда не идут в сеть в
+  `resolve_import_url`, поэтому им нечего гейтить) и `provider.check_worker_src(url)`
+  отказывает. Та же функция `check_worker_src` (`crates/core/src/ext.rs`,
+  срез 13), что уже гейтит конструктор — здесь просто вызывается из второй
+  точки входа.
+- Обе регистрации `_lumen_import_scripts_resolve` — dedicated worker
+  (`worker.rs::install_worker_globals_v8`) и `SharedWorker`
+  (`shared_worker.rs`) — зовут `import_scripts_csp_blocked` до
+  `resolve_import_url`/`fetch_worker_script`; заблокированный URL не
+  фетчится вовсе, тот же принцип «ни одного исходящего байта», что каждый
+  предыдущий срез этого GAP уже применяет на своей точке. `ServiceWorker`'s
+  `importScripts` (`sw_worker.rs`) не тронут — его конструирование само
+  никогда не было в объёме среза 13 (только `new Worker`/`new SharedWorker`),
+  так что это отдельный, более широкий пробел, не сужаемый этим срезом.
+- Никакого `securitypolicyviolation` для этого случая: в отличие от
+  конструктора (чей гейт стоит на **родительском** JS-рантайме, где
+  `document`/CSP-шим уже есть), `_lumen_import_scripts_resolve` исполняется
+  на рантайме самого воркера — там нет ни `document`, ни установленного
+  `SecurityPolicyViolationEvent`. Заблокированный вызов выглядит для скрипта
+  как обычная сетевая неудача (`Error: importScripts: cannot load script: …`,
+  тот же путь, что уже даёт истёкший/недоступный URL) — само блокирование
+  происходит независимо от того, доставлено ли событие.
+
+Тесты: +3 в `crates/js/src/worker.rs::tests`
+(`v8_import_scripts_blocked_by_worker_src_never_reaches_fetch` — сквозной
+прогон через реальный `importScripts()` с провайдером, чей `fetch_sync`
+вернул бы исполняемое тело, если бы был достигнут;
+`import_scripts_csp_blocked_skips_data_and_blob_urls`;
+`import_scripts_csp_blocked_without_provider_never_blocks`).
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` (чисто), `cargo test -p lumen-js --features v8-backend --lib
+worker::tests` и `shared_worker::tests` (без регрессий).
