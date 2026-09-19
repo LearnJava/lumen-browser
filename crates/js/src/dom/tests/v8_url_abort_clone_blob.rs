@@ -323,6 +323,69 @@ fn structured_clone_array_buffer() {
 }
 
 #[test]
+fn structured_clone_transfer_detaches_array_buffer() {
+    // P3-structclone: `transfer` option (HTML LS §2.7.3) detaches the
+    // original ArrayBuffer instead of copying it — the clone gets the data,
+    // the source becomes byteLength 0 / unusable.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var buf = new ArrayBuffer(4);
+                     new Uint8Array(buf).set([1, 2, 3, 4]);
+                     var c = structuredClone(buf, { transfer: [buf] });
+                     var cv = new Uint8Array(c);
+                     c instanceof ArrayBuffer && c !== buf &&
+                     cv[0] === 1 && cv[3] === 4 && buf.byteLength === 0",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_transfer_preserves_identity_inside_graph() {
+    // A transferred object referenced elsewhere in the cloned graph must
+    // resolve to the same moved-to clone, not a second independent copy.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var buf = new ArrayBuffer(4);
+                     var c = structuredClone({ a: buf, b: buf }, { transfer: [buf] });
+                     c.a === c.b && c.a !== buf",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_transfer_duplicate_throws_data_clone_error() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var buf = new ArrayBuffer(4);
+                     var threw = false, name = '';
+                     try { structuredClone(buf, { transfer: [buf, buf] }); }
+                     catch (e) { threw = true; name = e.name; }
+                     threw && name === 'DataCloneError'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn structured_clone_transfer_rejects_non_transferable() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var threw = false, name = '';
+                     try { structuredClone({}, { transfer: [{}] }); }
+                     catch (e) { threw = true; name = e.name; }
+                     threw && name === 'DataCloneError'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn structured_clone_typed_array() {
     // Typed array clones its element type, length and values; original
     // stays independent.
