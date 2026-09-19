@@ -1188,6 +1188,36 @@ fn url_hash() {
     assert_eq!(r, lumen_core::JsValue::String("#section".into()));
 }
 
+// BUG-904: a URL ending in a bare '?' or '#' has no query/fragment at all
+// (URL Standard §6.3) — `search`/`hash` must report '', not the delimiter.
+#[test]
+fn url_search_empty_when_trailing_question_mark() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("new URL('http://example.test/x?').search").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("".into()));
+}
+
+#[test]
+fn url_hash_empty_when_trailing_hash() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("new URL('http://example.test/x#').hash").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("".into()));
+}
+
+#[test]
+fn location_search_empty_when_trailing_question_mark() {
+    let rt = v8_runtime_with_url("https://example.com/x?");
+    let r = rt.eval("location.search").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("".into()));
+}
+
+#[test]
+fn location_hash_empty_when_trailing_hash() {
+    let rt = v8_runtime_with_url("https://example.com/x#");
+    let r = rt.eval("location.hash").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("".into()));
+}
+
 #[test]
 fn url_origin() {
     let rt = v8_runtime_with_dom(make_doc());
