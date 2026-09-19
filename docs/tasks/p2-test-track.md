@@ -1229,6 +1229,35 @@ shim не устанавливался, ожидания не ослабляли
 TIMEOUT/MISSING с предшествующей нагрузкой и точной последовательностью id;
 до этого повторная генерация baseline не обоснована.
 
+### TEST-3: срез 35 (2026-09-19) — `webmessaging` закрыт, три плавающих подтеста сужены
+
+Кандидат выбран по счётчику файлов и предиктору (`RemoteContext`/`window.open`/
+`dispatcher`/`test_driver.*`): `webmessaging` — 161 id, 7 хитов, 3 `.https.`;
+`html-ruby-extensions` и `html-longdesc` отброшены — ни одного файла с
+`testharness.js`, только рефтесты, baseline получить нечем. `--update-expected
+--recursive --processes 4` — 7:01 (112/161 harness OK, 109/274 сабтестов, 92 новых
+`.ini`; бинарь `dev-release` от `origin/main` `a3f6ad16f`).
+
+Два первых `--check` подряд разошлись: первый — 0 регрессий, второй — 1
+(`event.data.sub.htm`: подтест «event.data returns the data of the message.»
+ожидался `NOTRUN`, получен `TIMEOUT`, при том что весь файл и так `TIMEOUT`) плюс
+unexpected-PASS `multi-globals/broadcastchannel-current.sub.html` (`TIMEOUT` → `OK`).
+Это не флип одной пары подтестов (срез 33), а неустойчивая разметка ещё не начатого
+подтеста после harness-таймаута (`NOTRUN`/`TIMEOUT`) и гонка `BroadcastChannel`
+между двумя контекстами; на двух ini одного механизма (`event.data`, `event.origin`)
+статус плавал в обе стороны. Baseline сужен приёмом среза 33 (первый элемент —
+ожидаемый, остальные — known-intermittent, `classify_one` пропускает всё из
+`{expected, *known_intermittent}`): `event.data` подтест `[NOTRUN, TIMEOUT]`,
+`event.origin` подтест `[TIMEOUT, NOTRUN]`, `broadcastchannel-current` файл
+`[TIMEOUT, OK]`. После этого три `--check` подряд — 0 регрессий (последний — и 0
+отклонений; в предыдущих двух «1 other deviation» — именно `event.origin`).
+
+Подтесты с многострочными именами (`Channel_postMessage_*_transfer_*`, «When
+transferring a port,\n outgoing messages…») в baseline не попадают
+(`_expressible_heading`) и не гейтятся — это существующее свойство генератора, не
+регрессия среза. Baseline 240 → 241. Дальше: `shadow-dom` (345 файлов, 19 хитов, 0
+`.https.`); `IndexedDB` (срез 34), долг среза 4, BUG-1006-класс и BUG-1038 не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
