@@ -41,6 +41,43 @@ pub fn parse_color(s: &str) -> Option<Color> {
     parse_css_color_fn(s).map(ColorFloat::to_srgb_color)
 }
 
+/// CSS Color L4/L5 — parses `<color>` syntax that must keep a
+/// `color(<space> …)` functional serialization instead of collapsing to
+/// legacy sRGB notation (`#rrggbb`/`rgb()`): a literal `color()` function
+/// (CSS Color L4 §10.1), or `color-mix()` mixed `in srgb` (CSS Color L5
+/// §10.2 mixes in the *predefined* `srgb` color space, not the legacy sRGB
+/// numeric model, so CSS Color L4 §4.2 keeps the result in `color()` form on
+/// serialization — confirmed by WPT `2d.fillStyle.colormix`: `color-mix(in
+/// srgb, red, blue)` reads back as `'color(srgb 0.5 0 0.5)'`, not a hex
+/// string). Other `color-mix()` interpolation spaces (`oklab`, `lch`, …) are
+/// out of scope here and return `None`, same as every other `<color>` syntax
+/// (hex/named/legacy functions) that stays sRGB-byte on serialization.
+///
+/// Exposed for consumers outside the cascade that need to remember when
+/// their input has to stay in functional form — Canvas 2D
+/// `fillStyle`/`strokeStyle`/`shadowColor` (BUG-930).
+pub fn parse_color_function(s: &str) -> Option<ColorFloat> {
+    let s = s.trim();
+    if let Some(wide) = parse_css_color_fn(s) {
+        return Some(wide);
+    }
+    let lower = s.to_ascii_lowercase();
+    if !lower.starts_with("color-mix(") || !s.ends_with(')') {
+        return None;
+    }
+    let (out, space) = parse_color_mix_f32(&s["color-mix(".len()..s.len() - 1])?;
+    if space != crate::color_mix::MixColorSpace::Srgb {
+        return None;
+    }
+    Some(ColorFloat {
+        r: out[0],
+        g: out[1],
+        b: out[2],
+        a: out[3],
+        space: ColorSpace::Srgb,
+    })
+}
+
 /// CSSOM specified-value serialization for a `<color>` assigned through
 /// `CSSStyleDeclaration.setProperty`/`el.style[prop] = …` (CSS Color L4 §4.2,
 /// CSSOM §6.7.3). Unlike [`parse_color`], which resolves everything down to
@@ -946,6 +983,23 @@ fn oklch_to_srgb(l: f32, c: f32, h_deg: f32) -> (u8, u8, u8) {
 /// from the inner body (without outer `color-mix(` and `)`).
 /// Returns `None` on any parse error; invalid inputs are silently ignored per spec.
 fn parse_color_mix(body: &str) -> Option<Color> {
+    let (out, _space) = parse_color_mix_f32(body)?;
+    Some(Color {
+        r: (out[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+        g: (out[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+        b: (out[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+        a: (out[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+    })
+}
+
+/// Same parse as [`parse_color_mix`], but returns the mixed channels as the
+/// float `[r, g, b, a]` (0..1, sRGB-gamma-encoded) `color_mix::mix_colors`
+/// itself produces, plus the interpolation space — before they get rounded
+/// to `u8`. [`parse_color_mix`] needs only the rounded `Color`; callers that
+/// must preserve full precision for `color(srgb …)`-form serialization
+/// (BUG-930 — rounding to `u8` and back loses it, e.g. `128/255 = 0.50196`
+/// instead of the `0.5` a direct float mix gives) need this instead.
+fn parse_color_mix_f32(body: &str) -> Option<([f32; 4], crate::color_mix::MixColorSpace)> {
     let parts = split_top_level_commas(body);
     if parts.len() != 3 {
         return None;
@@ -975,12 +1029,7 @@ fn parse_color_mix(body: &str) -> Option<Color> {
         ]
     };
     let out = crate::color_mix::mix_colors(space, to_f(c1), w1, to_f(c2), w2);
-    Some(Color {
-        r: (out[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-        g: (out[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-        b: (out[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-        a: (out[3] * 255.0).round().clamp(0.0, 255.0) as u8,
-    })
+    Some((out, space))
 }
 
 /// CSS Color L5 §11 — `color-contrast( <color> vs <color>#{2,} [ to <target> ]? )`.

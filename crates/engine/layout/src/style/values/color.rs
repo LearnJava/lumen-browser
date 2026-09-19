@@ -111,6 +111,22 @@ impl ColorFloat {
         [lr, lg, lb, self.a.clamp(0.0, 1.0)]
     }
 
+    /// CSS Color L4 §10.1 serialization — `color(<space> r g b[ / a])`.
+    /// Channels print via `f32`'s `Display`, which is Rust's shortest
+    /// round-tripping decimal, so `color(display-p3 0 1 0)` stays exactly
+    /// that instead of gamut-mapping to `#rrggbb`; alpha is omitted when
+    /// opaque. Consumers that resolve `color()` input straight to `Color`
+    /// (dropping the space) must not use this — it exists for the ones that
+    /// keep the `ColorFloat` around specifically to preserve it (BUG-930).
+    pub fn to_css_string(self) -> String {
+        let space = self.space.name();
+        if self.a >= 1.0 {
+            format!("color({space} {} {} {})", self.r, self.g, self.b)
+        } else {
+            format!("color({space} {} {} {} / {})", self.r, self.g, self.b, self.a)
+        }
+    }
+
     /// Конвертирует `ColorFloat` в линейные каналы заданного `target` цветового
     /// пространства.
     ///
