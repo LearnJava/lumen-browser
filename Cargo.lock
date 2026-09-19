@@ -2576,6 +2576,7 @@ dependencies = [
  "pdf-writer",
  "regex",
  "rodio",
+ "serde",
  "serde_json",
  "tracy-client",
  "windows-sys 0.52.0",
