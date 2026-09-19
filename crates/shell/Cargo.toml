@@ -116,6 +116,12 @@ serde_json = "1.0"
 # there too) — no new crate family in the tree, just a second call site.
 # Своя реализация Ed25519 — security antipattern.
 ed25519-dalek = "2"
+# UPD-7 (docs/tasks/ph3-self-update.md): own mini-ZIP reader for the
+# self-update archive — central directory parsing is ours, only the
+# stored/deflate decompression reuses the already-vendored `flate2`
+# (PNG iCCP path in lumen-image/lumen-js/lumen-storage) instead of adding
+# the `zip` crate. Permanent, same graduation as its other call sites.
+flate2.workspace = true
 # Provisional (PH3-11): audio playback for HTMLAudioElement Phase 1.
 # rodio is the standard pure-Rust audio playback library; wraps cpal underneath.
 # Graduation: permanent if Lumen ships a native audio playback service.

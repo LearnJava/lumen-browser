@@ -2553,6 +2553,7 @@ version = "0.5.0"
 dependencies = [
  "cpal",
  "ed25519-dalek",
+ "flate2",
  "lumen-a11y",
  "lumen-ai",
  "lumen-bidi-server",

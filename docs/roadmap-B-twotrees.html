@@ -2012,16 +2012,16 @@
       {
        "id": "UPD-6",
        "title": "UPD-6: Фоновая загрузка",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Фоновый поток по паттерну download.rs (std::thread + mpsc → about_to_wait): скачать zip (in-memory, стриминга в lumen-network нет — ок до ~200 МБ), sha256, сложить в data/update/pending/<ver>/"
+       "note": "Фоновый поток по паттерну download.rs (std::thread + mpsc → about_to_wait): скачать zip (in-memory, стриминга в lumen-network нет — ок до ~200 МБ), sha256, сложить в data/update/pending/<ver>/. **Ревизия 2026-09-19 (P1):** `crates/shell/src/update.rs` — `download_update_asset` (generic над `NetworkTransport`, тестируется через `MockTransport` без реальной сети: качает asset, `UpdateAsset::verify_body` до записи на диск — тело с несовпадающим хэшем никогда не попадает в `pending/`), `asset_download_url` (`.../releases/download/v<version>/<name>`, привязан к точному тегу релиза, а не к `latest`, чтобы архив не разошёлся с манифестом при гонке с новым релизом), `select_platform_asset` (подстрока `matrix.artifact-name` из `release.yml` в имени asset), `pending_dir_for`/`pending_root_dir`. `UpdateDownloadManager` — тонкая обёртка thread+mpsc вокруг `download_update_asset` с реальным `HttpClient` (тот же паттерн, что `download::DownloadManager`), один слот вместо списка (одновременно только одна самообновляющаяся загрузка); `cancel()` не прерывает поток (у `HttpClient::fetch` нет промежуточного хука отмены — то же ограничение, что уже задокументировано в `download.rs`), а помечает статус `Cancelled`, из-за чего `poll()` отбрасывает опоздавший результат. +19 тестов. Не подключено к UI/`window_mode.rs` — вызывающий код (кнопка загрузки, выбор asset из `CheckOutcome::Available`) остаётся UPD-9, как и UPD-1..5."
       },
       {
        "id": "UPD-7",
        "title": "UPD-7: Mini-ZIP reader",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Собственный reader: central directory + stored/deflate поверх имеющегося flate2 (~200 строк, крейт zip не добавляем); whitelist путей назначения — reject data/, .., абсолютные (заодно zip-slip); тест на реальном артефакте release.yml"
+       "note": "Собственный reader: central directory + stored/deflate поверх имеющегося flate2 (~200 строк, крейт zip не добавляем); whitelist путей назначения — reject data/, .., абсолютные (заодно zip-slip); тест на реальном артефакте release.yml. **Ревизия 2026-09-19 (P1):** `crates/shell/src/zip_reader.rs` — `ZipArchive::parse` (EOCD-сканирование с учётом произвольного comment, central directory, отказ на multi-disk/ZIP64), `extract()` (central directory → local header → stored/`flate2::read::DeflateDecoder`, проверка декомпрессированного размера против central directory), `safe_relative_path()` (whitelist: reject абсолютные пути и диск-буквы, `..`-компоненты, поддерево `data/` регистронезависимо; директорийные записи `.../ ` пропускаются без записи). Реального `release.yml`-артефакта под рукой нет (нет сети/7z в среде разработки) — вместо него тест против вендоренной сторонней фикстуры `tests/wpt/FileAPI/filelist-section/support/upload.zip` (скопирована в `crates/shell/tests/fixtures/real-sample.zip`), которая проверяет реальный deflate-поток стороннего zip-писателя, плюс синтетические фикстуры (собственный byte-level билдер поверх `flate2::write::DeflateEncoder`, без крейта `zip`) на stored/deflate-смесь, множественные записи, директорийные записи и все ветки whitelist. 11 тестов, `cargo clippy -p lumen-shell --all-targets` зелёный. Не подключено: вызывающий код (staging и запуск на скачанный `data/update/pending/<ver>/*.zip`) остаётся UPD-8."
       },
       {
        "id": "UPD-8",
