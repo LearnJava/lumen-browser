@@ -1993,7 +1993,7 @@ fn bug1059_take_floating_panel_detaches_and_restores_demo_bar() {
         .rect;
 
     let (rect, detached) =
-        take_floating_panel(&mut layout, demo_bar).expect("#demoBar must be detachable");
+        take_floating_panel(&mut layout, demo_bar, lumen_chrome::ids::DEMO_BAR).expect("#demoBar must be detachable");
     assert_eq!(rect, before_rect, "detach must report the tree's own rect");
     assert!(
         lumen_layout::find_box_by_node(&layout, demo_bar).is_none(),
@@ -2052,7 +2052,7 @@ fn bug1059_chrome_dl_excludes_demo_bar_after_detach_but_floating_dl_includes_it(
 
     let demo_bar = doc.find_by_id(lumen_chrome::ids::DEMO_BAR).expect("has #demoBar");
     let (demo_rect, detached) =
-        take_floating_panel(&mut layout, demo_bar).expect("#demoBar must be detachable");
+        take_floating_panel(&mut layout, demo_bar, lumen_chrome::ids::DEMO_BAR).expect("#demoBar must be detachable");
     let floating_dl = paint_ordered(&detached.removed);
     let chrome_dl = paint_ordered(&layout);
 
