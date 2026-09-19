@@ -5058,6 +5058,20 @@ function _lumen_c2d_prop(name, apply, coerce) {
     });
 }
 
+// HTML LS §4.12.5.1.3: `currentColor` (bare or nested inside `color-mix()`/a
+// relative-color function) resolves to the computed `color` of the canvas
+// element itself, not to a parseable literal — `CanvasColor::from_css_str`
+// (BUG-451) has no notion of an element, so it rejects the keyword outright.
+// The element is known here (`nid`), so the substitution happens at this
+// JS/native boundary: replace the keyword with the resolved `color` text
+// before the string ever reaches the Rust parser. A context with no element
+// (`nid == null`) resolves to opaque black, per spec (BUG-930).
+function _lumen_c2d_resolve_current_color(nid, css) {
+    if (!/currentcolor/i.test(css)) { return css; }
+    var resolved = (nid == null ? '' : _lumen_computed_property(nid, 'color')) || 'rgb(0, 0, 0)';
+    return css.replace(/currentcolor/gi, resolved);
+}
+
 function _lumen_c2d_paint_style(name, setColor, setGradient, setPattern) {
     Object.defineProperty(CanvasRenderingContext2D.prototype, name, {
         get: function() { return _lumen_c2d(this, name)[name]; },
@@ -5073,7 +5087,8 @@ function _lumen_c2d_paint_style(name, setColor, setGradient, setPattern) {
                 // значение), валидная хранится в канонической сериализации —
                 // её и возвращает натив (BUG-451). Раньше здесь оседала сырая
                 // строка, поэтому геттер отдавал '#0F0' и даже 'not-a-color'.
-                var ser = setColor(st.nid, String(v));
+                var css = _lumen_c2d_resolve_current_color(st.nid, String(v));
+                var ser = setColor(st.nid, css);
                 if (ser === null || ser === undefined) { return; }
                 st[name] = ser;
             }
@@ -5090,7 +5105,8 @@ function _lumen_c2d_color_prop(name, setColor) {
         get: function() { return _lumen_c2d(this, name)[name]; },
         set: function(v) {
             var st = _lumen_c2d(this, name);
-            var ser = setColor(st.nid, String(v));
+            var css = _lumen_c2d_resolve_current_color(st.nid, String(v));
+            var ser = setColor(st.nid, css);
             if (ser === null || ser === undefined) { return; }
             st[name] = ser;
         },

@@ -468,10 +468,15 @@ fn paint_style_getter_returns_canonical_serialization() {
 /// Невалидное значение ИГНОРИРУЕТСЯ: атрибут сохраняет прежнее. Раньше в него
 /// оседал мусор, а рисование продолжалось предыдущим цветом — то есть чтение и
 /// рисование расходились.
+///
+/// `currentColor` больше не входит в этот список (BUG-930): с 2026-09-19 это
+/// ВАЛИДНОЕ значение, разрешаемое в вычисленный `color` элемента (или в
+/// непрозрачный чёрный, если стиль ещё не посчитан) — покрыто отдельно ниже и
+/// в `dom::tests::v8_bug930_canvas_currentcolor`.
 #[test]
 fn paint_style_ignores_invalid_values() {
     let rt = v8_runtime_with_dom(make_doc());
-    for bad in ["not-a-color", "", "rgb(", "#gg", "currentColor"] {
+    for bad in ["not-a-color", "", "rgb(", "#gg"] {
         assert_eq!(
             s(
                 &rt,
@@ -490,6 +495,13 @@ fn paint_style_ignores_invalid_values() {
         "#00ff00"
     );
     assert_eq!(s(&rt, "(ctx.shadowColor = '#0F0', ctx.shadowColor)"), "#00ff00");
+    // BUG-930: `currentColor` — валидное значение, а не мусор. Без посчитанного
+    // `color` (как здесь) оно разрешается в непрозрачный чёрный, а не сохраняет
+    // прежнее значение атрибута.
+    assert_eq!(
+        s(&rt, "(ctx.fillStyle = '#0f0', ctx.fillStyle = 'currentColor', ctx.fillStyle)"),
+        "#000000"
+    );
 }
 
 /// Отвергнутое значение не должно доходить и до растеризатора: пиксель обязан
