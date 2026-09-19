@@ -252,6 +252,34 @@ impl<T: DatagramTransport> RequestDriver<T> {
         self.turn.send_request(req)
     }
 
+    /// Places an RFC 9220 Extended CONNECT `req` onto a fresh client-initiated
+    /// bidirectional stream, without finishing its send half — a pass-through to
+    /// [`RequestTurn::open_extended_connect`](super::request_turn::RequestTurn::open_extended_connect).
+    /// The rendered bytes wait on the pump's send half until the next
+    /// [`RequestDriver::transmit`] moves them onto the wire.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the request cannot be built (RFC 9114 §4.2/§7.2.1) or
+    /// all client bidirectional stream identifiers are spent (RFC 9000 §2.1).
+    pub fn open_extended_connect(
+        &mut self,
+        req: &ClientRequest,
+    ) -> Result<SentRequest, DispatchError> {
+        self.turn.open_extended_connect(req)
+    }
+
+    /// The final (non-`1xx`) response head for an Extended CONNECT request on
+    /// `stream_id` — a pass-through to
+    /// [`RequestTurn::extended_connect_head`](super::request_turn::RequestTurn::extended_connect_head).
+    #[must_use]
+    pub fn extended_connect_head(
+        &self,
+        stream_id: u64,
+    ) -> Option<&super::h3_request::H3ResponseHead> {
+        self.turn.extended_connect_head(stream_id)
+    }
+
     /// Stages the request pump's send half and flushes it — a pass-through to
     /// [`RequestTurn::transmit`](super::request_turn::RequestTurn::transmit).
     ///
@@ -627,6 +655,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,
@@ -640,6 +669,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body,
             use_huffman: true,

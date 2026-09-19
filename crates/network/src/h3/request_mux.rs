@@ -254,6 +254,17 @@ impl RequestMux {
     pub fn active_count(&self) -> usize {
         self.exchanges.len()
     }
+
+    /// The final (non-`1xx`) response head for `stream_id`, once its `HEADERS`
+    /// frame has arrived — available before the exchange completes (before its
+    /// stream FIN), which is what an Extended CONNECT session needs (RFC 9220):
+    /// its control stream is deliberately never FIN'd. Returns `None` for an
+    /// unknown or already-retired stream, or one whose final head has not
+    /// arrived yet.
+    #[must_use]
+    pub fn peek_final_head(&self, stream_id: u64) -> Option<&super::h3_request::H3ResponseHead> {
+        self.exchanges.get(&stream_id)?.final_head()
+    }
 }
 
 #[cfg(test)]
@@ -273,6 +284,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,

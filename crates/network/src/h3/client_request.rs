@@ -185,6 +185,17 @@ pub enum ConnectFetchError {
     Splice(RequestSpliceError),
     /// The handshake confirmed but the request phase failed ([`FetchError`]).
     Fetch(FetchError),
+    /// Placing an RFC 9220 Extended CONNECT request failed: a malformed request
+    /// header, or all client bidirectional stream identifiers spent
+    /// ([`RequestDriver::open_extended_connect`](super::request_driver::RequestDriver::open_extended_connect)).
+    ExtendedConnectDispatch(DispatchError),
+    /// A request-driver turn failed while driving the Extended CONNECT stream to
+    /// its response head — a socket error, a bad frame, or a rejected send
+    /// action.
+    ExtendedConnectDriver(RequestDriverError),
+    /// The Extended CONNECT stream never produced a final (non-`1xx`) response
+    /// head within the turn budget — the peer never answered.
+    ExtendedConnectIncomplete,
 }
 
 impl core::fmt::Display for ConnectFetchError {
@@ -196,6 +207,13 @@ impl core::fmt::Display for ConnectFetchError {
             }
             Self::Splice(e) => write!(f, "HTTP/3 request: {e}"),
             Self::Fetch(e) => write!(f, "HTTP/3 request: {e}"),
+            Self::ExtendedConnectDispatch(e) => {
+                write!(f, "HTTP/3 extended connect: placing the request: {e}")
+            }
+            Self::ExtendedConnectDriver(e) => write!(f, "HTTP/3 extended connect: {e}"),
+            Self::ExtendedConnectIncomplete => {
+                write!(f, "HTTP/3 extended connect: no response head within the turn budget")
+            }
         }
     }
 }
@@ -206,7 +224,9 @@ impl std::error::Error for ConnectFetchError {
             Self::Connect(e) => Some(e),
             Self::Splice(e) => Some(e),
             Self::Fetch(e) => Some(e),
-            Self::NotConfirmed(_) => None,
+            Self::ExtendedConnectDispatch(e) => Some(e),
+            Self::ExtendedConnectDriver(e) => Some(e),
+            Self::NotConfirmed(_) | Self::ExtendedConnectIncomplete => None,
         }
     }
 }
@@ -407,6 +427,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,

@@ -189,6 +189,11 @@ fn validate_regular_field(name: &[u8], value: &[u8]) -> Result<(), MessageError>
 /// Build the ordered request field list: the four request pseudo-headers in the
 /// profile's fingerprint order (RFC 9114 §4.3.1), then the regular fields.
 ///
+/// `protocol`, when `Some`, inserts a `:protocol` pseudo-header at position 1 —
+/// immediately after `:method` and before the profile's other three pseudo-
+/// headers — per the RFC 9220 §3 Extended CONNECT convention. `None` leaves the
+/// field list exactly as an ordinary request's.
+///
 /// `extra_headers` are ordinary request headers as `(name, value)` byte slices;
 /// their names must be lower-case and must not be pseudo-headers or
 /// connection-specific fields — each is validated per RFC 9114 §4.2.
@@ -201,6 +206,7 @@ pub fn build_request_fields(
     scheme: &[u8],
     authority: &[u8],
     path: &[u8],
+    protocol: Option<&[u8]>,
     extra_headers: &[(&[u8], &[u8])],
 ) -> Result<Vec<HeaderField>, MessageError> {
     let m = HeaderField::new(b":method".to_vec(), method.to_vec());
@@ -214,6 +220,12 @@ pub fn build_request_fields(
         H3Profile::Safari => vec![m, s, p, a],
     };
 
+    if let Some(proto) = protocol {
+        // RFC 9220 §3: `:protocol` is a request pseudo-header for Extended
+        // CONNECT, placed right after `:method` in the field list.
+        fields.insert(1, HeaderField::new(b":protocol".to_vec(), proto.to_vec()));
+    }
+
     for (name, value) in extra_headers {
         validate_regular_field(name, value)?;
         fields.push(HeaderField::new(name.to_vec(), value.to_vec()));
@@ -225,22 +237,28 @@ pub fn build_request_fields(
 /// build the profile-ordered field list, QPACK-encode it (static table only),
 /// and wrap it in a `HEADERS` frame ready to write to the request stream.
 ///
+/// `protocol` is the optional RFC 9220 `:protocol` pseudo-header for Extended
+/// CONNECT (see [`build_request_fields`]); `None` for an ordinary request.
+///
 /// `use_huffman` enables Huffman coding of literal names/values when it does not
 /// enlarge them.
 ///
 /// # Errors
 /// [`MessageError`] if a request header violates RFC 9114 §4.2 or the frame
 /// fails to encode.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_request(
     profile: H3Profile,
     method: &[u8],
     scheme: &[u8],
     authority: &[u8],
     path: &[u8],
+    protocol: Option<&[u8]>,
     extra_headers: &[(&[u8], &[u8])],
     use_huffman: bool,
 ) -> Result<Vec<u8>, MessageError> {
-    let fields = build_request_fields(profile, method, scheme, authority, path, extra_headers)?;
+    let fields =
+        build_request_fields(profile, method, scheme, authority, path, protocol, extra_headers)?;
     let block = qpack::encode_field_section(&fields, use_huffman);
     let mut out = Vec::new();
     Frame::Headers(block).encode(&mut out)?;
@@ -376,8 +394,10 @@ mod tests {
     #[test]
     fn chrome_pseudo_header_order() {
         let fields =
-            build_request_fields(H3Profile::Chrome, b"GET", b"https", b"example.com", b"/", &[])
-                .unwrap();
+            build_request_fields(
+                H3Profile::Chrome, b"GET", b"https", b"example.com", b"/", None, &[],
+            )
+            .unwrap();
         let names: Vec<&[u8]> = fields.iter().map(|f| f.name.as_slice()).collect();
         assert_eq!(
             names,
@@ -393,7 +413,8 @@ mod tests {
     #[test]
     fn firefox_and_safari_pseudo_header_order() {
         let ff =
-            build_request_fields(H3Profile::Firefox, b"GET", b"https", b"h", b"/", &[]).unwrap();
+            build_request_fields(H3Profile::Firefox, b"GET", b"https", b"h", b"/", None, &[])
+                .unwrap();
         let ff_names: Vec<&[u8]> = ff.iter().map(|f| f.name.as_slice()).collect();
         assert_eq!(
             ff_names,
@@ -401,7 +422,8 @@ mod tests {
         );
 
         let sf =
-            build_request_fields(H3Profile::Safari, b"GET", b"https", b"h", b"/", &[]).unwrap();
+            build_request_fields(H3Profile::Safari, b"GET", b"https", b"h", b"/", None, &[])
+                .unwrap();
         let sf_names: Vec<&[u8]> = sf.iter().map(|f| f.name.as_slice()).collect();
         assert_eq!(
             sf_names,
@@ -417,6 +439,7 @@ mod tests {
             b"https",
             b"example.com",
             b"/submit",
+            None,
             &[(b"accept", b"text/html"), (b"user-agent", b"Lumen")],
         )
         .unwrap();
@@ -437,6 +460,7 @@ mod tests {
             b"https",
             b"h",
             b"/",
+            None,
             &[(b"Accept", b"x")],
         )
         .unwrap_err();
@@ -458,6 +482,7 @@ mod tests {
                 b"https",
                 b"h",
                 b"/",
+                None,
                 &[(bad, b"x")],
             )
             .unwrap_err();
@@ -475,6 +500,7 @@ mod tests {
                 b"https",
                 b"h",
                 b"/",
+                None,
                 &[(b"te", b"trailers")]
             )
             .is_ok()
@@ -485,6 +511,7 @@ mod tests {
             b"https",
             b"h",
             b"/",
+            None,
             &[(b"te", b"gzip")],
         )
         .unwrap_err();
@@ -494,8 +521,10 @@ mod tests {
     #[test]
     fn encode_request_produces_headers_frame() {
         let frame_bytes =
-            encode_request(H3Profile::Chrome, b"GET", b"https", b"example.com", b"/", &[], true)
-                .unwrap();
+            encode_request(
+                H3Profile::Chrome, b"GET", b"https", b"example.com", b"/", None, &[], true,
+            )
+            .unwrap();
         // The bytes parse back as a HEADERS frame whose block decodes to the
         // request field list.
         let (frame, consumed) = Frame::parse(&frame_bytes).unwrap().unwrap();
@@ -622,8 +651,10 @@ mod tests {
     fn request_response_round_trip_via_frames() {
         // Encode a request, then encode a matching response, decode both.
         let req_frame =
-            encode_request(H3Profile::Chrome, b"GET", b"https", b"h", b"/index.html", &[], true)
-                .unwrap();
+            encode_request(
+                H3Profile::Chrome, b"GET", b"https", b"h", b"/index.html", None, &[], true,
+            )
+            .unwrap();
         let (Frame::Headers(req_block), _) = Frame::parse(&req_frame).unwrap().unwrap() else {
             panic!("expected HEADERS");
         };
@@ -703,6 +734,7 @@ mod tests {
             b"https",
             b"example.com",
             b"/file",
+            None,
             &[(b"range", b"bytes=0-1023")],
         )
         .unwrap();
@@ -718,6 +750,7 @@ mod tests {
             b"https",
             b"example.com",
             b"/file",
+            None,
             &[
                 (b"range", b"bytes=0-499"),
                 (b"if-range", b"\"abc123\""),
@@ -736,6 +769,7 @@ mod tests {
             b"https",
             b"example.com",
             b"/secure",
+            None,
             &[(b"authorization", b"Bearer token123")],
         )
         .unwrap();
@@ -755,6 +789,7 @@ mod tests {
             b"https",
             b"example.com",
             b"/resource",
+            None,
             &[
                 (b"range", b"bytes=100-199"),
                 (b"if-range", b"Tue, 01 Jan 2026 00:00:00 GMT"),
@@ -782,9 +817,60 @@ mod tests {
             b"https",
             b"example.com",
             b"/tail",
+            None,
             &[(b"range", b"bytes=-500")],
         )
         .unwrap();
         assert_eq!(field(&fields, b"range"), Some(b"bytes=-500".as_slice()));
+    }
+
+    // ── :protocol pseudo-header (RFC 9220 §3, Extended CONNECT) ───────────────
+
+    /// `:protocol` lands right after `:method` and before the profile's other
+    /// three pseudo-headers when `Some`.
+    #[test]
+    fn protocol_pseudo_header_inserted_after_method() {
+        let fields = build_request_fields(
+            H3Profile::Chrome,
+            b"CONNECT",
+            b"https",
+            b"example.com",
+            b"/wt",
+            Some(b"webtransport"),
+            &[],
+        )
+        .unwrap();
+        let names: Vec<&[u8]> = fields.iter().map(|f| f.name.as_slice()).collect();
+        assert_eq!(
+            names,
+            vec![
+                b":method".as_slice(),
+                b":protocol",
+                b":authority",
+                b":scheme",
+                b":path",
+            ]
+        );
+        assert_eq!(field(&fields, b":protocol"), Some(b"webtransport".as_slice()));
+    }
+
+    /// `protocol: None` leaves the field order identical to an ordinary request.
+    #[test]
+    fn protocol_none_leaves_field_order_unchanged() {
+        let fields = build_request_fields(
+            H3Profile::Chrome,
+            b"GET",
+            b"https",
+            b"example.com",
+            b"/",
+            None,
+            &[],
+        )
+        .unwrap();
+        let names: Vec<&[u8]> = fields.iter().map(|f| f.name.as_slice()).collect();
+        assert_eq!(
+            names,
+            vec![b":method".as_slice(), b":authority", b":scheme", b":path"]
+        );
     }
 }

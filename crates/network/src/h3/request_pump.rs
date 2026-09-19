@@ -148,6 +148,33 @@ impl RequestPump {
         self.dispatch.send_request(req)
     }
 
+    /// Places an RFC 9220 Extended CONNECT `req` onto a fresh client-initiated
+    /// bidirectional stream without finishing its send half — a pass-through to
+    /// [`RequestDispatch::open_extended_connect`].
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Open`] if the request cannot be built (RFC 9114
+    /// §4.2/§7.2.1) or all client bidirectional stream identifiers are spent
+    /// (RFC 9000 §2.1). No stream is consumed.
+    pub fn open_extended_connect(
+        &mut self,
+        req: &ClientRequest,
+    ) -> Result<SentRequest, DispatchError> {
+        self.dispatch.open_extended_connect(req)
+    }
+
+    /// The final (non-`1xx`) response head for an Extended CONNECT request on
+    /// `stream_id` — a pass-through to
+    /// [`RequestDispatch::extended_connect_head`].
+    #[must_use]
+    pub fn extended_connect_head(
+        &self,
+        stream_id: u64,
+    ) -> Option<&super::h3_request::H3ResponseHead> {
+        self.dispatch.extended_connect_head(stream_id)
+    }
+
     /// Drains every request send stream into QUIC STREAM frames (RFC 9000 §19.8),
     /// each carrying at most `max_frame_len` bytes of stream data.
     ///
@@ -357,6 +384,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,
@@ -370,6 +398,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body,
             use_huffman: true,

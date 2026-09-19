@@ -264,6 +264,15 @@ impl ResponseAssembler {
         self.head.is_some()
     }
 
+    /// The final (non-`1xx`) response head, once its `HEADERS` frame has been
+    /// processed by [`process_frame`](Self::process_frame) — available the
+    /// instant [`has_final_response`](Self::has_final_response) becomes `true`,
+    /// independent of the stream FIN.
+    #[must_use]
+    pub(crate) fn final_head(&self) -> Option<&H3ResponseHead> {
+        self.head.as_ref()
+    }
+
     /// Consume the assembler at the stream FIN and return the finished response.
     ///
     /// # Errors

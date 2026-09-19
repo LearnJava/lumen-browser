@@ -52,6 +52,23 @@ RFC 9220) с datagrams и uni/bidirectional QUIC-стримами, `ready`/`clos
 Нативный биндинг: открыть WT-сессию через `:protocol = webtransport` CONNECT-стрим
 на живом H3-соединении. Резолв `ready` при 2xx, reject при отказе. **Требует срез 0.**
 
+**Срез 2a — done (2026-09-20, P1) — транспортный примитив.** `:protocol`
+псевдо-заголовок (RFC 9220 §3) в `crates/network/src/h3` — `ClientRequest::protocol`,
+`build_request_fields`/`encode_request`. `open_extended_connect`/`extended_connect_head`
+пробрасываются сквозной цепочкой `RequestDispatch → RequestPump → RequestTurn →
+RequestDriver` (тот же паттерн, что и у `send_request`); `extended_connect_head` читает
+финальную голову ответа **до** FIN — `RequestMux::peek_final_head`/`ClientExchange::final_head`
+— то, чего обычный запрос не требовал (успешная Extended CONNECT-сессия намеренно никогда
+не FIN'ится). `h3_extended_connect_on_driver` (`client_transport.rs`) — генерик по
+`DatagramTransport` (как и `h3_exchange`), драйвит `transmit`/`poll` до финальной головы
+turn-budget'ом. Новые ошибки `ConnectFetchError::ExtendedConnect{Dispatch,Driver,Incomplete}`.
+2286/2286 тестов `lumen-network`, `clippy -p lumen-network --all-targets -D warnings` и
+`cargo check --workspace` зелёные. **Не сделано (срез 2b, следующий шаг):**
+`crates/js/src/webtransport.rs`'s `_lumen_webtransport_open` всё ещё всегда отвечает
+«нет сессии» — примитив среза 2a им пока не вызывается; нужны резолв origin → живое H3-
+соединение (пул соединений), вызов `h3_extended_connect_on_driver` из нативного биндинга
+и превращение его результата в резолв/реджект промиса `ready`.
+
 ### Срез 3 — M — Uni/Bidirectional streams
 `createUnidirectionalStream`/`createBidirectionalStream` → реальные QUIC-стримы,
 обёрнутые в WHATWG ReadableStream/WritableStream (переиспользовать stream-инфраструктуру
