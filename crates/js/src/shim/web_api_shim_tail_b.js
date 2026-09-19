@@ -475,8 +475,11 @@ if (typeof _lumen_idb_load === 'function') {
 // subclasses and `cause`), Blob/File, ImageData. Preserves shared references
 // and cycles via a memory map (same original → same clone). Throws a
 // DataCloneError DOMException for non-serializable values (functions, symbols).
-// Not handled: the `transfer` option (transferables are copied, not detached),
-// and other platform objects beyond the ones listed above.
+// `structuredClone(value, {transfer: [...]})` (HTML LS §2.7.3
+// StructuredSerializeWithTransfer) detaches ArrayBuffer/OffscreenCanvas/
+// ImageBitmap instead of copying them — see `_lumen_transfer_one` below.
+// Not handled: MessagePort transfer, and other platform objects beyond the
+// ones listed above.
 // Extension point for `[Serializable]` platform interfaces (HTML LS §2.7.2).
 // A platform object is not a plain object: cloned as one it loses its class and
 // its internal slots, which for a File System Access handle means the clone is
@@ -500,9 +503,84 @@ if (typeof _lumen_idb_load === 'function') {
     });
 })();
 
-function structuredClone(val) {
+// Transfer steps (HTML LS §2.7.3) for one entry of a `structuredClone`
+// `transfer` list: hands the underlying resource to a fresh object and
+// neuters `orig` so further use observes a detached/closed source, matching
+// the transfer semantics `postMessage` implementations rely on elsewhere in
+// the platform. ArrayBuffer uses the engine's own detach (`.transfer()`,
+// ECMA-262 ArrayBuffer.prototype.transfer, present since this V8 embed).
+// OffscreenCanvas/ImageBitmap have no native detach here — both are thin JS
+// wrappers around an integer `__canvas_id__` handle (`offscreen_canvas.rs`),
+// so the handle is moved to a new wrapper and the original's copy is cleared;
+// no native call is needed or exists for this. ImageBitmap has no
+// constructor/prototype of its own (a plain `{width, height, __canvas_id__,
+// close()}` shape returned by `createImageBitmap`/`transferToImageBitmap`),
+// so it is recognised structurally rather than via `instanceof`.
+function _lumen_transfer_one(orig) {
+    if (orig instanceof ArrayBuffer) {
+        if (typeof orig.transfer !== 'function') {
+            throw new DOMException(
+                'structuredClone: ArrayBuffer transfer is not supported', 'DataCloneError');
+        }
+        try {
+            return orig.transfer();
+        } catch (e) {
+            throw new DOMException(
+                'structuredClone: the ArrayBuffer could not be transferred', 'DataCloneError');
+        }
+    }
+    if (typeof OffscreenCanvas !== 'undefined' && orig instanceof OffscreenCanvas) {
+        if (typeof orig.__canvas_id__ !== 'number') {
+            throw new DOMException(
+                'structuredClone: the OffscreenCanvas has already been transferred', 'DataCloneError');
+        }
+        var movedCanvas = Object.create(OffscreenCanvas.prototype);
+        movedCanvas.__canvas_id__ = orig.__canvas_id__;
+        movedCanvas.width = orig.width;
+        movedCanvas.height = orig.height;
+        movedCanvas._2d_context = null;
+        orig.__canvas_id__ = undefined;
+        orig.width = 0;
+        orig.height = 0;
+        orig._2d_context = null;
+        return movedCanvas;
+    }
+    if (orig !== null && typeof orig === 'object' &&
+        typeof orig.__canvas_id__ === 'number' && typeof orig.close === 'function') {
+        var movedBitmap = {
+            width: orig.width, height: orig.height,
+            __canvas_id__: orig.__canvas_id__, close: orig.close
+        };
+        orig.__canvas_id__ = undefined;
+        orig.close = function() {};
+        return movedBitmap;
+    }
+    throw new DOMException(
+        'structuredClone: value in transfer list is not transferable', 'DataCloneError');
+}
+
+function structuredClone(val, options) {
+    var transferList = [];
+    if (options && options.transfer !== undefined && options.transfer !== null) {
+        if (typeof options.transfer.length !== 'number') {
+            throw new TypeError('structuredClone: transfer is not a sequence');
+        }
+        transferList = Array.prototype.slice.call(options.transfer);
+    }
     // memory: original object → its clone, so shared refs and cycles round-trip.
+    // Transferables are resolved into this map up front (before the value is
+    // walked at all), so `clone()`'s existing `memory.has(v)` check below
+    // picks up the moved-to object automatically wherever the original is
+    // encountered inside the graph.
     var memory = new Map();
+    for (var ti = 0; ti < transferList.length; ti++) {
+        var transferOrig = transferList[ti];
+        if (memory.has(transferOrig)) {
+            throw new DOMException(
+                'structuredClone: duplicate object in transfer list', 'DataCloneError');
+        }
+        memory.set(transferOrig, _lumen_transfer_one(transferOrig));
+    }
     function clone(v) {
         if (v === null) return null;
         var t = typeof v;
