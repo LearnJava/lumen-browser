@@ -1667,6 +1667,23 @@ pub(crate) fn install_worker_bindings_v8(
     Ok(())
 }
 
+/// GAP-CSPENF срез 28: would `provider`'s `worker-src`/`default-src` policy
+/// refuse `url` as an `importScripts()` target? `data:`/`blob:lumen/` URLs
+/// never reach the network in [`resolve_import_url`], so they need no gate —
+/// CSP source-list matching does not apply to them anyway (CSP3 §6.6.2.1
+/// treats `data:`/`blob:` as always non-matching hosts, but here it is
+/// simpler to just skip the check where there is no fetch to block). Shared
+/// by [`install_worker_globals_v8`] (dedicated worker) and
+/// `shared_worker.rs`'s `_lumen_import_scripts_resolve` registration — both
+/// reuse this function rather than repeating the check inline.
+pub(crate) fn import_scripts_csp_blocked(
+    provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
+    url: &str,
+) -> bool {
+    !(url.starts_with("data:") || url.starts_with("blob:lumen/"))
+        && provider.is_some_and(|p| p.check_worker_src(url).is_err())
+}
+
 /// Fetch a classic worker script body over the network via `provider`.
 ///
 /// Returns `None` when there is no provider, the request fails, or the
@@ -2058,11 +2075,32 @@ fn install_worker_globals_v8(
         )?;
     }
 
+    // GAP-CSPENF срез 28: `importScripts()` reuses the same `worker-src`/
+    // `default-src` gate the classic worker script fetch above already has
+    // (`_lumen_worker_fetch_script`) — CSP3 §6.4 says `worker-src` governs
+    // "a worker's script and its imported scripts" equally, but the initial
+    // срез 13 gate only sat in front of the constructor's own fetch, leaving
+    // every subsequent `importScripts(url)` call inside an already-running
+    // worker to reach the network unchecked (through the plain
+    // `fetch_worker_script` branch of [`resolve_import_url`]). `data:`/
+    // `blob:lumen/` URLs bypass the check — they never touch the network in
+    // [`resolve_import_url`] either, so there is nothing for CSP to gate.
+    // No `securitypolicyviolation` dispatch here: unlike the constructor
+    // path (which runs on the parent's own JS runtime and already had a
+    // `document`), this native runs on the worker's own runtime, which has
+    // no `SecurityPolicyViolationEvent`/CSP shim installed at all — the
+    // block still lands the same "not a single outgoing byte" way (a blocked
+    // URL never reaches `fetch_worker_script`), it just surfaces to the
+    // script only as the pre-existing `importScripts: cannot load script:`
+    // `Error`, same as any other fetch failure this API already produces.
     {
         let fp = fetch_provider;
         rt.register_native(
             "_lumen_import_scripts_resolve",
             into_v8_fn1(move |url: String| -> Option<String> {
+                if import_scripts_csp_blocked(fp.as_deref(), &url) {
+                    return None;
+                }
                 resolve_import_url(&url, &blob_store, fp.as_deref())
             }),
         )?;
@@ -3079,6 +3117,69 @@ mod tests_v8 {
 
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
         assert_eq!(rt.eval("_ms3").unwrap(), lumen_core::JsValue::Number(30.0));
+    }
+
+    /// GAP-CSPENF срез 28: `worker-src`/`default-src` gates
+    /// `importScripts()`'s own network fetch, not just the classic script the
+    /// worker was constructed from — mirrors the mock shape
+    /// `v8_webworker.rs::CspBlockedWorkerProvider` uses for the constructor
+    /// path (срез 13), but `check_worker_src` here refuses unconditionally
+    /// while `fetch_sync` would succeed if reached, proving the pre-check
+    /// short-circuits before any network I/O the same way.
+    struct CspBlockedImportNet;
+    impl lumen_core::ext::JsFetchProvider for CspBlockedImportNet {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: b"globalThis._unreachable = true;".to_vec(),
+            })
+        }
+        fn check_worker_src(&self, _url: &str) -> lumen_core::error::Result<()> {
+            Err(lumen_core::error::Error::CspWorkerSrcBlocked {
+                blocked_uri: "https://blocked.example/lib.js".into(),
+                original_policy: "worker-src 'none'".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn v8_import_scripts_blocked_by_worker_src_never_reaches_fetch() {
+        let rt = V8JsRuntime::new().unwrap();
+        let store = make_store();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(
+            &rt, 0, Arc::clone(&queue), Arc::clone(&errors), store,
+            Some(Arc::new(CspBlockedImportNet)), "https://example.test/worker.js", false,
+            Arc::new(AtomicBool::new(false)),
+        ).unwrap();
+
+        let err = rt.eval("importScripts('https://blocked.example/lib.js')");
+        assert!(err.is_err(), "a worker-src-blocked importScripts() must throw");
+        assert_eq!(
+            rt.eval("typeof _unreachable").unwrap(),
+            lumen_core::JsValue::String("undefined".into()),
+            "the blocked script body must never execute",
+        );
+    }
+
+    /// `data:`/`blob:lumen/` targets never touch the network, so
+    /// [`import_scripts_csp_blocked`] must not gate them even when the
+    /// provider refuses every URL unconditionally.
+    #[test]
+    fn import_scripts_csp_blocked_skips_data_and_blob_urls() {
+        assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "data:text/javascript,1"));
+        assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "blob:lumen/abc"));
+        assert!(import_scripts_csp_blocked(Some(&CspBlockedImportNet), "https://blocked.example/lib.js"));
+    }
+
+    /// No provider at all (e.g. a `blob:`/`data:`-origin worker with no
+    /// `JsFetchProvider`) must never be treated as a block.
+    #[test]
+    fn import_scripts_csp_blocked_without_provider_never_blocks() {
+        assert!(!import_scripts_csp_blocked(None, "https://example.test/lib.js"));
     }
 
     /// BUG-776: the scope's own script URL, split into `WorkerLocation`
