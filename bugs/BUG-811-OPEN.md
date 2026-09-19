@@ -1684,3 +1684,47 @@ failed) без регрессий; `cargo clippy -p lumen-network -p lumen-shell
 `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
 warnings` (чисто), `cargo test -p lumen-js --features v8-backend --lib
 worker::tests` и `shared_worker::tests` (без регрессий).
+
+## Срез 29 (2026-09-19, `p6-gap-cspenf-srez29`) — директива `form-action`
+
+Ещё одна навигационная директива CSP3 (§6.4.3), до этого среза только
+парсившаяся (`CspDirective::FormAction` существовал в
+`crates/network/src/csp.rs`, но ничего его не читало) — как и
+`frame-ancestors` до среза 27, отправка формы не проверялась вовсе.
+
+- `crates/network/src/csp.rs`: новый `CspPolicy::form_action_allowed`
+  (`action_url`, `self_origin`) — та же форма, что
+  `frame_ancestor_allowed` (срез 27): **без фолбэка на `default-src`**, CSP3
+  §6.4 явно исключает навигационные директивы из наследования; отсутствие
+  директивы значит «не ограничено».
+- `crates/shell/src/csp_enforce.rs::form_action_blocked` — тонкая обёртка
+  той же формы, что и `frame_src_blocked`/`font_src_blocked` выше в файле.
+- `crates/shell/src/lumen/form_submit.rs::run_form_submission` — `csp_gate`
+  документа считывается в том же коротком заимствовании, что уже даёт
+  `submit_event`/`enctype`/`dialog_node` (тот же паттерн, что и
+  `document_csp_policy` в `frames.rs`). Новый метод
+  `form_action_navigation_blocked` вызывается ПОСЛЕ резолва адреса и ДО
+  `navigate_to` в обеих ветках, у которых вообще есть навигация (`get` и
+  POST-«submit as entity body»); `method="dialog"` не гейтится — CSP3
+  §6.4.3 ограничивает цель НАВИГАЦИИ, а `dialog` не навигирует никуда, она
+  закрывает `<dialog>`.
+- `crates/shell/src/lumen/frame_form_submit.rs::frame_submit_navigate` —
+  зеркало для формы под-документа `<iframe>`: гейтится политикой РЕБЁНКА
+  (форма его собственная) и его собственным origin (`nav_base.origin()`),
+  до диспетчеризации по `LinkTarget` (`Page`/`Frame`/`NewWindow`) — ни один
+  из трёх реальных исходов навигации не должен случиться, если действие
+  заблокировано. `securitypolicyviolation` шлётся через `h.js` напрямую
+  (контекст РЕБЁНКА, как `fire_dialog_close` чуть выше в этом файле), а не
+  через `route_task_js` (тот адресует только рантайм страницы).
+- POST-путь `<iframe>`-формы не тронут: `run_frame_form_submission` уже не
+  отправляет POST по сети вовсе (только `eprintln`, см. комментарий на
+  месте) — гейтить нечего, пока сама отправка не написана.
+
+Тесты: +4 в `crates/network/src/csp.rs` (`form_action_allowed` — host
+allow/deny, `'none'`, `'self'` относительно origin документа-владельца
+формы, отсутствие директивы не наследует `default-src`), +4 в
+`crates/shell/src/csp_enforce.rs` (обёртка `form_action_blocked`, те же
+четыре случая). `cargo test -p lumen-network --lib csp` (40 passed) и
+`cargo test -p lumen-shell --features v8 --bin lumen` (1906 passed, 0
+failed) без регрессий; `cargo clippy -p lumen-network -p lumen-shell
+--all-targets --features v8 -- -D warnings` чисто.

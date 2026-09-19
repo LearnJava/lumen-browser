@@ -42,6 +42,7 @@ impl Lumen {
         let nav_base = handle.base.clone();
         let prepared = {
             let Ok(doc) = handle.doc.lock() else { return };
+            let root = doc.root();
             let submit_event = lumen_dom::submit_form(&doc, form);
             let enctype = forms::enctype_of_form(&doc, form);
             let dialog_node = lumen_dom::find_ancestor_dialog(&doc, submitter.unwrap_or(form));
@@ -50,9 +51,14 @@ impl Lumen {
             // это расхождение во фрейме нельзя — отклонение записано в
             // bugs/BUG-480-OPEN.md.
             let target = doc.get(form).get_attr("target").unwrap_or_default().to_owned();
-            (submit_event, enctype, dialog_node, target)
+            // GAP-CSPENF срез 29: `form-action` гейтится политикой РЕБЁНКА
+            // (форма его собственная), тем же `document_csp_policy`, что
+            // страница использует для своей — origin тоже ребёнка (`nav_base`
+            // ниже — его собственная `ResourceBase`).
+            let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
+            (submit_event, enctype, dialog_node, target, csp_gate)
         };
-        let (submit_event, enctype, dialog_node, target) = prepared;
+        let (submit_event, enctype, dialog_node, target, csp_gate) = prepared;
         match submit_event {
             lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
                 if fire_submit_event
@@ -99,7 +105,7 @@ impl Lumen {
                             body.clone()
                         };
                         let get_url = forms::make_get_url(&action, &url_body);
-                        self.frame_submit_navigate(idx, &get_url, &target, &nav_base);
+                        self.frame_submit_navigate(idx, &get_url, &target, &nav_base, csp_gate.as_ref());
                     }
                     _ => {
                         // POST не отправляет и страница (`run_form_submission`) —
@@ -168,7 +174,19 @@ impl Lumen {
         get_url: &str,
         target: &str,
         nav_base: &ResourceBase,
+        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
     ) {
+        if let Some((policy, original_policy)) = csp_gate {
+            let self_origin = nav_base.origin();
+            let resolved = nav_base.resolve_str(get_url);
+            if crate::csp_enforce::form_action_blocked(policy, &resolved, self_origin.as_ref()) {
+                if let Some(js) = self.frames.get(idx).and_then(|h| h.js.clone()) {
+                    js.fire_csp_violation("form-action", &resolved, original_policy);
+                }
+                eprintln!("iframe: submit to {resolved} blocked by CSP form-action");
+                return;
+            }
+        }
         match self.link_destination(idx, target) {
             LinkTarget::NewWindow => {
                 eprintln!(
