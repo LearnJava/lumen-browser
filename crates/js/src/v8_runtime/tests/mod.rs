@@ -609,8 +609,8 @@ fn frame_post_message_self_delivery_through_install_dom() {
     // постановки в ящик та же, что у пары родитель↔ребёнок, но внутри
     // одного изолята. Слот родителя с about:-URL даёт источнику события
     // унаследованный origin (self_origin страницы).
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
-    rt.register_parent_document(1, doc, "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
+    rt.register_parent_document(1, doc, "about:srcdoc".to_owned(), None, true, None);
     rt.eval("window.__got = null; window.onmessage = function(e) { window.__got = e; };")
         .unwrap();
     rt.eval("_lumen_frame_content_window(1).postMessage({n: 5}, '*')").unwrap();
@@ -642,7 +642,7 @@ fn frame_post_message_self_delivery_through_install_dom() {
 fn frame_facade_focus_and_blur_update_active_element_without_shell_request() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     // tabindex делает div#main фокусируемым (HTML LS §6.6.1).
     rt.eval("document.getElementById('main').setAttribute('tabindex', '0');")
         .unwrap();
@@ -684,7 +684,7 @@ fn frame_facade_focus_and_blur_update_active_element_without_shell_request() {
 fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     rt.eval(
         "window.__got = null; \
              document.getElementById('main').addEventListener('hello', function(e) { \
@@ -722,7 +722,7 @@ fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
 fn frame_facade_inserted_script_executes_on_pump_with_current_script() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     rt.eval(
         "var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
@@ -753,7 +753,7 @@ fn frame_facade_inserted_script_executes_on_pump_with_current_script() {
 fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     rt.eval(
         "window.__count = 0; \
              var d = _lumen_frame_content_document(1); \
@@ -795,7 +795,7 @@ fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
 fn detached_before_delivery_script_runs_on_reinsertion() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     rt.eval(
         "var d = _lumen_frame_content_document(1); \
              var s = d.createElement('script'); \
@@ -831,7 +831,7 @@ fn detached_before_delivery_script_runs_on_reinsertion() {
 fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     rt.eval(
         "window.__err = false; \
              var d = _lumen_frame_content_document(1); \
@@ -890,7 +890,7 @@ fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
 fn frame_data_block_stays_unmarked_after_delivery() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     rt.eval(
         "var d = _lumen_frame_content_document(1); \
              var j = d.createElement('script'); \
@@ -930,6 +930,7 @@ fn parent_child_pair(
         "about:srcdoc".to_owned(),
         None,
         true,
+        None,
     );
     child.register_parent_document(
         1,
@@ -937,6 +938,7 @@ fn parent_child_pair(
         "https://parent.example/index.html".to_owned(),
         None,
         true,
+        None,
     );
     (parent, child, parent_doc, child_doc)
 }
@@ -1080,6 +1082,7 @@ fn mirror_gates_top_level_non_element_and_missing_native() {
         "https://parent.example/index.html".to_owned(),
         None,
         true,
+        None,
     );
     // Текстовый узел — не элемент.
     rt.eval("window.__tnid = document.createTextNode('x').__nid__;").unwrap();
@@ -1127,6 +1130,7 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         "https://parent.example/index.html".to_owned(),
         None,
         true,
+        None,
     );
     parent
         .eval("window.__got = false;")
@@ -1152,6 +1156,7 @@ fn resource_envelope_dropped_without_accessible_sender_binding() {
         "about:srcdoc".to_owned(),
         None,
         false,
+        None,
     );
     child
         .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
@@ -1207,7 +1212,7 @@ fn external_script_failure_mirrors_error_to_facade_handler() {
 fn frame_transport_pending_flips_around_pump() {
     let doc = make_doc();
     let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
-    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+    rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true, None);
     assert!(!rt.frame_transport_pending(), "ящик пуст до постановки");
     rt.eval("_lumen_frame_content_window(1).postMessage('wake', '*')")
         .unwrap();

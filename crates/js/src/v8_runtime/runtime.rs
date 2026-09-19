@@ -1012,6 +1012,7 @@ impl V8JsRuntime {
         url: String,
         name: Option<String>,
         accessible: bool,
+        peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
     ) {
         let registry = Arc::clone(&self.frame_docs);
         let idx = self.run(move |_inner| {
@@ -1022,6 +1023,7 @@ impl V8JsRuntime {
                 url,
                 name,
                 accessible,
+                peer,
             };
             crate::frame_bridge::upsert_binding(&mut reg, binding)
         });
@@ -1058,6 +1060,7 @@ impl V8JsRuntime {
         url: String,
         name: Option<String>,
         accessible: bool,
+        peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
     ) {
         let registry = Arc::clone(&self.frame_docs);
         self.run(move |_inner| {
@@ -1068,6 +1071,7 @@ impl V8JsRuntime {
                     url,
                     name,
                     accessible,
+                    peer,
                 });
         });
         // Срез 3: включить геттеры window.parent/top/frameElement/name. Ошибки
@@ -1088,6 +1092,7 @@ impl V8JsRuntime {
         doc: Arc<Mutex<lumen_dom::Document>>,
         url: String,
         accessible: bool,
+        peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
     ) {
         let registry = Arc::clone(&self.frame_docs);
         self.run(move |_inner| {
@@ -1098,6 +1103,7 @@ impl V8JsRuntime {
                     url,
                     name: None,
                     accessible,
+                    peer,
                 });
         });
         // Слот top ставится только у фреймов глубины ≥ 2, у которых parent

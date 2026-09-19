@@ -1935,18 +1935,28 @@ pub(crate) fn spawn_frame(
         // BUG-921: снимок атрибута `name` хоста на момент создания контекста —
         // `window.name` ребёнка запоминает его один раз (HTML LS §7.2.3), а не
         // перечитывает атрибут при каждом обращении.
+        // BUG-979: peer — родитель, only когда сам доступен same-origin
+        // (`accessible_parent`) — глобалы читаются исключительно same-origin,
+        // натив ещё раз гейтит это явно, но не полагаться на второй слой
+        // защиты, когда первый доступен бесплатно.
+        let parent_peer = accessible_parent.then(|| parent_js.and_then(|js| js.frame_peer_bridge())).flatten();
         js.register_parent_document(
             info.node.index() as u32,
             Arc::clone(parent),
             &parent_url,
             info.name.as_deref(),
             accessible_parent,
+            parent_peer,
         );
         // Ребёнок глубины ≥ 2 получает отдельный слот top: его верх —
         // корень страницы, а не непосредственный родитель.
         if depth >= 1 {
             let accessible_top = frame_access_allowed(&env.page_base, &child_url, opaque);
-            js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top);
+            // BUG-979: top's own runtime is not reachable here (only its doc
+            // Arc is threaded down through `top_doc`) — `window.top`'s facade
+            // keeps the IDL-only whitelist for now; scope stays contentWindow/
+            // parent, the shapes this bug's WPT repro actually exercises.
+            js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top, None);
         }
     }
     // BUG-480 срез 12: cascade + layout ребёнка — контентная геометрия
@@ -2052,12 +2062,16 @@ pub(crate) fn spawn_frame(
     // имя хоста едет вместе с биндингом (ключ window[name]).
     if let Some(js) = parent_js {
         let accessible = frame_access_allowed(base, &child_url, opaque);
+        // BUG-979: peer only when same-origin — see the symmetric comment on
+        // the `register_parent_document` call site above.
+        let child_peer = accessible.then(|| child_js.as_ref().and_then(|js| js.frame_peer_bridge())).flatten();
         js.register_iframe_document(
             info.node.index() as u32,
             Arc::clone(&child_doc_arc),
             &child_url,
             info.name.as_deref(),
             accessible,
+            child_peer,
         );
     }
     fire_iframe_load_event(parent_js, info.node);

@@ -237,7 +237,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// срез 3). `accessible=false`
     /// (cross-origin / opaque sandbox) регистрирует биндинг без доступа к
     /// содержимому: `contentWindow` есть, `contentDocument` — `null`.
-    /// Default no-op покрывает сборки без v8.
+    /// `peer` — BUG-979: хэндл РЕБЁНКА для синхронного кросс-изолятного
+    /// чтения/вызова его реальных глобалов из фасада `winFacade` (не только
+    /// фиксированный IDL-набор); `None`, если у ребёнка нет своего рантайма
+    /// (загрузка провалилась) — фасад в этом случае остаётся на прежнем
+    /// поведении (только IDL-набор). Default no-op покрывает сборки без v8.
     fn register_iframe_document(
         &self,
         _host_nid: u32,
@@ -245,6 +249,7 @@ pub(crate) trait PersistentJs: Send + Sync {
         _url: &str,
         _name: Option<&str>,
         _accessible: bool,
+        _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
     }
     /// BUG-480 срез 3: зарегистрировать документ родителя в JS-контексте
@@ -256,8 +261,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// читают предков из любого события. `host_nid` — nid хоста в дереве
     /// родителя. `name` — значение атрибута `name` хоста НА МОМЕНТ вызова
     /// (BUG-921): `window.name` ребёнка запоминает его один раз, а не
-    /// перечитывает атрибут при каждом обращении. Default no-op покрывает
-    /// сборки без v8.
+    /// перечитывает атрибут при каждом обращении. `peer` — BUG-979: хэндл
+    /// РОДИТЕЛЯ, симметричный `register_iframe_document`'s `peer` (ребёнок
+    /// синхронно читает/вызывает глобалы родителя через `window.parent`/
+    /// `.top` так же, как родитель — глобалы ребёнка через `contentWindow`).
+    /// Default no-op покрывает сборки без v8.
     fn register_parent_document(
         &self,
         _host_nid: u32,
@@ -265,13 +273,31 @@ pub(crate) trait PersistentJs: Send + Sync {
         _url: &str,
         _name: Option<&str>,
         _accessible: bool,
+        _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
     }
     /// BUG-480 срез 3: зарегистрировать документ верхнего окна в JS-контексте
     /// фрейма глубины ≥ 2 (`window.top` ведёт в корень, а не в непосредственного
     /// родителя). Для фрейма первого уровня не вызывается — там top разрешается
-    /// через [`PersistentJs::register_parent_document`]. Default no-op без v8.
-    fn register_top_document(&self, _doc: Arc<Mutex<Document>>, _url: &str, _accessible: bool) {}
+    /// через [`PersistentJs::register_parent_document`]. `peer` — BUG-979, тот
+    /// же смысл, что у `register_parent_document`. Default no-op без v8.
+    fn register_top_document(
+        &self,
+        _doc: Arc<Mutex<Document>>,
+        _url: &str,
+        _accessible: bool,
+        _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
+    ) {
+    }
+    /// BUG-979: this context's OWN handle, for a PEER's registry to store as
+    /// the `peer` argument above — `frames.rs` calls this on `parent_js`/
+    /// `child_js` at each `register_*_document` call site rather than reaching
+    /// into a concrete `V8PersistentJs` itself (which it never sees, only the
+    /// trait object). `None` for a context with no `FramePeerBridge` (default
+    /// covers non-v8 builds).
+    fn frame_peer_bridge(&self) -> Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>> {
+        None
+    }
     /// Deliver a PerformancePaintTiming entry to JS PerformanceObservers.
     ///
     /// `name` is `"first-paint"` or `"first-contentful-paint"`;
@@ -799,7 +825,12 @@ pub(crate) trait PersistentJs: Send + Sync {
 /// service) were wired in S10; pointer capture in S12b-20.
 #[cfg(feature = "v8")]
 pub(crate) struct V8PersistentJs {
-    pub(crate) rt: lumen_js::v8_runtime::V8JsRuntime,
+    /// BUG-979: `Arc`-wrapped (not owned by value) so a peer frame's registry
+    /// can hold its own clone for [`lumen_js::frame_peer_bridge::FramePeerBridge`]
+    /// alongside the `Arc<Mutex<Document>>` it already keeps for the same
+    /// lifetime — see `register_iframe_document`/`register_parent_document`/
+    /// `register_top_document` below.
+    pub(crate) rt: Arc<lumen_js::v8_runtime::V8JsRuntime>,
 }
 
 /// Build the `_lumen_deliver_popstate(...)` call a same-document traversal
@@ -992,6 +1023,7 @@ impl PersistentJs for V8PersistentJs {
         url: &str,
         name: Option<&str>,
         accessible: bool,
+        peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
         self.rt.register_frame_document(
             host_nid,
@@ -999,6 +1031,7 @@ impl PersistentJs for V8PersistentJs {
             url.to_owned(),
             name.map(str::to_owned),
             accessible,
+            peer,
         );
     }
     fn register_parent_document(
@@ -1008,6 +1041,7 @@ impl PersistentJs for V8PersistentJs {
         url: &str,
         name: Option<&str>,
         accessible: bool,
+        peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
         self.rt.register_parent_document(
             host_nid,
@@ -1015,10 +1049,20 @@ impl PersistentJs for V8PersistentJs {
             url.to_owned(),
             name.map(str::to_owned),
             accessible,
+            peer,
         );
     }
-    fn register_top_document(&self, doc: Arc<Mutex<Document>>, url: &str, accessible: bool) {
-        self.rt.register_top_document(doc, url.to_owned(), accessible);
+    fn register_top_document(
+        &self,
+        doc: Arc<Mutex<Document>>,
+        url: &str,
+        accessible: bool,
+        peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
+    ) {
+        self.rt.register_top_document(doc, url.to_owned(), accessible, peer);
+    }
+    fn frame_peer_bridge(&self) -> Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>> {
+        Some(Arc::clone(&self.rt) as Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>)
     }
     fn deliver_paint_timing(&self, name: &str, start_ms: f64) {
         self.eval_js(&format!(
