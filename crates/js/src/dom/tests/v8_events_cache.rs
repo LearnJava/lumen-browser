@@ -660,6 +660,103 @@ fn sw_worker_post_message_does_not_throw() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// ── GAP-CSPENF срез 30: worker-src против serviceWorker.register() ────────
+
+/// `serviceWorker.register()`'s script fetch used to go through the page's
+/// plain `fetch()` only, gated by `connect-src` (срез 10) — `worker-src`
+/// never saw it, unlike `new Worker()`/`new SharedWorker()`/`importScripts()`
+/// (срезы 13/28). Same mock provider shape as `v8_webworker.rs`'s
+/// `CspBlockedWorkerProvider`: `check_worker_src` refuses unconditionally so
+/// a regression that skips the pre-check surfaces as `register()` resolving
+/// instead of rejecting, not as a network call this rig cannot make anyway.
+struct CspBlockedSwRegisterProvider;
+impl lumen_core::ext::JsFetchProvider for CspBlockedSwRegisterProvider {
+    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Err(lumen_core::error::Error::Network(
+            "fetch_sync must not be reached — check_worker_src should short-circuit first".into(),
+        ))
+    }
+    fn check_worker_src(&self, _url: &str) -> lumen_core::error::Result<()> {
+        Err(lumen_core::error::Error::CspWorkerSrcBlocked {
+            blocked_uri: "https://example.com/sw.js".into(),
+            original_policy: "worker-src 'none'".into(),
+        })
+    }
+}
+
+fn v8_runtime_with_csp_blocked_sw_register(url: &str) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedSwRegisterProvider);
+    rt.install_dom(make_doc(), url, Some(p), None, None, None, None, None, None, None, false)
+        .unwrap();
+    rt
+}
+
+#[test]
+fn sw_register_worker_src_block_rejects_promise() {
+    let rt = v8_runtime_with_csp_blocked_sw_register("https://example.com/");
+    rt.eval(
+        r#"
+                var rejected = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function() { rejected = false; })
+                    .catch(function(e) { rejected = e.name; });
+                "#,
+    )
+    .unwrap();
+    let result = rt.eval("rejected").unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("SecurityError".into()));
+}
+
+#[test]
+fn sw_register_worker_src_block_never_registers() {
+    let rt = v8_runtime_with_csp_blocked_sw_register("https://example.com/");
+    rt.eval(
+        "navigator.serviceWorker.register('/sw.js').catch(function() {});",
+    )
+    .unwrap();
+    let result = rt.eval("_lumen_sw_has_registration('https://example.com')").unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(false));
+}
+
+#[test]
+fn sw_register_worker_src_block_fires_security_policy_violation_event() {
+    let rt = v8_runtime_with_csp_blocked_sw_register("https://example.com/");
+    rt.eval(
+        r#"
+                var seen = null;
+                document.addEventListener('securitypolicyviolation', function(e) {
+                    seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|');
+                });
+                navigator.serviceWorker.register('/sw.js').catch(function() {});
+                "#,
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("seen").unwrap(),
+        lumen_core::JsValue::String(
+            "worker-src|https://example.com/sw.js|worker-src 'none'".into()
+        )
+    );
+}
+
+#[test]
+fn sw_register_allowed_when_no_worker_src_policy() {
+    // No fetch provider at all → `check_worker_src` is never called, same as
+    // every other срез's "no policy means no block" invariant.
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                "#,
+    )
+    .unwrap();
+    let result = rt.eval("reg !== null && reg.installing !== null").unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── caches API ────────────────────────────────────────────────────────────
 
 #[test]

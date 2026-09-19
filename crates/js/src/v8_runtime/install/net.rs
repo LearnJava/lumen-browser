@@ -44,8 +44,42 @@ pub(crate) fn install_service_worker(
             }
         );
 
+        // _lumen_sw_check_worker_src(url) → [] | [blockedUri, originalPolicy]
+        //
+        // GAP-CSPENF срез 30: `navigator.serviceWorker.register(url)` fetches
+        // its registration script via the page's plain `fetch()`
+        // (`web_api_shim_mid_b.js::_sw_run_lifecycle`), which срез 10 already
+        // gates against `connect-src` — but CSP3 §6.4 puts the registration
+        // script under `worker-src` (falling back to `script-src`, then
+        // `default-src`), a directive `fetch()` never checks. A policy with
+        // `worker-src 'none'` and no `connect-src` restriction let a page
+        // register any service worker unhindered. Same I/O-free
+        // `check_worker_src` precheck that срезы 13/28 already use for
+        // `new Worker()`/`new SharedWorker()`/`importScripts()`, exposed here
+        // as a single call (no side channel needed — `register()` calls this
+        // synchronously and once, unlike the fire-and-forget net natives that
+        // motivated the read-and-clear slot pattern elsewhere in this file).
+        {
+            let fp = fp_sw_net.clone();
+            reg!(scope, ctx, store,
+                "_lumen_sw_check_worker_src",
+                move |url: String| -> Vec<String> {
+                    let Some(provider) = fp.as_deref() else {
+                        return Vec::new();
+                    };
+                    match provider.check_worker_src(&url) {
+                        Err(lumen_core::error::Error::CspWorkerSrcBlocked {
+                            blocked_uri,
+                            original_policy,
+                        }) => vec![blocked_uri, original_policy],
+                        _ => Vec::new(),
+                    }
+                }
+            );
+        }
+
         let sw = Arc::clone(&sw_regs);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_sw_has_registration",
             move |origin: String| -> bool {
                 sw.lock().unwrap().keys().any(|(o, _)| *o == origin)
