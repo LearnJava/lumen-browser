@@ -449,6 +449,53 @@ impl V8JsRuntime {
         })
     }
 
+    /// [`Self::eval_and_report_via`], except the reporter is called **only**
+    /// for a runtime failure (the script compiled, then threw while running),
+    /// never for a compile/parse failure — the module counterpart
+    /// ([`Self::eval_module_at_and_report_via`]) already has this split via
+    /// `ModuleFailure::{Load,Runtime}`; a classic script has no such enum from
+    /// V8, so the two `has_caught()` checks below are it.
+    ///
+    /// A shared worker's top-level script is the one caller that needs this
+    /// (BUG-905): a parse failure never entered the worker's own global scope,
+    /// so there is no "the scope's own `onerror` may cancel this" step to run
+    /// — HTML LS routes a script-fetch/parse failure straight to a plain
+    /// `error` `Event` on every owning `SharedWorker`, which the caller builds
+    /// itself from the `Err` this returns (mirroring how it already handles a
+    /// module *load* failure). A *runtime* failure, by contrast, does reach
+    /// the worker's own scope, so the reporter still runs for it exactly as
+    /// in [`Self::eval_and_report_via`].
+    #[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+    pub fn eval_and_report_via_runtime_only(&self, script: &str, reporter: &str) -> JsResult<JsValue> {
+        let reporter = reporter.to_owned();
+        self.run(move |inner| {
+            with_tc!(inner, |tc, _ctx| {
+                let src = v8::String::new(tc, script)
+                    .ok_or_else(|| JsError::Runtime("OOM: script string".into()))?;
+
+                let compiled = compile_cached!(tc, script, src);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let compiled = compiled
+                    .ok_or_else(|| JsError::Runtime("script compile returned None".into()))?;
+
+                let result = compiled.run(tc);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    report_exception_via!(tc, exc, reporter.as_str());
+                    return Err(v8_err(tc, exc));
+                }
+                match result {
+                    Some(val) if val.is_object() || val.is_array() => Ok(JsValue::Undefined),
+                    Some(val) => from_v8(tc, val),
+                    None => Err(JsError::Runtime("script returned no value".into())),
+                }
+            })
+        })
+    }
+
     /// Evaluate `source` as the entry ES module of a top-level page load
     /// ([`crate::v8_esm::evaluate_entry_module`]), additionally reporting a
     /// **runtime** failure through the shim's window `error` pipeline — the

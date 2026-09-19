@@ -30,19 +30,21 @@
 //! resolver). If the fetch fails, the worker never connects and `onerror`
 //! fires once instead of running an empty script.
 //!
-//! **Uncaught-exception reporting (BUG-591 SharedWorker parent-side
-//! reporting):** an uncaught exception anywhere in the shared worker's global
+//! **Uncaught-exception reporting (BUG-905, corrects BUG-591's original
+//! shape):** a *runtime* exception anywhere in the shared worker's global
 //! scope (top-level script body, `onconnect`, a port's `onmessage`, a flushed
-//! timer callback) is HTML LS "report the exception" run on a scope that
-//! every connected client observes — unlike a dedicated [`crate::worker`],
-//! where exactly one client exists. So the error is broadcast to *every*
-//! currently-connected port's owning client, not routed by the port that
-//! happened to trigger it. `_lumen_sw_report_error` (registered per
-//! connecting client in [`install_shared_worker_globals_v8`]) pushes into
-//! every live port's [`crate::worker::WorkerErrorQueue`] entry tracked by
-//! `error_ports` inside [`run_shared_worker_thread_v8`]; each client's
-//! `V8JsRuntime::pump_shared_workers` drains its own queue and fires
-//! `ErrorEvent` `'error'` at the matching `SharedWorker` instance via
+//! timer callback) runs HTML LS "report the exception" **at that scope only**
+//! and stops there — logged to the console, never forwarded — because a
+//! shared worker has no single owning client the way a dedicated
+//! [`crate::worker`] does (HTML LS §10.2.6). A top-level *parse/load* failure
+//! is the one case that still reaches every connected client, as a plain
+//! `error` `Event` rather than an `ErrorEvent`: the script body never ran, so
+//! there is no scope to report at in the first place.
+//! [`run_shared_worker_thread_v8`] pushes that failure straight into every
+//! live port's [`crate::worker::WorkerErrorQueue`] entry tracked by
+//! `error_ports` (and replays it to a client that connects afterwards); each
+//! client's `V8JsRuntime::pump_shared_workers` drains its own queue and fires
+//! the event at the matching `SharedWorker` instance via
 //! `_lumen_deliver_shared_worker_errors`.
 
 use std::sync::{Arc, Mutex};
@@ -142,14 +144,15 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   }
 
   // Report an uncaught exception from onconnect/onmessage/a flushed timer.
-  // HTML LS §8.1.3.6 then §10.2.6: it fires `error` at this global scope
-  // first (BUG-813) and only reaches every connected client if nothing
-  // cancelled it (BUG-591 SharedWorker parent-side reporting — "report the
-  // exception" broadcasts to all owning `SharedWorker` objects, unlike a
-  // dedicated worker's single client). `filename`/`lineno`/`colno` are
-  // best-effort-parsed from `.stack`, same technique as the dedicated-worker
-  // twin (`worker.rs`'s `_lumen_report_worker_exception`), whose long comment
-  // covers the re-entrancy guard and the `<anonymous>` fallback too.
+  // HTML LS §8.1.3.6 then §10.2.6: it fires `error` at this global scope and
+  // stops there — a shared worker's runtime error has no single owning
+  // client to forward to (unlike a dedicated worker, BUG-905), so a report
+  // that nothing cancelled goes to the console, never to
+  // `_lumen_sw_report_error`/any connected `SharedWorker.onerror`.
+  // `filename`/`lineno`/`colno` are best-effort-parsed from `.stack`, same
+  // technique as the dedicated-worker twin (`worker.rs`'s
+  // `_lumen_report_worker_exception`), whose long comment covers the
+  // re-entrancy guard and the `<anonymous>` fallback too.
   var _onerror = null;
   var _errListeners = [];
   var _reportingError = false;
@@ -169,13 +172,14 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     if (!filename || filename === '<anonymous>') {
       filename = (globalThis.location && globalThis.location.href) || '';
     }
-    // Read by `run_shared_worker_thread_v8` for the top-level script only: a
-    // scope that cancelled its own error must not have it replayed to clients
-    // as they connect. Set on every report, so a stale `true` cannot leak into
-    // a later one; left `undefined` by a module *load* failure, which never
-    // reaches this function at all.
+    // Read by `run_shared_worker_thread_v8` for the top-level script only, to
+    // tell a runtime failure (this function ran, so the global is now a
+    // boolean) apart from a compile/parse failure (never reaches this
+    // function at all, so the global stays `undefined`) — see
+    // `eval_and_report_via_runtime_only`. The value itself no longer gates
+    // anything: cancelled or not, a runtime error stops at this scope.
     globalThis._lumen_worker_error_cancelled = false;
-    if (_reportingError) { _lumen_sw_report_error(message, filename, lineno, colno); return; }
+    if (_reportingError) { _lumen_sw_console_log('[ERR]  ' + message); return; }
     _reportingError = true;
     var cancelled = false;
     try {
@@ -200,7 +204,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
       }
     } finally { _reportingError = false; }
     globalThis._lumen_worker_error_cancelled = cancelled;
-    if (!cancelled) _lumen_sw_report_error(message, filename, lineno, colno);
+    if (!cancelled) _lumen_sw_console_log('[ERR]  ' + message);
   }
 
   Object.defineProperty(globalThis, 'onconnect', {
@@ -511,18 +515,24 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   };
 
   // Internal: fire `error` at this SharedWorker instance — used both for the
-  // script-fetch-failure case above and for a genuine uncaught exception in
-  // the worker's global scope (BUG-591), delivered via
-  // `_lumen_deliver_shared_worker_errors` below. `info` is a plain object
-  // ({message, filename, lineno, colno}), not yet an `ErrorEvent`.
+  // script-fetch-failure case above and for a top-level parse/load failure
+  // reported via `_lumen_deliver_shared_worker_errors` below (BUG-905: a
+  // *runtime* exception no longer reaches here at all — HTML LS §10.2.6 stops
+  // it at the worker's own scope). `info` is a plain object
+  // ({message, filename, lineno, colno[, plain]}) — neither remaining case's
+  // script body ever ran, so per HTML LS ("Script parse error dispatches
+  // plain Event", `shared-worker-runtime-error-is-not-parse-error.html`) this
+  // fires a bare `Event`, not an `ErrorEvent`, when `plain` is set.
   SharedWorker.prototype._deliverError = function(info) {
-    var ev = new ErrorEvent('error', {
-      message: String((info && info.message) || ''),
-      filename: String((info && info.filename) || ''),
-      lineno: (info && info.lineno) | 0,
-      colno: (info && info.colno) | 0,
-      bubbles: false, cancelable: true,
-    });
+    var ev = (info && info.plain)
+      ? new Event('error', { bubbles: false, cancelable: true })
+      : new ErrorEvent('error', {
+          message: String((info && info.message) || ''),
+          filename: String((info && info.filename) || ''),
+          lineno: (info && info.lineno) | 0,
+          colno: (info && info.colno) | 0,
+          bubbles: false, cancelable: true,
+        });
     if (typeof this._onerror === 'function') { try { this._onerror(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     for (var i = 0; i < this._errorListeners.length; i++) {
       try { this._errorListeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
@@ -812,8 +822,10 @@ fn run_shared_worker_thread_v8(
     };
 
     let ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>> = Arc::new(Mutex::new(HashMap::new()));
-    // Broadcast target for uncaught exceptions (BUG-591): every currently
-    // connected client's own error queue, keyed the same way as `ports`.
+    // Target for a top-level parse/load failure (BUG-905: no longer a
+    // broadcast target for a *runtime* exception, which now stops at the
+    // scope's own `onerror`/`'error'` listeners) — every currently connected
+    // client's own error queue, keyed the same way as `ports`.
     let error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>> =
         Arc::new(Mutex::new(HashMap::new()));
     // BUG-778 `self.close()`: flipped from inside the worker script; polled
@@ -827,7 +839,6 @@ fn run_shared_worker_thread_v8(
     if let Err(e) = install_shared_worker_globals_v8(
         &rt,
         Arc::clone(&ports),
-        Arc::clone(&error_ports),
         fetch_provider,
         &script_url,
         is_module,
@@ -837,43 +848,43 @@ fn run_shared_worker_thread_v8(
         return;
     }
 
-    // BUG-813: the top-level script goes through the reporting variants so an
-    // uncaught exception fires `error` at this scope's own handlers (which the
-    // very same script may have installed a line earlier) before it is
-    // broadcast to the clients — the broadcast itself is then done from JS by
-    // `_lumen_sw_report_exception`, which is what a `return true` there
-    // cancels. Same shape and same reason as `worker.rs::run_worker_thread_v8`.
+    // BUG-905: the top-level script goes through the runtime-only reporting
+    // variants so an uncaught RUNTIME exception fires `error` at this scope's
+    // own handlers (which the very same script may have installed a line
+    // earlier) and stops there — HTML LS §10.2.6 gives a shared worker no
+    // owning client to forward it to, cancelled or not. A PARSE/load failure
+    // never reaches the reporter at all (the body never started), which is
+    // exactly the branch below that still replays to clients.
     let outcome = if is_module {
         rt.set_module_context(&script_url, fp_esm);
         rt.eval_module_at_and_report_via(&script_url, &script, "_lumen_worker_exception_reporter")
     } else {
-        rt.eval_and_report_via(&script, "_lumen_worker_exception_reporter")
+        rt.eval_and_report_via_runtime_only(&script, "_lumen_worker_exception_reporter")
             .map(|_| ())
     };
-    // A top-level failure that nobody was connected to hear yet. The worker
-    // thread is spawned by the *first* client's connect, so this eval always
-    // runs before any `Connect` arrives and `broadcast_shared_worker_error`
-    // below reaches an empty map — which is why a shared worker whose script
-    // failed to load used to leave its client waiting for the run's timeout
-    // rather than firing `error` (BUG-777: a module worker makes this the
-    // common case, since every failed `import` in the graph lands here).
-    // Replayed to each client as it connects, matching HTML LS "report the
-    // exception" firing at every `SharedWorker` object owning a port.
+    // A top-level *parse/load* failure that nobody was connected to hear yet.
+    // The worker thread is spawned by the *first* client's connect, so this
+    // eval always runs before any `Connect` arrives and
+    // `broadcast_shared_worker_error` below reaches an empty map — which is
+    // why a shared worker whose script failed to load used to leave its
+    // client waiting for the run's timeout rather than firing `error`
+    // (BUG-777: a module worker makes this the common case, since every
+    // failed `import` in the graph lands here). Replayed to each client as it
+    // connects, matching HTML LS "fire an event named error" at every
+    // `SharedWorker` object owning a port.
     let mut pending_error: Option<String> = None;
 
     if let Err(e) = outcome {
         eprintln!("[shared-worker] v8 script error: {e:?}");
-        // BUG-591 SharedWorker parent-side reporting: broadcast the top-level
-        // failure to every already-connected client.
-        //
-        // BUG-813: unless the scope's own `onerror` cancelled it — the JS-side
-        // report the reporter already made reached the same (still empty) map,
-        // so what is actually being decided here is the replay below.
-        let cancelled = matches!(
-            rt.eval("!!globalThis._lumen_worker_error_cancelled"),
+        // BUG-905: `eval_and_report_via_runtime_only`/`eval_module_at_and_report_via`
+        // both call the reporter only for a runtime failure — so "the reporter
+        // never ran" (the global stays `undefined`, not a `bool`) is exactly a
+        // parse/load failure, the only case that still reaches a client.
+        let reporter_ran = matches!(
+            rt.eval("typeof globalThis._lumen_worker_error_cancelled === 'boolean'"),
             Ok(lumen_core::JsValue::Bool(true))
         );
-        if !cancelled {
+        if !reporter_ran {
             let message = match &e {
                 lumen_core::JsError::Parse(m) | lumen_core::JsError::Runtime(m) => m.clone(),
                 lumen_core::JsError::NotImplemented => "not implemented".to_string(),
@@ -881,7 +892,9 @@ fn run_shared_worker_thread_v8(
             broadcast_shared_worker_error(&error_ports, &message, "", 0, 0);
             pending_error = Some(message);
         }
-        // Continue: the worker may still service connections if the error was partial.
+        // A runtime failure already fired at the worker's own scope above —
+        // nothing more to do for it here. Either way, the worker may still
+        // service connections if the failure was partial.
     }
 
     // BUG-778 "close a worker": discard further queued tasks (including a
@@ -919,7 +932,7 @@ fn run_shared_worker_thread_v8(
                     errors
                         .lock()
                         .unwrap()
-                        .push((port_id, crate::worker::error_info_json(message, "", 0, 0)));
+                        .push((port_id, crate::worker::error_info_json_plain(message, "", 0, 0)));
                 }
                 let _ = rt.eval(&format!(
                     "if(typeof _lumen_sw_dispatch_connect==='function')\
@@ -952,10 +965,11 @@ fn run_shared_worker_thread_v8(
     // `rt` drops here: `V8JsRuntime::drop` sends `Shutdown` and joins its thread.
 }
 
-/// Push an uncaught-exception report onto every currently-connected client's
-/// error queue (BUG-591 SharedWorker parent-side reporting — HTML LS "report
-/// the exception" fires `error` at *every* `SharedWorker` object owning a
-/// port into this worker, not just the one that triggered it).
+/// Push a top-level *parse/load* failure onto every currently-connected
+/// client's error queue (BUG-905: the only remaining caller — a runtime
+/// failure now stops at the worker's own scope, HTML LS §10.2.6 — so this
+/// always builds the "plain `Event`, not `ErrorEvent`" shape via
+/// [`crate::worker::error_info_json_plain`]).
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn broadcast_shared_worker_error(
@@ -965,7 +979,7 @@ fn broadcast_shared_worker_error(
     lineno: i32,
     colno: i32,
 ) {
-    let info = crate::worker::error_info_json(message, filename, lineno, colno);
+    let info = crate::worker::error_info_json_plain(message, filename, lineno, colno);
     for (port_id, errors) in error_ports.lock().unwrap().iter() {
         errors.lock().unwrap().push((*port_id, info.clone()));
     }
@@ -975,9 +989,7 @@ fn broadcast_shared_worker_error(
 ///
 /// Registers `_lumen_sw_port_reply` / `_lumen_sw_console_log` (both plain
 /// String/u32 natives — no scoped mechanism needed, unlike `worker.rs`'s
-/// throwing `atob`/`btoa`), `_lumen_sw_report_error` (BUG-591 — broadcasts an
-/// uncaught-exception report to every connected client via `error_ports`),
-/// `_lumen_worker_self_close`/`_lumen_worker_net_fetch`/
+/// throwing `atob`/`btoa`), `_lumen_worker_self_close`/`_lumen_worker_net_fetch`/
 /// `_lumen_import_scripts_resolve` (BUG-778 — the same three natives the
 /// dedicated worker registers, reusing [`crate::worker::worker_net_fetch_json`]/
 /// [`crate::worker::resolve_import_url`] rather than a second implementation),
@@ -986,6 +998,12 @@ fn broadcast_shared_worker_error(
 /// `_lumen_worker_is_module` (BUG-777, gates `importScripts`), and evaluates
 /// [`SHARED_WORKER_GLOBAL_SHIM`] followed by
 /// [`crate::worker::WORKER_TIMERS_SHIM`] and [`crate::worker::WORKER_NET_SHIM`].
+///
+/// No native here reaches `error_ports` (BUG-905): a runtime exception now
+/// stops at the scope's own `onerror`/`'error'` listeners (logged to the
+/// console instead of broadcast), so the only remaining producer of a
+/// client-visible error report is [`run_shared_worker_thread_v8`]'s top-level
+/// parse/load-failure branch, which writes into `error_ports` directly.
 ///
 /// `importScripts('blob:lumen/…')` is not supported here (`None` is passed as
 /// the blob store — always empty): unlike a dedicated [`crate::worker`], a
@@ -998,7 +1016,6 @@ fn broadcast_shared_worker_error(
 fn install_shared_worker_globals_v8(
     rt: &V8JsRuntime,
     ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>>,
-    error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     script_url: &str,
     is_module: bool,
@@ -1018,19 +1035,6 @@ fn install_shared_worker_globals_v8(
         into_v8_fn1(move |msg: String| {
             eprintln!("[shared-worker] {msg}");
         }),
-    )?;
-
-    // _lumen_sw_report_error(message, filename, lineno, colno) — called by
-    // `SHARED_WORKER_GLOBAL_SHIM`'s `_lumen_sw_report_exception` for an
-    // uncaught exception from `onconnect`, a port's `onmessage`, or a
-    // flushed timer callback (BUG-591 SharedWorker parent-side reporting).
-    rt.register_native(
-        "_lumen_sw_report_error",
-        into_v8_fn4(
-            move |message: String, filename: String, lineno: i32, colno: i32| {
-                broadcast_shared_worker_error(&error_ports, &message, &filename, lineno, colno);
-            },
-        ),
     )?;
 
     // _lumen_worker_self_close() — BUG-778 `self.close()`.
@@ -1157,8 +1161,7 @@ mod tests_v8 {
     fn shared_worker_global_scope_has_performance() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        let error_ports = Arc::new(Mutex::new(HashMap::new()));
-        install_shared_worker_globals_v8(&rt, ports, error_ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
         for expr in [
             "typeof performance.now === 'function'",
             "performance instanceof Performance",
@@ -1179,11 +1182,9 @@ mod tests_v8 {
     fn shared_worker_scope_timers_are_driven_by_the_task_loop() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        let error_ports = Arc::new(Mutex::new(HashMap::new()));
         install_shared_worker_globals_v8(
             &rt,
             ports,
-            error_ports,
             None,
             "http://example.test/sw.js",
             false,
@@ -1204,24 +1205,22 @@ mod tests_v8 {
         }
     }
 
-    /// [BUG-813] A `SharedWorkerGlobalScope` fires `error` at itself before the
-    /// report is broadcast to its clients, exactly like the dedicated twin —
-    /// the difference being only *how many* clients hear it, which is what
-    /// `broadcast_shared_worker_error` already handles. Both handler forms and
-    /// both ways of cancelling are asserted in one runtime because the scope's
-    /// own error path has no per-client state.
+    /// [BUG-905] A `SharedWorkerGlobalScope` fires `error` at itself, and —
+    /// unlike the dedicated twin — that is where a runtime exception ends:
+    /// HTML LS §10.2.6 gives a shared worker no single owning client to
+    /// forward an uncancelled report to, so neither handler form reaches any
+    /// connected client's error queue, cancelled or not.
+    /// `globalThis._lumen_worker_error_cancelled` still records which way the
+    /// scope's own handlers went — `run_shared_worker_thread_v8` reads it only
+    /// to tell a runtime failure (this ran) from a parse failure (it never
+    /// runs at all), not to gate a broadcast that no longer exists.
     #[test]
     fn shared_worker_scope_reports_the_exception_to_itself_first() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        let error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let client: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        error_ports.lock().unwrap().insert(1, Arc::clone(&client));
         install_shared_worker_globals_v8(
             &rt,
             ports,
-            Arc::clone(&error_ports),
             None,
             "http://example.test/sw.js",
             false,
@@ -1245,16 +1244,22 @@ mod tests_v8 {
             seen,
             JsValue::String("h:boom@http://example.test/sw.js;l:true;".to_string())
         );
-        assert_eq!(crate::worker::drain_errors(&client).len(), 1);
+        assert_eq!(
+            rt.eval("globalThis._lumen_worker_error_cancelled").unwrap(),
+            JsValue::Bool(false)
+        );
 
-        // Cancelling stops the broadcast — the whole point of the scope getting
-        // the event first.
+        // Cancelling changes only the recorded flag — the scope was already
+        // the end of the line either way.
         rt.eval(
             "onerror = function() { return true; }; \
              _lumen_worker_exception_reporter(new Error('cancelled'));",
         )
         .unwrap();
-        assert!(crate::worker::drain_errors(&client).is_empty());
+        assert_eq!(
+            rt.eval("globalThis._lumen_worker_error_cancelled").unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
@@ -1262,7 +1267,6 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_shared_worker_globals_v8(
             &rt,
-            Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(HashMap::new())),
             None,
             "http://example.test/worker.js",
@@ -1328,13 +1332,15 @@ mod tests_v8 {
         Vec::new()
     }
 
-    /// [BUG-813] A shared worker's *top-level* exception is evaluated by Rust,
+    /// [BUG-905] A shared worker's *top-level* exception is evaluated by Rust,
     /// so it reaches the scope's own `onerror` only because
     /// `run_shared_worker_thread_v8` routes it through
-    /// `eval_and_report_via`. Asserted through cancellation rather than through
-    /// a `postMessage`, because at top-level time no client is connected yet —
-    /// which is also why the *uncancelled* half has to travel as the replayed
-    /// `pending_error` instead of the JS-side broadcast.
+    /// `eval_and_report_via_runtime_only`. HTML LS §10.2.6: a runtime error
+    /// (the script compiled and started running) stops at the worker's own
+    /// scope for a *shared* worker — unlike a dedicated worker's single
+    /// client, there is no owning `SharedWorker` to forward it to, cancelled
+    /// or not. Asserted through the client's error queue rather than through
+    /// a `postMessage`, because at top-level time no client is connected yet.
     #[test]
     fn v8_shared_worker_top_level_throw_runs_the_scopes_own_onerror() {
         let (rt, _outbox, errors) = runtime_with_shared_worker_errors();
@@ -1346,8 +1352,6 @@ mod tests_v8 {
             "new SharedWorker('{cancelling}','v8-toplevel-cancelled');"
         ))
         .unwrap();
-        // Give the thread the same budget the positive case gets below, so an
-        // empty queue here means "cancelled", not "not yet".
         assert!(
             wait_for_error(&errors).is_empty(),
             "a cancelling scope handler must stop the report to every client"
@@ -1362,9 +1366,27 @@ mod tests_v8 {
             "new SharedWorker('{plain}','v8-toplevel-reported');"
         ))
         .unwrap();
-        let reported = wait_for_error(&errors2);
-        assert_eq!(reported.len(), 1, "uncancelled: the client still hears it");
-        assert!(reported[0].1.contains("boom"), "got {}", reported[0].1);
+        assert!(
+            wait_for_error(&errors2).is_empty(),
+            "uncancelled runtime error still must not reach a shared worker's clients"
+        );
+    }
+
+    /// [BUG-905] Counterpart of the above: a top-level *parse* failure never
+    /// starts the script body, so there is no scope for it to be cancelled at
+    /// — HTML LS routes it straight to every owning `SharedWorker` as a plain
+    /// `error` Event, which `eval_and_report_via_runtime_only` leaves outside
+    /// its runtime-only reporting (the reporter never runs, so
+    /// `run_shared_worker_thread_v8` falls into its "load failure" branch).
+    #[test]
+    fn v8_shared_worker_top_level_parse_failure_reaches_the_client() {
+        let (rt, _outbox, errors) = runtime_with_shared_worker_errors();
+        let broken = format!("data:text/javascript,{}", urlencode("function ("));
+        rt.eval(&format!("new SharedWorker('{broken}','v8-toplevel-parse-error');"))
+            .unwrap();
+        let reported = wait_for_error(&errors);
+        assert_eq!(reported.len(), 1, "a parse failure must still reach the client");
+        assert!(reported[0].1.contains("\"plain\":true"), "got {}", reported[0].1);
     }
 
     /// Pump `rt`'s outbox until `count_expr` evaluates to `>= expected`, or the
@@ -1562,8 +1584,7 @@ mod tests_v8 {
     fn v8_shared_worker_global_scope_has_fetch_xhr_close() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        let error_ports = Arc::new(Mutex::new(HashMap::new()));
-        install_shared_worker_globals_v8(&rt, ports, error_ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
         for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
             assert_eq!(rt.eval(expr).unwrap(), JsValue::String("function".into()), "{expr}");
         }
@@ -1630,10 +1651,9 @@ mod tests_v8 {
     fn v8_shared_worker_import_scripts_path_absolute_resolves_against_base_url() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        let error_ports = Arc::new(Mutex::new(HashMap::new()));
         let net = SwTestNet::new(&[("https://example.test/resources/testharness.js", "globalThis._sms1 = 40;")]);
         install_shared_worker_globals_v8(
-            &rt, ports, error_ports, Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)),
+            &rt, ports, Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
@@ -1649,7 +1669,6 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_shared_worker_globals_v8(
             &rt,
-            Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(HashMap::new())),
             None,
             "https://example.test/a/sw.js?x=1",
@@ -1722,7 +1741,6 @@ mod tests_v8 {
         install_shared_worker_globals_v8(
             &rt,
             Arc::new(Mutex::new(HashMap::new())),
-            Arc::new(Mutex::new(HashMap::new())),
             None,
             "https://example.test/sw.js",
             false,
@@ -1777,9 +1795,12 @@ mod tests_v8 {
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
 
+        // A *parse* failure (BUG-905: not a runtime `throw`, which now stops
+        // at the worker's own scope and never reaches any client — see
+        // `v8_shared_worker_top_level_throw_runs_the_scopes_own_onerror`).
         let port_id = connect_shared_worker_v8(
             "v8-toplevel-fail".to_string(),
-            "throw new Error('sw-boom');".to_string(),
+            "function (".to_string(),
             "https://example.test/sw.js".to_string(),
             false,
             Arc::clone(&outbox),
@@ -1791,6 +1812,6 @@ mod tests_v8 {
         let drained = std::mem::take(&mut *errors.lock().unwrap());
         assert_eq!(drained.len(), 1, "client never heard the failure: {drained:?}");
         assert_eq!(drained[0].0, port_id);
-        assert!(drained[0].1.contains("sw-boom"), "unexpected report: {}", drained[0].1);
+        assert!(drained[0].1.contains("\"plain\":true"), "unexpected report: {}", drained[0].1);
     }
 }
