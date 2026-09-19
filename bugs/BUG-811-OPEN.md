@@ -2010,3 +2010,55 @@ csp_enforce.rs`), а сам метод — только проводка в но
 `cases::snapshot_cpu::cpu_snapshots_match_references`, тот же байтовый
 сигнатурный дрейф 7 файлов (BUG-1008), воспроизводимый на `main` при
 `git stash` этого диффа — чужой, не регрессия этого среза.
+
+## Срез 35 (2026-09-19, `p6-gap-cspenf-srez35`) — директива `navigate-to` против `window.open()`
+
+Срез 34 сам назвал `window.open` не тронутым — «сложнее по ветвлению
+(`_self`/именованный target/reuse/opener), кандидат на отдельный срез». Это
+он: до этого среза `navigate-to 'self'` не мешало
+`window.open('https://other.example/…')` открыть новую вкладку и уйти куда
+угодно — цикл обработки popup-запросов в `Lumen::on_about_to_wait`
+(`about_to_wait.rs:1206`) никогда не спрашивал CSP.
+
+- Новый приватный `Lumen::window_open_navigate_to_blocked(url)`
+  (`about_to_wait.rs`, тот же контур, что `js_navigate_to_blocked` среза 34
+  и `click.rs::navigate_to_link_blocked` среза 33): один
+  `layout_source.document.lock()`, `document_csp_policy`,
+  `csp_enforce::navigate_to_blocked`, при блокировке — `route_task_js` +
+  `fire_csp_violation("navigate-to", …)`, `eprintln!` и возврат `true`.
+- Вызывается в ветке `resolved`-вычисления ДО `open_new_tab()`/`switch_tab()`
+  — пока `self.source`/`self.layout_source` ещё указывают на OPENER, не на
+  ещё не существующую вкладку: навигация проверяется политикой
+  инициатора, ровно как того требует спека (CSP3 §6.9). При блокировке
+  `resolved` получает `Err("blocked by CSP navigate-to")` — тот же путь,
+  которым уже идут прочие отказы этой ветки (невалидный URL,
+  web→file guard), так что новая вкладка всё равно открывается (та же
+  вкладка-заглушка `about:blank`, что и у любого другого `Err` здесь), но
+  СЕТЕВОЙ РЕСУРС не запрашивается: `resolve_js_navigation`/сеть не
+  вызываются вовсе.
+- `javascript:` URL и пустой `url` (`about:blank`) проверяются раньше этой
+  ветки и гейт не проходят — тот же принцип, что срез 34 применил к
+  `location.href=`: `javascript:` исполняется в контексте OPENER'а, а не
+  навигирует, поэтому `navigate-to` его не касается.
+
+Не тронуто этим срезом: навигация внутри уже открытого `window.open()`-попапа
+(его собственный `location.href=`/клики уже гейтятся срезами 33/34 — это не
+разрыв, а естественное покрытие); история (`navigate-to` её не покрывает по
+спеке); `<iframe>`/дочерние документы (отдельный, ранее закрытый пласт —
+срезы 8/22/24); директива `sandbox` (по-прежнему единственная
+распарсенная-но-не-применённая).
+
+Живая проверка — `tests/wpt/verify_gap_cspenf_window_open_navigate_to.py`
+(`--mcp-live-port`, HTTP-сервер, dev-release, коммит текущего среза):
+страница A с `navigate-to 'self'` открывает `window.open('/.wo-allowed.html')`
+(same-origin) — сервер видит запрос, новая вкладка навигирует туда; затем,
+со свежей вкладки той же политики, `window.open('http://127.0.0.1:<чужой
+порт без сервера>/.wo-blocked.html')` (cross-origin) — сервер на чужом порту
+НЕ получает запроса (иначе — connection-refused в логе, а не тишина), а
+`stderr` содержит `window.open: navigation to … blocked by CSP
+navigate-to`. Оба случая — ЗЕЛЁНЫЙ. Чистых unit-тестов на сам
+`window_open_navigate_to_blocked` не добавлено — та же причина, что у среза
+34 (`navigate_to_blocked`/`document_csp_policy` уже 10 тестов среза 33,
+новый метод — только проводка).
+
+`cargo clippy -p lumen-shell --all-targets -- -D warnings` чисто.
