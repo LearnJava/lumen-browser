@@ -3,9 +3,10 @@
 //! http-equiv="Content-Security-Policy">`. Срез 4 добавил `img-src`/
 //! `default-src` против `<img src>` (host/scheme/`'self'`-источники, не
 //! только keyword). Срез 5 добавил заголовок `Content-Security-Policy`
-//! ответа: он доезжает до документа (`Document::csp_header`) и сливается с
-//! `<meta>`-политиками в [`document_csp_policy`], поэтому все точки
-//! enforcement видят его без изменений в них самих. Срез 6 добавил
+//! ответа: он доезжает до документа (`Document::csp_header`) и участвует
+//! вместе с `<meta>`-политиками в [`document_csp_policy`] (срез 40 сделал их
+//! независимыми политиками, не одной строкой), поэтому все точки enforcement
+//! видят его без изменений в них самих. Срез 6 добавил
 //! `script-src`/`default-src` против внешнего `<script src>` — та же
 //! host/scheme/`'self'` проверка, что срез 4 сделал для `img-src`, теперь
 //! останавливает fetch внешнего скрипта до сети.
@@ -192,11 +193,23 @@
 //! `importScripts()`) закрыли это до появления списка ниже; список не был
 //! обновлён тогда, чинится этим срезом.
 //!
+//! Срез 40 закрыл последний пункт списка «не покрыто», который держался с
+//! среза 1: заголовок и каждая `<meta>` теперь проверяются как независимые
+//! политики (CSP3 §3.4) — [`document_csp_policy`] парсит каждую строку
+//! отдельно вместо склейки в одну через `;`, и каждая `_blocked` функция
+//! этого файла принимает `&[CspPolicy]`, блокируя при нарушении ЛЮБОЙ из
+//! них. Не мигрирован этим срезом: `lumen-network::HttpClient`'s
+//! `connect-src`/`worker-src`/`object-src`/`media-src` (`page_pipeline.rs`'s
+//! единственный вызов, который их настраивает, по-прежнему передаёт им один
+//! смёрженный [`CspPolicy`] через новый [`document_csp_policy_combined`]) —
+//! у `HttpClient` нет `&Document`/парсинга по месту, threading
+//! `Vec<CspPolicy>` через него отдельная, более широкая работа.
+//!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/…
 //! — распознаётся [`CspDirective::ManifestSrc`], но манифест ничем не
 //! фетчится этим движком, гейтить нечего), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
-//! честная независимая проверка заголовка и `<meta>` вместо их слияния. См.
+//! `lumen-network::HttpClient`'s четыре gate'а (см. срез 40 выше). См.
 //! `bugs/BUG-811-OPEN.md`.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
@@ -230,29 +243,49 @@ fn collect_meta_csp(doc: &Document, id: NodeId, out: &mut Vec<String>) {
     }
 }
 
-/// Действующая политика документа: заголовок `Content-Security-Policy` ответа
-/// (срез 5, `Document::csp_header`) плюс каждая `<meta
+/// Действующие политики документа: заголовок `Content-Security-Policy` ответа
+/// (срез 5, `Document::csp_header`) и каждая `<meta
 /// http-equiv="Content-Security-Policy">` (срез 1), в порядке «заголовок,
 /// затем документ».
 ///
 /// Заголовок и каждая `<meta>` по спецификации (CSP3 §3.4) — независимые
-/// политики, каждая проверяется отдельно, и нарушение любой из них —
-/// нарушение; здесь они упрощённо сливаются в одну строку через `;` — для
-/// одиночной политики (подавляющее большинство случаев) результат совпадает,
-/// для нескольких политик со связанными ослаблениями (например,
-/// `'unsafe-inline'` в одной и `'self'` в другой) это может дать более мягкий
-/// эффективный результат, чем спецификация. Честная независимая проверка —
-/// отдельная работа (`bugs/BUG-811-OPEN.md`).
+/// политики: каждая парсится и проверяется отдельно (срез 40) — все
+/// `_blocked` функции этого файла принимают `&[CspPolicy]` и блокируют, если
+/// нарушена ЛЮБАЯ политика из списка — до среза 40 они упрощённо сливались в
+/// одну строку через `;` перед парсингом, что для нескольких политик со
+/// связанными ослаблениями (например, `'unsafe-inline'` в одной и `'self'` в
+/// другой) могло дать более мягкий эффективный результат, чем спецификация.
 ///
 /// `Content-Security-Policy-Report-Only` не учитывается ни с той, ни с другой
 /// стороны: у `<meta>` репортинг-вариант недопустим по HTML LS, а заголовок
 /// отфильтрован в `page_source::content_security_policy_header` — здесь
 /// enforcement, а report-only по определению ничего не блокирует.
 ///
-/// The returned `String` is the combined raw policy text — carried through to
+/// The returned `String` is the combined raw policy text (still joined with
+/// `; ` for display) — carried through to
 /// `SecurityPolicyViolationEvent.originalPolicy` (CSP3 §7.8), which the
-/// parsed [`CspPolicy`] itself does not retain.
-pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(CspPolicy, String)> {
+/// parsed [`CspPolicy`] itself does not retain; CSP3 §7.8 actually wants each
+/// violated policy's own text here, not every policy's — that distinction is
+/// still open (`bugs/BUG-811-OPEN.md`).
+pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(Vec<CspPolicy>, String)> {
+    let mut parts: Vec<String> = doc.csp_header().map(str::to_owned).into_iter().collect();
+    collect_meta_csp(doc, root, &mut parts);
+    if parts.is_empty() {
+        return None;
+    }
+    let combined = parts.join("; ");
+    let policies = parts.iter().map(|p| lumen_network::csp::parse_csp_header(p)).collect();
+    Some((policies, combined))
+}
+
+/// Single merged policy, kept only for
+/// [`lumen_network::HttpClient`]'s `connect-src`/`worker-src`/`object-src`/
+/// `media-src` gates (`page_pipeline.rs`'s one call site that feeds them) —
+/// those still enforce header+`<meta>` as one combined policy, same
+/// simplification [`document_csp_policy`] used before срез 40. Migrating them
+/// to independent enforcement means threading `Vec<CspPolicy>` through
+/// `HttpClient`, a separate, larger change (`bugs/BUG-811-OPEN.md`).
+pub(crate) fn document_csp_policy_combined(doc: &Document, root: NodeId) -> Option<(CspPolicy, String)> {
     let mut parts: Vec<String> = doc.csp_header().map(str::to_owned).into_iter().collect();
     collect_meta_csp(doc, root, &mut parts);
     if parts.is_empty() {
@@ -275,8 +308,8 @@ pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(CspPo
 /// объявляла ограничения). `'strict-dynamic'` без совпавшего nonce/хэша НЕ
 /// разрешает голый инлайн (CSP3 §8.2) — здесь не учитывается умышленно, тем
 /// самым инлайн без nonce/хэша остаётся заблокированным.
-pub(crate) fn inline_script_blocked(policy: &CspPolicy, nonce: Option<&str>, body: &str) -> bool {
-    inline_directive_blocked(policy, &CspDirective::ScriptSrc, nonce, body)
+pub(crate) fn inline_script_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
+    inline_directive_blocked(policies, &CspDirective::ScriptSrc, nonce, body)
 }
 
 /// `true`, если `style-src` (или `default-src`) документа запрещает данный
@@ -284,8 +317,8 @@ pub(crate) fn inline_script_blocked(policy: &CspPolicy, nonce: Option<&str>, bod
 /// `'sha256-…'` набор источников, что [`inline_script_blocked`] уже даёт
 /// скриптам, применённый к `CspDirective::StyleSrc`. Атрибут `style=` и
 /// событийные обработчики этим не покрыты — только тело `<style>`.
-pub(crate) fn inline_style_blocked(policy: &CspPolicy, nonce: Option<&str>, body: &str) -> bool {
-    inline_directive_blocked(policy, &CspDirective::StyleSrc, nonce, body)
+pub(crate) fn inline_style_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
+    inline_directive_blocked(policies, &CspDirective::StyleSrc, nonce, body)
 }
 
 /// `true` if `style-src-attr`/`style-src`/`default-src` forbids the value of
@@ -301,7 +334,11 @@ pub(crate) fn inline_style_blocked(policy: &CspPolicy, nonce: Option<&str>, body
 /// granular one (`style-src-attr` → `style-src` → `default-src`), one step
 /// deeper than [`inline_directive_blocked`]'s single `directive` →
 /// `default-src` step used by every other directive in this file.
-pub(crate) fn style_attribute_blocked(policy: &CspPolicy, body: &str) -> bool {
+pub(crate) fn style_attribute_blocked(policies: &[CspPolicy], body: &str) -> bool {
+    policies.iter().any(|policy| single_style_attribute_blocked(policy, body))
+}
+
+fn single_style_attribute_blocked(policy: &CspPolicy, body: &str) -> bool {
     let Some(sources) = policy
         .directives
         .get(&CspDirective::StyleSrcAttr)
@@ -325,6 +362,17 @@ pub(crate) fn style_attribute_blocked(policy: &CspPolicy, body: &str) -> bool {
 /// совпавший источник (`'unsafe-inline'` ИЛИ nonce ИЛИ хэш) допускает
 /// инлайн; отсутствие директивы, применимой к `directive`, — не нарушение.
 fn inline_directive_blocked(
+    policies: &[CspPolicy],
+    directive: &CspDirective,
+    nonce: Option<&str>,
+    body: &str,
+) -> bool {
+    policies
+        .iter()
+        .any(|policy| single_inline_directive_blocked(policy, directive, nonce, body))
+}
+
+fn single_inline_directive_blocked(
     policy: &CspPolicy,
     directive: &CspDirective,
     nonce: Option<&str>,
@@ -365,11 +413,13 @@ pub(crate) fn fire_script_src_violation(
 /// `<script src>` at `url` — срез 6, external counterpart to
 /// [`inline_script_blocked`]. Same "don't invent a violation" stance as
 /// [`img_src_blocked`]: a `url` that fails to parse is treated as allowed.
-pub(crate) fn script_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+pub(crate) fn script_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    !policy.fetch_directive_allows(&CspDirective::ScriptSrc, &parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::ScriptSrc, &parsed, self_origin))
 }
 
 /// `true` if `img-src` (or `default-src`) forbids fetching `url` — срез 4.
@@ -377,11 +427,13 @@ pub(crate) fn script_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opt
 /// a policy exists); a `url` that fails to parse is treated as allowed — the
 /// fetch proceeds and hits the normal network-failure path instead of a CSP
 /// one, same "don't invent a violation" stance as the rest of this module.
-pub(crate) fn img_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+pub(crate) fn img_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    !policy.fetch_directive_allows(&CspDirective::ImgSrc, &parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::ImgSrc, &parsed, self_origin))
 }
 
 /// `true` if `style-src` (or `default-src`) forbids fetching the external
@@ -389,11 +441,13 @@ pub(crate) fn img_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option
 /// [`img_src_blocked`]/[`script_src_blocked`]: absence of a policy is not
 /// checked here (the caller only calls this when a policy exists), and a
 /// `url` that fails to parse is treated as allowed.
-pub(crate) fn style_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+pub(crate) fn style_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    !policy.fetch_directive_allows(&CspDirective::StyleSrc, &parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::StyleSrc, &parsed, self_origin))
 }
 
 /// `true` if `frame-src` (falling back to `child-src`, then `default-src` —
@@ -406,11 +460,13 @@ pub(crate) fn style_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
 /// expected to have already been filtered out before this is called, since
 /// those never reach the network/filesystem and CSP3 §6.5 does not restrict
 /// them).
-pub(crate) fn frame_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+pub(crate) fn frame_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    !policy.fetch_directive_allows_via_child_src(&CspDirective::FrameSrc, &parsed, self_origin)
+    policies.iter().any(|policy| {
+        !policy.fetch_directive_allows_via_child_src(&CspDirective::FrameSrc, &parsed, self_origin)
+    })
 }
 
 /// `true` if `media-src` (or `default-src`) forbids fetching `url` as a
@@ -424,11 +480,13 @@ pub(crate) fn frame_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
 /// — `tracks::load_video_tracks`, the shell's overlay snapshot, which has a
 /// `&Document` and so is gated here instead. Gating only the shim's half left
 /// the bytes going out anyway.
-pub(crate) fn media_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+pub(crate) fn media_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    !policy.fetch_directive_allows(&CspDirective::MediaSrc, &parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::MediaSrc, &parsed, self_origin))
 }
 
 /// `true` if `font-src` (or `default-src`) forbids fetching `url` as an
@@ -436,11 +494,13 @@ pub(crate) fn media_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
 /// [`img_src_blocked`]/[`media_src_blocked`]: absence of a policy is not
 /// checked here (the caller only calls this when a policy exists), and a
 /// `url` that fails to parse is treated as allowed.
-pub(crate) fn font_src_blocked(policy: &CspPolicy, url: &str, self_origin: Option<&Origin>) -> bool {
+pub(crate) fn font_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    !policy.fetch_directive_allows(&CspDirective::FontSrc, &parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::FontSrc, &parsed, self_origin))
 }
 
 /// `true` if the CHILD document's own `frame-ancestors` directive refuses to
@@ -450,11 +510,13 @@ pub(crate) fn font_src_blocked(policy: &CspPolicy, url: &str, self_origin: Optio
 /// PROTECTED document's own policy, not the embedder's: the caller passes
 /// the child's `csp_gate` and its own origin as `self_origin`.
 pub(crate) fn frame_ancestors_blocked(
-    policy: &CspPolicy,
+    policies: &[CspPolicy],
     ancestor_origin: &Origin,
     self_origin: Option<&Origin>,
 ) -> bool {
-    !policy.frame_ancestor_allowed(ancestor_origin, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.frame_ancestor_allowed(ancestor_origin, self_origin))
 }
 
 /// `true` if `form-action` forbids submitting a `<form>` owned by this
@@ -464,14 +526,16 @@ pub(crate) fn frame_ancestors_blocked(
 /// caller only calls this when a policy exists), and a `url` that fails to
 /// parse is treated as allowed, same as every fetch-gate above.
 pub(crate) fn form_action_blocked(
-    policy: &CspPolicy,
+    policies: &[CspPolicy],
     action_url: &str,
     self_origin: Option<&Origin>,
 ) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(action_url) else {
         return false;
     };
-    !policy.form_action_allowed(&parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.form_action_allowed(&parsed, self_origin))
 }
 
 /// `true` if `base-uri` forbids setting this document's base URL to
@@ -482,14 +546,16 @@ pub(crate) fn form_action_blocked(
 /// `base_url` that fails to parse is treated as allowed, same as every
 /// fetch-gate above.
 pub(crate) fn base_uri_blocked(
-    policy: &CspPolicy,
+    policies: &[CspPolicy],
     base_url: &str,
     self_origin: Option<&Origin>,
 ) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(base_url) else {
         return false;
     };
-    !policy.base_uri_allowed(&parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.base_uri_allowed(&parsed, self_origin))
 }
 
 /// `true` if `navigate-to` forbids this document from navigating to
@@ -500,14 +566,16 @@ pub(crate) fn base_uri_blocked(
 /// policy exists), and a `target_url` that fails to parse is treated as
 /// allowed, same as every fetch-gate above.
 pub(crate) fn navigate_to_blocked(
-    policy: &CspPolicy,
+    policies: &[CspPolicy],
     target_url: &str,
     self_origin: Option<&Origin>,
 ) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(target_url) else {
         return false;
     };
-    !policy.navigate_to_allowed(&parsed, self_origin)
+    policies
+        .iter()
+        .any(|policy| !policy.navigate_to_allowed(&parsed, self_origin))
 }
 
 #[cfg(test)]
@@ -517,37 +585,37 @@ mod tests {
     #[test]
     fn no_policy_allows_inline() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!inline_script_blocked(&p, None, ""));
+        assert!(!inline_script_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn script_src_none_blocks_inline() {
         let p = lumen_network::csp::parse_csp_header("script-src 'none'");
-        assert!(inline_script_blocked(&p, None, ""));
+        assert!(inline_script_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn script_src_unsafe_inline_allows() {
         let p = lumen_network::csp::parse_csp_header("script-src 'self' 'unsafe-inline'");
-        assert!(!inline_script_blocked(&p, None, ""));
+        assert!(!inline_script_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn default_src_fallback_blocks() {
         let p = lumen_network::csp::parse_csp_header("default-src 'self'");
-        assert!(inline_script_blocked(&p, None, ""));
+        assert!(inline_script_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn matching_nonce_allows() {
         let p = lumen_network::csp::parse_csp_header("script-src 'nonce-abc123'");
-        assert!(!inline_script_blocked(&p, Some("abc123"), ""));
+        assert!(!inline_script_blocked(std::slice::from_ref(&p), Some("abc123"), ""));
     }
 
     #[test]
     fn mismatched_nonce_blocks() {
         let p = lumen_network::csp::parse_csp_header("script-src 'nonce-abc123'");
-        assert!(inline_script_blocked(&p, Some("other"), ""));
+        assert!(inline_script_blocked(std::slice::from_ref(&p), Some("other"), ""));
     }
 
     /// GAP-CSPENF срез 20: `'sha256-…'` matching the actual inline body allows it.
@@ -556,7 +624,7 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header(
             "script-src 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
         );
-        assert!(!inline_script_blocked(&p, None, "alert(1)"));
+        assert!(!inline_script_blocked(std::slice::from_ref(&p), None, "alert(1)"));
     }
 
     /// A hash source for a *different* body still blocks — one match is not
@@ -566,7 +634,7 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header(
             "script-src 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
         );
-        assert!(inline_script_blocked(&p, None, "alert(2)"));
+        assert!(inline_script_blocked(std::slice::from_ref(&p), None, "alert(2)"));
     }
 
     /// `sha384`/`sha512` are matched too, not only `sha256` — CSP3 §8.1 does
@@ -576,7 +644,7 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header(
             "script-src 'sha384-HT2E9NfWiuQ/w1PRai+hTyqW16NIoCGA/m8VQDUopfAtcz6YQjtsMmQd5uRbVDpW'",
         );
-        assert!(!inline_script_blocked(&p, None, "alert(1)"));
+        assert!(!inline_script_blocked(std::slice::from_ref(&p), None, "alert(1)"));
     }
 
     /// A policy naming both a nonce and a hash source accepts either — the
@@ -586,7 +654,7 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header(
             "script-src 'nonce-unrelated' 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
         );
-        assert!(!inline_script_blocked(&p, None, "alert(1)"));
+        assert!(!inline_script_blocked(std::slice::from_ref(&p), None, "alert(1)"));
     }
 
     // GAP-CSPENF срез 21: `inline_style_blocked` shares the exact match logic
@@ -599,31 +667,31 @@ mod tests {
     #[test]
     fn no_style_src_allows_inline_style() {
         let p = lumen_network::csp::parse_csp_header("script-src 'none'");
-        assert!(!inline_style_blocked(&p, None, ""));
+        assert!(!inline_style_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn style_src_none_blocks_inline_style() {
         let p = lumen_network::csp::parse_csp_header("style-src 'none'");
-        assert!(inline_style_blocked(&p, None, ""));
+        assert!(inline_style_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn style_src_unsafe_inline_allows_inline_style() {
         let p = lumen_network::csp::parse_csp_header("style-src 'self' 'unsafe-inline'");
-        assert!(!inline_style_blocked(&p, None, ""));
+        assert!(!inline_style_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn script_src_unsafe_inline_does_not_allow_inline_style() {
         let p = lumen_network::csp::parse_csp_header("script-src 'unsafe-inline'; style-src 'none'");
-        assert!(inline_style_blocked(&p, None, ""));
+        assert!(inline_style_blocked(std::slice::from_ref(&p), None, ""));
     }
 
     #[test]
     fn style_src_matching_nonce_allows_inline_style() {
         let p = lumen_network::csp::parse_csp_header("style-src 'nonce-abc123'");
-        assert!(!inline_style_blocked(&p, Some("abc123"), ""));
+        assert!(!inline_style_blocked(std::slice::from_ref(&p), Some("abc123"), ""));
     }
 
     #[test]
@@ -631,26 +699,26 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header(
             "style-src 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
         );
-        assert!(!inline_style_blocked(&p, None, "alert(1)"));
+        assert!(!inline_style_blocked(std::slice::from_ref(&p), None, "alert(1)"));
     }
 
     #[test]
     fn no_img_src_allows() {
         let p = lumen_network::csp::parse_csp_header("script-src 'self'");
-        assert!(!img_src_blocked(&p, "https://example.com/x.png", None));
+        assert!(!img_src_blocked(std::slice::from_ref(&p), "https://example.com/x.png", None));
     }
 
     #[test]
     fn img_src_none_blocks() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(img_src_blocked(&p, "https://example.com/x.png", None));
+        assert!(img_src_blocked(std::slice::from_ref(&p), "https://example.com/x.png", None));
     }
 
     #[test]
     fn img_src_allowed_host_passes() {
         let p = lumen_network::csp::parse_csp_header("img-src cdn.example.com");
-        assert!(!img_src_blocked(&p, "https://cdn.example.com/x.png", None));
-        assert!(img_src_blocked(&p, "https://other.example.com/x.png", None));
+        assert!(!img_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/x.png", None));
+        assert!(img_src_blocked(std::slice::from_ref(&p), "https://other.example.com/x.png", None));
     }
 
     /// GAP-CSPENF срез 5: a document with no `<meta>` CSP still has a policy
@@ -674,36 +742,60 @@ mod tests {
         assert!(document_csp_policy(&doc, root).is_none());
     }
 
+    /// GAP-CSPENF срез 40: a strict header and a lenient `<meta>` must both be
+    /// enforced independently (CSP3 §3.4) — a document cannot loosen the
+    /// header's `script-src 'self'` by declaring `'unsafe-inline'` in a
+    /// `<meta>` tag of its own choosing. Before срез 40 both were merged into
+    /// one string (`"script-src 'self'; script-src 'unsafe-inline'"`), and a
+    /// single `CspPolicy` keeps only the last occurrence of a repeated
+    /// directive — the `<meta>` value, coming second, silently overrode the
+    /// header's and allowed the inline script the header alone forbids.
+    #[test]
+    fn strict_header_is_not_loosened_by_a_lenient_meta_policy() {
+        // `document_csp_policy` itself would need a `<meta>` element in the
+        // tree to exercise the header+meta path end to end (plain DOM
+        // walking, already covered by `doc_extract`'s own tests) — this test
+        // targets the merge logic in isolation, against two
+        // independently-parsed policies standing in for "header" and "meta".
+        let header_policy = lumen_network::csp::parse_csp_header("script-src 'self'");
+        let meta_policy = lumen_network::csp::parse_csp_header("script-src 'unsafe-inline'");
+        let policies = vec![header_policy, meta_policy];
+        assert!(
+            inline_script_blocked(&policies, None, "alert(1)"),
+            "the header's own script-src must still block inline execution even though the meta policy allows it"
+        );
+    }
+
     #[test]
     fn img_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!img_src_blocked(&p, "not a url", None));
+        assert!(!img_src_blocked(std::slice::from_ref(&p), "not a url", None));
     }
 
     /// GAP-CSPENF срез 6: `script-src` against an external `<script src>`.
     #[test]
     fn no_script_src_allows_external() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!script_src_blocked(&p, "https://example.com/a.js", None));
+        assert!(!script_src_blocked(std::slice::from_ref(&p), "https://example.com/a.js", None));
     }
 
     #[test]
     fn script_src_none_blocks_external() {
         let p = lumen_network::csp::parse_csp_header("script-src 'none'");
-        assert!(script_src_blocked(&p, "https://example.com/a.js", None));
+        assert!(script_src_blocked(std::slice::from_ref(&p), "https://example.com/a.js", None));
     }
 
     #[test]
     fn script_src_allowed_host_passes() {
         let p = lumen_network::csp::parse_csp_header("script-src cdn.example.com");
-        assert!(!script_src_blocked(&p, "https://cdn.example.com/a.js", None));
-        assert!(script_src_blocked(&p, "https://other.example.com/a.js", None));
+        assert!(!script_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/a.js", None));
+        assert!(script_src_blocked(std::slice::from_ref(&p), "https://other.example.com/a.js", None));
     }
 
     #[test]
     fn script_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("script-src 'none'");
-        assert!(!script_src_blocked(&p, "not a url", None));
+        assert!(!script_src_blocked(std::slice::from_ref(&p), "not a url", None));
     }
 
     /// GAP-CSPENF срез 7: `style-src` against an external `<link
@@ -711,58 +803,58 @@ mod tests {
     #[test]
     fn no_style_src_allows_external() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!style_src_blocked(&p, "https://example.com/a.css", None));
+        assert!(!style_src_blocked(std::slice::from_ref(&p), "https://example.com/a.css", None));
     }
 
     #[test]
     fn style_src_none_blocks_external() {
         let p = lumen_network::csp::parse_csp_header("style-src 'none'");
-        assert!(style_src_blocked(&p, "https://example.com/a.css", None));
+        assert!(style_src_blocked(std::slice::from_ref(&p), "https://example.com/a.css", None));
     }
 
     #[test]
     fn style_src_allowed_host_passes() {
         let p = lumen_network::csp::parse_csp_header("style-src cdn.example.com");
-        assert!(!style_src_blocked(&p, "https://cdn.example.com/a.css", None));
-        assert!(style_src_blocked(&p, "https://other.example.com/a.css", None));
+        assert!(!style_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/a.css", None));
+        assert!(style_src_blocked(std::slice::from_ref(&p), "https://other.example.com/a.css", None));
     }
 
     #[test]
     fn style_src_default_src_fallback_blocks() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(style_src_blocked(&p, "https://example.com/a.css", None));
+        assert!(style_src_blocked(std::slice::from_ref(&p), "https://example.com/a.css", None));
     }
 
     #[test]
     fn style_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("style-src 'none'");
-        assert!(!style_src_blocked(&p, "not a url", None));
+        assert!(!style_src_blocked(std::slice::from_ref(&p), "not a url", None));
     }
 
     /// GAP-CSPENF срез 15: `frame-src` against `<iframe>`/`<frame>` navigation.
     #[test]
     fn no_frame_src_allows_navigation() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!frame_src_blocked(&p, "https://example.com/frame.html", None));
+        assert!(!frame_src_blocked(std::slice::from_ref(&p), "https://example.com/frame.html", None));
     }
 
     #[test]
     fn frame_src_none_blocks_navigation() {
         let p = lumen_network::csp::parse_csp_header("frame-src 'none'");
-        assert!(frame_src_blocked(&p, "https://example.com/frame.html", None));
+        assert!(frame_src_blocked(std::slice::from_ref(&p), "https://example.com/frame.html", None));
     }
 
     #[test]
     fn frame_src_allowed_host_passes() {
         let p = lumen_network::csp::parse_csp_header("frame-src cdn.example.com");
-        assert!(!frame_src_blocked(&p, "https://cdn.example.com/frame.html", None));
-        assert!(frame_src_blocked(&p, "https://other.example.com/frame.html", None));
+        assert!(!frame_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/frame.html", None));
+        assert!(frame_src_blocked(std::slice::from_ref(&p), "https://other.example.com/frame.html", None));
     }
 
     #[test]
     fn frame_src_default_src_fallback_blocks() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(frame_src_blocked(&p, "https://example.com/frame.html", None));
+        assert!(frame_src_blocked(std::slice::from_ref(&p), "https://example.com/frame.html", None));
     }
 
     /// GAP-CSPENF срез 26: `child-src` sits between `frame-src` and
@@ -772,46 +864,46 @@ mod tests {
     #[test]
     fn frame_src_falls_back_to_child_src_before_default_src() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'; child-src cdn.example.com");
-        assert!(!frame_src_blocked(&p, "https://cdn.example.com/frame.html", None));
-        assert!(frame_src_blocked(&p, "https://other.example.com/frame.html", None));
+        assert!(!frame_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/frame.html", None));
+        assert!(frame_src_blocked(std::slice::from_ref(&p), "https://other.example.com/frame.html", None));
     }
 
     #[test]
     fn frame_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("frame-src 'none'");
-        assert!(!frame_src_blocked(&p, "not a url", None));
+        assert!(!frame_src_blocked(std::slice::from_ref(&p), "not a url", None));
     }
 
     /// GAP-CSPENF срез 17: `media-src` against the shell's `<track src>` fetch.
     #[test]
     fn no_media_src_allows_track_fetch() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!media_src_blocked(&p, "https://example.com/cap.vtt", None));
+        assert!(!media_src_blocked(std::slice::from_ref(&p), "https://example.com/cap.vtt", None));
     }
 
     #[test]
     fn media_src_none_blocks_track_fetch() {
         let p = lumen_network::csp::parse_csp_header("media-src 'none'");
-        assert!(media_src_blocked(&p, "https://example.com/cap.vtt", None));
+        assert!(media_src_blocked(std::slice::from_ref(&p), "https://example.com/cap.vtt", None));
     }
 
     #[test]
     fn media_src_allowed_host_passes() {
         let p = lumen_network::csp::parse_csp_header("media-src cdn.example.com");
-        assert!(!media_src_blocked(&p, "https://cdn.example.com/cap.vtt", None));
-        assert!(media_src_blocked(&p, "https://other.example.com/cap.vtt", None));
+        assert!(!media_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/cap.vtt", None));
+        assert!(media_src_blocked(std::slice::from_ref(&p), "https://other.example.com/cap.vtt", None));
     }
 
     #[test]
     fn media_src_default_src_fallback_blocks() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(media_src_blocked(&p, "https://example.com/cap.vtt", None));
+        assert!(media_src_blocked(std::slice::from_ref(&p), "https://example.com/cap.vtt", None));
     }
 
     #[test]
     fn media_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("media-src 'none'");
-        assert!(!media_src_blocked(&p, "not a url", None));
+        assert!(!media_src_blocked(std::slice::from_ref(&p), "not a url", None));
     }
 
     /// A stricter sibling directive must not stand in for `media-src`: a page
@@ -819,46 +911,46 @@ mod tests {
     #[test]
     fn img_src_none_does_not_block_media() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'; media-src *");
-        assert!(!media_src_blocked(&p, "https://example.com/cap.vtt", None));
+        assert!(!media_src_blocked(std::slice::from_ref(&p), "https://example.com/cap.vtt", None));
     }
 
     /// GAP-CSPENF срез 19: `font-src` against `@font-face url()`.
     #[test]
     fn no_font_src_allows_font_fetch() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!font_src_blocked(&p, "https://example.com/font.woff2", None));
+        assert!(!font_src_blocked(std::slice::from_ref(&p), "https://example.com/font.woff2", None));
     }
 
     #[test]
     fn font_src_none_blocks_font_fetch() {
         let p = lumen_network::csp::parse_csp_header("font-src 'none'");
-        assert!(font_src_blocked(&p, "https://example.com/font.woff2", None));
+        assert!(font_src_blocked(std::slice::from_ref(&p), "https://example.com/font.woff2", None));
     }
 
     #[test]
     fn font_src_allowed_host_passes() {
         let p = lumen_network::csp::parse_csp_header("font-src cdn.example.com");
-        assert!(!font_src_blocked(&p, "https://cdn.example.com/font.woff2", None));
-        assert!(font_src_blocked(&p, "https://other.example.com/font.woff2", None));
+        assert!(!font_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/font.woff2", None));
+        assert!(font_src_blocked(std::slice::from_ref(&p), "https://other.example.com/font.woff2", None));
     }
 
     #[test]
     fn font_src_default_src_fallback_blocks() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(font_src_blocked(&p, "https://example.com/font.woff2", None));
+        assert!(font_src_blocked(std::slice::from_ref(&p), "https://example.com/font.woff2", None));
     }
 
     #[test]
     fn font_src_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("font-src 'none'");
-        assert!(!font_src_blocked(&p, "not a url", None));
+        assert!(!font_src_blocked(std::slice::from_ref(&p), "not a url", None));
     }
 
     /// A stricter sibling directive must not stand in for `font-src`.
     #[test]
     fn media_src_none_does_not_block_font() {
         let p = lumen_network::csp::parse_csp_header("media-src 'none'; font-src *");
-        assert!(!font_src_blocked(&p, "https://example.com/font.woff2", None));
+        assert!(!font_src_blocked(std::slice::from_ref(&p), "https://example.com/font.woff2", None));
     }
 
     // GAP-CSPENF срез 23: `style-src-attr` against the `style=""` attribute.
@@ -866,19 +958,19 @@ mod tests {
     #[test]
     fn no_policy_allows_style_attribute() {
         let p = lumen_network::csp::parse_csp_header("img-src 'none'");
-        assert!(!style_attribute_blocked(&p, "color:red"));
+        assert!(!style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
     }
 
     #[test]
     fn style_src_attr_none_blocks_attribute() {
         let p = lumen_network::csp::parse_csp_header("style-src-attr 'none'");
-        assert!(style_attribute_blocked(&p, "color:red"));
+        assert!(style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
     }
 
     #[test]
     fn style_src_attr_unsafe_inline_allows() {
         let p = lumen_network::csp::parse_csp_header("style-src-attr 'unsafe-inline'");
-        assert!(!style_attribute_blocked(&p, "color:red"));
+        assert!(!style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
     }
 
     /// `style-src` (no `-attr` split) falls back for the attribute too — CSP3
@@ -886,13 +978,13 @@ mod tests {
     #[test]
     fn style_src_fallback_allows_attribute() {
         let p = lumen_network::csp::parse_csp_header("style-src 'unsafe-inline'");
-        assert!(!style_attribute_blocked(&p, "color:red"));
+        assert!(!style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
     }
 
     #[test]
     fn default_src_fallback_blocks_attribute() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(style_attribute_blocked(&p, "color:red"));
+        assert!(style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
     }
 
     /// A hash source alone does not allow a `style=""` attribute — CSP3 §8.1
@@ -903,7 +995,7 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header(
             "style-src-attr 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
         );
-        assert!(style_attribute_blocked(&p, "alert(1)"));
+        assert!(style_attribute_blocked(std::slice::from_ref(&p), "alert(1)"));
     }
 
     /// `'unsafe-hashes'` plus a matching hash allows it.
@@ -912,8 +1004,8 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header(
             "style-src-attr 'unsafe-hashes' 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
         );
-        assert!(!style_attribute_blocked(&p, "alert(1)"));
-        assert!(style_attribute_blocked(&p, "alert(2)"));
+        assert!(!style_attribute_blocked(std::slice::from_ref(&p), "alert(1)"));
+        assert!(style_attribute_blocked(std::slice::from_ref(&p), "alert(2)"));
     }
 
     /// A nonce source never applies to a `style=""` attribute — there is no
@@ -921,7 +1013,7 @@ mod tests {
     #[test]
     fn nonce_source_does_not_allow_attribute() {
         let p = lumen_network::csp::parse_csp_header("style-src-attr 'nonce-abc123'");
-        assert!(style_attribute_blocked(&p, "color:red"));
+        assert!(style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
     }
 
     // ── GAP-CSPENF срез 27: `frame-ancestors` enforcement ───────────────────
@@ -930,33 +1022,33 @@ mod tests {
     fn frame_ancestors_blocks_unlisted_embedder() {
         let p = lumen_network::csp::parse_csp_header("frame-ancestors example.com");
         let ancestor = Origin::new("https", "other.example", 443);
-        assert!(frame_ancestors_blocked(&p, &ancestor, None));
+        assert!(frame_ancestors_blocked(std::slice::from_ref(&p), &ancestor, None));
     }
 
     #[test]
     fn frame_ancestors_allows_listed_embedder() {
         let p = lumen_network::csp::parse_csp_header("frame-ancestors example.com");
         let ancestor = Origin::new("https", "example.com", 443);
-        assert!(!frame_ancestors_blocked(&p, &ancestor, None));
+        assert!(!frame_ancestors_blocked(std::slice::from_ref(&p), &ancestor, None));
     }
 
     #[test]
     fn no_frame_ancestors_directive_allows_any_embedder() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
         let ancestor = Origin::new("https", "anything.example", 443);
-        assert!(!frame_ancestors_blocked(&p, &ancestor, None));
+        assert!(!frame_ancestors_blocked(std::slice::from_ref(&p), &ancestor, None));
     }
 
     #[test]
     fn form_action_blocks_unlisted_target() {
         let p = lumen_network::csp::parse_csp_header("form-action example.com");
-        assert!(form_action_blocked(&p, "https://other.example/submit", None));
+        assert!(form_action_blocked(std::slice::from_ref(&p), "https://other.example/submit", None));
     }
 
     #[test]
     fn form_action_allows_listed_target() {
         let p = lumen_network::csp::parse_csp_header("form-action example.com");
-        assert!(!form_action_blocked(&p, "https://example.com/submit", None));
+        assert!(!form_action_blocked(std::slice::from_ref(&p), "https://example.com/submit", None));
     }
 
     #[test]
@@ -964,27 +1056,27 @@ mod tests {
         // Navigation directives (CSP3 §6.4) never inherit `default-src` —
         // same rule already covered for `frame-ancestors` above.
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(!form_action_blocked(&p, "https://anything.example/submit", None));
+        assert!(!form_action_blocked(std::slice::from_ref(&p), "https://anything.example/submit", None));
     }
 
     #[test]
     fn form_action_self_matches_document_origin() {
         let p = lumen_network::csp::parse_csp_header("form-action 'self'");
         let origin = Origin::new("https", "example.com", 443);
-        assert!(!form_action_blocked(&p, "https://example.com/submit", Some(&origin)));
-        assert!(form_action_blocked(&p, "https://other.example/submit", Some(&origin)));
+        assert!(!form_action_blocked(std::slice::from_ref(&p), "https://example.com/submit", Some(&origin)));
+        assert!(form_action_blocked(std::slice::from_ref(&p), "https://other.example/submit", Some(&origin)));
     }
 
     #[test]
     fn base_uri_blocks_unlisted_target() {
         let p = lumen_network::csp::parse_csp_header("base-uri example.com");
-        assert!(base_uri_blocked(&p, "https://other.example/base/", None));
+        assert!(base_uri_blocked(std::slice::from_ref(&p), "https://other.example/base/", None));
     }
 
     #[test]
     fn base_uri_allows_listed_target() {
         let p = lumen_network::csp::parse_csp_header("base-uri example.com");
-        assert!(!base_uri_blocked(&p, "https://example.com/base/", None));
+        assert!(!base_uri_blocked(std::slice::from_ref(&p), "https://example.com/base/", None));
     }
 
     #[test]
@@ -992,27 +1084,27 @@ mod tests {
         // Navigation directives (CSP3 §6.4) never inherit `default-src` —
         // same rule already covered for `frame-ancestors`/`form-action` above.
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(!base_uri_blocked(&p, "https://anything.example/base/", None));
+        assert!(!base_uri_blocked(std::slice::from_ref(&p), "https://anything.example/base/", None));
     }
 
     #[test]
     fn base_uri_self_matches_document_origin() {
         let p = lumen_network::csp::parse_csp_header("base-uri 'self'");
         let origin = Origin::new("https", "example.com", 443);
-        assert!(!base_uri_blocked(&p, "https://example.com/base/", Some(&origin)));
-        assert!(base_uri_blocked(&p, "https://other.example/base/", Some(&origin)));
+        assert!(!base_uri_blocked(std::slice::from_ref(&p), "https://example.com/base/", Some(&origin)));
+        assert!(base_uri_blocked(std::slice::from_ref(&p), "https://other.example/base/", Some(&origin)));
     }
 
     #[test]
     fn navigate_to_blocks_unlisted_target() {
         let p = lumen_network::csp::parse_csp_header("navigate-to example.com");
-        assert!(navigate_to_blocked(&p, "https://other.example/next", None));
+        assert!(navigate_to_blocked(std::slice::from_ref(&p), "https://other.example/next", None));
     }
 
     #[test]
     fn navigate_to_allows_listed_target() {
         let p = lumen_network::csp::parse_csp_header("navigate-to example.com");
-        assert!(!navigate_to_blocked(&p, "https://example.com/next", None));
+        assert!(!navigate_to_blocked(std::slice::from_ref(&p), "https://example.com/next", None));
     }
 
     #[test]
@@ -1021,20 +1113,20 @@ mod tests {
         // same rule already covered for `frame-ancestors`/`form-action`/
         // `base-uri` above.
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
-        assert!(!navigate_to_blocked(&p, "https://anything.example/next", None));
+        assert!(!navigate_to_blocked(std::slice::from_ref(&p), "https://anything.example/next", None));
     }
 
     #[test]
     fn navigate_to_self_matches_document_origin() {
         let p = lumen_network::csp::parse_csp_header("navigate-to 'self'");
         let origin = Origin::new("https", "example.com", 443);
-        assert!(!navigate_to_blocked(&p, "https://example.com/next", Some(&origin)));
-        assert!(navigate_to_blocked(&p, "https://other.example/next", Some(&origin)));
+        assert!(!navigate_to_blocked(std::slice::from_ref(&p), "https://example.com/next", Some(&origin)));
+        assert!(navigate_to_blocked(std::slice::from_ref(&p), "https://other.example/next", Some(&origin)));
     }
 
     #[test]
     fn navigate_to_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("navigate-to 'none'");
-        assert!(!navigate_to_blocked(&p, "::: not a url :::", None));
+        assert!(!navigate_to_blocked(std::slice::from_ref(&p), "::: not a url :::", None));
     }
 }

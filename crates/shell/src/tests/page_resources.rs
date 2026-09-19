@@ -589,7 +589,7 @@ fn frame_fonts_reports_csp_blocked_font_src() {
     let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let policy = lumen_network::csp::parse_csp_header("font-src 'none'");
-    let csp_gate = Some((policy, "font-src 'none'".to_owned()));
+    let csp_gate = Some((vec![policy], "font-src 'none'".to_owned()));
     let self_origin = base.origin();
     let (_registry, web_fonts, blocked) = load_frame_fonts(
         &sheet.font_faces,
@@ -651,7 +651,7 @@ fn frame_background_images_reports_csp_blocked_img_src() {
     let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let policy = lumen_network::csp::parse_csp_header("img-src 'none'");
-    let csp_gate = Some((policy, "img-src 'none'".to_owned()));
+    let csp_gate = Some((vec![policy], "img-src 'none'".to_owned()));
     let self_origin = base.origin();
 
     let (images, _keys, blocked) = fetch_frame_background_images(
@@ -917,7 +917,7 @@ fn inline_css_imports_style_src_blocks_cross_origin_import() {
         &mut std::collections::HashSet::new(),
         0,
         lumen_encoding::Encoding::Utf8,
-        Some((&policy, None)),
+        Some((std::slice::from_ref(&policy), None)),
     );
     assert_eq!(blocked, vec!["https://evil.example/b.css".to_owned()]);
     assert_eq!(out, text, "blocked import must fetch nothing, leaving the text untouched");
@@ -935,12 +935,12 @@ fn inline_css_imports_style_src_self_allows_same_origin_target() {
     let policy = lumen_network::csp::parse_csp_header("style-src 'self'");
     let self_origin = base.origin();
     assert!(!crate::csp_enforce::style_src_blocked(
-        &policy,
+        std::slice::from_ref(&policy),
         "https://good.example/b.css",
         self_origin.as_ref(),
     ));
     assert!(crate::csp_enforce::style_src_blocked(
-        &policy,
+        std::slice::from_ref(&policy),
         "https://other.example/b.css",
         self_origin.as_ref(),
     ));
@@ -969,7 +969,7 @@ fn inline_css_imports_style_src_none_blocks_file_import() {
         &mut std::collections::HashSet::new(),
         0,
         lumen_encoding::Encoding::Utf8,
-        Some((&policy, None)),
+        Some((std::slice::from_ref(&policy), None)),
     );
     assert_eq!(blocked.len(), 1, "the file:-scheme import target must be reported blocked: {blocked:?}");
     assert!(!out.contains("color: blue"), "blocked import body must never be inlined: {out:?}");

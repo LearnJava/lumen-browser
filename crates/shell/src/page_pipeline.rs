@@ -469,12 +469,12 @@ fn build_page_cascade(
         // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
         // `@import` внутри load_linked_stylesheets.
         let (inline, blocked_inline_style_count) =
-            extract_style_blocks(doc, csp_policy.as_ref().map(|(p, _)| p));
+            extract_style_blocks(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         // GAP-CSPENF срез 23: `style=""` attribute — same one-shot policy read
         // as above, separate walk (attributes live on arbitrary elements, not
         // only `<style>` nodes).
         let (blocked_style_attr_nodes, _) =
-            collect_style_attr_csp_blocked(doc, csp_policy.as_ref().map(|(p, _)| p));
+            collect_style_attr_csp_blocked(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         // GAP-CSPENF срез 38: `style-src` теперь также gates `@import`
         // targets, not only the `<style>`/`<link>` themselves — same
         // one-shot `csp_policy` read as the two gates above.
@@ -488,7 +488,7 @@ fn build_page_cascade(
             &mut std::collections::HashSet::new(),
             0,
             crate::stylesheets::document_encoding(doc),
-            csp_policy.as_ref().map(|(p, _)| (p, self_origin.as_ref())),
+            csp_policy.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
         );
         // BUG-743: всё, что не пришло из инлайновых <style>, откладывается
         // отдельно — так поздний динамический <style> пересобирает каскад без
@@ -773,7 +773,7 @@ pub(crate) fn parse_and_layout(
             // this via `check_object_src`, same one-`HttpClient`-per-document
             // approach as connect-src/worker-src above.
             let root = doc.root();
-            if let Some((policy, original_policy)) = crate::csp_enforce::document_csp_policy(&doc, root) {
+            if let Some((policy, original_policy)) = crate::csp_enforce::document_csp_policy_combined(&doc, root) {
                 let self_origin = base.origin();
                 client = client
                     .with_connect_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
@@ -1038,7 +1038,7 @@ pub(crate) fn parse_and_layout(
             let root = d.root();
             let csp_policy = crate::csp_enforce::document_csp_policy(&d, root);
             let (blocked_style_attr_nodes, _) =
-                collect_style_attr_csp_blocked(&d, csp_policy.as_ref().map(|(p, _)| p));
+                collect_style_attr_csp_blocked(&d, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
             d.set_style_attr_csp_blocked(blocked_style_attr_nodes);
         }
         if scripts_changed_css || dom_touched || adopted_changed {
@@ -1416,7 +1416,7 @@ pub(crate) fn parse_and_layout(
         drop(d);
         let csp_gate = bg_policy
             .as_ref()
-            .map(|(policy, _)| (policy, self_origin.as_ref()));
+            .map(|(policy, _)| (policy.as_slice(), self_origin.as_ref()));
         let (decoded, blocked) =
             fetch_and_decode_background_images(&layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate);
         for (src, image) in decoded {

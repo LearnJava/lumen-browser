@@ -174,7 +174,7 @@ impl Lumen {
         get_url: &str,
         target: &str,
         nav_base: &ResourceBase,
-        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+        csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     ) {
         if let Some((policy, original_policy)) = csp_gate {
             let self_origin = nav_base.origin();

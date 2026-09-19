@@ -86,7 +86,7 @@ impl Lumen {
         let root = doc.root();
         let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
         let (inline, blocked) =
-            extract_style_blocks(&doc, csp_policy.as_ref().map(|(p, _)| p));
+            extract_style_blocks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         drop(doc);
         if blocked > 0
             && let Some((_, original_policy)) = &csp_policy

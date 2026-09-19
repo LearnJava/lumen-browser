@@ -1190,7 +1190,7 @@ impl Lumen {
     pub(crate) fn spawn_image_requests(
         &mut self,
         requests: Vec<lumen_layout::ImageRequest>,
-        csp_gate: Option<(lumen_network::csp::CspPolicy, String)>,
+        csp_gate: Option<(Vec<lumen_network::csp::CspPolicy>, String)>,
     ) {
         let Some(base) = self.document_resource_base() else { return };
         let self_origin = base.origin();
