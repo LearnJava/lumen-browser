@@ -65,6 +65,7 @@ pub mod temporal_api;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
 pub mod webhid;
+pub mod webtransport;
 pub mod webusb;
 pub mod worker;
 pub mod url_pattern;

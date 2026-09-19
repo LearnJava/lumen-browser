@@ -943,6 +943,7 @@ impl V8JsRuntime {
         install_v8!(web_locks::install_web_locks_bindings_v8);
         install_v8!(web_midi::install_web_midi_api_v8);
         install_v8!(webrtc_stub::install_webrtc_bindings_v8);
+        install_v8!(webtransport::install_webtransport_v8);
         install_v8!(webusb::install_webusb_bindings_v8);
         install_v8!(webxr::install_webxr_bindings_v8);
         install_v8!(window_management::install_window_management_api_v8);
