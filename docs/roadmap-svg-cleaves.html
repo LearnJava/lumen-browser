@@ -58,11 +58,11 @@
  "generated": "2026-09-19",
  "counts": {
   "open": 277,
-  "fixed": 728,
+  "fixed": 730,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1005,
+ "total_bugs": 1007,
  "phases": [
   {
    "id": "P0",
@@ -5336,6 +5336,17 @@
        "status": "opt",
        "size": "L",
        "note": "Khronos WebGL conformance suite (1.0, минимальное подмножество) на webgl_canvas; делать после стабилизации canvas/webgl-пути (BUG-348); информационный отчёт, не гейт. Бриф docs/tasks/p2-test-track.md"
+      },
+      {
+       "id": "TEST-9",
+       "title": "TEST-9: гибридный захват графтестов (`--ipc` дефолтом, gdigrab для GPU-подмножества)",
+       "status": "planned",
+       "size": "M",
+       "note": "Гибридный захват в графическом прогоне: `--ipc` (собственный снимок Lumen) дефолтом, gdigrab — только для GPU-чувствительного подмножества. **Замер 2026-09-19, два прогона на одном dev-release-бинарнике** (`results/20260919-131021.json` — ipc, `20260919-133745.json` — gdigrab): 137/156 тестов совпадают, медиана расхождения 0.002 пп, максимум 0.497 пп; `--ipc` идёт <5 мин headless против ~20 мин foreground с фокусом. Расходятся 19 тестов (>0.5 пп), 9 меняют статус, и кластер осмысленный — трансформы/clip-path (100, 109, 130, 135, 136), фильтры/блюр/blend (30, 52, 56), AA-чувствительные края (16, 51, 53, 45, 147, 79, 117, 97), плюс 19, 55, 57, 59, 62, 78, 80: CPU-растеризатор и wgpu — независимые реализации каждого `DisplayCommand`, и расходятся они именно на GPU-специфике. Докстринг `run.py:28-30,38-41` устарел и задачу маскирует: BUG-221 (паритет CPU/femtovg) закрыт 2026-06-20, а пометка «CPU-снимок без исполнения скриптов» помечена ошибочной в коде (`dump_mode.rs:193-196` — скрипты исполняются, отсутствуют только per-frame pumps таймеров/rAF), то есть пометки «ТРЕБУЕТ gdigrab» у TEST-57/129-138 держатся на снятом основании. ГРАНИЦА: это замена дефолта, а не ещё один флаг — у раннера уже есть `--ipc`/`--per-test-process`/`--live` (no-op)/`--paint-bisect`, и четвёртый способ захвата рядом с gdigrab был бы усложнением. Основная цена не в коде: debtor-baseline'ы привязаны к способу захвата, для `--ipc`-пути нужен свой набор, иначе переключение молча подменит эталоны у 19 тестов (135/136 уже дают FAIL при *меньшем* дифе — ратчет требует разжалования). Сносится вместе с gdigrab: магента-калибровка, crop-offset, `hwnd`-перечисление, `_resolve_ffmpeg`, `ctypes.wintypes`, гонки фокуса, допуск `_DEBTOR_TOL = 2.0` (вчетверо выше порога теста 0.5 %). ffmpeg уходит не полностью — кроп Edge-эталона остаётся, а его замена требует либо Pillow (политика зависимостей, ADR-027), либо дописать кроп к самодельному zlib-декодеру PNG в `run.py`. Блокеры-предусловия: BUG-1061 (зависание ffmpeg роняет прогон) и BUG-1062 (сломанный захват рапортуется как регрессия). Отдельным вопросом — offscreen-GPU-захват через уже существующие `Renderer::new_headless`/`render_to_image` как замена gdigrab для тех 19 тестов: снял бы фокус и Windows-привязку, но offscreen не обязан совпадать с surface до байта (формат поверхности, sRGB, MSAA) и требует зафиксированного `WGPU_BACKEND` плюс сверки дельты, а не перегенерации эталонов под новый путь",
+       "bugs": [
+        "BUG-1061",
+        "BUG-1062"
+       ]
       }
      ]
     },
@@ -8441,20 +8452,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-908": {
-   "status": "open",
-   "title": "Пер-сессионного шума ±1e-7 в аудио больше нет: реализация жила в `audio_bindings.rs`, который был мёртв из-за порядка установки ([BUG-550](bugs/BUG-550-FIXED.md…",
-   "component": "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloat*Data`), ADR-007 Layer 4",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-909": {
-   "status": "open",
-   "title": "Страничный `setTimeout(fn, delay, …args)` теряет хвостовые аргументы: `setTimeout(function(a,b){...}, 0, 'x', 'y')` вызывает обработчик с `undefined, undefined`…",
-   "component": "js (`crates/js/src/dom.rs` — `setTimeout`/`setInterval` кладут в очередь `{id, fn, deadline, interval, nesting}`, `_lumen_tick_timers` зовёт `ready[k].fn()` без аргументов)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-910": {
    "status": "open",
    "title": "Динамический `import()` резолвится относительно **URL документа**, а `<base href>` игнорируется в любой форме. Замер прогоном `run_report.py --all --recursive -…",
@@ -9063,6 +9060,20 @@
    "component": "layout (`crates/engine/layout/src/selector_query.rs:2164-2191`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-1061": {
+   "status": "open",
+   "title": "Зависший вызов `ffmpeg` роняет весь прогон: `ffmpeg_diff`/`ffmpeg_crop` зовут `subprocess.run(timeout=15)` без `try`, `TimeoutExpired` всплывает в `main` и заве…",
+   "component": "тулинг графтестов (`graphic_tests/run.py:1317-1323`, вызов `:1633`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1062": {
+   "status": "open",
+   "title": "Сломанный gdigrab-захват рапортуется как массовая регрессия рендера, а не как невалидный прогон: при `ERROR` на калибровочном TEST-00 crop-offset не определён,…",
+   "component": "тулинг графтестов (`graphic_tests/run.py` — калибровка TEST-00, `_load_crop_offset`)",
+   "date": null,
+   "debtor": true
   },
   "BUG-001": {
    "status": "fixed",
@@ -14145,6 +14156,20 @@
    "component": "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception`, `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime/eval.rs::eval_and_report_via`)",
    "date": "2026-09-19",
    "debtor": false
+  },
+  "BUG-908": {
+   "status": "fixed",
+   "title": "Рендер `OfflineAudioContext` был побитово одинаков в любой сессии — рабочий аудио-фингерпринт с тех пор, как BUG-828 сделал рендер настоящим. Причина — ADR-007…",
+   "component": "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloatTimeDomainData`/`getFloatFrequencyData`), ADR-007 Layer 4",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-909": {
+   "status": "fixed",
+   "title": "Страничный `setTimeout(fn, delay, …args)` теряет хвостовые аргументы: `setTimeout(function(a,b){...}, 0, 'x', 'y')` вызывает обработчик с `undefined, undefined`…",
+   "component": "js (`crates/js/src/dom.rs` — `setTimeout`/`setInterval` кладут в очередь `{id, fn, deadline, interval, nesting}`, `_lumen_tick_timers` зовёт `ready[k].fn()` без аргументов)",
+   "date": "2026-09-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14834,7 +14859,7 @@
   "js (`crates/js/src/wasm/parser.rs::parse_element_section`)": [
    "BUG-700"
   ],
-  "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloat*Data`), ADR-007 Layer 4": [
+  "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloatTimeDomainData`/`getFloatFrequencyData`), ADR-007 Layer 4": [
    "BUG-908"
   ],
   "js (`crates/js/src/web_codecs.rs` — `webcodecs_shim`)": [

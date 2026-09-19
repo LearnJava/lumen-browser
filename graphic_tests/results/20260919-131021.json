@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-09-19T13:37:45",
+  "timestamp": "2026-09-19T13:10:21",
   "git": {
-    "commit": "023af1c5d",
+    "commit": "1a8db7504",
     "branch": "main",
-    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p3-bug-909-docstatus: BUG-909 -- РґРѕРєСЃС‚Р°С‚СѓСЃ FIXED"
+    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p3-bug-908: BUG-908 -- ADR-007 Layer 4 С€СѓРј РІ Web Audio РїРѕСЃР»Рµ BUG-828"
   },
   "crop_offset": [
-    8,
-    99
+    0,
+    0
   ],
   "halted_at": null,
   "summary": {
     "total": 156,
-    "passed": 98,
-    "failed": 12,
+    "passed": 93,
+    "failed": 19,
     "errors": 0,
-    "debtors": 46,
+    "debtors": 44,
     "skipped": 0
   },
   "tests": [
@@ -191,7 +191,7 @@
       "html": "13-visibility-opacity.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3499,
+      "diff_pct": 0.3526,
       "diff_region": {
         "top": 148,
         "left": 25,
@@ -206,13 +206,8 @@
       "html": "14-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2029,
-      "diff_region": {
-        "top": 165,
-        "left": 175,
-        "bottom": 262,
-        "right": 604
-      }
+      "diff_pct": 0.0,
+      "diff_region": null
     },
     {
       "id": "15",
@@ -230,9 +225,14 @@
       "label": "outline",
       "html": "16-outline.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 2.8038,
+      "diff_region": {
+        "top": 15,
+        "left": 21,
+        "bottom": 244,
+        "right": 836
+      }
     },
     {
       "id": "17",
@@ -251,7 +251,7 @@
       "html": "18-images.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 14.9784,
+      "diff_pct": 15.0563,
       "diff_region": {
         "top": 28,
         "left": 25,
@@ -271,7 +271,7 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.7622,
+      "diff_pct": 8.9202,
       "diff_region": {
         "top": 26,
         "left": 26,
@@ -291,7 +291,7 @@
       "html": "20-quirks-bgcolor.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2279,
+      "diff_pct": 0.2441,
       "diff_region": {
         "top": 140,
         "left": 25,
@@ -306,7 +306,7 @@
       "html": "21-border-style.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.1468,
+      "diff_pct": 3.2358,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -321,9 +321,9 @@
       "html": "22-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0011,
+      "diff_pct": 0.1632,
       "diff_region": {
-        "top": 474,
+        "top": 287,
         "left": 149,
         "bottom": 692,
         "right": 792
@@ -351,12 +351,12 @@
       "html": "24-vertical-align.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4697,
+      "diff_pct": 0.4682,
       "diff_region": {
         "top": 172,
         "left": 20,
         "bottom": 227,
-        "right": 103
+        "right": 104
       }
     },
     {
@@ -386,11 +386,11 @@
       "html": "27-direction-rtl.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.228,
+      "diff_pct": 0.308,
       "diff_region": {
-        "top": 191,
+        "top": 190,
         "left": 143,
-        "bottom": 281,
+        "bottom": 282,
         "right": 859
       }
     },
@@ -420,13 +420,13 @@
       "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
       "html": "30-css-filter.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3263,
+      "status": "FAIL",
+      "diff_pct": 0.5831,
       "diff_region": {
         "top": 31,
         "left": 31,
         "bottom": 540,
-        "right": 767
+        "right": 889
       }
     },
     {
@@ -436,11 +436,11 @@
       "html": "31-clip-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1579,
+      "diff_pct": 0.0623,
       "diff_region": {
         "top": 181,
-        "left": 41,
-        "bottom": 620,
+        "left": 61,
+        "bottom": 610,
         "right": 635
       }
     },
@@ -451,9 +451,9 @@
       "html": "32-list-markers.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.285,
+      "diff_pct": 3.7613,
       "diff_region": {
-        "top": 32,
+        "top": 33,
         "left": 60,
         "bottom": 495,
         "right": 922
@@ -471,11 +471,11 @@
       "html": "33-multi-column.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0741,
+      "diff_pct": 0.1023,
       "diff_region": {
         "top": 172,
-        "left": 195,
-        "bottom": 482,
+        "left": 191,
+        "bottom": 555,
         "right": 578
       }
     },
@@ -486,7 +486,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9929,
+      "diff_pct": 3.0155,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -506,8 +506,13 @@
       "html": "35-grid-named-areas.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0307,
+      "diff_region": {
+        "top": 661,
+        "left": 123,
+        "bottom": 718,
+        "right": 226
+      }
     },
     {
       "id": "36",
@@ -516,11 +521,11 @@
       "html": "36-border-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3638,
+      "diff_pct": 0.2077,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 594,
+        "bottom": 592,
         "right": 774
       }
     },
@@ -561,12 +566,12 @@
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0353,
+      "diff_pct": 0.0543,
       "diff_region": {
-        "top": 218,
-        "left": 415,
+        "top": 217,
+        "left": 414,
         "bottom": 396,
-        "right": 786
+        "right": 788
       }
     },
     {
@@ -626,7 +631,7 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4876,
+      "diff_pct": 2.0611,
       "diff_region": {
         "top": 0,
         "left": 0,
@@ -646,10 +651,10 @@
       "html": "46-individual-transforms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.213,
+      "diff_pct": 1.3733,
       "diff_region": {
-        "top": 74,
-        "left": 25,
+        "top": 75,
+        "left": 16,
         "bottom": 576,
         "right": 680
       },
@@ -666,9 +671,9 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4449,
+      "diff_pct": 1.4604,
       "diff_region": {
-        "top": 26,
+        "top": 38,
         "left": 29,
         "bottom": 646,
         "right": 987
@@ -701,11 +706,11 @@
       "html": "49-background-blend-mode.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1497,
+      "diff_pct": 0.1389,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 253,
+        "bottom": 0,
         "right": 1023
       }
     },
@@ -726,12 +731,12 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5699,
+      "diff_pct": 1.1142,
       "diff_region": {
-        "top": 23,
+        "top": 22,
         "left": 21,
-        "bottom": 452,
-        "right": 402
+        "bottom": 454,
+        "right": 648
       },
       "debtor": {
         "bug": "BUG-124",
@@ -746,9 +751,9 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3565,
+      "diff_pct": 2.2909,
       "diff_region": {
-        "top": 67,
+        "top": 63,
         "left": 111,
         "bottom": 324,
         "right": 911
@@ -766,12 +771,12 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1584,
+      "diff_pct": 1.7628,
       "diff_region": {
         "top": 36,
         "left": 33,
         "bottom": 515,
-        "right": 761
+        "right": 800
       },
       "debtor": {
         "bug": "BUG-219",
@@ -786,7 +791,7 @@
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2321,
+      "diff_pct": 0.2493,
       "diff_region": {
         "top": 26,
         "left": 27,
@@ -800,18 +805,18 @@
       "label": "<video> replaced element — grey DrawImage placeholder; UA default 300×150; CSS/attr dimensions; border + border-radius",
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.4561,
+      "status": "DEBTOR",
+      "diff_pct": 0.5808,
       "diff_region": {
         "top": 123,
-        "left": 122,
+        "left": 123,
         "bottom": 410,
-        "right": 711
+        "right": 713
       },
       "debtor": {
         "bug": "BUG-192",
         "baseline": 0.54,
-        "verdict": "REMOVE"
+        "verdict": "OK"
       }
     },
     {
@@ -821,7 +826,7 @@
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.355,
+      "diff_pct": 2.1729,
       "diff_region": {
         "top": 152,
         "left": 25,
@@ -835,18 +840,18 @@
       "label": "HTML LS §4.12.4 — <canvas> getContext(\"2d\"): fillRect/strokeRect/arc/path fill; UA default 300×150; attr dimensions; CSS background + border + border-radius on the canvas element box",
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.6284,
+      "status": "FAIL",
+      "diff_pct": 0.4917,
       "diff_region": {
         "top": 183,
-        "left": 35,
+        "left": 94,
         "bottom": 400,
-        "right": 701
+        "right": 705
       },
       "debtor": {
         "bug": "BUG-099",
         "baseline": 0.88,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -856,12 +861,12 @@
       "html": "58-first-letter-line.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3899,
+      "diff_pct": 2.4599,
       "diff_region": {
         "top": 37,
         "left": 33,
-        "bottom": 184,
-        "right": 1007
+        "bottom": 185,
+        "right": 1002
       },
       "debtor": {
         "bug": "BUG-100",
@@ -876,7 +881,7 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0319,
+      "diff_pct": 9.2794,
       "diff_region": {
         "top": 28,
         "left": 25,
@@ -896,7 +901,7 @@
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1482,
+      "diff_pct": 0.2045,
       "diff_region": {
         "top": 20,
         "left": 28,
@@ -911,7 +916,7 @@
       "html": "61-view-transitions.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.6604,
+      "diff_pct": 10.5969,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -931,11 +936,11 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.7522,
+      "diff_pct": 1.5426,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 710,
+        "bottom": 708,
         "right": 1023
       },
       "debtor": {
@@ -951,9 +956,9 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1801,
+      "diff_pct": 1.5698,
       "diff_region": {
-        "top": 34,
+        "top": 31,
         "left": 11,
         "bottom": 437,
         "right": 1023
@@ -971,9 +976,9 @@
       "html": "64-table.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.371,
+      "diff_pct": 7.5735,
       "diff_region": {
-        "top": 42,
+        "top": 41,
         "left": 21,
         "bottom": 406,
         "right": 1023
@@ -991,9 +996,9 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.7046,
+      "diff_pct": 2.0936,
       "diff_region": {
-        "top": 29,
+        "top": 1,
         "left": 1,
         "bottom": 695,
         "right": 989
@@ -1011,12 +1016,12 @@
       "html": "66-selection-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.9656,
+      "diff_pct": 1.1035,
       "diff_region": {
-        "top": 42,
+        "top": 41,
         "left": 41,
         "bottom": 349,
-        "right": 301
+        "right": 315
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1031,9 +1036,9 @@
       "html": "67-attr-typed.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2942,
+      "diff_pct": 1.3569,
       "diff_region": {
-        "top": 62,
+        "top": 61,
         "left": 41,
         "bottom": 446,
         "right": 690
@@ -1051,10 +1056,10 @@
       "html": "68-font-variation-settings.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0152,
+      "diff_pct": 0.0022,
       "diff_region": {
         "top": 21,
-        "left": 21,
+        "left": 24,
         "bottom": 232,
         "right": 768
       }
@@ -1076,7 +1081,7 @@
       "html": "70-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1761,
+      "diff_pct": 1.3921,
       "diff_region": {
         "top": 26,
         "left": 20,
@@ -1096,7 +1101,7 @@
       "html": "71-starting-style.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0033,
+      "diff_pct": 0.0027,
       "diff_region": {
         "top": 260,
         "left": 292,
@@ -1111,10 +1116,10 @@
       "html": "72-host-slotted.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0054,
+      "diff_pct": 0.0019,
       "diff_region": {
         "top": 41,
-        "left": 31,
+        "left": 32,
         "bottom": 300,
         "right": 330
       }
@@ -1136,10 +1141,10 @@
       "html": "74-font-stretch.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0087,
+      "diff_pct": 0.0064,
       "diff_region": {
         "top": 25,
-        "left": 25,
+        "left": 27,
         "bottom": 220,
         "right": 924
       }
@@ -1151,8 +1156,13 @@
       "html": "75-masonry-auto-flow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.2469,
+      "diff_region": {
+        "top": 61,
+        "left": 121,
+        "bottom": 342,
+        "right": 902
+      }
     },
     {
       "id": "76",
@@ -1161,9 +1171,9 @@
       "html": "76-motion-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0171,
+      "diff_pct": 0.0194,
       "diff_region": {
-        "top": 315,
+        "top": 305,
         "left": 102,
         "bottom": 525,
         "right": 999
@@ -1196,11 +1206,11 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.8571,
+      "diff_pct": 5.4304,
       "diff_region": {
         "top": 28,
         "left": 25,
-        "bottom": 522,
+        "bottom": 536,
         "right": 904
       },
       "debtor": {
@@ -1216,9 +1226,9 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.7524,
+      "diff_pct": 6.8594,
       "diff_region": {
-        "top": 45,
+        "top": 43,
         "left": 60,
         "bottom": 477,
         "right": 600
@@ -1236,12 +1246,12 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.2753,
+      "diff_pct": 4.0148,
       "diff_region": {
         "top": 22,
         "left": 21,
         "bottom": 483,
-        "right": 658
+        "right": 668
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1256,7 +1266,7 @@
       "html": "81-view-transition-name.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0033,
+      "diff_pct": 0.0027,
       "diff_region": {
         "top": 260,
         "left": 152,
@@ -1271,12 +1281,12 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.5736,
+      "diff_pct": 1.564,
       "diff_region": {
         "top": 35,
         "left": 20,
         "bottom": 633,
-        "right": 603
+        "right": 609
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1291,9 +1301,9 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 8.0044,
+      "diff_pct": 8.1951,
       "diff_region": {
-        "top": 34,
+        "top": 31,
         "left": 51,
         "bottom": 516,
         "right": 972
@@ -1311,12 +1321,12 @@
       "html": "84-text-decoration-skip-ink.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.5421,
+      "diff_pct": 6.039,
       "diff_region": {
-        "top": 32,
+        "top": 33,
         "left": 41,
         "bottom": 417,
-        "right": 433
+        "right": 451
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1330,17 +1340,23 @@
       "label": "INTERACTION: transform × overflow:hidden — клиппинг трансформированных слоёв, поворот самого клип-контейнера",
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2802,
+      "status": "FAIL",
+      "diff_pct": 1.1571,
       "diff_region": {
-        "top": 448,
-        "left": 365,
+        "top": 5,
+        "left": 345,
         "bottom": 674,
-        "right": 1009
+        "right": 1023
       },
       "deps": [
         "22",
         "14"
+      ],
+      "affected": [
+        "c1: rotate corners clipped",
+        "c2: scale clipped",
+        "c4: negative translate clipped",
+        "c5: rotated clip container"
       ]
     },
     {
@@ -1350,7 +1366,7 @@
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2525,
+      "diff_pct": 0.1763,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1383,12 +1399,12 @@
       "html": "103-filter-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2394,
+      "diff_pct": 0.2597,
       "diff_region": {
-        "top": 35,
-        "left": 46,
-        "bottom": 652,
-        "right": 983
+        "top": 256,
+        "left": 394,
+        "bottom": 645,
+        "right": 783
       },
       "deps": [
         "30",
@@ -1402,7 +1418,7 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0449,
+      "diff_pct": 0.0726,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1437,12 +1453,12 @@
       "html": "106-transform-zindex.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0014,
+      "diff_pct": 0.2752,
       "diff_region": {
-        "top": 28,
+        "top": 81,
         "left": 70,
         "bottom": 638,
-        "right": 921
+        "right": 620
       },
       "deps": [
         "22",
@@ -1456,7 +1472,7 @@
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0431,
+      "diff_pct": 0.0258,
       "diff_region": {
         "top": 65,
         "left": 65,
@@ -1476,10 +1492,10 @@
       "html": "108-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0011,
+      "diff_pct": 0.3711,
       "diff_region": {
-        "top": 429,
-        "left": 419,
+        "top": 94,
+        "left": 94,
         "bottom": 620,
         "right": 950
       },
@@ -1493,18 +1509,24 @@
       "label": "INTERACTION: clip-path × transform × border-radius — клип в локальном боксе элемента сквозь трансформацию",
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.185,
+      "status": "FAIL",
+      "diff_pct": 2.3645,
       "diff_region": {
-        "top": 85,
-        "left": 87,
-        "bottom": 671,
-        "right": 1001
+        "top": 78,
+        "left": 16,
+        "bottom": 682,
+        "right": 634
       },
       "deps": [
         "31",
         "22",
         "36"
+      ],
+      "affected": [
+        "c0: circle clip on rotated",
+        "c1: inset clip on scaled",
+        "c3: clipped parent, transformed child",
+        "c4: clip-path ∩ border-radius"
       ]
     },
     {
@@ -1524,12 +1546,12 @@
       "html": "86-position-anchor-fallback.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1077,
+      "diff_pct": 0.1459,
       "diff_region": {
-        "top": 202,
+        "top": 201,
         "left": 299,
         "bottom": 217,
-        "right": 405
+        "right": 422
       }
     },
     {
@@ -1569,12 +1591,12 @@
       "html": "90-avif-image.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.9223,
+      "diff_pct": 0.9181,
       "diff_region": {
-        "top": 22,
-        "left": 22,
+        "top": 23,
+        "left": 126,
         "bottom": 590,
-        "right": 919
+        "right": 925
       },
       "debtor": {
         "bug": "BUG-209",
@@ -1609,11 +1631,11 @@
       "html": "93-field-sizing.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.0508,
+      "diff_pct": 3.0802,
       "diff_region": {
         "top": 13,
         "left": 13,
-        "bottom": 285,
+        "bottom": 286,
         "right": 245
       },
       "debtor": {
@@ -1639,12 +1661,12 @@
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.4341,
+      "diff_pct": 2.9473,
       "diff_region": {
-        "top": 52,
+        "top": 50,
         "left": 40,
         "bottom": 521,
-        "right": 484
+        "right": 485
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1669,12 +1691,12 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3384,
+      "diff_pct": 2.7559,
       "diff_region": {
-        "top": 55,
+        "top": 54,
         "left": 46,
         "bottom": 632,
-        "right": 315
+        "right": 340
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1714,7 +1736,7 @@
       "html": "110-accent-color.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4623,
+      "diff_pct": 1.5112,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1749,12 +1771,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.258,
+      "diff_pct": 0.2262,
       "diff_region": {
         "top": 90,
-        "left": 51,
-        "bottom": 450,
-        "right": 321
+        "left": 256,
+        "bottom": 137,
+        "right": 305
       }
     },
     {
@@ -1764,11 +1786,11 @@
       "html": "113-shape-outside-path.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3021,
+      "diff_pct": 1.3563,
       "diff_region": {
-        "top": 67,
-        "left": 171,
-        "bottom": 134,
+        "top": 41,
+        "left": 41,
+        "bottom": 240,
         "right": 958
       },
       "debtor": {
@@ -1819,12 +1841,12 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1285,
+      "diff_pct": 2.1852,
       "diff_region": {
-        "top": 57,
+        "top": 56,
         "left": 41,
         "bottom": 277,
-        "right": 385
+        "right": 448
       },
       "debtor": {
         "bug": "BUG-216",
@@ -1889,9 +1911,9 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.6202,
+      "diff_pct": 9.5775,
       "diff_region": {
-        "top": 33,
+        "top": 32,
         "left": 41,
         "bottom": 295,
         "right": 627
@@ -1969,11 +1991,11 @@
       "html": "129-svg-dynamic-createelementns.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0184,
+      "diff_pct": 0.051,
       "diff_region": {
         "top": 99,
-        "left": 139,
-        "bottom": 122,
+        "left": 52,
+        "bottom": 648,
         "right": 522
       }
     },
@@ -1983,12 +2005,12 @@
       "label": "BUG-243 (dynamic SVG, без текста): глубоко вложенные <g>-трансформы — кумулятивная композиция translate/rotate/scale (спираль из 16 вложенных квадратов) + каталог независимых translate()+scale() мотивов. Проверяет parse_svg_transform.compose на глубине. ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3011,
+      "status": "FAIL",
+      "diff_pct": 6.8826,
       "diff_region": {
         "top": 112,
-        "left": 202,
-        "bottom": 604,
+        "left": 149,
+        "bottom": 590,
         "right": 945
       }
     },
@@ -2014,12 +2036,12 @@
       "html": "132-svg-dynamic-use-symbol.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2392,
+      "diff_pct": 1.8258,
       "diff_region": {
-        "top": 84,
-        "left": 64,
-        "bottom": 706,
-        "right": 677
+        "top": 69,
+        "left": 49,
+        "bottom": 700,
+        "right": 679
       },
       "debtor": {
         "bug": "BUG-246",
@@ -2034,9 +2056,9 @@
       "html": "133-svg-dynamic-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3198,
+      "diff_pct": 0.042,
       "diff_region": {
-        "top": 56,
+        "top": 104,
         "left": 140,
         "bottom": 689,
         "right": 1000
@@ -2049,7 +2071,7 @@
       "html": "134-svg-dynamic-stroke-styles.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9915,
+      "diff_pct": 3.3652,
       "diff_region": {
         "top": 20,
         "left": 56,
@@ -2068,18 +2090,18 @@
       "label": "BUG-243 (dynamic SVG, без текста): порядок отрисовки по document order (z-stack) — каскад перекрытых квадратов/кругов, плетёная сетка баров, веер повёрнутых карт. Геометрия перекрытий должна совпасть с Edge. ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.1788,
+      "status": "FAIL",
+      "diff_pct": 0.1389,
       "diff_region": {
         "top": 101,
-        "left": 650,
-        "bottom": 623,
-        "right": 874
+        "left": 501,
+        "bottom": 626,
+        "right": 998
       },
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.54,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -2088,18 +2110,18 @@
       "label": "BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.5016,
+      "status": "FAIL",
+      "diff_pct": 0.3455,
       "diff_region": {
-        "top": 91,
+        "top": 51,
         "left": 81,
         "bottom": 709,
-        "right": 955
+        "right": 972
       },
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.55,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -2109,7 +2131,7 @@
       "html": "137-svg-dynamic-transform-pinwheel.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3567,
+      "diff_pct": 1.0091,
       "diff_region": {
         "top": 69,
         "left": 115,
@@ -2129,11 +2151,11 @@
       "html": "138-svg-dynamic-dashboard.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1223,
+      "diff_pct": 0.1066,
       "diff_region": {
         "top": 30,
         "left": 21,
-        "bottom": 650,
+        "bottom": 640,
         "right": 1006
       }
     },
@@ -2154,12 +2176,12 @@
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2234,
+      "diff_pct": 1.3822,
       "diff_region": {
-        "top": 42,
+        "top": 41,
         "left": 41,
         "bottom": 462,
-        "right": 358
+        "right": 386
       },
       "debtor": {
         "bug": "BUG-128",
@@ -2174,7 +2196,7 @@
       "html": "141-backface-visibility.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.4399,
+      "diff_pct": 1.4563,
       "diff_region": {
         "top": 74,
         "left": 141,
@@ -2234,9 +2256,9 @@
       "html": "145-writing-mode.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.3944,
+      "diff_pct": 3.5315,
       "diff_region": {
-        "top": 28,
+        "top": 27,
         "left": 24,
         "bottom": 339,
         "right": 1023
@@ -2264,7 +2286,7 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9088,
+      "diff_pct": 2.3614,
       "diff_region": {
         "top": 41,
         "left": 49,
@@ -2299,12 +2321,12 @@
       "html": "149-nested-overflow-scroll.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.8339,
+      "diff_pct": 1.3833,
       "diff_region": {
-        "top": 23,
+        "top": 22,
         "left": 21,
-        "bottom": 527,
-        "right": 664
+        "bottom": 526,
+        "right": 648
       },
       "debtor": {
         "bug": "BUG-288",
@@ -2319,10 +2341,10 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.1109,
+      "diff_pct": 7.4881,
       "diff_region": {
-        "top": 47,
-        "left": 36,
+        "top": 46,
+        "left": 37,
         "bottom": 686,
         "right": 704
       }
@@ -2334,12 +2356,12 @@
       "html": "151-unicode-bidi.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 6.4714,
+      "diff_pct": 6.258,
       "diff_region": {
         "top": 44,
         "left": 29,
-        "bottom": 639,
-        "right": 994
+        "bottom": 718,
+        "right": 996
       }
     },
     {
@@ -2349,12 +2371,12 @@
       "html": "152-grid-place-content.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0977,
+      "diff_pct": 0.1302,
       "diff_region": {
         "top": 183,
         "left": 287,
         "bottom": 513,
-        "right": 724
+        "right": 1009
       }
     },
     {
@@ -2364,12 +2386,12 @@
       "html": "153-zoom.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3197,
+      "diff_pct": 0.4331,
       "diff_region": {
-        "top": 443,
+        "top": 11,
         "left": 262,
         "bottom": 455,
-        "right": 481
+        "right": 849
       }
     },
     {
@@ -2379,12 +2401,12 @@
       "html": "154-svg-external-image-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.212,
+      "diff_pct": 0.262,
       "diff_region": {
         "top": 32,
         "left": 21,
         "bottom": 166,
-        "right": 385
+        "right": 412
       }
     },
     {
@@ -2394,12 +2416,12 @@
       "html": "155-svg-inline-gradients.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.0753,
+      "diff_pct": 2.0694,
       "diff_region": {
         "top": 26,
         "left": 20,
         "bottom": 329,
-        "right": 654
+        "right": 681
       }
     },
     {
@@ -2409,7 +2431,7 @@
       "html": "156-svg-mask.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.5978,
+      "diff_pct": 2.5754,
       "diff_region": {
         "top": 46,
         "left": 20,
