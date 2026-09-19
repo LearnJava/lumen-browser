@@ -207,8 +207,11 @@ fn fetch_connect_src_block_fires_security_policy_violation_event() {
     );
 }
 
-/// Same block, `XMLHttpRequest` side — shares the synchronous
-/// `_lumen_fetch_sync*` bindings with `fetch()`'s default path.
+/// Same block, `XMLHttpRequest` side. BUG-980 made the default (async)
+/// `send()` path return before the request settles and drive readyState
+/// transitions from a `setTimeout` poll loop — same shape as `fetch()`'s async
+/// path — so the block now surfaces a tick later instead of within the same
+/// `eval` call.
 #[test]
 fn xhr_connect_src_block_fires_security_policy_violation_event() {
     let rt = v8_runtime_with_csp_blocked_fetch();
@@ -222,6 +225,13 @@ fn xhr_connect_src_block_fires_security_policy_violation_event() {
          x.send();",
     )
     .unwrap();
+    for _ in 0..400 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        if rt.eval("seen").unwrap() != lumen_core::JsValue::Null {
+            break;
+        }
+    }
     assert_eq!(
         rt.eval("seen").unwrap(),
         lumen_core::JsValue::String(
