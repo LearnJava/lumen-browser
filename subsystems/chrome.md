@@ -434,6 +434,29 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   unconditionally per CC-15-3 — but is now effectively dead in practice, since the only writer of
   `archive.visible` is the new `ToggleArchive` action). `ArchivedTab::{title,container}`'s
   `#[allow(dead_code)]` markers are gone — both fields are read by `chrome_model_snapshot` now.
+- **CC-18 srez 1: floating control panel un-stripped and wired** (`scripts/gen_chrome_assets.py`,
+  `crates/chrome/src/model.rs`, `crates/shell/src/chrome_ui.rs`): `strip_demo_css`/
+  `strip_demo_bar_html` removed — `#demoBar`/`#infoPanel` (7 layout forms, unmodified from the
+  design reference) ship as real chrome. New `ChromeAction`s `SetDemoVariant`/`ToggleDemoMini`/
+  `ToggleDemoInfo`/`SetLayout` plus new `ChromeControlPanelModel`/`ControlPanelShape`/
+  `bind_control_panel` (syncs `body[data-demo]` + `.active` on the shape/profile/layout buttons via
+  a new `collect_by_attr` — like `find_by_attr` but returns every match in a subtree, since a button
+  group needs all of them touched, not just the first). `SetProfile`/`ToggleFocus` moved out of the
+  BUG-426 dead-branch into real handlers: the panel's profile buttons are a second,
+  `chrome_doc`-reachable site for the same `ProfileRegistry::set_active` the legacy popover already
+  performs (`reset_anonymous_cookie_jar()` extracted so both sites share the DS-16 reset instead of
+  duplicating the `.expect()` clippy already flags as debt); its Focus button reuses
+  `KeyCommand::ToggleFocusMode`'s exact `self.focus.toggle(...)` sequence, so the legacy ring widget
+  now shows from either trigger. `ToggleTheme`/`ToggleQaPanel` stay documented no-ops (see the
+  Deferred bullet below). Not done this slice: dragging the panel by its header / double-click reset
+  (needs a new drag primitive at the winit event-loop level — the panel always sits at its shape's
+  CSS default position). **A live check the same day found the panel invisible in the real window
+  regardless** ([BUG-1059](../bugs/BUG-1059-OPEN.md)): `#demoBar` floats *inside*
+  `chrome_page_host_rect` by design, and `build_chrome_overlay_strips`'s 4-strip clip around that
+  rect — built to keep `<body>`'s leftover full-window background off the live page — discards
+  everything inside it indiscriminately, page-overlapping chrome included. All the wiring above is
+  real and unit-tested at the model/dispatch level, but has no paint path to the screen yet.
+  `ROADMAP.md` CC-18 has the full revision note.
 
 ## Deferred
 
@@ -446,13 +469,17 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
 - Shields-count / downloads-progress `ChromeModel` binding — mentioned in the CC-6 brief's
   description but not required by its DoD sentence; same rebuild pattern as tabs/workspaces once
   picked up.
-- `SetProfile` dispatched from the *new* chrome (profile-menu popover click) — still routed through
-  the legacy popover; `SetPermission`/`ClosePalette`/`CloseModal`/`OmniGo` were wired by CC-9/CC-10,
-  and `SetSettingsSection`/`SetSidebarTab`/`CloseRightSidebar` by CC-10b (see below) — the remaining
-  demo-only `ChromeAction`s dispatched as no-ops (`ArchiveCard`, `ToggleSwitch`,
-  `ToggleFocusTimer`, `ToggleFocus`, `SetDevtoolsTab`) have no clean 1:1 backing state or (for
-  `ToggleSwitch`) no way to resolve which of 6 identical `.toggle` elements was clicked from
-  `data-action` alone. `ToggleSidebar` is wired (CC-8).
+- `SetProfile` dispatched from the profile-menu **popover** click — still routed through the legacy
+  popover (CC-15-1 keeps that overlay deliberately); `SetPermission`/`ClosePalette`/`CloseModal`/
+  `OmniGo` were wired by CC-9/CC-10, and `SetSettingsSection`/`SetSidebarTab`/`CloseRightSidebar` by
+  CC-10b (see below). `SetProfile`/`ToggleFocus` dispatched from the floating control panel (CC-18)
+  *are* wired now — see the CC-18 Done bullet below; the remaining demo-only `ChromeAction`s
+  dispatched as permanent no-ops (`ArchiveCard`, `ToggleSwitch`, `ToggleFocusTimer`, `SetDevtoolsTab`,
+  `ToggleTheme`, `ToggleQaPanel`) have no clean 1:1 backing state, or (`ToggleSwitch`) no way to
+  resolve which of the remaining identical `.toggle` elements was clicked from `data-action` alone,
+  or (`ToggleTheme`) need new plumbing through `self.dark_mode` beyond a chrome-local flag, or
+  (`ToggleQaPanel`) target a panel intentionally excluded from the product build. `ToggleSidebar` is
+  wired (CC-8).
 - Omnibox suggestion **dropdown** rendering (CC-9): keyboard `ArrowUp`/`ArrowDown` selection already
   updates `address_bar`'s own state (and `chrome_omnibox_value` already reflects a selected
   suggestion in `#omniInput`'s value), but the dropdown list itself is not painted under the flag —

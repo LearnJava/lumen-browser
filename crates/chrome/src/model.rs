@@ -106,6 +106,79 @@ pub struct ChromeModel {
     pub settings: ChromeSettingsModel,
     /// `#rightSidebar` snapshot (CC-10b).
     pub right_sidebar: ChromeRightSidebarModel,
+    /// `#demoBar` floating control panel snapshot (CC-18).
+    pub control_panel: ChromeControlPanelModel,
+}
+
+/// `#demoBar` floating control panel snapshot (CC-18) — the panel itself
+/// stays permanently mounted (it is `position:fixed`, outside the page
+/// flow), so unlike the modal overlays above there is no open/closed flag
+/// here beyond [`Self::mini_open`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeControlPanelModel {
+    /// Active `#demoSwitch` layout form — bound to `body[data-demo]` plus
+    /// `.active` on the matching button.
+    pub shape: ControlPanelShape,
+    /// `true` shows the expanded card even in [`ControlPanelShape::Mini`]
+    /// (`#demoBar.mini-open`) — irrelevant, but harmless, for the other six
+    /// shapes (their CSS never reads `.mini-open`).
+    pub mini_open: bool,
+    /// `true` shows `#infoPanel` (`.open`).
+    pub info_open: bool,
+}
+
+/// One of the floating control panel's 7 layout forms (`body[data-demo="…"]`
+/// in `assets/chrome/chrome.html` carries the CSS for each).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ControlPanelShape {
+    /// Вертикальная карточка с подписями групп (bottom-left, default).
+    #[default]
+    Card,
+    /// Узкая, без подписей.
+    Compact,
+    /// Горизонтальная полоса, сверху по центру.
+    Bar,
+    /// Высокий вертикальный рейл у правого края.
+    Dock,
+    /// Кнопки группами по сетке 2×N.
+    Grid,
+    /// Широкая, две колонки, снизу по центру.
+    Wide,
+    /// Свёрнута в пилюлю (bottom-right); [`ChromeControlPanelModel::mini_open`]
+    /// expands it back to a full card.
+    Mini,
+}
+
+impl ControlPanelShape {
+    /// `data-demo`/`data-demo-variant` attribute value.
+    #[must_use]
+    pub const fn attr_value(self) -> &'static str {
+        match self {
+            Self::Card => "card",
+            Self::Compact => "compact",
+            Self::Bar => "bar",
+            Self::Dock => "dock",
+            Self::Grid => "grid",
+            Self::Wide => "wide",
+            Self::Mini => "mini",
+        }
+    }
+
+    /// Parses a `data-demo-variant` attribute value. `None` for anything
+    /// else (should not occur against the build-gated asset).
+    #[must_use]
+    pub fn from_attr_value(value: &str) -> Option<Self> {
+        match value {
+            "card" => Some(Self::Card),
+            "compact" => Some(Self::Compact),
+            "bar" => Some(Self::Bar),
+            "dock" => Some(Self::Dock),
+            "grid" => Some(Self::Grid),
+            "wide" => Some(Self::Wide),
+            "mini" => Some(Self::Mini),
+            _ => None,
+        }
+    }
 }
 
 /// Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
@@ -699,7 +772,9 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
             Some(slug) => set_attr(doc, body, "data-profile", slug),
             None => remove_attr(doc, body, "data-profile"),
         }
+        set_attr(doc, body, "data-demo", model.control_panel.shape.attr_value());
     }
+    bind_control_panel(doc, model);
     if let Some(sidebar) = doc.find_by_id(crate::ids::SIDEBAR) {
         set_class_token(doc, sidebar, "collapsed", model.sidebar_collapsed);
     }
@@ -752,6 +827,34 @@ pub fn bind_model_tracked(doc: &mut Document, model: &ChromeModel) -> ChromeMuta
     MUTATION_TRACKER.with(|t| *t.borrow_mut() = Some(ChromeMutations::default()));
     bind_model(doc, model);
     MUTATION_TRACKER.with(|t| t.borrow_mut().take()).unwrap_or_default()
+}
+
+/// Syncs `#demoBar` (CC-18): `mini-open`/`#infoPanel`'s `open`, plus `.active`
+/// on the matching `#demoSwitch` shape button and on whichever profile/layout
+/// button inside its `.demo-group`s matches the model's current values.
+/// `body[data-demo]`/`[data-profile]`/`[data-layout]` themselves are set by
+/// the caller (`bind_model`) — this only handles the panel's own buttons.
+fn bind_control_panel(doc: &mut Document, model: &ChromeModel) {
+    if let Some(bar) = doc.find_by_id(crate::ids::DEMO_BAR) {
+        set_class_token(doc, bar, "mini-open", model.control_panel.mini_open);
+        for node in collect_by_attr(doc, bar, "data-demo-variant") {
+            let active = doc.get(node).get_attr("data-demo-variant")
+                == Some(model.control_panel.shape.attr_value());
+            set_class_token(doc, node, "active", active);
+        }
+        for node in collect_by_attr(doc, bar, "data-profile") {
+            let active = doc.get(node).get_attr("data-profile") == model.profile_slug.as_deref();
+            set_class_token(doc, node, "active", active);
+        }
+        let layout = if model.layout_vertical { "vertical" } else { "horizontal" };
+        for node in collect_by_attr(doc, bar, "data-layout") {
+            let active = doc.get(node).get_attr("data-layout") == Some(layout);
+            set_class_token(doc, node, "active", active);
+        }
+    }
+    if let Some(info) = doc.find_by_id(crate::ids::INFO_PANEL) {
+        set_class_token(doc, info, "open", model.control_panel.info_open);
+    }
 }
 
 /// Toggles `.active` on exactly one of `#view-page`/`#view-history`/
@@ -1829,6 +1932,26 @@ fn find_by_attr(doc: &Document, name: &str, value: &str) -> Option<NodeId> {
         }
     }
     None
+}
+
+/// Every element within `root`'s subtree carrying attribute `name` (with any
+/// value) — collects instead of stopping at the first match, used to sync
+/// `.active` across a whole button group (CC-18's `#demoSwitch` shape
+/// buttons and the profile/layout buttons inside `#demoBar`'s `.demo-group`s)
+/// without also touching `<body>`'s own same-named attribute outside `root`.
+fn collect_by_attr(doc: &Document, root: NodeId, name: &str) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    let mut stack: Vec<NodeId> = vec![root];
+    while let Some(id) = stack.pop() {
+        let node = doc.get(id);
+        if matches!(node.data, NodeData::Element { .. }) && node.get_attr(name).is_some() {
+            out.push(id);
+        }
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    out
 }
 
 /// Finds the first element carrying `class` as one of its class tokens —
@@ -3135,6 +3258,78 @@ mod tests {
         assert!(!has_class(&doc, history, "active"));
         assert!(!has_class(&doc, bookmarks, "active"));
         assert!(has_class(&doc, settings, "active"));
+    }
+
+    /// CC-18: `body[data-demo]` and exactly one `#demoSwitch` button's
+    /// `.active` follow [`ChromeControlPanelModel::shape`].
+    #[test]
+    fn control_panel_shape_sets_data_demo_and_the_matching_switch_button() {
+        let mut doc = parse_asset();
+        bind_model(
+            &mut doc,
+            &ChromeModel {
+                control_panel: ChromeControlPanelModel { shape: ControlPanelShape::Dock, ..Default::default() },
+                ..ChromeModel::default()
+            },
+        );
+        let body = doc.body().expect("asset has <body>");
+        assert_eq!(doc.get(body).get_attr("data-demo"), Some("dock"));
+        let bar = doc.find_by_id(crate::ids::DEMO_BAR).expect("asset has #demoBar");
+        let mut active_variants: Vec<&str> = collect_by_attr(&doc, bar, "data-demo-variant")
+            .into_iter()
+            .filter(|&n| has_class(&doc, n, "active"))
+            .map(|n| doc.get(n).get_attr("data-demo-variant").expect("just matched on it"))
+            .collect();
+        assert_eq!(active_variants.len(), 1, "exactly one shape button should be active");
+        assert_eq!(active_variants.pop(), Some("dock"));
+    }
+
+    /// CC-18: `#demoBar.mini-open`/`#infoPanel.open` follow their flags
+    /// independently of the shape.
+    #[test]
+    fn control_panel_mini_and_info_toggle_their_own_class() {
+        let mut doc = parse_asset();
+        bind_model(
+            &mut doc,
+            &ChromeModel {
+                control_panel: ChromeControlPanelModel { mini_open: true, info_open: true, ..Default::default() },
+                ..ChromeModel::default()
+            },
+        );
+        let bar = doc.find_by_id(crate::ids::DEMO_BAR).expect("asset has #demoBar");
+        let info = doc.find_by_id(crate::ids::INFO_PANEL).expect("asset has #infoPanel");
+        assert!(has_class(&doc, bar, "mini-open"));
+        assert!(has_class(&doc, info, "open"));
+
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, bar, "mini-open"));
+        assert!(!has_class(&doc, info, "open"));
+    }
+
+    /// CC-18: the floating panel's own profile/layout buttons (distinct
+    /// nodes from the toolbar avatar popover) mirror
+    /// `profile_slug`/`layout_vertical`, the same as `body[data-profile]`/
+    /// `[data-layout]` do.
+    #[test]
+    fn control_panel_profile_and_layout_buttons_mirror_the_model() {
+        let mut doc = parse_asset();
+        bind_model(
+            &mut doc,
+            &ChromeModel {
+                profile_slug: Some("anonymous".to_owned()),
+                layout_vertical: false,
+                ..ChromeModel::default()
+            },
+        );
+        let bar = doc.find_by_id(crate::ids::DEMO_BAR).expect("asset has #demoBar");
+        for node in collect_by_attr(&doc, bar, "data-profile") {
+            let is_anon = doc.get(node).get_attr("data-profile") == Some("anonymous");
+            assert_eq!(has_class(&doc, node, "active"), is_anon);
+        }
+        for node in collect_by_attr(&doc, bar, "data-layout") {
+            let is_horizontal = doc.get(node).get_attr("data-layout") == Some("horizontal");
+            assert_eq!(has_class(&doc, node, "active"), is_horizontal);
+        }
     }
 
     #[test]

@@ -52,6 +52,112 @@ input{font-family:inherit; font-size:inherit; color:inherit;}
 .icon-lg{width:18px; height:18px;}
 
 /* ============================================================
+   2. ПАНЕЛЬ УПРАВЛЕНИЯ ДЕМО (не часть Lumen)
+   ============================================================ */
+/* Панель управления демо (НЕ часть Lumen). position:fixed → вне потока,
+   окно Lumen всегда edge-to-edge. ФИШКА: 7 форм панели + перетаскивание
+   за шапку в любую точку экрана. Формы: card/compact/bar/dock/grid/wide/mini.
+   Дабл-клик по шапке — сброс позиции к дефолту формы. */
+.demo-bar{
+  position:fixed; z-index:600; left:18px; bottom:18px;
+  display:flex; flex-direction:column; gap:12px;
+  padding:14px; width:252px; font-size:12px;
+  background:#16161c; color:#d3d6dd;
+  border:1px solid #2f2f3a; border-radius:14px;
+  box-shadow:0 20px 54px rgba(0,0,0,.55);
+}
+.demo-header{ display:flex; align-items:center; gap:7px; cursor:grab; }
+.demo-bar.dragging, .demo-bar.dragging .demo-header{ cursor:grabbing; }
+.demo-grip{ flex:none; color:#6a6a74; font-size:13px; line-height:1; user-select:none; letter-spacing:-2px; }
+.demo-bar .brand{ font-weight:600; color:#fff; font-size:12.5px; letter-spacing:.2px; flex:1; min-width:0; }
+.demo-bar .brand span{ display:block; color:#8b8b96; font-weight:400; font-size:9.5px; letter-spacing:.03em; margin-top:2px; text-transform:uppercase; }
+.demo-info-btn, .demo-expand{ flex:none; width:24px; height:24px; padding:0; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; border:1px solid #34343d; background:#1e1e24; color:#cfd3da; }
+.demo-info-btn:hover, .demo-expand:hover{ background:#2a2a33; color:#fff; }
+.demo-expand{ display:none; }
+
+/* сегмент-переключатель форм (7 штук, сетка 4×2) */
+.demo-switch{ display:grid; grid-template-columns:repeat(4,1fr); gap:3px; padding:3px; background:#0e0e12; border:1px solid #2a2a32; border-radius:9px; }
+.demo-switch button{ padding:5px 4px; border:none; border-radius:6px; background:none; color:#9a9aa4; font-size:10px; white-space:nowrap; transition:background .12s, color .12s; }
+.demo-switch button:hover{ color:#fff; background:#22222a; }
+.demo-switch button.active{ background:var(--accent,#0066FF); color:#fff; }
+
+.demo-group{ display:flex; flex-direction:column; gap:5px; align-items:stretch; }
+.demo-group label{ color:#8b8b96; font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
+.demo-group .demo-btns{ display:flex; flex-wrap:wrap; gap:4px; }
+.demo-btn{ padding:5px 9px; border-radius:6px; border:1px solid #34343d; background:#1e1e24; color:#cfd3da; transition:background .12s; font-size:11.5px; white-space:nowrap; }
+.demo-btn:hover{ background:#2a2a33; }
+.demo-btn.active{ background:var(--accent,#0066FF); border-color:transparent; color:#fff; }
+.demo-swatch{ width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:5px; vertical-align:-1px; }
+.demo-hint{ color:#75757f; font-size:10.5px; line-height:1.5; border-top:1px solid #2a2a32; padding-top:9px; }
+.demo-hint kbd{ background:#26262e; border:1px solid #3a3a44; border-radius:3px; padding:1px 5px; font-family:var(--font-mono); font-size:10px; }
+body.demo-dragging{ user-select:none; }
+
+/* --- Форма 1: Карточка — вертикальная, с подписями групп --- */
+body[data-demo="card"] .demo-bar{ width:252px; max-height:calc(100vh - 36px); overflow-y:auto; }
+
+/* --- Форма 2: Компакт — узкая, плотная, без подписей --- */
+body[data-demo="compact"] .demo-bar{ width:186px; gap:8px; padding:11px; max-height:calc(100vh - 36px); overflow-y:auto; }
+body[data-demo="compact"] .demo-group label{ display:none; }
+body[data-demo="compact"] .demo-group{ gap:4px; }
+body[data-demo="compact"] .demo-btn{ padding:4px 7px; font-size:11px; }
+body[data-demo="compact"] .demo-hint{ display:none; }
+
+/* --- Форма 3: Полоса — горизонтальная, сверху по центру --- */
+body[data-demo="bar"] .demo-bar{
+  left:50%; bottom:auto; top:12px; transform:translateX(-50%);
+  width:auto; max-width:calc(100vw - 24px);
+  flex-direction:row; align-items:center; flex-wrap:wrap; gap:8px 14px; padding:9px 14px; border-radius:12px;
+}
+body[data-demo="bar"] .brand span{ display:none; }
+body[data-demo="bar"] .demo-group{ flex-direction:row; align-items:center; gap:6px; }
+body[data-demo="bar"] .demo-group label{ display:none; }
+body[data-demo="bar"] .demo-hint{ display:none; }
+
+/* --- Форма 4: Док — высокий вертикальный рейл у правого края --- */
+body[data-demo="dock"] .demo-bar{
+  left:auto; right:16px; top:16px; bottom:16px;
+  width:240px; overflow-y:auto; border-radius:14px;
+}
+
+/* --- Форма 5: Сетка — кнопки выровнены в сетку 2×N --- */
+body[data-demo="grid"] .demo-bar{ width:244px; max-height:calc(100vh - 36px); overflow-y:auto; }
+body[data-demo="grid"] .demo-group .demo-btns{ display:grid; grid-template-columns:repeat(2,1fr); gap:5px; }
+body[data-demo="grid"] .demo-btn{ display:flex; align-items:center; justify-content:center; text-align:center; }
+
+/* --- Форма 6: Панель — широкая, две колонки, снизу по центру --- */
+body[data-demo="wide"] .demo-bar{
+  left:50%; bottom:18px; transform:translateX(-50%);
+  width:512px; display:grid; grid-template-columns:1fr 1fr; gap:10px 18px; align-items:start;
+  max-height:calc(100vh - 36px); overflow-y:auto;
+}
+body[data-demo="wide"] .demo-header,
+body[data-demo="wide"] .demo-switch,
+body[data-demo="wide"] .demo-hint{ grid-column:1 / -1; }
+
+/* --- Форма 7: Мини — свёрнута в пилюлю, раскрывается кнопкой ≡ --- */
+body[data-demo="mini"] .demo-bar{ left:auto; right:18px; bottom:18px; width:auto; padding:9px 12px; }
+body[data-demo="mini"] .demo-expand{ display:inline-flex; }
+body[data-demo="mini"] .brand span{ display:none; }
+body[data-demo="mini"] .demo-switch,
+body[data-demo="mini"] .demo-group,
+body[data-demo="mini"] .demo-hint{ display:none; }
+body[data-demo="mini"] .demo-bar.mini-open{ width:236px; gap:12px; padding:14px; }
+body[data-demo="mini"] .demo-bar.mini-open .demo-switch{ display:grid; }
+body[data-demo="mini"] .demo-bar.mini-open .demo-group{ display:flex; }
+body[data-demo="mini"] .demo-bar.mini-open .demo-hint{ display:block; }
+
+.info-panel{
+  position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:440px; max-width:calc(100vw - 36px);
+  max-height:80vh; overflow-y:auto; background:#1b1b21; color:#d6d8de;
+  border:1px solid #34343d; border-radius:12px; box-shadow:0 24px 60px rgba(0,0,0,.5); padding:18px 20px;
+  z-index:950; display:none; font-size:12.5px; line-height:1.6;
+}
+.info-panel.open{ display:block; }
+.info-panel b{ color:#fff; }
+.info-panel .info-close{ position:absolute; top:10px; right:10px; width:22px; height:22px; border:none; background:none; color:#9a9aa4; border-radius:5px; }
+.info-panel .info-close:hover{ background:#2a2a33; color:#fff; }
+
+/* ============================================================
    3. ОКНО LUMEN (app-frame) — на весь экран
    ============================================================ */
 .stage{ display:flex; flex:1; min-height:0; }
@@ -614,6 +720,71 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 </svg>
 
 <!-- ================= DEMO CONTROL BAR ================= -->
+<div class="demo-bar" id="demoBar">
+  <div class="demo-header" id="demoHeader">
+    <span class="demo-grip" title="Перетащите панель за шапку в любое место">⠿</span>
+    <div class="brand">Lumen<span>демо-панель · перетащи меня</span></div>
+    <button class="demo-expand" title="Развернуть / свернуть" data-action="toggle-demo-mini">≡</button>
+    <button class="demo-info-btn" title="О прототипе" data-action="toggle-demo-info">ⓘ</button>
+  </div>
+
+  <div class="demo-switch" id="demoSwitch">
+    <button data-demo-variant="card" class="active" data-action="set-demo-variant">Карточка</button>
+    <button data-demo-variant="compact" data-action="set-demo-variant">Компакт</button>
+    <button data-demo-variant="bar" data-action="set-demo-variant">Полоса</button>
+    <button data-demo-variant="dock" data-action="set-demo-variant">Док</button>
+    <button data-demo-variant="grid" data-action="set-demo-variant">Сетка</button>
+    <button data-demo-variant="wide" data-action="set-demo-variant">Панель</button>
+    <button data-demo-variant="mini" data-action="set-demo-variant">Мини</button>
+  </div>
+
+  <div class="demo-group">
+    <label>Профиль</label>
+    <div class="demo-btns">
+      <button class="demo-btn active" data-profile="personal" data-action="set-profile"><span class="demo-swatch" style="background:#0066FF"></span>Личный</button>
+      <button class="demo-btn" data-profile="work" data-action="set-profile"><span class="demo-swatch" style="background:#8B5CF6"></span>Рабочий</button>
+      <button class="demo-btn" data-profile="anonymous" data-action="set-profile"><span class="demo-swatch" style="background:#FF3B30"></span>Аноним</button>
+      <button class="demo-btn" data-profile="guest" data-action="set-profile"><span class="demo-swatch" style="background:#8E8E93"></span>Гость</button>
+    </div>
+  </div>
+
+  <div class="demo-group">
+    <label>Тема · Вкладки</label>
+    <div class="demo-btns">
+      <button class="demo-btn active" id="themeBtn" data-action="toggle-theme">☾ / ☀</button>
+      <button class="demo-btn active" data-layout="vertical" data-action="set-layout">Вертикальные</button>
+      <button class="demo-btn" data-layout="horizontal" data-action="set-layout">Горизонт.</button>
+    </div>
+  </div>
+
+  <div class="demo-group">
+    <label>Экран</label>
+    <div class="demo-btns">
+      <button class="demo-btn" data-action="new-tab">Новая</button>
+      <button class="demo-btn" data-action="show-view" data-view="page">Страница</button>
+      <button class="demo-btn" data-action="show-view" data-view="history">История</button>
+      <button class="demo-btn" data-action="show-view" data-view="bookmarks">Закладки</button>
+      <button class="demo-btn" data-action="show-view" data-view="settings">Настройки</button>
+    </div>
+  </div>
+
+  <div class="demo-group">
+    <label>Режимы</label>
+    <div class="demo-btns">
+      <button class="demo-btn" data-action="toggle-focus">Фокус</button>
+      <button class="demo-btn" data-action="toggle-qa-panel"><span class="demo-swatch" style="background:#F08A2E"></span>QA-панель</button>
+    </div>
+  </div>
+
+  <div class="demo-hint">Перетащите за шапку ⠿ в любое место · дабл-клик — сброс · <kbd>Ctrl</kbd>+<kbd>K</kbd> — Command Palette</div>
+</div>
+
+<div class="info-panel" id="infoPanel">
+  <button class="info-close" data-action="toggle-demo-info">✕</button>
+  <p style="margin-top:0"><b>О прототипе.</b> HTML/CSS/JS-прокладка для демонстрации дизайн-системы Lumen: реальный продукт рисует интерфейс через <code>wgpu</code>/<code>femtovg</code> без нативных виджетов; здесь используются обычные DOM-элементы с теми же токенами (цвета, радиусы, типографика, состояния).</p>
+  <p><b>Окно — на весь экран</b> (edge-to-edge, как реальное maximized-окно), контент вкладки заполняет всё пространство. Слева — сайдбар: профиль → пространства → вкладки этого пространства (переключите пространство — список вкладок и цвет активного маркера меняются).</p>
+  <p style="margin-bottom:0">Переключите профиль — рамка окна и аватар меняют цвет; в «Госте» интерфейс монохромный, в «Анонимном» — окно получает красную обводку. Нажмите «Свернуть панель», чтобы увидеть Lumen по-настоящему на весь экран.</p>
+</div>
 
 <!-- ================= STAGE ================= -->
 <div class="stage">

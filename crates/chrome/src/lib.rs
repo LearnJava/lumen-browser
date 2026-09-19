@@ -20,12 +20,12 @@ mod gate;
 mod model;
 pub use model::{
     bind_model, bind_model_tracked, ChromeArchiveEntryModel, ChromeBookmarkCardModel, ChromeBookmarkFolderModel,
-    ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeDownloadModel, ChromeDropdownModel,
-    ChromeFindModel, ChromeMutations,
+    ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeControlPanelModel, ChromeDownloadModel,
+    ChromeDropdownModel, ChromeFindModel, ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
     ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel,
-    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
-    SelectorTouch, NO_DOMAIN_LABEL,
+    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeWorkspaceModel,
+    ControlPanelShape, OmniboxModel, SelectorTouch, NO_DOMAIN_LABEL,
 };
 
 /// Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]
