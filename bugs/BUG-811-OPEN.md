@@ -2606,4 +2606,57 @@ WebSocket (`ws://` → `wss://`), навигации верхнего докум
 списка дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
 `originalPolicy`.
 
+## Срез 45 (2026-09-20, `p6-gap-cspenf-srez45`) — `upgrade-insecure-requests` для `<script src>` top-level документа
+
+Механическое продолжение среза 44, названное срезами 43/44 не покрытым:
+тот же `csp_enforce::upgrade_insecure_url`, но применённый к единственному
+оставшемуся *fetch*-производителю top-level документа, у которого его ещё
+не было — внешним `<script src>` (`scripts.rs::resolve_script_sources`,
+уже гейтящей `script-src` срезом 6).
+
+- [`scripts::resolve_script_sources`](../crates/shell/src/scripts.rs) —
+  `resolved_url` (сырой, резолвленный `base.resolve_str(src)`) сначала идёт
+  через `upgrade_insecure_url`; апгрейженный адрес (`gate_url`) — то, что
+  видит `script_src_blocked` (тот же порядок Fetch §4.1, что срезы 43/44
+  уже дали картинкам: апгрейд — шаг 5, CSP-гейт — шаг 6). Ветка
+  `ResolvedResource::File` апгрейд не видит (`file:` никогда не совпадёт со
+  схемой `http`, менять там нечего); в ветке `ResolvedResource::Url`
+  апгрейженный адрес заменяет сырой ДО `Url::parse`/фактического фетча —
+  заблокированный или неапгрейженный URL не различить снаружи: апгрейд
+  просто меняет то, что реально уходит в сеть, тем же принципом «ни одного
+  исходящего байта», что и остальные гейты этого файла.
+- Функция чистая и уже покрыта пятью юнит-тестами среза 43
+  (`csp_enforce.rs`) — новых не потребовалось, как и в срезе 44; изменился
+  только вызывающий код, не сама логика переписывания.
+
+Подтверждено живой пробой (`.tmp/srez45/serve.py`, простой HTTP-сервер на
+`127.0.0.1`; страница несёт `<meta http-equiv="Content-Security-Policy"
+content="upgrade-insecure-requests">` и `<script src="http://…/
+listener.js">`): сервер получает ровно `GET /frame.html`, а на
+`listener.js` — только TLS ClientHello (`code 400 … Bad request version`) и
+`code 400 … Bad HTTP/0.9 request type`; stderr браузера пишет `GET
+https://127.0.0.1:8791/listener.js` с последующим `TLS handshake: received
+corrupt message` (простой http-сервер пробы TLS не терминирует, ожидаемо)
+— запрос скрипта реально ушёл на `https://`, тем же рисунком, что срезы
+43/44 уже показали для картинок.
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen
+csp` — 96 passed, 0 failed (без изменений числа, как и в срезе 44 —
+переиспользуется уже протестированная `upgrade_insecure_url`); `cargo
+clippy -p lumen-shell --profile dev-release --all-targets --features v8 --
+-D warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца — тот же
+известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого
+среза.
+
+Не покрыто этим срезом (продолжение BUG-692, не изменилось): `<script
+src>` внутри `<iframe>` (та же форма гейта — механическое продолжение,
+как срез 44 сделал для картинок), `<link rel=stylesheet>`/`@import`,
+`@font-face url()` (везде — и top-level, и `<iframe>`), `<video>`/
+`<audio>`/`<track>`, `fetch()`/XHR/WebSocket (`ws://` → `wss://`),
+навигации верхнего документа и `<iframe>`, заголовок
+`Upgrade-Insecure-Requests: 1` на навигационном запросе и `upgrade
+insecure navigations set` (UIR §4.1 шаги 1-2). Остаток общего списка
+дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
+`originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
