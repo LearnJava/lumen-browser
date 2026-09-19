@@ -803,7 +803,7 @@ function _lumen_tick_timers() {
         if (r.interval !== null) {
             var rn = (r.nesting || 1) + 1;
             var riv = _lumen_clamp_timeout(r.interval, rn);
-            _lumen_timers.push({ id: r.id, fn: r.fn, deadline: now + riv, interval: r.interval, nesting: rn });
+            _lumen_timers.push({ id: r.id, fn: r.fn, deadline: now + riv, interval: r.interval, nesting: rn, args: r.args });
         }
     }
     // Run callbacks; an uncaught exception is reported (HTML §8.6 step 17
@@ -812,7 +812,7 @@ function _lumen_tick_timers() {
     // schedules inherit level+1 (§8.6 step 3).
     for (var k = 0; k < ready.length; k++) {
         _lumen_timer_nesting = ready[k].nesting || 1;
-        try { ready[k].fn(); } catch(e) { _lumen_report_exception(e); }
+        try { ready[k].fn.apply(globalThis, ready[k].args || []); } catch(e) { _lumen_report_exception(e); }
     }
     _lumen_timer_nesting = 0;
     // Notify shell of next wakeup if any timers remain.
@@ -826,13 +826,18 @@ function _lumen_tick_timers() {
 }
 
 function setTimeout(fn, delay) {
-    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn, 'Window setTimeout');
+    // HTML LS §8.6 step 8 hands trailing arguments to a Function handler only
+    // (BUG-909: they used to be dropped on the floor, so the callback always
+    // saw `undefined` in their place); a string handler takes none, matching
+    // `WORKER_TIMERS_SHIM._stringHandler`.
+    var args = Array.prototype.slice.call(arguments, 2);
+    if (typeof fn !== 'function') { fn = _lumen_timer_string_handler(fn, 'Window setTimeout'); args = []; }
     var nesting = _lumen_timer_nesting + 1;
     var ms = _lumen_timer_delay(delay);
     ms = _lumen_clamp_timeout(ms, nesting);
     var id = _lumen_timer_seq++;
     var deadline = _lumen_now_ms() + ms;
-    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: null, nesting: nesting });
+    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: null, nesting: nesting, args: args });
     _lumen_request_wakeup(deadline);
     return id;
 }
@@ -845,13 +850,14 @@ function clearTimeout(id) {
 }
 
 function setInterval(fn, interval) {
-    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn, 'Window setInterval');
+    var args = Array.prototype.slice.call(arguments, 2);
+    if (typeof fn !== 'function') { fn = _lumen_timer_string_handler(fn, 'Window setInterval'); args = []; }
     var nesting = _lumen_timer_nesting + 1;
     var ms = _lumen_timer_delay(interval);
     var first = _lumen_clamp_timeout(ms, nesting);
     var id = _lumen_timer_seq++;
     var deadline = _lumen_now_ms() + first;
-    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: ms, nesting: nesting });
+    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: ms, nesting: nesting, args: args });
     _lumen_request_wakeup(deadline);
     return id;
 }

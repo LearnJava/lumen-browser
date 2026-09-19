@@ -450,6 +450,47 @@ fn window_open_postmessage_rejects_uncloneable_value() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// ── setTimeout/setInterval trailing arguments (BUG-909) ────────────────────
+
+#[test]
+fn set_timeout_passes_trailing_arguments_to_the_handler() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var got = null; \
+         setTimeout(function(a, b) { got = a + b; }, 0, 'x', 'y'); \
+         _lumen_tick_timers(); \
+         got === 'xy'"
+    ));
+}
+
+#[test]
+fn set_interval_passes_trailing_arguments_on_every_firing() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var seen = []; \
+         var id = setInterval(function(a, b) { seen.push(a + b); }, 0, 'x', 'y'); \
+         _lumen_tick_timers(); \
+         _lumen_tick_timers(); \
+         clearInterval(id); \
+         seen.length === 2 && seen[0] === 'xy' && seen[1] === 'xy'"
+    ));
+}
+
+#[test]
+fn set_timeout_string_handler_does_not_receive_trailing_arguments() {
+    let rt = v8_runtime_deterministic(make_doc(), "https://example.com/");
+    assert!(bool_eval(
+        &rt,
+        "var got = 'untouched'; \
+         globalThis.got = got; \
+         setTimeout('globalThis.got = typeof a', 0, 1, 2); \
+         _lumen_tick_timers(); \
+         globalThis.got === 'undefined'"
+    ));
+}
+
 // ── window.postMessage (self, BUG-717) ─────────────────────────────────────
 
 #[test]
