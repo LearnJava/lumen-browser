@@ -121,6 +121,14 @@ cc = "1.2"
 webgpu = ["lumen-paint/backend-wgpu"]
 # V8 JS backend (rusty_v8). Replaces QuickJS at S12 cutover. Off by default until then.
 v8-backend = ["dep:v8"]
+# GAP-MEDIADECODE срез 6: marker feature (no new dependency) that turns on the
+# `<video>` FFmpeg-backed native bindings (`__lumen_video_ffmpeg_load`,
+# `canPlayType` answering "maybe" for video/mp4|webm|ogg). Decoding itself
+# stays shell-side (`lumen-media-ffmpeg`, its own `ffmpeg` feature, requires
+# `FFMPEG_DIR`) — mirroring `VideoGifStore`'s design, this crate never links
+# against FFmpeg. Off by default so `canPlayType` keeps answering "" for those
+# mimes until the shell side (срез 7) actually drains `pending_ffmpeg_loads`.
+ffmpeg-video = []
 
 [dev-dependencies]
 
