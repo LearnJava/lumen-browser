@@ -399,8 +399,41 @@ pub(crate) struct PageCascade {
 /// unaffected by `<base>` and must keep using the un-adjusted value.
 pub(crate) fn effective_base(doc: &Document, base: &ResourceBase) -> ResourceBase {
     match doc.base_href() {
-        Some(href) => base.resolve_as_base(href),
-        None => base.clone(),
+        // GAP-CSPENF срез 32: an href the document's `base-uri` directive
+        // forbids is discarded — HTML LS §4.2.3 step 6 already discards a
+        // `<base>` whose href fails to *parse*; CSP3 §6.4.1 adds a second,
+        // policy-based reason to discard it, and both leave the document's
+        // original base in effect, not merely fail the one relative-URL
+        // resolution that happened to trigger this call.
+        Some(href) if base_uri_href_blocked(doc, base, href).is_none() => {
+            base.resolve_as_base(href)
+        }
+        _ => base.clone(),
+    }
+}
+
+/// `Some(resolved href)` if this document's `base-uri` directive (CSP3
+/// §6.4.1) forbids `href` (relative to `base`, the document's un-adjusted
+/// base) — `None` if there is no policy, no `base-uri` directive, or the
+/// href is allowed. `self_origin` deliberately comes from the un-adjusted
+/// `base`, never from an already-`<base>`-adjusted one — `base-uri` gates
+/// what `<base>` may become, so checking it against its own candidate value
+/// would make `'self'` degenerate into "always true".
+///
+/// Shared by [`effective_base`] (the actual block) and the one-shot
+/// `securitypolicyviolation` report fired once per document in
+/// `parse_and_layout`, the same one-shot-push shape every other GAP-CSPENF
+/// срез already uses for a directive whose choke point is a pure function
+/// with no `js_ctx`.
+fn base_uri_href_blocked(doc: &Document, base: &ResourceBase, href: &str) -> Option<String> {
+    let root = doc.root();
+    let (policy, _original) = crate::csp_enforce::document_csp_policy(doc, root)?;
+    let resolved = base.resolve_str(href);
+    let self_origin = base.origin();
+    if crate::csp_enforce::base_uri_blocked(&policy, &resolved, self_origin.as_ref()) {
+        Some(resolved)
+    } else {
+        None
     }
 }
 
@@ -1275,6 +1308,31 @@ pub(crate) fn parse_and_layout(
         if let Some(original_policy) = original_policy {
             for _ in 0..blocked_style_attr_nodes.len() {
                 js.fire_csp_violation("style-src-attr", "inline", &original_policy);
+            }
+        }
+    }
+
+    // GAP-CSPENF срез 32: `securitypolicyviolation` for a `base-uri`-blocked
+    // `<base href>` — the actual block already happened, silently, inside
+    // every `effective_base` call above (`base_uri_href_blocked`); this is
+    // only the one-shot report, read fresh from the post-script document the
+    // same way the style-src-attr block above does, since a script can
+    // insert/change `<base>` after the initial parse.
+    #[cfg(feature = "v8")]
+    if let Some(js) = &js_ctx {
+        let blocked = {
+            let d = doc_arc.lock().unwrap();
+            d.base_href()
+                .and_then(|href| base_uri_href_blocked(&d, base, href))
+        };
+        if let Some(blocked_href) = blocked {
+            let original_policy = {
+                let d = doc_arc.lock().unwrap();
+                let root = d.root();
+                crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
+            };
+            if let Some(original_policy) = original_policy {
+                js.fire_csp_violation("base-uri", &blocked_href, &original_policy);
             }
         }
     }
