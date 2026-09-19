@@ -1486,3 +1486,52 @@ v8 --bin lumen` (1885 passed, 0 failed, включая 2 новых).
 `frame-ancestors`; `report-to`; честная независимая проверка заголовка и
 `<meta>`; вложенные фреймы фрейма (рекурсия та же функция, не тестировалась
 отдельно для этого гейта, как и остальные срезы 8/22 её не тестировали).
+
+## Срез 25 (2026-09-19, `p6-gap-cspenf-srez25`) — `font-src`/`img-src` против `@font-face url()`/`background-image` внутри `<iframe>`
+
+Реализовано: ровно два пробела, что срезы 18/19 назвали не покрытыми — фон
+(`background-image: url()`) и веб-шрифты (`@font-face url()`) ребёнка
+`<iframe>` фетчились совсем без проверки CSP-политики, хотя та же проверка
+для его собственных `<img src>`/`<link rel=stylesheet>`/инлайновых
+`<style>` уже действовала с срезов 8/22.
+
+- `crates/shell/src/frames.rs::load_frame_fonts`: новые параметры `csp_gate`/
+  `self_origin` — каждый `url()`-источник `@font-face`, прежде чем звать
+  `fetch_font_bytes`, проверяется тем же [`font_src_blocked`], что срез 19
+  уже даёт top-level документу; `local()`-источники не затронуты (CSP гейтит
+  сетевой фетч, а не системный поиск шрифта, который уже отработал выше в
+  `load_font_faces`). Возвращает третий элемент кортежа —
+  `blocked_by_font_src: Vec<String>` (резолвленные URL) для последующего
+  `securitypolicyviolation`.
+- `crates/shell/src/frames.rs::fetch_frame_background_images`: та же пара
+  параметров, каждый URL проверяется [`img_src_blocked`] (уже даёт top-level
+  документу срез 18) до фетча; замыкание `parallel_map` возвращает
+  `(Option<(raw, key, image)>, Option<blocked_url>)` вместо голого `Option`,
+  чтобы отличить «не найдено» от «заблокировано». Третий возвращаемый вектор
+  — `blocked_by_img_src`.
+- `crates/shell/src/frames.rs::spawn_frame`: политика ребёнка считается один
+  раз (`child_csp_gate`, тем же `document_csp_policy(&child_doc_arc, ...)`,
+  что уже даёт `fetch_frame_subresources`) перед обоими вызовами вместо
+  повторного разбора внутри каждого; диспетчер `securitypolicyviolation`
+  (уже несущий `img-src`/`style-src`/инлайн/атрибут с срезов 8/22/24)
+  расширен `font-src` и вторым `img-src` источником (фон), переиспользуя
+  тот же `child_csp_gate` вместо повторного лока `child_doc_arc`.
+
+Тесты: +4 в `crates/shell/src/tests/page_resources.rs` —
+`frame_fonts_reports_csp_blocked_font_src`/`frame_fonts_no_policy_does_not_report_blocked`
+(прямой вызов `load_frame_fonts`, без сети — политика проверяется до
+`fetch_font_bytes`) и
+`frame_background_images_reports_csp_blocked_img_src`/`frame_background_images_no_policy_does_not_report_blocked`
+(реальный layout через `lumen_layout::layout_measured` с
+`background-image: url(...)`, прямой вызов `fetch_frame_background_images`).
+`cargo test -p lumen-shell --features v8 --bin lumen` без регрессий,
+`cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings`
+чисто.
+
+Не покрыто этим срезом: остальные директивы (`manifest-src`/`child-src`/…);
+`frame-ancestors` (распознаётся парсером, но нигде не проверяется — сама
+проверка ancestor-цепочки происхождений архитектурно другая форма, чем все
+fetch-гейты этого файла); `report-to`; честная независимая проверка
+заголовка и `<meta>`; атрибут `style=` внутри `<iframe>` после точечной
+DOM-мутации; вложенные фреймы фрейма (та же функция вызывается рекурсивно,
+не тестировалась отдельно для этого гейта).

@@ -498,6 +498,137 @@ fn frame_subresources_no_policy_keeps_style_attr() {
     assert_eq!(out.blocked_style_attr_count, 0);
 }
 
+/// GAP-CSPENF срез 25: `font-src` политика ребёнка `<iframe>` блокирует его
+/// собственный `@font-face url()` — срез 19 дал этот гейт top-level
+/// документу, а `load_frame_fonts` (`frames.rs`) фетчил `url()`-источники
+/// ребёнка без единой проверки политики.
+#[test]
+fn frame_fonts_reports_csp_blocked_font_src() {
+    let sheet = lumen_css_parser::parse(
+        "@font-face { font-family: 'X'; src: url('font.woff2'); }",
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let policy = lumen_network::csp::parse_csp_header("font-src 'none'");
+    let csp_gate = Some((policy, "font-src 'none'".to_owned()));
+    let self_origin = base.origin();
+    let (_registry, web_fonts, blocked) = load_frame_fonts(
+        &sheet.font_faces,
+        &base,
+        &sink,
+        None,
+        csp_gate.as_ref(),
+        self_origin.as_ref(),
+    );
+
+    assert!(web_fonts.is_empty(), "font-src 'none' must block the fetch, not just report it");
+    assert_eq!(blocked, vec!["https://example.com/frame/font.woff2".to_owned()]);
+}
+
+/// A document without a policy still attempts its own `@font-face url()` —
+/// the gate must not misfire when there is nothing to enforce (the fetch
+/// itself fails here, there being no server, but it must not be reported as
+/// CSP-blocked).
+#[test]
+fn frame_fonts_no_policy_does_not_report_blocked() {
+    let sheet = lumen_css_parser::parse(
+        "@font-face { font-family: 'X'; src: url('font.woff2'); }",
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let self_origin = base.origin();
+    let (_registry, _web_fonts, blocked) =
+        load_frame_fonts(&sheet.font_faces, &base, &sink, None, None, self_origin.as_ref());
+
+    assert!(blocked.is_empty(), "no policy must never report a font-src block");
+}
+
+/// GAP-CSPENF срез 25: `img-src` политика ребёнка `<iframe>` также блокирует
+/// его собственный `background-image: url()` — срез 18 дал этот гейт
+/// top-level документу (`fetch_and_decode_background_images`), а
+/// `fetch_frame_background_images` фетчила фон ребёнка без единой проверки
+/// политики.
+#[test]
+fn frame_background_images_reports_csp_blocked_img_src() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><body style="margin:0">
+             <div style="width:10px;height:10px;background-image:url(bg.png)"></div>
+           </body></html>"#,
+    );
+    let font = lumen_font::Font::parse(INTER_FONT).unwrap();
+    let measurer = crate::relayout::page_measurer(&font, &[]);
+    let sheet = lumen_css_parser::parse("");
+    let layout =
+        lumen_layout::layout_measured(&doc, &sheet, Size::new(1024.0, 720.0), &measurer);
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let policy = lumen_network::csp::parse_csp_header("img-src 'none'");
+    let csp_gate = Some((policy, "img-src 'none'".to_owned()));
+    let self_origin = base.origin();
+
+    let (images, _keys, blocked) = fetch_frame_background_images(
+        &layout,
+        &base,
+        &sink,
+        None,
+        lumen_core::ColorSpace::Srgb,
+        csp_gate.as_ref(),
+        self_origin.as_ref(),
+    );
+
+    assert!(images.is_empty(), "img-src 'none' must block the fetch, not just report it");
+    assert_eq!(blocked, vec!["https://example.com/frame/bg.png".to_owned()]);
+}
+
+/// A document without a policy still attempts its own `background-image` —
+/// the gate must not misfire when there is nothing to enforce.
+#[test]
+fn frame_background_images_no_policy_does_not_report_blocked() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><body style="margin:0">
+             <div style="width:10px;height:10px;background-image:url(bg.png)"></div>
+           </body></html>"#,
+    );
+    let font = lumen_font::Font::parse(INTER_FONT).unwrap();
+    let measurer = crate::relayout::page_measurer(&font, &[]);
+    let sheet = lumen_css_parser::parse("");
+    let layout =
+        lumen_layout::layout_measured(&doc, &sheet, Size::new(1024.0, 720.0), &measurer);
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let self_origin = base.origin();
+
+    let (_images, _keys, blocked) = fetch_frame_background_images(
+        &layout,
+        &base,
+        &sink,
+        None,
+        lumen_core::ColorSpace::Srgb,
+        None,
+        self_origin.as_ref(),
+    );
+
+    assert!(blocked.is_empty(), "no policy must never report an img-src block");
+}
+
 /// Настоящий PNG `w`×`h` (непрозрачный) для фикстур: `decode_image` обязан его
 /// разобрать, поэтому строка «bytes» тут больше не годится.
 ///
