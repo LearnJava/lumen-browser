@@ -30,6 +30,41 @@ impl Lumen {
         }
     }
 
+    /// `true`, если `navigate-to` документа запрещает переход по ссылке
+    /// `href` — GAP-CSPENF срез 33.
+    ///
+    /// `href` резолвится относительно адреса документа ДО проверки (то же
+    /// место, где каждая ветка перехода ниже его резолвит для самой
+    /// навигации), поэтому политика сравнивается с настоящим адресом
+    /// назначения, а не с сырым значением атрибута — та же ловушка, на
+    /// которой срез 4 сначала «fail open»-ил для `<img src>`.
+    ///
+    /// Диспатчит `securitypolicyviolation` (тот же `route_task_js`/
+    /// `fire_csp_violation`, что и `form-action` в `form_submit.rs`) перед
+    /// возвратом, так что вызывающему остаётся только выйти из обработки
+    /// клика.
+    fn navigate_to_link_blocked(
+        &mut self,
+        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+        href: &str,
+    ) -> bool {
+        let Some((policy, original_policy)) = csp_gate else {
+            return false;
+        };
+        let resolved = self.source.resolve_href(href);
+        let self_origin = self.source.resource_base().and_then(|b| b.origin());
+        if !crate::csp_enforce::navigate_to_blocked(policy, &resolved, self_origin.as_ref()) {
+            return false;
+        }
+        let original_policy = original_policy.clone();
+        let blocked = resolved.clone();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_csp_violation("navigate-to", &blocked, &original_policy);
+        });
+        eprintln!("links: navigation to {resolved} blocked by CSP navigate-to");
+        true
+    }
+
     /// Сообщить JS-контекстам фреймов о смене фокуса внутри под-документа —
     /// `document.activeElement` ребёнка (BUG-480 срез 23).
     ///
@@ -761,17 +796,25 @@ impl Lumen {
                 // way a frame link already does (frame_links.rs), and reading
                 // it in this one lock keeps the two answers from a link that
                 // mutates between two separate walks.
+                //
+                // GAP-CSPENF срез 33: the document's `navigate-to` policy is
+                // read inside this SAME lock, for the same reason `target`/
+                // `rel` are — the gate below must answer about the document
+                // the click was hit-tested against, and a separate walk could
+                // observe a document a script mutated in between.
                 let link = hit_result.as_ref().and_then(|r| {
                     self.layout_source.as_ref().and_then(|src| {
                         let doc = src.document.lock().unwrap();
+                        let root = doc.root();
                         links::find_link(&doc, r.source_node).map(|(anchor, href)| {
                             let target = doc.get(anchor).get_attr("target").unwrap_or_default().to_owned();
                             let rel = doc.get(anchor).get_attr("rel").unwrap_or_default().to_owned();
-                            (href, target, rel)
+                            let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
+                            (href, target, rel, csp_gate)
                         })
                     })
                 });
-                if let Some((href, target_attr, rel_attr)) = link {
+                if let Some((href, target_attr, rel_attr, csp_gate)) = link {
                     // GAP-NAVCTX срез 1 (BUG-884): `<a href="javascript:...">`
                     // runs the code in the clicking document, ignoring `target`
                     // — popup/named-frame targeting for a `javascript:` anchor
@@ -783,6 +826,19 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.navigate_replace(PageSource::Static { html, url: current });
                         }
+                        return;
+                    }
+                    // GAP-CSPENF срез 33: `navigate-to` gates the destination
+                    // ONCE, here, ahead of the whole `_blank`/named-frame/
+                    // named-tab/same-document dispatch below — every one of
+                    // those branches ends in a navigation to the very same
+                    // resolved URL, so a per-branch check would be four copies
+                    // of one answer. Placed after the `javascript:` early
+                    // return above on purpose: a `javascript:` href evaluates
+                    // in the clicking document and navigates nowhere, so there
+                    // is no destination for this directive to compare against
+                    // (script execution is `script-src`'s job, срез 1).
+                    if self.navigate_to_link_blocked(csp_gate.as_ref(), &href) {
                         return;
                     }
                     let t = target_attr.trim();

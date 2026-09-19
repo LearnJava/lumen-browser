@@ -476,6 +476,24 @@ pub(crate) fn base_uri_blocked(
     !policy.base_uri_allowed(&parsed, self_origin)
 }
 
+/// `true` if `navigate-to` forbids this document from navigating to
+/// `target_url` — срез 33, the fourth navigation directive this module
+/// enforces (see [`frame_ancestors_blocked`]/[`form_action_blocked`]/
+/// [`base_uri_blocked`] for the first three): no `default-src` fallback,
+/// absence of a policy is not checked here (the caller only calls this when a
+/// policy exists), and a `target_url` that fails to parse is treated as
+/// allowed, same as every fetch-gate above.
+pub(crate) fn navigate_to_blocked(
+    policy: &CspPolicy,
+    target_url: &str,
+    self_origin: Option<&Origin>,
+) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(target_url) else {
+        return false;
+    };
+    !policy.navigate_to_allowed(&parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -967,5 +985,40 @@ mod tests {
         let origin = Origin::new("https", "example.com", 443);
         assert!(!base_uri_blocked(&p, "https://example.com/base/", Some(&origin)));
         assert!(base_uri_blocked(&p, "https://other.example/base/", Some(&origin)));
+    }
+
+    #[test]
+    fn navigate_to_blocks_unlisted_target() {
+        let p = lumen_network::csp::parse_csp_header("navigate-to example.com");
+        assert!(navigate_to_blocked(&p, "https://other.example/next", None));
+    }
+
+    #[test]
+    fn navigate_to_allows_listed_target() {
+        let p = lumen_network::csp::parse_csp_header("navigate-to example.com");
+        assert!(!navigate_to_blocked(&p, "https://example.com/next", None));
+    }
+
+    #[test]
+    fn navigate_to_does_not_fall_back_to_default_src() {
+        // Navigation directives (CSP3 §6.4) never inherit `default-src` —
+        // same rule already covered for `frame-ancestors`/`form-action`/
+        // `base-uri` above.
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(!navigate_to_blocked(&p, "https://anything.example/next", None));
+    }
+
+    #[test]
+    fn navigate_to_self_matches_document_origin() {
+        let p = lumen_network::csp::parse_csp_header("navigate-to 'self'");
+        let origin = Origin::new("https", "example.com", 443);
+        assert!(!navigate_to_blocked(&p, "https://example.com/next", Some(&origin)));
+        assert!(navigate_to_blocked(&p, "https://other.example/next", Some(&origin)));
+    }
+
+    #[test]
+    fn navigate_to_unparseable_url_not_blocked() {
+        let p = lumen_network::csp::parse_csp_header("navigate-to 'none'");
+        assert!(!navigate_to_blocked(&p, "::: not a url :::", None));
     }
 }

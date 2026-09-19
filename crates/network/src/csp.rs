@@ -300,6 +300,25 @@ impl CspPolicy {
             .iter()
             .any(|s| source_matches_url(s, base_url, self_origin))
     }
+
+    /// `true` if this policy's `navigate-to` directive allows this document to
+    /// navigate itself (or a context it controls) to `target_url` — CSP3
+    /// navigation directive. Like `frame-ancestors`/`form-action`/`base-uri`
+    /// it does **not** fall back to `default-src`: its absence means no
+    /// restriction. `self_origin` is the navigating document's own origin,
+    /// matching `'self'`'s meaning in this directive.
+    ///
+    /// `form-action` is the narrower sibling that governs form submissions
+    /// only; a page that sets both has to satisfy each independently, so this
+    /// method deliberately knows nothing about `CspDirective::FormAction`.
+    pub fn navigate_to_allowed(&self, target_url: &Url, self_origin: Option<&Origin>) -> bool {
+        let Some(sources) = self.directives.get(&CspDirective::NavigateTo) else {
+            return true;
+        };
+        sources
+            .iter()
+            .any(|s| source_matches_url(s, target_url, self_origin))
+    }
 }
 
 /// `true` if `source` (one token of a fetch-directive source list) matches
@@ -913,5 +932,48 @@ mod tests {
         // fetch directive above.
         let p = parse_csp_header("default-src 'none'");
         assert!(p.base_uri_allowed(&img_url("https://anything.example/base/"), None));
+    }
+
+    // ── GAP-CSPENF срез 33: `navigate-to` enforcement ────────────────────
+
+    #[test]
+    fn navigate_to_allows_listed_host() {
+        let p = parse_csp_header("navigate-to example.com");
+        assert!(p.navigate_to_allowed(&img_url("https://example.com/next"), None));
+        assert!(!p.navigate_to_allowed(&img_url("https://other.example/next"), None));
+    }
+
+    #[test]
+    fn navigate_to_none_blocks_every_target() {
+        let p = parse_csp_header("navigate-to 'none'");
+        assert!(!p.navigate_to_allowed(&img_url("https://example.com/next"), None));
+    }
+
+    #[test]
+    fn navigate_to_self_matches_documents_own_origin() {
+        let p = parse_csp_header("navigate-to 'self'");
+        let doc_origin = origin("https://example.com/");
+        assert!(p.navigate_to_allowed(&img_url("https://example.com/next"), Some(&doc_origin)));
+        assert!(!p.navigate_to_allowed(&img_url("https://other.example/next"), Some(&doc_origin)));
+    }
+
+    #[test]
+    fn navigate_to_absent_does_not_fall_back_to_default_src() {
+        // CSP3 §6.4: navigation directives (navigate-to, base-uri,
+        // form-action, frame-ancestors, sandbox) never inherit default-src —
+        // unlike every fetch directive above.
+        let p = parse_csp_header("default-src 'none'");
+        assert!(p.navigate_to_allowed(&img_url("https://anything.example/next"), None));
+    }
+
+    #[test]
+    fn navigate_to_is_independent_of_form_action() {
+        // A page may set one without the other; neither substitutes for the
+        // other, so a `form-action`-only policy leaves link navigation free
+        // and a `navigate-to`-only policy leaves submissions free.
+        let only_form = parse_csp_header("form-action 'none'");
+        assert!(only_form.navigate_to_allowed(&img_url("https://example.com/next"), None));
+        let only_nav = parse_csp_header("navigate-to 'none'");
+        assert!(only_nav.form_action_allowed(&img_url("https://example.com/submit"), None));
     }
 }
