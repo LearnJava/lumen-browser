@@ -145,8 +145,19 @@
 //! читается один раз перед обоими вызовами в `spawn_frame`); `local()`-шрифты
 //! не затронуты — `font-src` гейтит только сетевой фетч.
 //!
-//! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/
-//! `child-src`/…), `report-to` (Reporting API,
+//! Срез 26 добавил разбор директивы `child-src` (`CspDirective::ChildSrc`
+//! — до этого среза не распознавалась вовсе, падала в `_ => continue`) и
+//! CSP3 §6.4 granular-фолбэк для `frame-src`/`worker-src`: обе раньше падали
+//! напрямую на `default-src` через общий [`CspPolicy::effective_sources`],
+//! минуя промежуточный `child-src`, который спека требует проверить первым.
+//! Новый [`CspPolicy::fetch_directive_allows_via_child_src`] — тот же метод,
+//! что срез 23 уже даёт `style-src-attr` (одним уровнем глубже общего
+//! случая), применённый к [`frame_src_blocked`] (этот файл) и
+//! `worker_src_gate` (`crates/network/src/lib.rs`, вне этого файла — та же
+//! причина, что у срезов 10/13: нет `&Document` в точке принятия решения).
+//!
+//! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/…),
+//! `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
 //! атрибут `style=` внутри `<iframe>` после точечной DOM-мутации (см.
 //! выше), `@import` внутри уже загруженного листа (наследует
@@ -354,8 +365,9 @@ pub(crate) fn style_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
     !policy.fetch_directive_allows(&CspDirective::StyleSrc, &parsed, self_origin)
 }
 
-/// `true` if `frame-src` (or `default-src`) forbids navigating a nested
-/// `<iframe>`/`<frame>` to `url` — срез 15, same fetch-gate shape as
+/// `true` if `frame-src` (falling back to `child-src`, then `default-src` —
+/// срез 26) forbids navigating a nested `<iframe>`/`<frame>` to `url` — срез
+/// 15, same fetch-gate shape as
 /// [`img_src_blocked`]/[`script_src_blocked`]/[`style_src_blocked`]: absence
 /// of a policy is not checked here (the caller only calls this when a policy
 /// exists), and a `url` that fails to parse is treated as allowed (the
@@ -367,7 +379,7 @@ pub(crate) fn frame_src_blocked(policy: &CspPolicy, url: &str, self_origin: Opti
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    !policy.fetch_directive_allows(&CspDirective::FrameSrc, &parsed, self_origin)
+    !policy.fetch_directive_allows_via_child_src(&CspDirective::FrameSrc, &parsed, self_origin)
 }
 
 /// `true` if `media-src` (or `default-src`) forbids fetching `url` as a
@@ -653,6 +665,17 @@ mod tests {
     fn frame_src_default_src_fallback_blocks() {
         let p = lumen_network::csp::parse_csp_header("default-src 'none'");
         assert!(frame_src_blocked(&p, "https://example.com/frame.html", None));
+    }
+
+    /// GAP-CSPENF срез 26: `child-src` sits between `frame-src` and
+    /// `default-src` in the CSP3 §6.4 fallback chain — an allowing
+    /// `child-src` must win over a blocking `default-src` when `frame-src`
+    /// itself is absent.
+    #[test]
+    fn frame_src_falls_back_to_child_src_before_default_src() {
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'; child-src cdn.example.com");
+        assert!(!frame_src_blocked(&p, "https://cdn.example.com/frame.html", None));
+        assert!(frame_src_blocked(&p, "https://other.example.com/frame.html", None));
     }
 
     #[test]

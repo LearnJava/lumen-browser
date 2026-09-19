@@ -1535,3 +1535,46 @@ fetch-гейты этого файла); `report-to`; честная незав�
 заголовка и `<meta>`; атрибут `style=` внутри `<iframe>` после точечной
 DOM-мутации; вложенные фреймы фрейма (та же функция вызывается рекурсивно,
 не тестировалась отдельно для этого гейта).
+
+## Срез 26 (2026-09-19, `p6-gap-cspenf-srez26`) — директива `child-src` + CSP3 §6.4 granular-фолбэк для `frame-src`/`worker-src`
+
+Закрыт ровно тот пробел, что срез 25 назвал не покрытым первым пунктом
+списка: `child-src` не была распознана парсером вовсе (`crates/network/src/
+csp.rs` — токен `child-src` падал в безымянный `_ => continue`, как любая
+неизвестная директива), а `frame-src`/`worker-src` фолбэк на `default-src`
+проходили одношаговым `effective_sources`, минуя промежуточный `child-src`,
+который CSP3 §6.4 требует проверить первым для обеих директив.
+
+- `crates/network/src/csp.rs`: новый вариант `CspDirective::ChildSrc`,
+  строка `"child-src"` теперь маппится на него в парсере. Новый метод
+  `CspPolicy::fetch_directive_allows_via_child_src` — тот же принцип
+  granular-фолбэка, что `style_attribute_blocked` (срез 23) уже даёт
+  `style-src-attr` (`directive` → `style-src` → `default-src`), только
+  публичный метод самого `CspPolicy`, а не приватная функция шелла: `frame-
+  src`/`worker-src` живут в двух разных крейтах (`csp_enforce.rs` в shell,
+  `HttpClient` в network), обоим нужен один и тот же трёхшаговый фолбэк.
+  Приватный `effective_sources_via_child_src` под капотом — `directive` →
+  `child-src` → `default-src`.
+- `crates/shell/src/csp_enforce.rs::frame_src_blocked`: вызывает новый метод
+  вместо `fetch_directive_allows`.
+- `crates/network/src/lib.rs::worker_src_gate` (backing `check_worker_src`,
+  срез 13): тот же переход на новый метод.
+
+Тесты: +4 в `crates/network/src/csp.rs` (парсинг `child-src`, фолбэк-цепочка
+для `frame-src` — приоритет собственной директивы над `child-src`, `child-
+src` над `default-src`, отсутствие всех трёх директив не блокирует), +1 в
+`crates/network/src/lib.rs` (`worker_src_falls_back_to_child_src_before_default_src`),
++1 в `crates/shell/src/csp_enforce.rs`
+(`frame_src_falls_back_to_child_src_before_default_src`).
+`cargo test -p lumen-network csp::`/`worker_src` и
+`cargo test -p lumen-shell --features v8 --bin lumen frame_src` без
+регрессий; `cargo clippy -p lumen-network --all-targets -- -D warnings` и
+`cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings`
+чисто.
+
+Не покрыто этим срезом: остальные директивы (`manifest-src`/…) — `manifest-
+src` не гейтится, потому что `<link rel=manifest>` вообще не обрабатывается
+движком (Web App Manifest не реализован — не CSP-дефект); `frame-ancestors`;
+`report-to`; честная независимая проверка заголовка и `<meta>`; атрибут
+`style=` внутри `<iframe>` после точечной DOM-мутации; вложенные фреймы
+фрейма; `importScripts()` внутри уже запущенного воркера.

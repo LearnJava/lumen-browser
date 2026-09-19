@@ -106,6 +106,10 @@ pub enum CspDirective {
     ObjectSrc,
     /// Restricts `@font-face` `src` sources.
     FontSrc,
+    /// Restricts `<frame>` and `<iframe>` sources, and nested browsing
+    /// contexts/workers when `frame-src`/`worker-src` is absent (CSP3 §6.4
+    /// granular fallback — see [`CspPolicy::fetch_directive_allows_via_child_src`]).
+    ChildSrc,
     /// Restricts `<frame>` and `<iframe>` sources.
     FrameSrc,
     /// Restricts Worker, SharedWorker, and ServiceWorker sources.
@@ -208,6 +212,35 @@ impl CspPolicy {
         self_origin: Option<&Origin>,
     ) -> bool {
         let Some(sources) = self.effective_sources(directive) else {
+            return true;
+        };
+        sources
+            .iter()
+            .any(|s| source_matches_url(s, url, self_origin))
+    }
+
+    /// Returns the effective source list for `directive`, falling back to
+    /// `child-src` and then `default-src` — the CSP3 §6.4 granular chain
+    /// that `frame-src` and `worker-src` get (unlike every other fetch
+    /// directive, which falls straight to `default-src` via
+    /// [`Self::effective_sources`]).
+    fn effective_sources_via_child_src(&self, directive: &CspDirective) -> Option<&Vec<CspSource>> {
+        self.directives
+            .get(directive)
+            .or_else(|| self.directives.get(&CspDirective::ChildSrc))
+            .or_else(|| self.directives.get(&CspDirective::DefaultSrc))
+    }
+
+    /// Same as [`Self::fetch_directive_allows`], but for `frame-src`/
+    /// `worker-src` — the two fetch directives CSP3 §6.4 gives an extra
+    /// `child-src` fallback step before `default-src`.
+    pub fn fetch_directive_allows_via_child_src(
+        &self,
+        directive: &CspDirective,
+        url: &Url,
+        self_origin: Option<&Origin>,
+    ) -> bool {
+        let Some(sources) = self.effective_sources_via_child_src(directive) else {
             return true;
         };
         sources
@@ -376,6 +409,7 @@ fn parse_into(policy: &mut CspPolicy, header: &str) {
                     "media-src" => CspDirective::MediaSrc,
                     "object-src" => CspDirective::ObjectSrc,
                     "font-src" => CspDirective::FontSrc,
+                    "child-src" => CspDirective::ChildSrc,
                     "frame-src" => CspDirective::FrameSrc,
                     "worker-src" => CspDirective::WorkerSrc,
                     "manifest-src" => CspDirective::ManifestSrc,
@@ -669,5 +703,63 @@ mod tests {
     fn img_src_wildcard_host_allows_any() {
         let p = parse_csp_header("img-src *");
         assert!(p.fetch_directive_allows(&CspDirective::ImgSrc, &img_url("https://anything.example/x.png"), None));
+    }
+
+    // ── GAP-CSPENF срез 26: `child-src` directive + granular fallback ──────
+
+    #[test]
+    fn child_src_directive_parses() {
+        let p = parse_csp_header("child-src example.com");
+        assert!(p.directives.contains_key(&CspDirective::ChildSrc));
+    }
+
+    #[test]
+    fn frame_src_via_child_src_falls_back_to_child_src_before_default_src() {
+        let p = parse_csp_header("default-src 'none'; child-src example.com");
+        assert!(p.fetch_directive_allows_via_child_src(
+            &CspDirective::FrameSrc,
+            &img_url("https://example.com/frame.html"),
+            None
+        ));
+        assert!(!p.fetch_directive_allows_via_child_src(
+            &CspDirective::FrameSrc,
+            &img_url("https://other.example/frame.html"),
+            None
+        ));
+    }
+
+    #[test]
+    fn frame_src_via_child_src_prefers_its_own_directive_over_child_src() {
+        let p = parse_csp_header("frame-src example.com; child-src other.example");
+        assert!(p.fetch_directive_allows_via_child_src(
+            &CspDirective::FrameSrc,
+            &img_url("https://example.com/frame.html"),
+            None
+        ));
+        assert!(!p.fetch_directive_allows_via_child_src(
+            &CspDirective::FrameSrc,
+            &img_url("https://other.example/frame.html"),
+            None
+        ));
+    }
+
+    #[test]
+    fn frame_src_via_child_src_falls_back_to_default_src_without_child_src() {
+        let p = parse_csp_header("default-src 'none'");
+        assert!(!p.fetch_directive_allows_via_child_src(
+            &CspDirective::FrameSrc,
+            &img_url("https://example.com/frame.html"),
+            None
+        ));
+    }
+
+    #[test]
+    fn no_frame_src_child_src_or_default_src_allows_anything() {
+        let p = parse_csp_header("script-src 'self'");
+        assert!(p.fetch_directive_allows_via_child_src(
+            &CspDirective::FrameSrc,
+            &img_url("https://anything.example/frame.html"),
+            None
+        ));
     }
 }
