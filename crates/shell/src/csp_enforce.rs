@@ -92,12 +92,22 @@
 //! `<script>` (`scripts.rs`) — не событийные атрибуты (`onclick=…`, которых
 //! `'unsafe-hashes'` касается отдельно) и не `style`-src.
 //!
+//! Срез 21 добавил `style-src`/`default-src` против инлайновых `<style>` —
+//! [`inline_style_blocked`], тот же `'unsafe-inline'`/`'nonce-…'`/
+//! `'sha256-…'`-набор, что [`inline_script_blocked`] уже даёт скриптам,
+//! только применённый к `CspDirective::StyleSrc`. Гейт стоит в
+//! `doc_extract::walk_style_blocks`, до склейки каскада: заблокированный
+//! `<style>`-узел не попадает в текст, который парсит [`lumen_css_parser`],
+//! вовсе — тот же принцип «не применённый CSS», что срез 7 уже даёт
+//! заблокированному внешнему `<link>`. Атрибут `style=` этим не покрыт.
+//!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/
 //! `child-src`/…), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
 //! `@font-face url()`/`background-image` внутри `<iframe>` (см. выше),
-//! инлайновые `<style>`/атрибут `style` (не блокируются, только
-//! внешний `<link>`), `@import` внутри уже загруженного листа (наследует
+//! атрибут `style=` (не блокируется, только тело `<style>`), инлайновый
+//! `<style>` внутри `<iframe>` (`frames.rs` каскад ребёнка не гейтится этим
+//! срезом), `@import` внутри уже загруженного листа (наследует
 //! политику владельца, отдельно не проверяется), честная независимая
 //! проверка заголовка и `<meta>` вместо их слияния, `importScripts()`
 //! внутри уже запущенного воркера (`worker-src` гейтит только начальный
@@ -181,7 +191,28 @@ pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(CspPo
 /// разрешает голый инлайн (CSP3 §8.2) — здесь не учитывается умышленно, тем
 /// самым инлайн без nonce/хэша остаётся заблокированным.
 pub(crate) fn inline_script_blocked(policy: &CspPolicy, nonce: Option<&str>, body: &str) -> bool {
-    let Some(sources) = policy.effective_sources(&CspDirective::ScriptSrc) else {
+    inline_directive_blocked(policy, &CspDirective::ScriptSrc, nonce, body)
+}
+
+/// `true`, если `style-src` (или `default-src`) документа запрещает данный
+/// инлайновый `<style>` — срез 21, тот же `'unsafe-inline'`/`'nonce-…'`/
+/// `'sha256-…'` набор источников, что [`inline_script_blocked`] уже даёт
+/// скриптам, применённый к `CspDirective::StyleSrc`. Атрибут `style=` и
+/// событийные обработчики этим не покрыты — только тело `<style>`.
+pub(crate) fn inline_style_blocked(policy: &CspPolicy, nonce: Option<&str>, body: &str) -> bool {
+    inline_directive_blocked(policy, &CspDirective::StyleSrc, nonce, body)
+}
+
+/// Общая проверка [`inline_script_blocked`]/[`inline_style_blocked`]: любой
+/// совпавший источник (`'unsafe-inline'` ИЛИ nonce ИЛИ хэш) допускает
+/// инлайн; отсутствие директивы, применимой к `directive`, — не нарушение.
+fn inline_directive_blocked(
+    policy: &CspPolicy,
+    directive: &CspDirective,
+    nonce: Option<&str>,
+    body: &str,
+) -> bool {
+    let Some(sources) = policy.effective_sources(directive) else {
         return false;
     };
     let allowed = sources.iter().any(|s| match s {
@@ -370,6 +401,51 @@ mod tests {
             "script-src 'nonce-unrelated' 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
         );
         assert!(!inline_script_blocked(&p, None, "alert(1)"));
+    }
+
+    // GAP-CSPENF срез 21: `inline_style_blocked` shares the exact match logic
+    // `inline_script_blocked` already has (`inline_directive_blocked`) — these
+    // only prove it is wired to `CspDirective::StyleSrc`, not `ScriptSrc`
+    // (`style_src_none_blocks_inline_style` and `no_style_src_allows_inline`),
+    // plus one nonce/hash spot-check that a sibling directive does not leak
+    // its sources into `style-src`.
+
+    #[test]
+    fn no_style_src_allows_inline_style() {
+        let p = lumen_network::csp::parse_csp_header("script-src 'none'");
+        assert!(!inline_style_blocked(&p, None, ""));
+    }
+
+    #[test]
+    fn style_src_none_blocks_inline_style() {
+        let p = lumen_network::csp::parse_csp_header("style-src 'none'");
+        assert!(inline_style_blocked(&p, None, ""));
+    }
+
+    #[test]
+    fn style_src_unsafe_inline_allows_inline_style() {
+        let p = lumen_network::csp::parse_csp_header("style-src 'self' 'unsafe-inline'");
+        assert!(!inline_style_blocked(&p, None, ""));
+    }
+
+    #[test]
+    fn script_src_unsafe_inline_does_not_allow_inline_style() {
+        let p = lumen_network::csp::parse_csp_header("script-src 'unsafe-inline'; style-src 'none'");
+        assert!(inline_style_blocked(&p, None, ""));
+    }
+
+    #[test]
+    fn style_src_matching_nonce_allows_inline_style() {
+        let p = lumen_network::csp::parse_csp_header("style-src 'nonce-abc123'");
+        assert!(!inline_style_blocked(&p, Some("abc123"), ""));
+    }
+
+    #[test]
+    fn style_src_matching_sha256_hash_allows_inline_style() {
+        let p = lumen_network::csp::parse_csp_header(
+            "style-src 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
+        );
+        assert!(!inline_style_blocked(&p, None, "alert(1)"));
     }
 
     #[test]

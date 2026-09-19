@@ -362,6 +362,12 @@ pub(crate) struct PageCascade {
     /// `style-src`/`default-src` blocked — mirrors `blocked_by_img_src`
     /// (срез 4), fired as `securitypolicyviolation` once a JS runtime exists.
     pub(crate) blocked_by_style_src: Vec<String>,
+    /// GAP-CSPENF срез 21: number of inline `<style>` blocks `style-src`/
+    /// `default-src` blocked — no URL to report (`blockedURI` is always
+    /// `"inline"`, same as inline `<script>`), so a count is enough to fire
+    /// one `securitypolicyviolation` per blocked block once a JS runtime
+    /// exists.
+    pub(crate) blocked_inline_style_count: usize,
     /// Parsed cascade.
     pub(crate) sheet: lumen_css_parser::Stylesheet,
     /// CSSOM-1 срез 2: один [`StylesheetNodeEntry`] на `<style>`/`<link
@@ -407,17 +413,24 @@ fn build_page_cascade(
     dark_mode: bool,
     media_print: bool,
 ) -> Result<PageCascade, Box<dyn Error>> {
-    let (css, dynamic_css, link_outcomes, blocked_by_style_src) = {
+    let (css, dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
         let link_media_ctx = if media_print {
             print_media_context(viewport, dark_mode)
         } else {
             screen_media_context(viewport, dark_mode)
         };
+        // GAP-CSPENF срез 21: та же одноразовая точка чтения политики, что
+        // остальные срезы уже применяют — посчитана здесь, а не передана
+        // параметром, чтобы не менять сигнатуру `build_page_cascade` ради
+        // одного гейта.
+        let root = doc.root();
+        let csp_policy = crate::csp_enforce::document_csp_policy(doc, root);
         // Инлайновые <style>: их `@import` резолвятся относительно базы
         // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
-        // `@import` относительно своего URL внутри load_linked_stylesheets.
-        let inline = extract_style_blocks(doc);
+        // `@import` внутри load_linked_stylesheets.
+        let (inline, blocked_inline_style_count) =
+            extract_style_blocks(doc, csp_policy.as_ref().map(|(p, _)| p));
         let mut css = inline_css_imports(
             &inline,
             base,
@@ -448,7 +461,7 @@ fn build_page_cascade(
             // CSSOM-5 срез 2: placeholder — see the field's doc comment.
             adopted_fp: 0,
         };
-        (css, dyn_css, link_outcomes, blocked_by_style_src)
+        (css, dyn_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count)
     };
 
     let sheet = {
@@ -518,8 +531,8 @@ fn build_page_cascade(
     }
 
     Ok(PageCascade {
-        dynamic_css, link_outcomes, blocked_by_style_src, sheet, stylesheet_nodes, font_registry,
-        pending_web_fonts, measurer,
+        dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count, sheet,
+        stylesheet_nodes, font_registry, pending_web_fonts, measurer,
     })
 }
 
@@ -1156,8 +1169,8 @@ pub(crate) fn parse_and_layout(
     // right after them if they touched `<style>`/`<link>`), so there is nothing
     // left to fetch or parse here — only to hand out.
     let PageCascade {
-        dynamic_css, link_outcomes, blocked_by_style_src, sheet, stylesheet_nodes, font_registry,
-        pending_web_fonts, measurer,
+        dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count, sheet,
+        stylesheet_nodes, font_registry, pending_web_fonts, measurer,
     } = cascade;
 
     // BUG-804: HTML LS §4.6.7 «process the linked resource» — каждый
@@ -1200,6 +1213,25 @@ pub(crate) fn parse_and_layout(
         if let Some(original_policy) = original_policy {
             for url in &blocked_by_style_src {
                 js.fire_csp_violation("style-src", url, &original_policy);
+            }
+        }
+    }
+
+    // GAP-CSPENF срез 21: `securitypolicyviolation` for every `style-src`-
+    // blocked inline `<style>` — no URL, `blockedURI` is always `"inline"`,
+    // same one-shot-push shape as `blocked_by_style_src` above.
+    #[cfg(feature = "v8")]
+    if blocked_inline_style_count > 0
+        && let Some(js) = &js_ctx
+    {
+        let original_policy = {
+            let d = doc_arc.lock().unwrap();
+            let root = d.root();
+            crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
+        };
+        if let Some(original_policy) = original_policy {
+            for _ in 0..blocked_inline_style_count {
+                js.fire_csp_violation("style-src", "inline", &original_policy);
             }
         }
     }

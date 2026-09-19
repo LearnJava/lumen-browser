@@ -31,7 +31,12 @@ impl Lumen {
             match ls.document.lock() {
                 Ok(doc) => {
                     let blob = doc.to_bytes().unwrap_or_default();
-                    let css = extract_style_blocks(&doc);
+                    // GAP-CSPENF срез 21: hibernate snapshot, not the live
+                    // cascade — the CSP gate already ran once when this page
+                    // was first loaded/relaid-out; re-gating here would need
+                    // the original policy threaded through `HibernatedTab`,
+                    // out of scope for this slice (see restore below).
+                    let (css, _blocked) = extract_style_blocks(&doc, None);
                     (blob, css)
                 }
                 Err(_) => (vec![], String::new()),
@@ -153,8 +158,10 @@ impl Lumen {
         };
 
         // Re-parse CSS from inline <style> blocks preserved in the DOM.
+        // GAP-CSPENF срез 21: same restore-path exception as the hibernate
+        // side above — not gated.
         let css = if data.css_source.is_empty() {
-            extract_style_blocks(&doc)
+            extract_style_blocks(&doc, None).0
         } else {
             data.css_source.clone()
         };

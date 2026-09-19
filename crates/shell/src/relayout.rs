@@ -78,8 +78,24 @@ impl Lumen {
         if fp == base.inline_fp && adopted_fp == base.adopted_fp {
             return false;
         }
-        let inline = extract_style_blocks(&doc);
+        // GAP-CSPENF срез 21: та же политика, что `build_page_cascade` уже
+        // считает для первичной сборки — поздно вставленный `<style>` (тот,
+        // ради которого существует этот путь, BUG-743) обязан пройти тот же
+        // гейт, иначе CSS-in-JS обходил бы style-src, вставляя стиль после
+        // навигации вместо разметки.
+        let root = doc.root();
+        let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
+        let (inline, blocked) =
+            extract_style_blocks(&doc, csp_policy.as_ref().map(|(p, _)| p));
         drop(doc);
+        if blocked > 0
+            && let Some((_, original_policy)) = &csp_policy
+            && let Some(js) = self.js_ctx.as_ref()
+        {
+            for _ in 0..blocked {
+                js.fire_csp_violation("style-src", "inline", original_policy);
+            }
+        }
         let mut css =
             String::with_capacity(base.imports_prefix.len() + inline.len() + base.linked.len());
         css.push_str(&base.imports_prefix);
