@@ -2499,6 +2499,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-media-ffmpeg"
+version = "0.5.0"
+dependencies = [
+ "lumen-core",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-network"
 version = "0.5.0"
 dependencies = [

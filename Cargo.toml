@@ -23,6 +23,7 @@ members = [
     "crates/engine/font",
     "crates/engine/encoding",
     "crates/engine/image",
+    "crates/engine/media-ffmpeg",
     "crates/engine/canvas",
     "crates/engine/a11y",
     "workspace-hack",
@@ -91,6 +92,7 @@ lumen-paint = { path = "crates/engine/paint", default-features = false }
 lumen-font = { path = "crates/engine/font" }
 lumen-encoding = { path = "crates/engine/encoding" }
 lumen-image = { path = "crates/engine/image" }
+lumen-media-ffmpeg = { path = "crates/engine/media-ffmpeg" }
 lumen-canvas = { path = "crates/engine/canvas" }
 lumen-a11y = { path = "crates/engine/a11y" }
 

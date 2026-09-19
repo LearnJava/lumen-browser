@@ -214,3 +214,79 @@ coverage (corrupt input, no video stream, unsupported codec — the PoC only
 exercises the success path), and the actual `VideoDecoder`/
 `VideoDecodeSession` impl wired to `crates/js/src/video_bindings.rs`'s
 resource-selection algorithm. Status remains `planned`.
+
+## Revision 2026-09-19 (P1, срез 4)
+
+Landed the real crate: `crates/engine/media-ffmpeg` (`lumen-media-ffmpeg`),
+registered in the workspace `Cargo.toml`. It carries every item срез 3
+flagged as "not done" except the `crates/js` wiring:
+
+- **Feature-gated, not a workspace-wide dependency.** The crate compiles
+  clean with `cargo check -p lumen-media-ffmpeg` (no feature) and does
+  **not** link FFmpeg at all in that mode — `build.rs` only emits
+  `cargo:rustc-link-lib`/`-search` when `CARGO_FEATURE_FFMPEG` is set, and
+  panics with a pointer to this ADR if the feature is on but `FFMPEG_DIR`
+  is missing. `cargo check --workspace` (measured this revision, no
+  feature flags passed) succeeds and never touches FFmpeg — the ADR's
+  Consequences-section rule ("landing a dependency that breaks `cargo
+  build --workspace` is worse than landing none") holds even though the
+  crate itself now exists in the tree.
+- **In-memory input, not a file path.** `VideoDecoder::open(&self, bytes:
+  &[u8])`'s signature never gets a filesystem path — a real
+  `HTMLMediaElement` resource is network/Blob bytes. срез 2/3's PoC only
+  ever called `avformat_open_input` with a real path; this revision had to
+  add a custom `AVIOContext` (`avio_alloc_context` with hand-written
+  `read_packet`/`seek` `extern "C" fn` callbacks reading a boxed
+  `Vec<u8>`) — verified live in a second scratch-PoC round (same
+  `D:\Temp\ffmpeg-ffi-poc`, not committed) before porting into the crate,
+  because it is a materially different code path from file-based
+  `avformat_open_input` (`AVFMT_FLAG_CUSTOM_IO`, manual `AVIOContext`
+  lifetime, `avformat_close_input` deliberately *not* freeing `pb` when
+  that flag is set).
+- **`AVFrame`'s hand-transcribed layout had a bug, found by this
+  revision's live run, not by inspection:** срез 3's `AVFrameHead`
+  omitted `sample_aspect_ratio` (an `AVRational`, two `c_int`) between
+  `pict_type` and `pts` (`libavutil/frame.h`) — the PoC never read `pts`,
+  only `width`/`height`/`format`/`data`/`linesize`, so the gap was
+  invisible until this revision's seek support needed `pts` to know when
+  the decode loop reached the requested timestamp. Symptom was a
+  nonsensical `pts ≈ 2^32` reported by the live PoC before the fix, `pts =
+  0.000` (correct, first frame) after adding the missing field. Lesson:
+  a hand-transcribed struct is only as trustworthy as the specific fields
+  a given revision actually reads and exercises live — untested fields
+  past the last one a prior revision needed can still be wrong.
+- **Seeking (`av_seek_frame` + `avcodec_flush_buffers`) verified live**
+  against `test.mp4`: seeking to 1.0s and decoding forward from there
+  (through the custom `AVIOContext`, not a file) landed on a real decoded
+  frame at pts≈1.030s (first decodable frame at/after the keyframe `
+  AVSEEK_FLAG_BACKWARD` lands on).
+- **Tests exercise the real crate, not the scratch PoC**:
+  `cargo test -p lumen-media-ffmpeg --features ffmpeg` (needs `FFMPEG_DIR`
+  and the matching `bin/` DLLs on `PATH` at runtime) decodes
+  `tests/wpt/css/css-sizing/aspect-ratio/support/2x2-green.webm` (asserts
+  the same `rgba[0..4] == [0, 127, 0, 255]` srez 3 measured) and
+  `tests/wpt/css/css-ui/support/test.mp4` (dimensions + a `frame_at(1.0)`
+  seek), both passing live this revision.
+- **License note, not a `cargo-deny` entry:** since the FFI is hand-rolled
+  (no `ffmpeg-sys-next`/`ffmpeg-next` in `Cargo.lock`), there is no new
+  *Rust crate* for `cargo-deny`'s license audit to flag — the GPL/LGPL
+  surface this ADR's Consequences section warned about lives in the linked
+  FFmpeg DLLs themselves (a runtime/distribution concern), not in the
+  dependency graph `cargo-deny` inspects. This is a real distinction from
+  what срез 1's Consequences section anticipated ("`cargo-deny` GPL
+  allow-list entry... once the dependency actually lands"), not a
+  loophole: shipping the actual DLLs still carries the same licensing
+  obligation, tracked here rather than in `deny.toml`.
+
+**Not done, still ahead:** the only item срез 3 flagged that this revision
+did not do is wiring `FfmpegVideoDecoder` into
+`crates/js/src/video_bindings.rs`'s resource-selection algorithm — the
+crate today is self-contained and unused by the rest of the workspace.
+Also not done: error-path coverage beyond "no decodable video stream" (a
+genuinely corrupt/truncated container past the point `avformat_open_input`
+accepts it is untested), audio track decoding (the trait-anchor's own doc
+comment scopes audio out of this first wiring), and a decision on whether
+`frame_at` re-seeking on every call (this revision's approach — no
+"decode forward from last position" fast path) is fast enough for
+`<video>` playback framerates once wired to a real render loop. Status
+remains `planned`.
