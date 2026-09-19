@@ -38,6 +38,71 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS bookmarks (
+            id         INTEGER PRIMARY KEY,
+            url        TEXT NOT NULL UNIQUE,
+            title      TEXT NOT NULL DEFAULT '',
+            folder     TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            note       TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS bookmark_tags (
+            bookmark_id INTEGER NOT NULL,
+            tag         TEXT NOT NULL,
+            PRIMARY KEY (bookmark_id, tag),
+            FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS bookmark_folder_idx ON bookmarks(folder);
+        CREATE INDEX IF NOT EXISTS bookmark_tag_idx ON bookmark_tags(tag);
+        "#,
+    },
+    Migration {
+        version: 2,
+        sql: r#"
+        ALTER TABLE bookmarks ADD COLUMN summary TEXT;
+        ALTER TABLE bookmarks ADD COLUMN embedding BLOB;
+        "#,
+    },
+];
+
+/// One-time bridge for databases created before this migration list existed:
+/// `user_version` reads as 0, but `summary`/`embedding` may already be
+/// present courtesy of the old ad-hoc [`migrate_semantic_columns`] (which
+/// checked `PRAGMA table_info` by hand on every open). Stamps
+/// `user_version = 2` when both columns are already there so
+/// [`run_migrations`] doesn't try to add them again and fail on "duplicate
+/// column name".
+fn bridge_pre_migration_version(conn: &Connection) -> rusqlite::Result<()> {
+    let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version != 0 {
+        return Ok(());
+    }
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'bookmarks'",
+        [],
+        |r| r.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let has_summary = conn
+        .prepare("SELECT 1 FROM pragma_table_info('bookmarks') WHERE name = 'summary'")?
+        .exists([])?;
+    let has_embedding = conn
+        .prepare("SELECT 1 FROM pragma_table_info('bookmarks') WHERE name = 'embedding'")?
+        .exists([])?;
+    if has_summary && has_embedding {
+        conn.pragma_update(None, "user_version", 2)?;
+    }
+    Ok(())
+}
+
 /// Одна закладка.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bookmark {
@@ -80,34 +145,14 @@ impl Bookmarks {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS bookmarks (
-                id         INTEGER PRIMARY KEY,
-                url        TEXT NOT NULL UNIQUE,
-                title      TEXT NOT NULL DEFAULT '',
-                folder     TEXT NOT NULL DEFAULT '',
-                created_at INTEGER NOT NULL,
-                note       TEXT NOT NULL DEFAULT '',
-                summary    TEXT,
-                embedding  BLOB
-            );
-            CREATE TABLE IF NOT EXISTS bookmark_tags (
-                bookmark_id INTEGER NOT NULL,
-                tag         TEXT NOT NULL,
-                PRIMARY KEY (bookmark_id, tag),
-                FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS bookmark_folder_idx ON bookmarks(folder);
-            CREATE INDEX IF NOT EXISTS bookmark_tag_idx ON bookmark_tags(tag);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("bookmarks init: {e}")))?;
-        migrate_semantic_columns(&conn)?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("bookmarks pragmas: {e}")))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| Error::Storage(format!("bookmarks pragmas: {e}")))?;
+        bridge_pre_migration_version(&conn)
+            .map_err(|e| Error::Storage(format!("bookmarks bridge: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("bookmarks init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -371,29 +416,6 @@ impl Bookmarks {
 /// Adds `summary`/`embedding` columns to a `bookmarks` table created before
 /// Step 6 (§12.8). `CREATE TABLE IF NOT EXISTS` above only covers fresh
 /// databases — existing on-disk files need an explicit `ALTER TABLE`.
-fn migrate_semantic_columns(conn: &Connection) -> Result<()> {
-    let mut stmt = conn
-        .prepare("PRAGMA table_info(bookmarks)")
-        .map_err(|e| Error::Storage(format!("bookmarks migrate prepare: {e}")))?;
-    let rows = stmt
-        .query_map([], |r| r.get::<_, String>(1))
-        .map_err(|e| Error::Storage(format!("bookmarks migrate query: {e}")))?;
-    let mut columns: HashSet<String> = HashSet::new();
-    for r in rows {
-        columns.insert(r.map_err(|e| Error::Storage(format!("bookmarks migrate row: {e}")))?);
-    }
-    drop(stmt);
-    if !columns.contains("summary") {
-        conn.execute("ALTER TABLE bookmarks ADD COLUMN summary TEXT", [])
-            .map_err(|e| Error::Storage(format!("bookmarks migrate add summary: {e}")))?;
-    }
-    if !columns.contains("embedding") {
-        conn.execute("ALTER TABLE bookmarks ADD COLUMN embedding BLOB", [])
-            .map_err(|e| Error::Storage(format!("bookmarks migrate add embedding: {e}")))?;
-    }
-    Ok(())
-}
-
 /// Serialises an embedding vector to little-endian bytes for BLOB storage.
 /// Paired with [`embedding_from_bytes`]; see [`Bookmark::embedding`].
 pub fn embedding_to_bytes(v: &[f32]) -> Vec<u8> {
@@ -489,6 +511,40 @@ mod tests {
 
     fn make() -> Bookmarks {
         Bookmarks::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn reopen_of_pre_migration_database_with_columns_already_present() {
+        // Симулирует БД, созданную старым ad-hoc migrate_semantic_columns:
+        // user_version никогда не выставлялся (= 0), но summary/embedding
+        // уже есть. v2 обязан быть no-op, а не падать на "duplicate column".
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE bookmarks (
+                id         INTEGER PRIMARY KEY,
+                url        TEXT NOT NULL UNIQUE,
+                title      TEXT NOT NULL DEFAULT '',
+                folder     TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                note       TEXT NOT NULL DEFAULT '',
+                summary    TEXT,
+                embedding  BLOB
+            );
+            CREATE TABLE bookmark_tags (
+                bookmark_id INTEGER NOT NULL,
+                tag         TEXT NOT NULL,
+                PRIMARY KEY (bookmark_id, tag),
+                FOREIGN KEY (bookmark_id) REFERENCES bookmarks(id) ON DELETE CASCADE
+            ) WITHOUT ROWID;
+            "#,
+        )
+        .unwrap();
+        let b = Bookmarks::init(conn).unwrap();
+        let id = b
+            .add("https://legacy.example/", "Legacy", "", &[], "", 100)
+            .unwrap();
+        assert!(id > 0);
     }
 
     #[test]
@@ -764,7 +820,7 @@ mod tests {
 
     #[test]
     fn migrate_adds_missing_columns_to_legacy_schema() {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE bookmarks (
                 id INTEGER PRIMARY KEY,
@@ -776,9 +832,9 @@ mod tests {
             );",
         )
         .unwrap();
-        migrate_semantic_columns(&conn).unwrap();
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
         // Re-running on an already-migrated schema must not error.
-        migrate_semantic_columns(&conn).unwrap();
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
         conn.execute(
             "INSERT INTO bookmarks (url, created_at, summary, embedding) VALUES (?1, 1, ?2, ?3)",
             params!["https://z/", "sum", vec![1u8, 2, 3, 4]],
