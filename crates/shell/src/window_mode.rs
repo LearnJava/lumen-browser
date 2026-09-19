@@ -389,6 +389,8 @@ pub(crate) fn run_window_mode(
         gif_last_frame: HashMap::new(),
         video_gif_last_frame: HashMap::new(),
         video_gif_frames: HashMap::new(),
+        video_ffmpeg_sessions: HashMap::new(),
+        video_ffmpeg_last_ms: HashMap::new(),
         frames: Vec::new(),
         frame_env: None,
         frame_nav_requests: Vec::new(),

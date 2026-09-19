@@ -2581,6 +2581,7 @@ dependencies = [
  "lumen-knowledge",
  "lumen-layout",
  "lumen-mcp",
+ "lumen-media-ffmpeg",
  "lumen-network",
  "lumen-paint",
  "lumen-storage",

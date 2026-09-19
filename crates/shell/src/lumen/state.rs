@@ -853,6 +853,17 @@ pub(crate) struct Lumen {
     /// Decoded animated GIF frames for `<video>` nodes (keyed by nid).
     /// Stored separately from `VideoGifStore` (which has no `lumen_image` dep).
     pub(crate) video_gif_frames: HashMap<u32, lumen_image::AnimatedGif>,
+    /// GAP-MEDIADECODE срез 7: open FFmpeg decode sessions for `<video>` nodes
+    /// backed by an mp4/webm/ogg container (keyed by nid). Only ever populated
+    /// under the `ffmpeg-video` feature — without it `pending_ffmpeg_loads`
+    /// stays empty (JS never queues a load, `canPlayType` answers `""`).
+    /// Cleared together with the `VideoGifStore` entries on navigation.
+    pub(crate) video_ffmpeg_sessions: HashMap<u32, Box<dyn lumen_core::ext::VideoDecodeSession>>,
+    /// Last decoded playback position (ms) per FFmpeg-backed `<video>` node —
+    /// avoids re-decoding a frame on every render tick when playback has not
+    /// advanced past the previous one (`frame_at` reseeks/decodes on every
+    /// call, unlike the GIF path's pre-decoded frame table).
+    pub(crate) video_ffmpeg_last_ms: HashMap<u32, u64>,
     /// BUG-480 срез 1: живые sub-документы `<iframe>` текущей страницы.
     /// Держат DOM+JS детей; заменяется целиком в [`Lumen::apply_loaded_page`].
     /// В PageSnapshot не попадает — после bfcache-восстановления фреймы без

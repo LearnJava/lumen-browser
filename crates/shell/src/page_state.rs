@@ -155,6 +155,11 @@ pub(crate) struct PageSnapshot {
     pub(crate) video_gif_last_frame: HashMap<u32, usize>,
     /// Decoded animated GIF frames for `<video>` nodes (keyed by nid).
     pub(crate) video_gif_frames: HashMap<u32, lumen_image::AnimatedGif>,
+    /// GAP-MEDIADECODE срез 7: open FFmpeg decode sessions for `<video>` nodes
+    /// (keyed by nid). Only ever populated under the `ffmpeg-video` feature.
+    pub(crate) video_ffmpeg_sessions: HashMap<u32, Box<dyn lumen_core::ext::VideoDecodeSession>>,
+    /// Last decoded playback position (ms) per FFmpeg-backed `<video>` node.
+    pub(crate) video_ffmpeg_last_ms: HashMap<u32, u64>,
     pub(crate) image_cache: lumen_image::ImageDecodeCache,
     /// Per-tab user zoom factor. Preserved when the tab goes to background.
     pub(crate) zoom_factor: f32,
