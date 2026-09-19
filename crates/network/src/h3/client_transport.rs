@@ -47,7 +47,7 @@ use super::client_request::{
 };
 use super::conn_connect::{ConnectOutcome, OwnedTrustAnchor};
 use super::h3_exchange::{BodySink, H3Response};
-use super::h3_request::H3Profile;
+use super::h3_request::{H3Profile, H3ResponseHead};
 use super::mozilla_roots::mozilla_trust_anchors;
 use super::request_driver::RequestDriver;
 use super::request_exchange::ClientRequest;
@@ -187,6 +187,7 @@ fn h3_exchange<T: DatagramTransport>(
         scheme: b"https",
         authority,
         path,
+        protocol: None,
         headers,
         body,
         use_huffman: true,
@@ -231,6 +232,7 @@ fn h3_exchange_with_sink<'s, T: DatagramTransport>(
         scheme: b"https",
         authority,
         path,
+        protocol: None,
         headers,
         body,
         use_huffman: true,
@@ -427,6 +429,7 @@ pub fn h3_fetch_on_driver(
         scheme: b"https",
         authority: authority.as_bytes(),
         path,
+        protocol: None,
         headers,
         body,
         use_huffman: true,
@@ -460,12 +463,89 @@ pub fn h3_fetch_on_driver_with_sink<'s>(
         scheme: b"https",
         authority: authority.as_bytes(),
         path,
+        protocol: None,
         headers,
         body,
         use_huffman: true,
     };
     fetch_with_sink(driver, &req, Instant::now, request_turns, sink)
         .map_err(|e| H3TransportError::Exchange(ConnectFetchError::Fetch(e)))
+}
+
+/// Open an RFC 9220 Extended CONNECT session on `driver` (already confirmed, from
+/// [`h3_connect`] or the pool) and drive it to its final response head — the
+/// WebTransport session handshake's HTTP/3 leg (RFC 9220 §3, WHATWG WebTransport
+/// §5.1).
+///
+/// Builds a `CONNECT` request carrying the `:protocol = webtransport` (or
+/// whatever `protocol` names) pseudo-header, places it via
+/// [`RequestDriver::open_extended_connect`] — which, unlike an ordinary request,
+/// leaves the send half open: a successful Extended CONNECT stream is the
+/// session's control stream for as long as the session lives, so it is
+/// deliberately never FIN'd — then drives `driver.transmit`/`driver.poll` turn by
+/// turn (not [`RequestDriver::run`], which only stops once [`is_done`], i.e. on
+/// completion or FIN, neither of which a live Extended CONNECT stream produces)
+/// until [`RequestDriver::extended_connect_head`] reports a final head.
+///
+/// Returns the stream identifier (the caller needs it for later slices — uni/bidi
+/// streams and datagrams associate with this same Extended CONNECT stream) paired
+/// with the response head. The caller decides pass/fail from the head's
+/// `:status`: this function's job is only "a final response head arrived", not
+/// judging whether it is a 2xx.
+///
+/// The caller keeps `driver` alive afterward — later slices need the live
+/// connection for streams and datagrams; this function never drops or closes it.
+///
+/// # Errors
+///
+/// [`H3TransportError::Exchange`] wrapping:
+/// - [`ConnectFetchError::ExtendedConnectDispatch`] if the request cannot be
+///   built or placed (RFC 9114 §4.2/§7.2.1, RFC 9000 §2.1);
+/// - [`ConnectFetchError::ExtendedConnectDriver`] if a driver turn fails (a
+///   socket error, a bad frame, a rejected send action);
+/// - [`ConnectFetchError::ExtendedConnectIncomplete`] if `request_turns` turns
+///   pass with no final head (the peer never answered).
+pub fn h3_extended_connect_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    host: &str,
+    port: u16,
+    protocol: &[u8],
+    path: &[u8],
+    headers: &[(&[u8], &[u8])],
+    request_turns: usize,
+) -> Result<(u64, H3ResponseHead), H3TransportError> {
+    let authority = authority_for(host, port);
+    let req = ClientRequest {
+        profile: H3Profile::default(),
+        method: b"CONNECT",
+        scheme: b"https",
+        authority: authority.as_bytes(),
+        path,
+        protocol: Some(protocol),
+        headers,
+        body: b"",
+        use_huffman: true,
+    };
+    let sent = driver
+        .open_extended_connect(&req)
+        .map_err(|e| H3TransportError::Exchange(ConnectFetchError::ExtendedConnectDispatch(e)))?;
+    let stream_id = sent.stream_id;
+
+    for _ in 0..request_turns {
+        driver
+            .transmit(Instant::now())
+            .map_err(|e| H3TransportError::Exchange(ConnectFetchError::ExtendedConnectDriver(e)))?;
+        if let Some(head) = driver.extended_connect_head(stream_id) {
+            return Ok((stream_id, head.clone()));
+        }
+        driver
+            .poll(Instant::now())
+            .map_err(|e| H3TransportError::Exchange(ConnectFetchError::ExtendedConnectDriver(e)))?;
+        if let Some(head) = driver.extended_connect_head(stream_id) {
+            return Ok((stream_id, head.clone()));
+        }
+    }
+    Err(H3TransportError::Exchange(ConnectFetchError::ExtendedConnectIncomplete))
 }
 
 #[cfg(test)]
@@ -568,6 +648,181 @@ mod tests {
         match err {
             H3TransportError::Exchange(ConnectFetchError::NotConfirmed(_)) => {}
             other => panic!("expected Exchange(NotConfirmed), got {other:?}"),
+        }
+    }
+
+    // ---- h3_extended_connect_on_driver (RFC 9220 §3) --------------------
+
+    use crate::h3::conn_turn::{ConnectionTurn, DEFAULT_ACK_DELAY_EXPONENT};
+    use crate::h3::connection::{ConnectionConfig, QuicConnection};
+    use crate::h3::driver::ConnectionDriver;
+    use crate::h3::event_loop::DatagramEventLoop;
+    use crate::h3::frame::Frame as H3Frame;
+    use crate::h3::key_schedule::InitialKeys;
+    use crate::h3::loss::PacketNumberSpace;
+    use crate::h3::packet_crypt::{ProtectedHeader, encrypt_packet};
+    use crate::h3::pto::LossDetection;
+    use crate::h3::qpack::{self, HeaderField};
+    use crate::h3::quic_frame::{self, Frame};
+    use crate::h3::recv_path::RecvKeyRing;
+    use crate::h3::request_pump::RequestPump;
+    use crate::h3::request_turn::RequestTurn;
+    use crate::h3::send_state::ConnectionSendState;
+    use crate::h3::stream_manager::StreamManagerConfig;
+    use std::time::Duration;
+
+    /// The RFC 9001 Appendix A client Destination Connection ID.
+    fn dcid() -> Vec<u8> {
+        vec![0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08]
+    }
+
+    /// The four-byte local connection ID the request driver is addressed by.
+    fn local_cid() -> Vec<u8> {
+        vec![0x11, 0x22, 0x33, 0x44]
+    }
+
+    fn keys() -> InitialKeys {
+        InitialKeys::derive(&dcid())
+    }
+
+    fn connection(now: Instant) -> QuicConnection {
+        QuicConnection::new_client(
+            ConnectionConfig {
+                peer_initial_cid: dcid(),
+                local_initial_cid: local_cid(),
+                active_connection_id_limit: 8,
+                peer_active_connection_id_limit: 8,
+                peer_initial_max_data: 1_000_000,
+                peer_initial_max_streams_bidi: 100,
+                peer_initial_max_streams_uni: 100,
+                pto: Duration::from_millis(100),
+            },
+            now,
+        )
+    }
+
+    fn stream_config() -> StreamManagerConfig {
+        StreamManagerConfig {
+            initial_max_stream_data_bidi_local: 1 << 20,
+            initial_max_stream_data_bidi_remote: 1 << 20,
+            initial_max_stream_data_uni: 1 << 20,
+            initial_max_data: 1 << 20,
+            initial_max_streams_bidi: 100,
+            initial_max_streams_uni: 100,
+        }
+    }
+
+    fn pump() -> RequestPump {
+        RequestPump::new(stream_config(), 1 << 20)
+    }
+
+    /// A confirmed-connection-shaped [`RequestDriver`] over `t`: Application-Data
+    /// installed on both directions, ready to place requests — standing in for
+    /// what [`h3_connect`] would have returned.
+    fn extended_connect_driver(
+        t: MockDatagramTransport,
+        now: Instant,
+    ) -> RequestDriver<MockDatagramTransport> {
+        let mut recv_keys = RecvKeyRing::new();
+        recv_keys.install(PacketNumberSpace::ApplicationData, keys().client);
+        let driver = ConnectionDriver::new(
+            DatagramEventLoop::new(t),
+            connection(now),
+            LossDetection::new(Duration::from_millis(25)),
+            recv_keys,
+            4,
+        );
+        let mut send = ConnectionSendState::new(1, dcid(), local_cid(), 1200);
+        send.install(PacketNumberSpace::ApplicationData, keys().client);
+        let turn = ConnectionTurn::new(driver, send, 1200, DEFAULT_ACK_DELAY_EXPONENT);
+        RequestDriver::new(RequestTurn::with_default_frame_len(turn, pump()))
+    }
+
+    /// Encode the response-stream bytes for an Extended CONNECT response head:
+    /// just a HEADERS frame carrying `:status` — no body (RFC 9220 §3 responses
+    /// carry no message body).
+    fn extended_connect_response_bytes(code: &[u8]) -> Vec<u8> {
+        let block =
+            qpack::encode_field_section(&[HeaderField::new(b":status".to_vec(), code.to_vec())], true);
+        let mut out = Vec::new();
+        H3Frame::Headers(block).encode(&mut out).unwrap();
+        out
+    }
+
+    /// Encrypt one short-header (1-RTT) packet carrying `frames` with packet
+    /// number `pn`.
+    fn one_rtt_packet(pn: u64, frames: &[Frame]) -> Vec<u8> {
+        let dcid = local_cid();
+        let header = ProtectedHeader::Short { spin: false, key_phase: false, dcid: &dcid };
+        let mut payload = Vec::new();
+        quic_frame::encode_all(frames, &mut payload).expect("encode frames");
+        encrypt_packet(&keys().client, &header, pn, None, &payload).expect("encrypt")
+    }
+
+    /// A STREAM frame carrying an Extended CONNECT response head for `code` on
+    /// `stream_id`, with **no** FIN — an Extended CONNECT session's control
+    /// stream is deliberately never closed on success (RFC 9220 §3).
+    fn extended_connect_response_stream(stream_id: u64, code: &[u8]) -> Frame {
+        Frame::Stream {
+            stream_id,
+            offset: 0,
+            fin: false,
+            data: extended_connect_response_bytes(code),
+        }
+    }
+
+    #[test]
+    fn extended_connect_resolves_on_a_2xx_head_with_no_fin() {
+        let now = Instant::now();
+        let mut t = transport();
+        t.push_inbound(one_rtt_packet(0, &[extended_connect_response_stream(0, b"200")]));
+        let mut driver = extended_connect_driver(t, now);
+
+        let (stream_id, head) =
+            h3_extended_connect_on_driver(&mut driver, "example.com", 443, b"webtransport", b"/wt", &[], 8)
+                .expect("extended connect resolves");
+        assert_eq!(stream_id, 0);
+        assert_eq!(head.status, 200);
+        // The stream is still alive (no FIN was ever sent) — the driver can keep
+        // using it for later slices.
+        assert!(driver.turn().pump().is_active(stream_id));
+    }
+
+    #[test]
+    fn extended_connect_resolves_on_a_non_2xx_head_too() {
+        // This function's job is only "a final head arrived" — the caller
+        // decides pass/fail from the status. A 403 resolves `Ok` just like a 200.
+        let now = Instant::now();
+        let mut t = transport();
+        t.push_inbound(one_rtt_packet(0, &[extended_connect_response_stream(0, b"403")]));
+        let mut driver = extended_connect_driver(t, now);
+
+        let (_, head) =
+            h3_extended_connect_on_driver(&mut driver, "example.com", 443, b"webtransport", b"/wt", &[], 8)
+                .expect("a non-2xx head still resolves Ok");
+        assert_eq!(head.status, 403);
+    }
+
+    #[test]
+    fn extended_connect_times_out_when_the_peer_never_answers() {
+        let now = Instant::now();
+        // No inbound datagram at all: the request goes out but nothing ever
+        // answers, so the turn budget is spent without a final head.
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let err = h3_extended_connect_on_driver(
+            &mut driver,
+            "example.com",
+            443,
+            b"webtransport",
+            b"/wt",
+            &[],
+            3,
+        )
+        .unwrap_err();
+        match err {
+            H3TransportError::Exchange(ConnectFetchError::ExtendedConnectIncomplete) => {}
+            other => panic!("expected ExtendedConnectIncomplete, got {other:?}"),
         }
     }
 }

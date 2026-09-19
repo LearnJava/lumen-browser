@@ -46,6 +46,9 @@ pub struct ClientRequest<'a> {
     pub authority: &'a [u8],
     /// The request target (`:path`), e.g. `/index.html`.
     pub path: &'a [u8],
+    /// The RFC 9220 `:protocol` pseudo-header for Extended CONNECT (RFC 9220
+    /// §3); `None` for an ordinary request.
+    pub protocol: Option<&'a [u8]>,
     /// The ordinary request header fields as `(name, value)` byte slices.
     pub headers: &'a [(&'a [u8], &'a [u8])],
     /// The request body; empty means no body (no `DATA` frame is emitted).
@@ -130,6 +133,7 @@ impl ClientExchange {
             req.scheme,
             req.authority,
             req.path,
+            req.protocol,
             req.headers,
             req.use_huffman,
         )
@@ -150,6 +154,19 @@ impl ClientExchange {
     #[must_use]
     pub const fn state(&self) -> ExchangeState {
         self.state
+    }
+
+    /// The final (non-`1xx`) response head, once its `HEADERS` frame has been
+    /// processed — this is available as soon as that frame arrives, even with
+    /// `fin=false`, while the exchange is still [`ExchangeState::Receiving`].
+    ///
+    /// This is the accessor Extended CONNECT (RFC 9220) needs: a successful
+    /// Extended CONNECT stream is deliberately never FIN'd, so a caller must be
+    /// able to read the response head before the exchange reaches
+    /// [`ExchangeState::Complete`].
+    #[must_use]
+    pub(crate) fn final_head(&self) -> Option<&super::h3_request::H3ResponseHead> {
+        self.assembler.final_head()
     }
 
     /// Feed the next chunk of response-stream bytes.
@@ -249,6 +266,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,

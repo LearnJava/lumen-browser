@@ -2698,6 +2698,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,

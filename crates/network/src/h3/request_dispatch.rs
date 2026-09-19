@@ -163,6 +163,51 @@ impl RequestDispatch {
         Ok(SentRequest { stream_id: opened.stream_id })
     }
 
+    /// Places an RFC 9220 Extended CONNECT `req` (a `:protocol`-carrying CONNECT
+    /// request) onto a fresh client-initiated bidirectional stream, identically
+    /// to [`send_request`](Self::send_request), except the send half is **not**
+    /// finished.
+    ///
+    /// An ordinary HTTP/3 request is exactly one message, so
+    /// [`send_request`](Self::send_request) closes the send half the moment it
+    /// writes it. An Extended CONNECT stream is the opposite: it is the
+    /// session's control stream for as long as the session lives (RFC 9220 §3),
+    /// so the send half must stay open — closing it would signal the end of the
+    /// client's half of a session that has not even started.
+    ///
+    /// Returns the [`SentRequest`] naming the stream. The stream identifier is
+    /// consumed only on success — a rejected request burns no id.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Open`] if the request cannot be built (RFC 9114
+    /// §4.2/§7.2.1) or all client bidirectional stream identifiers are spent
+    /// (RFC 9000 §2.1). The stream manager is left untouched.
+    pub fn open_extended_connect(
+        &mut self,
+        req: &ClientRequest,
+    ) -> Result<SentRequest, DispatchError> {
+        let opened = self.mux.open(req)?;
+        let send = self
+            .streams
+            .open_send_stream(opened.stream_id, self.peer_initial_max_stream_data_bidi_remote);
+        send.write(&opened.bytes);
+        Ok(SentRequest { stream_id: opened.stream_id })
+    }
+
+    /// The final (non-`1xx`) response head for an Extended CONNECT request on
+    /// `stream_id`, once its `HEADERS` frame has arrived — see
+    /// [`RequestMux::peek_final_head`](super::request_mux::RequestMux::peek_final_head).
+    /// Available before the stream FIN, which an Extended CONNECT session never
+    /// sends on success (RFC 9220 §3).
+    #[must_use]
+    pub fn extended_connect_head(
+        &self,
+        stream_id: u64,
+    ) -> Option<&super::h3_request::H3ResponseHead> {
+        self.mux.peek_final_head(stream_id)
+    }
+
     /// Routes an inbound STREAM frame for a request stream: `offset`/`data` is the
     /// carried byte range (possibly empty) and `fin` marks the server's STREAM FIN.
     ///
@@ -357,6 +402,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,
@@ -371,6 +417,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body,
             use_huffman: true,
@@ -630,5 +677,61 @@ mod tests {
         assert!(!d.request_flushed(s));
         let _ = d.streams_mut().send_stream_mut(s).unwrap().poll_transmit(1 << 20).unwrap();
         assert!(d.request_flushed(s));
+    }
+
+    // ── open_extended_connect / extended_connect_head (RFC 9220 §3) ──────────
+
+    /// An Extended CONNECT request per RFC 9220 §3.
+    fn extended_connect(path: &'static [u8]) -> ClientRequest<'static> {
+        ClientRequest {
+            profile: H3Profile::Chrome,
+            method: b"CONNECT",
+            scheme: b"https",
+            authority: b"example.com",
+            path,
+            protocol: Some(b"webtransport"),
+            headers: &[],
+            body: b"",
+            use_huffman: true,
+        }
+    }
+
+    #[test]
+    fn open_extended_connect_does_not_finish_the_send_stream() {
+        let mut d = dispatch();
+        let sent = d.open_extended_connect(&extended_connect(b"/wt")).unwrap();
+        // Drain the send stream: no FIN, unlike an ordinary `send_request`.
+        let chunk = d
+            .streams_mut()
+            .send_stream_mut(sent.stream_id)
+            .unwrap()
+            .poll_transmit(1 << 20)
+            .unwrap();
+        assert!(!chunk.fin, "an Extended CONNECT stream must stay open");
+        assert_eq!(
+            d.streams().send_stream(sent.stream_id).unwrap().state(),
+            SendState::Send,
+            "the send half is not finished"
+        );
+    }
+
+    #[test]
+    fn extended_connect_head_available_before_fin() {
+        let mut d = dispatch();
+        let s = d.open_extended_connect(&extended_connect(b"/wt")).unwrap().stream_id;
+        assert_eq!(d.extended_connect_head(s), None);
+        // A HEADERS frame with :status 200, delivered with no FIN: the stream
+        // stays active and the head becomes visible immediately.
+        let head = headers_frame(&[status(b"200")]);
+        assert_eq!(d.on_stream_frame(s, 0, &head, false).unwrap(), None);
+        assert!(d.is_active(s), "a headers-only, no-FIN receive must not retire the stream");
+        let resp_head = d.extended_connect_head(s).expect("final head available");
+        assert_eq!(resp_head.status, 200);
+    }
+
+    #[test]
+    fn extended_connect_head_unknown_for_never_opened_stream() {
+        let d = dispatch();
+        assert_eq!(d.extended_connect_head(0), None);
     }
 }

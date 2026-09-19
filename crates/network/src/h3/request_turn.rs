@@ -294,6 +294,36 @@ impl<T: DatagramTransport> RequestTurn<T> {
         self.pump.send_request(req)
     }
 
+    /// Places an RFC 9220 Extended CONNECT `req` onto a fresh client-initiated
+    /// bidirectional stream, without finishing its send half — a pass-through to
+    /// [`RequestPump::open_extended_connect`](super::request_pump::RequestPump::open_extended_connect).
+    /// The rendered bytes wait on the pump's send half until the next
+    /// [`RequestTurn::stage_requests`] moves them into the connection's send
+    /// queue.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Open`] if the request cannot be built (RFC 9114
+    /// §4.2/§7.2.1) or all client bidirectional stream identifiers are spent
+    /// (RFC 9000 §2.1).
+    pub fn open_extended_connect(
+        &mut self,
+        req: &ClientRequest,
+    ) -> Result<SentRequest, DispatchError> {
+        self.pump.open_extended_connect(req)
+    }
+
+    /// The final (non-`1xx`) response head for an Extended CONNECT request on
+    /// `stream_id` — a pass-through to
+    /// [`RequestPump::extended_connect_head`](super::request_pump::RequestPump::extended_connect_head).
+    #[must_use]
+    pub fn extended_connect_head(
+        &self,
+        stream_id: u64,
+    ) -> Option<&super::h3_request::H3ResponseHead> {
+        self.pump.extended_connect_head(stream_id)
+    }
+
     /// Drains the pump's request send streams
     /// ([`RequestPump::poll_transmit`](super::request_pump::RequestPump::poll_transmit))
     /// and enqueues every produced STREAM frame into the connection's Application Data
@@ -569,6 +599,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body: b"",
             use_huffman: true,
@@ -582,6 +613,7 @@ mod tests {
             scheme: b"https",
             authority: b"example.com",
             path,
+            protocol: None,
             headers: &[],
             body,
             use_huffman: true,
