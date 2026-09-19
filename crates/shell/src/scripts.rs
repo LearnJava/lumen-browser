@@ -313,7 +313,9 @@ pub(crate) fn flush_parser_inserts(
 /// `subresources.rs::fetch_and_decode_images`/`scripts.rs::run_scripts_with_dom`
 /// (see `bugs/BUG-811-OPEN.md` срез 5's rationale). A `script-src`/
 /// `default-src` mismatch is checked against the resolved URL before either
-/// branch below touches the filesystem or the network.
+/// branch below touches the filesystem or the network. `upgrade-insecure-
+/// requests` (срез 45) rewrites an `http:` URL to `https:` before that gate
+/// runs, mirroring срезы 43/44 for images.
 pub(crate) fn resolve_script_sources(
     items: &[ScriptSource],
     base: &ResourceBase,
@@ -341,10 +343,20 @@ pub(crate) fn resolve_script_sources(
         }),
         ScriptSource::External(nid, src) => {
             let resolved_url = base.resolve_str(src);
+            // GAP-CSPENF срез 45: `upgrade-insecure-requests` переписывает
+            // схему ДО гейта `script-src` (тот же порядок Fetch §4.1, что
+            // срезы 43/44 уже дали картинкам top-level документа и
+            // `<iframe>`) — гейт и фактический fetch обязаны видеть уже
+            // `https://`. `upgraded` — `None`, когда переписывать нечего;
+            // тогда всё идёт ровно как раньше, по сырому `resolved_url`.
+            let upgraded = csp_gate
+                .as_ref()
+                .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url));
+            let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
             if let Some((policy, _)) = &csp_gate
-                && crate::csp_enforce::script_src_blocked(policy, &resolved_url, self_origin.as_ref())
+                && crate::csp_enforce::script_src_blocked(policy, gate_url, self_origin.as_ref())
             {
-                return Some(ResolvedScript::blocked_by_csp(*nid, resolved_url));
+                return Some(ResolvedScript::blocked_by_csp(*nid, gate_url.to_owned()));
             }
             match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
@@ -363,9 +375,13 @@ pub(crate) fn resolve_script_sources(
                     Some(ResolvedScript::failed(*nid))
                 }
             },
-            ResolvedResource::Url(url) => {
+            ResolvedResource::Url(raw_url) => {
                 use lumen_core::url::Url;
                 use lumen_network::RequestDestination;
+                // Апгрейженный адрес идёт в фактический запрос; сырой
+                // остаётся вычисленным выше только для незаписанного случая
+                // (`upgraded` — `None`, `gate_url == &raw_url`).
+                let url = upgraded.unwrap_or(raw_url);
                 let sub_url = match Url::parse(&url) {
                     Ok(u) => u,
                     Err(e) => {
