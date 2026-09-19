@@ -334,17 +334,22 @@ impl Lumen {
             }
         }
 
-        // Advance frames for playing videos.
+        // Advance frames for playing videos. A paused video is not skipped
+        // outright (GAP-MEDIADECODE срез 8): `__lumen_video_seek` rewrites
+        // `position_ms` even while paused (HTML spec: seeking a paused
+        // <video> must still show the frame at the new position), and
+        // `current_ms()` on a paused entry is just `position_ms` — so the
+        // `last == idx` check below already skips the no-op case (unchanged
+        // position while paused) at zero extra decode cost.
         let playback = self.video_gif_store.playback.lock().unwrap();
         let mut has_playing = false;
 
         let updates: Vec<(u32, usize, lumen_image::Image)> = playback
             .iter()
             .filter_map(|(nid, state)| {
-                if state.paused {
-                    return None;
+                if !state.paused {
+                    has_playing = true;
                 }
-                has_playing = true;
                 let cycle = state.cycle_ms;
                 if cycle == 0 {
                     return None;
@@ -362,6 +367,7 @@ impl Lumen {
             .collect();
         drop(playback);
 
+        let has_updates = !updates.is_empty();
         for (nid, idx, image) in updates {
             let key = format!("video:{nid}");
             if let Some(r) = self.renderer.as_mut()
@@ -372,7 +378,7 @@ impl Lumen {
             self.video_gif_last_frame.insert(nid, idx);
         }
 
-        if has_playing {
+        if has_playing || has_updates {
             self.request_redraw();
         }
     }
@@ -486,16 +492,31 @@ impl Lumen {
         // Advance frames for playing FFmpeg-backed videos. `playback` is the
         // store shared with the GIF path (comment on `VideoGifStore::playback`),
         // so filter to nodes this map actually owns a session for.
+        //
+        // A paused video is not skipped outright (GAP-MEDIADECODE срез 8):
+        // `__lumen_video_seek` rewrites `position_ms` even while paused (HTML
+        // spec: seeking a paused <video> must still show the frame at the new
+        // position). While paused there is no continuous tick driving a
+        // re-decode, so the 30fps throttle below — meant to cap re-decode
+        // rate during smooth playback — would otherwise also suppress the one
+        // decode a paused seek needs; skip it and decode unconditionally
+        // whenever the position actually moved.
         let playback = self.video_gif_store.playback.lock().unwrap();
         let mut has_playing = false;
         let mut due: Vec<(u32, u64)> = Vec::new();
         for (nid, state) in playback.iter() {
-            if state.paused || !self.video_ffmpeg_sessions.contains_key(nid) {
+            if !self.video_ffmpeg_sessions.contains_key(nid) {
+                continue;
+            }
+            let cur_ms = state.current_ms(elapsed_ms);
+            let last = self.video_ffmpeg_last_ms.get(nid).copied();
+            if state.paused {
+                if last != Some(cur_ms) {
+                    due.push((*nid, cur_ms));
+                }
                 continue;
             }
             has_playing = true;
-            let cur_ms = state.current_ms(elapsed_ms);
-            let last = self.video_ffmpeg_last_ms.get(nid).copied();
             // Cap re-decode rate at roughly 30fps — `frame_at` reseeks and
             // decodes on every call, unlike the GIF path's precomputed table.
             if last.is_none_or(|l| cur_ms.saturating_sub(l) >= 33) {
@@ -504,6 +525,7 @@ impl Lumen {
         }
         drop(playback);
 
+        let has_due = !due.is_empty();
         for (nid, cur_ms) in due {
             let Some(session) = self.video_ffmpeg_sessions.get_mut(&nid) else { continue };
             let secs = cur_ms as f64 / 1000.0;
@@ -531,7 +553,7 @@ impl Lumen {
             }
         }
 
-        if has_playing {
+        if has_playing || has_due {
             self.request_redraw();
         }
     }
