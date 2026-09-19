@@ -585,14 +585,23 @@ pub(crate) fn fetch_frame_subresources(
     let decoded = parallel_map(&requests, |_, req| {
         let sink: &Arc<dyn EventSink> = &sink.clone();
         let key = frame_image_key(base, &req.url);
+        // GAP-CSPENF срез 44: same order as the page (срез 43) — upgrade the
+        // scheme before the `img-src` gate sees the URL (Fetch §4.1: upgrade
+        // is step 5, the CSP check step 6). The registry key (`key`, above)
+        // stays the raw resolved `req.url` either way — upgrade only changes
+        // the address that is actually fetched.
+        let upgraded = csp_gate
+            .as_ref()
+            .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &key));
         if let Some((policy, _)) = &csp_gate {
-            let resolved_url = base.resolve_str(&req.url);
+            let resolved_url = upgraded.clone().unwrap_or_else(|| key.clone());
             if crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
                 return (key, None, Some(resolved_url));
             }
         }
+        let fetch_src: &str = upgraded.as_deref().unwrap_or(&req.url);
         let img = crate::image_cache::IMAGE_CACHE.get_or_decode_current(&key, || {
-            decode_image(&req.url, base, sink, cookie_jar.clone(), target)
+            decode_image(fetch_src, base, sink, cookie_jar.clone(), target)
         });
         (key, img, None)
     });
@@ -710,13 +719,20 @@ pub(crate) fn fetch_frame_background_images(
 ) {
     let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     let decoded = parallel_map(&urls, |_, url| {
+        // GAP-CSPENF срез 44: same upgrade-before-gate order as `<img>` above
+        // and the page's `fetch_and_decode_background_images` (срез 43 left
+        // this exact producer named as not covered).
+        let resolved = base.resolve_str(url);
+        let upgraded =
+            csp_gate.and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved));
         if let Some((policy, _)) = csp_gate {
-            let resolved = base.resolve_str(url);
+            let resolved = upgraded.clone().unwrap_or_else(|| resolved.clone());
             if crate::csp_enforce::img_src_blocked(policy, &resolved, self_origin) {
                 return (None, Some(resolved));
             }
         }
-        let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
+        let fetch_url: &str = upgraded.as_deref().unwrap_or(url);
+        let bytes = match fetch_image_bytes(fetch_url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("iframe: пропуск bg-картинки {url}: {e}");
