@@ -216,7 +216,7 @@ impl Lumen {
     /// has to bail out of the `get`/POST navigation.
     fn form_action_navigation_blocked(
         &mut self,
-        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+        csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
         resolved: &str,
     ) -> bool {
         let Some((policy, original_policy)) = csp_gate else {

@@ -45,7 +45,7 @@ impl Lumen {
     /// клика.
     fn navigate_to_link_blocked(
         &mut self,
-        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+        csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
         href: &str,
     ) -> bool {
         let Some((policy, original_policy)) = csp_gate else {

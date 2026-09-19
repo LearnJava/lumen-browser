@@ -132,7 +132,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             &mut std::collections::HashSet::new(),
             0,
             encoding,
-            csp_gate.as_ref().map(|(p, _)| (p, self_origin.as_ref())),
+            csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
         ))
     });
 
@@ -302,7 +302,7 @@ pub(crate) fn inline_css_imports(
     seen: &mut std::collections::HashSet<String>,
     depth: u32,
     referring_encoding: lumen_encoding::Encoding,
-    csp_gate: Option<(&CspPolicy, Option<&Origin>)>,
+    csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
 ) -> (String, Vec<String>) {
     let mut blocked = Vec::new();
     // Быстрый путь: нет токена `@import` вовсе → лишний парс не нужен

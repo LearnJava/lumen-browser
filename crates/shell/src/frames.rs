@@ -534,7 +534,7 @@ pub(crate) fn fetch_frame_subresources(
     // `<iframe>` не проверялся вовсе (та же граница, что срез 7 документирует
     // для внешнего `<link>` подфрейма до срез 8).
     let (inline, blocked_inline_style_count) =
-        extract_style_blocks(doc, csp_gate.as_ref().map(|(p, _)| p));
+        extract_style_blocks(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()));
     // GAP-CSPENF срез 24: `style=""` attribute inside a frame — same one-shot
     // policy read as the inline `<style>` gate above, separate walk (the
     // attribute lives on arbitrary elements, not only `<style>` nodes); срез
@@ -545,7 +545,7 @@ pub(crate) fn fetch_frame_subresources(
     // same way it does for the top-level document in
     // `page_pipeline.rs::build_page_cascade`.
     let (blocked_style_attr_nodes, blocked_style_attr_count) =
-        collect_style_attr_csp_blocked(doc, csp_gate.as_ref().map(|(p, _)| p));
+        collect_style_attr_csp_blocked(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()));
     doc.set_style_attr_csp_blocked(blocked_style_attr_nodes);
     let self_origin = base.origin();
     // GAP-CSPENF срез 38: `style-src` also gates `@import` targets inside the
@@ -561,7 +561,7 @@ pub(crate) fn fetch_frame_subresources(
         &mut std::collections::HashSet::new(),
         0,
         crate::stylesheets::document_encoding(doc),
-        csp_gate.as_ref().map(|(p, _)| (p, self_origin.as_ref())),
+        csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
     );
     // GAP-CSPENF срез 7: `style-src` gates the fetch here (blocked sheets
     // return the same `false` outcome a network failure would); срез 8 stops
@@ -701,7 +701,7 @@ pub(crate) fn fetch_frame_background_images(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-    csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+    csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
 ) -> (
     Vec<(String, Arc<lumen_image::Image>)>,
@@ -861,7 +861,7 @@ pub(crate) fn load_frame_fonts(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-    csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+    csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
 ) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
     let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
@@ -1266,7 +1266,7 @@ pub(crate) fn relayout_frame_content(
         let root = doc.root();
         let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
         let (blocked_style_attr_nodes, _) =
-            collect_style_attr_csp_blocked(&doc, csp_policy.as_ref().map(|(p, _)| p));
+            collect_style_attr_csp_blocked(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         doc.set_style_attr_csp_blocked(blocked_style_attr_nodes);
     }
     let Some(measurer) = frame_measurer(

@@ -53,7 +53,7 @@ fn walk_title(doc: &Document, id: NodeId, out: &mut String) -> bool {
 /// после того, как появляется JS-рантайм.
 pub(crate) fn extract_style_blocks(
     doc: &Document,
-    csp_gate: Option<&lumen_network::csp::CspPolicy>,
+    csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
 ) -> (String, usize) {
     let mut out = String::new();
     let mut blocked = 0;
@@ -163,7 +163,7 @@ pub(crate) struct DynamicCssBase {
 fn walk_style_blocks(
     doc: &Document,
     id: NodeId,
-    csp_gate: Option<&lumen_network::csp::CspPolicy>,
+    csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
     out: &mut String,
     blocked: &mut usize,
 ) {
@@ -205,7 +205,7 @@ fn walk_style_blocks(
 /// way [`extract_style_blocks`] already does for blocked `<style>` blocks.
 pub(crate) fn collect_style_attr_csp_blocked(
     doc: &Document,
-    csp_gate: Option<&lumen_network::csp::CspPolicy>,
+    csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
 ) -> (std::collections::HashSet<NodeId>, usize) {
     let mut blocked = std::collections::HashSet::new();
     if let Some(policy) = csp_gate {
@@ -218,7 +218,7 @@ pub(crate) fn collect_style_attr_csp_blocked(
 fn walk_style_attrs(
     doc: &Document,
     id: NodeId,
-    policy: &lumen_network::csp::CspPolicy,
+    policy: &[lumen_network::csp::CspPolicy],
     blocked: &mut std::collections::HashSet<NodeId>,
 ) {
     let node = doc.get(id);
@@ -258,7 +258,7 @@ mod tests {
             "<style nonce=\"abc\">a{color:red}</style><style>b{color:blue}</style>",
         );
         let policy = lumen_network::csp::parse_csp_header("style-src 'nonce-abc'");
-        let (css, blocked) = extract_style_blocks(&doc, Some(&policy));
+        let (css, blocked) = extract_style_blocks(&doc, Some(std::slice::from_ref(&policy)));
         assert!(css.contains("a{color:red}"));
         assert!(!css.contains("b{color:blue}"));
         assert_eq!(blocked, 1);
@@ -282,7 +282,7 @@ mod tests {
             "<div style=\"color:red\">a</div><div>b</div>",
         );
         let policy = lumen_network::csp::parse_csp_header("style-src-attr 'none'");
-        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(&policy));
+        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(std::slice::from_ref(&policy)));
         assert_eq!(count, 1);
         assert_eq!(blocked.len(), 1);
     }
@@ -299,7 +299,7 @@ mod tests {
     fn collect_style_attr_csp_blocked_unsafe_inline_allows() {
         let doc = lumen_html_parser::parse("<div style=\"color:red\">a</div>");
         let policy = lumen_network::csp::parse_csp_header("style-src-attr 'unsafe-inline'");
-        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(&policy));
+        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(std::slice::from_ref(&policy)));
         assert_eq!(count, 0);
         assert!(blocked.is_empty());
     }

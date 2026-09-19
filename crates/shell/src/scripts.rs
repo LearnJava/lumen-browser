@@ -698,8 +698,8 @@ pub(crate) fn run_scripts_with_dom(
                 // timer — same one-shot push as the layout/stylesheet state
                 // above, and for the same reason (nothing here reacts to a
                 // policy a script installs later).
-                if let Some((policy, _)) = &csp_policy
-                    && policy.require_trusted_types_for_script
+                if let Some((policies, _)) = &csp_policy
+                    && policies.iter().any(|p| p.require_trusted_types_for_script)
                 {
                     let _ = rt.eval("_lumen_tt_set_require_script(true);");
                 }
