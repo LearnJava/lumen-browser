@@ -20,6 +20,26 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result, ext::CacheBackend};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+            CREATE TABLE IF NOT EXISTS cache_entries (
+                origin           TEXT NOT NULL,
+                cache_name       TEXT NOT NULL,
+                request_url      TEXT NOT NULL,
+                request_method   TEXT NOT NULL DEFAULT 'GET',
+                response_status  INTEGER NOT NULL,
+                response_headers TEXT NOT NULL DEFAULT '',
+                response_body    BLOB NOT NULL,
+                cached_at        INTEGER NOT NULL,
+                PRIMARY KEY (origin, cache_name, request_url, request_method)
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS cache_origin_name_idx ON cache_entries(origin, cache_name);
+            "#,
+}];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedEntry {
     pub origin: String,
@@ -55,26 +75,11 @@ impl CacheStorage {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS cache_entries (
-                origin           TEXT NOT NULL,
-                cache_name       TEXT NOT NULL,
-                request_url      TEXT NOT NULL,
-                request_method   TEXT NOT NULL DEFAULT 'GET',
-                response_status  INTEGER NOT NULL,
-                response_headers TEXT NOT NULL DEFAULT '',
-                response_body    BLOB NOT NULL,
-                cached_at        INTEGER NOT NULL,
-                PRIMARY KEY (origin, cache_name, request_url, request_method)
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS cache_origin_name_idx ON cache_entries(origin, cache_name);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("cache_storage init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("cache_storage pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("cache_storage init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

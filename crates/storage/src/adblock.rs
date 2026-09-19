@@ -22,6 +22,26 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: "CREATE TABLE IF NOT EXISTS subscriptions (
+                url      TEXT PRIMARY KEY,
+                title    TEXT NOT NULL,
+                enabled  INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS list_meta (
+                slug          TEXT PRIMARY KEY,
+                url           TEXT NOT NULL,
+                etag          TEXT,
+                last_modified TEXT,
+                fetched_at    INTEGER NOT NULL DEFAULT 0,
+                rule_count    INTEGER NOT NULL DEFAULT 0,
+                content_hash  TEXT
+            );",
+}];
+
 // ── Value types ──────────────────────────────────────────────────────────────
 
 /// A filter-list subscription the user follows.
@@ -83,24 +103,10 @@ impl AdblockStore {
         Self::with_conn(conn)
     }
 
-    fn with_conn(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS subscriptions (
-                url      TEXT PRIMARY KEY,
-                title    TEXT NOT NULL,
-                enabled  INTEGER NOT NULL DEFAULT 1
-            );
-            CREATE TABLE IF NOT EXISTS list_meta (
-                slug          TEXT PRIMARY KEY,
-                url           TEXT NOT NULL,
-                etag          TEXT,
-                last_modified TEXT,
-                fetched_at    INTEGER NOT NULL DEFAULT 0,
-                rule_count    INTEGER NOT NULL DEFAULT 0,
-                content_hash  TEXT
-            );",
-        )
-        .map_err(|e| Error::Storage(e.to_string()))?;
+    fn with_conn(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("adblock pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("adblock init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

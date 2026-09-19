@@ -18,6 +18,21 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+            CREATE TABLE IF NOT EXISTS dns_cache (
+                hostname    TEXT PRIMARY KEY,
+                addresses   TEXT NOT NULL DEFAULT '',
+                cached_at   INTEGER NOT NULL,
+                expires_at  INTEGER NOT NULL
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS dns_expires_idx ON dns_cache(expires_at);
+            "#,
+}];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsEntry {
     pub hostname: String,
@@ -56,23 +71,12 @@ impl DnsCache {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(mut conn: Connection) -> Result<Self> {
         // addresses хранится как `,`-separated string. Альтернатива — JSON,
         // но для простого list-IPv4/IPv6 это лишний overhead.
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS dns_cache (
-                hostname    TEXT PRIMARY KEY,
-                addresses   TEXT NOT NULL DEFAULT '',
-                cached_at   INTEGER NOT NULL,
-                expires_at  INTEGER NOT NULL
-            ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS dns_expires_idx ON dns_cache(expires_at);
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("dns_cache init: {e}")))?;
+        set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("dns_cache pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("dns_cache init: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

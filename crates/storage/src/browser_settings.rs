@@ -14,6 +14,16 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: "CREATE TABLE IF NOT EXISTS browser_settings (
+                key   TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+            );",
+}];
+
 // ── Setting keys (keep in sync with SettingsSection in settings_panel) ─────
 
 const KEY_HOMEPAGE: &str = "homepage";
@@ -99,14 +109,11 @@ impl std::fmt::Debug for BrowserSettings {
 }
 
 impl BrowserSettings {
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS browser_settings (
-                key   TEXT PRIMARY KEY NOT NULL,
-                value TEXT NOT NULL
-            );",
-        )
-        .map_err(|e| Error::Storage(e.to_string()))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("browser_settings pragmas: {e}")))?;
+        run_migrations(&mut conn, MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("browser_settings init: {e}")))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
