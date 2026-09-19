@@ -1379,6 +1379,54 @@ fn relayout_frame_content_populates_scroll_containers() {
     );
 }
 
+// ── GAP-CSPENF срез 39: `style-src-attr` внутри `<iframe>` после мутации ────
+
+/// `relayout_frame_content` — единственная точка, куда `about_to_wait.rs`
+/// зовёт per-фреймовый `frame_dirty` (`own_dirty || bridge_dirty`, тот же
+/// сигнал, что уже гейтит любую другую пост-скриптовую работу ребёнка) —
+/// обязана пере-собрать `Document::style_attr_csp_blocked` ребёнка, а не
+/// только его `layout`. Срез 37 дал ровно эту пере-проверку top-level
+/// странице (`page_pipeline.rs`'s `dom_touched`-гейт); у фрейма то же
+/// множество считалось один раз, при спавне (`fetch_frame_subresources`, до
+/// его собственных скриптов), и мутация `style=""` уже существующего узла
+/// (без единого `<style>`/`<link>`) доезжала до layout незаблокированной.
+#[test]
+fn relayout_frame_content_rechecks_style_attr_csp_after_mutation() {
+    use lumen_dom::{Attribute, QualName};
+
+    let child_html = r#"<html><head>
+         <meta http-equiv="Content-Security-Policy" content="style-src-attr 'none'">
+       </head><body style="margin:0"><div id="probe">t</div></body></html>"#;
+    let (page_layout, handle) = live_frame_with_child(child_html);
+    let mut frames = vec![handle];
+
+    let probe = {
+        let doc = frames[0].doc.lock().expect("лок ребёнка");
+        doc.find_by_id("probe").expect("<div id=probe>")
+    };
+    {
+        let mut doc = frames[0].doc.lock().expect("лок ребёнка");
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(probe).data {
+            attrs.push(Attribute {
+                name: QualName::html("style"),
+                value: "color:rgb(255,0,0)".to_owned(),
+            });
+        }
+    }
+
+    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout, Default::default());
+
+    let color = crate::forms::find_layout_box(frames[0].layout.as_ref().expect("layout ребёнка"), probe)
+        .map(|b| b.style.color)
+        .expect("бокс #probe в свежем layout");
+    assert_ne!(
+        (color.r, color.g, color.b),
+        (255, 0, 0),
+        "style-src-attr 'none' обязана блокировать style=\"\", добавленный мимо <style>/<link>, \
+         даже когда узел уже существовал на момент спавна фрейма"
+    );
+}
+
 // ── навигация фрейма (BUG-480 срез 19) ──────────────────────────────────────
 
 /// Навигация под-документа уносит с собой хэндлы ВСЕХ его потомков, включая
