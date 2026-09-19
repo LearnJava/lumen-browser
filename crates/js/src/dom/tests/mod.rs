@@ -281,3 +281,6 @@ mod v8_bug877_895_shadow_root_wrapper;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug930_canvas_currentcolor;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug930_canvas_wide_gamut;

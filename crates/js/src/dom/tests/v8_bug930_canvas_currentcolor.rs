@@ -118,7 +118,10 @@ fn fill_style_color_mix_with_nested_current_color_is_accepted() {
         )
         .unwrap();
     // Midpoint of black and white — no longer rejected as an unparseable value.
-    assert_eq!(r, lumen_core::JsValue::String("#808080".to_string()));
+    // `color-mix(in srgb, …)` mixes in the *predefined* srgb color space, so
+    // BUG-930's serialization fix keeps the result in functional form rather
+    // than gamut-mapping it to `#808080` (CSS Color L4 §4.2).
+    assert_eq!(r, lumen_core::JsValue::String("color(srgb 0.5 0.5 0.5)".to_string()));
 }
 
 /// No computed style populated yet (page can write `fillStyle` before first
