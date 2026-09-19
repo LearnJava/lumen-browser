@@ -12,6 +12,8 @@
 //! signatures are unchanged.
 
 use crate::*;
+use lumen_network::csp::CspPolicy;
+use lumen_network::Origin;
 
 /// BUG-268: media-гейт для `<link rel=stylesheet media=...>` (HTML LS §4.2.4).
 ///
@@ -84,6 +86,14 @@ pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
 /// `error` по этому исходу (BUG-804); `securitypolicyviolation` — отдельно,
 /// той же схемой, что `blocked_by_img_src` в `subresources.rs` (здесь для
 /// него нет JS-рантайма).
+///
+/// Срез 38: тот же вектор теперь несёт и resolved URL каждого `@import`
+/// внутри ДОПУЩЕННОГО листа, которое `style-src`/`default-src` отдельно
+/// запретило (CSP3 §6.4.1 — `@import` — такой же фетч, как сам `<link>`, и
+/// проверяется по своему целевому URL, а не наследует статус владельца).
+/// [`inline_css_imports`] делает саму проверку; этот проход лишь передаёт ей
+/// уже посчитанные `csp_gate`/`self_origin` и подмешивает возвращённый
+/// список в общий `blocked_by_style_src`.
 pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (String, Vec<(NodeId, bool)>, Vec<String>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
@@ -122,6 +132,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             &mut std::collections::HashSet::new(),
             0,
             encoding,
+            csp_gate.as_ref().map(|(p, _)| (p, self_origin.as_ref())),
         ))
     });
 
@@ -130,10 +141,11 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     let mut blocked_by_style_src = Vec::new();
     for ((node, _, _), part) in hrefs.iter().zip(parts) {
         match part {
-            Ok(text) => {
+            Ok((text, blocked_imports)) => {
                 outcomes.push((*node, true));
                 css.push_str(&text);
                 css.push('\n');
+                blocked_by_style_src.extend(blocked_imports);
             }
             Err(blocked_url) => {
                 outcomes.push((*node, false));
@@ -263,6 +275,23 @@ const MAX_CSS_IMPORT_DEPTH: u32 = 16;
 /// Директивы `@import …;` остаются в исходном тексте — парсер каскада
 /// собирает их в `Stylesheet::imports` и игнорирует (повторной загрузки нет),
 /// так что двойного применения не происходит.
+///
+/// `csp_gate` — GAP-CSPENF срез 38: политика (и origin документа, для
+/// `'self'`) владельца этого листа, та же пара, что все fetch-гейты этого
+/// файла (`style_src_blocked` в [`load_linked_stylesheets`]) уже принимают.
+/// До этого среза `@import` не проверялся вообще ни на одном из трёх сайтов
+/// вызова (внешний `<link>` внутри самого себя, инлайновый `<style>`
+/// страницы, инлайновый `<style>` `<iframe>`) — CSP3 §6.4.1 требует того же
+/// `style-src`-гейта для цели `@import`, что и для самого `<link>`, но
+/// разбор листа никогда не сверялся с политикой. Проверяется КАЖДЫЙ уровень
+/// вложенности: `csp_gate` передаётся дальше без изменений в рекурсивный
+/// вызов — политика одна на весь документ, а не своя у каждого
+/// импортированного листа (импортированный лист не приносит своей CSP).
+/// Возвращает вторым элементом resolved URL каждой заблокированной цели, в
+/// том же общем формате, что [`load_linked_stylesheets`] уже даёт для
+/// заблокированного `<link>` — вызывающая сторона подмешивает его в
+/// `blocked_by_style_src` для одного и того же `securitypolicyviolation`-пути
+/// (`violatedDirective="style-src"`, `blockedURI` = URL импорта).
 #[allow(clippy::too_many_arguments)] // recursive helper threading fetch context — see BUG-509
 pub(crate) fn inline_css_imports(
     css_text: &str,
@@ -273,21 +302,23 @@ pub(crate) fn inline_css_imports(
     seen: &mut std::collections::HashSet<String>,
     depth: u32,
     referring_encoding: lumen_encoding::Encoding,
-) -> String {
+    csp_gate: Option<(&CspPolicy, Option<&Origin>)>,
+) -> (String, Vec<String>) {
+    let mut blocked = Vec::new();
     // Быстрый путь: нет токена `@import` вовсе → лишний парс не нужен
     // (подавляющее большинство листов). Ложные срабатывания (например
     // `@import` внутри комментария) безопасны — последующий парс правильно
     // не найдёт импорта и вернёт текст как есть.
     if !contains_ignore_ascii_case(css_text.as_bytes(), b"@import") {
-        return css_text.to_owned();
+        return (css_text.to_owned(), blocked);
     }
     let parsed = lumen_css_parser::parse(css_text);
     if parsed.imports.is_empty() {
-        return css_text.to_owned();
+        return (css_text.to_owned(), blocked);
     }
     if depth >= MAX_CSS_IMPORT_DEPTH {
         eprintln!("Пропуск @import: превышена глубина вложенности ({MAX_CSS_IMPORT_DEPTH})");
-        return css_text.to_owned();
+        return (css_text.to_owned(), blocked);
     }
 
     let mut prefix = String::new();
@@ -298,7 +329,16 @@ pub(crate) fn inline_css_imports(
         }
         // Цикл/дубликат: ключ = абсолютный резолв URL относительно текущего листа.
         let key = base.resolve_str(&imp.url);
-        if !seen.insert(key) {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        // GAP-CSPENF срез 38: `style-src`/`default-src` против цели `@import`,
+        // до сети — тот же принцип «заблокированный фетч не идёт в сеть
+        // вовсе», что `load_linked_stylesheets` уже даёт `<link>`.
+        if let Some((policy, self_origin)) = csp_gate
+            && crate::csp_enforce::style_src_blocked(policy, &key, self_origin)
+        {
+            blocked.push(key);
             continue;
         }
         let Some((text, imp_base, imp_encoding)) = fetch_stylesheet_text(
@@ -311,7 +351,7 @@ pub(crate) fn inline_css_imports(
         ) else {
             continue;
         };
-        let resolved = inline_css_imports(
+        let (resolved, nested_blocked) = inline_css_imports(
             &text,
             &imp_base,
             sink,
@@ -320,7 +360,9 @@ pub(crate) fn inline_css_imports(
             seen,
             depth + 1,
             imp_encoding,
+            csp_gate,
         );
+        blocked.extend(nested_blocked);
         prefix.push_str(&resolved);
         if !prefix.ends_with('\n') {
             prefix.push('\n');
@@ -328,10 +370,10 @@ pub(crate) fn inline_css_imports(
     }
 
     if prefix.is_empty() {
-        return css_text.to_owned();
+        return (css_text.to_owned(), blocked);
     }
     prefix.push_str(css_text);
-    prefix
+    (prefix, blocked)
 }
 
 /// ASCII-case-insensitive поиск подстроки `needle` в `haystack` без аллокаций.

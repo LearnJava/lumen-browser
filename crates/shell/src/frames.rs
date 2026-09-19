@@ -547,7 +547,12 @@ pub(crate) fn fetch_frame_subresources(
     let (blocked_style_attr_nodes, blocked_style_attr_count) =
         collect_style_attr_csp_blocked(doc, csp_gate.as_ref().map(|(p, _)| p));
     doc.set_style_attr_csp_blocked(blocked_style_attr_nodes);
-    let mut css = inline_css_imports(
+    let self_origin = base.origin();
+    // GAP-CSPENF срез 38: `style-src` also gates `@import` targets inside the
+    // frame's own inline `<style>` — same CHILD policy, same one-shot
+    // `csp_gate` this function already reads at the top for the image/style
+    // gates above.
+    let (mut css, blocked_by_style_src_imports) = inline_css_imports(
         &inline,
         base,
         sink,
@@ -556,21 +561,22 @@ pub(crate) fn fetch_frame_subresources(
         &mut std::collections::HashSet::new(),
         0,
         crate::stylesheets::document_encoding(doc),
+        csp_gate.as_ref().map(|(p, _)| (p, self_origin.as_ref())),
     );
     // GAP-CSPENF срез 7: `style-src` gates the fetch here (blocked sheets
     // return the same `false` outcome a network failure would); срез 8 stops
     // discarding the blocked-URL list `load_linked_stylesheets` already
     // computes and surfaces it via `FrameSubresourceOutcomes` for the caller
     // to dispatch `securitypolicyviolation` on (no JS runtime exists yet here).
-    let (linked, links, blocked_by_style_src) =
+    let (linked, links, mut blocked_by_style_src) =
         load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
+    blocked_by_style_src.extend(blocked_by_style_src_imports);
     css.push_str(&linked);
 
     let (requests, lazy_requests): (Vec<lumen_layout::ImageRequest>, Vec<lumen_layout::ImageRequest>) =
         lumen_layout::collect_image_requests(doc, viewport)
             .into_iter()
             .partition(|req| !req.is_lazy);
-    let self_origin = base.origin();
     // Фаза 1 (параллельно): сеть + декодирование, `doc` не трогаем — форма
     // `fetch_and_decode_images` страницы. Третий элемент кортежа — резолвленный
     // URL, если `img-src` его заблокировал (`None` — не блокировался, фетч

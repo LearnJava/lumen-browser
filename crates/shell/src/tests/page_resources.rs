@@ -745,12 +745,14 @@ fn inline_css_imports_prepends_imported_content() {
     let entry = dir.join("a.css");
     let base = ResourceBase::File(entry.clone());
     let text = "@import url(\"b.css\");\na { color: red; }";
-    let out = inline_css_imports(
+    let (out, blocked) = inline_css_imports(
         text, &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
+        None,
     );
+    assert!(blocked.is_empty(), "no CSP gate, nothing should be reported blocked");
     let b_pos = out.find("color: blue").expect("imported content present");
     let a_pos = out.find("color: red").expect("own content present");
     assert!(b_pos < a_pos, "imported rules must precede importing sheet's own rules");
@@ -766,10 +768,11 @@ fn inline_css_imports_result_ends_with_source_text() {
     let base = ResourceBase::File(dir.join("a.css"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     for text in ["@import url(\"b.css\");\na { color: red; }", "a { color: red; }", ""] {
-        let out = inline_css_imports(
+        let (out, _blocked) = inline_css_imports(
             text, &base, &null_sink(), None, &ctx,
             &mut std::collections::HashSet::new(), 0,
             lumen_encoding::Encoding::Utf8,
+            None,
         );
         assert!(out.ends_with(text), "результат не оканчивается исходником: {out:?}");
     }
@@ -824,11 +827,12 @@ fn inline_css_imports_nested_order() {
     std::fs::write(dir.join("c.css"), ".c{}").unwrap();
     std::fs::write(dir.join("b.css"), "@import url(c.css);\n.b{}").unwrap();
     let base = ResourceBase::File(dir.join("a.css"));
-    let out = inline_css_imports(
+    let (out, _blocked) = inline_css_imports(
         "@import url(b.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
+        None,
     );
     let c = out.find(".c{}").unwrap();
     let b = out.find(".b{}").unwrap();
@@ -844,11 +848,12 @@ fn inline_css_imports_cycle_guard() {
     std::fs::write(dir.join("b.css"), "@import url(a.css);\n.b{}").unwrap();
     let base = ResourceBase::File(dir.join("a.css"));
     // Начинаем с содержимого a.css — тот же файл будет импортирован из b.
-    let out = inline_css_imports(
+    let (out, _blocked) = inline_css_imports(
         "@import url(b.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
+        None,
     );
     // Каждый лист загружен максимум один раз (guard по `seen`).
     assert_eq!(out.matches(".b{}").count(), 1);
@@ -860,11 +865,12 @@ fn inline_css_imports_media_gate() {
     let dir = import_fixture_dir("media");
     std::fs::write(dir.join("p.css"), ".print-only{}").unwrap();
     let base = ResourceBase::File(dir.join("a.css"));
-    let out = inline_css_imports(
+    let (out, _blocked) = inline_css_imports(
         "@import url(p.css) print;\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
+        None,
     );
     assert!(!out.contains(".print-only{}"), "print-only @import must be skipped for screen");
     assert!(out.contains(".a{}"));
@@ -876,13 +882,98 @@ fn inline_css_imports_media_gate() {
 fn inline_css_imports_missing_file_is_skipped() {
     let dir = import_fixture_dir("missing");
     let base = ResourceBase::File(dir.join("a.css"));
-    let out = inline_css_imports(
+    let (out, _blocked) = inline_css_imports(
         "@import url(nope.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
+        None,
     );
     assert!(out.contains(".a{}"));
+}
+
+// ──────────── GAP-CSPENF срез 38: `style-src` против `@import` ───────────
+
+/// `style-src`, запрещающий origin цели `@import`, останавливает её фетч —
+/// resolved URL цели уходит в возвращённый список заблокированных импортов
+/// (тот же формат, что [`load_linked_stylesheets`] уже даёт заблокированному
+/// `<link>`), а сам текст остаётся РОВНО исходным (директива `@import …;`
+/// остаётся в нём буквально, см. doc-comment [`inline_css_imports`] — парсер
+/// каскада её просто игнорирует; блокировка касается тела, которое иначе
+/// было бы ПРЕДПОСЛАНО этому тексту, а не самой строки директивы).
+/// `evil.example` никогда не резолвится по сети: гейт стоит ДО
+/// `fetch_stylesheet_text`, поэтому тест безопасен без доступа к сети.
+#[test]
+fn inline_css_imports_style_src_blocks_cross_origin_import() {
+    let base = ResourceBase::Url("https://good.example/a.css".to_owned());
+    let policy = lumen_network::csp::parse_csp_header("style-src https://good.example");
+    let text = "@import url(\"https://evil.example/b.css\");\n.a{color:red}";
+    let (out, blocked) = inline_css_imports(
+        text,
+        &base,
+        &null_sink(),
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        &mut std::collections::HashSet::new(),
+        0,
+        lumen_encoding::Encoding::Utf8,
+        Some((&policy, None)),
+    );
+    assert_eq!(blocked, vec!["https://evil.example/b.css".to_owned()]);
+    assert_eq!(out, text, "blocked import must fetch nothing, leaving the text untouched");
+}
+
+/// Тот же origin, что `style-src`, разрешает `@import` (через сам
+/// `style_src_blocked`, без реального сетевого похода — unit-тесты этого
+/// файла не бьют по сети, см. [`inline_css_imports_missing_file_is_skipped`]
+/// и соседи, все на `ResourceBase::File`). `'self'` относительно
+/// `self_origin` документа должен матчить тот же `https://good.example`,
+/// что несёт сам `base`.
+#[test]
+fn inline_css_imports_style_src_self_allows_same_origin_target() {
+    let base = ResourceBase::Url("https://good.example/a.css".to_owned());
+    let policy = lumen_network::csp::parse_csp_header("style-src 'self'");
+    let self_origin = base.origin();
+    assert!(!crate::csp_enforce::style_src_blocked(
+        &policy,
+        "https://good.example/b.css",
+        self_origin.as_ref(),
+    ));
+    assert!(crate::csp_enforce::style_src_blocked(
+        &policy,
+        "https://other.example/b.css",
+        self_origin.as_ref(),
+    ));
+}
+
+/// `style-src 'none'` blocks a `@import` even when the whole document is
+/// loaded from disk (`ResourceBase::File`): `base.resolve_str` turns the
+/// relative `"b.css"` into an absolute filesystem path, which the WHATWG URL
+/// parser still accepts as a `file:`-scheme URL (Windows drive letters parse
+/// as a special-case), so `style_src_blocked` sees a normal URL, not an
+/// unparseable string — CSP applies to `file://` `@import` targets exactly
+/// like any other scheme, there is no scheme-based loophole for local
+/// development.
+#[test]
+fn inline_css_imports_style_src_none_blocks_file_import() {
+    let dir = import_fixture_dir("csp_none_file");
+    std::fs::write(dir.join("b.css"), "b { color: blue; }").unwrap();
+    let base = ResourceBase::File(dir.join("a.css"));
+    let policy = lumen_network::csp::parse_csp_header("style-src 'none'");
+    let (out, blocked) = inline_css_imports(
+        "@import url(\"b.css\");\na { color: red; }",
+        &base,
+        &null_sink(),
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        &mut std::collections::HashSet::new(),
+        0,
+        lumen_encoding::Encoding::Utf8,
+        Some((&policy, None)),
+    );
+    assert_eq!(blocked.len(), 1, "the file:-scheme import target must be reported blocked: {blocked:?}");
+    assert!(!out.contains("color: blue"), "blocked import body must never be inlined: {out:?}");
+    assert!(out.contains("color: red"), "importing sheet's own rules must survive: {out:?}");
 }
 
 /// Текст без `@import` возвращается без изменений (быстрый путь).
@@ -890,11 +981,12 @@ fn inline_css_imports_missing_file_is_skipped() {
 fn inline_css_imports_no_import_passthrough() {
     let base = ResourceBase::File(std::path::PathBuf::from("x/a.css"));
     let text = ".a { color: red; }";
-    let out = inline_css_imports(
+    let (out, _blocked) = inline_css_imports(
         text, &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
+        None,
     );
     assert_eq!(out, text);
 }
