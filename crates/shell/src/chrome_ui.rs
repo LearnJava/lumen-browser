@@ -1415,6 +1415,34 @@ impl Lumen {
                 }
                 self.relayout_chrome_host();
             }
+            // CC-18 срез 4: `#themeBtn` — explicit dark/light lock, the same
+            // mechanism `close_settings_panel`'s Appearance-section flush
+            // already uses (`ShellTheme::is_dark` ignores its `os_dark`
+            // argument once `base` is `Light`/`Dark`, so a stale
+            // `self.dark_mode` passed in here never leaks the OS value back
+            // in). Persisted immediately via `settings_store.set_theme`
+            // (not only on settings-panel close) since this is a one-click
+            // toggle with no draft/apply step of its own — the Appearance
+            // section's own theme picker (still unwired, BUG-421) and this
+            // button now agree on the same backing store.
+            ChromeAction::ToggleTheme => {
+                self.shell_theme.base = if self.dark_mode {
+                    panels::themes::ThemeBase::Light
+                } else {
+                    panels::themes::ThemeBase::Dark
+                };
+                if let Err(e) = self.settings_store.set_theme(&self.shell_theme.to_settings_str()) {
+                    eprintln!("chrome: не удалось сохранить тему: {e}");
+                }
+                let new_dark = self.shell_theme.is_dark(self.dark_mode);
+                if new_dark != self.dark_mode {
+                    self.dark_mode = new_dark;
+                    // ADR-016 M2.2b-4: same async-safe whole-page restyle as
+                    // the OS theme flip / settings-panel lock.
+                    self.relayout_chrome();
+                }
+                self.relayout_chrome_host();
+            }
             // BUG-426 reinvestigation (2026-08-01): these were filed
             // together as "sit in one empty branch" but each is a no-op for
             // its own, unrelated reason — none is a small wiring gap like
@@ -1456,13 +1484,6 @@ impl Lumen {
             // view with no per-tab data behind Elements/Network/Sources, so
             // there is nothing to switch between.
             //
-            // `ToggleTheme` (CC-18, `#themeBtn`): no backing state exists —
-            // `self.dark_mode` mirrors the OS `prefers-color-scheme` only and
-            // also drives page content's own `@media (prefers-color-scheme)`
-            // (`crates/shell/src/stylesheets.rs::screen_media_context`), so a
-            // UI override needs new plumbing through that whole path, not
-            // just a chrome-local flag. Follow-up, not this slice.
-            //
             // `ToggleQaPanel` (CC-18, `#demoBar`'s "QA-панель" button): the
             // QA/tester panel it targets is `strip_qa_panel_html`-excluded
             // from the product build entirely (same exclusion that already
@@ -1482,7 +1503,6 @@ impl Lumen {
             | ChromeAction::ToggleSwitch
             | ChromeAction::ToggleFocusTimer
             | ChromeAction::SetDevtoolsTab
-            | ChromeAction::ToggleTheme
             | ChromeAction::ToggleQaPanel => {}
         }
     }
