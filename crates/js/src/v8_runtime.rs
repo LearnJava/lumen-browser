@@ -934,7 +934,11 @@ impl V8JsRuntime {
         }
         install_v8!(virtual_keyboard::install_virtual_keyboard_bindings_v8);
         install_v8!(wake_lock::install_wake_lock_bindings_v8);
-        install_v8!(web_audio::install_web_audio_api_v8);
+        // BUG-908: the rendered-buffer/AnalyserNode noise seed is per-origin
+        // (ADR-007 Layer 4), so this takes `page_origin` like `canvas2d` above.
+        if let Err(e) = crate::web_audio::install_web_audio_api_v8(self, &page_origin) {
+            eprintln!("v8: web_audio::install_web_audio_api_v8 failed: {e}");
+        }
         install_v8!(webhid::install_webhid_bindings_v8);
         install_v8!(web_locks::install_web_locks_bindings_v8);
         install_v8!(web_midi::install_web_midi_api_v8);
