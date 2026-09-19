@@ -1,11 +1,25 @@
 # BUG-911 — тесты `lumen-network` берут эфемерный порт у ОС и падают, когда он попал в список «bad ports» Fetch §3.9
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19
 **Заведён:** 2026-08-25 (P1, поймано гейтом `scoped-test.sh` при закрытии [BUG-832](BUG-832-FIXED.md))
 **Область:** `crates/network/src/lib.rs:6186` (`mock_http_server`), `:8353`
 (`mock_http_server_capturing`) — обе биндят `127.0.0.1:0`; `crates/network/src/lib.rs:302`
 (`require_http_scheme` → `blocked port`), `crates/network/src/bad_port.rs`
 **Владелец:** P3 (`lumen-network`)
+
+## Фикс
+
+Общий хелпер `bind_ephemeral_listener()` (крейт-уровень, `#[cfg(test)]`,
+рядом с `mod bad_port`) биндит `127.0.0.1:0` в цикле и перебиндывает, пока
+`bad_port::is_bad_port(port)` истинно, — держится за существующий предикат,
+без копии списка. Все 27 мест теста, ранее звавших
+`TcpListener::bind("127.0.0.1:0")` напрямую (включая `mock_http_server`,
+`mock_http_server_capturing`, `mock_keepalive_server` и мок-серверы в
+`mod http_cache_tests`), переведены на этот хелпер. Регрессионный тест
+`tests::bind_ephemeral_listener_never_returns_bad_port` гоняет хелпер 2000
+раз и проверяет постусловие; сам цикл ретраев проверен вручную временной
+принудительной подменой предиката (2 гарантированных перебинда на вызов,
+2000 вызовов) — не хёрдится и не паникует.
 
 ## Симптом
 
