@@ -131,6 +131,7 @@ function XMLHttpRequest() {
     this._aborted         = false;
     this._sent            = false;
     this._overrideMime    = '';
+    this._asyncHandle     = null; // BUG-980: in-flight `_lumen_fetch_async_*` handle, if any
 }
 
 // XHR §4.1 — ReadyState constants
@@ -327,107 +328,174 @@ XMLHttpRequest.prototype.send = function(body) {
     // no page (--dump-*, SVG rasterization, the crate's own unit tests).
     var _rtStart = (typeof performance !== 'undefined' && performance) ? performance.now() : 0;
 
-    // Execute synchronously using the same native fetch bindings.
-    var ok;
-    try {
-        if (hasBody) {
-            var bodyBytes, contentType;
-            if (body instanceof FormData) {
-                var boundary = '----LumenXhrBoundary' + Math.random().toString(36).slice(2, 10).toUpperCase();
-                var mbytes = body._toMultipart(boundary);
-                bodyBytes    = Array.from(mbytes);
-                contentType  = 'multipart/form-data; boundary=' + boundary;
-            } else if (typeof body === 'string') {
-                bodyBytes   = Array.from(new TextEncoder().encode(body));
-                contentType = 'text/plain;charset=UTF-8';
-            } else if (body instanceof URLSearchParams) {
-                bodyBytes   = Array.from(new TextEncoder().encode(body.toString()));
-                contentType = 'application/x-www-form-urlencoded;charset=UTF-8';
-            } else if (body instanceof Uint8Array) {
-                bodyBytes   = Array.from(body);
-                contentType = 'application/octet-stream';
-            } else if (body instanceof ArrayBuffer) {
-                bodyBytes   = Array.from(new Uint8Array(body));
-                contentType = 'application/octet-stream';
-            } else if (body instanceof Blob) {
-                // Read blob data via text() synchronous simulation.
-                bodyBytes   = Array.from(new TextEncoder().encode(''));
-                contentType = body.type || 'application/octet-stream';
-            } else {
-                bodyBytes   = Array.from(new TextEncoder().encode(String(body)));
-                contentType = 'text/plain;charset=UTF-8';
-            }
-            // Caller-specified Content-Type overrides.
-            if (self._reqHeaders['content-type']) {
-                contentType = self._reqHeaders['content-type'];
-            }
-            ok = _lumen_fetch_sync_with_body(self._url, self._method, contentType, bodyBytes, xhrHeaders);
+    var bodyBytes = [], contentType = '';
+    if (hasBody) {
+        if (body instanceof FormData) {
+            var boundary = '----LumenXhrBoundary' + Math.random().toString(36).slice(2, 10).toUpperCase();
+            var mbytes = body._toMultipart(boundary);
+            bodyBytes    = Array.from(mbytes);
+            contentType  = 'multipart/form-data; boundary=' + boundary;
+        } else if (typeof body === 'string') {
+            bodyBytes   = Array.from(new TextEncoder().encode(body));
+            contentType = 'text/plain;charset=UTF-8';
+        } else if (body instanceof URLSearchParams) {
+            bodyBytes   = Array.from(new TextEncoder().encode(body.toString()));
+            contentType = 'application/x-www-form-urlencoded;charset=UTF-8';
+        } else if (body instanceof Uint8Array) {
+            bodyBytes   = Array.from(body);
+            contentType = 'application/octet-stream';
+        } else if (body instanceof ArrayBuffer) {
+            bodyBytes   = Array.from(new Uint8Array(body));
+            contentType = 'application/octet-stream';
+        } else if (body instanceof Blob) {
+            // Read blob data via text() synchronous simulation.
+            bodyBytes   = Array.from(new TextEncoder().encode(''));
+            contentType = body.type || 'application/octet-stream';
         } else {
-            ok = _lumen_fetch_sync(self._url, self._method, xhrHeaders);
+            bodyBytes   = Array.from(new TextEncoder().encode(String(body)));
+            contentType = 'text/plain;charset=UTF-8';
         }
-    } catch(e) {
+        // Caller-specified Content-Type overrides.
+        if (self._reqHeaders['content-type']) {
+            contentType = self._reqHeaders['content-type'];
+        }
+    }
+
+    function fail(eventType) {
         self._sent = false;
         self._setReadyState(4);
-        self._fireProgress('error', 0, 0);
+        self._fireProgress(eventType, 0, 0);
         self._fireProgress('loadend', 0, 0);
-        return;
     }
 
-    if (self._aborted) {
-        self._setReadyState(4);
-        self._fireProgress('abort', 0, 0);
-        self._fireProgress('loadend', 0, 0);
-        return;
-    }
+    function commitResponse() {
+        self.status     = _lumen_fetch_get_status();
+        self.statusText = _lumen_fetch_get_status_text();
+        self.responseURL = self._url;
+        self._parseResponseHeaders(_lumen_fetch_get_headers());
 
-    if (!ok) {
-        // GAP-CSPENF срез 10: XHR shares the sync `_lumen_fetch_sync*` bindings
-        // with fetch()'s non-async path, so a `connect-src` block surfaces the
-        // same way — via the side-channel getter, not a distinct `ok` value.
-        if (typeof _lumen_fire_connect_src_violation === 'function' &&
-            typeof _lumen_fetch_last_csp_block === 'function') {
-            _lumen_fire_connect_src_violation(_lumen_fetch_last_csp_block());
+        self._setReadyState(2); // HEADERS_RECEIVED
+        self._setReadyState(3); // LOADING
+
+        var bodyLen = _lumen_fetch_body_length();
+        var rawBody = bodyLen > 0 ? _lumen_fetch_body_chunk(0, bodyLen) : [];
+        self._buildResponse(rawBody);
+
+        // BUG-839: Resource Timing entry with initiatorType 'xmlhttprequest'.
+        // Recorded here rather than in the shared native bridge because `xhr.rs` is
+        // its own rt.eval — a fix inside WEB_API_SHIM never reaches it (BUG-780).
+        if (typeof _lumen_record_resource_timing === 'function') {
+            _lumen_record_resource_timing(self._url, 'xmlhttprequest', _rtStart,
+                ((typeof performance !== 'undefined' && performance) ? performance.now() : 0) - _rtStart,
+                { status: self.status, decodedBodySize: bodyLen, encodedBodySize: bodyLen,
+                  contentType: self.getResponseHeader('content-type') || '' });
         }
-        self._sent = false;
-        self._setReadyState(4);
-        self._fireProgress('error', 0, 0);
-        self._fireProgress('loadend', 0, 0);
+
+        self._setReadyState(4); // DONE
+        self._fireProgress('progress', bodyLen, bodyLen);
+        self._fireProgress('load', bodyLen, bodyLen);
+        self._fireProgress('loadend', bodyLen, bodyLen);
+    }
+
+    // XHR §4.5.1: true synchronous mode (`async === false`, only reachable when
+    // no policy disabled it above) still has to block the calling thread by
+    // spec — keep the original blocking `_lumen_fetch_sync*` bindings for it.
+    if (self._async === false) {
+        var ok;
+        try {
+            ok = hasBody
+                ? _lumen_fetch_sync_with_body(self._url, self._method, contentType, bodyBytes, xhrHeaders)
+                : _lumen_fetch_sync(self._url, self._method, xhrHeaders);
+        } catch (e) {
+            fail('error');
+            return;
+        }
+
+        if (self._aborted) {
+            self._setReadyState(4);
+            self._fireProgress('abort', 0, 0);
+            self._fireProgress('loadend', 0, 0);
+            return;
+        }
+
+        if (!ok) {
+            // GAP-CSPENF срез 10: sync XHR shares `_lumen_fetch_sync*` with
+            // fetch()'s non-async path, so a `connect-src` block surfaces the
+            // same way — via the side-channel getter, not a distinct `ok` value.
+            if (typeof _lumen_fire_connect_src_violation === 'function' &&
+                typeof _lumen_fetch_last_csp_block === 'function') {
+                _lumen_fire_connect_src_violation(_lumen_fetch_last_csp_block());
+            }
+            fail('error');
+            return;
+        }
+
+        commitResponse();
         return;
     }
 
-    // Capture response metadata.
-    self.status     = _lumen_fetch_get_status();
-    self.statusText = _lumen_fetch_get_status_text();
-    self.responseURL = self._url;
-    self._parseResponseHeaders(_lumen_fetch_get_headers());
-
-    self._setReadyState(2); // HEADERS_RECEIVED
-    self._setReadyState(3); // LOADING
-
-    // Read body.
-    var bodyLen = _lumen_fetch_body_length();
-    var rawBody = bodyLen > 0 ? _lumen_fetch_body_chunk(0, bodyLen) : [];
-    self._buildResponse(rawBody);
-
-    // BUG-839: Resource Timing entry with initiatorType 'xmlhttprequest'.
-    // Recorded here rather than in the shared native bridge because `xhr.rs` is
-    // its own rt.eval — a fix inside WEB_API_SHIM never reaches it (BUG-780).
-    if (typeof _lumen_record_resource_timing === 'function') {
-        _lumen_record_resource_timing(self._url, 'xmlhttprequest', _rtStart,
-            ((typeof performance !== 'undefined' && performance) ? performance.now() : 0) - _rtStart,
-            { status: self.status, decodedBodySize: bodyLen, encodedBodySize: bodyLen,
-              contentType: self.getResponseHeader('content-type') || '' });
+    // BUG-980: async requests (the default, and the only mode most WPT/page
+    // code uses) must return control to caller JS *before* any network I/O —
+    // a handler assigned right after `send()` (the idiom XHR §4.5.6 itself
+    // demonstrates) otherwise attaches to a request that already ran and
+    // discarded every event synchronously inside this call. This mirrors the
+    // `fetch()` async path (`web_api_shim_mid_b2.js`, `_lumen_fetch_async_*`
+    // bridges + a setTimeout poll loop) instead of blocking here.
+    var handle = _lumen_fetch_async_start(self._url, self._method, contentType, bodyBytes, hasBody, xhrHeaders);
+    if (!handle) {
+        fail('error');
+        return;
     }
+    self._asyncHandle = handle;
 
-    self._setReadyState(4); // DONE
-    self._fireProgress('progress', bodyLen, bodyLen);
-    self._fireProgress('load', bodyLen, bodyLen);
-    self._fireProgress('loadend', bodyLen, bodyLen);
+    function poll() {
+        // abort() already fired the user-visible events and reset state
+        // synchronously (XHR §4.5.4) — just release the native handle.
+        if (self._aborted) {
+            _lumen_fetch_async_free(handle);
+            self._asyncHandle = null;
+            return;
+        }
+        var st = _lumen_fetch_async_poll(handle);
+        if (st === 0) { setTimeout(poll, 1); return; }
+        self._asyncHandle = null;
+
+        if (st === 4) {
+            if (typeof _lumen_fire_connect_src_violation === 'function') {
+                _lumen_fire_connect_src_violation(_lumen_fetch_async_csp_info(handle));
+            }
+            _lumen_fetch_async_free(handle);
+            fail('error');
+            return;
+        }
+        if (st === 2 || st === 3) {
+            _lumen_fetch_async_free(handle);
+            fail(st === 3 ? 'abort' : 'error');
+            return;
+        }
+
+        // st === 1: ok
+        if (!_lumen_fetch_async_commit(handle)) {
+            _lumen_fetch_async_free(handle);
+            fail('error');
+            return;
+        }
+        _lumen_fetch_async_free(handle);
+        commitResponse();
+    }
+    setTimeout(poll, 0);
 };
 
 // ── XHR §4.5 — abort() ─────────────────────────────────────────────────────
 XMLHttpRequest.prototype.abort = function() {
     this._aborted = true;
+    // BUG-980: an in-flight async send() runs on a background thread — flip its
+    // AbortToken so the socket actually tears down instead of running to
+    // completion unseen. The poll loop (`send()`) frees the handle itself once
+    // it observes `_aborted`.
+    if (this._asyncHandle && typeof _lumen_fetch_async_abort === 'function') {
+        _lumen_fetch_async_abort(this._asyncHandle);
+    }
     if (this.readyState === 0 || this.readyState === 4) return;
     this.status     = 0;
     this.statusText = '';
@@ -978,6 +1046,60 @@ mod tests {
                  x.send(); \
                  x.status === 200 && observed !== null && observed.length === 1 && \
                  observed[0].type === 'document-policy-violation' && observed[0].body.featureId === 'sync-xhr'"
+            )
+            .unwrap(),
+            bool_true()
+        );
+    }
+
+    // ── BUG-980: async send() must not run the whole exchange inline ──────────
+
+    /// A handler assigned *after* `send()` returns (XHR §4.5.6's own idiom, and
+    /// the shape most WPT `async_test`s use) must still see every readyState
+    /// transition. Before the fix, `send()` drove the whole request/response
+    /// cycle synchronously inside the call itself, so by the time this line ran
+    /// the request was already `DONE` and the handler was attached to a dead
+    /// object — it was simply never invoked again.
+    #[test]
+    fn xhr_send_is_async_handler_assigned_after_send_still_fires() {
+        let r = rt_with_policy(None, None);
+        r.eval(
+            "var x = new XMLHttpRequest(); \
+             globalThis.__states = []; \
+             x.open('GET', '/data'); \
+             x.send(); \
+             x.onreadystatechange = function() { __states.push(x.readyState); };",
+        )
+        .unwrap();
+
+        for _ in 0..400 {
+            let _ = r.eval("_lumen_tick_timers();");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if r.eval("x.readyState").unwrap() == JsValue::Number(4.0) {
+                break;
+            }
+        }
+
+        assert_eq!(r.eval("x.readyState").unwrap(), JsValue::Number(4.0));
+        assert_eq!(r.eval("x.status").unwrap(), JsValue::Number(200.0));
+        assert_eq!(
+            r.eval("__states.indexOf(4) !== -1").unwrap(),
+            bool_true()
+        );
+    }
+
+    /// `send()` itself must return before the request completes — the defining
+    /// symptom of BUG-980 was `readyState` already being `4` on the very next
+    /// line after `send()`.
+    #[test]
+    fn xhr_send_returns_before_request_completes() {
+        let r = rt_with_policy(None, None);
+        assert_eq!(
+            r.eval(
+                "var x = new XMLHttpRequest(); \
+                 x.open('GET', '/data'); \
+                 x.send(); \
+                 x.readyState !== 4"
             )
             .unwrap(),
             bool_true()
