@@ -2,12 +2,20 @@
 """Generate assets/chrome/chrome.html from the frozen design reference.
 
 Strips everything the CC track's "Not the product" list excludes from the
-engine-rendered chrome (docs/tasks/p1-css-chrome.md §2): the demo control
-bar (7 layout variants + drag), the info panel, the `[data-tip]` developer
-tooltip layer, the QA/tester panel, and the Google Fonts `<link>`s (Inter
-and JetBrains Mono are already bundled in assets/fonts/, DS-4). The
+engine-rendered chrome (docs/tasks/p1-css-chrome.md §2): the `[data-tip]`
+developer tooltip layer, the QA/tester panel, and the Google Fonts `<link>`s
+(Inter and JetBrains Mono are already bundled in assets/fonts/, DS-4). The
 `<script>` block is also removed — all ~40 interactions move to Rust in
 later CC slices (CC-5/CC-6/CC-7).
+
+CC-18 (2026-09-19): the demo control bar (7 layout variants) and info panel
+are no longer stripped — the floating control panel ships as a real,
+engine-rendered part of the product chrome (user decision 2026-07-28,
+`ROADMAP.md` CC-18). `setDemoVariant`/`toggleMini`/`toggleInfo`/`setLayout`/
+`setProfile`/`showView` on it get the same `data-action` treatment as every
+other surviving `onclick` below; dragging the panel by its header and the
+`toggleTheme()`/`toggleQa()` buttons are not wired yet (see
+`ChromeAction::ToggleTheme`/`ToggleQaPanel` in `dispatch_chrome_action`).
 
 The reference itself (docs/design/lumen-v3_3.html) is the frozen source of
 truth and is never edited here; a design change means a new version of the
@@ -83,15 +91,6 @@ def strip_google_fonts(html: str) -> str:
     return html
 
 
-def strip_demo_css(html: str) -> str:
-    return _strip_between(
-        html,
-        r"/\* =+\n\s*2\. ПАНЕЛЬ УПРАВЛЕНИЯ ДЕМО",
-        r"/\* =+\n\s*3\. ОКНО LUMEN",
-        label="demo CSS block",
-    )
-
-
 def strip_tooltip_css(html: str) -> str:
     return _strip_between(
         html,
@@ -108,16 +107,6 @@ def strip_qa_css(html: str) -> str:
         r"</style>",
         label="QA CSS block",
     )
-
-
-def strip_demo_bar_html(html: str) -> str:
-    html = _strip_balanced_element(
-        html, r'<div class="demo-bar"', "div", label="demo-bar element"
-    )
-    html = _strip_balanced_element(
-        html, r'<div class="info-panel"', "div", label="info-panel element"
-    )
-    return html
 
 
 def strip_qa_panel_html(html: str) -> str:
@@ -233,6 +222,43 @@ ONCLICK_EXACT_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
     "setProfile('work')": ("set-profile", {"data-profile": "work"}),
     "setProfile('anonymous')": ("set-profile", {"data-profile": "anonymous"}),
     "setProfile('guest')": ("set-profile", {"data-profile": "guest"}),
+    # CC-18: floating control panel (`#demoBar`). The panel's own profile
+    # buttons pass `this` (`setProfile('personal',this)`) where the toolbar
+    # avatar popover's don't — same action, distinct onclick body, so a
+    # second dict entry rather than reusing the four above. Unlike the
+    # popover's `.pm-item` (no attribute of its own — the slug lives only in
+    # the onclick call), these buttons already carry their own
+    # `data-profile`/`data-layout`/`data-demo-variant` natively (the design's
+    # own JS reads it back via `getAttribute`) — an empty extra dict, or
+    # `add_data_actions` would duplicate the attribute.
+    "setProfile('personal',this)": ("set-profile", {}),
+    "setProfile('work',this)": ("set-profile", {}),
+    "setProfile('anonymous',this)": ("set-profile", {}),
+    "setProfile('guest',this)": ("set-profile", {}),
+    "setLayout('vertical',this)": ("set-layout", {}),
+    "setLayout('horizontal',this)": ("set-layout", {}),
+    "setDemoVariant('card')": ("set-demo-variant", {}),
+    "setDemoVariant('compact')": ("set-demo-variant", {}),
+    "setDemoVariant('bar')": ("set-demo-variant", {}),
+    "setDemoVariant('dock')": ("set-demo-variant", {}),
+    "setDemoVariant('grid')": ("set-demo-variant", {}),
+    "setDemoVariant('wide')": ("set-demo-variant", {}),
+    "setDemoVariant('mini')": ("set-demo-variant", {}),
+    "toggleMini()": ("toggle-demo-mini", {}),
+    "toggleInfo()": ("toggle-demo-info", {}),
+    # No backing state yet (`dispatch_chrome_action` leaves both as
+    # documented no-ops) — theme is still OS-`prefers-color-scheme`-only
+    # (no UI override plumbed through `self.dark_mode`, which also drives
+    # page content's `@media (prefers-color-scheme)`), and the QA/tester
+    # panel this button targets is `strip_qa_panel_html`-excluded from the
+    # product build entirely, same as `toggleQa()` was already dead in the
+    # `showView('page');toggleQa()` compound handler above.
+    "toggleTheme()": ("toggle-theme", {}),
+    "toggleQa()": ("toggle-qa-panel", {}),
+    "showView('newtab')": ("new-tab", {}),
+    "showView('page')": ("show-view", {"data-view": "page"}),
+    "showView('history')": ("show-view", {"data-view": "history"}),
+    "showView('bookmarks')": ("show-view", {"data-view": "bookmarks"}),
 }
 
 # A handful of onclick bodies carry no real signal (JS-only bubbling guard,
@@ -422,10 +448,8 @@ def generate() -> str:
     html = SOURCE.read_text(encoding="utf-8")
 
     html = strip_google_fonts(html)
-    html = strip_demo_css(html)
     html = strip_tooltip_css(html)
     html = strip_qa_css(html)
-    html = strip_demo_bar_html(html)
     html = strip_qa_panel_html(html)
     html = strip_script(html)
     html = strip_tooltip_attrs(html)

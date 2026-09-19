@@ -1067,6 +1067,13 @@ pub(crate) struct Lumen {
     /// DS-14 scope: only the active pointer and visual signature (avatar,
     /// chrome accent) are wired — per-profile data isolation is DS-16.
     pub(crate) profiles: lumen_storage::ProfileRegistry,
+    /// Floating control panel (CC-18, `#demoBar`): active layout form, and
+    /// whether the Мини pill is expanded/`#infoPanel` is open. No on-disk
+    /// persistence yet — resets to [`lumen_chrome::ControlPanelShape::Card`]
+    /// every launch, same as every other chrome-only UI flag here.
+    pub(crate) control_panel_shape: lumen_chrome::ControlPanelShape,
+    pub(crate) control_panel_mini_open: bool,
+    pub(crate) control_panel_info_open: bool,
     /// Shields floating panel state (7C.4).
     ///
     /// Shows blocked-request counts per domain, and lets the user toggle

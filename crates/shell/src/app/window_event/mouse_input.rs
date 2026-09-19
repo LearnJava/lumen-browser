@@ -503,10 +503,7 @@ impl Lumen {
                                 // fresh in-memory jar so no cookie
                                 // survives a previous Anonymous session.
                                 if self.active_profile_is_anonymous() {
-                                    self.anonymous_cookie_jar = Arc::new(
-                                        lumen_storage::CookieJar::open_in_memory()
-                                            .expect("anonymous_cookie_jar reset"),
-                                    );
+                                    self.reset_anonymous_cookie_jar();
                                 }
                             }
                             self.profile_menu.visible = false;

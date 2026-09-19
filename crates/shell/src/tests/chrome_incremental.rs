@@ -1933,3 +1933,38 @@ fn bug405_slice57_fold_overlay_with_reuse_net_win_on_real_order() {
         reuse_summary.min_ms,
     );
 }
+
+/// CC-18/BUG-1059: `#demoBar` (`position:fixed; left:18px; bottom:18px`)
+/// gets a real, on-screen-sized layout box — the bug is in paint
+/// compositing (`build_chrome_overlay_strips` clips it away because it sits
+/// inside `chrome_page_host_rect` by design), not in layout. This pins the
+/// half that already works, so a future regression in the OTHER half
+/// doesn't get blamed on this one by a debugger re-deriving both from
+/// scratch.
+#[test]
+fn bug1059_demo_bar_gets_a_correctly_positioned_layout_box() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let model = lumen_chrome::ChromeModel::default();
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let demo_bar = doc.find_by_id(lumen_chrome::ids::DEMO_BAR).expect("has #demoBar");
+    let b = lumen_layout::find_box_by_node(&layout, demo_bar).expect("#demoBar must get a layout box");
+    assert_eq!(
+        b.style.display,
+        lumen_layout::Display::Flex,
+        "the default Card shape is a flex column"
+    );
+    assert!(b.rect.width > 0.0 && b.rect.height > 0.0, "box must have real size: {:?}", b.rect);
+    assert!(
+        b.rect.x >= 0.0
+            && b.rect.y >= 0.0
+            && b.rect.x + b.rect.width <= viewport.width
+            && b.rect.y + b.rect.height <= viewport.height,
+        "box must lie fully inside the viewport (bottom-left corner): {:?}",
+        b.rect,
+    );
+}

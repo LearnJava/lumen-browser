@@ -622,6 +622,11 @@ impl Lumen {
             dark_theme: self.dark_mode,
             layout_vertical: self.vertical_tabs.visible,
             profile_slug,
+            control_panel: lumen_chrome::ChromeControlPanelModel {
+                shape: self.control_panel_shape,
+                mini_open: self.control_panel_mini_open,
+                info_open: self.control_panel_info_open,
+            },
             tabs,
             workspaces,
             omnibox: lumen_chrome::OmniboxModel {
@@ -818,6 +823,18 @@ impl Lumen {
     /// sidebar. A handful of actions remain permanent no-ops for reasons
     /// specific to each — see the comment on the final match arm below
     /// (BUG-426).
+    ///
+    /// DS-16: resets [`Self::anonymous_cookie_jar`] to a fresh in-memory jar
+    /// — shared by both real sites that switch *into* the Anonymous profile
+    /// (the legacy `#profileMenu` overlay's `MouseInput` handler and
+    /// `ChromeAction::SetProfile` below, CC-18) so a switch through either
+    /// one never carries a cookie over from a previous Anonymous run.
+    #[allow(clippy::expect_used)] // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn reset_anonymous_cookie_jar(&mut self) {
+        self.anonymous_cookie_jar =
+            Arc::new(lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar reset"));
+    }
+
     pub(crate) fn dispatch_chrome_action(
         &mut self,
         nid: NodeId,
@@ -1266,23 +1283,105 @@ impl Lumen {
                 self.settings_panel.toggle_fingerprint_mode();
                 self.relayout_chrome_host();
             }
-            // BUG-426 reinvestigation (2026-08-01): all six of these were
-            // filed together as "sit in one empty branch" but each is a
-            // no-op for its own, unrelated reason — none is a small wiring
-            // gap like BUG-419/420/421 turned out to be.
-            //
-            // `SetProfile`: `#profileMenu`/`.pm-item` in the chrome asset are
-            // permanently unreachable, not just unwired — CC-15-1
-            // (`docs/tasks/p1-css-chrome.md`) deliberately kept the profile
-            // switcher a legacy overlay (`panels::profile_menu::build_panel`,
-            // painted and hit-tested outside `chrome_doc` entirely, see the
-            // `WindowEvent::MouseInput` branch above `ToggleProfileMenu`'s
-            // callers) rather than migrate it to `ChromeModel`/`bind_model`;
-            // nothing ever sets `#profileMenu`'s `.open` class, so it never
-            // gets a layout box for the engine chrome to hit-test in the
-            // first place. `ChromeModel::profile_slug` already reflects
-            // whatever profile the legacy path activates, same as CC-15-1's
-            // rationale describes.
+            // CC-18: `#demoBar`'s own profile buttons (`.demo-group
+            // [data-profile]`) — a second, `chrome_doc`-reachable site for
+            // the exact same switch `WindowEvent::MouseInput`'s
+            // `ProfileMenuHit::SwitchTo` already performs for the legacy
+            // `#profileMenu` overlay (CC-15-1 kept that one a legacy overlay
+            // deliberately; this button lives inside the floating panel,
+            // which CC-18 wires through `chrome_doc` instead). Slug → id
+            // goes through `DEFAULT_PROFILES`' name, same lookup
+            // `ChromeModel::profile_slug` does in reverse just above.
+            ChromeAction::SetProfile => {
+                if let Some(slug) = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-profile"))
+                    && let Some((name, ..)) =
+                        panels::profile_menu::DEFAULT_PROFILES.iter().find(|(_, s, _)| *s == slug)
+                    && let Some(id) =
+                        self.profile_menu.entries.iter().find(|e| e.name == *name).map(|e| e.id)
+                    && self.profiles.set_active(Some(id)).is_ok()
+                {
+                    self.profile_menu.set_active(Some(id));
+                    // DS-16: Anonymous is ephemeral — mirrors the legacy
+                    // overlay's own reset so switching via either site never
+                    // carries a cookie over from a previous Anonymous run.
+                    if self.active_profile_is_anonymous() {
+                        self.reset_anonymous_cookie_jar();
+                    }
+                    self.relayout_chrome_host();
+                }
+            }
+            // CC-18: `#demoSwitch` — the floating panel's own 7-shape
+            // switcher (`body[data-demo]` picks the CSS form,
+            // `bind_control_panel` syncs `.active`).
+            ChromeAction::SetDemoVariant => {
+                if let Some(shape) = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-demo-variant"))
+                    .and_then(lumen_chrome::ControlPanelShape::from_attr_value)
+                {
+                    self.control_panel_shape = shape;
+                    // Reference JS (`setDemoVariant`): switching to any shape
+                    // other than "mini" also collapses the pill back down.
+                    if shape != lumen_chrome::ControlPanelShape::Mini {
+                        self.control_panel_mini_open = false;
+                    }
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ToggleDemoMini => {
+                self.control_panel_mini_open = !self.control_panel_mini_open;
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleDemoInfo => {
+                self.control_panel_info_open = !self.control_panel_info_open;
+                self.relayout_chrome_host();
+            }
+            // CC-18: `.demo-group [data-layout]` — real backing state
+            // (`self.vertical_tabs.visible`, already mirrored one-way into
+            // `ChromeModel::layout_vertical`) that BUG-421 found had no
+            // working *setter* anywhere in the UI (the shared `ToggleSwitch`
+            // action below can't tell which of six toggles fired). Unlike
+            // that shared toggle, `setLayout` carries the target value
+            // directly, so no discriminator is needed.
+            ChromeAction::SetLayout => {
+                if let Some(layout) = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-layout"))
+                {
+                    self.vertical_tabs.visible = layout == "vertical";
+                    self.relayout_chrome_host();
+                }
+            }
+            // CC-18: the floating panel's "Фокус" button is a new
+            // `chrome_doc`-reachable site for the same flag
+            // `KeyCommand::ToggleFocusMode` already flips — real state
+            // (`self.focus.active`), so the legacy ring widget
+            // (`panels::focus_panel`, still the only thing that paints it)
+            // now genuinely appears/disappears from here too. The visual
+            // cutover to the frozen design's own `.focus-timer` pill
+            // (BUG-426) stays unimplemented: `body` never gets a
+            // `focus-mode` class from this action, so nothing paints out of
+            // `chrome_doc` itself yet — a follow-up, not this slice.
+            ChromeAction::ToggleFocus => {
+                self.focus.toggle(panels::focus_panel::DEFAULT_POMODORO_MIN);
+                if self.focus.active {
+                    let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                    self.focus.tick(now_ms);
+                }
+                self.relayout_chrome_host();
+            }
+            // BUG-426 reinvestigation (2026-08-01): these were filed
+            // together as "sit in one empty branch" but each is a no-op for
+            // its own, unrelated reason — none is a small wiring gap like
+            // BUG-419/420/421 turned out to be. `SetProfile`/`ToggleFocus`
+            // used to be here too; CC-18 gave both a second,
+            // `chrome_doc`-reachable call site (the floating panel) and
+            // moved them out above.
             //
             // `ArchiveCard`: the two `.bm-card.readlater` demo cards
             // (`data-action="archive-card"`) live inside `#view-bookmarks`'s
@@ -1305,21 +1404,10 @@ impl Lumen {
             // all — no force-HTTPS setting, no extensions/QA-flag store —
             // so a click still can't resolve to anything.
             //
-            // `ToggleFocusTimer`/`ToggleFocus`: unlike the above, real
-            // backing state exists (`self.focus: FocusModePanel`) and is
-            // fully interactive already — but through a *different* legacy
-            // overlay (`panels::focus_panel::build_panel` + its own
-            // `MouseInput`/`FocusHit` hit-test, unconditionally painted
-            // whenever `self.focus.active`), not `chrome_doc`. The chrome
-            // asset's `.focus-timer` pill is a simpler visual (icon + `MM:SS`
-            // + two buttons) than the legacy widget's card-with-progress-ring
-            // — `body` never gets a `focus-mode` class, so the pill has no
-            // layout box today. Wiring these two actions for real would mean
-            // either drawing both widgets at once (visibly duplicated) or
-            // retiring the ring animation to cut over to the frozen design's
-            // pill, the same class of legacy-overlay-vs-engine-chrome call
-            // CC-15-1 already made for the profile switcher — a follow-up
-            // task, not a same-shape fix as this bug's other five actions.
+            // `ToggleFocusTimer`: distinct from `ToggleFocus` above — no
+            // `#demoBar` button reaches it (CC-18's panel has no play/pause
+            // control), and it's still only wired from the legacy
+            // `panels::focus_panel` overlay's own hit-test.
             //
             // `SetDevtoolsTab`: `.dt-tab`'s four static rows (Elements /
             // Console / Network / Sources, `data-dt-tab="…"`) mock a
@@ -1327,12 +1415,26 @@ impl Lumen {
             // `self.devtools_console: ConsolePanel` is a single JS-console
             // view with no per-tab data behind Elements/Network/Sources, so
             // there is nothing to switch between.
-            ChromeAction::SetProfile
-            | ChromeAction::ArchiveCard
+            //
+            // `ToggleTheme` (CC-18, `#themeBtn`): no backing state exists —
+            // `self.dark_mode` mirrors the OS `prefers-color-scheme` only and
+            // also drives page content's own `@media (prefers-color-scheme)`
+            // (`crates/shell/src/stylesheets.rs::screen_media_context`), so a
+            // UI override needs new plumbing through that whole path, not
+            // just a chrome-local flag. Follow-up, not this slice.
+            //
+            // `ToggleQaPanel` (CC-18, `#demoBar`'s "QA-панель" button): the
+            // QA/tester panel it targets is `strip_qa_panel_html`-excluded
+            // from the product build entirely (same exclusion that already
+            // made the identical `toggleQa()` call dead in the
+            // `showView('page');toggleQa()` compound handler elsewhere) —
+            // permanently nothing to switch to, not a remainder.
+            ChromeAction::ArchiveCard
             | ChromeAction::ToggleSwitch
             | ChromeAction::ToggleFocusTimer
-            | ChromeAction::ToggleFocus
-            | ChromeAction::SetDevtoolsTab => {}
+            | ChromeAction::SetDevtoolsTab
+            | ChromeAction::ToggleTheme
+            | ChromeAction::ToggleQaPanel => {}
         }
     }
 

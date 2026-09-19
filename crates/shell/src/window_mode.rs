@@ -443,6 +443,9 @@ pub(crate) fn run_window_mode(
             pm
         },
         profiles: profiles_registry,
+        control_panel_shape: lumen_chrome::ControlPanelShape::default(),
+        control_panel_mini_open: false,
+        control_panel_info_open: false,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
