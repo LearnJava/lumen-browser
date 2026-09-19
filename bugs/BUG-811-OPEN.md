@@ -1877,3 +1877,72 @@ lumen-shell --features v8 --bin lumen` (1923 passed, 0 failed) без
 регрессий; `cargo clippy -p lumen-network --all-targets -- -D warnings` и
 `cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings`
 чисто.
+
+## Срез 33 (2026-09-19, `p6-gap-cspenf-srez33`) — директива `navigate-to` против перехода по `<a href>`
+
+После среза 32 `navigate-to` осталась последней директивой `CspDirective` с
+парсингом (`crates/network/src/csp.rs:473`), но без единой точки применения:
+`grep -rn "NavigateTo\|navigate_to_allowed" crates/` до этого среза давал
+ровно два совпадения — вариант перечисления и строка парсера. Политика
+`navigate-to 'none'` принималась и не мешала клику по ссылке уйти куда
+угодно.
+
+- `crates/network/src/csp.rs`: новый `CspPolicy::navigate_to_allowed`
+  (`target_url`, `self_origin`) — та же форма, что `frame_ancestor_allowed`
+  (срез 27)/`form_action_allowed` (срез 29)/`base_uri_allowed` (срез 32):
+  **без фолбэка на `default-src`**, CSP3 §6.4 относит `navigate-to` к
+  navigation directives наравне с ними; отсутствие директивы значит «не
+  ограничено». `form-action` намеренно не участвует: директивы независимы,
+  страница, объявившая одну, не ограничивает другую (отдельный тест
+  `navigate_to_is_independent_of_form_action`).
+- `crates/shell/src/csp_enforce.rs::navigate_to_blocked` — тонкая обёртка той
+  же формы, что `form_action_blocked`/`base_uri_blocked` выше в файле:
+  нераспарсившийся URL нарушением не считается (fail-open, как у каждого
+  fetch-гейта этого модуля).
+- `crates/shell/src/lumen/click.rs`: политика документа читается тем же
+  ОДНИМ заимствованием `src.document.lock()`, что уже отдаёт `href`/`target`/
+  `rel` кликнутого якоря (`csp_enforce::document_csp_policy(&doc, root)`) —
+  отдельный проход мог бы увидеть документ, изменённый скриптом между двумя
+  чтениями, тот же аргумент, по которому срез 29 считает `csp_gate` внутри
+  `prepared`-замыкания `run_form_submission`.
+- Новый приватный `Lumen::navigate_to_link_blocked(csp_gate, href)` вызывается
+  ОДИН раз — до всего дерева ветвления `_blank`/именованный фрейм/именованная
+  вкладка/фрагмент/обычный переход: все пять веток кончаются навигацией на
+  один и тот же резолвленный URL, поэтому проверка в каждой была бы пятью
+  копиями одного ответа. `href` резолвится (`self.source.resolve_href`) ДО
+  сверки с политикой — та же ловушка сырого значения атрибута, на которой
+  срез 4 сначала «fail open»-ил для `<img src>`.
+- `securitypolicyviolation` диспатчится через уже существующий
+  `route_task_js` + `PersistentJs::fire_csp_violation("navigate-to", …)` (тот
+  же путь, что `form-action` в `form_submit.rs`), и переход не происходит
+  вовсе — ни новой вкладки, ни сетевого запроса.
+
+Не тронуто этим срезом (осознанно, чтобы срез остался одной директивой против
+одной точки потребления): `<a href="javascript:…">` — код исполняется в
+кликнувшем документе и никуда не навигирует, сравнивать директиве не с чем
+(исполнение — дело `script-src`, срез 1), поэтому гейт стоит ПОСЛЕ раннего
+`return` этой ветки; навигация из JS (`location.href`/`location.assign`/
+`window.open`) и из `<meta http-equiv=refresh>` — другие точки потребления, по
+одной на срез; ссылки внутри `<iframe>` (`frame_links.rs`/`click.rs` ветка
+фрейма) — политика ребёнка, тот же разрыв, что срезы 8/22/24 закрывали
+отдельными срезами для своих директив; переход «назад/вперёд» по истории
+(`navigate-to` его не покрывает по спеке); директива `sandbox` — единственная
+оставшаяся распарсенная-но-не-применённая, но её применение требует
+интеграции с моделью sandbox-флагов `<iframe sandbox>`
+(`crates/js/src/iframe_element.rs`) и не сужается до одного среза этого
+рисунка.
+
+Тесты: +5 в `crates/network/src/csp.rs` (`navigate_to_allows_listed_host`,
+`navigate_to_none_blocks_every_target`,
+`navigate_to_self_matches_documents_own_origin`,
+`navigate_to_absent_does_not_fall_back_to_default_src`,
+`navigate_to_is_independent_of_form_action`), +5 в
+`crates/shell/src/csp_enforce.rs` (обёртка `navigate_to_blocked`: блокировка
+неперечисленной цели, пропуск перечисленной, отсутствие фолбэка на
+`default-src`, `'self'` относительно origin документа,
+`navigate_to_unparseable_url_not_blocked`).
+
+`cargo test -p lumen-network --lib` (2278 passed, 0 failed) и `cargo test -p
+lumen-shell --features v8 --bin lumen` (1928 passed, 0 failed) без регрессий;
+`cargo clippy -p lumen-network -p lumen-shell --all-targets --features v8 --
+-D warnings` чисто.
