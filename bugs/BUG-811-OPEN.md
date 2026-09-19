@@ -2430,3 +2430,51 @@ http://127.0.0.1:<port>/` показывал `"INLINE_SCRIPT_RAN"` — инла�
 
 Не покрыто этим срезом: то же, что срез 40 оставил открытым —
 `lumen-network::HttpClient`'s четыре gate'а, `report-to`, `manifest-src`.
+
+## Срез 42 (2026-09-19, `p6-gap-cspenf-srez42`) — четыре gate'а `lumen-network::HttpClient` тоже независимые политики
+
+Ровно тот пробел, что срезы 40/41 сами называли не покрытым: `connect-src`
+(`fetch()`/`XMLHttpRequest`/WebSocket/EventSource/`sendBeacon`), `worker-src`
+(`new Worker()`/`new SharedWorker()`), `object-src` (`<embed>`/`<object>`) и
+`media-src` (`<video>`/`<audio>`/`<track>`) проверялись против одного
+смёрженного `CspPolicy` — те же `document_csp_policy_combined`, что срез 40
+завёл как временный костыль именно для этих четырёх директив, потому что у
+`HttpClient` нет `&Document`/точки парсинга по месту.
+
+- [`HttpClient::{connect_src,worker_src,object_src,media_src}_policy`](../crates/network/src/lib.rs)
+  сменили тип поля с `Option<(CspPolicy, Option<Origin>, String)>` на
+  `Option<(Vec<CspPolicy>, Option<Origin>, String)>` — та же механическая
+  замена, что срез 40 уже дал `csp_enforce.rs`'s `_blocked`-функциям. Все
+  четыре `with_*_policy`-билдера и четыре `*_gate`-функции обновлены: гейт
+  блокирует, если нарушает ХОТЯ БЫ ОДНА политика из списка
+  (`policies.iter().any(...)`) — ровно CSP3 §3.4's "any policy forbids it".
+- `document_csp_policy_combined` (`crates/shell/src/csp_enforce.rs`) удалена —
+  `page_pipeline.rs`'s единственный вызов, настраивающий все четыре gate'а,
+  теперь зовёт [`document_csp_policy`] напрямую и передаёт весь `Vec<CspPolicy>`
+  каждому из четырёх `with_*_policy`.
+- `original_policy` остаётся одной склеенной строкой (не по одной на
+  политику) — то же упрощение, что CSP3 §7.8 требует текст именно
+  НАРУШЕННОЙ политики, а не всех сразу; этот пробел уже назван в doc-comment
+  [`document_csp_policy`](../crates/shell/src/csp_enforce.rs) и не тронут этим
+  срезом.
+
+Новый юнит-тест `connect_src_strict_policy_is_not_loosened_by_a_lenient_one`
+(`crates/network/src/lib.rs`) — строгий `connect-src 'none'` и лояльный
+`connect-src example.com` как два элемента `Vec`; `fetch_request` на
+`example.com` обязан остаться `CspConnectSrcBlocked`. Тот же
+"strict-is-not-loosened" рисунок, что срез 40 уже проверяет для
+`csp_enforce.rs`'s `_blocked`-функций.
+
+`cargo test -p lumen-network connect_src` (10/10, было 9), `worker_src`
+(6/6), `object_src` (5/5), `media_src` (5/5) — все без регрессий; `cargo
+clippy -p lumen-network --all-targets -- -D warnings` (чисто); `cargo build
+-p lumen-shell --profile dev-release --features v8` + `cargo clippy -p
+lumen-shell --profile dev-release --all-targets --features v8 -- -D
+warnings` (оба чисто); `cargo test -p lumen-shell --profile dev-release
+--features v8 --bin lumen csp` (91 passed, 0 failed — без изменений, этот
+срез не тронул `csp_enforce.rs`'s тестируемую логику).
+
+Не покрыто (остаток общего списка, не изменился этим срезом): `report-to`
+(Reporting API, этот движок его не разбирает), `manifest-src` (нечем
+фетчить манифест — гейтить нечего), честная per-policy `originalPolicy`
+вместо одной склеенной строки (см. выше).

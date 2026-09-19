@@ -200,10 +200,10 @@
 //! этого файла принимает `&[CspPolicy]`, блокируя при нарушении ЛЮБОЙ из
 //! них. Не мигрирован этим срезом: `lumen-network::HttpClient`'s
 //! `connect-src`/`worker-src`/`object-src`/`media-src` (`page_pipeline.rs`'s
-//! единственный вызов, который их настраивает, по-прежнему передаёт им один
-//! смёрженный [`CspPolicy`] через новый [`document_csp_policy_combined`]) —
-//! у `HttpClient` нет `&Document`/парсинга по месту, threading
-//! `Vec<CspPolicy>` через него отдельная, более широкая работа.
+//! единственный вызов, который их настраивает, по-прежнему передавал им один
+//! смёрженный `CspPolicy`) — у `HttpClient` нет `&Document`/парсинга по
+//! месту, threading `Vec<CspPolicy>` через него — отдельная, более широкая
+//! работа.
 //!
 //! Срез 41 закрыл ровно тот пробел, что срез 40 сам назвал не покрытым:
 //! несколько ОДНОИМЁННЫХ заголовков `Content-Security-Policy` ответа теперь
@@ -216,14 +216,24 @@
 //! более мягкий заголовок тихо ослаблял более строгий более ранний.
 //! `content_security_policy_header` теперь возвращает `Vec<String>` — по
 //! одному элементу на occurrence, — `Document::csp_header` хранит их тем же
-//! списком, и `document_csp_policy`/`document_csp_policy_combined` просто
-//! добавляют весь список в `parts` вместо одной строки.
+//! списком, и `document_csp_policy` просто добавляет весь список в `parts`
+//! вместо одной строки.
+//!
+//! Срез 42 (вне этого файла — `crates/network/src/lib.rs`) закрыл ровно
+//! пробел, что срез 40 сам назвал не покрытым:
+//! `HttpClient::{connect_src,worker_src,object_src,media_src}_policy`
+//! сменили тип с `Option<(CspPolicy, Option<Origin>, String)>` на
+//! `Option<(Vec<CspPolicy>, Option<Origin>, String)>`, и все четыре
+//! `*_gate`-функции блокируют, если нарушает ХОТЯ БЫ ОДНА политика из списка —
+//! тот же `policies.iter().any(...)` рисунок, что `_blocked`-функции этого
+//! файла уже дают с среза 40. `page_pipeline.rs`'s единственный вызов теперь
+//! зовёт [`document_csp_policy`] напрямую вместо удалённого
+//! `document_csp_policy_combined`.
 //!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/…
 //! — распознаётся [`CspDirective::ManifestSrc`], но манифест ничем не
 //! фетчится этим движком, гейтить нечего), `report-to` (Reporting API,
-//! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
-//! `lumen-network::HttpClient`'s четыре gate'а (см. срез 40 выше). См.
+//! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает). См.
 //! `bugs/BUG-811-OPEN.md`.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
@@ -290,24 +300,6 @@ pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(Vec<C
     let combined = parts.join("; ");
     let policies = parts.iter().map(|p| lumen_network::csp::parse_csp_header(p)).collect();
     Some((policies, combined))
-}
-
-/// Single merged policy, kept only for
-/// [`lumen_network::HttpClient`]'s `connect-src`/`worker-src`/`object-src`/
-/// `media-src` gates (`page_pipeline.rs`'s one call site that feeds them) —
-/// those still enforce header+`<meta>` as one combined policy, same
-/// simplification [`document_csp_policy`] used before срез 40. Migrating them
-/// to independent enforcement means threading `Vec<CspPolicy>` through
-/// `HttpClient`, a separate, larger change (`bugs/BUG-811-OPEN.md`).
-pub(crate) fn document_csp_policy_combined(doc: &Document, root: NodeId) -> Option<(CspPolicy, String)> {
-    let mut parts: Vec<String> = doc.csp_header().to_vec();
-    collect_meta_csp(doc, root, &mut parts);
-    if parts.is_empty() {
-        return None;
-    }
-    let combined = parts.join("; ");
-    let policy = lumen_network::csp::parse_csp_header(&combined);
-    Some((policy, combined))
 }
 
 /// `true`, если `script-src` (или `default-src`) документа запрещает

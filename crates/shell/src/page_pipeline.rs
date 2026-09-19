@@ -763,30 +763,30 @@ pub(crate) fn parse_and_layout(
             // `connect-src` (or `default-src`) — WebSocket/EventSource share this
             // `HttpClient` but are not gated here, that's a separate directive
             // (`connect-src` covers them too per CSP3 §6.7.2, left for a later срез).
-            // GAP-CSPENF срез 13: same merged document policy also gates
+            // GAP-CSPENF срез 13: same document policies also gate
             // `new Worker(url)`/`new SharedWorker(url)`'s classic script fetch
             // against `worker-src` (or `default-src`) — `Worker`/`SharedWorker`
             // share this `HttpClient` the same way WebSocket/EventSource/
             // sendBeacon do (срезы 11/12), each checked against its own directive.
-            // GAP-CSPENF срез 16: same merged document policy also gates
+            // GAP-CSPENF срез 16: same document policies also gate
             // `<embed src>`/`<object data>` against `object-src` (or
             // `default-src`) — the JS shim's `_lumen_check_object_src` reads
             // this via `check_object_src`, same one-`HttpClient`-per-document
             // approach as connect-src/worker-src above.
             let root = doc.root();
-            if let Some((policy, original_policy)) = crate::csp_enforce::document_csp_policy_combined(&doc, root) {
+            if let Some((policies, original_policy)) = crate::csp_enforce::document_csp_policy(&doc, root) {
                 let self_origin = base.origin();
                 client = client
-                    .with_connect_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
-                    .with_worker_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
-                    .with_object_src_policy(policy.clone(), self_origin.clone(), original_policy.clone())
-                    // GAP-CSPENF срез 17: and the same policy gates
+                    .with_connect_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    .with_worker_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    .with_object_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    // GAP-CSPENF срез 17: and the same policies gate
                     // `<video src>`/`<audio src>`/`<track src>` against
                     // `media-src` (or `default-src`) — the JS media shims'
                     // `_lumen_check_media_src` reads this via `check_media_src`,
                     // same one-`HttpClient`-per-document approach as the three
                     // gates above.
-                    .with_media_src_policy(policy, self_origin, original_policy);
+                    .with_media_src_policy(policies, self_origin, original_policy);
             }
             // GAP-POLICYREPORT (BUG-953): attach the precomputed sync-xhr
             // disposition regardless of whether either header was present —
