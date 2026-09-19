@@ -256,6 +256,9 @@ mod v8_bug612_longdesc_reflection;
 mod v8_bug606_legacy_noop_apis;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1057_document_all_dda;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug607_document_color_attrs;
 
 #[cfg(feature = "v8-backend")]

@@ -100,6 +100,16 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Windows MSVC: use_custom_libcxx must NOT be enabled (MSVC uses its own CRT).
 v8 = { version = "150.1.0", optional = true, default-features = false }
 
+[build-dependencies]
+# Provisional: compiles the single C++ translation unit `cpp/undetectable.cc`,
+# Lumen's local binding for `v8::ObjectTemplate::MarkAsUndetectable()`
+# (GAP-DOCALLDDA / BUG-1057 — `document.all`'s `[[IsHTMLDDA]]` slot).
+# Trait-anchor: invoking the host C++ toolchain with the right target/flags;
+# `cc` is what the whole ecosystem (including the `v8` crate itself) uses for it.
+# Graduation criterion: removed outright once denoland/rusty_v8#2078 ships in a
+# published `v8` release — the wrapper then comes from the crate itself.
+cc = "1.2"
+
 [features]
 # Реальный WebGPU-бэкенд (U-4c, Stage 1): включает wgpu-устройство в lumen-paint и
 # регистрирует нативы `_lumen_webgpu_*`, через которые JS-шим navigator.gpu получает

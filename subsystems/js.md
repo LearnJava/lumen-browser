@@ -23,6 +23,19 @@ the time — read dates.
 
 ## Done
 
+- **`document.all` carries the real `[[IsHTMLDDA]]` slot ([BUG-1057](../bugs/BUG-1057-FIXED.md),
+  GAP-DOCALLDDA, P1, 2026-09-19).** `typeof document.all === 'undefined'`, falsy, `== null`/`==
+  undefined`, yet `!== null` and a live collection under the hood (`length`, indices, `item()`,
+  `namedItem()`, named access), plus HTML's `[[Call]]` (`document.all('id')` ≡ `namedItem`). The two
+  V8 primitives it needs — `ObjectTemplate::MarkAsUndetectable` and the mandatory
+  `SetCallAsFunctionHandler` — have no `rusty_v8` binding, so `crates/js/cpp/undetectable.cc` (one
+  header-free translation unit, compiled by the crate's new `build.rs` under `v8-backend`) binds the
+  symbols that are already inside the prebuilt `rusty_v8.lib`. Wrapper and interceptors live in
+  `v8_runtime/html_all.rs`; the collection itself stays the shim's existing
+  `_lumen_make_nid_collection`. WPT `document-all.html` 2/2. Upstream PR
+  [denoland/rusty_v8#2078](https://github.com/denoland/rusty_v8/pull/2078) would let all of this be
+  deleted in favour of a crate-provided `mark_as_undetectable()`.
+
 - Dedicated/shared-worker `importScripts` executes imported source as a classic
   `v8::Script` in the current worker context, rather than indirect eval.
   Strict-script function/var declarations and global lexical bindings survive
@@ -2290,6 +2303,23 @@ the time — read dates.
 
 These were loaded on every session regardless of the task; they only matter when you touch the JS
 runtime or the shim. Read them before a JS/Web-API change.
+
+- **`document.all` is falsy and `== null` BY DESIGN — never test it, or anything derived from it,
+  with `||`, `!x` or `!= null`.** The wrapper `_lumen_make_html_all_collection` returns carries V8's
+  undetectable bit, so `wrapped || fallback` throws the *successful* result away and silently installs
+  the fallback (exactly the bug that made the first version of `document.all` detectable again).
+  `!== undefined && !== null` is the only check the `[[IsHTMLDDA]]` slot does not lie to
+  ([BUG-1057](../bugs/BUG-1057-FIXED.md)).
+- **An undetectable V8 object must also be callable.** `ObjectTemplate::MarkAsUndetectable()` without
+  `SetCallAsFunctionHandler()` is not a degraded object — V8 CHECK-fails (`Check failed:
+  !IsUndefined(obj->GetInstanceCallHandler())`, `api-natives.cc`) while instantiating the template and
+  takes the process with it.
+- **A patch to the `v8` crate's `binding.cc` does nothing in a normal build.** `build_binding()` runs
+  only under `V8_FROM_SOURCE`; every ordinary build links the prebuilt `rusty_v8.lib` from denoland's
+  CI, so a new C wrapper there is simply absent at link time. When a V8 API has no `rusty_v8` binding,
+  check whether the *V8* symbol is already in that library (`grep -oa '<Name>[A-Za-z0-9_@?$]*'
+  target/<profile>/gn_out/obj/rusty_v8.lib`) and bind it locally — that is what
+  `crates/js/cpp/undetectable.cc` does — instead of forking the crate.
 
 - **A per-feature shim outside `WEB_API_SHIM*` is its own `rt.eval` that a page-shim fix never reaches.**
   `xhr.rs`, `audio_element.rs`, `video_bindings.rs`, `web_audio.rs`, `worker.rs`,

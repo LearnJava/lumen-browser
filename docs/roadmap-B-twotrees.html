@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 277,
-  "fixed": 730,
+  "open": 276,
+  "fixed": 731,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -1704,8 +1704,8 @@
     {
      "id": "P3-structclone",
      "title": "structuredClone + Transferable objects",
-     "status": "planned",
-     "note": "PARTIAL: structuredClone (примитивы/Map/Set/массивы/объекты) — dom.rs; 2026-07-18 [P1] дошиты циклические+разделяемые ссылки (memory map), BigInt, Boolean/Number/String-обёртки, ArrayBuffer+типизированные массивы/DataView (deep-copy backing buffer, общая идентичность буфера у нескольких вью), DataCloneError DOMException для функций/символов; остаётся только опция `transfer` (Transferable: ArrayBuffer/ImageBitmap/OffscreenCanvas detach)"
+     "status": "done",
+     "note": "structuredClone (примитивы/Map/Set/массивы/объекты) — dom.rs; 2026-07-18 [P1] дошиты циклические+разделяемые ссылки (memory map), BigInt, Boolean/Number/String-обёртки, ArrayBuffer+типизированные массивы/DataView (deep-copy backing buffer, общая идентичность буфера у нескольких вью), DataCloneError DOMException для функций/символов. **Ревизия 2026-09-19 (P1):** дошита опция `transfer` (`web_api_shim_tail_b.js::_lumen_transfer_one`/`structuredClone`) — ArrayBuffer детачится через нативный `ArrayBuffer.prototype.transfer()` (ECMA-262, есть в этом V8 150.1.0); OffscreenCanvas/ImageBitmap нативного детача не имеют (тонкие JS-обёртки вокруг целочисленного `__canvas_id__`, `offscreen_canvas.rs`) — хэндл переносится на новую обёртку, у оригинала обнуляется. Дубликаты в `transfer` и нетрансферируемые значения бросают `DataCloneError`. Не входит в объём: transfer-плечо `postMessage`/`Worker.postMessage`/`MessagePort.postMessage` (ни один из них сегодня не принимает второй аргумент вообще — отдельная задача) и MessagePort как Transferable. 4 новых теста (`dom/tests/v8_url_abort_clone_blob.rs`): детач буфера, сохранение идентичности внутри графа, дубликат в списке, нетрансферируемое значение — все зелёные (31/31 structuredClone-тестов). `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` чисто."
     },
     {
      "id": "P3-ricallback",
@@ -2026,9 +2026,9 @@
       {
        "id": "UPD-8",
        "title": "UPD-8: Применение обновления",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Rename-трюк для lumen.exe + lumen-network-service.exe (атомарно: сначала все rename, потом все копии, откат при ошибке), перезапуск процесса, чистка .old и pending/ при старте"
+       "note": "Rename-трюк для lumen.exe + lumen-network-service.exe (атомарно: сначала все rename, потом все копии, откат при ошибке), перезапуск процесса, чистка .old и pending/ при старте. **Ревизия 2026-09-19 (P1):** `crates/shell/src/update.rs` — `apply_staged_update()` (извлекает staged zip через `zip_reader::extract`, проверяет наличие обоих бинарников в архиве до первого rename, затем rename-трюк: `rename_live_binaries_to_old()` переименовывает оба живых бинарника в `.old` с откатом уже переименованных при ошибке, `copy_new_binaries_into_place()` копирует новые версии на место живых имён, при ошибке удаляет уже скопированные новые файлы и восстанавливает `.old` → живое имя для обоих — апдейт атомарен по обоим бинарникам целиком, никогда не остаётся наполовину применённым), `restart_process()` (спавнит новый экземпляр текущего exe и завершает текущий процесс), `cleanup_after_apply()` (удаляет оставшиеся `.old` и весь `data/update/pending/`, best-effort, вызывается на следующем старте после рестарта). `.old`-файлы намеренно не удаляются в `apply_staged_update` — только на следующем старте (пока текущий процесс не вышел, Windows может держать старый бинарник смэпленным). Не подключено: вызывающий код (кнопка «Перезапустить и обновить», момент старта, где вызывается `cleanup_after_apply`) остаётся UPD-9, как и UPD-1..7. 8 новых тестов (успешный apply, отсутствующий в архиве бинарник, повреждённый zip, откат rename при ошибке второго переименования, cleanup при наличии/отсутствии мусора, `exe_dir()` совпадает с `current_exe().parent()`); `cargo clippy -p lumen-shell --all-targets` зелёный."
       },
       {
        "id": "UPD-9",
@@ -6838,9 +6838,9 @@
       {
        "id": "GAP-DOCALLDDA",
        "title": "GAP: `document.all` IsHTMLDDA-семантика",
-       "status": "planned",
-       "size": "S",
-       "note": "`document.all`'s spec-mandated \"unusual behaviors\" (`typeof document.all === \"undefined\"`, loose `== null`/`== undefined`, falsy in boolean context, calling it as a function returns `undefined`) require a real `[[IsHTMLDDA]]` internal slot — in V8 terms, `v8::ObjectTemplate::MarkAsUndetectable()`, confirmed present in the vendored V8 C++ headers (`v8-template.h:1099`) but absent from the `rusty_v8` Rust binding surface (`grep -rn undetectable` over the crate's `src/*.rs` is empty). No shim-side trick reproduces `typeof` returning `\"undefined\"` for an object — the JS `Proxy` has no `typeof` trap. Needs a `rusty_v8` binding extension (upstream PR or a local patch), not a JS-only fix. Найден P3 при работе над BUG-606, 2026-09-16. **Ревизия 2026-09-17 (P1):** объём подтверждён и оказался больше пометки `size: S` — сборка `v8` по умолчанию тянет прекомпилированную статическую библиотеку (`download_static_lib_binaries()` в `build.rs` крейта `v8-150.1.0`); чтобы добавить в `binding.cc` вызов уже существующего в заголовках `v8::ObjectTemplate::MarkAsUndetectable()`, нужен путь `V8_FROM_SOURCE=1`, а он требует `gn`/`ninja`/`depot_tools` и полную сборку V8 из исходников (часы времени, десятки ГБ) — на машине разработки этого тулчейна нет, и его установка выходит за рамки одной сессии. Задача отложена без изменения кода; следующая ревизия должна начинать с решения о тулчейне (upstream PR в `rusty_v8` — без локальной сборки вообще — против локального патча с полной установкой V8-билд-тулчейна), а не с попытки собрать `V8_FROM_SOURCE` заново. **Ревизия 2026-09-18 (P1):** решение принято пользователем — путь upstream PR. Диф подготовлен и вычитан против вендоренного исходника крейта (`v8-150.1.0/src/binding.cc`, `v8-150.1.0/src/template.rs`) по образцу уже существующего `set_immutable_proto()`: новая C++-обёртка `v8__ObjectTemplate__MarkAsUndetectable` вызывает уже слинкованный в прекомпилированную статическую библиотеку `v8::ObjectTemplate::MarkAsUndetectable()` (собирать V8 из исходников не требуется — функция не новая в самом V8, только биндинг к ней новый), плюс `extern \"C\"` объявление и безопасная обёртка `ObjectTemplate::mark_as_undetectable()` в Rust. Патч и текст PR — [`docs/upstream-patches/rusty_v8-mark-as-undetectable.patch`](docs/upstream-patches/rusty_v8-mark-as-undetectable.patch). Не сделано намеренно — форк/пуш/открытие PR в `github.com/denoland/rusty_v8` не выполнены в этой сессии: это запись во внешний репозиторий за пределами `D:\\RustProjects\\lumen-browser` (working boundary), нужно отдельное явное одобрение пользователя на само действие (не только на выбор пути), плюс его GitHub-доступ к форку. После того как PR смёржат вверх по течению (или временно — после публикации собственного форка), интеграционная часть в Lumen (JS-шим `document.all`, ветвление `install_dom`) — отдельная последующая задача, которая уже пойдёт через `git` этого репозитория. Статус остаётся `planned`. **Ревизия 2026-09-18 (P1), срез 2:** пользователь одобрил внешнее действие — форк `LearnJava/rusty_v8` создан (`gh repo fork denoland/rusty_v8 --clone=false`), ветка `mark-as-undetectable-binding` запушена, upstream PR открыт: [denoland/rusty_v8#2078](https://github.com/denoland/rusty_v8/pull/2078). Патч из `docs/upstream-patches/rusty_v8-mark-as-undetectable.patch` не применился как есть (`git apply` — «corrupt patch at line 67»: второй хунк указывает `-1062,4 +1063,15`, но реально даёт 3 контекстных + 13 добавленных строк, что даёт `+16`, а не `+15` — расхождение подсчёта в самом файле патча, не в целевом коде); изменение внесено вручную по смыслу патча (`v8__ObjectTemplate__MarkAsUndetectable` в `binding.cc`, `extern` объявление и `ObjectTemplate::mark_as_undetectable()` в `template.rs`) прямо в текущий upstream HEAD форка (`49f5ab4`, заметно новее вендоренного `150.1.0`: `extern \"C\"` там уже `unsafe extern \"C\"`, номера строк сместились) — итоговый дифф идентичен по содержанию подготовленному патчу. Дальше — ждать решения мейнтейнеров upstream; после мержа (или как временное решение — pin на форк) интеграционная часть в Lumen (JS-шим `document.all`, ветвление `install_dom`) остаётся отдельной последующей задачей. Статус остаётся `planned`.",
+       "status": "done",
+       "size": "M",
+       "note": "`document.all`'s spec-mandated \"unusual behaviors\" (`typeof document.all === \"undefined\"`, loose `== null`/`== undefined`, falsy in boolean context, calling it as a function returns `undefined`) require a real `[[IsHTMLDDA]]` internal slot — in V8 terms, `v8::ObjectTemplate::MarkAsUndetectable()`, confirmed present in the vendored V8 C++ headers (`v8-template.h:1099`) but absent from the `rusty_v8` Rust binding surface (`grep -rn undetectable` over the crate's `src/*.rs` is empty). No shim-side trick reproduces `typeof` returning `\"undefined\"` for an object — the JS `Proxy` has no `typeof` trap. Needs a `rusty_v8` binding extension (upstream PR or a local patch), not a JS-only fix. Найден P3 при работе над BUG-606, 2026-09-16. **Ревизия 2026-09-17 (P1):** объём подтверждён и оказался больше пометки `size: S` — сборка `v8` по умолчанию тянет прекомпилированную статическую библиотеку (`download_static_lib_binaries()` в `build.rs` крейта `v8-150.1.0`); чтобы добавить в `binding.cc` вызов уже существующего в заголовках `v8::ObjectTemplate::MarkAsUndetectable()`, нужен путь `V8_FROM_SOURCE=1`, а он требует `gn`/`ninja`/`depot_tools` и полную сборку V8 из исходников (часы времени, десятки ГБ) — на машине разработки этого тулчейна нет, и его установка выходит за рамки одной сессии. Задача отложена без изменения кода; следующая ревизия должна начинать с решения о тулчейне (upstream PR в `rusty_v8` — без локальной сборки вообще — против локального патча с полной установкой V8-билд-тулчейна), а не с попытки собрать `V8_FROM_SOURCE` заново. **Ревизия 2026-09-18 (P1):** решение принято пользователем — путь upstream PR. Диф подготовлен и вычитан против вендоренного исходника крейта (`v8-150.1.0/src/binding.cc`, `v8-150.1.0/src/template.rs`) по образцу уже существующего `set_immutable_proto()`: новая C++-обёртка `v8__ObjectTemplate__MarkAsUndetectable` вызывает уже слинкованный в прекомпилированную статическую библиотеку `v8::ObjectTemplate::MarkAsUndetectable()` (собирать V8 из исходников не требуется — функция не новая в самом V8, только биндинг к ней новый), плюс `extern \"C\"` объявление и безопасная обёртка `ObjectTemplate::mark_as_undetectable()` в Rust. Патч и текст PR — [`docs/upstream-patches/rusty_v8-mark-as-undetectable.patch`](docs/upstream-patches/rusty_v8-mark-as-undetectable.patch). Не сделано намеренно — форк/пуш/открытие PR в `github.com/denoland/rusty_v8` не выполнены в этой сессии: это запись во внешний репозиторий за пределами `D:\\RustProjects\\lumen-browser` (working boundary), нужно отдельное явное одобрение пользователя на само действие (не только на выбор пути), плюс его GitHub-доступ к форку. После того как PR смёржат вверх по течению (или временно — после публикации собственного форка), интеграционная часть в Lumen (JS-шим `document.all`, ветвление `install_dom`) — отдельная последующая задача, которая уже пойдёт через `git` этого репозитория. Статус остаётся `planned`. **Ревизия 2026-09-18 (P1), срез 2:** пользователь одобрил внешнее действие — форк `LearnJava/rusty_v8` создан (`gh repo fork denoland/rusty_v8 --clone=false`), ветка `mark-as-undetectable-binding` запушена, upstream PR открыт: [denoland/rusty_v8#2078](https://github.com/denoland/rusty_v8/pull/2078). Патч из `docs/upstream-patches/rusty_v8-mark-as-undetectable.patch` не применился как есть (`git apply` — «corrupt patch at line 67»: второй хунк указывает `-1062,4 +1063,15`, но реально даёт 3 контекстных + 13 добавленных строк, что даёт `+16`, а не `+15` — расхождение подсчёта в самом файле патча, не в целевом коде); изменение внесено вручную по смыслу патча (`v8__ObjectTemplate__MarkAsUndetectable` в `binding.cc`, `extern` объявление и `ObjectTemplate::mark_as_undetectable()` в `template.rs`) прямо в текущий upstream HEAD форка (`49f5ab4`, заметно новее вендоренного `150.1.0`: `extern \"C\"` там уже `unsafe extern \"C\"`, номера строк сместились) — итоговый дифф идентичен по содержанию подготовленному патчу. Дальше — ждать решения мейнтейнеров upstream; после мержа (или как временное решение — pin на форк) интеграционная часть в Lumen (JS-шим `document.all`, ветвление `install_dom`) остаётся отдельной последующей задачей. Статус остаётся `planned`. **Закрыт 2026-09-19 (P1):** прежняя ревизия ошибалась в одном звене — PR действительно можно открыть без сборки V8 из исходников, но ПОТРЕБИТЬ патч так нельзя: `build_binding()` (компиляция `binding.cc`) в `build.rs` крейта `v8` стоит только под `V8_FROM_SOURCE`, дефолтный путь линкует готовую `rusty_v8.lib` из CI denoland, где нашей обёртки нет. Ветка форка вдобавок несовместима по версии (`152.2.0` против требуемой `150.1.0`). Решение — собственная C++-единица трансляции `crates/js/cpp/undetectable.cc` (+`crates/js/build.rs`, `cc`), зовущая уже слинкованные символы `MarkAsUndetectable` и `SetCallAsFunctionHandler` (второй обязателен: V8 CHECK-падает на undetectable-шаблоне без обработчика вызова). `document.all` — `crates/js/src/v8_runtime/html_all.rs` поверх живой коллекции шима; WPT `document-all.html` 2/2. PR #2078 остаётся правильным долгим путём: после его публикации локальная обёртка и зависимость `cc` снимаются в пользу `ObjectTemplate::mark_as_undetectable()`.",
        "bugs": [
         "BUG-1057"
        ]
@@ -7543,13 +7543,6 @@
    "status": "open",
    "title": "No UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` -- light-DOM children appended to `<video>`/`<audio>` render directly instead of b…",
    "component": "dom (`crates/engine/dom/src/lib.rs` — `Document::create_element`/`try_create_element`, `ua_shadow_kind`/`attach_ua_shadow_root`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1057": {
-   "status": "open",
-   "title": "`document.all`'s spec-mandated `[[IsHTMLDDA]]` \"unusual behaviors\" (`typeof` reads `\"undefined\"`, loose equality to `null`/`undefined`, falsy, callable-returns-…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `document.all`; `rusty_v8` binding -- no `MarkAsUndetectable` exposed)",
    "date": null,
    "debtor": false
   },
@@ -8472,8 +8465,8 @@
   },
   "BUG-910": {
    "status": "open",
-   "title": "Динамический `import()` резолвится относительно **URL документа**, а `<base href>` игнорируется в любой форме. Замер прогоном `run_report.py --all --recursive -…",
-   "component": "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)",
+   "title": "Динамический `import()` без собственного `resource_name` (весь код, скомпилированный из строки — `setTimeout`/`eval`/`Function`/инлайн-обработчик) теперь резолв…",
+   "component": "js (`crates/js/src/v8_esm.rs::resolve`/`document_base_url` — читает живой `_lumen_document_base_url()`, но не «замороженную» на момент подготовки скрипта базу)",
    "date": null,
    "debtor": false
   },
@@ -14188,6 +14181,13 @@
    "component": "js (`crates/js/src/dom.rs` — `setTimeout`/`setInterval` кладут в очередь `{id, fn, deadline, interval, nesting}`, `_lumen_tick_timers` зовёт `ready[k].fn()` без аргументов)",
    "date": "2026-09-19",
    "debtor": false
+  },
+  "BUG-1057": {
+   "status": "fixed",
+   "title": "`document.all`'s spec-mandated `[[IsHTMLDDA]]` \"unusual behaviors\" (`typeof` reads `\"undefined\"`, loose equality to `null`/`undefined`, falsy, callable-returns-…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `document.all`; `rusty_v8` binding -- no `MarkAsUndetectable` exposed)",
+   "date": "2026-09-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14808,7 +14808,7 @@
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
    "BUG-748"
   ],
-  "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)": [
+  "js (`crates/js/src/v8_esm.rs::resolve`/`document_base_url` — читает живой `_lumen_document_base_url()`, но не «замороженную» на момент подготовки скрипта базу)": [
    "BUG-910"
   ],
   "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)": [

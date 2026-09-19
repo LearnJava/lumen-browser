@@ -83,6 +83,7 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 | `quinn` | HTTP/3 / QUIC | расширение `NetworkTransport` | 3 | Реалистично — никогда. QUIC = год+ работы (congestion control, packet loss recovery, 0-RTT, key updates) |
 | `redb` | Pure Rust ACID key-value (copy-on-write B+tree). Альтернативный storage backend для горячих key-value (localStorage, IndexedDB, HTTP cache) | `StorageBackend` | 2–3 | Замерить p99 latency SQLite WAL vs redb на реальной нагрузке localStorage/IndexedDB. Если SQLite < 1 мс — не нужен |
 | `tantivy` | Rust-native полнотекстовый поиск. Замена SQLite FTS5 для §12.1 knowledge layer при миграции на pure-Rust storage | `KnowledgeStore` | 3+ | Только вместе с redb — при решении полностью отказаться от SQLite C-кода |
+| `cc` (build-dependency `lumen-js`, с 2026-09-19) | Сборка ОДНОЙ C++-единицы трансляции `crates/js/cpp/undetectable.cc` — локального биндинга к `v8::ObjectTemplate::MarkAsUndetectable()` и `SetCallAsFunctionHandler()` (GAP-DOCALLDDA/[BUG-1057](../../bugs/BUG-1057-FIXED.md)). Оба символа уже лежат в прекомпилированной `rusty_v8.lib`, но Rust-обёрток к ним крейт `v8` не даёт, а патч его `binding.cc` потребителю не помогает: тот файл компилируется только под `V8_FROM_SOURCE` | — (вызов хост-тулчейна C++; тем же `cc` пользуется и сам крейт `v8`) | 3 | Удаляется целиком, как только [denoland/rusty_v8#2078](https://github.com/denoland/rusty_v8/pull/2078) выйдет в релизе крейта — обёртка тогда приедет из самого `v8` |
 
 **Принципы работы с provisional-категорией:**
 
