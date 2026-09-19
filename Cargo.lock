@@ -2437,6 +2437,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "cbc",
+ "cc",
  "ctr",
  "flate2",
  "getrandom 0.2.17",

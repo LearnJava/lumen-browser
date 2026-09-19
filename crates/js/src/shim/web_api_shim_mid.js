@@ -10340,6 +10340,12 @@ var __dom_node_warned = false;
 // BUG-324: cache for the live page's `document.implementation`, so repeated
 // access returns the same object (`document.implementation === document.implementation`).
 var _lumen_document_implementation = null;
+// GAP-DOCALLDDA/BUG-1057: cache for `document.all`. Cached for the same reason
+// `implementation` above is — every engine returns one and the same
+// HTMLAllCollection, so `document.all === document.all` must hold. Caching the
+// wrapper costs no staleness: the collection it wraps is a live Proxy that
+// re-queries the document on every read.
+var __lumen_document_all = null;
 
 // HTML LS §4.8.3: the `HTMLImageElement` interface and its legacy factory
 // function `Image(width?, height?)`. BUG-305: both were entirely absent, so
@@ -10670,6 +10676,38 @@ var document = {
     // must still expose, always empty, as a live HTMLCollection.
     get applets() {
         return _lumen_make_nid_collection(function() { return []; }, HTMLCollection.prototype);
+    },
+    // HTML LS §obsolete (GAP-DOCALLDDA, BUG-1057): `document.all` -- a live
+    // collection of every element in tree order, wrapped in the native
+    // `[[IsHTMLDDA]]` object so `typeof document.all === 'undefined'`,
+    // `document.all == null` and `Boolean(document.all) === false` while the
+    // object itself stays a real object under `===`. The wrapper forwards every
+    // read to the collection built here, so `length`, indices, `item()`,
+    // `namedItem()` and named access keep working through it.
+    //
+    // Without the native (a non-V8 context, or a V8 one where the template
+    // could not be instantiated) the bare collection is returned: `document.all`
+    // then behaves like a normal HTMLCollection -- truthy, `typeof` "object" --
+    // which is the pre-existing shape of every other legacy collection and far
+    // better than throwing on access.
+    get all() {
+        if (__lumen_document_all === null) {
+            var coll = _lumen_make_nid_collection(
+                function() { return _lumen_query_selector_all('*'); },
+                HTMLCollection.prototype);
+            var wrapped = typeof _lumen_make_html_all_collection === 'function'
+                ? _lumen_make_html_all_collection(coll)
+                : undefined;
+            // STRICT comparison, and no `||`: the wrapper is falsy and loosely
+            // equal to `undefined`/`null` BY DESIGN, so `wrapped || coll` or
+            // `wrapped != null` would throw the successful result away and
+            // silently fall back to the detectable collection. `!==` is the one
+            // operator the DDA slot does not lie to.
+            __lumen_document_all = (wrapped !== undefined && wrapped !== null)
+                ? wrapped
+                : coll;
+        }
+        return __lumen_document_all;
     },
     // HTML LS §obsolete (BUG-606): `document.clear()`/`captureEvents()`/
     // `releaseEvents()` are historical no-ops kept only for compatibility with

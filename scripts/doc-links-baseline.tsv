@@ -3,6 +3,7 @@
 # Новая ссылка, которой здесь нет, роняет гейт; починенную --update уберёт.
 # файл	цель	класс	где цель на самом деле
 .claude/agents/css-rust-architect.md	file.md	missing	
+BUGS-FIXED.md	bugs/BUG-1057-OPEN.md	stale-status-suffix	bugs/BUG-1057-FIXED.md
 BUGS-FIXED.md	bugs/BUG-250-FIXED.md	missing	
 BUGS-FIXED.md	bugs/BUG-384-OPEN.md	stale-status-suffix	bugs/BUG-384-FIXED.md
 BUGS-FIXED.md	bugs/BUG-444-OPEN.md	stale-status-suffix	bugs/BUG-444-FIXED.md
@@ -182,6 +183,7 @@ bugs/BUG-584-OPEN.md	BUG-582-OPEN.md	stale-status-suffix	bugs/BUG-582-FIXED.md
 bugs/BUG-590-FIXED.md	bugs/BUG-871-OPEN.md	wrong-relative-path	bugs/BUG-871-OPEN.md
 bugs/BUG-599-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-604-OPEN.md	BUG-351-OPEN.md	stale-status-suffix	bugs/BUG-351-FIXED.md
+bugs/BUG-606-FIXED.md	BUG-1057-OPEN.md	stale-status-suffix	bugs/BUG-1057-FIXED.md
 bugs/BUG-618-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 bugs/BUG-618-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-630-OPEN.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md

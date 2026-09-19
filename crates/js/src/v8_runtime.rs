@@ -78,6 +78,7 @@ mod install;
 // ── Голова рантайма: модули SPLIT-JS7 ─────────────────────────────────────────
 
 mod command;
+mod html_all;
 mod named_access;
 mod promise_reject;
 mod style_flush;
@@ -233,6 +234,11 @@ impl V8JsRuntime {
             let isolate = &mut inner.isolate;
             let context_global = &inner.context;
             let store = &mut inner.native_fn_store;
+            // GAP-DOCALLDDA: the `document.all` factory is the one DOM-core
+            // native that needs raw V8 (it builds an `ObjectTemplate`), so it
+            // goes into the scoped store rather than through `reg!`. Disjoint
+            // field borrow, same as `store` above.
+            let store_scoped = &mut inner.native_fn_store_scoped;
 
             v8::scope!(let scope, isolate);
             let ctx = v8::Local::new(scope, context_global);
@@ -532,6 +538,35 @@ impl V8JsRuntime {
                 )?;
                 let val = v8::Boolean::new(scope, cross_origin_isolated);
                 ctx.global(scope).set(scope, key.into(), val.into());
+            }
+
+            // GAP-DOCALLDDA / BUG-1057: `_lumen_make_html_all_collection(coll)`
+            // — wraps the shim's live all-elements collection in an object
+            // carrying V8's `[[IsHTMLDDA]]`-equivalent "undetectable" bit, the
+            // one part of `document.all` no JavaScript can express. Registered
+            // before the shim is evaluated because the shim's `document.all`
+            // getter calls it (and falls back to the bare collection when the
+            // native is absent, as it is in every non-V8 context).
+            {
+                let native: Box<dyn crate::v8_compat::V8NativeFnScoped + Send> = Box::new(
+                    |scope: &mut v8::PinScope,
+                     args: &v8::FunctionCallbackArguments,
+                     rv: &mut v8::ReturnValue| {
+                        let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+                            return;
+                        };
+                        if let Some(wrapper) = html_all::make_html_all_collection(scope, target) {
+                            rv.set(wrapper.into());
+                        }
+                    },
+                );
+                crate::v8_compat::register_v8_native_scoped(
+                    scope,
+                    ctx,
+                    store_scoped,
+                    "_lumen_make_html_all_collection",
+                    native,
+                )?;
             }
 
             // Polyfill `DOMException`: quickjs-ng provides it as a built-in (part of
