@@ -2177,3 +2177,79 @@ failed, 20 ignored) без регрессий; `cargo clippy -p lumen-shell
 падения `lumen-network --lib` (`http_cache_miss_fetches_and_stores`,
 `auth_digest_sha256_response_is_64_hex`) — ни один из трёх не связан с
 CSP/`page_pipeline.rs`, файлы этого среза их не трогают.
+
+## Срез 38 (2026-09-19, `p6-gap-cspenf-srez38`) — `style-src`/`default-src` против цели `@import`
+
+Список «не покрыто» с самого начала (срез 1, `csp_enforce.rs` doc-comment) и
+срез 14 отдельно называли пробел: `@import` внутри уже загруженного листа
+«наследует политику владельца, отдельно не проверяется». До этого среза
+`inline_css_imports` (`crates/shell/src/stylesheets.rs`) — единственная
+функция, резолвящая `@import`-цепочки, общая для ВСЕХ трёх сайтов
+потребления (собственные `@import` внешнего `<link>`, `@import` top-level
+инлайнового `<style>`, `@import` инлайнового `<style>` внутри `<iframe>`) —
+не принимала CSP вообще: `style-src '<host>'`, запрещавший внешний
+`<link>`, не мешал тому же самому листу дотянуться до запрещённого хоста
+через `@import`, если сам `<link>` был на разрешённом origin (или лист был
+инлайновым `<style>`, у которого вообще нет проверки фетча).
+
+- `crates/shell/src/stylesheets.rs::inline_css_imports` — новый параметр
+  `csp_gate: Option<(&CspPolicy, Option<&Origin>)>`, той же формы, что
+  каждый fetch-гейт этого файла уже принимает (`style_src_blocked`, срез 7).
+  Проверяется КАЖДЫЙ уровень вложенности: `csp_gate` передаётся дальше без
+  изменений в рекурсивный вызов — CSP3 §6.4.1 не даёт импортированному
+  листу своей политики, действует политика владельца всей цепочки.
+  Заблокированная цель не фетчится вовсе (та же «сеть её не видела»
+  гарантия, что срез 7 даёт `<link>`) и её resolved URL уходит вторым
+  элементом возврата — функция сменила тип с `String` на
+  `(String, Vec<String>)`.
+- Три сайта потребления подключены к общему `blocked_by_style_src`, который
+  `page_pipeline.rs`/`frames.rs` уже дispatch'ат как
+  `securitypolicyviolation` (`violatedDirective="style-src"`) для
+  заблокированного `<link>` — новый список просто подмешивается в тот же
+  вектор ДО дispatch'а, отдельного события/пути не заводилось:
+  - `stylesheets.rs::load_linked_stylesheets` — свой `csp_gate`/
+    `self_origin` уже посчитаны для проверки самого `<link>`, переданы в
+    рекурсивный вызов `inline_css_imports` без изменений; per-item
+    `Result` сменил тип с `Result<String, Option<String>>` на
+    `Result<(String, Vec<String>), Option<String>>`, чтобы каждый лист,
+    загруженный параллельно (`parallel_map`), нёс свои заблокированные
+    импорты независимо.
+  - `page_pipeline.rs::build_page_cascade` — уже посчитанный `csp_policy`
+    (срез 21) плюс новый `self_origin = base.origin()`, переданы в
+    `inline_css_imports` top-level инлайновых `<style>`; возвращённый
+    список подмешан в `blocked_by_style_src`, пришедший от
+    `load_linked_stylesheets`, ДО общего `securitypolicyviolation`-dispatch
+    (строка ~1282 этого файла, не тронута — уже итерирует весь вектор).
+  - `frames.rs::fetch_frame_subresources` — та же схема, но политика
+    ЧАДА (уже посчитанный `csp_gate`, срез 22), для его собственного
+    инлайнового `<style>`.
+- `self_origin` для `'self'`-источников — всегда origin ВЛАДЕЮЩЕГО
+  документа (`base.origin()` снаружи `inline_css_imports`), не origin
+  импортированного листа: тот же принцип, что `base_uri_allowed` (срез 32)
+  уже применяет — политика документа решает про весь фетч, который он
+  порождает, транзитивно.
+
+Обнаружено попутно (не баг, задокументировано тестом
+`inline_css_imports_style_src_none_blocks_file_import`): `style-src 'none'`
+блокирует `@import` даже для `file://`-документов — `ResourceBase::
+resolve_str` для File-базы возвращает абсолютный путь ОС (`D:\...\b.css`),
+и WHATWG URL-парсер (`lumen_core::url::Url::parse`) успешно превращает
+Windows-путь с буквой диска в `file:`-URL вместо ошибки, так что "не
+парсится → fail-open" здесь не применяется — CSP действует на `file://`
+так же, как на любую другую схему.
+
+Тесты: +4 в `crates/shell/src/tests/page_resources.rs`
+(`inline_css_imports_style_src_blocks_cross_origin_import`,
+`inline_css_imports_style_src_self_allows_same_origin_target`,
+`inline_css_imports_style_src_none_blocks_file_import` — три новых сценария
+— плюс все 7 существующих `inline_css_imports_*`-тестов обновлены под
+новую сигнатуру `(String, Vec<String>)` и передают `None` там, где CSP не
+участвует, доказывая обратную совместимость). `cargo test -p lumen-shell
+--features v8 --bin lumen` (1963 passed, 0 failed, 20 ignored) без
+регрессий; `cargo clippy -p lumen-shell --all-targets --features v8 -- -D
+warnings` чисто.
+
+Не покрыто этим срезом: остальные пункты общего списка «не покрыто»
+(`report-to`, честная независимая проверка заголовка/`<meta>`,
+`ServiceWorker`-конструирование, `manifest-src`) — ни один из них не
+пересекается с `@import`, отдельные задачи.

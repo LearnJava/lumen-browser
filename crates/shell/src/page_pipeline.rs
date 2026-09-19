@@ -475,7 +475,11 @@ fn build_page_cascade(
         // only `<style>` nodes).
         let (blocked_style_attr_nodes, _) =
             collect_style_attr_csp_blocked(doc, csp_policy.as_ref().map(|(p, _)| p));
-        let mut css = inline_css_imports(
+        // GAP-CSPENF срез 38: `style-src` теперь также gates `@import`
+        // targets, not only the `<style>`/`<link>` themselves — same
+        // one-shot `csp_policy` read as the two gates above.
+        let self_origin = base.origin();
+        let (mut css, blocked_by_style_src_imports) = inline_css_imports(
             &inline,
             base,
             sink,
@@ -484,19 +488,21 @@ fn build_page_cascade(
             &mut std::collections::HashSet::new(),
             0,
             crate::stylesheets::document_encoding(doc),
+            csp_policy.as_ref().map(|(p, _)| (p, self_origin.as_ref())),
         );
         // BUG-743: всё, что не пришло из инлайновых <style>, откладывается
         // отдельно — так поздний динамический <style> пересобирает каскад без
         // единого сетевого запроса. `inline_css_imports` возвращает
         // `<импорты> + <исходный текст>`, поэтому префикс = всё до хвоста.
         let imports_prefix = css[..css.len() - inline.len()].to_owned();
-        let (linked, link_outcomes, blocked_by_style_src) = load_linked_stylesheets(
+        let (linked, link_outcomes, mut blocked_by_style_src) = load_linked_stylesheets(
             doc,
             base,
             sink,
             cookie_jar.clone(),
             &link_media_ctx,
         );
+        blocked_by_style_src.extend(blocked_by_style_src_imports);
         css.push_str(&linked);
         let dyn_css = DynamicCssBase {
             imports_prefix,
