@@ -12,13 +12,16 @@
 //! # Wiring status
 //!
 //! [`check_for_update`] is not called from `window_mode.rs` yet — that wiring,
-//! plus a UI surface for the result, lands with UPD-9. Today the module is
-//! exercised only by its own tests.
+//! plus a UI surface for the result, lands with UPD-9. [`UpdateDownloadManager`]
+//! (UPD-6) follows the same rule: nothing calls `start()` yet, the trigger is
+//! also UPD-9. Today the module is exercised only by its own tests.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lumen_core::ext::NetworkTransport;
 use lumen_core::url::Url;
 use lumen_network::{ConditionalFetch, HttpClient};
 use serde::{Deserialize, Serialize};
@@ -648,6 +651,225 @@ pub fn backup_before_migration_if_updated() {
     save_last_run_version(&current);
 }
 
+// ── Background download (UPD-6) ─────────────────────────────────────────────
+
+/// `<data>/update/pending` — root of staged, hash-verified update archives
+/// waiting for UPD-7 (mini-ZIP extraction) and UPD-8 (apply).
+#[must_use]
+pub fn pending_root_dir() -> PathBuf {
+    update_dir().join("pending")
+}
+
+/// `<data>/update/pending/<version>` — destination directory
+/// [`download_update_asset`] stages the verified archive into for release
+/// `version`.
+#[must_use]
+pub fn pending_dir_for(version: &str) -> PathBuf {
+    pending_root_dir().join(version)
+}
+
+/// Substring identifying this platform's asset among an
+/// [`UpdateManifest::assets`] list — matches the `matrix.artifact-name`
+/// baked into every asset filename by `release.yml` (e.g.
+/// `lumen-windows-x86_64-v0.5.0.zip`). `None` on a target `release.yml` does
+/// not build for — there is no asset to select.
+fn platform_asset_tag() -> Option<&'static str> {
+    if cfg!(target_os = "windows") {
+        Some("windows")
+    } else if cfg!(target_os = "macos") {
+        Some("macos")
+    } else if cfg!(target_os = "linux") {
+        Some("linux")
+    } else {
+        None
+    }
+}
+
+/// Pick this platform's asset out of a manifest's [`UpdateManifest::assets`],
+/// by [`platform_asset_tag`] substring match. The first match wins — today's
+/// `release.yml` publishes exactly one asset per platform, so ambiguity is
+/// not a real case.
+#[must_use]
+pub fn select_platform_asset(assets: &[UpdateAsset]) -> Option<&UpdateAsset> {
+    let tag = platform_asset_tag()?;
+    assets.iter().find(|a| a.name.contains(tag))
+}
+
+/// Direct-download URL for `asset_name` published under release tag
+/// `v<version>`. Pinned to the exact tag rather than [`MANIFEST_URL`]'s
+/// `.../releases/latest/...` convention — the archive fetched here must
+/// always match the manifest that named it, even if a newer release gets
+/// tagged while the download is in flight.
+#[must_use]
+pub fn asset_download_url(version: &str, asset_name: &str) -> String {
+    format!("https://github.com/LearnJava/lumen-browser/releases/download/v{version}/{asset_name}")
+}
+
+/// Outcome of one [`download_update_asset`] attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UpdateDownloadOutcome {
+    /// Downloaded, hash-verified, and written to `path`.
+    Staged { path: PathBuf },
+    /// The downloaded body's SHA-256 did not match [`UpdateAsset::sha256`].
+    /// The manifest carrying that hash was already signature-verified by
+    /// [`verify_manifest`] — this catches corruption or a compromised mirror
+    /// on top of that, so it is never staged to disk.
+    HashMismatch,
+    /// Network error or I/O failure while fetching or writing.
+    Failed(String),
+}
+
+/// Fetch `asset` for release `version` via `transport`, verify its SHA-256,
+/// and write it to `dest_dir/asset.name`.
+///
+/// `dest_dir` is an explicit parameter rather than always
+/// `pending_dir_for(version)` — same reason [`backup_databases`] takes
+/// `data_dir`/`dest_dir` instead of deriving them: [`update_dir`] resolves
+/// from `current_exe()` and cannot be pointed at a scratch dir in tests.
+/// [`UpdateDownloadManager::start`] is the caller that passes the real
+/// [`pending_dir_for`].
+///
+/// Generic over [`NetworkTransport`] so tests exercise this against
+/// [`lumen_network::MockTransport`] instead of a real HTTP round-trip — the
+/// same reason [`apply_check_result`] is split from [`check_for_update`].
+fn download_update_asset<T: NetworkTransport>(
+    transport: &T,
+    version: &str,
+    asset: &UpdateAsset,
+    dest_dir: &Path,
+) -> UpdateDownloadOutcome {
+    let url = asset_download_url(version, &asset.name);
+    let parsed = match Url::parse(&url) {
+        Ok(u) => u,
+        Err(e) => return UpdateDownloadOutcome::Failed(e.to_string()),
+    };
+    let body = match transport.fetch(&parsed) {
+        Ok(b) => b,
+        Err(e) => return UpdateDownloadOutcome::Failed(e.to_string()),
+    };
+    if !asset.verify_body(&body) {
+        return UpdateDownloadOutcome::HashMismatch;
+    }
+    if let Err(e) = std::fs::create_dir_all(dest_dir) {
+        return UpdateDownloadOutcome::Failed(e.to_string());
+    }
+    let dest = dest_dir.join(&asset.name);
+    if let Err(e) = std::fs::write(&dest, &body) {
+        return UpdateDownloadOutcome::Failed(e.to_string());
+    }
+    UpdateDownloadOutcome::Staged { path: dest }
+}
+
+/// Current state of the (at most one) in-flight self-update download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateDownloadStatus {
+    /// No download started yet, or the previous one finished and its result
+    /// was already consumed by the caller.
+    Idle,
+    /// Fetch + hash-verify + write running on a background thread.
+    InProgress,
+    /// Downloaded, hash-verified, and staged at `path` — ready for UPD-7.
+    Staged { path: PathBuf },
+    /// The downloaded body's hash did not match the (signed) manifest's.
+    HashMismatch,
+    /// Network error or I/O failure.
+    Failed(String),
+    /// Cancelled by the user before the background thread reported back.
+    Cancelled,
+}
+
+/// Runs [`download_update_asset`] on its own `std::thread`, polled from the
+/// shell event loop (`about_to_wait`) via [`UpdateDownloadManager::poll`] —
+/// the same thread-per-download + `mpsc` pattern as `download::DownloadManager`,
+/// minus the multi-entry list: only one self-update download is ever in
+/// flight, so a single [`UpdateDownloadStatus`] slot is enough.
+///
+/// The in-memory `HttpClient::fetch` has no mid-transfer cancellation hook
+/// (same limitation `download.rs` notes), so [`Self::cancel`] does not stop
+/// the thread — it only marks the status `Cancelled` so [`Self::poll`] drops
+/// the eventual result instead of overwriting a state the user already
+/// dismissed, mirroring `DownloadManager::poll`'s
+/// "`Cancelled` wins over a late `Done`" rule.
+pub struct UpdateDownloadManager {
+    status: UpdateDownloadStatus,
+    rx: mpsc::Receiver<UpdateDownloadOutcome>,
+    tx: mpsc::Sender<UpdateDownloadOutcome>,
+}
+
+impl Default for UpdateDownloadManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UpdateDownloadManager {
+    /// Create a new manager with no download in flight.
+    #[must_use]
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            status: UpdateDownloadStatus::Idle,
+            rx,
+            tx,
+        }
+    }
+
+    /// Start downloading `asset` for release `version` on a background
+    /// thread. A no-op while a download is already [`UpdateDownloadStatus::InProgress`]
+    /// — callers gate the UI trigger on [`Self::status`] the same way
+    /// `download.rs`'s cancel button only appears while `InProgress`.
+    pub fn start(&mut self, version: String, asset: UpdateAsset) {
+        if matches!(self.status, UpdateDownloadStatus::InProgress) {
+            return;
+        }
+        self.status = UpdateDownloadStatus::InProgress;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            use lumen_network::{BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder};
+            let client = crate::config::global().apply_http(
+                HttpClient::new()
+                    .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
+                    .with_content_decoder(Arc::new(GzipContentDecoder::new()))
+                    .with_content_decoder(Arc::new(DeflateContentDecoder::new())),
+            );
+            let outcome = download_update_asset(&client, &version, &asset, &pending_dir_for(&version));
+            let _ = tx.send(outcome);
+        });
+    }
+
+    /// Mark the in-flight download as cancelled. The background thread keeps
+    /// running to completion (see the struct docs), but [`Self::poll`] will
+    /// discard its result once it arrives.
+    pub fn cancel(&mut self) {
+        if matches!(self.status, UpdateDownloadStatus::InProgress) {
+            self.status = UpdateDownloadStatus::Cancelled;
+        }
+    }
+
+    /// Drain the internal channel and update [`Self::status`].
+    ///
+    /// Must be called regularly from the shell event loop (e.g.
+    /// `about_to_wait`), same as [`crate::download::DownloadManager::poll`].
+    pub fn poll(&mut self) {
+        while let Ok(outcome) = self.rx.try_recv() {
+            if matches!(self.status, UpdateDownloadStatus::Cancelled) {
+                continue;
+            }
+            self.status = match outcome {
+                UpdateDownloadOutcome::Staged { path } => UpdateDownloadStatus::Staged { path },
+                UpdateDownloadOutcome::HashMismatch => UpdateDownloadStatus::HashMismatch,
+                UpdateDownloadOutcome::Failed(reason) => UpdateDownloadStatus::Failed(reason),
+            };
+        }
+    }
+
+    /// Current download state.
+    #[must_use]
+    pub fn status(&self) -> &UpdateDownloadStatus {
+        &self.status
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1215,5 +1437,166 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ── Background download (UPD-6) ──────────────────────────────────────────
+
+    fn test_asset(name: &str, body: &[u8]) -> UpdateAsset {
+        UpdateAsset {
+            name: name.to_string(),
+            sha256: lumen_core::hash::sha256_hex(body),
+            size: body.len() as u64,
+        }
+    }
+
+    #[test]
+    fn asset_download_url_format() {
+        assert_eq!(
+            asset_download_url("1.2.3", "lumen-windows-x86_64-v1.2.3.zip"),
+            "https://github.com/LearnJava/lumen-browser/releases/download/v1.2.3/lumen-windows-x86_64-v1.2.3.zip"
+        );
+    }
+
+    #[test]
+    fn pending_dir_for_is_under_pending_root() {
+        assert_eq!(pending_dir_for("1.2.3"), pending_root_dir().join("1.2.3"));
+    }
+
+    #[test]
+    fn select_platform_asset_matches_current_platform() {
+        let tag = platform_asset_tag().expect("test runs on a platform release.yml builds for");
+        let assets = vec![
+            test_asset(&format!("lumen-{tag}-x86_64-v1.0.0.zip"), b"a"),
+            test_asset("lumen-completely-unrelated-v1.0.0.zip", b"b"),
+        ];
+        let picked = select_platform_asset(&assets).expect("must find the platform's own asset");
+        assert!(picked.name.contains(tag));
+    }
+
+    #[test]
+    fn select_platform_asset_none_when_no_match() {
+        let assets = vec![test_asset("lumen-totally-unrelated-v1.0.0.zip", b"a")];
+        assert!(select_platform_asset(&assets).is_none());
+    }
+
+    #[test]
+    fn download_update_asset_stages_matching_hash() {
+        let body = b"zip contents".to_vec();
+        let asset = test_asset("lumen-windows-x86_64-v1.0.0.zip", &body);
+        let mut transport = lumen_network::MockTransport::new();
+        transport.add_fixture(asset_download_url("1.0.0", &asset.name), body.clone());
+        let dest_dir = scratch_dir("download_stage");
+
+        let outcome = download_update_asset(&transport, "1.0.0", &asset, &dest_dir);
+
+        match outcome {
+            UpdateDownloadOutcome::Staged { path } => {
+                assert_eq!(path, dest_dir.join(&asset.name));
+                assert_eq!(std::fs::read(&path).unwrap(), body);
+            }
+            other => panic!("expected Staged, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dest_dir);
+    }
+
+    #[test]
+    fn download_update_asset_rejects_hash_mismatch_without_staging() {
+        let body = b"zip contents".to_vec();
+        let mut asset = test_asset("lumen-windows-x86_64-v1.0.0.zip", &body);
+        asset.sha256 = "f".repeat(64); // wrong hash, valid hex
+        let mut transport = lumen_network::MockTransport::new();
+        transport.add_fixture(asset_download_url("1.0.0", &asset.name), body);
+        let dest_dir = scratch_dir("download_hash_mismatch");
+
+        let outcome = download_update_asset(&transport, "1.0.0", &asset, &dest_dir);
+
+        assert_eq!(outcome, UpdateDownloadOutcome::HashMismatch);
+        assert!(
+            !dest_dir.join(&asset.name).exists(),
+            "a body that fails hash verification must never be written to disk"
+        );
+        let _ = std::fs::remove_dir_all(&dest_dir);
+    }
+
+    #[test]
+    fn download_update_asset_reports_transport_failure() {
+        let asset = test_asset("lumen-windows-x86_64-v1.0.0.zip", b"unused");
+        let transport = lumen_network::MockTransport::new(); // no fixture registered
+        let dest_dir = scratch_dir("download_transport_fail");
+
+        let outcome = download_update_asset(&transport, "1.0.0", &asset, &dest_dir);
+
+        assert!(matches!(outcome, UpdateDownloadOutcome::Failed(_)));
+        let _ = std::fs::remove_dir_all(&dest_dir);
+    }
+
+    #[test]
+    fn manager_new_is_idle() {
+        let mgr = UpdateDownloadManager::new();
+        assert_eq!(*mgr.status(), UpdateDownloadStatus::Idle);
+    }
+
+    #[test]
+    fn manager_poll_applies_staged_outcome() {
+        let mut mgr = UpdateDownloadManager::new();
+        mgr.status = UpdateDownloadStatus::InProgress;
+        let path = PathBuf::from("/tmp/lumen-update.zip");
+        mgr.tx.send(UpdateDownloadOutcome::Staged { path: path.clone() }).unwrap();
+        mgr.poll();
+        assert_eq!(*mgr.status(), UpdateDownloadStatus::Staged { path });
+    }
+
+    #[test]
+    fn manager_poll_applies_hash_mismatch() {
+        let mut mgr = UpdateDownloadManager::new();
+        mgr.status = UpdateDownloadStatus::InProgress;
+        mgr.tx.send(UpdateDownloadOutcome::HashMismatch).unwrap();
+        mgr.poll();
+        assert_eq!(*mgr.status(), UpdateDownloadStatus::HashMismatch);
+    }
+
+    #[test]
+    fn manager_poll_applies_failed() {
+        let mut mgr = UpdateDownloadManager::new();
+        mgr.status = UpdateDownloadStatus::InProgress;
+        mgr.tx.send(UpdateDownloadOutcome::Failed("boom".to_string())).unwrap();
+        mgr.poll();
+        assert_eq!(*mgr.status(), UpdateDownloadStatus::Failed("boom".to_string()));
+    }
+
+    #[test]
+    fn manager_cancel_wins_over_late_result() {
+        let mut mgr = UpdateDownloadManager::new();
+        mgr.status = UpdateDownloadStatus::InProgress;
+        mgr.cancel();
+        assert_eq!(*mgr.status(), UpdateDownloadStatus::Cancelled);
+        // Thread still sends its result after the user already cancelled.
+        mgr.tx
+            .send(UpdateDownloadOutcome::Staged { path: PathBuf::from("/tmp/late.zip") })
+            .unwrap();
+        mgr.poll();
+        assert_eq!(
+            *mgr.status(),
+            UpdateDownloadStatus::Cancelled,
+            "a result arriving after cancel must not overwrite it"
+        );
+    }
+
+    #[test]
+    fn manager_cancel_on_idle_is_noop() {
+        let mut mgr = UpdateDownloadManager::new();
+        mgr.cancel();
+        assert_eq!(*mgr.status(), UpdateDownloadStatus::Idle);
+    }
+
+    #[test]
+    fn manager_start_ignored_while_already_in_progress() {
+        let mut mgr = UpdateDownloadManager::new();
+        mgr.status = UpdateDownloadStatus::InProgress;
+        // No fixture/network available — if this spawned a real fetch it would
+        // eventually report Failed; asserting the status is untouched proves
+        // `start` returned before spawning anything.
+        mgr.start("1.0.0".to_string(), test_asset("lumen-windows-x86_64-v1.0.0.zip", b"x"));
+        assert_eq!(*mgr.status(), UpdateDownloadStatus::InProgress);
     }
 }
