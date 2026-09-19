@@ -26,9 +26,28 @@
 /// Install the W3C Web Audio API Level 1 into a V8 context (Ph3 V8 migration
 /// S5-S7 batch 2). The rquickjs twin (`install_web_audio_api`) was removed in
 /// S12b-B19 — this is now the only backend.
+///
+/// `origin` seeds the ADR-007 Layer 4 fingerprint noise (BUG-908) — see
+/// [`audio_noise_seed`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_web_audio_api_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
+    origin: &str,
+) -> lumen_core::JsResult<()> {
+    install_web_audio_api_v8_inner(rt, origin, audio_noise_enabled())
+}
+
+/// Shared by [`install_web_audio_api_v8`] and its own tests: the latter pass
+/// `noise_enabled` explicitly rather than through `LUMEN_DISABLE_AUDIO_NOISE`,
+/// since [`audio_noise_enabled`] latches its answer in a process-wide
+/// `OnceLock` on first read — fine for one browser process, but it would make
+/// two tests in the same binary that want *different* answers racy against
+/// each other instead of each just asking for what it needs.
+#[cfg(feature = "v8-backend")]
+fn install_web_audio_api_v8_inner(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    origin: &str,
+    noise_enabled: bool,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::into_v8_fn0;
     use lumen_core::ext::JsRuntime as _;
@@ -37,8 +56,55 @@ pub(crate) fn install_web_audio_api_v8(
     // binding is kept so an embedder can still poke the context per frame.
     let native = into_v8_fn0(move || {});
     rt.register_native("_lumen_audio_tick_time", native)?;
+
+    // BUG-908 (ADR-007 Layer 4): a fixed per-session+origin seed for the
+    // fingerprint noise the shim bakes into a rendered `OfflineAudioContext`
+    // buffer and mixes into `AnalyserNode.getFloatTimeDomainData`. Split into
+    // two u32 halves because a V8 native return value round-trips through an
+    // f64, which cannot carry a full u64 seed exactly; the shim below
+    // reassembles it into a `BigInt` and mixes it with the same SplitMix64
+    // round `lumen_canvas::fp_noise::CanvasNoiseGenerator` uses, so the two
+    // layers share one noise *shape* without sharing one noise *value* (see
+    // `audio_noise_seed`).
+    let seed = audio_noise_seed(origin);
+    let seed_hi = (seed >> 32) as u32;
+    let seed_lo = (seed & 0xFFFF_FFFF) as u32;
+    rt.register_native("_lumen_audio_noise_seed_hi", into_v8_fn0(move || seed_hi))?;
+    rt.register_native("_lumen_audio_noise_seed_lo", into_v8_fn0(move || seed_lo))?;
+    rt.register_native("_lumen_audio_noise_enabled", into_v8_fn0(move || noise_enabled))?;
+
     rt.eval(WEB_AUDIO_SHIM)?;
     Ok(())
+}
+
+/// Per-session+origin seed for the BUG-908 audio fingerprint noise.
+///
+/// Reuses [`crate::canvas2d::document_noise_seed`]'s per-process-session +
+/// per-origin derivation (same "session" lifetime the ADR-007 Layer 4 noise
+/// model calls for everywhere else) rather than growing a second wall-clock
+/// `OnceLock`, but XORs in a fixed tag so the two layers do not hand out the
+/// literal same seed value — a page that recovers one noise sample should not
+/// thereby know the other layer's noise for free.
+#[cfg(feature = "v8-backend")]
+fn audio_noise_seed(origin: &str) -> u64 {
+    crate::canvas2d::document_noise_seed(origin) ^ 0x4155_4449_4F5F_4E5A
+}
+
+/// Whether a rendered `OfflineAudioContext` buffer and `AnalyserNode` reads
+/// should carry BUG-908 fingerprint noise.
+///
+/// Mirrors [`crate::canvas2d::canvas_noise_enabled`]'s escape hatch: WPT's
+/// `webaudio/*` constant-source tests render a graph and assert exact sample
+/// equality (`assert_array_equals`), which a seed that changes on every
+/// `lumen` launch cannot satisfy across separate runs. `LUMEN_DISABLE_AUDIO_NOISE`
+/// (any value, checked once) turns the noise off for the life of the process;
+/// unset in a normal browsing session, so this changes nothing there.
+/// `docs/automation.md` §Flags.
+#[cfg(feature = "v8-backend")]
+fn audio_noise_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("LUMEN_DISABLE_AUDIO_NOISE").is_none())
 }
 
 #[cfg(feature = "v8-backend")]
@@ -61,6 +127,52 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   function _wa_task(fn) {
     if (typeof setTimeout === 'function') { setTimeout(fn, 0); return; }
     fn();
+  }
+
+  // ── BUG-908 fingerprint noise (ADR-007 Layer 4) ────────────────────────────
+  //
+  // The rendered `OfflineAudioContext` buffer is otherwise bit-exact across
+  // every session and every copy of the browser, which makes "render a fixed
+  // graph, hash the samples" a working audio fingerprint. This mirrors
+  // `lumen_canvas::fp_noise::CanvasNoiseGenerator`'s design one level up in
+  // JS (the buffer being perturbed is a plain `Float32Array` owned entirely
+  // by this shim, not a Rust-side pixel buffer a native can reach into):
+  // the perturbation of a sample is a pure function of (seed, index,
+  // channel), bounded to ±1e-7 (ADR-007 Layer 4's own figure — far below
+  // anything audible or DSP-significant), computed with the same SplitMix64
+  // round the canvas generator uses so the two layers share one noise shape.
+  var _waSeed = (BigInt(_lumen_audio_noise_seed_hi() >>> 0) << 32n)
+              | BigInt(_lumen_audio_noise_seed_lo() >>> 0);
+  var _waNoiseEnabled = !!_lumen_audio_noise_enabled();
+  var _WA_MASK64 = (1n << 64n) - 1n;
+  function _waMix64(z) {
+    z = (z + 0x9E3779B97F4A7C15n) & _WA_MASK64;
+    z = ((z ^ (z >> 30n)) * 0xBF58476D1CE4E5B9n) & _WA_MASK64;
+    z = ((z ^ (z >> 27n)) * 0x94D049BB133111EBn) & _WA_MASK64;
+    return (z ^ (z >> 31n)) & _WA_MASK64;
+  }
+  // `channel` doubles as a generic "second axis" (an AnalyserNode's own id
+  // when perturbing its readback, since there is no buffer channel there).
+  function _waSampleDelta(index, channel) {
+    var h = _waMix64(
+      _waSeed
+      ^ _waMix64((BigInt(index >>> 0) * 0x9E3779B97F4A7C15n) & _WA_MASK64)
+      ^ _waMix64((BigInt(channel >>> 0) + 1n) & _WA_MASK64)
+    );
+    return (Number(h % 3n) - 1) * 1e-7;
+  }
+  // Bakes noise into a rendered buffer's channels once, in place, right after
+  // `startRendering()` produces it — NOT on every `getChannelData()` call,
+  // so the spec's "same object on every call" identity
+  // (audiobuffer-getChannelData.html) still holds and a script-authored
+  // buffer (`createBuffer()` + `copyToChannel()`) is never touched, since its
+  // content is the page's own, not the implementation's.
+  function _waApplyNoiseToBuffer(buf) {
+    if (!_waNoiseEnabled) return;
+    for (var c = 0; c < buf.numberOfChannels; c++) {
+      var data = buf._channels[c];
+      for (var i = 0; i < data.length; i++) data[i] += _waSampleDelta(i, c);
+    }
   }
 
   // BUG-591: an exception thrown by a page handler goes into the ordinary
@@ -857,6 +969,11 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
 
   // ── AnalyserNode ────────────────────────────────────────────────────────────
 
+  // BUG-908: gives each AnalyserNode a stable id to stand in for the
+  // "channel" axis of `_waSampleDelta` when perturbing its readback — there
+  // is no buffer channel here, but two AnalyserNodes must still disagree so
+  // reading the same instant through both cannot average the noise away.
+  var _waAnalyserNextId = 1;
   function AnalyserNode(context, opts) {
     AudioNode.call(this, context, opts);
     this.numberOfInputs  = 1;
@@ -867,6 +984,7 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     this.smoothingTimeConstant= (opts && opts.smoothingTimeConstant != null) ? opts.smoothingTimeConstant : 0.8;
     this._ring    = null;   // most recent `fftSize` mono samples
     this._ringPos = 0;
+    this._waId = _waAnalyserNextId++;
   }
   AnalyserNode.prototype = Object.create(AudioNode.prototype);
   AnalyserNode.prototype.constructor = AnalyserNode;
@@ -892,6 +1010,11 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
   AnalyserNode.prototype.getFloatFrequencyData = function(array) {
     // No FFT yet: report the floor, which is what an all-silent input means.
     for (var i = 0; i < array.length; i++) array[i] = this.minDecibels;
+    // BUG-908: noise here too, even though the floor above carries no signal
+    // yet — once a real FFT lands, this call site does not need revisiting.
+    if (_waNoiseEnabled) {
+      for (var j = 0; j < array.length; j++) array[j] += _waSampleDelta(j, this._waId);
+    }
   };
   AnalyserNode.prototype.getByteFrequencyData = function(array) {
     for (var i = 0; i < array.length; i++) array[i] = 0;
@@ -900,6 +1023,12 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     var ring = this._ring, n = array.length;
     for (var i = 0; i < n; i++) {
       array[i] = ring ? ring[((this._ringPos - n + i) % ring.length + ring.length) % ring.length] : 0.0;
+    }
+    // BUG-908: this reads live signal off `_ring` fresh on every call, unlike
+    // `AudioBuffer.getChannelData()` above, so the noise is mixed in per-call
+    // rather than baked in once.
+    if (_waNoiseEnabled) {
+      for (var k = 0; k < n; k++) array[k] += _waSampleDelta(k, this._waId);
     }
   };
   AnalyserNode.prototype.getByteTimeDomainData = function(array) {
@@ -1428,6 +1557,9 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     }
     this._currentTime = this.length / sr;
     this._setState('closed');
+    // BUG-908: baked in once, here, not per-`getChannelData()` call — see
+    // `_waApplyNoiseToBuffer`.
+    _waApplyNoiseToBuffer(buf);
     var rendered = buf;
     _wa_task(function() {
       var evt = { type: 'complete', renderedBuffer: rendered };
@@ -1489,6 +1621,18 @@ mod tests_v8 {
     use lumen_core::JsValue;
 
     fn rt_with_web_audio() -> V8JsRuntime {
+        rt_with_web_audio_noise("https://example.test", false)
+    }
+
+    /// Like [`rt_with_web_audio`], but lets a BUG-908 test pick the origin and
+    /// force the noise decision explicitly via
+    /// [`super::install_web_audio_api_v8_inner`] instead of
+    /// `LUMEN_DISABLE_AUDIO_NOISE` — the env var latches process-wide on
+    /// first read, which would make a noise-enabled test and a noise-disabled
+    /// test (e.g. `bug828_offline_render_is_not_silent`'s exact zero/non-zero
+    /// count, the same assertion shape WPT's `webaudio/*` constant-source
+    /// tests make) race each other for which answer wins, in the same binary.
+    fn rt_with_web_audio_noise(origin: &str, noise_enabled: bool) -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         rt.eval(
             r#"
@@ -1501,7 +1645,7 @@ mod tests_v8 {
             "#,
         )
         .unwrap();
-        super::install_web_audio_api_v8(&rt).unwrap();
+        super::install_web_audio_api_v8_inner(&rt, origin, noise_enabled).unwrap();
         rt
     }
 
@@ -1821,6 +1965,137 @@ mod tests_v8 {
         // A sine starting at phase 0 has its first sample at exactly zero;
         // every other frame of the 4410 carries signal.
         assert_eq!(nonzero, JsValue::Number(4409.0));
+    }
+
+    // ── BUG-908: ADR-007 Layer 4 audio fingerprint noise ─────────────────────
+
+    /// The seed itself: stable for the same origin, different across origins
+    /// (the property the whole defence rests on — see `audio_noise_seed`).
+    #[test]
+    fn bug908_noise_seed_differs_by_origin_and_is_stable() {
+        let a1 = super::audio_noise_seed("https://a.example");
+        let a2 = super::audio_noise_seed("https://a.example");
+        let b = super::audio_noise_seed("https://b.example");
+        assert_eq!(a1, a2, "same origin must reproduce the same seed");
+        assert_ne!(a1, b, "different origins must not share a seed");
+    }
+
+    /// Renders a 128-sample constant-0.5 source and returns the *sum* of the
+    /// channel, not one sample: each sample's noise is one of {-1,0,+1}·1e-7,
+    /// so a single-sample comparison has a real one-in-three chance of two
+    /// different origins landing on the same delta by luck. Summing 128 of
+    /// them makes an all-samples collision between two different seeds
+    /// astronomically unlikely while keeping the same ±(1e-7 · n) budget
+    /// check meaningful. Returns the raw eval result (`JsValue::Number`); the
+    /// `#[test]` callers unwrap it themselves — `clippy.toml`'s
+    /// `allow-panic-in-tests` only covers a `#[test]` function's own body,
+    /// not a shared non-`#[test]` helper (docs/lint-policy.md §10).
+    fn rendered_constant_source_sum(origin: &str, noise_enabled: bool) -> JsValue {
+        let rt = rt_with_web_audio_noise(origin, noise_enabled);
+        rt.eval(
+            r#"
+            var ctx = new OfflineAudioContext(1, 128, 44100);
+            var src = ctx.createConstantSource();
+            src.offset.value = 0.5;
+            src.connect(ctx.destination);
+            src.start(0);
+            var rendered = null;
+            ctx.oncomplete = function(e) { rendered = e.renderedBuffer; };
+            ctx.startRendering();
+            var data = rendered.getChannelData(0), sum = 0;
+            for (var i = 0; i < data.length; i++) sum += data[i];
+            sum
+            "#,
+        )
+        .unwrap()
+    }
+
+    /// The defect this bug is named for: two sessions (here, two origins
+    /// standing in for two runs — see `rt_with_web_audio_noise`) rendering the
+    /// same graph must NOT get the bit-identical sample, or hashing the
+    /// buffer is a working fingerprint again.
+    #[test]
+    fn bug908_rendered_buffer_differs_across_sessions_when_noise_is_on() {
+        let (JsValue::Number(a), JsValue::Number(b)) = (
+            rendered_constant_source_sum("https://a.example", true),
+            rendered_constant_source_sum("https://b.example", true),
+        ) else {
+            panic!("expected Number sums from both renders");
+        };
+        assert_ne!(a, b, "two sessions must not render a bit-identical buffer");
+        // ADR-007 Layer 4's own figure is ±1e-7 per sample over 128 samples;
+        // the per-sample bound is widened to 2e-7 for the nearest-`f32`-ULP
+        // rounding of that delta once added into the buffer's
+        // `Float32Array` storage (~1.19e-7 near 0.5).
+        let budget = 128.0 * 2e-7;
+        assert!((a - 64.0).abs() <= budget, "noise exceeded its budget: {a}");
+        assert!((b - 64.0).abs() <= budget, "noise exceeded its budget: {b}");
+    }
+
+    /// `LUMEN_DISABLE_AUDIO_NOISE`'s effect (here, the explicit
+    /// `noise_enabled: false` `rt_with_web_audio_noise` takes instead of the
+    /// env var — see that helper's doc comment): WPT's `webaudio/*`
+    /// constant-source tests need this bit-exact reproducibility.
+    #[test]
+    fn bug908_rendered_buffer_is_bit_exact_when_noise_is_off() {
+        let (JsValue::Number(a), JsValue::Number(b)) = (
+            rendered_constant_source_sum("https://a.example", false),
+            rendered_constant_source_sum("https://b.example", false),
+        ) else {
+            panic!("expected Number sums from both renders");
+        };
+        assert_eq!(a, 64.0);
+        assert_eq!(b, 64.0);
+    }
+
+    /// `AudioBuffer.getChannelData()` must keep returning the same object on
+    /// every call (`audiobuffer-getChannelData.html`) even with noise on —
+    /// the noise is baked into the buffer once at render completion, not
+    /// applied per read (see `_waApplyNoiseToBuffer`'s doc comment in the
+    /// shim).
+    #[test]
+    fn bug908_get_channel_data_identity_holds_with_noise_on() {
+        let rt = rt_with_web_audio_noise("https://a.example", true);
+        let ok = rt
+            .eval(
+                r#"
+                var ctx = new OfflineAudioContext(1, 128, 44100);
+                var src = ctx.createConstantSource();
+                src.connect(ctx.destination);
+                src.start(0);
+                var rendered = null;
+                ctx.oncomplete = function(e) { rendered = e.renderedBuffer; };
+                ctx.startRendering();
+                var a = rendered.getChannelData(0);
+                var b = rendered.getChannelData(0);
+                a === b && a[10] === b[10]
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    /// A script-authored buffer (`createBuffer()` + `copyToChannel()`) is the
+    /// page's own content, not the implementation's — perturbing it would
+    /// break real audio-editing use cases for no anti-fingerprinting benefit,
+    /// so it must read back exactly what was written even with noise on.
+    #[test]
+    fn bug908_script_authored_buffer_is_never_perturbed() {
+        let rt = rt_with_web_audio_noise("https://a.example", true);
+        let ok = rt
+            .eval(
+                r#"
+                var ctx = new OfflineAudioContext(1, 128, 44100);
+                var buf = ctx.createBuffer(1, 4, 44100);
+                buf.copyToChannel(new Float32Array([0.5, 0.25, -0.5, 0]), 0);
+                buf.getChannelData(0)[0] === 0.5
+                  && buf.getChannelData(0)[1] === 0.25
+                  && buf.getChannelData(0)[2] === -0.5
+                  && buf.getChannelData(0)[3] === 0
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     /// `AudioParam` automation reaches the rendered samples: a constant source

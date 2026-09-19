@@ -27,7 +27,7 @@
 2294	crates/shell/src/frames.rs
 2275	crates/engine/layout/src/lib.rs
 2133	crates/engine/paint/src/lib.rs
-2067	crates/js/src/web_audio.rs
+2342	crates/js/src/web_audio.rs
 2036	crates/shell/src/tests/bug341_census.rs
 2011	crates/js/src/dom/tests/v8_ws_sse.rs
 2009	crates/engine/paint/src/display_list/tests/anim_and_chrome.rs

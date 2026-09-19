@@ -63,6 +63,11 @@ from wptrunner import wptcommandline, wptrunner  # noqa: E402
 # bit-exact (confirmed in isolation, `bugs/BUG-1024-FIXED.md` §Локализация).
 # `setdefault` so an explicit override in the calling shell still wins.
 os.environ.setdefault("LUMEN_DISABLE_CANVAS_NOISE", "1")
+# Same reasoning, one layer over: an `OfflineAudioContext` render carries the
+# ADR-007 layer 4 audio fingerprint noise (BUG-908), which flakes WPT's
+# `webaudio/*` constant-source tests (`assert_array_equals` against an exact
+# rendered sample) the same way uncontrolled canvas noise did above.
+os.environ.setdefault("LUMEN_DISABLE_AUDIO_NOISE", "1")
 
 
 def default_binary() -> str:
