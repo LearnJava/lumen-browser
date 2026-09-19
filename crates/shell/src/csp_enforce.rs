@@ -458,6 +458,24 @@ pub(crate) fn form_action_blocked(
     !policy.form_action_allowed(&parsed, self_origin)
 }
 
+/// `true` if `base-uri` forbids setting this document's base URL to
+/// `base_url` via `<base href>` — срез 32, the third navigation directive
+/// this module enforces (see [`frame_ancestors_blocked`]/[`form_action_blocked`]
+/// for the first two): no `default-src` fallback, absence of a policy is not
+/// checked here (the caller only calls this when a policy exists), and a
+/// `base_url` that fails to parse is treated as allowed, same as every
+/// fetch-gate above.
+pub(crate) fn base_uri_blocked(
+    policy: &CspPolicy,
+    base_url: &str,
+    self_origin: Option<&Origin>,
+) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(base_url) else {
+        return false;
+    };
+    !policy.base_uri_allowed(&parsed, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -921,5 +939,33 @@ mod tests {
         let origin = Origin::new("https", "example.com", 443);
         assert!(!form_action_blocked(&p, "https://example.com/submit", Some(&origin)));
         assert!(form_action_blocked(&p, "https://other.example/submit", Some(&origin)));
+    }
+
+    #[test]
+    fn base_uri_blocks_unlisted_target() {
+        let p = lumen_network::csp::parse_csp_header("base-uri example.com");
+        assert!(base_uri_blocked(&p, "https://other.example/base/", None));
+    }
+
+    #[test]
+    fn base_uri_allows_listed_target() {
+        let p = lumen_network::csp::parse_csp_header("base-uri example.com");
+        assert!(!base_uri_blocked(&p, "https://example.com/base/", None));
+    }
+
+    #[test]
+    fn base_uri_does_not_fall_back_to_default_src() {
+        // Navigation directives (CSP3 §6.4) never inherit `default-src` —
+        // same rule already covered for `frame-ancestors`/`form-action` above.
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(!base_uri_blocked(&p, "https://anything.example/base/", None));
+    }
+
+    #[test]
+    fn base_uri_self_matches_document_origin() {
+        let p = lumen_network::csp::parse_csp_header("base-uri 'self'");
+        let origin = Origin::new("https", "example.com", 443);
+        assert!(!base_uri_blocked(&p, "https://example.com/base/", Some(&origin)));
+        assert!(base_uri_blocked(&p, "https://other.example/base/", Some(&origin)));
     }
 }

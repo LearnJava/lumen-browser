@@ -1053,6 +1053,50 @@ fn effective_base_does_not_change_page_origin() {
     );
 }
 
+// ── GAP-CSPENF срез 32: `base-uri` blocks `<base href>` ──────────────────
+
+#[test]
+fn effective_base_ignores_base_href_blocked_by_base_uri() {
+    let doc = lumen_html_parser::parse(concat!(
+        "<html><head>",
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"base-uri example.com\">",
+        "<base href=\"https://other.example/\">",
+        "</head><body></body></html>",
+    ));
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let eff = effective_base(&doc, &page);
+    assert_eq!(
+        eff.resolve_str("pic.png"), "https://example.com/a/pic.png",
+        "base-uri example.com must reject the cross-origin <base href>, leaving the page's own base in effect"
+    );
+}
+
+#[test]
+fn effective_base_allows_base_href_matching_base_uri() {
+    let doc = lumen_html_parser::parse(concat!(
+        "<html><head>",
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"base-uri example.com\">",
+        "<base href=\"/other/\">",
+        "</head><body></body></html>",
+    ));
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let eff = effective_base(&doc, &page);
+    assert_eq!(eff.resolve_str("pic.png"), "https://example.com/other/pic.png");
+}
+
+#[test]
+fn effective_base_ignores_base_href_when_base_uri_is_none() {
+    let doc = lumen_html_parser::parse(concat!(
+        "<html><head>",
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"base-uri 'none'\">",
+        "<base href=\"/other/\">",
+        "</head><body></body></html>",
+    ));
+    let page = ResourceBase::Url("https://example.com/a/page.html".to_owned());
+    let eff = effective_base(&doc, &page);
+    assert_eq!(eff.resolve_str("pic.png"), "https://example.com/a/pic.png");
+}
+
 /// An automation `file://` URL goes through the same rule as a `file:` href
 /// (BUG-440 folded the two onto `file_url_to_path`), so a percent-escaped
 /// name navigates as well from BiDi/MCP as it resolves inside a page.

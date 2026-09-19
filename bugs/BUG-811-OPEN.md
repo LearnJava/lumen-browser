@@ -1825,3 +1825,55 @@ v8-backend -- -D warnings` и `cargo clippy -p lumen-shell --all-targets
 срезы этого GAP проверяют). `cargo test -p lumen-js --features v8-backend
 --lib` (3908 passed, 0 failed) без регрессий; `cargo clippy -p lumen-js
 --all-targets --features v8-backend -- -D warnings` чисто.
+
+## Срез 32 (2026-09-19, `p6-gap-cspenf-srez32`) — директива `base-uri` против `<base href>`
+
+Единственная директива из `CspDirective`, у которой был парсинг
+(`CspDirective::BaseUri`, `crates/network/src/csp.rs`), но вообще не было
+проверяющей функции — `grep -rn "BaseUri\|base_uri" crates/network/src
+crates/shell/src` до этого среза не находил ни одного enforcement-сайта.
+Единственная точка потребления `<base href>` — `crates/shell/src/
+page_pipeline.rs::effective_base` — резолвила её без всякой проверки.
+
+- `crates/network/src/csp.rs`: новый `CspPolicy::base_uri_allowed`
+  (`base_url`, `self_origin`) — та же форма, что `frame_ancestor_allowed`
+  (срез 27)/`form_action_allowed` (срез 29): **без фолбэка на
+  `default-src`**, CSP3 §6.4 относит `base-uri` к navigation directives
+  наравне с ними; отсутствие директивы значит «не ограничено».
+- `crates/shell/src/csp_enforce.rs::base_uri_blocked` — тонкая обёртка той
+  же формы, что `form_action_blocked`.
+- `crates/shell/src/page_pipeline.rs::effective_base` — новый приватный
+  `base_uri_href_blocked(doc, base, href)` вызывается ПЕРЕД
+  `base.resolve_as_base(href)`; заблокированный href отбрасывается целиком
+  (базой остаётся исходный URL документа), не просто игнорируется одно
+  обращение — HTML LS §4.2.3 шаг 6 уже отбрасывает `<base>`, чей href не
+  парсится, CSP3 §6.4.1 добавляет вторую, политика-зависимую причину. Важно:
+  `self_origin` для проверки берётся из НЕ-адаптированного `base`
+  (параметра функции), а не из уже применённого `<base>` — иначе `'self'`
+  вырождался бы в «всегда true» для любого href, который сам себе
+  назначает базу.
+- `effective_base` — единственная точка потребления, но вызывается на
+  каждый резолв URL (10+ сайтов вызова, намеренно пересчитывается заново,
+  не кэшируется — BUG-752), поэтому диспатч `securitypolicyviolation`
+  оттуда означал бы событие на каждый резолв. Вместо этого — одноразовый
+  репорт в `parse_and_layout`, тот же «one-shot-push» паттерн, что срезы
+  7/21/23 уже применяют для choke point'ов без `js_ctx`: `<base href>`
+  документа (после исполнения скриптов — те могут вставить/сменить
+  `<base>`) перепроверяется один раз тем же `base_uri_href_blocked`, и при
+  блокировке шлётся ровно одно событие `securitypolicyviolation`
+  (`violatedDirective="base-uri"`).
+
+Тесты: +4 в `crates/network/src/csp.rs` (`base_uri_allowed` — host
+allow/deny, `'none'`, `'self'` относительно origin документа, отсутствие
+директивы не наследует `default-src`), +4 в `crates/shell/src/
+csp_enforce.rs` (обёртка `base_uri_blocked`, те же четыре случая), +3 в
+`crates/shell/src/tests/page_pipeline.rs` (`effective_base_*base_uri*` —
+кросс-origin `<base href>` отклонён `base-uri example.com` и база
+документа остаётся исходной; совпадающий host пропускается;
+`base-uri 'none'` отбрасывает даже относительный href).
+
+`cargo test -p lumen-network --lib` (2273 passed), `cargo test -p
+lumen-shell --features v8 --bin lumen` (1923 passed, 0 failed) без
+регрессий; `cargo clippy -p lumen-network --all-targets -- -D warnings` и
+`cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings`
+чисто.

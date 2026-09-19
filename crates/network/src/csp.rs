@@ -285,6 +285,21 @@ impl CspPolicy {
             .iter()
             .any(|s| source_matches_url(s, action_url, self_origin))
     }
+
+    /// `true` if this policy's `base-uri` directive allows a document to set
+    /// its base URL to `base_url` via `<base href>` — CSP3 §6.4.1. Like
+    /// `frame-ancestors`/`form-action`, `base-uri` is a navigation directive
+    /// and does **not** fall back to `default-src` (CSP3 §6.4): its absence
+    /// means no restriction. `self_origin` is the document's own origin,
+    /// matching `'self'`'s meaning in this directive.
+    pub fn base_uri_allowed(&self, base_url: &Url, self_origin: Option<&Origin>) -> bool {
+        let Some(sources) = self.directives.get(&CspDirective::BaseUri) else {
+            return true;
+        };
+        sources
+            .iter()
+            .any(|s| source_matches_url(s, base_url, self_origin))
+    }
 }
 
 /// `true` if `source` (one token of a fetch-directive source list) matches
@@ -866,5 +881,37 @@ mod tests {
         // above.
         let p = parse_csp_header("default-src 'none'");
         assert!(p.form_action_allowed(&img_url("https://anything.example/submit"), None));
+    }
+
+    // ── GAP-CSPENF срез 32: `base-uri` enforcement ───────────────────────
+
+    #[test]
+    fn base_uri_allows_listed_host() {
+        let p = parse_csp_header("base-uri example.com");
+        assert!(p.base_uri_allowed(&img_url("https://example.com/base/"), None));
+        assert!(!p.base_uri_allowed(&img_url("https://other.example/base/"), None));
+    }
+
+    #[test]
+    fn base_uri_none_blocks_every_target() {
+        let p = parse_csp_header("base-uri 'none'");
+        assert!(!p.base_uri_allowed(&img_url("https://example.com/base/"), None));
+    }
+
+    #[test]
+    fn base_uri_self_matches_documents_own_origin() {
+        let p = parse_csp_header("base-uri 'self'");
+        let doc_origin = origin("https://example.com/");
+        assert!(p.base_uri_allowed(&img_url("https://example.com/base/"), Some(&doc_origin)));
+        assert!(!p.base_uri_allowed(&img_url("https://other.example/base/"), Some(&doc_origin)));
+    }
+
+    #[test]
+    fn base_uri_absent_does_not_fall_back_to_default_src() {
+        // CSP3 §6.4: navigation directives (base-uri, form-action,
+        // frame-ancestors, sandbox) never inherit default-src — unlike every
+        // fetch directive above.
+        let p = parse_csp_header("default-src 'none'");
+        assert!(p.base_uri_allowed(&img_url("https://anything.example/base/"), None));
     }
 }
