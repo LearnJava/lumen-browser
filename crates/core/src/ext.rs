@@ -1602,6 +1602,59 @@ pub trait ImageDecoder: Send + Sync {
     fn decode_rgba8(&self, bytes: &[u8]) -> std::result::Result<(u32, u32, Vec<u8>), String>;
 }
 
+/// Plug-in декодер видео/аудио-контейнеров для форматов, которые движок
+/// сегодня не декодирует вообще (`video/mp4`, `video/webm`, `video/ogg`) —
+/// единственный декодируемый формат сейчас, анимированный GIF, идёт мимо
+/// этого trait'а через отдельный путь ([`crate::ext::ImageDecoder`]-подобный,
+/// см. `crates/js/src/video_bindings.rs`). Trait-anchor под FFmpeg-биндинги
+/// (GAP-MEDIADECODE, [ADR-030](../../../docs/decisions/ADR-030-media-codec-strategy-ffmpeg.md)) —
+/// объявлен до того, как связка `ffmpeg-next`/`ffmpeg-sys-next` реально
+/// линкуется на целевой платформе (живой `bindgen`-блокер, статус `blocked`
+/// в `docs/plan/tech-stack.md` §5), чтобы реализация была drop-in заменой
+/// без переписывания вызывающей стороны.
+///
+/// Дизайн, как и у `ImageDecoder`, намеренно тонкий: sniff по контейнеру +
+/// потоковый доступ к декодированным кадрам. Никакого выбора дорожек по
+/// кодеку/битрейту, никакого демультиплексирования нескольких видеодорожек —
+/// первая видеодорожка и первая аудиодорожка, этого достаточно для
+/// `<video>`/`<audio>` HTML-элементов.
+pub trait VideoDecoder: Send + Sync {
+    /// Имя контейнера/кодек-стека: `"ffmpeg"`, …
+    fn decoder_name(&self) -> &'static str;
+
+    /// MIME-типы, которые этот декодер способен открыть — источник ответа
+    /// `HTMLMediaElement.canPlayType()` при подключённом декодере.
+    fn mime_types(&self) -> &'static [&'static str];
+
+    /// Открыть контейнер и вернуть сессию декодирования, либо диагностику
+    /// ошибки (аналог HTML LS «dedicated media source failure steps»).
+    ///
+    /// # Errors
+    /// Строка с диагностикой: неизвестный контейнер, нет декодируемой
+    /// видео/аудио-дорожки, повреждённые данные.
+    fn open(&self, bytes: &[u8]) -> std::result::Result<Box<dyn VideoDecodeSession>, String>;
+}
+
+/// Одна открытая сессия декодирования — постранично (по кадру) декодирует
+/// видеодорожку в RGBA8, зная общую длительность и текущую позицию. Аудио
+/// вне объёма этого среза trait-anchor'а: у `<audio>` сегодня свой путь
+/// (`audio_element.rs`), а видео с полноценным звуком — часть более
+/// широкого будущего среза, не первого подключения FFmpeg.
+pub trait VideoDecodeSession: Send {
+    /// Ширина/высота видеодорожки в пикселях.
+    fn dimensions(&self) -> (u32, u32);
+
+    /// Длительность в секундах, `None` для бесконечных/неизвестных потоков.
+    fn duration_secs(&self) -> Option<f64>;
+
+    /// Декодировать и вернуть кадр на позиции `secs` (RGBA8, row-major) —
+    /// ближайший к запрошенному времени ключевой+P/B кадр после перемотки.
+    ///
+    /// # Errors
+    /// Строка с диагностикой: позиция за пределами потока, ошибка декодера.
+    fn frame_at(&mut self, secs: f64) -> std::result::Result<Vec<u8>, String>;
+}
+
 /// Spell checker — проверка орфографии для form field / contenteditable.
 /// Trait-anchor под `hunspell-rs` / `spellbook` (provisional, §5, Phase 3).
 ///
