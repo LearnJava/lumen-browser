@@ -885,15 +885,17 @@ fn shared_worker_external_url_fetch_failure_fires_onerror() {
     ));
 }
 
-// ── BUG-591: SharedWorker parent-side reporting ─────────────────────────
-// Unlike a dedicated Worker (one client), an uncaught exception in a
-// SharedWorker's global scope must broadcast `error` to *every*
-// currently-connected client's `SharedWorker` object, not just the one
-// whose message/connect triggered it — see `shared_worker.rs`'s
-// `broadcast_shared_worker_error`/`error_ports`.
+// ── BUG-905: SharedWorker runtime errors stop at the worker's own scope ──
+// Unlike a dedicated Worker (one owning client), HTML LS §10.2.6 gives a
+// shared worker no single owner to forward a *runtime* exception to — it
+// fires `error` at the worker's own global scope and stops there, regardless
+// of how many clients are connected or which one triggered it. This used to
+// broadcast to every connected client instead (the original, incorrect,
+// BUG-591 shape) — see `shared_worker.rs`'s `broadcast_shared_worker_error`,
+// now reserved for a top-level parse/load failure only.
 
 #[test]
-fn shared_worker_onconnect_exception_fires_client_onerror() {
+fn shared_worker_onconnect_exception_does_not_reach_client_onerror() {
     use std::time::Duration;
     let provider = Arc::new(FixedFetch {
         status: 200,
@@ -908,13 +910,11 @@ fn shared_worker_onconnect_exception_fires_client_onerror() {
     .unwrap();
     std::thread::sleep(Duration::from_millis(150));
     rt.pump_shared_workers();
-    assert!(bool_eval(&rt, "errEvent !== null"));
-    assert!(bool_eval(&rt, "errEvent.type === 'error'"));
-    assert!(bool_eval(&rt, "errEvent.message === 'boom-connect'"));
+    assert!(bool_eval(&rt, "errEvent === null"));
 }
 
 #[test]
-fn shared_worker_port_onmessage_exception_broadcasts_to_all_clients() {
+fn shared_worker_port_onmessage_exception_does_not_reach_any_client() {
     use std::time::Duration;
     let provider = Arc::new(FixedFetch {
         status: 200,
@@ -933,14 +933,12 @@ fn shared_worker_port_onmessage_exception_broadcasts_to_all_clients() {
     .unwrap();
     std::thread::sleep(Duration::from_millis(150));
     rt.pump_shared_workers();
-    assert!(bool_eval(&rt, "errA !== null"), "client A (sender) should see the broadcast");
-    assert!(bool_eval(&rt, "errB !== null"), "client B (bystander) should see the broadcast too");
-    assert!(bool_eval(&rt, "errA.message === 'boom-message'"));
-    assert!(bool_eval(&rt, "errB.message === 'boom-message'"));
+    assert!(bool_eval(&rt, "errA === null"), "client A (sender) must not see a runtime error");
+    assert!(bool_eval(&rt, "errB === null"), "client B (bystander) must not see it either");
 }
 
 #[test]
-fn shared_worker_error_addeventlistener_also_fires() {
+fn shared_worker_error_addeventlistener_does_not_fire_for_runtime_error() {
     use std::time::Duration;
     let provider = Arc::new(FixedFetch {
         status: 200,
@@ -955,8 +953,7 @@ fn shared_worker_error_addeventlistener_also_fires() {
     .unwrap();
     std::thread::sleep(Duration::from_millis(150));
     rt.pump_shared_workers();
-    assert!(bool_eval(&rt, "gotViaListener !== null"));
-    assert!(bool_eval(&rt, "gotViaListener.message === 'boom-listener'"));
+    assert!(bool_eval(&rt, "gotViaListener === null"));
 }
 
 // ── GAP-CSPENF срез 13: worker-src против new Worker()/new SharedWorker() ──

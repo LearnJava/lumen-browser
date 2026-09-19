@@ -162,6 +162,20 @@ pub(crate) fn error_info_json(message: &str, filename: &str, lineno: i32, colno:
     )
 }
 
+/// [`error_info_json`] plus `"plain":true` — read by `SharedWorker`'s
+/// `_deliverError` (`shared_worker.rs`) to dispatch a bare `Event` instead of
+/// an `ErrorEvent` (BUG-905): a shared worker's top-level *parse* failure
+/// never entered the worker's own scope, so HTML LS routes it straight to
+/// every owning `SharedWorker` object as a plain `error` event — the only
+/// caller is `run_shared_worker_thread_v8`'s "reporter never ran" branch.
+pub(crate) fn error_info_json_plain(message: &str, filename: &str, lineno: i32, colno: i32) -> String {
+    format!(
+        "{{\"message\":\"{}\",\"filename\":\"{}\",\"lineno\":{lineno},\"colno\":{colno},\"plain\":true}}",
+        json_escape(message),
+        json_escape(filename),
+    )
+}
+
 // ─── base64 helpers ───────────────────────────────────────────────────────────
 
 /// Decode standard base64 (RFC 4648 §4) to bytes.
