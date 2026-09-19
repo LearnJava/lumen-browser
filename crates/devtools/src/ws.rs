@@ -128,6 +128,44 @@ pub fn write_text_frame<S: Write>(stream: &mut S, text: &str) -> Result<(), WsEr
     write_raw_frame(stream, 0x1, text.as_bytes())
 }
 
+/// Один необработанный входящий фрейм для вызывающих, которым нужен
+/// собственный контроль над Ping (см. [`read_frame`]) — например
+/// bidi-server, отвечающий на Ping с отдельного потока, пока на основном
+/// выполняется медленная команда (BUG-981).
+pub enum WsFrame {
+    /// Text-фрейм с телом сообщения.
+    Text(String),
+    /// Ping с телом, которое нужно вернуть в Pong как есть.
+    Ping(Vec<u8>),
+    /// Close-фрейм или эквивалентное закрытие соединения.
+    Close,
+}
+
+/// Как [`read_text_frame`], но не отвечает на Ping сам и не глотает Pong
+/// молча — оставляет то и другое решению вызывающего. `read_text_frame`
+/// остаётся основным API для однопоточных потребителей (DevTools CDP).
+pub fn read_frame<S: Read>(stream: &mut S) -> Result<WsFrame, WsError> {
+    loop {
+        let frame = read_raw_frame(stream)?;
+        match frame.opcode {
+            0x1 => {
+                return String::from_utf8(frame.payload)
+                    .map(WsFrame::Text)
+                    .map_err(|_| WsError::BadHandshake("non-utf8 payload"));
+            }
+            0x8 => return Ok(WsFrame::Close),
+            0x9 => return Ok(WsFrame::Ping(frame.payload)),
+            0xA => {} // Pong — игнорируем, ждём следующий фрейм
+            op => return Err(WsError::UnsupportedOpcode(op)),
+        }
+    }
+}
+
+/// Ответить Pong на Ping, полученный через [`read_frame`].
+pub fn write_pong<S: Write>(stream: &mut S, payload: &[u8]) -> Result<(), WsError> {
+    write_raw_frame(stream, 0xA, payload)
+}
+
 struct RawFrame {
     opcode: u8,
     payload: Vec<u8>,
@@ -284,5 +322,57 @@ mod tests {
         // RFC 6455 §1.3 example
         let accept = ws_accept_key("dGhlIHNhbXBsZSBub25jZQ==");
         assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    #[test]
+    fn read_frame_classifies_ping_without_answering() {
+        // opcode 0x9 = Ping, без маски, payload "hi" — read_frame не должен
+        // сам писать Pong (в отличие от read_text_frame), только вернуть его
+        // вызывающему (BUG-981: ответом распоряжается отдельный поток).
+        let frame = vec![0x89, 0x02, b'h', b'i'];
+        let mut stream = MockStream::new(frame);
+        match read_frame(&mut stream).unwrap() {
+            WsFrame::Ping(payload) => assert_eq!(payload, b"hi"),
+            _ => panic!("expected Ping"),
+        }
+        assert!(stream.write_buf.is_empty());
+    }
+
+    #[test]
+    fn read_frame_returns_text() {
+        let frame = make_text_frame("hello", false);
+        let mut stream = MockStream::new(frame);
+        match read_frame(&mut stream).unwrap() {
+            WsFrame::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn read_frame_returns_close() {
+        let frame = vec![0x88, 0x00];
+        let mut stream = MockStream::new(frame);
+        assert!(matches!(read_frame(&mut stream), Ok(WsFrame::Close)));
+    }
+
+    #[test]
+    fn read_frame_skips_pong_and_reads_next_frame() {
+        // Pong (0xA, без payload), затем text-фрейм — read_frame молча
+        // пропускает Pong и возвращает следующий содержательный фрейм.
+        let mut input = vec![0x8A, 0x00];
+        input.extend(make_text_frame("after-pong", false));
+        let mut stream = MockStream::new(input);
+        match read_frame(&mut stream).unwrap() {
+            WsFrame::Text(t) => assert_eq!(t, "after-pong"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn write_pong_format() {
+        let mut stream = MockStream::new(vec![]);
+        write_pong(&mut stream, b"hi").unwrap();
+        // FIN+pong=0x8A, len=2, payload
+        assert_eq!(&stream.write_buf, &[0x8A, 0x02, b'h', b'i']);
     }
 }

@@ -2,7 +2,7 @@
 command is running — a slow command can get the client's own 20s ping
 liveness timeout to kill the whole session
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19 (P3)
 **Дата:** 2026-09-04
 **Компонент:** bidi-server (`crates/bidi-server/src/transport.rs::handle`,
 line 32-60 read/dispatch loop; ping/pong auto-answer lives in
@@ -115,3 +115,37 @@ rerun of either file can complete without hitting it (measured above); the
 code-level cause and the corpus-visible failure are both real and
 reproduced, but which id absorbs it is a matter of shard-order luck, not a
 property of the file itself.
+
+## Исправлено (P3, 2026-09-19)
+
+Read/dispatch развязаны на два потока одного соединения:
+`lumen_devtools::ws` получил низкоуровневый `read_frame`/`WsFrame`/
+`write_pong` (не отвечает на Ping сам, в отличие от `read_text_frame`) —
+`transport::handle` теперь клонирует `TcpStream` и запускает отдельный
+reader-поток, который читает сокет и отвечает на Ping немедленно, пока
+основной поток занят `dispatch()`; оба потока пишут через общий
+`Arc<Mutex<TcpStream>>`, чтобы Pong и ответ `dispatch()` не перемежались
+на одном TCP-соединении. По завершении основного цикла сокет закрывается
+(`shutdown(Both)`), чтобы разблокировать читающий поток, который затем
+джойнится. `read_text_frame`/`write_text_frame` не тронуты — ими
+по-прежнему пользуется однопоточный DevTools CDP.
+
+Новые юнит-тесты в `crates/devtools/src/ws.rs`
+(`read_frame_classifies_ping_without_answering`,
+`read_frame_returns_text`, `read_frame_returns_close`,
+`read_frame_skips_pong_and_reads_next_frame`, `write_pong_format`).
+`cargo test -p lumen-devtools --lib` 15/15,
+`cargo test -p lumen-bidi-server --lib` 109/109,
+`cargo clippy -p lumen-devtools -p lumen-bidi-server --all-targets -- -D
+warnings` чист. `scripts/scoped-test.sh`: два предсуществующих красных, не
+связанных с правкой — `cpu_snapshots_match_references` (BUG-1008,
+идентичный дрейф эталонов — те же 7 файлов) и одиночный флак
+`lumen-shell --bin lumen` (1860/1860 зелёных при адресном перезапуске той
+же командой в изоляции).
+
+`transport.rs` — единственный call-site нового API; не unit-тестируется
+напрямую (нужен настоящий `TcpStream` + `AutomationHandle` живого окна),
+корректность reader/writer-развязки проверена чтением кода и юнит-тестами
+на `read_frame`/`write_pong`, которые ловят именно то поведение
+(классификация Ping без авто-ответа), на которое опирается новая логика
+`transport::handle`.
