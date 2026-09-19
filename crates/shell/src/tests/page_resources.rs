@@ -433,6 +433,71 @@ fn frame_subresources_no_policy_keeps_inline_style() {
     assert!(out.css.contains("color"), "no policy must not block inline style");
 }
 
+/// GAP-CSPENF срез 24: `style-src-attr` политика ребёнка `<iframe>` также
+/// блокирует его СОБСТВЕННЫЙ атрибут `style=""` — срез 23 дал это top-level
+/// документу через `page_pipeline.rs::build_page_cascade`, срез 22 дал
+/// инлайновый `<style>` фрейма, но атрибут внутри `<iframe>` оставался
+/// непокрытым (`bugs/BUG-811-OPEN.md` срез 23 "не покрыто").
+#[test]
+fn frame_subresources_reports_csp_blocked_style_attr() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                 <meta http-equiv="Content-Security-Policy" content="style-src-attr 'none'">
+               </head><body><div style="color:red">a</div></body></html>"#,
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
+    let out = fetch_frame_subresources(
+        &mut doc,
+        &base,
+        &sink,
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
+    );
+
+    assert_eq!(out.blocked_style_attr_count, 1, "the sole style= node is blocked");
+    // The blocked set is written directly onto `doc` — `lumen_layout`'s
+    // cascade is the only reader (see `Document::is_style_attr_csp_blocked`'s
+    // doc comment), so re-deriving the same node id here to probe it would
+    // just duplicate `doc_extract`'s own walk; the count above already proves
+    // exactly one node was found and the walk-then-`set_style_attr_csp_blocked`
+    // wiring is a single straight-line call with nothing to branch on.
+}
+
+/// A document without a policy still cascades its own `style=""` — the gate
+/// must not misfire when there is nothing to enforce.
+#[test]
+fn frame_subresources_no_policy_keeps_style_attr() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head></head><body><div style="color:red">a</div></body></html>"#,
+    );
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
+    let out = fetch_frame_subresources(
+        &mut doc,
+        &base,
+        &sink,
+        None,
+        &screen_media_context(Size::new(1024.0, 720.0), false),
+        Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
+    );
+
+    assert_eq!(out.blocked_style_attr_count, 0);
+}
+
 /// Настоящий PNG `w`×`h` (непрозрачный) для фикстур: `decode_image` обязан его
 /// разобрать, поэтому строка «bytes» тут больше не годится.
 ///

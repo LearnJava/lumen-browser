@@ -1440,3 +1440,49 @@ DOM-мутация после первого layout (см. выше); дирек
 `script-src`/`img-src`/`style-src`/`style-src-attr`/`connect-src`/`worker-src`/
 `frame-src`/`object-src`/`media-src`/`font-src`; `frame-ancestors`;
 `report-to`; честная независимая проверка заголовка и `<meta>`.
+
+## Срез 24 (2026-09-19, `p6-gap-cspenf-srez24`) — `style-src-attr` против атрибута `style=` внутри `<iframe>`
+
+Реализовано: ровно тот пробел, что срез 23 назвал не покрытым — атрибут
+`style=""` внутри `<iframe>` не гейтился вовсе, хотя политика ребёнка уже
+считалась в том же месте кода для `img-src`/внешнего `<link>`/инлайнового
+`<style>` (срезы 8/22).
+
+- `crates/shell/src/frames.rs::fetch_frame_subresources`: сразу после гейта
+  инлайнового `<style>` (срез 22) добавлен `collect_style_attr_csp_blocked`
+  (срез 23) по тому же `csp_gate` — набор заблокированных узлов пишется прямо
+  на `doc` (`Document::set_style_attr_csp_blocked`) ДО того, как документ
+  передаётся в `run_scripts_with_dom`/`layout_frame_document`: `lumen_layout`'s
+  cascade читает этот набор с документа так же, как у top-level документа
+  (`page_pipeline.rs::build_page_cascade`), без отдельного провода через
+  layout ребёнка.
+- `FrameSubresourceOutcomes` получила `blocked_style_attr_count: usize` — тот
+  же счётчик-без-URL, что уже есть у `blocked_inline_style_count` (срез 22):
+  `blockedURI` для атрибута тоже всегда `"inline"`.
+- `crates/shell/src/frames.rs::spawn_frame`: диспатч `securitypolicyviolation`
+  после появления JS-рантайма ребёнка расширен на `blocked_style_attr_count`
+  с `violatedDirective=style-src-attr` — тот же one-shot-push путь, что уже
+  несёт `blocked_by_img_src`/`blocked_by_style_src`/`blocked_inline_style_count`
+  для этого ребёнка (срезы 8/22).
+
+Тесты: +2 в `crates/shell/src/tests/page_resources.rs`
+(`frame_subresources_reports_csp_blocked_style_attr` — `style-src-attr 'none'`
+блокирует счётчик; `frame_subresources_no_policy_keeps_style_attr` — без
+политики гейт не срабатывает). Живым окном (`--screenshot`, три арма):
+`<iframe>` с `<meta ... content="style-src-attr 'none'">` и `<div
+style="color:red">` внутри даёт `getComputedStyle(#probe).color === rgb(0, 0,
+0)` (атрибут не применился) и `securitypolicyviolation` с
+`directive=style-src-attr policy=style-src-attr 'none'` внутри фрейма;
+baseline той же страницы без директивы даёт `rgb(255, 0, 0)`.
+
+Подтверждено `cargo build -p lumen-shell --features v8` + `cargo clippy -p
+lumen-shell -p lumen-dom -p lumen-layout -p lumen-network --all-targets
+--features v8 -- -D warnings` (чисто) + `cargo test -p lumen-shell --features
+v8 --bin lumen` (1885 passed, 0 failed, включая 2 новых).
+
+Не покрыто этим срезом: точечная DOM-мутация после первого layout (см. срез
+23); директивы кроме `script-src`/`img-src`/`style-src`/`style-src-attr`/
+`connect-src`/`worker-src`/`frame-src`/`object-src`/`media-src`/`font-src`;
+`frame-ancestors`; `report-to`; честная независимая проверка заголовка и
+`<meta>`; вложенные фреймы фрейма (рекурсия та же функция, не тестировалась
+отдельно для этого гейта, как и остальные срезы 8/22 её не тестировали).
