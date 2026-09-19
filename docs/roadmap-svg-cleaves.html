@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 282,
-  "fixed": 723,
+  "open": 281,
+  "fixed": 724,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -591,8 +591,8 @@
     {
      "id": "P2-scrolldriven",
      "title": "CSS Scroll-Driven Animations L1",
-     "status": "planned",
-     "note": "PARTIAL (ревизия P3 2026-07-04): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs), композит animated background-color готов (BUG-231 FIXED); TEST-78 остаток = font-parity (BUG-127 → KNOWN_DEBTOR 4.64). Подтверждено живой пробой 2026-09-01 (WPT-RUN-6 срез 31, BUG-950): Phase 1 — проводка `animation-timeline: scroll()` от `ScrollTimeline.currentTime` в `AnimationScheduler` для keyframe-прогресса — по-прежнему не сделана, `getComputedStyle` анимируемого свойства не двигается вовсе при прокрутке",
+     "status": "done",
+     "note": "PARTIAL (ревизия P3 2026-07-04): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs), композит animated background-color готов (BUG-231 FIXED); TEST-78 остаток = font-parity (BUG-127 → KNOWN_DEBTOR 4.64). **Ревизия P1 2026-09-19 (BUG-950 FIXED):** объём заявки на «Phase 1 не сделана» оказался стал — проводка `ScrollCtx`/`progress_for` уже существовала с 2026-06-22, а getComputedStyle-патчинг оверрайдов уже общий (GAP-CSSANIM срезы 2-8). Настоящий дефект был у́же: поле `nearest` в `AnimationTimeline::Scroll` парсилось, но отбрасывалось в `progress_for`, поэтому `scroll(self)`/`scroll(nearest)` молча резолвились в прогресс корневого вьюпорта вместо собственного скролла контейнера — исправлено новой `find_nearest_scroll_container`. Остаток вне скоупа: спецификационное различие `self` (обязан быть сам scroll-контейнером) и `nearest` (ищет предка) не разведено — оба используют один и тот же ancestor-or-self поиск; расходится со спекой только когда `self` указан на элементе, который сам не является scroll-контейнером. Подробности — [bugs/BUG-950-FIXED.md](bugs/BUG-950-FIXED.md)",
      "bugs": [
       "BUG-127",
       "BUG-950"
@@ -8679,13 +8679,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-950": {
-   "status": "open",
-   "title": "`animation-timeline: scroll(self)` не двигает вычисленный стиль анимируемого свойства вообще — проводка от `ScrollTimeline.currentTime` к `AnimationScheduler` (…",
-   "component": "js (`crates/js/src/scroll_timeline.rs` — Phase 0 готова, Phase 1 нет по собственному doc-комментарию строки 16)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-951": {
    "status": "open",
    "title": "`<label>.focus()` без собственного `tabindex` — полный no-op: не фокусируется ни метка, ни связанный контрол (`for`/первый labelable-потомок), `_lumen_is_focusa…",
@@ -14136,6 +14129,13 @@
    "status": "fixed",
    "title": "Регресс-тест BUG-418 (`native_binding_panic_does_not_abort_process`) стал детерминированно красным 2026-09-04: триггер паники (`_lumen_append_child(0, 429496729…",
    "component": "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs` — регресс-тест BUG-418)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-950": {
+   "status": "fixed",
+   "title": "`animation-timeline: scroll(self)` не двигало вычисленный стиль анимируемого свойства при скролле контейнера, не страницы. Заявка называла причиной отсутствующу…",
+   "component": "layout (`crates/engine/layout/src/scroll_timeline.rs`), shell (`crates/shell/src/animation_scheduler.rs::ScrollCtx::progress_for`)",
    "date": "2026-09-19",
    "debtor": false
   },

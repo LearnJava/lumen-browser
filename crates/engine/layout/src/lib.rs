@@ -113,7 +113,7 @@ pub use anchor::{
 pub use motion_path::{resolve_motion_transform, MotionTransform};
 pub use text_iter::{collect_visible_text, TextFragment};
 pub use scroll_timeline::{
-    collect_named_scroll_timelines, collect_named_view_timelines,
+    collect_named_scroll_timelines, collect_named_view_timelines, find_nearest_scroll_container,
     resolve_scroll_progress, resolve_view_progress,
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };

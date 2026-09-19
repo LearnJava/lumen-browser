@@ -25,9 +25,9 @@ use lumen_layout::{
         AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
         IterationCount, TimingFunction,
     },
-    collect_named_scroll_timelines, collect_named_view_timelines, resolve_scroll_progress,
-    resolve_view_progress, LayoutBox, NamedScrollTimeline, NamedViewTimeline, ScrollTimeline,
-    ViewTimeline, Viewport,
+    collect_named_scroll_timelines, collect_named_view_timelines, find_nearest_scroll_container,
+    resolve_scroll_progress, resolve_view_progress, LayoutBox, NamedScrollTimeline,
+    NamedViewTimeline, ScrollTimeline, ViewTimeline, Viewport,
 };
 
 /// Ключ одного экземпляра анимации: (элемент, индекс в списке animation-name).
@@ -118,17 +118,25 @@ impl ScrollCtx<'_> {
     /// Прогресс `[0,1]` для timeline узла `node`, либо `None` если timeline =
     /// `auto` (тогда анимация управляется обычными часами `@keyframes`).
     ///
-    /// * `scroll()` — прогресс корневого вьюпорта по нужной оси. `nearest`/`self`
-    ///   аппроксимируются корневым вьюпортом (полный резолвинг ближайшего
-    ///   scroll-контейнера — задача L2).
+    /// * `scroll()` — прогресс контейнера по нужной оси: `root` → корневой
+    ///   вьюпорт, `nearest`/`self` → ближайший ancestor-or-self с реальным
+    ///   overflow (`find_nearest_scroll_container`), с фолбэком на корневой
+    ///   вьюпорт, если такого нет (BUG-950 — раньше `nearest`/`self` тоже
+    ///   молча резолвились в корневой вьюпорт, поэтому скролл внутри
+    ///   `<div animation-timeline: scroll(self)>` не двигал прогресс вовсе).
     /// * `view()` — view-прогресс самого узла как subject (cover-диапазон).
     /// * `<custom-ident>` — матч против именованных scroll/view timeline-ов;
     ///   неизвестное имя → inactive timeline, удерживаем прогресс 0 (from-state).
     fn progress_for(&self, timeline: &AnimationTimeline, node: NodeId) -> Option<f32> {
         match timeline {
             AnimationTimeline::Auto => None,
-            AnimationTimeline::Scroll { axis, .. } => {
-                let tl = ScrollTimeline { element: None, axis: *axis };
+            AnimationTimeline::Scroll { axis, nearest } => {
+                let element = if *nearest {
+                    find_nearest_scroll_container(self.root, node)
+                } else {
+                    None
+                };
+                let tl = ScrollTimeline { element, axis: *axis };
                 Some(resolve_scroll_progress(
                     &tl, self.root, self.scroll_x, self.scroll_y, self.viewport,
                 ))
@@ -833,6 +841,53 @@ mod tests {
         // content 2000, vp 720 → max 1280; scroll 640 → 0.5.
         let half = ctx_for(&root, 640.0).progress_for(&tl, node(1)).unwrap();
         assert!((half - 0.5).abs() < 0.01, "expected ~0.5, got {half}");
+    }
+
+    // BUG-950: `scroll(self)` на самом элементе-контейнере должен резолвиться
+    // против его собственного scroll_y, а не молча против корневого вьюпорта
+    // (страница может вообще не скроллиться, пока скроллится сам контейнер).
+    #[test]
+    fn progress_for_scroll_self_uses_own_container_not_root() {
+        use lumen_layout::style::Overflow;
+
+        let mut root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+        let mut container = make_box(2, 0.0, 0.0, 400.0, 300.0);
+        {
+            let style = std::sync::Arc::make_mut(&mut container.style);
+            style.overflow_x = Overflow::Auto;
+            style.overflow_y = Overflow::Auto;
+        }
+        container.scroll_y = 200.0;
+        // container height 300, content 700 tall -> max_scroll 400; 200/400 = 0.5.
+        container.children.push(make_box(3, 0.0, 0.0, 400.0, 700.0));
+        root.children.push(container);
+
+        let tl = AnimationTimeline::Scroll { axis: ScrollAxis::Block, nearest: true };
+        // Page itself never scrolled (scroll_y = 0.0) — only the inner container did.
+        let p = ctx_for(&root, 0.0).progress_for(&tl, node(2)).unwrap();
+        assert!((p - 0.5).abs() < 0.01, "expected ~0.5 from container's own scroll, got {p}");
+    }
+
+    // `scroll(root)` must keep resolving against the root viewport even when
+    // the animated element itself sits inside a scroll container.
+    #[test]
+    fn progress_for_scroll_root_keyword_ignores_own_container() {
+        use lumen_layout::style::Overflow;
+
+        let mut root = make_box(1, 0.0, 0.0, 1024.0, 2000.0);
+        let mut container = make_box(2, 0.0, 0.0, 400.0, 300.0);
+        {
+            let style = std::sync::Arc::make_mut(&mut container.style);
+            style.overflow_x = Overflow::Auto;
+            style.overflow_y = Overflow::Auto;
+        }
+        container.scroll_y = 200.0; // Would give 0.5 if wrongly picked up.
+        container.children.push(make_box(3, 0.0, 0.0, 400.0, 700.0));
+        root.children.push(container);
+
+        let tl = AnimationTimeline::Scroll { axis: ScrollAxis::Block, nearest: false };
+        let p = ctx_for(&root, 0.0).progress_for(&tl, node(2)).unwrap();
+        assert!(p.abs() < 1e-6, "scroll(root) with page scroll 0 must be 0, got {p}");
     }
 
     // Named scroll-timeline резолвится по своему контейнеру, не по корню.
