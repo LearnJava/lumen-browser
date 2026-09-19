@@ -193,6 +193,46 @@ fn walk_style_blocks(
     }
 }
 
+/// GAP-CSPENF срез 23: walk the whole tree once and collect every element
+/// whose `style=""` attribute `style-src-attr`/`style-src`/`default-src`
+/// forbids (`crate::csp_enforce::style_attribute_blocked`) — the last inline
+/// class срезы 21/22 named as not covered (those gate `<style>` element
+/// text; this gates the attribute). Returns the blocked set (handed to
+/// [`lumen_dom::Document::set_style_attr_csp_blocked`], the only thing
+/// `lumen_layout`'s cascade consults — see that method's doc comment for why
+/// the decision travels as bare node ids) plus a count, so the caller can
+/// fire one `securitypolicyviolation` per blocked node the same one-shot-push
+/// way [`extract_style_blocks`] already does for blocked `<style>` blocks.
+pub(crate) fn collect_style_attr_csp_blocked(
+    doc: &Document,
+    csp_gate: Option<&lumen_network::csp::CspPolicy>,
+) -> (std::collections::HashSet<NodeId>, usize) {
+    let mut blocked = std::collections::HashSet::new();
+    if let Some(policy) = csp_gate {
+        walk_style_attrs(doc, doc.root(), policy, &mut blocked);
+    }
+    let count = blocked.len();
+    (blocked, count)
+}
+
+fn walk_style_attrs(
+    doc: &Document,
+    id: NodeId,
+    policy: &lumen_network::csp::CspPolicy,
+    blocked: &mut std::collections::HashSet<NodeId>,
+) {
+    let node = doc.get(id);
+    if let Some(style) = node.get_attr("style")
+        && !style.is_empty()
+        && crate::csp_enforce::style_attribute_blocked(policy, style)
+    {
+        blocked.insert(id);
+    }
+    for &child in &node.children {
+        walk_style_attrs(doc, child, policy, blocked);
+    }
+}
+
 /// Формат заголовка окна. С title из страницы — `"<title> — Lumen"`,
 /// без — fallback на версию билда.
 pub(crate) fn window_title(page_title: Option<&str>) -> String {
@@ -230,5 +270,37 @@ mod tests {
         let (css, blocked) = extract_style_blocks(&doc, None);
         assert!(css.contains("a{color:red}"));
         assert_eq!(blocked, 0);
+    }
+
+    /// GAP-CSPENF срез 23: `style-src-attr 'none'` blocks exactly the one
+    /// element carrying a non-empty `style=""` attribute — proves the
+    /// DOM-walking plumbing, not `style_attribute_blocked` itself (already
+    /// covered exhaustively by `csp_enforce::tests`).
+    #[test]
+    fn collect_style_attr_csp_blocked_finds_only_the_styled_node() {
+        let doc = lumen_html_parser::parse(
+            "<div style=\"color:red\">a</div><div>b</div>",
+        );
+        let policy = lumen_network::csp::parse_csp_header("style-src-attr 'none'");
+        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(&policy));
+        assert_eq!(count, 1);
+        assert_eq!(blocked.len(), 1);
+    }
+
+    #[test]
+    fn collect_style_attr_csp_blocked_no_policy_blocks_nothing() {
+        let doc = lumen_html_parser::parse("<div style=\"color:red\">a</div>");
+        let (blocked, count) = collect_style_attr_csp_blocked(&doc, None);
+        assert_eq!(count, 0);
+        assert!(blocked.is_empty());
+    }
+
+    #[test]
+    fn collect_style_attr_csp_blocked_unsafe_inline_allows() {
+        let doc = lumen_html_parser::parse("<div style=\"color:red\">a</div>");
+        let policy = lumen_network::csp::parse_csp_header("style-src-attr 'unsafe-inline'");
+        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(&policy));
+        assert_eq!(count, 0);
+        assert!(blocked.is_empty());
     }
 }

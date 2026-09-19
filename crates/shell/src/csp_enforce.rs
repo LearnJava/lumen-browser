@@ -111,12 +111,37 @@
 //! `spawn_frame` тем же one-shot-push путём, что уже несёт
 //! `blocked_by_img_src`/`blocked_by_style_src` для этого ребёнка.
 //!
+//! Срез 23 закрыл последний класс инлайна, названный не покрытым срезами
+//! 21/22: атрибут `style=""` на произвольном элементе. Архитектурно другое
+//! решение, чем срезы 21/22: точка потребления (`lumen_layout::style::
+//! cascade`) — единственный choke point, единый для парсер-, скрипт- и
+//! CSSOM-вставленного значения атрибута, — но `layout` не зависит от
+//! `lumen-network`/`CspPolicy` (layering `dom → layout`, а не `network →
+//! layout`), поэтому решение считается один раз в shell'е и travels down as
+//! bare node ids (`Document::style_attr_csp_blocked`, новое поле —
+//! `layout`/`dom` не знают о CSP вовсе). [`style_attribute_blocked`] — тот же
+//! host/scheme-независимый гейт по духу, что [`inline_style_blocked`], но с
+//! другим набором источников (CSP3 §6.4.2/§8.1): нет nonce (атрибут не может
+//! нести `nonce=` для самого себя), а хэш-источник допускает совпадение
+//! только вместе с `'unsafe-hashes'` — голого хэша достаточно для `<style>`
+//! элемента, но никогда не для атрибута. Фолбэк на один уровень глубже
+//! остальных директив этого файла: `style-src-attr` → `style-src` →
+//! `default-src` (CSP3 §6.4 granular chain). Вычисляется один раз в
+//! `build_page_cascade` (та же точка, что срез 21 уже даёт `<style>`), гейт
+//! стоит в `cascade.rs` перед `parse_inline_style` — атрибут остаётся в DOM
+//! нетронутым (`getAttribute('style')` не меняется), исключается только его
+//! эффект на каскад. Покрывает только элементы дерева на момент вычисления
+//! каскада (начальный парсинг + пересборка при `scripts_changed_css`) — узел,
+//! получивший `style=""` другим путём после этого момента (простой
+//! `setAttribute`/`style.cssText`, не трогающий `<style>`/`<link>`), гейт не
+//! видит; `<iframe>` не тронут этим срезом.
+//!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/
 //! `child-src`/…), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает),
 //! `@font-face url()`/`background-image` внутри `<iframe>` (см. выше),
-//! атрибут `style=` (не блокируется, только тело `<style>`, ни top-level, ни
-//! внутри `<iframe>`), `@import` внутри уже загруженного листа (наследует
+//! атрибут `style=` внутри `<iframe>` и после точечной DOM-мутации (см.
+//! выше), `@import` внутри уже загруженного листа (наследует
 //! политику владельца, отдельно не проверяется), честная независимая
 //! проверка заголовка и `<meta>` вместо их слияния, `importScripts()`
 //! внутри уже запущенного воркера (`worker-src` гейтит только начальный
@@ -210,6 +235,39 @@ pub(crate) fn inline_script_blocked(policy: &CspPolicy, nonce: Option<&str>, bod
 /// событийные обработчики этим не покрыты — только тело `<style>`.
 pub(crate) fn inline_style_blocked(policy: &CspPolicy, nonce: Option<&str>, body: &str) -> bool {
     inline_directive_blocked(policy, &CspDirective::StyleSrc, nonce, body)
+}
+
+/// `true` if `style-src-attr`/`style-src`/`default-src` forbids the value of
+/// a `style=""` attribute whose text is `body` — срез 23, last inline class
+/// срезы 21/22 named as not covered. Unlike [`inline_style_blocked`] (which
+/// gates `<style>` element text), CSP3 §6.4.2 "inline check" treats an
+/// attribute differently on two points: there is no nonce for a `style=`
+/// attribute (an element cannot carry a nonce for its own attribute, only
+/// for a `<style>`/`<script>` element's own `nonce=` attribute), and a hash
+/// source only matches an attribute if the policy also carries
+/// `'unsafe-hashes'` (CSP3 §8.1) — a bare hash source is enough for `<style>`
+/// element text but never for an attribute. Fallback chain is the CSP3 §6.4
+/// granular one (`style-src-attr` → `style-src` → `default-src`), one step
+/// deeper than [`inline_directive_blocked`]'s single `directive` →
+/// `default-src` step used by every other directive in this file.
+pub(crate) fn style_attribute_blocked(policy: &CspPolicy, body: &str) -> bool {
+    let Some(sources) = policy
+        .directives
+        .get(&CspDirective::StyleSrcAttr)
+        .or_else(|| policy.directives.get(&CspDirective::StyleSrc))
+        .or_else(|| policy.directives.get(&CspDirective::DefaultSrc))
+    else {
+        return false;
+    };
+    let unsafe_hashes = sources.contains(&CspSource::UnsafeHashes);
+    let allowed = sources.iter().any(|s| match s {
+        CspSource::UnsafeInline => true,
+        CspSource::Hash { algorithm, value } => {
+            unsafe_hashes && algorithm.digest_base64(body.as_bytes()) == *value
+        }
+        _ => false,
+    });
+    !allowed
 }
 
 /// Общая проверка [`inline_script_blocked`]/[`inline_style_blocked`]: любой
@@ -671,5 +729,68 @@ mod tests {
     fn media_src_none_does_not_block_font() {
         let p = lumen_network::csp::parse_csp_header("media-src 'none'; font-src *");
         assert!(!font_src_blocked(&p, "https://example.com/font.woff2", None));
+    }
+
+    // GAP-CSPENF срез 23: `style-src-attr` against the `style=""` attribute.
+
+    #[test]
+    fn no_policy_allows_style_attribute() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'none'");
+        assert!(!style_attribute_blocked(&p, "color:red"));
+    }
+
+    #[test]
+    fn style_src_attr_none_blocks_attribute() {
+        let p = lumen_network::csp::parse_csp_header("style-src-attr 'none'");
+        assert!(style_attribute_blocked(&p, "color:red"));
+    }
+
+    #[test]
+    fn style_src_attr_unsafe_inline_allows() {
+        let p = lumen_network::csp::parse_csp_header("style-src-attr 'unsafe-inline'");
+        assert!(!style_attribute_blocked(&p, "color:red"));
+    }
+
+    /// `style-src` (no `-attr` split) falls back for the attribute too — CSP3
+    /// §6.4's granular chain, one step before `default-src`.
+    #[test]
+    fn style_src_fallback_allows_attribute() {
+        let p = lumen_network::csp::parse_csp_header("style-src 'unsafe-inline'");
+        assert!(!style_attribute_blocked(&p, "color:red"));
+    }
+
+    #[test]
+    fn default_src_fallback_blocks_attribute() {
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        assert!(style_attribute_blocked(&p, "color:red"));
+    }
+
+    /// A hash source alone does not allow a `style=""` attribute — CSP3 §8.1
+    /// requires `'unsafe-hashes'` alongside it, unlike `<style>` element text
+    /// ([`inline_style_blocked`]'s `matching_sha256_hash_allows`-equivalent).
+    #[test]
+    fn bare_hash_does_not_allow_attribute() {
+        let p = lumen_network::csp::parse_csp_header(
+            "style-src-attr 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
+        );
+        assert!(style_attribute_blocked(&p, "alert(1)"));
+    }
+
+    /// `'unsafe-hashes'` plus a matching hash allows it.
+    #[test]
+    fn unsafe_hashes_plus_matching_hash_allows_attribute() {
+        let p = lumen_network::csp::parse_csp_header(
+            "style-src-attr 'unsafe-hashes' 'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='",
+        );
+        assert!(!style_attribute_blocked(&p, "alert(1)"));
+        assert!(style_attribute_blocked(&p, "alert(2)"));
+    }
+
+    /// A nonce source never applies to a `style=""` attribute — there is no
+    /// attribute to carry one, unlike `<style nonce="…">`.
+    #[test]
+    fn nonce_source_does_not_allow_attribute() {
+        let p = lumen_network::csp::parse_csp_header("style-src-attr 'nonce-abc123'");
+        assert!(style_attribute_blocked(&p, "color:red"));
     }
 }
