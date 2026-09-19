@@ -794,7 +794,7 @@ mod tests_v8 {
     impl lumen_core::ext::JsFetchProvider for SwNet {
         fn fetch_sync(
             &self,
-            _url: &str,
+            url: &str,
             _method: &str,
         ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
             if let Ok(mut n) = self.via_intercepted.lock() {
@@ -805,6 +805,7 @@ mod tests_v8 {
                 status_text: "OK".into(),
                 headers: vec![],
                 body: "путь через перехватчик".as_bytes().to_vec(),
+                url: url.to_string(),
             })
         }
 
@@ -819,12 +820,14 @@ mod tests_v8 {
                     status_text: "OK".into(),
                     headers: vec![("content-type".into(), "text/plain".into())],
                     body: body.clone().into_bytes(),
+                    url: url.to_string(),
                 }),
                 None => Ok(lumen_core::ext::JsFetchResult {
                     status: 404,
                     status_text: "Not Found".into(),
                     headers: vec![],
                     body: Vec::new(),
+                    url: url.to_string(),
                 }),
             }
         }

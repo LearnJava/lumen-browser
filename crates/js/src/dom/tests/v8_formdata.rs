@@ -253,11 +253,11 @@ impl CaptureFetch {
 impl lumen_core::ext::JsFetchProvider for CaptureFetch {
     fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         self.calls.lock().unwrap().push((url.into(), method.into(), String::new(), vec![]));
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
     fn fetch_with_body_sync(&self, url: &str, method: &str, content_type: &str, body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         self.calls.lock().unwrap().push((url.into(), method.into(), content_type.into(), body.to_vec()));
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
 }
 
@@ -272,11 +272,11 @@ fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
 // exercising the _lumen_fetch_cancellable* bridge → code 2 path.
 struct AbortFetch;
 impl lumen_core::ext::JsFetchProvider for AbortFetch {
-    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+    fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
-    fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+    fn fetch_with_body_sync(&self, url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
     fn fetch_cancellable(&self, _url: &str, _method: &str, _token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         Err(lumen_core::error::Error::Aborted("aborted".into()))
@@ -300,11 +300,11 @@ fn v8_runtime_with_abort_fetch() -> V8JsRuntime {
 // then report an abort — simulates a slow in-flight request cancelled mid-stream.
 struct BlockingFetch;
 impl lumen_core::ext::JsFetchProvider for BlockingFetch {
-    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+    fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
-    fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+    fn fetch_with_body_sync(&self, url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
     fn fetch_cancellable(&self, _url: &str, _method: &str, token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         while !token.is_aborted() { std::thread::sleep(std::time::Duration::from_millis(5)); }

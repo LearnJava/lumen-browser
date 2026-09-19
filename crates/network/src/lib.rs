@@ -4530,6 +4530,7 @@ impl HttpClient {
                     status_text: "OK".into(),
                     headers: vec![],
                     body,
+                    url: url.to_string(),
                 });
             }
         }
@@ -4546,7 +4547,7 @@ impl HttpClient {
         let author_headers = build_author_headers(req.headers, request_body.is_some());
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
-        let (resp, _final_url) = fetch_with_redirect(
+        let (resp, final_url) = fetch_with_redirect(
             &url,
             5,
             &self.pool,
@@ -4586,6 +4587,7 @@ impl HttpClient {
                 .map(|(k, v)| (k.to_ascii_lowercase(), v))
                 .collect(),
             body: resp.body,
+            url: final_url.to_string(),
         })
     }
 
@@ -6638,6 +6640,24 @@ mod tests {
         let page = client.fetch_page(&url, None).expect("fetch");
         assert_eq!(page.body, b"hi");
         assert_eq!(page.final_url.as_str(), format!("http://127.0.0.1:{port}/auth/login/"));
+        server.join().unwrap();
+    }
+
+    /// BUG-984: the same contract on the JS-`fetch()`/XHR/Worker path —
+    /// `JsFetchProvider::fetch_sync` must report the final URL, not the
+    /// pre-redirect request URL `fetch_request_impl` used to discard.
+    #[test]
+    fn js_fetch_sync_reports_final_url_after_redirect() {
+        let (port, server) = mock_http_server(2, move |i| match i {
+            1 => b"HTTP/1.1 302 Found\r\nLocation: /new-path\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi".to_vec(),
+            _ => unreachable!(),
+        });
+        let client = HttpClient::new();
+        let url = format!("http://127.0.0.1:{port}/old-path");
+        let result = JsFetchProvider::fetch_sync(&client, &url, "GET").expect("fetch");
+        assert_eq!(result.body, b"hi");
+        assert_eq!(result.url, format!("http://127.0.0.1:{port}/new-path"));
         server.join().unwrap();
     }
 

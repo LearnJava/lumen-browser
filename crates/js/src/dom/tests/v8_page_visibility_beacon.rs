@@ -26,11 +26,11 @@ impl CaptureFetch {
 impl lumen_core::ext::JsFetchProvider for CaptureFetch {
     fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         self.calls.lock().unwrap().push((url.into(), method.into(), String::new(), vec![]));
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
     fn fetch_with_body_sync(&self, url: &str, method: &str, content_type: &str, body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         self.calls.lock().unwrap().push((url.into(), method.into(), content_type.into(), body.to_vec()));
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
 }
 

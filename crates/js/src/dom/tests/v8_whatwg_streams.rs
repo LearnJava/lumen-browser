@@ -28,11 +28,11 @@ impl CaptureFetch {
 impl lumen_core::ext::JsFetchProvider for CaptureFetch {
     fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         self.calls.lock().unwrap().push((url.into(), method.into(), String::new(), vec![]));
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
     fn fetch_with_body_sync(&self, url: &str, method: &str, content_type: &str, body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         self.calls.lock().unwrap().push((url.into(), method.into(), content_type.into(), body.to_vec()));
-        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec(), url: url.to_string() })
     }
 }
 
@@ -68,6 +68,7 @@ impl lumen_core::ext::JsFetchProvider for CaptureHeadersFetch {
             status_text: "OK".into(),
             headers: vec![],
             body: b"ok".to_vec(),
+            url: req.url.to_string(),
         })
     }
 }
@@ -251,6 +252,7 @@ impl lumen_core::ext::JsFetchProvider for EchoUrlFetch {
             status_text: "OK".into(),
             headers: vec![],
             body: format!("body-{tail}").into_bytes(),
+            url: url.to_string(),
         })
     }
     fn fetch_with_body_sync(&self, url: &str, method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
@@ -1145,6 +1147,62 @@ fn request_constructor_absolutizes_relative_url() {
     let rt = v8_runtime_with_fetch(CaptureFetch::new());
     let r = rt.eval("new Request('resources/x.js').url").unwrap();
     assert_eq!(r, lumen_core::JsValue::String("https://example.com/resources/x.js".into()));
+}
+
+/// Mock provider standing in for an HTTP redirect: `fetch_with_redirect`
+/// (`lumen-network`) already follows redirects and reports the final URL in
+/// `JsFetchResult::url` — this double mimics that by answering with a URL
+/// different from the one it was asked for.
+struct RedirectingFetch;
+impl lumen_core::ext::JsFetchProvider for RedirectingFetch {
+    fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![],
+            body: b"ok".to_vec(),
+            url: "https://example.com/final.txt".into(),
+        })
+    }
+}
+
+/// BUG-984: `Response.url`/`.redirected` must report the URL of the final
+/// hop after an HTTP redirect, not the URL `fetch()` was called with.
+#[test]
+fn fetch_response_url_and_redirected_reflect_the_final_url_after_redirect() {
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(RedirectingFetch);
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false)
+        .unwrap();
+    rt.eval(
+        "fetch('https://example.com/start.txt').then(function(r) { \
+             globalThis.__url = r.url; globalThis.__redirected = r.redirected; \
+         });",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__url").unwrap(),
+        lumen_core::JsValue::String("https://example.com/final.txt".into())
+    );
+    assert_eq!(rt.eval("globalThis.__redirected").unwrap(), lumen_core::JsValue::Bool(true));
+}
+
+/// Sibling of the above: when the final URL equals the request URL (no
+/// redirect happened), `.redirected` must stay `false`.
+#[test]
+fn fetch_response_redirected_is_false_when_no_redirect_happened() {
+    let rt = v8_runtime_with_fetch(CaptureFetch::new());
+    rt.eval(
+        "fetch('https://example.com/x.txt').then(function(r) { \
+             globalThis.__url = r.url; globalThis.__redirected = r.redirected; \
+         });",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__url").unwrap(),
+        lumen_core::JsValue::String("https://example.com/x.txt".into())
+    );
+    assert_eq!(rt.eval("globalThis.__redirected").unwrap(), lumen_core::JsValue::Bool(false));
 }
 
 #[test]

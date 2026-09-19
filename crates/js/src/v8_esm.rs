@@ -1113,12 +1113,14 @@ mod tests {
                     status_text: "OK".into(),
                     headers: vec![],
                     body: text.into_bytes(),
+                    url: url.to_string(),
                 }),
                 None => Ok(lumen_core::ext::JsFetchResult {
                     status: 404,
                     status_text: "Not Found".into(),
                     headers: vec![],
                     body: Vec::new(),
+                    url: url.to_string(),
                 }),
             }
         }
