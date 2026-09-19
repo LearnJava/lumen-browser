@@ -10,7 +10,9 @@
 use std::collections::HashMap;
 
 use crate::origin::Origin;
+use lumen_core::hash::base64_encode;
 use lumen_core::url::Url;
+use sha2::{Digest, Sha256, Sha384, Sha512};
 
 /// Hash algorithm used in a CSP hash source expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +23,24 @@ pub enum HashAlgorithm {
     Sha384,
     /// SHA-512 (`'sha512-…'`).
     Sha512,
+}
+
+impl HashAlgorithm {
+    /// Base64-encoded digest of `body` under this algorithm — CSP3 §8.1
+    /// "script-src source hash matching": a `'sha256-…'`/`'sha384-…'`/
+    /// `'sha512-…'` source is satisfied when this equals the source's
+    /// declared value byte-for-byte (standard base64, matching how the
+    /// build tooling that generates these hashes for a page normally
+    /// encodes them — a base64url-encoded declared value simply won't
+    /// match, same "don't invent equivalence" stance as the rest of this
+    /// module).
+    pub fn digest_base64(&self, body: &[u8]) -> String {
+        match self {
+            HashAlgorithm::Sha256 => base64_encode(&Sha256::digest(body)),
+            HashAlgorithm::Sha384 => base64_encode(&Sha384::digest(body)),
+            HashAlgorithm::Sha512 => base64_encode(&Sha512::digest(body)),
+        }
+    }
 }
 
 /// A single source expression from a CSP directive source list.
