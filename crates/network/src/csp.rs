@@ -84,6 +84,8 @@ pub enum CspDirective {
     MediaSrc,
     /// Restricts `<object>` and `<embed>` sources.
     ObjectSrc,
+    /// Restricts `@font-face` `src` sources.
+    FontSrc,
     /// Restricts `<frame>` and `<iframe>` sources.
     FrameSrc,
     /// Restricts Worker, SharedWorker, and ServiceWorker sources.
@@ -353,6 +355,7 @@ fn parse_into(policy: &mut CspPolicy, header: &str) {
                     "connect-src" => CspDirective::ConnectSrc,
                     "media-src" => CspDirective::MediaSrc,
                     "object-src" => CspDirective::ObjectSrc,
+                    "font-src" => CspDirective::FontSrc,
                     "frame-src" => CspDirective::FrameSrc,
                     "worker-src" => CspDirective::WorkerSrc,
                     "manifest-src" => CspDirective::ManifestSrc,

@@ -1550,8 +1550,36 @@ impl Lumen {
         // triggers a relayout — FOUT (Flash Of Unstyled Text) swap pattern.
         if !page.pending_web_fonts.is_empty() {
             let base_opt = self.document_resource_base();
+            // GAP-CSPENF срез 19: `font-src`/`default-src` против `@font-face
+            // url()` — последний из трёх производителей среза 4 (`img-src`/
+            // `style-src`/`connect-src`… уже гейтили свои сети), которого
+            // не было вовсе (`grep -n FontSrc crates/` до этого среза не
+            // находил ничего — директива не была даже распарсена). Проверка
+            // стоит здесь, на потоке, породившем `page`, а не внутри
+            // спавненного `std::thread::spawn` ниже: у детач-потока нет
+            // `&self` (нет `js_ctx`/`engine_thread` для диспатча события),
+            // та же причина, по которой срезы 10-13/16/17 переносили гейт в
+            // `lumen-network` — здесь переносить некуда, читатель URL уже
+            // синхронный и на главном потоке, поэтому решение «фетчить или
+            // нет» принимается тут же, до `std::thread::spawn`.
+            let csp_gate = self.layout_source.as_ref().and_then(|src| {
+                let doc = src.document.lock().unwrap();
+                let root = doc.root();
+                crate::csp_enforce::document_csp_policy(&doc, root)
+            });
+            let self_origin = base_opt.as_ref().and_then(|b| b.origin());
             for pf in page.pending_web_fonts {
                 if let Some(base) = base_opt.clone() {
+                    if let Some((policy, original_policy)) = &csp_gate {
+                        let resolved = base.resolve_str(&pf.url);
+                        if crate::csp_enforce::font_src_blocked(policy, &resolved, self_origin.as_ref()) {
+                            let original_policy = original_policy.clone();
+                            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                j.fire_csp_violation("font-src", &resolved, &original_policy);
+                            });
+                            continue;
+                        }
+                    }
                     let sink = Arc::clone(&self.event_sink);
                     let cookie_jar = self.active_cookie_jar();
                     let proxy = self.load_proxy.clone();
