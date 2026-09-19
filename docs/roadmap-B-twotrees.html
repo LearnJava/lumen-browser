@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 285,
-  "fixed": 720,
+  "open": 282,
+  "fixed": 723,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8858,27 +8858,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-979": {
-   "status": "open",
-   "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
-   "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-984": {
-   "status": "open",
-   "title": "`fetch_with_redirect` уже вычисляет верный финальный URL после HTTP-редиректов (`let (resp, _final_url) = …` — подчёркивание не линт, значение реально выбрасыва…",
-   "component": "network (`crates/network/src/lib.rs::HttpClient::fetch_request_impl`) / core (`crates/core/src/ext.rs::JsFetchResult`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-997": {
-   "status": "open",
-   "title": "Регресс-тест BUG-418 детерминированно красный на `main` (воспроизведено в изоляции, `--features v8-backend`, без правок): триггер, которым он провоцировал паник…",
-   "component": "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs:726` — `native_binding_panic_does_not_abort_process`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-998": {
    "status": "open",
    "title": "Кросс-документный `history.back()`/`forward()`, вызванный со стороны страницы (`eval`), не доводит `document_ready` (таймаут 5с и 40с — тот же исход), а следующ…",
@@ -14163,6 +14142,27 @@
    "component": "bidi-server (`crates/bidi-server/src/transport.rs::handle`)",
    "date": "2026-09-19",
    "debtor": false
+  },
+  "BUG-984": {
+   "status": "fixed",
+   "title": "`fetch_with_redirect` уже вычисляет верный финальный URL после HTTP-редиректов (`let (resp, _final_url) = …` — подчёркивание не линт, значение реально выбрасыва…",
+   "component": "network (`crates/network/src/lib.rs::HttpClient::fetch_request_impl`) / core (`crates/core/src/ext.rs::JsFetchResult`)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-997": {
+   "status": "fixed",
+   "title": "Регресс-тест BUG-418 (`native_binding_panic_does_not_abort_process`) стал детерминированно красным 2026-09-04: триггер паники (`_lumen_append_child(0, 429496729…",
+   "component": "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs` — регресс-тест BUG-418)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-979": {
+   "status": "fixed",
+   "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
+   "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
+   "date": "2026-09-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14641,11 +14641,11 @@
   "js (`crates/js/src/dom.rs`, `window` object)": [
    "BUG-623"
   ],
-  "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs:726` — `native_binding_panic_does_not_abort_process`)": [
-   "BUG-997"
-  ],
   "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs` — `native_binding_panic_does_not_abort_process`)": [
    "BUG-1030"
+  ],
+  "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs` — регресс-тест BUG-418)": [
+   "BUG-997"
   ],
   "js (`crates/js/src/esm.rs:148-151` — ветка (4) `resolve_specifier_with` отдаёт значение карты наружу как есть, минуя резолвинг веток (3)/(3b))": [
    "BUG-879"

@@ -1,6 +1,6 @@
 # BUG-997 — `native_binding_panic_does_not_abort_process` больше не проверяет то, что заявлено в имени
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19 (дрейф трекера — фактически закрыт раньше, статус не был обновлён)
 **Заведён:** 2026-09-04 (P1, DATAURL-1 — обнаружено гейтом `scoped-test.sh`, к data: URL отношения не имеет)
 **Область:** `crates/js/src/dom/tests/v8_perf_typedom_node.rs:726` (`native_binding_panic_does_not_abort_process`)
 **Владелец:** P3/P4 (тест-фоллоу-ап на правку BUG-986)
@@ -57,3 +57,30 @@ BUG-986-guard'а, либо синтетическая паника через т
 `crates/network/src/lib.rs` — `lumen-js` не тронут вообще) и повторно на чистом
 `main` HEAD `701f9bda5` — идентичный результат в обоих случаях, значит поломка не
 связана с DATAURL-1 и присутствует на `main` уже сейчас.
+
+## Ревизия P3 2026-09-19 — фактически закрыт цепочкой BUG-1030/BUG-1024/BUG-1036
+
+Взят как первый указатель `STATUS-P3.md` (`BUGS.md:281`). При попытке воспроизвести
+красный тест обнаружено, что триггер уже переехал дважды и тест давно зелёный:
+
+- **BUG-1030** (`8482b36c9`, 2026-09-07) — тот же срез, что описан выше в разделе
+  «Root cause» как рекомендованный путь: `native_binding_panic_does_not_abort_process`
+  переведён на новый живой вход паники, `_lumen_get_tag_name(4294967295)` (`_lumen_-
+  append_child`'s guard от BUG-986 закрыл прежний). Старое поведение (тихий пропуск)
+  закреплено отдельным тестом `native_binding_foreign_node_id_is_silently_skipped`.
+- **BUG-1024**/**BUG-1036** (`b099c97ac`, `62da93256`, 2026-09-07…08) — тем же
+  паттерном bounds-check закрыли и `_lumen_get_tag_name` (и все прочие прямые
+  `doc.get(nid)` в `dom_core.rs`/`platform.rs`). Каждый раз, когда очередной вход
+  переставал паниковать, регресс-тест BUG-418 (что паника в native-биндинге не роняет
+  процесс) переезжал на следующий ещё непроверенный вход — сейчас это
+  `frame_bridge::tests::f_children_native_binding_panic_does_not_abort_process`
+  (`_lumen_f_children`, `crates/js/src/frame_bridge.rs:3440`), единственный
+  оставшийся неохраняемый путь (кросс-фреймовый read-натив, `checked_node`
+  намеренно доверяет `nid` для чтения).
+
+Живой прогон: `cargo test -p lumen-js --lib --features v8-backend` — **3894/3894
+зелёных**, включая всю цепочку регресс-тестов (`native_binding_foreign_node_id_is_-
+silently_skipped`, `f_children_native_binding_panic_does_not_abort_process` и
+остальные потомки среза). Правки кода не требовалось — только синхронизация
+трекера. `BUGS.md` (снята строка), `BUGS-FIXED.md` (добавлена запись),
+`STATUS-P3.md` (пересчитан `remap_status_pointers.py`).
