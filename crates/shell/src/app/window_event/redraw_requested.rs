@@ -652,6 +652,19 @@ impl Lumen {
             framed.append(&mut overlay_buf);
             overlay_buf = framed;
         }
+        // BUG-1059: `#demoBar`/`#infoPanel` (CC-18) — detached from
+        // `chrome_layout`'s tree in `relayout_chrome_host` precisely because
+        // they sit *inside* `chrome_page_host_rect` and would otherwise fall
+        // into the gap the 4-strip clip above cuts around it. Painted here as
+        // its own unclipped segment, same prepend idiom as every other block
+        // in this phase (so `chrome_tail_digests`, captured just above,
+        // stays a valid suffix — this only pushes it deeper toward the tail,
+        // never appends after it).
+        if let Some(floating_dl) = self.chrome_floating_dl.as_ref().filter(|dl| !dl.is_empty()) {
+            let mut floating = floating_dl.clone();
+            floating.append(&mut overlay_buf);
+            overlay_buf = floating;
+        }
         if let Some(t0) = frame_log_t0 {
             bmarks[0] = t0.elapsed().as_secs_f64() * 1e3;
         }

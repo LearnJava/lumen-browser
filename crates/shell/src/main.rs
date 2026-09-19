@@ -189,8 +189,8 @@ use crate::frames::{
     fetch_frame_subresources, fetch_iframe_source, frame_access_allowed, frame_error_document,
 };
 use crate::chrome_ui::{
-    ChromeOverlayFrameCache, ContentAreaDetachment, chrome_overlay_cache_disabled,
-    chrome_overlay_digest_reuse_disabled, chrome_overlay_segment,
+    ChromeOverlayFrameCache, ContentAreaDetachment, FloatingPanelDetachment,
+    chrome_overlay_cache_disabled, chrome_overlay_digest_reuse_disabled, chrome_overlay_segment,
 };
 use crate::engine_bridge::{
     EngineCommit, EngineJsState, route_eval_js, route_query_js, route_task_js,
@@ -213,7 +213,9 @@ use crate::storage_stores::{
     sw_store_for_base,
 };
 #[cfg(test)]
-use crate::chrome_ui::{restore_content_area, take_content_area};
+use crate::chrome_ui::{
+    restore_content_area, restore_floating_panel, take_content_area, take_floating_panel,
+};
 use crate::layout_walk::{collect_box_styles, find_video_source, promote_will_change_layers};
 use crate::window_metrics::{FullscreenPoll, content_layout_viewport, decide_fullscreen_poll};
 use crate::page_state::{PARKED_PAGES_MAX, PageSnapshot, ParkedPage};

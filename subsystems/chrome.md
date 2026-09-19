@@ -451,11 +451,14 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   Deferred bullet below). Not done this slice: dragging the panel by its header / double-click reset
   (needs a new drag primitive at the winit event-loop level — the panel always sits at its shape's
   CSS default position). **A live check the same day found the panel invisible in the real window
-  regardless** ([BUG-1059](../bugs/BUG-1059-OPEN.md)): `#demoBar` floats *inside*
-  `chrome_page_host_rect` by design, and `build_chrome_overlay_strips`'s 4-strip clip around that
-  rect — built to keep `<body>`'s leftover full-window background off the live page — discards
-  everything inside it indiscriminately, page-overlapping chrome included. All the wiring above is
-  real and unit-tested at the model/dispatch level, but has no paint path to the screen yet.
+  regardless** ([BUG-1059](../bugs/BUG-1059-FIXED.md), closed the same day): `#demoBar` floats
+  *inside* `chrome_page_host_rect` by design, and `build_chrome_overlay_strips`'s 4-strip clip around
+  that rect — built to keep `<body>`'s leftover full-window background off the live page — discards
+  everything inside it indiscriminately, page-overlapping chrome included. Fixed by detaching
+  `#demoBar`/`#infoPanel` from `chrome_layout`'s tree before that clip is built
+  (`take_floating_panel`/`restore_floating_panel`, `chrome_ui.rs`, mirroring `take_content_area`'s
+  S22 walk without its salvage step) and painting them through their own unclipped display list
+  (`Lumen::chrome_floating_dl`), appended to `overlay_buf` right after the strip-clipped segment.
   `ROADMAP.md` CC-18 has the full revision note.
 
 ## Deferred

@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 287,
-  "fixed": 716,
+  "open": 286,
+  "fixed": 718,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1003,
+ "total_bugs": 1004,
  "phases": [
   {
    "id": "P0",
@@ -5216,9 +5216,10 @@
        "title": "CC-18: Плавающая панель управления",
        "status": "done",
        "size": "M",
-       "note": "Плавающая панель управления как штатная фича браузера (решение пользователя 2026-07-28, не обсуждается): перенести из макета `demo-bar` в продуктовый хром — перетаскиваемая панель поверх контента с переключателями профиля (Личный/Рабочий/Аноним/Гость), темы, раскладки вкладок (вертикальные/горизонтальные), экрана (Новая/Страница/История/Закладки/Настройки) и режима Фокус; 7 форм самой панели (Карточка/Компакт/Полоса/Док/Сетка/Панель/Мини), дабл-клик по шапке — сброс позиции, Ctrl+K — палитра. Генератор ассетов сейчас вырезает `demo-bar` как «не продукт» (scripts/gen_chrome_assets.py, strip_demo_bar_html) — вырезание отменяется, onclick-обработчики переезжают в Rust по образцу CC-5. Блокер: BUG-426, без него переключатели мертвы. После BUG-426",
+       "note": "Плавающая панель управления как штатная фича браузера (решение пользователя 2026-07-28, не обсуждается): перенести из макета `demo-bar` в продуктовый хром — перетаскиваемая панель поверх контента с переключателями профиля (Личный/Рабочий/Аноним/Гость), темы, раскладки вкладок (вертикальные/горизонтальные), экрана (Новая/Страница/История/Закладки/Настройки) и режима Фокус; 7 форм самой панели (Карточка/Компакт/Полоса/Док/Сетка/Панель/Мини), дабл-клик по шапке — сброс позиции, Ctrl+K — палитра. Генератор ассетов сейчас вырезает `demo-bar` как «не продукт» (scripts/gen_chrome_assets.py, strip_demo_bar_html) — вырезание отменяется, onclick-обработчики переезжают в Rust по образцу CC-5. Блокер: BUG-426, без него переключатели мертвы. **Ревизия 2026-09-19 (P1), срез 1:** BUG-426 закрыт 2026-08-01 (переразбор, не перереализация — см. bugs/BUG-426-FIXED.md), CC-18 разблокирована. `strip_demo_css`/`strip_demo_bar_html` убраны из `gen_chrome_assets.py`; `#demoBar`/`#infoPanel` теперь часть `assets/chrome/chrome.html` (все 7 форм и их CSS шли одним блоком, без правок). Реально подключено (`ChromeAction`/`dispatch_chrome_action`, `ChromeControlPanelModel`/`bind_control_panel` в `crates/chrome/src/model.rs`): переключатель формы (`set-demo-variant`, `body[data-demo]` + `.active` на кнопке), сворачивание в пилюлю (`toggle-demo-mini`), инфо-попап (`toggle-demo-info`), профиль (`set-profile` — второй, chrome_doc-достижимый сайт того же переключателя, что легаси `#profileMenu`, с тем же DS-16 сбросом cookie-jar для Anonymous — обе точки теперь используют общий `reset_anonymous_cookie_jar()`), раскладка вкладок (`set-layout` → `self.vertical_tabs.visible` — закрывает часть остатка BUG-421: у переключателя наконец есть реальный сеттер, не только геттер), экран (`Новая`/`Страница`/`История`/`Закладки`/`Настройки` — переиспользуют уже существующие `new-tab`/`show-view`), режим Фокус (`toggle-focus` → `self.focus.active`, тот же переключатель, что `KeyCommand::ToggleFocusMode` — легаси кольцо-виджет теперь показывается и с этой кнопки). Не сделано в этом срезе: перетаскивание панели за шапку и дабл-клик-сброс (нужен новый drag-примитив на уровне цикла событий winit — панель всегда стоит в дефолтной для своей формы позиции), тема ☾/☀ (`self.dark_mode` — только зеркало OS `prefers-color-scheme`, оно же определяет `@media (prefers-color-scheme)` для содержимого страниц — UI-оверрайд требует отдельного протаскивания через весь этот путь, не только хром-флага), кнопка «QA-панель» (нацелена на `.qa-panel`, которая осознанно исключена из продукта — постоянный, не временный no-op, как и `toggleQa()` уже был мёртв в существующем `showView('page');toggleQa()`). Оба no-op задокументированы явно в `dispatch_chrome_action` (`ChromeAction::ToggleTheme`/`ToggleQaPanel`). Тесты: +3 в `crates/chrome/src/model.rs` (`control_panel_shape_sets_data_demo_and_the_matching_switch_button` и др.), `cargo test -p lumen-chrome` 79/79, `cargo clippy -p lumen-chrome -p lumen-shell --all-targets -- -D warnings` зелёный. **Живая проверка вскрыла блокер, не заметный на уровне юнит-тестов:** панель не рисуется в реальном окне вовсе — заведён [BUG-1059](bugs/BUG-1059-FIXED.md): `chrome_dl` компонуется в кадр через `build_chrome_overlay_strips`, которая обрезает весь chrome-документ до 4 полос ВОКРУГ `chrome_page_host_rect` (это и держит легаси-остаток `<body>`-фона от наползания на страницу), так что любой контент ВНУТРИ этого прямоугольника — а `#demoBar` там стоит по замыслу, это же плавающая панель поверх контента — не попадает ни в одну из четырёх полос и никогда не долетает до экрана. Диагностика: отдельный layout-прогон против реального `assets/chrome/chrome.html` даёт корректный бокс `#demoBar` (`rect=Rect{x:18,y:498.7,w:252,h:523.3}` на 1920×1040), а честный OS-скриншот живого окна (не `resource://screenshot` — тот, как и весь остальной screenshot-автоматизации, рисует только страницу, `automation.rs::render_current_page_to_png`) ничего не показывает в этом месте. Полноценный фикс (детач `#demoBar`/`#infoPanel` из хром-дерева перед 4-полосным клипом, отдельный маленький display list поверх страницы без клипа — по образцу того, как caret омнибокса уже рисуется поверх зажатого сегмента) в этой сессии не сделан: `take_content_area`/`restore_content_area` (BUG-341 S22) явно предупреждают, что тот же класс детача легко сломать против инкрементального базиса реюза боксов, а копировать этот механизм для другого мотива без полноценного ревью — риск тихой регрессии в чувствительной подсистеме за пределами безопасного бюджета одной сессии. Статус остаётся `planned` — drag, тема и (теперь) видимость самой панели остаются реальным остатком; следующий срез должен начинать с BUG-1059, иначе любая дальнейшая работа над переключателями останется непроверяемой живьём. После BUG-426 **Ревизия 2026-09-19 (P1), срез 2:** BUG-1059 закрыт — новые `take_floating_panel`/`restore_floating_panel` (`crates/shell/src/chrome_ui.rs`, независимый от `take_content_area`/`restore_content_area` код, без salvage-шага, но той же S22-формы) детачат `#demoBar`/`#infoPanel` (`position:fixed`-соседи `#contentArea` под `<body>`, не потомки — порядок с прунингом contentArea не важен) из дерева `chrome_layout` ДО того, как `build_chrome_overlay_strips` строит 4-полосный клип, и красят их отдельным, некли́пнутым display list-ом (`Lumen::chrome_floating_dl`), пришиваемым к `overlay_buf` сразу после клипнутого хром-сегмента в `RedrawRequested`. Запись детача (`chrome_floating_detached: Vec<FloatingPanelDetachment>`) восстанавливается в инкрементальный базис в начале следующего прохода `relayout_chrome_host`, зеркаля `chrome_content_area_detached` — неудачное восстановление откатывается на полный layout, а не на неверное дерево. 2 новых юнит-теста (`bug1059_take_floating_panel_detaches_and_restores_demo_bar`, `bug1059_chrome_dl_excludes_demo_bar_after_detach_but_floating_dl_includes_it`) фиксируют и раунд-трип детача/восстановления, и сам факт разделения `chrome_dl`/`floating_dl`. `cargo clippy -p lumen-shell -p lumen-chrome --all-targets -- -D warnings` чист; `scoped-test.sh` — единственный красный тот же класс дрейфа эталонов, что BUG-1008 (7 файлов, воспроизведён на чистом `main`); `dump_golden.py` 4/12 — тот же предсуществующий дрейф. Живой `--maximized`-запуск с OS-уровня скриншотом подтвердил: панель теперь видна в нижнем левом углу окна. Остаток CC-18 не сузился этим срезом: drag-по-шапке, дабл-клик-сброс, переключатель темы ☾/☀ — по-прежнему не сделаны, статус остаётся `planned`",
        "bugs": [
-        "BUG-426"
+        "BUG-426",
+        "BUG-1059"
        ]
       },
       {
@@ -8822,13 +8823,6 @@
    "status": "open",
    "title": "Процентные `padding`/`margin` flex-элемента в строчном контейнере резолвятся против его собственного разрешённого главного размера, а не против контентной ширин…",
    "component": "layout (`box_tree/flex.rs::lay_out_flex`, строчная ветка)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-975": {
-   "status": "open",
-   "title": "Программная запись скролла (`scrollTo`/`scrollBy`/`scrollLeft=`/`scrollTop=`) не видна синхронному чтению в том же тике: `_lumen_request_scroll` только кладёт з…",
-   "component": "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`)",
    "date": null,
    "debtor": false
   },
@@ -14128,6 +14122,20 @@
    "status": "fixed",
    "title": "Имя вложенного browsing context не хранилось в контексте: `window.name` ребёнка на каждое обращение перечитывал атрибут `name` узла-хоста, поэтому правка атрибу…",
    "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-1059": {
+   "status": "fixed",
+   "title": "Any `chrome_dl` content whose box falls **inside** `chrome_page_host_rect` never paints in the live window — `build_chrome_overlay_strips` clips the whole chrom…",
+   "component": "shell paint compositing (`crates/shell/src/chrome_ui.rs::build_chrome_overlay_strips`, `redraw_requested.rs` Step 6)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-975": {
+   "status": "fixed",
+   "title": "Программная запись скролла (`scrollTo`/`scrollBy`/`scrollLeft=`/`scrollTop=`) не видна синхронному чтению в том же тике: `_lumen_request_scroll` только кладёт з…",
+   "component": "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`)",
    "date": "2026-09-19",
    "debtor": false
   }

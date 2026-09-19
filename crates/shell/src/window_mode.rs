@@ -248,6 +248,8 @@ pub(crate) fn run_window_mode(
         chrome_transition_scheduler: TransitionScheduler::new(),
         chrome_prev_styles: HashMap::new(),
         chrome_content_area_detached: None,
+        chrome_floating_detached: Vec::new(),
+        chrome_floating_dl: None,
         chrome_prev_cascade_styles: lumen_layout::CascadeStyles::default(),
         chrome_prev_interactive: (None, None, None),
         chrome_prev_viewport: None,

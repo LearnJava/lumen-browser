@@ -1,6 +1,6 @@
 # BUG-1059: chrome content overlapping `chrome_page_host_rect` never paints in the live window
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19
 **Компонент:** shell paint compositing (`crates/shell/src/chrome_ui.rs::build_chrome_overlay_strips`, `crates/shell/src/app/window_event/redraw_requested.rs` Step 6 chrome block)
 **Найден:** P1, 2026-09-19, при живой проверке CC-18 (плавающая панель управления, `#demoBar`)
 
@@ -93,3 +93,53 @@ Blocks CC-18 (`ROADMAP.md`) from being visually complete — see that task's
 срез 1 revision note. Self-contained to chrome paint compositing; does not
 affect page rendering, WPT, or any existing panel (none of them currently
 place chrome content inside `chrome_page_host_rect`).
+
+## Исправлено (P1, срез 2, тот же день)
+
+Built the paint path the previous session sketched, with the care its own
+"Not attempted" note asked for — new, independent code, not a rushed reuse
+of `take_content_area`/`restore_content_area`.
+
+- **Detach:** `take_floating_panel`/`take_floating_panel_at`
+  (`crates/shell/src/chrome_ui.rs`) walk `LayoutBox` the same way
+  `take_content_area_at` does, but skip its salvage step entirely — a
+  floating panel paints as one unclipped unit, nothing needs to stay behind
+  in the strip-clipped main tree. `relayout_chrome_host` calls this for
+  `lumen_chrome::ids::DEMO_BAR`/`INFO_PANEL` right after `#contentArea`'s own
+  pruning (siblings under `<body>`, not descendants of `#contentArea` — order
+  between the two doesn't matter), before `paint_ordered(&layout)` builds
+  `chrome_dl`, so the strip clip never sees them.
+- **Standalone paint:** each detached box is flattened on its own via the
+  existing `paint_ordered` (already absolute-positioned, same precondition
+  `take_content_area`'s doc comment already relies on for its own salvaged
+  popovers) and concatenated into `Lumen::chrome_floating_dl`. `RedrawRequested`
+  appends it to `overlay_buf`, unclipped, right after the strip-clipped
+  segment (+caret) — same idea as the caret, a separate step instead of
+  folding into `ChromeOverlayFrameCache` to avoid touching that cache's
+  invariants at all.
+- **Restore:** `restore_floating_panel`, mirroring `restore_content_area`.
+  `chrome_floating_detached: Vec<FloatingPanelDetachment>` is restored into
+  the incremental basis at the top of the next `relayout_chrome_host` pass —
+  same S22 shape as `chrome_content_area_detached`: a restore failure
+  discards the whole basis and falls back to a full layout, never a wrong
+  incremental tree.
+
+**Tests:** `bug1059_take_floating_panel_detaches_and_restores_demo_bar`
+(detach removes the box from the tree, the detached box still paints
+non-empty content, restore puts it back at the same rect) and
+`bug1059_chrome_dl_excludes_demo_bar_after_detach_but_floating_dl_includes_it`
+(the actual split: `#demoBar`'s own background fill is present in the
+standalone `floating_dl` and absent from `chrome_dl`) — both in
+`crates/shell/src/tests/chrome_incremental.rs`, next to the srez-1 layout
+test this session's predecessor left. `cargo clippy -p lumen-shell
+-p lumen-chrome --all-targets -- -D warnings` clean. `scripts/scoped-test.sh`:
+only red is `cpu_snapshots_match_references` — the same BUG-1008-class
+7-file drift, reproduced on a clean `main`, unrelated to this change.
+`dump_golden.py` — same pre-existing 4/12 mismatch as `main`. Live
+`--maximized` launch + an OS-level screenshot (same method the symptom
+section above used) confirms `#demoBar` now renders in the window's
+bottom-left corner.
+
+**Not attempted, still CC-18's own remainder** (unaffected by this fix):
+drag-by-header, double-click reset, the ☾/☀ theme override, the QA-panel
+no-op button — see `ROADMAP.md`'s CC-18 entry.
