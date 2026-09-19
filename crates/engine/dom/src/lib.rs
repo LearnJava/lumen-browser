@@ -576,6 +576,19 @@ pub struct Document {
     /// `None` for every non-network source (file / snapshot / `about:` page).
     #[serde(default)]
     csp_header: Option<String>,
+    /// Nodes whose `style=""` attribute `style-src-attr`/`style-src`/
+    /// `default-src` forbids (GAP-CSPENF срез 23). Layout is the only reader
+    /// (`cascade.rs` skips [`Self::get_attr`]`("style")` for a member of this
+    /// set instead of feeding it to the parser) and does not depend on
+    /// `lumen-network`/`CspPolicy` at all — the shell resolves the policy
+    /// once (same point as [`Self::csp_header`]'s other consumers) and hands
+    /// down only this set of node ids, keeping the layering boundary
+    /// (`dom`/`layout` know nothing about CSP itself) intact. Computed once,
+    /// against the tree as parsed — a `style` attribute added or changed by
+    /// a script afterward is not re-evaluated (see `bugs/BUG-811-OPEN.md`
+    /// срез 23 "не покрыто").
+    #[serde(default)]
+    style_attr_csp_blocked: HashSet<NodeId>,
 }
 
 /// Default for [`Document::character_set`] — matches [`Document::new`] and
@@ -626,6 +639,7 @@ impl Document {
             character_set: default_character_set(),
             content_type: default_content_type(),
             csp_header: None,
+            style_attr_csp_blocked: HashSet::new(),
         }
     }
 
@@ -673,6 +687,23 @@ impl Document {
     /// once by the shell right after parsing, before any script runs.
     pub fn set_csp_header(&mut self, csp_header: Option<String>) {
         self.csp_header = csp_header;
+    }
+
+    /// `true` if `node`'s `style=""` attribute is CSP-blocked (GAP-CSPENF
+    /// срез 23) — [`Self::style_attr_csp_blocked`]'s only reader, called from
+    /// `lumen_layout`'s cascade before it would otherwise parse the
+    /// attribute's text.
+    pub fn is_style_attr_csp_blocked(&self, node: NodeId) -> bool {
+        self.style_attr_csp_blocked.contains(&node)
+    }
+
+    /// Replace the set of nodes whose `style=""` attribute `style-src-attr`
+    /// forbids. Called once by the shell after it resolves the document's
+    /// CSP policy, before the first layout — see
+    /// [`Self::style_attr_csp_blocked`]'s doc comment for why the set
+    /// travels as bare node ids rather than a policy reference.
+    pub fn set_style_attr_csp_blocked(&mut self, blocked: HashSet<NodeId>) {
+        self.style_attr_csp_blocked = blocked;
     }
 
     pub fn root(&self) -> NodeId {

@@ -734,12 +734,20 @@ pub fn compute_style(
     // Layer/Specificity/Order, но до Importance-инверсии.
     drop(prof_ua);
     let prof_match = lumen_core::profile::scope_detail("cs_match");
-    let inline_decls: Vec<Declaration> = doc
-        .get(node)
-        .get_attr("style")
-        .filter(|s| !s.is_empty())
-        .map(parse_inline_style)
-        .unwrap_or_default();
+    // GAP-CSPENF срез 23: a `style-src-attr`-blocked `style=""` attribute
+    // never reaches the parser — same "not applied CSS" principle срезы 7/21
+    // already give a blocked external `<link>`/inline `<style>`. The
+    // attribute's raw text is untouched (`getAttribute('style')` still
+    // returns it), only its effect on the cascade is suppressed.
+    let inline_decls: Vec<Declaration> = if doc.is_style_attr_csp_blocked(node) {
+        Vec::new()
+    } else {
+        doc.get(node)
+            .get_attr("style")
+            .filter(|s| !s.is_empty())
+            .map(parse_inline_style)
+            .unwrap_or_default()
+    };
 
     // Собираем все matched declarations с их sort key:
     // (important, is_inline, layer_priority, specificity, rule_order, decl_index).

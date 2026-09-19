@@ -1369,3 +1369,74 @@ None)` — ни один navigable там не несёт CSP-политику);
 `script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`/`frame-src`/
 `object-src`/`media-src`/`font-src`; `frame-ancestors`; `report-to`; честная
 независимая проверка заголовка и `<meta>`.
+
+## Срез 23 (2026-09-19, `p6-gap-cspenf-srez23`) — `style-src-attr` против атрибута `style=`
+
+Реализовано: последний класс инлайна, названный не покрытым срезами 21/22, —
+атрибут `style=""` на произвольном элементе. Архитектурно другое решение, чем
+срезы 21/22 (гейт текста `<style>` в `doc_extract::walk_style_blocks`): точка
+потребления атрибута — `lumen_layout::style::cascade` (`crates/engine/layout`),
+единственный choke point для парсер-, скрипт- и CSSOM-вставленного значения
+(`element.style.setProperty`/`.cssText` и обычный `setAttribute('style', …)`
+сходятся в один и тот же DOM-атрибут, который cascade.rs читает напрямую), но
+`layout` не зависит от `lumen-network`/`CspPolicy` (layering `dom → layout`,
+не `network → layout`) — решение не может считаться там же, где считается
+политика.
+
+- `crates/shell/src/csp_enforce.rs`: `style_attribute_blocked(policy, body)` —
+  тот же дух, что [`inline_style_blocked`] даёт `<style>`-тексту, но с другим
+  набором источников (CSP3 §6.4.2/§8.1): нет `nonce` (у атрибута нет своего
+  `nonce=`, в отличие от `<style nonce="…">`), а хэш-источник допускает
+  совпадение только вместе с `'unsafe-hashes'` — голого хэша достаточно для
+  `<style>` элемента (срез 20/21), но никогда для атрибута. Фолбэк на один
+  уровень глубже остальных директив этого файла: `style-src-attr` →
+  `style-src` → `default-src` (CSP3 §6.4 granular chain, до этого среза
+  `CspDirective::StyleSrcAttr` был распарсен, но нигде не участвовал в этом
+  фолбэке). +7 unit-тестов.
+- `crates/engine/dom/src/lib.rs`: `Document` получила
+  `style_attr_csp_blocked: HashSet<NodeId>` и пару методов
+  (`is_style_attr_csp_blocked`/`set_style_attr_csp_blocked`) — данные без
+  какого-либо CSP-типа, тот же паттерн, что уже даёт `csp_header:
+  Option<String>` (срез 5): `dom`/`layout` не узнают о CSP ничего сверх
+  голого набора id, все узнают только через shell, который заполняет набор.
+- `crates/shell/src/doc_extract.rs::collect_style_attr_csp_blocked` — обход
+  всего дерева (не только `<style>`-узлов, в отличие от `walk_style_blocks`),
+  каждый непустой атрибут `style` проверяется независимо; +3 unit-теста.
+- `crates/engine/layout/src/style/cascade.rs`: перед `parse_inline_style`
+  проверяет `doc.is_style_attr_csp_blocked(node)` — заблокированный атрибут
+  не попадает в парсер вовсе (тот же принцип «не применённый CSS», что уже
+  даёт заблокированный `<link>`/`<style>`), но остаётся в DOM нетронутым —
+  `getAttribute('style')` продолжает возвращать исходный текст, меняется
+  только эффект на каскад.
+- `crates/shell/src/page_pipeline.rs::build_page_cascade` считает набор той
+  же одноразовой политикой, что уже даёт `extract_style_blocks`
+  (`PageCascade::blocked_style_attr_nodes`); набор передаётся в `Document` в
+  обеих точках, где документ ещё изменяем до layout — сразу после начальной
+  сборки каскада и после пересборки при `scripts_changed_css` (та же ветка,
+  что уже пересчитывает `blocked_inline_style_count`). `securitypolicyviolation`
+  диспатчится по одному на узел с `violatedDirective=style-src-attr`,
+  `blockedURI=inline` — той же one-shot-push схемой, что и инлайновый
+  `<style>` (срез 21), но отдельной директивой в отчёте (CSP3 §6.4 granular
+  effective directive, не `style-src`).
+
+Подтверждено живым окном (`--screenshot`, три арма): страница с `<meta
+... content="style-src-attr 'none'">` и `<div style="color:red">` даёт
+`getComputedStyle(#probe).color === rgb(0, 0, 0)` (атрибут не применился) и
+`securitypolicyviolation` с `directive=style-src-attr`; baseline той же
+страницы без директивы даёт `rgb(255, 0, 0)`. `cargo test -p lumen-shell
+--features v8 --bin lumen` без регрессий (1881 passed), `cargo test -p
+lumen-dom` (303 passed), `cargo test -p lumen-layout` (77 passed), `cargo
+clippy -p lumen-dom -p lumen-layout -p lumen-network -p lumen-shell
+--all-targets --features v8 -- -D warnings` чисто.
+
+Покрывает только элементы дерева на момент вычисления каскада (начальный
+парсинг + пересборка при `scripts_changed_css`) — узел, получивший `style=""`
+другим путём после этого момента (простой `setAttribute`/`style.cssText`, не
+трогающий `<style>`/`<link>` и потому не запускающий пересборку каскада),
+гейт не видит.
+
+Не покрыто этим срезом: атрибут `style=` внутри `<iframe>`; точечная
+DOM-мутация после первого layout (см. выше); директивы кроме
+`script-src`/`img-src`/`style-src`/`style-src-attr`/`connect-src`/`worker-src`/
+`frame-src`/`object-src`/`media-src`/`font-src`; `frame-ancestors`;
+`report-to`; честная независимая проверка заголовка и `<meta>`.
