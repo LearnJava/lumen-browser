@@ -24,6 +24,73 @@ use flate2::Compression;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::migrations::{run_migrations, set_common_pragmas, Migration};
+
+const HIBERNATED_TABS_MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: r#"
+    CREATE TABLE IF NOT EXISTS hibernated_tabs (
+        tab_id      INTEGER PRIMARY KEY,
+        dom_blob    BLOB    NOT NULL,
+        css_source  TEXT    NOT NULL DEFAULT '',
+        url         TEXT    NOT NULL DEFAULT '',
+        title       TEXT    NOT NULL DEFAULT '',
+        scroll_x    REAL    NOT NULL DEFAULT 0.0,
+        scroll_y    REAL    NOT NULL DEFAULT 0.0
+    );
+    "#,
+}];
+
+const TAB_SNAPSHOTS_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS tab_snapshots (
+            tab_id           INTEGER PRIMARY KEY,
+            js_heap_blob     BLOB    NOT NULL DEFAULT x'',
+            dom_blob         BLOB    NOT NULL DEFAULT x'',
+            scroll_x         REAL    NOT NULL DEFAULT 0.0,
+            scroll_y         REAL    NOT NULL DEFAULT 0.0,
+            form_state_json  TEXT    NOT NULL DEFAULT '{}',
+            ts               INTEGER NOT NULL DEFAULT 0
+        );
+        "#,
+    },
+    Migration {
+        version: 2,
+        sql: "ALTER TABLE tab_snapshots ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0;",
+    },
+];
+
+/// One-time bridge for `tab_snapshots` databases created before this
+/// migration list existed (pre-GG-5): `user_version` reads as 0, but
+/// `compressed` may already be present courtesy of the old ad-hoc
+/// `let _ = execute_batch(ALTER TABLE ...)` or a `CREATE TABLE` that already
+/// had the column baked in. Stamps `user_version = 2` in that case so
+/// [`run_migrations`] doesn't try to add the column again and fail on
+/// "duplicate column name".
+fn bridge_pre_migration_version(conn: &Connection) -> rusqlite::Result<()> {
+    let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version != 0 {
+        return Ok(());
+    }
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tab_snapshots'",
+        [],
+        |r| r.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let has_column = conn
+        .prepare("SELECT 1 FROM pragma_table_info('tab_snapshots') WHERE name = 'compressed'")?
+        .exists([])?;
+    if has_column {
+        conn.pragma_update(None, "user_version", 2)?;
+    }
+    Ok(())
+}
+
 /// Magic prefix tagging a deflate-compressed DOM blob (ADR-008 §10J.1).
 ///
 /// `store()` prepends these 4 bytes before the zlib stream so `fetch()` can tell
@@ -142,23 +209,11 @@ impl TabSnapshotStore {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS hibernated_tabs (
-                tab_id      INTEGER PRIMARY KEY,
-                dom_blob    BLOB    NOT NULL,
-                css_source  TEXT    NOT NULL DEFAULT '',
-                url         TEXT    NOT NULL DEFAULT '',
-                title       TEXT    NOT NULL DEFAULT '',
-                scroll_x    REAL    NOT NULL DEFAULT 0.0,
-                scroll_y    REAL    NOT NULL DEFAULT 0.0
-            );
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("tab_snapshot init: {e}")))?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("tab_snapshot pragmas: {e}")))?;
+        run_migrations(&mut conn, HIBERNATED_TABS_MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("tab_snapshot init: {e}")))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -307,29 +362,13 @@ impl SleepingTabStore {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            CREATE TABLE IF NOT EXISTS tab_snapshots (
-                tab_id           INTEGER PRIMARY KEY,
-                js_heap_blob     BLOB    NOT NULL DEFAULT x'',
-                dom_blob         BLOB    NOT NULL DEFAULT x'',
-                scroll_x         REAL    NOT NULL DEFAULT 0.0,
-                scroll_y         REAL    NOT NULL DEFAULT 0.0,
-                form_state_json  TEXT    NOT NULL DEFAULT '{}',
-                ts               INTEGER NOT NULL DEFAULT 0,
-                compressed       INTEGER NOT NULL DEFAULT 0
-            );
-            "#,
-        )
-        .map_err(|e| Error::Storage(format!("sleeping_tab init: {e}")))?;
-        // Migration for pre-GG-5 on-disk databases: add the compressed column.
-        // Silently ignored for fresh databases where CREATE TABLE already includes it.
-        let _ = conn.execute_batch(
-            "ALTER TABLE tab_snapshots ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0;",
-        );
+    fn init(mut conn: Connection) -> Result<Self> {
+        set_common_pragmas(&conn)
+            .map_err(|e| Error::Storage(format!("sleeping_tab pragmas: {e}")))?;
+        bridge_pre_migration_version(&conn)
+            .map_err(|e| Error::Storage(format!("sleeping_tab bridge: {e}")))?;
+        run_migrations(&mut conn, TAB_SNAPSHOTS_MIGRATIONS)
+            .map_err(|e| Error::Storage(format!("sleeping_tab init: {e}")))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -606,6 +645,33 @@ mod sleeping_tests {
 
     fn make_sleep() -> SleepingTabStore {
         SleepingTabStore::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn reopen_of_pre_migration_database_with_compressed_already_present() {
+        // Симулирует БД, созданную старым ad-hoc `let _ = execute_batch(ALTER
+        // TABLE ...)`: user_version никогда не выставлялся (= 0), но
+        // `compressed` уже есть. v2 обязан быть no-op, а не падать на
+        // "duplicate column".
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE tab_snapshots (
+                tab_id           INTEGER PRIMARY KEY,
+                js_heap_blob     BLOB    NOT NULL DEFAULT x'',
+                dom_blob         BLOB    NOT NULL DEFAULT x'',
+                scroll_x         REAL    NOT NULL DEFAULT 0.0,
+                scroll_y         REAL    NOT NULL DEFAULT 0.0,
+                form_state_json  TEXT    NOT NULL DEFAULT '{}',
+                ts               INTEGER NOT NULL DEFAULT 0,
+                compressed       INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )
+        .unwrap();
+        let store = SleepingTabStore::init(conn).unwrap();
+        store.store(1, &sample_sleep()).unwrap();
+        assert!(store.fetch(1).unwrap().is_some());
     }
 
     fn sample_sleep() -> T2SleepData {
