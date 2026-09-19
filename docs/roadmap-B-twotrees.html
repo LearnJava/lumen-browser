@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 285,
+  "open": 286,
   "fixed": 719,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1004,
+ "total_bugs": 1005,
  "phases": [
   {
    "id": "P0",
@@ -9138,6 +9138,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1060": {
+   "status": "open",
+   "title": "`query_all_deep_chain_does_not_overflow_the_stack`/`find_first_dom_node_by_selector_deep_chain_does_not_overflow_the_stack` (цепочка 200 000 узлов, LAYOUT-1 сре…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs:2164-2191`)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -15094,6 +15101,9 @@
   ],
   "layout (`crates/engine/layout/src/lib.rs::content_width`/`content_height`)": [
    "BUG-504"
+  ],
+  "layout (`crates/engine/layout/src/selector_query.rs:2164-2191`)": [
+   "BUG-1060"
   ],
   "layout (`crates/engine/layout/src/selector_query.rs:688` `computed_style_to_map` — 88 свойств, обоих нет) + shell (`crates/shell/src/main.rs:22950` `take_cv_events` — вызывающих нет)": [
    "BUG-852"
