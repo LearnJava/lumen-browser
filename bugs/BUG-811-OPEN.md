@@ -1946,3 +1946,67 @@ lumen-shell --features v8 --bin lumen` (1923 passed, 0 failed) без
 lumen-shell --features v8 --bin lumen` (1928 passed, 0 failed) без регрессий;
 `cargo clippy -p lumen-network -p lumen-shell --all-targets --features v8 --
 -D warnings` чисто.
+
+## Срез 34 (2026-09-19, `p6-gap-cspenf-srez34`) — директива `navigate-to` против `location.href`/`.assign()`/`.replace()`
+
+После среза 33 у `<a href>` был гейт, а у JS-навигации — нет: `navigate-to
+'none'` не мешало `location.href = 'https://…'` уйти куда угодно, хотя
+`navigate-to` покрывает ЛЮБУЮ навигацию верхнего документа, а не только клик.
+Все три JS-формы (`location.href=`, `.assign()`, `.replace()`) уже
+схлопнуты JS-шимом в один нативный вызов `_lumen_navigate(url, replace)`
+(`_lumen_navigate_or_fragment`, `web_api_shim_mid_b.js:233`) и одну точку
+исполнения на Rust-стороне — `Lumen::on_about_to_wait`'а
+`pending_js_navigate`-ветку (`crates/shell/src/app/about_to_wait.rs:1725`),
+где `JsNavigateRequest::Push`/`Replace` оба вызывают `resolve_js_navigation`
+перед фактической навигацией. Ровно этот выбор консультирующий агент назвал
+самым узким следующим срезом: одна точка потребления, минимум веток —
+`window.open` неоднородна (`_self`/именованный target/reuse/opener), а
+`<meta http-equiv=refresh>` вообще не отдельный путь — она уже проходит через
+эту же ветку (шим превращает её в одноразовый `setTimeout` с
+`location.replace`/`location.reload`, `scripts.rs:729-750`), так что этот
+срез закрывает её бесплатно.
+
+- Новый приватный `Lumen::js_navigate_to_blocked(url)`
+  (`about_to_wait.rs`, та же форма, что `click.rs::navigate_to_link_blocked`
+  среза 33): один `layout_source.document.lock()`, `document_csp_policy`,
+  `csp_enforce::navigate_to_blocked`, при блокировке — `route_task_js` +
+  `fire_csp_violation("navigate-to", …)`, `eprintln!` и возврат `true`.
+  Вызывается в НАЧАЛЕ каждой из веток `Push`/`Replace` (после проверки
+  `javascript:`-URL, которую срез 33 тоже не трогал по той же причине —
+  `javascript:` исполняется на месте, а не навигирует), так что при блокировке
+  `resolve_js_navigation`/`navigate_to`/`navigate_replace` не вызываются
+  вовсе — ни истории, ни сети.
+- `url`, дошедший до `js_navigate_to_blocked`, уже прогнан JS-шимом через
+  `new URL(raw, base).href`, т.е. абсолютный — `self.source.resolve_href`
+  внутри гейта на нём чаще всего no-op, но вызывается всё равно: тот же
+  путь для случая, когда шим не смог распарсить и передал сырую строку,
+  что и у клика (иначе гейт незаметно перестал бы совпадать с ним на границе).
+- `js_navigate_to_blocked` — отдельная функция с собственным
+  `#[allow(clippy::unwrap_used)]` (блокировка мьютекса), а не встраивание в
+  уже помеченный `on_about_to_wait`: тело `Mutex::lock` живёт в новой функции,
+  а не в месте вызова.
+
+Не тронуто этим срезом (по той же логике «один срез — одна точка
+потребления»): `window.open` (сложнее по ветвлению, кандидат на отдельный
+срез); переход по истории (`navigate-to` его не покрывает по спеке);
+ссылки/JS-навигация внутри `<iframe>` (политика ребёнка — тот же разрыв, что
+уже закрывали по директивам срезы 8/22/24); директива `sandbox` — по-прежнему
+единственная распарсенная-но-не-применённая, требует интеграции с моделью
+sandbox-флагов `<iframe sandbox>` и не сужается до одного среза.
+
+Живая проверка (`--mcp-port`, персистентный V8): страница с
+`<meta http-equiv="Content-Security-Policy" content="navigate-to 'self'">`,
+`eval` `location.href='https://other.example/blocked'` — `location.href`
+после вызова остаётся исходным `file://`-адресом документа, перехода не
+произошло. Чистых unit-тестов на сам `js_navigate_to_blocked` не добавлено:
+покрываемая им логика (`navigate_to_blocked`/`document_csp_policy`) уже имеет
+10 тестов среза 33 (`crates/network/src/csp.rs` + `crates/shell/src/
+csp_enforce.rs`), а сам метод — только проводка в новую точку потребления,
+той же формы, что `click.rs::navigate_to_link_blocked`, который тоже не
+покрыт отдельным unit-тестом (тот путь тоже верифицировался живым пробником).
+
+`cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings`
+чисто. `cargo test -p lumen-driver --test all` — один снятый провал,
+`cases::snapshot_cpu::cpu_snapshots_match_references`, тот же байтовый
+сигнатурный дрейф 7 файлов (BUG-1008), воспроизводимый на `main` при
+`git stash` этого диффа — чужой, не регрессия этого среза.

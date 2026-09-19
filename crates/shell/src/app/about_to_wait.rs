@@ -1736,7 +1736,7 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.navigate_replace(PageSource::Static { html, url: current });
                         }
-                    } else {
+                    } else if !self.js_navigate_to_blocked(&url) {
                         // BUG-293: same file://-resolution + web→file guard as popups.
                         match resolve_js_navigation(&url, &self.source) {
                             Ok(source) => self.navigate_to(source),
@@ -1751,7 +1751,7 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.navigate_replace(PageSource::Static { html, url: current });
                         }
-                    } else {
+                    } else if !self.js_navigate_to_blocked(&url) {
                         match resolve_js_navigation(&url, &self.source) {
                             Ok(source) => self.navigate_replace(source),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
@@ -1774,6 +1774,42 @@ impl Lumen {
                 }
             }
         }
+    }
+
+    /// `true` if the document's `navigate-to` policy blocks a JS-initiated
+    /// navigation to `url` (`location.href=`/`.assign()`/`.replace()`) —
+    /// GAP-CSPENF срез 34. Same shape as `click.rs::navigate_to_link_blocked`
+    /// (срез 33): one document lock, gate, fire `securitypolicyviolation`.
+    ///
+    /// `url` already comes out of the JS shim resolved
+    /// (`_lumen_navigate_or_fragment`'s `new URL(raw, base).href`), so
+    /// `resolve_href` below is normally a no-op pass-through for it — kept
+    /// anyway so an unparseable `url` the shim passed through raw is handled
+    /// the same way the click path handles one.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn js_navigate_to_blocked(&mut self, url: &str) -> bool {
+        let Some(ls) = self.layout_source.as_ref() else {
+            return false;
+        };
+        let csp_gate = {
+            let doc = ls.document.lock().unwrap();
+            let root = doc.root();
+            crate::csp_enforce::document_csp_policy(&doc, root)
+        };
+        let Some((policy, original_policy)) = csp_gate else {
+            return false;
+        };
+        let resolved = self.source.resolve_href(url);
+        let self_origin = self.source.resource_base().and_then(|b| b.origin());
+        if !crate::csp_enforce::navigate_to_blocked(&policy, &resolved, self_origin.as_ref()) {
+            return false;
+        }
+        let blocked = resolved.clone();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_csp_violation("navigate-to", &blocked, &original_policy);
+        });
+        eprintln!("location: navigation to {resolved} blocked by CSP navigate-to");
+        true
     }
 }
 
