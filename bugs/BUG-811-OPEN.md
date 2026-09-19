@@ -2554,4 +2554,56 @@ v8 -- -D warnings` — чисто.
 списка дорожки не изменился: `report-to`, `manifest-src`, честная
 per-policy `originalPolicy`.
 
+## Срез 44 (2026-09-19, `p6-gap-cspenf-srez44`) — `upgrade-insecure-requests` для картинок внутри `<iframe>`
+
+Механическое продолжение среза 43, названное им же не покрытым: тот же
+`csp_enforce::upgrade_insecure_url`, но применённый к обоим продюсерам
+картинок ЧУЖОГО (child) документа `<iframe>` — `<img>` и
+`background-image`/`cross-fade()` — против политики самого фрейма, а не
+top-level документа (тот же принцип разделения политик, что уже применяют
+срезы 6/8/25 к скриптам/стилям/шрифтам фрейма).
+
+- [`crates/shell/src/frames.rs::fetch_frame_subresources`](../crates/shell/src/frames.rs)
+  — цикл декодирования `<img>` теперь считает `upgrade_insecure_url(policy,
+  &key)` ДО `img_src_blocked` (тот же порядок Fetch §4.1, что срез 43 дал
+  странице), и передаёт апгрейженный адрес в `decode_image`. Ключ реестра
+  (`frame_image_key` — резолвленный, но НЕ апгрейженный `req.url`) не
+  меняется — апгрейд трогает только адрес фактического запроса, как и на
+  странице.
+- [`fetch_frame_background_images`](../crates/shell/src/frames.rs) — тот же
+  приём для `background-image`: `upgrade_insecure_url` перед
+  `img_src_blocked`, апгрейженный адрес идёт в `fetch_image_bytes`, а
+  возвращаемый `(url, key)`-контракт для [`FrameHandle`] остаётся на сыром
+  `url` без изменений.
+
+Подтверждено живой пробой (`.tmp/srez44/serve.py`, простой HTTP-сервер на
+`127.0.0.1`, логирующий каждую строку запроса; top-level документ и
+`<iframe>` оба несут `<meta http-equiv="Content-Security-Policy"
+content="upgrade-insecure-requests">`, фрейм содержит `<img
+src="http://…/img.png">` и `background-image: url('http://…/bg.png')`):
+после `GET /frame.html` сервер НЕ получает `GET /img.png`/`GET /bg.png` —
+вместо них два TLS ClientHello (`code 400 … Bad request version`), а stderr
+браузера пишет `GET https://…/img.png` и `GET https://…/bg.png` с
+последующим `TLS handshake: received corrupt message` (простой http-сервер
+пробы TLS не терминирует, ожидаемо) — то есть оба запроса фрейма реально
+ушли на `https://`, как и у top-level документа среза 43.
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen
+csp` — 96 passed, 0 failed (без изменений числа — логика переиспользует уже
+протестированный `upgrade_insecure_url`, новых юнит-тестов не потребовалось,
+живая проба покрывает именно два новых call site); `cargo clippy -p
+lumen-shell --profile dev-release --all-targets --features v8 -- -D
+warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца — тот же
+известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого
+среза.
+
+Не покрыто этим срезом (продолжение BUG-692, не изменилось): `<script
+src>`, `<link rel=stylesheet>`/`@import`, `@font-face url()` (везде — и
+top-level, и `<iframe>`), `<video>`/`<audio>`/`<track>`, `fetch()`/XHR/
+WebSocket (`ws://` → `wss://`), навигации верхнего документа и `<iframe>`,
+заголовок `Upgrade-Insecure-Requests: 1` на навигационном запросе и
+`upgrade insecure navigations set` (UIR §4.1 шаги 1-2). Остаток общего
+списка дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
+`originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
