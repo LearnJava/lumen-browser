@@ -1327,3 +1327,45 @@ lumen` без регрессий (1868 passed), `cargo clippy -p lumen-shell
 `script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`/`frame-src`/
 `object-src`/`media-src`/`font-src`; `frame-ancestors`; `report-to`;
 честная независимая проверка заголовка и `<meta>`.
+
+## Срез 22 (2026-09-19, `p6-gap-cspenf-srez22`) — `style-src` против инлайновых `<style>` внутри `<iframe>`
+
+Реализовано: ровно тот пробел, что срез 21 назвал не покрытым — инлайновый
+`<style>` внутри `<iframe>` не гейтился вовсе, хотя политика ребёнка уже
+считалась в том же месте кода для `img-src`/внешнего `<link>` (срез 8).
+
+- `crates/shell/src/frames.rs::fetch_frame_subresources`: `csp_gate`
+  (`document_csp_policy` ребёнка) была вычислена ПОСЛЕ вызова
+  `extract_style_blocks(doc, None)` — политика для картинок уже существовала
+  в теле функции, просто не была доступна раньше по порядку кода. Срез 22
+  переставил вычисление `csp_gate` перед этим вызовом и передал его тем же
+  `inline_style_blocked`-гейтом, что срез 21 уже даёт top-level документу
+  (`csp_gate.as_ref().map(|(p, _)| p)`) — заблокированный `<style>`-узел
+  ребёнка не попадает в текст, который парсит каскад фрейма, вовсе, тот же
+  принцип «не применённый CSS».
+- `FrameSubresourceOutcomes` получила `blocked_inline_style_count: usize` —
+  `extract_style_blocks` уже возвращает это число (срез 21), оно просто
+  отбрасывалось здесь (`let (inline, _blocked) = …`).
+- `crates/shell/src/frames.rs::spawn_frame`: диспатч `securitypolicyviolation`
+  после появления JS-рантайма ребёнка расширен на `blocked_inline_style_count`
+  — `blockedURI = "inline"` для каждого заблокированного узла, тот же
+  one-shot-push путь, что уже несёт `blocked_by_img_src`/`blocked_by_style_src`
+  для этого ребёнка (срез 8).
+
+Тесты: +2 в `crates/shell/src/tests/page_resources.rs`
+(`frame_subresources_reports_csp_blocked_inline_style` — `style-src 'none'`
+блокирует и счётчик, и текст каскада; `frame_subresources_no_policy_keeps_inline_style`
+— без политики гейт не срабатывает). Живой проб не делался — то же обоснование,
+что срез 18 уже принял для тонкой match-веточной проводки, переиспользующей
+уже протестированный примитив (`inline_style_blocked`, срез 21) в новой точке
+вызова. Подтверждено `cargo clippy -p lumen-shell --all-targets --features
+v8 -- -D warnings` (чисто) и `cargo test -p lumen-shell --features v8 --bin
+lumen` (1870 passed, 0 failed, включая 2 новых).
+
+Не покрыто этим срезом: атрибут `style=` (ни top-level, ни внутри `<iframe>`);
+инлайновый `<style>` внутри sidebar/восстановленной после гибернации вкладки
+(`docking.rs`/`hibernation.rs` по-прежнему зовут `extract_style_blocks(&doc,
+None)` — ни один navigable там не несёт CSP-политику); директивы кроме
+`script-src`/`img-src`/`style-src`/`connect-src`/`worker-src`/`frame-src`/
+`object-src`/`media-src`/`font-src`; `frame-ancestors`; `report-to`; честная
+независимая проверка заголовка и `<meta>`.
