@@ -1790,3 +1790,38 @@ BUG-984, ни один из них не задевал файл другого);
 failed) без регрессий; `cargo clippy -p lumen-js --all-targets --features
 v8-backend -- -D warnings` и `cargo clippy -p lumen-shell --all-targets
 --features v8 -- -D warnings` чисто.
+
+## Срез 31 (2026-09-19, `p6-gap-cspenf-srez31`) — `worker-src` против `importScripts()` внутри самого Service Worker
+
+Закрыт остаток, который срез 30 сам назвал не сузившимся: срез 28 гейтил
+`importScripts()` для `Worker`/`SharedWorker` (`crates/js/src/worker.rs`,
+`shared_worker.rs`), но конструирование самого Service Worker никогда не
+входило в объём среза 13 — поэтому у его собственного `importScripts`
+(`crates/js/src/sw_worker.rs`, отдельный рантайм, не связанный с
+`worker.rs`) не было вообще никакой проверки: чистый JS-шим напрямую звал
+`_lumen_sw_net_fetch` без предварительного гейта.
+
+- `crates/js/src/sw_worker.rs::install_sw_globals_v8` — новый натив
+  `_lumen_sw_check_worker_src(url) -> bool`, переиспользующий
+  `worker::import_scripts_csp_blocked` (срез 28) — тот же I/O-free
+  precheck с тем же пропуском `data:`/`blob:lumen/` целей, а не
+  повторная реализация. Рантайм SW получает `fetch_provider` тем же
+  `Arc<dyn JsFetchProvider>`, что уже используется для
+  `_lumen_sw_net_fetch`/`fetch_bypassing_sw`.
+- Шим `globalThis.importScripts` (в `sw_globals_shim`) зовёт
+  `_lumen_sw_check_worker_src(abs)` первым шагом внутри цикла по
+  аргументам, до `_lumen_sw_net_fetch` — заблокированный URL не уходит в
+  сеть вовсе, бросает тот же `Error('importScripts: cannot load script: …')`,
+  что уже используется для обычного сетевого отказа (тот же паттерн, что
+  срез 28 применил для `Worker`/`SharedWorker`: в рантайме воркера нет
+  `document`/CSP-шима, поэтому `securitypolicyviolation` здесь не
+  диспатчится — блокировка видна скрипту как обычная сетевая неудача).
+
+Тесты: +2 в `crates/js/src/sw_worker.rs::tests_v8`
+(`sw_import_scripts_blocked_by_worker_src_never_reaches_fetch` — мок
+`CspBlockedSwNet` отказывает безусловно, тело блокированного скрипта
+никогда не исполняется; `sw_import_scripts_allowed_when_no_worker_src_policy`
+— тот же «нет политики значит нет блока» инвариант, что все предыдущие
+срезы этого GAP проверяют). `cargo test -p lumen-js --features v8-backend
+--lib` (3908 passed, 0 failed) без регрессий; `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` чисто.
