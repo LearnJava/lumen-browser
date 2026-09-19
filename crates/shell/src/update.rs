@@ -13,8 +13,9 @@
 //!
 //! [`check_for_update`] is not called from `window_mode.rs` yet — that wiring,
 //! plus a UI surface for the result, lands with UPD-9. [`UpdateDownloadManager`]
-//! (UPD-6) follows the same rule: nothing calls `start()` yet, the trigger is
-//! also UPD-9. Today the module is exercised only by its own tests.
+//! (UPD-6), [`apply_staged_update`] and [`restart_process`] (UPD-8) follow the
+//! same rule: nothing calls them yet, the trigger is also UPD-9. Today the
+//! module is exercised only by its own tests.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -870,6 +871,172 @@ impl UpdateDownloadManager {
     }
 }
 
+// ── Apply (UPD-8) ────────────────────────────────────────────────────────────
+
+/// Distributed binaries the rename trick replaces, in application order —
+/// matches the two-exe layout `network_service.rs::NetworkServiceHandle::spawn`
+/// already assumes (`lumen.exe` + `lumen-network-service.exe` side by side in
+/// `exe_dir`). Platform-suffixed the same way that module is.
+#[cfg(windows)]
+const UPDATE_BINARIES: &[&str] = &["lumen.exe", "lumen-network-service.exe"];
+#[cfg(not(windows))]
+const UPDATE_BINARIES: &[&str] = &["lumen", "lumen-network-service"];
+
+/// Suffix the rename trick gives a binary's previous version — restored on
+/// rollback, deleted by [`cleanup_after_apply`] on the first successful
+/// startup of the new version.
+const OLD_SUFFIX: &str = ".old";
+
+/// Everything that can go wrong applying a staged update.
+#[derive(Debug)]
+pub enum ApplyError {
+    /// The staged archive failed to extract — see [`crate::zip_reader::ZipError`].
+    Extract(crate::zip_reader::ZipError),
+    /// The archive extracted cleanly but is missing one of [`UPDATE_BINARIES`]
+    /// — never partially applied over this: checked before the first rename.
+    MissingBinary(&'static str),
+    /// A rename or copy failed. Every variant below this point in the apply
+    /// sequence rolls back whatever renames already succeeded before
+    /// returning, so `exe_dir` is left exactly as it was found.
+    Io(String),
+}
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApplyError::Extract(e) => write!(f, "failed to extract staged update: {e}"),
+            ApplyError::MissingBinary(name) => {
+                write!(f, "staged archive is missing expected binary {name:?}")
+            }
+            ApplyError::Io(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ApplyError {}
+
+/// Renames every live binary in `exe_dir` to `<name>.old`, restoring any
+/// already-renamed one if a later rename fails — the first half of the
+/// "first all renames, then all copies" sequence
+/// (`docs/tasks/ph3-self-update.md` §2). Returns the `(live, old)` pairs on
+/// success, so the caller can roll them back too if the copy phase fails.
+fn rename_live_binaries_to_old(exe_dir: &Path) -> Result<Vec<(PathBuf, PathBuf)>, ApplyError> {
+    let mut renamed = Vec::new();
+    for name in UPDATE_BINARIES {
+        let live = exe_dir.join(name);
+        let old = exe_dir.join(format!("{name}{OLD_SUFFIX}"));
+        if let Err(e) = std::fs::rename(&live, &old) {
+            for (live, old) in renamed.iter().rev() {
+                let _ = std::fs::rename(old, live);
+            }
+            return Err(ApplyError::Io(format!(
+                "renaming {} to {}: {e}",
+                live.display(),
+                old.display()
+            )));
+        }
+        renamed.push((live, old));
+    }
+    Ok(renamed)
+}
+
+/// Copies each extracted binary from `extracted_dir` into the now-vacated
+/// `renamed` live paths. On failure, removes any new copy already written
+/// and restores every `.old` back to its live name — the update is left
+/// fully rolled back, never half-applied.
+fn copy_new_binaries_into_place(
+    extracted_dir: &Path,
+    renamed: &[(PathBuf, PathBuf)],
+) -> Result<(), ApplyError> {
+    for (index, name) in UPDATE_BINARIES.iter().enumerate() {
+        let (live, _) = &renamed[index];
+        let src = extracted_dir.join(name);
+        if let Err(e) = std::fs::copy(&src, live) {
+            for (live, _) in &renamed[..index] {
+                let _ = std::fs::remove_file(live);
+            }
+            for (live, old) in renamed {
+                let _ = std::fs::rename(old, live);
+            }
+            return Err(ApplyError::Io(format!("copying {} into place: {e}", src.display())));
+        }
+    }
+    Ok(())
+}
+
+/// Extracts `zip_path` and replaces every binary in [`UPDATE_BINARIES`] under
+/// `exe_dir` with the extracted version, via the rename trick from
+/// `docs/tasks/ph3-self-update.md` §2: rename every live binary to `.old`,
+/// then copy every new one into place. Staged atomically **across both
+/// binaries** — a failure at either phase restores `exe_dir` to exactly how
+/// it was found, never leaving one binary updated and the other not.
+///
+/// Every extracted binary is checked present in the archive *before* the
+/// first rename, so a truncated or wrong-platform archive is rejected
+/// without touching a single live file.
+///
+/// Does not restart the process — see [`restart_process`] — and does not
+/// remove `zip_path`'s pending directory or the leftover `.old` files, which
+/// is [`cleanup_after_apply`]'s job on the *next* startup (the running
+/// process still has the old binaries mapped into memory on Windows until it
+/// exits, so cleanup here would race the very restart this function enables).
+pub fn apply_staged_update(zip_path: &Path, exe_dir: &Path) -> Result<(), ApplyError> {
+    let extracted_dir = zip_path.with_file_name("extracted");
+    let zip_bytes = std::fs::read(zip_path).map_err(|e| ApplyError::Io(e.to_string()))?;
+    crate::zip_reader::extract(&zip_bytes, &extracted_dir).map_err(ApplyError::Extract)?;
+
+    for name in UPDATE_BINARIES {
+        if !extracted_dir.join(name).is_file() {
+            return Err(ApplyError::MissingBinary(name));
+        }
+    }
+
+    let renamed = rename_live_binaries_to_old(exe_dir)?;
+    copy_new_binaries_into_place(&extracted_dir, &renamed)
+}
+
+/// `<exe_dir>` for the running binary — [`apply_staged_update`]'s and
+/// [`cleanup_after_apply`]'s real caller passes this, derived the same way
+/// `network_service.rs::NetworkServiceHandle::spawn` locates its sibling exe.
+/// `None` only if `current_exe()` itself fails, which the OS does not allow
+/// in practice for an already-running process.
+#[must_use]
+pub fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
+/// Removes every `<name>.old` left by a previous [`apply_staged_update`] and
+/// the whole `data/update/pending/` staging tree. Best-effort and infallible,
+/// same policy as [`save_state`] — a locked `.old` file (still mapped by a
+/// process that hasn't fully exited) is retried on the *next* startup rather
+/// than blocking this one.
+///
+/// **Call once at startup**, after the restart from [`restart_process`] has
+/// landed in the new binary — mirrors [`backup_before_migration_if_updated`]'s
+/// placement, but this one is order-independent with it (neither touches the
+/// other's files).
+pub fn cleanup_after_apply(exe_dir: &Path) {
+    for name in UPDATE_BINARIES {
+        let old = exe_dir.join(format!("{name}{OLD_SUFFIX}"));
+        let _ = std::fs::remove_file(old);
+    }
+    let _ = std::fs::remove_dir_all(pending_root_dir());
+}
+
+/// Spawns a fresh instance of the current executable and exits this process
+/// — the "restart" step after [`apply_staged_update`] has replaced the
+/// binaries on disk. UPD-9 wires the UI trigger that calls this; the
+/// mechanism itself has no caller yet.
+///
+/// Never returns on success (the process exits before the call site sees a
+/// value) — only a spawn failure (e.g. the just-copied binary is somehow not
+/// executable) is observable by a caller.
+pub fn restart_process() -> Result<(), std::io::Error> {
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe).spawn()?;
+    std::process::exit(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1598,5 +1765,153 @@ mod tests {
         // `start` returned before spawning anything.
         mgr.start("1.0.0".to_string(), test_asset("lumen-windows-x86_64-v1.0.0.zip", b"x"));
         assert_eq!(*mgr.status(), UpdateDownloadStatus::InProgress);
+    }
+
+    // ── Apply (UPD-8) ─────────────────────────────────────────────────────
+
+    /// Writes `UPDATE_BINARIES` (real names for this platform) as plain files
+    /// under `dir`, so a test `exe_dir` looks like a real install without
+    /// needing the actual current binary.
+    fn write_fake_binaries(dir: &Path, contents: &[&[u8]]) {
+        std::fs::create_dir_all(dir).unwrap();
+        for (name, body) in UPDATE_BINARIES.iter().zip(contents) {
+            std::fs::write(dir.join(name), body).unwrap();
+        }
+    }
+
+    fn read_binaries(dir: &Path) -> Vec<Vec<u8>> {
+        UPDATE_BINARIES.iter().map(|name| std::fs::read(dir.join(name)).unwrap()).collect()
+    }
+
+    fn build_update_zip(contents: &[&[u8]]) -> Vec<u8> {
+        let entries: Vec<(&str, &[u8], bool)> =
+            UPDATE_BINARIES.iter().zip(contents).map(|(name, body)| (*name, *body, true)).collect();
+        crate::zip_reader::tests::build_zip(&entries)
+    }
+
+    #[test]
+    fn apply_staged_update_replaces_both_binaries() {
+        let exe_dir = scratch_dir("apply_ok_exe");
+        write_fake_binaries(&exe_dir, &[b"old lumen", b"old service"]);
+        let pending = scratch_dir("apply_ok_pending");
+        let zip_path = pending.join("update.zip");
+        std::fs::write(&zip_path, build_update_zip(&[b"new lumen", b"new service"])).unwrap();
+
+        apply_staged_update(&zip_path, &exe_dir).expect("well-formed staged update must apply");
+
+        assert_eq!(read_binaries(&exe_dir), vec![b"new lumen".to_vec(), b"new service".to_vec()]);
+        // The `.old` files are left in place deliberately — see
+        // `apply_staged_update`'s doc comment — `cleanup_after_apply` removes
+        // them, and only on a later startup.
+        assert_eq!(
+            std::fs::read(exe_dir.join(format!("{}{OLD_SUFFIX}", UPDATE_BINARIES[0]))).unwrap(),
+            b"old lumen"
+        );
+        assert_eq!(
+            std::fs::read(exe_dir.join(format!("{}{OLD_SUFFIX}", UPDATE_BINARIES[1]))).unwrap(),
+            b"old service"
+        );
+
+        let _ = std::fs::remove_dir_all(&exe_dir);
+        let _ = std::fs::remove_dir_all(&pending);
+    }
+
+    #[test]
+    fn apply_staged_update_rejects_archive_missing_a_binary() {
+        let exe_dir = scratch_dir("apply_missing_exe");
+        write_fake_binaries(&exe_dir, &[b"old lumen", b"old service"]);
+        let pending = scratch_dir("apply_missing_pending");
+        let zip_path = pending.join("update.zip");
+        // Only the first binary is present in the archive.
+        let zip = crate::zip_reader::tests::build_zip(&[(UPDATE_BINARIES[0], b"new lumen", true)]);
+        std::fs::write(&zip_path, zip).unwrap();
+
+        let result = apply_staged_update(&zip_path, &exe_dir);
+
+        assert!(matches!(result, Err(ApplyError::MissingBinary(_))));
+        assert_eq!(
+            read_binaries(&exe_dir),
+            vec![b"old lumen".to_vec(), b"old service".to_vec()],
+            "a rejected archive must not touch any live binary"
+        );
+        for name in UPDATE_BINARIES {
+            assert!(!exe_dir.join(format!("{name}{OLD_SUFFIX}")).exists());
+        }
+
+        let _ = std::fs::remove_dir_all(&exe_dir);
+        let _ = std::fs::remove_dir_all(&pending);
+    }
+
+    #[test]
+    fn apply_staged_update_rejects_corrupt_archive() {
+        let exe_dir = scratch_dir("apply_corrupt_exe");
+        write_fake_binaries(&exe_dir, &[b"old lumen", b"old service"]);
+        let pending = scratch_dir("apply_corrupt_pending");
+        let zip_path = pending.join("update.zip");
+        std::fs::write(&zip_path, b"not a zip at all").unwrap();
+
+        let result = apply_staged_update(&zip_path, &exe_dir);
+
+        assert!(matches!(result, Err(ApplyError::Extract(_))));
+        assert_eq!(
+            read_binaries(&exe_dir),
+            vec![b"old lumen".to_vec(), b"old service".to_vec()],
+            "extraction failure must not touch any live binary"
+        );
+
+        let _ = std::fs::remove_dir_all(&exe_dir);
+        let _ = std::fs::remove_dir_all(&pending);
+    }
+
+    #[test]
+    fn rename_live_binaries_rolls_back_when_second_rename_fails() {
+        let exe_dir = scratch_dir("apply_rename_rollback");
+        write_fake_binaries(&exe_dir, &[b"lumen body", b"service body"]);
+        // Pre-create the second binary's `.old` destination as a directory —
+        // `fs::rename` onto an existing non-empty destination fails on every
+        // platform, forcing the rollback path.
+        std::fs::create_dir_all(exe_dir.join(format!("{}{OLD_SUFFIX}", UPDATE_BINARIES[1]))).unwrap();
+        std::fs::create_dir_all(exe_dir.join(format!("{}{OLD_SUFFIX}", UPDATE_BINARIES[1])).join("x")).unwrap();
+
+        let result = rename_live_binaries_to_old(&exe_dir);
+
+        assert!(result.is_err());
+        assert_eq!(
+            read_binaries(&exe_dir),
+            vec![b"lumen body".to_vec(), b"service body".to_vec()],
+            "the first binary's rename must be rolled back when the second fails"
+        );
+
+        let _ = std::fs::remove_dir_all(&exe_dir);
+    }
+
+    #[test]
+    fn cleanup_after_apply_removes_old_files_and_pending_tree() {
+        let exe_dir = scratch_dir("cleanup_exe");
+        for name in UPDATE_BINARIES {
+            std::fs::write(exe_dir.join(format!("{name}{OLD_SUFFIX}")), b"stale").unwrap();
+        }
+
+        cleanup_after_apply(&exe_dir);
+
+        for name in UPDATE_BINARIES {
+            assert!(!exe_dir.join(format!("{name}{OLD_SUFFIX}")).exists());
+        }
+
+        let _ = std::fs::remove_dir_all(&exe_dir);
+    }
+
+    #[test]
+    fn cleanup_after_apply_is_a_noop_when_nothing_to_clean() {
+        let exe_dir = scratch_dir("cleanup_noop_exe");
+        // Must not panic or error when there is nothing stale on disk.
+        cleanup_after_apply(&exe_dir);
+        let _ = std::fs::remove_dir_all(&exe_dir);
+    }
+
+    #[test]
+    fn exe_dir_matches_current_exe_parent() {
+        let expected = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        assert_eq!(exe_dir(), Some(expected));
     }
 }
