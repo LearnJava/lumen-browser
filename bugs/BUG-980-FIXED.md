@@ -2,7 +2,7 @@
 synchronously inside the call itself — a handler assigned after `send()`
 returns (a common, spec-legal WPT idiom) never sees a single event
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-19 (P3)
 **Дата:** 2026-09-04
 **Компонент:** js (`crates/js/src/xhr.rs::XMLHttpRequest.prototype.send`,
 line ~296: "Execute synchronously using the same native fetch bindings")
@@ -100,3 +100,38 @@ separately.
 
 Attributed via `_exact_id_marker("/xhr/cors-expose-star.sub.any.html")` in
 `tests/wpt/timeout_audit.py` (marker `xhr-send-runs-synchronously`).
+
+## Исправлено (P3, 2026-09-19)
+
+`send()` for the async case (`_async !== false`, the default and the only
+mode most page/WPT code uses) no longer blocks: it starts the request
+through the same `_lumen_fetch_async_start`/`_poll`/`_commit`/`_free`/
+`_csp_info` bridge that `fetch()`'s async path already uses
+(`crates/js/src/v8_runtime/install/net.rs`), and drives the readyState
+transitions and progress events from a `setTimeout` poll loop instead of
+from inside the `send()` call itself — exactly the shape this bug asked
+for. `abort()` now flips the in-flight request's `AbortToken` via
+`_lumen_fetch_async_abort` instead of resetting state immediately.
+
+The true synchronous mode (`async === false`, gated by BUG-953's
+Document-Policy/Permissions-Policy checks) is unchanged — it still blocks
+via `_lumen_fetch_sync*`, which is correct: real synchronous XHR is
+required by spec to block the calling thread.
+
+Two new regression tests in `crates/js/src/xhr.rs`:
+`xhr_send_is_async_handler_assigned_after_send_still_fires` (a handler
+assigned after `send()` returns still observes `readyState 4`) and
+`xhr_send_returns_before_request_completes` (`send()` returns control
+before the request settles). `xhr_connect_src_block_fires_security_policy_violation_event`
+(`crates/js/src/dom/tests/v8_whatwg_streams.rs`) was updated to pump
+`_lumen_tick_timers()` — the `connect-src` block now surfaces a tick
+later, not within the same `eval` call.
+
+`cargo test -p lumen-js --features v8-backend` — 3881/3881 (whole crate,
+not just `xhr`). `cargo clippy --workspace --all-targets -- -D warnings`
+clean.
+
+Not touched: `worker.rs`'s `WORKER_NET_SHIM`/`_lumen_worker_net_fetch` has
+a similarly synchronous shape, but that is an intentional block of the
+worker's own JS thread (not the main thread) — a different situation, out
+of scope for this fix.
