@@ -168,3 +168,49 @@ matching FFmpeg's documented ABI order, rather than lean on opacity the way
 next revision should attempt it before writing the real
 `crates/media-ffmpeg`-shaped crate and the `VideoDecoder` impl. Status
 remains `planned`.
+
+## Revision 2026-09-19 (P1, срез 3)
+
+The decode loop flagged above as "real, unstarted work" is done and proven,
+still in the same throwaway scratch crate (`D:\Temp\ffmpeg-ffi-poc`, not
+committed — working-boundary rule). `AVFrame`'s public, directly-field-read
+struct was hand-transcribed from the installed FFmpeg 7.1 headers
+(`D:\ffmpeg-dev\ffmpeg-7.1-full_build-shared\include`, the same distribution
+already linked against) rather than guessed: `data: [*mut u8; 8]`,
+`linesize: [c_int; 8]`, `extended_data`, `width`, `height`, `nb_samples`,
+`format`, matching `libavutil/frame.h`'s field order exactly. Two more
+structs needed field-level layout for the same reason — `AVPacket`
+(`data`/`size`/`stream_index`, from `libavcodec/packet.h`, FFmpeg's own
+public read/write API for these fields) and the leading fields of
+`AVFormatContext` (`nb_streams`/`streams`) and `AVStream` (`codecpar`), needed
+only to walk `ctx->streams[i]->codecpar` since no accessor function exists
+for that pointer. `AVCodecParameters` itself stayed fully opaque — its
+pointer is only ever handed to `avcodec_parameters_to_context()`, never
+dereferenced by our code. `AVCodecContext` also stayed opaque throughout.
+
+Full pipeline `avformat_open_input` → `av_find_best_stream` (avoids ever
+reading `AVCodecParameters` fields, and avoids a manual
+`avcodec_find_decoder(codec_id)` call) → `avcodec_alloc_context3` →
+`avcodec_parameters_to_context` → `avcodec_open2` → `av_read_frame` →
+`avcodec_send_packet`/`avcodec_receive_frame` → `sws_getContext`/`sws_scale`
+into `AV_PIX_FMT_RGBA` ran live against two real files from this repo's own
+WPT vendor tree: `tests/wpt/css/css-sizing/aspect-ratio/support/2x2-green.webm`
+(VP8/9 — decoded 2×2, `sws_scale` output `rgba[0..4] == [0, 127, 0, 255]`,
+correctly green, not zeroed memory) and
+`tests/wpt/css/css-ui/support/test.mp4` (H.264 — decoded 400×300 cleanly).
+Two different codecs through the same opaque-`AVCodecContext` path confirms
+the technique generalizes past the one format tested in срез 2. No `bindgen`
+in the dependency tree, no layout assertion, no crash, correct pixel data.
+
+**Not done, still ahead:** this is still the scratch PoC, not
+`crates/media-ffmpeg`. Landing the real crate needs: the
+`ffmpeg-sys-next`-shaped hand-rolled crate added to the workspace (with the
+ADR-027 "why this dependency" justification and the `cargo-deny`
+GPL-allow-list entry this ADR's Consequences section flagged as pending),
+`build.rs` resolving `FFMPEG_DIR` instead of the PoC's hardcoded
+`D:\ffmpeg-dev\...` path, seeking (`av_seek_frame`) for `frame_at(secs)`
+rather than this revision's "decode the first frame only" loop, error-path
+coverage (corrupt input, no video stream, unsupported codec — the PoC only
+exercises the success path), and the actual `VideoDecoder`/
+`VideoDecodeSession` impl wired to `crates/js/src/video_bindings.rs`'s
+resource-selection algorithm. Status remains `planned`.
