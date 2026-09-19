@@ -1165,15 +1165,20 @@ pub(crate) fn parse_and_layout(
         let self_origin = base.origin();
         let blocked = std::cell::RefCell::new(Vec::new());
         let tracks = tracks::load_video_tracks(&d, &|src| {
-            if let Some((policy, _)) = &media_policy {
-                // Resolve first: a policy can only be matched against an
-                // absolute URL, and `fetch_vtt_text` resolves the same way.
-                if let ResolvedResource::Url(abs) = eff_base.resolve(src)
-                    && crate::csp_enforce::media_src_blocked(policy, &abs, self_origin.as_ref())
-                {
-                    blocked.borrow_mut().push(abs);
+            if let Some((policy, _)) = &media_policy
+                && let ResolvedResource::Url(abs) = eff_base.resolve(src)
+            {
+                // GAP-CSPENF срез 50: upgrade-insecure-requests для `<track
+                // src>` — тот же порядок Fetch §4.1 (шаг 5 апгрейда раньше
+                // шага 6 блокировки), что срезы 43-49 уже применяют к
+                // остальным parser-driven подресурсам (`gate_url`, а не
+                // `abs`, идёт и в `media_src_blocked`, и в `fetch_vtt_text`).
+                let gate_url = crate::csp_enforce::upgrade_insecure_url(policy, &abs).unwrap_or(abs);
+                if crate::csp_enforce::media_src_blocked(policy, &gate_url, self_origin.as_ref()) {
+                    blocked.borrow_mut().push(gate_url);
                     return None;
                 }
+                return fetch_vtt_text(&gate_url, &eff_base, sink, cookie_jar.clone());
             }
             fetch_vtt_text(src, &eff_base, sink, cookie_jar.clone())
         });

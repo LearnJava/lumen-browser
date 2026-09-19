@@ -2847,4 +2847,49 @@ lumen csp` (96 passed) не регрессировали. `cargo clippy --worksp
 общего списка дорожки не изменился: `report-to`, `manifest-src`, честная
 per-policy `originalPolicy`.
 
+## Срез 50 (2026-09-20, `p6-gap-cspenf-srez50`) — `upgrade-insecure-requests` для `<track src>`
+
+Срезы 48/49 назвали `<video>`/`<audio>`/`<track>` непокрытыми. Из троих
+только `<track>` фетчится по пути, у которого есть `&Document` и живая
+CSP-политика документа до того, как этот фетч случится
+([`page_pipeline.rs`](../crates/shell/src/page_pipeline.rs)`::parse_and_layout`,
+замыкание для `tracks::load_video_tracks`) — тот же путь, что срез 17 уже
+гейтит `media-src`/`default-src`. `<video>`/`<audio>` фетчатся из
+JS-шима (`__lumen_video_load`/`__lumen_audio_load`) через собственные
+загрузчики, не через это замыкание — вне скоупа этого среза.
+
+- [`page_pipeline.rs`](../crates/shell/src/page_pipeline.rs) — тот же
+  приём, что срезы 43-48: `gate_url = upgrade_insecure_url(policy, &abs)`
+  (или сам `abs`, если апгрейдить нечего) идёт и в `media_src_blocked`, и
+  в `fetch_vtt_text`, а не резолвленный, но не апгрейженный `abs`. Порядок
+  сохранён — Fetch §4.1 шаг 5 (апгрейд) раньше шага 6 (гейт).
+- `<track>` также фетчится вторым путём — JS-шима `readTrackBody`
+  (`video_element.js`), который вызывает голый `fetch()`; тот уже апгрейдит
+  сам, потому что срез 49 переписал `HttpClient::fetch_request_impl`
+  целиком, а не только native-путь — отдельной правки не потребовалось.
+
+Подтверждено живой пробой (простой HTTP-сервер на `127.0.0.1:8795`,
+`<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">`
++ `<video><track src="http://127.0.0.1:8795/cap.vtt"></video>`,
+`--screenshot`): до правки — `GET /cap.vtt` долетает до сервера как есть
+(`404`, но байты ушли); после — `GET https://127.0.0.1:8795/cap.vtt` рвётся
+на `TLS handshake: received corrupt message`, сервер получает только
+`GET /top.html`.
+
+Два юнит-теста `media_src_blocked`, что уже покрывали срез 17
+(`media_src_none_blocks_track_fetch`, `no_media_src_allows_track_fetch`),
+переиспользованы без изменений; `cargo test -p lumen-shell --profile
+dev-release --features v8 --bin lumen csp` — 96 passed, `... track` — 27
+passed, 0 failed. `cargo clippy --workspace --all-targets -- -D warnings`
+— чисто. `scripts/scoped-test.sh` не догнан до конца — тот же известный
+сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия этого среза.
+
+Не покрыто этим срезом (продолжение BUG-692): `<video src>`/`<audio src>`
+через `__lumen_video_load`/`__lumen_audio_load` (свои HttpClient-загрузчики
+вне `connect_src_policy`, не native-путь этого среза); навигации верхнего
+документа и `<iframe>`; заголовок `Upgrade-Insecure-Requests: 1` на
+навигационном запросе и `upgrade insecure navigations set` (UIR §4.1 шаги
+1-2). Остаток общего списка дорожки не изменился: `report-to`,
+`manifest-src`, честная per-policy `originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
