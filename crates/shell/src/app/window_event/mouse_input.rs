@@ -101,6 +101,20 @@ impl Lumen {
                 self.relayout_chrome_host();
                 self.request_redraw();
             }
+            // CC-18 срез 3: the floating control panel (`#demoBar`/
+            // `#infoPanel`) is the top-most thing on screen — BUG-1059
+            // paints it unclipped over everything else — and it is the
+            // *only* surface `chrome_hit_test` cannot answer for, because
+            // the same BUG-1059 fix detached its boxes out of
+            // `chrome_layout`. Its press routing therefore runs first and
+            // on its own detached trees: a press on the header starts a
+            // drag (or resets the position on a double-click), a press on
+            // one of its controls dispatches that control's own
+            // `data-action`, and a press anywhere else on it is swallowed
+            // because the panel is opaque.
+            if self.floating_panel_press(x_css, y_css, event_loop) {
+                return;
+            }
             // F2-6: a press on a docked panel's inner edge begins a
             // resize drag; the click never reaches the page / panels.
             if let Some(edge) = self.resize_edge_at(x_css, y_css) {
@@ -1051,6 +1065,9 @@ impl Lumen {
             if self.pip.dragging() {
                 self.pip.end_drag();
             }
+            // CC-18 срез 3: same for a floating-panel header drag — the
+            // offset it produced stays, only the tracking stops.
+            self.floating_panel_end_drag();
             self.scroll_drag = None;
             self.frame_scroll_drag = None;
             // FRAME-7 остаток: end an in-progress mouse-drag text selection —

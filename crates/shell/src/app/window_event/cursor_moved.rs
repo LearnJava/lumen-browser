@@ -27,6 +27,19 @@ impl Lumen {
             self.update_cursor_icon();
             return;
         }
+        // CC-18 срез 3: while dragging the floating panel by its header the
+        // drag owns the cursor, exactly like `panel_resize` above — move the
+        // panel and skip page hover / inspector / gesture work. No relayout:
+        // the offset is applied when the floating display list is rebuilt.
+        if self.chrome_float_drag.is_some() {
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            self.floating_panel_drag_to((position.x as f32) / dpr, (position.y as f32) / dpr);
+            return;
+        }
         self.update_cursor_icon();
         // DevTools inspector: highlight the box under the cursor.
         if self.dom_inspector.visible {

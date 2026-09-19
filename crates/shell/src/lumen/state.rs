@@ -190,6 +190,23 @@ pub(crate) struct Lumen {
     /// box. Appended to `overlay_buf` in `RedrawRequested`, unclipped,
     /// independent of [`ChromeOverlayFrameCache`]'s strip-segment cache.
     pub(crate) chrome_floating_dl: Option<lumen_paint::DisplayList>,
+    /// CC-18 срез 3: per-panel drag offset from the CSS-computed position, in
+    /// window CSS px, keyed by element id (`ids::DEMO_BAR`/`ids::INFO_PANEL`).
+    ///
+    /// A *paint-time* override deliberately: it is applied to a copy of the
+    /// detached box subtree in [`Lumen::rebuild_chrome_floating_dl`] and never
+    /// to the cascade, the box tree or the incremental basis, so dragging the
+    /// panel cannot perturb chrome layout or the box-reuse graft. An absent
+    /// entry means "at the CSS default for the current shape", which is also
+    /// what the double-click reset and a shape switch restore.
+    pub(crate) chrome_float_offsets: HashMap<&'static str, (f32, f32)>,
+    /// CC-18 срез 3: the in-progress header drag, `None` when no button is
+    /// held on a `data-action="drag-panel"` element.
+    pub(crate) chrome_float_drag: Option<FloatingPanelDrag>,
+    /// CC-18 срез 3: the previous press on a drag handle — the only input to
+    /// double-click detection (winit delivers raw press/release, there is no
+    /// OS double-click event to read).
+    pub(crate) chrome_float_last_press: Option<FloatingPanelPress>,
     /// BUG-341 S5: the per-node `ComputedStyle` cascade cache
     /// ([`lumen_layout::CounterMap::styles`]) from the previous pass —
     /// `RestyleDelta::prev_styles` for the next incremental cascade. Distinct

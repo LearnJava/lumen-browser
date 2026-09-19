@@ -13,9 +13,12 @@ are no longer stripped — the floating control panel ships as a real,
 engine-rendered part of the product chrome (user decision 2026-07-28,
 `ROADMAP.md` CC-18). `setDemoVariant`/`toggleMini`/`toggleInfo`/`setLayout`/
 `setProfile`/`showView` on it get the same `data-action` treatment as every
-other surviving `onclick` below; dragging the panel by its header and the
-`toggleTheme()`/`toggleQa()` buttons are not wired yet (see
-`ChromeAction::ToggleTheme`/`ToggleQaPanel` in `dispatch_chrome_action`).
+other surviving `onclick` below; the `toggleTheme()`/`toggleQa()` buttons are
+not wired yet (see `ChromeAction::ToggleTheme`/`ToggleQaPanel` in
+`dispatch_chrome_action`). CC-18 срез 3 adds `add_drag_handles` — the panel's
+header carries `data-action="drag-panel"` so the shell can reproduce the
+reference's header drag / double-click-reset, which lived in the stripped
+`<script>` and therefore had no inline handler to rewrite.
 
 The reference itself (docs/design/lumen-v3_3.html) is the frozen source of
 truth and is never edited here; a design change means a new version of the
@@ -321,6 +324,36 @@ def add_data_actions(html: str) -> str:
     return _TAG_RE.sub(rewrite, html)
 
 
+# CC-18 срез 3: elements the shell may drag a floating panel by, mapped to the
+# panel they move. The reference wires the drag through
+# `header.addEventListener('mousedown'/'dblclick')` inside the `<script>` block
+# `strip_script` removes, so `add_data_actions` — which only rewrites *inline*
+# `onclick`/`onfocus`/`oninput` — cannot see it and no marker would survive
+# into the asset at all.
+#
+# The marker is a plain `data-action`, not a bespoke attribute: the shell
+# resolves it through the very same nearest-ancestor `chrome_action_at` lookup
+# every other chrome interaction goes through, and that lookup reproduces the
+# reference's own `e.target.closest('.demo-switch, .demo-info-btn,
+# .demo-expand')` guard for free — those controls carry their own
+# `data-action`, so a press on one resolves to *that* action and never starts a
+# drag.
+DRAG_HANDLE_IDS = ("demoHeader",)
+
+
+def add_drag_handles(html: str) -> str:
+    """Stamp `data-action="drag-panel"` on every floating-panel drag handle."""
+    for el_id in DRAG_HANDLE_IDS:
+        pattern = re.compile(r'(<[a-zA-Z][\w-]*\s[^<>]*?id="' + re.escape(el_id) + r'")')
+        html, n = pattern.subn(r'\1 data-action="drag-panel"', html, count=1)
+        if n != 1:
+            raise GenError(
+                f"add_drag_handles: element id={el_id!r} not found — the reference "
+                "renamed or dropped the floating panel's drag handle"
+            )
+    return html
+
+
 # CC-13 (docs/tasks/p1-css-chrome.md): declarative `role`/`aria-*` injection
 # so `lumen_a11y::build_ax_tree` — the same builder that already reads ARIA
 # off web pages — derives real chrome accessibility nodes (tab list, tabs,
@@ -454,6 +487,7 @@ def generate() -> str:
     html = strip_script(html)
     html = strip_tooltip_attrs(html)
     html = add_data_actions(html)
+    html = add_drag_handles(html)
     html = add_aria_roles(html)
     html = add_aria_labels(html)
     html = collapse_blank_lines(html)
