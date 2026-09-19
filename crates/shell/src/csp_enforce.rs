@@ -230,7 +230,21 @@
 //! зовёт [`document_csp_policy`] напрямую вместо удалённого
 //! `document_csp_policy_combined`.
 //!
-//! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/…
+//! Срез 43 завёл первую директиву этого файла, которая не блокирует, а
+//! МЕНЯЕТ запрос: [`upgrade_insecure_url`] (`upgrade-insecure-requests`,
+//! BUG-692). Она переписывает `http` → `https` до гейта `img-src` (Fetch
+//! §4.1: upgrade — шаг 5, CSP-проверка — шаг 6) и подключена во всех трёх
+//! producer'ах картинок ГЛАВНОГО документа: eager
+//! (`subresources::fetch_and_decode_images`), streaming/dynamic
+//! (`page_load::spawn_image_requests`) и отложенный `loading="lazy"`
+//! (`page_load::fetch_and_register_lazy_images`). Ключ кэша/реестра картинок
+//! везде остаётся сырым URL — апгрейд меняет только адрес запроса.
+//!
+//! Что НЕ покрыто (следующие срезы): `upgrade-insecure-requests` для всего
+//! остального (картинки `<iframe>`, `background-image`, `<script src>`,
+//! `<link rel=stylesheet>`/`@import`, `@font-face`, media/`<track>`,
+//! `fetch()`/XHR/WebSocket, навигации и `Upgrade-Insecure-Requests: 1` на
+//! навигационном запросе), остальные директивы (`manifest-src`/…
 //! — распознаётся [`CspDirective::ManifestSrc`], но манифест ничем не
 //! фетчится этим движком, гейтить нечего), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает). См.
@@ -426,6 +440,43 @@ pub(crate) fn script_src_blocked(policies: &[CspPolicy], url: &str, self_origin:
     policies
         .iter()
         .any(|policy| !policy.fetch_directive_allows(&CspDirective::ScriptSrc, &parsed, self_origin))
+}
+
+/// Переписать `url` под `upgrade-insecure-requests` (срез 43): `Some(новый
+/// URL)`, если хотя бы одна политика документа объявила директиву И схема
+/// `url` — `http`; `None` — переписывать нечего (директивы нет, URL не
+/// парсится, схема не `http`).
+///
+/// Это единственная директива CSP в этом файле, которая НЕ гейт: она ничего
+/// не блокирует и не порождает `securitypolicyviolation` — она меняет сам
+/// запрос ([UIR] §4.1 шаг 5: «If request's URL's scheme is "http", set
+/// request's URL's scheme to "https"»). Порт при этом не трогается руками:
+/// явный `:80` WHATWG-парсер уже свернул в дефолтный (`Url::port()` — `None`),
+/// поэтому смена схемы сама даёт 443, а явный нестандартный порт (`:8080`)
+/// спецификация сохраняет.
+///
+/// Апгрейд по спецификации происходит ДО проверки fetch-директив (Fetch §4.1
+/// «main fetch»: upgrade — шаг 5, «should request be blocked by Content
+/// Security Policy» — шаг 6), поэтому вызывающая сторона обязана гейтить уже
+/// переписанный URL, а не исходный.
+///
+/// Исключений для loopback/IP-адресов здесь нет умышленно: «Should insecure
+/// requests be upgraded for client?» смотрит только на наличие директивы в
+/// политике клиента, а шаг 5 — только на схему; `http://localhost` живые
+/// движки не апгрейдят по собственному решению, а не по тексту спецификации.
+///
+/// [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
+pub(crate) fn upgrade_insecure_url(policies: &[CspPolicy], url: &str) -> Option<String> {
+    if !policies.iter().any(|p| p.upgrade_insecure_requests) {
+        return None;
+    }
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    if parsed.scheme() != "http" {
+        return None;
+    }
+    let serialized = parsed.as_str();
+    let rest = serialized.strip_prefix("http:")?;
+    Some(format!("https:{rest}"))
 }
 
 /// `true` if `img-src` (or `default-src`) forbids fetching `url` — срез 4.
@@ -725,6 +776,63 @@ mod tests {
         let p = lumen_network::csp::parse_csp_header("img-src cdn.example.com");
         assert!(!img_src_blocked(std::slice::from_ref(&p), "https://cdn.example.com/x.png", None));
         assert!(img_src_blocked(std::slice::from_ref(&p), "https://other.example.com/x.png", None));
+    }
+
+    /// GAP-CSPENF срез 43: без директивы ничего не переписывается.
+    #[test]
+    fn no_upgrade_insecure_requests_leaves_url_alone() {
+        let p = lumen_network::csp::parse_csp_header("img-src 'self'");
+        assert_eq!(upgrade_insecure_url(std::slice::from_ref(&p), "http://example.com/x.png"), None);
+    }
+
+    /// UIR §4.1 шаг 5: `http` → `https`, путь/запрос/фрагмент не трогаются.
+    #[test]
+    fn upgrade_insecure_requests_rewrites_http_scheme() {
+        let p = lumen_network::csp::parse_csp_header("upgrade-insecure-requests");
+        assert_eq!(
+            upgrade_insecure_url(std::slice::from_ref(&p), "http://example.com/x.png?a=1#f"),
+            Some("https://example.com/x.png?a=1#f".to_owned())
+        );
+    }
+
+    /// Явный нестандартный порт спецификация сохраняет (переписывается только
+    /// схема); дефолтный `:80` WHATWG-парсер сворачивает сам, так что после
+    /// смены схемы получается 443.
+    #[test]
+    fn upgrade_insecure_requests_keeps_explicit_port() {
+        let p = lumen_network::csp::parse_csp_header("upgrade-insecure-requests");
+        assert_eq!(
+            upgrade_insecure_url(std::slice::from_ref(&p), "http://example.com:8080/x.png"),
+            Some("https://example.com:8080/x.png".to_owned())
+        );
+        assert_eq!(
+            upgrade_insecure_url(std::slice::from_ref(&p), "http://example.com:80/x.png"),
+            Some("https://example.com/x.png".to_owned())
+        );
+    }
+
+    /// Не-`http` схемы вне действия директивы: `https` уже безопасна, `data:`/
+    /// `file:` шаг 5 не называет.
+    #[test]
+    fn upgrade_insecure_requests_ignores_non_http_schemes() {
+        let p = lumen_network::csp::parse_csp_header("upgrade-insecure-requests");
+        assert_eq!(upgrade_insecure_url(std::slice::from_ref(&p), "https://example.com/x.png"), None);
+        assert_eq!(upgrade_insecure_url(std::slice::from_ref(&p), "data:image/png;base64,AA"), None);
+        assert_eq!(upgrade_insecure_url(std::slice::from_ref(&p), ":://не-url"), None);
+    }
+
+    /// CSP3 §3.4: директива в ЛЮБОЙ из независимых политик документа включает
+    /// апгрейд — тот же `any`-рисунок, что у всех гейтов этого файла.
+    #[test]
+    fn upgrade_insecure_requests_in_any_policy_applies() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("img-src 'self'"),
+            lumen_network::csp::parse_csp_header("upgrade-insecure-requests"),
+        ];
+        assert_eq!(
+            upgrade_insecure_url(&policies, "http://example.com/x.png"),
+            Some("https://example.com/x.png".to_owned())
+        );
     }
 
     /// GAP-CSPENF срез 5: a document with no `<meta>` CSP still has a policy

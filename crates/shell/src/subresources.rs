@@ -392,7 +392,19 @@ pub(crate) fn fetch_and_decode_images(
         if req.is_lazy {
             return ImgOutcome::Lazy;
         }
+        // GAP-CSPENF срез 43: `upgrade-insecure-requests` переписывает схему
+        // ДО гейта `img-src` (Fetch §4.1: upgrade — шаг 5, CSP-проверка —
+        // шаг 6), поэтому и гейт, и cross-origin-классификация, и сам фетч
+        // видят уже `https://`. `upgraded` — `None`, когда переписывать
+        // нечего; тогда всё идёт ровно как раньше, по сырому `req.url`.
         let resolved_url = base.resolve_str(&req.url);
+        let upgraded = csp_gate
+            .as_ref()
+            .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url));
+        let resolved_url = upgraded.clone().unwrap_or(resolved_url);
+        // Ключ кэша/реестра картинок остаётся сырым `req.url` (его знает
+        // layout и рендерер); апгрейд меняет только адрес запроса.
+        let fetch_url: &str = upgraded.as_deref().unwrap_or(&req.url);
         if let Some((policy, _original)) = &csp_gate
             && crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref())
         {
@@ -428,7 +440,7 @@ pub(crate) fn fetch_and_decode_images(
             ),
             _ => (
                 image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
-                    decode_image(&req.url, base, sink, cookie_jar.clone(), target)
+                    decode_image(fetch_url, base, sink, cookie_jar.clone(), target)
                 }),
                 url_cross_origin,
             ),
