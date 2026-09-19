@@ -1242,12 +1242,33 @@ fn clamp_frame_scroll(frames: &mut [FrameHandle]) {
 /// Дальше работу доделывает [`sync_frame_viewports`] — не ради экономии кода,
 /// а потому что мутация могла подвинуть host-бокс ВЛОЖЕННОГО фрейма (раскрытый
 /// `<details>` над ним), и порядок обхода по глубине живёт только там.
+///
+/// GAP-CSPENF срез 39: единственный вызывающий этой функции по мутации
+/// скрипта — `about_to_wait.rs`'s `frame_dirty` (`own_dirty || bridge_dirty`,
+/// тот же сигнал, что уже гейтит любую другую пост-скриптовую работу ребёнка)
+/// — тот же тип триггера, что срез 37 дал странице через `dom_touched`.
+/// `style_attr_csp_blocked` ребёнка считался только один раз, при спавне
+/// (`fetch_frame_subresources`, до его собственных скриптов): точечная
+/// мутация `style=""` (`setAttribute`/`style.cssText`) без затрагивания
+/// `<style>`/`<link>` доезжала до layout незаблокированной. Полотно ребёнка
+/// (`FrameHandle::sheet`) само не пересчитывается после спавна (CSSOM-1 ещё
+/// не даёт живой per-node registry), так что здесь достаточно пере-собрать
+/// только это множество узлов — не whole-каскад.
+#[allow(clippy::unwrap_used)] // короткий лок дерева, docs/lint-policy.md §10
 pub(crate) fn relayout_frame_content(
     frames: &mut [FrameHandle],
     idx: usize,
     page_layout: &lumen_layout::LayoutBox,
     interactive: FrameInteractive,
 ) {
+    {
+        let mut doc = frames[idx].doc.lock().unwrap();
+        let root = doc.root();
+        let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
+        let (blocked_style_attr_nodes, _) =
+            collect_style_attr_csp_blocked(&doc, csp_policy.as_ref().map(|(p, _)| p));
+        doc.set_style_attr_csp_blocked(blocked_style_attr_nodes);
+    }
     let Some(measurer) = frame_measurer(
         &frames[idx].sheet.font_faces,
         &frames[idx].font_registry,
