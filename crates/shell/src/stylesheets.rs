@@ -113,16 +113,31 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     // Каждый лист резолвит собственные `@import` относительно СВОЕГО URL
     // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
     // `@import "b.css"` = `/css/b.css`) разрешались корректно.
+    let gate_ref = csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref()));
     let parts = parallel_map(&hrefs, |_, (_, href, charset_attr)| {
         if let Some((policy, _original)) = &csp_gate {
             let resolved_url = base.resolve_str(href);
-            if crate::csp_enforce::style_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
-                return Err(Some(resolved_url));
+            // GAP-CSPENF срез 47: гейт `style-src` обязан видеть тот же
+            // апгрейженный адрес, что и фактический фетч ниже
+            // (`fetch_stylesheet_text`, теперь принимающая тот же
+            // `gate_ref`) — тем же порядком Fetch §4.1, что срезы 43-45 уже
+            // дали картинкам и `<script src>`.
+            let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url);
+            let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
+            if crate::csp_enforce::style_src_blocked(policy, gate_url, self_origin.as_ref()) {
+                return Err(Some(gate_url.to_owned()));
             }
         }
-        let (text, sheet_base, encoding) =
-            fetch_stylesheet_text(href, base, sink, cookie_jar.clone(), charset_attr.as_deref(), doc_encoding)
-                .ok_or(None)?;
+        let (text, sheet_base, encoding) = fetch_stylesheet_text(
+            href,
+            base,
+            sink,
+            cookie_jar.clone(),
+            charset_attr.as_deref(),
+            doc_encoding,
+            gate_ref,
+        )
+        .ok_or(None)?;
         Ok(inline_css_imports(
             &text,
             &sheet_base,
@@ -132,7 +147,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             &mut std::collections::HashSet::new(),
             0,
             encoding,
-            csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
+            gate_ref,
         ))
     });
 
@@ -175,6 +190,12 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
 /// значение атрибута `<link charset=…>` (`None` для `@import`, у него такого
 /// атрибута нет) и кодировка ссылающегося документа/листа. Полный порядок
 /// приоритетов реализует [`lumen_encoding::detect_stylesheet_encoding`].
+///
+/// `csp_gate` — GAP-CSPENF срез 47: `upgrade-insecure-requests` переписывает
+/// схему `http:` → `https:` ДО фактического запроса (та же точка, что срезы
+/// 43-45 уже дали картинкам и `<script src>`); `None` = политики без
+/// `upgrade-insecure-requests` вовсе, тогда ветка `ResolvedResource::Url`
+/// фетчит `url` как раньше, без изменений.
 fn fetch_stylesheet_text(
     href: &str,
     base: &ResourceBase,
@@ -182,6 +203,7 @@ fn fetch_stylesheet_text(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     link_charset_attr: Option<&str>,
     referring_encoding: lumen_encoding::Encoding,
+    csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
 ) -> Option<(String, ResourceBase, lumen_encoding::Encoding)> {
     match base.resolve(href) {
         ResolvedResource::File(path) => match std::fs::read(&path) {
@@ -204,9 +226,17 @@ fn fetch_stylesheet_text(
                 None
             }
         },
-        ResolvedResource::Url(url) => {
+        ResolvedResource::Url(raw_url) => {
             use lumen_core::url::Url;
             use lumen_network::RequestDestination;
+
+            // GAP-CSPENF срез 47: апгрейженный адрес идёт в фактический
+            // запрос, тем же принципом, что `scripts.rs::resolve_script_sources`
+            // уже даёт `<script src>` (срез 45) — гейт (вызывающая сторона) и
+            // фетч обязаны видеть один и тот же `https://`-адрес.
+            let url = csp_gate
+                .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &raw_url))
+                .unwrap_or(raw_url);
 
             let sub_url = match Url::parse(&url) {
                 Ok(u) => u,
@@ -335,11 +365,19 @@ pub(crate) fn inline_css_imports(
         // GAP-CSPENF срез 38: `style-src`/`default-src` против цели `@import`,
         // до сети — тот же принцип «заблокированный фетч не идёт в сеть
         // вовсе», что `load_linked_stylesheets` уже даёт `<link>`.
-        if let Some((policy, self_origin)) = csp_gate
-            && crate::csp_enforce::style_src_blocked(policy, &key, self_origin)
-        {
-            blocked.push(key);
-            continue;
+        //
+        // Срез 47: `upgrade-insecure-requests` переписывает `key` ДО этого
+        // гейта (та же схема, что `load_linked_stylesheets` уже даёт
+        // `<link>`) — гейт и фактический фетч (`fetch_stylesheet_text`,
+        // принимающая тот же `csp_gate`) обязаны видеть один адрес. `seen`
+        // остаётся на сыром `key` — дедуп циклов не вопрос безопасности.
+        if let Some((policy, self_origin)) = csp_gate {
+            let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &key);
+            let gate_url = upgraded.as_deref().unwrap_or(&key);
+            if crate::csp_enforce::style_src_blocked(policy, gate_url, self_origin) {
+                blocked.push(gate_url.to_owned());
+                continue;
+            }
         }
         let Some((text, imp_base, imp_encoding)) = fetch_stylesheet_text(
             &imp.url,
@@ -348,6 +386,7 @@ pub(crate) fn inline_css_imports(
             cookie_jar.clone(),
             None, // `@import` has no `<link charset>`-equivalent attribute
             referring_encoding,
+            csp_gate,
         ) else {
             continue;
         };
@@ -430,6 +469,18 @@ pub(crate) fn build_stylesheet_node_registry(
     collect_stylesheet_owners(doc, doc.root(), &mut owners);
     let doc_encoding = document_encoding(doc);
 
+    // GAP-CSPENF срез 47: тот же `csp_gate`, что `load_linked_stylesheets`
+    // уже считает для того же документа — без него этот проход резолвил бы
+    // и лукапил `PREFETCH_CACHE` по сырому (не апгрейженному) URL, промахнулся
+    // мимо записи, сделанной апгрейженным фетчем, и тихо сходил бы в сеть по
+    // `http://` второй раз только ради заполнения `document.styleSheets`.
+    let csp_gate = {
+        let root = doc.root();
+        crate::csp_enforce::document_csp_policy(doc, root)
+    };
+    let self_origin = base.origin();
+    let gate_ref = csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref()));
+
     let mut out = Vec::with_capacity(owners.len());
     for owner in owners {
         match owner {
@@ -449,6 +500,7 @@ pub(crate) fn build_stylesheet_node_registry(
                     cookie_jar.clone(),
                     charset_attr.as_deref(),
                     doc_encoding,
+                    gate_ref,
                 ) {
                     out.push(StylesheetNodeEntry {
                         node: id.index() as u32,

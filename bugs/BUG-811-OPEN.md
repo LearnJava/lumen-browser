@@ -2686,4 +2686,70 @@ src="http://127.0.0.1:8792/listener.js">`): сервер получает `GET
 lumen-shell --profile dev-release --all-targets --features v8 -- -D
 warnings` — чисто (без изменений в исходниках).
 
+## Срез 47 (2026-09-20, `p6-gap-cspenf-srez47`) — `upgrade-insecure-requests` для `<link rel=stylesheet>` и `@import`
+
+Механическое продолжение срезов 43-46, названное срезом 45 не покрытым:
+`csp_enforce::upgrade_insecure_url`, применённая к обеим точкам фетча
+CSS в [`stylesheets.rs`](../crates/shell/src/stylesheets.rs) — внешнему
+`<link rel=stylesheet>` (`load_linked_stylesheets`) и `@import`
+(`inline_css_imports`), которые, как и `<script src>`, не имеют
+раздельных top-level/`<iframe>` реализаций: обе вызываются одинаково из
+`page_pipeline.rs` и `frames.rs`, поэтому один срез закрыл сразу оба
+контекста.
+
+- [`fetch_stylesheet_text`](../crates/shell/src/stylesheets.rs) — общая
+  точка фактического фетча для `<link>` и `@import` — получила новый
+  параметр `csp_gate: Option<(&[CspPolicy], Option<&Origin>)>` (та же пара,
+  что уже принимает `inline_css_imports`); в ветке `ResolvedResource::Url`
+  сырой резолвленный адрес (`raw_url`) сначала идёт через
+  `upgrade_insecure_url`, апгрейженный — то, что реально уходит в
+  `PREFETCH_CACHE`/сеть и что возвращается как база для вложенных
+  `@import`. Ветка `ResolvedResource::File` апгрейд не видит по той же
+  причине, что и в `scripts.rs` (`file:` не совпадёт со схемой `http`).
+- `load_linked_stylesheets` — гейт `style_src_blocked` для каждого `<link>`
+  теперь смотрит на апгрейженный `gate_url`, а не на сырой
+  `resolved_url` (тот же порядок Fetch §4.1, что и `<script src>`
+  среза 45) — иначе гейт видел бы `http://`, а фактический фетч уже
+  `https://`, и хост мог бы обойти `style-src`-политику, отличающуюся для
+  двух схем.
+- `inline_css_imports` — тот же приём для цели каждого `@import`: `key`
+  (сырой резолв, используемый и для `seen`-дедупа циклов) апгрейдится
+  только для гейта/фетча, дедуп циклов остаётся на сыром адресе — это не
+  вопрос безопасности, а защита от бесконечной рекурсии.
+- [`build_stylesheet_node_registry`](../crates/shell/src/stylesheets.rs)
+  (CSSOM `document.styleSheets`, отдельный проход по тем же `<link>`,
+  читающий `PREFETCH_CACHE` второй раз) тоже получила тот же `csp_gate`:
+  без него она резолвила бы `href` заново без апгрейда, промахивалась
+  мимо кэш-записи под апгрейженным ключом и тихо повторно фетчила бы
+  `http://` — открытый небезопасный запрос ради одного только CSSOM,
+  которого сам каскад уже не делает.
+- Пять юнит-тестов `upgrade_insecure_url` (срез 43) переиспользованы без
+  изменений — новых не потребовалось, менялись только вызывающие коды.
+
+Подтверждено живой пробой (`.tmp/srez47/serve.py`, простой HTTP-сервер на
+`127.0.0.1:8793`; страница несёт `<meta http-equiv="Content-Security-Policy"
+content="upgrade-insecure-requests">` и `<link rel="stylesheet"
+href="http://…/style.css">`, лист несёт собственный `@import`): stderr
+браузера показывает `GET https://127.0.0.1:8793/style.css` с последующим
+`TLS handshake: received corrupt message` (простой http-сервер пробы TLS
+не терминирует, ожидаемо), сервер получает только `GET /top.html` — запрос
+листа реально ушёл на `https://` и не долетел до сервера ни разу по
+`http://`, тем же рисунком, что срезы 43-46 уже показали для картинок и
+скриптов.
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen
+csp` — 96 passed, 0 failed (без изменений числа, как и в срезах 44-46);
+`cargo clippy -p lumen-shell --profile dev-release --all-targets --features
+v8 -- -D warnings` — чисто. `scripts/scoped-test.sh` не догнан до конца —
+тот же известный сломанный гейт [BUG-805](BUG-805-OPEN.md), не регрессия
+этого среза.
+
+Не покрыто этим срезом (продолжение BUG-692, не изменилось): `@font-face
+url()` (везде — и top-level, и `<iframe>`), `<video>`/`<audio>`/`<track>`,
+`fetch()`/XHR/WebSocket (`ws://` → `wss://`), навигации верхнего документа
+и `<iframe>`, заголовок `Upgrade-Insecure-Requests: 1` на навигационном
+запросе и `upgrade insecure navigations set` (UIR §4.1 шаги 1-2). Остаток
+общего списка дорожки не изменился: `report-to`, `manifest-src`, честная
+per-policy `originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
