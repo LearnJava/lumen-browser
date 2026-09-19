@@ -96,10 +96,18 @@ impl VideoPlaybackState {
 pub struct VideoGifStore {
     /// Per-node playback timing.  Key = DOM node index (`el.__nid__`).
     /// Populated by the shell after decoding; read by JS native bindings.
+    /// Shared by GIF- and FFmpeg-backed entries alike (`VideoPlaybackState`
+    /// carries no GIF-specific field), so both decode backends reuse the same
+    /// `__lumen_video_play`/`pause`/`seek`/`current_time`/… natives.
     pub playback: Mutex<HashMap<u32, VideoPlaybackState>>,
-    /// Pending load requests: `(nid, src_url)` queued by `__lumen_video_load`.
+    /// Pending GIF load requests: `(nid, src_url)` queued by `__lumen_video_load`.
     /// Drained by the shell's tick loop.
     pub pending_loads: Mutex<Vec<(u32, String)>>,
+    /// Pending FFmpeg-container load requests: `(nid, src_url)` queued by
+    /// `__lumen_video_ffmpeg_load` (GAP-MEDIADECODE срез 6, feature
+    /// `ffmpeg-video`). Drained by the shell's tick loop once it links
+    /// `lumen-media-ffmpeg` (срез 7, not yet wired).
+    pub pending_ffmpeg_loads: Mutex<Vec<(u32, String)>>,
 }
 
 // ── Global registry ───────────────────────────────────────────────────────────

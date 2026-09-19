@@ -4396,6 +4396,7 @@ impl JsFetchProvider for HttpClient {
     /// own hook instead of relying on `fetch_with_body_sync`'s existing gate).
     fn check_connect_src(&self, url: &str) -> Result<()> {
         let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let url = self.upgrade_insecure_requests_url(url);
         self.connect_src_gate(&url)
     }
 
@@ -4519,6 +4520,47 @@ impl HttpClient {
         Ok(())
     }
 
+    /// GAP-CSPENF срез 49: `upgrade-insecure-requests` for JS-initiated
+    /// network requests — the last item срез 48 named not covered
+    /// (`fetch()`/`XMLHttpRequest`/WebSocket/EventSource; `sendBeacon` is a
+    /// thin wrapper over `fetch_with_body_sync`, which funnels through
+    /// [`Self::fetch_request_impl`] below, so it is covered for free).
+    ///
+    /// Duplicates the scheme-swap that `lumen_shell::csp_enforce::
+    /// upgrade_insecure_url` already applies to parser-driven subresources
+    /// (срезы 43-48) instead of depending on it: `lumen-network` sits below
+    /// `lumen-shell` in the crate graph and cannot import it. The policies
+    /// needed already live on `HttpClient` — [`Self::connect_src_policy`] is
+    /// the same `Vec<CspPolicy>` `with_connect_src_policy` stores for every
+    /// one of these call sites, so no new field is needed.
+    ///
+    /// Per [UIR] §4.1 step 5, upgrading must happen before the `connect-src`
+    /// block check (step 6) — every call site below calls this immediately
+    /// after `Url::parse`, before its gate. `ws`/`wss` are handled alongside
+    /// `http`/`https` because a WebSocket handshake is a `connect-src`-gated
+    /// fetch under CSP3 §6.7.2 just like `fetch()`, and the Mixed Content
+    /// upgrade algorithm this directive defers to treats both pairs alike.
+    ///
+    /// [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
+    fn upgrade_insecure_requests_url(&self, url: Url) -> Url {
+        let Some((policies, _, _)) = &self.connect_src_policy else {
+            return url;
+        };
+        if !policies.iter().any(|p| p.upgrade_insecure_requests) {
+            return url;
+        }
+        let new_scheme = match url.scheme() {
+            "http" => "https",
+            "ws" => "wss",
+            _ => return url,
+        };
+        let serialized = url.as_str().to_string();
+        let Some((_, rest)) = serialized.split_once(':') else {
+            return url;
+        };
+        Url::parse(&format!("{new_scheme}:{rest}")).unwrap_or(url)
+    }
+
     /// Общее тело JS-запроса. `allow_sw_intercept = false` — для запросов,
     /// исходящих из самого service worker-а.
     fn fetch_request_impl(
@@ -4527,6 +4569,7 @@ impl HttpClient {
         allow_sw_intercept: bool,
     ) -> Result<JsFetchResult> {
         let url = Url::parse(req.url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let url = self.upgrade_insecure_requests_url(url);
         self.connect_src_gate(&url)?;
         let method_upper = req.method.to_ascii_uppercase();
         match (req.body.is_some(), method_upper.as_str()) {
@@ -4793,6 +4836,9 @@ impl JsWebSocketProvider for HttpClient {
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
+        // GAP-CSPENF срез 49: upgrade `ws:` to `wss:` before the gate below —
+        // same UIR §4.1 step 5-before-6 ordering as `fetch_request_impl`.
+        let parsed = self.upgrade_insecure_requests_url(parsed);
         // GAP-CSPENF срез 11: same one-time `connect_src_policy` gate that
         // `fetch_request_impl` (срез 10) checks before any socket work — a
         // WebSocket handshake is a `connect-src`-gated fetch (CSP3 §6.7.2) just
@@ -4943,6 +4989,9 @@ impl JsSseProvider for HttpClient {
     fn connect_sse(&self, url: &str) -> Result<Box<dyn JsSseSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("sse: invalid URL: {e}")))?;
+        // GAP-CSPENF срез 49: same `http` → `https` upgrade as `fetch_request_impl`
+        // — EventSource speaks plain HTTP(S), not its own scheme, before the gate below.
+        let parsed = self.upgrade_insecure_requests_url(parsed);
         // GAP-CSPENF срез 11: same `connect_src_policy` gate as `connect()`
         // above (WebSocket) — `EventSource` is `connect-src`-gated per CSP3
         // §6.7.2 and shares the same `HttpClient`-owned policy slot.
@@ -5844,6 +5893,79 @@ mod tests {
         let sse_result =
             <HttpClient as lumen_core::ext::JsSseProvider>::connect_sse(&client, "not a url");
         assert!(!matches!(sse_result, Err(Error::CspConnectSrcBlocked { .. })));
+    }
+
+    // ── GAP-CSPENF срез 49: upgrade-insecure-requests для fetch/XHR/WS/SSE ────
+
+    #[test]
+    fn upgrade_insecure_requests_url_rewrites_http_to_https() {
+        let policy = csp::parse_csp_header("upgrade-insecure-requests");
+        let client = HttpClient::new().with_connect_src_policy(
+            vec![policy],
+            None,
+            "upgrade-insecure-requests".to_owned(),
+        );
+        let url = Url::parse("http://example.com/x?a=1#f").unwrap();
+        let upgraded = client.upgrade_insecure_requests_url(url);
+        assert_eq!(upgraded.as_str(), "https://example.com/x?a=1#f");
+    }
+
+    #[test]
+    fn upgrade_insecure_requests_url_rewrites_ws_to_wss() {
+        let policy = csp::parse_csp_header("upgrade-insecure-requests");
+        let client = HttpClient::new().with_connect_src_policy(
+            vec![policy],
+            None,
+            "upgrade-insecure-requests".to_owned(),
+        );
+        let url = Url::parse("ws://example.com/socket").unwrap();
+        let upgraded = client.upgrade_insecure_requests_url(url);
+        assert_eq!(upgraded.as_str(), "wss://example.com/socket");
+    }
+
+    #[test]
+    fn upgrade_insecure_requests_url_leaves_https_and_wss_alone() {
+        let policy = csp::parse_csp_header("upgrade-insecure-requests");
+        let client = HttpClient::new().with_connect_src_policy(
+            vec![policy],
+            None,
+            "upgrade-insecure-requests".to_owned(),
+        );
+        let https = Url::parse("https://example.com/x").unwrap();
+        assert_eq!(
+            client.upgrade_insecure_requests_url(https.clone()).as_str(),
+            https.as_str()
+        );
+        let wss = Url::parse("wss://example.com/socket").unwrap();
+        assert_eq!(client.upgrade_insecure_requests_url(wss.clone()).as_str(), wss.as_str());
+    }
+
+    #[test]
+    fn upgrade_insecure_requests_url_without_directive_does_not_rewrite() {
+        // Policy exists (so `connect_src_policy` is `Some`) but never declared
+        // `upgrade-insecure-requests` — must not invent an upgrade.
+        let policy = csp::parse_csp_header("connect-src example.com");
+        let client = HttpClient::new().with_connect_src_policy(
+            vec![policy],
+            None,
+            "connect-src example.com".to_owned(),
+        );
+        let url = Url::parse("http://example.com/x").unwrap();
+        assert_eq!(
+            client.upgrade_insecure_requests_url(url.clone()).as_str(),
+            url.as_str()
+        );
+    }
+
+    #[test]
+    fn upgrade_insecure_requests_url_without_any_policy_does_not_rewrite() {
+        // Default `HttpClient` — `with_connect_src_policy` never called.
+        let client = HttpClient::new();
+        let url = Url::parse("http://example.com/x").unwrap();
+        assert_eq!(
+            client.upgrade_insecure_requests_url(url.clone()).as_str(),
+            url.as_str()
+        );
     }
 
     // ── GAP-CSPENF срез 12: connect-src против navigator.sendBeacon ──────────
