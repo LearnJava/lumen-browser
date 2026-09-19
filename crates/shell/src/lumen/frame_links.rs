@@ -56,15 +56,31 @@ impl Lumen {
         // в котором по ней кликнули, а дальше по коду `self.frames` берётся
         // изменяемо — заём поля пережить этого не может.
         let nav_base = handle.base.clone();
+        // GAP-CSPENF срез 36: политика РЕБЁНКА читается в этом же локе,
+        // тем же способом, что уже даёт `target`/`rel` (срез 24) — ссылку
+        // написал ребёнок, поэтому именно его `navigate-to` (не страницы)
+        // решает, куда ему можно, и второй проход рисковал бы увидеть
+        // документ, изменённый скриптом между двумя чтениями.
         let found = {
             let Ok(doc) = handle.doc.lock() else { return false };
+            let root = doc.root();
             links::find_link(&doc, source_node).map(|(anchor, href)| {
                 let target = doc.get(anchor).get_attr("target").unwrap_or_default().to_owned();
                 let rel = doc.get(anchor).get_attr("rel").unwrap_or_default().to_owned();
-                (href, target, rel)
+                let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
+                (href, target, rel, csp_gate)
             })
         };
-        let Some((href, target_attr, rel_attr)) = found else { return false };
+        let Some((href, target_attr, rel_attr, csp_gate)) = found else { return false };
+        // GAP-CSPENF срез 36: одна проверка ПЕРЕД всем деревом ветвления
+        // ниже (`_blank`/именованный фрейм/именованная вкладка/`_top`/
+        // `_self`) — тот же порядок, что срез 33 уже даёт `<a href>`
+        // страницы (`click.rs::navigate_to_link_blocked`): каждая из веток
+        // кончается навигацией на один и тот же резолвленный `href`, так
+        // что проверка внутри каждой была бы четырьмя копиями одного ответа.
+        if self.frame_navigate_to_link_blocked(idx, csp_gate.as_ref(), &href, &nav_base) {
+            return true;
+        }
         match self.link_destination(idx, &target_attr) {
             LinkTarget::NewWindow => {
                 // GAP-NAVCTX срез 2 (BUG-883): open a real tab instead of the
@@ -150,6 +166,44 @@ impl Lumen {
                 true
             }
         }
+    }
+
+    /// `true`, если `navigate-to` документа-РЕБЁНКА запрещает переход по
+    /// ссылке `href`, кликнутой внутри его собственного под-документа —
+    /// GAP-CSPENF срез 36.
+    ///
+    /// Зеркало [`Lumen::navigate_to_link_blocked`] страницы (`click.rs`,
+    /// срез 33): та же одноразовая проверка, тот же fail-open на
+    /// нераспарсившемся `href`, но политика и origin сравнения — собственные
+    /// у РЕБЁНКА (`nav_base`), а не у страницы, потому что ссылку написал
+    /// ребёнок. Резолв `href` — тем же `nav_base`, что и настоящая навигация
+    /// ниже, та же ловушка сырого значения атрибута, на которой срез 4
+    /// сначала «fail open»-ил для `<img src>`.
+    ///
+    /// `securitypolicyviolation` уходит прямым `eval_js`-хэндлом ребёнка
+    /// (`fire_csp_violation`), не через `route_task_js`: тот адресует только
+    /// контекст СТРАНИЦЫ — та же причина, что у `frame_form_submit.rs`'s
+    /// `fire_csp_violation`-вызова.
+    fn frame_navigate_to_link_blocked(
+        &mut self,
+        idx: usize,
+        csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+        href: &str,
+        nav_base: &ResourceBase,
+    ) -> bool {
+        let Some((policy, original_policy)) = csp_gate else {
+            return false;
+        };
+        let resolved = nav_base.resolve_str(href);
+        let self_origin = nav_base.origin();
+        if !crate::csp_enforce::navigate_to_blocked(policy, &resolved, self_origin.as_ref()) {
+            return false;
+        }
+        if let Some(js) = self.frames.get(idx).and_then(|h| h.js.clone()) {
+            js.fire_csp_violation("navigate-to", &resolved, original_policy);
+        }
+        eprintln!("iframe: navigation to {resolved} blocked by CSP navigate-to");
+        true
     }
 
     /// Разобрать `target` ссылки ребёнка.
