@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 278,
-  "fixed": 727,
+  "open": 277,
+  "fixed": 728,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -1991,16 +1991,16 @@
       {
        "id": "UPD-3",
        "title": "UPD-3: Проверка подписи",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "ed25519-подпись манифеста (ed25519-dalek уже в дереве): key_id + список доверенных ключей (ротация), sha256 бинарников, downgrade-отказ; негативные тесты (битая подпись, подмена хэша)"
+       "note": "ed25519-подпись манифеста (ed25519-dalek уже в дереве): key_id + список доверенных ключей (ротация), sha256 бинарников, downgrade-отказ; негативные тесты (битая подпись, подмена хэша). **Ревизия 2026-09-19 (P1):** `crates/shell/src/update.rs` — `TRUSTED_KEYS` (key_id → ed25519 public key, пусто до UPD-10), `verify_manifest`/`verify_manifest_with_keys` (подпись над `UpdateManifest::signing_body`, отдельная от wire-типа структура полей — новое поле молча не попадёт под подпись без явного изменения), `UpdateAsset::verify_body` (sha256 скачанного тела против манифеста, для UPD-6), `apply_check_result` теперь гейтит `CheckOutcome::Available` подписью (новый вариант `Untrusted`) **после** downgrade-отсева — валидно подписанный, но не новый манифест не доходит до проверки подписи. base64 decode вынесен в `lumen-core::hash` (был приватным дублем в `sri.rs`). +16 тестов (валидная подпись, неизвестный `key_id`, подмена тела/хэша после подписи, чужой ключ под тем же `key_id`, битая/короткая base64-подпись, sha256 тела кейс-инсенситивно). `TRUSTED_KEYS` пуст — любой реальный манифест сегодня отклоняется до UPD-10 (продакшен-ключ + CI-подпись)."
       },
       {
        "id": "UPD-4",
        "title": "UPD-4: Схема-версии lumen-storage",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "PRAGMA user_version + общий helper миграций в lumen-storage (~25 хранилищ: CREATE IF NOT EXISTS → v1, ad-hoc ALTER profiles.rs:97 → v2), миграции в одной транзакции, отказ открывать базу с user_version из будущего. Ценен независимо от апдейтера"
+       "note": "PRAGMA user_version + общий helper миграций в lumen-storage (~25 хранилищ: CREATE IF NOT EXISTS → v1, ad-hoc ALTER profiles.rs:97 → v2), миграции в одной транзакции, отказ открывать базу с user_version из будущего. Ценен независимо от апдейтера. **Ревизия 2026-09-19 (P1):** `crates/storage/src/migrations.rs` — `Migration{version, sql}` + `run_migrations()` (применяет непройденные миграции по возрастанию версии одной транзакцией, отказывается открывать БД с `user_version` из будущего) + `set_common_pragmas()` (общий WAL/synchronous, раньше дублировался в 34 местах). Все 28 файлов `crates/storage/src/*.rs` переведены с прямого `CREATE TABLE IF NOT EXISTS` в `execute_batch` на v1-миграцию через helper. Три обнаруженных ad-hoc ALTER-протокола (каждый свой) закрыты отдельно: `profiles.rs` (глотал \"duplicate column\"), `bookmarks.rs::migrate_semantic_columns` (читал `PRAGMA table_info` вручную на каждом открытии), `tab_snapshot.rs::SleepingTabStore` (тот же глотающий паттерн) — все три переведены на v2-миграцию + одноразовый `bridge_pre_migration_version()`, который детектирует уже смигрированные старые БД (колонка есть, `user_version` ещё 0) и проставляет целевую версию, не давая `run_migrations` повторно упасть на \"duplicate column name\". 656 тестов + `cargo clippy --workspace --all-targets` зелёные."
       },
       {
        "id": "UPD-5",
@@ -8445,13 +8445,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-905": {
-   "status": "open",
-   "title": "Runtime-ошибка shared-воркера рассылается всем подключённым клиентам, тогда как HTML LS §10.2.6 пробрасывает ошибку на объект-владелец **только** для выделенног…",
-   "component": "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception` и рассылка в `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime.rs::eval_and_report_via` — не разделяет фазу компиляции и фазу исполнения)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-906": {
    "status": "open",
    "title": "Заголовок ответа `Link: <…>; rel=preload; as=script` (HTML LS §4.6.6 «Link headers») не даёт ни одного запроса — ни на самом документе, ни на его подресурсе. От…",
@@ -14163,6 +14156,13 @@
    "component": "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)",
    "date": "2026-09-19",
    "debtor": false
+  },
+  "BUG-905": {
+   "status": "fixed",
+   "title": "Runtime-ошибка shared-воркера рассылается всем подключённым клиентам, тогда как HTML LS §10.2.6 пробрасывает ошибку на объект-владелец **только** для выделенног…",
+   "component": "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception`, `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime/eval.rs::eval_and_report_via`)",
+   "date": "2026-09-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14677,7 +14677,7 @@
   "js (`crates/js/src/shared_worker.rs` — `hub_v8`/`HUB_V8`, `close_shared_worker_port_v8`)": [
    "BUG-1000"
   ],
-  "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception` и рассылка в `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime.rs::eval_and_report_via` — не разделяет фазу компиляции и фазу исполнения)": [
+  "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception`, `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime/eval.rs::eval_and_report_via`)": [
    "BUG-905"
   ],
   "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
