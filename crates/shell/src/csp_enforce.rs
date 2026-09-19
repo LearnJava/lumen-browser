@@ -412,6 +412,20 @@ pub(crate) fn font_src_blocked(policy: &CspPolicy, url: &str, self_origin: Optio
     !policy.fetch_directive_allows(&CspDirective::FontSrc, &parsed, self_origin)
 }
 
+/// `true` if the CHILD document's own `frame-ancestors` directive refuses to
+/// be embedded by a frame whose origin is `ancestor_origin` — срез 27, the
+/// first navigation directive this module enforces (every directive above is
+/// a fetch directive). Unlike them, `frame-ancestors` is read from the
+/// PROTECTED document's own policy, not the embedder's: the caller passes
+/// the child's `csp_gate` and its own origin as `self_origin`.
+pub(crate) fn frame_ancestors_blocked(
+    policy: &CspPolicy,
+    ancestor_origin: &Origin,
+    self_origin: Option<&Origin>,
+) -> bool {
+    !policy.frame_ancestor_allowed(ancestor_origin, self_origin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,5 +838,28 @@ mod tests {
     fn nonce_source_does_not_allow_attribute() {
         let p = lumen_network::csp::parse_csp_header("style-src-attr 'nonce-abc123'");
         assert!(style_attribute_blocked(&p, "color:red"));
+    }
+
+    // ── GAP-CSPENF срез 27: `frame-ancestors` enforcement ───────────────────
+
+    #[test]
+    fn frame_ancestors_blocks_unlisted_embedder() {
+        let p = lumen_network::csp::parse_csp_header("frame-ancestors example.com");
+        let ancestor = Origin::new("https", "other.example", 443);
+        assert!(frame_ancestors_blocked(&p, &ancestor, None));
+    }
+
+    #[test]
+    fn frame_ancestors_allows_listed_embedder() {
+        let p = lumen_network::csp::parse_csp_header("frame-ancestors example.com");
+        let ancestor = Origin::new("https", "example.com", 443);
+        assert!(!frame_ancestors_blocked(&p, &ancestor, None));
+    }
+
+    #[test]
+    fn no_frame_ancestors_directive_allows_any_embedder() {
+        let p = lumen_network::csp::parse_csp_header("default-src 'none'");
+        let ancestor = Origin::new("https", "anything.example", 443);
+        assert!(!frame_ancestors_blocked(&p, &ancestor, None));
     }
 }
