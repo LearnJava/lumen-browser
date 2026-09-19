@@ -17,6 +17,18 @@
     return base.endsWith('.gif');
   }
 
+  // GAP-MEDIADECODE срез 6: extension sniff for the containers
+  // `__lumen_video_ffmpeg_load` (feature `ffmpeg-video`) may decode. Same
+  // pre-fetch, extension-based limitation `isGifSrc` already accepts — the
+  // real gate is `HAS_FFMPEG_LOAD` (native only registered with the feature).
+  var HAS_FFMPEG_LOAD = (typeof __lumen_video_ffmpeg_load === 'function');
+  function isFfmpegSrc(src) {
+    if (!src) return false;
+    var base = src.split('?')[0].split('#')[0].toLowerCase();
+    return base.endsWith('.mp4') || base.endsWith('.webm')
+      || base.endsWith('.ogg') || base.endsWith('.ogv');
+  }
+
   function nowMs() {
     return (typeof performance !== 'undefined' && performance.now)
       ? performance.now()
@@ -719,7 +731,9 @@
     var _generation   = 0;
     var _loadTimer    = null;
     var _tupdateTimer = null;
-    var _gifBacked = false; // true once a GIF is successfully loaded
+    var _gifBacked = false;    // true once a GIF is successfully loaded
+    var _ffmpegBacked = false; // true once an FFmpeg container is successfully loaded (срез 6)
+    function decoded() { return (_gifBacked || _ffmpegBacked) && HAS_STORE; }
 
     function attr(name) {
       var v = (el.getAttribute && el.getAttribute(name));
@@ -732,7 +746,7 @@
       if (_tupdateTimer !== null) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
     }
     function isPaused() {
-      return (_gifBacked && HAS_STORE && nid) ? __lumen_video_paused(nid) : _paused;
+      return (decoded() && nid) ? __lumen_video_paused(nid) : _paused;
     }
     // Resolution failure falls back to the raw string rather than to null: a
     // document with no base URL (a unit-test runtime, an `about:blank` tab)
@@ -767,8 +781,9 @@
       if (_networkState !== NETWORK_EMPTY) {
         queueEvent('emptied');
         if (!isPaused()) queueEvent('pause');
-        if (_gifBacked && HAS_STORE && nid) __lumen_video_pause(nid, nowMs());
-        _gifBacked   = false;
+        if (decoded() && nid) __lumen_video_pause(nid, nowMs());
+        _gifBacked    = false;
+        _ffmpegBacked = false;
         _paused      = true;
         _readyState  = HAVE_NOTHING;
         _currentSrc  = '';
@@ -865,6 +880,7 @@
         return;
       }
       if (startGifLoad(gen, url)) return;
+      if (startFfmpegLoad(gen, url)) return;
       failResource(gen, candidate, 'unsupported media format');
     }
 
@@ -913,13 +929,46 @@
       return true;
     }
 
+    // ── FFmpeg-container load (GAP-MEDIADECODE срез 6) ──────────────────────
+    //
+    // Mirrors `startGifLoad` exactly, including the polling model: the shell
+    // has no "decode this on the next tick" callback surface, so readiness is
+    // observed by polling the same `__lumen_video_ready(nid)` the GIF path
+    // uses (the shell would insert into the same `playback` map — срез 7, not
+    // yet wired, so this currently polls forever for a real container, same
+    // as any other unsupported format did before this slice).
+    function startFfmpegLoad(gen, src) {
+      if (!HAS_FFMPEG_LOAD || !nid) return false;
+      if (!isFfmpegSrc(src)) return false;
+      if (typeof setInterval !== 'function') return false;
+      __lumen_video_ffmpeg_load(nid, src);
+      _loadTimer = setInterval(function() {
+        if (gen !== _generation) { clearInterval(_loadTimer); _loadTimer = null; return; }
+        if (!__lumen_video_ready(nid)) return;
+        clearInterval(_loadTimer); _loadTimer = null;
+        _ffmpegBacked = true;
+        _readyState = HAVE_METADATA;
+        fireEvent(el, 'durationchange');
+        fireEvent(el, 'loadedmetadata');
+        _readyState = HAVE_CURRENT_DATA;
+        fireEvent(el, 'loadeddata');
+        _readyState = HAVE_FUTURE_DATA;
+        fireEvent(el, 'canplay');
+        _readyState = HAVE_ENOUGH_DATA;
+        _networkState = NETWORK_IDLE;
+        fireEvent(el, 'canplaythrough');
+        if (hasAttr('autoplay')) el.play();
+      }, POLL_MS);
+      return true;
+    }
+
     // ── timeupdate loop ───────────────────────────────────────────────────────
 
     function startTupdate() {
       if (_tupdateTimer !== null) return;
       if (typeof setInterval !== 'function') return;
       _tupdateTimer = setInterval(function() {
-        if (!_gifBacked || !HAS_STORE || __lumen_video_paused(nid)) {
+        if (!decoded() || __lumen_video_paused(nid)) {
           clearInterval(_tupdateTimer); _tupdateTimer = null; return;
         }
         fireEvent(el, 'timeupdate');
@@ -960,12 +1009,12 @@
 
     Object.defineProperty(el, 'currentTime', {
       get: function() {
-        if (_gifBacked && HAS_STORE && nid) return __lumen_video_current_time(nid, nowMs());
+        if (decoded() && nid) return __lumen_video_current_time(nid, nowMs());
         return 0;
       },
       set: function(v) {
         var secs = Number(v) || 0;
-        if (_gifBacked && HAS_STORE && nid) __lumen_video_seek(nid, secs, nowMs());
+        if (decoded() && nid) __lumen_video_seek(nid, secs, nowMs());
         // With no media resource there is nothing to seek in: §4.8.11.9 stores
         // the value as the default playback start position and fires nothing.
         if (_readyState !== HAVE_NOTHING) { queueEvent('seeking'); queueEvent('seeked'); }
@@ -976,7 +1025,7 @@
 
     Object.defineProperty(el, 'duration', {
       get: function() {
-        if (_gifBacked && HAS_STORE && nid) return __lumen_video_duration(nid);
+        if (decoded() && nid) return __lumen_video_duration(nid);
         return NaN;  // §4.8.11.6: NaN while readyState is HAVE_NOTHING
       },
       configurable: true,
@@ -989,7 +1038,7 @@
 
     Object.defineProperty(el, 'ended', {
       get: function() {
-        if (_gifBacked && HAS_STORE && nid) return __lumen_video_ended(nid, nowMs());
+        if (decoded() && nid) return __lumen_video_ended(nid, nowMs());
         return false;
       },
       configurable: true,
@@ -997,7 +1046,7 @@
 
     Object.defineProperty(el, 'videoWidth', {
       get: function() {
-        if (_gifBacked && HAS_STORE && nid) return __lumen_video_width(nid);
+        if (decoded() && nid) return __lumen_video_width(nid);
         return 0;
       },
       configurable: true,
@@ -1005,7 +1054,7 @@
 
     Object.defineProperty(el, 'videoHeight', {
       get: function() {
-        if (_gifBacked && HAS_STORE && nid) return __lumen_video_height(nid);
+        if (decoded() && nid) return __lumen_video_height(nid);
         return 0;
       },
       configurable: true,
@@ -1087,7 +1136,7 @@
 
     var _emptyRanges = { length: 0, start: function(){ return 0; }, end: function(){ return 0; } };
     function ranges() {
-      if (!(_gifBacked && HAS_STORE && nid)) return _emptyRanges;
+      if (!(decoded() && nid)) return _emptyRanges;
       var d = __lumen_video_duration(nid);
       if (isNaN(d) || d <= 0 || d === Infinity) return _emptyRanges;
       return { length: 1, start: function(){ return 0; }, end: function(){ return d; } };
@@ -1105,7 +1154,7 @@
         return Promise.reject(domException('the media resource is not supported', 'NotSupportedError'));
       }
       if (_networkState === NETWORK_EMPTY) mediaLoadAlgorithm();
-      if (_gifBacked && HAS_STORE && nid) {
+      if (decoded() && nid) {
         __lumen_video_play(nid, nowMs());
         _paused = false;
         queueEvent('play');
@@ -1126,7 +1175,7 @@
     el.pause = function() {
       if (_networkState === NETWORK_EMPTY) mediaLoadAlgorithm();
       var wasPaused = isPaused();
-      if (_gifBacked && HAS_STORE && nid) __lumen_video_pause(nid, nowMs());
+      if (decoded() && nid) __lumen_video_pause(nid, nowMs());
       if (_tupdateTimer !== null) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
       _paused = true;
       if (!wasPaused) { queueEvent('timeupdate'); queueEvent('pause'); }
@@ -1139,7 +1188,7 @@
     };
 
     el.fastSeek = function(t) {
-      if (_gifBacked && HAS_STORE && nid) __lumen_video_seek(nid, Number(t) || 0, nowMs());
+      if (decoded() && nid) __lumen_video_seek(nid, Number(t) || 0, nowMs());
     };
 
     // A <source> appended after the element settled with no resource re-enters

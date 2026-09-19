@@ -32,6 +32,7 @@
 //! | `__lumen_video_width` | `(nid: f64) → f64` | GIF pixel width |
 //! | `__lumen_video_height` | `(nid: f64) → f64` | GIF pixel height |
 //! | `__lumen_video_can_play_type` | `(mime: String) → String` | canPlayType probe |
+//! | `__lumen_video_ffmpeg_load` | `(nid: f64, src: String)` | Queue FFmpeg-container load (feature `ffmpeg-video`, GAP-MEDIADECODE срез 6) |
 //! | `__lumen_texttracks_json` | `(nid: f64) → String` | JSON of parsed `<track>` cues |
 //! | `__lumen_vtt_parse` | `(text: String) → String` | Parse a WebVTT file (BUG-775) |
 //!
@@ -46,10 +47,18 @@
 //! (`dom.rs` builds `HTMLVideoElement`/`HTMLAudioElement` straight off
 //! `HTMLElement`, so the constants had no interface to live on).
 //!
-//! Only an animated GIF is decodable, so resource selection ends in the spec's
-//! «dedicated media source failure steps» for every other format — `loadstart`
-//! then `error` with `MEDIA_ERR_SRC_NOT_SUPPORTED` — which is what
-//! `canPlayType` has always said about them.  Every media event is *queued*,
+//! Only an animated GIF is decodable by default, so resource selection ends in
+//! the spec's «dedicated media source failure steps» for every other format —
+//! `loadstart` then `error` with `MEDIA_ERR_SRC_NOT_SUPPORTED` — which is what
+//! `canPlayType` has always said about them. GAP-MEDIADECODE срез 6 adds the
+//! `ffmpeg-video` feature (off by default): with it, `canPlayType` answers
+//! "maybe" for `video/mp4`/`video/webm`/`video/ogg` and the shim queues loads
+//! via `__lumen_video_ffmpeg_load` into the same store's `pending_ffmpeg_loads`
+//! — but nothing drains that queue yet (срез 7, shell-side `lumen-media-ffmpeg`
+//! tick, not written), so builds with the feature on would stall on those
+//! sources exactly like an unhandled GIF load would. The feature exists so the
+//! JS-side plumbing can be reviewed and tested in isolation before it is wired
+//! to a real decoder.  Every media event is *queued*,
 //! never dispatched inline: the near-universal `e.volume = 0.5;
 //! e.onvolumechange = …` order sees nothing at all from a synchronous
 //! dispatch.  `<audio>` keeps its own, older model in `audio_element.rs` and
@@ -59,6 +68,22 @@
 use crate::text_track_store::get_text_track_store;
 #[cfg(feature = "v8-backend")]
 use crate::video_gif_store::get_video_gif_store;
+
+/// Mime types `FfmpegVideoDecoder::mime_types()` claims
+/// (`crates/engine/media-ffmpeg/src/decoder.rs`), duplicated here rather than
+/// imported: this crate does not depend on `lumen-media-ffmpeg` (decode stays
+/// shell-side), so the list is a plain string match kept in sync by hand.
+/// Behind the `ffmpeg-video` feature so `canPlayType` keeps answering `""`
+/// for these mimes until the shell (срез 7) can actually decode them.
+#[cfg(all(feature = "v8-backend", feature = "ffmpeg-video"))]
+fn is_ffmpeg_mime(base: &str) -> bool {
+    matches!(base, "video/mp4" | "video/webm" | "video/ogg")
+}
+
+#[cfg(all(feature = "v8-backend", not(feature = "ffmpeg-video")))]
+fn is_ffmpeg_mime(_base: &str) -> bool {
+    false
+}
 
 /// V8 port of `install_video_bindings` (Ph3 V8 migration S5-S7 batch 3; the
 /// rquickjs twin was removed in S12b-B22): state is the process-global
@@ -238,13 +263,27 @@ pub(crate) fn install_video_bindings_v8(
         let can_play_type = into_v8_fn1(move |mime: String| -> String {
             let m = mime.trim().to_ascii_lowercase();
             let base = m.split(';').next().unwrap_or("").trim();
-            if base == "image/gif" {
+            if base == "image/gif" || is_ffmpeg_mime(base) {
                 "maybe".to_string()
             } else {
                 String::new()
             }
         });
         rt.register_native("__lumen_video_can_play_type", can_play_type)?;
+    }
+
+    // GAP-MEDIADECODE срез 6: queue a container load for the shell's (not yet
+    // written, срез 7) FFmpeg tick. Mirrors `__lumen_video_load` exactly —
+    // same `pending_*` queue shape, same store, no decode here.
+    #[cfg(feature = "ffmpeg-video")]
+    {
+        let store = get_video_gif_store();
+        let ffmpeg_load = into_v8_fn2(move |nid: f64, src: String| {
+            if let Some(s) = &store {
+                s.pending_ffmpeg_loads.lock().unwrap().push((nid as u32, src));
+            }
+        });
+        rt.register_native("__lumen_video_ffmpeg_load", ffmpeg_load)?;
     }
 
     {
@@ -434,6 +473,10 @@ var document = {
         assert!(ok, "canPlayType('image/gif') should return 'maybe'");
     }
 
+    // These mp4/webm assertions are specifically about the *default* (no
+    // `ffmpeg-video`) contract; with the feature on, `canPlayType` legitimately
+    // answers "maybe" instead (see `can_play_type_ffmpeg_mimes_maybe_with_feature`).
+    #[cfg(not(feature = "ffmpeg-video"))]
     #[test]
     fn can_play_type_mp4_empty() {
         let rt = with_video();
@@ -442,6 +485,22 @@ var document = {
             "var el = document.createElement('video'); el.canPlayType('video/mp4') === ''",
         );
         assert!(ok, "canPlayType('video/mp4') should return ''");
+    }
+
+    /// GAP-MEDIADECODE срез 6: with the feature off (the default), FFmpeg
+    /// containers must still fail cleanly — the whole point of gating
+    /// `canPlayType` on `ffmpeg-video` is that a default build never claims a
+    /// format it cannot decode.
+    #[cfg(not(feature = "ffmpeg-video"))]
+    #[test]
+    fn can_play_type_webm_ogg_empty_without_feature() {
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video');
+             el.canPlayType('video/webm') === '' && el.canPlayType('video/ogg') === ''",
+        );
+        assert!(ok, "canPlayType should stay '' for FFmpeg mimes without the ffmpeg-video feature");
     }
 
     #[test]
@@ -517,6 +576,43 @@ tt.length === 1
             .eval("document.createElement('video').textTracks.length")
             .unwrap();
         assert_eq!(len, JsValue::Number(0.0), "no store entry → empty TextTrackList");
+    }
+
+    /// GAP-MEDIADECODE срез 6: with `ffmpeg-video` on, `canPlayType` claims the
+    /// three container mimes `FfmpegVideoDecoder::mime_types()` decodes.
+    #[cfg(feature = "ffmpeg-video")]
+    #[test]
+    fn can_play_type_ffmpeg_mimes_maybe_with_feature() {
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video');
+             el.canPlayType('video/mp4') === 'maybe'
+               && el.canPlayType('video/webm') === 'maybe'
+               && el.canPlayType('video/ogg') === 'maybe'
+               && el.canPlayType('video/mp4; codecs=\"avc1.42E01E\"') === 'maybe'",
+        );
+        assert!(ok, "canPlayType should answer 'maybe' for FFmpeg-decodable containers");
+    }
+
+    /// The load native queues into the *same* store the GIF loader uses
+    /// (`pending_ffmpeg_loads`, not `pending_loads`) — no new store type.
+    #[cfg(feature = "ffmpeg-video")]
+    #[test]
+    fn native_video_ffmpeg_load_registers_pending() {
+        use crate::video_gif_store::set_video_gif_store;
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = Arc::new(crate::video_gif_store::VideoGifStore::default());
+        set_video_gif_store(store.clone());
+
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).unwrap();
+        rt.eval("__lumen_video_ffmpeg_load(99, 'test.mp4');").unwrap();
+
+        let loads = store.pending_ffmpeg_loads.lock().unwrap();
+        assert!(!loads.is_empty(), "ffmpeg load should be queued");
+        assert!(loads.iter().any(|(n, s)| *n == 99 && s == "test.mp4"));
+        assert!(store.pending_loads.lock().unwrap().is_empty(), "must not touch the GIF queue");
     }
 
     #[test]
@@ -668,6 +764,12 @@ tt.length === 1
         /// ends in the dedicated media source failure steps — `loadstart` then
         /// `error`, with a real `MediaError` — instead of the fabricated
         /// `loadedmetadata` + `canplay` pair the old shim answered with.
+        // GAP-MEDIADECODE срез 6: this whole scenario is specific to the
+        // no-`ffmpeg-video` default — with the feature on, `movie.mp4` is
+        // queued via `startFfmpegLoad` instead of failing outright, and stays
+        // pending forever until срез 7 wires a real decoder (documented in
+        // `install_video_bindings_v8`'s module doc).
+        #[cfg(not(feature = "ffmpeg-video"))]
         #[test]
         fn assigning_src_runs_resource_selection_and_reports_the_failure() {
             let rt = rt_with_dom();
@@ -700,6 +802,8 @@ tt.length === 1
         /// `load()` was a no-op that fired nothing. It must re-enter the whole
         /// algorithm, which for an element that already had a resource means
         /// `abort` + `emptied` before the new attempt.
+        // Same `ffmpeg-video`-changes-the-contract reason as the test above.
+        #[cfg(not(feature = "ffmpeg-video"))]
         #[test]
         fn load_reruns_the_algorithm_with_abort_and_emptied() {
             let rt = rt_with_dom();
@@ -728,6 +832,9 @@ tt.length === 1
         /// `<source>` element, never at the media element, and the next
         /// candidate is tried. A `type` the engine cannot play skips the
         /// candidate without even a fetch.
+        // Same `ffmpeg-video`-changes-the-contract reason: both candidates here
+        // are `.webm`/`.mp4`, which the feature makes pending rather than failed.
+        #[cfg(not(feature = "ffmpeg-video"))]
         #[test]
         fn source_children_report_failure_on_the_source_element() {
             let rt = rt_with_dom();
@@ -759,6 +866,8 @@ tt.length === 1
 
         /// `play()` on an element whose resource selection failed rejects with
         /// NotSupportedError instead of resolving as if playback had started.
+        // Same `ffmpeg-video`-changes-the-contract reason as above.
+        #[cfg(not(feature = "ffmpeg-video"))]
         #[test]
         fn play_rejects_once_the_resource_is_known_unsupported() {
             let rt = rt_with_dom();
