@@ -1590,21 +1590,30 @@ impl Lumen {
             let self_origin = base_opt.as_ref().and_then(|b| b.origin());
             for pf in page.pending_web_fonts {
                 if let Some(base) = base_opt.clone() {
-                    if let Some((policy, original_policy)) = &csp_gate {
-                        let resolved = base.resolve_str(&pf.url);
-                        if crate::csp_enforce::font_src_blocked(policy, &resolved, self_origin.as_ref()) {
-                            let original_policy = original_policy.clone();
-                            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                                j.fire_csp_violation("font-src", &resolved, &original_policy);
-                            });
-                            continue;
-                        }
+                    // GAP-CSPENF срез 48: `upgrade-insecure-requests`
+                    // переписывает `http://` в `https://` до гейта
+                    // `font-src` (тот же порядок Fetch §4.1, что срезы
+                    // 43-47 уже дали картинкам/скриптам/CSS) — `gate_url`
+                    // и есть то, что реально уходит в `fetch_font_bytes`.
+                    let resolved = base.resolve_str(&pf.url);
+                    let gate_url = csp_gate.as_ref()
+                        .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved))
+                        .unwrap_or_else(|| resolved.clone());
+                    if let Some((policy, original_policy)) = &csp_gate
+                        && crate::csp_enforce::font_src_blocked(policy, &gate_url, self_origin.as_ref())
+                    {
+                        let original_policy = original_policy.clone();
+                        let blocked_url = gate_url.clone();
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.fire_csp_violation("font-src", &blocked_url, &original_policy);
+                        });
+                        continue;
                     }
                     let sink = Arc::clone(&self.event_sink);
                     let cookie_jar = self.active_cookie_jar();
                     let proxy = self.load_proxy.clone();
                     std::thread::spawn(move || {
-                        let raw = match fetch_font_bytes(&pf.url, &base, &sink, Some(cookie_jar)) {
+                        let raw = match fetch_font_bytes(&gate_url, &base, &sink, Some(cookie_jar)) {
                             Ok(b) => b,
                             Err(e) => {
                                 eprintln!("@font-face «{}»: не загружен {}: {e}", pf.family, pf.url);

@@ -884,14 +884,20 @@ pub(crate) fn load_frame_fonts(
     let mut blocked_by_font_src = Vec::new();
     let mut web_fonts = Vec::with_capacity(pending.len());
     for pf in pending {
-        if let Some((policy, _)) = csp_gate {
-            let resolved = base.resolve_str(&pf.url);
-            if crate::csp_enforce::font_src_blocked(policy, &resolved, self_origin) {
-                blocked_by_font_src.push(resolved);
-                continue;
-            }
+        let resolved = base.resolve_str(&pf.url);
+        // GAP-CSPENF срез 48: то же переписывание `http://` в `https://`
+        // до гейта `font-src`, что срез 48 дал top-level `@font-face` —
+        // `gate_url` и есть адрес, который реально уходит в `fetch_font_bytes`.
+        let gate_url = csp_gate
+            .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved))
+            .unwrap_or_else(|| resolved.clone());
+        if let Some((policy, _)) = csp_gate
+            && crate::csp_enforce::font_src_blocked(policy, &gate_url, self_origin)
+        {
+            blocked_by_font_src.push(gate_url);
+            continue;
         }
-        let Ok(raw) = fetch_font_bytes(&pf.url, base, sink, cookie_jar.clone()) else {
+        let Ok(raw) = fetch_font_bytes(&gate_url, base, sink, cookie_jar.clone()) else {
             continue;
         };
         let bytes = match lumen_font::maybe_decode_font(&raw) {
