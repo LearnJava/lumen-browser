@@ -652,48 +652,71 @@ pub(crate) fn frame_image_key(base: &ResourceBase, raw_src: &str) -> String {
 /// `background-image` set or changed by a later relayout/mutation is not
 /// picked up — a known limitation shared with the page, not a regression.
 ///
-/// Returns `(images, raw_to_key)`: `images` is the `LoadedPage::images`-shaped
-/// list to fold into [`FrameHandle::images`]; `raw_to_key` extends
-/// [`FrameHandle::image_keys`] so [`rekey_frame_images`] rewrites
-/// `DrawBackgroundImage`/`DrawCrossFade` sources the same way it already
-/// rewrites `DrawImage`.
+/// Returns `(images, raw_to_key, blocked_by_img_src)`: `images` is the
+/// `LoadedPage::images`-shaped list to fold into [`FrameHandle::images`];
+/// `raw_to_key` extends [`FrameHandle::image_keys`] so
+/// [`rekey_frame_images`] rewrites `DrawBackgroundImage`/`DrawCrossFade`
+/// sources the same way it already rewrites `DrawImage`; `blocked_by_img_src`
+/// is the resolved URL of every `background-image` the CHILD's own
+/// `img-src`/`default-src` policy blocked (GAP-CSPENF срез 25 — срез 18 named
+/// this exact gap as not covered: it gated the top-level page's background
+/// images only). `csp_gate` is the CHILD's own policy, computed once by the
+/// caller (same one-shot read as [`fetch_frame_subresources`]'s `csp_gate`).
 #[allow(clippy::type_complexity)]
-fn fetch_frame_background_images(
+pub(crate) fn fetch_frame_background_images(
     layout: &lumen_layout::LayoutBox,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
-) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<(String, String)>) {
+    csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+    self_origin: Option<&lumen_network::Origin>,
+) -> (
+    Vec<(String, Arc<lumen_image::Image>)>,
+    Vec<(String, String)>,
+    Vec<String>,
+) {
     let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     let decoded = parallel_map(&urls, |_, url| {
+        if let Some((policy, _)) = csp_gate {
+            let resolved = base.resolve_str(url);
+            if crate::csp_enforce::img_src_blocked(policy, &resolved, self_origin) {
+                return (None, Some(resolved));
+            }
+        }
         let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("iframe: пропуск bg-картинки {url}: {e}");
-                return None;
+                return (None, None);
             }
         };
         let image = match lumen_image::decode_to(&bytes, target) {
             Ok(i) => i,
             Err(e) => {
                 eprintln!("iframe: не декодируется bg-картинка {url}: {e}");
-                return None;
+                return (None, None);
             }
         };
         eprintln!(
             "iframe: загружена bg-картинка: {url} ({}×{}, {:?})",
             image.width, image.height, image.format
         );
-        Some((url.clone(), frame_image_key(base, url), Arc::new(image)))
+        (Some((url.clone(), frame_image_key(base, url), Arc::new(image))), None)
     });
     let mut images = Vec::new();
     let mut raw_to_key = Vec::new();
-    for (raw, key, image) in decoded.into_iter().flatten() {
-        raw_to_key.push((raw, key.clone()));
-        images.push((key, image));
+    let mut blocked_by_img_src = Vec::new();
+    for (loaded, blocked_url) in decoded {
+        if let Some(url) = blocked_url {
+            blocked_by_img_src.push(url);
+        }
+        if let Some((raw, key, image)) = loaded {
+            raw_to_key.push((raw, key.clone()));
+            images.push((key, image));
+        }
     }
-    (images, raw_to_key)
+    (images, raw_to_key, blocked_by_img_src)
 }
 
 /// Доставить исходы подресурсов фрейма ([`fetch_frame_subresources`]) его
@@ -790,50 +813,71 @@ fn frame_measurer(
 /// async+relayout канал ради одних лишь шрифтов было бы непропорционально
 /// M-размеру этой задачи; расплата — фрейм с медленным веб-шрифтом чуть дольше
 /// показывает первый paint, а не мигает FOUT (в обмен де-факто лучший UX).
-fn load_frame_fonts(
+/// GAP-CSPENF срез 25: `csp_gate` is the CHILD's own policy (computed once by
+/// the caller, same one-shot read as [`fetch_frame_subresources`]'s
+/// `csp_gate`) — `font-src`/`default-src` against a frame's own `@font-face
+/// url()` was named as not covered by срез 19 (which only gated the
+/// top-level page's fonts). `local()` sources are unaffected, same as the
+/// top-level path — CSP's fetch directives govern network fetches, not the
+/// system font lookup `load_font_faces` already resolved above. Returns the
+/// resolved URL of every blocked source alongside the registry/web-fonts, so
+/// the caller can dispatch `securitypolicyviolation` once its JS runtime
+/// exists (this function runs before that, same ordering constraint as
+/// `fetch_frame_subresources`'s `blocked_by_img_src`).
+pub(crate) fn load_frame_fonts(
     font_faces: &[lumen_css_parser::FontFaceRule],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>) {
+    csp_gate: Option<&(lumen_network::csp::CspPolicy, String)>,
+    self_origin: Option<&lumen_network::Origin>,
+) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
     let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
-    let web_fonts = pending
-        .into_iter()
-        .filter_map(|pf| {
-            let raw = fetch_font_bytes(&pf.url, base, sink, cookie_jar.clone()).ok()?;
-            let bytes = match lumen_font::maybe_decode_font(&raw) {
-                Ok(Some(d)) => d,
-                Ok(None) => raw,
-                Err(e) => {
-                    eprintln!("iframe @font-face «{}»: WOFF-декод провалился: {e}", pf.family);
-                    return None;
-                }
-            };
-            if lumen_font::Font::parse(&bytes).is_err() {
-                eprintln!("iframe @font-face «{}»: невалидный sfnt {}", pf.family, pf.url);
-                return None;
+    let mut blocked_by_font_src = Vec::new();
+    let mut web_fonts = Vec::with_capacity(pending.len());
+    for pf in pending {
+        if let Some((policy, _)) = csp_gate {
+            let resolved = base.resolve_str(&pf.url);
+            if crate::csp_enforce::font_src_blocked(policy, &resolved, self_origin) {
+                blocked_by_font_src.push(resolved);
+                continue;
             }
-            let unicode_range = pf
-                .unicode_range_str
-                .as_deref()
-                .map(lumen_font::parse_unicode_ranges)
-                .unwrap_or_default();
-            // CSS Fonts L4 §14 (FONTLOAD-11/12/13, BUG-467): ascent/descent/line-gap-override, size-adjust.
-            let ascent_override = pf.ascent_override_str.as_deref()
-                .and_then(lumen_font::parse_metric_override_percent);
-            let descent_override = pf.descent_override_str.as_deref()
-                .and_then(lumen_font::parse_metric_override_percent);
-            let size_adjust = pf.size_adjust_str.as_deref()
-                .and_then(lumen_font::parse_metric_override_percent);
-            let line_gap_override = pf.line_gap_override_str.as_deref()
-                .and_then(lumen_font::parse_metric_override_percent);
-            Some(LoadedWebFont {
-                family: pf.family, weight: pf.weight, style: pf.style, unicode_range,
-                ascent_override, descent_override, size_adjust, line_gap_override, bytes,
-            })
-        })
-        .collect();
-    (registry, web_fonts)
+        }
+        let Ok(raw) = fetch_font_bytes(&pf.url, base, sink, cookie_jar.clone()) else {
+            continue;
+        };
+        let bytes = match lumen_font::maybe_decode_font(&raw) {
+            Ok(Some(d)) => d,
+            Ok(None) => raw,
+            Err(e) => {
+                eprintln!("iframe @font-face «{}»: WOFF-декод провалился: {e}", pf.family);
+                continue;
+            }
+        };
+        if lumen_font::Font::parse(&bytes).is_err() {
+            eprintln!("iframe @font-face «{}»: невалидный sfnt {}", pf.family, pf.url);
+            continue;
+        }
+        let unicode_range = pf
+            .unicode_range_str
+            .as_deref()
+            .map(lumen_font::parse_unicode_ranges)
+            .unwrap_or_default();
+        // CSS Fonts L4 §14 (FONTLOAD-11/12/13, BUG-467): ascent/descent/line-gap-override, size-adjust.
+        let ascent_override = pf.ascent_override_str.as_deref()
+            .and_then(lumen_font::parse_metric_override_percent);
+        let descent_override = pf.descent_override_str.as_deref()
+            .and_then(lumen_font::parse_metric_override_percent);
+        let size_adjust = pf.size_adjust_str.as_deref()
+            .and_then(lumen_font::parse_metric_override_percent);
+        let line_gap_override = pf.line_gap_override_str.as_deref()
+            .and_then(lumen_font::parse_metric_override_percent);
+        web_fonts.push(LoadedWebFont {
+            family: pf.family, weight: pf.weight, style: pf.style, unicode_range,
+            ascent_override, descent_override, size_adjust, line_gap_override, bytes,
+        });
+    }
+    (registry, web_fonts, blocked_by_font_src)
 }
 
 /// Посчитать cascade + layout под-документа фрейма на заданном вьюпорте и
@@ -1996,11 +2040,27 @@ pub(crate) fn spawn_frame(
     // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
     // нём ищется host-бокс вложенного фрейма.
     let frame_sheet = lumen_css_parser::parse(&subresources.css);
+    // GAP-CSPENF срез 25: the CHILD's own policy, read once here so both
+    // `load_frame_fonts` (`font-src`) and `fetch_frame_background_images`
+    // (`img-src`) below can gate against it without each re-parsing —
+    // same one-shot shape as `fetch_frame_subresources`'s `csp_gate`.
+    let child_csp_gate = {
+        let d = child_doc_arc.lock().unwrap();
+        let root = d.root();
+        crate::csp_enforce::document_csp_policy(&d, root)
+    };
+    let child_self_origin = child_base.origin();
     // FRAME-5: синхронно (см. doc-comment `load_frame_fonts`) — тем же
     // приёмом, что срез 11 уже применяет к картинкам и таблицам стилей
     // ребёнка выше в этой функции.
-    let (font_registry, web_fonts) =
-        load_frame_fonts(&frame_sheet.font_faces, &child_base, sink, cookie_jar.clone());
+    let (font_registry, web_fonts, blocked_by_font_src) = load_frame_fonts(
+        &frame_sheet.font_faces,
+        &child_base,
+        sink,
+        cookie_jar.clone(),
+        child_csp_gate.as_ref(),
+        child_self_origin.as_ref(),
+    );
     let frame_layout = frame_measurer(&frame_sheet.font_faces, &font_registry, &web_fonts).map(|measurer| {
         layout_frame_document(
             &child_doc_arc,
@@ -2017,10 +2077,18 @@ pub(crate) fn spawn_frame(
     // ребёнка уже после его layout-а (см. doc-comment
     // `fetch_frame_background_images` — картинки фона не влияют на расчёт
     // коробок, тот же порядок, что и у страницы в `parse_and_layout`).
-    let (bg_images, bg_image_keys) = frame_layout
+    let (bg_images, bg_image_keys, blocked_by_bg_img_src) = frame_layout
         .as_ref()
         .map(|layout| {
-            fetch_frame_background_images(layout, &child_base, sink, cookie_jar.clone(), env.target)
+            fetch_frame_background_images(
+                layout,
+                &child_base,
+                sink,
+                cookie_jar.clone(),
+                env.target,
+                child_csp_gate.as_ref(),
+                child_self_origin.as_ref(),
+            )
         })
         .unwrap_or_default();
     // Lifecycle ребёнка: DOMContentLoaded сразу после parse+inline-скриптов
@@ -2045,30 +2113,38 @@ pub(crate) fn spawn_frame(
         // attribute count — `violatedDirective=style-src-attr`, same
         // convention as `page_pipeline.rs`'s `blocked_style_attr_nodes` push
         // (срез 23).
+        // GAP-CSPENF срез 25: same push again, extended with `font-src`
+        // (`@font-face url()`) and `img-src` (`background-image: url()`)
+        // inside this frame — reuses `child_csp_gate` computed above instead
+        // of re-locking `child_doc_arc` (that recompute predates this срез,
+        // which already needed the policy earlier for `load_frame_fonts`/
+        // `fetch_frame_background_images`).
         #[cfg(feature = "v8")]
-        if !subresources.blocked_by_img_src.is_empty()
+        if (!subresources.blocked_by_img_src.is_empty()
             || !subresources.blocked_by_style_src.is_empty()
             || subresources.blocked_inline_style_count > 0
             || subresources.blocked_style_attr_count > 0
+            || !blocked_by_font_src.is_empty()
+            || !blocked_by_bg_img_src.is_empty())
+            && let Some((_, original_policy)) = &child_csp_gate
         {
-            let original_policy = {
-                let d = child_doc_arc.lock().unwrap();
-                let root = d.root();
-                crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
-            };
-            if let Some(original_policy) = original_policy {
-                for url in &subresources.blocked_by_img_src {
-                    js.fire_csp_violation("img-src", url, &original_policy);
-                }
-                for url in &subresources.blocked_by_style_src {
-                    js.fire_csp_violation("style-src", url, &original_policy);
-                }
-                for _ in 0..subresources.blocked_inline_style_count {
-                    js.fire_csp_violation("style-src", "inline", &original_policy);
-                }
-                for _ in 0..subresources.blocked_style_attr_count {
-                    js.fire_csp_violation("style-src-attr", "inline", &original_policy);
-                }
+            for url in &subresources.blocked_by_img_src {
+                js.fire_csp_violation("img-src", url, original_policy);
+            }
+            for url in &subresources.blocked_by_style_src {
+                js.fire_csp_violation("style-src", url, original_policy);
+            }
+            for _ in 0..subresources.blocked_inline_style_count {
+                js.fire_csp_violation("style-src", "inline", original_policy);
+            }
+            for _ in 0..subresources.blocked_style_attr_count {
+                js.fire_csp_violation("style-src-attr", "inline", original_policy);
+            }
+            for url in &blocked_by_font_src {
+                js.fire_csp_violation("font-src", url, original_policy);
+            }
+            for url in &blocked_by_bg_img_src {
+                js.fire_csp_violation("img-src", url, original_policy);
             }
         }
         js.notify_window_loaded();

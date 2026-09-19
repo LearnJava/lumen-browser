@@ -187,7 +187,8 @@ use crate::frames::FrameHandle;
 use crate::frames::{apply_iframe_sandbox_gates, base_url_string, load_frame_sub_documents};
 #[cfg(test)]
 use crate::frames::{
-    fetch_frame_subresources, fetch_iframe_source, frame_access_allowed, frame_error_document,
+    fetch_frame_background_images, fetch_frame_subresources, fetch_iframe_source,
+    frame_access_allowed, frame_error_document, load_frame_fonts,
 };
 use crate::chrome_ui::{
     ChromeOverlayFrameCache, ContentAreaDetachment,
