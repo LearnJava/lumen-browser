@@ -1,8 +1,17 @@
 # BUG-975: программная запись скролла (`scrollTo`/`scrollBy`/`scrollLeft=`/`scrollTop=`) не видна синхронному чтению в том же тике
 
-**Статус:** OPEN (частично закрыт, часть 2 landed)
+**Статус:** FIXED 2026-09-19 (P3-ревизия, дрейф трекера)
 **Компонент:** js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`, нативы `_lumen_request_scroll`/`_lumen_get_scroll_state`)
-**Найден:** P3, 2026-09-04, при доследовании остатка [BUG-504](bugs/BUG-504-OPEN.md) (файл `overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html`) уже после посадки CSSOM-4.
+**Найден:** P3, 2026-09-04, при доследовании остатка [BUG-504](BUG-504-FIXED.md) (файл `overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html`) уже после посадки CSSOM-4.
+
+**Ревизия P3 2026-09-19:** доследующий текст файла (часть 2, ниже) сам
+описывает полное закрытие остатка, но заголовок статуса не был обновлён.
+Проверено заново: 5 регресс-тестов `v8_bug975_scroll_request_sync.rs`
+зелёные (`cargo test -p lumen-js --profile dev-release --features
+v8-backend v8_bug975` — 5/5), блокер `verify_bug504_vertical_rl_clip.py`
+снят фиксом [BUG-977](BUG-977-FIXED.md) (подтверждено закрытием
+[BUG-504](BUG-504-FIXED.md) части 13, 2026-09-13, 5/5). Живого остатка не
+найдено — переведено в `FIXED` задним числом.
 
 **Срез P3 2026-09-04:** реализован вариант (b) из предложенной правки —
 `_lumen_request_scroll` теперь, помимо постановки в `pending_scrolls`,
