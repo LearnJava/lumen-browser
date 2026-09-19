@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-19",
  "counts": {
-  "open": 285,
-  "fixed": 720,
+  "open": 283,
+  "fixed": 722,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -609,8 +609,8 @@
     {
      "id": "P2-scrolldriven",
      "title": "CSS Scroll-Driven Animations L1",
-     "status": "planned",
-     "note": "PARTIAL (ревизия P3 2026-07-04): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs), композит animated background-color готов (BUG-231 FIXED); TEST-78 остаток = font-parity (BUG-127 → KNOWN_DEBTOR 4.64). Подтверждено живой пробой 2026-09-01 (WPT-RUN-6 срез 31, BUG-950): Phase 1 — проводка `animation-timeline: scroll()` от `ScrollTimeline.currentTime` в `AnimationScheduler` для keyframe-прогресса — по-прежнему не сделана, `getComputedStyle` анимируемого свойства не двигается вовсе при прокрутке",
+     "status": "done",
+     "note": "PARTIAL (ревизия P3 2026-07-04): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs), композит animated background-color готов (BUG-231 FIXED); TEST-78 остаток = font-parity (BUG-127 → KNOWN_DEBTOR 4.64). **Ревизия P1 2026-09-19 (BUG-950 FIXED):** объём заявки на «Phase 1 не сделана» оказался стал — проводка `ScrollCtx`/`progress_for` уже существовала с 2026-06-22, а getComputedStyle-патчинг оверрайдов уже общий (GAP-CSSANIM срезы 2-8). Настоящий дефект был у́же: поле `nearest` в `AnimationTimeline::Scroll` парсилось, но отбрасывалось в `progress_for`, поэтому `scroll(self)`/`scroll(nearest)` молча резолвились в прогресс корневого вьюпорта вместо собственного скролла контейнера — исправлено новой `find_nearest_scroll_container`. Остаток вне скоупа: спецификационное различие `self` (обязан быть сам scroll-контейнером) и `nearest` (ищет предка) не разведено — оба используют один и тот же ancestor-or-self поиск; расходится со спекой только когда `self` указан на элементе, который сам не является scroll-контейнером. Подробности — [bugs/BUG-950-FIXED.md](bugs/BUG-950-FIXED.md)",
      "bugs": [
       "BUG-127",
       "BUG-950"
@@ -8697,13 +8697,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-950": {
-   "status": "open",
-   "title": "`animation-timeline: scroll(self)` не двигает вычисленный стиль анимируемого свойства вообще — проводка от `ScrollTimeline.currentTime` к `AnimationScheduler` (…",
-   "component": "js (`crates/js/src/scroll_timeline.rs` — Phase 0 готова, Phase 1 нет по собственному doc-комментарию строки 16)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-951": {
    "status": "open",
    "title": "`<label>.focus()` без собственного `tabindex` — полный no-op: не фокусируется ни метка, ни связанный контрол (`for`/первый labelable-потомок), `_lumen_is_focusa…",
@@ -8855,13 +8848,6 @@
    "status": "open",
    "title": "`eval()`, вернувший сконструированный `CSSStyleSheet` (с непустым `cssRules`) как completion value скрипта, валит изолят фатальным V8 OOM за ~60-100с: цикл `she…",
    "component": "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded`) / js-shim (`crates/js/src/shim/web_api_shim_mid.js` — обёртки `cssRules`/`parentStyleSheet` конструируемого листа без кэша)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-979": {
-   "status": "open",
-   "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
-   "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
    "date": null,
    "debtor": false
   },
@@ -14161,6 +14147,20 @@
    "status": "fixed",
    "title": "Read/dispatch-цикл BiDi-соединения отвечает `Pong` на входящий `Ping` только внутри `read_text_frame`, а не пока выполняется `dispatch()` — команда `browsingCon…",
    "component": "bidi-server (`crates/bidi-server/src/transport.rs::handle`)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-950": {
+   "status": "fixed",
+   "title": "`animation-timeline: scroll(self)` не двигало вычисленный стиль анимируемого свойства при скролле контейнера, не страницы. Заявка называла причиной отсутствующу…",
+   "component": "layout (`crates/engine/layout/src/scroll_timeline.rs`), shell (`crates/shell/src/animation_scheduler.rs::ScrollCtx::progress_for`)",
+   "date": "2026-09-19",
+   "debtor": false
+  },
+  "BUG-979": {
+   "status": "fixed",
+   "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
+   "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
    "date": "2026-09-19",
    "debtor": false
   }

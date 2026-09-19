@@ -115,6 +115,46 @@ fn find_box(root: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
     None
 }
 
+/// Whether `b` establishes a scroll container per CSS Overflow L3 §3.3 — any
+/// `overflow` other than `visible`/`clip` on either axis. Matches the
+/// definition `box_tree/predicates.rs::scrollbar_gutter_inline` already uses
+/// for the same concept.
+fn establishes_scroll_container(b: &LayoutBox) -> bool {
+    use crate::style::Overflow;
+    matches!(b.style.overflow_x, Overflow::Scroll | Overflow::Auto | Overflow::Hidden)
+        || matches!(b.style.overflow_y, Overflow::Scroll | Overflow::Auto | Overflow::Hidden)
+}
+
+/// Find the nearest ancestor-or-self of `node` that establishes a scroll
+/// container, for resolving `scroll(self)`/`scroll(nearest)` (CSS
+/// `scroll-animations-1` §3.1 defines both as "nearest ancestor in the flat
+/// tree, starting at the element itself, that is a scroll container").
+///
+/// Returns `None` when no such ancestor exists — callers then fall back to
+/// the root viewport, which is the correct behavior per spec (the root
+/// element's scroll container is the viewport itself).
+pub fn find_nearest_scroll_container(root: &LayoutBox, node: NodeId) -> Option<NodeId> {
+    fn build_path<'a>(b: &'a LayoutBox, id: NodeId, path: &mut Vec<&'a LayoutBox>) -> bool {
+        path.push(b);
+        if b.node == id {
+            return true;
+        }
+        for child in &b.children {
+            if build_path(child, id, path) {
+                return true;
+            }
+        }
+        path.pop();
+        false
+    }
+
+    let mut path = Vec::new();
+    if !build_path(root, node, &mut path) {
+        return None;
+    }
+    path.into_iter().rev().find(|b| establishes_scroll_container(b)).map(|b| b.node)
+}
+
 /// Compute the total content size of `node` by walking its subtree.
 ///
 /// Returns `(content_width, content_height)` in CSS px — the bounding box of
@@ -324,7 +364,7 @@ fn collect_named_view_timelines_rec(root: &LayoutBox, out: &mut Vec<NamedViewTim
 mod tests {
     use super::*;
     use crate::box_tree::{BoxKind, LayoutBox};
-    use crate::style::ComputedStyle;
+    use crate::style::{ComputedStyle, Overflow};
     use lumen_core::geom::Rect;
     use lumen_dom::NodeId;
 
@@ -449,6 +489,74 @@ mod tests {
         let tl = ScrollTimeline { element: Some(node(2)), axis: ScrollAxis::Block };
         let p = resolve_scroll_progress(&tl, &root, 0.0, 0.0, vp(1024.0, 720.0));
         assert!((p - 0.375).abs() < 0.01, "expected ~0.375, got {p}");
+    }
+
+    // ── find_nearest_scroll_container (BUG-950) ─────────────────────────────
+
+    fn make_box_overflow(id: u32, x: f32, y: f32, w: f32, h: f32, o: Overflow) -> LayoutBox {
+        let mut lb = make_box(id, x, y, w, h);
+        let mut style = ComputedStyle::root();
+        style.overflow_x = o;
+        style.overflow_y = o;
+        lb.style = std::sync::Arc::new(style);
+        lb
+    }
+
+    #[test]
+    fn nearest_scroll_container_finds_direct_parent() {
+        // node 3 (target) is a direct child of node 2, which is a scroll
+        // container (`animation-timeline: scroll(self)` on node 2 itself).
+        let root = {
+            let mut r = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+            let mut container = make_box_overflow(2, 0.0, 0.0, 400.0, 300.0, Overflow::Auto);
+            container.children.push(make_box(3, 0.0, 0.0, 400.0, 300.0));
+            r.children.push(container);
+            r
+        };
+        assert_eq!(find_nearest_scroll_container(&root, node(3)), Some(node(2)));
+    }
+
+    #[test]
+    fn nearest_scroll_container_is_self() {
+        // The animated node itself is a scroll container — `scroll(self)`.
+        let root = {
+            let mut r = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+            r.children.push(make_box_overflow(2, 0.0, 0.0, 400.0, 300.0, Overflow::Scroll));
+            r
+        };
+        assert_eq!(find_nearest_scroll_container(&root, node(2)), Some(node(2)));
+    }
+
+    #[test]
+    fn nearest_scroll_container_skips_non_scrolling_ancestors() {
+        // node 4 -> node 3 (visible) -> node 2 (scroll container) -> root.
+        let root = {
+            let mut r = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+            let mut container = make_box_overflow(2, 0.0, 0.0, 400.0, 300.0, Overflow::Auto);
+            let mut middle = make_box(3, 0.0, 0.0, 400.0, 300.0);
+            middle.children.push(make_box(4, 0.0, 0.0, 400.0, 300.0));
+            container.children.push(middle);
+            r.children.push(container);
+            r
+        };
+        assert_eq!(find_nearest_scroll_container(&root, node(4)), Some(node(2)));
+    }
+
+    #[test]
+    fn nearest_scroll_container_none_falls_back_to_root() {
+        // No scrolling ancestor anywhere -> None, caller falls back to root viewport.
+        let root = {
+            let mut r = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+            r.children.push(make_box(2, 0.0, 0.0, 400.0, 300.0));
+            r
+        };
+        assert_eq!(find_nearest_scroll_container(&root, node(2)), None);
+    }
+
+    #[test]
+    fn nearest_scroll_container_node_not_found() {
+        let root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+        assert_eq!(find_nearest_scroll_container(&root, node(99)), None);
     }
 
     #[test]
