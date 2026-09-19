@@ -1222,6 +1222,8 @@ impl Lumen {
                     })
                 } else if url.is_empty() {
                     Ok(PageSource::url("about:blank"))
+                } else if self.window_open_navigate_to_blocked(&url) {
+                    Err("blocked by CSP navigate-to".to_owned())
                 } else {
                     resolve_js_navigation(&url, &self.source)
                 };
@@ -1809,6 +1811,41 @@ impl Lumen {
             j.fire_csp_violation("navigate-to", &blocked, &original_policy);
         });
         eprintln!("location: navigation to {resolved} blocked by CSP navigate-to");
+        true
+    }
+
+    /// `true`, если `navigate-to` политики ЗАКРЫВАЮЩЕГО (opener) документа
+    /// запрещает `window.open(url)` — GAP-CSPENF срез 35. Тот же контур, что
+    /// [`js_navigate_to_blocked`] (срез 34) и `click.rs::navigate_to_link_blocked`
+    /// (срез 33): одна блокировка документа, гейт, `securitypolicyviolation`.
+    ///
+    /// Вызывается ДО `open_new_tab()`/`switch_tab()` в цикле обработки
+    /// popup-запросов, пока `self.source`/`self.layout_source` ещё указывают
+    /// на opener — навигация проверяется политикой инициатора, а не той
+    /// вкладки, что ещё не существует.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn window_open_navigate_to_blocked(&mut self, url: &str) -> bool {
+        let Some(ls) = self.layout_source.as_ref() else {
+            return false;
+        };
+        let csp_gate = {
+            let doc = ls.document.lock().unwrap();
+            let root = doc.root();
+            crate::csp_enforce::document_csp_policy(&doc, root)
+        };
+        let Some((policy, original_policy)) = csp_gate else {
+            return false;
+        };
+        let resolved = self.source.resolve_href(url);
+        let self_origin = self.source.resource_base().and_then(|b| b.origin());
+        if !crate::csp_enforce::navigate_to_blocked(&policy, &resolved, self_origin.as_ref()) {
+            return false;
+        }
+        let blocked = resolved.clone();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_csp_violation("navigate-to", &blocked, &original_policy);
+        });
+        eprintln!("window.open: navigation to {resolved} blocked by CSP navigate-to");
         true
     }
 }
