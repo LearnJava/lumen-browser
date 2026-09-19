@@ -205,6 +205,20 @@
 //! у `HttpClient` нет `&Document`/парсинга по месту, threading
 //! `Vec<CspPolicy>` через него отдельная, более широкая работа.
 //!
+//! Срез 41 закрыл ровно тот пробел, что срез 40 сам назвал не покрытым:
+//! несколько ОДНОИМЁННЫХ заголовков `Content-Security-Policy` ответа теперь
+//! тоже независимые политики, не только заголовок и `<meta>`. До этого среза
+//! `page_source::content_security_policy_header` склеивала все вхождения
+//! заголовка в одну строку через `"; "` ДО парсинга — `document_csp_policy`
+//! видело результат как один готовый "part", и `CspPolicy::directives`
+//! (`HashMap`) при повторе директивы (например, `script-src` в обоих
+//! заголовках) хранило только последнее встреченное значение: более поздний,
+//! более мягкий заголовок тихо ослаблял более строгий более ранний.
+//! `content_security_policy_header` теперь возвращает `Vec<String>` — по
+//! одному элементу на occurrence, — `Document::csp_header` хранит их тем же
+//! списком, и `document_csp_policy`/`document_csp_policy_combined` просто
+//! добавляют весь список в `parts` вместо одной строки.
+//!
 //! Что НЕ покрыто (следующие срезы): остальные директивы (`manifest-src`/…
 //! — распознаётся [`CspDirective::ManifestSrc`], но манифест ничем не
 //! фетчится этим движком, гейтить нечего), `report-to` (Reporting API,
@@ -268,7 +282,7 @@ fn collect_meta_csp(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// violated policy's own text here, not every policy's — that distinction is
 /// still open (`bugs/BUG-811-OPEN.md`).
 pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(Vec<CspPolicy>, String)> {
-    let mut parts: Vec<String> = doc.csp_header().map(str::to_owned).into_iter().collect();
+    let mut parts: Vec<String> = doc.csp_header().to_vec();
     collect_meta_csp(doc, root, &mut parts);
     if parts.is_empty() {
         return None;
@@ -286,7 +300,7 @@ pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(Vec<C
 /// to independent enforcement means threading `Vec<CspPolicy>` through
 /// `HttpClient`, a separate, larger change (`bugs/BUG-811-OPEN.md`).
 pub(crate) fn document_csp_policy_combined(doc: &Document, root: NodeId) -> Option<(CspPolicy, String)> {
-    let mut parts: Vec<String> = doc.csp_header().map(str::to_owned).into_iter().collect();
+    let mut parts: Vec<String> = doc.csp_header().to_vec();
     collect_meta_csp(doc, root, &mut parts);
     if parts.is_empty() {
         return None;
@@ -726,7 +740,7 @@ mod tests {
     #[test]
     fn response_header_alone_is_a_policy() {
         let mut doc = Document::new();
-        doc.set_csp_header(Some("script-src 'none'".to_owned()));
+        doc.set_csp_header(vec!["script-src 'none'".to_owned()]);
         let root = doc.root();
         let (policy, original) =
             document_csp_policy(&doc, root).expect("header alone must produce a policy");
@@ -740,6 +754,30 @@ mod tests {
         let doc = Document::new();
         let root = doc.root();
         assert!(document_csp_policy(&doc, root).is_none());
+    }
+
+    /// GAP-CSPENF срез 41: two occurrences of the response header are
+    /// independent policies (CSP3 §3.4), same as header+`<meta>` already are
+    /// (срез 40) — a later, laxer occurrence of a repeated directive must not
+    /// silently override an earlier, stricter one. Before срез 41
+    /// `page_source::content_security_policy_header` joined every occurrence
+    /// into one string first, so `parse_csp_header` kept only the last
+    /// `script-src` and the strict first header stopped blocking anything.
+    #[test]
+    fn repeated_response_header_stays_independent() {
+        let mut doc = Document::new();
+        doc.set_csp_header(vec![
+            "script-src 'none'".to_owned(),
+            "script-src 'unsafe-inline'".to_owned(),
+        ]);
+        let root = doc.root();
+        let (policy, _) =
+            document_csp_policy(&doc, root).expect("two headers must still produce a policy");
+        assert!(
+            inline_script_blocked(&policy, None, "alert(1)"),
+            "the first header's own script-src must still block inline execution even though \
+             the second header's occurrence allows it"
+        );
     }
 
     /// GAP-CSPENF срез 40: a strict header and a lenient `<meta>` must both be

@@ -178,7 +178,7 @@ impl PageSource {
                 content_type: Some("text/html".to_owned()),
                 cross_origin_isolated: false,
                 cache_control_no_store: false,
-                csp_header: None,
+                csp_header: Vec::new(),
                 sync_xhr_document_policy: None,
                 sync_xhr_permissions_policy: None,
                 status: 0,
@@ -192,7 +192,7 @@ impl PageSource {
                     content_type: None,
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
-                    csp_header: None,
+                    csp_header: Vec::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
                     status: 0,
@@ -262,7 +262,7 @@ impl PageSource {
                     content_type: Some("text/html".to_owned()),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
-                    csp_header: None,
+                    csp_header: Vec::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
                     status: 0,
@@ -277,7 +277,7 @@ impl PageSource {
                     content_type: Some("text/html".to_owned()),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
-                    csp_header: None,
+                    csp_header: Vec::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
                     status: 0,
@@ -371,7 +371,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, raw.csp_header.as_deref(), raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -390,12 +390,14 @@ pub(crate) struct RawPage {
     /// the page from a full bfcache freeze (HTML LS §8.6) — the shell falls
     /// back to the existing HTML-snapshot bfcache path on navigate-away.
     pub(crate) cache_control_no_store: bool,
-    /// Raw `Content-Security-Policy` header of the response, if any
-    /// (GAP-CSPENF срез 5). Stamped onto the parsed [`Document`] so that every
-    /// enforcement point — which only ever gets a `&Document` — sees the
-    /// header alongside the document's `<meta>` policies. `None` for every
-    /// non-network source (file / snapshot / `about:` page).
-    pub(crate) csp_header: Option<String>,
+    /// Raw `Content-Security-Policy` header(s) of the response, one entry per
+    /// occurrence (GAP-CSPENF срез 5, срез 41 split the single joined
+    /// `String` into independent entries — see `content_security_policy_header`).
+    /// Stamped onto the parsed [`Document`] so that every enforcement point —
+    /// which only ever gets a `&Document` — sees the header(s) alongside the
+    /// document's `<meta>` policies. Empty for every non-network source
+    /// (file / snapshot / `about:` page).
+    pub(crate) csp_header: Vec<String>,
     /// `sync-xhr` disposition from the response's `Document-Policy`(`-Report-Only`)
     /// headers (GAP-POLICYREPORT, BUG-953). `None` for every non-network source,
     /// same as `csp_header`.
@@ -439,35 +441,32 @@ pub(crate) fn response_content_type(resp_headers: &[(String, String)]) -> Option
         .map(|(_, v)| v.clone())
 }
 
-/// The response's `Content-Security-Policy` header text (GAP-CSPENF срез 5),
-/// or `None` when the response carried none.
+/// The response's `Content-Security-Policy` header text, one entry per
+/// occurrence of the header (GAP-CSPENF срез 41; srez 5 introduced this
+/// function, returning a single joined `String`).
 ///
 /// `Content-Security-Policy-Report-Only` is deliberately **not** matched: this
 /// slice enforces, and a report-only policy must never block anything — the
 /// exact-name comparison keeps it out (a `starts_with` would swallow it).
 ///
 /// A response may repeat the header, and each occurrence is an independent
-/// policy per CSP3 §3.4. They are joined with `"; "` here, the same
-/// simplification `csp_enforce::document_csp_policy` already applies to
-/// multiple `<meta>` policies — for a single policy (the overwhelming majority)
-/// the result is identical, for several policies with interacting relaxations
-/// it can be more permissive than the spec.
+/// policy per CSP3 §3.4 — `document_csp_policy` needs each one as its own
+/// element, not joined with `"; "`: joining first (as this function did
+/// through срез 40) turns a directive repeated across two header instances
+/// into a single `HashMap` entry, so a later, laxer occurrence of e.g.
+/// `script-src` silently overrides an earlier, stricter one instead of both
+/// being enforced independently.
 ///
 /// Extracted as a free function so it is unit-testable without a network
 /// round-trip, like its two neighbours above.
-pub(crate) fn content_security_policy_header(
-    resp_headers: &[(String, String)],
-) -> Option<String> {
-    let parts: Vec<&str> = resp_headers
+pub(crate) fn content_security_policy_header(resp_headers: &[(String, String)]) -> Vec<String> {
+    resp_headers
         .iter()
         .filter(|(k, _)| k.eq_ignore_ascii_case("content-security-policy"))
         .map(|(_, v)| v.trim())
         .filter(|v| !v.is_empty())
-        .collect();
-    if parts.is_empty() {
-        return None;
-    }
-    Some(parts.join("; "))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Join every occurrence of `header_name` in `resp_headers` with `", "`, the
@@ -675,36 +674,34 @@ mod tests {
             ("Server".to_owned(), "nginx".to_owned()),
             ("Content-Security-Policy".to_owned(), "script-src 'none'".to_owned()),
         ];
-        assert_eq!(
-            content_security_policy_header(&headers).as_deref(),
-            Some("script-src 'none'")
-        );
+        assert_eq!(content_security_policy_header(&headers), vec!["script-src 'none'".to_owned()]);
     }
 
     #[test]
     fn csp_header_name_match_is_case_insensitive() {
         let headers = vec![("content-security-POLICY".to_owned(), "img-src 'self'".to_owned())];
-        assert_eq!(content_security_policy_header(&headers).as_deref(), Some("img-src 'self'"));
+        assert_eq!(content_security_policy_header(&headers), vec!["img-src 'self'".to_owned()]);
     }
 
     #[test]
     fn csp_header_none_when_absent() {
         let headers = vec![("Server".to_owned(), "nginx".to_owned())];
-        assert_eq!(content_security_policy_header(&headers), None);
+        assert!(content_security_policy_header(&headers).is_empty());
     }
 
     /// Several `Content-Security-Policy` headers are independent policies
-    /// (CSP3 §3.4); this срез merges them the same way it merges several
-    /// `<meta>` policies.
+    /// (CSP3 §3.4, срез 41) — each occurrence stays its own element instead of
+    /// being joined into one string, so `document_csp_policy` can enforce each
+    /// as a separate policy.
     #[test]
-    fn csp_header_repeated_is_merged() {
+    fn csp_header_repeated_stays_independent() {
         let headers = vec![
             ("Content-Security-Policy".to_owned(), "script-src 'none'".to_owned()),
             ("Content-Security-Policy".to_owned(), "img-src 'self'".to_owned()),
         ];
         assert_eq!(
-            content_security_policy_header(&headers).as_deref(),
-            Some("script-src 'none'; img-src 'self'")
+            content_security_policy_header(&headers),
+            vec!["script-src 'none'".to_owned(), "img-src 'self'".to_owned()]
         );
     }
 
@@ -716,13 +713,13 @@ mod tests {
             "Content-Security-Policy-Report-Only".to_owned(),
             "script-src 'none'".to_owned(),
         )];
-        assert_eq!(content_security_policy_header(&headers), None);
+        assert!(content_security_policy_header(&headers).is_empty());
     }
 
     #[test]
     fn csp_header_empty_value_is_ignored() {
         let headers = vec![("Content-Security-Policy".to_owned(), "   ".to_owned())];
-        assert_eq!(content_security_policy_header(&headers), None);
+        assert!(content_security_policy_header(&headers).is_empty());
     }
 
     // ---- GAP-POLICYREPORT (BUG-953): sync-xhr disposition ----

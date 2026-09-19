@@ -563,8 +563,10 @@ pub struct Document {
     /// the `content_type` hint `parse_and_layout` already receives.
     #[serde(default = "default_content_type")]
     content_type: String,
-    /// Raw text of the response's `Content-Security-Policy` header, if the
-    /// server sent one (GAP-CSPENF срез 5). Set once by the shell in
+    /// Raw text of each occurrence of the response's `Content-Security-Policy`
+    /// header, if the server sent any (GAP-CSPENF срез 5; срез 41 switched
+    /// this from a single joined `String` to one entry per occurrence — CSP3
+    /// §3.4 treats each as an independent policy). Set once by the shell in
     /// `parse_and_layout`, next to `character_set`/`content_type`, because CSP
     /// enforcement happens in several places that only ever receive a
     /// `&Document` (inline scripts, `<img>` fetches on three different
@@ -572,10 +574,10 @@ pub struct Document {
     /// the moment it enforces.
     ///
     /// Serialised like `content_type`: a fact about the response that produced
-    /// this document, which must stay readable after a bfcache restore.
-    /// `None` for every non-network source (file / snapshot / `about:` page).
+    /// this document, which must stay readable after a bfcache restore. Empty
+    /// for every non-network source (file / snapshot / `about:` page).
     #[serde(default)]
-    csp_header: Option<String>,
+    csp_header: Vec<String>,
     /// Nodes whose `style=""` attribute `style-src-attr`/`style-src`/
     /// `default-src` forbids (GAP-CSPENF срез 23). Layout is the only reader
     /// (`cascade.rs` skips [`Self::get_attr`]`("style")` for a member of this
@@ -638,7 +640,7 @@ impl Document {
             design_mode: false,
             character_set: default_character_set(),
             content_type: default_content_type(),
-            csp_header: None,
+            csp_header: Vec::new(),
             style_attr_csp_blocked: HashSet::new(),
         }
     }
@@ -675,17 +677,17 @@ impl Document {
         self.content_type = content_type;
     }
 
-    /// Raw `Content-Security-Policy` response header of this document, if any
-    /// (GAP-CSPENF срез 5). Combined with the document's `<meta
-    /// http-equiv="Content-Security-Policy">` policies by the shell's
-    /// enforcement points.
-    pub fn csp_header(&self) -> Option<&str> {
-        self.csp_header.as_deref()
+    /// Raw `Content-Security-Policy` response header(s) of this document, one
+    /// entry per occurrence (GAP-CSPENF срез 5, срез 41). Combined with the
+    /// document's `<meta http-equiv="Content-Security-Policy">` policies by
+    /// the shell's enforcement points.
+    pub fn csp_header(&self) -> &[String] {
+        &self.csp_header
     }
 
-    /// Set the document's `Content-Security-Policy` response header. Called
-    /// once by the shell right after parsing, before any script runs.
-    pub fn set_csp_header(&mut self, csp_header: Option<String>) {
+    /// Set the document's `Content-Security-Policy` response header(s).
+    /// Called once by the shell right after parsing, before any script runs.
+    pub fn set_csp_header(&mut self, csp_header: Vec<String>) {
         self.csp_header = csp_header;
     }
 
