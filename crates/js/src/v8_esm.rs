@@ -326,10 +326,43 @@ pub(crate) fn register_inline(source: &str) -> String {
     })
 }
 
-/// Resolve `name` as imported from `base`, applying the import map and the page
-/// URL exactly like the rquickjs `LumenResolver`.
-fn resolve(base: &str, name: &str) -> String {
-    with_state(|s| resolve_specifier_with(&s.page_url, &s.import_map, base, name))
+/// Read the live document base URL (HTML LS §4.2.3) through the page shim's
+/// `_lumen_document_base_url()` — the `<base href>` element resolved against
+/// the document URL, or the document URL itself if there is none.
+///
+/// Falls back to the stored `page_url` (captured once at navigation, never
+/// updated) when the shim isn't reachable — a bare runtime with no DOM/shim
+/// installed (unit tests), or a `<base>`-free page, where the two agree
+/// anyway. [BUG-910](../../../bugs/BUG-910-OPEN.md): before this, every
+/// relative specifier resolved against `page_url` ignored `<base href>`
+/// outright.
+fn document_base_url(scope: &mut v8::PinScope<'_, '_>) -> String {
+    let stored = with_state(|s| s.page_url.clone());
+    let Some(code) = v8::String::new(
+        scope,
+        "(function(){try{return (typeof _lumen_document_base_url==='function')?_lumen_document_base_url():'';}catch(e){return '';}})()",
+    ) else {
+        return stored;
+    };
+    v8::tc_scope!(let tc, scope);
+    let Some(script) = v8::Script::compile(tc, code, None) else {
+        return stored;
+    };
+    let Some(result) = script.run(tc) else {
+        return stored;
+    };
+    let value = result.to_rust_string_lossy(tc);
+    if value.is_empty() { stored } else { value }
+}
+
+/// Resolve `name` as imported from `base`, applying the import map and the
+/// live document base URL (see [`document_base_url`]) as the fallback base
+/// for relative specifiers that have no path of their own — dynamic
+/// `import()` from `eval`/`Function`/`setTimeout`/an inline event handler,
+/// and inline `lumen://inline-N` module scripts.
+fn resolve(scope: &mut v8::PinScope<'_, '_>, base: &str, name: &str) -> String {
+    let page_url = document_base_url(scope);
+    with_state(|s| resolve_specifier_with(&page_url, &s.import_map, base, name))
 }
 
 // ── Module compilation ────────────────────────────────────────────────────────
@@ -554,7 +587,7 @@ fn prefetch_graph(scope: &mut v8::PinScope<'_, '_>, root_specifier: &str, root_k
                 // У `ModuleRequest` шаг атрибутов такой же, как у резолв-колбэка:
                 // [ключ, значение, смещение в исходнике].
                 let ty = declared_type(scope, request.get_import_attributes(), 3);
-                let resolved = resolve(base, &raw);
+                let resolved = resolve(scope, base, &raw);
                 if seen.insert(cache_key(&resolved, &ty)) {
                     wanted.push((resolved, ty));
                 }
@@ -656,7 +689,7 @@ fn resolve_module_callback<'s>(
             .cloned()
             .unwrap_or_default()
     });
-    let resolved = resolve(&base, &raw);
+    let resolved = resolve(scope, &base, &raw);
     // `ResolveModuleCallback` receives [key, value, source-offset] per attribute.
     let ty = declared_type(scope, import_attributes, 3);
     module_for(scope, &resolved, &ty)
@@ -684,7 +717,7 @@ fn dynamic_import_callback<'s>(
     } else {
         resource_name.to_rust_string_lossy(scope)
     };
-    let resolved = resolve(&base, &raw);
+    let resolved = resolve(scope, &base, &raw);
     // The dynamic-import array is [key, value] per attribute (no source offset).
     let ty = declared_type(scope, import_attributes, 2);
 
@@ -928,6 +961,24 @@ mod tests {
         rt.eval_module("import('dynmod').then(m => { globalThis.__dyn = m.v; });")
             .unwrap();
         assert_eq!(rt.eval("globalThis.__dyn").unwrap(), JsValue::String("dynamic".into()));
+    }
+
+    #[test]
+    fn v8_dynamic_import_of_relative_specifier_follows_document_base_url() {
+        // BUG-910: a dynamic `import()` compiled with no resource name of its
+        // own (mirrors `eval`/`Function`/`setTimeout`/an inline handler) must
+        // resolve a relative specifier against the *live* document base URL
+        // (`<base href>`), not the page URL captured once at navigation.
+        let rt = rt();
+        rt.eval(
+            "globalThis._lumen_document_base_url = function() { \
+             return 'https://example.com/base/'; };",
+        )
+        .unwrap();
+        rt.register_module_source("https://example.com/base/mod.js", "export const v = 'via-base';");
+        rt.eval_module("import('./mod.js').then(m => { globalThis.__dyn = m.v; });")
+            .unwrap();
+        assert_eq!(rt.eval("globalThis.__dyn").unwrap(), JsValue::String("via-base".into()));
     }
 
     #[test]
