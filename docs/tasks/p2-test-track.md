@@ -1543,6 +1543,49 @@ Baseline 246 → 247.
 мысль для следующей сессии: три категории подряд (`connection-allowlist`, `signed-exchange`, `fedcm`) упёрлись в
 BUG-1069, владелец которого — P2; его починка (тулинг, без Rust) даёт больше, чем очередной baseline из `ERROR`.
 
+### TEST-3: срез 42 (2026-09-20) — `shared-storage`: 88 `ERROR` (BUG-1069) + 2 честных `FAIL`; новых багов нет
+
+**Выбор кандидата.** Следующий малый по списку среза 41 (`shared-storage`). Счёт id по первой строке лога:
+`running 90 all vendored` — на порядок ниже порога обрыва, прогон взят целиком (`.tmp/run_cat.sh`: update и три
+`--check` подряд, в фоне с опросом файла `.done`).
+
+**Baseline.** `--update-expected --recursive --processes 4 --binary target/dev-release/lumen.exe` — 1:29.
+Итог: **2/90 harness OK, 0/2 подтестов**, 90 новых `.ini` (88 файловых `expected: ERROR`, 2 подтеста `expected: FAIL`).
+Baseline 247 → 248.
+
+**88 `ERROR` — одна причина, сверена с логом.** 264 строки `ExecutorException` (88 × 3 попытки), все — `TLS
+handshake: invalid peer certificate: certificate not valid for name "localhost"`; строк без TLS — 0. Все 88 —
+`.https.` — [BUG-1069](../../bugs/BUG-1069-OPEN.md), в него дописано.
+
+**2 `FAIL` — артефакт хоста, не дефект движка.** `insecure-context.tentative.http.html`
+(`assert_equals(window.sharedStorage, undefined)`) и `shared-storage-writable-insecure-context.tentative.http.sub.html`
+(`fetch` с `sharedStorageWritable` «не отклонён») ждут **insecure** context на `.http.`-странице. Но wptrunner ходит на
+`http://localhost:18300` (`browser_host = "localhost"`, WPT-RUN-10), а `origin.rs::is_potentially_trustworthy` по
+Secure Contexts §3.1 считает `localhost` доверенным — движок отвечает верно на неверный хост. Багов на движок не
+заведено. Запись в baseline честная (`FAIL` — то, что сегодня видит прогон), но её нельзя читать как «`sharedStorage`
+не закрыт за `[SecureContext]`»: на реальном insecure-хосте ответ мог бы быть другим. Отмечено в BUG-1069 —
+это второй, не лечащийся сертификатом, артефакт `browser_host`. Тот же эффект ждёт любую категорию с
+insecure-context-тестами на `.http.`-страницах.
+
+**Сужение.** Не понадобилось: три `--check` (~1:25–1:37 каждый) — 0 регрессий, 0 unexpected pass, 0 других
+отклонений. Плавающих нет.
+
+**Ограничение записанного.** Как у срезов 39–41: 88 из 90 — нижняя планка, регрессировать им некуда; гейт
+по категории держат только два `.http.`-файла, и держат они «`sharedStorage` виден на `localhost`».
+
+**Проба перевыпуска сертификата (не закоммичена).** В рабочем дереве с прошлой сессии лежали правки
+`tests/wpt/certs/*` (SAN + `localhost`, `*.localhost`) — незавершённая починка BUG-1069. На `fedcm` с ней TLS-ошибка
+исчезает (0 из 81), файлы доходят до страницы и дают `TIMEOUT` на `testharnessreport.js` (201 строка), а не `ERROR`.
+Правки убраны из дерева (`git checkout -- tests/wpt/certs`), чтобы срез шёл на прежнем сертификате, как срезы
+39–41; diff сохранён в `.tmp/bug1069-cert-fix.patch` (`.tmp` не отслеживается). Коммитить сертификат можно только вместе
+с перегенерацией baseline по ~134 категориям с `ERROR`-файлами (список — `.tmp/https_error_cats.txt`, 2081 файл): иначе
+`--check` по ним станет красным.
+
+Дальше: `webnn` (183 id, 178 из них `.https.` — снова почти целиком `ERROR`); `appmanifest` baseline получить не может;
+`websockets` (786 id, ~25 мин), `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34),
+долг среза 4 не тронуты. Мысль среза 41 остаётся в силе и усилилась: каждая следующая категория из оставшихся
+упирается в BUG-1069, его починка (тулинг, без Rust; владелец P2) даёт больше очередного baseline из `ERROR`.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ

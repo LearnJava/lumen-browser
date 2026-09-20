@@ -55,5 +55,16 @@ DnsName("web-platform.test") or DnsName("127.0.0.1")
   той же TLS-ошибкой — так что оценка по имени файла занижает охват. Соответствие файл→строка лога там
   подтверждено по счёту (18 загрузок `.sxg` + 4 из `service-workers/` + 6 `.https.`-страниц), не по каждому файлу;
   и `fedcm` — 81 файл из 81, срез 41 WPT-RUN-7, 2026-09-20: 81 уникальный `https://localhost:18443/…` в логе,
-  все с этой ошибкой, других причин нет — категория целиком `expected: ERROR`, ни один подтест не стартует).
+  все с этой ошибкой, других причин нет — категория целиком `expected: ERROR`, ни один подтест не стартует;
+  и `shared-storage` — 88 `.https.`-файлов из 90, срез 42, 2026-09-20: 264 строки `ExecutorException` = 88×3, все
+  с этой ошибкой).
+- Пробный перевыпуск сертификата (SAN + `localhost`, `*.localhost`; срез 41→42, 2026-09-20, не закоммичен):
+  на `fedcm` TLS-ошибка исчезает (0 из 81), файлы доходят до страницы и дают `TIMEOUT` на
+  `testharnessreport.js` вместо `ERROR` — то есть после починки baseline сдвинется `ERROR → TIMEOUT` (или лучше),
+  а не останется прежним. Не проверено на других категориях.
+- **Второй артефакт `browser_host = "localhost"`, не связанный с сертификатом:** `http://localhost` в движке —
+  secure context (`crates/network/src/origin.rs::is_potentially_trustworthy`, как в спеке), поэтому тесты, которые
+  ждут *insecure* context на `.http.`-странице (`shared-storage/insecure-context.tentative.http.html`,
+  `…-writable-insecure-context…http.sub.html`), получают `FAIL` независимо от сертификата — верный ответ движка на
+  неверный хост. Починка сертификата этого не лечит.
 - `*.localhost` в SAN не решает нерезолвимость самих поддоменов на Windows — см. [BUG-1070](BUG-1070-OPEN.md).
