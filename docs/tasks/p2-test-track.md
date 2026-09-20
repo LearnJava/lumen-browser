@@ -1417,6 +1417,54 @@ tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`
 сужением `[OK, TIMEOUT]` для трёх плавающих подтестов (см. раздел BUG-1006 выше). `encoding` — только
 с `--exclude-prefix /encoding/legacy-mb-`. `IndexedDB` (срез 34), долг среза 4 и BUG-1038 не тронуты.
 
+### TEST-3: срез 39 (2026-09-20) — `connection-allowlist` закрыт с сужением; найдены BUG-1069 и BUG-1070
+
+**Выбор кандидата.** Из оставшихся малых первым проверен `appmanifest` (102 файла, 0 предикторных хитов):
+`--update-expected` за 5 с — `no tests selected`, единственные 4 файла с `testharness.js` — `*-manual.html`.
+Baseline получить нечем (в список «покрыть нечем» к `annotation-*`, `avif`, `print` и т.д.). Вторым взят
+`connection-allowlist` — категория [BUG-1038](../../bugs/BUG-1038-OPEN.md), откаченная в срезе 30; счёт по
+id заранее: `running 73 all vendored` (срез 30 брал те же 73).
+
+**Baseline.** `--update-expected --recursive --processes 4` — 6:33 (23/73 harness OK, 82/164 подтестов,
+58 новых `.ini`; бинарь `dev-release` от `origin/main` `195ea5000`, `cargo build` 36 с). Без внешнего
+`timeout` (BUG-1006 закрыт) прогон и все `--check` доходят до вердикта.
+
+**Сужение (приём срезов 33/35).** Три первых `--check` дали не тот же набор, что в срезе 30, а другой,
+и уже объяснимый: подтесты, чей статус зависит от того, в какой момент harness-таймаут оборвал файл.
+- `navigation-wildcard`/`navigation-response-origin`, подтест `www.localhost … should fail.`:
+  PASS → TIMEOUT — `expected: [PASS, TIMEOUT]`;
+- те же файлы, подтест `www1.localhost … should fail.`: TIMEOUT → NOTRUN — `[TIMEOUT, NOTRUN]`;
+- `websocket.sub.window.html`: подтесты `(www)` — `[TIMEOUT, PASS]`, `(www1)` — `[NOTRUN, TIMEOUT]`.
+Первый заход сужения (`www.localhost`, `websocket`) убрал регрессии, но `note:` показал ещё
+один плавающий подтест (`www1`: TIMEOUT → NOTRUN) — сужен вторым заходом. Три `--check` подряд на итоговом
+baseline (по ~7 мин): **0 регрессий, 0 unexpected pass, 0 других отклонений**. Baseline 244 → 245.
+
+**Тулинг.** `run_report.py --check` считал «other deviation(s)», но не печатал их — утверждение
+«0 других отклонений» нельзя было проверить, а ненулевое число не говорило, что плавает. Теперь такие
+случаи печатаются строками `note: …` (exit code не меняется).
+
+**Что записано как сегодняшняя правда (51 `NOTRUN`, 40 `TIMEOUT`, 27 `ERROR`, 14 `FAIL`):**
+- **27 файлов `ERROR` — все `.https.`, все из одной причины:** `TLS handshake: invalid peer certificate:
+  certificate not valid for name "localhost"; … only valid for … web-platform.test / 127.0.0.1`.
+  27 из 27 сверено с логом. Тестовый сертификат не покрывает `browser_host = "localhost"` (WPT-RUN-10);
+  комментарий `tests/wpt/certs/README.md` («moot — отвергается раньше проверки имени») устарел с BUG-785.
+  Это [BUG-1069](../../bugs/BUG-1069-OPEN.md). По оценке (`.ini` с `https` в имени, файловый
+  `expected: ERROR`) затронуто 1992 из 2024 `.ini` во всём `tests/wpt/metadata/` — **не проверено по
+  каждому файлу**; сверено только в этой категории.
+- **`TIMEOUT`/`NOTRUN` на подтестах `www*.localhost`:** поддомены не резолвятся на Windows
+  (`os error 11001`, `ping www.localhost` тоже не находит) — [BUG-1070](../../bugs/BUG-1070-OPEN.md);
+  `SystemDnsResolver` целиком `getaddrinfo`. Здесь же вероятная причина плавания среза 30 (фоновый
+  DNS-шум), но она **не доказана**: в срезе 39 плавали другие подтесты.
+- Заголовок `Connection-Allowlist` в движке не реализован (скоуп категории 🚫) — отдельный баг не заводился.
+
+**Следствие для baseline.** Починка BUG-1069 или BUG-1070 даст массу смен статусов; baseline
+регенерируется (`--update-expected` + три `--check`) в том же коммите или сразу следом. BUG-1038 остаётся
+OPEN (корневая причина плавания среза 30 не локализована), но блокер «baseline нельзя закоммитить» снят.
+
+Дальше: из оставшихся малых — `signed-exchange` (74 файла), `fedcm` (103), `shared-storage` (124),
+`webnn` (183, 0 хитов). `appmanifest` baseline получить не может. `websockets` (786 id, ~25 мин на прогон),
+`encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), долг среза 4 не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
