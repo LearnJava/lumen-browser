@@ -113,8 +113,10 @@ UA решают сами. `Request.priority` (constructor/property) сознат
 (`v8_page_visibility_beacon.rs`) покрывали «не бросает». `cargo clippy -p
 lumen-js --all-targets --features v8-backend -D warnings` зелёный.
 
-### Срез 6 — XS — Доки
-`CAPABILITIES.md` (network/fetch) 🟡→✅ по частям; `ROADMAP.md:161` уточнить; `subsystems/`.
+### Срез 6 — XS — Доки — **сделано 2026-09-21 (P1)**
+`CAPABILITIES.md` получил bullet в `## Networking & storage` (сразу после content-decoding);
+`ROADMAP.md:244` (`P3-earlyhints`) переведён из `planned` в `done`; `subsystems/network.md`
+и `subsystems/js.md` получили по одной строке про `Priority:`/`fetchpriority`/103.
 
 ## Tests
 - `lumen-network`: skip 1xx (`100 Continue`), парсинг 103 + `Link`, финальный статус корректен.
@@ -123,8 +125,13 @@ lumen-js --all-targets --features v8-backend -D warnings` зелёный.
 - Регресс: обычный ответ без 1xx работает как раньше (`read_head` не изменил семантику).
 
 ## Definition of done
-- [ ] `read_head` пропускает informational 1xx, финальный статус читается верно.
-- [ ] 103 Early Hints парсятся, `Link: rel=preload/preconnect` эмитят подресурс-хинты.
-- [ ] `fetchpriority` HTML-атрибут переопределяет эвристику приоритета.
+- [x] `read_head` пропускает informational 1xx, финальный статус читается верно.
+- [x] 103 Early Hints парсятся, `Link: rel=preload/preconnect` эмитят подресурс-хинты.
+- [x] `fetchpriority` HTML-атрибут переопределяет эвристику приоритета.
 - [x] `fetch()` init читает `priority`.
-- [ ] Тесты зелёные; `CAPABILITIES.md`/`ROADMAP.md`/`subsystems/` обновлены.
+- [x] Тесты зелёные; `CAPABILITIES.md`/`ROADMAP.md`/`subsystems/` обновлены.
+
+Задача `P3-earlyhints` полностью `done` — H2/H3 1xx-гэп и сетевая приоритетная
+очередь (RFC 9218 — сейчас advisory-only заголовок, никто не переупорядочивает
+запросы) осознанно оставлены вне скоупа этого брифа, задокументированы как гэп
+в `CAPABILITIES.md`.
