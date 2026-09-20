@@ -105,6 +105,15 @@ impl Lumen {
                     ) {
                         eprintln!("bfcache thaw: JS DOM init failed: {e}");
                     }
+                    // BUG-998: see `_lumen_mark_ready_state_restored`'s doc comment
+                    // (web_api_shim_tail_b.js) — a thaw installs a fresh runtime
+                    // whose `document.readyState` otherwise never leaves 'loading'.
+                    {
+                        use lumen_core::ext::JsRuntime as _;
+                        if let Err(e) = rt.eval("_lumen_mark_ready_state_restored()") {
+                            eprintln!("bfcache thaw: readyState restore failed: {e}");
+                        }
+                    }
                     self.set_js_ctx(Some(Arc::new(V8PersistentJs { rt: Arc::new(rt) }) as Arc<dyn PersistentJs>));
                 }
                 Err(e) => {

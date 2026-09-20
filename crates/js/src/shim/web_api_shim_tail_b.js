@@ -799,8 +799,24 @@ function _lumen_apply_visibility(hidden) {
     }
 }
 
+// BUG-998: a page thawed from a bfcache Frozen entry (`bfcache_thaw`, see
+// crates/shell/src/lumen/bfcache.rs) gets a brand-new runtime via
+// `install_dom` — `_doc_ready_state` above initialises to 'loading' just as
+// it would for a real navigation. But a thaw is not a real navigation: HTML
+// LS §8.6 "reactivate a document" restores an already-complete document and
+// fires only `pageshow(persisted=true)` — `readystatechange`/
+// `DOMContentLoaded`/`load` must NOT refire. Calling
+// `_lumen_apply_ready_state('complete')` would do exactly that (it dispatches
+// `readystatechange` and the `load` listeners), so a thawed page needs the
+// state set directly, with no event dispatch. Without this, `readyState`
+// stays stuck at 'loading' forever — a thawed page never reports itself
+// ready.
+function _lumen_mark_ready_state_restored() {
+    _doc_ready_state = 'complete';
+}
 window._lumen_apply_ready_state = _lumen_apply_ready_state;
 window._lumen_apply_visibility  = _lumen_apply_visibility;
+window._lumen_mark_ready_state_restored = _lumen_mark_ready_state_restored;
 
 // ── <dialog> modal stack (HTML5 §4.11.7) ─────────────────────────────────────
 // Tracks nids of dialogs opened via showModal(), in open order.
