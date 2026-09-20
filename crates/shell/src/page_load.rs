@@ -551,6 +551,15 @@ impl Lumen {
             // is still queued keep audibly playing until it drains.
             if let Some(sink) = self.video_ffmpeg_audio_sinks.get(nid) {
                 sink.set_paused(state.paused);
+                let (volume, muted) = self
+                    .video_gif_store
+                    .audio_levels
+                    .lock()
+                    .unwrap()
+                    .get(nid)
+                    .copied()
+                    .unwrap_or((1.0, false));
+                sink.set_volume(if muted { 0.0 } else { volume });
             }
             let cur_ms = state.current_ms(elapsed_ms);
             let last = self.video_ffmpeg_last_ms.get(nid).copied();
@@ -656,6 +665,19 @@ impl Lumen {
                                 "video FFmpeg аудио: открыт вывод nid={nid} ({} Гц, {} кан.)",
                                 track.sample_rate, track.channels
                             );
+                            // Apply whatever `volume`/`muted` the page had
+                            // already set before this sink existed — the
+                            // per-tick mirror above only reaches sinks that
+                            // were already open at the start of the tick.
+                            let (volume, muted) = self
+                                .video_gif_store
+                                .audio_levels
+                                .lock()
+                                .unwrap()
+                                .get(&nid)
+                                .copied()
+                                .unwrap_or((1.0, false));
+                            sink.set_volume(if muted { 0.0 } else { volume });
                             e.insert(sink);
                         }
                         None => eprintln!("video FFmpeg аудио: нет аудио-устройства nid={nid}"),
@@ -1854,6 +1876,9 @@ impl Lumen {
         // GAP-MEDIADECODE срез 9: previous page's failure records must not leak
         // onto a same-index node in the new page.
         self.video_gif_store.load_failures.lock().unwrap().clear();
+        // Same reasoning for volume/muted — a same-index node on the new page
+        // must start at the spec default, not the previous page's setting.
+        self.video_gif_store.audio_levels.lock().unwrap().clear();
 
         // Update shields panel domain and clear per-page blocked counts.
         {

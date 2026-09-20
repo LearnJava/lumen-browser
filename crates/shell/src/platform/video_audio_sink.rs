@@ -66,6 +66,13 @@ impl VideoPcmAudioSink {
             self.sink.play();
         }
     }
+
+    /// Set the linear output volume (`0.0` silent .. `1.0` unattenuated,
+    /// values above `1.0` amplify same as `rodio::Sink::set_volume`).
+    /// Idempotent — safe to call every tick.
+    pub(crate) fn set_volume(&self, volume: f32) {
+        self.sink.set_volume(volume);
+    }
 }
 
 #[cfg(test)]
@@ -109,5 +116,13 @@ mod tests {
         let Some(sink) = sink_or_skip() else { return };
         sink.set_paused(true);
         sink.set_paused(false);
+    }
+
+    #[test]
+    fn set_volume_does_not_panic() {
+        let Some(sink) = sink_or_skip() else { return };
+        sink.set_volume(0.0);
+        sink.set_volume(0.5);
+        sink.set_volume(1.0);
     }
 }

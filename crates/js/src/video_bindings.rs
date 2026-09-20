@@ -32,6 +32,8 @@
 //! | `__lumen_video_ended` | `(nid: f64, now_ms: f64) → bool` | Has ended? |
 //! | `__lumen_video_width` | `(nid: f64) → f64` | GIF pixel width |
 //! | `__lumen_video_height` | `(nid: f64) → f64` | GIF pixel height |
+//! | `__lumen_video_set_volume` | `(nid: f64, volume: f64)` | Route `video.volume =` to the audio sink |
+//! | `__lumen_video_set_muted` | `(nid: f64, muted: bool)` | Route `video.muted =` to the audio sink |
 //! | `__lumen_video_can_play_type` | `(mime: String) → String` | canPlayType probe |
 //! | `__lumen_video_ffmpeg_load` | `(nid: f64, src: String)` | Queue FFmpeg-container load (feature `ffmpeg-video`, GAP-MEDIADECODE срез 6) |
 //! | `__lumen_texttracks_json` | `(nid: f64) → String` | JSON of parsed `<track>` cues |
@@ -277,6 +279,35 @@ pub(crate) fn install_video_bindings_v8(
                 .unwrap_or(0.0)
         });
         rt.register_native("__lumen_video_height", height)?;
+    }
+
+    // GAP-MEDIADECODE, остаток среза 15: route `video.volume =`/`video.muted =`
+    // to the FFmpeg audio sink. Written to `audio_levels`, not `playback`,
+    // because `playback` entries are wholesale replaced on every decode
+    // completion (see the field doc on `VideoGifStore::audio_levels`) — a
+    // write here must survive that.
+    {
+        let store = get_video_gif_store();
+        let set_volume = into_v8_fn2(move |nid: f64, volume: f64| {
+            if let Some(s) = &store {
+                let mut levels = s.audio_levels.lock().unwrap();
+                let entry = levels.entry(nid as u32).or_insert((1.0, false));
+                entry.0 = volume as f32;
+            }
+        });
+        rt.register_native("__lumen_video_set_volume", set_volume)?;
+    }
+
+    {
+        let store = get_video_gif_store();
+        let set_muted = into_v8_fn2(move |nid: f64, muted: bool| {
+            if let Some(s) = &store {
+                let mut levels = s.audio_levels.lock().unwrap();
+                let entry = levels.entry(nid as u32).or_insert((1.0, false));
+                entry.1 = muted;
+            }
+        });
+        rt.register_native("__lumen_video_set_muted", set_muted)?;
     }
 
     {
