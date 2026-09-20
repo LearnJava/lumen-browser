@@ -194,7 +194,7 @@ TIMEOUT с измеримой длительностью): из 3 558 TIMEOUT-id
 `websockets/keeping-connection-open/001.html` (`?default`, `?wss`): тест
 объявлен `timeout=long` и по своей природе идёт 20 с, поэтому при
 10-секундном потолке он не может пройти ни при какой починке WebSocket-ов.
-Ранее [BUG-869](BUG-869-OPEN.md) числил их за собой; там это исправлено.
+Ранее [BUG-869](BUG-869-FIXED.md) числил их за собой; там это исправлено.
 В `tests/wpt/timeout_audit.py` механизм называется
 `harness-long-timeout-ignored`.
 
