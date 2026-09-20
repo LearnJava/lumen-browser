@@ -110,7 +110,20 @@ enum EngineMsg<C, S> {
     /// `Lumen::sync_engine_js_state` (обновление состояния) и `route_eval_js` (шим
     /// fire-and-forget `eval_js`) ставят `Task`. Value-returning `query`-путь
     /// (`take_dom_dirty`, `eval_js_value`) подключается в M2.2c-2c.
-    Task(Box<dyn FnOnce(&mut S) + Send>),
+    Task {
+        /// Место постановки задания (BUG-935 S23): `#[track_caller]` на
+        /// [`EngineThread::task`]/[`EngineThread::query`] и на всех трёх
+        /// `route_*_js`-обёртках (`engine_bridge.rs`) делает эту локацию
+        /// прозрачно проходящей сквозь обёртки до настоящего UI-стороннего
+        /// call site'а (`page_load.rs`/`relayout.rs`), без ручного протаскивания
+        /// строкового лейбла через два-три десятка вызовов. S22 нашёл, что
+        /// долгие `Task` (12-46с) доминируют в живых зависаниях, но не смог
+        /// сказать, какой вызывающий их поставил — эта метка отвечает на
+        /// вопрос напрямую в логе `[engine] task`.
+        caller: &'static std::panic::Location<'static>,
+        /// Работа над персистентным состоянием.
+        job: Box<dyn FnOnce(&mut S) + Send>,
+    },
     /// Завершение потока.
     Shutdown,
 }
@@ -220,8 +233,14 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     ///
     /// Живой с M2.2c-2b: `Lumen::sync_engine_js_state` кладёт хэндл `js_ctx` + DOM
     /// в состояние, а `route_eval_js` шлёт fire-and-forget `eval_js`.
+    ///
+    /// `#[track_caller]` (BUG-935 S23): захватывает call site постановки задания
+    /// (прозрачно проходит сквозь `route_task_js`/`route_eval_js`, тоже
+    /// `#[track_caller]`) — атрибуция для `[engine] task` census-лога.
+    #[track_caller]
     pub fn task(&self, job: impl FnOnce(&mut S) + Send + 'static) {
-        let _ = self.tx.send(EngineMsg::Task(Box::new(job)));
+        let caller = std::panic::Location::caller();
+        let _ = self.tx.send(EngineMsg::Task { caller, job: Box::new(job) });
     }
 
     /// Request/reply над персистентным состоянием `S`: ставит упорядоченное
@@ -247,19 +266,26 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     ///
     /// Живой с M2.2c-2c: `route_query_js` маршрутизирует через него value-returning
     /// UI→JS чтения (`take_dom_dirty`, `take_raf_pending`, `eval_js_value`).
+    ///
+    /// `#[track_caller]` (BUG-935 S23): та же атрибуция, что у [`Self::task`].
+    #[track_caller]
     pub fn query<R: Send + 'static>(
         &self,
         job: impl FnOnce(&mut S) -> R + Send + 'static,
     ) -> Option<R> {
+        let caller = std::panic::Location::caller();
         // Queue depth 1: ровно один ответ на одно задание.
         let (reply_tx, reply_rx) = mpsc::sync_channel::<R>(1);
         self.tx
-            .send(EngineMsg::Task(Box::new(move |state| {
-                // `send` вернёт `Err`, если вызывающий уже отказался ждать
-                // (таймаут) или отказался ждать раньше (queue depth 1, никогда
-                // не блокирует поток) — тогда роняем.
-                let _ = reply_tx.send(job(state));
-            })))
+            .send(EngineMsg::Task {
+                caller,
+                job: Box::new(move |state| {
+                    // `send` вернёт `Err`, если вызывающий уже отказался ждать
+                    // (таймаут) или отказался ждать раньше (queue depth 1, никогда
+                    // не блокирует поток) — тогда роняем.
+                    let _ = reply_tx.send(job(state));
+                }),
+            })
             .ok()?;
         // Ограниченное ожидание (BUG-935 S6): `Err` — и `Disconnected`
         // (sender дропнут при shutdown), и `Timeout` (задание застряло в
@@ -379,7 +405,7 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 let commit = job();
                 let _ = reply.send(commit);
             }
-            EngineMsg::Task(job) => {
+            EngineMsg::Task { caller, job } => {
                 // Task исполняется всегда и по порядку над персистентным состоянием
                 // (не коалесцируется). Ответ (если запрос) шлёт само замыкание.
                 //
@@ -389,15 +415,17 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 // `Task` на этом потоке проходит через одну и ту же точку, лог
                 // здесь ловит суммарную стоимость движкового `Task`, независимо от
                 // того, какой из вызывающих (`tick_timers`/`run_animation_frame`/
-                // `eval_js`/…) его поставил — следующий срез должен сопоставить эти
-                // строки по времени с `lock2_wait` из `compute_layout_incremental_restyle`
-                // (`relayout.rs`), чтобы подтвердить или опровергнуть S20's гипотезу
-                // «что-то на движковом потоке держит `Mutex<Document>` 0.3-0.6с окнами».
+                // `eval_js`/…) его поставил.
+                //
+                // BUG-935 S23: `caller` (`#[track_caller]`, захвачен в
+                // `EngineThread::task`/`query` при постановке) добавляет ИМЕННО
+                // этот call site в лог — S21/S22 могли видеть долгую строку, но не
+                // могли сказать, какой из вызывающих её поставил.
                 let log_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
                 job(state);
                 if let Some(t0) = log_t0 {
                     eprintln!(
-                        "[engine] task {:.2}ms (engine-thread Task, generic wrapper)",
+                        "[engine] task {:.2}ms (engine-thread Task, from {caller})",
                         t0.elapsed().as_secs_f32() * 1000.0
                     );
                 }
@@ -614,8 +642,9 @@ mod tests {
     }
 
     /// `Task`-сообщение, прибавляющее `delta` к состоянию `u64`. Тип коммита — `u64`.
+    #[track_caller]
     fn add_task(delta: u64) -> EngineMsg<u64, u64> {
-        EngineMsg::Task(Box::new(move |s: &mut u64| *s += delta))
+        EngineMsg::Task { caller: std::panic::Location::caller(), job: Box::new(move |s: &mut u64| *s += delta) }
     }
 
     #[test]
@@ -656,9 +685,10 @@ mod tests {
         let latest: CommitSlot<String> = Arc::new(Mutex::new(None));
         let mut applied = 0;
         let mut log = String::new();
-        let mk = |c: char| -> EngineMsg<String, String> {
-            EngineMsg::Task(Box::new(move |s: &mut String| s.push(c)))
-        };
+        #[track_caller]
+        fn mk(c: char) -> EngineMsg<String, String> {
+            EngineMsg::Task { caller: std::panic::Location::caller(), job: Box::new(move |s: &mut String| s.push(c)) }
+        }
         run_batch(vec![mk('a'), mk('b'), mk('c')], &mut applied, &latest, &mut log);
         assert_eq!(log, "abc");
     }
@@ -684,7 +714,10 @@ mod tests {
         let mut state: u64 = 0;
         let batch: Vec<EngineMsg<u64, u64>> = vec![
             EngineMsg::Run { generation: 1, job: Box::new(|| 1) },
-            EngineMsg::Task(Box::new(|s: &mut u64| *s += 7)),
+            EngineMsg::Task {
+                caller: std::panic::Location::caller(),
+                job: Box::new(|s: &mut u64| *s += 7),
+            },
             EngineMsg::Run { generation: 2, job: Box::new(|| 2) },
         ];
         run_batch(batch, &mut applied, &latest, &mut state);
