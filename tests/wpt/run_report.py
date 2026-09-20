@@ -631,7 +631,13 @@ def main() -> int:
 
     if args.check:
         verdict = expectations.classify(results, test_ids)
-        for kind, entries in (("REGRESSION", verdict["regressions"]), ("info", verdict["improvements"])):
+        # "note" — смена статуса, не влияющая на exit code (FAIL <-> NOTRUN и т.п.);
+        # счётчик «other deviation(s)» без списка не даёт проверить, что он нулевой не случайно.
+        for kind, entries in (
+            ("REGRESSION", verdict["regressions"]),
+            ("info", verdict["improvements"]),
+            ("note", verdict["other"]),
+        ):
             for e in entries:
                 where = f"{e['test']}" + (f" [{e['subtest']}]" if e["subtest"] else "")
                 print(
