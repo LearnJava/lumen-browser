@@ -5509,6 +5509,53 @@ mod tests {
         server.join().ok();
     }
 
+    /// BUG-935 regression: the opening handshake's HTTP exchange used to run
+    /// with no read timeout at all on the socket — unlike the request/response
+    /// path `fetch()` bounds since BUG-307 — so a server/proxy that accepted
+    /// the TCP/TLS connection but never sent the `101` response blocked
+    /// `read_exact` forever on the ordered `EngineThread` task. `connect`/
+    /// `connect_deflate` now bound the handshake with `FETCH_READ_TIMEOUT`
+    /// before dropping the stream back into its long-lived unbounded mode.
+    /// This drives the same read-timeout mechanism directly (a short timeout
+    /// instead of waiting out the real 60s bound) against a server that
+    /// accepts but never answers, proving the handshake read turns into a
+    /// bounded error rather than hanging.
+    #[test]
+    fn ws_handshake_read_times_out_against_a_stalled_server() {
+        use std::time::{Duration, Instant};
+
+        let listener = bind_ephemeral_listener();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            // Accept and hold the connection open without ever sending the
+            // 101 response — the stalled-handshake case from the bug report.
+            let (sock, _) = listener.accept().expect("accept");
+            thread::sleep(Duration::from_secs(2));
+            drop(sock);
+        });
+
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("tcp connect");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .expect("set_read_timeout");
+
+        let started = Instant::now();
+        crate::websocket::upgrade::perform(
+            &mut stream,
+            "127.0.0.1",
+            "/",
+            "dGhlIHNhbXBsZSBub25jZQ==",
+            &[],
+        )
+        .expect_err("stalled server must time out the handshake read, not hang forever");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "handshake blocked past its read timeout"
+        );
+
+        server.join().unwrap();
+    }
+
     /// BUG-307 regression: before this fix, `JsWebSocketSessionImpl`'s
     /// background recv thread held the `session` mutex inside a plain
     /// blocking `recv()` with no timeout, so `send_text()` (which needs the
