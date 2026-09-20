@@ -4965,16 +4965,35 @@ impl SseProvider for HttpClient {
 /// whenever a page called any WebSocket method while its socket was idle.
 const WS_RECV_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// One not-yet-written outgoing message, queued by `send_text`/`send_binary`
+/// (GAP-WSASYNC срез 2, BUG-869) so the JS thread never blocks on the socket.
+enum QueuedWsFrame {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
 /// Background-threaded WebSocket session for the JS runtime.
 ///
 /// Spawns a receive thread that pushes `JsWsEvent`s into a shared queue.
 /// JS calls `poll()` to drain the queue without blocking the script thread.
+///
+/// Sends go through the same asymmetry: `send_text`/`send_binary` only queue
+/// the frame and return, a background writer thread performs the actual
+/// blocking `write` (BUG-869 — a slow reader on the other end used to stall
+/// the write inside the JS thread, freezing the whole document for as long
+/// as the peer took to drain its TCP receive buffer).
 struct JsWebSocketSessionImpl {
-    /// For sending: shared so both this struct and (indirectly) the bg thread
-    /// can access the same underlying stream.
+    /// For sending: shared so this struct, the writer thread and (via
+    /// `close()`) the JS thread can all reach the same underlying stream.
     session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>>,
-    /// Buffered events produced by the background recv thread.
+    /// Buffered events produced by the background recv/writer threads.
     queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>>,
+    /// Outgoing messages not yet handed to `send_frame` by the writer thread.
+    send_queue: Arc<std::sync::Mutex<std::collections::VecDeque<QueuedWsFrame>>>,
+    /// `false` once the recv thread has observed Close/Error — tells the
+    /// writer thread it can stop polling `send_queue` once it drains empty,
+    /// instead of parking forever on a socket nothing will ever read again.
+    running: Arc<std::sync::atomic::AtomicBool>,
     /// Server-negotiated sub-protocol, cached at connect time — never changes
     /// afterwards, so `protocol()` doesn't need to contend with the recv
     /// thread's `session` lock at all (BUG-307).
@@ -4982,7 +5001,8 @@ struct JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketSessionImpl {
-    /// Create a new session, spawning a background thread to receive frames.
+    /// Create a new session, spawning background threads to receive frames
+    /// and to write queued outgoing ones.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn new(ws: websocket::WebSocket) -> Self {
         let protocol = ws.protocol().to_string();
@@ -4990,9 +5010,13 @@ impl JsWebSocketSessionImpl {
             Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         let session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>> =
             Arc::new(std::sync::Mutex::new(Box::new(ws)));
+        let send_queue: Arc<std::sync::Mutex<std::collections::VecDeque<QueuedWsFrame>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
         let q2 = Arc::clone(&queue);
         let s2 = Arc::clone(&session);
+        let running_recv = Arc::clone(&running);
 
         // The background thread polls recv_timeout() in a loop and pushes
         // events into the shared queue so JS can poll without blocking. Each
@@ -5035,6 +5059,7 @@ impl JsWebSocketSessionImpl {
                         q2.lock()
                             .unwrap()
                             .push_back(JsWsEvent::Close { code, reason });
+                        running_recv.store(false, std::sync::atomic::Ordering::Release);
                         break;
                     }
                     Ok(Some(
@@ -5047,25 +5072,81 @@ impl JsWebSocketSessionImpl {
                         q2.lock()
                             .unwrap()
                             .push_back(JsWsEvent::Error(e.to_string()));
+                        running_recv.store(false, std::sync::atomic::Ordering::Release);
                         break;
                     }
                 }
             }
         });
 
-        Self { session, queue, protocol }
+        let q3 = Arc::clone(&queue);
+        let s3 = Arc::clone(&session);
+        let sq2 = Arc::clone(&send_queue);
+        let running_send = Arc::clone(&running);
+
+        // Writer thread: drains `send_queue` in FIFO order, one message at a
+        // time, performing the actual blocking socket write off the JS
+        // thread. A `Flushed` event reports each message's application-data
+        // length back to JS so `bufferedAmount` can be decremented as data
+        // actually leaves — see `send_text`/`send_binary` below for the
+        // matching increment. Exits once the connection is no longer
+        // `running` and the queue has drained (nothing left to flush).
+        std::thread::spawn(move || {
+            loop {
+                let next = sq2.lock().unwrap().pop_front();
+                let Some(frame) = next else {
+                    if !running_send.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                };
+                let (result, bytes) = match frame {
+                    QueuedWsFrame::Text(text) => {
+                        let n = text.len() as u64;
+                        (s3.lock().unwrap().send_text(&text), n)
+                    }
+                    QueuedWsFrame::Binary(data) => {
+                        let n = data.len() as u64;
+                        (s3.lock().unwrap().send_binary(&data), n)
+                    }
+                };
+                match result {
+                    Ok(()) => {
+                        q3.lock().unwrap().push_back(JsWsEvent::Flushed { bytes });
+                    }
+                    Err(e) => {
+                        q3.lock()
+                            .unwrap()
+                            .push_back(JsWsEvent::Error(e.to_string()));
+                        running_send.store(false, std::sync::atomic::Ordering::Release);
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self { session, queue, send_queue, running, protocol }
     }
 }
 
 impl JsWebSocketSession for JsWebSocketSessionImpl {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_text(&self, text: &str) -> Result<()> {
-        self.session.lock().unwrap().send_text(text)
+        self.send_queue
+            .lock()
+            .unwrap()
+            .push_back(QueuedWsFrame::Text(text.to_string()));
+        Ok(())
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_binary(&self, data: &[u8]) -> Result<()> {
-        self.session.lock().unwrap().send_binary(data)
+        self.send_queue
+            .lock()
+            .unwrap()
+            .push_back(QueuedWsFrame::Binary(data.to_vec()));
+        Ok(())
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -5075,6 +5156,7 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn close(&self, code: u16, reason: &str) -> Result<()> {
+        self.running.store(false, std::sync::atomic::Ordering::Release);
         self.session.lock().unwrap().close(code, reason)
     }
 

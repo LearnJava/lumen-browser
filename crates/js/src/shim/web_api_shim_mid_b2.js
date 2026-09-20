@@ -1293,6 +1293,12 @@ function _lumen_ws_pump_one(ws) {
                 _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, true, { isTrusted: true }));
                 ws._handle = 0;
                 break;
+            } else if (ev.t === 'flushed') {
+                // GAP-WSASYNC срез 2 (BUG-869): a queued send() finished
+                // writing to the socket — take its bytes back out of
+                // bufferedAmount, mirroring the increment in send() below.
+                ws.bufferedAmount -= ev.bytes;
+                if (ws.bufferedAmount < 0) { ws.bufferedAmount = 0; }
             } else if (ev.t === 'error') {
                 // GAP-WSASYNC срез 1: connect() now resolves off-thread, so a
                 // `connect-src` refusal or an ordinary handshake failure both
@@ -1379,6 +1385,11 @@ WebSocket.prototype.send = function(data) {
     }
     var n = _lumen_ws_bytelen(data);
     if (this.readyState === 1) {
+        // GAP-WSASYNC срез 2 (BUG-869): the native call only queues the
+        // frame now — count it as buffered immediately, the 'flushed' poll
+        // event above subtracts it back out once the writer thread actually
+        // puts it on the wire.
+        this.bufferedAmount += n;
         if (typeof data === 'string') {
             _lumen_ws_send(this._handle, data);
         } else {

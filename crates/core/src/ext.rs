@@ -2800,6 +2800,15 @@ pub enum JsWsEvent {
     },
     /// Unrecoverable network or protocol error.
     Error(String),
+    /// A queued outgoing message finished writing to the socket (GAP-WSASYNC
+    /// срез 2, BUG-869) — `bytes` is the application-data length `send()`
+    /// added to `bufferedAmount` when it queued the message; the shim
+    /// subtracts it back out on delivery so `bufferedAmount` reflects only
+    /// what is still queued, not yet on the wire.
+    Flushed {
+        /// Application-data byte length of the message that just finished sending.
+        bytes: u64,
+    },
 }
 
 /// A live WebSocket connection from the JS runtime's perspective.
