@@ -47,6 +47,11 @@ pub(crate) fn render_bytes(
     // next to the document's `<meta>` policies. срез 41: one entry per header
     // occurrence, not joined — CSP3 §3.4 treats each as an independent policy.
     csp_header: &[String],
+    // GAP-CSPENF срез 59: `{group name -> endpoint URLs}` resolved from the
+    // response's `Report-To` header(s) — a CSP policy's `report-to <group>`
+    // directive resolves against this map. Same "raw fact about the
+    // response" status as `csp_header`; see `page_source::report_to_endpoints`.
+    report_to_endpoints: &std::collections::HashMap<String, Vec<String>>,
     // GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition resolved from the
     // response's `Document-Policy`/`Permissions-Policy` (+ `-Report-Only`)
     // headers — see `page_source::document_policy_sync_xhr_disposition`/
@@ -55,7 +60,7 @@ pub(crate) fn render_bytes(
     sync_xhr_document_policy: Option<lumen_core::ext::PolicyDisposition>,
     sync_xhr_permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false, csp_header, sync_xhr_document_policy, sync_xhr_permissions_policy)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -724,6 +729,9 @@ pub(crate) fn parse_and_layout(
     // which only ever receive a `&Document`, can combine them with the
     // document's `<meta>` policies. срез 41: one entry per header occurrence.
     csp_header: &[String],
+    // GAP-CSPENF срез 59: see `render_bytes`'s doc comment on this parameter —
+    // stamped onto the document right next to `csp_header`.
+    report_to_endpoints: &std::collections::HashMap<String, Vec<String>>,
     // GAP-POLICYREPORT (BUG-953): see `render_bytes`'s doc comment on these
     // same two parameters — passed straight through to the `HttpClient` built
     // below, no per-document merge needed.
@@ -765,6 +773,10 @@ pub(crate) fn parse_and_layout(
     // same way `character_set`/`content_type` above do, because CSP is
     // enforced from several places that hold nothing but a `&Document`.
     doc.set_csp_header(csp_header.to_vec());
+    // GAP-CSPENF срез 59: same point, same reasoning as `csp_header` above —
+    // a `report-to <group>` directive resolves against this map from
+    // whichever call site fires `securitypolicyviolation`.
+    doc.set_report_to_endpoints(report_to_endpoints.clone());
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
