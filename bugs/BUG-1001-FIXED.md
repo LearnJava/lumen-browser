@@ -1,6 +1,6 @@
 # BUG-1001 — `lumen-layout`'s debug_assert-only инварианты мертвы под `--profile dev-release -D warnings` (мандатный гейт НЕ задет)
 
-**Статус:** OPEN
+**Статус:** FIXED (задним числом, дрейф трекера — см. «Ревизия 2026-09-21»)
 **Заведён:** 2026-09-05 (P1, побочная находка при подготовке гейта для FONTLOAD-6)
 **Область:** `crates/engine/layout/src/invariants.rs` (`check_geometry`, `check_finite`, `check_containment` — DEVX-8a)
 **Владелец:** не назначен (задевает любую сессию, чей крейт зависит от `lumen-layout`, только если она добавляет `--profile dev-release` к гейту)
@@ -83,3 +83,24 @@ debug_assert-only» по собственному сообщению комми�
 cargo clippy -p lumen-layout --all-targets --profile dev-release -- -D warnings
 ```
 на `.claude/worktrees/p1-work` (база — `origin/main` `07e54a7fd`), 2026-09-05.
+
+## Ревизия 2026-09-21 (P3) — уже исправлено, взято по STATUS-P3.md, дрейф трекера
+
+Заявка не воспроизводится на текущем `main`. `invariants.rs` уже несёт
+`#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]` на всех трёх
+функциях (`check_geometry`/`check_finite`/`check_containment`) — ровно первый
+шаг починки, предложенный выше. Проверено репро-командой из заявки:
+
+```
+cargo clippy -p lumen-layout --all-targets --profile dev-release -- -D warnings
+```
+
+Гейт зелёный (`Finished dev-release profile [optimized] target(s)`, без единого
+предупреждения).
+
+Причина — исправлено не этой заявкой, а [BUG-1053](BUG-1053-FIXED.md) (FIXED
+2026-09-13, P1), который поймал тот же класс дефекта (тот же `cfg_attr`-паттерн)
+для восьми функций сразу в `lumen-layout` и `lumen-paint` под мандатным
+`cargo clippy --workspace --all-targets --profile dev-release -- -D warnings`.
+BUG-1001 — более ранняя, узкая (layout-only) находка того же симптома, не
+закрытая как дубликат в момент фикса BUG-1053. Трекер не обновлялся с тех пор.
