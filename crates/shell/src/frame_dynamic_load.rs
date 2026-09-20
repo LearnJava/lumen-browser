@@ -127,6 +127,7 @@ pub(crate) fn run_new_frame_load(
         top_doc,
         env,
         prep.parent_js.as_ref(),
+        None,
     )
 }
 

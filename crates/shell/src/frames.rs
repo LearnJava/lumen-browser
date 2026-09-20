@@ -133,11 +133,19 @@ fn maybe_upgrade_frame_src(
 /// напечатан внутри; вызывающая сторона показывает причину в самом фрейме —
 /// FRAME-4 срез 2, до него `spawn_frame` на этой ошибке просто не заводил
 /// хэндл, и фрейм молча оставался прежним документом либо серой заглушкой).
+///
+/// `send_uir_header` — GAP-CSPENF срез 55: `Upgrade-Insecure-Requests: 1` на
+/// сетевом запросе, когда родитель фрейма объявил
+/// `upgrade-insecure-requests` — `frames.rs`'s собственный аналог
+/// `csp_enforce::navigation_wants_uir_header`, вычисленный вызывающей
+/// стороной один раз из уже читаемого `csp_gate` (тот же порядок, что срез 52
+/// уже даёт апгрейду схемы через `maybe_upgrade_frame_src`).
 pub(crate) fn fetch_iframe_source(
     src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    send_uir_header: bool,
 ) -> Result<FrameSource, FetchError> {
     if src.trim().is_empty() {
         return Ok(FrameSource::Inline(String::new()));
@@ -187,7 +195,6 @@ pub(crate) fn fetch_iframe_source(
         }
         ResolvedResource::Url(url) => {
             use lumen_core::url::Url as _Url;
-            use lumen_network::RequestDestination;
             let sub_url = match _Url::parse(&url) {
                 Ok(u) => u,
                 Err(e) => {
@@ -197,7 +204,7 @@ pub(crate) fn fetch_iframe_source(
                 }
             };
             let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar);
-            match client.fetch_subresource(&sub_url, RequestDestination::Document) {
+            match client.fetch_subresource_document(&sub_url, send_uir_header) {
                 Ok(bytes) => Ok(FrameSource::Url {
                     html: String::from_utf8_lossy(&bytes).into_owned(),
                     url,
@@ -1853,7 +1860,7 @@ pub(crate) fn load_frame_sub_documents(
         if info.loading_lazy {
             continue;
         }
-        handles.extend(spawn_frame(&info, None, parent, depth, base, top_doc, env, parent_js));
+        handles.extend(spawn_frame(&info, None, parent, depth, base, top_doc, env, parent_js, None));
     }
     handles
 }
@@ -1869,6 +1876,18 @@ pub(crate) fn load_frame_sub_documents(
 /// (ссылку резолвит документ, в котором по ней кликнули), а не относительно
 /// документа-хозяина, и где `srcdoc` уже ни при чём: элемент показывает
 /// результат навигации, а не свою разметку.
+///
+/// `uir_override` — GAP-CSPENF срез 55: `None` — UIR-заголовок решает
+/// `csp_gate` ХОЗЯИНА (`parent`, вычислен ниже), корректно для инициации
+/// СВЕРХУ (первичная вставка, `<a target=имя_фрейма>`/переприсваивание
+/// `.src` документом, который и есть хозяин целевого `<iframe>`) —
+/// `maybe_upgrade_frame_src` уже опирается на тот же `csp_gate` для того же
+/// множества путей. `Some(flag)` — вызывающая сторона уже прочитала политику
+/// НАСТОЯЩЕГО инициатора и он не совпадает с хозяином: единственный
+/// сегодняшний случай — ссылка ВНУТРИ самого фрейма (`frame_links.rs`),
+/// решает `navigate-to` РЕБЁНКА, а не хозяина цели, той же причиной, что
+/// срез 53 уже разводит источники для апгрейда схемы
+/// (`resolve_and_upgrade_frame_href`).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[allow(clippy::unwrap_used)] // короткий лок дерева; poisoned mutex = паника потока загрузки, docs/lint-policy.md §10
 pub(crate) fn spawn_frame(
@@ -1880,6 +1899,7 @@ pub(crate) fn spawn_frame(
     top_doc: &Arc<Mutex<Document>>,
     env: &FrameLoadEnv,
     parent_js: Option<&Arc<dyn PersistentJs>>,
+    uir_override: Option<bool>,
 ) -> Vec<FrameHandle> {
     // URL родителя и верха для фасадов location/URL у предков (срез 3).
     let parent_url = base_url_string(base);
@@ -1942,6 +1962,12 @@ pub(crate) fn spawn_frame(
         crate::csp_enforce::document_csp_policy(&doc, root)
     };
     let self_origin = base.origin();
+    // GAP-CSPENF срез 55: `uir_override` побеждает, когда вызывающая сторона
+    // уже прочитала политику настоящего инициатора (см. doc-comment функции);
+    // иначе — тот же `csp_gate` выше, которым уже пользуется
+    // `maybe_upgrade_frame_src`.
+    let send_uir_header = uir_override
+        .unwrap_or_else(|| crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref()));
     let frame_src_check = |src: &str, resolve_base: &ResourceBase| -> Option<FetchError> {
         let lowered = src.trim_start().to_ascii_lowercase();
         if lowered.is_empty() || lowered.starts_with("about:") {
@@ -1986,7 +2012,9 @@ pub(crate) fn spawn_frame(
                 Some(
                     frame_src_check(&href, nav_base)
                         .map(Err)
-                        .unwrap_or_else(|| fetch_iframe_source(&href, nav_base, sink, cookie_jar.clone())),
+                        .unwrap_or_else(|| {
+                            fetch_iframe_source(&href, nav_base, sink, cookie_jar.clone(), send_uir_header)
+                        }),
                 )
             }
             None if info.srcdoc.is_some() => None,
@@ -1994,7 +2022,7 @@ pub(crate) fn spawn_frame(
                 let src = maybe_upgrade_frame_src(csp_gate.as_ref(), src, base);
                 frame_src_check(&src, base)
                     .map(Err)
-                    .unwrap_or_else(|| fetch_iframe_source(&src, base, sink, cookie_jar.clone()))
+                    .unwrap_or_else(|| fetch_iframe_source(&src, base, sink, cookie_jar.clone(), send_uir_header))
             }),
         },
     };
@@ -2486,12 +2514,16 @@ pub(crate) fn clear_frame_nav_requests(requests: &mut Vec<FrameNavRequest>) {
 /// ней кликнули ([`FrameHandle::base`] этого документа). Это не всегда база
 /// целевого фрейма: `target=_parent` меняет чужой под-документ, а адрес всё
 /// равно написан кликнувшим.
+///
+/// `uir_override` — GAP-CSPENF срез 55, прямиком в [`spawn_frame`]'s
+/// одноимённый параметр: см. его doc-comment.
 pub(crate) fn run_frame_navigation(
     prep: &FrameNavPrep,
     href: &str,
     nav_base: &ResourceBase,
     page_doc: &Arc<Mutex<Document>>,
     env: &FrameLoadEnv,
+    uir_override: Option<bool>,
 ) -> Vec<FrameHandle> {
     spawn_frame(
         &prep.info,
@@ -2502,6 +2534,7 @@ pub(crate) fn run_frame_navigation(
         page_doc,
         env,
         prep.parent_js.as_ref(),
+        uir_override,
     )
 }
 

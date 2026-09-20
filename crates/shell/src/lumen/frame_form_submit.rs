@@ -208,7 +208,7 @@ impl Lumen {
                     eprintln!("iframe: action '{get_url}' внутри фрейма не навигабелен — пропуск");
                     return;
                 }
-                self.navigate_frame_to(target_idx, get_url, nav_base);
+                self.navigate_frame_to(target_idx, get_url, nav_base, None);
             }
         }
     }

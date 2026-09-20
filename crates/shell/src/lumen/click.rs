@@ -946,7 +946,7 @@ impl Lumen {
                             });
                         }
                         if let Some(nav_base) = self.frame_env.as_ref().map(|e| e.page_base.clone()) {
-                            self.navigate_frame_to(idx, &href, &nav_base);
+                            self.navigate_frame_to(idx, &href, &nav_base, None);
                         }
                     } else if !t.is_empty()
                         && !t.eq_ignore_ascii_case("_self")

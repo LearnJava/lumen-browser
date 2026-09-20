@@ -103,7 +103,7 @@ impl Lumen {
             self.pending_frame_load_dispatch.push(PendingFrameLoad { prep, is_top });
         }
         for (idx, new_src) in delta.changed {
-            self.navigate_frame_to(idx, &new_src, base);
+            self.navigate_frame_to(idx, &new_src, base, None);
         }
     }
 

@@ -3143,3 +3143,75 @@ frame), «upgrade insecure navigations set» как постоянное сос�
 объявлением и навигацией, что вне сферы этого среза). Остаток общего
 списка дорожки не изменился: `report-to`, `manifest-src`, честная
 per-policy `originalPolicy`.
+
+## Срез 55 (2026-09-20, `p6-gap-cspenf-srez55`) — заголовок `Upgrade-Insecure-Requests: 1` на навигации `<iframe>`
+
+Закрывает хвост, названный срезом 54: `<iframe>`/`<frame>`-навигация — сеть,
+идущая мимо `HttpClient::fetch_page`, до этого среза никогда не несла
+заголовок независимо от того, объявляла ли инициирующая политика
+`upgrade-insecure-requests`.
+
+- **`lumen-network::HttpClient::fetch_subresource_document`** (новый
+  публичный метод) — `RequestDestination::Document` фикс + опциональный
+  `send_uir_header: bool`, тем же приёмом среза 54 (слот
+  `extra_request_headers` внутри `fetch_subresource_inner`, которая получила
+  третий параметр `send_uir_header`). Существующие `fetch_subresource`/
+  `fetch_subresource_with_content_type` не тронуты по контракту (зовут
+  `fetch_subresource_inner` с `false`) — у них нет CSP-контекста, и раздувать
+  их сигнатуру ради единственного вызывающего (`frames.rs`) было бы чужой
+  болью для образов/скриптов/стилей/шрифтов.
+- **`frames::fetch_iframe_source`** получил параметр `send_uir_header: bool`,
+  доходящий до `fetch_subresource_document`. **`frames::spawn_frame`**
+  получил параметр `uir_override: Option<bool>`: `None` — решает `csp_gate`
+  ХОЗЯИНА целевого `<iframe>` (тот же `csp_gate`, что уже читает
+  `maybe_upgrade_frame_src` срез 52) — корректно для первичной вставки,
+  `<a target=имя_фрейма>` со страницы (`click.rs`) и переприсваивания `.src`
+  скриптом (`frame_dynamic.rs`): во всех трёх хозяин цели и есть инициатор.
+  `Some(flag)` — вызывающая сторона уже прочитала политику НАСТОЯЩЕГО
+  инициатора, который с хозяином цели не совпадает: единственный сегодняшний
+  случай — ссылка/форма ВНУТРИ самого фрейма (`frame_links.rs`), где `navigate-to`
+  решает РЕБЁНОК, а не хозяин цели, той же причиной, что срез 53 уже разводит
+  источники для апгрейда схемы (`resolve_and_upgrade_frame_href`).
+  `run_frame_navigation`/`replace_frame_document`/`navigate_frame_to`
+  прокидывают этот `Option<bool>` без интерпретации; `traverse_frame` (шаг
+  истории) передаёт `None` — документ уже показывался раньше, повторная CSP-политика
+  инициатора неприменима.
+- **`frame_links.rs`** — все четыре точки навигации, которыми уже управляет
+  `csp_gate` РЕБЁНКА (`navigate_frame_from_link` → `Some(uir)`;
+  `navigate_page_from_frame`, обе ветки `NewWindow` — существующая вкладка и
+  новая) получили `.with_uir_header(navigation_wants_uir_header(csp_gate))`/
+  `Some(uir)` тем же способом, что срез 54 уже даёт top-level `<a>`/форме/
+  `window.open()`.
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen --
+csp frame navigate form click` — 370 passed. `cargo test -p lumen-network
+--profile dev-release --tests -- fetch_subresource` — 9 passed. `cargo
+clippy -p lumen-network -p lumen-shell --all-targets --features v8 -- -D
+warnings` — чисто. `scripts/scoped-test.sh` — один красный тест,
+`lumen-driver::snapshot_cpu::cpu_snapshots_match_references`, тот же
+7-файловый класс дрейфа, что и известный несвязанный
+[BUG-1008](BUG-1008-OPEN.md) (`text-rendering`/`canvas-2d`/`list-markers`/
+`forms`/`multiple-backgrounds`/`scrollbar-rendering`/`final`) — не
+регрессия этого среза.
+
+Живым пробой этот срез не проверен (нет готовой автоматизации клика по
+ссылке внутри `<iframe>`/загрузки самого `<iframe>` под рукой в этой
+сессии) — корректность опирается на: 1) идентичность приёма с уже живьём
+подтверждённым срезом 54 (`send_uir_header`/`extra_request_headers` — тот же
+код, только третий вызывающий); 2) полный зелёный прогон `csp`/`frame`/
+`navigate`/`form`/`click` наборов; 3) существующие юнит-тесты на
+`navigation_wants_uir_header`/`resolve_and_upgrade_frame_href`, которые эта
+проводка переиспользует без изменений их собственной логики.
+
+Попутно найден и заведён отдельным дефектом (не в скоупе этого среза):
+[BUG-1067](BUG-1067-OPEN.md) — form GET-отправка ИЗ `<iframe>` с
+`target="_top"`/`_parent` (`frame_form_submit.rs::frame_submit_navigate`,
+ветка `LinkTarget::Page`) резолвит `action` без апгрейда схемы и без UIR-
+заголовка вовсе, в отличие от соседней ветки `LinkTarget::Frame` той же
+функции (она идёт через `spawn_frame` и оба получает автоматически).
+
+Не покрыто: BUG-1067 (см. выше). «upgrade insecure navigations set» как
+постоянное состояние браузингового контекста — тот же принятый компромисс,
+что и у срезов 50-54 (заголовок решается заново на каждый вызов из уже
+читаемой в момент навигации политики). Остаток общего списка дорожки не
+изменился: `report-to`, `manifest-src`, честная per-policy `originalPolicy`.
