@@ -478,8 +478,34 @@ impl Lumen {
     /// multi-second stalls. Reverted again — do not re-attempt this swap
     /// without first decoupling that JS-push from the synchronous layout apply
     /// (see the bug file's S15 section, "Не сделано / следующий срез").
+    ///
+    /// BUG-935 S18 re-tried the swap under the S17 fix: `apply_ms` stayed low
+    /// (150-850ms) as expected, yet the census still stalled — the last
+    /// logged tick showed a `[frame]` `js`-step of ~7.0s while
+    /// `try_relayout_raf_incremental`'s own internal timers (`apply_ms` +
+    /// profiled layout stages) summed to only ~1.07s, an almost-order-of-
+    /// magnitude gap with no timer covering it. S18 could not tell whether
+    /// that gap sits *inside* the function (an uninstrumented section its own
+    /// `incr_ms` should already include, which would mean the two log lines
+    /// were matched to the wrong tick) or *outside* it (something in this
+    /// caller). The timer below wraps the exact call site and logs right next
+    /// to it, so a future swap experiment can compare this number against the
+    /// function's own `incr_ms` from a single well-defined tick instead of
+    /// pattern-matching two independently-timed `eprintln!` lines after the
+    /// fact.
     pub(crate) fn relayout_raf_dirty(&mut self) {
-        if !self.submit_relayout_job() && !self.try_relayout_raf_incremental() {
+        if self.submit_relayout_job() {
+            return;
+        }
+        let outer_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+        let handled = self.try_relayout_raf_incremental();
+        if let Some(t0) = outer_t0 {
+            eprintln!(
+                "[engine] relayout_raf_dirty outer_ms={:.2} (try_relayout_raf_incremental call, handled={handled})",
+                t0.elapsed().as_secs_f32() * 1000.0,
+            );
+        }
+        if !handled {
             self.relayout();
         }
     }
@@ -695,8 +721,22 @@ impl Lumen {
     /// fix) and reverted it both times — see [`Self::relayout_raf_dirty`]'s doc
     /// comment for the confirmed-regression finding, which applies identically
     /// here.
+    ///
+    /// BUG-935 S19: same outer timer as [`Self::relayout_raf_dirty`], wrapping
+    /// the same call site here — see that function's doc comment for why.
     pub(crate) fn relayout_raf_dirty_readback(&mut self) {
-        if !self.readback_relayout_job() && !self.try_relayout_raf_incremental() {
+        if self.readback_relayout_job() {
+            return;
+        }
+        let outer_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+        let handled = self.try_relayout_raf_incremental();
+        if let Some(t0) = outer_t0 {
+            eprintln!(
+                "[engine] relayout_raf_dirty_readback outer_ms={:.2} (try_relayout_raf_incremental call, handled={handled})",
+                t0.elapsed().as_secs_f32() * 1000.0,
+            );
+        }
+        if !handled {
             self.relayout();
         }
     }
