@@ -276,6 +276,24 @@ pub fn base64url_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// BUG-935 срез 22: то же условие, что `lumen_paint::frame_log_enabled`
+/// (`LUMEN_FRAME_LOG>=1`), но без зависимости от `lumen-paint` — `lumen-network`
+/// лежит ниже `lumen-paint` по слоям (`docs/plan/architecture.md` §1), заводить
+/// обратную зависимость ради одного диагностического флага нельзя. Используется
+/// для проверки гипотезы среза 21: доминируют ли длинные engine-thread `Task`
+/// (до 233.9с) последовательными DoH-запросами `resolve()` (AAAA, потом A, без
+/// общего таймаута на сумму).
+fn frame_log_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LUMEN_FRAME_LOG")
+            .ok()
+            .and_then(|v| v.parse::<u8>().ok())
+            .unwrap_or(0)
+            >= 1
+    })
+}
+
 // ── DohResolver ──────────────────────────────────────────────────────────────
 
 /// DNS-over-HTTPS резолвер.
@@ -314,13 +332,28 @@ impl DohResolver {
     /// Отправить один DoH-запрос и распарсить ответ. Возвращает list
     /// IP-адресов или Err при wire / HTTP / RCODE-ошибке.
     fn query(&self, hostname: &str, qtype: u16) -> Result<Vec<IpAddr>> {
-        // Wire query → base64url → URL.
-        let wire = encode_query(0, hostname, qtype)?;
-        let encoded = base64url_encode(&wire);
-        let url = self.build_query_url(&encoded)?;
-        // GET — transport.fetch проверяет статус 2xx и возвращает body.
-        let body = self.transport.fetch(&url)?;
-        decode_answer_ips(&body)
+        // BUG-935 срез 22: таймер снаружи `transport.fetch` — единственный
+        // сетевой вызов этого метода, уже ограниченный `CONNECT_TIMEOUT`/
+        // `FETCH_READ_TIMEOUT` (S4/S9) по отдельности, но не по сумме двух
+        // подряд идущих запросов `resolve()`.
+        let log_t0 = frame_log_enabled().then(std::time::Instant::now);
+        let result = (|| -> Result<Vec<IpAddr>> {
+            // Wire query → base64url → URL.
+            let wire = encode_query(0, hostname, qtype)?;
+            let encoded = base64url_encode(&wire);
+            let url = self.build_query_url(&encoded)?;
+            // GET — transport.fetch проверяет статус 2xx и возвращает body.
+            let body = self.transport.fetch(&url)?;
+            decode_answer_ips(&body)
+        })();
+        if let Some(t0) = log_t0 {
+            eprintln!(
+                "[doh] query {hostname} qtype={qtype} {:.2}ms ok={} (BUG-935 S22)",
+                t0.elapsed().as_secs_f32() * 1000.0,
+                result.is_ok(),
+            );
+        }
+        result
     }
 
     /// Построить URL с query-параметром `dns=...`. Если у endpoint-а
@@ -359,6 +392,13 @@ impl DnsResolver for DohResolver {
         // если он доступен), потом A. Если AAAA дал Err — продолжаем
         // на A; если A тоже Err — поднимаем последнюю ошибку. Если оба
         // вернули пусто — Err про NODATA (caller ждёт хотя бы один адрес).
+        //
+        // BUG-935 срез 22: таймер вокруг ОБОИХ последовательных `query()` —
+        // проверка гипотезы среза 21 «engine-thread `Task`-замыкание виснет
+        // на несколько десятков-сотен секунд, потому что `resolve()` платит
+        // сумму двух независимо ограниченных таймаутов, а не общий бюджет».
+        let log_t0 = frame_log_enabled().then(std::time::Instant::now);
+
         let mut addrs = Vec::new();
         let mut last_err: Option<Error> = None;
 
@@ -381,6 +421,13 @@ impl DnsResolver for DohResolver {
                     last_err = Some(e);
                 }
             }
+        }
+
+        if let Some(t0) = log_t0 {
+            eprintln!(
+                "[doh] resolve {hostname} total {:.2}ms (AAAA+A, BUG-935 S22)",
+                t0.elapsed().as_secs_f32() * 1000.0,
+            );
         }
 
         // Sinkhole-ответ блокировщика (`0.0.0.0`/`::`) — не адрес для
