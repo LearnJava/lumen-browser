@@ -93,6 +93,15 @@
         /// `webtransport_close_session` call received, if any — same purpose
         /// as `last_write`.
         last_close_session: std::sync::Mutex<Option<(i32, u32, String)>>,
+        /// GAP-WEBTRANSPORT, remaining sub-slice of срез 5: same queued-answer
+        /// shape as `poll_incoming_uni_results`, for `webtransport_poll_closed`.
+        /// Empty defaults to `Ok(WebTransportSessionState::Open)` so a test
+        /// that never touches peer-close detection still terminates
+        /// `pollSessionClosedByPeer`'s loop (via a subsequent local `close()`)
+        /// instead of spinning forever on "still open".
+        poll_closed_results: std::sync::Mutex<
+            std::collections::VecDeque<lumen_core::error::Result<lumen_core::ext::WebTransportSessionState>>,
+        >,
     }
     impl lumen_core::ext::JsFetchProvider for StubFetch {
         fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
@@ -214,6 +223,15 @@
                 Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
             }
         }
+        fn webtransport_poll_closed(
+            &self,
+            _handle: i32,
+        ) -> lumen_core::error::Result<lumen_core::ext::WebTransportSessionState> {
+            match self.poll_closed_results.lock().unwrap().pop_front() {
+                Some(r) => r,
+                None => Ok(lumen_core::ext::WebTransportSessionState::Open),
+            }
+        }
     }
 
     /// Unlike [`rt_with_webtransport`], does not call `install_webtransport_v8`
@@ -267,6 +285,7 @@
             poll_incoming_datagrams_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             close_session_result: Ok(()),
             last_close_session: std::sync::Mutex::new(None),
+            poll_closed_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -655,6 +674,7 @@
             poll_incoming_datagrams_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             close_session_result: Ok(()),
             last_close_session: std::sync::Mutex::new(None),
+            poll_closed_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1070,6 +1090,7 @@
             poll_incoming_datagrams_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             close_session_result: Ok(()),
             last_close_session: std::sync::Mutex::new(None),
+            poll_closed_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1436,4 +1457,122 @@
         .unwrap();
         rt.eval("_lumen_tick_timers()").unwrap();
         check(&rt, "_wtClosedRejected");
+    }
+
+    /// GAP-WEBTRANSPORT, remaining sub-slice of срез 5: direct native-call
+    /// coverage for `_lumen_webtransport_poll_closed`, same "no provider →
+    /// unsupported" shape as `native_close_session_reports_unsupported_with_no_provider`.
+    #[test]
+    fn native_poll_closed_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_poll_closed(0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: once `webtransport_poll_closed` reports `closedByPeer`,
+    /// `pollSessionClosedByPeer` fulfills `closed` with that same
+    /// `closeCode`/`reason` — a peer-initiated close settles `closed` the
+    /// same way a locally initiated one does (spec §5.4), the difference
+    /// being which side supplied the `close_code`/`reason`.
+    #[test]
+    fn peer_close_fulfills_closed_with_the_peers_close_info() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        stub.poll_closed_results.lock().unwrap().push_back(Ok(
+            lumen_core::ext::WebTransportSessionState::ClosedByPeer {
+                close_code: 99,
+                reason: "server done".to_string(),
+            },
+        ));
+        rt.eval(
+            "globalThis._wtCloseInfo = null; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.closed.then(function(info) { \
+                globalThis._wtCloseInfo = info; \
+            });",
+        )
+        .unwrap();
+        for _ in 0..3 {
+            rt.eval("_lumen_tick_timers()").unwrap();
+        }
+        check(
+            &rt,
+            "_wtCloseInfo !== null && _wtCloseInfo.closeCode === 99 && _wtCloseInfo.reason === 'server done'",
+        );
+    }
+
+    /// End-to-end: once `webtransport_poll_closed` reports `connectionLost`,
+    /// `pollSessionClosedByPeer` rejects `closed` with a `WebTransportError` —
+    /// a fatal connection error the client did not initiate has no
+    /// `close_code`/`reason` to report, unlike a local or peer-initiated
+    /// close (spec §5.4).
+    #[test]
+    fn connection_lost_rejects_closed_with_a_webtransport_error() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        stub.poll_closed_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(lumen_core::ext::WebTransportSessionState::ConnectionLost));
+        rt.eval(
+            "globalThis._wtClosedRejected = false; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.closed.catch(function(e) { \
+                globalThis._wtClosedRejected = e instanceof WebTransportError; \
+            });",
+        )
+        .unwrap();
+        for _ in 0..3 {
+            rt.eval("_lumen_tick_timers()").unwrap();
+        }
+        check(&rt, "_wtClosedRejected");
+    }
+
+    /// A local `close()` racing the peer-close poll loop wins: the loop's
+    /// `session._closed` guard stops it from ever calling
+    /// `_lumen_webtransport_poll_closed` again once `close()` ran, so
+    /// `closed` settles with the caller's own `closeInfo`, not whatever the
+    /// (never-checked) queued peer-close answer would have said.
+    #[test]
+    fn local_close_wins_the_race_against_the_peer_close_poll_loop() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        stub.poll_closed_results.lock().unwrap().push_back(Ok(
+            lumen_core::ext::WebTransportSessionState::ClosedByPeer {
+                close_code: 1,
+                reason: "should never be observed".to_string(),
+            },
+        ));
+        rt.eval(
+            "globalThis._wtCloseInfo = null; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { \
+                globalThis._wt.close({ closeCode: 7, reason: 'local' }); \
+            }); \
+            globalThis._wt.closed.then(function(info) { \
+                globalThis._wtCloseInfo = info; \
+            });",
+        )
+        .unwrap();
+        for _ in 0..3 {
+            rt.eval("_lumen_tick_timers()").unwrap();
+        }
+        check(
+            &rt,
+            "_wtCloseInfo !== null && _wtCloseInfo.closeCode === 7 && _wtCloseInfo.reason === 'local'",
+        );
     }

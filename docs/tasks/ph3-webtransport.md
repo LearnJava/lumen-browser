@@ -382,10 +382,42 @@ lumen-js --all-targets --features lumen-js/v8-backend -D warnings` и
 `utf8ByteLength` вместо `TextEncoder`). Подробности — ROADMAP.md
 `P3-webtransport`, ревизия «срез 5».
 
-Остаток (следующий под-срез без номера): обнаружение
-`CLOSE_WEBTRANSPORT_SESSION`, присланной **пиром**, и абрупт-потери
-соединения — `closed` сейчас settles только от собственного `close()` или
-провала `ready`, реакции на закрытие сессии со стороны сервера ещё нет.
+### Срез 5, под-срез без номера — done (2026-09-20, P1) — обнаружение
+### закрытия со стороны пира
+`closed` теперь settles и на **пир**-инициированное закрытие, и на обрыв
+соединения. `h3::capsule::decode_close_webtransport_session` — приёмный
+парный к `encode_close_webtransport_session`, тот же
+accumulate-across-polls приём, что и `parse_webtransport_uni_header`.
+`HttpClient::webtransport_poll_closed` (`lib.rs`) читает байты с той же
+Extended CONNECT stream сессии через уже существующий
+`h3_webtransport_read_stream_on_driver` (сессионный stream ничем не
+отличается от любого другого на транспортном уровне — только на уровне
+накопления/декодирования капсулы), копит их в новом
+`WebTransportSession::pending_close_capsule` и, распознав капсулу, снимает
+сессию из `webtransport_sessions` и возвращает
+`WebTransportSessionState::ClosedByPeer{close_code, reason}`; любая ошибка
+при поллинге (сокет/QUIC) — снимает сессию и возвращает `ConnectionLost`
+(нет частичного состояния на обрыв связи, всё сворачивается в один
+вариант). Новый нативный биндинг `_lumen_webtransport_poll_closed(handle)`
+(JSON `{"ok":true,"state":"open"|"closedByPeer"|"connectionLost", …}` /
+`{"ok":false,"message":…}`). Шим: `pollSessionClosedByPeer` — тот же
+`setTimeout(0)`-цикл, что у остальных discovery-луп, запускается один раз
+из конструктора сразу после того, как `ready` резолвится, но **первый
+`attempt()` отложен на один `setTimeout(0)`**, а не вызван синхронно — иначе
+пир-ответ мог бы обогнать `ready.then()`-реакцию, вызывающую `close()` в тот
+же тик, хотя оба события произошли «одновременно»; отложенный старт даёт
+такой реакции шанс отработать первой (её микрозадача сбрасывается раньше
+следующего макротаска), так что локальный `close()` всегда выигрывает гонку
+в один тик. 6 новых тестов `h3::capsule` (кодирование не менялось, декодер
+получил все 4), 4 новых теста `lumen-js --features v8-backend` (unsupported
+без провайдера, пир закрыл сессию → `closed` fulfills тем же
+`{closeCode,reason}`, обрыв связи → `closed` rejects `WebTransportError`,
+локальный `close()` выигрывает гонку с пир-опросом). 2363 тестов
+`lumen-network`, 3972+4 (57 всего в `webtransport`-модуле) тестов `lumen-js
+--features v8-backend`. `cargo clippy -p lumen-core -p lumen-network -p
+lumen-js --all-targets --features lumen-js/v8-backend -D warnings` и `cargo
+check --workspace` зелёные. `P3-webtransport` полностью `done` — Definition
+of done ниже закрыт целиком.
 
 ## Tests
 - Юнит (`lumen-js`): наличие классов, `new WebTransport('https://…')` не бросает синхронно,
@@ -409,5 +441,5 @@ lumen-js --all-targets --features lumen-js/v8-backend -D warnings` и
 - [x] Incoming unidirectional streams — обнаружение + header-парсинг + `incomingUnidirectionalStreams` (срез 4d, 2026-09-20).
 - [x] Incoming bidirectional streams — та же машинерия обнаружения + регистрация send-half под id, который выбрал пир (срез 4e, 2026-09-20).
 - [x] Datagrams — приём и отправка через RFC 9297 §2.1 quarter stream id, `datagrams.readable`/`.writable` живые (срез datagrams-b, 2026-09-20).
-- [x] Lifecycle — `close(closeInfo)`/`closed` для локально инициированного закрытия (срез 5, 2026-09-20). Обнаружение закрытия со стороны пира — открытый под-срез.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready`/uni+bidi write+read/incoming uni+bidi/datagrams/local `close()` живые; обнаружение закрытия пиром — открытый остаток).
+- [x] Lifecycle — `close(closeInfo)`/`closed` для локально инициированного закрытия (срез 5, 2026-09-20), и `closed` для закрытия со стороны пира/обрыва соединения (срез 5, под-срез без номера, 2026-09-20).
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready`/uni+bidi write+read/incoming uni+bidi/datagrams/lifecycle — local + peer close/connection-lost — все живые).

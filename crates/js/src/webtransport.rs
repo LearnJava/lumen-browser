@@ -47,6 +47,7 @@ pub(crate) fn install_webtransport_v8(
     let send_datagram_fetch_provider = fetch_provider.clone();
     let poll_incoming_datagrams_fetch_provider = fetch_provider.clone();
     let close_session_fetch_provider = fetch_provider.clone();
+    let poll_closed_fetch_provider = fetch_provider.clone();
 
     // GAP-WEBTRANSPORT срез 3b: `_lumen_webtransport_open(url)` now also
     // reports the session `handle` `webtransport_connect` allocated — срез
@@ -378,6 +379,35 @@ pub(crate) fn install_webtransport_v8(
         }
     });
     rt.register_native("_lumen_webtransport_close_session", close_session)?;
+
+    // GAP-WEBTRANSPORT, remaining sub-slice of срез 5: `closed`'s
+    // peer-initiated counterpart to `close_session` above —
+    // `webtransport_poll_closed` detects a `CLOSE_WEBTRANSPORT_SESSION`
+    // capsule the peer sent, or a fatal connection error, since neither has
+    // a push notification for the shim to wait on. JSON shape:
+    // `{"ok":true,"state":"open"}` / `{"ok":true,"state":"closedByPeer","closeCode":N,"reason":"…"}` /
+    // `{"ok":true,"state":"connectionLost"}` / `{"ok":false,"message":"…"}`.
+    let poll_closed = into_v8_fn1(move |handle: i32| -> String {
+        let Some(ref provider) = poll_closed_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_poll_closed(handle) {
+            Ok(lumen_core::ext::WebTransportSessionState::Open) => r#"{"ok":true,"state":"open"}"#.to_string(),
+            Ok(lumen_core::ext::WebTransportSessionState::ClosedByPeer { close_code, reason }) => {
+                let reason = reason.replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":true,"state":"closedByPeer","closeCode":{close_code},"reason":"{reason}"}}"#)
+            }
+            Ok(lumen_core::ext::WebTransportSessionState::ConnectionLost) => {
+                r#"{"ok":true,"state":"connectionLost"}"#.to_string()
+            }
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_poll_closed", poll_closed)?;
 
     rt.eval(WEBTRANSPORT_SHIM)?;
     Ok(())
@@ -894,6 +924,54 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     get: function() { return this._writable; }, enumerable: true, configurable: true,
   });
 
+  // GAP-WEBTRANSPORT, remaining sub-slice of срез 5: `closed`'s peer-initiated
+  // counterpart to `close()`'s own settling of the promise (below). Polls
+  // `_lumen_webtransport_poll_closed(handle)` in the same `setTimeout(0)`
+  // loop shape as the incoming-stream/datagram discovery loops above,
+  // started once the session has a live handle (`ready` resolved — there is
+  // nothing to poll before that). Stops for good once `session._closed` is
+  // set, whether by this loop itself or by a racing local `close()` — the
+  // check at the top of `attempt` is enough since JS has no preemption
+  // between it and the resolve/reject below in the same tick.
+  function pollSessionClosedByPeer(session) {
+    function attempt() {
+      if (session._closed) return;
+      var result;
+      try {
+        result = JSON.parse(_lumen_webtransport_poll_closed(session._handle));
+      } catch (e) {
+        result = { ok: false, message: 'WebTransport: malformed native response.' };
+      }
+      if (!result || !result.ok) {
+        // Polling itself failed — most likely a racing local close() already
+        // removed the session's native state. Nothing further to observe.
+        return;
+      }
+      if (result.state === 'closedByPeer') {
+        session._closed = true;
+        session._closedResolve({ closeCode: result.closeCode >>> 0, reason: result.reason || '' });
+        return;
+      }
+      if (result.state === 'connectionLost') {
+        session._closed = true;
+        session._closedReject(new WebTransportError({
+          source: 'session',
+          message: 'The WebTransport connection was lost.',
+        }));
+        return;
+      }
+      setTimeout(attempt, 0);
+    }
+    // Deferred rather than called synchronously here: this runs right after
+    // `ready` resolves, in the same tick — calling `attempt` immediately
+    // would let a peer-close answer preempt a `ready.then()` reaction that
+    // calls `close()` itself, even though both raced at the same instant.
+    // One `setTimeout(0)` lets such a reaction's microtask flush first, so a
+    // local `close()` reliably wins a same-tick race against a peer-initiated
+    // one.
+    setTimeout(attempt, 0);
+  }
+
   // ── WebTransport (spec §5) ─────────────────────────────────────────────────
   function WebTransport(url, options) {
     if (new.target === undefined) {
@@ -935,10 +1013,10 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     // the session `handle` (`{ok:true,status,handle}` on a 2xx response,
     // `{ok:false,message}` otherwise, including "not supported in this
     // context", the old always-fail answer) — stashed on `self._handle` so
-    // `createUnidirectionalStream()` can address the live session. Datagrams
-    // and incoming streams stay stubs until срез 4/lifecycle срез 5;
-    // `closed` is deliberately left pending on success — no lifecycle wiring
-    // exists yet to ever settle it.
+    // `createUnidirectionalStream()` can address the live session. `closed`
+    // settles on success only once something happens to the session
+    // afterward — a local `close()` call, or `pollSessionClosedByPeer`
+    // below noticing the peer closed it / the connection died.
     setTimeout(function() {
       var result;
       try {
@@ -949,6 +1027,7 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
       if (result && result.ok) {
         self._handle = result.handle;
         self._readyResolve(undefined);
+        pollSessionClosedByPeer(self);
       } else {
         self._readyFailed = true;
         var err = new WebTransportError({
