@@ -327,6 +327,50 @@ lumen-network --all-targets -D warnings` и `cargo check --workspace` зелён
 шим `WebTransportDatagramDuplexStream.readable`/`.writable` (сейчас
 permanently-empty/permanently-reject) — следующий под-срез.
 
+**Срез datagrams-b — done (2026-09-20, P1) — приём/отправка датаграмм и
+шим.** `RequestDriver` (`crates/network/src/h3/request_driver.rs`) больше не
+роняет `Frame::Datagram` на пол: `poll_incoming_nonblocking` фильтрует
+`ingest.residual` и копит каждый payload в новом накопителе
+(`RequestDriver::take_datagrams`) — раньше `route_deferred`'s `residual`
+не читал вообще никто. Новые транспортные примитивы
+`client_transport.rs::h3_webtransport_send_datagram_on_driver`/
+`h3_webtransport_poll_incoming_datagrams_on_driver`: отправка кодирует
+RFC 9297 §2.1 quarter stream id (`session_id / 4` — session id всегда
+client-initiated bidi, `4n`, деление точное) как первый varint payload'а и
+кладёт `Frame::Datagram` прямо в `ConnectionSendState::enqueue`
+(Application Data) — у датаграммы, в отличие от стрима, нет своего QUIC
+stream id, маршрутизировать через `streams_mut()` нечем; приём дренирует
+`take_datagrams()` и оставляет только те, чей quarter id совпал с сессией
+(один `RequestDriver` держит ровно одну WT-сессию, так что в реальности
+несовпадений не бывает, но проверка не убрана — код не полагается на это
+как на инвариант против недобросовестного пира). `HttpClient::webtransport_send_datagram`/
+`webtransport_poll_incoming_datagrams` (`lib.rs`) и два новых метода
+`JsFetchProvider` (default «не поддерживается», `ext.rs`) — тот же паттерн,
+что и у прочих точек расширения WebTransport. Новые нативные биндинги
+`_lumen_webtransport_send_datagram(handle, bytes)`/
+`_lumen_webtransport_poll_incoming_datagrams(handle)` (последний отдаёт
+JSON-массив массивов байт — на один poll может прийти больше одной
+датаграммы). Шим: `WebTransportDatagramDuplexStream` больше не
+permanently-empty/permanently-reject — `writable` (`openDatagramWritable`)
+лениво ждёт `session._handle`, как и `datagrams` сконструирован в
+`WebTransport`; `readable` (`openDatagramReadable`) — тот же
+discovery-loop, что у `incomingUnidirectionalStreams`, но кладёт в очередь
+целый `Uint8Array` на каждую датаграмму, а не вложенный `ReadableStream`
+(датаграмма RFC 9221 доставляется целиком или не доставляется вовсе, в
+отличие от байт-ориентированного стрима). Мёртвые `emptyReadableStream`/
+`rejectingWritableStream` (единственные потребители — старый `datagrams`)
+удалены. Файл `crates/js/src/webtransport.rs` был на пределе конвенции в
+2000 строк ещё до этого среза — тестовый модуль (`mod tests_v8`, ~1090
+строк) вынесен в `crates/js/src/webtransport/tests.rs` через `#[path]`,
+тот же приём, что `css-parser/src/parser.rs`'s `parser/tests/*.rs`. 3 новых
+теста `request_driver`, 6 новых `client_transport` (2314+2 датаграммных
+округляются до 2320+), `clippy -p lumen-network --all-targets -D warnings`
+зелёный; 7 новых тестов `lumen-js --features v8-backend` (47/47
+`webtransport`-тестов зелёные), `clippy -p lumen-core -p lumen-network -p
+lumen-js --all-targets --features lumen-js/v8-backend -D warnings` и
+`cargo check --workspace` зелёные. Не сделано: lifecycle `closed`/
+`close(info)` на сессии (срез 5) — последний оставшийся под-срез задачи.
+
 ### Срез 5 — S — Lifecycle: closed/close(info)/сессионные коды ошибок
 Корректный `closed` промис, `close({closeCode, reason})`, RFC 9114/9220 error mapping.
 
@@ -351,5 +395,6 @@ permanently-empty/permanently-reject) — следующий под-срез.
 - [x] Bidi readable — приём входящих байт на стриме, который открыли мы (срез 4c, 2026-09-20).
 - [x] Incoming unidirectional streams — обнаружение + header-парсинг + `incomingUnidirectionalStreams` (срез 4d, 2026-09-20).
 - [x] Incoming bidirectional streams — та же машинерия обнаружения + регистрация send-half под id, который выбрал пир (срез 4e, 2026-09-20).
-- [ ] Datagrams, lifecycle — остаются.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read+incoming uni+incoming bidi живые, datagrams/lifecycle ещё стабы).
+- [x] Datagrams — приём и отправка через RFC 9297 §2.1 quarter stream id, `datagrams.readable`/`.writable` живые (срез datagrams-b, 2026-09-20).
+- [ ] Lifecycle (срез 5) — остаётся.
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read+incoming uni+incoming bidi+datagrams живые, lifecycle ещё стаб).

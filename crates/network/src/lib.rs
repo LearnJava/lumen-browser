@@ -4904,6 +4904,46 @@ impl JsFetchProvider for HttpClient {
             h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
         Ok((bytes, finished))
     }
+
+    /// GAP-WEBTRANSPORT срез datagrams-b: sends `data` as a QUIC DATAGRAM
+    /// (RFC 9221) on the session `handle` names —
+    /// `WebTransportDatagramDuplexStream.writable`'s transport primitive.
+    /// Delegates straight to
+    /// [`h3::client_transport::h3_webtransport_send_datagram_on_driver`],
+    /// which prefixes `data` with the session's RFC 9297 §2.1 quarter stream
+    /// id before enqueuing and flushing.
+    fn webtransport_send_datagram(&self, handle: i32, data: &[u8]) -> Result<()> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        h3::client_transport::h3_webtransport_send_datagram_on_driver(
+            &mut session.driver,
+            session.session_id,
+            data,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport send datagram: {e}")))
+    }
+
+    /// GAP-WEBTRANSPORT срез datagrams-b: `WebTransportDatagramDuplexStream.readable`'s
+    /// non-blocking poll primitive — drains every QUIC DATAGRAM already
+    /// queued on the session `handle` names' socket and returns the
+    /// WebTransport application payload of each one whose RFC 9297 §2.1
+    /// quarter stream id names this session, in arrival order. Unlike a
+    /// stream, a datagram carries no `finished` signal (RFC 9221 datagrams
+    /// are unreliable and unordered by the transport, delivered whole or not
+    /// at all) — the caller polls again later rather than waiting on one.
+    fn webtransport_poll_incoming_datagrams(&self, handle: i32) -> Result<Vec<Vec<u8>>> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        h3::client_transport::h3_webtransport_poll_incoming_datagrams_on_driver(
+            &mut session.driver,
+            session.session_id,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport poll incoming datagrams: {e}")))
+    }
 }
 
 impl HttpClient {
