@@ -12,6 +12,7 @@
 mod antidetect_surface_api;
 mod bug489_display_contents_computed_style;
 mod bug590_create_event_beforeunload;
+mod bug936_mask_layer_wgpu_vs_cpu;
 mod compare_backends;
 mod fontload3_document_fonts_population;
 mod idl_reflection;

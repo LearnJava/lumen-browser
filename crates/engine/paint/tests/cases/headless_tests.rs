@@ -1689,3 +1689,182 @@ fn text_run_cache_matches_relayout() {
         assert!(dark > 0, "в кадре плеча «{name}» нет текста — гейт негоден");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUG-936 — GPU readback пробы `MaskLayerComposite` (диагностика, не гейт)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `PushOpacity` → красная заливка → `PushMaskLayer(Alpha)` → белая заливка
+/// только в левой половине → `PopMaskLayer` → `PopOpacity`, поверх белого
+/// фона. Ожидание по CSS Masking L1 §6.2 (alpha-режим): левая половина —
+/// красный контент (mask alpha=1 там, где нарисован белый прямоугольник),
+/// правая половина — фон (mask alpha=0, композит даёт прозрачность).
+fn mask_layer_alpha_half_dl(w: f32, h: f32) -> Vec<DisplayCommand> {
+    let full = Rect { x: 0.0, y: 0.0, width: w, height: h };
+    let left_half = Rect { x: 0.0, y: 0.0, width: w / 2.0, height: h };
+    vec![
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::PushOpacity { alpha: 1.0, bounds: None },
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PushMaskLayer { rect: full, mode: lumen_paint::display_list::MaskMode::Alpha },
+        DisplayCommand::FillRect { rect: left_half, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::PopMaskLayer,
+        DisplayCommand::PopOpacity,
+    ]
+}
+
+#[test]
+#[ignore = "requires GPU adapter"]
+fn mask_layer_composite_applies_alpha_mask() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let img = r
+        .render_to_image(&mask_layer_alpha_half_dl(64.0, 64.0), 0.0, 0.0)
+        .expect("render_to_image");
+
+    let px = |x: usize, y: usize| {
+        let o = (y * 64 + x) * 4;
+        &img.data[o..o + 4]
+    };
+    let left = px(16, 32);
+    let right = px(48, 32);
+    eprintln!("[bug936] left={left:?} right={right:?}");
+    assert_eq!(
+        (left[0], left[1], left[2]),
+        (255, 0, 0),
+        "левая половина (mask alpha=1) должна остаться красным контентом",
+    );
+    assert_eq!(
+        (right[0], right[1], right[2]),
+        (255, 255, 255),
+        "правая половина (mask alpha=0) должна показывать фон, а не немаскированный контент",
+    );
+}
+
+/// Тот же сценарий, что [`mask_layer_alpha_half_dl`], но группа обёрнута в
+/// `PushTransform` (сдвиг), как в реальном SVG-пути (`svg_text_decoration.rs`
+/// оборачивает `emit_svg_shape_masked` в накопленный `PushTransform` панели).
+/// Композитный квад строится через `transformed_grad_quad(scrolled,
+/// transform_stack.last())` (`renderer.rs:3441`) — если трансформ учтён не
+/// там, где записаны сами уровни-текстуры, результат окажется смещён
+/// относительно проверяемых пикселей ровно на сдвиг.
+fn mask_layer_alpha_half_transformed_dl(w: f32, h: f32, dx: f32, dy: f32) -> Vec<DisplayCommand> {
+    let full = Rect { x: 0.0, y: 0.0, width: w, height: h };
+    let left_half = Rect { x: 0.0, y: 0.0, width: w / 2.0, height: h };
+    vec![
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::translation_2d(dx, dy) },
+        DisplayCommand::PushOpacity { alpha: 1.0, bounds: None },
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PushMaskLayer { rect: full, mode: lumen_paint::display_list::MaskMode::Alpha },
+        DisplayCommand::FillRect { rect: left_half, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::PopMaskLayer,
+        DisplayCommand::PopOpacity,
+        DisplayCommand::PopTransform,
+    ]
+}
+
+#[test]
+#[ignore = "requires GPU adapter"]
+fn mask_layer_composite_applies_alpha_mask_under_transform() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let (dx, dy) = (10.0, 0.0);
+    let img = r
+        .render_to_image(&mask_layer_alpha_half_transformed_dl(64.0, 64.0, dx, dy), 0.0, 0.0)
+        .expect("render_to_image");
+
+    let px = |x: usize, y: usize| {
+        let o = (y * 64 + x) * 4;
+        &img.data[o..o + 4]
+    };
+    // Без сдвига граница маски проходит по x=32; со сдвигом dx=10 — по x=42.
+    let left = px(36, 32);   // внутри левой половины смещённого прямоугольника
+    let right = px(60, 32);  // за пределами смещённого прямоугольника (но внутри canvas)
+    eprintln!("[bug936] transformed left={left:?} right={right:?}");
+    assert_eq!(
+        (left[0], left[1], left[2]),
+        (255, 0, 0),
+        "смещённая левая половина должна остаться красным контентом",
+    );
+    assert_eq!(
+        (right[0], right[1], right[2]),
+        (255, 255, 255),
+        "справа от смещённого прямоугольника должен быть фон",
+    );
+}
+
+/// Luminance-режим (CSS Masking L1 §6.1): серая заливка `#808080` маски даёт
+/// относительную яркость ≈0.502 → контент виден примерно наполовину
+/// (полупрозрачный красный на белом фоне), в отличие от alpha-режима, где та
+/// же заливка дала бы полную видимость (два теста 156-svg-mask.html сверяют
+/// именно это различие одной и той же заливкой маски).
+#[test]
+#[ignore = "requires GPU adapter"]
+fn mask_layer_composite_applies_luminance_mask() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let full = Rect { x: 0.0, y: 0.0, width: 64.0, height: 64.0 };
+    let dl = vec![
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::PushOpacity { alpha: 1.0, bounds: None },
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PushMaskLayer { rect: full, mode: lumen_paint::display_list::MaskMode::Luminance },
+        DisplayCommand::FillRect { rect: full, color: Color { r: 128, g: 128, b: 128, a: 255 } },
+        DisplayCommand::PopMaskLayer,
+        DisplayCommand::PopOpacity,
+    ];
+    let img = r.render_to_image(&dl, 0.0, 0.0).expect("render_to_image");
+    let o = (32 * 64 + 32) * 4;
+    let px = &img.data[o..o + 4];
+    eprintln!("[bug936] luminance center={px:?}");
+    // ma = luma(0.502) * alpha(1.0) ≈ 0.502 → premultiplied red ≈128, blended
+    // over white background ≈ (255*(1-0.502) + 128) ≈ 255 - ok let's just
+    // assert it's neither pure content (255,0,0) nor pure background (255,255,255).
+    assert_ne!((px[0], px[1], px[2]), (255, 0, 0), "не должно быть непрозрачным контентом");
+    assert_ne!((px[0], px[1], px[2]), (255, 255, 255), "не должно быть чистым фоном — маска не сработала");
+}
+
+/// Составная маска из трёх прямоугольников ("H"-форма — panel 3 в
+/// `156-svg-mask.html`), все нарисованы одним `Draw`-батчем в уровне маски.
+/// Проверяет, что несколько fill-операций в ОДНОМ уровне маски (а не одна,
+/// как в остальных пробах этого файла) корректно накапливаются перед
+/// композитом — а не перетирают друг друга через повторный `ClearTransparent`.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn mask_layer_composite_applies_compound_mask() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let full = Rect { x: 0.0, y: 0.0, width: 64.0, height: 64.0 };
+    // "H": две вертикальные полосы по краям + горизонтальная перекладина
+    // посередине. Центр (32,32) внутри маски (на перекладине); угол (4,4) —
+    // вне всех трёх прямоугольников.
+    let left_bar = Rect { x: 0.0, y: 0.0, width: 12.0, height: 64.0 };
+    let right_bar = Rect { x: 52.0, y: 0.0, width: 12.0, height: 64.0 };
+    let bar = Rect { x: 0.0, y: 28.0, width: 64.0, height: 8.0 };
+    let dl = vec![
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::PushOpacity { alpha: 1.0, bounds: None },
+        DisplayCommand::FillRect { rect: full, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PushMaskLayer { rect: full, mode: lumen_paint::display_list::MaskMode::Alpha },
+        DisplayCommand::FillRect { rect: left_bar, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::FillRect { rect: right_bar, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::FillRect { rect: bar, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+        DisplayCommand::PopMaskLayer,
+        DisplayCommand::PopOpacity,
+    ];
+    let img = r.render_to_image(&dl, 0.0, 0.0).expect("render_to_image");
+    let px = |x: usize, y: usize| {
+        let o = (y * 64 + x) * 4;
+        &img.data[o..o + 4]
+    };
+    let on_bar = px(32, 31);
+    let off_bar = px(32, 4);
+    eprintln!("[bug936] compound on_bar={on_bar:?} off_bar={off_bar:?}");
+    assert_eq!((on_bar[0], on_bar[1], on_bar[2]), (255, 0, 0), "перекладина 'H' должна показывать контент");
+    assert_eq!((off_bar[0], off_bar[1], off_bar[2]), (255, 255, 255), "вне трёх прямоугольников — фон");
+}
