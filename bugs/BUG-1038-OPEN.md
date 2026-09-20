@@ -65,3 +65,14 @@ LUMEN_PROFILE=dev-release python tests/wpt/run_report.py \
 прогон) или это структурная гонка в реализации connection-allowlist-инъекции/навигации,
 независимая от окружения. Нужны изолированные прогоны одного файла (`run_smoke.py <id>`)
 с диагностикой по каждому кадру, не прогон всей категории.
+
+## Обновление 2026-09-20 (WPT-RUN-7 срез 39)
+
+Категория взята заново после закрытия BUG-1006 и **получила baseline** (58 `.ini`). Плавали не те
+подтесты, что в срезе 30: `www.localhost … should fail.` (PASS → TIMEOUT) и `www1.localhost …`
+(TIMEOUT ↔ NOTRUN) в `navigation-wildcard`/`navigation-response-origin`, `(www)`/`(www1)` в `websocket`;
+`iframe-contentwindow-injection` и `navigation-redirect-default` в трёх прогонах не плавали. Все шесть записей
+сужены (`[PASS, TIMEOUT]`, `[TIMEOUT, NOTRUN]`, `[TIMEOUT, PASS]`, `[NOTRUN, TIMEOUT]`), три
+`--check` подряд — 0 регрессий. Корневая причина плавания не локализована; поддомены не резолвятся на
+Windows — [BUG-1070](BUG-1070-OPEN.md), это вероятный, но не доказанный источник. Статус остаётся OPEN:
+блокер «baseline нельзя закоммитить» снят, но при перегенерации плавающий набор может оказаться другим.
