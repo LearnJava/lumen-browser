@@ -315,6 +315,27 @@ fn eval_deeply_nested_array_truncates() {
 }
 
 #[test]
+fn eval_constructed_stylesheet_completion_value_does_not_oom() {
+    // BUG-978: a constructed `CSSStyleSheet` as the completion value of
+    // `eval()` used to crash the process with a fatal V8 OOM instead of
+    // returning. Its `cssRules`/`parentStyleSheet` wrappers are
+    // intentionally uncached (CSSOM-1/CSSOM-5), so every read down the
+    // `sheet -> cssRules -> rule -> parentStyleSheet -> sheet'` cycle
+    // rebuilds a fresh JS object with a fresh `get_identity_hash()` — the
+    // `[Circular]` detector in `from_v8_bounded` never fires, and
+    // `FROM_V8_MAX_DEPTH`'s 64 levels of live getter calls on a
+    // ~300-own-property object exhausted the isolate's heap before the
+    // depth cap was reached. `FROM_V8_MAX_VISITED` bounds total work
+    // instead, so this must now return (with some string marker somewhere
+    // in the tree) rather than crash or hang.
+    let rt = runtime_with_dom(make_doc(), "https://example.com/");
+    let val = rt
+        .eval("var s = new CSSStyleSheet(); s.replaceSync('p{}'); s")
+        .unwrap();
+    assert!(matches!(val, JsValue::Object(_)), "expected object, got {val:?}");
+}
+
+#[test]
 fn eval_runtime_error() {
     assert!(matches!(
         rt().eval("throw new Error('boom')"),

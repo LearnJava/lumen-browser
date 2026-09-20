@@ -43,24 +43,42 @@ impl v8::ValueDeserializerImpl for LumenValueDeserializerImpl {}
 /// via `V8_Fatal`, instead of surfacing as a catchable `JsError`.
 pub(super) const FROM_V8_MAX_DEPTH: usize = 64;
 
+/// Max object/array nodes `from_v8` will visit in one call, independent of
+/// depth (BUG-978). A wrapper type whose getters rebuild a fresh JS object on
+/// every read (e.g. the uncached `CSSStyleSheet`/`CSSRule` wrappers in
+/// `web_api_shim_mid.js` — CSSOM-1/CSSOM-5's documented "nothing here is
+/// cached" tradeoff) gives every node on a cyclic path a new
+/// `get_identity_hash()`, so [`FROM_V8_MAX_DEPTH`]'s cycle detector never
+/// fires: the walk is still finite (depth still caps it), but 64 levels of
+/// live V8 getter calls on a ~300-own-property object is enough allocation to
+/// exhaust the isolate's heap and crash the process via fatal V8 OOM before
+/// the depth cap is ever reached. This budget bounds the walk by total work
+/// done, not just how deep one path goes, so it catches wide/dense fan-out
+/// the same way depth catches long chains.
+pub(super) const FROM_V8_MAX_VISITED: usize = 20_000;
+
 /// Convert a V8 `Local<Value>` to a `JsValue`.
 ///
 /// `scope` must be a `&PinScope<'s, '_>` (= `PinnedRef<HandleScope<'_, Context>>`).
 /// Any scope that deref-coerces to one is accepted (e.g. `&mut PinnedRef<TryCatch<…>>`).
 pub(super) fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::Value>) -> JsResult<JsValue> {
     let mut ancestors = Vec::new();
-    from_v8_bounded(scope, val, &mut ancestors)
+    let mut visited = 0usize;
+    from_v8_bounded(scope, val, &mut ancestors, &mut visited)
 }
 
-/// Depth/cycle-guarded worker behind [`from_v8`]. `ancestors` holds the
-/// identity hashes of every object/array currently being walked on the
+/// Depth/cycle/budget-guarded worker behind [`from_v8`]. `ancestors` holds
+/// the identity hashes of every object/array currently being walked on the
 /// current path (push on entry, pop on exit) so a self-reference anywhere in
-/// the chain is caught instead of recursed into forever.
+/// the chain is caught instead of recursed into forever. `visited` counts
+/// every object/array node entered across the whole call, capped by
+/// [`FROM_V8_MAX_VISITED`] regardless of depth (BUG-978).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(super) fn from_v8_bounded<'s>(
     scope: &v8::PinScope<'s, '_>,
     val: v8::Local<'s, v8::Value>,
     ancestors: &mut Vec<std::num::NonZeroI32>,
+    visited: &mut usize,
 ) -> JsResult<JsValue> {
     if val.is_null() || val.is_undefined() {
         return Ok(JsValue::Null);
@@ -83,9 +101,13 @@ pub(super) fn from_v8_bounded<'s>(
         if ancestors.len() >= FROM_V8_MAX_DEPTH {
             return Ok(JsValue::String("[Max Depth Exceeded]".into()));
         }
+        if *visited >= FROM_V8_MAX_VISITED {
+            return Ok(JsValue::String("[Max Nodes Exceeded]".into()));
+        }
         if ancestors.contains(&hash) {
             return Ok(JsValue::String("[Circular]".into()));
         }
+        *visited += 1;
         ancestors.push(hash);
         let len = arr.length();
         let mut items = Vec::with_capacity(len as usize);
@@ -93,7 +115,7 @@ pub(super) fn from_v8_bounded<'s>(
             let elem = arr
                 .get_index(scope, i)
                 .ok_or_else(|| JsError::Runtime(format!("array[{i}] is missing")))?;
-            items.push(from_v8_bounded(scope, elem, ancestors)?);
+            items.push(from_v8_bounded(scope, elem, ancestors, visited)?);
         }
         ancestors.pop();
         return Ok(JsValue::Array(items));
@@ -104,9 +126,13 @@ pub(super) fn from_v8_bounded<'s>(
         if ancestors.len() >= FROM_V8_MAX_DEPTH {
             return Ok(JsValue::String("[Max Depth Exceeded]".into()));
         }
+        if *visited >= FROM_V8_MAX_VISITED {
+            return Ok(JsValue::String("[Max Nodes Exceeded]".into()));
+        }
         if ancestors.contains(&hash) {
             return Ok(JsValue::String("[Circular]".into()));
         }
+        *visited += 1;
         ancestors.push(hash);
         let own_props = obj
             .get_own_property_names(scope, Default::default())
@@ -121,7 +147,7 @@ pub(super) fn from_v8_bounded<'s>(
             let prop_val = obj
                 .get(scope, key)
                 .ok_or_else(|| JsError::Runtime(format!("get '{key_str}' failed")))?;
-            entries.push((key_str, from_v8_bounded(scope, prop_val, ancestors)?));
+            entries.push((key_str, from_v8_bounded(scope, prop_val, ancestors, visited)?));
         }
         ancestors.pop();
         return Ok(JsValue::object(entries));
