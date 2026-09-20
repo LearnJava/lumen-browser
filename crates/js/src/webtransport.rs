@@ -31,10 +31,11 @@ pub(crate) fn install_webtransport_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     fetch_provider: Option<std::sync::Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::into_v8_fn1;
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn3};
     use lumen_core::ext::JsRuntime as _;
 
     let uni_fetch_provider = fetch_provider.clone();
+    let write_fetch_provider = fetch_provider.clone();
 
     // GAP-WEBTRANSPORT срез 3b: `_lumen_webtransport_open(url)` now also
     // reports the session `handle` `webtransport_connect` allocated — срез
@@ -82,6 +83,28 @@ pub(crate) fn install_webtransport_v8(
         }
     });
     rt.register_native("_lumen_webtransport_open_uni_stream", open_uni)?;
+
+    // GAP-WEBTRANSPORT срез 3c: the write-bytes primitive the previous
+    // slice's comment ("no write-bytes primitive exists yet") deferred —
+    // writes `bytes` to the already-open `streamId` on session `handle`
+    // (`webtransport_write_uni_stream`, `h3_webtransport_write_stream_on_driver`).
+    // `stream_id` travels as `f64` (JS has no native u64) — every id this
+    // session hands out is `4n+2` for a small `n`, always exactly
+    // representable, so the round trip through `f64` loses nothing.
+    let write_stream = into_v8_fn3(move |handle: i32, stream_id: f64, bytes: Vec<u8>| -> String {
+        let Some(ref provider) = write_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_write_uni_stream(handle, stream_id as u64, &bytes) {
+            Ok(()) => r#"{"ok":true}"#.to_string(),
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_write_stream", write_stream)?;
 
     rt.eval(WEBTRANSPORT_SHIM)?;
     Ok(())
@@ -165,19 +188,39 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     });
   }
 
-  // GAP-WEBTRANSPORT срез 3b: the writable half of a uni-stream that *did*
-  // open on the wire (`createUnidirectionalStream()` got a real QUIC stream
-  // id back) — unlike `rejectingWritableStream()` this is not a session
-  // failure, so writes reject with a stream-scoped `WebTransportError`. No
-  // native "write bytes to an open WT stream" primitive exists yet (a later
-  // slice); this is what a caller sees in the meantime.
-  function unwritableOpenStream() {
+  // GAP-WEBTRANSPORT срез 3c: the writable half of a uni-stream that opened
+  // on the wire (`createUnidirectionalStream()` got a real QUIC stream id
+  // back) — each `write(chunk)` sends `chunk`'s bytes over
+  // `_lumen_webtransport_write_stream(handle, streamId, bytes)`
+  // (`h3_webtransport_write_stream_on_driver`, срез 3c). No `close`/`abort`
+  // handler yet — closing the writer neither sends a FIN nor errors, a later
+  // slice (stream lifecycle) wires that up; the underlying QUIC stream stays
+  // open on the wire regardless.
+  function openUniStreamWritable(handle, streamId) {
     return new WritableStream({
-      write: function() {
-        return Promise.reject(new WebTransportError({
-          source: 'stream',
-          message: 'Writing to a WebTransport unidirectional stream is not yet supported.',
-        }));
+      write: function(chunk) {
+        var bytes;
+        try {
+          bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        } catch (e) {
+          return Promise.reject(new WebTransportError({
+            source: 'stream',
+            message: 'WebTransport stream chunks must be BufferSource.',
+          }));
+        }
+        var result;
+        try {
+          result = JSON.parse(_lumen_webtransport_write_stream(handle, streamId, bytes));
+        } catch (e) {
+          result = { ok: false, message: 'WebTransport: malformed native response.' };
+        }
+        if (!result || !result.ok) {
+          return Promise.reject(new WebTransportError({
+            source: 'stream',
+            message: (result && result.message) || 'Failed to write to a WebTransport unidirectional stream.',
+          }));
+        }
+        return Promise.resolve();
       },
     });
   }
@@ -293,13 +336,13 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
   WebTransport.prototype.createBidirectionalStream = function() {
     return Promise.reject(notConnectedError());
   };
-  // GAP-WEBTRANSPORT срез 3b: rejects synchronously (session not `ready` yet
-  // or `ready` failed, same as `createBidirectionalStream()`'s unconditional
-  // reject before this slice) when there is no live handle; otherwise opens
-  // a real QUIC uni-stream on it (`_lumen_webtransport_open_uni_stream`,
-  // срез 3a's transport primitive) and resolves a `WritableStream` wrapping
-  // it — writing to that stream still rejects (`unwritableOpenStream()`),
-  // since no write-bytes native exists yet.
+  // GAP-WEBTRANSPORT срез 3b/3c: rejects synchronously (session not `ready`
+  // yet or `ready` failed, same as `createBidirectionalStream()`'s
+  // unconditional reject before срез 3b) when there is no live handle;
+  // otherwise opens a real QUIC uni-stream on it
+  // (`_lumen_webtransport_open_uni_stream`, срез 3a's transport primitive)
+  // and resolves a `WritableStream` whose `write()` sends bytes over that
+  // stream (`openUniStreamWritable`, срез 3c).
   WebTransport.prototype.createUnidirectionalStream = function() {
     if (this._handle === null) {
       return Promise.reject(notConnectedError());
@@ -316,7 +359,7 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
         message: (result && result.message) || 'Failed to open a WebTransport unidirectional stream.',
       }));
     }
-    return Promise.resolve(unwritableOpenStream());
+    return Promise.resolve(openUniStreamWritable(this._handle, result.streamId));
   };
   WebTransport.prototype.getStats = function() {
     return Promise.resolve({});
@@ -368,11 +411,16 @@ mod tests_v8 {
 
     /// A fetch provider whose `webtransport_connect` answers deterministically
     /// (`Ok`/`Err`) instead of network I/O — GAP-WEBTRANSPORT срез 2b. Its
-    /// `webtransport_open_uni_stream` (срез 3b) is a fixed `Ok(7)`/keeps the
-    /// trait default, since no test here drives it through a live handle.
+    /// `webtransport_open_uni_stream` (срез 3b) and `webtransport_write_uni_stream`
+    /// (срез 3c) are each a fixed result rather than driving a live handle.
     struct StubFetch {
         result: std::sync::Mutex<Option<lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>>>,
         uni_stream_result: lumen_core::error::Result<u64>,
+        write_stream_result: lumen_core::error::Result<()>,
+        /// The `(handle, stream_id, bytes)` triple the last `write` call
+        /// received, if any — lets a test assert the JS layer forwarded the
+        /// right stream id and payload, not just that it resolved.
+        last_write: std::sync::Mutex<Option<(i32, u64, Vec<u8>)>>,
     }
     impl lumen_core::ext::JsFetchProvider for StubFetch {
         fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
@@ -387,6 +435,18 @@ mod tests_v8 {
         fn webtransport_open_uni_stream(&self, _handle: i32) -> lumen_core::error::Result<u64> {
             match &self.uni_stream_result {
                 Ok(id) => Ok(*id),
+                Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
+            }
+        }
+        fn webtransport_write_uni_stream(
+            &self,
+            handle: i32,
+            stream_id: u64,
+            data: &[u8],
+        ) -> lumen_core::error::Result<()> {
+            *self.last_write.lock().unwrap() = Some((handle, stream_id, data.to_vec()));
+            match &self.write_stream_result {
+                Ok(()) => Ok(()),
                 Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
             }
         }
@@ -409,15 +469,30 @@ mod tests_v8 {
         result: lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>,
         uni_stream_result: lumen_core::error::Result<u64>,
     ) -> V8JsRuntime {
+        rt_with_webtransport_provider_full(result, uni_stream_result, Ok(())).0
+    }
+
+    /// Like [`rt_with_webtransport_provider_and_uni_result`], but also
+    /// controls what `webtransport_write_uni_stream` answers and returns the
+    /// `Arc<Mutex<...>>` the test can inspect for the last write's
+    /// `(handle, stream_id, bytes)` — GAP-WEBTRANSPORT срез 3c.
+    fn rt_with_webtransport_provider_full(
+        result: lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>,
+        uni_stream_result: lumen_core::error::Result<u64>,
+        write_stream_result: lumen_core::error::Result<()>,
+    ) -> (V8JsRuntime, Arc<StubFetch>) {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(StubFetch {
+        let stub = Arc::new(StubFetch {
             result: std::sync::Mutex::new(Some(result)),
             uni_stream_result,
+            write_stream_result,
+            last_write: std::sync::Mutex::new(None),
         });
+        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
             .unwrap();
-        rt
+        (rt, stub)
     }
 
     fn check(rt: &V8JsRuntime, expr: &str) {
@@ -608,6 +683,114 @@ mod tests_v8 {
             }
             other => panic!("expected a String, got {other:?}"),
         }
+    }
+
+    /// GAP-WEBTRANSPORT срез 3c: direct native-call coverage for
+    /// `_lumen_webtransport_write_stream`, same "no `setTimeout` pumping in
+    /// this harness" workaround as the other native-call tests above.
+    #[test]
+    fn native_write_stream_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_write_stream(0, 2, new Uint8Array([1]))").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_write_stream_forwards_handle_stream_id_and_bytes() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 5, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        let r = rt.eval("_lumen_webtransport_write_stream(5, 2, new Uint8Array([104, 105]))").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => assert!(s.contains(r#""ok":true"#), "expected ok:true, got {s}"),
+            other => panic!("expected a String, got {other:?}"),
+        }
+        let last = stub.last_write.lock().unwrap().clone().expect("write was recorded");
+        assert_eq!(last, (5, 2, vec![104, 105]));
+    }
+
+    #[test]
+    fn native_write_stream_reports_provider_error_message() {
+        let (rt, _stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 0, status: 200 }),
+            Ok(2),
+            Err(lumen_core::error::Error::Network("WebTransport session not found".to_string())),
+        );
+        let r = rt.eval("_lumen_webtransport_write_stream(0, 2, new Uint8Array([1]))").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+                assert!(s.contains("session not found"), "expected the message, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: `createUnidirectionalStream()` resolves a real
+    /// `WritableStream` whose `write()` reaches
+    /// `_lumen_webtransport_write_stream` with the session's handle and the
+    /// stream id `createUnidirectionalStream()` itself opened — proves the
+    /// two natives compose through the shim, not just each in isolation.
+    #[test]
+    fn create_unidirectional_stream_write_reaches_the_native_with_the_right_ids() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        rt.eval(
+            "globalThis._wtWriteOk = false; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { \
+                return globalThis._wt.createUnidirectionalStream(); \
+            }).then(function(stream) { \
+                var writer = stream.getWriter(); \
+                return writer.write(new Uint8Array([1, 2, 3])); \
+            }).then(function() { \
+                globalThis._wtWriteOk = true; \
+            });",
+        )
+        .unwrap();
+        // `ready` resolves from a `setTimeout(0)` callback (the constructor's
+        // native call, срез 3b) — this harness needs an explicit timer pump
+        // (`_lumen_tick_timers`, see `internal_globals.rs`'s
+        // `engine_state_stays_writable`) to run it before the promise chain
+        // above can proceed.
+        rt.eval("_lumen_tick_timers()").unwrap();
+        check(&rt, "_wtWriteOk");
+        let last = stub.last_write.lock().unwrap().clone().expect("write was recorded");
+        assert_eq!(last, (3, 2, vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn create_unidirectional_stream_write_rejects_on_provider_error() {
+        let (rt, _stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 0, status: 200 }),
+            Ok(2),
+            Err(lumen_core::error::Error::Network("boom".to_string())),
+        );
+        rt.eval(
+            "globalThis._wtWriteRejected = false; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { \
+                return globalThis._wt.createUnidirectionalStream(); \
+            }).then(function(stream) { \
+                var writer = stream.getWriter(); \
+                return writer.write(new Uint8Array([1])); \
+            }).catch(function(e) { \
+                globalThis._wtWriteRejected = (e instanceof WebTransportError) && e.source === 'stream'; \
+            });",
+        )
+        .unwrap();
+        rt.eval("_lumen_tick_timers()").unwrap();
+        check(&rt, "_wtWriteRejected");
     }
 
     #[test]

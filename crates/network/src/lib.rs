@@ -4653,6 +4653,20 @@ impl JsFetchProvider for HttpClient {
         session.next_uni_stream_number += 1;
         Ok(stream_id)
     }
+
+    /// GAP-WEBTRANSPORT срез 3c: writes `data` to the already-open
+    /// unidirectional stream `stream_id` on the session `handle` names
+    /// ([`h3::client_transport::h3_webtransport_write_stream_on_driver`]) —
+    /// the write-bytes primitive `webtransport_open_uni_stream` (срез 3b)
+    /// left for a later slice.
+    fn webtransport_write_uni_stream(&self, handle: i32, stream_id: u64, data: &[u8]) -> Result<()> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        h3::client_transport::h3_webtransport_write_stream_on_driver(&mut session.driver, stream_id, data)
+            .map_err(|e| Error::Network(format!("WebTransport write stream: {e}")))
+    }
 }
 
 impl HttpClient {
