@@ -250,6 +250,11 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
 
     var _handle  = HAS_PROVIDER ? __lumen_audio_alloc() : 0;
     var _src     = (el.getAttribute && el.getAttribute('src')) || '';
+    // HTML LS §4.8.11: DOMString, empty until the resource selection
+    // algorithm has picked a URL — never `undefined`. Mirrors
+    // `video_element.js`'s `_currentSrc` (set from `startFetch`, ahead of
+    // the media-src CSP gate so a blocked candidate still names itself).
+    var _currentSrc = '';
     var _volume  = 1.0;
     var _muted   = !!(el.hasAttribute && el.hasAttribute('muted'));
     var _loop    = !!(el.hasAttribute && el.hasAttribute('loop'));
@@ -291,6 +296,7 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
         try { var _r = _url_resolve(url, _lumen_document_base_url()); if (_r) _abs = String(_r); }
         catch (e) {}
       }
+      _currentSrc = _abs;
       // GAP-CSPENF срез 51: `upgrade-insecure-requests` rewrite, ahead of the
       // `media-src` check per [UIR] §4.1 step 5 before step 6 — same order
       // every other producer uses. `PlatformAudioPlayer::load` has no CSP
@@ -369,6 +375,11 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
         if (el.setAttribute) el.setAttribute('src', _src);
         if (_src) startLoad(_src);
       },
+      configurable: true,
+    });
+
+    Object.defineProperty(el, 'currentSrc', {
+      get: function() { return _currentSrc; },
       configurable: true,
     });
 
@@ -738,6 +749,24 @@ var document = {
         let ok = bool_eval(
             &rt,
             "var el = document.createElement('audio'); el.paused === true",
+        );
+        assert!(ok);
+    }
+
+    /// BUG-940: `currentSrc` must be a `DOMString` per HTML LS §4.8.11, never
+    /// `undefined` — before `src` is set, after an empty assignment, and once
+    /// resource selection has picked a real URL.
+    #[test]
+    fn current_src_is_empty_string_until_resource_selection_picks_a_url() {
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('audio');
+             var before = el.currentSrc;
+             el.src = '';
+             var afterEmpty = el.currentSrc;
+             el.src = 'http://example.test/a.mp3';
+             before === '' && afterEmpty === '' && el.currentSrc === 'http://example.test/a.mp3'",
         );
         assert!(ok);
     }
