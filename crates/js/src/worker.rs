@@ -371,6 +371,15 @@ pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> 
     rt.eval(&crate::navigator_bindings::worker_navigator_id_shim())?;
     rt.eval(&crate::dom::worker_exposed_shim())?;
     rt.eval(WORKER_ERROR_EVENT_SHIM)?;
+    rt.eval(WORKER_MESSAGE_EVENT_SHIM)?;
+    // GAP-WORKERSCOPE: `MessageChannel`/`MessagePort` (BUG-872) — the same
+    // self-contained shim the page scope uses (it depends only on
+    // `setTimeout`, resolved dynamically at call time, so evaluating it here
+    // ahead of `WORKER_TIMERS_SHIM`/`sw_globals_shim` is safe). A worker-scope
+    // `MessagePort` from `new MessageChannel()` stays local to that scope —
+    // it does not cross the agent boundary into a transferred port on the
+    // other side of `postMessage` (BUG-868, still open).
+    rt.eval(crate::dom::MESSAGE_CHANNEL_SHIM)?;
     Ok(())
 }
 
@@ -416,6 +425,56 @@ if (typeof globalThis.ErrorEvent !== 'function') {
     value: 'ErrorEvent', configurable: true,
   });
   globalThis.ErrorEvent = _LumenWorkerErrorEvent;
+}
+undefined;
+"#;
+
+/// `MessageEvent` for a `WorkerGlobalScope` (GAP-WORKERSCOPE, BUG-872) — same
+/// rationale and shape as [`WORKER_ERROR_EVENT_SHIM`] just above: a standalone
+/// constructor rather than a slice of the page's `Event`-subclassing shim,
+/// since that shim is page-only. Follows this codebase's established
+/// `new MessageEvent(data, init)` convention (the constructor's first
+/// argument is the payload, not a WebIDL event type — see
+/// `web_api_shim_mid_b2.js`'s own `MessageEvent`, `broadcast_channel.rs`, and
+/// the `v8_ws_sse.rs` tests that pin it) rather than the spec's
+/// `new MessageEvent(type, init)`, so a worker-scope message event and a
+/// page-scope one stay constructible the same way.
+///
+/// Evaluated for every worker flavour that goes through
+/// [`install_worker_scope_globals_v8`] — dedicated, shared and service —
+/// and guarded so a scope that already has the page-side class keeps it.
+#[cfg(feature = "v8-backend")]
+pub(crate) const WORKER_MESSAGE_EVENT_SHIM: &str = r#"
+if (typeof globalThis.MessageEvent !== 'function') {
+  var _LumenWorkerMessageEvent = function MessageEvent(data, init) {
+    this.type = 'message';
+    this.data = data;
+    this.origin = (init && init.origin != null) ? String(init.origin) : '';
+    this.lastEventId = (init && init.lastEventId != null) ? String(init.lastEventId) : '';
+    this.source = (init && init.source !== undefined) ? init.source : null;
+    this.ports = (init && Array.isArray(init.ports)) ? init.ports : [];
+    // HTML LS §9.3.4 MessageEventInit.userActivation -- spec default is
+    // null, not silently dropped (BUG-610, mirrored here for parity with the
+    // page-side MessageEvent).
+    this.userActivation = (init && init.userActivation !== undefined) ? init.userActivation : null;
+    this.bubbles    = !!(init && init.bubbles);
+    this.cancelable = !!(init && init.cancelable);
+    this.defaultPrevented = false;
+    this.target = null;
+    this.currentTarget = null;
+  };
+  _LumenWorkerMessageEvent.prototype.preventDefault = function() {
+    if (this.cancelable) this.defaultPrevented = true;
+  };
+  _LumenWorkerMessageEvent.prototype.stopPropagation = function() {};
+  _LumenWorkerMessageEvent.prototype.stopImmediatePropagation = function() {};
+  // `assert_class_string(e, 'MessageEvent')` (WPT's testharness) reads
+  // `Object.prototype.toString`, which for a plain constructor answers
+  // `[object Object]` without this.
+  Object.defineProperty(_LumenWorkerMessageEvent.prototype, Symbol.toStringTag, {
+    value: 'MessageEvent', configurable: true,
+  });
+  globalThis.MessageEvent = _LumenWorkerMessageEvent;
 }
 undefined;
 "#;
@@ -598,8 +657,11 @@ fn worker_global_shim(worker_id: u32) -> String {
     var resolved = (typeof _lumen_offscreen_canvas_from_image_data !== 'undefined')
       ? _deserializeTransfers(data)
       : data;
-    var ev = {{ data: resolved, type: 'message', target: globalThis,
-                bubbles: false, cancelable: false }};
+    // Lumen's MessageEvent constructor takes (data, init) — see dom.rs shim.
+    var ev;
+    try {{ ev = new MessageEvent(resolved, {{ bubbles: false, cancelable: false }}); }}
+    catch (e) {{ ev = {{ type: 'message', data: resolved, bubbles: false, cancelable: false }}; }}
+    ev.target = globalThis;
     if (_onmessage) {{ try {{ _onmessage(ev); }} catch(e) {{ _lumen_report_worker_exception(e); }} }}
     for (var i = 0; i < _msgListeners.length; i++) {{
       try {{ _msgListeners[i](ev); }} catch(e) {{ _lumen_report_worker_exception(e); }}
@@ -1395,8 +1457,11 @@ const WORKER_SHIM: &str = r#"(function() {
   Worker.prototype._deliver = function(json) {
     var data;
     try { data = JSON.parse(json); } catch(e) { data = json; }
-    var ev = { data: data, type: 'message', target: this,
-               bubbles: false, cancelable: false };
+    // Lumen's MessageEvent constructor takes (data, init) — see dom.rs shim.
+    var ev;
+    try { ev = new MessageEvent(data, { bubbles: false, cancelable: false }); }
+    catch (e) { ev = { type: 'message', data: data, bubbles: false, cancelable: false }; }
+    ev.target = this;
     if (this._onmessage) { try { this._onmessage(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     for (var i = 0; i < this._listeners.length; i++) {
       try { this._listeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
@@ -3845,5 +3910,69 @@ mod tests_v8 {
         let reported = drain_errors(&errors);
         assert_eq!(reported.len(), 1);
         assert!(reported[0].1.contains("\"message\":\"boom\""));
+    }
+
+    /// [BUG-872, GAP-WORKERSCOPE] `'X' in self && self instanceof X` is the
+    /// idiom WPT's worker resources use to gate a whole test file on scope
+    /// support; `MessageChannel`/`MessagePort`/`MessageEvent` used to be
+    /// entirely absent from a `DedicatedWorkerGlobalScope`, so both halves of
+    /// that idiom were false and the worker silently did nothing.
+    /// `WorkerGlobalScope`/`DedicatedWorkerGlobalScope`/`WorkerNavigator`/
+    /// `ErrorEvent` are covered by earlier tests in this module (BUG-777,
+    /// BUG-776, BUG-813) and asserted again here only as a control.
+    #[test]
+    fn v8_worker_scope_exposes_message_channel_and_message_event() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)),
+        ).unwrap();
+        for expr in [
+            "typeof MessageChannel",
+            "typeof MessagePort",
+            "typeof MessageEvent",
+            "typeof WorkerGlobalScope",
+            "typeof DedicatedWorkerGlobalScope",
+            "typeof WorkerNavigator",
+            "typeof ErrorEvent",
+        ] {
+            assert_eq!(
+                rt.eval(expr).unwrap(),
+                lumen_core::JsValue::String("function".to_string()),
+                "{expr}"
+            );
+        }
+        // Constructing and wiring up a worker-scope `MessageChannel` does not
+        // throw. `postMessage` itself still needs `structuredClone`, which —
+        // like the page scope — this shim depends on rather than defines;
+        // unlike the page scope, a worker has no `structuredClone` at all
+        // (pre-existing gap, shared with the service-worker scope's own
+        // `MESSAGE_CHANNEL_SHIM` use — BUG-868, not this GAP's slice).
+        assert_eq!(
+            rt.eval(
+                "var ch = new MessageChannel(); \
+                 ch.port1 instanceof MessagePort && ch.port2 instanceof MessagePort && \
+                 typeof ch.port1.postMessage === 'function'"
+            )
+            .unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    /// [BUG-872, GAP-WORKERSCOPE] A delivered message is a real `MessageEvent`
+    /// instance, not a plain object literal — the constructor being present
+    /// on `self` is not enough if nothing ever hands one to a listener.
+    #[test]
+    fn v8_worker_dispatched_message_is_a_real_message_event() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var ok = false; \
+             self.onmessage = function(e) { \
+               ok = (e instanceof MessageEvent) && e.data === 'hi' && e.target === self; \
+             };",
+        )
+        .unwrap();
+        rt.eval("_lumen_worker_dispatch_message('hi');").unwrap();
+        assert_eq!(rt.eval("ok").unwrap(), lumen_core::JsValue::Bool(true));
     }
 }

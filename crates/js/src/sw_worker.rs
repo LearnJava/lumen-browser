@@ -719,9 +719,9 @@ fn install_sw_globals_v8(
     // the shim below whose `Request`/`Response` construct it via `new Headers`.
     rt.eval(crate::dom::HEADERS_SHIM)?;
     rt.eval(&sw_globals_shim(&scope_str, &origin_str))?;
-    // После шима области: блоки опираются на `_lumen_console_error`,
-    // `queueMicrotask` и `setTimeout`, которые шим только что определил.
-    rt.eval(crate::dom::MESSAGE_CHANNEL_SHIM)?;
+    // `MessageChannel`/`MessagePort` already came from
+    // `install_worker_scope_globals_v8` above (GAP-WORKERSCOPE); nothing left
+    // to evaluate for them here.
     rt.eval(crate::dom::IDB_SHIM)?;
     Ok(())
 }
