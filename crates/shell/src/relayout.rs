@@ -185,7 +185,7 @@ impl Lumen {
         lumen_layout::clear_animated_heights();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        self.apply_relayout_result(new_dl, lb, viewport);
+        self.apply_relayout_result(new_dl, lb, viewport, false);
         if let Some(t0) = engine_t0 {
             let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
             self.engine_stats.record(engine_ms);
@@ -407,7 +407,7 @@ impl Lumen {
         // a third, conditional `document.lock()` of its own for
         // @starting-style, plus tile-grid diff/hash over the whole DL).
         let apply_t0 = incr_t0.is_some().then(std::time::Instant::now);
-        self.apply_relayout_result(new_dl, new_lb, viewport);
+        self.apply_relayout_result(new_dl, new_lb, viewport, true);
         let apply_ms = apply_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
         // `apply_relayout_result` unconditionally clears the cache — restore it
         // here, after `lb` has already landed in `self.layout_box`. BUG-935 S13:
@@ -739,7 +739,28 @@ impl Lumen {
     /// `@starting-style` sync, `will-change` layer promotion, zoom-preview reset,
     /// scroll clamping and JS-observer delivery. Kept identical for both callers
     /// so an off-thread relayout is byte-for-byte equivalent to a synchronous one.
-    pub(crate) fn apply_relayout_result(&mut self, mut new_dl: DisplayList, lb: lumen_layout::LayoutBox, viewport: Size) {
+    ///
+    /// `defer_js_push` (BUG-935 S17): when `true`, the JS-observer push below
+    /// (rects/styles/`deliver_layout_observers`/lazy-images/scroll-states) is
+    /// issued as a fire-and-forget engine-thread [`route_task_js`] instead of
+    /// the blocking [`route_query_js`] — see the field doc on
+    /// [`crate::lumen::state::Lumen::pending_lazy_image_reqs`] for why lazy-image
+    /// requests still reach [`Self::fetch_and_register_lazy_images`] despite the
+    /// caller not getting them back synchronously. Only
+    /// [`Self::try_relayout_raf_incremental`] passes `true` — BUG-935 S15 found
+    /// that path calling the blocking form lands *behind* the still-running rAF
+    /// JS turn that dirtied the DOM (same ordered engine-thread FIFO), stalling
+    /// the UI thread for as long as that turn's synchronous network calls take.
+    /// Every other producer keeps `false` (byte-identical to before this slice):
+    /// they run this push only after their commit already landed, so the FIFO is
+    /// idle and blocking costs nothing.
+    pub(crate) fn apply_relayout_result(
+        &mut self,
+        mut new_dl: DisplayList,
+        lb: lumen_layout::LayoutBox,
+        viewport: Size,
+        defer_js_push: bool,
+    ) {
         // BUG-480 срез 13: контентный вьюпорт под-документов следует за
         // размером их host-бокса — значит за каждым relayout (ресайз, зум,
         // любое движение вёрстки над фреймом). Проход сам гейтится на
@@ -926,29 +947,72 @@ impl Lumen {
                     .iter()
                     .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                     .collect();
-                lazy_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
-                    js.update_layout_rects(rects);
-                    js.update_client_rects(client_rects);
-                    js.update_hit_test_tree(hit_test_tree);
-                    js.update_computed_styles(styles);
-                    js.update_pseudo_computed_styles(pseudo_styles);
-                    js.update_custom_properties(customs);
-                    js.update_stylesheet(stylesheet);
-                    js.update_viewport_size(vw, vh);
-                    js.deliver_layout_observers();
-                    // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
-                    // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
-                    // read from winit at window creation / refreshed on ThemeChanged.
-                    js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
-                    // After fresh rects are in JS: fire lazy-load proximity check.
-                    // Images that entered the viewport+margin are queued by JS via
-                    // _lumen_request_lazy_image_load; we drain and fetch them below.
-                    js.deliver_lazy_images();
-                    let reqs = js.take_lazy_image_requests();
-                    js.update_scroll_states(scroll_states);
-                    reqs
-                })
-                .unwrap_or_default();
+                // BUG-935 S17: `defer_js_push` splits the two callers that used
+                // to share this one blocking `route_query_js` call.
+                // `try_relayout_raf_incremental` (the only `true` caller) fires
+                // it as a non-blocking `route_task_js` instead — S15 measured
+                // the blocking form costing multiple seconds when it lands
+                // behind the still-running rAF JS turn that dirtied the DOM on
+                // the same ordered engine-thread FIFO. `take_lazy_image_requests`'s
+                // result is therefore not available synchronously here; the task
+                // stashes it in `pending_lazy_image_reqs` for the drain below
+                // (this call's or a later producer's).
+                if defer_js_push {
+                    let reqs_slot = Arc::clone(&self.pending_lazy_image_reqs);
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                        js.update_layout_rects(rects);
+                        js.update_client_rects(client_rects);
+                        js.update_hit_test_tree(hit_test_tree);
+                        js.update_computed_styles(styles);
+                        js.update_pseudo_computed_styles(pseudo_styles);
+                        js.update_custom_properties(customs);
+                        js.update_stylesheet(stylesheet);
+                        js.update_viewport_size(vw, vh);
+                        js.deliver_layout_observers();
+                        js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
+                        js.deliver_lazy_images();
+                        let reqs = js.take_lazy_image_requests();
+                        js.update_scroll_states(scroll_states);
+                        if !reqs.is_empty()
+                            && let Ok(mut slot) = reqs_slot.lock()
+                        {
+                            slot.extend(reqs);
+                        }
+                    });
+                } else {
+                    lazy_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                        js.update_layout_rects(rects);
+                        js.update_client_rects(client_rects);
+                        js.update_hit_test_tree(hit_test_tree);
+                        js.update_computed_styles(styles);
+                        js.update_pseudo_computed_styles(pseudo_styles);
+                        js.update_custom_properties(customs);
+                        js.update_stylesheet(stylesheet);
+                        js.update_viewport_size(vw, vh);
+                        js.deliver_layout_observers();
+                        // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
+                        // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
+                        // read from winit at window creation / refreshed on ThemeChanged.
+                        js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
+                        // After fresh rects are in JS: fire lazy-load proximity check.
+                        // Images that entered the viewport+margin are queued by JS via
+                        // _lumen_request_lazy_image_load; we drain and fetch them below.
+                        js.deliver_lazy_images();
+                        let reqs = js.take_lazy_image_requests();
+                        js.update_scroll_states(scroll_states);
+                        reqs
+                    })
+                    .unwrap_or_default();
+                }
+            }
+            // BUG-935 S17: pick up whatever a *previous* deferred push (this
+            // call's own, if `defer_js_push` above, or an earlier one) already
+            // stashed — every producer routes through here, so this always
+            // catches up within one relayout regardless of which producer runs
+            // next. A no-op (empty lock, immediately dropped) on every build
+            // that never takes the `defer_js_push` branch.
+            if let Ok(mut slot) = self.pending_lazy_image_reqs.lock() {
+                lazy_reqs.append(&mut slot);
             }
             if !lazy_reqs.is_empty() {
                 self.fetch_and_register_lazy_images(lazy_reqs);
@@ -1097,7 +1161,7 @@ impl Lumen {
         // a stale in-flight async commit is dropped by `poll_engine_commit`.
         self.engine_applied_generation = self.engine_job_generation;
         let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
-        self.apply_relayout_result(content, layout_box, viewport);
+        self.apply_relayout_result(content, layout_box, viewport, false);
         if lumen_paint::frame_log_enabled() {
             self.engine_stats.record(compute_ms);
             eprintln!(
@@ -1125,7 +1189,7 @@ impl Lumen {
         }
         self.engine_applied_generation = commit.generation;
         let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
-        self.apply_relayout_result(content, layout_box, viewport);
+        self.apply_relayout_result(content, layout_box, viewport, false);
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off

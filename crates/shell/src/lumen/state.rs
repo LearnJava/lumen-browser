@@ -802,6 +802,18 @@ pub(crate) struct Lumen {
     /// permanently starve notifications/popups/console. UI-thread only, flag-on
     /// only (stays `false` off the flag).
     pub(crate) raf_drain_gate: bool,
+    /// BUG-935 S17: lock-free-ish handoff for `<img loading=lazy>` requests
+    /// discovered by a **deferred** JS-observer push
+    /// ([`Self::apply_relayout_result`]'s `defer_js_push` branch, used only by
+    /// [`Self::try_relayout_raf_incremental`]). That branch fires the push as a
+    /// fire-and-forget engine-thread `task` instead of a blocking `query` (the
+    /// blocking round-trip was BUG-935 S15's confirmed multi-second stall
+    /// source), so `take_lazy_image_requests()`'s result is not available to
+    /// the caller synchronously — the task appends it here instead, and the
+    /// next `apply_relayout_result` call (any producer) drains and fetches it.
+    /// Empty and unused off the deferred path (every other producer still
+    /// fetches its own `lazy_reqs` synchronously, byte-identical to before).
+    pub(crate) pending_lazy_image_reqs: Arc<Mutex<Vec<(u32, String)>>>,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
