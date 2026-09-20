@@ -185,7 +185,7 @@ impl Lumen {
         lumen_layout::clear_animated_heights();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        self.apply_relayout_result(new_dl, lb, viewport, false);
+        self.apply_relayout_result(new_dl, lb, viewport, true);
         if let Some(t0) = engine_t0 {
             let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
             self.engine_stats.record(engine_ms);
@@ -786,14 +786,22 @@ impl Lumen {
     /// the blocking [`route_query_js`] — see the field doc on
     /// [`crate::lumen::state::Lumen::pending_lazy_image_reqs`] for why lazy-image
     /// requests still reach [`Self::fetch_and_register_lazy_images`] despite the
-    /// caller not getting them back synchronously. Only
-    /// [`Self::try_relayout_raf_incremental`] passes `true` — BUG-935 S15 found
-    /// that path calling the blocking form lands *behind* the still-running rAF
-    /// JS turn that dirtied the DOM (same ordered engine-thread FIFO), stalling
-    /// the UI thread for as long as that turn's synchronous network calls take.
-    /// Every other producer keeps `false` (byte-identical to before this slice):
-    /// they run this push only after their commit already landed, so the FIFO is
-    /// idle and blocking costs nothing.
+    /// caller not getting them back synchronously.
+    /// [`Self::try_relayout_raf_incremental`] passes `true` since S17 — BUG-935
+    /// S15 found that path calling the blocking form lands *behind* the
+    /// still-running rAF JS turn that dirtied the DOM (same ordered
+    /// engine-thread FIFO), stalling the UI thread for as long as that turn's
+    /// synchronous network calls take. [`Self::relayout`] and
+    /// [`Self::poll_engine_commit`] pass `true` since S27 for the same reason
+    /// (S23/S24 measured the latter as the dominant contributor to the
+    /// `QUERY_TIMEOUT` tax on every subsequent frame's `route_query_js`) — S25
+    /// found neither reads the push result synchronously and S26 added an
+    /// independent drain for `pending_lazy_image_reqs` so the "next producer
+    /// picks it up" assumption no longer has to hold. [`Self::readback_relayout_job`]
+    /// still passes `false`, but is dead in production (S25 finding A: its
+    /// sole caller is gated on the engine thread being *off*, and the function
+    /// itself returns early on that same condition) — not converted, since
+    /// there is no live path to measure or regress.
     pub(crate) fn apply_relayout_result(
         &mut self,
         mut new_dl: DisplayList,
@@ -1248,7 +1256,15 @@ impl Lumen {
         }
         self.engine_applied_generation = commit.generation;
         let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
-        self.apply_relayout_result(content, layout_box, viewport, false);
+        // BUG-935 S27: `defer_js_push=true` — S23/S24 measured this call site
+        // (the `poll_engine_commit` off-thread commit path) as the dominant
+        // contributor to the `QUERY_TIMEOUT` tax on the UI thread (S24's
+        // `relayout.rs:1023`, 51.7s over just 2 calls in a 3-minute run). S25
+        // confirmed no caller reads the JS-side push result synchronously
+        // (finding B) and S26 added an independent drain for
+        // `pending_lazy_image_reqs` so a push that never gets picked up by a
+        // *next* `apply_relayout_result` still gets fetched (finding C).
+        self.apply_relayout_result(content, layout_box, viewport, true);
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off
