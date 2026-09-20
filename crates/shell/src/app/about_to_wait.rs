@@ -1275,10 +1275,10 @@ impl Lumen {
                     })
                 } else if url.is_empty() {
                     Ok(PageSource::url("about:blank"))
-                } else if self.window_open_navigate_to_blocked(&url) {
-                    Err("blocked by CSP navigate-to".to_owned())
+                } else if let Some(upgraded) = self.window_open_navigate_to_gate(&url) {
+                    resolve_js_navigation(&upgraded, &self.source)
                 } else {
-                    resolve_js_navigation(&url, &self.source)
+                    Err("blocked by CSP navigate-to".to_owned())
                 };
                 // GAP-NAVCTX срез 4 (BUG-797): opener's tab id, read BEFORE
                 // `open_new_tab()`/`switch_tab()` moves `self.tab_strip.active`
@@ -1875,8 +1875,12 @@ impl Lumen {
         None
     }
 
-    /// `true`, если `navigate-to` политики ЗАКРЫВАЮЩЕГО (opener) документа
-    /// запрещает `window.open(url)` — GAP-CSPENF срез 35. Тот же контур, что
+    /// `navigate-to` гейт для `window.open(url)` — `None` если политика
+    /// ЗАКРЫВАЮЩЕГО (opener) документа запрещает переход (GAP-CSPENF срез 35),
+    /// иначе адрес, апгрейженный `upgrade-insecure-requests` (срез 53,
+    /// продолжение среза 52 — тот же приём, что [`js_navigate_to_gate`]:
+    /// UIR §4.1 шаг 5 обязан отработать раньше гейта шага 6, поэтому
+    /// возвращается уже переписанный URL, а не исходный). Тот же контур, что
     /// [`js_navigate_to_gate`] (срез 34) и `click.rs::navigate_to_link_blocked`
     /// (срез 33): одна блокировка документа, гейт, `securitypolicyviolation`.
     ///
@@ -1885,9 +1889,9 @@ impl Lumen {
     /// на opener — навигация проверяется политикой инициатора, а не той
     /// вкладки, что ещё не существует.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    fn window_open_navigate_to_blocked(&mut self, url: &str) -> bool {
+    fn window_open_navigate_to_gate(&mut self, url: &str) -> Option<String> {
         let Some(ls) = self.layout_source.as_ref() else {
-            return false;
+            return Some(url.to_owned());
         };
         let csp_gate = {
             let doc = ls.document.lock().unwrap();
@@ -1895,19 +1899,20 @@ impl Lumen {
             crate::csp_enforce::document_csp_policy(&doc, root)
         };
         let Some((policy, original_policy)) = csp_gate else {
-            return false;
+            return Some(url.to_owned());
         };
         let resolved = self.source.resolve_href(url);
+        let resolved = crate::csp_enforce::upgrade_insecure_url(&policy, &resolved).unwrap_or(resolved);
         let self_origin = self.source.resource_base().and_then(|b| b.origin());
         if !crate::csp_enforce::navigate_to_blocked(&policy, &resolved, self_origin.as_ref()) {
-            return false;
+            return Some(resolved);
         }
         let blocked = resolved.clone();
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.fire_csp_violation("navigate-to", &blocked, &original_policy);
         });
         eprintln!("window.open: navigation to {resolved} blocked by CSP navigate-to");
-        true
+        None
     }
 }
 
