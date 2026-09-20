@@ -450,6 +450,7 @@ pub(crate) fn install_node_properties(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     dom_dirty: Arc<AtomicBool>,
+    flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
 ) -> JsResult<()> {
     // ── node properties ──────────────────────────────────────────────────────
@@ -616,6 +617,7 @@ pub(crate) fn install_node_properties(
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_set_attr",
@@ -636,10 +638,12 @@ pub(crate) fn install_node_properties(
                     record_dom_touch(&touched, nid);
                 }
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_remove_attr", move |node_id: u32, name: String| {
             let mut doc = d.lock().unwrap();
@@ -654,6 +658,7 @@ pub(crate) fn install_node_properties(
                 record_dom_touch(&touched, nid);
             }
             dirty.store(true, Ordering::Relaxed);
+            stale.store(true, Ordering::Relaxed);
         });
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store,
@@ -676,6 +681,7 @@ pub(crate) fn install_node_properties(
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store,
             "_lumen_set_attr_ns",
@@ -696,6 +702,7 @@ pub(crate) fn install_node_properties(
                     record_dom_touch(&touched, nid);
                 }
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
         // ── Form-control runtime value (BUG-441) ────────────────────────────
@@ -715,6 +722,7 @@ pub(crate) fn install_node_properties(
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_set_dirty_value",
@@ -728,11 +736,13 @@ pub(crate) fn install_node_properties(
                     // the painted text — same restyle trigger as an attribute.
                     record_dom_touch(&touched, nid);
                     dirty.store(true, Ordering::Relaxed);
+                    stale.store(true, Ordering::Relaxed);
                 }
             }
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_clear_dirty_value", move |node_id: u32| {
             let mut doc = d.lock().unwrap();
@@ -741,6 +751,7 @@ pub(crate) fn install_node_properties(
                 doc.clear_control_value(nid);
                 record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         });
         // ── Checkbox/radio runtime checkedness (BUG-444) ────────────────────
@@ -758,6 +769,7 @@ pub(crate) fn install_node_properties(
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store,
             "_lumen_set_dirty_checked",
@@ -771,11 +783,13 @@ pub(crate) fn install_node_properties(
                     // — same restyle trigger as an attribute change.
                     record_dom_touch(&touched, nid);
                     dirty.store(true, Ordering::Relaxed);
+                    stale.store(true, Ordering::Relaxed);
                 }
             }
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_clear_dirty_checked", move |node_id: u32| {
             let mut doc = d.lock().unwrap();
@@ -784,6 +798,7 @@ pub(crate) fn install_node_properties(
                 doc.clear_control_checked(nid);
                 record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         });
         let d = Arc::clone(&doc);
@@ -815,6 +830,7 @@ pub(crate) fn install_node_properties(
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_set_text_content",
@@ -830,6 +846,7 @@ pub(crate) fn install_node_properties(
                 // a text/childList change here can flip `:empty` for `nid`.
                 record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
@@ -850,6 +867,7 @@ pub(crate) fn install_node_properties(
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_set_inner_html",
@@ -898,6 +916,7 @@ pub(crate) fn install_node_properties(
                 }
                 record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
@@ -1005,6 +1024,7 @@ pub(crate) fn install_tree_mutation(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     dom_dirty: Arc<AtomicBool>,
+    flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
 ) -> JsResult<()> {
     // ── tree mutation ────────────────────────────────────────────────────────
@@ -1078,6 +1098,7 @@ pub(crate) fn install_tree_mutation(
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_append_child",
@@ -1100,10 +1121,12 @@ pub(crate) fn install_tree_mutation(
                 // parent-subtree invalidation).
                 record_dom_touch(&touched, parent);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_remove_child",
@@ -1123,6 +1146,7 @@ pub(crate) fn install_tree_mutation(
                     record_dom_touch(&touched, parent);
                 }
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
     }
@@ -1137,6 +1161,7 @@ pub(crate) fn install_shadow_dom(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     dom_dirty: Arc<AtomicBool>,
+    flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
 ) -> JsResult<()> {
     // ── Shadow DOM ───────────────────────────────────────────────────────────────
@@ -1145,6 +1170,7 @@ pub(crate) fn install_shadow_dom(
     {
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_attach_shadow", move |nid: u32, mode: String| -> u32 {
             let mut doc = d.lock().unwrap();
@@ -1160,6 +1186,7 @@ pub(crate) fn install_shadow_dom(
             // conservative fallback.
             record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
+            stale.store(true, Ordering::Relaxed);
             shadow.index() as u32
         });
     }
@@ -1247,6 +1274,7 @@ pub(crate) fn install_shadow_dom(
     {
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_insert_before",
@@ -1266,6 +1294,7 @@ pub(crate) fn install_shadow_dom(
                     record_dom_touch(&touched, parent);
                 }
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
     }
@@ -1307,6 +1336,7 @@ pub(crate) fn install_selection(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     dom_dirty: Arc<AtomicBool>,
+    flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
 ) -> JsResult<()> {
     // ── Selection API (WHATWG Selection API + DOM §4.5) ─────────────────────
@@ -1333,6 +1363,7 @@ pub(crate) fn install_selection(
         // Sets selection to [anchor_nid, anchor_offset, focus_nid, focus_offset].
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_set_selection",
@@ -1365,6 +1396,7 @@ pub(crate) fn install_selection(
                 // rather than risk an under-approximated restyle root-set.
                 record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         );
     }
@@ -1372,12 +1404,14 @@ pub(crate) fn install_selection(
         // Clears the current selection.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_clear_selection", move || {
             let mut doc = d.lock().unwrap();
             doc.set_selection(Selection { anchor: None, focus: None });
             record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
+            stale.store(true, Ordering::Relaxed);
         });
     }
     {
@@ -1440,6 +1474,7 @@ pub(crate) fn install_selection(
         // Deletes the contents of range; returns [new_pos_nid, new_pos_offset].
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_range_delete_contents",
@@ -1460,6 +1495,7 @@ pub(crate) fn install_selection(
                 // whole elements — not attributable to a simple node set.
                 record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
                 vec![pos.container.index() as u32, pos.offset]
             }
         );
@@ -1497,6 +1533,7 @@ pub(crate) fn install_design_mode(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     dom_dirty: Arc<AtomicBool>,
+    flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
 ) -> JsResult<()> {
     // ── document.designMode (HTML LS §6.6.3, BUG-353) ──────────────────────
@@ -1518,6 +1555,7 @@ pub(crate) fn install_design_mode(
         // Returns true on success.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_contenteditable_insert_text", move |text: String| -> bool {
             if text.is_empty() { return false; }
@@ -1535,6 +1573,7 @@ pub(crate) fn install_design_mode(
             // attributable to a simple node set.
             record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
+            stale.store(true, Ordering::Relaxed);
             true
         });
     }
@@ -1543,6 +1582,7 @@ pub(crate) fn install_design_mode(
         // If the selection is non-collapsed, deletes the selection instead.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_contenteditable_delete_backward", move || -> bool {
             let mut doc = d.lock().unwrap();
@@ -1553,6 +1593,7 @@ pub(crate) fn install_design_mode(
                 doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
                 record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
                 return true;
             }
             let Some(anchor) = sel.anchor else { return false; };
@@ -1575,6 +1616,7 @@ pub(crate) fn install_design_mode(
             doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
             record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
+            stale.store(true, Ordering::Relaxed);
             true
         });
     }
@@ -1583,6 +1625,7 @@ pub(crate) fn install_design_mode(
         // If the selection is non-collapsed, deletes the selection instead.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_contenteditable_delete_forward", move || -> bool {
             let mut doc = d.lock().unwrap();
@@ -1592,6 +1635,7 @@ pub(crate) fn install_design_mode(
                 doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
                 record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
                 return true;
             }
             let Some(anchor) = sel.anchor else { return false; };
@@ -1614,6 +1658,7 @@ pub(crate) fn install_design_mode(
             doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
             record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
+            stale.store(true, Ordering::Relaxed);
             true
         });
     }
@@ -1622,6 +1667,7 @@ pub(crate) fn install_design_mode(
         // Finds the editing host, then calls insert_paragraph_break.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_contenteditable_insert_paragraph", move || -> bool {
             let mut doc = d.lock().unwrap();
@@ -1640,6 +1686,7 @@ pub(crate) fn install_design_mode(
             doc.set_selection(Selection { anchor: Some(new_pos), focus: Some(new_pos) });
             record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
+            stale.store(true, Ordering::Relaxed);
             true
         });
     }
@@ -1648,6 +1695,7 @@ pub(crate) fn install_design_mode(
         // Returns true if the command was handled.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, 
             "_lumen_exec_command",
@@ -1672,6 +1720,7 @@ pub(crate) fn install_design_mode(
                                 });
                                 record_dom_touch_unattributed(&touched);
                                 dirty.store(true, Ordering::Relaxed);
+                                stale.store(true, Ordering::Relaxed);
                             }
                         }
                         true
@@ -1691,6 +1740,7 @@ pub(crate) fn install_design_mode(
                             });
                             record_dom_touch_unattributed(&touched);
                             dirty.store(true, Ordering::Relaxed);
+                            stale.store(true, Ordering::Relaxed);
                         }
                         true
                     }
@@ -1703,6 +1753,7 @@ pub(crate) fn install_design_mode(
                             });
                             record_dom_touch_unattributed(&touched);
                             dirty.store(true, Ordering::Relaxed);
+                            stale.store(true, Ordering::Relaxed);
                         }
                         true
                     }

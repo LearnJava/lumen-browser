@@ -251,6 +251,7 @@ impl V8JsRuntime {
             let nav_out = Arc::clone(&self.nav_out);
             let timer_wakeup = Arc::clone(&self.timer_wakeup);
             let dom_dirty = Arc::clone(&self.dom_dirty);
+            let flush_stale = Arc::clone(&self.flush_stale);
             let dom_touched = Arc::clone(&self.dom_touched);
             let raf_pending = Arc::clone(&self.raf_pending);
             let layout_rects = Arc::clone(&self.layout_rects);
@@ -280,7 +281,7 @@ impl V8JsRuntime {
                 custom_properties: Arc::clone(&custom_properties),
                 viewport_size: Arc::clone(&viewport_size),
                 stylesheet: Arc::clone(&self.flush_stylesheet),
-                dom_dirty: Arc::clone(&dom_dirty),
+                flush_stale: Arc::clone(&flush_stale),
                 never_flushed: Arc::clone(&self.style_never_flushed),
                 scroll_states: Arc::clone(&scroll_states),
                 focused_nid: Arc::clone(&self.focused_nid),
@@ -337,6 +338,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
             )?;
 
@@ -350,6 +352,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
             )?;
 
@@ -488,6 +491,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
             )?;
 
@@ -497,6 +501,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
             )?;
             install::install_contenteditable(scope, ctx, store, Arc::clone(&doc))?;
@@ -506,6 +511,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
             )?;
 
@@ -521,6 +527,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
                 Arc::clone(&computed_styles),
                 Arc::clone(&custom_properties),

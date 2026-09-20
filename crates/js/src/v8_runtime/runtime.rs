@@ -65,6 +65,17 @@ pub struct V8JsRuntime {
     pub(super) timer_wakeup: Arc<Mutex<Option<f64>>>,
     /// Set to `true` by any DOM-mutating JS binding. Cleared by `take_dom_dirty`.
     pub(super) dom_dirty: Arc<AtomicBool>,
+    /// BUG-935 S34: sibling of [`Self::dom_dirty`] set at every same call site,
+    /// but consumed only by [`super::style_flush::FlushHandles::maybe_flush`]'s
+    /// gate — cleared there at the end of a successful flush instead of by the
+    /// scheduler's `take_dom_dirty`/`take_dom_dirty_lockfree`. Splitting the two
+    /// stops a same-tick accessor flush (CSSOM-4) from silently eating the
+    /// scheduler's "DOM mutated" signal, which used to make one shared
+    /// `dom_dirty` re-run a full off-thread layout on every observed target of
+    /// an `IntersectionObserver`/`ResizeObserver` sweep instead of once per
+    /// script turn (see `bugs/BUG-935-OPEN.md` S33's `deliver_layout_observers`
+    /// finding).
+    pub(super) flush_stale: Arc<AtomicBool>,
     /// BUG-341 S7: nodes touched by a tracked DOM-mutation primitive since the
     /// last [`Self::take_dom_touched`] call, plus the `unattributed` fallback
     /// flag. See [`DomTouched`].
@@ -331,6 +342,7 @@ impl V8JsRuntime {
             nav_out: Arc::new(Mutex::new(None)),
             timer_wakeup: Arc::new(Mutex::new(None)),
             dom_dirty: Arc::new(AtomicBool::new(false)),
+            flush_stale: Arc::new(AtomicBool::new(false)),
             dom_touched: Arc::new(Mutex::new(DomTouched::default())),
             raf_pending: Arc::new(AtomicBool::new(false)),
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
