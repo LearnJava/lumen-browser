@@ -50,6 +50,18 @@
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+/// Верхняя граница ожидания [`EngineThread::query`] (BUG-935 срез 6). `Task`
+/// исполняются по порядку (FIFO, без coalescing), поэтому замыкание `query`
+/// может стоять в очереди позади уже стартовавшего синхронного задания
+/// (например, `fetch()` без `AbortSignal` внутри `eval_js`, ограниченного
+/// `FETCH_READ_TIMEOUT=60s` в `lumen-network`) и не начать исполняться
+/// заметно дольше типичной длительности своей собственной работы. Значение
+/// — с запасом над наблюдёнными full-relayout (146–2600мс, BUG-935 S3/S5),
+/// но много меньше `FETCH_READ_TIMEOUT`, так что таймаут гасит именно
+/// патологический хвост очереди, а не типичную нагрузку.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Задание/сигнал движковому потоку. Задания `Run` коалесцируются (latest-wins с
 /// generation-guard); `Readback` — request/reply по immutable-снимку, исполняется
@@ -222,8 +234,16 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     /// [`Self::task`], не коалесцируется и исполняется по порядку в пачке.
     ///
     /// Возвращает `None`, если поток уже завершён или получил `Shutdown` раньше,
-    /// чем исполнил задание (канал ответа дропнут) — вызывающая сторона тогда
-    /// подставляет значение-по-умолчанию своей ветки «без JS».
+    /// чем исполнил задание (канал ответа дропнут), **или** если ответ не пришёл
+    /// за [`QUERY_TIMEOUT`] (BUG-935 срез 6: FIFO-очередь `Task` может держать
+    /// это задание позади уже стартовавшего синхронного `fetch()` на десятки
+    /// секунд — таймаут не даёт вызывающей стороне (включая MCP/automation-канал)
+    /// повиснуть на весь этот срок). Оба случая вызывающая сторона уже трактует
+    /// одинаково — подставляет значение-по-умолчанию своей ветки «без JS»,
+    /// поэтому таймаут не заводит новый режим отказа, а лишь ограничивает уже
+    /// существующий сверху. Задание при этом остаётся в очереди и всё равно
+    /// исполнится (мутация состояния `S` не теряется) — теряется только ответ,
+    /// который уже некому принять.
     ///
     /// Живой с M2.2c-2c: `route_query_js` маршрутизирует через него value-returning
     /// UI→JS чтения (`take_dom_dirty`, `take_raf_pending`, `eval_js_value`).
@@ -235,13 +255,16 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
         let (reply_tx, reply_rx) = mpsc::sync_channel::<R>(1);
         self.tx
             .send(EngineMsg::Task(Box::new(move |state| {
-                // `send` вернёт `Err`, только если вызывающий отказался ждать
-                // (queue depth 1, никогда не блокирует поток) — тогда роняем.
+                // `send` вернёт `Err`, если вызывающий уже отказался ждать
+                // (таймаут) или отказался ждать раньше (queue depth 1, никогда
+                // не блокирует поток) — тогда роняем.
                 let _ = reply_tx.send(job(state));
             })))
             .ok()?;
-        // Блокируемся до ответа; `Err` (sender дропнут при shutdown) → None.
-        reply_rx.recv().ok()
+        // Ограниченное ожидание (BUG-935 S6): `Err` — и `Disconnected`
+        // (sender дропнут при shutdown), и `Timeout` (задание застряло в
+        // очереди позади долгого синхронного соседа) — трактуются одинаково.
+        reply_rx.recv_timeout(QUERY_TIMEOUT).ok()
     }
 }
 
@@ -688,6 +711,25 @@ mod tests {
         engine.submit(1, || 1);
         engine.submit(2, || 2);
         assert_eq!(engine.readback(|| 99), Some(99));
+    }
+
+    #[test]
+    fn query_times_out_when_stuck_behind_long_task() {
+        // BUG-935 срез 6: `Task` не коалесцируется, поэтому `query` может стоять
+        // в очереди позади уже стартовавшего долгого соседа (в проде — синхронный
+        // `fetch()` внутри `eval_js`, до `FETCH_READ_TIMEOUT=60s`). Раньше это
+        // блокировало вызывающего (в т.ч. MCP/automation-канал) на весь этот
+        // срок; теперь `query` обязан вернуть `None` не позже `QUERY_TIMEOUT`.
+        let engine = EngineThread::<u64, u64>::spawn_with_state(0).expect("spawn engine thread");
+        engine.task(|s| {
+            thread::sleep(QUERY_TIMEOUT + Duration::from_secs(1));
+            *s += 1;
+        });
+        assert_eq!(
+            engine.query(|s| *s),
+            None,
+            "query обязан истечь по QUERY_TIMEOUT, а не ждать долгий сосед по FIFO-очереди"
+        );
     }
 
     #[test]
