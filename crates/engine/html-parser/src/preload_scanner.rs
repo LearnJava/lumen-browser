@@ -323,6 +323,112 @@ fn find_attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// Разобрать значение HTTP-заголовка `Link` (RFC 8288 §3) в те же
+/// [`PreloadHint`], что эмитит HTML-сканер для `<link rel>` — GAP-EARLYHINTS
+/// срез 3 (RFC 8297 103 Early Hints): преконнект/прелоад-хинты из
+/// заголовка должны стартовать так же, как author-хинты из разметки,
+/// переиспользуя один и тот же `rel`-словарь ([`collect_link_hints`] для
+/// `<link>`-тегов).
+///
+/// Формат одного элемента: `<url-reference>; param1=value1; param2="value 2"`,
+/// элементы разделены запятой. `rel` может нести несколько keyword-ов
+/// (`rel="preload stylesheet"`) — каждый эмитится отдельным hint-ом, как и
+/// в HTML-сканере. Неизвестные `rel`-токены и элементы без `<url>`/`rel`
+/// молча пропускаются (лениво, как и весь остальной модуль).
+///
+/// URL не резолвится относительно базы — тот же контракт, что и у
+/// [`scan_preload_hints`]: caller прогоняет через `Url::resolve(base)`.
+pub fn parse_link_header(header: &str) -> Vec<PreloadHint> {
+    let mut out = Vec::new();
+    for entry in split_link_header_entries(header) {
+        let Some((url, params)) = parse_link_header_entry(entry) else {
+            continue;
+        };
+        let rel = find_param(&params, "rel").map(str::to_ascii_lowercase);
+        let Some(rel) = rel else {
+            continue;
+        };
+        let as_kind = find_param(&params, "as")
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .filter(|s| !s.is_empty());
+        for token in rel.split_ascii_whitespace() {
+            match token {
+                "stylesheet" => out.push(PreloadHint::Stylesheet { url: url.clone(), media: None }),
+                "preload" => out.push(PreloadHint::Preload { url: url.clone(), as_kind: as_kind.clone() }),
+                "modulepreload" => out.push(PreloadHint::ModulePreload { url: url.clone() }),
+                "prefetch" => out.push(PreloadHint::Prefetch { url: url.clone() }),
+                "preconnect" => out.push(PreloadHint::Preconnect { url: url.clone(), dns_only: false }),
+                "dns-prefetch" => out.push(PreloadHint::Preconnect { url: url.clone(), dns_only: true }),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Разбить значение `Link`-заголовка на элементы по запятым верхнего
+/// уровня — запятая внутри `<...>` (URL-reference) или `"..."` (quoted
+/// param value) не считается разделителем (RFC 8288 §3, RFC 7230 §3.2.6
+/// quoted-string).
+fn split_link_header_entries(header: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut angle_depth = 0i32;
+    let mut in_quotes = false;
+    let mut start = 0usize;
+    for (i, b) in header.bytes().enumerate() {
+        match b {
+            b'<' if !in_quotes => angle_depth += 1,
+            b'>' if !in_quotes => angle_depth -= 1,
+            b'"' => in_quotes = !in_quotes,
+            b',' if angle_depth <= 0 && !in_quotes => {
+                out.push(&header[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&header[start..]);
+    out
+}
+
+/// Разобрать один элемент `Link`-заголовка в `(url, [(param, value)])`.
+/// `None` если `<url-reference>` отсутствует или пуст.
+fn parse_link_header_entry(entry: &str) -> Option<(String, Vec<(String, String)>)> {
+    let entry = entry.trim();
+    let open = entry.find('<')?;
+    let close = entry[open..].find('>').map(|i| open + i)?;
+    let url = entry[open + 1..close].trim();
+    if url.is_empty() {
+        return None;
+    }
+    let mut params = Vec::new();
+    for part in entry[close + 1..].split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some(eq) = part.find('=') else { continue };
+        let key = part[..eq].trim().to_owned();
+        let mut value = part[eq + 1..].trim();
+        if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+            value = &value[1..value.len() - 1];
+        }
+        params.push((key, value.to_owned()));
+    }
+    Some((url.to_owned(), params))
+}
+
+/// ASCII case-insensitive lookup среди `Link`-заголовка параметров
+/// (`find_attr`-аналог для `(String, String)` пар, разобранных
+/// [`parse_link_header_entry`]).
+fn find_param<'a>(params: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    params
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +816,124 @@ mod tests {
         // `<link>` и `<img>` — void elements, парсятся даже без `/>`.
         let hints = scan_preload_hints(r#"<link rel="stylesheet" href="x.css" /><img src="y.png" />"#);
         assert_eq!(hints.len(), 2);
+    }
+
+    // ---- GAP-EARLYHINTS срез 3: parse_link_header (RFC 8288 `Link:` header) ----
+
+    #[test]
+    fn link_header_preload_with_as() {
+        let hints = parse_link_header(r#"<https://example.test/style.css>; rel=preload; as=style"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Preload {
+                url: "https://example.test/style.css".into(),
+                as_kind: Some("style".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn link_header_preconnect_and_dns_prefetch() {
+        let hints = parse_link_header(
+            r#"<https://cdn.example/>; rel=preconnect, <https://cdn2.example/>; rel="dns-prefetch""#,
+        );
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::Preconnect { url: "https://cdn.example/".into(), dns_only: false },
+                PreloadHint::Preconnect { url: "https://cdn2.example/".into(), dns_only: true },
+            ]
+        );
+    }
+
+    #[test]
+    fn link_header_multiple_entries_preserve_order() {
+        let hints = parse_link_header(
+            r#"</a.css>; rel=preload; as=style, </b.js>; rel=preload; as=script"#,
+        );
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) },
+                PreloadHint::Preload { url: "/b.js".into(), as_kind: Some("script".into()) },
+            ]
+        );
+    }
+
+    #[test]
+    fn link_header_multi_token_rel_emits_both() {
+        let hints = parse_link_header(r#"</hero.css>; rel="preload stylesheet"; as=style"#);
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::Preload { url: "/hero.css".into(), as_kind: Some("style".into()) },
+                PreloadHint::Stylesheet { url: "/hero.css".into(), media: None },
+            ]
+        );
+    }
+
+    #[test]
+    fn link_header_modulepreload_and_prefetch() {
+        let hints = parse_link_header(
+            r#"</mod.js>; rel=modulepreload, </next.html>; rel=prefetch"#,
+        );
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::ModulePreload { url: "/mod.js".into() },
+                PreloadHint::Prefetch { url: "/next.html".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn link_header_unknown_rel_skipped() {
+        assert!(parse_link_header(r#"</icon.png>; rel=icon"#).is_empty());
+    }
+
+    #[test]
+    fn link_header_missing_rel_skipped() {
+        assert!(parse_link_header(r#"</x.css>; as=style"#).is_empty());
+    }
+
+    #[test]
+    fn link_header_empty_url_skipped() {
+        assert!(parse_link_header(r#"<>; rel=preload"#).is_empty());
+    }
+
+    #[test]
+    fn link_header_no_angle_brackets_skipped() {
+        assert!(parse_link_header("rel=preload").is_empty());
+        assert!(parse_link_header("").is_empty());
+    }
+
+    #[test]
+    fn link_header_quoted_param_value_unquoted() {
+        let hints = parse_link_header(r#"</f.woff2>; rel=preload; as="font""#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Preload { url: "/f.woff2".into(), as_kind: Some("font".into()) }]
+        );
+    }
+
+    #[test]
+    fn link_header_param_comma_inside_quotes_not_a_separator() {
+        // Гипотетический param со значением, содержащим запятую в кавычках —
+        // не должен разбить элемент пополам.
+        let hints = parse_link_header(r#"</a.css>; rel=preload; as=style; title="a, b""#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) }]
+        );
+    }
+
+    #[test]
+    fn link_header_case_insensitive_rel_and_param_names() {
+        let hints = parse_link_header(r#"</x.css>; REL=Preload; AS=Style"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Preload { url: "/x.css".into(), as_kind: Some("style".into()) }]
+        );
     }
 
     #[test]
