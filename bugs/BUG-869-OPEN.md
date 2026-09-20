@@ -83,3 +83,40 @@ PROBE tick — ни одного за весь прогон (ticks = 0)
    --variant ws-backpressure` — ожидается `wb-received 50`,
    `wb-close clean=true` и ненулевой счётчик тиков.
 2. WPT: `run_report.py --all --root websockets --recursive`.
+
+## Срез 2 (2026-09-20, `p6-gap-wsasync-srez2`) — асинхронный `send()`, главный симптом закрыт
+
+`send_text`/`send_binary` на `JsWebSocketSessionImpl` (`crates/network/src/lib.rs`)
+больше не пишут в сокет из потока JS: они кладут кадр в новую
+`send_queue: Arc<Mutex<VecDeque<QueuedWsFrame>>>` и возвращают `Ok(())`
+немедленно. Второй фоновый поток (writer thread, наравне с уже существующим
+recv-потоком) вычитывает очередь FIFO и делает настоящий блокирующий
+`send_text`/`send_binary` на `session` — тот самый блокирующий `write`,
+который раньше держал поток JS. По завершении записи каждого сообщения
+поток кладёт `JsWsEvent::Flushed { bytes }` в общую событийную очередь;
+`_lumen_ws_poll` сериализует его как `{"t":"flushed","bytes":N}`, а шим
+(`crates/js/src/shim/web_api_shim_mid_b2.js`) вычитает `N` из
+`bufferedAmount` — `send()` теперь прибавляет байты `bufferedAmount` сразу
+(до этого среза `bufferedAmount` не менялся в OPEN-состоянии вовсе, только
+в CLOSING/CLOSED), а `flushed` возвращает их по мере фактической отправки.
+
+Прямое измерение (`verify_worker_port_storage_gaps.py`, dev-release,
+Windows, `--seconds 10`):
+
+| вариант | было | стало |
+|---|---|---|
+| `ws-backpressure` | 0 тиков, зависает | **16** тиков, `wb-received 50`, `wb-close clean=true` — тест проходит целиком |
+| `ws-backpressure-steps` | `send()` держит поток ~312–386 мс, `buffered=0` всегда, 0 тиков | `send()` возвращает за **2–6 мс**, `bufferedAmount` растёт на 65536 с каждым `send()` (`buffered=65536` → `131072` → …), **14** тиков за прогон |
+
+`close()` не тронут в этом срезе — он по-прежнему делает блокирующий
+`session.lock().unwrap().close(...)` прямо из потока JS; при этом писатель
+может в этот момент держать `session` на долгой записи под обратным
+давлением, так что `close()`, вызванный во время активной серии `send()`
+под backpressure, теперь способен заблокировать поток JS на время текущей
+записи — раньше это было невозможно (`send()` и `close()` были
+взаимоисключающе синхронны на одном потоке). Не измерялось отдельно;
+задел на будущий срез, если понадобится.
+
+Не проверялось: реальный прогон `run_report.py --root websockets`
+(только живой probe выше). [BUG-862](BUG-862-OPEN.md) (`send(null)` кидает
+`TypeError`) не тронут, отдельная задача.

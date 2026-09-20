@@ -1233,9 +1233,13 @@ pub(crate) fn install_websocket(
     // ── WebSocket API ─────────────────────────────────────────────────────────
     // GAP-WSASYNC срез 1: async connect — handle returned immediately,
     // handshake runs on a background thread, background recv thread (started
-    // once the handshake resolves), JS polls. Frame writes (`send_text`/
-    // `send_binary`) are still synchronous on the JS thread — that half
-    // (BUG-869, backpressure) is not this slice.
+    // once the handshake resolves), JS polls.
+    // GAP-WSASYNC срез 2 (BUG-869): `send_text`/`send_binary` now queue on the
+    // `JsWebSocketSessionImpl` side (`crates/network/src/lib.rs`) and return
+    // immediately — a background writer thread performs the actual blocking
+    // write, reporting each flushed message's byte length back through
+    // `_lumen_ws_poll` (`{"t":"flushed",...}`) so the shim can decrement
+    // `bufferedAmount`.
     // _lumen_ws_connect(url)  → handle u32 (0 = error, no provider only)
     // _lumen_ws_send(h, text) → bool
     // _lumen_ws_send_bin(h, data) → bool
@@ -1411,6 +1415,9 @@ pub(crate) fn install_websocket(
                             .replace('\\', "\\\\")
                             .replace('"', "\\\"");
                         format!(r#"{{"t":"error","msg":"{m}"}}"#)
+                    }
+                    JsWsEvent::Flushed { bytes } => {
+                        format!(r#"{{"t":"flushed","bytes":{bytes}}}"#)
                     }
                 })
             }
