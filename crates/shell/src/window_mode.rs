@@ -374,6 +374,7 @@ pub(crate) fn run_window_mode(
         dom_dirty_flag: None,
         raf_task_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         raf_drain_gate: false,
+        pending_lazy_image_reqs: Arc::new(Mutex::new(Vec::new())),
         no_scrollbar,
         maximized,
         first_paint_delivered: false,
