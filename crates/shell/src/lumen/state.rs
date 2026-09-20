@@ -560,6 +560,17 @@ pub(crate) struct Lumen {
     /// `src`, добавленный скриптом позже, своего `ImageDecoded` уже не получит,
     /// и размер ему может дать только эта карта.
     pub(crate) stream_image_sizes: HashMap<String, (u32, u32)>,
+    /// BUG-938: decoded `Arc<Image>` pixels for every `src` in
+    /// [`Self::stream_image_sizes`], keyed the same way. `Lumen::on_user_event`'s
+    /// `ImageDecoded` handler fills this alongside the size so
+    /// `apply_stream_intrinsic_sizes` can push the bitmap into
+    /// `img_bitmap_store` (`PersistentJs::set_img_bitmap`) the first time a
+    /// matching `<img>` node is seen — the one-shot `register_img_bitmaps`
+    /// pass only covers images the initial parse saw, so a script-inserted
+    /// `<img>` or a re-pointed `src` (both routed through streaming/dynamic
+    /// decode, not the parse-time pipeline) never reached `drawImage`/
+    /// `createImageBitmap` before this.
+    pub(crate) stream_image_pixels: HashMap<String, Arc<lumen_image::Image>>,
     /// BUG-735: в карту [`Self::stream_image_sizes`] попал новый размер —
     /// на ближайшем кадре нужно разнести его по `<img>` и, если DOM изменился,
     /// сделать релейаут. Флаг коалесцирует пачку декодов (сотня картинок = один

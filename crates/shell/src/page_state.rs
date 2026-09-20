@@ -105,6 +105,8 @@ pub(crate) struct PageSnapshot {
     pub(crate) stream_images_requested: std::collections::HashSet<String>,
     /// BUG-735: mirrors [`Lumen::stream_image_sizes`].
     pub(crate) stream_image_sizes: HashMap<String, (u32, u32)>,
+    /// BUG-938: mirrors [`Lumen::stream_image_pixels`].
+    pub(crate) stream_image_pixels: HashMap<String, Arc<lumen_image::Image>>,
     /// BUG-735: mirrors [`Lumen::stream_image_sizes_dirty`].
     pub(crate) stream_image_sizes_dirty: bool,
     /// BUG-1048: mirrors [`Lumen::stream_image_errors`].

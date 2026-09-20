@@ -320,6 +320,7 @@ pub(crate) fn run_window_mode(
         preload_dispatched: std::collections::HashSet::new(),
         stream_images_requested: std::collections::HashSet::new(),
         stream_image_sizes: HashMap::new(),
+        stream_image_pixels: HashMap::new(),
         stream_image_sizes_dirty: false,
         stream_image_errors: std::collections::HashSet::new(),
         stream_image_events_fired: std::collections::HashSet::new(),
