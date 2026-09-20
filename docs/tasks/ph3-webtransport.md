@@ -209,6 +209,45 @@ needs a `SendStream` registered for a peer-picked id — deferred, no
 dedicated sub-slice number assigned yet), datagrams (срез 4/datagrams
 below), lifecycle (срез 5).
 
+**Срез 4e — done (2026-09-20, P1) — incoming bidirectional streams.**
+`HttpClient::classify_discovered_peer_streams` (`crates/network/src/lib.rs`,
+factored out of срез 4d's `webtransport_poll_incoming_uni_streams` so both
+poll methods share one discovery drain) now files a discovered bidirectional
+id (RFC 9000 §2.1) into its own `pending_peer_bidi_headers` map instead of
+leaving it unclassified, and immediately registers its send half via a new
+transport primitive, `h3_webtransport_open_incoming_bidi_send_on_driver`
+(`client_transport.rs`) — idempotent `open_send_stream`, no header of ours to
+write since the peer's own `WEBTRANSPORT_STREAM` frame already established
+the direction. `webtransport_poll_incoming_bidi_streams`/
+`webtransport_read_incoming_bidi_stream` mirror the uni pair exactly
+(`parse_webtransport_uni_header` is reused unchanged — it never validated the
+type byte, only decoded two varints, so it works for both stream kinds); the
+write half needed no new primitive at all — `webtransport_write_uni_stream`/
+`webtransport_close_uni_stream`/`webtransport_abort_uni_stream` were already
+generic over any already-open `stream_id`, and the discovery step above is
+what makes a peer-picked id "already open" for them. Two new
+`JsFetchProvider` methods (default "unsupported", same pattern as every other
+extension point) and two new natives
+(`_lumen_webtransport_poll_incoming_bidi_streams`/
+`_lumen_webtransport_read_incoming_bidi_stream`). Shim:
+`incomingBidirectionalStreams` is no longer a permanently-empty
+`ReadableStream` — `openIncomingBidirectionalStreams` mirrors
+`openIncomingUnidirectionalStreams`'s discovery-loop shape but wraps each
+discovered id as a full `WebTransportBidirectionalStream`
+(`openIncomingBidiStreamReadable` for `readable`, the existing
+`openUniStreamWritable` for `writable` — unmodified, since a `SendStream`
+never knew its own direction, so the same function that backs a self-opened
+stream's write half backs a peer-opened one's too). 2 new tests
+`client_transport` (write only succeeds after registration; a second,
+idempotent registration does not reset bytes already queued), 2314+2 tests
+`lumen-network`; 5 new tests `lumen-js` (both new natives'
+unsupported/success plus one end-to-end discovery→readable-bytes+writable-write
+test), 3978+5 tests `lumen-js --features v8-backend`. `cargo clippy -p
+lumen-core -p lumen-network -p lumen-js --all-targets --features
+lumen-js/v8-backend -D warnings` and `cargo check --workspace` green. Not
+done: datagrams (срез 4/datagrams below), lifecycle `closed`/`close(info)`
+on the session (срез 5).
+
 **Срез 4b — done (2026-09-20, P1) — подключение bidi-стрима к сессии и к
 JS.** `HttpClient::webtransport_open_bidi_stream(handle)`
 (`crates/network/src/lib.rs`) зеркалит `webtransport_open_uni_stream`:
@@ -286,5 +325,6 @@ session id = id Extended CONNECT-стрима — draft-ietf-webtrans-http3 §4.
 - [x] Bidi streams — открытие + write/close/abort до JS (срезы 4a-4b, 2026-09-20).
 - [x] Bidi readable — приём входящих байт на стриме, который открыли мы (срез 4c, 2026-09-20).
 - [x] Incoming unidirectional streams — обнаружение + header-парсинг + `incomingUnidirectionalStreams` (срез 4d, 2026-09-20).
-- [ ] Incoming bidirectional streams, datagrams, lifecycle — остаются.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read+incoming uni живые, incoming bidi/datagrams/lifecycle ещё стабы).
+- [x] Incoming bidirectional streams — та же машинерия обнаружения + регистрация send-half под id, который выбрал пир (срез 4e, 2026-09-20).
+- [ ] Datagrams, lifecycle — остаются.
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read+incoming uni+incoming bidi живые, datagrams/lifecycle ещё стабы).

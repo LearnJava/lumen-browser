@@ -850,6 +850,34 @@ pub fn h3_webtransport_stream_finished_on_driver<T: DatagramTransport>(
         .is_some_and(super::stream_manager::recv_stream_finished)
 }
 
+/// Registers the send half of a **peer-initiated** WebTransport
+/// bidirectional stream `stream_id` — the counterpart
+/// [`h3_webtransport_open_bidi_stream_on_driver`] does not need, since that
+/// one already knows it opened the stream itself (and writes the
+/// `WEBTRANSPORT_STREAM` header as its first bytes). An incoming bidi
+/// stream's direction was established by the *peer's* own
+/// `WEBTRANSPORT_STREAM` frame (draft-ietf-webtrans-http3 §4.3) — the caller
+/// (`lib.rs`) parsed and stripped it off the receive half already — so this
+/// only needs to create the [`super::stream::SendStream`] state; there is no
+/// header of ours to write and nothing queued yet to flush.
+///
+/// [`super::stream_manager::StreamManager::open_send_stream`] is idempotent
+/// (`entry().or_insert_with`), so calling this more than once for the same
+/// `stream_id` — e.g. once per discovery poll until the caller notices it
+/// already did this — is harmless.
+pub fn h3_webtransport_open_incoming_bidi_send_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    stream_id: u64,
+    peer_initial_max_stream_data_bidi: u64,
+) {
+    driver
+        .turn_mut()
+        .pump_mut()
+        .dispatch_mut()
+        .streams_mut()
+        .open_send_stream(stream_id, peer_initial_max_stream_data_bidi);
+}
+
 /// Writes application bytes to a WebTransport unidirectional stream already
 /// opened by [`h3_webtransport_open_uni_stream_on_driver`] and flushes them
 /// onto the wire.
@@ -1390,6 +1418,54 @@ mod tests {
             .expect("writes to the open bidi stream");
         h3_webtransport_close_uni_stream_on_driver(&mut driver, stream_id)
             .expect("closes the bidi stream's send half");
+    }
+
+    #[test]
+    fn webtransport_open_incoming_bidi_send_lets_write_succeed_on_a_peer_picked_id() {
+        // Mirrors `webtransport_bidi_stream_write_close_and_reset_reuse_the_uni_primitives`,
+        // but for a stream id *we* never allocated (a server-initiated bidi id,
+        // `4n+1`) — before this call, writing to it must fail as unknown.
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let peer_stream_id = 5u64; // 4*1 + 1 — server-initiated bidirectional
+
+        let err = h3_webtransport_write_stream_on_driver(&mut driver, peer_stream_id, b"hello")
+            .unwrap_err();
+        assert!(matches!(err, WebTransportStreamError::UnknownStream(id) if id == peer_stream_id));
+
+        h3_webtransport_open_incoming_bidi_send_on_driver(&mut driver, peer_stream_id, 1 << 20);
+
+        h3_webtransport_write_stream_on_driver(&mut driver, peer_stream_id, b"hello")
+            .expect("send half now registered");
+        h3_webtransport_close_uni_stream_on_driver(&mut driver, peer_stream_id)
+            .expect("closes the registered send half");
+    }
+
+    #[test]
+    fn webtransport_open_incoming_bidi_send_is_idempotent() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let peer_stream_id = 5u64;
+
+        h3_webtransport_open_incoming_bidi_send_on_driver(&mut driver, peer_stream_id, 1 << 20);
+        h3_webtransport_write_stream_on_driver(&mut driver, peer_stream_id, b"foo").unwrap();
+        // A second registration for the same id must not reset the send
+        // stream state (e.g. discard the bytes already queued above) — same
+        // "safe to call repeatedly across polls" contract the doc promises.
+        h3_webtransport_open_incoming_bidi_send_on_driver(&mut driver, peer_stream_id, 1 << 20);
+        h3_webtransport_write_stream_on_driver(&mut driver, peer_stream_id, b"bar").unwrap();
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(peer_stream_id)
+            .expect("send half exists");
+        // No header of ours precedes the payload (unlike a self-opened
+        // stream) — an idempotent re-registration must not reset the offset
+        // and lose the "foo" already queued before it.
+        assert_eq!(send.write_offset(), 6);
     }
 
     #[test]

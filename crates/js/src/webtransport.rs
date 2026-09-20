@@ -42,6 +42,8 @@ pub(crate) fn install_webtransport_v8(
     let read_fetch_provider = fetch_provider.clone();
     let poll_incoming_uni_fetch_provider = fetch_provider.clone();
     let read_incoming_uni_fetch_provider = fetch_provider.clone();
+    let poll_incoming_bidi_fetch_provider = fetch_provider.clone();
+    let read_incoming_bidi_fetch_provider = fetch_provider.clone();
 
     // GAP-WEBTRANSPORT срез 3b: `_lumen_webtransport_open(url)` now also
     // reports the session `handle` `webtransport_connect` allocated — срез
@@ -252,6 +254,54 @@ pub(crate) fn install_webtransport_v8(
         }
     });
     rt.register_native("_lumen_webtransport_read_incoming_uni_stream", read_incoming_uni)?;
+
+    // GAP-WEBTRANSPORT срез 4e: `incomingBidirectionalStreams`'s discovery
+    // poll — the bidi counterpart of `_lumen_webtransport_poll_incoming_uni_streams`
+    // (`webtransport_poll_incoming_bidi_streams`,
+    // `h3_webtransport_poll_new_peer_streams_on_driver`). A reported id
+    // already has its send half registered on the Rust side, so the shim's
+    // `writable` for it reuses `openUniStreamWritable` unchanged, same as
+    // `createBidirectionalStream()`'s.
+    let poll_incoming_bidi = into_v8_fn1(move |handle: i32| -> String {
+        let Some(ref provider) = poll_incoming_bidi_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_poll_incoming_bidi_streams(handle) {
+            Ok(ids) => {
+                let ids_json = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+                format!(r#"{{"ok":true,"streamIds":[{ids_json}]}}"#)
+            }
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_poll_incoming_bidi_streams", poll_incoming_bidi)?;
+
+    // GAP-WEBTRANSPORT срез 4e: the read-bytes primitive for one incoming
+    // bidirectional stream `_lumen_webtransport_poll_incoming_bidi_streams`
+    // reported ready — same `(bytes, finished)` shape as
+    // `_lumen_webtransport_read_incoming_uni_stream`, backed by
+    // `webtransport_read_incoming_bidi_stream`.
+    let read_incoming_bidi = into_v8_fn2(move |handle: i32, stream_id: f64| -> String {
+        let Some(ref provider) = read_incoming_bidi_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_read_incoming_bidi_stream(handle, stream_id as u64) {
+            Ok((bytes, finished)) => {
+                let bytes_json = bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(",");
+                format!(r#"{{"ok":true,"bytes":[{bytes_json}],"finished":{finished}}}"#)
+            }
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_read_incoming_bidi_stream", read_incoming_bidi)?;
 
     rt.eval(WEBTRANSPORT_SHIM)?;
     Ok(())
@@ -502,6 +552,109 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     });
   }
 
+  // GAP-WEBTRANSPORT срез 4e: the readable half of one incoming
+  // (peer-initiated) bidirectional stream — same poll-loop shape as
+  // `openIncomingUniStreamReadable`, pulling via
+  // `_lumen_webtransport_read_incoming_bidi_stream`
+  // (`webtransport_read_incoming_bidi_stream`). Unlike an incoming uni
+  // stream, this one also gets a `writable` — the Rust side has already
+  // registered the stream's send half by the time
+  // `openIncomingBidirectionalStreams` reports the id, so
+  // `openUniStreamWritable` (unmodified — a `SendStream` does not know its
+  // own direction) works on it exactly as it does for a stream we opened
+  // ourselves.
+  function openIncomingBidiStreamReadable(handle, streamId) {
+    return new ReadableStream({
+      pull: function(controller) {
+        return new Promise(function(resolve) {
+          function attempt() {
+            var result;
+            try {
+              result = JSON.parse(_lumen_webtransport_read_incoming_bidi_stream(handle, streamId));
+            } catch (e) {
+              result = { ok: false, message: 'WebTransport: malformed native response.' };
+            }
+            if (!result || !result.ok) {
+              controller.error(new WebTransportError({
+                source: 'stream',
+                message: (result && result.message) || 'Failed to read an incoming WebTransport stream.',
+              }));
+              resolve();
+              return;
+            }
+            if (result.bytes && result.bytes.length) {
+              controller.enqueue(new Uint8Array(result.bytes));
+              resolve();
+              return;
+            }
+            if (result.finished) {
+              controller.close();
+              resolve();
+              return;
+            }
+            setTimeout(attempt, 0);
+          }
+          attempt();
+        });
+      },
+    });
+  }
+
+  // GAP-WEBTRANSPORT срез 4e: `incomingBidirectionalStreams` itself — the
+  // bidi counterpart of `openIncomingUnidirectionalStreams` below, same
+  // discovery-loop shape (polls `_lumen_webtransport_poll_incoming_bidi_streams`,
+  // waits for a live handle, stops for good on `close()`/a failed `ready`),
+  // but each discovered id is wrapped as a full `WebTransportBidirectionalStream`
+  // (`openIncomingBidiStreamReadable` for `readable`, `openUniStreamWritable`
+  // for `writable`) instead of a read-only `ReadableStream` — a peer-initiated
+  // bidirectional stream carries a writable half back to the peer, unlike an
+  // incoming unidirectional one.
+  function openIncomingBidirectionalStreams(session) {
+    return new ReadableStream({
+      pull: function(controller) {
+        return new Promise(function(resolve) {
+          function attempt() {
+            if (session._closed || session._readyFailed) {
+              controller.close();
+              resolve();
+              return;
+            }
+            if (session._handle === null) {
+              setTimeout(attempt, 0);
+              return;
+            }
+            var result;
+            try {
+              result = JSON.parse(_lumen_webtransport_poll_incoming_bidi_streams(session._handle));
+            } catch (e) {
+              result = { ok: false, message: 'WebTransport: malformed native response.' };
+            }
+            if (!result || !result.ok) {
+              controller.error(new WebTransportError({
+                source: 'session',
+                message: (result && result.message) || 'Failed to poll incoming WebTransport streams.',
+              }));
+              resolve();
+              return;
+            }
+            if (result.streamIds && result.streamIds.length) {
+              for (var i = 0; i < result.streamIds.length; i++) {
+                controller.enqueue(new WebTransportBidirectionalStream(
+                  openIncomingBidiStreamReadable(session._handle, result.streamIds[i]),
+                  openUniStreamWritable(session._handle, result.streamIds[i])
+                ));
+              }
+              resolve();
+              return;
+            }
+            setTimeout(attempt, 0);
+          }
+          attempt();
+        });
+      },
+    });
+  }
+
   // GAP-WEBTRANSPORT срез 4d: `incomingUnidirectionalStreams` itself — a
   // `ReadableStream` of `ReadableStream`s, one per peer-initiated
   // unidirectional stream discovered on `session`. Polls
@@ -596,14 +749,13 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
 
     this._url = url;
     this._datagrams = new WebTransportDatagramDuplexStream();
-    this._incomingBidi = emptyReadableStream();
     this._closed = false;
     this._handle = null;
     this._readyFailed = false;
-    // GAP-WEBTRANSPORT срез 4d: a real discovery stream, unlike
-    // `_incomingBidi` above (peer-initiated bidi streams remain a later
-    // slice) — reads `this._handle`/`_closed`/`_readyFailed` lazily on each
-    // `pull()`, so it is safe to construct before those settle below.
+    // GAP-WEBTRANSPORT срез 4d/4e: real discovery streams — both read
+    // `this._handle`/`_closed`/`_readyFailed` lazily on each `pull()`, so it
+    // is safe to construct them before those settle below.
+    this._incomingBidi = openIncomingBidirectionalStreams(this);
     this._incomingUnidi = openIncomingUnidirectionalStreams(this);
 
     var self = this;
@@ -817,6 +969,13 @@ mod tests_v8 {
         /// GAP-WEBTRANSPORT срез 4d: same queued-answer shape as
         /// `read_stream_results`, for `webtransport_read_incoming_uni_stream`.
         read_incoming_uni_results: ReadStreamResults,
+        /// GAP-WEBTRANSPORT срез 4e: same queued-answer shape as
+        /// `poll_incoming_uni_results`, for `webtransport_poll_incoming_bidi_streams`.
+        poll_incoming_bidi_results:
+            std::sync::Mutex<std::collections::VecDeque<lumen_core::error::Result<Vec<u64>>>>,
+        /// GAP-WEBTRANSPORT срез 4e: same queued-answer shape as
+        /// `read_stream_results`, for `webtransport_read_incoming_bidi_stream`.
+        read_incoming_bidi_results: ReadStreamResults,
     }
     impl lumen_core::ext::JsFetchProvider for StubFetch {
         fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
@@ -897,6 +1056,22 @@ mod tests_v8 {
                 None => Ok((Vec::new(), true)),
             }
         }
+        fn webtransport_poll_incoming_bidi_streams(&self, _handle: i32) -> lumen_core::error::Result<Vec<u64>> {
+            match self.poll_incoming_bidi_results.lock().unwrap().pop_front() {
+                Some(r) => r,
+                None => Ok(Vec::new()),
+            }
+        }
+        fn webtransport_read_incoming_bidi_stream(
+            &self,
+            _handle: i32,
+            _stream_id: u64,
+        ) -> lumen_core::error::Result<(Vec<u8>, bool)> {
+            match self.read_incoming_bidi_results.lock().unwrap().pop_front() {
+                Some(r) => r,
+                None => Ok((Vec::new(), true)),
+            }
+        }
     }
 
     /// Unlike [`rt_with_webtransport`], does not call `install_webtransport_v8`
@@ -943,6 +1118,8 @@ mod tests_v8 {
             read_stream_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             poll_incoming_uni_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             read_incoming_uni_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            poll_incoming_bidi_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            read_incoming_bidi_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1324,6 +1501,8 @@ mod tests_v8 {
             read_stream_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             poll_incoming_uni_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             read_incoming_uni_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            poll_incoming_bidi_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            read_incoming_bidi_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1597,6 +1776,112 @@ mod tests_v8 {
         check(&rt, "_wtIncomingDone");
     }
 
+    /// GAP-WEBTRANSPORT срез 4e: direct native-call coverage for
+    /// `_lumen_webtransport_poll_incoming_bidi_streams`, same "no provider"
+    /// shape as the other native-call tests above.
+    #[test]
+    fn native_poll_incoming_bidi_streams_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_poll_incoming_bidi_streams(0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_poll_incoming_bidi_streams_reports_stream_ids_on_success() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        stub.poll_incoming_bidi_results.lock().unwrap().push_back(Ok(vec![5, 13]));
+        let r = rt.eval("_lumen_webtransport_poll_incoming_bidi_streams(3)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":true"#), "expected ok:true, got {s}");
+                assert!(s.contains(r#""streamIds":[5,13]"#), "expected streamIds [5,13], got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// GAP-WEBTRANSPORT срез 4e: direct native-call coverage for
+    /// `_lumen_webtransport_read_incoming_bidi_stream`, same "no provider"
+    /// shape as the other native-call tests above.
+    #[test]
+    fn native_read_incoming_bidi_stream_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_read_incoming_bidi_stream(0, 5)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: `incomingBidirectionalStreams` yields a full
+    /// `WebTransportBidirectionalStream` once
+    /// `_lumen_webtransport_poll_incoming_bidi_streams` reports a discovered
+    /// id — its `readable` pulls bytes through
+    /// `_lumen_webtransport_read_incoming_bidi_stream` (same discovery+read
+    /// composition proof as `incoming_unidirectional_streams_yields_a_readable_then_bytes`)
+    /// and its `writable` reaches the ordinary `_lumen_webtransport_write_stream`
+    /// unchanged — proving the send half the Rust side pre-registers on
+    /// discovery is actually usable from JS, not just present on the Rust
+    /// side.
+    #[test]
+    fn incoming_bidirectional_streams_yields_a_stream_readable_and_writable() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        stub.poll_incoming_bidi_results.lock().unwrap().push_back(Ok(vec![13]));
+        {
+            let mut reads = stub.read_incoming_bidi_results.lock().unwrap();
+            reads.push_back(Ok((vec![7u8, 8, 9], false)));
+            reads.push_back(Ok((Vec::new(), true)));
+        }
+        rt.eval(
+            "globalThis._wtIncomingLen = -1; globalThis._wtIncomingDone = false; \
+            globalThis._wtIncomingWriteOk = false; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { \
+                var reader = globalThis._wt.incomingBidirectionalStreams.getReader(); \
+                return reader.read(); \
+            }).then(function(res) { \
+                var stream = res.value; \
+                var writePromise = (stream instanceof WebTransportBidirectionalStream) ? \
+                    stream.writable.getWriter().write(new Uint8Array([1, 2, 3])) : \
+                    Promise.reject(new Error('not a WebTransportBidirectionalStream')); \
+                var innerReader = stream.readable.getReader(); \
+                var readPromise = innerReader.read().then(function(res1) { \
+                    globalThis._wtIncomingLen = res1.value ? res1.value.length : -1; \
+                    return innerReader.read(); \
+                }).then(function(res2) { \
+                    globalThis._wtIncomingDone = res2.done === true; \
+                }); \
+                return Promise.all([writePromise, readPromise]); \
+            }).then(function() { \
+                globalThis._wtIncomingWriteOk = true; \
+            });",
+        )
+        .unwrap();
+        for _ in 0..3 {
+            rt.eval("_lumen_tick_timers()").unwrap();
+        }
+        check(&rt, "_wtIncomingLen === 3");
+        check(&rt, "_wtIncomingDone");
+        check(&rt, "_wtIncomingWriteOk");
+        let last = stub.last_write.lock().unwrap().clone().expect("write was recorded");
+        assert_eq!(last, (3, 13, vec![1, 2, 3]));
+    }
+
     /// End-to-end: `createBidirectionalStream()`'s `readable` polls
     /// `_lumen_webtransport_read_stream` — a first poll answering bytes with
     /// `finished:false` yields one chunk, and a second answering
@@ -1626,6 +1911,8 @@ mod tests_v8 {
             read_stream_results: std::sync::Mutex::new(reads),
             poll_incoming_uni_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
             read_incoming_uni_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            poll_incoming_bidi_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            read_incoming_bidi_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)

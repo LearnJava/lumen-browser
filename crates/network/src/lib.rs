@@ -1034,6 +1034,16 @@ struct WebTransportSession {
     /// [`HttpClient::webtransport_read_incoming_uni_stream`]'s first call for
     /// that stream prepends them to the live read (GAP-WEBTRANSPORT срез 4d).
     peer_uni_stream_leftover: std::collections::HashMap<u64, Vec<u8>>,
+    /// Same accumulation shape as `pending_peer_uni_headers`, for a
+    /// peer-initiated **bidirectional** stream's `WEBTRANSPORT_STREAM` header
+    /// (`0x41` + session id, draft-ietf-webtrans-http3 §4.3) — a separate map
+    /// because a discovered bidi id shares no numeric range with a uni id
+    /// (RFC 9000 §2.1) but still needs its own independent per-id
+    /// accumulation state (GAP-WEBTRANSPORT срез 4e).
+    pending_peer_bidi_headers: std::collections::HashMap<u64, Vec<u8>>,
+    /// Same role as `peer_uni_stream_leftover`, for a peer-initiated bidi
+    /// stream (GAP-WEBTRANSPORT срез 4e).
+    peer_bidi_stream_leftover: std::collections::HashMap<u64, Vec<u8>>,
 }
 
 type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, WebTransportSession>>>;
@@ -4647,6 +4657,8 @@ impl JsFetchProvider for HttpClient {
                 next_bidi_stream_number: 0,
                 pending_peer_uni_headers: std::collections::HashMap::new(),
                 peer_uni_stream_leftover: std::collections::HashMap::new(),
+                pending_peer_bidi_headers: std::collections::HashMap::new(),
+                peer_bidi_stream_leftover: std::collections::HashMap::new(),
             },
         );
 
@@ -4774,9 +4786,11 @@ impl JsFetchProvider for HttpClient {
     /// names' transport, finds every peer-initiated unidirectional stream
     /// newly opened toward us since the last call
     /// ([`h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver`],
-    /// filtered to [`h3::stream::is_unidirectional`] ids — a peer-initiated
-    /// bidirectional stream is a later slice), and returns the ids whose
-    /// WebTransport stream header has now fully arrived and been stripped
+    /// filtered to [`h3::stream::is_unidirectional`] ids — a discovered
+    /// bidirectional id is classified too, by [`Self::classify_discovered_peer_streams`],
+    /// but only [`Self::webtransport_poll_incoming_bidi_streams`] reports it),
+    /// and returns the ids whose WebTransport stream header has now fully
+    /// arrived and been stripped
     /// ([`h3::client_transport::parse_webtransport_uni_header`]) — ready for
     /// [`Self::webtransport_read_incoming_uni_stream`].
     ///
@@ -4790,17 +4804,7 @@ impl JsFetchProvider for HttpClient {
             .get_mut(&handle)
             .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
 
-        let discovered = h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver(
-            &mut session.driver,
-        )
-        .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
-        for id in discovered {
-            if h3::stream::is_unidirectional(id) {
-                session.pending_peer_uni_headers.entry(id).or_default();
-            }
-            // A discovered bidirectional id (`h3::stream::is_bidirectional`)
-            // is left unclassified — incoming bidi streams are a later slice.
-        }
+        Self::classify_discovered_peer_streams(session)?;
 
         let mut ready = Vec::new();
         let pending_ids: Vec<u64> = session.pending_peer_uni_headers.keys().copied().collect();
@@ -4818,6 +4822,63 @@ impl JsFetchProvider for HttpClient {
             }
         }
         Ok(ready)
+    }
+
+    /// GAP-WEBTRANSPORT срез 4e: `incomingBidirectionalStreams`'s discovery
+    /// primitive — the bidi counterpart of
+    /// [`Self::webtransport_poll_incoming_uni_streams`]. Shares its discovery
+    /// step ([`Self::classify_discovered_peer_streams`]) and its header-parse
+    /// loop shape, but drains [`WebTransportSession::pending_peer_bidi_headers`]
+    /// instead, and a returned id already has its send half registered (see
+    /// [`Self::classify_discovered_peer_streams`]'s doc) — ready for both
+    /// [`Self::webtransport_read_incoming_bidi_stream`] and, unchanged, the
+    /// existing `webtransport_write_uni_stream`/`webtransport_close_uni_stream`/
+    /// `webtransport_abort_uni_stream`.
+    fn webtransport_poll_incoming_bidi_streams(&self, handle: i32) -> Result<Vec<u64>> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+
+        Self::classify_discovered_peer_streams(session)?;
+
+        let mut ready = Vec::new();
+        let pending_ids: Vec<u64> = session.pending_peer_bidi_headers.keys().copied().collect();
+        for id in pending_ids {
+            let chunk =
+                h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, id)
+                    .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
+            let buf = session.pending_peer_bidi_headers.entry(id).or_default();
+            buf.extend_from_slice(&chunk);
+            if let Some(header_len) = h3::client_transport::parse_webtransport_uni_header(buf) {
+                let leftover = buf.split_off(header_len);
+                session.pending_peer_bidi_headers.remove(&id);
+                session.peer_bidi_stream_leftover.insert(id, leftover);
+                ready.push(id);
+            }
+        }
+        Ok(ready)
+    }
+
+    /// GAP-WEBTRANSPORT срез 4e: reads a peer-initiated bidirectional
+    /// stream's bytes — the read half `incomingBidirectionalStreams` hands
+    /// JS once [`Self::webtransport_poll_incoming_bidi_streams`] reports
+    /// `stream_id` ready. Same "prepend the header-parse leftover, then drive
+    /// the shared non-blocking read primitive" shape as
+    /// [`Self::webtransport_read_incoming_uni_stream`].
+    fn webtransport_read_incoming_bidi_stream(&self, handle: i32, stream_id: u64) -> Result<(Vec<u8>, bool)> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let mut bytes = session.peer_bidi_stream_leftover.remove(&stream_id).unwrap_or_default();
+        let chunk =
+            h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, stream_id)
+                .map_err(|e| Error::Network(format!("WebTransport read incoming stream: {e}")))?;
+        bytes.extend_from_slice(&chunk);
+        let finished =
+            h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
+        Ok((bytes, finished))
     }
 
     /// GAP-WEBTRANSPORT срез 4d: reads a peer-initiated unidirectional
@@ -4846,6 +4907,48 @@ impl JsFetchProvider for HttpClient {
 }
 
 impl HttpClient {
+    /// Shared discovery step for [`JsFetchProvider::webtransport_poll_incoming_uni_streams`]
+    /// and [`JsFetchProvider::webtransport_poll_incoming_bidi_streams`]
+    /// (GAP-WEBTRANSPORT срез 4e) — drains
+    /// [`h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver`]
+    /// once and files every newly discovered id into the map its direction
+    /// owns ([`h3::stream::is_unidirectional`] → `pending_peer_uni_headers`,
+    /// [`h3::stream::is_bidirectional`] → `pending_peer_bidi_headers`).
+    ///
+    /// Calling this from both poll methods on the same session is safe
+    /// despite the shared drain: whichever call runs first for a given round
+    /// of newly-arrived ids sees and classifies all of them (into either
+    /// map, as appropriate); the other call finds nothing new from the drain
+    /// but still processes whatever is already pending in its own map. No id
+    /// is ever lost to whichever poll happens to run second.
+    ///
+    /// A bidirectional id also gets its send half registered right away
+    /// ([`h3::client_transport::h3_webtransport_open_incoming_bidi_send_on_driver`])
+    /// — unlike an incoming unidirectional stream, an incoming bidi stream's
+    /// `writable` needs a live [`h3::stream::SendStream`] under the peer's own
+    /// id before `write()`/`close()`/`abort()` on it (the pre-existing,
+    /// stream-id-generic natives) can do anything.
+    fn classify_discovered_peer_streams(session: &mut WebTransportSession) -> Result<()> {
+        let discovered =
+            h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver(&mut session.driver)
+                .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
+        let peer_initial_max_stream_data_bidi = session.peer_initial_max_stream_data_bidi;
+        for id in discovered {
+            if h3::stream::is_unidirectional(id) {
+                session.pending_peer_uni_headers.entry(id).or_default();
+            } else {
+                debug_assert!(h3::stream::is_bidirectional(id));
+                h3::client_transport::h3_webtransport_open_incoming_bidi_send_on_driver(
+                    &mut session.driver,
+                    id,
+                    peer_initial_max_stream_data_bidi,
+                );
+                session.pending_peer_bidi_headers.entry(id).or_default();
+            }
+        }
+        Ok(())
+    }
+
     /// `connect-src`/`default-src` gate shared by every JS-initiated network
     /// path that owns a parsed `Url` — `fetch_request_impl` below and
     /// [`JsFetchProvider::check_connect_src`]'s override (`sendBeacon`'s
