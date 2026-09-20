@@ -290,6 +290,22 @@ impl Lumen {
                 next_wakeup = Some(wakeup);
             }
         }
+        // GAP-MEDIADECODE срез 10: a `<video>` resource-selection algorithm
+        // (queued as a JS task, drained by `tick_timers()` above) enqueues a
+        // GIF- or FFmpeg-backed load into `pending_loads`/`pending_ffmpeg_loads`
+        // without ever requesting a repaint — those queues are only drained by
+        // `RedrawRequested`'s `tick_video_gifs`/`tick_video_ffmpegs` (GAP-MEDIADECODE
+        // срез 7). Measured live (2026-09-20): a page whose only activity is
+        // `<video autoplay>` parks in `ControlFlow::Wait` right after `loadstart`
+        // — `networkState` stays `NETWORK_LOADING`/`readyState` stays `0` forever,
+        // because nothing else ever triggers the one redraw that would drain the
+        // queue. An unrelated redraw (scroll, resize, click) unblocks it, which is
+        // exactly how this went unnoticed — every prior check happened to cause one.
+        let video_load_pending = !self.video_gif_store.pending_loads.lock().unwrap().is_empty()
+            || !self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().is_empty();
+        if video_load_pending {
+            self.request_redraw();
+        }
         // BUG-480 срез 1: таймеры фреймов участвуют в WaitUntil наравне с
         // таймерами страницы, иначе setTimeout ребёнка срабатывает с задержкой
         // до следующего пробуждения по чужому источнику.
