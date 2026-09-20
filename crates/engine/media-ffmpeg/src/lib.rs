@@ -152,4 +152,42 @@ mod tests {
 
         assert!(session.decode_audio_pcm(1024).is_err());
     }
+
+    /// GAP-MEDIADECODE срез 19: `frame_at` (видео-seek) до этого среза
+    /// сбрасывал `avcodec_flush_buffers` только для видео-кодека — аудио-
+    /// кодек-контекст после перемотки демуксера оставался с внутренним
+    /// буфером декодера от позиции ДО seek (bit-reservoir/переупорядочивание
+    /// кадров AAC), что могло подмешать в `decode_audio_pcm` пару кадров с
+    /// прежней позиции раньше настоящих пост-seek пакетов. Регрессия на сам
+    /// факт восстановления: после перемотки НАЗАД (`frame_at(0.0)` после
+    /// `frame_at(1.0)`, т. е. против направления декодирования) следующий
+    /// `decode_audio_pcm` должен успешно вернуть непустой PCM снова, а не
+    /// упасть в EOF-ошибку демуксера (симптом стейлового состояния декодера,
+    /// наблюдавшийся до фикса при последовательных seek).
+    #[test]
+    fn decode_audio_pcm_recovers_after_backward_seek() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/wpt/fetch/api/request/destination/resources/dummy_video.mp4"
+        );
+        let bytes = std::fs::read(path).expect("тестовый .mp4 должен быть на диске");
+
+        let decoder = FfmpegVideoDecoder;
+        let mut session = decoder.open(&bytes).expect("open() должен декодировать dummy_video.mp4");
+
+        session.frame_at(1.0).expect("frame_at(1.0) должен сработать");
+        let first = session
+            .decode_audio_pcm(2048)
+            .expect("PCM после первого seek должен декодироваться");
+        assert!(!first.is_empty());
+
+        session.frame_at(0.0).expect("frame_at(0.0) (seek назад) должен сработать");
+        let second = session
+            .decode_audio_pcm(2048)
+            .expect("PCM после seek назад должен декодироваться заново, а не падать в EOF");
+        assert!(
+            second.iter().any(|&s| s != 0),
+            "аудио после seek назад не должно декодироваться как тишина"
+        );
+    }
 }

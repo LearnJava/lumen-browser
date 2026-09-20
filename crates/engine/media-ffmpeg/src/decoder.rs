@@ -928,6 +928,25 @@ impl VideoDecodeSession for FfmpegSession {
         unsafe {
             avcodec_flush_buffers(self.codec_ctx);
         }
+        // GAP-MEDIADECODE срез 19: `av_seek_frame` перематывает демуксер для
+        // ОБЕИХ дорожек (он не различает потоки), но до этого среза только
+        // видео-кодек получал `avcodec_flush_buffers` — аудио-кодек-контекст
+        // (если дорожка есть) оставался с внутренним буфером декодера
+        // (bit-reservoir/переупорядочивание кадров AAC и т.п.) от позиции ДО
+        // seek. Следующий `decode_audio_pcm` мог отдать пару кадров из этого
+        // стейла буфера раньше настоящих пост-seek пакетов — не паника и не
+        // падение, а слышимый щелчок/чужой звук на секунду вокруг каждой
+        // перемотки. `avcodec_flush_buffers` документированно безопасен на
+        // codec-контексте без ни одного посланного пакета (no-op) — так что
+        // сбрасывать его безусловно при каждом seek корректно и тогда, когда
+        // аудио на этом тике вообще не будет декодироваться (пауза+перемотка).
+        if !self.audio_codec_ctx.is_null() {
+            // SAFETY: `self.audio_codec_ctx` не null — открыт `avcodec_open2`
+            // в `open_audio_track` и не освобождается до `Drop` этой сессии.
+            unsafe {
+                avcodec_flush_buffers(self.audio_codec_ctx);
+            }
+        }
 
         let (_w, _h, rgba) = self.decode_from_current_position(secs)?;
         Ok(rgba)
