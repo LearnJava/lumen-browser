@@ -21,7 +21,7 @@ fatal runtime error: stack overflow, aborting
 Снаружи это выглядит по-разному в зависимости от того, кто запускал браузер:
 в прогоне WPT (`run_report.py --binary target/dev-release/lumen`, инстансы
 `lumen --bidi-port N`) — как `[bidi] frame error: io: failed to fill whole
-buffer` и оборванный прогон (класс [BUG-1006](BUG-1006-OPEN.md)); в живом
+buffer` и оборванный прогон (класс [BUG-1006](BUG-1006-FIXED.md)); в живом
 окне — как пропавшее окно без единой строки в логе.
 
 ## Механизм

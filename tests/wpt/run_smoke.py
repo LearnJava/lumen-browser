@@ -49,6 +49,7 @@ sys.path[:0] = [
 
 import localpaths  # noqa: E402,F401  (repo_root bootstrap wptrunner expects)
 from wptrunner import wptcommandline, wptrunner  # noqa: E402
+import shutdown_guard  # noqa: E402  (BUG-1006)
 
 # BUG-1024: the browser subprocess wptrunner spawns inherits this process's
 # environment, so setting this here (once, at import time — `run_report.py`
@@ -141,8 +142,16 @@ def run(binary: str, test_ids: list, extra_args: list = None) -> int:
     kwargs = vars(cmd_parser.parse_args(argv))
     wptcommandline.check_args(kwargs)
 
+    # BUG-1006: a SIGTERM/SIGBREAK (or Ctrl-C) mid-run must end the process in
+    # bounded time — see `shutdown_guard.py` for why upstream's own shutdown
+    # can block forever on an orphaned browser's pipes.
+    shutdown_guard.install(wptrunner)
     with wptrunner.GlobalLogger(kwargs, {"raw": sys.stdout}):
-        rv = wptrunner.start(**kwargs)
+        try:
+            rv = wptrunner.start(**kwargs)
+        except KeyboardInterrupt:
+            shutdown_guard.arm()
+            raise
     return rv
 
 

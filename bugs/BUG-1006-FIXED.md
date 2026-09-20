@@ -1,11 +1,67 @@
-# BUG-1006 — `--check`/`--update-expected` не доводится до конца: краш один раз, зависание в `wait_for_all_managers_done` другой (НЕ зависит от размера категории)
+# BUG-1006 — `--check`/`--update-expected` «не доводился до конца»: краш `[bidi] frame error` и зависание после SIGTERM (причина — внешний `timeout` короче прогона, не движок)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-20 (P2)
 **Заведён:** 2026-09-05 (P2, WPT-RUN-7 срез 6 — попытка перегенерации `websockets`)
-**Область:** тулинг (`tests/wpt/run_report.py` + вендоренный `tools/wptrunner/wptrunner/testrunner.py`),
-не движок Lumen напрямую — общая точка обоих провалов ниже одна и та же: синхронизация
-`wptrunner` со своими же worker-процессами на очень длинном прогоне (25–35 минут)
-**Владелец:** P2 (тулинг), возможный движковый триггер — P3
+**Область:** тулинг (`tests/wpt/run_smoke.py`, `tests/wpt/shutdown_guard.py`) + диагностика
+`crates/bidi-server/src/transport.rs`; движок ни при чём
+**Владелец:** P2 (тулинг)
+
+## Корневая причина и фикс (2026-09-20)
+
+**«Краша» не было — все репродукции оборваны внешним `timeout`, выбранным короче прогона.**
+Сверка внутреннего времени `[bidi] frame error` с аргументом `timeout` в каждой репродукции:
+
+| Репродукция | `timeout` | Момент «краша» / конца |
+|---|---|---|
+| `websockets`, прогон 1 | `timeout 500` (8:20) | 8:17 + запуск ≈ 8:20 |
+| `long-animation-frame` (срез 8) | `timeout 280` (4:40) | 4:37 |
+| `html/rendering` (срез 23) | `timeout --kill-after=20 480` (8:00) | 7:57, через 0.01 с после `Main thread got signal` |
+| `websockets`, прогон 2 | `timeout -k 30 2000` (33:20) | «~34 минуты», 782/786 |
+
+`[bidi] frame error: io: failed to fill whole buffer` печатает **Lumen**, когда клиент BiDi
+(python-раннер) исчез — `read_exact` на оборванном TCP даёт `UnexpectedEof`. Раннер же умирал
+потому, что групповой SIGTERM от `timeout` убивал его вместе с python. Это следствие, а не
+причина; сообщение выглядело как краш движка и три сессии искали не там. На Windows то же
+приходит как `ConnectionReset` («Удаленный хост принудительно разорвал…»).
+
+**Без внешнего `timeout` те же прогоны доходят до вердикта** (Windows, `dev-release`,
+`--processes 4`, 2026-09-20): `long-animation-frame` — 41/41 `TEST_END` за 5:44, exit 0
+(дольше, чем обрывавший её `timeout 280`); `websockets` `--update-expected` — 786/786 за 24:33,
+191 `.ini`, ни одного `CRITICAL`/`frame error`; `websockets` `--check` — 786/786 за 25:09,
+вердикт `check: 3 regression(s)…` (три плавающих `TIMEOUT`: `?wss`-варианты `bufferedAmount-*`
+и `readyState/005.html?default` — отдельный класс, как [BUG-999](BUG-999-OPEN.md)/
+[BUG-1003](BUG-1003-OPEN.md), к этому багу не относится). «Слишком длинный прогон» — не блокер;
+блокером была сама схема запуска.
+
+**Вторая половина — зависание после SIGTERM** (`futex_wait` в главном потоке,
+`anon_pipe_read` в двух потоках; `timeout` без `-k` не добивал процесс ~27 мин). Механизм:
+апстримный `termination_handler` поднимает `KeyboardInterrupt`, главный поток ждёт менеджеры
+10 с и завершается, но `TestRunnerManager` и читатели `mozprocess` — **не-daemon** потоки, и
+`threading._shutdown` ждёт их. `mozprocess` запускает `lumen` в **отдельной группе**
+(`os.setpgid(0, 0)`), поэтому групповой SIGTERM оставляет браузер живым сиротой с открытыми
+пайпами, `ProcessReader` вечно блокирован в `read()`. На Linux это не воспроизводилось в
+этой сессии (Windows-прогон с SIGBREAK через 40 с завершился штатно за 11.6 с без сирот), так
+что фикс — страховка по механизму, проверенная имитацией зависшего не-daemon потока плюс
+сквозным прогоном на нормальном пути.
+
+**Что сделано:**
+- [`tests/wpt/shutdown_guard.py`](../tests/wpt/shutdown_guard.py) — daemon-watchdog: через 30 с
+  после сигнала/`KeyboardInterrupt` убивает всех потомков (осиротевший `lumen` тоже) и
+  `os._exit(143)`. Подключён в `run_smoke.run()` (общая точка `run_report.py`/`run_suite.py`/
+  `run_corpus.py`); на нормальном пути не взводится. Апстримный `wptrunner` не тронут —
+  оборачивается `wptrunner.handle_interrupt_signals`.
+- [`crates/bidi-server/src/transport.rs`](../crates/bidi-server/src/transport.rs) —
+  `peer_hung_up`: обрыв клиента без Close-кадра печатается как
+  `[bidi] client disconnected without a Close frame: …`, а не `frame error`. Иначе следующая
+  сессия снова прочитает убитый раннер как краш браузера.
+- Пины: [`tests/wpt/verify_bug1006_shutdown_guard.py`](../tests/wpt/verify_bug1006_shutdown_guard.py)
+  (4 случая), `transport::tests` (2 теста).
+
+**Правило (→ `docs/probe-method.md`):** «краш» на отметке, равной аргументу внешнего `timeout`,
+— это `timeout`, а не краш. Перед разбором сверять время события с таймаутом запуска.
+
+Остальное ниже — исторический журнал наблюдений; гипотезы «краш движка», «размер/длительность»
+и «порядок причины/следствия сигнал↔краш» им опровергнуты/разрешены.
 
 ## Симптом
 
