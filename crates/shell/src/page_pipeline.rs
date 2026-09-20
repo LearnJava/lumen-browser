@@ -419,10 +419,11 @@ pub(crate) fn effective_base(doc: &Document, base: &ResourceBase) -> ResourceBas
     }
 }
 
-/// `Some(resolved href)` if this document's `base-uri` directive (CSP3
-/// §6.4.1) forbids `href` (relative to `base`, the document's un-adjusted
-/// base) — `None` if there is no policy, no `base-uri` directive, or the
-/// href is allowed. `self_origin` deliberately comes from the un-adjusted
+/// `Some((resolved href, every violated policy's text))` if this document's
+/// `base-uri` directive (CSP3 §6.4.1) forbids `href` (relative to `base`,
+/// the document's un-adjusted base) — `None` if there is no policy, no
+/// `base-uri` directive, or the href is allowed. `self_origin` deliberately
+/// comes from the un-adjusted
 /// `base`, never from an already-`<base>`-adjusted one — `base-uri` gates
 /// what `<base>` may become, so checking it against its own candidate value
 /// would make `'self'` degenerate into "always true".
@@ -431,18 +432,25 @@ pub(crate) fn effective_base(doc: &Document, base: &ResourceBase) -> ResourceBas
 /// `securitypolicyviolation` report fired once per document in
 /// `parse_and_layout`, the same one-shot-push shape every other GAP-CSPENF
 /// срез already uses for a directive whose choke point is a pure function
-/// with no `js_ctx`. Returns `(resolved href, violating policy's raw text)` —
-/// срез 56 made the second element the SPECIFIC policy `base-uri` violated,
-/// not `document_csp_policy`'s combined text of every policy the document
-/// declared (`SecurityPolicyViolationEvent.originalPolicy`, CSP3 §7.8).
-fn base_uri_href_blocked(doc: &Document, base: &ResourceBase, href: &str) -> Option<(String, String)> {
+/// with no `js_ctx`. Returns `(resolved href, every violated policy's raw
+/// text)` — срез 56 made the second element the SPECIFIC policy/policies
+/// `base-uri` violated, not `document_csp_policy`'s combined text of every
+/// policy the document declared (`SecurityPolicyViolationEvent.
+/// originalPolicy`, CSP3 §7.8); срез 58 made it every violated policy, not
+/// just the first, when several independent policies (CSP3 §3.4) forbid the
+/// same `<base href>` at once. `effective_base` only checks `.is_none()` —
+/// the block itself stays a single decision regardless of how many texts
+/// come back.
+fn base_uri_href_blocked(doc: &Document, base: &ResourceBase, href: &str) -> Option<(String, Vec<String>)> {
     let root = doc.root();
     let (policy, _original) = crate::csp_enforce::document_csp_policy(doc, root)?;
     let resolved = base.resolve_str(href);
     let self_origin = base.origin();
-    let policy_text =
-        crate::csp_enforce::violating_base_uri_policy(&policy, &resolved, self_origin.as_ref())?;
-    Some((resolved, policy_text.to_owned()))
+    let violated = crate::csp_enforce::violating_base_uri_policy(&policy, &resolved, self_origin.as_ref());
+    if violated.is_empty() {
+        return None;
+    }
+    Some((resolved, violated.into_iter().map(str::to_owned).collect()))
 }
 
 /// Fetch + parse the page CSS and build the matching font stack (BUG-443).
@@ -1149,12 +1157,19 @@ pub(crate) fn parse_and_layout(
         };
         if let Some((policy, original_policy)) = &img_src_policy {
             let self_origin = base.origin();
-            // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной политики.
+            // Срез 56/58: `originalPolicy` — текст КАЖДОЙ нарушенной политики
+            // (CSP3 §7.8/§3.4), не только первой.
             for url in &blocked_by_img_src {
-                let text = crate::csp_enforce::violating_fetch_policy(
+                let texts = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::ImgSrc, url, self_origin.as_ref(),
-                ).unwrap_or(original_policy);
-                js.fire_csp_violation("img-src", url, text);
+                );
+                if texts.is_empty() {
+                    js.fire_csp_violation("img-src", url, original_policy);
+                } else {
+                    for text in &texts {
+                        js.fire_csp_violation("img-src", url, text);
+                    }
+                }
             }
         }
     }
@@ -1186,14 +1201,19 @@ pub(crate) fn parse_and_layout(
                 // остальным parser-driven подресурсам (`gate_url`, а не
                 // `abs`, идёт и в `media_src_blocked`, и в `fetch_vtt_text`).
                 let gate_url = crate::csp_enforce::upgrade_insecure_url(policy, &abs).unwrap_or(abs);
-                // Срез 56: захватываем текст ИМЕННО нарушенной политики
-                // здесь же, пока `policy`/`self_origin` в скоупе — дешевле и
-                // точнее, чем пересчитывать `document_csp_policy` заново в
-                // точке диспатча ниже.
-                if let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+                // Срез 56/58: захватываем текст КАЖДОЙ нарушенной политики
+                // (CSP3 §7.8/§3.4) здесь же, пока `policy`/`self_origin` в
+                // скоупе — дешевле и точнее, чем пересчитывать
+                // `document_csp_policy` заново в точке диспатча ниже; фетч
+                // блокируется однократно, событий — по одному на политику.
+                let violated = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::MediaSrc, &gate_url, self_origin.as_ref(),
-                ) {
-                    blocked.borrow_mut().push((gate_url, policy_text.to_owned()));
+                );
+                if !violated.is_empty() {
+                    let mut blocked = blocked.borrow_mut();
+                    for policy_text in &violated {
+                        blocked.push((gate_url.clone(), (*policy_text).to_owned()));
+                    }
                     return None;
                 }
                 return fetch_vtt_text(&gate_url, &eff_base, sink, cookie_jar.clone());
@@ -1316,11 +1336,19 @@ pub(crate) fn parse_and_layout(
         };
         if let Some((policy, original_policy)) = &style_src_policy {
             let self_origin = base.origin();
+            // Срез 58: одно событие на каждую нарушенную политику (CSP3
+            // §7.8/§3.4), не только на первую.
             for url in &blocked_by_style_src {
-                let text = crate::csp_enforce::violating_fetch_policy(
+                let texts = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::StyleSrc, url, self_origin.as_ref(),
-                ).unwrap_or(original_policy);
-                js.fire_csp_violation("style-src", url, text);
+                );
+                if texts.is_empty() {
+                    js.fire_csp_violation("style-src", url, original_policy);
+                } else {
+                    for text in &texts {
+                        js.fire_csp_violation("style-src", url, text);
+                    }
+                }
             }
         }
     }
@@ -1363,8 +1391,11 @@ pub(crate) fn parse_and_layout(
             d.base_href()
                 .and_then(|href| base_uri_href_blocked(&d, base, href))
         };
-        if let Some((blocked_href, policy_text)) = blocked {
-            js.fire_csp_violation("base-uri", &blocked_href, &policy_text);
+        if let Some((blocked_href, policy_texts)) = blocked {
+            // Срез 58: одно событие на каждую нарушенную политику.
+            for policy_text in &policy_texts {
+                js.fire_csp_violation("base-uri", &blocked_href, policy_text);
+            }
         }
     }
 

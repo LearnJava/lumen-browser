@@ -15,7 +15,9 @@ use crate::*;
 /// for every `img-src`-blocked one)` — [`fetch_and_decode_background_images`]'s
 /// return shape, named to keep that signature under clippy's
 /// `type_complexity` threshold (срез 56 added the policy text half of the
-/// blocked pair).
+/// blocked pair). Срез 58: a URL blocked by several independent policies at
+/// once (CSP3 §3.4) appears as several entries, one per violated policy's
+/// text — the block itself still happens once, only the report count grows.
 type BackgroundImagesOutcome = (Vec<(String, Arc<lumen_image::Image>)>, Vec<(String, String)>);
 
 /// P3-webvtt срез 3: фетчит текст `.vtt` по `src` из `<track>` (файл или URL).
@@ -77,10 +79,13 @@ pub(crate) fn fetch_and_decode_background_images(
                 ResolvedResource::Url(u) => u.clone(),
                 ResolvedResource::File(p) => p.display().to_string(),
             };
-            if let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+            // Срез 58: report one text per independently violated policy
+            // (CSP3 §7.8/§3.4) — the fetch stays blocked once regardless.
+            let violated = crate::csp_enforce::violating_fetch_policy(
                 policy, &lumen_network::csp::CspDirective::ImgSrc, &abs, self_origin,
-            ) {
-                return Err((abs, policy_text.to_owned()));
+            );
+            if !violated.is_empty() {
+                return Err((abs, violated.into_iter().map(str::to_owned).collect::<Vec<_>>()));
             }
         }
         let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
@@ -112,7 +117,14 @@ pub(crate) fn fetch_and_decode_background_images(
         match outcome {
             Ok(Some(pair)) => decoded.push(pair),
             Ok(None) => {}
-            Err(blocked_uri) => blocked.push(blocked_uri),
+            // Срез 58: flatten "one URL, several violated policies" into
+            // one `(url, text)` entry per policy — the existing dispatch
+            // loop at the call site already fires one event per entry.
+            Err((url, texts)) => {
+                for text in texts {
+                    blocked.push((url.clone(), text));
+                }
+            }
         }
     }
     (decoded, blocked)

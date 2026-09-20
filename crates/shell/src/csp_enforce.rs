@@ -274,10 +274,25 @@
 //! `blocked_inline_style_policies`/`blocked_style_attr_policies` в
 //! `PageCascade`/`FrameSubresourceOutcomes`.
 //!
-//! CSP3 §7.8 также хочет ОТДЕЛЬНЫЙ отчёт на КАЖДУЮ нарушенную политику, если
-//! их несколько сразу — каждая `violating_*` функция даёт текст первой
-//! нарушившей, не список всех; многополитийное одновременное нарушение
-//! одного и того же ресурса встречается редко и остаётся отдельным пробелом.
+//! Срез 58 закрыл ровно тот пробел, что срез 56 сам назвал не покрытым: CSP3
+//! §7.8 хочет ОТДЕЛЬНЫЙ `securitypolicyviolation` на КАЖДУЮ нарушенную
+//! политику, когда один и тот же ресурс нарушает несколько независимых
+//! политик документа одновременно (CSP3 §3.4, независимые политики — срез 40).
+//! Все пять `violating_*` функций этого файла ([`violating_fetch_policy`],
+//! [`violating_fetch_policy_via_child_src`], [`violating_inline_policy`],
+//! [`violating_base_uri_policy`], [`violating_style_attr_policy`]) сменили
+//! `Option<&str>` (текст ПЕРВОЙ нарушившей политики, `.find(...)`) на
+//! `Vec<&str>` (текст КАЖДОЙ нарушившей, `.filter(...)`) — пустой `Vec` то же
+//! самое, что раньше `None`. Каждая точка диспетчеризации переключена с
+//! `if let Some(text) = ...` на `for text in ...`; там, где у той же точки
+//! есть отдельное решение «блокировать ли ресурс» (`page_pipeline.rs`'s
+//! `base_uri_href_blocked`/`load_video_tracks`, `frames.rs`'s
+//! `frame_src_check`, `page_load.rs`'s lazy-image/web-font пути,
+//! `subresources.rs`'s `fetch_and_decode_background_images`), блокировка
+//! осталась однократной — ресурс либо загружен, либо нет, независимо от
+//! того, сколько политик его запрещают, — только событий теперь по одному на
+//! каждую нарушенную политику. Остаток дорожки не изменился: `report-to`,
+//! `manifest-src` (см. выше).
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;
@@ -329,11 +344,12 @@ fn collect_meta_csp(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// enforcement, а report-only по определению ничего не блокирует.
 ///
 /// The returned `String` is the combined raw policy text (still joined with
-/// `; ` for display) — carried through to
-/// `SecurityPolicyViolationEvent.originalPolicy` (CSP3 §7.8), which the
-/// parsed [`CspPolicy`] itself does not retain; CSP3 §7.8 actually wants each
-/// violated policy's own text here, not every policy's — that distinction is
-/// still open (`bugs/BUG-811-OPEN.md`).
+/// `; ` for display) — used only as a fallback `originalPolicy` where a call
+/// site cannot cheaply re-derive which policy actually blocked a given
+/// resource; every production dispatch site prefers the specific violated
+/// policy's own text via the `violating_*` functions below (срез 56), which
+/// since срез 58 report every policy that independently violates the same
+/// resource, not only the first (CSP3 §7.8).
 pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(Vec<CspPolicy>, String)> {
     let mut parts: Vec<String> = doc.csp_header().to_vec();
     collect_meta_csp(doc, root, &mut parts);
@@ -689,11 +705,12 @@ pub(crate) fn navigate_to_blocked(
         .any(|policy| !policy.navigate_to_allowed(&parsed, self_origin))
 }
 
-/// Срез 56: text of the FIRST policy in `policies` whose `directive` (or
-/// `default-src` fallback) forbids fetching `url` — the specific policy
-/// `SecurityPolicyViolationEvent.originalPolicy` (CSP3 §7.8) should carry,
-/// unlike [`document_csp_policy`]'s combined text of every policy the
-/// document declared. `None` both when nothing is violated and when `url`
+/// Срез 56/58: text of EVERY policy in `policies` whose `directive` (or
+/// `default-src` fallback) forbids fetching `url`, in policy order — CSP3
+/// §7.8/§3.4 want one `SecurityPolicyViolationEvent` per independently
+/// violated policy, not one for the whole document, unlike
+/// [`document_csp_policy`]'s combined text of every policy the document
+/// declared. An empty `Vec` both when nothing is violated and when `url`
 /// fails to parse (same "don't invent a violation" stance as every
 /// `*_blocked` fetch-gate above).
 pub(crate) fn violating_fetch_policy<'a>(
@@ -701,12 +718,15 @@ pub(crate) fn violating_fetch_policy<'a>(
     directive: &CspDirective,
     url: &str,
     self_origin: Option<&Origin>,
-) -> Option<&'a str> {
-    let parsed = lumen_core::url::Url::parse(url).ok()?;
+) -> Vec<&'a str> {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return Vec::new();
+    };
     policies
         .iter()
-        .find(|policy| !policy.fetch_directive_allows(directive, &parsed, self_origin))
+        .filter(|policy| !policy.fetch_directive_allows(directive, &parsed, self_origin))
         .map(|policy| policy.raw.as_str())
+        .collect()
 }
 
 /// Same as [`violating_fetch_policy`], through the extra `child-src` fallback
@@ -717,15 +737,18 @@ pub(crate) fn violating_fetch_policy_via_child_src<'a>(
     directive: &CspDirective,
     url: &str,
     self_origin: Option<&Origin>,
-) -> Option<&'a str> {
-    let parsed = lumen_core::url::Url::parse(url).ok()?;
+) -> Vec<&'a str> {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return Vec::new();
+    };
     policies
         .iter()
-        .find(|policy| !policy.fetch_directive_allows_via_child_src(directive, &parsed, self_origin))
+        .filter(|policy| !policy.fetch_directive_allows_via_child_src(directive, &parsed, self_origin))
         .map(|policy| policy.raw.as_str())
+        .collect()
 }
 
-/// Inline counterpart of [`violating_fetch_policy`]: text of the first policy
+/// Inline counterpart of [`violating_fetch_policy`]: text of every policy
 /// whose inline check (`'unsafe-inline'`/nonce/hash) forbids `body` for
 /// `directive` — same predicate `inline_script_blocked`/
 /// [`inline_style_blocked`] already share via [`single_inline_directive_blocked`].
@@ -734,39 +757,44 @@ pub(crate) fn violating_inline_policy<'a>(
     directive: &CspDirective,
     nonce: Option<&str>,
     body: &str,
-) -> Option<&'a str> {
+) -> Vec<&'a str> {
     policies
         .iter()
-        .find(|policy| single_inline_directive_blocked(policy, directive, nonce, body))
+        .filter(|policy| single_inline_directive_blocked(policy, directive, nonce, body))
         .map(|policy| policy.raw.as_str())
+        .collect()
 }
 
-/// `base-uri` counterpart of [`violating_fetch_policy`] — text of the first
+/// `base-uri` counterpart of [`violating_fetch_policy`] — text of every
 /// policy whose `base-uri` forbids `base_url`, same predicate
 /// `base_uri_blocked` already uses.
 pub(crate) fn violating_base_uri_policy<'a>(
     policies: &'a [CspPolicy],
     base_url: &str,
     self_origin: Option<&Origin>,
-) -> Option<&'a str> {
-    let parsed = lumen_core::url::Url::parse(base_url).ok()?;
+) -> Vec<&'a str> {
+    let Ok(parsed) = lumen_core::url::Url::parse(base_url) else {
+        return Vec::new();
+    };
     policies
         .iter()
-        .find(|policy| !policy.base_uri_allowed(&parsed, self_origin))
+        .filter(|policy| !policy.base_uri_allowed(&parsed, self_origin))
         .map(|policy| policy.raw.as_str())
+        .collect()
 }
 
 /// `style=""` attribute counterpart of [`violating_inline_policy`] — text of
-/// the first policy whose [`single_style_attribute_blocked`] forbids `body`
-/// (GAP-CSPENF срез 57). Kept separate rather than folded into
+/// every policy whose [`single_style_attribute_blocked`] forbids `body`
+/// (GAP-CSPENF срез 57/58). Kept separate rather than folded into
 /// `violating_inline_policy` because the attribute form uses its own
 /// fallback chain and `'unsafe-hashes'` gate, same reason
 /// [`style_attribute_blocked`] is not built on [`inline_directive_blocked`].
-pub(crate) fn violating_style_attr_policy<'a>(policies: &'a [CspPolicy], body: &str) -> Option<&'a str> {
+pub(crate) fn violating_style_attr_policy<'a>(policies: &'a [CspPolicy], body: &str) -> Vec<&'a str> {
     policies
         .iter()
-        .find(|policy| single_style_attribute_blocked(policy, body))
+        .filter(|policy| single_style_attribute_blocked(policy, body))
         .map(|policy| policy.raw.as_str())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1429,5 +1457,153 @@ mod tests {
     fn navigate_to_unparseable_url_not_blocked() {
         let p = lumen_network::csp::parse_csp_header("navigate-to 'none'");
         assert!(!navigate_to_blocked(std::slice::from_ref(&p), "::: not a url :::", None));
+    }
+
+    // ── GAP-CSPENF срез 58: multi-policy `violating_*` reports ─────────────
+    //
+    // CSP3 §7.8/§3.4 want a `securitypolicyviolation` per independently
+    // violated policy when several policies of the same document forbid the
+    // same resource at once, not just the first one that matches.
+
+    /// Two independent policies both forbidding the same fetch must both show
+    /// up, in policy order — not just the first.
+    #[test]
+    fn violating_fetch_policy_reports_every_violated_policy() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("img-src 'none'"),
+            lumen_network::csp::parse_csp_header("img-src 'self'"),
+        ];
+        let violated = violating_fetch_policy(
+            &policies,
+            &CspDirective::ImgSrc,
+            "https://example.com/x.png",
+            None,
+        );
+        assert_eq!(violated, vec!["img-src 'none'", "img-src 'self'"]);
+    }
+
+    /// Only the policy that actually forbids the fetch is reported when the
+    /// other one of two policies allows it.
+    #[test]
+    fn violating_fetch_policy_reports_only_the_violated_one() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("img-src *"),
+            lumen_network::csp::parse_csp_header("img-src 'none'"),
+        ];
+        let violated = violating_fetch_policy(
+            &policies,
+            &CspDirective::ImgSrc,
+            "https://example.com/x.png",
+            None,
+        );
+        assert_eq!(violated, vec!["img-src 'none'"]);
+    }
+
+    /// Nothing violated across either policy — empty, not `None` any more.
+    #[test]
+    fn violating_fetch_policy_empty_when_nothing_violated() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("img-src *"),
+            lumen_network::csp::parse_csp_header("script-src 'none'"),
+        ];
+        let violated = violating_fetch_policy(
+            &policies,
+            &CspDirective::ImgSrc,
+            "https://example.com/x.png",
+            None,
+        );
+        assert!(violated.is_empty());
+    }
+
+    /// Same multi-policy behaviour through the `child-src` fallback chain
+    /// `frame-src`/`worker-src` get.
+    #[test]
+    fn violating_fetch_policy_via_child_src_reports_every_violated_policy() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("frame-src 'none'"),
+            lumen_network::csp::parse_csp_header("default-src 'none'; child-src cdn.example.com"),
+        ];
+        let violated = violating_fetch_policy_via_child_src(
+            &policies,
+            &CspDirective::FrameSrc,
+            "https://other.example/frame.html",
+            None,
+        );
+        assert_eq!(violated.len(), 2);
+    }
+
+    /// Two independent policies, both forbidding the same inline body.
+    #[test]
+    fn violating_inline_policy_reports_every_violated_policy() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("script-src 'none'"),
+            lumen_network::csp::parse_csp_header("default-src 'none'"),
+        ];
+        let violated = violating_inline_policy(&policies, &CspDirective::ScriptSrc, None, "alert(1)");
+        assert_eq!(violated.len(), 2);
+    }
+
+    /// Only one of two policies blocks the inline body — the other allows
+    /// `'unsafe-inline'`, so exactly one text comes back.
+    #[test]
+    fn violating_inline_policy_reports_only_the_violated_one() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("script-src 'unsafe-inline'"),
+            lumen_network::csp::parse_csp_header("script-src 'none'"),
+        ];
+        let violated = violating_inline_policy(&policies, &CspDirective::ScriptSrc, None, "alert(1)");
+        assert_eq!(violated, vec!["script-src 'none'"]);
+    }
+
+    /// Two independent policies both forbidding the same `<base href>`.
+    #[test]
+    fn violating_base_uri_policy_reports_every_violated_policy() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("base-uri example.com"),
+            lumen_network::csp::parse_csp_header("base-uri other.example"),
+        ];
+        let violated =
+            violating_base_uri_policy(&policies, "https://third.example/base/", None);
+        assert_eq!(violated.len(), 2);
+    }
+
+    /// Only the stricter of two `base-uri` policies blocks a target the
+    /// other one allows.
+    #[test]
+    fn violating_base_uri_policy_reports_only_the_violated_one() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("base-uri example.com"),
+            lumen_network::csp::parse_csp_header("base-uri *"),
+        ];
+        let violated =
+            violating_base_uri_policy(&policies, "https://example.com/base/", None);
+        assert!(violated.is_empty());
+        let violated =
+            violating_base_uri_policy(&policies, "https://other.example/base/", None);
+        assert_eq!(violated, vec!["base-uri example.com"]);
+    }
+
+    /// Two independent policies both forbidding the same `style=""`
+    /// attribute value.
+    #[test]
+    fn violating_style_attr_policy_reports_every_violated_policy() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("style-src-attr 'none'"),
+            lumen_network::csp::parse_csp_header("default-src 'none'"),
+        ];
+        let violated = violating_style_attr_policy(&policies, "color:red");
+        assert_eq!(violated.len(), 2);
+    }
+
+    /// Only one of two policies blocks the attribute — the other allows
+    /// `'unsafe-inline'` for `style-src-attr`.
+    #[test]
+    fn violating_style_attr_policy_reports_only_the_violated_one() {
+        let policies = vec![
+            lumen_network::csp::parse_csp_header("style-src-attr 'unsafe-inline'"),
+            lumen_network::csp::parse_csp_header("style-src-attr 'none'"),
+        ];
+        let violated = violating_style_attr_policy(&policies, "color:red");
+        assert_eq!(violated, vec!["style-src-attr 'none'"]);
     }
 }

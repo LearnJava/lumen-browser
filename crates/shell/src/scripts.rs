@@ -157,16 +157,18 @@ pub(crate) struct ResolvedScript {
     /// `None` не диспатчит ничего: у инлайнового скрипта «from an external
     /// file» ложно, и события по спецификации нет вовсе.
     pub(crate) external_ok: Option<bool>,
-    /// GAP-CSPENF срез 6: `Some(_)` when `external_ok == Some(false)` because
+    /// GAP-CSPENF срез 6: non-empty when `external_ok == Some(false)` because
     /// `script-src`/`default-src` blocked the fetch (not a network/decode
-    /// failure) — the caller uses this to fire `securitypolicyviolation`
-    /// alongside the element's `error` event, with `url` as `blockedURI`.
-    /// Срез 56: carries the SPECIFIC violating policy's raw text (captured in
-    /// [`resolve_script_sources`], where `self_origin` is still in scope),
-    /// not `run_scripts_with_dom`'s later, combined `document_csp_policy`
-    /// text — that document does not have `self_origin` available to
-    /// re-derive which policy actually blocked this URL.
-    pub(crate) csp_blocked: Option<String>,
+    /// failure) — the caller uses this to fire one `securitypolicyviolation`
+    /// per entry alongside the element's `error` event, with `url` as
+    /// `blockedURI`. Срез 56: carries the SPECIFIC violating policy's raw
+    /// text (captured in [`resolve_script_sources`], where `self_origin` is
+    /// still in scope), not `run_scripts_with_dom`'s later, combined
+    /// `document_csp_policy` text — that document does not have
+    /// `self_origin` available to re-derive which policy actually blocked
+    /// this URL. Срез 58: `Vec<String>`, not `Option<String>` — one entry per
+    /// independently violated policy (CSP3 §7.8/§3.4), not just the first.
+    pub(crate) csp_blocked: Vec<String>,
 }
 
 impl ResolvedScript {
@@ -177,21 +179,21 @@ impl ResolvedScript {
     /// сообщить странице об отказе. Заодно узел остаётся границей отрезка в
     /// [`ParserInsertLog`] — настоящий парсер тоже вставил его в дерево.
     fn failed(node: NodeId) -> Self {
-        Self { node, source: String::new(), url: None, external_ok: Some(false), csp_blocked: None }
+        Self { node, source: String::new(), url: None, external_ok: Some(false), csp_blocked: Vec::new() }
     }
 
     /// Внешний `<script src>`, чей fetch `script-src`/`default-src`
     /// запретил до сети (GAP-CSPENF срез 6) — тот же "нет тела → `error`"
     /// исход, что и [`Self::failed`], плюс резолвленный `url` для
-    /// `securitypolicyviolation.blockedURI` и `policy_text` — сырой текст
-    /// нарушенной политики (срез 56) для `originalPolicy`.
-    fn blocked_by_csp(node: NodeId, url: String, policy_text: String) -> Self {
+    /// `securitypolicyviolation.blockedURI` и `policy_texts` — сырой текст
+    /// каждой нарушенной политики (срез 56/58) для `originalPolicy`.
+    fn blocked_by_csp(node: NodeId, url: String, policy_texts: Vec<String>) -> Self {
         Self {
             node,
             source: String::new(),
             url: Some(url),
             external_ok: Some(false),
-            csp_blocked: Some(policy_text),
+            csp_blocked: policy_texts,
         }
     }
 }
@@ -351,7 +353,7 @@ pub(crate) fn resolve_script_sources(
             source: body.clone(),
             url: None,
             external_ok: None,
-            csp_blocked: None,
+            csp_blocked: Vec::new(),
         }),
         ScriptSource::External(nid, src) => {
             let resolved_url = base.resolve_str(src);
@@ -365,11 +367,13 @@ pub(crate) fn resolve_script_sources(
                 .as_ref()
                 .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url));
             let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
-            if let Some((policy, _)) = &csp_gate
-                && let Some(policy_text) =
-                    crate::csp_enforce::violating_fetch_policy(policy, &lumen_network::csp::CspDirective::ScriptSrc, gate_url, self_origin.as_ref())
-            {
-                return Some(ResolvedScript::blocked_by_csp(*nid, gate_url.to_owned(), policy_text.to_owned()));
+            if let Some((policy, _)) = &csp_gate {
+                let violated: Vec<String> = crate::csp_enforce::violating_fetch_policy(
+                    policy, &lumen_network::csp::CspDirective::ScriptSrc, gate_url, self_origin.as_ref(),
+                ).into_iter().map(str::to_owned).collect();
+                if !violated.is_empty() {
+                    return Some(ResolvedScript::blocked_by_csp(*nid, gate_url.to_owned(), violated));
+                }
             }
             match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
@@ -380,7 +384,7 @@ pub(crate) fn resolve_script_sources(
                         source: content,
                         url: None,
                         external_ok: Some(true),
-                        csp_blocked: None,
+                        csp_blocked: Vec::new(),
                     })
                 }
                 Err(e) => {
@@ -426,7 +430,7 @@ pub(crate) fn resolve_script_sources(
                             // относительных импортов внутри модуля.
                             url: Some(url.clone()),
                             external_ok: Some(true),
-                            csp_blocked: None,
+                            csp_blocked: Vec::new(),
                         })
                     }
                     Err(e) => {
@@ -792,8 +796,9 @@ pub(crate) fn run_scripts_with_dom(
                     // нарушение — `securitypolicyviolation` с резолвленным
                     // `url` как `blockedURI`.
                     if *external_ok == Some(false) {
-                        if let Some(policy_text) = csp_blocked {
-                            let blocked_uri = url.as_deref().unwrap_or("");
+                        // Срез 58: одно событие на каждую нарушенную политику.
+                        let blocked_uri = url.as_deref().unwrap_or("");
+                        for policy_text in csp_blocked {
                             crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, policy_text);
                         }
                         fire_parser_script_event(&rt, *nid, *external_ok);
@@ -810,16 +815,19 @@ pub(crate) fn run_scripts_with_dom(
                             let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
                             doc.get(*nid).get_attr("nonce").map(str::to_owned)
                         };
-                        // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной
-                        // политики (`violating_inline_policy`), не
-                        // объединённый `csp_policy.1`.
-                        if let Some(policy_text) = crate::csp_enforce::violating_inline_policy(
+                        // Срез 56/58: `originalPolicy` — текст КАЖДОЙ
+                        // нарушенной политики (`violating_inline_policy`), не
+                        // объединённый `csp_policy.1`, и не только первая.
+                        let violated = crate::csp_enforce::violating_inline_policy(
                             policy,
                             &lumen_network::csp::CspDirective::ScriptSrc,
                             nonce.as_deref(),
                             src,
-                        ) {
-                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", policy_text);
+                        );
+                        if !violated.is_empty() {
+                            for policy_text in &violated {
+                                crate::csp_enforce::fire_script_src_violation(&rt, "inline", policy_text);
+                            }
                             fire_parser_script_event(&rt, *nid, *external_ok);
                             continue;
                         }
@@ -864,8 +872,9 @@ pub(crate) fn run_scripts_with_dom(
                     // GAP-CSPENF срез 6: та же CSP-разметка, что у
                     // классических скриптов выше.
                     if item.external_ok == Some(false) {
-                        if let Some(policy_text) = &item.csp_blocked {
-                            let blocked_uri = item.url.as_deref().unwrap_or("");
+                        // Срез 58: одно событие на каждую нарушенную политику.
+                        let blocked_uri = item.url.as_deref().unwrap_or("");
+                        for policy_text in &item.csp_blocked {
                             crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, policy_text);
                         }
                         fire_parser_script_event(&rt, item.node, item.external_ok);
@@ -881,13 +890,16 @@ pub(crate) fn run_scripts_with_dom(
                             let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
                             doc.get(item.node).get_attr("nonce").map(str::to_owned)
                         };
-                        if let Some(policy_text) = crate::csp_enforce::violating_inline_policy(
+                        let violated = crate::csp_enforce::violating_inline_policy(
                             policy,
                             &lumen_network::csp::CspDirective::ScriptSrc,
                             nonce.as_deref(),
                             &item.source,
-                        ) {
-                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", policy_text);
+                        );
+                        if !violated.is_empty() {
+                            for policy_text in &violated {
+                                crate::csp_enforce::fire_script_src_violation(&rt, "inline", policy_text);
+                            }
                             fire_parser_script_event(&rt, item.node, item.external_ok);
                             continue;
                         }
