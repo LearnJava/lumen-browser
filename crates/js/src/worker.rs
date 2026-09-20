@@ -2087,15 +2087,14 @@ fn spawn_worker_v8(
 /// thread + isolate) — there is no additional cross-thread dispatch needed,
 /// so this outer thread just owns the runtime handle and pumps `WorkerInMsg`.
 ///
-/// `OffscreenCanvas` is NOT installed here: this thread only calls
-/// [`install_worker_globals_v8`], not the full `install_dom` install list
-/// that wires `offscreen_canvas`'s V8 port
-/// (`offscreen_canvas::install_offscreen_canvas_bindings_v8`, P1-imagebitmap)
-/// for the main page context. A worker script that references
-/// `OffscreenCanvas` sees `undefined`; `worker_global_shim`'s
-/// `_deserializeTransfers` already guards on `typeof
-/// _lumen_offscreen_canvas_from_image_data !== 'undefined'` and degrades to
-/// passing the raw (un-deserialized) data through.
+/// BUG-937: `OffscreenCanvas` is installed here (not the full `install_dom`
+/// list, just [`install_worker_globals_v8`] plus
+/// `offscreen_canvas::install_offscreen_canvas_bindings_v8`, P1-imagebitmap)
+/// so a transferred `OffscreenCanvas` deserializes back into a real instance
+/// instead of the raw sentinel — `worker_global_shim`'s
+/// `_deserializeTransfers` guards on `typeof
+/// _lumen_offscreen_canvas_from_image_data !== 'undefined'`, which this
+/// install makes true.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::too_many_arguments)]  // worker-thread setup, BUG-778 added base_url/fetch_provider
 fn run_worker_thread_v8(
@@ -2144,6 +2143,16 @@ fn run_worker_thread_v8(
     ) {
         eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
         return;
+    }
+
+    // BUG-937: same origin derivation as the page's `page_origin` in
+    // `v8_runtime.rs` — needed for the per-document canvas-noise seed, not for
+    // any cross-origin check (a worker's `OffscreenCanvas` has none).
+    let worker_origin = crate::file_input::origin_for_url(&script_url);
+    if let Err(e) =
+        crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt, &worker_origin)
+    {
+        eprintln!("[worker-{id}] v8 offscreen_canvas install failed: {e:?}");
     }
 
     // A module worker evaluates its script under its own URL (BUG-777), so a
@@ -3117,6 +3126,34 @@ mod tests_v8 {
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].0, worker_id);
         assert_eq!(msgs[0].1, "42");
+
+        terminate_worker(&reg, worker_id);
+    }
+
+    /// BUG-937: a real worker thread (`run_worker_thread_v8`, not just
+    /// `install_worker_globals_v8` as most tests in this module exercise)
+    /// must see a real `OffscreenCanvas` global and native — before the fix
+    /// this reported `object`/`function` was `undefined` for both.
+    #[test]
+    fn v8_worker_end_to_end_has_offscreen_canvas() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        let script = "postMessage(typeof OffscreenCanvas + ',' + \
+                       typeof _lumen_offscreen_canvas_from_image_data);"
+            .to_string();
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+
+        std::thread::sleep(Duration::from_millis(300));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].0, worker_id);
+        assert_eq!(msgs[0].1, "\"function,function\"");
 
         terminate_worker(&reg, worker_id);
     }
