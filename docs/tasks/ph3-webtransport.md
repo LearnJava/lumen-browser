@@ -302,6 +302,31 @@ session id = id Extended CONNECT-стрима — draft-ietf-webtrans-http3 §4.
 ### Срез 4 — S — Datagrams
 `datagrams.readable/writable` поверх `h3/datagram.rs` (QUIC DATAGRAM). **Требует срез 2.**
 
+**Срез datagrams-a — done (2026-09-20, P1) — транспортный примитив: QUIC DATAGRAM frame + transport parameter.**
+`h3/datagram.rs` (несмотря на имя) — это UDP-датаграммная коалесация пакетов
+(RFC 9000 §12.2/§14.1), не сам QUIC DATAGRAM (RFC 9221); этого типа фрейма не
+было в `quic_frame.rs` вообще. Новый `Frame::Datagram(Vec<u8>)`: парсит обе
+формы (`0x30` без Length — до конца пакета; `0x31` с Length — коалесируемая),
+кодирует всегда во `0x31` (тот же выбор, что у STREAM). `PacketType::permits`
+разрешает его только в 0-RTT/1-RTT (RFC 9221 §4). `SendPriority::of` даёт ему
+приоритет STREAM. `QuicConnection::dispatch_frame` кладёт принятый DATAGRAM в
+`effects.deferred` — оттуда он доходит до `RequestTurn::route_deferred`'s
+`residual` (не запрашивается пумпом, значит не `is_request_frame`), но пока
+никто это не читает: маршрутизация к конкретной WebTransport-сессии по quarter
+stream id (RFC 9297 §2.1) — отдельный под-срез. Новый транспортный параметр
+`max_datagram_frame_size` (id `0x20`, RFC 9221 §3) в `transport_params.rs`:
+`None` по умолчанию (расширение не поддерживается), клиент рекламирует
+`Some(65535)` через новое `ClientConnectConfig::max_datagram_frame_size` —
+намеренно завышенный потолок, реальным ограничителем остаётся подтверждённый
+path MTU, которого этот параметр не видит. 12 новых тестов `quic_frame`, 2
+новых `transport_params`, 2326 тестов `lumen-network`, `clippy -p
+lumen-network --all-targets -D warnings` и `cargo check --workspace` зелёные.
+Не сделано: приём/отправка настоящих датаграмм (нужен quarter-stream-id
+энкодинг сессии + маршрутизация в `HttpClient::webtransport_sessions`),
+`_lumen_webtransport_send_datagram`/`_lumen_webtransport_poll_incoming_datagrams`,
+шим `WebTransportDatagramDuplexStream.readable`/`.writable` (сейчас
+permanently-empty/permanently-reject) — следующий под-срез.
+
 ### Срез 5 — S — Lifecycle: closed/close(info)/сессионные коды ошибок
 Корректный `closed` промис, `close({closeCode, reason})`, RFC 9114/9220 error mapping.
 

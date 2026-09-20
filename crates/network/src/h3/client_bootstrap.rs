@@ -99,6 +99,11 @@ pub struct ClientConnectConfig {
     /// The probe-timeout seed handed to loss detection before any RTT sample is
     /// taken (RFC 9002 §6.2.1).
     pub initial_pto: Duration,
+    /// `max_datagram_frame_size` advertised to the peer (RFC 9221 §3): the
+    /// largest QUIC DATAGRAM frame the client is willing to receive. `None`
+    /// omits the parameter, declaring no DATAGRAM support at all — a WebTransport
+    /// session's `datagrams` needs this present on both ends of the connection.
+    pub max_datagram_frame_size: Option<u64>,
 }
 
 impl ClientConnectConfig {
@@ -155,6 +160,11 @@ impl Default for ClientConnectConfig {
             initial_max_streams_uni: 100,
             active_connection_id_limit: 8,
             initial_pto: Duration::from_millis(100),
+            // Comfortably above a real path's MTU-bound datagram size, so the
+            // ceiling this parameter imposes is never the binding constraint —
+            // that role belongs to the confirmed path MTU (`path_mtu`), which
+            // this static advertisement cannot see.
+            max_datagram_frame_size: Some(65_535),
         }
     }
 }
@@ -275,6 +285,7 @@ fn build_transport_parameters(scid: &[u8], config: &ClientConnectConfig) -> Tran
         active_connection_id_limit: Some(config.active_connection_id_limit),
         initial_source_connection_id: Some(scid.to_vec()),
         retry_source_connection_id: None,
+        max_datagram_frame_size: config.max_datagram_frame_size,
         unknown: Vec::new(),
     }
 }

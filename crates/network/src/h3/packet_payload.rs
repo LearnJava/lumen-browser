@@ -82,9 +82,10 @@ impl PacketType {
     #[must_use]
     pub const fn permits(self, frame: &Frame) -> bool {
         use Frame::{
-            Ack, ConnectionClose, Crypto, DataBlocked, HandshakeDone, MaxData, MaxStreamData,
-            MaxStreams, NewConnectionId, NewToken, Padding, PathChallenge, PathResponse, Ping,
-            ResetStream, RetireConnectionId, Stream, StreamDataBlocked, StreamsBlocked, StopSending,
+            Ack, ConnectionClose, Crypto, DataBlocked, Datagram, HandshakeDone, MaxData,
+            MaxStreamData, MaxStreams, NewConnectionId, NewToken, Padding, PathChallenge,
+            PathResponse, Ping, ResetStream, RetireConnectionId, Stream, StreamDataBlocked,
+            StreamsBlocked, StopSending,
         };
         match frame {
             // IH01 — every frame-bearing packet type.
@@ -93,7 +94,8 @@ impl PacketType {
             Ack { .. } | Crypto { .. } => !matches!(self, Self::ZeroRtt),
             // ___1 — 1-RTT only.
             NewToken(_) | PathResponse(_) | HandshakeDone => matches!(self, Self::OneRtt),
-            // __01 — the application (0-RTT / 1-RTT) types only.
+            // __01 — the application (0-RTT / 1-RTT) types only. DATAGRAM is
+            // barred from Initial/Handshake by the same rule (RFC 9221 §4).
             ResetStream { .. }
             | StopSending { .. }
             | Stream { .. }
@@ -105,7 +107,8 @@ impl PacketType {
             | StreamsBlocked { .. }
             | NewConnectionId { .. }
             | RetireConnectionId(_)
-            | PathChallenge(_) => matches!(self, Self::ZeroRtt | Self::OneRtt),
+            | PathChallenge(_)
+            | Datagram(_) => matches!(self, Self::ZeroRtt | Self::OneRtt),
             // CONNECTION_CLOSE: the transport form (0x1c) is universal; the
             // application form (0x1d) is barred from Initial / Handshake.
             ConnectionClose { frame_type: Some(_), .. } => true,

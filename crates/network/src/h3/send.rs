@@ -83,7 +83,10 @@ impl SendPriority {
             Frame::ConnectionClose { .. } => Self::Close,
             Frame::Ack { .. } => Self::Ack,
             Frame::Crypto { .. } => Self::Crypto,
-            Frame::Stream { .. } => Self::Stream,
+            // DATAGRAM is application data like STREAM, but unreliable — it
+            // never blocks on a retransmission, so it shares STREAM's priority
+            // rather than warranting its own class (RFC 9221 §4).
+            Frame::Stream { .. } | Frame::Datagram(_) => Self::Stream,
             Frame::Ping | Frame::Padding(_) => Self::Probe,
             // Everything else is connection-management / flow control.
             Frame::ResetStream { .. }
