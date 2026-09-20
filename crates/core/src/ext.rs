@@ -2488,6 +2488,26 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Locally initiates closing the WebTransport session `handle` names —
+    /// `WebTransport.prototype.close(closeInfo)`'s transport primitive
+    /// (GAP-WEBTRANSPORT/`P3-webtransport` срез 5). Sends a
+    /// `CLOSE_WEBTRANSPORT_SESSION` capsule (draft-ietf-webtrans-http3 §4.5,
+    /// capsule type `0x2843`) carrying `close_code`/`reason` on the session's
+    /// Extended CONNECT stream, then finishes that stream's send half — the
+    /// caller (the JS shim) drops the session's local state regardless of
+    /// whether this returns `Ok`, matching `close()`'s spec shape of never
+    /// throwing or rejecting.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_close_session(&self, handle: i32, close_code: u32, reason: &str) -> Result<()> {
+        let _ = (handle, close_code, reason);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —
