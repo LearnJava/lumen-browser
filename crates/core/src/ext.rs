@@ -2286,6 +2286,40 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Gracefully closes the WebTransport unidirectional stream `stream_id`
+    /// (a [`webtransport_open_uni_stream`](Self::webtransport_open_uni_stream)
+    /// return value) on the session `handle` names, sending a QUIC STREAM FIN
+    /// — GAP-WEBTRANSPORT/`P3-webtransport` срез 3d, what
+    /// `WritableStreamDefaultWriter.close()` on `createUnidirectionalStream()`'s
+    /// stream needs.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_close_uni_stream(&self, handle: i32, stream_id: u64) -> Result<()> {
+        let _ = (handle, stream_id);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+
+    /// Abruptly terminates the WebTransport unidirectional stream `stream_id`
+    /// (a [`webtransport_open_uni_stream`](Self::webtransport_open_uni_stream)
+    /// return value) on the session `handle` names with `error_code`, sending a
+    /// QUIC RESET_STREAM — GAP-WEBTRANSPORT/`P3-webtransport` срез 3d, what
+    /// `WritableStreamDefaultWriter.abort(reason)` on
+    /// `createUnidirectionalStream()`'s stream needs.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_abort_uni_stream(&self, handle: i32, stream_id: u64, error_code: u64) -> Result<()> {
+        let _ = (handle, stream_id, error_code);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —
