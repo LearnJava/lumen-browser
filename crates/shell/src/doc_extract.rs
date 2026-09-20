@@ -48,15 +48,17 @@ fn walk_title(doc: &Document, id: NodeId, out: &mut String) -> bool {
 /// inline_style_blocked`, тот же гейт, что срез 1/20 уже дают инлайновым
 /// `<script>`), заблокированный узел не попадает в склеенный текст вовсе —
 /// тот же принцип «не применённый CSS», что уже применяется к заблокированным
-/// внешним `<link>` (срез 7). Возвращает и число заблокированных узлов —
-/// вызывающий код диспатчит `securitypolicyviolation` по одному на узел
+/// внешним `<link>` (срез 7). Возвращает и текст ИМЕННО той политики, что
+/// нарушил каждый заблокированный узел (срез 57 — было числом; CSP3 §7.8
+/// хочет `originalPolicy` нарушенной политики, не объединённый текст всех) —
+/// вызывающий код диспатчит `securitypolicyviolation` по одной записи на узел
 /// после того, как появляется JS-рантайм.
 pub(crate) fn extract_style_blocks(
     doc: &Document,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
-) -> (String, usize) {
+) -> (String, Vec<String>) {
     let mut out = String::new();
-    let mut blocked = 0;
+    let mut blocked = Vec::new();
     walk_style_blocks(doc, doc.root(), csp_gate, &mut out, &mut blocked);
     (out, blocked)
 }
@@ -165,7 +167,7 @@ fn walk_style_blocks(
     id: NodeId,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
     out: &mut String,
-    blocked: &mut usize,
+    blocked: &mut Vec<String>,
 ) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
@@ -179,8 +181,13 @@ fn walk_style_blocks(
         }
         if let Some(policy) = csp_gate {
             let nonce = node.get_attr("nonce");
-            if crate::csp_enforce::inline_style_blocked(policy, nonce, &text) {
-                *blocked += 1;
+            if let Some(raw) = crate::csp_enforce::violating_inline_policy(
+                policy,
+                &lumen_network::csp::CspDirective::StyleSrc,
+                nonce,
+                &text,
+            ) {
+                blocked.push(raw.to_owned());
                 return;
             }
         }
@@ -195,24 +202,27 @@ fn walk_style_blocks(
 
 /// GAP-CSPENF срез 23: walk the whole tree once and collect every element
 /// whose `style=""` attribute `style-src-attr`/`style-src`/`default-src`
-/// forbids (`crate::csp_enforce::style_attribute_blocked`) — the last inline
-/// class срезы 21/22 named as not covered (those gate `<style>` element
-/// text; this gates the attribute). Returns the blocked set (handed to
-/// [`lumen_dom::Document::set_style_attr_csp_blocked`], the only thing
+/// forbids (`crate::csp_enforce::violating_style_attr_policy`) — the last
+/// inline class срезы 21/22 named as not covered (those gate `<style>`
+/// element text; this gates the attribute). Returns the blocked set (handed
+/// to [`lumen_dom::Document::set_style_attr_csp_blocked`], the only thing
 /// `lumen_layout`'s cascade consults — see that method's doc comment for why
-/// the decision travels as bare node ids) plus a count, so the caller can
-/// fire one `securitypolicyviolation` per blocked node the same one-shot-push
-/// way [`extract_style_blocks`] already does for blocked `<style>` blocks.
+/// the decision travels as bare node ids) plus, in the same document order,
+/// the text of the policy that blocked each one (срез 57 — was a bare count;
+/// CSP3 §7.8 wants the violated policy's own `originalPolicy`), so the
+/// caller can fire one `securitypolicyviolation` per blocked node the same
+/// one-shot-push way [`extract_style_blocks`] already does for blocked
+/// `<style>` blocks.
 pub(crate) fn collect_style_attr_csp_blocked(
     doc: &Document,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
-) -> (std::collections::HashSet<NodeId>, usize) {
+) -> (std::collections::HashSet<NodeId>, Vec<String>) {
     let mut blocked = std::collections::HashSet::new();
+    let mut policies = Vec::new();
     if let Some(policy) = csp_gate {
-        walk_style_attrs(doc, doc.root(), policy, &mut blocked);
+        walk_style_attrs(doc, doc.root(), policy, &mut blocked, &mut policies);
     }
-    let count = blocked.len();
-    (blocked, count)
+    (blocked, policies)
 }
 
 fn walk_style_attrs(
@@ -220,16 +230,18 @@ fn walk_style_attrs(
     id: NodeId,
     policy: &[lumen_network::csp::CspPolicy],
     blocked: &mut std::collections::HashSet<NodeId>,
+    policies: &mut Vec<String>,
 ) {
     let node = doc.get(id);
     if let Some(style) = node.get_attr("style")
         && !style.is_empty()
-        && crate::csp_enforce::style_attribute_blocked(policy, style)
+        && let Some(raw) = crate::csp_enforce::violating_style_attr_policy(policy, style)
     {
         blocked.insert(id);
+        policies.push(raw.to_owned());
     }
     for &child in &node.children {
-        walk_style_attrs(doc, child, policy, blocked);
+        walk_style_attrs(doc, child, policy, blocked, policies);
     }
 }
 
@@ -261,7 +273,7 @@ mod tests {
         let (css, blocked) = extract_style_blocks(&doc, Some(std::slice::from_ref(&policy)));
         assert!(css.contains("a{color:red}"));
         assert!(!css.contains("b{color:blue}"));
-        assert_eq!(blocked, 1);
+        assert_eq!(blocked, vec![policy.raw.clone()]);
     }
 
     #[test]
@@ -269,7 +281,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<style>a{color:red}</style>");
         let (css, blocked) = extract_style_blocks(&doc, None);
         assert!(css.contains("a{color:red}"));
-        assert_eq!(blocked, 0);
+        assert!(blocked.is_empty());
     }
 
     /// GAP-CSPENF срез 23: `style-src-attr 'none'` blocks exactly the one
@@ -282,16 +294,16 @@ mod tests {
             "<div style=\"color:red\">a</div><div>b</div>",
         );
         let policy = lumen_network::csp::parse_csp_header("style-src-attr 'none'");
-        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(std::slice::from_ref(&policy)));
-        assert_eq!(count, 1);
+        let (blocked, policies) = collect_style_attr_csp_blocked(&doc, Some(std::slice::from_ref(&policy)));
+        assert_eq!(policies, vec![policy.raw.clone()]);
         assert_eq!(blocked.len(), 1);
     }
 
     #[test]
     fn collect_style_attr_csp_blocked_no_policy_blocks_nothing() {
         let doc = lumen_html_parser::parse("<div style=\"color:red\">a</div>");
-        let (blocked, count) = collect_style_attr_csp_blocked(&doc, None);
-        assert_eq!(count, 0);
+        let (blocked, policies) = collect_style_attr_csp_blocked(&doc, None);
+        assert!(policies.is_empty());
         assert!(blocked.is_empty());
     }
 
@@ -299,8 +311,8 @@ mod tests {
     fn collect_style_attr_csp_blocked_unsafe_inline_allows() {
         let doc = lumen_html_parser::parse("<div style=\"color:red\">a</div>");
         let policy = lumen_network::csp::parse_csp_header("style-src-attr 'unsafe-inline'");
-        let (blocked, count) = collect_style_attr_csp_blocked(&doc, Some(std::slice::from_ref(&policy)));
-        assert_eq!(count, 0);
+        let (blocked, policies) = collect_style_attr_csp_blocked(&doc, Some(std::slice::from_ref(&policy)));
+        assert!(policies.is_empty());
         assert!(blocked.is_empty());
     }
 }

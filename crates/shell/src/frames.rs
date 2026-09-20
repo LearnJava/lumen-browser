@@ -469,24 +469,25 @@ pub(crate) struct FrameSubresourceOutcomes {
     /// already computed this (срез 7), it was just discarded here before this
     /// срез.
     pub(crate) blocked_by_style_src: Vec<String>,
-    /// GAP-CSPENF срез 22: number of inline `<style>` nodes the CHILD's own
-    /// `style-src`/`default-src` policy blocked — same gate srez 21 already
-    /// gives the top-level document's `extract_style_blocks` call, applied
-    /// to the frame's own `csp_gate` (computed above for `img-src` since срез
-    /// 8). No URL to report — `blockedURI` for inline is always `"inline"`,
-    /// same shape as `page_pipeline.rs`'s `blocked_inline_style_count`.
-    pub(crate) blocked_inline_style_count: usize,
-    /// GAP-CSPENF срез 24: number of `style=""` attributes the CHILD's own
-    /// `style-src-attr`/`style-src`/`default-src` policy blocked — same gate
-    /// срез 23 already gives the top-level document's
-    /// `collect_style_attr_csp_blocked` call, applied to the frame's own
-    /// `csp_gate`. The blocked node id set itself is written directly onto
-    /// `doc` inside [`fetch_frame_subresources`] (the cascade reads it off
-    /// the document, same as the top-level path in `page_pipeline.rs`) — this
-    /// count exists only so the caller can dispatch one
-    /// `securitypolicyviolation` per blocked node, same one-shot-push shape
-    /// as `blocked_inline_style_count`.
-    pub(crate) blocked_style_attr_count: usize,
+    /// GAP-CSPENF срез 22: text of the `style-src`/`default-src` policy that
+    /// blocked each inline `<style>` node of the CHILD — same gate срез 21
+    /// already gives the top-level document's `extract_style_blocks` call,
+    /// applied to the frame's own `csp_gate` (computed above for `img-src`
+    /// since срез 8). No URL to report — `blockedURI` for inline is always
+    /// `"inline"`, same shape as `page_pipeline.rs`'s
+    /// `blocked_inline_style_policies`. Срез 57 turned this from a bare count
+    /// into the violated policy's own text.
+    pub(crate) blocked_inline_style_policies: Vec<String>,
+    /// GAP-CSPENF срез 24: text of the policy that blocked each `style=""`
+    /// attribute of the CHILD — same gate срез 23 already gives the
+    /// top-level document's `collect_style_attr_csp_blocked` call, applied to
+    /// the frame's own `csp_gate`. The blocked node id set itself is written
+    /// directly onto `doc` inside [`fetch_frame_subresources`] (the cascade
+    /// reads it off the document, same as the top-level path in
+    /// `page_pipeline.rs`) — this vec exists only so the caller can dispatch
+    /// one `securitypolicyviolation` per blocked node, same one-shot-push
+    /// shape as `blocked_inline_style_policies`. Срез 57: was a bare count.
+    pub(crate) blocked_style_attr_policies: Vec<String>,
     /// GAP-CSPENF срез 27: `true` if the CHILD's own `frame-ancestors`
     /// directive refuses embedding by `ancestor_origin` (the immediate
     /// embedder — CSP3 §6.4.2). When set, every other field above is left
@@ -566,7 +567,7 @@ pub(crate) fn fetch_frame_subresources(
     // 21 уже применяет к top-level документу; до этого среза `<style>` внутри
     // `<iframe>` не проверялся вовсе (та же граница, что срез 7 документирует
     // для внешнего `<link>` подфрейма до срез 8).
-    let (inline, blocked_inline_style_count) =
+    let (inline, blocked_inline_style_policies) =
         extract_style_blocks(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()));
     // GAP-CSPENF срез 24: `style=""` attribute inside a frame — same one-shot
     // policy read as the inline `<style>` gate above, separate walk (the
@@ -577,7 +578,7 @@ pub(crate) fn fetch_frame_subresources(
     // straight off the document (`Document::is_style_attr_csp_blocked`), the
     // same way it does for the top-level document in
     // `page_pipeline.rs::build_page_cascade`.
-    let (blocked_style_attr_nodes, blocked_style_attr_count) =
+    let (blocked_style_attr_nodes, blocked_style_attr_policies) =
         collect_style_attr_csp_blocked(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()));
     doc.set_style_attr_csp_blocked(blocked_style_attr_nodes);
     let self_origin = base.origin();
@@ -690,8 +691,8 @@ pub(crate) fn fetch_frame_subresources(
         lazy_requests,
         blocked_by_img_src,
         blocked_by_style_src,
-        blocked_inline_style_count,
-        blocked_style_attr_count,
+        blocked_inline_style_policies,
+        blocked_style_attr_policies,
         frame_ancestors_blocked: false,
     }
 }
@@ -2266,14 +2267,14 @@ pub(crate) fn spawn_frame(
         // `page_pipeline.rs`'s `blocked_by_img_src`/`blocked_by_style_src`
         // dispatch, just against the CHILD's own runtime/policy instead of
         // the page's.
-        // GAP-CSPENF срез 22: same push, extended with the inline-`<style>`
-        // count `fetch_frame_subresources` now also collects for this CHILD
-        // (`blocked_uri = "inline"`, same convention as
-        // `page_pipeline.rs`'s `blocked_inline_style_count` push).
-        // GAP-CSPENF срез 24: same push again, extended with the `style=""`
-        // attribute count — `violatedDirective=style-src-attr`, same
-        // convention as `page_pipeline.rs`'s `blocked_style_attr_nodes` push
-        // (срез 23).
+        // GAP-CSPENF срез 22/57: same push, extended with the inline-`<style>`
+        // policy text `fetch_frame_subresources` now also collects for this
+        // CHILD (`blocked_uri = "inline"`, same convention as
+        // `page_pipeline.rs`'s `blocked_inline_style_policies` push).
+        // GAP-CSPENF срез 24/57: same push again, extended with the
+        // `style=""` attribute policy text — `violatedDirective=style-src-attr`,
+        // same convention as `page_pipeline.rs`'s `blocked_style_attr_policies`
+        // push (срез 23).
         // GAP-CSPENF срез 25: same push again, extended with `font-src`
         // (`@font-face url()`) and `img-src` (`background-image: url()`)
         // inside this frame — reuses `child_csp_gate` computed above instead
@@ -2283,17 +2284,14 @@ pub(crate) fn spawn_frame(
         #[cfg(feature = "v8")]
         if (!subresources.blocked_by_img_src.is_empty()
             || !subresources.blocked_by_style_src.is_empty()
-            || subresources.blocked_inline_style_count > 0
-            || subresources.blocked_style_attr_count > 0
+            || !subresources.blocked_inline_style_policies.is_empty()
+            || !subresources.blocked_style_attr_policies.is_empty()
             || !blocked_by_font_src.is_empty()
             || !blocked_by_bg_img_src.is_empty())
             && let Some((policy, original_policy)) = &child_csp_gate
         {
-            // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной политики
-            // для каждого URL, известного по отдельности; счётчики
-            // (`blocked_inline_style_count`/`blocked_style_attr_count`) уже
-            // потеряли тело к этой точке — те два остаются на объединённом
-            // тексте (см. doc-comment среза 56 в `csp_enforce.rs`).
+            // Срез 56/57: `originalPolicy` — текст ИМЕННО нарушенной политики
+            // для каждого URL/узла, известного по отдельности.
             for url in &subresources.blocked_by_img_src {
                 let text = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::ImgSrc, url, child_self_origin.as_ref(),
@@ -2306,11 +2304,11 @@ pub(crate) fn spawn_frame(
                 ).unwrap_or(original_policy);
                 js.fire_csp_violation("style-src", url, text);
             }
-            for _ in 0..subresources.blocked_inline_style_count {
-                js.fire_csp_violation("style-src", "inline", original_policy);
+            for text in &subresources.blocked_inline_style_policies {
+                js.fire_csp_violation("style-src", "inline", text);
             }
-            for _ in 0..subresources.blocked_style_attr_count {
-                js.fire_csp_violation("style-src-attr", "inline", original_policy);
+            for text in &subresources.blocked_style_attr_policies {
+                js.fire_csp_violation("style-src-attr", "inline", text);
             }
             for url in &blocked_by_font_src {
                 let text = crate::csp_enforce::violating_fetch_policy(
