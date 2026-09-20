@@ -533,6 +533,30 @@ setTimeout(function () { log("checked"); }, 5000);
 </script>
 """, "wbs-sent-0 … wbs-sent-49, wbs-all-sent, ticks running"),
 
+    # GAP-WSASYNC срез 3 (BUG-869): does `close()`, called while the writer
+    # thread is mid-write on a backpressured socket, block the calling
+    # script the way a direct `session.lock().unwrap().close()` used to?
+    # Measures the wall-clock the `close()` call itself takes to return, not
+    # just whether the page eventually settles.
+    "ws-close-under-backpressure": ("""
+<script>
+var log = function (m) { console.log("PROBE wcb-" + m); };
+var SIZE = 65536, COUNT = 50;
+var ws = new WebSocket("ws://127.0.0.1:__WSPORT__/echo-size");
+ws.onopen = function () {
+    var msg = new Uint8Array(SIZE);
+    for (var i = 0; i < COUNT; i++) { ws.send(msg); }
+    log("sent " + COUNT + " buffered=" + ws.bufferedAmount);
+    var t0 = Date.now();
+    ws.close();
+    log("close-call-returned ms=" + (Date.now() - t0));
+};
+ws.onclose = function (e) { log("close clean=" + e.wasClean + " code=" + e.code); };
+ws.onerror = function () { log("error"); };
+setTimeout(function () { log("checked"); }, 5000);
+</script>
+""", "wcb-close-call-returned ms is small (well under the writer's drain time), ticks keep running throughout"),
+
     # `keeping-connection-open/001.html` in miniature: the real test idles for
     # 20 s, which no probe budget survives; 4 s is enough to catch a socket
     # that is torn down the moment it goes quiet.
