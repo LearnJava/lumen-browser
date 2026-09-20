@@ -4511,11 +4511,26 @@ function _lumen_make_dom_implementation(ownerDoc) {
 }
 
 // Dispatch slotchange on all <slot> elements inside the shadow root of `host_nid`.
-// Called when host's light DOM changes (appendChild / removeChild).
+// Called when host's light DOM changes (appendChild / removeChild / insertBefore).
+//
+// BUG-876 root cause: this used to look slots up via the unscoped
+// `_lumen_query_selector_all('slot')`, which walks from `doc.root()`
+// (`crates/engine/layout/src/selector_query.rs::query_all`) — a shadow root is
+// allocated as an arena orphan, never a DOM child of anything reachable from
+// the document root (`Document::attach_shadow`'s doc comment), so that scan
+// could never find a single `<slot>` living inside a shadow tree and this
+// function was a silent no-op on every real shadow host. Scoping the query to
+// the shadow root itself (`_lumen_query_selector_all_scoped`, the same native
+// `Element`/`ShadowRoot` `querySelector(All)` uses) fixes the lookup.
+//
+// Phase 0 simplification: fires on every `<slot>` in the shadow tree rather
+// than only the ones whose assigned-nodes list actually changed (DOM LS
+// §4.2.2.4 "signal a slot change" is per-slot) — acceptable over-firing for a
+// single-mutation-at-a-time engine with no manual slot assignment.
 function _lumen_fire_slotchange(host_nid) {
     var sr_nid = _lumen_u2n(_lumen_get_shadow_root(host_nid));
     if (sr_nid === null) return;
-    var slots = _lumen_query_selector_all('slot');
+    var slots = _lumen_query_selector_all_scoped(sr_nid, 'slot');
     for (var i = 0; i < slots.length; i++) {
         var slot_nid = slots[i];
         var ev = new Event('slotchange', { bubbles: true, cancelable: false });
@@ -7194,6 +7209,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (pid !== null) {
                 _lumen_remove_child(pid, nid);
                 _lumen_ce_maybe_disconnected(this);
+                _lumen_fire_slotchange(pid);
             }
         },
         // Inserts nodes immediately before this element.
@@ -7209,6 +7225,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     _lumen_insert_before(pid, _bn.__nid__, nid);
                 }
             }
+            _lumen_fire_slotchange(pid);
         },
         // Inserts nodes immediately after this element.
         after: function() { var nid = this.__nid__;
@@ -7228,6 +7245,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     else { _lumen_append_child(pid, _an.__nid__); }
                 }
             }
+            _lumen_fire_slotchange(pid);
         },
         // Replaces this element with the given nodes/strings.
         replaceWith: function() { var nid = this.__nid__;
@@ -7249,6 +7267,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     else { _lumen_append_child(pid, _rn.__nid__); }
                 }
             }
+            _lumen_fire_slotchange(pid);
         },
         // ── ParentNode extensions (DOM LS §4.2.5) ───────────────────────────────
         // Inserts nodes before the first child of this element.
@@ -7266,6 +7285,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     else { _lumen_append_child(nid, _pn.__nid__); }
                 }
             }
+            _lumen_fire_slotchange(nid);
         },
         // ParentNode.append (DOM LS §4.2.5): appends nodes/strings as the last children.
         append: function() { var nid = this.__nid__;
@@ -7277,6 +7297,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     _lumen_append_child(nid, _an.__nid__);
                 }
             }
+            _lumen_fire_slotchange(nid);
         },
         // HTML LS 4.9.2 (old-fashioned but conforming markup) — insertAdjacent{Text,Element}.
         // Delegates to the before/after/prepend/append methods above (same silent
@@ -7780,6 +7801,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
                 _lumen_ce_maybe_connected(newNode);
             }
+            _lumen_fire_slotchange(nid);
             return newNode;
         },
         // HTMLSlotElement (DOM LS §4.2.2.2): applicable only on <slot> elements.
@@ -7822,8 +7844,22 @@ var _LUMEN_WRAPPER_MEMBERS = {
         get slot() { var nid = this.__nid__; var v = _lumen_u2n(_lumen_get_attr(nid, 'slot')); return v !== null ? v : ''; },
         set slot(v) { var nid = this.__nid__; _lumen_set_attr(nid, 'slot', String(v)); },
         // assignedSlot — the <slot> element this node is slotted into, or null.
-        // Phase 0 stub: full implementation requires composed tree traversal.
-        get assignedSlot() { var nid = this.__nid__; return null; },
+        // Reverse of `assignedNodes`: this node is a light-DOM child of some
+        // shadow host; find the host's shadow tree and the <slot> in it whose
+        // `name` matches this node's `slot` attribute (both default to '').
+        get assignedSlot() { var nid = this.__nid__;
+            var host_nid = _lumen_u2n(_lumen_get_parent(nid));
+            if (host_nid === null) return null;
+            var sr_nid = _lumen_u2n(_lumen_get_shadow_root(host_nid));
+            if (sr_nid === null) return null;
+            var my_slot = _lumen_u2n(_lumen_get_attr(nid, 'slot')) || '';
+            var slots = _lumen_query_selector_all_scoped(sr_nid, 'slot');
+            for (var _as = 0; _as < slots.length; _as++) {
+                var s_name = _lumen_u2n(_lumen_get_attr(slots[_as], 'name')) || '';
+                if (s_name === my_slot) return _lumen_make_element(slots[_as]);
+            }
+            return null;
+        },
         // ── checkVisibility (W3C Viewport API §4.1) ──────────────────────────────
         // Returns false if this element or any ancestor has display:none, is
         // disconnected, or (if options say so) has opacity:0 / visibility:hidden.
@@ -8216,6 +8252,7 @@ _lumen_canvas_define_dim('height', 1, 150);
         }
         _lumen_insert_before(nid, newChild.__nid__, oldChild.__nid__);
         _lumen_remove_child(nid, oldChild.__nid__);
+        _lumen_fire_slotchange(nid);
         return oldChild;
     };
     // DOM §4.4 Node.isSameNode / isEqualNode. `isSameNode` нельзя свести к

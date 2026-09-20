@@ -1,6 +1,6 @@
 # BUG-876 — распределение по слотам не происходит: `assignedNodes()` всегда пусто, `slotchange` не диспатчится нигде
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-SLOT](../ROADMAP.md))
+**Статус:** FIXED 2026-09-20 (P6, ДОРАБОТКА → [GAP-SLOT](../ROADMAP.md))
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-SLOT` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 27 — живой замер, варианты `slotchange`/`slot-detail`/`slot-detail2`)
 **Область:** `crates/js/src/dom.rs:5086` — `assignedNodes` возвращает результат обхода, который на живом дереве даёт пусто; `grep -rn "'slotchange'" crates/` — ни одной точки диспатча (имя есть только в списке `_LUMEN_EVENT_HANDLER_ATTRS`, `:1054`)
@@ -72,6 +72,45 @@ DOM Standard §4.2.2.4 «assign slottables»: при вставке/удален
 (`crates/js/src/dom/tests/v8_fontface_shadow_custom.rs`) подтверждает
 `assignedNodes().length === 1` для ровно той разметки, что в §Симптом.
 
-**Не тронуто:** диспатч `slotchange` — точки диспатча по-прежнему нет
+**Не тронуто (на тот момент):** диспатч `slotchange` — точки диспатча по-прежнему нет
 нигде в кодовой базе, это отдельная, не начатая часть задачи. Статус
 остаётся `OPEN`.
+
+## Диспатч slotchange (2026-09-20, P6, `p6-gap-slot`)
+
+Корень: `_lumen_fire_slotchange` (уже существовала, была подключена к
+`appendChild`/`removeChild`, но молчала) искала `<slot>` через нескопированный
+`_lumen_query_selector_all('slot')`. Эта функция обходит дерево от
+`doc.root()` (`crates/engine/layout/src/selector_query.rs::query_all`), а
+shadow root — orphan-узел арены, не DOM-ребёнок ничего достижимого от корня
+документа (`Document::attach_shadow`'а doc-comment), поэтому обход НИКОГДА не
+находил ни одного `<slot>` внутри теневого дерева — функция была тихим no-op
+на любом реальном shadow-хосте, несмотря на то что её уже звали.
+
+Фикс — заменить на `_lumen_query_selector_all_scoped(sr_nid, 'slot')` (тот же
+нативный примитив, которым уже пользуются `Element`/`ShadowRoot`
+`querySelector(All)`). Заодно:
+* добавлен вызов `_lumen_fire_slotchange` во все точки мутации хоста, которых
+  не было: `insertBefore`, `replaceChild`, `ChildNode.remove/before/after/replaceWith`,
+  `ParentNode.prepend/append`;
+* смена атрибута `slot` у light-DOM ребёнка тоже сигналит (хук в общей
+  обёртке `_lumen_set_attr`, `web_api_shim_mid_b2.js`);
+* `assignedSlot` (был хардкод-стаб `null`) теперь резолвит обратный поиск —
+  слот в shadow-дереве родителя с совпадающим `name`.
+
+Phase 0 упрощение: `_lumen_fire_slotchange` перебирает и шлёт `slotchange`
+на все слоты shadow-дерева хоста, а не только на те, чей список назначенных
+узлов реально изменился (DOM LS §4.2.2.4 требует по-слотово) — приемлемо для
+движка без ручного назначения слотов (`slotAssignment: 'manual'` не
+отслеживается).
+
+Тесты (`crates/js/src/dom/tests/v8_fontface_shadow_custom.rs`):
+`slot_slotchange_event_fires_on_append` (была плацебо-проверкой `changed >=
+0`, независимо от того, произошёл ли реальный диспатч — переписана на
+`changed === 1`), `slot_slotchange_event_fires_on_remove_and_onslotchange`,
+`slot_slotchange_event_fires_on_insert_before`,
+`slot_assigned_slot_resolves_matching_named_slot`. `cargo test -p lumen-js
+--lib --features v8-backend` — 3970/3970; `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` чисто.
+
+Статус — `FIXED`.
