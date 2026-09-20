@@ -3017,4 +3017,68 @@ warnings` — чисто. `scripts/scoped-test.sh` (14 крейтов, обра�
 `final`) — воспроизводится и на чистом `main` без этой ветки, не
 регрессия этого среза.
 
+## Срез 53 (2026-09-20, `p6-gap-cspenf-srez53`) — `upgrade-insecure-requests` для `window.open()` и ссылки внутри `<iframe>`
+
+Продолжение среза 52: закрывает оба навигационных гейта, названных им как
+непокрытые, — пятый и шестой из дерева ветвления `navigate-to`.
+
+- **`window.open(url)`** (`about_to_wait.rs`) —
+  `window_open_navigate_to_blocked` (`bool`) переименован в
+  `window_open_navigate_to_gate` и, тем же приёмом, что срез 34 уже даёт
+  `js_navigate_to_gate`, возвращает `Option<String>`: `None` — заблокировано
+  (`securitypolicyviolation` уже отправлен), `Some(url)` — адрес,
+  апгрейженный `upgrade_insecure_url` ДО гейта `navigate_to_blocked`.
+  Вызывающая сторона в цикле обработки popup-запросов передаёт этот
+  апгрейженный адрес в `resolve_js_navigation`, а не исходный сырой `url`.
+- **Ссылка ВНУТРИ фрейма** (`frame_links.rs::frame_link_click`, тот путь,
+  что срез 36 гейтил, но не апгрейжал) — новая функция модуля
+  `resolve_and_upgrade_frame_href` (зеркало `click.rs::
+  resolve_and_upgrade_href` среза 52, но резолвит против `nav_base`
+  РЕБЁНКА и читает CSP-гейт РЕБЁНКА, не страницы — та же пара источников,
+  что уже различает срез 36 у `frame_navigate_to_link_blocked`) заменяет
+  каждый сырой `nav_base.resolve_str` на пути от гейта до реальной
+  навигации: сам гейт, ветку `_blank`/именованная вкладка
+  (`LinkTarget::NewWindow`), `navigate_page_from_frame` (`_top`/`_parent`
+  глубины 0) и `navigate_frame_from_link` (`_self`/именованный фрейм) — все
+  три функции навигации получили параметр `csp_gate` для этого. Апгрейженный
+  адрес передаётся уже АБСОЛЮТНЫМ в `navigate_frame_to`; повторный резолв
+  внутри него против той же базы идемпотентен для `http`/`https`
+  (`ResourceBase::resolve`, ранний `return` на `starts_with("http://"
+  ) || starts_with("https://")`), так что двойного резолва без апгрейда
+  через эту ветку больше нет.
+- Не тронуто: `same_document_fragment`/`fragment_only` проверки — они
+  сравнивают/извлекают СЫРОЙ `href` (фрагмент вроде `#id` не резолвится в
+  абсолютный URL до апгрейда, иначе `fragment_only` перестал бы его узнавать
+  как фрагмент) и остаются на исходном значении, апгрейд применяется только
+  к ветке, которая реально уходит в сеть.
+
+Два новых юнит-теста на `resolve_and_upgrade_frame_href`
+(`resolve_and_upgrade_frame_href_rewrites_when_directive_present`,
+`resolve_and_upgrade_frame_href_no_gate_leaves_scheme_alone`) в
+`crates/shell/src/lumen/frame_links.rs`, зеркало пары тестов
+`click.rs::resolve_and_upgrade_href` среза 52. `cargo test -p lumen-shell
+--profile dev-release --features v8 --bin lumen csp` — 99 passed; `...
+frame` — 115 passed; `... navigate` — 15 passed (все три без нового
+падения). `cargo clippy -p lumen-shell --all-targets --features v8 -- -D
+warnings` — чисто. `scripts/scoped-test.sh` (14 крейтов) — тот же
+единственный красный `lumen-driver::snapshot_cpu::
+cpu_snapshots_match_references`, тот же 7-файловый набор, что срез 52 уже
+подтвердил как несвязанный дрейф [BUG-1008](BUG-1008-OPEN.md), не
+регрессия.
+
+Живой пробой на реальном окне этот срез не проверен (нет готового
+автоматизационного клика по кнопке/ссылке под рукой в этой сессии) —
+корректность опирается на: 1) идентичность приёма с уже живьём
+подтверждёнными срезами 43/50-52 (`upgrade_insecure_url`/
+`upgrade_navigation_url` не менялись, только точки вызова); 2) полный
+зелёный прогон `csp`/`frame`/`navigate` наборов; 3) новые юнит-тесты на
+саму добавленную функцию с реальными `CspPolicy`/`ResourceBase`. Отдельная
+проверка живьём остаётся желательной, но не блокирует этот срез.
+
+Не покрыто (продолжение BUG-692): заголовок `Upgrade-Insecure-Requests: 1`
+на навигационном запросе и «upgrade insecure navigations set» (UIR §4.1
+шаги 1-2) — это исчерпывает список UIR-путей навигации, названный срезами
+50-52. Остаток общего списка дорожки не изменился: `report-to`,
+`manifest-src`, честная per-policy `originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/

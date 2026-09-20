@@ -88,7 +88,7 @@ impl Lumen {
                 // link lives in the frame's sub-document, same rule the `Page`
                 // arm below already applies for `_top`.
                 if links::is_navigable_href(&href) {
-                    let resolved = nav_base.resolve_str(&href);
+                    let resolved = resolve_and_upgrade_frame_href(csp_gate.as_ref(), &nav_base, &href);
                     let t = target_attr.trim();
                     // GAP-NAVCTX срез 12 (BUG-883): `target` reaches this arm
                     // both for the reserved `_blank` and for a genuine name
@@ -158,11 +158,11 @@ impl Lumen {
             LinkTarget::Page => {
                 // Адрес разрешается базой РЕБЁНКА, а уходит наверх: `_top`
                 // меняет документ страницы, но ссылку написал ребёнок.
-                self.navigate_page_from_frame(&href, &nav_base);
+                self.navigate_page_from_frame(csp_gate.as_ref(), &href, &nav_base);
                 true
             }
             LinkTarget::Frame(target_idx) => {
-                self.navigate_frame_from_link(target_idx, target_idx == idx, &href, &nav_base);
+                self.navigate_frame_from_link(csp_gate.as_ref(), target_idx, target_idx == idx, &href, &nav_base);
                 true
             }
         }
@@ -184,6 +184,13 @@ impl Lumen {
     /// (`fire_csp_violation`), не через `route_task_js`: тот адресует только
     /// контекст СТРАНИЦЫ — та же причина, что у `frame_form_submit.rs`'s
     /// `fire_csp_violation`-вызова.
+    ///
+    /// GAP-CSPENF срез 53: гейтит уже АПГРЕЙЖЕННЫЙ адрес
+    /// (`resolve_and_upgrade_frame_href`, продолжение среза 52's
+    /// `click.rs::resolve_and_upgrade_href` для этого пути), поэтому каждая
+    /// ветка навигации ниже обязана резолвить `href` тем же способом, а не
+    /// сырым `nav_base.resolve_str` — иначе проверка и реальный переход
+    /// смотрели бы на разные URL.
     fn frame_navigate_to_link_blocked(
         &mut self,
         idx: usize,
@@ -194,7 +201,7 @@ impl Lumen {
         let Some((policy, original_policy)) = csp_gate else {
             return false;
         };
-        let resolved = nav_base.resolve_str(href);
+        let resolved = resolve_and_upgrade_frame_href(csp_gate, nav_base, href);
         let self_origin = nav_base.origin();
         if !crate::csp_enforce::navigate_to_blocked(policy, &resolved, self_origin.as_ref()) {
             return false;
@@ -302,8 +309,16 @@ impl Lumen {
     /// ссылке, написанной ребёнком.
     ///
     /// Дальше — обычный путь страницы: те же `fragment_only`/
-    /// `is_navigable_href`, что у клика по её собственной ссылке.
-    fn navigate_page_from_frame(&mut self, href: &str, nav_base: &ResourceBase) {
+    /// `is_navigable_href`, что у клика по её собственной ссылке. Срез 53:
+    /// разрешение адреса — [`resolve_and_upgrade_frame_href`], а не сырой
+    /// `nav_base.resolve_str`, той же причиной, что и у
+    /// `frame_navigate_to_link_blocked`.
+    fn navigate_page_from_frame(
+        &mut self,
+        csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+        href: &str,
+        nav_base: &ResourceBase,
+    ) {
         if let Some(frag) = links::fragment_only(href) {
             self.navigate_fragment(frag.to_owned());
             return;
@@ -312,7 +327,7 @@ impl Lumen {
             eprintln!("iframe: ссылка '{href}' с target=_top не навигабельна — пропуск");
             return;
         }
-        let resolved = nav_base.resolve_str(href);
+        let resolved = resolve_and_upgrade_frame_href(csp_gate, nav_base, href);
         if let Some(frag) = links::same_document_fragment(self.current_display_url(), &resolved) {
             self.navigate_fragment(frag);
             return;
@@ -326,8 +341,15 @@ impl Lumen {
     /// (`_self`): только тогда `#id` и «тот же адрес с другим фрагментом»
     /// означают прокрутку, а не загрузку. Для `_parent` целевой документ —
     /// чужой, и фрагмент в нём считать от адреса кликнувшего нельзя.
+    ///
+    /// Срез 53: разрешение адреса — [`resolve_and_upgrade_frame_href`], а не
+    /// сырой `nav_base.resolve_str`, той же причиной, что и у
+    /// `frame_navigate_to_link_blocked` — `navigate_frame_to` получает уже
+    /// апгрейженный абсолютный адрес (повторный резолв внутри него против
+    /// него же идемпотентен).
     fn navigate_frame_from_link(
         &mut self,
+        csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
         idx: usize,
         same_frame: bool,
         href: &str,
@@ -341,15 +363,15 @@ impl Lumen {
             eprintln!("iframe: ссылка '{href}' внутри фрейма не навигабельна — пропуск");
             return;
         }
+        let resolved = resolve_and_upgrade_frame_href(csp_gate, nav_base, href);
         if same_frame {
-            let resolved = nav_base.resolve_str(href);
             let current = self.frames[idx].url.clone();
             if let Some(frag) = links::same_document_fragment(&current, &resolved) {
                 self.frame_navigate_fragment(idx, &frag);
                 return;
             }
         }
-        self.navigate_frame_to(idx, href, nav_base);
+        self.navigate_frame_to(idx, &resolved, nav_base);
     }
 
     /// Заменить под-документ фрейма `idx` документом по адресу `href`.
@@ -555,5 +577,54 @@ impl Lumen {
         if let Some(y) = target_y {
             self.apply_frame_scroll(idx, y);
         }
+    }
+}
+
+/// Resolve `href` against the child frame's `nav_base` and, if the child's
+/// own CSP carries `upgrade-insecure-requests`, rewrite an `http:` result to
+/// `https:` — GAP-CSPENF срез 53, mirroring `click.rs::resolve_and_upgrade_href`
+/// (срез 52) for the frame-link navigation path (`window.open()`'s own gate,
+/// `about_to_wait.rs::window_open_navigate_to_gate`, was the other path срез
+/// 52 left uncovered and got the same treatment this slice). Every navigation
+/// branch reached after `Lumen::frame_navigate_to_link_blocked` must call
+/// this instead of a bare `nav_base.resolve_str`, or the gate check and the
+/// address actually navigated to would disagree on which URL they mean.
+fn resolve_and_upgrade_frame_href(
+    csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+    nav_base: &ResourceBase,
+    href: &str,
+) -> String {
+    let resolved = nav_base.resolve_str(href);
+    crate::csp_enforce::upgrade_navigation_url(csp_gate, &resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GAP-CSPENF срез 53: `resolve_and_upgrade_frame_href` резолвит `href`
+    /// против `nav_base` РЕБЁНКА и переписывает `http:` в `https:`, когда его
+    /// собственная политика несёт `upgrade-insecure-requests` — зеркало
+    /// `click.rs::resolve_and_upgrade_href_rewrites_when_directive_present`.
+    #[test]
+    fn resolve_and_upgrade_frame_href_rewrites_when_directive_present() {
+        let base = ResourceBase::Url("http://child.example/page.html".to_owned());
+        let p = lumen_network::csp::parse_csp_header("upgrade-insecure-requests");
+        let gate = (vec![p], "upgrade-insecure-requests".to_owned());
+        assert_eq!(
+            resolve_and_upgrade_frame_href(Some(&gate), &base, "next.html"),
+            "https://child.example/next.html"
+        );
+    }
+
+    /// Нет гейта (документ-ребёнок без CSP) — адрес только резолвится, схема
+    /// не трогается.
+    #[test]
+    fn resolve_and_upgrade_frame_href_no_gate_leaves_scheme_alone() {
+        let base = ResourceBase::Url("http://child.example/page.html".to_owned());
+        assert_eq!(
+            resolve_and_upgrade_frame_href(None, &base, "next.html"),
+            "http://child.example/next.html"
+        );
     }
 }
