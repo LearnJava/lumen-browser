@@ -732,6 +732,78 @@ fn css_typed_om_computed_style_property_map_is_read_only() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// ── GAP-TYPEDOM срез 2: StylePropertyMap.set()/append() variadic values ────
+
+#[test]
+fn typed_om_set_accepts_multiple_values_space_joined() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var el = document.documentElement;
+                el.attributeStyleMap.set('margin', CSS.px(1), CSS.px(2), CSS.px(3), CSS.px(4));
+                el.style.margin === '1px 2px 3px 4px'
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn typed_om_set_comma_list_property_joins_with_comma() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var el = document.documentElement;
+                el.attributeStyleMap.set('transition-property', 'opacity', 'transform');
+                el.style.transitionProperty === 'opacity, transform'
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn typed_om_append_adds_a_layer_to_a_comma_list_property() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var el = document.documentElement;
+                el.attributeStyleMap.set('will-change', 'opacity');
+                el.attributeStyleMap.append('will-change', 'transform');
+                el.style.willChange === 'opacity, transform'
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn typed_om_append_on_non_list_property_throws() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var el = document.documentElement;
+                var caught = '';
+                try { el.attributeStyleMap.append('color', 'red'); }
+                catch (e) { caught = e.name; }
+                caught === 'TypeError'
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn typed_om_set_with_no_values_throws() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var el = document.documentElement;
+                var caught = '';
+                try { el.attributeStyleMap.set('color'); }
+                catch (e) { caught = e.name; }
+                caught === 'TypeError'
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 // ── DOM node count / limit bindings ───────────────────────────────────────
 
 #[test]
