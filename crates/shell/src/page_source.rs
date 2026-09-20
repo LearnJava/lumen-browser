@@ -248,7 +248,7 @@ impl PageSource {
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
-                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
+                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links: _ } =
                     client.fetch_page(&lumen_url, body.as_deref(), *upgrade_insecure_requests)?;
                 // BUG-640: redirect signal — the only one obtainable without
                 // a `lumen-network` change (`fetch_with_redirect`'s hop
@@ -354,7 +354,7 @@ impl PageSource {
             );
         }
         let client = crate::config::global().apply_http(builder);
-        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
+        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links: _ } =
             client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref(), *upgrade_insecure_requests)?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.
         let redirected = final_url != lumen_url;

@@ -605,6 +605,12 @@ struct Response {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    /// Raw `Link` header values from `103 Early Hints` blocks seen before
+    /// this final response (RFC 8297). Only the HTTP/1.1 path
+    /// (`http1::response::read_head`) populates this today — H2/H3 still
+    /// discard 1xx header blocks entirely (`h2::conn`, `h3::h3_exchange`),
+    /// so both leave this empty.
+    early_hint_links: Vec<String>,
 }
 
 /// Map an [`h3::h3_exchange::H3Response`] onto the crate's [`Response`] at the
@@ -642,6 +648,9 @@ impl From<h3::h3_exchange::H3Response> for Response {
             status: resp.status,
             headers,
             body: resp.body,
+            // H3Response.informational keeps only status codes, never the
+            // header blocks — see `h3_response_drops_informational_and_trailers`.
+            early_hint_links: Vec::new(),
         }
     }
 }
@@ -1089,6 +1098,12 @@ pub struct PageResponse {
     /// responseStatus` (BUG-640), та же конвенция, что у
     /// `ResourceTimingRow::status` в шелле.
     pub status: u16,
+    /// Сырые значения заголовка `Link` из `103 Early Hints`-ответов,
+    /// увиденных на пути к финальному ответу (RFC 8297; P3-earlyhints
+    /// срез 2). Сегодня заполняется только для HTTP/1.1 — см. комментарий
+    /// на `Response::early_hint_links`. Пусто для кэш-хитов и перехвата
+    /// Service Worker — у синтетического ответа не было сетевого round-trip.
+    pub early_hint_links: Vec<String>,
 }
 
 
@@ -1862,7 +1877,9 @@ fn h2_do_request(
         h2p.release(key, h2);
     }
 
-    Ok(Response { status, headers, body: resp_body })
+    // h2::conn::fetch_with_body discards 1xx header blocks entirely today —
+    // see the comment on `Response::early_hint_links`.
+    Ok(Response { status, headers, body: resp_body, early_hint_links: Vec::new() })
 }
 
 /// Дописать `content-type`/`content-length` в набор заголовков HTTP/2-запроса.
@@ -1913,7 +1930,7 @@ fn h2_do_request_conn(
         &extra_refs,
         body.map_or(&[][..], |b| b.bytes),
     )?;
-    Ok((Response { status, headers, body: resp_body }, h2))
+    Ok((Response { status, headers, body: resp_body, early_hint_links: Vec::new() }, h2))
 }
 
 /// Build the full HTTP/2 request header list — browser-fingerprint headers
@@ -2303,7 +2320,7 @@ fn fetch_with_redirect(
     if url.scheme() == "data" {
         let (content_type, body) = parse_data_url(url)?;
         return Ok((
-            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body },
+            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body, early_hint_links: Vec::new() },
             url.clone(),
         ));
     }
@@ -2322,7 +2339,7 @@ fn fetch_with_redirect(
             .map_err(|e| Error::Network(format!("file: {}: {e}", path.display())))?;
         let content_type = guess_file_content_type(&path);
         return Ok((
-            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body },
+            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body, early_hint_links: Vec::new() },
             url.clone(),
         ));
     }
@@ -4106,7 +4123,7 @@ impl HttpClient {
                 // Synthetic response (e.g. Service Worker intercept) — no
                 // real HTTP round-trip, so no real status; `200` reflects
                 // that it's a successful substitute, not "unknown".
-                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200 });
+                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200, early_hint_links: Vec::new() });
             }
         }
         let url_str = url.to_string();
@@ -4123,6 +4140,7 @@ impl HttpClient {
                     final_url: url.clone(),
                     // Fresh HTTP-cache hit — no network round-trip, no status.
                     status: 0,
+                    early_hint_links: Vec::new(),
                 });
             }
             if !snap.conditional_headers.is_empty() {
@@ -4149,6 +4167,7 @@ impl HttpClient {
                         final_url,
                         // 304: a real network round-trip happened, this is its real status.
                         status: resp.status,
+                        early_hint_links: resp.early_hint_links,
                     });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -4157,6 +4176,7 @@ impl HttpClient {
                     headers: resp.headers,
                     final_url,
                     status: resp.status,
+                    early_hint_links: resp.early_hint_links,
                 });
             }
         }
@@ -4181,7 +4201,7 @@ impl HttpClient {
         {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status })
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status, early_hint_links: resp.early_hint_links })
     }
 
     /// Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
@@ -4221,7 +4241,7 @@ impl HttpClient {
                 // Synthetic response (e.g. Service Worker intercept) — no
                 // real HTTP round-trip, so no real status; `200` reflects
                 // that it's a successful substitute, not "unknown".
-                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200 });
+                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200, early_hint_links: Vec::new() });
             }
         }
         let url_str = url.to_string();
@@ -4239,6 +4259,7 @@ impl HttpClient {
                     final_url: url.clone(),
                     // Fresh HTTP-cache hit — no network round-trip, no status.
                     status: 0,
+                    early_hint_links: Vec::new(),
                 });
             }
             if !snap.conditional_headers.is_empty() {
@@ -4268,6 +4289,7 @@ impl HttpClient {
                         final_url,
                         // 304: a real network round-trip happened, this is its real status.
                         status: resp.status,
+                        early_hint_links: resp.early_hint_links,
                     });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -4276,6 +4298,7 @@ impl HttpClient {
                     headers: resp.headers,
                     final_url,
                     status: resp.status,
+                    early_hint_links: resp.early_hint_links,
                 });
             }
         }
@@ -4299,7 +4322,7 @@ impl HttpClient {
         {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status })
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status, early_hint_links: resp.early_hint_links })
     }
 }
 
@@ -8429,6 +8452,36 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
 
         assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_page_collects_early_hint_link_headers_from_103() {
+        // P3-earlyhints срез 2: 103 Early Hints' `Link` headers must survive
+        // past `read_head`'s 1xx skip (unlike the general interim-response
+        // case above, which only proves the final status/body are correct).
+        // Two 103 blocks, each with its own `Link`, confirm the loop
+        // accumulates across blocks rather than keeping only the last one.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload; as=style\r\n\r\n\
+              HTTP/1.1 103 Early Hints\r\nLink: </script.js>; rel=preload; as=script\r\n\r\n\
+              HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+
+        let resp = client.fetch_page(&url, None, false).unwrap();
+        assert_eq!(resp.body, b"ok");
+        assert_eq!(
+            resp.early_hint_links,
+            vec![
+                "</style.css>; rel=preload; as=style".to_owned(),
+                "</script.js>; rel=preload; as=script".to_owned(),
+            ]
+        );
 
         server.join().unwrap();
     }

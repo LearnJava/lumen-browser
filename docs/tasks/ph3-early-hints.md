@@ -45,15 +45,32 @@
 блока и читать следующую status-line (цикл). Это чинит и потенциальный `100 Continue`.
 Юнит-тест: mock-сервер шлёт `100 Continue\r\n\r\n` перед `200 OK`.
 
-### Срез 2 — M — Парсинг 103 Early Hints
-В цикле среза 1: при status==103 собрать `Link:`-заголовки блока, вернуть их отдельно
-(новое поле в `ResponseHead`/`Response`), затем продолжить чтение до финального ответа.
-Юнит-тест: `103` с `Link: </a.css>; rel=preload; as=style` + затем `200 OK`.
+### Срез 2 — M — Парсинг 103 Early Hints — **сделано 2026-09-20 (P1)**
+`read_head` (`crates/network/src/http1/response.rs`) собирает сырые значения `Link:` из
+каждого `103`-блока в `early_hint_links: Vec<String>` (новый 4-й элемент `ResponseHead`,
+новое приватное поле `Response`), затем продолжает цикл до финального статуса. Проброшено
+до публичного `PageResponse::early_hint_links` (`crates/network/src/lib.rs`) — оба пути,
+`fetch_page`/`fetch_page_streaming`. **Только HTTP/1.1** — H2 (`h2::conn::fetch_with_body`)
+и H3 (`h3::h3_exchange`, поле `H3Response.informational` хранит только коды статусов) по
+прежнему отбрасывают 1xx-заголовки целиком; `Response::early_hint_links` для них — пустой
+`Vec` с комментарием-пометкой. Юнит-тест: `fetch_page_collects_early_hint_link_headers_from_103`
+(`crates/network/src/lib.rs`), два последовательных `103` с разными `Link` перед `200 OK`.
 
-### Срез 3 — S — Проброс Early Hints в preload-конвейер
+### Срез 3 — S — Проброс Early Hints в preload-конвейер — ОТКРЫТО
 Распарсить `Link: rel=preload/preconnect` из 103 → эмитить `SubresourceHintFound`
 (переиспользовать существующий preload-путь) ДО получения финального body. Preconnect/
-prefetch стартуют раньше — суть RFC 8297.
+prefetch стартуют раньше — суть RFC 8297. **Блокер:** сегодня `Link`-заголовок нигде не
+парсится (grep `parse_link_header`/case-insensitive `"link"` lookup в `crates/network` и
+`crates/shell` — 0 совпадений), есть только HTML `<link rel=…>`-сканер
+(`crates/engine/html-parser/src/preload_scanner.rs`, `PreloadHint`/`scan_preload_hints`) —
+его `rel`-словарь стоит переиспользовать. И `fetch_page`/`fetch_page_streaming`
+(`crates/network/src/lib.rs`) синхронно блокируются до финального ответа — «до body»
+эмиссия хинта требует либо callback-параметра (по аналогии с `PageChunkSink`), либо
+эмиссии `SubresourceHintFound` из уже собранных `PageResponse::early_hint_links` сразу
+после `fetch_page` возвращается (не «до body», но не хуже текущего нуля). Естественная
+точка вызова — `crates/shell/src/page_source.rs` (там же, где сейчас `early_hint_links`
+отброшен через `early_hint_links: _`), с проброс в `dispatch_preload_hints`
+(`crates/shell/src/page_pipeline.rs:107-181`).
 
 ### Срез 4 — S — HTML-атрибут `fetchpriority`
 Читать `fetchpriority` на `<img>`/`<link>`/`<script>` в preload-сканере/DOM; override
