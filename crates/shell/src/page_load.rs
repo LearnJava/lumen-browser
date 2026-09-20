@@ -408,6 +408,11 @@ impl Lumen {
             .collect();
 
         for (nid, src) in loads {
+            // A fresh load for this node supersedes any earlier failure — a
+            // `load()` retry after fixing `src` must not stay haunted by the
+            // previous attempt (GAP-MEDIADECODE срез 9).
+            self.video_gif_store.load_failures.lock().unwrap().remove(&nid);
+
             let base = match &self.source {
                 PageSource::File(p) => ResourceBase::File(p.clone()),
                 PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
@@ -429,6 +434,8 @@ impl Lumen {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("video FFmpeg: пропуск {src}: {e}");
+                    self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
+                    self.request_redraw();
                     continue;
                 }
             };
@@ -438,6 +445,8 @@ impl Lumen {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("video FFmpeg: ошибка декодирования {src}: {e}");
+                    self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
+                    self.request_redraw();
                     continue;
                 }
             };
@@ -447,6 +456,8 @@ impl Lumen {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("video FFmpeg: не декодирован первый кадр {src}: {e}");
+                    self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
+                    self.request_redraw();
                     continue;
                 }
             };
@@ -1712,6 +1723,9 @@ impl Lumen {
         self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().clear();
         self.video_ffmpeg_sessions.clear();
         self.video_ffmpeg_last_ms.clear();
+        // GAP-MEDIADECODE срез 9: previous page's failure records must not leak
+        // onto a same-index node in the new page.
+        self.video_gif_store.load_failures.lock().unwrap().clear();
 
         // Update shields panel domain and clear per-page blocked counts.
         {

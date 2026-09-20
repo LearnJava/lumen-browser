@@ -22,6 +22,7 @@
 //! |---|---|---|
 //! | `__lumen_video_load` | `(nid: f64, src: String)` | Queue GIF load |
 //! | `__lumen_video_ready` | `(nid: f64) → bool` | GIF decoded and ready? |
+//! | `__lumen_video_failed` | `(nid: f64) → bool` | Queued load failed (GAP-MEDIADECODE срез 9)? |
 //! | `__lumen_video_play` | `(nid: f64, now_ms: f64)` | Start/resume |
 //! | `__lumen_video_pause` | `(nid: f64, now_ms: f64)` | Pause |
 //! | `__lumen_video_seek` | `(nid: f64, secs: f64, now_ms: f64)` | Seek |
@@ -118,6 +119,25 @@ pub(crate) fn install_video_bindings_v8(
                 .unwrap_or(false)
         });
         rt.register_native("__lumen_video_ready", ready)?;
+    }
+
+    // GAP-MEDIADECODE срез 9: whether the load queued for `nid` failed
+    // (currently only the FFmpeg tick writes into `load_failures` — a
+    // corrupted/undecodable container never reaches `playback`, so without
+    // this the shim's poll loop would spin on `__lumen_video_ready` forever
+    // instead of dispatching `error`). Registered unconditionally, like
+    // `ready` above, since it only reads shared state and costs nothing
+    // when the `ffmpeg-video` feature is off (the map is simply never
+    // written to).
+    {
+        let store = get_video_gif_store();
+        let failed = into_v8_fn1(move |nid: f64| -> bool {
+            store
+                .as_ref()
+                .map(|s| s.load_failures.lock().unwrap().contains_key(&(nid as u32)))
+                .unwrap_or(false)
+        });
+        rt.register_native("__lumen_video_failed", failed)?;
     }
 
     {
@@ -626,6 +646,25 @@ tt.length === 1
         install_video_bindings_v8(&rt).unwrap();
         let ready = rt.eval("__lumen_video_ready(55)").unwrap();
         assert_eq!(ready, JsValue::Bool(false), "should not be ready before decode");
+    }
+
+    /// GAP-MEDIADECODE срез 9: `__lumen_video_failed` reads `load_failures`
+    /// directly — no tick loop involved, this only checks the native binding
+    /// wires to the right store field.
+    #[test]
+    fn native_video_failed_reflects_load_failures() {
+        use crate::video_gif_store::set_video_gif_store;
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = Arc::new(crate::video_gif_store::VideoGifStore::default());
+        store.load_failures.lock().unwrap().insert(77, "corrupt container".to_string());
+        set_video_gif_store(store.clone());
+
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).unwrap();
+        let failed_77 = rt.eval("__lumen_video_failed(77)").unwrap();
+        let failed_78 = rt.eval("__lumen_video_failed(78)").unwrap();
+        assert_eq!(failed_77, JsValue::Bool(true), "77 has a recorded failure");
+        assert_eq!(failed_78, JsValue::Bool(false), "78 has no failure recorded");
     }
 
     // ── BUG-825: the HTMLMediaElement state machine on <video> ────────────────
