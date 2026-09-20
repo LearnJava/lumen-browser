@@ -1011,8 +1011,12 @@ function _lumen_fetch(input) {
         var keepalive = !!(init && init.keepalive);
 
         // Fetch Priority Hints (WHATWG Fetch §2.2.6): 'high'|'low'|'auto'.
-        // Phase 0: parsed and normalised; network priority queue wiring is Phase 2.
-        // network: priority queue — lumen-network Phase 2
+        // network: priority queue — lumen-network Phase 2 (still a single FIFO
+        // connection pool); an explicit hint maps to the RFC 9218 `Priority`
+        // request header (urgency `u`, 0 most urgent .. 7 least, default u=3)
+        // below, same on-the-wire signal srez 4 sends for the HTML
+        // `fetchpriority` attribute's preload hints — 'auto' sends nothing and
+        // leaves urgency to server/UA heuristics.
         var _fetchPriority = (init && init.priority) ? String(init.priority) : 'auto';
         if (_fetchPriority !== 'high' && _fetchPriority !== 'low') { _fetchPriority = 'auto'; }
 
@@ -1040,6 +1044,18 @@ function _lumen_fetch(input) {
             _lumen_headers_new(hdrSrc, 'request').forEach(function(v, k) {
                 authorHeaders.push(k); authorHeaders.push(v);
             });
+        }
+        // RFC 9218 Priority header for an explicit init.priority — an author
+        // header of the same name (set via init.headers/Request.headers)
+        // wins, mirroring the Content-Type override rule below.
+        if (_fetchPriority !== 'auto') {
+            var hasPriorityHeader = false;
+            for (var pfi = 0; pfi + 1 < authorHeaders.length; pfi += 2) {
+                if (authorHeaders[pfi] === 'priority') { hasPriorityHeader = true; break; }
+            }
+            if (!hasPriorityHeader) {
+                authorHeaders.push('priority', _fetchPriority === 'high' ? 'u=1' : 'u=5');
+            }
         }
 
         // AbortSignal.timeout(ms) deadline is enforced natively (the JS thread is

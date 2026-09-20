@@ -94,9 +94,24 @@ HTML-атрибут несёт author-override. Отдельный `Option<expli
 → Low вместо дефолтного Medium). `cargo clippy -p lumen-core -p lumen-html-parser
 -p lumen-shell --all-targets -D warnings` зелёный.
 
-### Срез 5 — XS — `fetch(url, {priority})` на JS-стороне
-Читать `init.priority` (`'high'|'low'|'auto'`) в `fetch()`-шиме `dom.rs`, прокинуть в
-запрос (маппинг на RFC 9218 `Priority:` или внутренний приоритет). Юнит-тест наличия.
+### Срез 5 — XS — `fetch(url, {priority})` на JS-стороне — **сделано 2026-09-21 (P1)**
+`init.priority` (`'high'|'low'|'auto'`) уже читался и нормализовался в
+`_lumen_fetch` (`web_api_shim_mid_b2.js`) — только нигде не использовался
+дальше (комментарий «Phase 2: network priority queue» относился к реальной
+приоритетной очереди в `lumen-network`, которой до сих пор нет). Дошито:
+явный `'high'`/`'low'` теперь уходит в запрос как RFC 9218 `Priority:`
+заголовок (`u=1`/`u=5`, urgency 0..7, дефолт u=3) через уже существующий
+`authorHeaders`-канал (BUG-749) — тот же путь, что и author-заголовки,
+поэтому явный `Priority` из `init.headers`/`Request.headers` вытесняет
+маппинг из `priority`, а не дублирует его. `'auto'` (дефолт, невалидное
+значение, отсутствие опции) заголовок не шлёт вовсе — сервер/эвристика
+UA решают сами. `Request.priority` (constructor/property) сознательно вне
+скоупа — задача касалась только `fetch()`. 2 новых теста `lumen-js`
+(`v8_whatwg_streams.rs`): `fetch_priority_maps_to_rfc9218_priority_header`,
+`fetch_priority_author_header_overrides_init_priority`; уже существующие
+`fetch_priority_high_and_low_accepted`/`fetch_priority_invalid_normalizes_to_auto`
+(`v8_page_visibility_beacon.rs`) покрывали «не бросает». `cargo clippy -p
+lumen-js --all-targets --features v8-backend -D warnings` зелёный.
 
 ### Срез 6 — XS — Доки
 `CAPABILITIES.md` (network/fetch) 🟡→✅ по частям; `ROADMAP.md:161` уточнить; `subsystems/`.
@@ -111,5 +126,5 @@ HTML-атрибут несёт author-override. Отдельный `Option<expli
 - [ ] `read_head` пропускает informational 1xx, финальный статус читается верно.
 - [ ] 103 Early Hints парсятся, `Link: rel=preload/preconnect` эмитят подресурс-хинты.
 - [ ] `fetchpriority` HTML-атрибут переопределяет эвристику приоритета.
-- [ ] `fetch()` init читает `priority`.
+- [x] `fetch()` init читает `priority`.
 - [ ] Тесты зелёные; `CAPABILITIES.md`/`ROADMAP.md`/`subsystems/` обновлены.

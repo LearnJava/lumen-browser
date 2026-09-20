@@ -159,6 +159,56 @@ fn xhr_set_request_header_reaches_the_provider() {
     assert_eq!(captured_headers(&capture), "x-probe:1;");
 }
 
+/// P3-earlyhints срез 5: `fetch(url, {priority})` maps to the RFC 9218
+/// `Priority` request header (urgency `u`) — 'high'/'low' send it, 'auto'
+/// (default, or an invalid value) sends nothing and leaves urgency to
+/// server/UA heuristics. Every case also sets an `X-Probe` header so
+/// `captured_headers` (which polls until *some* header is seen) never
+/// falls through its 3s timeout on the 'auto' cases.
+#[test]
+fn fetch_priority_maps_to_rfc9218_priority_header() {
+    for (expr, expected) in [
+        (
+            "fetch('/api', { priority: 'high', headers: { 'X-Probe': '1' } })",
+            "x-probe:1;priority:u=1;",
+        ),
+        (
+            "fetch('/api', { priority: 'low', headers: { 'X-Probe': '1' } })",
+            "x-probe:1;priority:u=5;",
+        ),
+        (
+            "fetch('/api', { priority: 'auto', headers: { 'X-Probe': '1' } })",
+            "x-probe:1;",
+        ),
+        (
+            "fetch('/api', { priority: 'not-a-real-keyword', headers: { 'X-Probe': '1' } })",
+            "x-probe:1;",
+        ),
+        ("fetch('/api', { headers: { 'X-Probe': '1' } })", "x-probe:1;"),
+    ] {
+        let (rt, capture) = v8_runtime_with_header_capture();
+        rt.eval(expr).unwrap();
+        assert_eq!(
+            captured_headers(&capture),
+            expected,
+            "`{expr}` не отдал ожидаемый заголовок Priority"
+        );
+    }
+}
+
+/// Author-заданный `Priority` заголовок (через `init.headers`) вытесняет
+/// маппинг из `init.priority` — тот же приоритет автора над эвристикой,
+/// что и в срезе 4 для HTML-атрибута.
+#[test]
+fn fetch_priority_author_header_overrides_init_priority() {
+    let (rt, capture) = v8_runtime_with_header_capture();
+    rt.eval(
+        "fetch('/api', { priority: 'high', headers: { 'Priority': 'u=7' } });",
+    )
+    .unwrap();
+    assert_eq!(captured_headers(&capture), "priority:u=7;");
+}
+
 /// GAP-CSPENF срез 10: mock provider that always refuses with
 /// `Error::CspConnectSrcBlocked`, the way `HttpClient::fetch_request_impl`
 /// does when the document's `connect-src` blocks the request — proves the
