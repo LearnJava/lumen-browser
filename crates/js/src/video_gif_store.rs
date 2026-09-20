@@ -108,6 +108,15 @@ pub struct VideoGifStore {
     /// `ffmpeg-video`). Drained by the shell's tick loop once it links
     /// `lumen-media-ffmpeg` (срез 7, not yet wired).
     pub pending_ffmpeg_loads: Mutex<Vec<(u32, String)>>,
+    /// Nodes whose FFmpeg-container load failed (fetch error, undecodable
+    /// container, or the first frame could not be produced) — GAP-MEDIADECODE
+    /// срез 9. Without this, a corrupted `src` never reaches `playback` and
+    /// the shim's poll loop (`__lumen_video_ready`) spins forever with no
+    /// `error` event, exactly the same shape a never-decoded GIF had before
+    /// this slice. Cleared when a fresh load for the same node is dequeued,
+    /// so a `load()` retry after fixing the source is not haunted by the
+    /// previous attempt's failure.
+    pub load_failures: Mutex<HashMap<u32, String>>,
 }
 
 // ── Global registry ───────────────────────────────────────────────────────────

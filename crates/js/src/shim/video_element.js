@@ -85,6 +85,7 @@
     globalThis.MediaError = _MediaError;
   }
 
+  var MEDIA_ERR_DECODE = 3;
   var MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
   function makeMediaError(code, message) {
@@ -944,6 +945,18 @@
       __lumen_video_ffmpeg_load(nid, src);
       _loadTimer = setInterval(function() {
         if (gen !== _generation) { clearInterval(_loadTimer); _loadTimer = null; return; }
+        // GAP-MEDIADECODE срез 9: a corrupted/undecodable container never
+        // reaches `playback`, so `__lumen_video_ready` alone would poll
+        // forever — check failure first so such a source reports a real
+        // `error` event instead of hanging silently in NETWORK_LOADING.
+        if (typeof __lumen_video_failed === 'function' && __lumen_video_failed(nid)) {
+          clearInterval(_loadTimer); _loadTimer = null;
+          _error = makeMediaError(MEDIA_ERR_DECODE, 'unable to decode media resource');
+          _readyState = HAVE_NOTHING;
+          _networkState = NETWORK_NO_SOURCE;
+          fireEvent(el, 'error');
+          return;
+        }
         if (!__lumen_video_ready(nid)) return;
         clearInterval(_loadTimer); _loadTimer = null;
         _ffmpegBacked = true;
