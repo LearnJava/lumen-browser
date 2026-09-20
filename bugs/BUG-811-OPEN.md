@@ -3415,3 +3415,35 @@ RFC 8941 Structured Fields). Карта прокинута тем же путё�
 среза 14 (`_lumen_send_csp_reports` в `crates/js/src/csp.rs`) всё ещё
 реэкстрагирует только `report-uri` из `originalPolicy` и не знает про эту
 карту. Остаток общего списка дорожки не изменился: `manifest-src`.
+
+**Срез 60 (2026-09-20, `p6-gap-cspenf-srez60`):** доставка отчётов на группы
+эндпоинтов `report-to` — второй шаг после среза 59. В отличие от
+`report-uri`, чей список URL сидит прямо в тексте CSP-директивы, `report-to
+<group>` несёт только ИМЯ группы: адреса резолвятся через карту
+`Document::report_to_endpoints`, которую срез 59 уже наполняет из
+`Report-To`. Расширять сигнатуру каждой из полутора десятков точек
+`fire_*_violation`/`_lumen_dispatch_csp_violation` шестым аргументом (как
+`originalPolicy` уже прокинут пятым) означало бы задеть весь список срезов
+1-59 разом — вместо этого новая нативная привязка
+`_lumen_get_report_to_endpoints_json` (`install_document_meta`,
+`crates/js/src/v8_runtime/install/dom_core.rs`) читает
+`doc.report_to_endpoints()` через уже существующий `Arc<Mutex<Document>>` у
+`install_dom` и отдаёт JSON одной строкой; `_lumen_send_csp_reports`
+(`crates/js/src/csp.rs`) зовёт её лениво, по одному разу на нарушение,
+только когда в политике вообще есть `report-to`. Разбор группы —
+`/report-to\s+(\S+)/i` (в отличие от `report-uri`, у директивы `report-to`
+может быть только ОДНО имя группы — CSP3 §3.1/Reporting API v0, не список
+через пробел); `report-uri` и `report-to` в одной политике доставляются оба,
+независимо друг от друга. Неизвестное имя группы (нет в карте, либо карта
+пуста — заголовка `Report-To` не было) молча не шлёт ничего, тем же
+принципом «нет цели — нет отчёта», что уже был у пустого `report-uri`.
+
+4 новых юнит-теста в `crates/js/src/csp.rs`: доставка на именованную группу,
+неизвестная группа не шлёт ничего, `report-uri`+`report-to` вместе шлют оба.
+`cargo test -p lumen-js --profile dev-release --features v8-backend -- csp`
+— 18 passed (14 из среза 14 + 4 новых). `cargo clippy -p lumen-js
+--all-targets --profile dev-release --features v8-backend -- -D warnings` и
+`cargo clippy -p lumen-shell --all-targets --profile dev-release --features
+v8 -- -D warnings` — чисто.
+
+Остаток общего списка дорожки не изменился: `manifest-src`.
