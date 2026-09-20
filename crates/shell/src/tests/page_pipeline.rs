@@ -1141,6 +1141,7 @@ fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
         lumen_core::ColorSpace::Srgb,
         false,
         &[],
+        &std::collections::HashMap::new(),
         None,
         None,
     )

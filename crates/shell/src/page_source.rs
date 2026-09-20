@@ -204,6 +204,7 @@ impl PageSource {
                 cross_origin_isolated: false,
                 cache_control_no_store: false,
                 csp_header: Vec::new(),
+                report_to_endpoints: HashMap::new(),
                 sync_xhr_document_policy: None,
                 sync_xhr_permissions_policy: None,
                 status: 0,
@@ -218,6 +219,7 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
+                    report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
                     status: 0,
@@ -273,6 +275,7 @@ impl PageSource {
                     cross_origin_isolated,
                     cache_control_no_store: cache_control_no_store(&resp_headers),
                     csp_header: content_security_policy_header(&resp_headers),
+                    report_to_endpoints: report_to_endpoints(&resp_headers),
                     sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
                     sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
                     status,
@@ -288,6 +291,7 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
+                    report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
                     status: 0,
@@ -303,6 +307,7 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
+                    report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
                     status: 0,
@@ -372,6 +377,7 @@ impl PageSource {
             cross_origin_isolated,
             cache_control_no_store: cache_control_no_store(&resp_headers),
             csp_header: content_security_policy_header(&resp_headers),
+            report_to_endpoints: report_to_endpoints(&resp_headers),
             sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
             sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
             status,
@@ -396,7 +402,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -423,6 +429,12 @@ pub(crate) struct RawPage {
     /// document's `<meta>` policies. Empty for every non-network source
     /// (file / snapshot / `about:` page).
     pub(crate) csp_header: Vec<String>,
+    /// `{group name -> endpoint URLs}` resolved from the response's
+    /// `Report-To` header(s) (GAP-CSPENF срез 59, see `report_to_endpoints`).
+    /// Stamped onto the parsed [`Document`] next to `csp_header` — a CSP
+    /// policy's `report-to <group>` directive resolves against this map.
+    /// Empty for every non-network source, same as `csp_header`.
+    pub(crate) report_to_endpoints: HashMap<String, Vec<String>>,
     /// `sync-xhr` disposition from the response's `Document-Policy`(`-Report-Only`)
     /// headers (GAP-POLICYREPORT, BUG-953). `None` for every non-network source,
     /// same as `csp_header`.
@@ -492,6 +504,63 @@ pub(crate) fn content_security_policy_header(resp_headers: &[(String, String)]) 
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// Parse one `Report-To` response header instance (Reporting API v0,
+/// <https://www.w3.org/TR/reporting-1/>) into `(group name, endpoint URLs)`.
+///
+/// `group` defaults to `"default"` when absent, per spec. `endpoints` must be
+/// a non-empty array of objects each carrying a string `url`; anything else
+/// (malformed JSON, missing/empty `endpoints`, an endpoint with no `url`) is
+/// treated the same permissive way CSP treats an unrecognised directive
+/// (CSP3 §2.3) — this instance defines nothing, silently skipped by the
+/// caller rather than surfaced as an error. `max_age`/`priority`/`weight` and
+/// any other fields are accepted but ignored: this slice only needs "does
+/// this group have at least one URL to POST to", not staleness or ordering.
+fn parse_report_to_header(header: &str) -> Option<(String, Vec<String>)> {
+    let value: serde_json::Value = serde_json::from_str(header).ok()?;
+    let obj = value.as_object()?;
+    let group = obj
+        .get("group")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("default")
+        .to_owned();
+    let urls: Vec<String> = obj
+        .get("endpoints")?
+        .as_array()?
+        .iter()
+        .filter_map(|ep| ep.get("url")?.as_str().map(str::to_owned))
+        .collect();
+    if urls.is_empty() {
+        return None;
+    }
+    Some((group, urls))
+}
+
+/// Resolve every `Report-To` response header instance into a
+/// `{group name -> endpoint URLs}` map (GAP-CSPENF срез 59) — the piece a CSP
+/// policy's `report-to <group>` directive needs but cannot carry itself,
+/// unlike `report-uri` whose target URL sits right inside the CSP header text
+/// (see `crates/js/src/csp.rs`'s module doc comment).
+///
+/// A response may repeat the header; when two instances name the same group,
+/// the later instance replaces the earlier one's endpoint list wholesale for
+/// that group — Reporting API v0 has no defined merge behaviour for this
+/// case (unlike RFC 8941 Dictionaries, `Report-To` is a bespoke JSON header,
+/// not a Structured Field), and "last one wins, whole-group" is the simplest
+/// rule that does not silently combine two operators' endpoint lists into
+/// one. Groups from different instances do not interact.
+pub(crate) fn report_to_endpoints(resp_headers: &[(String, String)]) -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+    for (k, v) in resp_headers {
+        if !k.eq_ignore_ascii_case("report-to") {
+            continue;
+        }
+        if let Some((group, urls)) = parse_report_to_header(v.trim()) {
+            map.insert(group, urls);
+        }
+    }
+    map
 }
 
 /// Join every occurrence of `header_name` in `resp_headers` with `", "`, the
@@ -745,6 +814,123 @@ mod tests {
     fn csp_header_empty_value_is_ignored() {
         let headers = vec![("Content-Security-Policy".to_owned(), "   ".to_owned())];
         assert!(content_security_policy_header(&headers).is_empty());
+    }
+
+    // ---- GAP-CSPENF срез 59: report_to_endpoints ----
+
+    #[test]
+    fn report_to_resolves_named_group() {
+        let headers = vec![(
+            "Report-To".to_owned(),
+            r#"{"group":"csp-endpoint","max_age":10886400,"endpoints":[{"url":"https://example.test/csp"}]}"#
+                .to_owned(),
+        )];
+        let map = report_to_endpoints(&headers);
+        assert_eq!(map.get("csp-endpoint"), Some(&vec!["https://example.test/csp".to_owned()]));
+    }
+
+    #[test]
+    fn report_to_group_defaults_to_default_when_absent() {
+        let headers = vec![(
+            "Report-To".to_owned(),
+            r#"{"max_age":10886400,"endpoints":[{"url":"https://example.test/r"}]}"#.to_owned(),
+        )];
+        let map = report_to_endpoints(&headers);
+        assert_eq!(map.get("default"), Some(&vec!["https://example.test/r".to_owned()]));
+    }
+
+    #[test]
+    fn report_to_collects_every_url_in_one_group() {
+        let headers = vec![(
+            "Report-To".to_owned(),
+            r#"{"group":"g","endpoints":[{"url":"https://a.test/r"},{"url":"https://b.test/r"}]}"#.to_owned(),
+        )];
+        let map = report_to_endpoints(&headers);
+        assert_eq!(
+            map.get("g"),
+            Some(&vec!["https://a.test/r".to_owned(), "https://b.test/r".to_owned()])
+        );
+    }
+
+    #[test]
+    fn report_to_header_name_match_is_case_insensitive() {
+        let headers = vec![(
+            "report-TO".to_owned(),
+            r#"{"group":"g","endpoints":[{"url":"https://example.test/r"}]}"#.to_owned(),
+        )];
+        assert!(report_to_endpoints(&headers).contains_key("g"));
+    }
+
+    #[test]
+    fn report_to_none_when_absent() {
+        let headers = vec![("Server".to_owned(), "nginx".to_owned())];
+        assert!(report_to_endpoints(&headers).is_empty());
+    }
+
+    #[test]
+    fn report_to_malformed_json_is_ignored() {
+        let headers = vec![("Report-To".to_owned(), "not json".to_owned())];
+        assert!(report_to_endpoints(&headers).is_empty());
+    }
+
+    #[test]
+    fn report_to_missing_endpoints_is_ignored() {
+        let headers = vec![("Report-To".to_owned(), r#"{"group":"g"}"#.to_owned())];
+        assert!(report_to_endpoints(&headers).is_empty());
+    }
+
+    #[test]
+    fn report_to_empty_endpoints_array_is_ignored() {
+        let headers = vec![("Report-To".to_owned(), r#"{"group":"g","endpoints":[]}"#.to_owned())];
+        assert!(report_to_endpoints(&headers).is_empty());
+    }
+
+    #[test]
+    fn report_to_endpoint_without_url_is_skipped_not_fatal() {
+        let headers = vec![(
+            "Report-To".to_owned(),
+            r#"{"group":"g","endpoints":[{"priority":1},{"url":"https://example.test/r"}]}"#.to_owned(),
+        )];
+        let map = report_to_endpoints(&headers);
+        assert_eq!(map.get("g"), Some(&vec!["https://example.test/r".to_owned()]));
+    }
+
+    /// Two instances naming the same group — later instance replaces the
+    /// earlier one's endpoint list wholesale (module doc comment on
+    /// `report_to_endpoints`: Reporting API v0 has no defined merge rule).
+    #[test]
+    fn report_to_repeated_same_group_last_one_wins() {
+        let headers = vec![
+            (
+                "Report-To".to_owned(),
+                r#"{"group":"g","endpoints":[{"url":"https://old.test/r"}]}"#.to_owned(),
+            ),
+            (
+                "Report-To".to_owned(),
+                r#"{"group":"g","endpoints":[{"url":"https://new.test/r"}]}"#.to_owned(),
+            ),
+        ];
+        let map = report_to_endpoints(&headers);
+        assert_eq!(map.get("g"), Some(&vec!["https://new.test/r".to_owned()]));
+    }
+
+    /// Two instances naming different groups both survive.
+    #[test]
+    fn report_to_different_groups_both_kept() {
+        let headers = vec![
+            (
+                "Report-To".to_owned(),
+                r#"{"group":"a","endpoints":[{"url":"https://a.test/r"}]}"#.to_owned(),
+            ),
+            (
+                "Report-To".to_owned(),
+                r#"{"group":"b","endpoints":[{"url":"https://b.test/r"}]}"#.to_owned(),
+            ),
+        ];
+        let map = report_to_endpoints(&headers);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("a"), Some(&vec!["https://a.test/r".to_owned()]));
+        assert_eq!(map.get("b"), Some(&vec!["https://b.test/r".to_owned()]));
     }
 
     // ---- GAP-POLICYREPORT (BUG-953): sync-xhr disposition ----

@@ -578,6 +578,18 @@ pub struct Document {
     /// for every non-network source (file / snapshot / `about:` page).
     #[serde(default)]
     csp_header: Vec<String>,
+    /// `{group name -> endpoint URLs}` resolved from every `Report-To`
+    /// response header instance (Reporting API v0,
+    /// <https://www.w3.org/TR/reporting-1/>) — GAP-CSPENF срез 59. A CSP
+    /// policy's `report-to <group>` directive names a group here; the group
+    /// itself is document-level state carried by a *separate* header, unlike
+    /// `report-uri` whose target URL sits right inside the CSP header text.
+    /// Set once by the shell in `parse_and_layout`, next to
+    /// [`Self::csp_header`], for the same "several enforcement points, only
+    /// ever a `&Document`" reason. Empty for every non-network source (file /
+    /// snapshot / `about:` page), same as `csp_header`.
+    #[serde(default)]
+    report_to_endpoints: HashMap<String, Vec<String>>,
     /// Nodes whose `style=""` attribute `style-src-attr`/`style-src`/
     /// `default-src` forbids (GAP-CSPENF срез 23). Layout is the only reader
     /// (`cascade.rs` skips [`Self::get_attr`]`("style")` for a member of this
@@ -641,6 +653,7 @@ impl Document {
             character_set: default_character_set(),
             content_type: default_content_type(),
             csp_header: Vec::new(),
+            report_to_endpoints: HashMap::new(),
             style_attr_csp_blocked: HashSet::new(),
         }
     }
@@ -689,6 +702,19 @@ impl Document {
     /// Called once by the shell right after parsing, before any script runs.
     pub fn set_csp_header(&mut self, csp_header: Vec<String>) {
         self.csp_header = csp_header;
+    }
+
+    /// `{group name -> endpoint URLs}` resolved from the response's
+    /// `Report-To` header(s) (GAP-CSPENF срез 59). Looked up by the JS-side
+    /// `report-to <group>` delivery path once per document.
+    pub fn report_to_endpoints(&self) -> &HashMap<String, Vec<String>> {
+        &self.report_to_endpoints
+    }
+
+    /// Set the document's `Report-To` endpoint groups. Called once by the
+    /// shell right after parsing, next to [`Self::set_csp_header`].
+    pub fn set_report_to_endpoints(&mut self, report_to_endpoints: HashMap<String, Vec<String>>) {
+        self.report_to_endpoints = report_to_endpoints;
     }
 
     /// `true` if `node`'s `style=""` attribute is CSP-blocked (GAP-CSPENF
