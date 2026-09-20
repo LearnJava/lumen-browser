@@ -722,6 +722,10 @@
     var _muted   = !!(el.hasAttribute && el.hasAttribute('muted'));
     var _defaultRate = 1.0;
     var _rate        = 1.0;
+    // Seed the native side with the markup-declared `muted` attribute — the
+    // `muted` property's own setter below is only reached from script, so a
+    // plain `<video muted>` would otherwise never tell the audio sink.
+    if (nid && _muted && typeof __lumen_video_set_muted === 'function') __lumen_video_set_muted(nid, true);
     var _networkState = NETWORK_EMPTY;
     var _readyState   = HAVE_NOTHING;
     var _currentSrc   = '';
@@ -1108,6 +1112,7 @@
         if (isNaN(n) || n < 0 || n > 1) throw domException('volume must be in the range 0..1', 'IndexSizeError');
         if (n === _volume) return;
         _volume = n;
+        if (nid && typeof __lumen_video_set_volume === 'function') __lumen_video_set_volume(nid, n);
         queueEvent('volumechange');
       },
       configurable: true,
@@ -1119,6 +1124,7 @@
         var b = !!v;
         if (b === _muted) return;
         _muted = b;
+        if (nid && typeof __lumen_video_set_muted === 'function') __lumen_video_set_muted(nid, b);
         queueEvent('volumechange');
       },
       configurable: true,

@@ -117,6 +117,17 @@ pub struct VideoGifStore {
     /// so a `load()` retry after fixing the source is not haunted by the
     /// previous attempt's failure.
     pub load_failures: Mutex<HashMap<u32, String>>,
+    /// `(volume, muted)` last set via JS `video.volume =`/`video.muted =`,
+    /// keyed by node — GAP-MEDIADECODE remainder: routes those two JS-side
+    /// properties (`crates/js/src/shim/video_element.js`'s `_volume`/`_muted`
+    /// closures) to the FFmpeg audio sink. Kept as its own map rather than a
+    /// field on `VideoPlaybackState` because that struct is wholesale
+    /// reconstructed on every load/decode completion and on tab-switch
+    /// restore (`page_snapshot.rs`) — a field there would silently reset to
+    /// its default the moment a fresh decode finishes, discarding whatever
+    /// the page had already set. Absent entry = spec default (`volume: 1.0`,
+    /// `muted: false`).
+    pub audio_levels: Mutex<HashMap<u32, (f32, bool)>>,
 }
 
 impl VideoGifStore {
