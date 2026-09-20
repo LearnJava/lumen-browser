@@ -5213,7 +5213,22 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn close(&self, code: u16, reason: &str) -> Result<()> {
         self.running.store(false, std::sync::atomic::Ordering::Release);
-        self.session.lock().unwrap().close(code, reason)
+        // GAP-WSASYNC срез 3 (BUG-869): `session.close()` blocks on the same
+        // mutex the writer thread can be holding for the duration of a
+        // blocking `send_text`/`send_binary` under backpressure — calling it
+        // straight from the JS thread (as this used to) stalled the whole
+        // document for however long that write took. Run it on a detached
+        // thread instead: the caller (`_lumen_ws_close`) already discards
+        // this method's `Result`, and the shim has already flipped
+        // `readyState` to CLOSING before invoking it, so nothing observable
+        // depends on the close frame having gone out by the time this
+        // returns.
+        let session = Arc::clone(&self.session);
+        let reason = reason.to_string();
+        std::thread::spawn(move || {
+            let _ = session.lock().unwrap().close(code, &reason);
+        });
+        Ok(())
     }
 
     fn protocol(&self) -> String {
