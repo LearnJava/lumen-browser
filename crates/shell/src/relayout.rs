@@ -88,12 +88,13 @@ impl Lumen {
         let (inline, blocked) =
             extract_style_blocks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         drop(doc);
-        if blocked > 0
-            && let Some((_, original_policy)) = &csp_policy
-            && let Some(js) = self.js_ctx.as_ref()
-        {
-            for _ in 0..blocked {
-                js.fire_csp_violation("style-src", "inline", original_policy);
+        if let Some(js) = self.js_ctx.as_ref() {
+            // GAP-CSPENF срез 57: each dispatch now carries the text of the
+            // policy actually violated by that block, not the document's
+            // combined text — same switch as `page_pipeline.rs`'s inline
+            // `<style>` dispatch.
+            for text in &blocked {
+                js.fire_csp_violation("style-src", "inline", text);
             }
         }
         let mut css =

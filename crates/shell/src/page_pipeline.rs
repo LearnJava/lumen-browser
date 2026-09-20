@@ -363,18 +363,24 @@ pub(crate) struct PageCascade {
     /// `style-src`/`default-src` blocked — mirrors `blocked_by_img_src`
     /// (срез 4), fired as `securitypolicyviolation` once a JS runtime exists.
     pub(crate) blocked_by_style_src: Vec<String>,
-    /// GAP-CSPENF срез 21: number of inline `<style>` blocks `style-src`/
-    /// `default-src` blocked — no URL to report (`blockedURI` is always
-    /// `"inline"`, same as inline `<script>`), so a count is enough to fire
-    /// one `securitypolicyviolation` per blocked block once a JS runtime
-    /// exists.
-    pub(crate) blocked_inline_style_count: usize,
+    /// GAP-CSPENF срез 21: text of the `style-src`/`default-src` policy that
+    /// blocked each inline `<style>` block, one entry per blocked block — no
+    /// URL to report (`blockedURI` is always `"inline"`, same as inline
+    /// `<script>`). Срез 57 turned this from a bare count into the violated
+    /// policy's own text (CSP3 §7.8's `originalPolicy`, not the document's
+    /// combined text).
+    pub(crate) blocked_inline_style_policies: Vec<String>,
     /// GAP-CSPENF срез 23: nodes whose `style=""` attribute `style-src-attr`/
     /// `style-src`/`default-src` blocked — handed to
     /// [`lumen_dom::Document::set_style_attr_csp_blocked`] before the first
-    /// layout, and its length used to fire one `securitypolicyviolation` per
-    /// node, the same one-shot-push shape as [`Self::blocked_inline_style_count`].
+    /// layout.
     pub(crate) blocked_style_attr_nodes: std::collections::HashSet<NodeId>,
+    /// GAP-CSPENF срез 57: text of the policy that blocked each node in
+    /// [`Self::blocked_style_attr_nodes`], same document order — was a bare
+    /// length used to fire one `securitypolicyviolation` per node; now each
+    /// dispatch carries the violated policy's own text instead of the
+    /// document's combined text.
+    pub(crate) blocked_style_attr_policies: Vec<String>,
     /// Parsed cascade.
     pub(crate) sheet: lumen_css_parser::Stylesheet,
     /// CSSOM-1 срез 2: один [`StylesheetNodeEntry`] на `<style>`/`<link
@@ -454,7 +460,7 @@ fn build_page_cascade(
     dark_mode: bool,
     media_print: bool,
 ) -> Result<PageCascade, Box<dyn Error>> {
-    let (css, dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count, blocked_style_attr_nodes) = {
+    let (css, dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
         let link_media_ctx = if media_print {
             print_media_context(viewport, dark_mode)
@@ -470,12 +476,12 @@ fn build_page_cascade(
         // Инлайновые <style>: их `@import` резолвятся относительно базы
         // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
         // `@import` внутри load_linked_stylesheets.
-        let (inline, blocked_inline_style_count) =
+        let (inline, blocked_inline_style_policies) =
             extract_style_blocks(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         // GAP-CSPENF срез 23: `style=""` attribute — same one-shot policy read
         // as above, separate walk (attributes live on arbitrary elements, not
         // only `<style>` nodes).
-        let (blocked_style_attr_nodes, _) =
+        let (blocked_style_attr_nodes, blocked_style_attr_policies) =
             collect_style_attr_csp_blocked(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         // GAP-CSPENF срез 38: `style-src` теперь также gates `@import`
         // targets, not only the `<style>`/`<link>` themselves — same
@@ -513,7 +519,7 @@ fn build_page_cascade(
             // CSSOM-5 срез 2: placeholder — see the field's doc comment.
             adopted_fp: 0,
         };
-        (css, dyn_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count, blocked_style_attr_nodes)
+        (css, dyn_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies)
     };
 
     let sheet = {
@@ -583,8 +589,8 @@ fn build_page_cascade(
     }
 
     Ok(PageCascade {
-        dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count,
-        blocked_style_attr_nodes, sheet,
+        dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies,
+        blocked_style_attr_nodes, blocked_style_attr_policies, sheet,
         stylesheet_nodes, font_registry, pending_web_fonts, measurer,
     })
 }
@@ -1266,8 +1272,8 @@ pub(crate) fn parse_and_layout(
     // right after them if they touched `<style>`/`<link>`), so there is nothing
     // left to fetch or parse here — only to hand out.
     let PageCascade {
-        dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_count,
-        blocked_style_attr_nodes, sheet,
+        dynamic_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies,
+        blocked_style_attr_nodes: _, blocked_style_attr_policies, sheet,
         stylesheet_nodes, font_registry, pending_web_fonts, measurer,
     } = cascade;
 
@@ -1319,43 +1325,28 @@ pub(crate) fn parse_and_layout(
         }
     }
 
-    // GAP-CSPENF срез 21: `securitypolicyviolation` for every `style-src`-
+    // GAP-CSPENF срез 21/57: `securitypolicyviolation` for every `style-src`-
     // blocked inline `<style>` — no URL, `blockedURI` is always `"inline"`,
-    // same one-shot-push shape as `blocked_by_style_src` above.
+    // same one-shot-push shape as `blocked_by_style_src` above. Срез 57:
+    // each dispatch now carries the text of the policy `extract_style_blocks`
+    // found actually violated for that node, not the document's combined text.
     #[cfg(feature = "v8")]
-    if blocked_inline_style_count > 0
-        && let Some(js) = &js_ctx
-    {
-        let original_policy = {
-            let d = doc_arc.lock().unwrap();
-            let root = d.root();
-            crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
-        };
-        if let Some(original_policy) = original_policy {
-            for _ in 0..blocked_inline_style_count {
-                js.fire_csp_violation("style-src", "inline", &original_policy);
-            }
+    if let Some(js) = &js_ctx {
+        for text in &blocked_inline_style_policies {
+            js.fire_csp_violation("style-src", "inline", text);
         }
     }
 
-    // GAP-CSPENF срез 23: `securitypolicyviolation` for every `style-src-attr`-
-    // blocked `style=""` attribute — `blockedURI` is `"inline"`, same as the
-    // inline `<style>` block above; `violatedDirective` is `style-src-attr`
-    // (CSP3 §6.4's granular directive for the attribute form), not
-    // `style-src`.
+    // GAP-CSPENF срез 23/57: `securitypolicyviolation` for every
+    // `style-src-attr`-blocked `style=""` attribute — `blockedURI` is
+    // `"inline"`, same as the inline `<style>` block above; `violatedDirective`
+    // is `style-src-attr` (CSP3 §6.4's granular directive for the attribute
+    // form), not `style-src`. Срез 57: same per-node policy text switch as
+    // the inline `<style>` dispatch above.
     #[cfg(feature = "v8")]
-    if !blocked_style_attr_nodes.is_empty()
-        && let Some(js) = &js_ctx
-    {
-        let original_policy = {
-            let d = doc_arc.lock().unwrap();
-            let root = d.root();
-            crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
-        };
-        if let Some(original_policy) = original_policy {
-            for _ in 0..blocked_style_attr_nodes.len() {
-                js.fire_csp_violation("style-src-attr", "inline", &original_policy);
-            }
+    if let Some(js) = &js_ctx {
+        for text in &blocked_style_attr_policies {
+            js.fire_csp_violation("style-src-attr", "inline", text);
         }
     }
 

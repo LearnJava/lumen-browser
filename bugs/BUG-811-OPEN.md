@@ -3281,7 +3281,37 @@ bounded_document_lock_waits_out_another_thread`, ни разу не тот же 
 между прогонами и ни один не в затронутых этим срезом файлах) — не
 регрессия этого среза.
 
+**Срез 57 (2026-09-20, `p6-gap-cspenf-srez57`)** закрыл остаток, названный
+срезом 56 не покрытым: `blocked_inline_style_count`/`blocked_style_attr_nodes`
+(`page_pipeline.rs`/`frames.rs`/`relayout.rs`) больше не сворачивают список
+нарушений инлайновых `<style>`/атрибутов `style=""` в счётчик до
+диспетчеризации — тело узла проверяется прямо в `doc_extract`'s обходе
+(`extract_style_blocks`/`collect_style_attr_csp_blocked`), пока ещё в скоупе,
+через новые `csp_enforce::violating_style_attr_policy` (аналог
+`violating_inline_policy` для атрибута — своя цепочка фолбэка/`'unsafe-hashes'`
+гейт) и уже существующий `violating_inline_policy`. Обе функции теперь
+возвращают `Vec<String>` — текст ИМЕННО нарушенной политики на каждый
+заблокированный узел, в порядке документа, вместо `usize`; поля
+`PageCascade`/`FrameSubresourceOutcomes` переименованы в
+`blocked_inline_style_policies`/`blocked_style_attr_policies`, каждый call
+site диспетчеризации (`page_pipeline.rs`, `frames.rs`, `relayout.rs`) отдаёт
+эту политику напрямую, а не объединённый текст `document_csp_policy`. Старые
+`inline_style_blocked`/`style_attribute_blocked`/`inline_directive_blocked`
+стали `#[cfg(test)]`-only (та же судьба, что срез 56 уже дал
+`inline_script_blocked`/`script_src_blocked` — производственных вызовов не
+осталось).
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen --
+csp frame navigate form click` — 370 passed (без нового падения, тот же
+счётчик, что срез 56). `cargo clippy -p lumen-shell --all-targets --profile
+dev-release --features v8 -- -D warnings` — чисто. `scripts/scoped-test.sh` дал
+один красный (`lumen-driver::cases::snapshot_cpu::cpu_snapshots_match_references`,
+7 файлов) — тот же известный несвязанный класс дрейфа, что
+[BUG-1008](BUG-1008-OPEN.md); не регрессия этого среза (срез не трогает
+paint/display list).
+
 Остаток общего списка дорожки не изменился: `report-to` (нужны группы
 эндпоинтов из `Report-To`, этот движок его не разбирает), `manifest-src`
-(движок не фетчит веб-манифест вовсе — гейтить нечего), агрегированный
-инлайн-счётчик выше.
+(движок не фетчит веб-манифест вовсе — гейтить нечего), а также
+многополитийный отчёт CSP3 §7.8 (текст первой нарушившей политики, не список
+всех при одновременном нарушении несколькими).

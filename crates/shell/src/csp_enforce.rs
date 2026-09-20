@@ -260,16 +260,24 @@
 //! из `&[CspPolicy]`, которая ФАКТИЧЕСКИ нарушена данной проверкой, и
 //! возвращают `Some(&её.raw)` вместо `bool` — каждый call site, что диспатчит
 //! событие, зовёт `violating_*` вместо `document_csp_policy`'s объединённого
-//! текста. Не покрыто этим срезом: `blocked_inline_style_count`/
-//! `blocked_style_attr_nodes` (`page_pipeline.rs`/`frames.rs`) — обе точки
-//! давно свернули список нарушений в счётчик до диспетчеризации, тело
-//! конкретного `<style>`/атрибута к моменту диспатча уже потеряно, поэтому
-//! они продолжают нести объединённый текст; per-инстанс исправление требует
-//! сначала пронести тела через `doc_extract`'s API, не только счётчик.
+//! текста.
+//!
+//! Срез 57 закрыл остаток, который срез 56 назвал не покрытым: инлайновые
+//! `<style>` (`doc_extract::extract_style_blocks`) и `style=""` атрибуты
+//! (`doc_extract::collect_style_attr_csp_blocked`) больше не сворачивают
+//! список нарушений в счётчик до диспетчеризации — каждая функция теперь
+//! зовёт [`violating_inline_policy`]/[`violating_style_attr_policy`] В
+//! МОМЕНТ, когда тело узла ещё в скоупе, и возвращает `Vec<String>` текстов
+//! нарушенных политик (одна запись на заблокированный узел, в порядке
+//! документа) вместо счётчика. `blocked_inline_style_count`/
+//! `blocked_style_attr_nodes`'s `usize`/длина стали
+//! `blocked_inline_style_policies`/`blocked_style_attr_policies` в
+//! `PageCascade`/`FrameSubresourceOutcomes`.
+//!
 //! CSP3 §7.8 также хочет ОТДЕЛЬНЫЙ отчёт на КАЖДУЮ нарушенную политику, если
-//! их несколько сразу — этот срез даёт текст первой нарушившей, не список
-//! всех; многополитийное одновременное нарушение одного и того же ресурса
-//! встречается редко и остаётся отдельным пробелом.
+//! их несколько сразу — каждая `violating_*` функция даёт текст первой
+//! нарушившей, не список всех; многополитийное одновременное нарушение
+//! одного и того же ресурса встречается редко и остаётся отдельным пробелом.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;
@@ -347,29 +355,36 @@ fn inline_script_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str
     inline_directive_blocked(policies, &CspDirective::ScriptSrc, nonce, body)
 }
 
-/// `true`, если `style-src` (или `default-src`) документа запрещает данный
-/// инлайновый `<style>` — срез 21, тот же `'unsafe-inline'`/`'nonce-…'`/
-/// `'sha256-…'` набор источников, что инлайновый `<script>` уже даёт
-/// скриптам, применённый к `CspDirective::StyleSrc`. Атрибут `style=` и
-/// событийные обработчики этим не покрыты — только тело `<style>`.
-pub(crate) fn inline_style_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
+/// Срез 57: test-only now — the production caller (`doc_extract::
+/// extract_style_blocks`) switched to [`violating_inline_policy`] so a fired
+/// `securitypolicyviolation` carries the specific violated policy's text, not
+/// just a bool. Kept for the unit tests below, which exercise
+/// [`inline_directive_blocked`] through this name — `true` if `style-src`
+/// (or `default-src`) forbids the given inline `<style>` body.
+#[cfg(test)]
+fn inline_style_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
     inline_directive_blocked(policies, &CspDirective::StyleSrc, nonce, body)
 }
 
-/// `true` if `style-src-attr`/`style-src`/`default-src` forbids the value of
-/// a `style=""` attribute whose text is `body` — срез 23, last inline class
-/// срезы 21/22 named as not covered. Unlike [`inline_style_blocked`] (which
-/// gates `<style>` element text), CSP3 §6.4.2 "inline check" treats an
-/// attribute differently on two points: there is no nonce for a `style=`
-/// attribute (an element cannot carry a nonce for its own attribute, only
-/// for a `<style>`/`<script>` element's own `nonce=` attribute), and a hash
-/// source only matches an attribute if the policy also carries
-/// `'unsafe-hashes'` (CSP3 §8.1) — a bare hash source is enough for `<style>`
-/// element text but never for an attribute. Fallback chain is the CSP3 §6.4
-/// granular one (`style-src-attr` → `style-src` → `default-src`), one step
-/// deeper than [`inline_directive_blocked`]'s single `directive` →
-/// `default-src` step used by every other directive in this file.
-pub(crate) fn style_attribute_blocked(policies: &[CspPolicy], body: &str) -> bool {
+/// Срез 57: test-only now — the production caller (`doc_extract::
+/// collect_style_attr_csp_blocked`) switched to
+/// [`violating_style_attr_policy`] for the same reason as
+/// [`inline_style_blocked`] above. `true` if `style-src-attr`/`style-src`/
+/// `default-src` forbids the value of a `style=""` attribute whose text is
+/// `body` — срез 23, last inline class срезы 21/22 named as not covered.
+/// Unlike [`inline_style_blocked`] (which gates `<style>` element text),
+/// CSP3 §6.4.2 "inline check" treats an attribute differently on two points:
+/// there is no nonce for a `style=` attribute (an element cannot carry a
+/// nonce for its own attribute, only for a `<style>`/`<script>` element's own
+/// `nonce=` attribute), and a hash source only matches an attribute if the
+/// policy also carries `'unsafe-hashes'` (CSP3 §8.1) — a bare hash source is
+/// enough for `<style>` element text but never for an attribute. Fallback
+/// chain is the CSP3 §6.4 granular one (`style-src-attr` → `style-src` →
+/// `default-src`), one step deeper than [`inline_directive_blocked`]'s single
+/// `directive` → `default-src` step used by every other directive in this
+/// file.
+#[cfg(test)]
+fn style_attribute_blocked(policies: &[CspPolicy], body: &str) -> bool {
     policies.iter().any(|policy| single_style_attribute_blocked(policy, body))
 }
 
@@ -396,6 +411,9 @@ fn single_style_attribute_blocked(policy: &CspPolicy, body: &str) -> bool {
 /// Общая проверка `inline_script_blocked`/[`inline_style_blocked`]: любой
 /// совпавший источник (`'unsafe-inline'` ИЛИ nonce ИЛИ хэш) допускает
 /// инлайн; отсутствие директивы, применимой к `directive`, — не нарушение.
+/// Срез 57: test-only now, same reason as the two `#[cfg(test)]` functions
+/// above that are its only remaining callers.
+#[cfg(test)]
 fn inline_directive_blocked(
     policies: &[CspPolicy],
     directive: &CspDirective,
@@ -735,6 +753,19 @@ pub(crate) fn violating_base_uri_policy<'a>(
     policies
         .iter()
         .find(|policy| !policy.base_uri_allowed(&parsed, self_origin))
+        .map(|policy| policy.raw.as_str())
+}
+
+/// `style=""` attribute counterpart of [`violating_inline_policy`] — text of
+/// the first policy whose [`single_style_attribute_blocked`] forbids `body`
+/// (GAP-CSPENF срез 57). Kept separate rather than folded into
+/// `violating_inline_policy` because the attribute form uses its own
+/// fallback chain and `'unsafe-hashes'` gate, same reason
+/// [`style_attribute_blocked`] is not built on [`inline_directive_blocked`].
+pub(crate) fn violating_style_attr_policy<'a>(policies: &'a [CspPolicy], body: &str) -> Option<&'a str> {
+    policies
+        .iter()
+        .find(|policy| single_style_attribute_blocked(policy, body))
         .map(|policy| policy.raw.as_str())
 }
 

@@ -404,7 +404,7 @@ fn frame_subresources_reports_csp_blocked_inline_style() {
         None,
     );
 
-    assert_eq!(out.blocked_inline_style_count, 1, "the sole <style> node is blocked");
+    assert_eq!(out.blocked_inline_style_policies.len(), 1, "the sole <style> node is blocked");
     assert!(!out.css.contains("color"), "blocked <style> text must not reach the cascade");
 }
 
@@ -433,7 +433,7 @@ fn frame_subresources_no_policy_keeps_inline_style() {
         None,
     );
 
-    assert_eq!(out.blocked_inline_style_count, 0);
+    assert!(out.blocked_inline_style_policies.is_empty());
     assert!(out.css.contains("color"), "no policy must not block inline style");
 }
 
@@ -467,7 +467,7 @@ fn frame_subresources_reports_csp_blocked_style_attr() {
         None,
     );
 
-    assert_eq!(out.blocked_style_attr_count, 1, "the sole style= node is blocked");
+    assert_eq!(out.blocked_style_attr_policies.len(), 1, "the sole style= node is blocked");
     // The blocked set is written directly onto `doc` — `lumen_layout`'s
     // cascade is the only reader (see `Document::is_style_attr_csp_blocked`'s
     // doc comment), so re-deriving the same node id here to probe it would
@@ -501,7 +501,7 @@ fn frame_subresources_no_policy_keeps_style_attr() {
         None,
     );
 
-    assert_eq!(out.blocked_style_attr_count, 0);
+    assert!(out.blocked_style_attr_policies.is_empty());
 }
 
 /// GAP-CSPENF срез 27: `frame-ancestors` in the CHILD's own policy refuses an
