@@ -265,7 +265,25 @@ impl Lumen {
                 .map(|ls| effective_base(&ls.document.lock().unwrap(), &base))
                 .unwrap_or(base);
 
-            let bytes = match fetch_image_bytes(&src, &base, &self.event_sink, Some(self.active_cookie_jar())) {
+            // GAP-CSPENF срез 51: `upgrade-insecure-requests` for this GIF fetch
+            // — same one-shot policy read and `resolve → upgrade` order as
+            // `fetch_and_register_lazy_images` (срез 43). `media-src`'s own
+            // block check already ran JS-side before this URL was queued
+            // (`_lumen_check_media_src`, срез 17); this tick is the shell's
+            // only point with a live `&Document` for this path, so it is where
+            // the scheme rewrite has to happen — срез 50 named this path (as
+            // opposed to `<audio src>`/`<track src>`) still uncovered.
+            let csp_gate = self.layout_source.as_ref().and_then(|ls| {
+                let doc = ls.document.lock().unwrap();
+                let root = doc.root();
+                crate::csp_enforce::document_csp_policy(&doc, root)
+            });
+            let upgraded = csp_gate.as_ref().and_then(|(policy, _)| {
+                crate::csp_enforce::upgrade_insecure_url(policy, &base.resolve_str(&src))
+            });
+            let fetch_url: &str = upgraded.as_deref().unwrap_or(&src);
+
+            let bytes = match fetch_image_bytes(fetch_url, &base, &self.event_sink, Some(self.active_cookie_jar())) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("video GIF: пропуск {src}: {e}");

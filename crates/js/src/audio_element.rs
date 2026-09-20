@@ -284,13 +284,23 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       // is the last synchronous point at which nothing has been requested yet,
       // the same reason срез 12's `sendBeacon` gate sits ahead of its
       // `thread::spawn`. The URL is resolved against the document base for the
-      // check only: the attribute is handed to the loader raw (an existing
-      // limitation of this path, unrelated to CSP), but a policy must be
-      // matched against an absolute URL to mean anything.
+      // check: a policy must be matched against an absolute URL to mean
+      // anything.
       var _abs = url;
       if (typeof _url_resolve === 'function' && typeof _lumen_document_base_url === 'function') {
         try { var _r = _url_resolve(url, _lumen_document_base_url()); if (_r) _abs = String(_r); }
         catch (e) {}
+      }
+      // GAP-CSPENF срез 51: `upgrade-insecure-requests` rewrite, ahead of the
+      // `media-src` check per [UIR] §4.1 step 5 before step 6 — same order
+      // every other producer uses. `PlatformAudioPlayer::load` has no CSP
+      // context of its own (unlike `<video>`'s GIF path, which the shell
+      // upgrades natively in `tick_video_gifs`), so this is the one rewrite
+      // that has to happen JS-side. Fixes as a side effect the loader's prior
+      // "handed the raw attribute" limitation: `__lumen_audio_load` below now
+      // gets the resolved, possibly-upgraded absolute URL instead.
+      if (typeof _lumen_upgrade_insecure_url === 'function') {
+        try { _abs = _lumen_upgrade_insecure_url(_abs); } catch (e) {}
       }
       if (typeof _lumen_check_media_src === 'function' && !_lumen_check_media_src(_abs)) {
         if (typeof _lumen_fire_media_src_violation === 'function') {
@@ -302,7 +312,7 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
         setTimeout(function() { fireOnce('error'); }, 0);
         return;
       }
-      __lumen_audio_load(_handle, url);
+      __lumen_audio_load(_handle, _abs);
       fireEvent(el, 'loadstart');
       fireEvent(el, 'progress');
 
