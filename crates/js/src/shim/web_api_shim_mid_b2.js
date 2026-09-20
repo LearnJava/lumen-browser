@@ -1365,17 +1365,28 @@ function WebSocket(url, protocols) {
     // Phase 0: no persistent event loop — caller must invoke _lumen_pump_websockets()
     // after setting onopen/onmessage to receive queued events.
 }
+// (BufferSource or Blob) branch of the WebIDL union accepted by send() — the
+// only two member types that carry raw bytes; everything else in the union
+// (USVString, plus null/undefined/number/plain-object/function reaching JS
+// through the untyped shim) coerces via ToString (BUG-862).
+function _lumen_ws_is_buffer_source(data) {
+    return data instanceof ArrayBuffer || (typeof ArrayBuffer.isView === 'function' && ArrayBuffer.isView(data));
+}
+
 // Application-data byte length used for bufferedAmount accounting (WHATWG WebSocket).
 function _lumen_ws_bytelen(data) {
     if (typeof data === 'string') {
         return new TextEncoder().encode(data).length;
     }
-    if (data instanceof ArrayBuffer) {
+    if (_lumen_ws_is_buffer_source(data)) {
         return data.byteLength;
     }
-    if (typeof data.byteLength === 'number') {
-        return data.byteLength;
+    if (typeof Blob !== 'undefined' && data instanceof Blob) {
+        return data.size;
     }
+    // WebIDL union (BufferSource or Blob or USVString) send() argument:
+    // anything that isn't buffer-like or a Blob coerces via ToString to
+    // USVString instead of crashing on a missing `byteLength` (BUG-862).
     return new TextEncoder().encode(String(data)).length;
 }
 
@@ -1392,8 +1403,10 @@ WebSocket.prototype.send = function(data) {
         this.bufferedAmount += n;
         if (typeof data === 'string') {
             _lumen_ws_send(this._handle, data);
-        } else {
+        } else if (_lumen_ws_is_buffer_source(data) || (typeof Blob !== 'undefined' && data instanceof Blob)) {
             _lumen_ws_send_bin(this._handle, data instanceof Uint8Array ? data : new Uint8Array(data));
+        } else {
+            _lumen_ws_send(this._handle, String(data));
         }
     } else if (this.readyState === 2 || this.readyState === 3) {
         // CLOSING/CLOSED: data is discarded but counted (WHATWG §the-websocket-interface send()).

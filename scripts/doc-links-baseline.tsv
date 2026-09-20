@@ -3,7 +3,7 @@
 # Новая ссылка, которой здесь нет, роняет гейт; починенную --update уберёт.
 # файл	цель	класс	где цель на самом деле
 .claude/agents/css-rust-architect.md	file.md	missing	
-.claude/skills/lumen-perf-audit/SKILL.md	../../../bugs/BUG-998-OPEN.md	wrong-relative-path	bugs/BUG-998-OPEN.md
+.claude/skills/lumen-perf-audit/SKILL.md	../../../bugs/BUG-998-OPEN.md	stale-status-suffix	bugs/BUG-998-FIXED.md
 BUGS-FIXED.md	bugs/BUG-1057-OPEN.md	stale-status-suffix	bugs/BUG-1057-FIXED.md
 BUGS-FIXED.md	bugs/BUG-250-FIXED.md	missing	
 BUGS-FIXED.md	bugs/BUG-384-OPEN.md	stale-status-suffix	bugs/BUG-384-FIXED.md
@@ -91,7 +91,7 @@ ROADMAP.md	bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 ROADMAP.md	bugs/BUG-889-OPEN.md	stale-status-suffix	bugs/BUG-889-FIXED.md
 ROADMAP.md	bugs/BUG-895-OPEN.md	stale-status-suffix	bugs/BUG-895-FIXED.md
 ROADMAP.md	bugs/BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
-ROADMAP.md	bugs/BUG-998-OPEN.md	wrong-relative-path	bugs/BUG-998-OPEN.md
+ROADMAP.md	bugs/BUG-998-OPEN.md	stale-status-suffix	bugs/BUG-998-FIXED.md
 ROADMAP.md	docs/tasks/p2-wpt-status-sync.md	missing	
 bugs/BUG-1009-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-1013-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
@@ -279,8 +279,6 @@ docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/otlayout.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/shape.rs	missing	
 docs/decisions/TEMPLATE.md	ADR-NNN-title.md	missing	
-docs/engine-gaps.md	../bugs/BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
-docs/engine-gaps.md	../bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 docs/engine-gaps.md	../bugs/BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 docs/plan/tech-stack.md	crates/core/src/ext.rs	missing	
 docs/roadmap-trees.md	roadmap-svg-columns.html	missing	

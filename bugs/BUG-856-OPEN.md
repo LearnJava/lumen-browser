@@ -105,9 +105,9 @@ Windows, `--seconds 6`):
   `TcpStream`/`read_exact`, по образцу `AbortWatchdog`), не заведённая здесь.
 - [BUG-869](BUG-869-OPEN.md) (синхронный `send()`, бэкпрешер) — отдельная
   половина той же `GAP-WSASYNC`, не тронута.
-- [BUG-862](BUG-862-OPEN.md) (`send(null)` кидает `TypeError` в
+- [BUG-862](BUG-862-FIXED.md) (`send(null)` кидает `TypeError` в
   `_lumen_ws_bytelen`) — увидено попутно в `ws-echo`, уже заведено, не
-  дублируется.
+  дублируется. Закрыт P6, 2026-09-20.
 
 Не проверялось: реальный прогон `run_report.py --root websockets` (только
 живой probe выше).
@@ -157,4 +157,4 @@ ws-close-connecting`, dev-release, Windows, `--seconds 8`): против `/sleep
 - [BUG-869](BUG-869-OPEN.md) фактически закрыт срезами 2–3 (`GAP-WSASYNC`),
   но статус `GAP-WSASYNC` в `ROADMAP.md` остаётся `planned` до WPT-прогона
   выше.
-- [BUG-862](BUG-862-OPEN.md) — не трогался, отдельная заявка.
+- [BUG-862](BUG-862-FIXED.md) — закрыт P6 отдельным срезом, 2026-09-20.
