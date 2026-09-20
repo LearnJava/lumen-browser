@@ -30,6 +30,22 @@
   `matchMedia` — не добавлен: census-протокол (`bug935_raf_relayout_census.py`)
   не делает `resize`, так что листенер на media-query никогда бы не
   сработал и остался бы мёртвым кодом.
+
+  S32: S31 нашёл, что S30's `io.observe()` вызванный на все 480 `.cell`
+  СРАЗУ при загрузке страницы копит 480 «первоначальных» уведомлений
+  (IntersectionObserver обязан прислать начальную запись по каждой цели
+  независимо от того, пересекается она или нет — Intersection Observer §5)
+  и доставляет их ОДНИМ батчем на первом же `scroll`-тике census'а (когда
+  relayout впервые зовёт `deliver_layout_observers`), что даёт единый
+  всплеск 480×20000 итераций (до 70с в одном замере S31) вместо
+  распределённой по тикам нагрузки — не «станочный шум», а артефакт
+  самого стенда. Этот срез наблюдает `.cell` НЕБОЛЬШИМИ фиксированными
+  партиями (`OBSERVE_BATCH`, одна секция за раз): первая партия — сразу
+  при загрузке (как у реальной страницы, где верхние ячейки видны сразу),
+  следующие — по одной на каждое DOM-событие `scroll` (не на пиксельный
+  сдвиг, а на факт тика — детерминированно, не зависит от `--ticks`'ного
+  `delta`). Так каждый census-тик добавляет примерно одинаковую, заведомо
+  небольшую порцию новых целей вместо однократного залпа по всем 480.
 -->
 <html lang="ru">
 <head>
@@ -98,9 +114,20 @@
     }
   }, { root: null, threshold: [0, 0.5, 1] });
   var cells = document.querySelectorAll('.cell');
-  for (var ci = 0; ci < cells.length; ci++) {
-    io.observe(cells[ci]);
+  // S32: наблюдать ячейки небольшими фиксированными партиями вместо всех
+  // 480 разом — см. комментарий выше. Один `scroll`-DOM-событие = одна
+  // новая партия (одна секция, 8 ячеек), независимо от величины сдвига.
+  var OBSERVE_BATCH = 8;
+  var observedCount = 0;
+  function growObservation() {
+    var next = Math.min(observedCount + OBSERVE_BATCH, cells.length);
+    for (var i = observedCount; i < next; i++) {
+      io.observe(cells[i]);
+    }
+    observedCount = next;
   }
+  growObservation();
+  window.addEventListener('scroll', growObservation);
 
   // rAF-цикл: каждый кадр меняет textContent таймкода и inline-style
   // ширины полосы прогресса — та же форма DOM-мутации, что видеоплеер
