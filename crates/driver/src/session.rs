@@ -1670,7 +1670,7 @@ fn new_v8_runtime(
         }
     };
     if let Err(e) = rt.install_dom(
-        doc, page_url, None, None, None, None, None, None, None, None, false,
+        doc, page_url, None, None, None, None, None, None, None, None, None, false,
     ) {
         eprintln!("InProcessSession: V8 install_dom failed: {e}");
         return None;

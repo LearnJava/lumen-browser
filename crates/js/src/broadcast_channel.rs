@@ -321,7 +321,7 @@ mod tests {
     fn runtime() -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false).unwrap();
         rt
     }
 

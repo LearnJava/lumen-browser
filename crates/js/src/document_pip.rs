@@ -234,7 +234,7 @@ mod tests {
     fn with_document_pip(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false)
             .unwrap();
         f(&rt);
     }

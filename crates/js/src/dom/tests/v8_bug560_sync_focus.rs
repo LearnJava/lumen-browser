@@ -15,7 +15,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_focus_rule(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
         "#main { color: rgb(0, 0, 0); } \

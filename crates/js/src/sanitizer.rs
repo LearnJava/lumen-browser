@@ -129,7 +129,7 @@ mod tests {
         // (v8_runtime.rs) — calling `install_sanitizer_bindings_v8` again would
         // re-declare the shim's top-level `const`s (not IIFE-wrapped) in the
         // same global scope and fail with "already been declared".
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false)
             .unwrap();
         f(&rt);
     }

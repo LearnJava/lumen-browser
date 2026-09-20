@@ -30,7 +30,7 @@ use lumen_js::v8_runtime::V8JsRuntime;
 fn make_rt() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }

@@ -575,6 +575,8 @@ pub(crate) fn run_scripts_with_dom(
     // `caches` API and any activating SW execution thread read/write the same
     // store (the SW serves cache-first responses the page previously cached).
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    // Срез 1 of P3-pushapi: shared Push API subscription backend, forwarded to `install_dom`.
+    push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: deterministic::DetConfig,
     cross_origin_isolated: bool,
@@ -656,7 +658,7 @@ pub(crate) fn run_scripts_with_dom(
                 if let Some(store) = ss_store {
                     rt = rt.with_session_storage(store);
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, None, cross_origin_isolated) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 // CSSOM-1 срез 3: seed document.styleSheets/element.sheet

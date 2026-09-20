@@ -90,6 +90,7 @@ impl Lumen {
                     let sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>> = None;
                     let sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>> = None;
                     let cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>> = None;
+                    let push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>> = None;
                     if let Err(e) = rt.install_dom(
                         Arc::clone(&doc_arc),
                         url,
@@ -100,6 +101,7 @@ impl Lumen {
                         idb_backend,
                         sw_backend,
                         cache_backend,
+                        push_backend,
                         None,
                         false,
                     ) {

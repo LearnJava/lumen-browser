@@ -55,7 +55,7 @@ fn perf9_census_install_dom_cost() {
         let rt = V8JsRuntime::new().unwrap();
         let t_new = t0.elapsed();
         let t1 = std::time::Instant::now();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false)
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false)
             .unwrap();
         let t_install = t1.elapsed();
         eprintln!(
@@ -613,7 +613,7 @@ fn make_doc() -> Arc<Mutex<lumen_dom::Document>> {
 /// and `WEB_API_SHIM` installed against `doc`, page URL `page_url`.
 fn runtime_with_dom(doc: Arc<Mutex<lumen_dom::Document>>, page_url: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(doc, page_url, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, page_url, None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }

@@ -548,7 +548,7 @@ mod tests {
         page.install_dom(
             Arc::new(Mutex::new(lumen_dom::Document::new())),
             "https://example.test/",
-            None, None, None, None, None, None, None, None, false,
+            None, None, None, None, None, None, None, None, None, false,
         )
         .unwrap();
 

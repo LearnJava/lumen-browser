@@ -134,6 +134,7 @@ impl V8JsRuntime {
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+        push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
         sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
         cross_origin_isolated: bool,
     ) -> JsResult<()> {
@@ -936,7 +937,11 @@ impl V8JsRuntime {
             eprintln!("v8: pointer_capture::install_pointer_capture_bindings_v8 failed: {e}");
         }
         install_v8!(presentation_api::install_presentation_api_v8);
-        install_v8!(push_api::install_push_api_v8);
+        // Срез 1 (persist): needs the per-process push-subscription store,
+        // so not the plain `install_v8!` macro (mirrors `pointer_capture` above).
+        if let Err(e) = crate::push_api::install_push_api_v8(self, push_backend.clone()) {
+            eprintln!("v8: push_api::install_push_api_v8 failed: {e}");
+        }
         install_v8!(reporting_api::install_reporting_api_bindings_v8);
         install_v8!(sanitizer::install_sanitizer_bindings_v8);
         install_v8!(scheduler::install_scheduler_api_v8);

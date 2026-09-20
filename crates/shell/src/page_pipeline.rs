@@ -35,6 +35,7 @@ pub(crate) fn render_bytes(
     cross_origin_isolated: bool,
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
     target: lumen_core::ColorSpace,
     cache_control_no_store: bool,
     // BUG-640: real facts about the top-level HTTP response, carried straight
@@ -60,7 +61,7 @@ pub(crate) fn render_bytes(
     sync_xhr_document_policy: Option<lumen_core::ext::PolicyDisposition>,
     sync_xhr_permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -726,6 +727,7 @@ pub(crate) fn parse_and_layout(
     cross_origin_isolated: bool,
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
     target: lumen_core::ColorSpace,
     media_print: bool,
     // GAP-CSPENF срез 5: the response's `Content-Security-Policy` header(s),
@@ -975,6 +977,7 @@ pub(crate) fn parse_and_layout(
         sw_backend: sw_backend.clone(),
         sw_worker_store: sw_worker_store.clone(),
         cache_backend: cache_backend.clone(),
+        push_backend: push_backend.clone(),
         media_ctx: screen_media_context(viewport, dark_mode),
         viewport,
         cookie_banner_dismiss,
@@ -996,6 +999,7 @@ pub(crate) fn parse_and_layout(
         sw_backend,
         sw_worker_store,
         cache_backend,
+        push_backend,
         cookie_banner_dismiss,
         deterministic,
         cross_origin_isolated,

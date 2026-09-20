@@ -3391,6 +3391,40 @@ pub trait CacheBackend: Send + Sync {
     fn cache_names(&self, origin: &str) -> Vec<String>;
 }
 
+/// Per-(origin, scope) Push API subscription persistence (W3C Push API L1).
+///
+/// A subscription is keyed by `(origin, scope)` — one `PushManager` per
+/// `ServiceWorkerRegistration`, one registration per scope — mirroring
+/// `UNIQUE (origin, scope)` in `lumen_storage::PushSubscriptions`.
+///
+/// All methods are best-effort: a storage failure must not abort a JS
+/// `pushManager.subscribe()`/`getSubscription()` call, so none of them
+/// surface a `Result` — same shape as [`CacheBackend`].
+///
+/// Implemented in `lumen-storage::PushStore`; `lumen-js` references only
+/// this trait, keeping the dependency graph acyclic.
+pub trait PushBackend: Send + Sync {
+    /// Create or replace the subscription for `(origin, scope)`.
+    /// `p256dh`/`auth` are base64-encoded key material (opaque to the store).
+    #[allow(clippy::too_many_arguments)]
+    fn push_subscribe(
+        &self,
+        origin: &str,
+        scope: &str,
+        endpoint: &str,
+        p256dh: &str,
+        auth: &str,
+        user_visible_only: bool,
+    );
+
+    /// Look up the subscription for `(origin, scope)`.
+    /// Returns `(endpoint, p256dh, auth, user_visible_only)` or `None`.
+    fn push_get(&self, origin: &str, scope: &str) -> Option<(String, String, String, bool)>;
+
+    /// Remove the subscription for `(origin, scope)`. Returns `true` if one existed.
+    fn push_unsubscribe(&self, origin: &str, scope: &str) -> bool;
+}
+
 // ============================================================================
 // ADR-006: Automation API — first-class engine surface
 // ============================================================================

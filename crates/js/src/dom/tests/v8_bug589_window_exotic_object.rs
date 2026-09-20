@@ -11,7 +11,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn runtime_with(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "https://example.com/page.html", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/page.html", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }

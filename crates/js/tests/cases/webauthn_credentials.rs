@@ -63,7 +63,7 @@ impl CredentialProvider for CannedAuthenticator {
 fn make_rt() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "https://example.com/login", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/login", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }

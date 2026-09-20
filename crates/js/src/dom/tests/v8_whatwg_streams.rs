@@ -7,7 +7,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -40,7 +40,7 @@ impl lumen_core::ext::JsFetchProvider for CaptureFetch {
 fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 
@@ -95,7 +95,7 @@ fn v8_runtime_with_header_capture() -> (V8JsRuntime, Arc<CaptureHeadersFetch>) {
     let capture = Arc::new(CaptureHeadersFetch { seen: std::sync::Mutex::new(String::new()) });
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::clone(&capture) as _;
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
     (rt, capture)
 }
 
@@ -232,7 +232,7 @@ impl lumen_core::ext::JsFetchProvider for AlwaysCspBlockedFetch {
 fn v8_runtime_with_csp_blocked_fetch() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(AlwaysCspBlockedFetch);
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 
@@ -314,7 +314,7 @@ impl lumen_core::ext::JsFetchProvider for EchoUrlFetch {
 fn v8_runtime_with_echo_fetch() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(EchoUrlFetch);
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 
@@ -1222,7 +1222,7 @@ impl lumen_core::ext::JsFetchProvider for RedirectingFetch {
 fn fetch_response_url_and_redirected_reflect_the_final_url_after_redirect() {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(RedirectingFetch);
-    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt.eval(
         "fetch('https://example.com/start.txt').then(function(r) { \

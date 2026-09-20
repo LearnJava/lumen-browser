@@ -48,7 +48,7 @@ fn make_scroll_doc() -> (Arc<Mutex<Document>>, u32) {
 fn v8_runtime_with_scroll_state(doc: Arc<Mutex<Document>>, main_nid: u32, overflow: &str, seed: [f32; 4]) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(&format!(
         "#main {{ width: 20px; height: 20px; overflow: {overflow}; }} \
@@ -144,7 +144,7 @@ fn scroll_to_before_any_flush_is_visible_to_synchronous_read() {
     let (doc, _main_nid) = make_scroll_doc();
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
         "#main { width: 20px; height: 20px; overflow: auto; } \

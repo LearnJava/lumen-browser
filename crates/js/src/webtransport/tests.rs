@@ -13,7 +13,7 @@
     fn rt_with_webtransport() -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false).unwrap();
         super::install_webtransport_v8(&rt, None).unwrap();
         rt
     }
@@ -288,7 +288,7 @@
             poll_closed_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
-        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, None, false)
             .unwrap();
         (rt, stub)
     }
@@ -677,7 +677,7 @@
             poll_closed_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
-        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, None, false)
             .unwrap();
         rt.eval(
             "globalThis._wtCloseRejected = false; \
@@ -1093,7 +1093,7 @@
             poll_closed_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
-        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, None, false)
             .unwrap();
         rt.eval(
             "globalThis._wtFirstLen = -1; globalThis._wtDone = false; \

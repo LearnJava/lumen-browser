@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 fn rt_with_sheet(css: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     let sheet = lumen_css_parser::parse(css);
     rt.update_stylesheet_nodes(vec![StylesheetNodeEntry {

@@ -30,7 +30,7 @@ mod selectors_canvas_window;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -54,7 +54,7 @@ fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::I
 /// (`pushState` resolves relative URLs against it).
 fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }

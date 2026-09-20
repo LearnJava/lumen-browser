@@ -243,6 +243,9 @@ impl Lumen {
                 let sw_worker_store = Some(Arc::clone(&self.sw_worker_store));
                 let cache_backend =
                     Some(Arc::clone(&self.cache_store) as Arc<dyn lumen_core::ext::CacheBackend>);
+                // push_backend: срез 1 wires only the native bindings + storage layer,
+                // not yet plumbed to a live tab (see docs/tasks/ph3-push-api.md срез 1).
+                let push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>> = None;
                 let cookie_banner_dismiss = self.cookie_banner_dismiss;
                 let deterministic = self.deterministic;
                 let dark_mode = self.dark_mode;
@@ -279,6 +282,7 @@ impl Lumen {
                         raw.cross_origin_isolated,
                         sw_worker_store,
                         cache_backend,
+                        push_backend,
                         target,
                         raw.cache_control_no_store,
                         raw.status,

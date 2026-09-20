@@ -201,6 +201,7 @@ pub(crate) fn render_source_to_png(
         raw.cross_origin_isolated,
         None,  // sw_worker_store
         None,  // cache_backend
+        None,  // push_backend
         lumen_core::ColorSpace::Srgb,
         false, // media_print: screenshot uses screen media
         &raw.csp_header,
@@ -317,6 +318,7 @@ pub(crate) fn do_print_to_pdf(
         raw.cross_origin_isolated,
         None,  // sw_worker_store: not needed in headless PDF mode
         None,  // cache_backend: not needed in headless PDF mode
+        None,  // push_backend: not needed in headless PDF mode
         lumen_core::ColorSpace::Srgb,
         true,  // media_print: apply @media print for PDF output (BUG-270)
         &raw.csp_header,
@@ -410,6 +412,7 @@ pub(crate) fn do_print_to_pdf_with_opts(
         raw.cross_origin_isolated,
         None, // sw_worker_store: not needed in headless print mode
         None, // cache_backend: not needed in headless print mode
+        None, // push_backend: not needed in headless print mode
         lumen_core::ColorSpace::Srgb,
         true, // media_print: apply @media print for PDF output (BUG-270)
         &raw.csp_header,
@@ -631,13 +634,13 @@ pub(crate) fn run_dump(
         }
         DumpKind::Layout => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
             let mut dl = paint_ordered(&parsed.layout);
             // BUG-480 срез 14: дамп обязан показывать то же, что попадёт на
             // экран, — окно вклеивает содержимое под-документов в список

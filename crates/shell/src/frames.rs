@@ -1815,6 +1815,8 @@ pub(crate) struct FrameLoadEnv {
     pub(crate) sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     /// Бэкенд Cache Storage.
     pub(crate) cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    /// Бэкенд Push API (срез 1 of P3-pushapi).
+    pub(crate) push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
     /// Экранный media-контекст: гейт `<link media>` и `@media` каскада ребёнка.
     pub(crate) media_ctx: lumen_css_parser::MediaContext,
     /// Вьюпорт СТРАНИЦЫ — им picker выбирает `srcset`-кандидата картинок
@@ -2128,6 +2130,7 @@ pub(crate) fn spawn_frame(
         env.sw_backend.clone().filter(|_| !opaque),
         env.sw_worker_store.clone().filter(|_| !opaque),
         env.cache_backend.clone().filter(|_| !opaque),
+        env.push_backend.clone().filter(|_| !opaque),
         env.cookie_banner_dismiss,
         env.deterministic,
         env.cross_origin_isolated,

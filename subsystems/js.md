@@ -2407,3 +2407,15 @@ runtime or the shim. Read them before a JS/Web-API change.
   neither timers nor microtasks, so a promise that settles off the poll loop never settles there at all.
   Choose per call site: needs the bytes in hand within this script pass → sync; feeds a promise the page
   awaits → `_lumenAsync`.
+- **Push API (`push_api.rs`) srez 1 — persisted natives, 2026-09-21.** `install_push_api_v8` now
+  takes `Option<Arc<dyn lumen_core::ext::PushBackend>>` and registers `_lumen_push_subscribe`/
+  `_lumen_push_get`/`_lumen_push_unsubscribe` via `register_native`/`into_v8_fn2`/`into_v8_fn6`
+  (the `storage_manager.rs`-style standalone pattern, not the `install_dom` mega-closure's `reg!` —
+  this module needs no raw `v8::Scope`). `getSubscription()` reads the backend, not an in-memory
+  field, so a subscription survives the JS context being torn down and rebuilt (see
+  `subsystems/storage.md`'s `PushStore` entry for the storage side). Key material (`p256dh`/`auth`)
+  round-trips through the native call as base64 (`_push_ab2b64`/`_push_b642ab` in the shim, over
+  `btoa`/`atob`) — still mock zero-filled bytes, real ECDH P-256 is срез 2. `install_dom`'s
+  `push_backend` parameter reaches every call site (mirroring `cache_backend`'s position exactly),
+  but no live tab constructs a real backend yet — see `docs/tasks/ph3-push-api.md` срез 1's "not
+  done" note before assuming subscriptions persist across a real page reload.
