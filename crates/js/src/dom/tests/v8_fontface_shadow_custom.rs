@@ -1355,8 +1355,69 @@ fn slot_slotchange_event_fires_on_append() {
                 slot.addEventListener('slotchange', function() { changed++; });
                 var light = document.createElement('p');
                 host.appendChild(light);
-                // slotchange should have fired
-                changed >= 0  // event dispatch is best-effort in Phase 0; just check no crash
+                changed === 1
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-876: `slotchange` must also fire on removal, via `onslotchange` (not
+// just `addEventListener`), and via `insertBefore`/`replaceChild` — not only
+// `appendChild`.
+#[test]
+fn slot_slotchange_event_fires_on_remove_and_onslotchange() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var sr = host.attachShadow({ mode: 'open' });
+                var slot = document.createElement('slot');
+                sr.appendChild(slot);
+                var light = document.createElement('p');
+                host.appendChild(light);
+                var changed = 0;
+                slot.onslotchange = function() { changed++; };
+                host.removeChild(light);
+                changed === 1
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn slot_slotchange_event_fires_on_insert_before() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var sr = host.attachShadow({ mode: 'open' });
+                var slot = document.createElement('slot');
+                sr.appendChild(slot);
+                var anchor = document.createElement('p');
+                host.appendChild(anchor);
+                var changed = 0;
+                slot.addEventListener('slotchange', function() { changed++; });
+                var light = document.createElement('span');
+                host.insertBefore(light, anchor);
+                changed === 1
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-876: `assignedSlot` was a hardcoded `null` stub — must resolve the
+// matching named <slot> inside the host's shadow tree.
+#[test]
+fn slot_assigned_slot_resolves_matching_named_slot() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var sr = host.attachShadow({ mode: 'open' });
+                var slot = document.createElement('slot');
+                slot.name = 's1';
+                sr.appendChild(slot);
+                var light = document.createElement('p');
+                light.setAttribute('slot', 's1');
+                host.appendChild(light);
+                light.assignedSlot === slot
             "#).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }

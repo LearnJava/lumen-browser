@@ -23,6 +23,7 @@ BUGS-FIXED.md	bugs/BUG-704-OPEN.md	stale-status-suffix	bugs/BUG-704-FIXED.md
 BUGS-FIXED.md	bugs/BUG-715-OPEN.md	stale-status-suffix	bugs/BUG-715-FIXED.md
 BUGS-FIXED.md	bugs/BUG-740-OPEN.md	stale-status-suffix	bugs/BUG-740-FIXED.md
 BUGS-FIXED.md	bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
+BUGS-FIXED.md	bugs/BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 BUGS-FIXED.md	bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 BUGS-FIXED.md	bugs/BUG-905-OPEN.md	stale-status-suffix	bugs/BUG-905-FIXED.md
 BUGS-FIXED.md	bugs/BUG-921-OPEN.md	stale-status-suffix	bugs/BUG-921-FIXED.md
@@ -85,6 +86,7 @@ ROADMAP.md	bugs/BUG-803-OPEN.md	stale-status-suffix	bugs/BUG-803-FIXED.md
 ROADMAP.md	bugs/BUG-806-OPEN.md	stale-status-suffix	bugs/BUG-806-FIXED.md
 ROADMAP.md	bugs/BUG-850-OPEN.md	stale-status-suffix	bugs/BUG-850-FIXED.md
 ROADMAP.md	bugs/BUG-872-OPEN.md	stale-status-suffix	bugs/BUG-872-FIXED.md
+ROADMAP.md	bugs/BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 ROADMAP.md	bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 ROADMAP.md	bugs/BUG-889-OPEN.md	stale-status-suffix	bugs/BUG-889-FIXED.md
 ROADMAP.md	bugs/BUG-895-OPEN.md	stale-status-suffix	bugs/BUG-895-FIXED.md
@@ -95,6 +97,7 @@ bugs/BUG-1009-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-1013-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-1015-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-1017-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
+bugs/BUG-1023-FIXED.md	BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 bugs/BUG-1023-FIXED.md	BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 bugs/BUG-1035-OPEN.md	BUG-1034-OPEN.md	stale-status-suffix	bugs/BUG-1034-FIXED.md
 bugs/BUG-237-OPEN.md	BUG-199-OPEN.md	stale-status-suffix	bugs/BUG-199-FIXED.md
@@ -276,6 +279,7 @@ docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/otlayout.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/shape.rs	missing	
 docs/decisions/TEMPLATE.md	ADR-NNN-title.md	missing	
+docs/engine-gaps.md	../bugs/BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 docs/engine-gaps.md	../bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 docs/engine-gaps.md	../bugs/BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 docs/plan/tech-stack.md	crates/core/src/ext.rs	missing	
@@ -294,6 +298,7 @@ docs/tasks/p2-test-track.md	../../bugs/BUG-594-OPEN.md	stale-status-suffix	bugs/
 docs/tasks/p2-test-track.md	../../bugs/BUG-596-OPEN.md	stale-status-suffix	bugs/BUG-596-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-598-OPEN.md	stale-status-suffix	bugs/BUG-598-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
+docs/tasks/p2-test-track.md	../../bugs/BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 docs/tasks/p2-test-track.md	bugs/BUG-986-FIXED.md	wrong-relative-path	bugs/BUG-986-FIXED.md
 docs/tasks/p2-test-track.md	bugs/BUG-995-FIXED.md	wrong-relative-path	bugs/BUG-995-FIXED.md
 docs/tasks/p2-wpt-runner-throughput.md	../../bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md

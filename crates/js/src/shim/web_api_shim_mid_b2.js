@@ -1702,6 +1702,13 @@ _lumen_set_attr = function(nid, name, value) {
     if (_mo_observers.length > 0) {
         _mo_notify(nid, 'attributes', String(name), old !== undefined ? old : null, null, null);
     }
+    // GAP-SLOT (DOM LS §4.2.2.4): changing `slot` on a light-DOM child moves it
+    // between named slots of its host's shadow tree — re-signal the host so
+    // `_lumen_fire_slotchange` re-fires for the (possibly two) affected slots.
+    if (String(name) === 'slot') {
+        var _slot_host = _lumen_u2n(_lumen_get_parent(nid));
+        if (_slot_host !== null) { _lumen_fire_slotchange(_slot_host); }
+    }
 };
 
 // Wrap _lumen_set_inner_html to intercept childList mutations. BUG-368 fixed
