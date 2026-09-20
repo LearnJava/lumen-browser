@@ -326,11 +326,23 @@ impl Lumen {
         // structurally unreachable (BUG-935 bug file, S12). `used_restyle`
         // keeps the two apart for the frame-log line below — it is no longer
         // derivable from "is there a cache to seed", since there always is now.
+        // BUG-935 S15: S14 found the restyle branch's cost concentrated in the
+        // <1ms-profiled prefix of `relayout_page_incremental_restyle` — a
+        // 7047/6752ms outlier with the internal layout stages summing to
+        // <1ms each. `document.lock()` right below is the one blocking call
+        // in that prefix (the other candidate, `refresh_dynamic_css`, has
+        // already run and returned above `incr_t0`), so time the wait on it
+        // specifically instead of guessing from the aggregate.
+        let mut lock_wait_ms: Option<f32> = None;
+        let mut dirty_roots_ms: Option<f32> = None;
         let (new_dl, new_lb, fresh_cascade_styles, used_restyle) = if !touched.unattributed
             && let Some(prev_styles) = self.page_prev_cascade_styles.take()
         {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
+            let lock_wait_t0 = incr_t0.is_some().then(std::time::Instant::now);
             let doc = src.document.lock().unwrap();
+            lock_wait_ms = lock_wait_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
+            let dirty_roots_t0 = incr_t0.is_some().then(std::time::Instant::now);
             // BUG-341 S7: computed once per pass, reused across all three axes.
             let state_index = lumen_layout::style::restyle_state_index(&doc, &src.stylesheet);
             let mut dirty_roots = std::collections::HashSet::new();
@@ -353,6 +365,7 @@ impl Lumen {
                 &node_index,
             ));
             drop(doc);
+            dirty_roots_ms = dirty_roots_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
             // BUG-341 S16: the page-side tracker reports *selector-relevant*
             // nodes only (`DomTouched` deliberately says nothing about text
             // writes) and has an `unattributed` escape hatch, so it cannot
@@ -387,7 +400,15 @@ impl Lumen {
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        // BUG-935 S15: restyle-wrapper's own `document.lock()` (relayout.rs
+        // ~1414) only accounted for 225-244ms of outlier ticks whose total
+        // `incr_ms` ran 5.3-5.9s — most of the outlier is still unlocated;
+        // `apply_relayout_result` is the next unprofiled candidate (it takes
+        // a third, conditional `document.lock()` of its own for
+        // @starting-style, plus tile-grid diff/hash over the whole DL).
+        let apply_t0 = incr_t0.is_some().then(std::time::Instant::now);
         self.apply_relayout_result(new_dl, new_lb, viewport);
+        let apply_ms = apply_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
         // `apply_relayout_result` unconditionally clears the cache — restore it
         // here, after `lb` has already landed in `self.layout_box`. BUG-935 S13:
         // both branches now produce a matching `CascadeStyles`, so this is no
@@ -396,11 +417,15 @@ impl Lumen {
         self.page_prev_interactive = new_interactive;
         if let Some(t0) = incr_t0 {
             let incr_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            let fmt_ms = |ms: Option<f32>| ms.map(|v| format!("{v:.2}")).unwrap_or_else(|| "n/a".to_string());
             eprintln!(
-                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={}",
+                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={}",
                 self.display_list.len(),
                 self.prev_styles.len(),
                 used_restyle as u8,
+                fmt_ms(lock_wait_ms),
+                fmt_ms(dirty_roots_ms),
+                fmt_ms(apply_ms),
             );
         }
         true
@@ -1393,14 +1418,38 @@ pub(crate) fn compute_layout_incremental_restyle(
     prev: lumen_layout::LayoutBox,
     delta: lumen_layout::counters::RestyleDelta<'_>,
 ) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
+    // BUG-935 S15: S14's <1ms-profiled `layout_mutation_incremental_restyle`
+    // stages sit far below the multi-hundred-ms/multi-second `[engine]
+    // relayout` total the caller reports — the gap must be in this wrapper,
+    // which the profile tree does not cover. Two unprofiled candidates live
+    // here: `Font::parse` re-parses the bundled font on *every* incremental
+    // call (fixed per-call tax, not contention), and `document.lock()` below
+    // is a *second*, independent lock acquisition from the one the caller
+    // (`try_relayout_raf_incremental`) already dropped before calling in —
+    // it can block on the same engine-thread contention S14 suspected, just
+    // one level deeper than S14 measured.
+    let log_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let font_parse_ms = log_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
     let measurer = page_measurer(&font, web_fonts);
+    let lock2_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
     let doc = document.lock().unwrap();
+    let lock2_wait_ms = lock2_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
     let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
     );
     drop(doc);
+    let paint_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
     let dl = paint_ordered(&layout);
+    if let Some(t0) = log_t0 {
+        let paint_ms = paint_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0).unwrap_or(0.0);
+        eprintln!(
+            "[engine] restyle-wrapper {:.2}ms total: font_parse={:.2}ms lock2_wait={:.2}ms paint_ordered={paint_ms:.2}ms",
+            t0.elapsed().as_secs_f32() * 1000.0,
+            font_parse_ms.unwrap_or(0.0),
+            lock2_wait_ms.unwrap_or(0.0),
+        );
+    }
     (dl, layout, counters)
 }
 

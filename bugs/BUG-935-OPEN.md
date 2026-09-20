@@ -980,6 +980,90 @@ clippy -p lumen-shell --all-targets --features v8 -- -D warnings` чист,
 симптом бага (M4-incremental routing не работает под дефолтной сборкой)
 по-прежнему открыт.
 
+## S15 (P3, 2026-09-20) — S14's `document.lock()` hypothesis instrumented and REFUTED; the real cost is a synchronous engine-thread round-trip in `apply_relayout_result` that S14's swap experiment exposed on the UI thread
+
+Продолжение с того места, где остановился S14 («гипотеза не подтверждена
+инструментально — нужен отдельный таймер ВНУТРИ `try_relayout_raf_incremental`,
+до и после `src.document.lock()`, до и после `refresh_dynamic_css()`»).
+
+**Инструментирование (оставлено под `LUMEN_FRAME_LOG=1`, безвредно):**
+таймер вокруг `src.document.lock()` в restyle-ветке `try_relayout_raf_incremental`
+(`lock_wait_ms`) и вокруг построения `dirty_roots`/индексов (`dirty_roots_ms`),
+добавлены в итоговую строку `[engine] relayout … (incremental, on-thread)`.
+Затем повторён S14's эксперимент (`||`-порядок временно свопнут, сборка
+`dev-release`, census на `lenta.ru`).
+
+**S14's гипотеза опровергнута числами:** `lock_wait_ms=0.00` на **всех**
+измеренных тиках этой сессии, включая outlier в 5880.54мс общего `incr_ms` —
+ожидание на `document.lock()` в этой конкретной точке не является причиной
+задержки. S14 предположил контенцию по мьютексу, не измерив её напрямую;
+измерение показывает, что мьютекс здесь не виноват.
+
+**Найден второй `document.lock()`, отдельный от первого:** `compute_layout_incremental_restyle`
+(`relayout.rs:1414`, вызывается ИЗ `relayout_page_incremental_restyle` уже
+ПОСЛЕ того, как вызывающий снял свой лок на строке 365) берёт **свой
+собственный** лок на тот же `Mutex<Document>`. Добавлен таймер
+(`[engine] restyle-wrapper …ms total: font_parse=…ms lock2_wait=…ms
+paint_ordered=…ms`) — в одном прогоне `lock2_wait` доходил до 857.03мс, что
+показывает реальную, но вторичную контенцию (не главный источник — см. ниже).
+
+**Настоящий доминирующий источник — `apply_relayout_result`, не сам layout:**
+таймер вокруг всего вызова `self.apply_relayout_result(...)` в
+`try_relayout_raf_incremental` (`apply_ms=`) показал, что эта функция съедает
+**почти весь** `incr_ms` на КАЖДОМ тике, не только на outlier'ах:
+нормальные тики — `apply_ms` 300-450мс при `incr_ms` 320-460мс (restyle-wrapper
+сам — 10-12мс); outlier — `apply_ms=6766.39мс` при `incr_ms=7635.48мс`.
+Чтение `apply_relayout_result` (`relayout.rs:889-936`) нашло механизм:
+секция JS-observer push (`self.js_present` gate) собирает rects/client
+rects/hit-test-tree/computed styles/pseudo styles/custom properties/
+stylesheet/viewport/scroll-states и одним пакетом зовёт
+`route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {…})` —
+**синхронный ordered round-trip на движковый поток** (тот же механизм,
+`EngineThread::query()`, что S6 ограничил `QUERY_TIMEOUT=5s`), исполняющий
+там `deliver_layout_observers`/`deliver_media_query_changes`/
+`deliver_lazy_images` и прочий JS-пуш.
+
+**Почему это объясняет и S12, и S14 разом:** под исходным (не свопнутым)
+`||`-порядком `apply_relayout_result` тоже вызывается — из
+`submit_relayout_job`'s асинхронной engine-thread задачи — но там она уже
+исполняется НА движковом потоке (сам себе round-trip не нужен, или он
+локальный) и не блокирует UI-поток. Смена `||`-порядка (S12, повторно S14)
+переносит `try_relayout_raf_incremental` целиком на UI-поток, включая эту
+секцию — и теперь UI-поток синхронно ждёт `route_query_js`'а ответа от ТОГО ЖЕ
+движкового потока, чья ordered FIFO-очередь может быть занята долгим
+синхронным `fetch`/сетевым вызовом (тот же класс, что S4-S10 чинили с
+таймаутами) — вплоть до `QUERY_TIMEOUT=5s` на один запрос, что и даёт
+наблюдаемые 5.9-7.6с. Это не контенция на мьютексе (S14's гипотеза) и не
+дороговизна самого layout'а (S12/S13 уже показали <1мс на профилируемые
+стадии) — это структурная разница между «async-safe off-thread» и
+«on-thread» путём, которую «Предполагаемый фикс» в начале файла предсказывал
+абстрактно («переключение сделает rAF-DOM-мутации ЧАСТИЧНО UI-блокирующими»),
+теперь локализована до конкретного вызова с конкретным механизмом.
+
+**Действие:** `||`-порядок снова откачен (обе функции вернули исходный
+порядок). Все три новых таймера (`lock_wait_ms`/`dirty_roots_ms` в
+`try_relayout_raf_incremental`, `restyle-wrapper` в
+`compute_layout_incremental_restyle`, `apply_ms` вокруг
+`apply_relayout_result`) оставлены под `LUMEN_FRAME_LOG=1` — без них это
+открытие осталось бы недоступным следующему срезу. `cargo clippy -p
+lumen-shell --all-targets --features v8 -- -D warnings` чист, `cargo test -p
+lumen-shell --bins --features v8 -- relayout` — 10/10 зелёных на откаченном
+коде.
+
+**Не сделано / следующий срез:** основной симптом бага (M4-incremental
+routing не работает под дефолтной сборкой) по-прежнему открыт — но теперь
+понятно, ПОЧЕМУ прямая смена `||`-порядка не годится: `apply_relayout_result`
+должна либо (а) остаться асинхронной даже когда сам layout выполнен на
+UI-потоке (разделить «синхронный layout» и «асинхронный JS-push» вместо
+текущего одного вызова, вынести `route_query_js`-секцию в отдельную
+engine-thread задачу, не дожидаясь её на UI-потоке), либо (б) для этого
+конкретного JS-push использовать неблокирующий/latest-wins механизм вместо
+ordered `query()`, раз результат (`lazy_reqs`) уже допускает `unwrap_or_default()`
+при таймауте. Оба варианта — архитектурная правка, не однострочная. Вторичная
+находка (второй `document.lock()` в `compute_layout_incremental_restyle`,
+857мс в одном прогоне) тоже не устранена — отдельный, менее приоритетный
+источник задержки на том же пути.
+
 ## Воспроизведение
 
 ```
