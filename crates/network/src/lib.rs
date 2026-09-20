@@ -1006,16 +1006,22 @@ type ChunkSink<'a> = &'a mut dyn FnMut(&[u8]);
 
 /// A live WebTransport session — the confirmed QUIC driver, the Extended
 /// CONNECT stream id (doubles as the WebTransport session id, RFC 9220 §3),
-/// the peer's advertised unidirectional stream flow-control window, and the
-/// next client-initiated uni-stream number to allocate
-/// ([`h3::client_transport::h3_webtransport_open_uni_stream_on_driver`]
-/// owns that number's meaning) — keyed by handle in
-/// [`HttpClient::webtransport_sessions`].
+/// the peer's advertised uni/bidi stream flow-control windows, and the next
+/// client-initiated uni/bidi stream numbers to allocate
+/// ([`h3::client_transport::h3_webtransport_open_uni_stream_on_driver`]/
+/// [`h3::client_transport::h3_webtransport_open_bidi_stream_on_driver`] own
+/// those numbers' meaning — separate id spaces, separate counters) — keyed
+/// by handle in [`HttpClient::webtransport_sessions`].
 struct WebTransportSession {
     driver: h3::request_driver::RequestDriver<h3::udp::UdpDatagram>,
     session_id: u64,
     peer_initial_max_stream_data_uni: u64,
     next_uni_stream_number: u64,
+    /// Peer's advertised flow-control window for a bidi stream *this* client
+    /// opens (RFC 9000 §4.1's `initial_max_stream_data_bidi_remote`, from the
+    /// local endpoint's own transport params — GAP-WEBTRANSPORT срез 4b).
+    peer_initial_max_stream_data_bidi: u64,
+    next_bidi_stream_number: u64,
 }
 
 type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, WebTransportSession>>>;
@@ -4625,6 +4631,8 @@ impl JsFetchProvider for HttpClient {
                 session_id: stream_id,
                 peer_initial_max_stream_data_uni: config.initial_max_stream_data_uni,
                 next_uni_stream_number: 0,
+                peer_initial_max_stream_data_bidi: config.initial_max_stream_data_bidi_remote,
+                next_bidi_stream_number: 0,
             },
         );
 
@@ -4697,6 +4705,33 @@ impl JsFetchProvider for HttpClient {
             error_code,
         )
         .map_err(|e| Error::Network(format!("WebTransport abort stream: {e}")))
+    }
+
+    /// GAP-WEBTRANSPORT срез 4b: `createBidirectionalStream()`'s transport
+    /// primitive — opens a client-initiated bidirectional QUIC stream on the
+    /// session `handle` names
+    /// ([`h3::client_transport::h3_webtransport_open_bidi_stream_on_driver`],
+    /// срез 4a) and hands its stream id back. The write half is addressed
+    /// through the same `webtransport_write_uni_stream`/
+    /// `webtransport_close_uni_stream`/`webtransport_abort_uni_stream` the uni
+    /// primitive uses — a `SendStream` does not know its own direction. The
+    /// read half (data the peer writes back) is not this slice — no incoming
+    /// WebTransport stream data reaches JS yet on either uni or bidi streams.
+    fn webtransport_open_bidi_stream(&self, handle: i32) -> Result<u64> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let bidi_stream_number = session.next_bidi_stream_number;
+        let stream_id = h3::client_transport::h3_webtransport_open_bidi_stream_on_driver(
+            &mut session.driver,
+            bidi_stream_number,
+            session.peer_initial_max_stream_data_bidi,
+            session.session_id,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport open bidi stream: {e}")))?;
+        session.next_bidi_stream_number += 1;
+        Ok(stream_id)
     }
 }
 
