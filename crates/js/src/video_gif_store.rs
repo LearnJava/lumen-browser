@@ -119,6 +119,23 @@ pub struct VideoGifStore {
     pub load_failures: Mutex<HashMap<u32, String>>,
 }
 
+impl VideoGifStore {
+    /// Whether a GIF- or FFmpeg-backed `<video>` load is queued and not yet
+    /// drained — GAP-MEDIADECODE срез 10: this is the exact condition whose
+    /// silence let a resource-selection load sit in `pending_loads`/
+    /// `pending_ffmpeg_loads` forever when nothing else happened to trigger a
+    /// repaint (`on_about_to_wait`, `crates/shell/src/app/about_to_wait.rs`,
+    /// needs a repaint request whenever this is `true`). Pulled out as its
+    /// own predicate so the shell-side timer/redraw fix has a unit test —
+    /// `about_to_wait.rs` itself needs a real `ActiveEventLoop` and has no
+    /// unit-test precedent, but this check touches only `self`.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub fn has_pending_video_load(&self) -> bool {
+        !self.pending_loads.lock().unwrap().is_empty()
+            || !self.pending_ffmpeg_loads.lock().unwrap().is_empty()
+    }
+}
+
 // ── Global registry ───────────────────────────────────────────────────────────
 
 static STORE: OnceLock<RwLock<Option<Arc<VideoGifStore>>>> = OnceLock::new();
@@ -139,4 +156,41 @@ pub fn set_video_gif_store(s: Arc<VideoGifStore>) {
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn get_video_gif_store() -> Option<Arc<VideoGifStore>> {
     store_lock().read().unwrap().clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VideoGifStore;
+
+    #[test]
+    fn has_pending_video_load_false_when_both_queues_empty() {
+        let store = VideoGifStore::default();
+        assert!(!store.has_pending_video_load());
+    }
+
+    #[test]
+    fn has_pending_video_load_true_for_gif_queue() {
+        let store = VideoGifStore::default();
+        store.pending_loads.lock().unwrap().push((1, "a.gif".to_string()));
+        assert!(store.has_pending_video_load());
+    }
+
+    #[test]
+    fn has_pending_video_load_true_for_ffmpeg_queue() {
+        let store = VideoGifStore::default();
+        store
+            .pending_ffmpeg_loads
+            .lock()
+            .unwrap()
+            .push((1, "a.mp4".to_string()));
+        assert!(store.has_pending_video_load());
+    }
+
+    #[test]
+    fn has_pending_video_load_false_after_drain() {
+        let store = VideoGifStore::default();
+        store.pending_loads.lock().unwrap().push((1, "a.gif".to_string()));
+        store.pending_loads.lock().unwrap().clear();
+        assert!(!store.has_pending_video_load());
+    }
 }

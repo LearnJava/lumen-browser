@@ -301,9 +301,9 @@ impl Lumen {
         // because nothing else ever triggers the one redraw that would drain the
         // queue. An unrelated redraw (scroll, resize, click) unblocks it, which is
         // exactly how this went unnoticed — every prior check happened to cause one.
-        let video_load_pending = !self.video_gif_store.pending_loads.lock().unwrap().is_empty()
-            || !self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().is_empty();
-        if video_load_pending {
+        // `has_pending_video_load` (срез 11) is the tested half of this fix —
+        // this call site itself stays untestable without a real `ActiveEventLoop`.
+        if self.video_gif_store.has_pending_video_load() {
             self.request_redraw();
         }
         // BUG-480 срез 1: таймеры фреймов участвуют в WaitUntil наравне с
