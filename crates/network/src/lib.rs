@@ -1191,8 +1191,20 @@ fn connect_inner(
                 Error::Network(format!("connect SOCKS5 proxy {}:{}: no addresses", s5.host, s5.port))
             })
         })?;
-        // Perform the SOCKS5 handshake to request a tunnel to (host, port).
-        socks5::socks5_connect(proxy_tcp, host, port, s5.auth.as_ref())?
+        // BUG-935 (S10): `socks5_connect` below does several `read_exact`
+        // calls with no read timeout on the socket at all — a proxy that
+        // accepts the TCP connect (passes `CONNECT_TIMEOUT`) but stalls
+        // mid-handshake (never replies to the method negotiation or the
+        // CONNECT request) blocks this ordered `EngineThread` task forever.
+        // Same FIFO-deadlock class as TCP-connect (S4), `EngineThread::query()`
+        // (S6), WS-handshake (S7), SSE-handshake (S8) and the TLS handshake
+        // (S9); bound just the handshake with `FETCH_READ_TIMEOUT`, then
+        // release it so the tunnelled stream keeps its caller-chosen timeout
+        // (`read_timeout`, applied further down for both TCP and TLS paths).
+        let _ = proxy_tcp.set_read_timeout(Some(FETCH_READ_TIMEOUT));
+        let tunnelled = socks5::socks5_connect(proxy_tcp, host, port, s5.auth.as_ref())?;
+        let _ = tunnelled.set_read_timeout(None);
+        tunnelled
     } else {
         // Direct path: resolve DNS locally and connect.
         // Префикс `resolve ` на всех DNS-ошибках (включая ошибку самого

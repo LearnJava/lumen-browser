@@ -274,4 +274,45 @@ mod tests {
         assert_eq!(socks5_rep_message(0x05), "connection refused");
         assert_eq!(socks5_rep_message(0xFF), "unknown error");
     }
+
+    /// BUG-935 (S10) regression: `socks5_connect` used to have no read
+    /// timeout at all on the proxy socket, so a proxy that accepts the TCP
+    /// connection but never replies to the method negotiation blocked the
+    /// caller's ordered `EngineThread` task forever — same class as the
+    /// TCP-connect (S4), `EngineThread::query()` (S6), WS-handshake (S7),
+    /// SSE-handshake (S8) and TLS-handshake (S9) deadlocks. The fix lives in
+    /// `connect_inner` (`lib.rs`), which now sets `FETCH_READ_TIMEOUT` on the
+    /// proxy socket before calling `socks5_connect`; this test drives that
+    /// same mechanism directly against a stalled proxy.
+    #[test]
+    fn socks5_handshake_read_times_out_against_a_stalled_server() {
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            // Accept and hold the connection open without ever answering the
+            // SOCKS5 method negotiation — the stalled-proxy case.
+            let (sock, _) = listener.accept().expect("accept");
+            thread::sleep(Duration::from_secs(2));
+            drop(sock);
+        });
+
+        let stream = TcpStream::connect(("127.0.0.1", port)).expect("tcp connect");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .expect("set_read_timeout");
+
+        let started = Instant::now();
+        socks5_connect(stream, "example.com", 443, None)
+            .expect_err("stalled proxy must time out the handshake read, not hang forever");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "handshake blocked past its read timeout"
+        );
+
+        server.join().unwrap();
+    }
 }
