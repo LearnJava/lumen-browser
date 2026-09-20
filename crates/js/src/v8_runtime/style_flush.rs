@@ -65,7 +65,12 @@ pub(crate) struct FlushHandles {
     pub(crate) custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     pub(crate) viewport_size: Arc<Mutex<[f32; 2]>>,
     pub(crate) stylesheet: Arc<Mutex<Option<Arc<lumen_css_parser::Stylesheet>>>>,
-    pub(crate) dom_dirty: Arc<AtomicBool>,
+    /// BUG-935 S34: sibling of `V8JsRuntime::dom_dirty` (see its doc comment),
+    /// set at every same DOM-mutating call site but gated/cleared only here
+    /// by [`Self::maybe_flush`] — the scheduler's own `dom_dirty` is a
+    /// separate `Arc<AtomicBool>` this struct no longer holds, so a same-tick
+    /// flush can no longer consume the scheduler's "DOM mutated" signal.
+    pub(crate) flush_stale: Arc<AtomicBool>,
     pub(crate) never_flushed: Arc<AtomicBool>,
     /// BUG-504 part 10: `scrollLeft`/`scrollTop`/`scrollWidth`/`scrollHeight`
     /// JS-visible cache, keyed like `layout_rects`. Reapplied onto the fresh
@@ -133,16 +138,23 @@ impl FlushHandles {
     /// panicking.
     pub(crate) fn maybe_flush(&self) {
         // BUG-560: `element.focus()` changes `:focus`/`:focus-within` matching
-        // without touching the DOM, so it never sets `dom_dirty` — without this
-        // check a same-tick `getComputedStyle()` right after `.focus()` would
-        // keep serving the pre-focus snapshot even though the flush below would
-        // otherwise happily recompute it. Compare against the focus baked into
-        // the last flush rather than trusting `dom_dirty`/`never_flushed` alone.
+        // without touching the DOM, so it never sets `flush_stale` — without
+        // this check a same-tick `getComputedStyle()` right after `.focus()`
+        // would keep serving the pre-focus snapshot even though the flush
+        // below would otherwise happily recompute it. Compare against the
+        // focus baked into the last flush rather than trusting
+        // `flush_stale`/`never_flushed` alone.
         let current_focus = *self.focused_nid.lock().unwrap_or_else(|e| e.into_inner());
         let focus_changed =
             *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner()) != current_focus;
+        // BUG-935 S34: gate on `flush_stale`, a dedicated flag set at every
+        // same DOM-mutating call site as the scheduler's own `dom_dirty`
+        // (`V8JsRuntime::dom_dirty`, a separate `Arc<AtomicBool>` this struct
+        // no longer holds) but consumed only here — so a same-tick flush no
+        // longer eats the scheduler's "DOM mutated" signal before its own
+        // `take_dom_dirty`/`take_dom_dirty_lockfree` gets to see it.
         if !self.never_flushed.load(Ordering::Relaxed)
-            && !self.dom_dirty.load(Ordering::Relaxed)
+            && !self.flush_stale.load(Ordering::Relaxed)
             && !focus_changed
             && !self.cssom_dirty.load(Ordering::Relaxed)
         {
@@ -155,9 +167,9 @@ impl FlushHandles {
         // taking seconds while the JS callback inside it measured 5-9ms).
         if lumen_paint::frame_log_enabled() {
             eprintln!(
-                "[engine] maybe_flush real (never_flushed={} dom_dirty={} focus_changed={} cssom_dirty={})",
+                "[engine] maybe_flush real (never_flushed={} flush_stale={} focus_changed={} cssom_dirty={})",
                 self.never_flushed.load(Ordering::Relaxed),
-                self.dom_dirty.load(Ordering::Relaxed),
+                self.flush_stale.load(Ordering::Relaxed),
                 focus_changed,
                 self.cssom_dirty.load(Ordering::Relaxed),
             );
@@ -269,6 +281,9 @@ impl FlushHandles {
         // comment) — only the "has something changed since the last flush"
         // gate resets.
         self.cssom_dirty.store(false, Ordering::Relaxed);
+        // BUG-935 S34: only `flush_stale` resets here — `dom_dirty` is the
+        // scheduler's own signal and stays untouched by this flush.
+        self.flush_stale.store(false, Ordering::Relaxed);
     }
 
     /// CSSOM-8 вариант C: replay every recorded CSSOM write

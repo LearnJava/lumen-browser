@@ -830,6 +830,7 @@ pub(crate) fn install_crypto_and_typed_om(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     dom_dirty: Arc<AtomicBool>,
+    flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
@@ -1040,6 +1041,7 @@ pub(crate) fn install_crypto_and_typed_om(
         });
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_set_style_property", move |nid: u32, prop: String, val: String| {
             if let Ok(mut doc) = d.lock() {
@@ -1061,10 +1063,12 @@ pub(crate) fn install_crypto_and_typed_om(
                     record_dom_touch(&touched, node_id);
                 }
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         });
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
+        let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_delete_style_property", move |nid: u32, prop: String| {
             if let Ok(mut doc) = d.lock() {
@@ -1091,6 +1095,7 @@ pub(crate) fn install_crypto_and_typed_om(
                     record_dom_touch(&touched, node_id);
                 }
                 dirty.store(true, Ordering::Relaxed);
+                stale.store(true, Ordering::Relaxed);
             }
         });
         // No `_lumen_has_style_property` here any more (BUG-387): `has()` is

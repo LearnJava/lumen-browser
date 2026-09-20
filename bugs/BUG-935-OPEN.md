@@ -2490,6 +2490,48 @@ A/B по-прежнему не решён и должен ждать этого 
 маскируется этим механизмом настолько же, насколько маскировался
 S28-S31's артефактами.
 
+**Срез 34 (2026-09-21):** S33's фикс внесён. `V8JsRuntime` и
+`FlushHandles` больше не делят один `dom_dirty: Arc<AtomicBool>` между
+планировщиком (`take_dom_dirty`/`take_dom_dirty_lockfree`) и same-tick
+флашем — заведён отдельный `flush_stale: Arc<AtomicBool>`, выставляемый
+в `true` на КАЖДОМ существующем сайте `dom_dirty.store(true, ...)`
+(инвентаризация нашла ровно шесть `install_*`-функций, принимающих
+`dom_dirty` как параметр: `install_node_properties`,
+`install_tree_mutation`, `install_shadow_dom`, `install_selection`,
+`install_design_mode` в `crates/js/src/v8_runtime/install/dom_core.rs` и
+`install_crypto_and_typed_om` в
+`crates/js/src/v8_runtime/install/platform.rs` — все остальные ссылки на
+`dom_dirty` в `install/` были либо объявлением параметра, либо чтением в
+другом месте, не установкой). `FlushHandles::maybe_flush` теперь читает
+и сбрасывает только `flush_stale`; страничный `dom_dirty` этой структурой
+больше не хранится (поле удалено как мёртвое — `dead_code` от clippy) и
+остаётся исключительно сигналом планировщика
+(`V8JsRuntime::take_dom_dirty`/`InProcessSession::take_dom_dirty_lockfree`),
+который эта правка не трогает.
+
+Перемер S29's офлайн-стенда (`bug935_raf_dom_stand.html`, с S30-32's
+`IntersectionObserver`-нагрузкой) после фикса: scroll RTT min/avg/max =
+47.2/62.5/108.3мс на 20 тиках, 23 off-thread relayout'а по 27-38мс каждый
+— против S32/S33's 543→8357мс/36→14864мс роста по ходу того же census'а
+на том же стенде (там же зафиксирован механизм — один полный layout на
+каждую наблюдаемую `IntersectionObserver`-цель). Направление и порядок
+величины совпадают с S33's прогнозом: `deliver_layout_observers` больше
+не оплачивает N полных layout'ов за один скрипт-тик.
+
+**Тесты:** `cargo clippy -p lumen-js --all-targets --features v8-backend
+-- -D warnings` и `cargo clippy -p lumen-shell --all-targets --features v8
+-- -D warnings` чисты. `cargo test -p lumen-js --features v8-backend --lib`
+— 4007/4017 зелёных в общем прогоне, 10 красных (все в
+`dom::tests::v8_webworker`, не тронутом этим срезом) — в изоляции
+(`--test-threads=1` на всём модуле) все 51 тестов этого модуля зелёные,
+т.е. это тайминговый флак параллельного запуска реальных worker-потоков,
+не регрессия. `cargo test -p lumen-shell --features v8 -- relayout` —
+13/13 зелёных.
+
+Вопрос S27's `defer_js_push` A/B по-прежнему не решён — он был замаскирован
+этим механизмом, теперь маска снята, но перемер самого A/B — отдельный
+следующий срез.
+
 ## Воспроизведение
 
 ```
