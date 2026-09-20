@@ -61,6 +61,7 @@ impl Lumen {
             preload_dispatched: std::mem::take(&mut self.preload_dispatched),
             stream_images_requested: std::mem::take(&mut self.stream_images_requested),
             stream_image_sizes: std::mem::take(&mut self.stream_image_sizes),
+            stream_image_pixels: std::mem::take(&mut self.stream_image_pixels),
             stream_image_sizes_dirty: self.stream_image_sizes_dirty,
             stream_image_errors: std::mem::take(&mut self.stream_image_errors),
             stream_image_events_fired: std::mem::take(&mut self.stream_image_events_fired),
@@ -154,6 +155,7 @@ impl Lumen {
         self.preload_dispatched = snap.preload_dispatched;
         self.stream_images_requested = snap.stream_images_requested;
         self.stream_image_sizes = snap.stream_image_sizes;
+        self.stream_image_pixels = snap.stream_image_pixels;
         self.stream_image_sizes_dirty = snap.stream_image_sizes_dirty;
         self.stream_image_errors = snap.stream_image_errors;
         self.stream_image_events_fired = snap.stream_image_events_fired;

@@ -66,6 +66,7 @@ impl Lumen {
         resource_timing::clear();
         self.stream_images_requested.clear();
         self.stream_image_sizes.clear();
+        self.stream_image_pixels.clear();
         self.stream_image_sizes_dirty = false;
         self.stream_image_errors.clear();
         self.stream_image_events_fired.clear();

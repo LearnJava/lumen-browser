@@ -740,6 +740,7 @@ impl Lumen {
             resource_timing::clear();
             self.stream_images_requested.clear();
             self.stream_image_sizes.clear();
+            self.stream_image_pixels.clear();
             self.stream_image_sizes_dirty = false;
             self.stream_image_errors.clear();
             self.stream_image_events_fired.clear();
@@ -1346,6 +1347,11 @@ impl Lumen {
         };
         // (node index, размер) — `None` значит decode-неудачу (`fire_image_error`).
         let mut fires: Vec<(u32, Option<(u32, u32)>)> = Vec::new();
+        // BUG-938: (node index, decoded pixels) — впервые увиденные пары
+        // `(nid, url)` этого прохода, чью картинку canvas `drawImage`/
+        // `createImageBitmap` до сих пор не видел (регистрация была только
+        // одноразовым проходом по снапшоту разбора, см. `page_pipeline.rs`).
+        let mut bitmap_regs: Vec<(u32, Arc<lumen_image::Image>)> = Vec::new();
         let changed = {
             let Some(src) = self.layout_source.as_ref() else { return };
             let Ok(mut doc) = src.document.lock() else { return };
@@ -1362,6 +1368,9 @@ impl Lumen {
                     changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {
                         fires.push((nid, Some((w, h))));
+                        if let Some(image) = self.stream_image_pixels.get(&req.url) {
+                            bitmap_regs.push((nid, Arc::clone(image)));
+                        }
                     }
                 } else if self.stream_image_errors.contains(&req.url)
                     && self.stream_image_events_fired.insert((nid, req.url.clone()))
@@ -1377,6 +1386,15 @@ impl Lumen {
                     Some((w, h)) => j.fire_image_load(nid, w, h),
                     None => j.fire_image_error(nid),
                 }
+            });
+        }
+        // BUG-938: GAP-CANVASORIGIN (BUG-941) isn't checked on this
+        // streaming/dynamic producer at all yet (only the eager pipeline in
+        // `page_pipeline.rs` does) — `tainted=false` matches that existing
+        // gap, not a regression introduced here.
+        for (nid, image) in bitmap_regs {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.set_img_bitmap(nid, image, false);
             });
         }
         if !changed {

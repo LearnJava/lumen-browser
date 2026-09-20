@@ -89,13 +89,18 @@ impl Lumen {
                     // BUG-272 срез 17: cache-insert returns the Arc handle; register
                     // with it so raw_images shares the CPU cache's allocation.
                     let handle = self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
+                    // BUG-938: keep the same Arc for `img_bitmap_store` (canvas
+                    // `drawImage`) — `apply_stream_intrinsic_sizes` reads this map.
+                    self.stream_image_pixels.insert(src.clone(), Arc::clone(&handle));
                     if let Err(e) = r.register_image(src.clone(), handle) {
                         eprintln!("Streaming-картинка: не зарегистрирована {src}: {e}");
                     }
                 } else {
                     // Renderer ещё не создан (окно не открыто) — отложим заливку
                     // в GPU до `resumed`.
-                    self.pending_images.push((src.clone(), Arc::new(image)));
+                    let image = Arc::new(image);
+                    self.stream_image_pixels.insert(src.clone(), Arc::clone(&image));
+                    self.pending_images.push((src.clone(), image));
                 }
                 if let Some(gif) = animated {
                     // Многокадровый GIF: тикается в `RedrawRequested`.

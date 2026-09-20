@@ -988,6 +988,18 @@ impl V8JsRuntime {
         });
     }
 
+    /// Register (or overwrite) a single decoded `<img>` bitmap without clearing
+    /// the rest of the store — BUG-938: the shell calls this whenever an image
+    /// decodes OUTSIDE the initial parse pass (streaming, script-inserted
+    /// `<img>`, a script `src` re-point), which [`Self::register_img_bitmaps`]'s
+    /// clear-then-fill shape cannot cover incrementally. The store is
+    /// `thread_local!` (JS thread), hence `run`.
+    pub fn set_img_bitmap(&self, nid: u32, image: Arc<lumen_image::Image>, tainted: bool) {
+        self.run(move |_inner| {
+            crate::img_bitmap_store::set_img_bitmap(nid, image, tainted);
+        });
+    }
+
     /// BUG-480 срез 3: зарегистрировать загруженный под-документ `<iframe>` для доступа из
     /// JS родителя через `contentWindow`/`contentDocument`
     /// ([`crate::frame_bridge`]).

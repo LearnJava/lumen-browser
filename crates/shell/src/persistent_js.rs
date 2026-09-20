@@ -199,6 +199,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// this bitmap. Default no-op covers non-QuickJS builds and `NullPersistentJs`.
     #[allow(dead_code)]
     fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, Arc<lumen_image::Image>, bool)>) {}
+    /// Register a single decoded `<img>` bitmap without clearing the store —
+    /// BUG-938: the one-shot [`Self::register_img_bitmaps`] only covers images
+    /// the initial parse pass saw. A script-inserted `<img>` or a script `src`
+    /// re-point decodes later, through the streaming/dynamic pipeline
+    /// (`page_load.rs`'s `apply_stream_intrinsic_sizes`), which calls this
+    /// per-image instead. `tainted` — GAP-CANVASORIGIN, same meaning as
+    /// [`Self::register_img_bitmaps`]'s bool.
+    #[allow(dead_code)]
+    fn set_img_bitmap(&self, _nid: u32, _image: Arc<lumen_image::Image>, _tainted: bool) {}
     /// Check registered lazy images against the current viewport and enqueue load
     /// requests for those within the lazy-load margin (1 viewport ahead of the fold).
     ///
@@ -1012,6 +1021,9 @@ impl PersistentJs for V8PersistentJs {
     // for the whole session — `drawImage(imgElement, …)` silently painted nothing.
     fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>, bool)>) {
         self.rt.register_img_bitmaps(bitmaps);
+    }
+    fn set_img_bitmap(&self, nid: u32, image: Arc<lumen_image::Image>, tainted: bool) {
+        self.rt.set_img_bitmap(nid, image, tainted);
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
         self.rt.take_lazy_image_requests()

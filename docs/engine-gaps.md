@@ -35,7 +35,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 - **`<img>` fires neither `load` nor `error` on any insertion path, and `img.complete` is `undefined`** ([BUG-630](../bugs/BUG-630-OPEN.md)). Never sequence a probe on an image arriving, and never read a silent `<img>` as evidence that a policy blocked it.
 - **`<object data>` and `<embed src>` never fetch** ([BUG-798](../bugs/BUG-798-OPEN.md)); `<input type=image>` and SVG `<image>` fetch but fire no `load`/`error`. A probe needing a subresource should use `<link rel=stylesheet>`, `<script src>` or `fetch()`.
-- **A script-side resource path is dead where the parser's works.** An `<img>` created by script (or a parser one given a new `src`) draws nothing through `drawImage` and rejects `createImageBitmap` with «image not yet decoded» — the bitmap store is filled once, by the parse pass ([BUG-938](../bugs/BUG-938-OPEN.md)); a `background-image` assigned from JS is never requested although the cascade shows it ([BUG-939](../bugs/BUG-939-OPEN.md)). Both fetch fine from markup, so a probe that builds its image or its background in JS measures this instead of its subject.
+- **A `background-image` assigned from JS is never requested**, although the cascade shows it ([BUG-939](../bugs/BUG-939-OPEN.md)) — it fetches fine from markup, so a probe that sets it in JS measures this instead of its subject.
 - **No outgoing request carries `Referer` or `Origin`** — not a subresource, not `fetch()`, not a same-origin POST ([BUG-859](../bugs/BUG-859-OPEN.md)), although `docs/plan/privacy.md` promises `strict-origin-when-cross-origin`.
 
 ## Media
