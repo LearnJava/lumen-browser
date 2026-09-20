@@ -1,6 +1,6 @@
 # BUG-978 — `eval()`, отдав сконструированный `CSSStyleSheet` (или что-то, ссылающееся на его `cssRules`) как completion value, роняет изолят OOM'ом
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-20 (P3)
 **Компонент:** js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded` — обход значения, возвращённого `eval()`) вместе с `crates/js/src/shim/web_api_shim_mid.js` (`_lumen_make_constructed_style_sheet`/CSSOM-1 `cssRules`/`parentStyleSheet` — обёртки без кэша)
 **Найден:** P1, 2026-09-04, при написании тестов CSSOM-5 срез 2 (`document.adoptedStyleSheets` → каскад, BUG-897) — сам срез 2 тут ни при чём, дефект уже жил в срезе 1 (`new CSSStyleSheet()`/`.replaceSync()`, влит 2026-09-04 тем же днём раньше).
 
@@ -69,3 +69,26 @@ rule → parentStyleSheet → sheet' → …`, но детектор `ancestors.
 - Или ограничить `from_v8`/`FROM_V8_MAX_DEPTH` не только по глубине, но и по
   суммарному числу посещённых объектов (жёсткий бюджет), чтобы экспоненциальный
   веер обрывался раньше OOM независимо от кэширования.
+
+## Исправлено (P3, 2026-09-20)
+
+Второй кандидат из «Что дальше»: новая константа `FROM_V8_MAX_VISITED = 20_000`
+(`value.rs`) считает суммарное число объектов/массивов, вошедших в обход за
+весь вызов `from_v8`, отдельно от `ancestors` (глубина одной ветки) и от
+цикл-детектора. Как только счётчик достигает потолка, узел возвращается как
+`"[Max Nodes Exceeded]"` — тем же способом, что уже существующие
+`"[Max Depth Exceeded]"`/`"[Circular]"`, без изменения `JsResult`-контракта
+вызывающих.
+
+Первый кандидат (кэшировать обёртки листа/правил по identity) намеренно не
+тронут — это отдельный архитектурный компромисс CSSOM-1/CSSOM-5
+("nothing here is cached"), а не часть этого дефекта; бюджет узлов чинит более
+общий инвариант («`from_v8` всегда завершается за конечную работу») и ловит
+любой другой источник плотного/широкого веера, не только этот конкретный.
+
+Новый тест `eval_constructed_stylesheet_completion_value_does_not_oom`
+(`crates/js/src/v8_runtime/tests/mod.rs`) воспроизводит минимальный репро из
+раздела «Симптом» — было OOM за 60-100с, стало 0.32с.
+`cargo test -p lumen-js --features v8-backend --lib` 3962/3962,
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+чист.
