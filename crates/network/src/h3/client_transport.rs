@@ -52,6 +52,7 @@ use super::mozilla_roots::mozilla_trust_anchors;
 use super::request_driver::RequestDriver;
 use super::request_exchange::ClientRequest;
 use super::udp::{DatagramTransport, UdpDatagram};
+use super::varint::{self, VarIntTooLarge};
 
 /// The default HTTPS port; when the request targets it the `:authority`
 /// pseudo-header omits the port (RFC 9114 §4.3.2, RFC 3986 §3.2.3).
@@ -548,6 +549,110 @@ pub fn h3_extended_connect_on_driver<T: DatagramTransport>(
     Err(H3TransportError::Exchange(ConnectFetchError::ExtendedConnectIncomplete))
 }
 
+/// draft-ietf-webtrans-http3 §4.2: the QUIC varint stream type identifying a
+/// client-initiated WebTransport unidirectional stream, prefixing the session
+/// id that demultiplexes it to a session.
+const WEBTRANSPORT_UNI_STREAM_TYPE: u64 = 0x54;
+
+/// Why [`h3_webtransport_open_uni_stream_on_driver`] could not open a
+/// WebTransport unidirectional stream.
+#[derive(Debug)]
+pub enum WebTransportStreamError {
+    /// Every client-initiated unidirectional QUIC stream identifier has been
+    /// handed out (RFC 9000 §2.1: `2^60` per type, the same bound
+    /// [`super::request_mux::OpenError::StreamsExhausted`] applies to bidi
+    /// streams) — unreachable on any real session.
+    StreamsExhausted,
+    /// The stream header (stream type, then session id — both QUIC varints)
+    /// could not be encoded because a value exceeded the varint's 62-bit range
+    /// (RFC 9000 §16). `session_id` is itself a QUIC stream identifier, always
+    /// well inside that range, so this only fires on a value from a future
+    /// caller that is not.
+    Header(VarIntTooLarge),
+    /// A driver turn failed while flushing the stream header onto the wire — a
+    /// socket error, a bad frame, or a rejected send action.
+    Driver(super::request_driver::RequestDriverError),
+}
+
+impl core::fmt::Display for WebTransportStreamError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::StreamsExhausted => {
+                write!(f, "WebTransport: client unidirectional stream identifiers exhausted")
+            }
+            Self::Header(e) => write!(f, "WebTransport: stream header: {e}"),
+            Self::Driver(e) => write!(f, "WebTransport: opening unidirectional stream: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for WebTransportStreamError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Header(e) => Some(e),
+            Self::Driver(e) => Some(e),
+            Self::StreamsExhausted => None,
+        }
+    }
+}
+
+/// Opens a WebTransport unidirectional stream (draft-ietf-webtrans-http3 §4.2)
+/// on `driver`'s connection, for the session `session_id` names — the Extended
+/// CONNECT stream identifier [`h3_extended_connect_on_driver`] returned when
+/// the session was established.
+///
+/// Allocates the `uni_stream_number`-th client-initiated unidirectional QUIC
+/// stream (RFC 9000 §2.1: the low two bits `0b10` mark client-initiated
+/// unidirectional, so the *n*-th such stream is identifier `4n + 2`) — the
+/// caller owns `uni_stream_number`, incrementing it per session starting at
+/// `0`, since it is a fully separate identifier space from the client
+/// bidirectional streams [`h3_extended_connect_on_driver`]/ordinary requests
+/// use and needs no coordination with them. Writes the WebTransport stream
+/// header (stream type `0x54`, then `session_id`, both QUIC varints —
+/// draft-ietf-webtrans-http3 §4.2) as the stream's first bytes and flushes it
+/// onto the wire.
+///
+/// Returns the opened stream's QUIC identifier; the caller writes further
+/// application bytes to it directly through
+/// `driver.turn_mut().pump_mut().dispatch_mut().streams_mut()` (the same
+/// accessor chain this function uses) — a unidirectional WebTransport stream
+/// carries no response, so unlike [`h3_extended_connect_on_driver`] this
+/// issues one `transmit` and returns rather than polling for a reply; the
+/// stream stays open (no FIN) for those later writes regardless of whether
+/// this first flush cleared the socket immediately or is still queued behind
+/// flow control.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::StreamsExhausted`], [`WebTransportStreamError::Header`],
+/// or [`WebTransportStreamError::Driver`] — see their docs.
+pub fn h3_webtransport_open_uni_stream_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    uni_stream_number: u64,
+    peer_initial_max_stream_data_uni: u64,
+    session_id: u64,
+) -> Result<u64, WebTransportStreamError> {
+    let stream_id = uni_stream_number
+        .checked_mul(4)
+        .and_then(|n| n.checked_add(2))
+        .ok_or(WebTransportStreamError::StreamsExhausted)?;
+
+    let mut header = Vec::with_capacity(varint::encoded_len(WEBTRANSPORT_UNI_STREAM_TYPE).unwrap_or(1) + 8);
+    varint::encode(WEBTRANSPORT_UNI_STREAM_TYPE, &mut header).map_err(WebTransportStreamError::Header)?;
+    varint::encode(session_id, &mut header).map_err(WebTransportStreamError::Header)?;
+
+    driver
+        .turn_mut()
+        .pump_mut()
+        .dispatch_mut()
+        .streams_mut()
+        .open_send_stream(stream_id, peer_initial_max_stream_data_uni)
+        .write(&header);
+
+    driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)?;
+    Ok(stream_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,6 +928,72 @@ mod tests {
         match err {
             H3TransportError::Exchange(ConnectFetchError::ExtendedConnectIncomplete) => {}
             other => panic!("expected ExtendedConnectIncomplete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webtransport_uni_stream_allocates_the_first_identifier_and_writes_the_header() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let stream_id = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the first uni stream");
+        assert_eq!(stream_id, 2, "the first client uni stream identifier is 4*0 + 2");
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .expect("the uni stream's send half was opened");
+        // Header: 2-byte varint 0x54 (stream type — 84 exceeds the 1-byte 0-63
+        // range) + 1-byte varint 0 (session id).
+        assert_eq!(send.write_offset(), 3);
+    }
+
+    #[test]
+    fn webtransport_uni_stream_identifiers_advance_by_four() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let first = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 0).unwrap();
+        let second = h3_webtransport_open_uni_stream_on_driver(&mut driver, 1, 1 << 20, 0).unwrap();
+        assert_eq!(first, 2);
+        assert_eq!(second, 6);
+    }
+
+    #[test]
+    fn webtransport_uni_stream_header_carries_the_session_id() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        // A session id above the 1-byte varint boundary (0x3f) forces the
+        // session-id half of the header to 2 bytes too, exercising the varint
+        // length switch rather than just the degenerate zero case.
+        let stream_id = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 100)
+            .expect("opens the uni stream");
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .expect("the uni stream's send half was opened");
+        // 2-byte stream type (0x54) + 2-byte session id (100) = 4 bytes.
+        assert_eq!(send.write_offset(), 4);
+    }
+
+    #[test]
+    fn webtransport_uni_stream_number_overflow_is_reported_not_wrapped() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let err = h3_webtransport_open_uni_stream_on_driver(&mut driver, u64::MAX, 1 << 20, 0)
+            .unwrap_err();
+        match err {
+            WebTransportStreamError::StreamsExhausted => {}
+            other => panic!("expected StreamsExhausted, got {other:?}"),
         }
     }
 }
