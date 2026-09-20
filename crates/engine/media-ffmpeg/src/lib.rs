@@ -26,8 +26,9 @@ pub use decoder::FfmpegVideoDecoder;
 
 #[cfg(all(test, feature = "ffmpeg"))]
 mod tests {
-    use lumen_core::ext::VideoDecoder;
+    use lumen_core::ext::{VideoDecodeSession, VideoDecoder};
 
+    use super::decoder::FfmpegSession;
     use super::FfmpegVideoDecoder;
 
     /// `2x2-green.webm` — тот же файл, на котором ADR-030 (срез 3)
@@ -189,5 +190,75 @@ mod tests {
             second.iter().any(|&s| s != 0),
             "аудио после seek назад не должно декодироваться как тишина"
         );
+    }
+
+    /// GAP-MEDIADECODE срез 21: непрерывное воспроизведение вперёд (каждый
+    /// следующий `frame_at` чуть дальше предыдущего декодированного кадра,
+    /// как реальный тик `tick_video_ffmpegs`) не должно делать ни одного
+    /// `av_seek_frame` — демуксер уже стоит там, где нужно продолжать
+    /// чтение. Регрессия на срез 20's остаток («per-tick троттлинг не
+    /// пересмотрен») — до этого среза каждый из этих вызовов делал
+    /// seek+flush и передекодировал GOP заново.
+    #[test]
+    fn frame_at_sequential_forward_ticks_do_not_reseek() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/wpt/css/css-ui/support/test.mp4"
+        );
+        let bytes = std::fs::read(path).expect("тестовый .mp4 должен быть на диске");
+
+        let mut session = FfmpegSession::open(bytes).expect("open() должен декодировать test.mp4");
+        assert_eq!(session.seek_count(), 0, "open() сам по себе не должен seek'ать");
+
+        // Имитация ~30fps троттлинга tick_video_ffmpegs: каждый тик чуть
+        // дальше предыдущего декодированного кадра. Первые несколько тиков
+        // догоняют B-frame reorder-delay `open()`'s первого кадра (его
+        // реальный pts — не ровно 0.0, а несколько кадров вперёд — этот тест
+        // не про эту границу, только про установившееся воспроизведение),
+        // поэтому счётчик seek снимается ПОСЛЕ разгона, не с самого начала.
+        for tick in 1..10 {
+            let secs = f64::from(tick) * (1.0 / 30.0);
+            session
+                .frame_at(secs)
+                .unwrap_or_else(|e| panic!("frame_at({secs}) должен сработать: {e}"));
+        }
+
+        let steady_state_seeks_before = session.seek_count();
+        for tick in 10..30 {
+            let secs = f64::from(tick) * (1.0 / 30.0);
+            session
+                .frame_at(secs)
+                .unwrap_or_else(|e| panic!("frame_at({secs}) должен сработать без seek: {e}"));
+        }
+
+        assert_eq!(
+            session.seek_count(),
+            steady_state_seeks_before,
+            "монотонное воспроизведение вперёд в установившемся режиме не должно вызывать av_seek_frame"
+        );
+    }
+
+    /// Симметричный случай: перемотка НАЗАД (типичный `<video loop>`/JS
+    /// `currentTime = 0`) по-прежнему должна идти через настоящий
+    /// `av_seek_frame` — срез 21 не должен молча пропускать реальные seek'и.
+    #[test]
+    fn frame_at_backward_jump_still_reseeks() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/wpt/css/css-ui/support/test.mp4"
+        );
+        let bytes = std::fs::read(path).expect("тестовый .mp4 должен быть на диске");
+
+        let mut session = FfmpegSession::open(bytes).expect("open() должен декодировать test.mp4");
+        // > MAX_FORWARD_SCAN_SECS (2.0) от pts~0 сразу после open() —
+        // намеренный большой прыжок вперёд, не троттлинг-тик.
+        session.frame_at(5.0).expect("frame_at(5.0) должен сработать");
+        assert_eq!(session.seek_count(), 1, "прыжок далеко вперёд от pts=0 должен seek'ать");
+
+        // `frame_at(0.0)` попал бы в кэш `first_frame` и вернулся бы без
+        // единого вызова декодера — перемотка назад проверяется на секунду,
+        // которая не совпадает с кэшированным первым кадром.
+        session.frame_at(1.0).expect("frame_at(1.0) (перемотка назад) должен сработать");
+        assert_eq!(session.seek_count(), 2, "перемотка назад должна была сделать настоящий seek");
     }
 }

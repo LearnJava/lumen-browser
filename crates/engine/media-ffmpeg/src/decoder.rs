@@ -147,6 +147,16 @@ pub struct FfmpegSession {
     /// время жизни сессии, чтобы `decode_audio_pcm` могло декодировать PCM
     /// без повторного `avcodec_open2`.
     audio_codec_ctx: *mut AVCodecContext,
+    /// pts (в секундах) последнего кадра, отданного `frame_at`/`open()` —
+    /// срез 21: точка, от которой `frame_at` решает, можно ли продолжить
+    /// декодирование демуксера как есть (непрерывное воспроизведение
+    /// вперёд) вместо `av_seek_frame`+`avcodec_flush_buffers`.
+    last_pts_secs: f64,
+    /// Число реальных `av_seek_frame` в `frame_at` за время жизни сессии —
+    /// только для регрессионных тестов среза 21 (монотонное воспроизведение
+    /// вперёд не должно его увеличивать, перемотка/большой скачок — должна).
+    #[cfg(test)]
+    seek_count: u32,
 }
 
 // SAFETY: `FfmpegSession` — единственный владелец всех перечисленных
@@ -159,7 +169,7 @@ pub struct FfmpegSession {
 unsafe impl Send for FfmpegSession {}
 
 impl FfmpegSession {
-    fn open(bytes: Vec<u8>) -> Result<Self, String> {
+    pub(crate) fn open(bytes: Vec<u8>) -> Result<Self, String> {
         let reader = Box::into_raw(Box::new(BufferReader { data: bytes, pos: 0 }));
 
         const AVIO_BUF_SIZE: usize = 4096;
@@ -369,6 +379,9 @@ impl FfmpegSession {
             audio_track,
             audio_stream_index,
             audio_codec_ctx,
+            last_pts_secs: 0.0,
+            #[cfg(test)]
+            seek_count: 0,
         };
 
         let (w, h, rgba) = session.decode_from_current_position(0.0).map_err(|e| {
@@ -738,7 +751,7 @@ impl FfmpegSession {
             return Err("av_packet_alloc/av_frame_alloc вернул null".to_string());
         }
 
-        let mut decoded: Option<(i64, c_int, c_int, c_int)> = None;
+        let mut decoded: Option<(f64, c_int, c_int, c_int)> = None;
         loop {
             // SAFETY: `self.fmt_ctx` открыт и жив на весь срок жизни
             // `self`; `pkt` — валидный, только что выделенный `AVPacket`.
@@ -784,7 +797,7 @@ impl FfmpegSession {
             } else {
                 pts as f64 * f64::from(self.time_base_num) / f64::from(self.time_base_den)
             };
-            decoded = Some((pts, w, h, fmt));
+            decoded = Some((pts_secs, w, h, fmt));
             if pts_secs + 0.001 >= target_secs {
                 break;
             }
@@ -792,7 +805,7 @@ impl FfmpegSession {
 
         let result = match decoded {
             None => Err("не удалось декодировать ни одного кадра".to_string()),
-            Some((_pts, w, h, fmt)) => {
+            Some((pts_secs, w, h, fmt)) => {
                 if w <= 0 || h <= 0 {
                     Err(format!("декодер вернул некорректные размеры кадра {w}x{h}"))
                 } else {
@@ -800,7 +813,11 @@ impl FfmpegSession {
                     // исходными размерами/форматом только что успешно
                     // декодированного `frame`; `frame.data`/`linesize`
                     // заполнены `avcodec_receive_frame` выше.
-                    unsafe { self.scale_frame_to_rgba8(frame, w, h, fmt) }
+                    let scaled = unsafe { self.scale_frame_to_rgba8(frame, w, h, fmt) };
+                    if scaled.is_ok() {
+                        self.last_pts_secs = pts_secs;
+                    }
+                    scaled
                 }
             }
         };
@@ -892,6 +909,14 @@ impl FfmpegSession {
 
         Ok((w as u32, h as u32, rgba))
     }
+
+    /// Число реальных `av_seek_frame` в `frame_at` за время жизни сессии —
+    /// см. поле [`Self::seek_count`]. Только для регрессионных тестов
+    /// среза 21.
+    #[cfg(test)]
+    pub(crate) fn seek_count(&self) -> u32 {
+        self.seek_count
+    }
 }
 
 impl VideoDecodeSession for FfmpegSession {
@@ -906,6 +931,30 @@ impl VideoDecodeSession for FfmpegSession {
     fn frame_at(&mut self, secs: f64) -> Result<Vec<u8>, String> {
         if (self.first_frame.0 - secs).abs() < 0.001 {
             return Ok(self.first_frame.1.clone());
+        }
+
+        // GAP-MEDIADECODE срез 21: до этого среза КАЖДЫЙ вызов делал
+        // `av_seek_frame`+`avcodec_flush_buffers`, даже для обычного
+        // воспроизведения вперёд, где `target_secs` каждого тика — это
+        // позиция последнего декодированного кадра плюс ~1 кадр (throttling
+        // в `tick_video_ffmpegs`) — то есть демуксер уже стоит ровно там,
+        // где нужно продолжать чтение, и seek на ближайший keyframe перед
+        // текущей позицией с последующим повторным декодированием того же
+        // GOP — чистая трата работы. Продолжаем без seek, когда `secs` не
+        // раньше последнего декодированного кадра (в пределах допуска — тот
+        // же 0.001, что и у сравнения с `first_frame` выше) и не улетел
+        // вперёд настолько, что линейное чтение стало бы дороже настоящего
+        // seek (произвольная перемотка из JS, долгая буферизация).
+        const MAX_FORWARD_SCAN_SECS: f64 = 2.0;
+        let forward_gap = secs - self.last_pts_secs;
+        if (-0.001..=MAX_FORWARD_SCAN_SECS).contains(&forward_gap) {
+            let (_w, _h, rgba) = self.decode_from_current_position(secs)?;
+            return Ok(rgba);
+        }
+
+        #[cfg(test)]
+        {
+            self.seek_count += 1;
         }
 
         if self.time_base_den == 0 {
