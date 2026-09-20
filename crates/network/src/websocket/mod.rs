@@ -99,14 +99,23 @@ impl WebSocket {
             }
         }
 
-        // No read timeout: a WebSocket connection is meant to sit idle between
-        // messages far longer than any bounded fetch (BUG-307's timeout is for
-        // plain request/response `connect()` calls, not long-lived sockets).
+        // No read timeout on the socket itself: once opened, a WebSocket
+        // connection is meant to sit idle between messages far longer than any
+        // bounded fetch (BUG-307's timeout is for plain request/response
+        // `connect()` calls, not long-lived sockets). The opening handshake
+        // below is a short-lived HTTP exchange, not the long-lived idle
+        // socket — bounded the same way fetch bounds its response read
+        // (BUG-935: a server/proxy that accepts the TCP/TLS connection but
+        // never answers the Upgrade request otherwise hangs `read_exact`
+        // forever on the ordered EngineThread task).
         let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard, None, None)?;
         let mut stream = conn.into_stream();
 
+        let _ = stream.set_read_timeout(Some(crate::FETCH_READ_TIMEOUT));
         let key = upgrade::generate_key();
-        let protocol = upgrade::perform(&mut stream, &host, &path, &key, protocols)?;
+        let protocol = upgrade::perform(&mut stream, &host, &path, &key, protocols);
+        let _ = stream.set_read_timeout(None);
+        let protocol = protocol?;
 
         sink.emit(&Event::WebSocketConnected {
             tab_id,
@@ -154,15 +163,23 @@ impl WebSocket {
             }
         }
 
-        // No read timeout: a WebSocket connection is meant to sit idle between
-        // messages far longer than any bounded fetch (BUG-307's timeout is for
-        // plain request/response `connect()` calls, not long-lived sockets).
+        // No read timeout on the socket itself: once opened, a WebSocket
+        // connection is meant to sit idle between messages far longer than any
+        // bounded fetch (BUG-307's timeout is for plain request/response
+        // `connect()` calls, not long-lived sockets). The opening handshake
+        // below is a short-lived HTTP exchange, not the long-lived idle
+        // socket — bounded the same way fetch bounds its response read
+        // (BUG-935: a server/proxy that accepts the TCP/TLS connection but
+        // never answers the Upgrade request otherwise hangs `read_exact`
+        // forever on the ordered EngineThread task).
         let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard, None, None)?;
         let mut stream = conn.into_stream();
 
+        let _ = stream.set_read_timeout(Some(crate::FETCH_READ_TIMEOUT));
         let key = upgrade::generate_key();
-        let (deflate_enabled, protocol) =
-            upgrade::perform_with_deflate(&mut stream, &host, &path, &key, protocols)?;
+        let handshake = upgrade::perform_with_deflate(&mut stream, &host, &path, &key, protocols);
+        let _ = stream.set_read_timeout(None);
+        let (deflate_enabled, protocol) = handshake?;
 
         sink.emit(&Event::WebSocketConnected {
             tab_id,
