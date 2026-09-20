@@ -175,10 +175,37 @@ impl WebSocket {
         let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard, None, None)?;
         let mut stream = conn.into_stream();
 
+        // GAP-WSASYNC срез 4 (BUG-856): honour an `AbortToken` installed by
+        // the caller (`HttpClient::connect_cancellable` via `AbortScope`) —
+        // same mechanism `do_request` uses for in-flight fetch abort. Without
+        // this, a server that accepts the TCP connection and never answers
+        // the Upgrade request holds the blocking read below for the full
+        // `FETCH_READ_TIMEOUT` (60s) even after JS calls `close()`, because
+        // the old `close_requested` flag was only checked *after* this call
+        // returned.
+        let token = crate::current_abort_token();
+        if let Some(t) = &token
+            && t.is_aborted()
+        {
+            return Err(Error::Aborted("ws: handshake aborted".to_string()));
+        }
+        let watchdog = token
+            .as_ref()
+            .and_then(|t| stream.try_clone_tcp().map(|sock| crate::AbortWatchdog::spawn(t.clone(), sock)));
+
         let _ = stream.set_read_timeout(Some(crate::FETCH_READ_TIMEOUT));
         let key = upgrade::generate_key();
         let handshake = upgrade::perform_with_deflate(&mut stream, &host, &path, &key, protocols);
         let _ = stream.set_read_timeout(None);
+
+        if let Some(wd) = watchdog {
+            wd.stop();
+        }
+        if let Some(t) = &token
+            && t.is_aborted()
+        {
+            return Err(Error::Aborted("ws: handshake aborted".to_string()));
+        }
         let (deflate_enabled, protocol) = handshake?;
 
         sink.emit(&Event::WebSocketConnected {
