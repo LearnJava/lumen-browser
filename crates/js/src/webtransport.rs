@@ -34,22 +34,26 @@ pub(crate) fn install_webtransport_v8(
     use crate::v8_compat::into_v8_fn1;
     use lumen_core::ext::JsRuntime as _;
 
-    // GAP-WEBTRANSPORT срез 2b: `_lumen_webtransport_open(url)` now drives a
-    // real Extended CONNECT (RFC 9220) attempt through the fetch provider —
-    // `lumen-network::HttpClient` overrides `webtransport_connect`, every
-    // other provider keeps the "unsupported" default. Returns a JSON object
-    // as a string (matching the `_lumen_fetch_*` cache-slot pattern would be
-    // overkill for three fields read exactly once by the shim's `setTimeout`
-    // callback): `{"ok":true,"status":200}` or `{"ok":false,"message":"…"}`.
-    // The handle itself is not surfaced to JS yet — срез 3 (uni/bidi
-    // streams) is what first needs it, and will extend this JSON then.
+    let uni_fetch_provider = fetch_provider.clone();
+
+    // GAP-WEBTRANSPORT срез 3b: `_lumen_webtransport_open(url)` now also
+    // reports the session `handle` `webtransport_connect` allocated — срез
+    // 2b left it out of the JSON on purpose ("not surfaced to JS yet");
+    // `createUnidirectionalStream()` is the first caller that needs it, to
+    // pass back into `_lumen_webtransport_open_uni_stream(handle)` below.
+    // Still `{"ok":true,"status":200,"handle":0}` or
+    // `{"ok":false,"message":"…"}` — a JSON string, matching the
+    // `_lumen_fetch_*` cache-slot pattern would be overkill for three fields
+    // read exactly once by the shim's `setTimeout` callback.
     let open = into_v8_fn1(move |url: String| -> String {
         let Some(ref provider) = fetch_provider else {
             return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
                 .to_string();
         };
         match provider.webtransport_connect(&url) {
-            Ok(session) => format!(r#"{{"ok":true,"status":{}}}"#, session.status),
+            Ok(session) => {
+                format!(r#"{{"ok":true,"status":{},"handle":{}}}"#, session.status, session.handle)
+            }
             Err(e) => {
                 let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
                 format!(r#"{{"ok":false,"message":"{message}"}}"#)
@@ -57,6 +61,27 @@ pub(crate) fn install_webtransport_v8(
         }
     });
     rt.register_native("_lumen_webtransport_open", open)?;
+
+    // GAP-WEBTRANSPORT срез 3b: `createUnidirectionalStream()`'s first native
+    // call — opens a client-initiated QUIC uni-stream on the session
+    // `handle` names (`h3_webtransport_open_uni_stream_on_driver`, срез 3a)
+    // and reports its stream id. No write-bytes primitive exists yet (a
+    // later slice), so this only proves the plumbing: session handle → live
+    // driver → a real stream opened on the wire.
+    let open_uni = into_v8_fn1(move |handle: i32| -> String {
+        let Some(ref provider) = uni_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_open_uni_stream(handle) {
+            Ok(stream_id) => format!(r#"{{"ok":true,"streamId":{stream_id}}}"#),
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_open_uni_stream", open_uni)?;
 
     rt.eval(WEBTRANSPORT_SHIM)?;
     Ok(())
@@ -140,6 +165,23 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     });
   }
 
+  // GAP-WEBTRANSPORT срез 3b: the writable half of a uni-stream that *did*
+  // open on the wire (`createUnidirectionalStream()` got a real QUIC stream
+  // id back) — unlike `rejectingWritableStream()` this is not a session
+  // failure, so writes reject with a stream-scoped `WebTransportError`. No
+  // native "write bytes to an open WT stream" primitive exists yet (a later
+  // slice); this is what a caller sees in the meantime.
+  function unwritableOpenStream() {
+    return new WritableStream({
+      write: function() {
+        return Promise.reject(new WebTransportError({
+          source: 'stream',
+          message: 'Writing to a WebTransport unidirectional stream is not yet supported.',
+        }));
+      },
+    });
+  }
+
   // ── WebTransportDatagramDuplexStream (spec §7) ────────────────────────────
   class WebTransportDatagramDuplexStream {
     constructor() {
@@ -184,6 +226,7 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     this._incomingBidi = emptyReadableStream();
     this._incomingUnidi = emptyReadableStream();
     this._closed = false;
+    this._handle = null;
 
     var self = this;
     var readyPromise = new Promise(function(resolve, reject) {
@@ -202,13 +245,14 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     this._ready = readyPromise;
     this._closedPromise = closedPromise;
 
-    // GAP-WEBTRANSPORT срез 2b: `_lumen_webtransport_open` now drives a real
-    // Extended CONNECT (RFC 9220) attempt and reports the outcome as JSON —
-    // `{ok:true,status}` on a 2xx response, `{ok:false,message}` otherwise
-    // (including "not supported in this context", the old always-fail
-    // answer). Streams/datagrams stay stubs until срезы 3-4 give the session
-    // a handle to drive them from; `closed` is deliberately left pending on
-    // success — no lifecycle wiring (срез 5) exists yet to ever settle it.
+    // GAP-WEBTRANSPORT срез 3b: `_lumen_webtransport_open` now also reports
+    // the session `handle` (`{ok:true,status,handle}` on a 2xx response,
+    // `{ok:false,message}` otherwise, including "not supported in this
+    // context", the old always-fail answer) — stashed on `self._handle` so
+    // `createUnidirectionalStream()` can address the live session. Datagrams
+    // and incoming streams stay stubs until срез 4/lifecycle срез 5;
+    // `closed` is deliberately left pending on success — no lifecycle wiring
+    // exists yet to ever settle it.
     setTimeout(function() {
       var result;
       try {
@@ -217,6 +261,7 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
         result = { ok: false, message: 'WebTransport: malformed native response.' };
       }
       if (result && result.ok) {
+        self._handle = result.handle;
         self._readyResolve(undefined);
       } else {
         var err = new WebTransportError({
@@ -248,8 +293,30 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
   WebTransport.prototype.createBidirectionalStream = function() {
     return Promise.reject(notConnectedError());
   };
+  // GAP-WEBTRANSPORT срез 3b: rejects synchronously (session not `ready` yet
+  // or `ready` failed, same as `createBidirectionalStream()`'s unconditional
+  // reject before this slice) when there is no live handle; otherwise opens
+  // a real QUIC uni-stream on it (`_lumen_webtransport_open_uni_stream`,
+  // срез 3a's transport primitive) and resolves a `WritableStream` wrapping
+  // it — writing to that stream still rejects (`unwritableOpenStream()`),
+  // since no write-bytes native exists yet.
   WebTransport.prototype.createUnidirectionalStream = function() {
-    return Promise.reject(notConnectedError());
+    if (this._handle === null) {
+      return Promise.reject(notConnectedError());
+    }
+    var result;
+    try {
+      result = JSON.parse(_lumen_webtransport_open_uni_stream(this._handle));
+    } catch (e) {
+      result = { ok: false, message: 'WebTransport: malformed native response.' };
+    }
+    if (!result || !result.ok) {
+      return Promise.reject(new WebTransportError({
+        source: 'stream',
+        message: (result && result.message) || 'Failed to open a WebTransport unidirectional stream.',
+      }));
+    }
+    return Promise.resolve(unwritableOpenStream());
   };
   WebTransport.prototype.getStats = function() {
     return Promise.resolve({});
@@ -300,9 +367,12 @@ mod tests_v8 {
     }
 
     /// A fetch provider whose `webtransport_connect` answers deterministically
-    /// (`Ok`/`Err`) instead of network I/O — GAP-WEBTRANSPORT срез 2b.
+    /// (`Ok`/`Err`) instead of network I/O — GAP-WEBTRANSPORT срез 2b. Its
+    /// `webtransport_open_uni_stream` (срез 3b) is a fixed `Ok(7)`/keeps the
+    /// trait default, since no test here drives it through a live handle.
     struct StubFetch {
         result: std::sync::Mutex<Option<lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>>>,
+        uni_stream_result: lumen_core::error::Result<u64>,
     }
     impl lumen_core::ext::JsFetchProvider for StubFetch {
         fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
@@ -312,6 +382,12 @@ mod tests_v8 {
             match self.result.lock().unwrap().take() {
                 Some(r) => r,
                 None => Err(lumen_core::error::Error::Network("StubFetch called twice".to_string())),
+            }
+        }
+        fn webtransport_open_uni_stream(&self, _handle: i32) -> lumen_core::error::Result<u64> {
+            match &self.uni_stream_result {
+                Ok(id) => Ok(*id),
+                Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
             }
         }
     }
@@ -324,10 +400,21 @@ mod tests_v8 {
     fn rt_with_webtransport_provider(
         result: lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>,
     ) -> V8JsRuntime {
+        rt_with_webtransport_provider_and_uni_result(result, Ok(7))
+    }
+
+    /// Like [`rt_with_webtransport_provider`], but also controls what
+    /// `webtransport_open_uni_stream` answers — GAP-WEBTRANSPORT срез 3b.
+    fn rt_with_webtransport_provider_and_uni_result(
+        result: lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>,
+        uni_stream_result: lumen_core::error::Result<u64>,
+    ) -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> =
-            Arc::new(StubFetch { result: std::sync::Mutex::new(Some(result)) });
+        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(StubFetch {
+            result: std::sync::Mutex::new(Some(result)),
+            uni_stream_result,
+        });
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
             .unwrap();
         rt
@@ -402,6 +489,28 @@ mod tests_v8 {
         check(&rt, "_wtTestResult");
     }
 
+    /// GAP-WEBTRANSPORT срез 3b: same shape as
+    /// `create_streams_reject_with_web_transport_error_before_ready` for the
+    /// other stream constructor — `createUnidirectionalStream()` now takes a
+    /// different code path (checks `self._handle` instead of unconditionally
+    /// rejecting), so it needs its own coverage that the no-handle-yet case
+    /// still rejects synchronously with the same `WebTransportError` shape.
+    #[test]
+    fn create_unidirectional_stream_rejects_before_ready() {
+        let rt = rt_with_webtransport();
+        rt.eval(
+            "globalThis._wtTestResult = false; \
+            (function() { \
+                var wt = new WebTransport('https://example.com/wt'); \
+                wt.createUnidirectionalStream().catch(function(e) { \
+                    globalThis._wtTestResult = (e instanceof WebTransportError) && e.source === 'session'; \
+                }); \
+            })();",
+        )
+        .unwrap();
+        check(&rt, "_wtTestResult");
+    }
+
     /// GAP-WEBTRANSPORT срез 2b: no `setTimeout` involved here — the native
     /// binding itself is called directly, same workaround
     /// `websocket_connect_fail_fires_onerror` uses ("we can't pump the
@@ -430,6 +539,72 @@ mod tests_v8 {
             lumen_core::JsValue::String(s) => {
                 assert!(s.contains(r#""ok":true"#), "expected ok:true, got {s}");
                 assert!(s.contains("200"), "expected status 200, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// GAP-WEBTRANSPORT срез 3b: the JSON `_lumen_webtransport_open` reports
+    /// on success now also carries the session `handle`, so
+    /// `createUnidirectionalStream()` can address it later.
+    #[test]
+    fn native_open_reports_handle_on_success() {
+        let rt = rt_with_webtransport_provider(Ok(lumen_core::ext::JsWebTransportSession {
+            handle: 42,
+            status: 200,
+        }));
+        let r = rt.eval("_lumen_webtransport_open('https://example.com/wt')").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""handle":42"#), "expected handle 42, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// GAP-WEBTRANSPORT срез 3b: direct native-call coverage for
+    /// `_lumen_webtransport_open_uni_stream`, same "no `setTimeout` pumping
+    /// in this harness" workaround as the `_lumen_webtransport_open` tests
+    /// above.
+    #[test]
+    fn native_open_uni_stream_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_open_uni_stream(0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_open_uni_stream_reports_stream_id_on_success() {
+        let rt = rt_with_webtransport_provider_and_uni_result(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 0, status: 200 }),
+            Ok(6),
+        );
+        let r = rt.eval("_lumen_webtransport_open_uni_stream(0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":true"#), "expected ok:true, got {s}");
+                assert!(s.contains(r#""streamId":6"#), "expected streamId 6, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_open_uni_stream_reports_provider_error_message() {
+        let rt = rt_with_webtransport_provider_and_uni_result(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 0, status: 200 }),
+            Err(lumen_core::error::Error::Network("WebTransport session not found".to_string())),
+        );
+        let r = rt.eval("_lumen_webtransport_open_uni_stream(0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+                assert!(s.contains("session not found"), "expected the message, got {s}");
             }
             other => panic!("expected a String, got {other:?}"),
         }

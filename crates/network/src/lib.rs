@@ -1004,10 +1004,21 @@ impl AbortWatchdog {
 /// читаемыми (без него clippy::type_complexity ругается на `Option<&mut dyn …>`).
 type ChunkSink<'a> = &'a mut dyn FnMut(&[u8]);
 
-/// A live WebTransport session — the confirmed QUIC driver plus the Extended
-/// CONNECT stream id — keyed by handle in [`HttpClient::webtransport_sessions`].
-type WebTransportSessions =
-    Arc<std::sync::Mutex<std::collections::HashMap<i32, (h3::request_driver::RequestDriver<h3::udp::UdpDatagram>, u64)>>>;
+/// A live WebTransport session — the confirmed QUIC driver, the Extended
+/// CONNECT stream id (doubles as the WebTransport session id, RFC 9220 §3),
+/// the peer's advertised unidirectional stream flow-control window, and the
+/// next client-initiated uni-stream number to allocate
+/// ([`h3::client_transport::h3_webtransport_open_uni_stream_on_driver`]
+/// owns that number's meaning) — keyed by handle in
+/// [`HttpClient::webtransport_sessions`].
+struct WebTransportSession {
+    driver: h3::request_driver::RequestDriver<h3::udp::UdpDatagram>,
+    session_id: u64,
+    peer_initial_max_stream_data_uni: u64,
+    next_uni_stream_number: u64,
+}
+
+type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, WebTransportSession>>>;
 
 /// Как [`ChunkSink`], но порция сопровождается URL hop-а, чьё тело стримится.
 ///
@@ -4607,12 +4618,40 @@ impl JsFetchProvider for HttpClient {
             *next += 1;
             id
         };
-        self.webtransport_sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(handle, (driver, stream_id));
+        self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            handle,
+            WebTransportSession {
+                driver,
+                session_id: stream_id,
+                peer_initial_max_stream_data_uni: config.initial_max_stream_data_uni,
+                next_uni_stream_number: 0,
+            },
+        );
 
         Ok(lumen_core::ext::JsWebTransportSession { handle, status: head.status })
+    }
+
+    /// GAP-WEBTRANSPORT срез 3b: opens the first client-initiated
+    /// unidirectional QUIC stream for the session `handle` names
+    /// ([`h3::client_transport::h3_webtransport_open_uni_stream_on_driver`],
+    /// срез 3a) and hands its QUIC stream id back — the actual write-bytes
+    /// primitive is a later slice, this one only proves the session handle
+    /// reaches a live driver and the stream opens on the wire.
+    fn webtransport_open_uni_stream(&self, handle: i32) -> Result<u64> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let uni_stream_number = session.next_uni_stream_number;
+        let stream_id = h3::client_transport::h3_webtransport_open_uni_stream_on_driver(
+            &mut session.driver,
+            uni_stream_number,
+            session.peer_initial_max_stream_data_uni,
+            session.session_id,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport open uni stream: {e}")))?;
+        session.next_uni_stream_number += 1;
+        Ok(stream_id)
     }
 }
 
