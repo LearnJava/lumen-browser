@@ -4944,6 +4944,31 @@ impl JsFetchProvider for HttpClient {
         )
         .map_err(|e| Error::Network(format!("WebTransport poll incoming datagrams: {e}")))
     }
+
+    /// GAP-WEBTRANSPORT срез 5: `WebTransport.prototype.close(closeInfo)`'s
+    /// transport primitive — sends a `CLOSE_WEBTRANSPORT_SESSION` capsule
+    /// ([`h3::client_transport::h3_webtransport_close_session_on_driver`]) and
+    /// unconditionally drops `handle`'s entry from
+    /// [`Self::webtransport_sessions`] — a closed session has no further use
+    /// for its driver regardless of whether the capsule reached the wire, and
+    /// `close()` never surfaces a failure back to script (spec §5.4: it
+    /// neither throws nor returns a rejectable value), so the caller (the JS
+    /// shim, via `_lumen_webtransport_close_session`) only needs this to have
+    /// no observable effect on a session that is already gone.
+    fn webtransport_close_session(&self, handle: i32, close_code: u32, reason: &str) -> Result<()> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut session) = sessions.remove(&handle) else {
+            return Err(Error::Network("WebTransport session not found".to_string()));
+        };
+        let session_id = session.session_id;
+        h3::client_transport::h3_webtransport_close_session_on_driver(
+            &mut session.driver,
+            session_id,
+            close_code,
+            reason.as_bytes(),
+        )
+        .map_err(|e| Error::Network(format!("WebTransport close session: {e}")))
+    }
 }
 
 impl HttpClient {

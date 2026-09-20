@@ -86,6 +86,13 @@
         /// instead of spinning.
         poll_incoming_datagrams_results:
             std::sync::Mutex<std::collections::VecDeque<lumen_core::error::Result<Vec<Vec<u8>>>>>,
+        /// GAP-WEBTRANSPORT срез 5: same shape as `write_stream_result`, for
+        /// `webtransport_close_session`.
+        close_session_result: lumen_core::error::Result<()>,
+        /// The `(handle, closeCode, reason)` triple the last
+        /// `webtransport_close_session` call received, if any — same purpose
+        /// as `last_write`.
+        last_close_session: std::sync::Mutex<Option<(i32, u32, String)>>,
     }
     impl lumen_core::ext::JsFetchProvider for StubFetch {
         fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
@@ -195,6 +202,18 @@
                 None => Ok(Vec::new()),
             }
         }
+        fn webtransport_close_session(
+            &self,
+            handle: i32,
+            close_code: u32,
+            reason: &str,
+        ) -> lumen_core::error::Result<()> {
+            *self.last_close_session.lock().unwrap() = Some((handle, close_code, reason.to_string()));
+            match &self.close_session_result {
+                Ok(()) => Ok(()),
+                Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
+            }
+        }
     }
 
     /// Unlike [`rt_with_webtransport`], does not call `install_webtransport_v8`
@@ -246,6 +265,8 @@
             send_datagram_result: Ok(()),
             last_send_datagram: std::sync::Mutex::new(None),
             poll_incoming_datagrams_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            close_session_result: Ok(()),
+            last_close_session: std::sync::Mutex::new(None),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -632,6 +653,8 @@
             send_datagram_result: Ok(()),
             last_send_datagram: std::sync::Mutex::new(None),
             poll_incoming_datagrams_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            close_session_result: Ok(()),
+            last_close_session: std::sync::Mutex::new(None),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1045,6 +1068,8 @@
             send_datagram_result: Ok(()),
             last_send_datagram: std::sync::Mutex::new(None),
             poll_incoming_datagrams_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            close_session_result: Ok(()),
+            last_close_session: std::sync::Mutex::new(None),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1290,4 +1315,125 @@
             rt.eval("_lumen_tick_timers()").unwrap();
         }
         check(&rt, "_wtDatagramDone");
+    }
+
+    /// GAP-WEBTRANSPORT срез 5: direct native-call coverage for
+    /// `_lumen_webtransport_close_session`, same "no provider → unsupported"
+    /// shape as `native_close_stream_reports_unsupported_with_no_provider`.
+    #[test]
+    fn native_close_session_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_close_session(0, 7, 'bye')").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: `close({closeCode, reason})` after `ready` reaches
+    /// `_lumen_webtransport_close_session` with the session's handle and the
+    /// caller's own `closeCode`/`reason`, and fulfills `closed` with that same
+    /// pair — the primary lifecycle contract срез 5 adds (spec §5.4: a
+    /// locally initiated close always fulfills `closed`, it never rejects).
+    #[test]
+    fn close_reaches_the_native_and_fulfills_closed_with_the_same_close_info() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        rt.eval(
+            "globalThis._wtCloseInfo = null; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { \
+                globalThis._wt.close({ closeCode: 42, reason: 'bye' }); \
+                return globalThis._wt.closed; \
+            }).then(function(info) { \
+                globalThis._wtCloseInfo = info; \
+            });",
+        )
+        .unwrap();
+        rt.eval("_lumen_tick_timers()").unwrap();
+        check(&rt, "_wtCloseInfo !== null && _wtCloseInfo.closeCode === 42 && _wtCloseInfo.reason === 'bye'");
+        let last = stub.last_close_session.lock().unwrap().clone().expect("close was recorded");
+        assert_eq!(last, (3, 42, "bye".to_string()));
+    }
+
+    /// `close()` with no `closeInfo` at all defaults to `{closeCode: 0, reason: ''}`
+    /// (spec §5.4's WebIDL dictionary defaults), not a thrown error or a
+    /// `null`/`undefined` reaching the native call.
+    #[test]
+    fn close_with_no_argument_defaults_close_code_and_reason() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        rt.eval(
+            "globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { globalThis._wt.close(); });",
+        )
+        .unwrap();
+        rt.eval("_lumen_tick_timers()").unwrap();
+        let last = stub.last_close_session.lock().unwrap().clone().expect("close was recorded");
+        assert_eq!(last, (3, 0, String::new()));
+    }
+
+    /// `close({reason})` with a `reason` longer than 1024 UTF-8 bytes throws a
+    /// `TypeError` synchronously (spec §5.4) rather than truncating or
+    /// rejecting `closed`.
+    #[test]
+    fn close_rejects_a_reason_over_1024_utf8_bytes() {
+        let rt = rt_with_webtransport();
+        check(
+            &rt,
+            "(function() { \
+                var wt = new WebTransport('https://example.com/wt'); \
+                var longReason = new Array(1026).join('a'); \
+                try { wt.close({ reason: longReason }); return false; } \
+                catch (e) { return e instanceof TypeError; } \
+            })()",
+        );
+    }
+
+    /// Closing before `ready` ever settles still fulfills `closed` with the
+    /// caller's own `closeInfo` — closing does not wait for the session to
+    /// finish connecting, and a session that never got a handle at all is not
+    /// the same as one whose `ready` explicitly failed (`_readyFailed`, tested
+    /// separately by every `openIncoming*`/`datagrams` "stops on close" test).
+    #[test]
+    fn close_before_ready_settles_still_fulfills_closed() {
+        let rt = rt_with_webtransport();
+        rt.eval(
+            "globalThis._wtCloseInfo = null; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.close({ closeCode: 5, reason: 'early' }); \
+            globalThis._wt.closed.then(function(info) { \
+                globalThis._wtCloseInfo = info; \
+            });",
+        )
+        .unwrap();
+        check(&rt, "_wtCloseInfo !== null && _wtCloseInfo.closeCode === 5 && _wtCloseInfo.reason === 'early'");
+    }
+
+    /// A failed `ready` (no `fetch_provider` at all, so the native always
+    /// answers "not supported") must keep rejecting `closed` — `close()`
+    /// called afterward must not paper over that with a fulfillment.
+    #[test]
+    fn close_after_ready_failed_does_not_override_the_rejection() {
+        let rt = rt_with_webtransport();
+        rt.eval(
+            "globalThis._wtClosedRejected = false; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.catch(function() {}); \
+            globalThis._wt.closed.catch(function(e) { \
+                globalThis._wtClosedRejected = e instanceof WebTransportError; \
+                globalThis._wt.close(); \
+            });",
+        )
+        .unwrap();
+        rt.eval("_lumen_tick_timers()").unwrap();
+        check(&rt, "_wtClosedRejected");
     }

@@ -46,6 +46,7 @@ pub(crate) fn install_webtransport_v8(
     let read_incoming_bidi_fetch_provider = fetch_provider.clone();
     let send_datagram_fetch_provider = fetch_provider.clone();
     let poll_incoming_datagrams_fetch_provider = fetch_provider.clone();
+    let close_session_fetch_provider = fetch_provider.clone();
 
     // GAP-WEBTRANSPORT срез 3b: `_lumen_webtransport_open(url)` now also
     // reports the session `handle` `webtransport_connect` allocated — срез
@@ -355,6 +356,28 @@ pub(crate) fn install_webtransport_v8(
         }
     });
     rt.register_native("_lumen_webtransport_poll_incoming_datagrams", poll_incoming_datagrams)?;
+
+    // GAP-WEBTRANSPORT срез 5: `WebTransport.prototype.close(closeInfo)`'s
+    // transport primitive — sends a `CLOSE_WEBTRANSPORT_SESSION` capsule
+    // (`webtransport_close_session`, `h3_webtransport_close_session_on_driver`)
+    // and drops the session's Rust-side state. Unlike every native above,
+    // its JSON result is never inspected by the shim — `close()` neither
+    // throws nor rejects per spec (§5.4), so a failure here (e.g. the session
+    // was already gone) has no observable effect on script.
+    let close_session = into_v8_fn3(move |handle: i32, close_code: f64, reason: String| -> String {
+        let Some(ref provider) = close_session_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_close_session(handle, close_code as u32, &reason) {
+            Ok(()) => r#"{"ok":true}"#.to_string(),
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_close_session", close_session)?;
 
     rt.eval(WEBTRANSPORT_SHIM)?;
     Ok(())
@@ -1011,12 +1034,59 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
   WebTransport.prototype.getStats = function() {
     return Promise.resolve({});
   };
+  // GAP-WEBTRANSPORT срез 5: byte length of `str`'s UTF-8 encoding, used to
+  // enforce `close()`'s 1024-byte cap on `reason` (spec §5.4) without a
+  // `TextEncoder` dependency — a manual UTF-16-surrogate-aware count.
+  function utf8ByteLength(str) {
+    var len = 0;
+    for (var i = 0; i < str.length; i++) {
+      var code = str.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff && i + 1 < str.length) {
+        var next = str.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          len += 4; // surrogate pair → one 4-byte UTF-8 code point
+          i++;
+          continue;
+        }
+      }
+      if (code < 0x80) len += 1;
+      else if (code < 0x800) len += 2;
+      else len += 3;
+    }
+    return len;
+  }
+
+  // GAP-WEBTRANSPORT срез 5: `WebTransport.prototype.close(closeInfo)` (spec
+  // §5.4 "Closing a WebTransport session"). Per spec this never throws for a
+  // bad `closeInfo` shape (WebIDL dictionary defaults apply) except the
+  // explicit 1024-byte `reason` cap, and never rejects — `closed` is the only
+  // observable outcome. `closeCode` is coerced the way WebIDL's `unsigned
+  // long` would (`>>> 0`, wrapping rather than throwing); `reason` defaults
+  // to `''`.
   WebTransport.prototype.close = function(closeInfo) {
     if (this._closed) return;
+    closeInfo = closeInfo || {};
+    var closeCode = typeof closeInfo.closeCode === 'number' ? (closeInfo.closeCode >>> 0) : 0;
+    var reason = typeof closeInfo.reason === 'string' ? closeInfo.reason : '';
+    if (utf8ByteLength(reason) > 1024) {
+      throw new TypeError("Failed to execute 'close' on 'WebTransport': The reason must not exceed 1024 UTF-8 bytes.");
+    }
     this._closed = true;
+    if (this._handle !== null) {
+      // Best-effort — the capsule's fate has no bearing on `closed`'s value
+      // below, since closing was locally initiated and its outcome is known
+      // regardless of whether the peer ever sees the capsule.
+      try {
+        _lumen_webtransport_close_session(this._handle, closeCode, reason);
+      } catch (e) { /* fire-and-forget, see doc above */ }
+    }
     // The session was never open — closing early does not change the
-    // rejection `ready`/`closed` already carry (§5.4 "Closing a
-    // WebTransport session").
+    // rejection `ready`/`closed` already carry (§5.4). Otherwise a locally
+    // initiated close always fulfills `closed` with the caller's own
+    // `closeInfo`, since a client always knows the outcome of its own close.
+    if (!this._readyFailed) {
+      this._closedResolve({ closeCode: closeCode, reason: reason });
+    }
   };
 
   Object.defineProperty(globalThis, 'WebTransport', {

@@ -371,8 +371,21 @@ lumen-js --all-targets --features lumen-js/v8-backend -D warnings` и
 `cargo check --workspace` зелёные. Не сделано: lifecycle `closed`/
 `close(info)` на сессии (срез 5) — последний оставшийся под-срез задачи.
 
-### Срез 5 — S — Lifecycle: closed/close(info)/сессионные коды ошибок
-Корректный `closed` промис, `close({closeCode, reason})`, RFC 9114/9220 error mapping.
+### Срез 5 — S — done (2026-09-20, P1) — Lifecycle: closed/close(info)
+Локально инициированное закрытие живое: `close(closeInfo)` отправляет
+`CLOSE_WEBTRANSPORT_SESSION`-капсулу (draft-ietf-webtrans-http3 §4.5, тип
+`0x2843`, `crates/network/src/h3/capsule.rs`) на Extended CONNECT stream
+сессии и завершает его FIN'ом (`h3_webtransport_close_session_on_driver`),
+затем безусловно резолвит `closed` собственными `{closeCode, reason}` —
+локально инициированное закрытие не может не знать своего исхода (спека
+§5.4). `reason` капается на 1024 UTF-8-байта (`TypeError` иначе, свой
+`utf8ByteLength` вместо `TextEncoder`). Подробности — ROADMAP.md
+`P3-webtransport`, ревизия «срез 5».
+
+Остаток (следующий под-срез без номера): обнаружение
+`CLOSE_WEBTRANSPORT_SESSION`, присланной **пиром**, и абрупт-потери
+соединения — `closed` сейчас settles только от собственного `close()` или
+провала `ready`, реакции на закрытие сессии со стороны сервера ещё нет.
 
 ## Tests
 - Юнит (`lumen-js`): наличие классов, `new WebTransport('https://…')` не бросает синхронно,
@@ -396,5 +409,5 @@ lumen-js --all-targets --features lumen-js/v8-backend -D warnings` и
 - [x] Incoming unidirectional streams — обнаружение + header-парсинг + `incomingUnidirectionalStreams` (срез 4d, 2026-09-20).
 - [x] Incoming bidirectional streams — та же машинерия обнаружения + регистрация send-half под id, который выбрал пир (срез 4e, 2026-09-20).
 - [x] Datagrams — приём и отправка через RFC 9297 §2.1 quarter stream id, `datagrams.readable`/`.writable` живые (срез datagrams-b, 2026-09-20).
-- [ ] Lifecycle (срез 5) — остаётся.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read+incoming uni+incoming bidi+datagrams живые, lifecycle ещё стаб).
+- [x] Lifecycle — `close(closeInfo)`/`closed` для локально инициированного закрытия (срез 5, 2026-09-20). Обнаружение закрытия со стороны пира — открытый под-срез.
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready`/uni+bidi write+read/incoming uni+bidi/datagrams/local `close()` живые; обнаружение закрытия пиром — открытый остаток).

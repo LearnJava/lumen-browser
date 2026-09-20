@@ -783,6 +783,7 @@
 
 pub mod ack;
 pub mod alt_svc;
+pub mod capsule;
 pub mod client_bootstrap;
 pub mod client_pool;
 pub mod client_request;

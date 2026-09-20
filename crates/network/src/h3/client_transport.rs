@@ -991,6 +991,47 @@ pub fn h3_webtransport_reset_uni_stream_on_driver<T: DatagramTransport>(
     driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
 }
 
+/// Locally initiates closing a WebTransport session (draft-ietf-webtrans-http3
+/// §4.5, GAP-WEBTRANSPORT срез 5) — `WebTransport.prototype.close(closeInfo)`'s
+/// transport primitive.
+///
+/// Writes a `CLOSE_WEBTRANSPORT_SESSION` capsule
+/// ([`super::capsule::encode_close_webtransport_session`]) to the session's
+/// Extended CONNECT stream (`session_id`, the same id
+/// [`h3_extended_connect_on_driver`] returned) and finishes that stream's send
+/// half (RFC 9000 §3.1, STREAM FIN) — the capsule is the last thing the client
+/// ever sends on this stream, so an ordinary FIN (rather than a RESET_STREAM)
+/// is enough; there is no further client-initiated activity on it to abort.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::Header`] if the capsule's own length overflowed
+/// the varint range (unreachable — `reason` is capped at 1024 bytes before
+/// this is ever called), [`WebTransportStreamError::UnknownStream`] if
+/// `session_id` names a stream this driver never opened, or
+/// [`WebTransportStreamError::Driver`] if the flushing turn fails.
+pub fn h3_webtransport_close_session_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    session_id: u64,
+    close_code: u32,
+    reason: &[u8],
+) -> Result<(), WebTransportStreamError> {
+    let capsule = super::capsule::encode_close_webtransport_session(close_code, reason)
+        .map_err(WebTransportStreamError::Header)?;
+
+    let send = driver
+        .turn_mut()
+        .pump_mut()
+        .dispatch_mut()
+        .streams_mut()
+        .send_stream_mut(session_id)
+        .ok_or(WebTransportStreamError::UnknownStream(session_id))?;
+    send.write(&capsule);
+    send.finish();
+
+    driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
+}
+
 /// Sends a QUIC DATAGRAM frame (RFC 9221) carrying `data` on the WebTransport
 /// session `session_id` names — `WebTransportDatagramDuplexStream.writable`'s
 /// transport primitive.
@@ -1500,6 +1541,45 @@ mod tests {
             .expect("writes to the open bidi stream");
         h3_webtransport_close_uni_stream_on_driver(&mut driver, stream_id)
             .expect("closes the bidi stream's send half");
+    }
+
+    #[test]
+    fn webtransport_close_session_writes_the_close_capsule_and_fins_the_stream() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        // `extended_connect_driver` builds a bare driver, not an already-open
+        // Extended CONNECT stream — open one directly the way
+        // `RequestDispatch::open_extended_connect` would (send half only, no
+        // FIN), standing in for the session stream
+        // `h3_webtransport_close_session_on_driver` writes the close capsule
+        // to.
+        driver.turn_mut().pump_mut().dispatch_mut().streams_mut().open_send_stream(0, 1 << 20);
+        h3_webtransport_close_session_on_driver(&mut driver, 0, 7, b"bye")
+            .expect("writes the capsule and FINs the session stream");
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(0)
+            .expect("send half exists");
+        let expected = super::super::capsule::encode_close_webtransport_session(7, b"bye").unwrap();
+        // No public byte-accessor on `SendStream` beyond the total offset —
+        // the capsule's own bytes are covered by `capsule::tests`; here it is
+        // enough to confirm the driver queued exactly the capsule's length
+        // and moved past `Ready` (a FIN was requested).
+        assert_eq!(send.write_offset(), expected.len() as u64);
+        assert_ne!(send.state(), SendState::Ready);
+    }
+
+    #[test]
+    fn webtransport_close_session_rejects_an_unknown_session_id() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let err = h3_webtransport_close_session_on_driver(&mut driver, 999, 0, b"")
+            .unwrap_err();
+        assert!(matches!(err, WebTransportStreamError::UnknownStream(id) if id == 999));
     }
 
     #[test]
