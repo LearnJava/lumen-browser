@@ -100,6 +100,32 @@ pub(crate) struct FetchError {
     pub(crate) attempted_url: String,
 }
 
+/// Резолвит `src` относительно `resolve_base` и, если владелец фрейма несёт
+/// `upgrade-insecure-requests`, апгрейжит `http:` в `https:`
+/// (`csp_enforce::upgrade_navigation_url`, UIR §4.1 шаг 5) — GAP-CSPENF срез
+/// 52. Пустой/`about:`/`data:`/`javascript:` `src` возвращается КАК ЕСТЬ:
+/// `frame_src_check` и [`fetch_iframe_source`] сами узнают эти формы и не
+/// уходят в сеть, а резолв пустой строки против `resolve_base` дал бы адрес
+/// самого владельца (`ResourceBase::resolve("")` — пустая ссылка резолвится
+/// в саму базу, RFC 3986 §5.3), что подменило бы «фрейм без содержимого»
+/// сетевым запросом к странице-хозяину.
+fn maybe_upgrade_frame_src(
+    csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+    src: &str,
+    resolve_base: &ResourceBase,
+) -> String {
+    let lowered = src.trim_start().to_ascii_lowercase();
+    if lowered.is_empty()
+        || lowered.starts_with("about:")
+        || lowered.starts_with("data:")
+        || lowered.starts_with("javascript:")
+    {
+        return src.to_owned();
+    }
+    let resolved = resolve_base.resolve_str(src);
+    crate::csp_enforce::upgrade_navigation_url(csp_gate, &resolved)
+}
+
 /// Получить исходник под-документа для `src`-фрейма: разрешить относительно
 /// `base`, файл прочитать с диска, URL скачать через subresource-клиент с
 /// `RequestDestination::Document` (тот же mixed-content/SW-интерсептор, что у
@@ -1944,17 +1970,31 @@ pub(crate) fn spawn_frame(
         // прежнем документе (для первичной вставки — на пустом `about:blank`,
         // как если бы `src` не было вовсе), код уже отработал побочные эффекты.
         Some(None) => None,
+        // GAP-CSPENF срез 52: `src`/`href` апгрейжены
+        // (`upgrade_navigation_url`, UIR §4.1 шаг 5) ДО `frame_src_check` —
+        // тот же порядок, что и у `frame-src` (шаг 6) выше по этой дорожке.
+        // `maybe_upgrade_frame_src` оставляет пустой/`about:`/`data:`/
+        // `javascript:` src нетронутым: и `frame_src_check`, и
+        // `fetch_iframe_source` сами решают, что с ним делать (пустой/
+        // `about:blank` — молча пустой документ, не сеть), а резолв в
+        // абсолютный `http(s)`-адрес превратил бы пустую строку в адрес
+        // РОДИТЕЛЯ (`ResourceBase::resolve("")` возвращает саму базу) — фрейм
+        // бы засетевился на страницу-хозяина вместо пустого документа.
         None => match dest {
-            Some((href, nav_base)) => Some(
-                frame_src_check(href, nav_base)
-                    .map(Err)
-                    .unwrap_or_else(|| fetch_iframe_source(href, nav_base, sink, cookie_jar.clone())),
-            ),
+            Some((href, nav_base)) => {
+                let href = maybe_upgrade_frame_src(csp_gate.as_ref(), href, nav_base);
+                Some(
+                    frame_src_check(&href, nav_base)
+                        .map(Err)
+                        .unwrap_or_else(|| fetch_iframe_source(&href, nav_base, sink, cookie_jar.clone())),
+                )
+            }
             None if info.srcdoc.is_some() => None,
             None => info.src.as_deref().map(|src| {
-                frame_src_check(src, base)
+                let src = maybe_upgrade_frame_src(csp_gate.as_ref(), src, base);
+                frame_src_check(&src, base)
                     .map(Err)
-                    .unwrap_or_else(|| fetch_iframe_source(src, base, sink, cookie_jar.clone()))
+                    .unwrap_or_else(|| fetch_iframe_source(&src, base, sink, cookie_jar.clone()))
             }),
         },
     };

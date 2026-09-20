@@ -2956,4 +2956,65 @@ lumen-network --all-targets -- -D warnings` — чисто.
 дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
 `originalPolicy`.
 
+## Срез 52 (2026-09-20, `p6-gap-cspenf-srez52`) — `upgrade-insecure-requests` для навигаций (шаг 5 UIR §4.1)
+
+Продолжение среза 51: закрывает URL-часть (UIR §4.1 шаг 5, «upgrade the
+request's URL» — переписать `http:` в `https:` ДО того, как навигационный
+гейт того же документа увидит адрес) для четырёх навигационных путей,
+каждый из которых уже читает `document_csp_policy` для СВОЕЙ директивы
+(`navigate-to`/`form-action`/`frame-src`):
+
+- **Клик по ссылке** (`click.rs::navigate_to_link_blocked`) — гейт теперь
+  сравнивает АПГРЕЙЖЕННЫЙ адрес, а не сырой `resolve_href`; новый метод
+  `Self::resolve_and_upgrade_href` переиспользуется во всех трёх ветках
+  диспатча ниже (`_blank`, именованный target/новая вкладка, обычная
+  навигация в том же документе) — без него проверка и реальный переход
+  смотрели бы на разные URL.
+- **JS-навигация** (`location.href=`/`.assign()`/`.replace()`,
+  `about_to_wait.rs`) — `js_navigate_to_blocked` переименован в
+  `js_navigate_to_gate` и вместо `bool` возвращает `Option<String>`:
+  `None` — заблокировано (`securitypolicyviolation` уже отправлен),
+  `Some(url)` — адрес, апгрейженный ДО гейта, которым и вызывается
+  `resolve_js_navigation`. `window.open()`
+  (`window_open_navigate_to_blocked`) этим срезом не тронут — отдельный,
+  пятый навигационный гейт, вне скоупа.
+- **Отправка формы** (`form_submit.rs`) — обе ветки (`get`/POST) апгрейжают
+  `resolved` перед `form_action_navigation_blocked`.
+- **`<iframe>` вставка/навигация** (`frames.rs::spawn_frame`) — новая
+  свободная функция `maybe_upgrade_frame_src` резолвит и апгрейжит
+  `src`/`href` ДО `frame_src_check`, но нарочно НЕ трогает пустой/
+  `about:`/`data:`/`javascript:` src: резолв пустой строки против базы
+  родителя вернул бы адрес самого родителя (RFC 3986 §5.3 — пустая ссылка
+  резолвится в саму базу), и фрейм без содержимого начал бы сетеваться на
+  страницу-хозяина вместо пустого документа.
+
+Общая переиспользуемая часть — `csp_enforce::upgrade_navigation_url`,
+обёртка над `upgrade_insecure_url` (срез 43) над уже прочитанным
+`document_csp_policy`-гейтом; три из четырёх мест выше вызывают её
+напрямую, `js_navigate_to_gate` — `upgrade_insecure_url` без обёртки (уже
+держит `policy` расплетённым из гейта).
+
+Не покрыто этим срезом: `window.open()` (`window_open_navigate_to_blocked`)
+и навигация ссылки ВНУТРИ фрейма (`frame_links.rs::frame_link_click`,
+срез 36) — оба читают ту же политику для `navigate-to`, но остаются
+пятым/шестым навигационным гейтом со своим деревом ветвления, не
+покрытым этим срезом; заголовок `Upgrade-Insecure-Requests: 1` на
+навигационном запросе и «upgrade insecure navigations set» (UIR §4.1
+шаги 1-2) — тоже, как и назвал срез 51. Остаток общего списка дорожки не
+изменился: `report-to`, `manifest-src`, честная per-policy
+`originalPolicy`.
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen
+csp` — 99 passed; `... frame` — 115 passed; `... navigate` — 15 passed;
+`... form` — 151 passed (все три полных набора без единого нового
+падения). `cargo clippy -p lumen-shell --all-targets --features v8 -- -D
+warnings` — чисто. `scripts/scoped-test.sh` (14 крейтов, обратные
+зависимости `lumen-shell`) — один красный тест,
+`lumen-driver::snapshot_cpu::cpu_snapshots_match_references`, тот же
+7-файловый байт-дельта-набор, что и известный несвязанный дрейф
+[BUG-1008](BUG-1008-OPEN.md) (`text-rendering`/`canvas-2d`/
+`list-markers`/`forms`/`multiple-backgrounds`/`scrollbar-rendering`/
+`final`) — воспроизводится и на чистом `main` без этой ветки, не
+регрессия этого среза.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/

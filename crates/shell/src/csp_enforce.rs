@@ -479,6 +479,24 @@ pub(crate) fn upgrade_insecure_url(policies: &[CspPolicy], url: &str) -> Option<
     Some(format!("https:{rest}"))
 }
 
+/// [`upgrade_insecure_url`] over an already-fetched `document_csp_policy` gate
+/// tuple, falling back to `resolved` unchanged when there is no policy or
+/// nothing to rewrite — GAP-CSPENF срез 52 shares this across every
+/// navigation gate that already reads the same tuple for its own directive
+/// (`navigate-to` in `click.rs`/`about_to_wait.rs`, `form-action` in
+/// `form_submit.rs`, `frame-src` in `frames.rs`), so the upgrade (UIR §4.1
+/// step 5) runs ahead of that gate (step 6) without re-deriving the order at
+/// each call site.
+pub(crate) fn upgrade_navigation_url(
+    csp_gate: Option<&(Vec<CspPolicy>, String)>,
+    resolved: &str,
+) -> String {
+    match csp_gate {
+        Some((policy, _)) => upgrade_insecure_url(policy, resolved).unwrap_or_else(|| resolved.to_owned()),
+        None => resolved.to_owned(),
+    }
+}
+
 /// `true` if `img-src` (or `default-src`) forbids fetching `url` — срез 4.
 /// Absence of a policy is not checked here (the caller only calls this when
 /// a policy exists); a `url` that fails to parse is treated as allowed — the
@@ -833,6 +851,35 @@ mod tests {
             upgrade_insecure_url(&policies, "http://example.com/x.png"),
             Some("https://example.com/x.png".to_owned())
         );
+    }
+
+    /// GAP-CSPENF срез 52: `upgrade_navigation_url` — обёртка над
+    /// `upgrade_insecure_url`, которую разделяют все навигационные гейты
+    /// (`navigate-to`/`form-action`/`frame-src`) — переписывает `http` в
+    /// `https`, когда директива есть.
+    #[test]
+    fn upgrade_navigation_url_rewrites_when_directive_present() {
+        let p = lumen_network::csp::parse_csp_header("upgrade-insecure-requests");
+        let gate = (vec![p], "upgrade-insecure-requests".to_owned());
+        assert_eq!(
+            upgrade_navigation_url(Some(&gate), "http://example.com/next"),
+            "https://example.com/next"
+        );
+    }
+
+    /// Нет гейта (документ без CSP) — адрес возвращается как есть.
+    #[test]
+    fn upgrade_navigation_url_no_gate_leaves_url_alone() {
+        assert_eq!(upgrade_navigation_url(None, "http://example.com/next"), "http://example.com/next");
+    }
+
+    /// Гейт есть, но без `upgrade-insecure-requests` — адрес не трогается,
+    /// `unwrap_or_else` откатывается на `resolved` без паники.
+    #[test]
+    fn upgrade_navigation_url_gate_without_directive_leaves_url_alone() {
+        let p = lumen_network::csp::parse_csp_header("navigate-to 'self'");
+        let gate = (vec![p], "navigate-to 'self'".to_owned());
+        assert_eq!(upgrade_navigation_url(Some(&gate), "http://example.com/next"), "http://example.com/next");
     }
 
     /// GAP-CSPENF срез 5: a document with no `<meta>` CSP still has a policy

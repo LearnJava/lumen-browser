@@ -1775,9 +1775,9 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.navigate_replace(PageSource::Static { html, url: current });
                         }
-                    } else if !self.js_navigate_to_blocked(&url) {
+                    } else if let Some(resolved) = self.js_navigate_to_gate(&url) {
                         // BUG-293: same file://-resolution + web→file guard as popups.
-                        match resolve_js_navigation(&url, &self.source) {
+                        match resolve_js_navigation(&resolved, &self.source) {
                             Ok(source) => self.navigate_to(source),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
@@ -1790,8 +1790,8 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.navigate_replace(PageSource::Static { html, url: current });
                         }
-                    } else if !self.js_navigate_to_blocked(&url) {
-                        match resolve_js_navigation(&url, &self.source) {
+                    } else if let Some(resolved) = self.js_navigate_to_gate(&url) {
+                        match resolve_js_navigation(&resolved, &self.source) {
                             Ok(source) => self.navigate_replace(source),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
@@ -1815,10 +1815,17 @@ impl Lumen {
         }
     }
 
-    /// `true` if the document's `navigate-to` policy blocks a JS-initiated
+    /// `None` if the document's `navigate-to` policy blocks a JS-initiated
     /// navigation to `url` (`location.href=`/`.assign()`/`.replace()`) —
-    /// GAP-CSPENF срез 34. Same shape as `click.rs::navigate_to_link_blocked`
-    /// (срез 33): one document lock, gate, fire `securitypolicyviolation`.
+    /// GAP-CSPENF срез 34, `Some` returns the address to actually navigate to
+    /// afterwards. Same shape as `click.rs::navigate_to_link_blocked` (срез
+    /// 33): one document lock, gate, fire `securitypolicyviolation`.
+    ///
+    /// GAP-CSPENF срез 52: the returned address has
+    /// `upgrade_navigation_url` already applied (UIR §4.1 step 5 ahead of the
+    /// gate's step 6, same order as every other navigation gate in this
+    /// crate) — the caller must navigate to it, not to the raw `url`, or the
+    /// check above and the real navigation would disagree.
     ///
     /// `url` already comes out of the JS shim resolved
     /// (`_lumen_navigate_or_fragment`'s `new URL(raw, base).href`), so
@@ -1826,9 +1833,9 @@ impl Lumen {
     /// anyway so an unparseable `url` the shim passed through raw is handled
     /// the same way the click path handles one.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    fn js_navigate_to_blocked(&mut self, url: &str) -> bool {
+    fn js_navigate_to_gate(&mut self, url: &str) -> Option<String> {
         let Some(ls) = self.layout_source.as_ref() else {
-            return false;
+            return Some(url.to_owned());
         };
         let csp_gate = {
             let doc = ls.document.lock().unwrap();
@@ -1836,24 +1843,25 @@ impl Lumen {
             crate::csp_enforce::document_csp_policy(&doc, root)
         };
         let Some((policy, original_policy)) = csp_gate else {
-            return false;
+            return Some(url.to_owned());
         };
         let resolved = self.source.resolve_href(url);
+        let resolved = crate::csp_enforce::upgrade_insecure_url(&policy, &resolved).unwrap_or(resolved);
         let self_origin = self.source.resource_base().and_then(|b| b.origin());
         if !crate::csp_enforce::navigate_to_blocked(&policy, &resolved, self_origin.as_ref()) {
-            return false;
+            return Some(resolved);
         }
         let blocked = resolved.clone();
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
             j.fire_csp_violation("navigate-to", &blocked, &original_policy);
         });
         eprintln!("location: navigation to {resolved} blocked by CSP navigate-to");
-        true
+        None
     }
 
     /// `true`, если `navigate-to` политики ЗАКРЫВАЮЩЕГО (opener) документа
     /// запрещает `window.open(url)` — GAP-CSPENF срез 35. Тот же контур, что
-    /// [`js_navigate_to_blocked`] (срез 34) и `click.rs::navigate_to_link_blocked`
+    /// [`js_navigate_to_gate`] (срез 34) и `click.rs::navigate_to_link_blocked`
     /// (срез 33): одна блокировка документа, гейт, `securitypolicyviolation`.
     ///
     /// Вызывается ДО `open_new_tab()`/`switch_tab()` в цикле обработки

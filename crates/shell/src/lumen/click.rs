@@ -43,6 +43,13 @@ impl Lumen {
     /// `fire_csp_violation`, что и `form-action` в `form_submit.rs`) перед
     /// возвратом, так что вызывающему остаётся только выйти из обработки
     /// клика.
+    ///
+    /// GAP-CSPENF срез 52: гейтит уже АПГРЕЙЖЕННЫЙ адрес
+    /// (`upgrade_navigation_url`, UIR §4.1 шаг 5 — перед шагом 6, тем же
+    /// порядком, что каждый fetch-гейт этой дорожки с среза 43), поэтому
+    /// каждая ветка навигации ниже обязана резолвить `href` тем же способом
+    /// (`Self::resolve_and_upgrade_href`), а не сырым `resolve_href` — иначе
+    /// проверка и реальный переход смотрели бы на разные URL.
     fn navigate_to_link_blocked(
         &mut self,
         csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
@@ -51,7 +58,7 @@ impl Lumen {
         let Some((policy, original_policy)) = csp_gate else {
             return false;
         };
-        let resolved = self.source.resolve_href(href);
+        let resolved = self.resolve_and_upgrade_href(csp_gate, href);
         let self_origin = self.source.resource_base().and_then(|b| b.origin());
         if !crate::csp_enforce::navigate_to_blocked(policy, &resolved, self_origin.as_ref()) {
             return false;
@@ -63,6 +70,21 @@ impl Lumen {
         });
         eprintln!("links: navigation to {resolved} blocked by CSP navigate-to");
         true
+    }
+
+    /// Resolve `href` against the document's base and, if the document's CSP
+    /// carries `upgrade-insecure-requests`, rewrite an `http:` result to
+    /// `https:` — GAP-CSPENF срез 52. Every navigation branch reached after
+    /// [`Self::navigate_to_link_blocked`] must call this instead of
+    /// `self.source.resolve_href` directly, or the gate check above and the
+    /// address actually navigated to would disagree on which URL they mean.
+    fn resolve_and_upgrade_href(
+        &self,
+        csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+        href: &str,
+    ) -> String {
+        let resolved = self.source.resolve_href(href);
+        crate::csp_enforce::upgrade_navigation_url(csp_gate, &resolved)
     }
 
     /// Сообщить JS-контекстам фреймов о смене фокуса внутри под-документа —
@@ -851,7 +873,7 @@ impl Lumen {
                     // fixed `window.open()` path (no tab was created at all).
                     if t.eq_ignore_ascii_case("_blank") {
                         if links::is_navigable_href(&href) {
-                            let resolved = self.source.resolve_href(&href);
+                            let resolved = self.resolve_and_upgrade_href(csp_gate.as_ref(), &href);
                             if click_log::is_enabled() {
                                 let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
                                     node_id: *nid, tag, id_attr: id, class_attr: cls,
@@ -943,7 +965,7 @@ impl Lumen {
                         // silently navigated the CURRENT document in place —
                         // the "уже существовавшее, более узкое ограничение"
                         // GAP-NAVCTX срез 2 (BUG-883) left untouched.
-                        let resolved = self.source.resolve_href(&href);
+                        let resolved = self.resolve_and_upgrade_href(csp_gate.as_ref(), &href);
                         if click_log::is_enabled() {
                             let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
                                 node_id: *nid, tag, id_attr: id, class_attr: cls,
@@ -1021,7 +1043,7 @@ impl Lumen {
                         // Same-page fragment navigation.
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
-                        let resolved = self.source.resolve_href(&href);
+                        let resolved = self.resolve_and_upgrade_href(csp_gate.as_ref(), &href);
                         // `about:newtab?...` special links (pin/unpin, "+",
                         // restore-closed, DS-11) are handled in-place, never
                         // as a real navigation.
