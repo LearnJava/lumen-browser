@@ -403,8 +403,11 @@ impl PageSource {
             return Ok((LoadedPage::empty(), None, None));
         }
         let raw = self.load_bytes(sink.clone(), None)?;
+        // push_backend: срез 1 wires only the native bindings + storage layer,
+        // not yet plumbed to a live tab (see docs/tasks/ph3-push-api.md срез 1).
+        let push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>> = None;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, push_backend, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }

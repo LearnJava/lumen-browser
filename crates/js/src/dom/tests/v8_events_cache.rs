@@ -32,7 +32,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -40,7 +40,7 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 /// V8 twin of [`super::runtime_with_url`].
 fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -687,7 +687,7 @@ impl lumen_core::ext::JsFetchProvider for CspBlockedSwRegisterProvider {
 fn v8_runtime_with_csp_blocked_sw_register(url: &str) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedSwRegisterProvider);
-    rt.install_dom(make_doc(), url, Some(p), None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), url, Some(p), None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -1102,7 +1102,7 @@ impl lumen_core::ext::CacheBackend for MockCacheBackend {
 fn v8_runtime_with_cache_backend() -> V8JsRuntime {
     let be: Arc<dyn lumen_core::ext::CacheBackend> = Arc::new(MockCacheBackend::new());
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, Some(be), None, false)
+    rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, Some(be), None, None, false)
         .unwrap();
     rt
 }

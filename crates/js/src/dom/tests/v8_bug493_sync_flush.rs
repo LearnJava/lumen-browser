@@ -13,7 +13,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_flush(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt.update_stylesheet(Arc::new(lumen_css_parser::parse("#main { color: red; }")));
     rt.update_viewport_size(800.0, 600.0);
@@ -62,7 +62,7 @@ fn offset_width_sees_same_tick_style_mutation() {
 fn get_computed_style_without_pushed_stylesheet_stays_a_plain_cache_read() {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     let r = rt
         .eval(

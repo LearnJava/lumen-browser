@@ -77,11 +77,10 @@ fn make_rt(backend: Arc<dyn IdbBackend>) -> V8JsRuntime {
         None,
         None,
         Some(backend),
+        None, None,
         None,
         None,
-        None,
-        false,
-    )
+        false)
     .unwrap();
     rt
 }

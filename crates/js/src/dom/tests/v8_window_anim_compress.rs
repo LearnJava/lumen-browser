@@ -7,7 +7,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -27,7 +27,7 @@ fn v8_runtime_deterministic_cfg(
 ) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.set_deterministic_mode(true, rng_seed, monotonic_clock);
-    rt.install_dom(doc, url, None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, url, None, None, None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 

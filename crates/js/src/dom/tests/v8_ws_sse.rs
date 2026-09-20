@@ -16,7 +16,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -973,7 +973,7 @@ impl lumen_core::ext::JsWebSocketProvider for FailWsProvider {
 fn v8_runtime_with_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 
@@ -1030,7 +1030,7 @@ impl lumen_core::ext::JsWebSocketProvider for CspBlockedWsProvider {
 fn v8_runtime_with_csp_blocked_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(CspBlockedWsProvider);
-    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 
@@ -1088,7 +1088,7 @@ fn websocket_connect_src_block_fires_security_policy_violation_event() {
 #[test]
 fn bfcache_blocked_false_by_default() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt.eval("_lumen_bfcache_blocked()").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(false));
 }
@@ -1096,7 +1096,7 @@ fn bfcache_blocked_false_by_default() {
 #[test]
 fn bfcache_blocked_true_when_websocket_open() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("_ws_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
         .unwrap();
@@ -1106,7 +1106,7 @@ fn bfcache_blocked_true_when_websocket_open() {
 #[test]
 fn bfcache_blocked_false_when_websocket_closed() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     // readyState 3 (CLOSED) must not block — only OPEN (1) does.
     let r = rt
         .eval("_ws_instances.push({ readyState: 3 }); _lumen_bfcache_blocked()")
@@ -1117,7 +1117,7 @@ fn bfcache_blocked_false_when_websocket_closed() {
 #[test]
 fn bfcache_blocked_true_when_eventsource_open() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("_sse_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
         .unwrap();
@@ -1127,7 +1127,7 @@ fn bfcache_blocked_true_when_eventsource_open() {
 #[test]
 fn bfcache_blocked_true_when_beforeunload_listener_registered() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("window.addEventListener('beforeunload', function() {}); _lumen_bfcache_blocked()")
         .unwrap();
@@ -1137,7 +1137,7 @@ fn bfcache_blocked_true_when_beforeunload_listener_registered() {
 #[test]
 fn bfcache_blocked_true_when_unload_listener_registered() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("window.addEventListener('unload', function() {}); _lumen_bfcache_blocked()")
         .unwrap();
@@ -1147,7 +1147,7 @@ fn bfcache_blocked_true_when_unload_listener_registered() {
 #[test]
 fn bfcache_blocked_true_when_onbeforeunload_property_set() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("window.onbeforeunload = function() {}; _lumen_bfcache_blocked()")
         .unwrap();
@@ -1162,7 +1162,7 @@ fn bfcache_blocked_true_when_onbeforeunload_property_set() {
 #[test]
 fn bfcache_blocked_true_when_worker_active() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("new Worker('data:text/javascript,'); _lumen_bfcache_blocked()")
         .unwrap();
@@ -1172,7 +1172,7 @@ fn bfcache_blocked_true_when_worker_active() {
 #[test]
 fn bfcache_blocked_false_after_worker_terminated() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("var w = new Worker('data:text/javascript,'); w.terminate(); _lumen_bfcache_blocked()")
         .unwrap();
@@ -1185,7 +1185,7 @@ fn bfcache_blocked_false_after_worker_terminated() {
 #[test]
 fn document_fonts_ready_is_a_thenable_promise() {
     let rt = V8JsRuntime::new().unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false).unwrap();
     let r = rt
         .eval("document.fonts.ready instanceof Promise && typeof document.fonts.ready.then === 'function'")
         .unwrap();
@@ -1223,7 +1223,7 @@ impl lumen_core::ext::JsWebSocketProvider for MockWsProvider {
 fn v8_runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 
@@ -1420,7 +1420,7 @@ fn v8_runtime_with_mock_sse(
     let rt = V8JsRuntime::new().unwrap();
     let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
         Arc::new(MockSseProvider { events });
-    rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, false)
+    rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -1465,7 +1465,7 @@ impl lumen_core::ext::JsSseProvider for CspBlockedSseProvider {
 fn v8_runtime_with_csp_blocked_sse(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let provider: Arc<dyn lumen_core::ext::JsSseProvider> = Arc::new(CspBlockedSseProvider);
-    rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, None, false).unwrap();
     rt
 }
 
@@ -1922,7 +1922,7 @@ fn eventsource_resolves_relative_url_and_url_getter_is_absolute() {
     rt.install_dom(
         make_doc(),
         "https://example.com/eventsource/page.html",
-        None, None, None, None, None, None, None, None, false,
+        None, None, None, None, None, None, None, None, None, false,
     )
     .unwrap();
     let r = rt
@@ -1942,7 +1942,7 @@ fn eventsource_empty_url_resolves_to_document_url() {
     rt.install_dom(
         make_doc(),
         "https://example.com/eventsource/page.html",
-        None, None, None, None, None, None, None, None, false,
+        None, None, None, None, None, None, None, None, None, false,
     )
     .unwrap();
     let r = rt.eval("new EventSource('').url").unwrap();
@@ -1959,7 +1959,7 @@ fn eventsource_stringifies_null_and_undefined_instead_of_empty() {
     rt.install_dom(
         make_doc(),
         "https://example.com/eventsource/page.html",
-        None, None, None, None, None, None, None, None, false,
+        None, None, None, None, None, None, None, None, None, false,
     )
     .unwrap();
     let r = rt
@@ -2008,8 +2008,7 @@ fn eventsource_connects_using_resolved_absolute_url() {
     rt.install_dom(
         make_doc(),
         "https://example.com/eventsource/page.html",
-        None, None, Some(provider), None, None, None, None, None, false,
-    )
+        None, None, Some(provider), None, None, None, None, None, None, false)
     .unwrap();
     rt.eval("var es = new EventSource('resources/message.py');")
         .unwrap();
@@ -2108,7 +2107,7 @@ impl lumen_core::ext::JsWebSocketProvider for MockBinaryWsProvider {
 fn v8_runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
-    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+    rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, None, false).unwrap();
     rt
 }
 

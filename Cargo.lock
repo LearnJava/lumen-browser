@@ -2452,6 +2452,7 @@ dependencies = [
  "lumen-image",
  "lumen-layout",
  "lumen-paint",
+ "lumen-storage",
  "p256",
  "rand_core 0.6.4",
  "rsa",

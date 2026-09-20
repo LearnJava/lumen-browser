@@ -131,6 +131,12 @@ v8-backend = ["dep:v8"]
 ffmpeg-video = []
 
 [dev-dependencies]
+# Срез 1 of P3-pushapi: `push_api::install_push_api_v8`'s unit tests build a
+# real `PushStore`/`PushSubscriptions` (SQLite-backed) directly, mirroring how
+# other natives' tests exercise their storage layer in-process. Test-only —
+# not a runtime dependency of lumen-js itself (the shell wires the trait
+# object in via `lumen_core::ext::PushBackend`).
+lumen-storage = { workspace = true }
 
 # Политики проекта как машинные проверки — [workspace.lints] в корневом
 # Cargo.toml, протокол docs/lint-policy.md.

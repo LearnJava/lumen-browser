@@ -1159,6 +1159,7 @@ impl BrowserSession for WinitSession {
             None,
             None,
             None,
+            None,
             false,
         )
         .map_err(|e| Error::Other(format!("install_dom: {e}")))?;

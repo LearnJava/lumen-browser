@@ -37,11 +37,30 @@ persist-хранением, поднимает push-канал доставки 
 - Persist — `lumen-storage` (по ADR-012 SQLite; подписки = долгоживущие → SQLite).
 
 ## Срезы (декомпозиция)
-### Срез 1 — S — Нативный биндинг + persist подписок
-Реализовать Rust `_lumen_push_subscribe` / `_lumen_push_unsubscribe` / `_lumen_push_get`
-в `push_api.rs`, хранящие подписки в `lumen-storage` (SQLite, ключ = scope регистрации SW).
-`getSubscription()` читает из стора, а не из in-memory поля. Юнит: subscribe→getSubscription
-переживает пересоздание JS-контекста.
+### Срез 1 — S — Нативный биндинг + persist подписок — **сделано 2026-09-21 (P1)**
+Реализовано: `lumen_core::ext::PushBackend` (`crates/core/src/ext.rs`, рядом с `SwBackend`/
+`CacheBackend`) — best-effort трейт `push_subscribe`/`push_get`/`push_unsubscribe`, ключ
+`(origin, scope)`. `lumen_storage::PushStore` (`crates/storage/src/push_store.rs`) — тонкий
+адаптер над уже существовавшей (закоммичена ранее, но никуда не подключена)
+`crates/storage/src/push_subscriptions.rs::PushSubscriptions` (SQLite, `UNIQUE(origin, scope)`).
+`crates/js/src/push_api.rs::install_push_api_v8` теперь принимает
+`Option<Arc<dyn PushBackend>>`, регистрирует три натива через `register_native`/`into_v8_fn2`/
+`into_v8_fn6`; JS-шим кодирует mock-ключи в base64 (`_push_ab2b64`/`_push_b642ab`, поверх
+`btoa`/`atob`) для передачи через натив. `getSubscription()` читает из стора (не из
+in-memory поля) — подписка переживает пересоздание JS-контекста (юнит
+`test_subscribe_then_reload_context_sees_persisted_subscription`, 10/10 тестов `push_api`
+зелёные, 5/5 `push_store`).
+
+Параметр `push_backend: Option<Arc<dyn PushBackend>>` доведён до `install_dom` →
+`run_scripts_with_dom` → `render_bytes`/`parse_and_layout` → `FrameLoadEnv` (та же позиция,
+что у `cache_backend`, во всех ~100 сигнатурах/call-сайтах, включая тесты `lumen-js`/
+`lumen-shell`). **Не сделано в этом срезе:** ни один реальный call-сайт (`page_source.rs`,
+`app/user_event.rs`) не строит настоящий `Arc<dyn PushBackend>` — оба передают `None` с
+явным комментарием. У `sw_backend`/`cache_backend` есть пер-табовое поле
+(`frames.rs`/`lumen/state.rs`, пересоздаётся в `tabs_cmd.rs`/`page_snapshot.rs`/
+`window_mode.rs`); у `push_backend` такого поля пока нет — это первая задача среза 2 или
+отдельного среза до него, иначе подписки останутся недостижимы из живой вкладки несмотря
+на полностью рабочий и протестированный слой ниже.
 
 ### Срез 2 — S — Реальные ключи подписки (ECDH P-256)
 Генерить настоящую P-256 keypair (переиспользовать `p256` из WebAuthn/subtle_crypto),

@@ -165,7 +165,7 @@ mod tests {
 
     fn runtime() -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false)
+        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, None, false)
             .unwrap();
         rt
     }

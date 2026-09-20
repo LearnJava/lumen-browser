@@ -29,7 +29,7 @@ use crate::v8_runtime::V8JsRuntime;
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -117,7 +117,7 @@ fn crypto_subtle_exists() {
 fn crypto_subtle_absent_on_insecure_origin() {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(make_doc(), "http://example.com/", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(make_doc(), "http://example.com/", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
     let r = rt
         .eval(
