@@ -1004,6 +1004,11 @@ impl AbortWatchdog {
 /// читаемыми (без него clippy::type_complexity ругается на `Option<&mut dyn …>`).
 type ChunkSink<'a> = &'a mut dyn FnMut(&[u8]);
 
+/// A live WebTransport session — the confirmed QUIC driver plus the Extended
+/// CONNECT stream id — keyed by handle in [`HttpClient::webtransport_sessions`].
+type WebTransportSessions =
+    Arc<std::sync::Mutex<std::collections::HashMap<i32, (h3::request_driver::RequestDriver<h3::udp::UdpDatagram>, u64)>>>;
+
 /// Как [`ChunkSink`], но порция сопровождается URL hop-а, чьё тело стримится.
 ///
 /// Публичный вариант для [`HttpClient::fetch_page_streaming`]: shell на каждом
@@ -2924,6 +2929,15 @@ pub struct HttpClient {
     /// `Some` when [`Self::with_http3`] was called. The `Mutex` is held only
     /// during the HashMap lookup / insert — never across I/O.
     h3_pool: Option<Arc<std::sync::Mutex<h3::client_pool::H3ConnectionPool>>>,
+    /// Live WebTransport sessions (RFC 9220 Extended CONNECT), keyed by the
+    /// handle script holds via `_lumen_webtransport_open` — GAP-WEBTRANSPORT
+    /// срез 2b. Each entry is the confirmed QUIC driver plus the Extended
+    /// CONNECT stream id, kept alive here (never dropped when
+    /// `webtransport_connect` returns) so a later slice (uni/bidi streams,
+    /// datagrams) can still reach the same session.
+    webtransport_sessions: WebTransportSessions,
+    /// Monotonic counter for `webtransport_sessions` handles.
+    webtransport_next_handle: Arc<std::sync::Mutex<i32>>,
     /// GAP-CSPENF срез 10: CSP `connect-src` gate for JS-issued requests
     /// (`fetch()`/`XMLHttpRequest`, both funnel through [`Self::fetch_request_impl`]).
     /// `(policies, self_origin, original_policy)` — set once via
@@ -3004,6 +3018,8 @@ impl HttpClient {
             http3_enabled: false,
             alt_svc_cache: Arc::new(std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new())),
             h3_pool: None,
+            webtransport_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            webtransport_next_handle: Arc::new(std::sync::Mutex::new(0)),
             connect_src_policy: None,
             worker_src_policy: None,
             object_src_policy: None,
@@ -4529,6 +4545,74 @@ impl JsFetchProvider for HttpClient {
     /// header, checked independently per spec (GAP-POLICYREPORT, BUG-953).
     fn permissions_policy_sync_xhr_disposition(&self) -> Option<lumen_core::ext::PolicyDisposition> {
         self.sync_xhr_policy.1
+    }
+
+    /// GAP-WEBTRANSPORT срез 2b: opens the RFC 9220 Extended CONNECT session
+    /// a `new WebTransport(url)` construction needs — a fresh QUIC connect
+    /// ([`h3::client_transport::h3_connect`]) followed by the Extended
+    /// CONNECT leg ([`h3::client_transport::h3_extended_connect_on_driver`],
+    /// срез 2a). Unlike ordinary `fetch()` this does not consult
+    /// [`Self::h3_alt_svc`]/`http3_enabled` — WebTransport is QUIC-native by
+    /// definition (WHATWG WebTransport §5.1), not an opportunistic upgrade of
+    /// an HTTP request.
+    ///
+    /// The confirmed driver is kept alive in [`Self::webtransport_sessions`]
+    /// under a fresh handle rather than dropped: a later slice (uni/bidi
+    /// streams, срез 3; datagrams, срез 4) reuses the same live session.
+    fn webtransport_connect(&self, url: &str) -> Result<lumen_core::ext::JsWebTransportSession> {
+        let parsed = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        if parsed.scheme() != "https" {
+            return Err(Error::InvalidUrl(
+                "WebTransport requires an https: URL".to_string(),
+            ));
+        }
+        let host = parsed.host();
+        if host.is_empty() {
+            return Err(Error::InvalidUrl("WebTransport URL has no host".to_string()));
+        }
+        let port = parsed.port().unwrap_or(443);
+        let path = if parsed.path().is_empty() { "/" } else { parsed.path() };
+
+        let config = h3::client_bootstrap::ClientConnectConfig::default();
+        let mut driver = h3::client_transport::h3_connect(
+            self.resolver.as_ref(),
+            host,
+            port,
+            &config,
+            H3_CONNECT_TURNS,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport connect: {e}")))?;
+
+        let (stream_id, head) = h3::client_transport::h3_extended_connect_on_driver(
+            &mut driver,
+            host,
+            port,
+            b"webtransport",
+            path.as_bytes(),
+            &[],
+            H3_REQUEST_TURNS,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport Extended CONNECT: {e}")))?;
+
+        if !(200..300).contains(&head.status) {
+            return Err(Error::Network(format!(
+                "WebTransport Extended CONNECT rejected: status {}",
+                head.status
+            )));
+        }
+
+        let handle = {
+            let mut next = self.webtransport_next_handle.lock().unwrap_or_else(|e| e.into_inner());
+            let id = *next;
+            *next += 1;
+            id
+        };
+        self.webtransport_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(handle, (driver, stream_id));
+
+        Ok(lumen_core::ext::JsWebTransportSession { handle, status: head.status })
     }
 }
 

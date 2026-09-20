@@ -214,6 +214,10 @@ impl V8JsRuntime {
         // здесь по той же причине, что и предыдущие — ниже провайдер уезжает
         // в замыкание по значению.
         let fp_sw_net = fetch_provider.clone();
+        // GAP-WEBTRANSPORT срез 2b: `install_webtransport_v8` is called after
+        // `self.run(move |inner| {...})` below returns (same reason as the
+        // clones above — that closure takes `fetch_provider` by value).
+        let fp_webtransport = fetch_provider.clone();
         // База IndexedDB воркера — та же, что у страницы: воркер, ведущий свою
         // очередь в `indexedDB`, обязан видеть те же данные.
         let idb_sw = idb_backend.clone();
@@ -978,7 +982,13 @@ impl V8JsRuntime {
         install_v8!(web_locks::install_web_locks_bindings_v8);
         install_v8!(web_midi::install_web_midi_api_v8);
         install_v8!(webrtc_stub::install_webrtc_bindings_v8);
-        install_v8!(webtransport::install_webtransport_v8);
+        // GAP-WEBTRANSPORT срез 2b: needs `fetch_provider` to drive a real
+        // Extended CONNECT attempt, so it takes an extra arg like
+        // `view_transitions`/`web_audio` above instead of the plain
+        // `install_v8!` macro.
+        if let Err(e) = crate::webtransport::install_webtransport_v8(self, fp_webtransport) {
+            eprintln!("v8: webtransport::install_webtransport_v8 failed: {e}");
+        }
         install_v8!(webusb::install_webusb_bindings_v8);
         install_v8!(webxr::install_webxr_bindings_v8);
         install_v8!(window_management::install_window_management_api_v8);

@@ -22,18 +22,40 @@
 ///
 /// Must be called after DOM install (needs `document`'s `URL`, `DOMException`,
 /// `ReadableStream`/`WritableStream`, `Promise`).
+///
+/// `fetch_provider` is `None` in contexts with no network access at all
+/// (detached documents, some test runtimes) — the session then always
+/// answers "not connected", same as before срез 2b.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_webtransport_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
+    fetch_provider: Option<std::sync::Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::into_v8_fn1;
     use lumen_core::ext::JsRuntime as _;
 
-    // Sentinel per the BUG-457 invariant: a negative `i32`, never `u32::MAX`
-    // widened through `IntoJsReturn for u32` (which V8 sees as the *positive*
-    // 4294967295.0). `-1` means "no live WebTransport session for this URL
-    // yet" — the only answer until Extended CONNECT lands.
-    let open = into_v8_fn1(move |_url: String| -> i32 { -1 });
+    // GAP-WEBTRANSPORT срез 2b: `_lumen_webtransport_open(url)` now drives a
+    // real Extended CONNECT (RFC 9220) attempt through the fetch provider —
+    // `lumen-network::HttpClient` overrides `webtransport_connect`, every
+    // other provider keeps the "unsupported" default. Returns a JSON object
+    // as a string (matching the `_lumen_fetch_*` cache-slot pattern would be
+    // overkill for three fields read exactly once by the shim's `setTimeout`
+    // callback): `{"ok":true,"status":200}` or `{"ok":false,"message":"…"}`.
+    // The handle itself is not surfaced to JS yet — срез 3 (uni/bidi
+    // streams) is what first needs it, and will extend this JSON then.
+    let open = into_v8_fn1(move |url: String| -> String {
+        let Some(ref provider) = fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_connect(&url) {
+            Ok(session) => format!(r#"{{"ok":true,"status":{}}}"#, session.status),
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
     rt.register_native("_lumen_webtransport_open", open)?;
 
     rt.eval(WEBTRANSPORT_SHIM)?;
@@ -180,15 +202,30 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     this._ready = readyPromise;
     this._closedPromise = closedPromise;
 
-    // `_lumen_webtransport_open` currently always answers "not connected"
-    // (no Extended CONNECT yet) — see the module doc comment. When a future
-    // slice makes it return a live session handle, only this branch and the
-    // stream/datagram bodies above need to change; the class shape does not.
+    // GAP-WEBTRANSPORT срез 2b: `_lumen_webtransport_open` now drives a real
+    // Extended CONNECT (RFC 9220) attempt and reports the outcome as JSON —
+    // `{ok:true,status}` on a 2xx response, `{ok:false,message}` otherwise
+    // (including "not supported in this context", the old always-fail
+    // answer). Streams/datagrams stay stubs until срезы 3-4 give the session
+    // a handle to drive them from; `closed` is deliberately left pending on
+    // success — no lifecycle wiring (срез 5) exists yet to ever settle it.
     setTimeout(function() {
-      _lumen_webtransport_open(self._url);
-      var err = notConnectedError();
-      self._readyReject(err);
-      self._closedReject(err);
+      var result;
+      try {
+        result = JSON.parse(_lumen_webtransport_open(self._url));
+      } catch (e) {
+        result = { ok: false, message: 'WebTransport: malformed native response.' };
+      }
+      if (result && result.ok) {
+        self._readyResolve(undefined);
+      } else {
+        var err = new WebTransportError({
+          source: 'session',
+          message: (result && result.message) || 'The WebTransport session is not connected.',
+        });
+        self._readyReject(err);
+        self._closedReject(err);
+      }
     }, 0);
   }
 
@@ -258,7 +295,41 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
         rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
-        super::install_webtransport_v8(&rt).unwrap();
+        super::install_webtransport_v8(&rt, None).unwrap();
+        rt
+    }
+
+    /// A fetch provider whose `webtransport_connect` answers deterministically
+    /// (`Ok`/`Err`) instead of network I/O — GAP-WEBTRANSPORT срез 2b.
+    struct StubFetch {
+        result: std::sync::Mutex<Option<lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>>>,
+    }
+    impl lumen_core::ext::JsFetchProvider for StubFetch {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Err(lumen_core::error::Error::Network("unused in this test".to_string()))
+        }
+        fn webtransport_connect(&self, _url: &str) -> lumen_core::error::Result<lumen_core::ext::JsWebTransportSession> {
+            match self.result.lock().unwrap().take() {
+                Some(r) => r,
+                None => Err(lumen_core::error::Error::Network("StubFetch called twice".to_string())),
+            }
+        }
+    }
+
+    /// Unlike [`rt_with_webtransport`], does not call `install_webtransport_v8`
+    /// a second time — `install_dom` already installs it once, internally, via
+    /// the `fetch_provider` argument here; a second `register_native` call for
+    /// the same name would not be reliably observable as an override, so the
+    /// provider has to go in through this one call.
+    fn rt_with_webtransport_provider(
+        result: lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>,
+    ) -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        let doc = Arc::new(Mutex::new(Document::new()));
+        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> =
+            Arc::new(StubFetch { result: std::sync::Mutex::new(Some(result)) });
+        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
+            .unwrap();
         rt
     }
 
@@ -329,6 +400,54 @@ mod tests_v8 {
         )
         .unwrap();
         check(&rt, "_wtTestResult");
+    }
+
+    /// GAP-WEBTRANSPORT срез 2b: no `setTimeout` involved here — the native
+    /// binding itself is called directly, same workaround
+    /// `websocket_connect_fail_fires_onerror` uses ("we can't pump the
+    /// timeout in this test"), to check the JSON shape `ready`'s callback
+    /// parses without depending on macrotask pumping this harness lacks.
+    #[test]
+    fn native_open_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_open('https://example.com/wt')").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_open_reports_ok_and_status_on_success() {
+        let rt = rt_with_webtransport_provider(Ok(lumen_core::ext::JsWebTransportSession {
+            handle: 0,
+            status: 200,
+        }));
+        let r = rt.eval("_lumen_webtransport_open('https://example.com/wt')").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":true"#), "expected ok:true, got {s}");
+                assert!(s.contains("200"), "expected status 200, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_open_reports_provider_error_message() {
+        let rt = rt_with_webtransport_provider(Err(lumen_core::error::Error::Network(
+            "WebTransport Extended CONNECT rejected: status 403".to_string(),
+        )));
+        let r = rt.eval("_lumen_webtransport_open('https://example.com/wt')").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+                assert!(s.contains("403"), "expected the status in the message, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
     }
 
     #[test]
