@@ -57,13 +57,17 @@ impl Lumen {
             });
             if let Some((policy, _)) = &csp_gate {
                 let resolved = upgraded.clone().unwrap_or_else(|| eff_base.resolve_str(&url));
-                // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной политики.
-                if let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+                // Срез 56/58: `originalPolicy` — текст КАЖДОЙ нарушенной
+                // политики (CSP3 §7.8/§3.4), не только первой; блокировка
+                // остаётся однократной.
+                let violated: Vec<String> = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::ImgSrc, &resolved, self_origin.as_ref(),
-                ) {
-                    let policy_text = policy_text.to_owned();
+                ).into_iter().map(str::to_owned).collect();
+                if !violated.is_empty() {
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                        j.fire_csp_violation("img-src", &resolved, &policy_text);
+                        for policy_text in &violated {
+                            j.fire_csp_violation("img-src", &resolved, policy_text);
+                        }
                         j.fire_image_error(nid);
                     });
                     continue;
@@ -1956,15 +1960,18 @@ impl Lumen {
                     let gate_url = csp_gate.as_ref()
                         .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved))
                         .unwrap_or_else(|| resolved.clone());
-                    if let Some((policy, _)) = &csp_gate
-                        && let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+                    let violated: Vec<String> = csp_gate.as_ref().map_or_else(Vec::new, |(policy, _)| {
+                        crate::csp_enforce::violating_fetch_policy(
                             policy, &lumen_network::csp::CspDirective::FontSrc, &gate_url, self_origin.as_ref(),
-                        )
-                    {
-                        let policy_text = policy_text.to_owned();
+                        ).into_iter().map(str::to_owned).collect()
+                    });
+                    if !violated.is_empty() {
+                        // Срез 58: одно событие на каждую нарушенную политику.
                         let blocked_url = gate_url.clone();
                         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                            j.fire_csp_violation("font-src", &blocked_url, &policy_text);
+                            for policy_text in &violated {
+                                j.fire_csp_violation("font-src", &blocked_url, policy_text);
+                            }
                         });
                         continue;
                     }

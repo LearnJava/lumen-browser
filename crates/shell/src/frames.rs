@@ -1976,15 +1976,21 @@ pub(crate) fn spawn_frame(
         }
         let (policy, _) = csp_gate.as_ref()?;
         let resolved = resolve_base.resolve_str(src);
-        // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной политики.
-        let policy_text = crate::csp_enforce::violating_fetch_policy_via_child_src(
+        // Срез 56/58: `originalPolicy` — текст КАЖДОЙ нарушенной политики
+        // (CSP3 §7.8/§3.4), блокировка остаётся однократной.
+        let violated = crate::csp_enforce::violating_fetch_policy_via_child_src(
             policy,
             &lumen_network::csp::CspDirective::FrameSrc,
             &resolved,
             self_origin.as_ref(),
-        )?;
+        );
+        if violated.is_empty() {
+            return None;
+        }
         if let Some(js) = parent_js {
-            js.fire_csp_violation("frame-src", &resolved, policy_text);
+            for policy_text in &violated {
+                js.fire_csp_violation("frame-src", &resolved, policy_text);
+            }
         }
         Some(FetchError {
             reason: format!("frame-src запрещает '{resolved}'"),
@@ -2290,19 +2296,35 @@ pub(crate) fn spawn_frame(
             || !blocked_by_bg_img_src.is_empty())
             && let Some((policy, original_policy)) = &child_csp_gate
         {
-            // Срез 56/57: `originalPolicy` — текст ИМЕННО нарушенной политики
-            // для каждого URL/узла, известного по отдельности.
+            // Срез 56/57/58: `originalPolicy` — текст КАЖДОЙ нарушенной
+            // политики (CSP3 §7.8/§3.4) для каждого URL/узла, известного по
+            // отдельности; `original_policy` — фолбэк на случай, если
+            // `violating_fetch_policy` ничего не находит (не должно случаться
+            // для уже известного заблокированным URL, но дешевле остаться
+            // корректным, чем не выстрелить событие вовсе).
             for url in &subresources.blocked_by_img_src {
-                let text = crate::csp_enforce::violating_fetch_policy(
+                let texts = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::ImgSrc, url, child_self_origin.as_ref(),
-                ).unwrap_or(original_policy);
-                js.fire_csp_violation("img-src", url, text);
+                );
+                if texts.is_empty() {
+                    js.fire_csp_violation("img-src", url, original_policy);
+                } else {
+                    for text in &texts {
+                        js.fire_csp_violation("img-src", url, text);
+                    }
+                }
             }
             for url in &subresources.blocked_by_style_src {
-                let text = crate::csp_enforce::violating_fetch_policy(
+                let texts = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::StyleSrc, url, child_self_origin.as_ref(),
-                ).unwrap_or(original_policy);
-                js.fire_csp_violation("style-src", url, text);
+                );
+                if texts.is_empty() {
+                    js.fire_csp_violation("style-src", url, original_policy);
+                } else {
+                    for text in &texts {
+                        js.fire_csp_violation("style-src", url, text);
+                    }
+                }
             }
             for text in &subresources.blocked_inline_style_policies {
                 js.fire_csp_violation("style-src", "inline", text);
@@ -2311,16 +2333,28 @@ pub(crate) fn spawn_frame(
                 js.fire_csp_violation("style-src-attr", "inline", text);
             }
             for url in &blocked_by_font_src {
-                let text = crate::csp_enforce::violating_fetch_policy(
+                let texts = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::FontSrc, url, child_self_origin.as_ref(),
-                ).unwrap_or(original_policy);
-                js.fire_csp_violation("font-src", url, text);
+                );
+                if texts.is_empty() {
+                    js.fire_csp_violation("font-src", url, original_policy);
+                } else {
+                    for text in &texts {
+                        js.fire_csp_violation("font-src", url, text);
+                    }
+                }
             }
             for url in &blocked_by_bg_img_src {
-                let text = crate::csp_enforce::violating_fetch_policy(
+                let texts = crate::csp_enforce::violating_fetch_policy(
                     policy, &lumen_network::csp::CspDirective::ImgSrc, url, child_self_origin.as_ref(),
-                ).unwrap_or(original_policy);
-                js.fire_csp_violation("img-src", url, text);
+                );
+                if texts.is_empty() {
+                    js.fire_csp_violation("img-src", url, original_policy);
+                } else {
+                    for text in &texts {
+                        js.fire_csp_violation("img-src", url, text);
+                    }
+                }
             }
         }
         js.notify_window_loaded();

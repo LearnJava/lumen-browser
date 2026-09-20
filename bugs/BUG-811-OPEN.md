@@ -3315,3 +3315,79 @@ paint/display list).
 (движок не фетчит веб-манифест вовсе — гейтить нечего), а также
 многополитийный отчёт CSP3 §7.8 (текст первой нарушившей политики, не список
 всех при одновременном нарушении несколькими).
+
+## Срез 58 (2026-09-20, `p6-gap-cspenf-srez58`) — многополитийный отчёт CSP3 §7.8
+
+Закрыл ровно тот пробел, что срез 56 сам назвал не покрытым: CSP3 §7.8 хочет
+ОТДЕЛЬНЫЙ `securitypolicyviolation` на КАЖДУЮ нарушенную политику, когда один
+и тот же ресурс нарушает несколько независимых политик документа одновременно
+(CSP3 §3.4, независимые политики — срез 40). До этого среза все пять
+`violating_*` функций `csp_enforce.rs` (`violating_fetch_policy`,
+`violating_fetch_policy_via_child_src`, `violating_inline_policy`,
+`violating_base_uri_policy`, `violating_style_attr_policy`) возвращали
+`Option<&str>` — текст ПЕРВОЙ нарушившей политики (`.find(...).map(...)`).
+
+- Все пять функций сменили `Option<&str>` на `Vec<&'a str>` — `.find(...)` →
+  `.filter(...)`, пустой `Vec` — то же самое, что раньше `None`.
+- Каждая из ~15 точек диспетчеризации (`doc_extract.rs`, `frames.rs`,
+  `page_pipeline.rs`, `page_load.rs`, `scripts.rs`, `subresources.rs`)
+  переключена с `if let Some(text) = violating_X(...) { fire_Y(..., text); }`
+  на `for text in violating_X(...) { fire_Y(..., text); }`. Там, где у той же
+  точки есть ОТДЕЛЬНОЕ решение «блокировать ли ресурс» (не единообразный
+  паттерн — проверено индивидуально в каждом месте), блокировка осталась
+  ОДНОКРАТНОЙ, только событий стало по одному на нарушенную политику:
+  - `page_pipeline.rs::base_uri_href_blocked` сменил возврат с
+    `Option<(String, String)>` на `Option<(String, Vec<String>)>` —
+    `effective_base` (реальный блок) по-прежнему смотрит только на
+    `.is_none()`, а точка диспатча в `parse_and_layout` теперь итерирует
+    `policy_texts`.
+  - `page_pipeline.rs`'s `load_video_tracks`-замыкание (`media-src` для
+    `<track>`) собирает `Vec` нарушенных политик и пушит по паре
+    `(gate_url, text)` в `blocked` на каждую, прежде чем однократно вернуть
+    `None` (не фетчить).
+  - `frames.rs`'s `frame_src_check` (`frame-src` для навигации `<iframe>`)
+    собирает `Vec`, `is_empty()` решает «пускать ли» (`return None`), иначе
+    диспатчит по одному событию на текст и один раз возвращает
+    `Some(FetchError)`.
+  - `page_load.rs`'s lazy-image и web-font пути — та же форма: собрать
+    `Vec<String>` (владеющий, до `move`-замыкания в `route_task_js`),
+    `is_empty()` решает «продолжать фетч или `continue`», иначе один
+    `fire_image_error`/ничего лишнего плюс цикл по текстам.
+  - `subresources.rs::fetch_and_decode_background_images` — `Err`-ветка
+    замыкания `parallel_map` сменила тип с `(String, String)` на
+    `(String, Vec<String>)`; внешний цикл, который разбирает `outcomes`,
+    разворачивает это в несколько записей `(url.clone(), text)` — дальше по
+    цепочке (`page_pipeline.rs`'s дисптач `blocked_by_bg_img_src`) уже ничего
+    менять не пришлось, там и раньше был цикл по записям `Vec`.
+  - `scripts.rs`'s `ResolvedScript::csp_blocked` сменил тип `Option<String>` →
+    `Vec<String>` (`blocked_by_csp` конструктор принимает `Vec` вместо
+    одного текста) — оба call site (классический и модульный
+    `<script src>`) итерируют его при диспатче `error`+`securitypolicyviolation`.
+  - `frames.rs`'s агрегатный блок среза 8/25 (`blocked_by_img_src`/
+    `blocked_by_style_src`/`blocked_by_font_src`/`blocked_by_bg_img_src` —
+    списки URL, где `violating_fetch_policy` пересчитывается заново в точке
+    диспатча с фолбэком на `original_policy`) — фолбэк остался (на случай,
+    если пересчёт ничего не находит), но при непустом результате теперь
+    цикл по каждому тексту, а не один `.unwrap_or(...)`.
+- `doc_extract.rs`'s `walk_style_blocks`/`walk_style_attrs` (инлайновые
+  `<style>`/`style=""`, срез 57) теперь пушат по одной записи на каждую
+  нарушенную политику того же узла в `blocked`/`policies`, вместо одной — сам
+  диспатч в `page_pipeline.rs`/`frames.rs` не менялся, он уже был циклом по
+  `Vec`.
+- Обновлены doc-комментарии, явно называвшие многополитийный отчёт «ещё не
+  сделано»: модульный doc-комментарий `csp_enforce.rs` (был "CSP3 §7.8 также
+  хочет ОТДЕЛЬНЫЙ отчёт... остаётся отдельным пробелом") и doc-комментарий
+  `document_csp_policy` (был "that distinction is still open").
+- Добавлены юнит-тесты на все пять `violating_*` функций с ДВУМЯ
+  одновременными политиками: случай, когда обе блокируют (возвращается
+  `Vec` длины 2), и случай, когда блокирует только одна (возвращается `Vec`
+  длины 1 с текстом именно этой политики).
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen --
+csp frame navigate form click` — 380 passed (370 из среза 57 + 10 новых
+многополитийных тестов, без нового падения). `cargo clippy -p lumen-shell
+--all-targets --profile dev-release --features v8 -- -D warnings` — чисто.
+
+Остаток общего списка дорожки не изменился: `report-to` (нужны группы
+эндпоинтов из `Report-To`, этот движок его не разбирает), `manifest-src`
+(движок не фетчит веб-манифест вовсе — гейтить нечего).

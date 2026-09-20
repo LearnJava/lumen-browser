@@ -181,13 +181,16 @@ fn walk_style_blocks(
         }
         if let Some(policy) = csp_gate {
             let nonce = node.get_attr("nonce");
-            if let Some(raw) = crate::csp_enforce::violating_inline_policy(
+            // Срез 58: one `securitypolicyviolation` per independently
+            // violated policy (CSP3 §7.8/§3.4), not just the first.
+            let violated = crate::csp_enforce::violating_inline_policy(
                 policy,
                 &lumen_network::csp::CspDirective::StyleSrc,
                 nonce,
                 &text,
-            ) {
-                blocked.push(raw.to_owned());
+            );
+            if !violated.is_empty() {
+                blocked.extend(violated.into_iter().map(str::to_owned));
                 return;
             }
         }
@@ -235,10 +238,14 @@ fn walk_style_attrs(
     let node = doc.get(id);
     if let Some(style) = node.get_attr("style")
         && !style.is_empty()
-        && let Some(raw) = crate::csp_enforce::violating_style_attr_policy(policy, style)
     {
-        blocked.insert(id);
-        policies.push(raw.to_owned());
+        // Срез 58: one `securitypolicyviolation` per independently violated
+        // policy (CSP3 §7.8/§3.4), not just the first.
+        let violated = crate::csp_enforce::violating_style_attr_policy(policy, style);
+        if !violated.is_empty() {
+            blocked.insert(id);
+            policies.extend(violated.into_iter().map(str::to_owned));
+        }
     }
     for &child in &node.children {
         walk_style_attrs(doc, child, policy, blocked, policies);

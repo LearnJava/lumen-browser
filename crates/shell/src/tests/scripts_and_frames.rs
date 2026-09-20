@@ -65,7 +65,7 @@ fn resolved_for_test(items: &[ScriptSource]) -> Vec<ResolvedScript> {
             let (node, source) = match s {
                 ScriptSource::Inline(n, src) | ScriptSource::External(n, src) => (*n, src),
             };
-            ResolvedScript { node, source: source.clone(), url: None, external_ok: None, csp_blocked: None }
+            ResolvedScript { node, source: source.clone(), url: None, external_ok: None, csp_blocked: Vec::new() }
         })
         .collect()
 }
