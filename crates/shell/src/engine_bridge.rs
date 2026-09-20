@@ -76,6 +76,10 @@ pub(crate) struct EngineJsState {
 /// `take_navigate_request`) может увидеть их на кадр позже — такие
 /// read-after-eval-цепочки переносятся на `query`-путь в M2.2c-2c. Поэтому
 /// маршрутизируются только заведомо изолированные void-вызовы без чтения следом.
+///
+/// `#[track_caller]` (BUG-935 S23): пробрасывает call site вызывающего сквозь
+/// `route_task_js` до `EngineThread::task`, где он попадает в `[engine] task`-лог.
+#[track_caller]
 pub(crate) fn route_eval_js(
     engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
     js: Option<&Arc<dyn PersistentJs>>,
@@ -101,6 +105,10 @@ pub(crate) fn route_eval_js(
 ///   `query` встаёт в очередь **после** него, сохраняя read-after-write порядок);
 /// - потока нет (флаг выключен, по умолчанию) → синхронный вызов по UI-хэндлу
 ///   `js` — **байт-идентично** прежним прямым `js.<method>()`.
+///
+/// `#[track_caller]` (BUG-935 S23): пробрасывает call site вызывающего сквозь
+/// `EngineThread::task` до `[engine] task`-лога.
+#[track_caller]
 pub(crate) fn route_task_js(
     engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
     js: Option<&Arc<dyn PersistentJs>>,
@@ -142,6 +150,10 @@ pub(crate) fn route_task_js(
 /// случае вызывающая сторона подставляет значение-по-умолчанию своей ветки «без
 /// JS» (напр. `unwrap_or(false)` для `take_dom_dirty`) — как и без флага, где
 /// `js_ctx == None` даёт ту же ветку.
+///
+/// `#[track_caller]` (BUG-935 S23): пробрасывает call site вызывающего сквозь
+/// `EngineThread::query` до `[engine] task`-лога.
+#[track_caller]
 pub(crate) fn route_query_js<R: Send + 'static>(
     engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
     js: Option<&Arc<dyn PersistentJs>>,

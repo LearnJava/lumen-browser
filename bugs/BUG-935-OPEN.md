@@ -1579,6 +1579,106 @@ DoH-путь исключён, следующая сессия должна ра
 регрессий, тесты новых полей не заводили — инструментация не меняет
 возвращаемые значения).
 
+## S23 (P3, 2026-09-20) — call-site-меткой (`#[track_caller]`) подтверждено: долгие `Task`-замыкания — это доставка JS-колбэков (timers/pump/observers), не сетевой ввод-вывод и не lock-contention
+
+Продолжение с того места, где остановился S22 (два открытых вопроса: что
+исполняется внутри долгих `Task`, и почему `route_query_js`/`RedrawRequested`
+каскадно платит `QUERY_TIMEOUT` на каждом кадре). Пошёл первым путём S21/S22
+— пункт (а), метка call-site'а на `EngineMsg::Task`.
+
+**Правка:** вместо ручного протаскивания `&'static str`-лейбла через
+`route_task_js`/`route_eval_js`/`route_query_js` и все ~25 вызывающих в
+`page_load.rs`/`relayout.rs` (что и предлагал S22) использован штатный
+Rust-механизм `#[track_caller]`: атрибут добавлен на `EngineThread::task`/
+`EngineThread::query` (`engine_thread.rs`) и на все три `route_*_js`-обёртки
+(`engine_bridge.rs`) — `#[track_caller]` прозрачно распространяется сквозь
+цепочку вызовов `#[track_caller]`-функций, поэтому `Location::caller()`,
+захваченный внутри `EngineThread::task`/`query`, указывает на настоящий
+UI-сторонний call site (`page_load.rs`/`relayout.rs`), а не на сам
+`engine_thread.rs`. `EngineMsg::Task` стал структ-вариантом с полем `caller:
+&'static Location<'static>`, лог `[engine] task` печатает его вместо
+статичной строки «generic wrapper». Прямые вызовы `engine.task`/`.query` в
+`relayout.rs:613,1286,1307,1322,1344` не потребовали правок — `#[track_caller]`
+уже покрывает их без обёртки. Дешевле и надёжнее, чем ручной лейбл на
+каждом из ~25 call site'ов (S22's исходный план), и не может разойтись с
+реальным местом вызова.
+
+**Живой замер** (`lenta.ru`, `--maximized`, `LUMEN_PROFILE_TREE=1
+LUMEN_FRAME_LOG=1`, ~2.5 минуты, идентично стенду S18-S22): из 201 строки
+`[engine] task` шесть превысили секунду:
+
+```
+[engine] task 19840.26ms (engine-thread Task, from crates\shell\src\page_load.rs:2186:13)
+[engine] task  5400.06ms (engine-thread Task, from crates\shell\src\app\about_to_wait.rs:260:13)
+[engine] task  6354.72ms (engine-thread Task, from crates\shell\src\app\about_to_wait.rs:260:13)
+[engine] task 28782.85ms (engine-thread Task, from crates\shell\src\relayout.rs:1023:33)
+[engine] task  4096.49ms (engine-thread Task, from crates\shell\src\app\about_to_wait.rs:260:13)
+[engine] task 28159.24ms (engine-thread Task, from crates\shell\src\relayout.rs:1023:33)
+```
+
+Все три call site'а — не сетевой код и не `document.lock()` (S20's
+гипотеза), а доставка JS-колбэков через `route_task_js`/`route_query_js`:
+
+- `about_to_wait.rs:260` — per-tick pump-батч (`j.tick_timers();
+  j.pump_websockets(); j.pump_sse(); j.pump_workers();
+  j.pump_broadcast_channels();`) — `tick_timers` исполняет due
+  `setTimeout`/`setInterval`-колбэки, `pump_websockets`/`pump_sse` доставляют
+  `message`-события синхронно, все — произвольный JS на движковом потоке;
+- `relayout.rs:1023` и `page_load.rs:2186` — `deliver_layout_observers`/
+  `deliver_media_query_changes`/`deliver_lazy_images` — доставка
+  `IntersectionObserver`/`ResizeObserver`/`matchMedia`-колбэков, тоже
+  произвольный синхронный JS.
+
+**Вывод:** долгие `Task`-замыкания (S21's находка) — это не единичный
+тяжёлый системный вызов (DNS/lock/IO), а **синхронное исполнение JS-кода
+самой страницы** внутри штатной доставки timer/pump/observer-колбэков.
+Согласуется с S22's наблюдением «ноль `→ GET` в окне блокировки»
+(колбэк может не делать сетевых вызовов вовсе — просто тяжёлый/зависший
+рекламный скрипт) и объясняет, почему S21's DoH- и S20's lock-гипотезы обе
+были частично неверны: единой системной причины нет, каждый долгий `Task`
+может быть другим JS-колбэком с другой ценой. Root cause на уровне «что
+именно в рекламном JS исполняется по 5-28с» не установлен и, вероятно, не
+устанавливаем без профилировщика V8 (за пределами этого трека) — но теперь
+достоверно известно, что причина внутри JS-исполнения, а не в
+Rust-инфраструктуре engine-thread/relayout/сети.
+
+**Значение для архитектуры:** ни один из существующих таймаутов
+(`QUERY_TIMEOUT`, `FETCH_READ_TIMEOUT`, `CONNECT_TIMEOUT`, S4-S10) не
+ограничивает время исполнения самого JS-колбэка — синхронный JS на
+движковом потоке в принципе не может быть прерван таймером изнутри
+однопоточного V8 без кооперативной точки останова (`SetInterruptCallback`)
+внутри страницы, которой ни у одного из pump/observer/timer-путей сейчас
+нет. Это отдельная, более глубокая архитектурная работа (execution budget
+per JS turn), не входит в этот срез.
+
+**Не сделано в этом срезе:** не внесён никакой лимит/interrupt на длину
+самого JS-колбэка — только диагностика подтвердила его как источник.
+`||`-своп `relayout_raf_dirty`/`_readback` (S18-S20's предпосылка к
+census'у M4-incremental-пути) по-прежнему не тронут — census на
+рекламно-тяжёлых сайтах остаётся зашумлён этим независимым источником пауз
+(S21's вывод не изменился, теперь с прямым подтверждением механизма вместо
+предположения).
+
+**Следующий срез должен** одно из: (1) сравнить `page_load.rs:2186`/
+`relayout.rs:1023`/`about_to_wait.rs:260` — сколько раз каждый встречается
+среди долгих `Task` на более длинном прогоне, чтобы понять, какой из трёх
+путей (timers/pump vs observers) доминирует численно, а не только по одному
+образцу каждого; (2) исследовать `V8::Isolate::SetInterruptCallback` (или
+эквивалент `rusty_v8`) как механизм кооперативного прерывания
+runaway-JS-колбэка per pump/observer/timer-вызов — если жизнеспособно,
+это первый реальный кандидат-фикс для самого симптома бага (а не только для
+диагностики), а не диагностика; (3) вернуться к S18-S20's `||`-свопу
+M4-incremental-пути теперь, когда источник шума в census'е понятен
+(документировать его как известный confound, а не пытаться устранить).
+
+**Тесты:** `cargo clippy -p lumen-shell --all-targets --features v8 -- -D
+warnings` чист, `cargo test -p lumen-shell --bins --features v8 -- relayout
+engine_thread` — 45/45 зелёных (тот же набор, что S6/S11-S22 гоняли, без
+регрессий). Инструментация не меняет поведение под дефолтной сборкой без
+`LUMEN_FRAME_LOG` — `#[track_caller]` не имеет рантайм-стоимости при
+отключённом логе (тот же `Instant::now()`-гейт, что уже был), добавляет
+только размер `&'static Location` (два указателя) в `EngineMsg::Task`.
+
 ## Воспроизведение
 
 ```
