@@ -1026,20 +1026,44 @@ impl Lumen {
                 // (this call's or a later producer's).
                 if defer_js_push {
                     let reqs_slot = Arc::clone(&self.pending_lazy_image_reqs);
+                    // BUG-935 S33: per-step timing inside the `route_task_js`
+                    // closure — S32 found the whole `[engine] task` (this
+                    // closure) taking up to 6.9s while the JS-side callback
+                    // it triggers (`busyWork` in `deliver_layout_observers`)
+                    // measured only 5-9ms from inside, a 1000-6900x gap that
+                    // must live in one of the steps below or in V8-isolate
+                    // entry/exit surrounding them. Only gated by
+                    // `LUMEN_FRAME_LOG` (same flag as `engine_t0` above), so
+                    // an ordinary run pays nothing.
+                    let step_log = lumen_paint::frame_log_enabled();
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
-                        js.update_layout_rects(rects);
-                        js.update_client_rects(client_rects);
-                        js.update_hit_test_tree(hit_test_tree);
-                        js.update_computed_styles(styles);
-                        js.update_pseudo_computed_styles(pseudo_styles);
-                        js.update_custom_properties(customs);
-                        js.update_stylesheet(stylesheet);
-                        js.update_viewport_size(vw, vh);
-                        js.deliver_layout_observers();
-                        js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
-                        js.deliver_lazy_images();
-                        let reqs = js.take_lazy_image_requests();
-                        js.update_scroll_states(scroll_states);
+                        macro_rules! timed_step {
+                            ($label:literal, $expr:expr) => {{
+                                let t0 = step_log.then(std::time::Instant::now);
+                                let result = $expr;
+                                if let Some(t0) = t0 {
+                                    let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                                    eprintln!("[engine] task-step {ms:.2}ms ({})", $label);
+                                }
+                                result
+                            }};
+                        }
+                        timed_step!("update_layout_rects", js.update_layout_rects(rects));
+                        timed_step!("update_client_rects", js.update_client_rects(client_rects));
+                        timed_step!("update_hit_test_tree", js.update_hit_test_tree(hit_test_tree));
+                        timed_step!("update_computed_styles", js.update_computed_styles(styles));
+                        timed_step!("update_pseudo_computed_styles", js.update_pseudo_computed_styles(pseudo_styles));
+                        timed_step!("update_custom_properties", js.update_custom_properties(customs));
+                        timed_step!("update_stylesheet", js.update_stylesheet(stylesheet));
+                        timed_step!("update_viewport_size", js.update_viewport_size(vw, vh));
+                        timed_step!("deliver_layout_observers", js.deliver_layout_observers());
+                        timed_step!(
+                            "deliver_media_query_changes",
+                            js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion)
+                        );
+                        timed_step!("deliver_lazy_images", js.deliver_lazy_images());
+                        let reqs = timed_step!("take_lazy_image_requests", js.take_lazy_image_requests());
+                        timed_step!("update_scroll_states", js.update_scroll_states(scroll_states));
                         if !reqs.is_empty()
                             && let Ok(mut slot) = reqs_slot.lock()
                         {

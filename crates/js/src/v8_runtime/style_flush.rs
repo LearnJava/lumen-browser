@@ -148,6 +148,20 @@ impl FlushHandles {
         {
             return;
         }
+        // BUG-935 S33: diagnostic-only counter — confirms/refutes whether a
+        // per-`_lumen_get_bounding_rect`-call same-tick flush (CSSOM-4) fires a
+        // *real* (non-no-op) full `layout_measured_with_counters` more than
+        // once per `deliver_layout_observers` sweep (S32 found the whole sweep
+        // taking seconds while the JS callback inside it measured 5-9ms).
+        if lumen_paint::frame_log_enabled() {
+            eprintln!(
+                "[engine] maybe_flush real (never_flushed={} dom_dirty={} focus_changed={} cssom_dirty={})",
+                self.never_flushed.load(Ordering::Relaxed),
+                self.dom_dirty.load(Ordering::Relaxed),
+                focus_changed,
+                self.cssom_dirty.load(Ordering::Relaxed),
+            );
+        }
         let Some(sheet) = self
             .stylesheet
             .lock()
