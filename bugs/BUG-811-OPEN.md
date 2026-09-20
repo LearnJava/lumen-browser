@@ -3082,3 +3082,64 @@ cpu_snapshots_match_references`, тот же 7-файловый набор, чт
 `manifest-src`, честная per-policy `originalPolicy`.
 
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/
+
+## Срез 54 (2026-09-20, `p6-gap-cspenf-srez54`) — заголовок `Upgrade-Insecure-Requests: 1` на навигационном запросе
+
+Закрывает хвост, названный срезом 53: UIR §4.1 шаги 1-2 требуют, чтобы
+навигационный запрос от документа, объявившего `upgrade-insecure-requests`,
+нёс заголовок `Upgrade-Insecure-Requests: 1` — независимо от того,
+переписала ли уже схему `upgrade_insecure_url` (заголовок это подсказка
+серверу, а не запись о свершившемся апгрейде: он ставится и тогда, когда
+URL и так был `https:`).
+
+- **`lumen-network::HttpClient`** — `fetch_page`/`fetch_page_streaming`
+  (`crates/network/src/lib.rs`) получили новый параметр
+  `send_uir_header: bool`; при `true` строка `"Upgrade-Insecure-Requests:
+  1\r\n"` подмешивается в уже существующий, ранее всегда пустой на этом
+  пути слот `extra_request_headers` `fetch_with_redirect` (тот же канал, что
+  несёт conditional-GET заголовки HTTP-кэша при cache revalidation —
+  `format!("{uir_header}{}", snap.conditional_headers)` для этой ветки,
+  просто `uir_header` для прямого запроса). Ни `http1/request.rs`, ни
+  сериализация заголовков не тронуты — оба уже собирают `extra_headers` в
+  общий блок.
+- **`crate::csp_enforce::navigation_wants_uir_header`** (новая функция,
+  `crates/shell/src/csp_enforce.rs`) — `true`, если хоть одна политика в уже
+  вычисленном `csp_gate` несёт `upgrade_insecure_requests`; сестра
+  `upgrade_navigation_url`, читает тот же tuple, что каждый `navigate-to`
+  гейт этой дорожки уже держит в скоупе.
+- **`PageSource::Url`** (`crates/shell/src/page_source.rs`) получил новое
+  поле `upgrade_insecure_requests: bool`; `load_bytes`/
+  `load_bytes_streaming` передают его в `fetch_page`/`fetch_page_streaming`
+  как `send_uir_header`. Новый метод `PageSource::with_uir_header(flag)` —
+  no-op на любом другом варианте — позволяет каждому call site дописать
+  флаг поверх уже собранного источника одной цепочкой, не трогая
+  `PageSource::url`/`from_arg`/`resolve_js_navigation` (десяток
+  call-site-ов без CSP-контекста — адресная строка, история, автоматизация
+  — не меняются, флаг остаётся `false` по умолчанию).
+- Точки вызова (только TOP-LEVEL навигация; `<iframe>`-навигация в этот срез
+  не входит — см. «Не покрыто» ниже): `click.rs` — все четыре ветки
+  `<a href>` (`_blank`, именованная вкладка/фрейм, обычная), `form_submit.rs`
+  — GET- и POST-ветки form-action, `about_to_wait.rs` —
+  `js_navigate_to_gate`/`window_open_navigate_to_gate` (обе поменяли
+  сигнатуру `Option<String>` → `Option<(String, bool)>`, второе поле — тот
+  же флаг, вычисленный на месте из уже читаемого `policy` вместо повторного
+  вызова гейта) и их три caller-а (`location.href=`/`.replace()`,
+  `window.open()`).
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen
+-- csp` — 99 passed, `... frame navigate form_post_nav` — 136 passed,
+`... click` — 22 passed (все без нового падения). `cargo test -p
+lumen-network --profile dev-release --tests -- nav_post_body` — 2 passed.
+`cargo clippy -p lumen-network -p lumen-shell --all-targets --features v8
+-- -D warnings` — чисто.
+
+Не покрыто: `<iframe>`-навигация (инициирующий документ там — дочерний,
+`frames.rs`/`frame_links.rs` уже читают свой `csp_gate`, но не прокинуты в
+этот срез — тот же список путей, что срезы 50-52 разделили на top-level и
+frame), «upgrade insecure navigations set» как постоянное состояние
+браузингового контекста (здесь заголовок решается заново на каждый вызов
+из уже читаемой в момент клика/навигации политики — расхождение с
+постоянным флагом возможно только если политика документа меняется между
+объявлением и навигацией, что вне сферы этого среза). Остаток общего
+списка дорожки не изменился: `report-to`, `manifest-src`, честная
+per-policy `originalPolicy`.

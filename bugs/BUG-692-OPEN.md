@@ -114,3 +114,16 @@ scheme по spec §4.1) на non-loopback host, переписать схему 
 место резолва URL подресурса в shell: там, где уже стоят гейты директив,
 есть `&Document` и, значит, действующие политики страницы; у `HttpClient`
 их нет — он получает политики отдельным билдером на навигацию (срезы 10-17).
+
+## Обновление 2026-09-20 (GAP-CSPENF срез 54) — заголовок закрыт для top-level навигации
+
+`HttpClient::fetch_page`/`fetch_page_streaming` теперь принимают
+`send_uir_header: bool` и добавляют `Upgrade-Insecure-Requests: 1` к
+навигационному запросу, когда инициирующий документ объявил директиву —
+`PageSource::Url::upgrade_insecure_requests` несёт флаг от `click.rs`/
+`form_submit.rs`/`about_to_wait.rs` до `HttpClient`. Детали —
+`bugs/BUG-811-OPEN.md`, «Срез 54».
+
+Остаток списка среза 43/53 сузился до: картинки/навигация `<iframe>` уже
+закрыты (срезы 44, 52-53), заголовок `Upgrade-Insecure-Requests: 1` для
+`<iframe>`-навигации — ещё нет (срез 54 закрыл только top-level).

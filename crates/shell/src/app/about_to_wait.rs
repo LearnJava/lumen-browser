@@ -1275,8 +1275,8 @@ impl Lumen {
                     })
                 } else if url.is_empty() {
                     Ok(PageSource::url("about:blank"))
-                } else if let Some(upgraded) = self.window_open_navigate_to_gate(&url) {
-                    resolve_js_navigation(&upgraded, &self.source)
+                } else if let Some((upgraded, uir)) = self.window_open_navigate_to_gate(&url) {
+                    resolve_js_navigation(&upgraded, &self.source).map(|s| s.with_uir_header(uir))
                 } else {
                     Err("blocked by CSP navigate-to".to_owned())
                 };
@@ -1791,10 +1791,10 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.navigate_replace(PageSource::Static { html, url: current });
                         }
-                    } else if let Some(resolved) = self.js_navigate_to_gate(&url) {
+                    } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         // BUG-293: same file://-resolution + web→file guard as popups.
                         match resolve_js_navigation(&resolved, &self.source) {
-                            Ok(source) => self.navigate_to(source),
+                            Ok(source) => self.navigate_to(source.with_uir_header(uir)),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
                     }
@@ -1806,9 +1806,9 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.navigate_replace(PageSource::Static { html, url: current });
                         }
-                    } else if let Some(resolved) = self.js_navigate_to_gate(&url) {
+                    } else if let Some((resolved, uir)) = self.js_navigate_to_gate(&url) {
                         match resolve_js_navigation(&resolved, &self.source) {
-                            Ok(source) => self.navigate_replace(source),
+                            Ok(source) => self.navigate_replace(source.with_uir_header(uir)),
                             Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                         }
                     }
@@ -1849,9 +1849,14 @@ impl Lumen {
     /// anyway so an unparseable `url` the shim passed through raw is handled
     /// the same way the click path handles one.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    fn js_navigate_to_gate(&mut self, url: &str) -> Option<String> {
+    /// GAP-CSPENF срез 54: returns `(resolved, send_uir_header)` — the
+    /// second field is `true` when `policy` declares
+    /// `upgrade-insecure-requests`, independent of whether `resolved` itself
+    /// got rewritten, so the caller can pass it straight to
+    /// `PageSource::with_uir_header`.
+    fn js_navigate_to_gate(&mut self, url: &str) -> Option<(String, bool)> {
         let Some(ls) = self.layout_source.as_ref() else {
-            return Some(url.to_owned());
+            return Some((url.to_owned(), false));
         };
         let csp_gate = {
             let doc = ls.document.lock().unwrap();
@@ -1859,13 +1864,14 @@ impl Lumen {
             crate::csp_enforce::document_csp_policy(&doc, root)
         };
         let Some((policy, original_policy)) = csp_gate else {
-            return Some(url.to_owned());
+            return Some((url.to_owned(), false));
         };
+        let uir = policy.iter().any(|p| p.upgrade_insecure_requests);
         let resolved = self.source.resolve_href(url);
         let resolved = crate::csp_enforce::upgrade_insecure_url(&policy, &resolved).unwrap_or(resolved);
         let self_origin = self.source.resource_base().and_then(|b| b.origin());
         if !crate::csp_enforce::navigate_to_blocked(&policy, &resolved, self_origin.as_ref()) {
-            return Some(resolved);
+            return Some((resolved, uir));
         }
         let blocked = resolved.clone();
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -1889,9 +1895,11 @@ impl Lumen {
     /// на opener — навигация проверяется политикой инициатора, а не той
     /// вкладки, что ещё не существует.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    fn window_open_navigate_to_gate(&mut self, url: &str) -> Option<String> {
+    /// GAP-CSPENF срез 54: see [`Self::js_navigate_to_gate`] for the meaning
+    /// of the returned `bool`.
+    fn window_open_navigate_to_gate(&mut self, url: &str) -> Option<(String, bool)> {
         let Some(ls) = self.layout_source.as_ref() else {
-            return Some(url.to_owned());
+            return Some((url.to_owned(), false));
         };
         let csp_gate = {
             let doc = ls.document.lock().unwrap();
@@ -1899,13 +1907,14 @@ impl Lumen {
             crate::csp_enforce::document_csp_policy(&doc, root)
         };
         let Some((policy, original_policy)) = csp_gate else {
-            return Some(url.to_owned());
+            return Some((url.to_owned(), false));
         };
+        let uir = policy.iter().any(|p| p.upgrade_insecure_requests);
         let resolved = self.source.resolve_href(url);
         let resolved = crate::csp_enforce::upgrade_insecure_url(&policy, &resolved).unwrap_or(resolved);
         let self_origin = self.source.resource_base().and_then(|b| b.origin());
         if !crate::csp_enforce::navigate_to_blocked(&policy, &resolved, self_origin.as_ref()) {
-            return Some(resolved);
+            return Some((resolved, uir));
         }
         let blocked = resolved.clone();
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
