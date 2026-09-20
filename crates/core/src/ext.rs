@@ -2270,6 +2270,22 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Writes `data` to the WebTransport unidirectional stream `stream_id`
+    /// (a [`webtransport_open_uni_stream`](Self::webtransport_open_uni_stream)
+    /// return value) on the session `handle` names — GAP-WEBTRANSPORT/
+    /// `P3-webtransport` срез 3c, the write-bytes primitive
+    /// `createUnidirectionalStream()`'s `WritableStream.write()` needs.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_write_uni_stream(&self, handle: i32, stream_id: u64, data: &[u8]) -> Result<()> {
+        let _ = (handle, stream_id, data);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —
