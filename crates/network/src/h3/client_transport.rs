@@ -777,6 +777,57 @@ pub fn h3_webtransport_read_stream_on_driver<T: DatagramTransport>(
     Ok(driver.turn_mut().pump_mut().dispatch_mut().streams_mut().read(stream_id))
 }
 
+/// Drains every datagram already queued on `driver`'s socket right now
+/// ([`RequestDriver::poll_incoming_nonblocking`]) and returns the QUIC stream
+/// ids of every peer-initiated ("server-initiated", RFC 9000 §2.1) WebTransport
+/// stream discovered since the last call —
+/// [`super::request_dispatch::RequestDispatch::take_discovered_server_streams`].
+///
+/// One [`RequestDriver`] backs exactly one WebTransport session
+/// (`HttpClient::webtransport_sessions` in `lib.rs` keys a distinct driver per
+/// session), so — unlike an id this side allocates itself — a discovered id
+/// needs no session-id cross-check to attribute it to a session: whichever
+/// driver saw it owns it. Each id is returned exactly once, the call after
+/// which it appeared; the caller (`lib.rs`) still has to accumulate and parse
+/// the WebTransport stream header (draft-ietf-webtrans-http3 §4.2/§4.3) off
+/// its bytes before the stream is usable — [`parse_webtransport_uni_header`]
+/// does that for the unidirectional case.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::Driver`] wrapping whatever
+/// [`RequestDriver::poll_incoming_nonblocking`] reported.
+pub fn h3_webtransport_poll_new_peer_streams_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+) -> Result<Vec<u64>, WebTransportStreamError> {
+    driver
+        .poll_incoming_nonblocking(Instant::now())
+        .map_err(WebTransportStreamError::Driver)?;
+    Ok(driver.turn_mut().pump_mut().dispatch_mut().take_discovered_server_streams())
+}
+
+/// Parses the WebTransport unidirectional stream header (stream type `0x54`,
+/// then the session id — both QUIC varints, draft-ietf-webtrans-http3 §4.2)
+/// off the front of `buf`, the accumulated bytes of a peer-initiated stream
+/// [`h3_webtransport_poll_new_peer_streams_on_driver`] reported.
+///
+/// Returns the header's byte length on success — the caller strips that many
+/// bytes and treats the remainder as WebTransport application data — or
+/// `None` when `buf` is too short to hold the whole header yet (both varints
+/// together are at most 16 bytes and typically arrive in the peer's first
+/// STREAM frame, so this converges within very few polls). Does not validate
+/// the stream type against [`WEBTRANSPORT_UNI_STREAM_TYPE`] or the session
+/// id: the id it was parsed for already came from a driver dedicated to one
+/// session (see [`h3_webtransport_poll_new_peer_streams_on_driver`]'s doc),
+/// so both are implied rather than worth rejecting a differently-behaved peer
+/// over.
+#[must_use]
+pub fn parse_webtransport_uni_header(buf: &[u8]) -> Option<usize> {
+    let (_type, type_len) = varint::decode(buf)?;
+    let (_session_id, session_id_len) = varint::decode(&buf[type_len..])?;
+    Some(type_len + session_id_len)
+}
+
 /// Whether a WebTransport stream's receive half has delivered every byte up
 /// to a known final size (RFC 9000 §3.2 `DataRead`, or a `RESET_STREAM` the
 /// application has observed) — the caller's signal to stop polling
@@ -1496,5 +1547,78 @@ mod tests {
             WebTransportStreamError::UnknownStream(id) => assert_eq!(id, 42),
             other => panic!("expected UnknownStream, got {other:?}"),
         }
+    }
+
+    // ── incoming (peer-initiated) uni streams — срез 4d ───────────────────────
+
+    /// Encode a WebTransport uni-stream header (`0x54` then `session_id`, both
+    /// QUIC varints) followed by `payload` — the wire shape a peer opening a
+    /// unidirectional stream toward us writes as its first bytes
+    /// (draft-ietf-webtrans-http3 §4.2), mirroring what
+    /// `h3_webtransport_open_uni_stream_on_driver` writes for the reverse
+    /// direction.
+    fn peer_uni_stream_bytes(session_id: u64, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        varint::encode(WEBTRANSPORT_UNI_STREAM_TYPE, &mut out).unwrap();
+        varint::encode(session_id, &mut out).unwrap();
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn poll_new_peer_streams_reports_a_server_initiated_uni_stream_once() {
+        let now = Instant::now();
+        let mut t = transport();
+        // Server-initiated unidirectional: id 3 (`4*0 + 3`, RFC 9000 §2.1).
+        t.push_inbound(one_rtt_packet(
+            0,
+            &[Frame::Stream { stream_id: 3, offset: 0, fin: false, data: peer_uni_stream_bytes(8, b"hi") }],
+        ));
+        let mut driver = extended_connect_driver(t, now);
+
+        let discovered = h3_webtransport_poll_new_peer_streams_on_driver(&mut driver).unwrap();
+        assert_eq!(discovered, vec![3]);
+        // Not reported again on a later poll with nothing new queued.
+        assert!(h3_webtransport_poll_new_peer_streams_on_driver(&mut driver).unwrap().is_empty());
+    }
+
+    #[test]
+    fn poll_new_peer_streams_ignores_client_initiated_ids() {
+        let now = Instant::now();
+        let driver = extended_connect_driver(transport(), now);
+        // No inbound data at all: nothing server-initiated was ever seen, and
+        // the driver's own client-initiated streams (Extended CONNECT etc.)
+        // must never surface here.
+        let mut driver = driver;
+        assert!(h3_webtransport_poll_new_peer_streams_on_driver(&mut driver).unwrap().is_empty());
+    }
+
+    #[test]
+    fn discovered_peer_uni_stream_bytes_are_readable_after_the_header() {
+        let now = Instant::now();
+        let mut t = transport();
+        t.push_inbound(one_rtt_packet(
+            0,
+            &[Frame::Stream { stream_id: 3, offset: 0, fin: true, data: peer_uni_stream_bytes(8, b"payload") }],
+        ));
+        let mut driver = extended_connect_driver(t, now);
+
+        let discovered = h3_webtransport_poll_new_peer_streams_on_driver(&mut driver).unwrap();
+        assert_eq!(discovered, vec![3]);
+
+        let buf = h3_webtransport_read_stream_on_driver(&mut driver, 3).unwrap();
+        let header_len = parse_webtransport_uni_header(&buf).expect("header fully arrived");
+        assert_eq!(&buf[header_len..], b"payload");
+        assert!(h3_webtransport_stream_finished_on_driver(&driver, 3));
+    }
+
+    #[test]
+    fn parse_webtransport_uni_header_reports_none_on_a_truncated_buffer() {
+        // Only the first byte of a 2-byte session-id varint present.
+        let mut header = Vec::new();
+        varint::encode(WEBTRANSPORT_UNI_STREAM_TYPE, &mut header).unwrap();
+        varint::encode(100, &mut header).unwrap();
+        assert!(parse_webtransport_uni_header(&header[..header.len() - 1]).is_none());
+        assert_eq!(parse_webtransport_uni_header(&header), Some(header.len()));
     }
 }

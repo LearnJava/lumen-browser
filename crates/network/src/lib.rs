@@ -1022,6 +1022,18 @@ struct WebTransportSession {
     /// local endpoint's own transport params — GAP-WEBTRANSPORT срез 4b).
     peer_initial_max_stream_data_bidi: u64,
     next_bidi_stream_number: u64,
+    /// Peer-initiated unidirectional streams whose WebTransport header
+    /// (`0x54` + session id, draft-ietf-webtrans-http3 §4.2) has not yet
+    /// fully arrived — accumulated across polls by
+    /// [`HttpClient::webtransport_poll_incoming_uni_streams`] until
+    /// [`h3::client_transport::parse_webtransport_uni_header`] succeeds
+    /// (GAP-WEBTRANSPORT срез 4d).
+    pending_peer_uni_headers: std::collections::HashMap<u64, Vec<u8>>,
+    /// Application bytes read past a peer-initiated uni stream's header
+    /// before the header was fully classified, held here until
+    /// [`HttpClient::webtransport_read_incoming_uni_stream`]'s first call for
+    /// that stream prepends them to the live read (GAP-WEBTRANSPORT срез 4d).
+    peer_uni_stream_leftover: std::collections::HashMap<u64, Vec<u8>>,
 }
 
 type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, WebTransportSession>>>;
@@ -4633,6 +4645,8 @@ impl JsFetchProvider for HttpClient {
                 next_uni_stream_number: 0,
                 peer_initial_max_stream_data_bidi: config.initial_max_stream_data_bidi_remote,
                 next_bidi_stream_number: 0,
+                pending_peer_uni_headers: std::collections::HashMap::new(),
+                peer_uni_stream_leftover: std::collections::HashMap::new(),
             },
         );
 
@@ -4750,6 +4764,81 @@ impl JsFetchProvider for HttpClient {
             .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
         let bytes = h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, stream_id)
             .map_err(|e| Error::Network(format!("WebTransport read stream: {e}")))?;
+        let finished =
+            h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
+        Ok((bytes, finished))
+    }
+
+    /// GAP-WEBTRANSPORT срез 4d: `incomingUnidirectionalStreams`'s discovery
+    /// primitive — drains one non-blocking sweep of the session `handle`
+    /// names' transport, finds every peer-initiated unidirectional stream
+    /// newly opened toward us since the last call
+    /// ([`h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver`],
+    /// filtered to [`h3::stream::is_unidirectional`] ids — a peer-initiated
+    /// bidirectional stream is a later slice), and returns the ids whose
+    /// WebTransport stream header has now fully arrived and been stripped
+    /// ([`h3::client_transport::parse_webtransport_uni_header`]) — ready for
+    /// [`Self::webtransport_read_incoming_uni_stream`].
+    ///
+    /// An id discovered this call but whose header is still incomplete (split
+    /// across more than one STREAM frame) is not returned yet; it stays
+    /// queued in [`WebTransportSession::pending_peer_uni_headers`] and is
+    /// retried on the next call, same as every other id still pending.
+    fn webtransport_poll_incoming_uni_streams(&self, handle: i32) -> Result<Vec<u64>> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+
+        let discovered = h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver(
+            &mut session.driver,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
+        for id in discovered {
+            if h3::stream::is_unidirectional(id) {
+                session.pending_peer_uni_headers.entry(id).or_default();
+            }
+            // A discovered bidirectional id (`h3::stream::is_bidirectional`)
+            // is left unclassified — incoming bidi streams are a later slice.
+        }
+
+        let mut ready = Vec::new();
+        let pending_ids: Vec<u64> = session.pending_peer_uni_headers.keys().copied().collect();
+        for id in pending_ids {
+            let chunk =
+                h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, id)
+                    .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
+            let buf = session.pending_peer_uni_headers.entry(id).or_default();
+            buf.extend_from_slice(&chunk);
+            if let Some(header_len) = h3::client_transport::parse_webtransport_uni_header(buf) {
+                let leftover = buf.split_off(header_len);
+                session.pending_peer_uni_headers.remove(&id);
+                session.peer_uni_stream_leftover.insert(id, leftover);
+                ready.push(id);
+            }
+        }
+        Ok(ready)
+    }
+
+    /// GAP-WEBTRANSPORT срез 4d: reads a peer-initiated unidirectional
+    /// stream's bytes — the read half `incomingUnidirectionalStreams` hands
+    /// JS a `ReadableStream` for, once
+    /// [`Self::webtransport_poll_incoming_uni_streams`] reports `stream_id`
+    /// ready. Prepends any application bytes
+    /// [`Self::webtransport_poll_incoming_uni_streams`] already read past the
+    /// header while classifying the stream (only ever non-empty on the first
+    /// call for a given `stream_id`), then drives the same non-blocking read
+    /// primitive [`Self::webtransport_read_bidi_stream`] uses.
+    fn webtransport_read_incoming_uni_stream(&self, handle: i32, stream_id: u64) -> Result<(Vec<u8>, bool)> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let mut bytes = session.peer_uni_stream_leftover.remove(&stream_id).unwrap_or_default();
+        let chunk =
+            h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, stream_id)
+                .map_err(|e| Error::Network(format!("WebTransport read incoming stream: {e}")))?;
+        bytes.extend_from_slice(&chunk);
         let finished =
             h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
         Ok((bytes, finished))

@@ -161,6 +161,54 @@ end-to-end byte delivery + close). `cargo clippy -p lumen-network`,
 — срез 4d; датаграммы (срез 4/datagrams в декомпозиции ниже); lifecycle
 (срез 5).
 
+**Срез 4d — S — done (2026-09-20, P1) — incoming (peer-initiated)
+unidirectional streams (bidi incoming remains a follow-up slice).**
+`RequestDispatch::on_stream_frame_with_sink`'s `mux.is_active`/`foreign_streams`
+gate (срез 4c's fix already exempted streams *we* register ahead of time)
+now also auto-registers a never-seen **server-initiated** stream id
+(`stream::is_server_initiated`, RFC 9000 §2.1: ids `4n+1`/`4n+3`) the moment
+its first STREAM frame arrives — the only shape of server-initiated stream a
+WebTransport client ever sees (HTTP/3 server push is not implemented) — and
+queues it once in a new `discovered_server_streams` drain
+(`RequestDispatch::take_discovered_server_streams`). New transport primitive
+`h3_webtransport_poll_new_peer_streams_on_driver` (`client_transport.rs`)
+wraps `poll_incoming_nonblocking` + that drain; `parse_webtransport_uni_header`
+parses the `0x54`+session-id header (draft-ietf-webtrans-http3 §4.2) off the
+accumulated bytes, `None` while incomplete (the caller retries next poll).
+`HttpClient::webtransport_poll_incoming_uni_streams(handle)`
+(`crates/network/src/lib.rs`) orchestrates per session: classifies each newly
+discovered id by parity (`is_unidirectional`; a discovered bidi id is left
+alone — that's a later slice), accumulates header bytes in
+`WebTransportSession::pending_peer_uni_headers` across polls until
+`parse_webtransport_uni_header` succeeds, then stashes the header's leftover
+application bytes in `peer_uni_stream_leftover` and reports the id ready.
+`webtransport_read_incoming_uni_stream(handle, stream_id)` prepends that
+leftover on its first call, then behaves like `webtransport_read_bidi_stream`.
+Two new `JsFetchProvider` methods (default "unsupported", same pattern as
+every other WebTransport extension point) plus two new natives,
+`_lumen_webtransport_poll_incoming_uni_streams`/
+`_lumen_webtransport_read_incoming_uni_stream`. Shim:
+`incomingUnidirectionalStreams` is no longer a permanently-empty
+`ReadableStream` — `openIncomingUnidirectionalStreams` polls discovery in the
+same `setTimeout(0)` loop shape as `openBidiStreamReadable`, waiting (not
+erroring) while the session has no live handle yet, and stopping for good on
+`close()`/a failed `ready` (`_readyFailed`); each discovered id is wrapped by
+`openIncomingUniStreamReadable` (read-only — a WebTransport incoming uni
+stream carries no writable half by definition, RFC 9000 §2.1) and enqueued
+into the outer stream. 3 new tests `lumen-network::h3::request_dispatch`
+(auto-registration/discovery-once/ordering), 5 new tests
+`lumen-network::h3::client_transport` (poll/classify/header-parse, including
+a truncated-header case), 2306+3 tests `lumen-network`; 6 new tests
+`lumen-js` (native unsupported/success + one end-to-end discovery→nested-
+readable→bytes test), 3972+6 tests `lumen-js --features v8-backend`. `cargo
+clippy -p lumen-core -p lumen-network -p lumen-js --all-targets --features
+lumen-js/v8-backend -D warnings` and `cargo check --workspace` green. Not
+done: incoming bidirectional streams (their `readable` needs the same
+discovery+header-parse machinery this slice built, but their `writable` also
+needs a `SendStream` registered for a peer-picked id — deferred, no
+dedicated sub-slice number assigned yet), datagrams (срез 4/datagrams
+below), lifecycle (срез 5).
+
 **Срез 4b — done (2026-09-20, P1) — подключение bidi-стрима к сессии и к
 JS.** `HttpClient::webtransport_open_bidi_stream(handle)`
 (`crates/network/src/lib.rs`) зеркалит `webtransport_open_uni_stream`:
@@ -237,5 +285,6 @@ session id = id Extended CONNECT-стрима — draft-ietf-webtrans-http3 §4.
 - [x] Uni streams end-to-end: open/write/close/abort (срезы 3a-3d, 2026-09-20).
 - [x] Bidi streams — открытие + write/close/abort до JS (срезы 4a-4b, 2026-09-20).
 - [x] Bidi readable — приём входящих байт на стриме, который открыли мы (срез 4c, 2026-09-20).
-- [ ] Incoming (peer-initiated) streams, datagrams, lifecycle — срезы 4d/5.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read живые, incoming streams/datagrams/lifecycle ещё стабы).
+- [x] Incoming unidirectional streams — обнаружение + header-парсинг + `incomingUnidirectionalStreams` (срез 4d, 2026-09-20).
+- [ ] Incoming bidirectional streams, datagrams, lifecycle — остаются.
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read+incoming uni живые, incoming bidi/datagrams/lifecycle ещё стабы).
