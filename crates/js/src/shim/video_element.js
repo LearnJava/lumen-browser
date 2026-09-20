@@ -989,11 +989,20 @@
         var ended = __lumen_video_ended(nid, nowMs());
         if (ended) {
           clearInterval(_tupdateTimer); _tupdateTimer = null;
-          fireEvent(el, 'ended');
           if (hasAttr('loop')) {
+            fireEvent(el, 'ended');
             __lumen_video_seek(nid, 0, nowMs());
             __lumen_video_play(nid, nowMs());
             startTupdate();
+          } else {
+            // §4.8.11.8 "reaches the end": pause the native sink so the Rust
+            // tick loop (`tick_video_ffmpegs`) stops decoding past `duration` —
+            // otherwise it keeps calling `decode_audio_pcm` on an exhausted
+            // demuxer and logs EOF errors every tick.
+            if (!isPaused()) fireEvent(el, 'pause');
+            __lumen_video_pause(nid, nowMs());
+            _paused = true;
+            fireEvent(el, 'ended');
           }
         }
       }, TUPDATE_MS);

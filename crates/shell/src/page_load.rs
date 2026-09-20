@@ -560,6 +560,14 @@ impl Lumen {
                 }
                 continue;
             }
+            // GAP-MEDIADECODE срез 15: the JS `timeupdate` poller (250ms
+            // period) calls `__lumen_video_pause` once it observes `ended`,
+            // but that lags up to one poll tick behind. Stop advancing here
+            // too, so a redraw tick in that window can't keep calling
+            // `frame_at`/`decode_audio_pcm` past the demuxer's EOF.
+            if state.is_ended(elapsed_ms) {
+                continue;
+            }
             has_playing = true;
             // Cap re-decode rate at roughly 30fps — `frame_at` reseeks and
             // decodes on every call, unlike the GIF path's precomputed table.
