@@ -165,7 +165,8 @@ use entry::{apply_font_size_adjust, font_size_adjust_used};
 pub use entry::{
     build_iframe_document, canvas_background_color, lay_out_incremental, layout, layout_measured,
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters,
-    layout_mutation_incremental, layout_mutation_incremental_restyle, layout_streaming_incremental,
+    layout_mutation_incremental, layout_mutation_incremental_restyle, layout_mutation_incremental_with_counters,
+    layout_streaming_incremental, layout_streaming_incremental_with_counters,
 };
 
 mod inline_build;

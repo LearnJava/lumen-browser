@@ -802,6 +802,112 @@ relayout` — 10/10 зелёных на откаченном коде.
 одного из этих двух — есть смысл возвращаться к смене порядка `||`-веток
 и к пунктам (2)/(3) плана S11.
 
+## S13 (P3, 2026-09-20) — починен корень регрессии S12: не-restyle ветка `try_relayout_raf_incremental` теперь тоже сеет `page_prev_cascade_styles`
+
+Продолжение с того места, где остановился S12 («настоящий следующий шаг — НЕ
+повторная попытка смены порядка, а починка самого условия входа в
+cascade-skip»). S12 нашёл два возможных направления: (а) научить не-restyle
+ветку `try_relayout_raf_incremental` (`relayout_page_incremental`) тоже
+возвращать/строить `CascadeStyles` для следующего цикла, либо (б) отдельный
+путь заполнения из `relayout()`/`readback_relayout_job`. Взято (а) — оно
+безопаснее: не-restyle ветка и так уже гоняет полный каскад внутри
+`layout_mutation_incremental` (`layout_streaming_incremental` →
+`precompute_counters`), просто выбрасывала результат.
+
+**Находка при чтении:** `grep` по всему дереву `page_prev_cascade_styles`
+показал, что ДО этого среза поле не устанавливалось в `Some` вообще нигде в
+кодовой базе, кроме самой restyle-ветки `try_relayout_raf_incremental` (и то
+только после того, как restyle-ветка уже успешно исполнилась). Раз вход в
+restyle-ветку сам требует, чтобы поле уже было `Some`, а единственный
+производитель `Some` — сама эта ветка, цепочка не может начаться ни разу ни
+при каком порядке вызовов и ни при какой сборке (не только под
+`LUMEN_ENGINE_THREAD=1`, как формулировал корень бага раньше) — дешёвый путь
+был мёртв структурно, с первого коммита BUG-341 S7. S12's эксперимент со сменой
+`||`-порядка ничего не мог изменить именно поэтому: 0/8 `restyle=1` — не
+статистическая случайность конкретного прогона, а гарантированный исход при
+любом количестве тиков.
+
+**Фикс** (три места, `crates/engine/layout/src/box_tree/entry.rs` +
+`crates/shell/src/relayout.rs`):
+
+1. `layout_streaming_incremental_with_counters` — рядом с существующей
+   `layout_streaming_incremental` (тонкая обёртка над ней, отбрасывающая
+   `CounterMap`, чтобы не трогать её единственного другого вызывающего —
+   `page_load.rs`'s стриминговый путь загрузки, которому кэш не нужен).
+2. `layout_mutation_incremental_with_counters` — аналогично для
+   `layout_mutation_incremental`.
+3. `relayout_page_incremental`/`compute_layout_incremental` (`relayout.rs`)
+   теперь возвращают `CounterMap` третьим элементом кортежа (единственный
+   вызывающий — `try_relayout_raf_incremental`, сигнатуру можно было менять
+   без обёртки).
+4. `try_relayout_raf_incremental`: `fresh_cascade_styles` для обеих веток
+   (restyle и full) теперь именно `CascadeStyles` (не `Option`), и
+   `self.page_prev_cascade_styles = Some(fresh_cascade_styles)` пишется
+   безусловно после `apply_relayout_result`, а не только для restyle-ветки.
+   `self.page_prev_interactive = new_interactive` — туда же (раньше тоже
+   писалось только restyle-веткой; без синхронного обновления после
+   full-ветки следующий цикл сравнивал бы новое hover/focus/active состояние
+   не с тем, что реально было на входе в last full pass).
+   Различение «какая ветка сработала» для отладочного лога
+   (`restyle={0|1}`) вынесено в отдельный `bool used_restyle`, заданный по
+   месту в каждой ветке — раньше он читался как `fresh_cascade_styles.is_some()`,
+   что после этой правки было бы всегда `true` и потеряло бы смысл.
+
+**Почему это корректно (не просто компилируется):** `CascadeStyles`,
+которую строит full-cascade ветка (`layout_mutation_incremental_with_counters`
+→ `layout_streaming_incremental_with_counters` → `precompute_counters`), —
+самый обычный полный каскад того же вида, что и самый первый проход страницы
+(`layout_measured_hyp_with_counters`, тот же путь, который сегодня сеет
+кэш для потомков `layout_mutation_incremental_restyle` при инициализации
+других циклов, например chrome-хоста, BUG-341 S6/S7). Контракт restyle-пути
+(`delta.prev_styles` должен быть «`CounterMap::styles()`, который тот же
+документ произвёл на прошлом цикле») ничего не говорит про то, каким путём
+тот прошлый цикл был получен — только что он полный и актуальный. Full-ветка
+даёт именно это: `precompute_counters` не пропускает ни одного узла (в
+отличие от restyle-пути, который сознательно скипает чистые поддеревья), so
+её результат — даже более надёжный источник кэша, не менее. Пройденный
+пасс-ординал (`CascadeStyles::pass`) при этом стартует с 0 у каждого
+свежепостроенного `CounterMap` (`with_capacity`) — ровно то же значение,
+что и у самого первого прохода страницы, так что цепочка `pass 0 (full) →
+pass 1 (restyle, reuse valid) → …` работает без специального случая.
+
+**Тест:** `mutation_incremental_with_counters_seeds_a_cache_matching_a_fresh_full_cascade`
+(`crates/engine/layout/src/incremental.rs`) — сравнивает
+`layout_mutation_incremental_with_counters`'s `CounterMap::into_styles()` с
+`CounterMap`, которую даёт `layout_measured_hyp_with_counters` над тем же
+итоговым DOM с нуля; `CascadeStyles::eq` сравнивает результат каскада, не
+пасс-ординалы (как и differential-тесты BUG-341), так что это именно
+проверка «то же содержимое, независимо от того, каким путём получено».
+`cargo test -p lumen-layout --lib -- incremental` — 52/52 зелёных (включая
+новый), `cargo clippy -p lumen-layout --all-targets -- -D warnings` и
+`cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings` —
+чистые.
+
+**Эффект под дефолтной сборкой:** по-прежнему нулевой сам по себе —
+`try_relayout_raf_incremental` вызывается из `relayout_raf_dirty` только
+когда `submit_relayout_job()` вернул `false`, а под `LUMEN_ENGINE_THREAD=1`
+(дефолт с ADR-023) она возвращает `true` почти всегда — см. «Корень» раздела
+выше, этот срез его не трогал. Значение этого среза — убрать структурный
+блокер, который делал ЛЮБУЮ попытку задействовать дешёвый путь (в том числе
+S12's смену порядка) заведомо провальной независимо от порядка вызовов;
+S12's «650-850мс на тик, 0/8 restyle» был прямым следствием именно этого
+отсутствия, не самой смены порядка.
+
+**Не сделано / следующий срез:** сама смена `||`-порядка в
+`relayout_raf_dirty`/`relayout_raf_dirty_readback` по-прежнему не внесена —
+теперь у неё есть шанс не повторить регрессию S12 (после одного full-цикла
+кэш будет `Some`, второй тик того же rAF-цикла уже может пойти по
+cascade-skip), но это нужно измерить заново тем же протоколом (census +
+интерливед A/B на `lenta.ru`, S5/S11's подтверждённый стенд), не
+предполагать. Следующая сессия должна повторить S11/S12's эксперимент на
+этом фиксе: (1) внести смену порядка, (2) прогнать
+`scripts/bug935_raf_relayout_census.py` на `lenta.ru`, (3) проверить долю
+`restyle=1` по логу `[engine] relayout … (incremental, on-thread) … restyle=…`
+и RTT `scroll` — если `restyle=1` теперь ненулевая доля тиков и RTT не хуже
+исходного off-thread baseline (S11: 10-33с на 17/20 тиков), это первое
+реальное измерение выигрыша M4; если снова 0/N — искать следующий блокер тем
+же методом, а не повторять S12 вслепую.
+
 ## Воспроизведение
 
 ```

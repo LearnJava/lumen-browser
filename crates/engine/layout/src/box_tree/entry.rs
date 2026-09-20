@@ -281,6 +281,28 @@ pub fn layout_streaming_incremental(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> LayoutBox {
+    layout_streaming_incremental_with_counters(doc, sheet, viewport, measurer, hp, dark_mode, prev).0
+}
+
+/// Like [`layout_streaming_incremental`], but also returns the [`CounterMap`]
+/// the full cascade pass produced (BUG-935 S13) — same relationship
+/// [`layout_measured_hyp_with_counters`] has to [`layout_measured_hyp`].
+///
+/// This path already runs a full cascade (`precompute_counters`) internally;
+/// it previously discarded the resulting map instead of handing it back, which
+/// is why [`layout_mutation_incremental`] (its caller) had nothing to seed
+/// [`crate::counters::CascadeStyles`] with for the next cycle — see that
+/// function's doc comment.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_streaming_incremental_with_counters(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    prev: &LayoutBox,
+) -> (LayoutBox, CounterMap) {
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -301,7 +323,7 @@ pub fn layout_streaming_incremental(
     crate::incremental::graft_geometry(&mut root, prev);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out_incremental(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
-    root
+    (root, counters)
 }
 
 /// Incremental re-layout for JS DOM mutations (ADR-016 M4).
@@ -333,14 +355,42 @@ pub fn layout_mutation_incremental(
     dark_mode: bool,
     prev: &LayoutBox,
 ) -> LayoutBox {
+    layout_mutation_incremental_with_counters(doc, sheet, viewport, measurer, hp, dark_mode, prev).0
+}
+
+/// Like [`layout_mutation_incremental`], but also returns the [`CounterMap`]
+/// the full cascade pass produced (BUG-935 S13).
+///
+/// [`layout_mutation_incremental`] already runs a full cascade internally
+/// (via [`layout_streaming_incremental_with_counters`]) — this variant just
+/// stops throwing the result away. A caller that persists
+/// `counters.into_styles()` as the next cycle's
+/// [`crate::counters::RestyleDelta::prev_styles`] turns what would otherwise
+/// be a dead end into a seed for [`layout_mutation_incremental_restyle`]'s
+/// cascade-skip fast path on the *following* cycle — see BUG-935's bug file,
+/// S12: without this, that fast path's precondition
+/// (`page_prev_cascade_styles` being `Some`) was never met by any producer
+/// reachable from a continuous rAF+DOM-mutation loop, so it was structurally
+/// unreachable regardless of call order.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_mutation_incremental_with_counters(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    prev: &LayoutBox,
+) -> (LayoutBox, CounterMap) {
     // Full cascade + graft: unchanged-style subtrees become CLEAN.
-    let mut root = layout_streaming_incremental(doc, sheet, viewport, measurer, hp, dark_mode, prev);
+    let (mut root, counters) =
+        layout_streaming_incremental_with_counters(doc, sheet, viewport, measurer, hp, dark_mode, prev);
     // Post-layout passes — same set as layout_measured_hyp, same order.
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
     apply_anchor_positions(&mut root, viewport);
     split_first_line_boxes(&mut root);
-    root
+    (root, counters)
 }
 
 /// BUG-341 S5: incremental re-layout for a pure interactive-state transition

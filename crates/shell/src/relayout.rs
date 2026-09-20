@@ -316,7 +316,16 @@ impl Lumen {
         // `prev_lb` (it moves the reusable subtrees straight into the fresh
         // tree instead of copying them), and only this shape lets the compiler
         // see that the fallback below runs exactly when the move did not.
-        let (new_dl, new_lb, fresh_cascade_styles) = if !touched.unattributed
+        // BUG-935 S13: both branches now hand back a `CascadeStyles` — the
+        // non-restyle one used to return `None` here, which meant
+        // `self.page_prev_cascade_styles` below stayed `None` after every cycle
+        // that took it, so the restyle branch's precondition
+        // (`page_prev_cascade_styles` being `Some`) was never met by a
+        // continuous rAF+DOM-mutation loop and the cheap branch was
+        // structurally unreachable (BUG-935 bug file, S12). `used_restyle`
+        // keeps the two apart for the frame-log line below — it is no longer
+        // derivable from "is there a cache to seed", since there always is now.
+        let (new_dl, new_lb, fresh_cascade_styles, used_restyle) = if !touched.unattributed
             && let Some(prev_styles) = self.page_prev_cascade_styles.take()
         {
             let (prev_hover, prev_focus, prev_active) = self.page_prev_interactive;
@@ -367,25 +376,23 @@ impl Lumen {
             );
             lumen_layout::box_tree::set_incremental_box_build(false);
             lumen_layout::counters::set_incremental_restyle(false);
-            (dl, lb, Some(counters.into_styles()))
+            (dl, lb, counters.into_styles(), true)
         } else {
-            let (dl, lb) = relayout_page_incremental(
+            let (dl, lb, counters) = relayout_page_incremental(
                 src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, &prev_lb,
             );
-            (dl, lb, None)
+            (dl, lb, counters.into_styles(), false)
         };
-        let used_restyle = fresh_cascade_styles.is_some();
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         self.apply_relayout_result(new_dl, new_lb, viewport);
         // `apply_relayout_result` unconditionally clears the cache — restore it
-        // here, after `lb` has already landed in `self.layout_box`, only when
-        // this cycle actually produced a matching one.
-        if let Some(styles) = fresh_cascade_styles {
-            self.page_prev_cascade_styles = Some(styles);
-            self.page_prev_interactive = new_interactive;
-        }
+        // here, after `lb` has already landed in `self.layout_box`. BUG-935 S13:
+        // both branches now produce a matching `CascadeStyles`, so this is no
+        // longer conditional on which branch ran.
+        self.page_prev_cascade_styles = Some(fresh_cascade_styles);
+        self.page_prev_interactive = new_interactive;
         if let Some(t0) = incr_t0 {
             let incr_ms = t0.elapsed().as_secs_f32() * 1000.0;
             eprintln!(
@@ -1285,10 +1292,16 @@ pub(crate) fn compute_layout(
 }
 
 /// ADR-016 M4: incremental variant of [`relayout_page`] — uses
-/// [`lumen_layout::layout_mutation_incremental`] to skip geometry re-computation
-/// for subtrees whose [`lumen_layout::ComputedStyle`] is unchanged, while
-/// preserving full cascade and post-layout passes. `prev` is the previously
-/// laid-out tree stored in `Lumen::layout_box`.
+/// [`lumen_layout::layout_mutation_incremental_with_counters`] to skip geometry
+/// re-computation for subtrees whose [`lumen_layout::ComputedStyle`] is
+/// unchanged, while preserving full cascade and post-layout passes. `prev` is
+/// the previously laid-out tree stored in `Lumen::layout_box`.
+///
+/// BUG-935 S13: also returns the [`lumen_layout::CounterMap`] the full cascade
+/// this path always runs produced — previously discarded, which is why
+/// [`Lumen::try_relayout_raf_incremental`]'s non-restyle branch had nothing to
+/// seed [`Lumen::page_prev_cascade_styles`] with for the next cycle. The
+/// caller persists `counters.into_styles()` there.
 pub(crate) fn relayout_page_incremental(
     src: &LayoutSource,
     viewport: Size,
@@ -1296,7 +1309,7 @@ pub(crate) fn relayout_page_incremental(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
     prev: &lumen_layout::LayoutBox,
-) -> (DisplayList, lumen_layout::LayoutBox) {
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     compute_layout_incremental(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev)
 }
 
@@ -1304,7 +1317,9 @@ pub(crate) fn relayout_page_incremental(
 /// cascade but reuses geometry from `prev` for unchanged subtrees.
 ///
 /// Same caller contract as [`compute_layout`]: thread-local interactive state
-/// must be set before the call and cleared afterwards.
+/// must be set before the call and cleared afterwards. See
+/// [`relayout_page_incremental`] for why the returned [`lumen_layout::CounterMap`]
+/// matters (BUG-935 S13).
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn compute_layout_incremental(
@@ -1315,16 +1330,16 @@ pub(crate) fn compute_layout_incremental(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
     prev: &lumen_layout::LayoutBox,
-) -> (DisplayList, lumen_layout::LayoutBox) {
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
-    let layout = lumen_layout::layout_mutation_incremental(
+    let (layout, counters) = lumen_layout::layout_mutation_incremental_with_counters(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
     );
     drop(doc);
     let dl = paint_ordered(&layout);
-    (dl, layout)
+    (dl, layout, counters)
 }
 
 /// BUG-341 S7: restyle-aware variant of [`relayout_page_incremental`] — uses
