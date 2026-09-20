@@ -96,6 +96,17 @@ pub(crate) fn install_document_meta(
             }
             .to_string()
         });
+        // GAP-CSPENF срез 60: `report-to <group>` (CSP3 §5.5) resolves the
+        // group name against the `Report-To` header's endpoint map
+        // (`Document::report_to_endpoints`, срез 59) — a document-scoped map,
+        // not something carried in the policy text itself like `report-uri`'s
+        // URLs. `_lumen_send_csp_reports` (`crates/js/src/csp.rs`) reads this
+        // once per violation via JSON rather than widening every
+        // `fire_*_violation` call site with a sixth argument.
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store, "_lumen_get_report_to_endpoints_json", move || -> String {
+            serde_json::to_string(d.lock().unwrap().report_to_endpoints()).unwrap_or_default()
+        });
     }
     Ok(())
 }

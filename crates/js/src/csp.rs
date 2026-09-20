@@ -79,15 +79,20 @@ const CSP_SHIM: &str = r#"
   // behind a native side channel (срезы 10-13). Every one of them already
   // threads `originalPolicy` (the combined header+meta text) through to here,
   // so re-extracting `report-uri` from that string avoids widening the
-  // boundary a sixth time. `report-to` (Reporting API) is NOT handled — it
-  // needs endpoint groups from a `Report-To` header this engine does not
-  // parse, a materially bigger feature; see `bugs/BUG-811-OPEN.md`.
+  // boundary a sixth time.
+  //
+  // ── report-to delivery (Reporting API v0) ────────────────────────────────
+  // GAP-CSPENF срез 60: unlike `report-uri`, a `report-to <group>` directive
+  // carries only a group NAME in the policy text — the URLs live in a
+  // separate `Report-To` response header, parsed into `Document::
+  // report_to_endpoints` by срез 59 (`page_source::report_to_endpoints`).
+  // Reading it via `_lumen_get_report_to_endpoints_json` (one native call per
+  // violation, `crates/js/src/v8_runtime/install/dom_core.rs`) keeps the
+  // boundary at the same single choke point срез 59 already crosses, instead
+  // of widening every `fire_*_violation` call site with a sixth argument the
+  // way `originalPolicy` itself is threaded.
   window._lumen_send_csp_reports = function(originalPolicy, evt) {
     if (typeof fetch !== 'function' || typeof URL !== 'function') { return; }
-    var m = /(?:^|;)\s*report-uri\s+([^;]+)/i.exec(originalPolicy || '');
-    if (!m) { return; }
-    var uris = m[1].trim().split(/\s+/).filter(Boolean);
-    if (!uris.length) { return; }
     var base = (typeof document !== 'undefined' && document.baseURI) ||
                (typeof location !== 'undefined' ? location.href : undefined);
     var body = JSON.stringify({
@@ -102,7 +107,7 @@ const CSP_SHIM: &str = r#"
         'status-code':         evt.statusCode
       }
     });
-    uris.forEach(function(u) {
+    var send = function(u) {
       var target;
       try { target = new URL(u, base).href; } catch (e) { return; }
       fetch(target, {
@@ -110,7 +115,21 @@ const CSP_SHIM: &str = r#"
         headers: { 'Content-Type': 'application/csp-report' },
         body:    body
       }).catch(function() {});
-    });
+    };
+    var uriMatch = /(?:^|;)\s*report-uri\s+([^;]+)/i.exec(originalPolicy || '');
+    if (uriMatch) {
+      uriMatch[1].trim().split(/\s+/).filter(Boolean).forEach(send);
+    }
+    var toMatch = /(?:^|;)\s*report-to\s+(\S+)/i.exec(originalPolicy || '');
+    if (toMatch && typeof _lumen_get_report_to_endpoints_json === 'function') {
+      var group = toMatch[1];
+      var endpoints;
+      try { endpoints = JSON.parse(_lumen_get_report_to_endpoints_json()); }
+      catch (e) { endpoints = null; }
+      if (endpoints && Array.isArray(endpoints[group])) {
+        endpoints[group].forEach(send);
+      }
+    }
   };
 })();
 "#;
@@ -365,5 +384,118 @@ mod tests {
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
+    }
+
+    /// Same rig as [`with_csp_api_and_report_mock`] plus a stub
+    /// `_lumen_get_report_to_endpoints_json` (in production installed by
+    /// `install_document_meta`, `crates/js/src/v8_runtime/install/
+    /// dom_core.rs`) returning the given group→URLs JSON map — for the
+    /// `report-to` delivery tests (GAP-CSPENF срез 60).
+    fn with_report_to_mock(endpoints_json: &str, f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(&format!(
+            r#"
+            globalThis.window = globalThis;
+            globalThis.location = {{ href: 'https://example.com/page' }};
+            globalThis._dispatched = [];
+            globalThis._reports = [];
+            globalThis.document = {{
+              baseURI: 'https://example.com/page',
+              referrer: '',
+              dispatchEvent: function(e) {{ _dispatched.push(e); }}
+            }};
+            function Event(type, init) {{
+              this.type = type;
+              this.bubbles    = (init && init.bubbles)    || false;
+              this.composed   = (init && init.composed)   || false;
+              this.cancelable = (init && init.cancelable) || false;
+            }}
+            globalThis.Event = Event;
+            function URL(u, base) {{
+              this.href = /^https?:\/\//.test(u) ? u : (base.match(/^(https?:\/\/[^/]+)/)[1] + u);
+            }}
+            globalThis.URL = URL;
+            globalThis.fetch = function(target, init) {{
+              _reports.push({{ target: target, init: init }});
+              return Promise.resolve({{ ok: true }});
+            }};
+            globalThis._lumen_get_report_to_endpoints_json = function() {{
+              return {};
+            }};
+            "#,
+            js_string_literal_for_test(endpoints_json),
+        ))
+        .unwrap();
+        install_csp_bindings_v8(&rt).unwrap();
+        f(&rt);
+    }
+
+    fn js_string_literal_for_test(s: &str) -> String {
+        format!("{:?}", s)
+    }
+
+    /// GAP-CSPENF срез 60: `report-to <group>` resolves the group name
+    /// against the `_lumen_get_report_to_endpoints_json` map and POSTs the
+    /// same `csp-report` body to every URL of that group.
+    #[test]
+    fn report_to_posts_to_named_group_endpoints() {
+        with_report_to_mock(
+            r#"{"csp-endpoint":["https://example.com/report-collector"]}"#,
+            |rt| {
+                let ok = rt
+                    .eval(
+                        r#"
+                        _lumen_dispatch_csp_violation('script-src', 'inline',
+                          "script-src 'none'; report-to csp-endpoint", 'enforce');
+                        _reports.length === 1 &&
+                        _reports[0].target === 'https://example.com/report-collector' &&
+                        JSON.parse(_reports[0].init.body)['csp-report']['violated-directive'] === 'script-src'
+                        "#,
+                    )
+                    .unwrap();
+                assert_eq!(ok, JsValue::Bool(true));
+            },
+        );
+    }
+
+    /// `report-to` names a group absent from the endpoints map — no report
+    /// is sent (nothing to send it to), and dispatch still does not throw.
+    #[test]
+    fn report_to_unknown_group_sends_no_reports() {
+        with_report_to_mock(r#"{"other-group":["https://example.com/x"]}"#, |rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    _lumen_dispatch_csp_violation('script-src', 'inline',
+                      "script-src 'none'; report-to csp-endpoint", 'enforce');
+                    _reports.length === 0 && _dispatched.length === 1
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// `report-uri` and `report-to` both present in the same policy — both
+    /// deliveries fire independently.
+    #[test]
+    fn report_uri_and_report_to_both_fire() {
+        with_report_to_mock(
+            r#"{"csp-endpoint":["https://example.com/collector"]}"#,
+            |rt| {
+                let ok = rt
+                    .eval(
+                        r#"
+                        _lumen_dispatch_csp_violation('script-src', 'inline',
+                          "script-src 'none'; report-uri /csp-report; report-to csp-endpoint", 'enforce');
+                        _reports.length === 2 &&
+                        _reports.some(function(r) { return r.target === 'https://example.com/csp-report'; }) &&
+                        _reports.some(function(r) { return r.target === 'https://example.com/collector'; })
+                        "#,
+                    )
+                    .unwrap();
+                assert_eq!(ok, JsValue::Bool(true));
+            },
+        );
     }
 }

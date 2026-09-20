@@ -52,7 +52,11 @@
 //! Срез 14 (`crates/js/src/csp.rs`, вне этого файла — JS-only) добавил
 //! доставку отчётов `report-uri`: `_lumen_dispatch_csp_violation`
 //! переизвлекает директиву из уже доехавшей `originalPolicy` и шлёт
-//! `fetch(..., {method:'POST'})` на каждый URI. `report-to` не тронут.
+//! `fetch(..., {method:'POST'})` на каждый URI. Срез 60 (тоже JS-only, плюс
+//! новая нативная привязка `_lumen_get_report_to_endpoints_json` —
+//! `crates/js/src/v8_runtime/install/dom_core.rs`) добавил `report-to
+//! <group>`: группа резолвится против карты `Document::report_to_endpoints`
+//! (срез 59), URL'ы которой шлются той же POST-доставкой.
 //!
 //! Срез 15 добавил `frame-src`/`default-src` против навигации `<iframe>`/
 //! `<frame>` — тот же host/scheme/`'self'` фетч-гейт, что срезы 4/6/7 дали
