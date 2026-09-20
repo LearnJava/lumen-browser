@@ -2164,6 +2164,22 @@ pub trait JsFetchProvider: Send + Sync {
         Ok(())
     }
 
+    /// Rewrites `url` per the document's `upgrade-insecure-requests`
+    /// directive (`http:`→`https:`, `ws:`→`wss:`), or returns it unchanged
+    /// when no policy applies (GAP-CSPENF срез 51).
+    ///
+    /// `<audio src>` is the one real media-loading path with no native
+    /// fetch of its own to upgrade internally: `PlatformAudioPlayer::load`
+    /// (`lumen-shell`) takes a bare `(handle, url)` with no CSP context at
+    /// all, so the rewrite has to happen JS-side, before the URL is handed
+    /// to `__lumen_audio_load` — mirrors [`check_media_src`](Self::check_media_src)'s
+    /// reasoning for why this is its own binding rather than a `&Document`
+    /// gate. Default implementation never rewrites, matching `HttpClient`
+    /// with no `upgrade-insecure-requests` policy installed.
+    fn upgrade_insecure_request_url(&self, url: &str) -> String {
+        url.to_string()
+    }
+
     /// `sync-xhr` disposition from the document's `Document-Policy` (+
     /// `-Report-Only`) response headers (GAP-POLICYREPORT, BUG-953). `None`
     /// means synchronous `XMLHttpRequest.send()` is allowed. Checked by the

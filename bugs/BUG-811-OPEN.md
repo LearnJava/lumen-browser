@@ -2892,4 +2892,68 @@ passed, 0 failed. `cargo clippy --workspace --all-targets -- -D warnings`
 1-2). Остаток общего списка дорожки не изменился: `report-to`,
 `manifest-src`, честная per-policy `originalPolicy`.
 
+## Срез 51 (2026-09-20, `p6-gap-cspenf-srez51`) — `upgrade-insecure-requests` для `<video src>` и `<audio src>`
+
+Продолжение среза 50: закрывает оба пути, названных им как непокрытые
+(`<track>` уже был закрыт срезом 50).
+
+- **`<video src="*.gif">`** — GIF-фетч реально фетчится не там, где JS
+  запускает загрузку (`startGifLoad` только queue-ит `(nid, src)` в
+  `__lumen_video_load`), а на следующем тике рендер-цикла:
+  `Lumen::tick_video_gifs` (`page_load.rs`), вызываемый из
+  `redraw_requested`. Этот тик — единственная точка на этом пути с живым
+  `&Document`, поэтому апгрейд сделан там же, тем же приёмом, что срезы 43/50:
+  `upgrade_insecure_url(policy, &base.resolve_str(&src))` перед
+  `fetch_image_bytes`. `media-src`-гейт (срез 17, `_lumen_check_media_src`)
+  не тронут — он уже отработал JS-стороной до постановки в очередь.
+- **`<audio src>`** — здесь ровно наоборот: `PlatformAudioPlayer::load`
+  (`lumen-shell/platform/audio_player.rs`) — `fn load(&self, handle: u64,
+  url: &str)` — вообще не получает `&Document`/CSP-политику, и его
+  `fetch_audio_bytes` строит голый `HttpClient::new()` без единой
+  `with_*_policy`. Апгрейдить там нечем, а значит апгрейд должен случиться
+  ДО того, как этот `url` покинул JS. Новый метод трейта
+  `JsFetchProvider::upgrade_insecure_request_url(&self, url: &str) -> String`
+  (`lumen-core/src/ext.rs`, default no-op) — реализация на `HttpClient`
+  (`lumen-network/src/lib.rs`) переиспользует уже существующий
+  `upgrade_insecure_requests_url` через `connect_src_policy` (тот же
+  `Vec<CspPolicy>`, что и `media_src_policy` — оба выставляются одним
+  вызовом `with_connect_src_policy`/`with_media_src_policy` в
+  `page_pipeline.rs`, так что политика видна методу вне зависимости от
+  того, под каким именем её читают). Новый нативный биндинг
+  `_lumen_upgrade_insecure_url` (`net.rs`, рядом с `_lumen_check_media_src`)
+  вызывается в `startLoad` (`audio_element.rs`) на `_abs` до
+  `_lumen_check_media_src` и до `__lumen_audio_load` — апгрейд раньше гейта,
+  UIR §4.1 шаг 5 перед шагом 6, тот же порядок, что везде в этой дорожке.
+  Побочный эффект: `__lumen_audio_load` теперь получает разрешённый
+  абсолютный URL вместо сырого атрибута — старое ограничение «loader
+  получает `url` как есть» (комментарий среза 17) снято попутно, раз апгрейд
+  всё равно требует абсолютного адреса.
+- `<track>`'s JS-fetch путь (`readTrackBody`, `video_element.js`) не тронут:
+  срез 49 уже переписал `fetch_request_impl` целиком, апгрейд там бесплатный.
+
+Подтверждено живой пробой (сырой TCP-сервер на `127.0.0.1`, `<meta
+http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">` +
+`<video src="http://.../movie.gif">` + `<audio src="http://.../sound.mp3">`):
+`<audio>` апгрейдится сразу — лог показывает `GET
+https://127.0.0.1:PORT/sound.mp3`, рвущийся на `TLS handshake: received
+corrupt message`. `<video>`'s GIF-фетч требует, чтобы `redraw_requested`
+хотя бы раз выполнился ПОСЛЕ того, как JS поставил `nid` в очередь (окно
+без анимации/скролла/ресайза может не перерисовываться сколько угодно долго
+после первого кадра — таймеры и `about_to_wait` тикают независимо от этого
+и в пробу не попались бы); после принудительного `Resized`-события лог
+показывает тот же переход `GET http://.../movie.gif` →
+`https://127.0.0.1:PORT/movie.gif` → тот же обрыв TLS-рукопожатия.
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen
+csp` — 96 passed; `... track` — 27 passed, 0 failed; `cargo test -p
+lumen-network upgrade_insecure` — 6 passed. `cargo clippy -p lumen-shell
+--all-targets --features v8`, `-p lumen-core --all-targets`, `-p
+lumen-network --all-targets -- -D warnings` — чисто.
+
+Не покрыто этим срезом: навигации верхнего документа и `<iframe>`,
+заголовок `Upgrade-Insecure-Requests: 1` на навигационном запросе и
+«upgrade insecure navigations set» (UIR §4.1 шаги 1-2) — это исчерпывает
+названный срезом 50 список путей UIR не покрывает. Остаток общего списка
+дорожки не изменился: `report-to`, `manifest-src`, честная per-policy
+`originalPolicy`.
+
 [UIR]: https://w3c.github.io/webappsec-upgrade-insecure-requests/

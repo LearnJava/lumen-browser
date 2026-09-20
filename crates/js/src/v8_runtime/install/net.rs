@@ -395,6 +395,7 @@ pub(crate) fn install_fetch(
         let fp_beacon = fetch_provider.clone();
         let fp_object = fetch_provider.clone();
         let fp_media = fetch_provider.clone();
+        let fp_media_uir = fetch_provider.clone();
         let fp_cancel = fetch_provider.clone();
         let fp_cancel_body = fetch_provider.clone();
         let c_cancel = Arc::clone(&cache);
@@ -1062,6 +1063,25 @@ pub(crate) fn install_fetch(
                 match lcb_get.lock().unwrap().take() {
                     Some((blocked_uri, original_policy)) => vec![blocked_uri, original_policy],
                     None => Vec::new(),
+                }
+            });
+        }
+
+        // _lumen_upgrade_insecure_url(url) → String
+        // GAP-CSPENF срез 51: `<audio src>`'s own rewrite point —
+        // `PlatformAudioPlayer::load` (`lumen-shell`) has no CSP context at
+        // all, so `startLoad` (`audio_element.rs`) calls this on `_abs`
+        // before `_lumen_check_media_src` and before `__lumen_audio_load`,
+        // same "upgrade before gate" order as `HttpClient::check_connect_src`.
+        // `<video src>`'s GIF path is upgraded natively instead
+        // (`Lumen::tick_video_gifs`, `lumen-shell`), which does have a live
+        // `&Document`; this binding exists only for the path that does not.
+        {
+            let fp = fp_media_uir;
+            reg!(scope, ctx, store, "_lumen_upgrade_insecure_url", move |url: String| -> String {
+                match &fp {
+                    Some(provider) => provider.upgrade_insecure_request_url(&url),
+                    None => url,
                 }
             });
         }

@@ -4430,6 +4430,19 @@ impl JsFetchProvider for HttpClient {
         self.media_src_gate(&url)
     }
 
+    /// GAP-CSPENF срез 51: `upgrade-insecure-requests` for `<audio src>` —
+    /// the JS shim resolves the URL to absolute (`_abs`) for its
+    /// `_lumen_check_media_src` call anyway, so this reuses that same
+    /// value rather than re-resolving. An unparseable `url` is returned
+    /// unchanged: the caller (`PlatformAudioPlayer::load`) will fail it on
+    /// its own parse attempt, same as today.
+    fn upgrade_insecure_request_url(&self, url: &str) -> String {
+        match Url::parse(url) {
+            Ok(parsed) => self.upgrade_insecure_requests_url(parsed).to_string(),
+            Err(_) => url.to_string(),
+        }
+    }
+
     /// GAP-POLICYREPORT (BUG-953): returns the `sync-xhr` disposition
     /// precomputed by `crate::document_policy` (resolved by the shell in
     /// `page_pipeline::parse_and_layout` and attached via
