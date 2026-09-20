@@ -96,8 +96,34 @@ warnings` и `cargo check --workspace` зелёные. Handle пока не по
 срез 3d) — `createUnidirectionalStream()` резолвит настоящий `WritableStream`
 чей `write`/`close`/`abort` все доходят до реального QUIC uni-стрима. Полная
 хронология срезов 3a/3b/3c/3d — см. `ROADMAP.md`'s `P3-webtransport` строку.
-Bidi-стримы и приём входящих стримов остаются отдельным под-срезом (не
-начаты).
+
+**Срез 4a — done (2026-09-20, P1) — транспортный примитив для bidi-стримов.**
+`crates/network/src/h3/client_transport.rs::h3_webtransport_open_bidi_stream_on_driver` —
+зеркало среза 3a для client-initiated bidirectional QUIC-стримов (RFC 9000
+§2.1: младшие два бита `0b00`, n-й стрим — `4n`, отдельное от uni-счётчика
+id-пространство). В отличие от uni-стрима (у него есть нативный QUIC
+stream-type байт), bidi-стрим такого поля не имеет — HTTP/3 кодирует
+направление фреймом `WEBTRANSPORT_STREAM` (тип `0x41`, draft-ietf-webtrans-http3
+§4.3) с session id как payload, первым на стриме; дальше сырые
+WebTransport-байты без дальнейшего HTTP/3-фрейминга. Send-половина identична
+uni-стриму (`SendStream` не знает про направление), поэтому
+`h3_webtransport_write_stream_on_driver`/`close_uni_stream_on_driver`/
+`reset_uni_stream_on_driver` переиспользованы без изменений — тест
+`webtransport_bidi_stream_write_close_and_reset_reuse_the_uni_primitives`
+это закрепляет. Recv-половина (`readable` у `WebTransportBidirectionalStream`)
+не требует отдельного «открытия» — `StreamManager` создаёт `RecvStream`
+лениво на первый входящий фрейм от пира, тем же путём, что и у обычных
+запросов. `WebTransportStreamError::StreamsExhausted`'s текст обобщён (был
+жёстко про unidirectional, теперь про оба направления — использован и здесь).
+5 новых юнит-тестов (id=0/4, длина заголовка при session-id=0/100, overflow,
+переиспользование write/close), 2314 тестов `lumen-network`,
+`clippy -p lumen-network --all-targets -D warnings` и `cargo check --workspace`
+зелёные. Не сделано: подключение к `HttpClient::webtransport_sessions` и к JS
+(`createBidirectionalStream()` пока по-прежнему реджектится,
+`ReadableStream`/`WritableStream`-обёртка для bidi отдельно) — срез 4b;
+приём входящих (`incomingBidirectionalStreams`/`incomingUnidirectionalStreams`)
+и датаграммы (RFC 9221) остаются отдельными под-срезами. Статус остаётся
+`planned`.
 
 **Срез 3a — done (2026-09-20, P1) — транспортный примитив для uni-стримов.**
 `crates/network/src/h3/client_transport.rs::h3_webtransport_open_uni_stream_on_driver` —
