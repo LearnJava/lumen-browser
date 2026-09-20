@@ -487,6 +487,53 @@ lumen-network --all-targets -- -D warnings` чист.
 text/event-stream`, а не отдельный протокол-хендшейк как WS); стоит
 проверить в следующем срезе, если аудит сетевых таймаутов продолжится.
 
+## S8 (P3, 2026-09-20) — тот же класс дедлока найден и починен в хендшейке SSE (`EventSource`)
+
+Продолжение аудита S4/S5/S6/S7 («синхронный сетевой вызов без таймаута
+блокирует ordered `EngineThread`-задание»). S7 явно оставил непроверенным
+`EventSource` (`crates/network/src/sse.rs`) — «стоит проверить, если аудит
+сетевых таймаутов продолжится».
+
+`EventSource::open_connection` читал статус-строку и заголовки ответа через
+`BufReader::read_line` вообще без таймаута — комментарий на месте («No read
+timeout: an EventSource connection is meant to sit idle between server-sent
+events far longer than any bounded fetch») верен только для уже установленного
+потокового тела, но по ошибке накрывал и сам открывающий HTTP-обмен. Путь до
+UI-потока идентичен S7: `_lumen_sse_connect` (`crates/js/src/v8_runtime/install/net.rs:1403`)
+вызывает `provider.connect_sse(&url)` **синхронно** прямо из JS-биндинга —
+внутри того же ordered `EngineThread`-таска, что и `fetch`/WS. Сервер/прокси,
+принявший TCP/TLS-соединение (проходит `CONNECT_TIMEOUT=10s` из S4), но не
+приславший ни строки ответа, блокирует `read_line` навсегда — третий
+самостоятельный вход в тот же класс (первый — TCP-connect S4, второй —
+`EngineThread::query()` S6, третий — WS-хендшейк S7).
+
+**Фикс:** `open_connection` выставляет `FETCH_READ_TIMEOUT` (60s, та же
+константа, что WS-хендшейк) на сырой сокет ПЕРЕД чтением статус-строки и
+заголовков и снимает его (`set_read_timeout(None)`) сразу после — до того, как
+поток становится долгоживущим idle-ридером тела, сохраняемым в
+`self.stream`. Логика чтения статус-строки/заголовков вынесена в отдельную
+функцию `read_response_head<R: BufRead>` — по тому же соображению, что и
+`websocket::upgrade::perform` в S7: чтобы регрессионный тест мог прогнать её
+напрямую на сыром `TcpStream` с коротким `read_timeout`, не дожидаясь
+настоящих 60с.
+
+Regression-тест `sse_handshake_read_times_out_against_a_stalled_server`
+(`crates/network/src/sse.rs`): сервер принимает TCP и держит соединение 2с, ни
+разу не отвечая; клиентский `TcpStream` получает `read_timeout=150ms`,
+`read_response_head` обязан вернуть `Err` быстрее 1с вместо зависания.
+`cargo test -p lumen-network --lib` — 2295/2295 зелёных (было 2294 — тест
+новый), `cargo clippy -p lumen-network --all-targets -- -D warnings` чист.
+
+**Не тронуто:** основной симптом бага (M4-incremental routing мёртв под
+движковым потоком) по-прежнему не тронут — самая крупная из находок S5,
+требует полного перф-протокола (census + A/B), не точечного фикса. Аудит
+«синхронный сетевой вызов без собственного таймаута на ordered
+`EngineThread`-задаче» пройден по всем путям, которые называли S4/S5/S6/S7 —
+TCP-connect, `EngineThread::query()`, WS-хендшейк, SSE-хендшейк; следующая
+сессия должна решить, остались ли ещё непроверенные сетевые входы этого
+класса (например TLS-хендшейк отдельно от TCP-connect — не проверялся ни
+одним срезом), или переходить к самому M4-incremental census'у.
+
 ## Воспроизведение
 
 ```
