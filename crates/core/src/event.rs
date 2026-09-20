@@ -90,6 +90,19 @@ impl FetchPriority {
             SubresourceKind::Image | SubresourceKind::Other { .. } => FetchPriority::Low,
         }
     }
+
+    /// Author-override через HTML-атрибут `fetchpriority` (HTML LS §2.5.7).
+    /// `explicit` — уже нормализованное значение (`"high"`/`"low"`, `None`
+    /// для отсутствующего/`"auto"`/невалидного атрибута — см.
+    /// `lumen_html_parser::preload_scanner::normalize_fetch_priority`).
+    /// `None` означает «нет override-а», caller падает на `for_kind`.
+    pub fn from_attr(explicit: Option<&str>) -> Option<Self> {
+        match explicit {
+            Some("high") => Some(FetchPriority::High),
+            Some("low") => Some(FetchPriority::Low),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

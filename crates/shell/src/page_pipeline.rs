@@ -126,23 +126,25 @@ pub(crate) fn dispatch_preload_hints(
 ) {
     use lumen_html_parser::PreloadHint;
 
-    // Первый проход: резолв URL + вычисление kind.
-    let mut resolved: Vec<(String, SubresourceKind)> = Vec::with_capacity(hints.len());
+    // Первый проход: резолв URL + вычисление kind + author fetchpriority
+    // (HTML LS §2.5.7, срез 4) — override эвристики `FetchPriority::for_kind`,
+    // когда `<link>`/`<img>`/`<script>` несёт явный `fetchpriority="high|low"`.
+    let mut resolved: Vec<(String, SubresourceKind, Option<String>)> = Vec::with_capacity(hints.len());
     for hint in hints {
-        let pair = match hint {
-            PreloadHint::Stylesheet { url, .. } =>
-                (base.resolve_str(url), SubresourceKind::Stylesheet),
-            PreloadHint::Script { url } =>
-                (base.resolve_str(url), SubresourceKind::Script),
-            PreloadHint::Image { url: Some(url), .. } =>
-                (base.resolve_str(url), SubresourceKind::Image),
+        let triple = match hint {
+            PreloadHint::Stylesheet { url, fetch_priority, .. } =>
+                (base.resolve_str(url), SubresourceKind::Stylesheet, fetch_priority.clone()),
+            PreloadHint::Script { url, fetch_priority } =>
+                (base.resolve_str(url), SubresourceKind::Script, fetch_priority.clone()),
+            PreloadHint::Image { url: Some(url), fetch_priority, .. } =>
+                (base.resolve_str(url), SubresourceKind::Image, fetch_priority.clone()),
             // srcset содержит список URL — резолвинг каждого кандидата
             // откладывается до picker-а; эмитим srcset-строку как-есть.
-            PreloadHint::Image { url: None, srcset: Some(s), .. } =>
-                (s.clone(), SubresourceKind::Image),
+            PreloadHint::Image { url: None, srcset: Some(s), fetch_priority, .. } =>
+                (s.clone(), SubresourceKind::Image, fetch_priority.clone()),
             PreloadHint::SourceSet { srcset, .. } =>
-                (srcset.clone(), SubresourceKind::Image),
-            PreloadHint::Preload { url, as_kind } => {
+                (srcset.clone(), SubresourceKind::Image, None),
+            PreloadHint::Preload { url, as_kind, fetch_priority } => {
                 let kind = match as_kind.as_deref() {
                     Some("font") => SubresourceKind::Font,
                     Some("image") => SubresourceKind::Image,
@@ -150,32 +152,35 @@ pub(crate) fn dispatch_preload_hints(
                     Some("style") => SubresourceKind::Stylesheet,
                     _ => SubresourceKind::Other { as_kind: as_kind.clone() },
                 };
-                (base.resolve_str(url), kind)
+                (base.resolve_str(url), kind, fetch_priority.clone())
             }
             // BUG-826: остальные два вида author-хинта. Реальный fetch и
             // события `load`/`error` для них делает JS-шим на самом элементе
             // (`_lumen_link_hint_prepare`), здесь — только строка сетевого лога.
             PreloadHint::ModulePreload { url } =>
-                (base.resolve_str(url), SubresourceKind::Script),
+                (base.resolve_str(url), SubresourceKind::Script, None),
             PreloadHint::Prefetch { url } =>
-                (base.resolve_str(url), SubresourceKind::Other { as_kind: Some("prefetch".into()) }),
+                (base.resolve_str(url), SubresourceKind::Other { as_kind: Some("prefetch".into()) }, None),
             // Preconnect URL — origin, не содержит path — резолвинг тривиален.
             PreloadHint::Preconnect { url, dns_only } =>
-                (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }),
+                (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }, None),
             PreloadHint::Image { url: None, srcset: None, .. } => continue,
         };
-        resolved.push(pair);
+        resolved.push(triple);
     }
 
     // Stable-sort по приоритету: High первыми. Stable сохраняет source-order
     // внутри одного уровня приоритета (важно для HTTP/2 multiplexing).
-    resolved.sort_by_key(|(_, k)| FetchPriority::for_kind(k));
+    resolved.sort_by_key(|(_, k, fp)| {
+        FetchPriority::from_attr(fp.as_deref()).unwrap_or_else(|| FetchPriority::for_kind(k))
+    });
 
     // Дедупликация + emit: пропускаем URL, уже отправленные в предыдущих вызовах
     // (cross-call dedup для streaming + финального pipeline).
-    for (url, kind) in resolved {
+    for (url, kind, fp) in resolved {
         if seen.insert(url.clone()) {
-            let priority = FetchPriority::for_kind(&kind);
+            let priority =
+                FetchPriority::from_attr(fp.as_deref()).unwrap_or_else(|| FetchPriority::for_kind(&kind));
             sink.emit(&Event::SubresourceHintFound { url, kind, priority });
         }
     }

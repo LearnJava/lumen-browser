@@ -2280,7 +2280,7 @@ fn feed_preload_and_emit(
     // parse here to feed progressive intermediate frames (the previous PH1-2 path).
     for hint in &early {
         let (raw_url, dest, is_css) = match hint {
-            lumen_html_parser::PreloadHint::Stylesheet { url, media } => {
+            lumen_html_parser::PreloadHint::Stylesheet { url, media, .. } => {
                 // BUG-268: print-only лист финальный pipeline всё равно не
                 // возьмёт (media-гейт в collect_link_hrefs) — не греем кэш
                 // и, главное, не эмитим CssLoaded: промежуточные progressive-
@@ -2290,7 +2290,7 @@ fn feed_preload_and_emit(
                 }
                 (url, RequestDestination::Style, true)
             }
-            lumen_html_parser::PreloadHint::Script { url } => {
+            lumen_html_parser::PreloadHint::Script { url, .. } => {
                 (url, RequestDestination::Script, false)
             }
             _ => continue,

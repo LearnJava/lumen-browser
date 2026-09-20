@@ -74,10 +74,18 @@ pub enum PreloadHint {
         /// работа caller-а (BUG-268: print-only листы не должны попадать
         /// в экранный каскад).
         media: Option<String>,
+        /// `fetchpriority` (HTML LS §2.5.7), нормализован в `"high"`/`"low"`;
+        /// `None` — атрибут отсутствует, `"auto"` или невалиден, caller
+        /// должен упасть на эвристику `FetchPriority::for_kind`.
+        fetch_priority: Option<String>,
     },
     /// `<script src="...">`. Без `type="module"` и атрибутов defer/async —
     /// caller-у достаточно URL.
-    Script { url: String },
+    Script {
+        url: String,
+        /// См. `Stylesheet::fetch_priority`.
+        fetch_priority: Option<String>,
+    },
     /// `<img src="...">` или fallback-fetch одиночного `<img>`. `srcset`
     /// и `sizes` отделены для удобства caller-а; при отсутствии срабатывает
     /// только `src`.
@@ -85,6 +93,8 @@ pub enum PreloadHint {
         url: Option<String>,
         srcset: Option<String>,
         sizes: Option<String>,
+        /// См. `Stylesheet::fetch_priority`.
+        fetch_priority: Option<String>,
     },
     /// `<source srcset="...">` внутри `<picture>` / `<video>` / `<audio>`.
     /// `media`-атрибут специально не учитываем — речь о preload, fetch
@@ -97,6 +107,8 @@ pub enum PreloadHint {
     Preload {
         url: String,
         as_kind: Option<String>,
+        /// См. `Stylesheet::fetch_priority`.
+        fetch_priority: Option<String>,
     },
     /// `<link rel="modulepreload" href="...">`. `as` спекой ограничен
     /// script-подобными destination-ами, поэтому здесь не хранится: caller
@@ -142,6 +154,9 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // `fetchpriority` — content-атрибут самого `<link>`, один и тот же для
+    // всех hint-ов, эмитированных из multi-token `rel` (HTML LS §2.5.7).
+    let fetch_priority = normalize_fetch_priority(attrs);
 
     let Some(rel) = rel else {
         return;
@@ -157,6 +172,7 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
             "stylesheet" => out.push(PreloadHint::Stylesheet {
                 url: href.to_string(),
                 media: media.clone(),
+                fetch_priority: fetch_priority.clone(),
             }),
             "preload" => out.push(PreloadHint::Preload {
                 url: href.to_string(),
@@ -164,6 +180,7 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
                     .as_ref()
                     .filter(|s| !s.is_empty())
                     .cloned(),
+                fetch_priority: fetch_priority.clone(),
             }),
             "modulepreload" => out.push(PreloadHint::ModulePreload {
                 url: href.to_string(),
@@ -190,6 +207,7 @@ fn collect_script_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
     {
         out.push(PreloadHint::Script {
             url: src.to_string(),
+            fetch_priority: normalize_fetch_priority(attrs),
         });
     }
 }
@@ -210,7 +228,21 @@ fn collect_img_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
     if src.is_none() && srcset.is_none() {
         return;
     }
-    out.push(PreloadHint::Image { url: src, srcset, sizes });
+    out.push(PreloadHint::Image { url: src, srcset, sizes, fetch_priority: normalize_fetch_priority(attrs) });
+}
+
+/// Нормализует `fetchpriority` (HTML LS §2.5.7) на `<link>`/`<img>`/`<script>`:
+/// `"high"`/`"low"` (case-insensitive) сохраняются как lower-case, всё
+/// остальное — отсутствие атрибута, `"auto"`, опечатка — `None`, сигнализируя
+/// caller-у упасть на эвристику `FetchPriority::for_kind`. Тот же контракт,
+/// что и `lumen_dom`'s `normalize_fetch_priority` для `<iframe>`, но не
+/// шарится напрямую — `lumen-html-parser` не зависит от `lumen-dom`.
+fn normalize_fetch_priority(attrs: &[(String, String)]) -> Option<String> {
+    match find_attr(attrs, "fetchpriority")?.trim().to_ascii_lowercase().as_str() {
+        "high" => Some("high".to_string()),
+        "low" => Some("low".to_string()),
+        _ => None,
+    }
 }
 
 fn collect_source_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
@@ -354,8 +386,11 @@ pub fn parse_link_header(header: &str) -> Vec<PreloadHint> {
             .filter(|s| !s.is_empty());
         for token in rel.split_ascii_whitespace() {
             match token {
-                "stylesheet" => out.push(PreloadHint::Stylesheet { url: url.clone(), media: None }),
-                "preload" => out.push(PreloadHint::Preload { url: url.clone(), as_kind: as_kind.clone() }),
+                // RFC 8288 не определяет параметр `fetchpriority` — только
+                // HTML-атрибут несёт author-override (срез 4); заголовочные
+                // hint-ы всегда падают на эвристику `FetchPriority::for_kind`.
+                "stylesheet" => out.push(PreloadHint::Stylesheet { url: url.clone(), media: None, fetch_priority: None }),
+                "preload" => out.push(PreloadHint::Preload { url: url.clone(), as_kind: as_kind.clone(), fetch_priority: None }),
                 "modulepreload" => out.push(PreloadHint::ModulePreload { url: url.clone() }),
                 "prefetch" => out.push(PreloadHint::Prefetch { url: url.clone() }),
                 "preconnect" => out.push(PreloadHint::Preconnect { url: url.clone(), dns_only: false }),
@@ -447,8 +482,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "theme.css".into(),
-                media: None,
-            }]
+                media: None, fetch_priority: None }]
         );
     }
 
@@ -461,14 +495,13 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "print.css".into(),
-                media: Some("print".into()),
-            }]
+                media: Some("print".into()), fetch_priority: None }]
         );
         // Пустой/whitespace-only media эквивалентен отсутствию атрибута.
         let hints = scan_preload_hints(r#"<link rel="stylesheet" media="  " href="a.css">"#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "a.css".into(), media: None }]
+            vec![PreloadHint::Stylesheet { url: "a.css".into(), media: None , fetch_priority: None }]
         );
     }
 
@@ -481,8 +514,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "theme.css".into(),
-                media: None,
-            }]
+                media: None, fetch_priority: None }]
         );
     }
 
@@ -494,8 +526,7 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "font.woff2".into(),
-                as_kind: Some("font".into()),
-            }]
+                as_kind: Some("font".into()), fetch_priority: None }]
         );
     }
 
@@ -507,8 +538,7 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "x.bin".into(),
-                as_kind: None,
-            }]
+                as_kind: None, fetch_priority: None }]
         );
     }
 
@@ -550,12 +580,10 @@ mod tests {
             vec![
                 PreloadHint::Preload {
                     url: "hero.css".into(),
-                    as_kind: Some("style".into()),
-                },
+                    as_kind: Some("style".into()), fetch_priority: None },
                 PreloadHint::Stylesheet {
                     url: "hero.css".into(),
-                    media: None,
-                },
+                    media: None, fetch_priority: None },
             ]
         );
     }
@@ -613,7 +641,7 @@ mod tests {
             hints,
             vec![PreloadHint::Script {
                 url: "app.js".into()
-            }]
+            , fetch_priority: None }]
         );
     }
 
@@ -640,8 +668,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: Some("actual.jpg".into()),
                 srcset: None,
-                sizes: None,
-            }]
+                sizes: None, fetch_priority: None }]
         );
     }
 
@@ -653,8 +680,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: Some("cat.png".into()),
                 srcset: None,
-                sizes: None,
-            }]
+                sizes: None, fetch_priority: None }]
         );
     }
 
@@ -668,8 +694,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: Some("fb.png".into()),
                 srcset: Some("s.png 480w, m.png 1024w".into()),
-                sizes: Some("100vw".into()),
-            }]
+                sizes: Some("100vw".into()), fetch_priority: None }]
         );
     }
 
@@ -683,8 +708,7 @@ mod tests {
             vec![PreloadHint::Image {
                 url: None,
                 srcset: Some("hi.png 2x".into()),
-                sizes: None,
-            }]
+                sizes: None, fetch_priority: None }]
         );
     }
 
@@ -712,8 +736,7 @@ mod tests {
                 PreloadHint::Image {
                     url: Some("hi.jpg".into()),
                     srcset: None,
-                    sizes: None,
-                },
+                    sizes: None, fetch_priority: None },
             ]
         );
     }
@@ -791,8 +814,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "/тема.css".into(),
-                media: None,
-            }]
+                media: None, fetch_priority: None }]
         );
     }
 
@@ -806,8 +828,7 @@ mod tests {
             hints,
             vec![PreloadHint::Stylesheet {
                 url: "theme.css".into(),
-                media: None,
-            }]
+                media: None, fetch_priority: None }]
         );
     }
 
@@ -827,8 +848,7 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "https://example.test/style.css".into(),
-                as_kind: Some("style".into()),
-            }]
+                as_kind: Some("style".into()), fetch_priority: None }]
         );
     }
 
@@ -854,8 +874,8 @@ mod tests {
         assert_eq!(
             hints,
             vec![
-                PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) },
-                PreloadHint::Preload { url: "/b.js".into(), as_kind: Some("script".into()) },
+                PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) , fetch_priority: None },
+                PreloadHint::Preload { url: "/b.js".into(), as_kind: Some("script".into()) , fetch_priority: None },
             ]
         );
     }
@@ -866,8 +886,8 @@ mod tests {
         assert_eq!(
             hints,
             vec![
-                PreloadHint::Preload { url: "/hero.css".into(), as_kind: Some("style".into()) },
-                PreloadHint::Stylesheet { url: "/hero.css".into(), media: None },
+                PreloadHint::Preload { url: "/hero.css".into(), as_kind: Some("style".into()) , fetch_priority: None },
+                PreloadHint::Stylesheet { url: "/hero.css".into(), media: None , fetch_priority: None },
             ]
         );
     }
@@ -912,7 +932,7 @@ mod tests {
         let hints = parse_link_header(r#"</f.woff2>; rel=preload; as="font""#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Preload { url: "/f.woff2".into(), as_kind: Some("font".into()) }]
+            vec![PreloadHint::Preload { url: "/f.woff2".into(), as_kind: Some("font".into()) , fetch_priority: None }]
         );
     }
 
@@ -923,7 +943,7 @@ mod tests {
         let hints = parse_link_header(r#"</a.css>; rel=preload; as=style; title="a, b""#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) }]
+            vec![PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) , fetch_priority: None }]
         );
     }
 
@@ -932,7 +952,7 @@ mod tests {
         let hints = parse_link_header(r#"</x.css>; REL=Preload; AS=Style"#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Preload { url: "/x.css".into(), as_kind: Some("style".into()) }]
+            vec![PreloadHint::Preload { url: "/x.css".into(), as_kind: Some("style".into()) , fetch_priority: None }]
         );
     }
 
@@ -945,7 +965,110 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "x.bin".into(),
-                as_kind: None,
+                as_kind: None, fetch_priority: None }]
+        );
+    }
+
+    // ---- срез 4: `fetchpriority` на `<link>`/`<img>`/`<script>` ----
+
+    #[test]
+    fn link_fetchpriority_high_and_low() {
+        let hints = scan_preload_hints(
+            r#"<link rel="stylesheet" href="a.css" fetchpriority="high">
+               <link rel="preload" href="b.woff2" as="font" fetchpriority="LOW">"#,
+        );
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::Stylesheet {
+                    url: "a.css".into(),
+                    media: None,
+                    fetch_priority: Some("high".into()),
+                },
+                PreloadHint::Preload {
+                    url: "b.woff2".into(),
+                    as_kind: Some("font".into()),
+                    fetch_priority: Some("low".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn link_fetchpriority_auto_and_invalid_yield_none() {
+        let hints = scan_preload_hints(
+            r#"<link rel="stylesheet" href="a.css" fetchpriority="auto">
+               <link rel="stylesheet" href="b.css" fetchpriority="bogus">
+               <link rel="stylesheet" href="c.css">"#,
+        );
+        for hint in &hints {
+            let PreloadHint::Stylesheet { fetch_priority, .. } = hint else { panic!() };
+            assert_eq!(*fetch_priority, None);
+        }
+    }
+
+    #[test]
+    fn link_fetchpriority_shared_across_multi_token_rel() {
+        // `fetchpriority` — content-атрибут самого `<link>`, применяется к
+        // обоим hint-ам multi-token `rel`.
+        let hints = scan_preload_hints(
+            r#"<link rel="preload stylesheet" href="hero.css" as="style" fetchpriority="high">"#,
+        );
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::Preload {
+                    url: "hero.css".into(),
+                    as_kind: Some("style".into()),
+                    fetch_priority: Some("high".into()),
+                },
+                PreloadHint::Stylesheet {
+                    url: "hero.css".into(),
+                    media: None,
+                    fetch_priority: Some("high".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn img_fetchpriority_high() {
+        let hints = scan_preload_hints(r#"<img src="hero.png" fetchpriority="high">"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Image {
+                url: Some("hero.png".into()),
+                srcset: None,
+                sizes: None,
+                fetch_priority: Some("high".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn script_fetchpriority_low() {
+        let hints = scan_preload_hints(r#"<script src="ads.js" fetchpriority="low"></script>"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Script {
+                url: "ads.js".into(),
+                fetch_priority: Some("low".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn link_header_never_sets_fetchpriority() {
+        // RFC 8288 не определяет параметр `fetchpriority` — только
+        // HTML-атрибут несёт author-override; заголовочные hint-ы (Early
+        // Hints/обычный ответ) всегда падают на эвристику `for_kind`.
+        let hints = parse_link_header(r#"<a.css>; rel=preload; as=style; fetchpriority=high"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Preload {
+                url: "a.css".into(),
+                as_kind: Some("style".into()),
+                fetch_priority: None,
             }]
         );
     }
@@ -1026,7 +1149,7 @@ mod streaming_tests {
         hints.extend(scanner.end());
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "styles.css".into(), media: None }]
+            vec![PreloadHint::Stylesheet { url: "styles.css".into(), media: None , fetch_priority: None }]
         );
     }
 
@@ -1041,7 +1164,7 @@ mod streaming_tests {
         assert_eq!(batch, streaming);
         assert_eq!(
             streaming,
-            vec![PreloadHint::Stylesheet { url: "late.css".into(), media: None }]
+            vec![PreloadHint::Stylesheet { url: "late.css".into(), media: None , fetch_priority: None }]
         );
     }
 
@@ -1058,7 +1181,7 @@ mod streaming_tests {
         let hints = scan_byte_by_byte(html);
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "/тема.css".into(), media: None }]
+            vec![PreloadHint::Stylesheet { url: "/тема.css".into(), media: None , fetch_priority: None }]
         );
     }
 
@@ -1073,8 +1196,7 @@ mod streaming_tests {
             vec![PreloadHint::Image {
                 url: Some("real.png".into()),
                 srcset: None,
-                sizes: None,
-            }]
+                sizes: None, fetch_priority: None }]
         );
     }
 
