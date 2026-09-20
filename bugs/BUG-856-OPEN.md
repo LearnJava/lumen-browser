@@ -111,3 +111,50 @@ Windows, `--seconds 6`):
 
 Не проверялось: реальный прогон `run_report.py --root websockets` (только
 живой probe выше).
+
+## Срез 4 (2026-09-20, `p6-gap-wsasync-srez4`) — отменяемый хэндшейк, остаток среза 1 закрыт
+
+`close()`, вызванный, пока `readyState` ещё `CONNECTING`, теперь прерывает
+фоновый хэндшейк немедленно вместо ожидания `FETCH_READ_TIMEOUT` (60 с) —
+ровно тот остаток, что срез 1 сознательно не тронул.
+
+Механизм — тот же, что уже использует `do_request` для отмены `fetch()` в
+полёте (`AbortToken`/`AbortScope`/`AbortWatchdog`, `crates/network/src/lib.rs`),
+доведённый до WebSocket-хэндшейка:
+
+- `JsWebSocketProvider` (`crates/core/src/ext.rs`) получил новый метод
+  `connect_cancellable(url, protocols, token: &AbortToken)` с реализацией по
+  умолчанию, делегирующей в `connect()` (моки в
+  `crates/js/src/dom/tests/v8_ws_sse.rs` не блокируются, поэтому дефолт для
+  них корректен без правок).
+- `HttpClient::connect_cancellable` (`crates/network/src/lib.rs`) устанавливает
+  токен на текущий поток через `AbortScope` на время синхронного
+  `connect_ws_impl` (общая приватная реализация, вынесенная из старого тела
+  `connect()`).
+- `websocket::WebSocket::connect_deflate` (`crates/network/src/websocket/mod.rs`)
+  читает токен обратно через `current_abort_token()` и оборачивает только
+  блокирующее чтение Upgrade-ответа (`upgrade::perform_with_deflate`) в
+  `AbortWatchdog`, который делает `shutdown()` сокета при отмене — тот же
+  приём, что `do_request` уже применяет к чтению тела ответа.
+- `PendingWsSession::close()` (`crates/js/src/v8_runtime/install/net.rs`)
+  при `Connecting` теперь не только запоминает `close_requested`
+  (код/причина для случая гонки с успешным подключением), но и сразу зовёт
+  `cancel.abort()`; фоновый поток вызывает `provider.connect_cancellable`
+  вместо `provider.connect`.
+
+Прямое измерение (`verify_focus_mutation_animation_gaps.py --variant
+ws-close-connecting`, dev-release, Windows, `--seconds 8`): против `/sleep`
+(сервер пробы принимает TCP и не отвечает на Upgrade вовсе — тот же сервер,
+что и `ws-connect-hang`) `close()`, позванный на 1000 мс, теперь доводит до
+`wsc-error readyState=2` и `wsc-close readyState=3 code=1006 clean=false` в
+пределах 8-секундного окна теста; до этого среза оба маркера появились бы
+только после полных 60 с `FETCH_READ_TIMEOUT`, то есть не появились бы в
+этом окне вовсе. `ws-connect-hang`/`ws-echo` перемерены без регрессии.
+
+Не в этом срезе:
+- Реальный прогон `run_report.py --root websockets --recursive` — ни один
+  срез 1–4 его не делал, только живые probe.
+- [BUG-869](BUG-869-OPEN.md) фактически закрыт срезами 2–3 (`GAP-WSASYNC`),
+  но статус `GAP-WSASYNC` в `ROADMAP.md` остаётся `planned` до WPT-прогона
+  выше.
+- [BUG-862](BUG-862-OPEN.md) — не трогался, отдельная заявка.

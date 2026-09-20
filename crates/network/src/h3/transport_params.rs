@@ -99,6 +99,10 @@ pub const PARAM_INITIAL_SOURCE_CONNECTION_ID: u64 = 0x0f;
 /// `retry_source_connection_id` (0x10) — the Source Connection ID from a Retry
 /// packet; server-only (RFC 9000 §18.2).
 pub const PARAM_RETRY_SOURCE_CONNECTION_ID: u64 = 0x10;
+/// `max_datagram_frame_size` (0x20) — the largest DATAGRAM frame the endpoint
+/// is willing to receive; its absence declares the endpoint will not process
+/// one at all (RFC 9221 §3). Not part of the RFC 9000 §18.2 base registry.
+pub const PARAM_MAX_DATAGRAM_FRAME_SIZE: u64 = 0x20;
 
 // ── Defaults and limits (RFC 9000 §18.2) ────────────────────────────────────
 
@@ -299,6 +303,11 @@ pub struct TransportParameters {
     pub initial_source_connection_id: Option<Vec<u8>>,
     /// `retry_source_connection_id` (server-only).
     pub retry_source_connection_id: Option<Vec<u8>>,
+    /// `max_datagram_frame_size` (RFC 9221 §3); `None` means the endpoint does
+    /// not support the QUIC DATAGRAM extension at all — the caller must not
+    /// send a [`Datagram`](super::quic_frame::Frame::Datagram) frame to it
+    /// regardless of what fits under a `Some` value.
+    pub max_datagram_frame_size: Option<u64>,
     /// Unknown / reserved (GREASE) parameters, `(id, value)`, preserved in the
     /// order received so a round-trip is byte-stable (RFC 9000 §18.1).
     pub unknown: Vec<(u64, Vec<u8>)>,
@@ -435,6 +444,9 @@ impl TransportParameters {
             PARAM_RETRY_SOURCE_CONNECTION_ID => {
                 self.retry_source_connection_id = Some(value.to_vec());
             }
+            PARAM_MAX_DATAGRAM_FRAME_SIZE => {
+                self.max_datagram_frame_size = Some(int_value(id, value)?);
+            }
             // Unknown or reserved (GREASE) parameter — preserve and ignore
             // (RFC 9000 §18.1).
             _ => self.unknown.push((id, value.to_vec())),
@@ -504,6 +516,9 @@ impl TransportParameters {
         }
         if let Some(cid) = &self.retry_source_connection_id {
             put_bytes_param(PARAM_RETRY_SOURCE_CONNECTION_ID, cid, &mut out)?;
+        }
+        if let Some(v) = self.max_datagram_frame_size {
+            put_int_param(PARAM_MAX_DATAGRAM_FRAME_SIZE, v, &mut out)?;
         }
         for (id, value) in &self.unknown {
             put_bytes_param(*id, value, &mut out)?;
@@ -620,11 +635,22 @@ mod tests {
             disable_active_migration: true,
             active_connection_id_limit: Some(4),
             initial_source_connection_id: Some(vec![0xde, 0xad, 0xbe, 0xef]),
+            max_datagram_frame_size: Some(65_535),
             ..Default::default()
         };
         let wire = params.serialize().expect("serialize");
         let parsed = TransportParameters::parse(&wire).expect("parse");
         assert_eq!(parsed, params);
+    }
+
+    /// `max_datagram_frame_size` round-trips and defaults to unsupported
+    /// (RFC 9221 §3 — absence means the endpoint will not process DATAGRAM at all).
+    #[test]
+    fn max_datagram_frame_size_roundtrips_and_defaults_to_absent() {
+        assert_eq!(TransportParameters::default().max_datagram_frame_size, None);
+        let params = TransportParameters { max_datagram_frame_size: Some(1200), ..Default::default() };
+        let wire = params.serialize().unwrap();
+        assert_eq!(TransportParameters::parse(&wire).unwrap(), params);
     }
 
     /// Absent parameters resolve to their RFC 9000 §18.2 defaults.

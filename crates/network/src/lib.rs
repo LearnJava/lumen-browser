@@ -1022,6 +1022,28 @@ struct WebTransportSession {
     /// local endpoint's own transport params — GAP-WEBTRANSPORT срез 4b).
     peer_initial_max_stream_data_bidi: u64,
     next_bidi_stream_number: u64,
+    /// Peer-initiated unidirectional streams whose WebTransport header
+    /// (`0x54` + session id, draft-ietf-webtrans-http3 §4.2) has not yet
+    /// fully arrived — accumulated across polls by
+    /// [`HttpClient::webtransport_poll_incoming_uni_streams`] until
+    /// [`h3::client_transport::parse_webtransport_uni_header`] succeeds
+    /// (GAP-WEBTRANSPORT срез 4d).
+    pending_peer_uni_headers: std::collections::HashMap<u64, Vec<u8>>,
+    /// Application bytes read past a peer-initiated uni stream's header
+    /// before the header was fully classified, held here until
+    /// [`HttpClient::webtransport_read_incoming_uni_stream`]'s first call for
+    /// that stream prepends them to the live read (GAP-WEBTRANSPORT срез 4d).
+    peer_uni_stream_leftover: std::collections::HashMap<u64, Vec<u8>>,
+    /// Same accumulation shape as `pending_peer_uni_headers`, for a
+    /// peer-initiated **bidirectional** stream's `WEBTRANSPORT_STREAM` header
+    /// (`0x41` + session id, draft-ietf-webtrans-http3 §4.3) — a separate map
+    /// because a discovered bidi id shares no numeric range with a uni id
+    /// (RFC 9000 §2.1) but still needs its own independent per-id
+    /// accumulation state (GAP-WEBTRANSPORT срез 4e).
+    pending_peer_bidi_headers: std::collections::HashMap<u64, Vec<u8>>,
+    /// Same role as `peer_uni_stream_leftover`, for a peer-initiated bidi
+    /// stream (GAP-WEBTRANSPORT срез 4e).
+    peer_bidi_stream_leftover: std::collections::HashMap<u64, Vec<u8>>,
 }
 
 type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, WebTransportSession>>>;
@@ -4633,6 +4655,10 @@ impl JsFetchProvider for HttpClient {
                 next_uni_stream_number: 0,
                 peer_initial_max_stream_data_bidi: config.initial_max_stream_data_bidi_remote,
                 next_bidi_stream_number: 0,
+                pending_peer_uni_headers: std::collections::HashMap::new(),
+                peer_uni_stream_leftover: std::collections::HashMap::new(),
+                pending_peer_bidi_headers: std::collections::HashMap::new(),
+                peer_bidi_stream_leftover: std::collections::HashMap::new(),
             },
         );
 
@@ -4754,9 +4780,175 @@ impl JsFetchProvider for HttpClient {
             h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
         Ok((bytes, finished))
     }
+
+    /// GAP-WEBTRANSPORT срез 4d: `incomingUnidirectionalStreams`'s discovery
+    /// primitive — drains one non-blocking sweep of the session `handle`
+    /// names' transport, finds every peer-initiated unidirectional stream
+    /// newly opened toward us since the last call
+    /// ([`h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver`],
+    /// filtered to [`h3::stream::is_unidirectional`] ids — a discovered
+    /// bidirectional id is classified too, by [`Self::classify_discovered_peer_streams`],
+    /// but only [`Self::webtransport_poll_incoming_bidi_streams`] reports it),
+    /// and returns the ids whose WebTransport stream header has now fully
+    /// arrived and been stripped
+    /// ([`h3::client_transport::parse_webtransport_uni_header`]) — ready for
+    /// [`Self::webtransport_read_incoming_uni_stream`].
+    ///
+    /// An id discovered this call but whose header is still incomplete (split
+    /// across more than one STREAM frame) is not returned yet; it stays
+    /// queued in [`WebTransportSession::pending_peer_uni_headers`] and is
+    /// retried on the next call, same as every other id still pending.
+    fn webtransport_poll_incoming_uni_streams(&self, handle: i32) -> Result<Vec<u64>> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+
+        Self::classify_discovered_peer_streams(session)?;
+
+        let mut ready = Vec::new();
+        let pending_ids: Vec<u64> = session.pending_peer_uni_headers.keys().copied().collect();
+        for id in pending_ids {
+            let chunk =
+                h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, id)
+                    .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
+            let buf = session.pending_peer_uni_headers.entry(id).or_default();
+            buf.extend_from_slice(&chunk);
+            if let Some(header_len) = h3::client_transport::parse_webtransport_uni_header(buf) {
+                let leftover = buf.split_off(header_len);
+                session.pending_peer_uni_headers.remove(&id);
+                session.peer_uni_stream_leftover.insert(id, leftover);
+                ready.push(id);
+            }
+        }
+        Ok(ready)
+    }
+
+    /// GAP-WEBTRANSPORT срез 4e: `incomingBidirectionalStreams`'s discovery
+    /// primitive — the bidi counterpart of
+    /// [`Self::webtransport_poll_incoming_uni_streams`]. Shares its discovery
+    /// step ([`Self::classify_discovered_peer_streams`]) and its header-parse
+    /// loop shape, but drains [`WebTransportSession::pending_peer_bidi_headers`]
+    /// instead, and a returned id already has its send half registered (see
+    /// [`Self::classify_discovered_peer_streams`]'s doc) — ready for both
+    /// [`Self::webtransport_read_incoming_bidi_stream`] and, unchanged, the
+    /// existing `webtransport_write_uni_stream`/`webtransport_close_uni_stream`/
+    /// `webtransport_abort_uni_stream`.
+    fn webtransport_poll_incoming_bidi_streams(&self, handle: i32) -> Result<Vec<u64>> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+
+        Self::classify_discovered_peer_streams(session)?;
+
+        let mut ready = Vec::new();
+        let pending_ids: Vec<u64> = session.pending_peer_bidi_headers.keys().copied().collect();
+        for id in pending_ids {
+            let chunk =
+                h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, id)
+                    .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
+            let buf = session.pending_peer_bidi_headers.entry(id).or_default();
+            buf.extend_from_slice(&chunk);
+            if let Some(header_len) = h3::client_transport::parse_webtransport_uni_header(buf) {
+                let leftover = buf.split_off(header_len);
+                session.pending_peer_bidi_headers.remove(&id);
+                session.peer_bidi_stream_leftover.insert(id, leftover);
+                ready.push(id);
+            }
+        }
+        Ok(ready)
+    }
+
+    /// GAP-WEBTRANSPORT срез 4e: reads a peer-initiated bidirectional
+    /// stream's bytes — the read half `incomingBidirectionalStreams` hands
+    /// JS once [`Self::webtransport_poll_incoming_bidi_streams`] reports
+    /// `stream_id` ready. Same "prepend the header-parse leftover, then drive
+    /// the shared non-blocking read primitive" shape as
+    /// [`Self::webtransport_read_incoming_uni_stream`].
+    fn webtransport_read_incoming_bidi_stream(&self, handle: i32, stream_id: u64) -> Result<(Vec<u8>, bool)> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let mut bytes = session.peer_bidi_stream_leftover.remove(&stream_id).unwrap_or_default();
+        let chunk =
+            h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, stream_id)
+                .map_err(|e| Error::Network(format!("WebTransport read incoming stream: {e}")))?;
+        bytes.extend_from_slice(&chunk);
+        let finished =
+            h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
+        Ok((bytes, finished))
+    }
+
+    /// GAP-WEBTRANSPORT срез 4d: reads a peer-initiated unidirectional
+    /// stream's bytes — the read half `incomingUnidirectionalStreams` hands
+    /// JS a `ReadableStream` for, once
+    /// [`Self::webtransport_poll_incoming_uni_streams`] reports `stream_id`
+    /// ready. Prepends any application bytes
+    /// [`Self::webtransport_poll_incoming_uni_streams`] already read past the
+    /// header while classifying the stream (only ever non-empty on the first
+    /// call for a given `stream_id`), then drives the same non-blocking read
+    /// primitive [`Self::webtransport_read_bidi_stream`] uses.
+    fn webtransport_read_incoming_uni_stream(&self, handle: i32, stream_id: u64) -> Result<(Vec<u8>, bool)> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let mut bytes = session.peer_uni_stream_leftover.remove(&stream_id).unwrap_or_default();
+        let chunk =
+            h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, stream_id)
+                .map_err(|e| Error::Network(format!("WebTransport read incoming stream: {e}")))?;
+        bytes.extend_from_slice(&chunk);
+        let finished =
+            h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
+        Ok((bytes, finished))
+    }
 }
 
 impl HttpClient {
+    /// Shared discovery step for [`JsFetchProvider::webtransport_poll_incoming_uni_streams`]
+    /// and [`JsFetchProvider::webtransport_poll_incoming_bidi_streams`]
+    /// (GAP-WEBTRANSPORT срез 4e) — drains
+    /// [`h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver`]
+    /// once and files every newly discovered id into the map its direction
+    /// owns ([`h3::stream::is_unidirectional`] → `pending_peer_uni_headers`,
+    /// [`h3::stream::is_bidirectional`] → `pending_peer_bidi_headers`).
+    ///
+    /// Calling this from both poll methods on the same session is safe
+    /// despite the shared drain: whichever call runs first for a given round
+    /// of newly-arrived ids sees and classifies all of them (into either
+    /// map, as appropriate); the other call finds nothing new from the drain
+    /// but still processes whatever is already pending in its own map. No id
+    /// is ever lost to whichever poll happens to run second.
+    ///
+    /// A bidirectional id also gets its send half registered right away
+    /// ([`h3::client_transport::h3_webtransport_open_incoming_bidi_send_on_driver`])
+    /// — unlike an incoming unidirectional stream, an incoming bidi stream's
+    /// `writable` needs a live [`h3::stream::SendStream`] under the peer's own
+    /// id before `write()`/`close()`/`abort()` on it (the pre-existing,
+    /// stream-id-generic natives) can do anything.
+    fn classify_discovered_peer_streams(session: &mut WebTransportSession) -> Result<()> {
+        let discovered =
+            h3::client_transport::h3_webtransport_poll_new_peer_streams_on_driver(&mut session.driver)
+                .map_err(|e| Error::Network(format!("WebTransport poll incoming streams: {e}")))?;
+        let peer_initial_max_stream_data_bidi = session.peer_initial_max_stream_data_bidi;
+        for id in discovered {
+            if h3::stream::is_unidirectional(id) {
+                session.pending_peer_uni_headers.entry(id).or_default();
+            } else {
+                debug_assert!(h3::stream::is_bidirectional(id));
+                h3::client_transport::h3_webtransport_open_incoming_bidi_send_on_driver(
+                    &mut session.driver,
+                    id,
+                    peer_initial_max_stream_data_bidi,
+                );
+                session.pending_peer_bidi_headers.entry(id).or_default();
+            }
+        }
+        Ok(())
+    }
+
     /// `connect-src`/`default-src` gate shared by every JS-initiated network
     /// path that owns a parsed `Url` — `fetch_request_impl` below and
     /// [`JsFetchProvider::check_connect_src`]'s override (`sendBeacon`'s
@@ -5021,16 +5213,35 @@ impl SseProvider for HttpClient {
 /// whenever a page called any WebSocket method while its socket was idle.
 const WS_RECV_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// One not-yet-written outgoing message, queued by `send_text`/`send_binary`
+/// (GAP-WSASYNC срез 2, BUG-869) so the JS thread never blocks on the socket.
+enum QueuedWsFrame {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
 /// Background-threaded WebSocket session for the JS runtime.
 ///
 /// Spawns a receive thread that pushes `JsWsEvent`s into a shared queue.
 /// JS calls `poll()` to drain the queue without blocking the script thread.
+///
+/// Sends go through the same asymmetry: `send_text`/`send_binary` only queue
+/// the frame and return, a background writer thread performs the actual
+/// blocking `write` (BUG-869 — a slow reader on the other end used to stall
+/// the write inside the JS thread, freezing the whole document for as long
+/// as the peer took to drain its TCP receive buffer).
 struct JsWebSocketSessionImpl {
-    /// For sending: shared so both this struct and (indirectly) the bg thread
-    /// can access the same underlying stream.
+    /// For sending: shared so this struct, the writer thread and (via
+    /// `close()`) the JS thread can all reach the same underlying stream.
     session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>>,
-    /// Buffered events produced by the background recv thread.
+    /// Buffered events produced by the background recv/writer threads.
     queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>>,
+    /// Outgoing messages not yet handed to `send_frame` by the writer thread.
+    send_queue: Arc<std::sync::Mutex<std::collections::VecDeque<QueuedWsFrame>>>,
+    /// `false` once the recv thread has observed Close/Error — tells the
+    /// writer thread it can stop polling `send_queue` once it drains empty,
+    /// instead of parking forever on a socket nothing will ever read again.
+    running: Arc<std::sync::atomic::AtomicBool>,
     /// Server-negotiated sub-protocol, cached at connect time — never changes
     /// afterwards, so `protocol()` doesn't need to contend with the recv
     /// thread's `session` lock at all (BUG-307).
@@ -5038,7 +5249,8 @@ struct JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketSessionImpl {
-    /// Create a new session, spawning a background thread to receive frames.
+    /// Create a new session, spawning background threads to receive frames
+    /// and to write queued outgoing ones.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn new(ws: websocket::WebSocket) -> Self {
         let protocol = ws.protocol().to_string();
@@ -5046,9 +5258,13 @@ impl JsWebSocketSessionImpl {
             Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         let session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>> =
             Arc::new(std::sync::Mutex::new(Box::new(ws)));
+        let send_queue: Arc<std::sync::Mutex<std::collections::VecDeque<QueuedWsFrame>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
         let q2 = Arc::clone(&queue);
         let s2 = Arc::clone(&session);
+        let running_recv = Arc::clone(&running);
 
         // The background thread polls recv_timeout() in a loop and pushes
         // events into the shared queue so JS can poll without blocking. Each
@@ -5091,6 +5307,7 @@ impl JsWebSocketSessionImpl {
                         q2.lock()
                             .unwrap()
                             .push_back(JsWsEvent::Close { code, reason });
+                        running_recv.store(false, std::sync::atomic::Ordering::Release);
                         break;
                     }
                     Ok(Some(
@@ -5103,25 +5320,81 @@ impl JsWebSocketSessionImpl {
                         q2.lock()
                             .unwrap()
                             .push_back(JsWsEvent::Error(e.to_string()));
+                        running_recv.store(false, std::sync::atomic::Ordering::Release);
                         break;
                     }
                 }
             }
         });
 
-        Self { session, queue, protocol }
+        let q3 = Arc::clone(&queue);
+        let s3 = Arc::clone(&session);
+        let sq2 = Arc::clone(&send_queue);
+        let running_send = Arc::clone(&running);
+
+        // Writer thread: drains `send_queue` in FIFO order, one message at a
+        // time, performing the actual blocking socket write off the JS
+        // thread. A `Flushed` event reports each message's application-data
+        // length back to JS so `bufferedAmount` can be decremented as data
+        // actually leaves — see `send_text`/`send_binary` below for the
+        // matching increment. Exits once the connection is no longer
+        // `running` and the queue has drained (nothing left to flush).
+        std::thread::spawn(move || {
+            loop {
+                let next = sq2.lock().unwrap().pop_front();
+                let Some(frame) = next else {
+                    if !running_send.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                };
+                let (result, bytes) = match frame {
+                    QueuedWsFrame::Text(text) => {
+                        let n = text.len() as u64;
+                        (s3.lock().unwrap().send_text(&text), n)
+                    }
+                    QueuedWsFrame::Binary(data) => {
+                        let n = data.len() as u64;
+                        (s3.lock().unwrap().send_binary(&data), n)
+                    }
+                };
+                match result {
+                    Ok(()) => {
+                        q3.lock().unwrap().push_back(JsWsEvent::Flushed { bytes });
+                    }
+                    Err(e) => {
+                        q3.lock()
+                            .unwrap()
+                            .push_back(JsWsEvent::Error(e.to_string()));
+                        running_send.store(false, std::sync::atomic::Ordering::Release);
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self { session, queue, send_queue, running, protocol }
     }
 }
 
 impl JsWebSocketSession for JsWebSocketSessionImpl {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_text(&self, text: &str) -> Result<()> {
-        self.session.lock().unwrap().send_text(text)
+        self.send_queue
+            .lock()
+            .unwrap()
+            .push_back(QueuedWsFrame::Text(text.to_string()));
+        Ok(())
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_binary(&self, data: &[u8]) -> Result<()> {
-        self.session.lock().unwrap().send_binary(data)
+        self.send_queue
+            .lock()
+            .unwrap()
+            .push_back(QueuedWsFrame::Binary(data.to_vec()));
+        Ok(())
     }
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -5131,7 +5404,23 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
 
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn close(&self, code: u16, reason: &str) -> Result<()> {
-        self.session.lock().unwrap().close(code, reason)
+        self.running.store(false, std::sync::atomic::Ordering::Release);
+        // GAP-WSASYNC срез 3 (BUG-869): `session.close()` blocks on the same
+        // mutex the writer thread can be holding for the duration of a
+        // blocking `send_text`/`send_binary` under backpressure — calling it
+        // straight from the JS thread (as this used to) stalled the whole
+        // document for however long that write took. Run it on a detached
+        // thread instead: the caller (`_lumen_ws_close`) already discards
+        // this method's `Result`, and the shim has already flipped
+        // `readyState` to CLOSING before invoking it, so nothing observable
+        // depends on the close frame having gone out by the time this
+        // returns.
+        let session = Arc::clone(&self.session);
+        let reason = reason.to_string();
+        std::thread::spawn(move || {
+            let _ = session.lock().unwrap().close(code, &reason);
+        });
+        Ok(())
     }
 
     fn protocol(&self) -> String {
@@ -5140,8 +5429,34 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketProvider for HttpClient {
-    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
+        self.connect_ws_impl(url, protocols)
+    }
+
+    /// GAP-WSASYNC срез 4 (BUG-856): installs `token` on this thread via
+    /// [`AbortScope`] for the duration of the (synchronous) handshake —
+    /// `websocket::WebSocket::connect_deflate` reads it back via
+    /// `current_abort_token()` and spawns an `AbortWatchdog` around the
+    /// blocking Upgrade read, exactly like `do_request` does for an
+    /// in-flight fetch. This is the caller-visible half of `close()` during
+    /// `CONNECTING` no longer waiting out `FETCH_READ_TIMEOUT`.
+    fn connect_cancellable(
+        &self,
+        url: &str,
+        protocols: &[String],
+        token: &AbortToken,
+    ) -> Result<Box<dyn JsWebSocketSession>> {
+        if token.is_aborted() {
+            return Err(Error::Aborted("ws: connect aborted".to_string()));
+        }
+        let _scope = AbortScope::new(token.clone());
+        self.connect_ws_impl(url, protocols)
+    }
+}
+
+impl HttpClient {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn connect_ws_impl(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
         // GAP-CSPENF срез 49: upgrade `ws:` to `wss:` before the gate below —

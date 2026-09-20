@@ -332,13 +332,17 @@ impl QuicConnection {
             // Loss detection owns ACK processing; not held by this slice.
             Frame::Ack { .. } => effects.deferred.push(frame.clone()),
 
-            // The stream manager (a later slice) owns per-stream state.
+            // The stream manager (a later slice) owns per-stream state; DATAGRAM
+            // has no stream to own but is likewise routed to a higher layer
+            // (RFC 9221 §4 — WebTransport session lookup, not this connection's
+            // job) rather than handled here.
             Frame::ResetStream { .. }
             | Frame::StopSending { .. }
             | Frame::Stream { .. }
             | Frame::MaxStreamData { .. }
             | Frame::StreamDataBlocked { .. }
-            | Frame::NewToken(_) => effects.deferred.push(frame.clone()),
+            | Frame::NewToken(_)
+            | Frame::Datagram(_) => effects.deferred.push(frame.clone()),
 
             Frame::Crypto { offset, data } => {
                 self.crypto_recv_mut(space).recv(*offset, data)?;

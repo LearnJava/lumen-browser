@@ -38,7 +38,7 @@
 use super::h3_exchange::{BodySink, H3Response};
 use super::request_exchange::ClientRequest;
 use super::request_mux::{MuxError, OpenError, RequestMux};
-use super::stream::SendState;
+use super::stream::{SendState, is_server_initiated};
 use super::stream_manager::{
     StreamManager, StreamManagerConfig, StreamManagerError, recv_stream_finished,
 };
@@ -125,6 +125,13 @@ pub struct RequestDispatch {
     /// [`Self::on_stream_frame_with_sink`] still accepts — see
     /// [`Self::register_foreign_stream`].
     foreign_streams: std::collections::BTreeSet<u64>,
+    /// Server-initiated stream ids [`Self::on_stream_frame_with_sink`] has
+    /// auto-registered as foreign (see there) but not yet handed to a caller
+    /// via [`Self::take_discovered_server_streams`] — a peer opening a
+    /// WebTransport stream toward us (RFC 9000 §2.1: ids `4n+1`/`4n+3`) is the
+    /// only source of these; plain HTTP/3 never has the server open a stream.
+    /// Each id is queued exactly once, the moment it is first seen.
+    discovered_server_streams: std::collections::VecDeque<u64>,
 }
 
 impl RequestDispatch {
@@ -142,6 +149,7 @@ impl RequestDispatch {
             streams: StreamManager::new(stream_config),
             peer_initial_max_stream_data_bidi_remote,
             foreign_streams: std::collections::BTreeSet::new(),
+            discovered_server_streams: std::collections::VecDeque::new(),
         }
     }
 
@@ -160,6 +168,17 @@ impl RequestDispatch {
     /// has nothing to do with the request mux.
     pub fn register_foreign_stream(&mut self, stream_id: u64) {
         self.foreign_streams.insert(stream_id);
+    }
+
+    /// Drains the server-initiated stream ids [`Self::on_stream_frame_with_sink`]
+    /// has auto-registered as foreign since the last call — a peer opening a
+    /// WebTransport stream toward us (`client_transport.rs`'s
+    /// `h3_webtransport_poll_new_peer_streams_on_driver` is the caller). Each id
+    /// is returned exactly once, in discovery order; its bytes are already
+    /// reassembling in [`Self::streams`] by the time it appears here, ready for
+    /// [`StreamManager::read`](super::stream_manager::StreamManager::read).
+    pub fn take_discovered_server_streams(&mut self) -> Vec<u64> {
+        self.discovered_server_streams.drain(..).collect()
     }
 
     /// Places `req` onto a fresh client-initiated bidirectional stream: allocate the
@@ -298,15 +317,28 @@ impl RequestDispatch {
         // layers' views of "known stream" aligned and avoids materialising
         // phantom receive state for a genuinely stray stream.
         if !self.mux.is_active(stream_id) {
-            if self.foreign_streams.contains(&stream_id) {
-                // Not an HTTP/3 request/response exchange — just reassemble the
-                // bytes into the stream layer for the owning caller (e.g. a
-                // WebTransport bidi stream reader) to drain via
-                // `streams()`/`streams_mut()`. No response is ever produced.
-                self.streams.recv_stream(stream_id, offset, data, fin)?;
-                return Ok(None);
+            if !self.foreign_streams.contains(&stream_id) {
+                if is_server_initiated(stream_id) {
+                    // The peer opened this stream toward us — a WebTransport
+                    // incoming uni/bidi stream (RFC 9000 §2.1: ids `4n+1`/
+                    // `4n+3`), the only shape of server-initiated stream this
+                    // client ever sees (HTTP/3 server push is not
+                    // implemented). Nobody could have registered it ahead of
+                    // time since its id was never ours to predict, so accept
+                    // it here, on first sight, instead of the caller pre-
+                    // registering as WebTransport's own bidi streams do.
+                    self.foreign_streams.insert(stream_id);
+                    self.discovered_server_streams.push_back(stream_id);
+                } else {
+                    return Err(DispatchError::Mux(MuxError::UnknownStream(stream_id)));
+                }
             }
-            return Err(DispatchError::Mux(MuxError::UnknownStream(stream_id)));
+            // Not an HTTP/3 request/response exchange — just reassemble the
+            // bytes into the stream layer for the owning caller (e.g. a
+            // WebTransport stream reader) to drain via
+            // `streams()`/`streams_mut()`. No response is ever produced.
+            self.streams.recv_stream(stream_id, offset, data, fin)?;
+            return Ok(None);
         }
         self.streams.recv_stream(stream_id, offset, data, fin)?;
         self.pump_recv_with_sink(stream_id, sink)
@@ -677,6 +709,44 @@ mod tests {
         d.register_foreign_stream(8);
         assert!(!d.is_active(8));
         assert_eq!(d.active_count(), 0);
+    }
+
+    // ── peer-initiated (server-initiated) streams — WebTransport incoming ────
+
+    #[test]
+    fn server_initiated_stream_is_auto_registered_and_discovered_once() {
+        // Id 3: server-initiated unidirectional (`4n+3`, n=0) — a stream the
+        // peer opened toward us, never predictable ahead of time, unlike
+        // WebTransport's own bidi streams which register themselves at open
+        // time because they picked their own id.
+        let mut d = dispatch();
+        assert_eq!(d.on_stream_frame(3, 0, b"hi", false).unwrap(), None);
+        assert_eq!(d.streams_mut().read(3), b"hi");
+        assert_eq!(d.take_discovered_server_streams(), vec![3]);
+        // Already registered: a second frame reassembles quietly and is not
+        // reported as a second discovery.
+        assert_eq!(d.on_stream_frame(3, 2, b"!", false).unwrap(), None);
+        assert_eq!(d.streams_mut().read(3), b"!");
+        assert!(d.take_discovered_server_streams().is_empty());
+    }
+
+    #[test]
+    fn client_initiated_never_opened_stream_stays_rejected() {
+        // Id 0 (client-initiated bidi) must not be swept up by the new
+        // server-initiated auto-registration path.
+        let mut d = dispatch();
+        let err = d.on_stream_frame(0, 0, b"x", false).unwrap_err();
+        assert_eq!(err, DispatchError::Mux(MuxError::UnknownStream(0)));
+        assert!(d.take_discovered_server_streams().is_empty());
+    }
+
+    #[test]
+    fn two_server_initiated_streams_are_discovered_in_order() {
+        let mut d = dispatch();
+        // Server-initiated bidi (1), then server-initiated uni (3).
+        d.on_stream_frame(1, 0, b"a", false).unwrap();
+        d.on_stream_frame(3, 0, b"b", false).unwrap();
+        assert_eq!(d.take_discovered_server_streams(), vec![1, 3]);
     }
 
     #[test]

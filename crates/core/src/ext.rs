@@ -2361,6 +2361,98 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Discovers unidirectional WebTransport streams the peer opened toward
+    /// us on the session `handle` names — GAP-WEBTRANSPORT/`P3-webtransport`
+    /// срез 4d, `incomingUnidirectionalStreams`'s discovery primitive. Never
+    /// blocks: drains one non-blocking sweep of the transport and returns the
+    /// ids of every stream whose WebTransport stream header has fully
+    /// arrived and been classified since the last call — a caller polls this
+    /// repeatedly (ultimately a JS `ReadableStream` pull on
+    /// `incomingUnidirectionalStreams` itself), same shape as
+    /// [`webtransport_read_bidi_stream`](Self::webtransport_read_bidi_stream)'s
+    /// per-stream poll.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_poll_incoming_uni_streams(&self, handle: i32) -> Result<Vec<u64>> {
+        let _ = handle;
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+
+    /// Reads a peer-initiated unidirectional WebTransport stream's bytes —
+    /// the read half `incomingUnidirectionalStreams` hands JS once
+    /// [`webtransport_poll_incoming_uni_streams`](Self::webtransport_poll_incoming_uni_streams)
+    /// reports `stream_id` ready. Never blocks, same `(bytes, finished)`
+    /// contract as
+    /// [`webtransport_read_bidi_stream`](Self::webtransport_read_bidi_stream).
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_read_incoming_uni_stream(
+        &self,
+        handle: i32,
+        stream_id: u64,
+    ) -> Result<(Vec<u8>, bool)> {
+        let _ = (handle, stream_id);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+
+    /// Discovers bidirectional WebTransport streams the peer opened toward us
+    /// on the session `handle` names — GAP-WEBTRANSPORT/`P3-webtransport`
+    /// срез 4e, `incomingBidirectionalStreams`'s discovery primitive. Same
+    /// contract as
+    /// [`webtransport_poll_incoming_uni_streams`](Self::webtransport_poll_incoming_uni_streams)
+    /// (never blocks, returns ids whose WebTransport stream header has fully
+    /// arrived and been stripped since the last call), except a returned id
+    /// also has its send half already registered — a peer-initiated
+    /// bidirectional stream needs a writable half back to the peer, unlike
+    /// an incoming unidirectional one.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_poll_incoming_bidi_streams(&self, handle: i32) -> Result<Vec<u64>> {
+        let _ = handle;
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+
+    /// Reads a peer-initiated bidirectional WebTransport stream's bytes —
+    /// the read half `incomingBidirectionalStreams` hands JS once
+    /// [`webtransport_poll_incoming_bidi_streams`](Self::webtransport_poll_incoming_bidi_streams)
+    /// reports `stream_id` ready. Never blocks, same `(bytes, finished)`
+    /// contract as
+    /// [`webtransport_read_incoming_uni_stream`](Self::webtransport_read_incoming_uni_stream).
+    /// The write half of the same stream reuses
+    /// [`webtransport_write_uni_stream`](Self::webtransport_write_uni_stream)/
+    /// [`webtransport_close_uni_stream`](Self::webtransport_close_uni_stream)/
+    /// [`webtransport_abort_uni_stream`](Self::webtransport_abort_uni_stream)
+    /// unchanged — those are already generic over any already-open
+    /// `stream_id`, and
+    /// [`webtransport_poll_incoming_bidi_streams`](Self::webtransport_poll_incoming_bidi_streams)
+    /// is what makes a discovered id "already open" for writing.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_read_incoming_bidi_stream(
+        &self,
+        handle: i32,
+        stream_id: u64,
+    ) -> Result<(Vec<u8>, bool)> {
+        let _ = (handle, stream_id);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —
@@ -2841,6 +2933,15 @@ pub enum JsWsEvent {
     },
     /// Unrecoverable network or protocol error.
     Error(String),
+    /// A queued outgoing message finished writing to the socket (GAP-WSASYNC
+    /// срез 2, BUG-869) — `bytes` is the application-data length `send()`
+    /// added to `bufferedAmount` when it queued the message; the shim
+    /// subtracts it back out on delivery so `bufferedAmount` reflects only
+    /// what is still queued, not yet on the wire.
+    Flushed {
+        /// Application-data byte length of the message that just finished sending.
+        bytes: u64,
+    },
 }
 
 /// A live WebSocket connection from the JS runtime's perspective.
@@ -2881,6 +2982,27 @@ pub trait JsWebSocketProvider: Send + Sync {
     /// `protocols` is the client's ordered list of sub-protocol preferences
     /// (`Sec-WebSocket-Protocol`); pass an empty slice to request none.
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>>;
+
+    /// Like [`Self::connect`], but honours `token` (GAP-WSASYNC срез 4,
+    /// BUG-856): a caller that aborts `token` while this call is blocked
+    /// inside the handshake — e.g. `WebSocket.close()` invoked while
+    /// `readyState` is still `CONNECTING`, against a server that accepts the
+    /// TCP connection and never answers the Upgrade request — unblocks it
+    /// immediately instead of waiting out the full handshake timeout.
+    ///
+    /// Default implementation ignores `token` and delegates to
+    /// [`Self::connect`] — the real network path (`lumen-network::HttpClient`)
+    /// overrides this; the fixed-outcome test mocks in
+    /// `crates/js/src/dom/tests/v8_ws_sse.rs` never block, so the default is
+    /// correct for them too.
+    fn connect_cancellable(
+        &self,
+        url: &str,
+        protocols: &[String],
+        _token: &AbortToken,
+    ) -> Result<Box<dyn JsWebSocketSession>> {
+        self.connect(url, protocols)
+    }
 }
 
 /// Persistence boundary for the IndexedDB JS shim.
