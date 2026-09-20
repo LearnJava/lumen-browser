@@ -21,8 +21,8 @@ fn dispatch_preload_hints_emits_events() {
         Arc::new(CollectingSink(Mutex::new(Vec::new())));
     let base = ResourceBase::Url("https://example.com/".to_owned());
     let hints = vec![
-        PreloadHint::Stylesheet { url: "reset.css".into(), media: None },
-        PreloadHint::Script { url: "https://cdn.example.com/lib.js".into() },
+        PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None },
+        PreloadHint::Script { url: "https://cdn.example.com/lib.js".into(), fetch_priority: None },
     ];
 
     dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -65,9 +65,9 @@ fn dispatch_preload_hints_deduplicates_same_url() {
     let base = ResourceBase::Url("https://example.com/".to_owned());
     // rel="preload stylesheet" создаёт два хинта на один href
     let hints = vec![
-        PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()) },
-        PreloadHint::Stylesheet { url: "style.css".into(), media: None },
-        PreloadHint::Stylesheet { url: "other.css".into(), media: None },
+        PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()), fetch_priority: None },
+        PreloadHint::Stylesheet { url: "style.css".into(), media: None, fetch_priority: None },
+        PreloadHint::Stylesheet { url: "other.css".into(), media: None, fetch_priority: None },
     ];
 
     dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -105,13 +105,13 @@ fn dispatch_preload_hints_cross_call_dedup() {
     let mut seen = std::collections::HashSet::new();
 
     // Первый вызов — ранний скан (streaming chunk)
-    let early = vec![PreloadHint::Stylesheet { url: "reset.css".into(), media: None }];
+    let early = vec![PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None }];
     dispatch_preload_hints(&early, &base, &sink, &mut seen);
 
     // Второй вызов — финальный pipeline: те же хинты + новый
     let full = vec![
-        PreloadHint::Stylesheet { url: "reset.css".into(), media: None },
-        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
+        PreloadHint::Stylesheet { url: "reset.css".into(), media: None, fetch_priority: None },
+        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None },
     ];
     dispatch_preload_hints(&full, &base, &sink, &mut seen);
 
@@ -146,9 +146,9 @@ fn dispatch_preload_hints_sorts_by_priority() {
     let base = ResourceBase::Url("https://example.com/".to_owned());
     // Source-order: img (Low) → script (Medium) → css (High)
     let hints = vec![
-        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
-        PreloadHint::Script { url: "app.js".into() },
-        PreloadHint::Stylesheet { url: "main.css".into(), media: None },
+        PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None, fetch_priority: None },
+        PreloadHint::Script { url: "app.js".into(), fetch_priority: None },
+        PreloadHint::Stylesheet { url: "main.css".into(), media: None, fetch_priority: None },
     ];
 
     dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -168,6 +168,54 @@ fn dispatch_preload_hints_sorts_by_priority() {
         *priority
     }).collect();
     assert_eq!(priorities, vec![FetchPriority::High, FetchPriority::Medium, FetchPriority::Low]);
+}
+
+/// P3-earlyhints срез 4: `fetchpriority="high|low"` на `<img>`/`<link>`/
+/// `<script>` переопределяет эвристику `FetchPriority::for_kind`, даже
+/// когда она бы предсказала обратное (image=Low по умолчанию → High;
+/// script=Medium по умолчанию → Low).
+#[test]
+fn dispatch_preload_hints_fetchpriority_overrides_heuristic() {
+    use lumen_core::event::SubresourceKind;
+    use lumen_html_parser::PreloadHint;
+    use std::sync::{Arc, Mutex};
+
+    struct CollectingSink(Mutex<Vec<Event>>);
+    impl EventSink for CollectingSink {
+        fn emit(&self, e: &Event) { self.0.lock().unwrap().push(e.clone()); }
+    }
+
+    let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
+    let base = ResourceBase::Url("https://example.com/".to_owned());
+    let hints = vec![
+        PreloadHint::Image {
+            url: Some("hero.png".into()),
+            srcset: None,
+            sizes: None,
+            fetch_priority: Some("high".into()),
+        },
+        PreloadHint::Script { url: "app.js".into(), fetch_priority: Some("low".into()) },
+    ];
+
+    dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
+
+    let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+    // SAFETY: см. остальные тесты этого файла — тот же однократно
+    // созданный `Arc<CollectingSink>`, ни разу не переприсвоенный.
+    let events = unsafe { (*sink_any).0.lock().unwrap() };
+    assert_eq!(events.len(), 2);
+
+    let by_kind = |k: SubresourceKind| {
+        events
+            .iter()
+            .find_map(|e| {
+                let Event::SubresourceHintFound { kind, priority, .. } = e else { panic!() };
+                (*kind == k).then_some(*priority)
+            })
+            .unwrap()
+    };
+    assert_eq!(by_kind(SubresourceKind::Image), FetchPriority::High);
+    assert_eq!(by_kind(SubresourceKind::Script), FetchPriority::Low);
 }
 
 #[test]

@@ -73,10 +73,26 @@
 сегодня только строка в stderr-логе (реальный fetch делает JS-шим на DOM-элементе),
 поэтому цена возможного дубликата — одна лишняя строка лога, не лишний сетевой запрос.
 
-### Срез 4 — S — HTML-атрибут `fetchpriority`
-Читать `fetchpriority` на `<img>`/`<link>`/`<script>` в preload-сканере/DOM; override
-эвристики `FetchPriority::for_kind`. Добавить `FetchPriority::Auto` или отдельный
-`Option<explicit>` слой. Юнит-тест: `<img fetchpriority=high>` → High, `low` → Low.
+### Срез 4 — S — HTML-атрибут `fetchpriority` — **сделано 2026-09-21 (P1)**
+`lumen_html_parser::preload_scanner::normalize_fetch_priority` (`high`/`low`
+case-insensitive → сохраняется, `auto`/отсутствие/опечатка → `None`) читает
+`fetchpriority` в `collect_link_hints`/`collect_script_hint`/`collect_img_hint`;
+новое поле `fetch_priority: Option<String>` на `PreloadHint::Stylesheet`/
+`Script`/`Image`/`Preload` (на `<link>` — один атрибут тега, общий для всех
+hint-ов multi-token `rel`). `Link`-заголовок (срез 3, `parse_link_header`)
+осознанно всегда даёт `None` — RFC 8288 не определяет такой параметр, только
+HTML-атрибут несёт author-override. Отдельный `Option<explicit>`-слой вместо
+`FetchPriority::Auto`: новый `FetchPriority::from_attr(Option<&str>) -> Option<Self>`
+(`crates/core/src/event.rs`) возвращает override только для `"high"`/`"low"`,
+`page_pipeline.rs`'s `dispatch_preload_hints` берёт
+`from_attr(fp).unwrap_or_else(|| for_kind(kind))` и для сортировки, и для
+самого `Event::SubresourceHintFound.priority` — override переживает и
+`sort_by_key`, и emit. 6 новых тестов `lumen-html-parser` (`link_fetchpriority_*`,
+`img_fetchpriority_high`, `script_fetchpriority_low`, `link_header_never_sets_fetchpriority`),
+1 новый тест `lumen-shell` (`dispatch_preload_hints_fetchpriority_overrides_heuristic`:
+`<img fetchpriority=high>` → High вместо дефолтного Low, `<script fetchpriority=low>`
+→ Low вместо дефолтного Medium). `cargo clippy -p lumen-core -p lumen-html-parser
+-p lumen-shell --all-targets -D warnings` зелёный.
 
 ### Срез 5 — XS — `fetch(url, {priority})` на JS-стороне
 Читать `init.priority` (`'high'|'low'|'auto'`) в `fetch()`-шиме `dom.rs`, прокинуть в
