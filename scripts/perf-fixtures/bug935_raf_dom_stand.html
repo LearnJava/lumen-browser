@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<!--
+  BUG-935 срез 29 — детерминированный офлайн-стенд для census'а
+  M4-incremental rAF-пути (`try_relayout_raf_incremental`,
+  `relayout_raf_dirty`/`relayout_raf_dirty_readback`).
+
+  S1-S28 мерили симптом на живых сайтах (ria.ru/lenta.ru) — рекламный/
+  аналитический трафик тех сайтов оказался доминирующим и нестабильным
+  вкладом в scroll RTT (S5/S11-S28), из-за чего строгий интерливед A/B
+  (S28) не смог отделить эффект правки от шума. Этот файл воспроизводит
+  ТОЛЬКО механизм исходного симптома — активный requestAnimationFrame-цикл,
+  трогающий DOM на каждом тике (как videojs-плеер на ria.ru, «Корень» раздел
+  BUG-935-OPEN.md) — без единого сетевого запроса, так что каждый прогон
+  на одной и той же машине детерминирован по составу работы (не по её
+  длительности — та всё ещё зависит от станка, отсюда чередующийся A/B
+  протокола, docs/perf-method.md §4).
+
+  Загружать как file://-URL (см. scripts/input_perf.py::to_url) —
+  никакой HTTP-сервер не нужен и не должен использоваться, сама точка
+  этого стенда — ноль сетевого ввода-вывода.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>BUG-935 synthetic rAF+DOM stand</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; }
+  #player {
+    position: sticky; top: 0; z-index: 10;
+    background: #123; color: #fff; padding: 12px 16px;
+  }
+  #time { font-variant-numeric: tabular-nums; }
+  #bar { height: 6px; background: #345; margin-top: 6px; }
+  #bar > div { height: 100%; background: #6cf; width: 0%; }
+  section { padding: 24px 16px; border-bottom: 1px solid #ddd; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .cell {
+    width: 120px; height: 64px; border-radius: 4px;
+    background: linear-gradient(135deg, #eef, #cce);
+    display: flex; align-items: center; justify-content: center;
+  }
+</style>
+</head>
+<body>
+<!-- Имитация видеоплеера ria.ru: rAF-цикл трогает DOM (таймкод + ширина
+     полосы прогресса) каждый кадр, независимо от scroll/click. -->
+<div id="player">
+  <span id="time">0.00s</span>
+  <div id="bar"><div id="bar-fill"></div></div>
+</div>
+
+<!-- Длинный скроллируемый контент — тот же приём, что input.html,
+     чтобы MCP `scroll` двигал реальную страницу. -->
+<main id="content"></main>
+
+<script>
+  var main = document.getElementById('content');
+  var html = '';
+  for (var s = 0; s < 60; s++) {
+    html += '<section><h2>Секция ' + s + '</h2><div class="row">';
+    for (var c = 0; c < 8; c++) {
+      html += '<div class="cell">' + s + '·' + c + '</div>';
+    }
+    html += '</div></section>';
+  }
+  main.innerHTML = html;
+
+  // rAF-цикл: каждый кадр меняет textContent таймкода и inline-style
+  // ширины полосы прогресса — та же форма DOM-мутации, что видеоплеер
+  // ria.ru (BUG-935-OPEN.md «Корень»: «на каждом тике трогает DOM»),
+  // без сети и без таймеров setTimeout/setInterval, чтобы единственным
+  // источником непрерывной работы был именно rAF.
+  var t0 = performance.now();
+  var timeEl = document.getElementById('time');
+  var fillEl = document.getElementById('bar-fill');
+  var DURATION_MS = 120000; // цикл длиннее любого разумного census-прогона
+  function tick() {
+    var elapsed = performance.now() - t0;
+    timeEl.textContent = (elapsed / 1000).toFixed(2) + 's';
+    fillEl.style.width = (elapsed / DURATION_MS * 100 % 100).toFixed(2) + '%';
+    if (elapsed < DURATION_MS) {
+      requestAnimationFrame(tick);
+    }
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>
