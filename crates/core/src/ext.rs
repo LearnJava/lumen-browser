@@ -2982,6 +2982,27 @@ pub trait JsWebSocketProvider: Send + Sync {
     /// `protocols` is the client's ordered list of sub-protocol preferences
     /// (`Sec-WebSocket-Protocol`); pass an empty slice to request none.
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>>;
+
+    /// Like [`Self::connect`], but honours `token` (GAP-WSASYNC срез 4,
+    /// BUG-856): a caller that aborts `token` while this call is blocked
+    /// inside the handshake — e.g. `WebSocket.close()` invoked while
+    /// `readyState` is still `CONNECTING`, against a server that accepts the
+    /// TCP connection and never answers the Upgrade request — unblocks it
+    /// immediately instead of waiting out the full handshake timeout.
+    ///
+    /// Default implementation ignores `token` and delegates to
+    /// [`Self::connect`] — the real network path (`lumen-network::HttpClient`)
+    /// overrides this; the fixed-outcome test mocks in
+    /// `crates/js/src/dom/tests/v8_ws_sse.rs` never block, so the default is
+    /// correct for them too.
+    fn connect_cancellable(
+        &self,
+        url: &str,
+        protocols: &[String],
+        _token: &AbortToken,
+    ) -> Result<Box<dyn JsWebSocketSession>> {
+        self.connect(url, protocols)
+    }
 }
 
 /// Persistence boundary for the IndexedDB JS shim.

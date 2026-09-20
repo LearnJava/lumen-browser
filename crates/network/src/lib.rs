@@ -5429,8 +5429,34 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketProvider for HttpClient {
-    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
+        self.connect_ws_impl(url, protocols)
+    }
+
+    /// GAP-WSASYNC срез 4 (BUG-856): installs `token` on this thread via
+    /// [`AbortScope`] for the duration of the (synchronous) handshake —
+    /// `websocket::WebSocket::connect_deflate` reads it back via
+    /// `current_abort_token()` and spawns an `AbortWatchdog` around the
+    /// blocking Upgrade read, exactly like `do_request` does for an
+    /// in-flight fetch. This is the caller-visible half of `close()` during
+    /// `CONNECTING` no longer waiting out `FETCH_READ_TIMEOUT`.
+    fn connect_cancellable(
+        &self,
+        url: &str,
+        protocols: &[String],
+        token: &AbortToken,
+    ) -> Result<Box<dyn JsWebSocketSession>> {
+        if token.is_aborted() {
+            return Err(Error::Aborted("ws: connect aborted".to_string()));
+        }
+        let _scope = AbortScope::new(token.clone());
+        self.connect_ws_impl(url, protocols)
+    }
+}
+
+impl HttpClient {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn connect_ws_impl(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
         // GAP-CSPENF срез 49: upgrade `ws:` to `wss:` before the gate below —
