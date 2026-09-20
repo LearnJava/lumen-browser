@@ -4715,8 +4715,9 @@ impl JsFetchProvider for HttpClient {
     /// through the same `webtransport_write_uni_stream`/
     /// `webtransport_close_uni_stream`/`webtransport_abort_uni_stream` the uni
     /// primitive uses — a `SendStream` does not know its own direction. The
-    /// read half (data the peer writes back) is not this slice — no incoming
-    /// WebTransport stream data reaches JS yet on either uni or bidi streams.
+    /// read half (data the peer writes back) is `webtransport_read_bidi_stream`
+    /// (срез 4c); a unidirectional stream carries no read half by
+    /// definition (RFC 9000 §2.1), so it needs no counterpart.
     fn webtransport_open_bidi_stream(&self, handle: i32) -> Result<u64> {
         let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
         let session = sessions
@@ -4732,6 +4733,26 @@ impl JsFetchProvider for HttpClient {
         .map_err(|e| Error::Network(format!("WebTransport open bidi stream: {e}")))?;
         session.next_bidi_stream_number += 1;
         Ok(stream_id)
+    }
+
+    /// GAP-WEBTRANSPORT срез 4c: drains whatever bytes have arrived so far
+    /// on the bidi stream `stream_id` (`webtransport_open_bidi_stream`'s
+    /// return value) — `WebTransportBidirectionalStream.readable`'s
+    /// non-blocking poll primitive. Drives one non-blocking sweep of the
+    /// session's transport ([`h3::client_transport::h3_webtransport_read_stream_on_driver`])
+    /// before reading, since nothing else keeps this driver's socket drained
+    /// once the session is established (unlike an ordinary request, which
+    /// `RequestDriver::run` drives to completion).
+    fn webtransport_read_bidi_stream(&self, handle: i32, stream_id: u64) -> Result<(Vec<u8>, bool)> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let bytes = h3::client_transport::h3_webtransport_read_stream_on_driver(&mut session.driver, stream_id)
+            .map_err(|e| Error::Network(format!("WebTransport read stream: {e}")))?;
+        let finished =
+            h3::client_transport::h3_webtransport_stream_finished_on_driver(&session.driver, stream_id);
+        Ok((bytes, finished))
     }
 }
 

@@ -270,6 +270,26 @@ impl<T: DatagramTransport> ConnectionDriver<T> {
         self.events.wait(&self.timers, now)
     }
 
+    /// Checks once, without blocking, whether a datagram is already queued —
+    /// [`event_loop::DatagramEventLoop::poll_nonblocking`] under an unchanged
+    /// timer scheduler (unlike [`Self::wait`], this never arms the read
+    /// timeout from `timers`, so it cannot block for a QUIC deadline that has
+    /// not arrived).
+    ///
+    /// For a connection whose request/response phase is over (e.g. a
+    /// WebTransport session between application-driven reads) nothing else
+    /// drains this transport, so a caller polling for "is there anything to
+    /// ingest right now" — a synchronous, JS-visible read, not the blocking
+    /// event-loop turn — uses this instead of [`Self::wait`] + [`Self::ingest`].
+    ///
+    /// # Errors
+    ///
+    /// Any non-timeout socket error from the underlying transport
+    /// ([`DatagramTransport::recv`](super::udp::DatagramTransport::recv)).
+    pub fn wait_nonblocking(&mut self) -> io::Result<Option<usize>> {
+        self.events.poll_nonblocking()
+    }
+
     /// Dispatches a datagram woken by [`Wakeup::Datagram(n)`](super::event_loop::Wakeup::Datagram):
     /// decrypts and routes its coalesced packets through the receive path
     /// ([`recv_path::ingest_datagram`](super::recv_path::ingest_datagram)).

@@ -480,6 +480,65 @@ impl<T: DatagramTransport> RequestDriver<T> {
         Ok(usize::from(matches!(effect, TurnEffect::AckQueued(_))))
     }
 
+    /// Drains every datagram already queued on the socket, right now, without
+    /// blocking for a QUIC deadline the way [`Self::poll`]'s `wait` would.
+    ///
+    /// [`Self::poll`]/[`Self::run`] are built for the request/response phase: the
+    /// wait blocks for the earliest QUIC timer, which is correct while a
+    /// response is expected soon. Past that phase — a WebTransport session
+    /// idling between application-driven reads, RFC 9220 §3 — nothing else
+    /// drains this transport, and an idle-timeout deadline can be seconds
+    /// away, so a caller polling "is there anything to read right now" (a
+    /// synchronous, JS-visible read) must never block on it. Each drained
+    /// datagram is ingested and routed exactly as [`Self::poll`]'s datagram
+    /// branch does — completed responses accumulate in
+    /// [`Self::responses`], owed acknowledgements are queued and flushed —
+    /// so this composes with ordinary request/response traffic on the same
+    /// connection.
+    ///
+    /// Returns the number of datagrams drained (0 if none were queued).
+    ///
+    /// # Errors
+    ///
+    /// [`RequestDriverError::Wait`] on a non-timeout socket error,
+    /// [`RequestDriverError::Ingest`] if a drained datagram carried an
+    /// authenticated connection error or a per-stream frame breached flow
+    /// control, [`RequestDriverError::Enqueue`] if a STOP_SENDING reply could
+    /// not be queued, [`RequestDriverError::Turn`] if the owed acknowledgement
+    /// could not be applied, or [`RequestDriverError::Flush`] if writing the
+    /// queued frames failed.
+    pub fn poll_incoming_nonblocking(&mut self, now: Instant) -> Result<usize, RequestDriverError> {
+        let mut drained = 0;
+        while let Some(n) = self
+            .turn
+            .turn_mut()
+            .driver_mut()
+            .wait_nonblocking()
+            .map_err(RequestDriverError::Wait)?
+        {
+            let (_report, ingest) = self.turn.ingest(n, now).map_err(RequestDriverError::Ingest)?;
+            let mut resets = Vec::new();
+            for event in ingest.events {
+                match event {
+                    PumpEvent::Response(resp) => self.responses.push(resp),
+                    PumpEvent::StopSending { reset, .. } => resets.push(reset),
+                    PumpEvent::Progress | PumpEvent::Aborted { .. } | PumpEvent::Ignored => {}
+                }
+            }
+            for reset in resets {
+                self.turn
+                    .turn_mut()
+                    .send_mut()
+                    .enqueue(PacketNumberSpace::ApplicationData, reset)
+                    .map_err(RequestDriverError::Enqueue)?;
+            }
+            self.acknowledge(now)?;
+            self.turn.flush(now).map_err(RequestDriverError::Flush)?;
+            drained += 1;
+        }
+        Ok(drained)
+    }
+
     /// Drives the loop until every in-flight request completes, a terminal timer ends
     /// the connection, or `max_turns` turns are spent, reading `clock` once per turn
     /// for the wall-clock instant a wake acts at.
@@ -787,6 +846,52 @@ mod tests {
         d.send_request(&get(b"/a")).unwrap();
         let poll = d.poll(now).unwrap();
         assert!(matches!(poll, RequestPoll::Timers(_)), "empty transport wakes on the timer");
+    }
+
+    // ---- poll_incoming_nonblocking (WebTransport-style out-of-band streams) --
+
+    #[test]
+    fn poll_incoming_nonblocking_drains_a_queued_datagram_for_a_foreign_stream() {
+        let now = base();
+        let mut transport = transport();
+        // A raw STREAM frame on a stream id no request ever opened — the
+        // shape an incoming WebTransport bidi write takes.
+        transport.push_inbound(one_rtt_packet(
+            0,
+            &[Frame::Stream { stream_id: 8, offset: 0, fin: false, data: b"hi".to_vec() }],
+        ));
+        let mut d = request_driver(transport, now);
+        d.turn_mut().pump_mut().dispatch_mut().register_foreign_stream(8);
+
+        let drained = d.poll_incoming_nonblocking(now).unwrap();
+        assert_eq!(drained, 1);
+        assert_eq!(
+            d.turn_mut().pump_mut().dispatch_mut().streams_mut().read(8),
+            b"hi"
+        );
+    }
+
+    #[test]
+    fn poll_incoming_nonblocking_returns_zero_on_an_empty_transport() {
+        let now = base();
+        let mut d = request_driver(transport(), now);
+        assert_eq!(d.poll_incoming_nonblocking(now).unwrap(), 0);
+    }
+
+    #[test]
+    fn poll_incoming_nonblocking_still_completes_an_ordinary_request() {
+        // Composes with the request/response phase on the same connection —
+        // an in-flight request's response arrives through the same drain.
+        let now = base();
+        let mut transport = transport();
+        transport.push_inbound(one_rtt_packet(0, &[response_stream(0, b"200", b"pong")]));
+        let mut d = request_driver(transport, now);
+        d.send_request(&post(b"/echo", b"ping")).unwrap();
+        d.transmit(now).unwrap();
+
+        assert_eq!(d.poll_incoming_nonblocking(now).unwrap(), 1);
+        assert_eq!(d.responses().len(), 1);
+        assert_eq!(d.responses()[0].body, b"pong");
     }
 
     // ---- run: drive to completion --------------------------------------

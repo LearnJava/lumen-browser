@@ -119,6 +119,12 @@ pub struct RequestDispatch {
     /// send-side flow-control window for a bidirectional stream *we* initiate —
     /// "remote" from the peer's point of view. Seeds each request's send stream.
     peer_initial_max_stream_data_bidi_remote: u64,
+    /// Stream ids opened outside the HTTP/3 request mux (currently: WebTransport
+    /// bidirectional streams, `h3_webtransport_open_bidi_stream_on_driver` in
+    /// `client_transport.rs`) whose inbound STREAM frames
+    /// [`Self::on_stream_frame_with_sink`] still accepts — see
+    /// [`Self::register_foreign_stream`].
+    foreign_streams: std::collections::BTreeSet<u64>,
 }
 
 impl RequestDispatch {
@@ -135,7 +141,25 @@ impl RequestDispatch {
             mux: RequestMux::new(),
             streams: StreamManager::new(stream_config),
             peer_initial_max_stream_data_bidi_remote,
+            foreign_streams: std::collections::BTreeSet::new(),
         }
+    }
+
+    /// Registers `stream_id` as legitimate even though no in-flight HTTP/3
+    /// request owns it in the mux — a stream opened directly against
+    /// [`Self::streams_mut`] by a caller outside the request tower (currently
+    /// only WebTransport bidirectional streams, RFC 9220 §3; a
+    /// client-initiated *uni*directional stream carries no inbound data by
+    /// definition, so it never needs this).
+    ///
+    /// Without this, an inbound STREAM frame for such a stream would reach
+    /// [`Self::on_stream_frame_with_sink`]'s `mux.is_active` gate, which knows
+    /// nothing about it, and fail the whole datagram ingest with
+    /// [`MuxError::UnknownStream`] — turning "the peer wrote back on a
+    /// WebTransport stream" into a connection-ending error for traffic that
+    /// has nothing to do with the request mux.
+    pub fn register_foreign_stream(&mut self, stream_id: u64) {
+        self.foreign_streams.insert(stream_id);
     }
 
     /// Places `req` onto a fresh client-initiated bidirectional stream: allocate the
@@ -256,8 +280,9 @@ impl RequestDispatch {
     /// - [`DispatchError::Stream`] if the frame breaches QUIC flow control or the
     ///   final-size invariants (RFC 9000 §4.1, §4.5).
     /// - [`DispatchError::Mux`] with [`MuxError::UnknownStream`] if no in-flight
-    ///   request owns `stream_id` (never opened, or already completed and retired),
-    ///   or [`MuxError::Exchange`] if the response stream is malformed (RFC 9114
+    ///   request owns `stream_id` (never opened, or already completed and retired)
+    ///   and it was not registered via [`Self::register_foreign_stream`], or
+    ///   [`MuxError::Exchange`] if the response stream is malformed (RFC 9114
     ///   §4.1) — the failed stream is retired.
     pub fn on_stream_frame_with_sink(
         &mut self,
@@ -267,11 +292,20 @@ impl RequestDispatch {
         fin: bool,
         sink: Option<BodySink<'_>>,
     ) -> Result<Option<H3Response>, DispatchError> {
-        // Reject bytes for a stream with no in-flight request before touching the
-        // reassembly, mirroring the mux's own contract (never opened, or completed
-        // and retired). This keeps the two layers' views of "known stream" aligned
-        // and avoids materialising phantom receive state for a stray stream.
+        // Reject bytes for a stream with no in-flight request and no foreign
+        // registration before touching the reassembly, mirroring the mux's own
+        // contract (never opened, or completed and retired). This keeps the two
+        // layers' views of "known stream" aligned and avoids materialising
+        // phantom receive state for a genuinely stray stream.
         if !self.mux.is_active(stream_id) {
+            if self.foreign_streams.contains(&stream_id) {
+                // Not an HTTP/3 request/response exchange — just reassemble the
+                // bytes into the stream layer for the owning caller (e.g. a
+                // WebTransport bidi stream reader) to drain via
+                // `streams()`/`streams_mut()`. No response is ever produced.
+                self.streams.recv_stream(stream_id, offset, data, fin)?;
+                return Ok(None);
+            }
             return Err(DispatchError::Mux(MuxError::UnknownStream(stream_id)));
         }
         self.streams.recv_stream(stream_id, offset, data, fin)?;
@@ -594,6 +628,55 @@ mod tests {
         let mut d = dispatch();
         let err = d.on_stream_frame(0, 0, &[], true).unwrap_err();
         assert_eq!(err, DispatchError::Mux(MuxError::UnknownStream(0)));
+    }
+
+    // ── register_foreign_stream (WebTransport streams bypass the mux) ────────
+
+    #[test]
+    fn foreign_stream_bytes_reassemble_without_a_mux_error() {
+        let mut d = dispatch();
+        // A stream id the mux never opened (e.g. a WebTransport bidi stream
+        // `client_transport.rs` wrote directly through `streams_mut()`).
+        d.register_foreign_stream(8);
+        // Before the fix this would hit the mux's `UnknownStream` gate and
+        // fail the whole datagram ingest.
+        assert_eq!(d.on_stream_frame(8, 0, b"hello", false).unwrap(), None);
+        assert_eq!(d.streams_mut().read(8), b"hello");
+    }
+
+    #[test]
+    fn unregistered_stream_is_still_rejected_even_if_it_looks_foreign() {
+        // Registering one id must not open the gate for every id — a stray
+        // stream with no in-flight request and no registration is still an
+        // error.
+        let mut d = dispatch();
+        d.register_foreign_stream(8);
+        let err = d.on_stream_frame(12, 0, b"hello", false).unwrap_err();
+        assert_eq!(err, DispatchError::Mux(MuxError::UnknownStream(12)));
+    }
+
+    #[test]
+    fn foreign_stream_reassembles_out_of_order_and_reports_finished() {
+        let mut d = dispatch();
+        d.register_foreign_stream(8);
+        // Tail with FIN before the head: buffered, no panic, no mux error.
+        assert_eq!(d.on_stream_frame(8, 5, b"world", true).unwrap(), None);
+        assert!(!d.streams().recv_stream_ref(8).unwrap().is_finished());
+        assert_eq!(d.on_stream_frame(8, 0, b"hello", false).unwrap(), None);
+        assert_eq!(d.streams_mut().read(8), b"helloworld");
+        assert!(d.streams().recv_stream_ref(8).unwrap().is_finished());
+    }
+
+    #[test]
+    fn foreign_registration_does_not_make_the_stream_mux_active() {
+        // `is_active`/`active_count` stay about HTTP/3 requests only — a
+        // registered foreign stream is not one, so it must not appear as an
+        // in-flight request (e.g. `RequestDriver::in_flight`/`is_done` must
+        // not wait on a WebTransport stream forever).
+        let mut d = dispatch();
+        d.register_foreign_stream(8);
+        assert!(!d.is_active(8));
+        assert_eq!(d.active_count(), 0);
     }
 
     #[test]
