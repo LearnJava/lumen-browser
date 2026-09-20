@@ -18,6 +18,18 @@
   Загружать как file://-URL (см. scripts/input_perf.py::to_url) —
   никакой HTTP-сервер не нужен и не должен использоваться, сама точка
   этого стенда — ноль сетевого ввода-вывода.
+
+  S30: S29 нашёл, что этот стенд не годился для S27's `defer_js_push` A/B —
+  у него не было ни одного `IntersectionObserver`-листенера, а именно его
+  исполнение (`deliver_layout_observers`, relayout.rs:1023) S23/S24
+  измерили как доминирующий вклад в цену блокирующего `route_query_js`.
+  Этот срез добавляет `IntersectionObserver` на каждую `.cell` (её
+  пересечение с вьюпортом меняется на каждом `scroll`-тике census'а —
+  есть чему сработать) с намеренно небыстрым колбэком (детерминированная
+  CPU-работа по числу итераций, не по времени — станочно-независимо).
+  `matchMedia` — не добавлен: census-протокол (`bug935_raf_relayout_census.py`)
+  не делает `resize`, так что листенер на media-query никогда бы не
+  сработал и остался бы мёртвым кодом.
 -->
 <html lang="ru">
 <head>
@@ -65,6 +77,30 @@
     html += '</div></section>';
   }
   main.innerHTML = html;
+
+  // S30: IntersectionObserver на каждую `.cell` — их пересечение с
+  // вьюпортом меняется на каждом census-скролле, так что колбэк реально
+  // срабатывает (не мёртвый листенер). Колбэк делает детерминированную
+  // CPU-работу (число итераций, не заданное время), чтобы у
+  // `deliver_layout_observers` было что исполнять на стороне
+  // `route_query_js`/`route_task_js` — S29's пустой стенд этого не давал.
+  var observerWork = 0;
+  function busyWork(iterations) {
+    var acc = 0;
+    for (var i = 0; i < iterations; i++) {
+      acc += Math.sqrt(i) * Math.sin(i);
+    }
+    observerWork += acc > -1 ? 1 : 0; // предотвращает мёртвый код от оптимизатора
+  }
+  var io = new IntersectionObserver(function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      busyWork(20000);
+    }
+  }, { root: null, threshold: [0, 0.5, 1] });
+  var cells = document.querySelectorAll('.cell');
+  for (var ci = 0; ci < cells.length; ci++) {
+    io.observe(cells[ci]);
+  }
 
   // rAF-цикл: каждый кадр меняет textContent таймкода и inline-style
   // ширины полосы прогресса — та же форма DOM-мутации, что видеоплеер
