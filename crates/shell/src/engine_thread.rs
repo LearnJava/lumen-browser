@@ -382,7 +382,25 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
             EngineMsg::Task(job) => {
                 // Task исполняется всегда и по порядку над персистентным состоянием
                 // (не коалесцируется). Ответ (если запрос) шлёт само замыкание.
+                //
+                // BUG-935 S21: внешний таймер вокруг всего замыкания — не знает,
+                // что внутри (JS-тик, DOM-мутация, `document.lock()` и т.п.,
+                // намеренно не депендится этот generic-модуль), но так как ЛЮБОЙ
+                // `Task` на этом потоке проходит через одну и ту же точку, лог
+                // здесь ловит суммарную стоимость движкового `Task`, независимо от
+                // того, какой из вызывающих (`tick_timers`/`run_animation_frame`/
+                // `eval_js`/…) его поставил — следующий срез должен сопоставить эти
+                // строки по времени с `lock2_wait` из `compute_layout_incremental_restyle`
+                // (`relayout.rs`), чтобы подтвердить или опровергнуть S20's гипотезу
+                // «что-то на движковом потоке держит `Mutex<Document>` 0.3-0.6с окнами».
+                let log_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
                 job(state);
+                if let Some(t0) = log_t0 {
+                    eprintln!(
+                        "[engine] task {:.2}ms (engine-thread Task, generic wrapper)",
+                        t0.elapsed().as_secs_f32() * 1000.0
+                    );
+                }
             }
             // `Shutdown` уже отсеян ранним `return true` выше.
             EngineMsg::Shutdown => {}
