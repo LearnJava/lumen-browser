@@ -8,8 +8,13 @@ use lumen_core::error::{Error, Result};
 use crate::http1::chunked::{read_body_to_eof, read_chunked};
 use crate::{Connection, Response, header_value};
 
-/// Разобранная head-секция ответа: `(status, headers, server_wants_close)`.
-pub(crate) type ResponseHead = (u16, Vec<(String, String)>, bool);
+/// Разобранная head-секция ответа: `(status, headers, server_wants_close,
+/// early_hint_links)`. `early_hint_links` — сырые значения заголовка `Link`
+/// из ВСЕХ `103 Early Hints`-блоков, встреченных перед финальным ответом
+/// (RFC 8297); каждая строка может сама содержать несколько
+/// запятая-разделённых link-value (RFC 8288 §3), парсинг — на стороне
+/// потребителя (preload-конвейер).
+pub(crate) type ResponseHead = (u16, Vec<(String, String)>, bool, Vec<String>);
 
 /// Прочитать один HTTP-ответ из persistent connection. Не consume-ит
 /// соединение — после возврата `Connection` пригоден к следующему
@@ -38,6 +43,7 @@ pub(crate) fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
     // `websocket::upgrade::expect_101`, never through this path. Cap at 20
     // to bound a misbehaving/malicious server flooding interim responses.
     const MAX_INTERIM_RESPONSES: u32 = 20;
+    let mut early_hint_links: Vec<String> = Vec::new();
     for _ in 0..MAX_INTERIM_RESPONSES {
         // Status line.
         let mut status_line = String::new();
@@ -73,6 +79,17 @@ pub(crate) fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
         }
 
         if (100..200).contains(&status) && status != 101 {
+            if status == 103 {
+                // RFC 8297: capture `Link` headers before the block is
+                // discarded — this is the only opportunity, the next loop
+                // iteration overwrites `headers` with the next block.
+                early_hint_links.extend(
+                    headers
+                        .iter()
+                        .filter(|(k, _)| k.eq_ignore_ascii_case("link"))
+                        .map(|(_, v)| v.clone()),
+                );
+            }
             continue;
         }
 
@@ -86,7 +103,7 @@ pub(crate) fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
             })
             .unwrap_or(false);
 
-        return Ok((status, headers, server_wants_close));
+        return Ok((status, headers, server_wants_close, early_hint_links));
     }
     conn.closed = true;
     Err(Error::Network(format!(
@@ -95,7 +112,7 @@ pub(crate) fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
 }
 
 pub(crate) fn read_response(conn: &mut Connection) -> Result<Response> {
-    let (status, headers, server_wants_close) = read_head(conn)?;
+    let (status, headers, server_wants_close, early_hint_links) = read_head(conn)?;
 
     // Body: chunked > Content-Length > read-to-EOF. RFC 7230 §3.3.3 (7): a
     // response with neither applies the read-to-EOF fallback unconditionally
@@ -145,6 +162,7 @@ pub(crate) fn read_response(conn: &mut Connection) -> Result<Response> {
         status,
         headers,
         body,
+        early_hint_links,
     })
 }
 

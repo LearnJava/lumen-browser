@@ -295,7 +295,7 @@ pub(crate) fn read_framed_buffered<R: BufRead>(reader: &mut R, framing: BodyFram
 /// preview + финальный авторитетный) — осознанный размен на простоту: документ
 /// декодируется один раз за навигацию.
 pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>) -> Result<Response> {
-    let (status, headers, server_wants_close) = read_head(conn)?;
+    let (status, headers, server_wants_close, early_hint_links) = read_head(conn)?;
 
     let is_chunked = header_value(&headers, "transfer-encoding")
         .map(|v| v.to_ascii_lowercase().contains("chunked"))
@@ -411,5 +411,6 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
         status,
         headers,
         body: raw,
+        early_hint_links,
     })
 }
