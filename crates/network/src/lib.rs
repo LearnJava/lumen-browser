@@ -1099,6 +1099,16 @@ fn apply_content_encoding(
 /// unbounded stall there deadlocks the whole tab and the automation channel.
 const FETCH_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// BUG-935: `TcpStream::connect` blocks until the OS gives up on the SYN
+/// handshake (platform-dependent, can exceed a minute on a blackholed host —
+/// packets dropped, no RST). `fetch()`'s default (no-`AbortSignal`) path runs
+/// this synchronously on the JS thread inside an ordered `EngineThread` task;
+/// every later `query()`/automation call queues strictly behind it (FIFO), so
+/// an unbounded connect stall freezes the whole UI thread and the automation
+/// channel, not just the one request — the same class of deadlock `FETCH_READ_TIMEOUT`
+/// bounds for a post-connect stall, but at the dial stage instead.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Открыть TCP (или TLS поверх TCP) к указанному origin. Резолв host →
 /// SocketAddr-ы делегируется в `resolver` (default = SystemDnsResolver).
 /// При нескольких адресах (DNS round-robin или IPv4+IPv6 dual-stack)
@@ -1166,7 +1176,7 @@ fn connect_inner(
         let mut last_err: Option<Error> = None;
         let mut tcp_opt: Option<TcpStream> = None;
         for addr in &proxy_addrs {
-            match TcpStream::connect(addr) {
+            match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
                 Ok(s) => {
                     tcp_opt = Some(s);
                     break;
@@ -1199,7 +1209,7 @@ fn connect_inner(
         let mut last_err: Option<Error> = None;
         let mut tcp_opt: Option<TcpStream> = None;
         for addr in &addrs {
-            match TcpStream::connect(addr) {
+            match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
                 Ok(s) => {
                     tcp_opt = Some(s);
                     break;
