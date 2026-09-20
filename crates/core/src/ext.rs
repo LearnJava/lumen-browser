@@ -2508,6 +2508,55 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Polls whether the WebTransport session `handle` names has been closed
+    /// by the **peer** — a `CLOSE_WEBTRANSPORT_SESSION` capsule
+    /// (draft-ietf-webtrans-http3 §4.5) arriving on the session's Extended
+    /// CONNECT stream — or lost to a fatal connection error, the remaining
+    /// open sub-slice of `P3-webtransport` срез 5 (locally initiated closing
+    /// is [`webtransport_close_session`](Self::webtransport_close_session)).
+    /// `WebTransport.prototype.closed` has no wire-level push notification to
+    /// wait on, so the JS shim polls this the same way it polls incoming
+    /// streams/datagrams.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_poll_closed(&self, handle: i32) -> Result<WebTransportSessionState> {
+        let _ = handle;
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+}
+
+/// Outcome of [`JsFetchProvider::webtransport_poll_closed`] — whether a
+/// WebTransport session is still open, was closed by the peer (with the
+/// `CLOSE_WEBTRANSPORT_SESSION` capsule's `close_code`/`reason`), or was lost
+/// to a fatal connection error (any socket/QUIC-level failure while polling —
+/// there is no partial state to report, so this collapses every such failure
+/// into one variant).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebTransportSessionState {
+    /// No peer-initiated close or connection failure observed yet.
+    Open,
+    /// The peer sent `CLOSE_WEBTRANSPORT_SESSION` — `closed` should fulfill
+    /// with this `close_code`/`reason`, same shape as a locally initiated
+    /// close (spec §5.4).
+    ClosedByPeer {
+        /// Application error code the peer supplied.
+        close_code: u32,
+        /// Application error message the peer supplied (UTF-8; lossily
+        /// converted from the capsule's raw bytes, same as
+        /// `String::from_utf8_lossy`, since the capsule places no encoding
+        /// guarantee on it beyond RFC 9297 §3's opaque payload).
+        reason: String,
+    },
+    /// The underlying QUIC connection failed — `closed` should reject with a
+    /// `WebTransportError`, since a connection loss the client did not
+    /// initiate has no `close_code`/`reason` to report (spec §5.4's "closed
+    /// due to a connection error").
+    ConnectionLost,
 }
 
 /// Outcome of successfully opening a WebTransport session —

@@ -47,6 +47,39 @@ pub fn encode_close_webtransport_session(close_code: u32, reason: &[u8]) -> Resu
     Ok(out)
 }
 
+/// Decodes a `CLOSE_WEBTRANSPORT_SESSION` capsule (draft-ietf-webtrans-http3
+/// §4.5) off the front of `buf` — the receive-side counterpart of
+/// [`encode_close_webtransport_session`], used to detect a **peer**-initiated
+/// close (GAP-WEBTRANSPORT, remaining sub-slice of срез 5).
+///
+/// Returns `(close_code, reason)` on a complete capsule. Returns `None` both
+/// when `buf` does not yet hold the whole capsule (the caller — same
+/// accumulate-across-polls shape as [`super::client_transport::parse_webtransport_uni_header`])
+/// and when the leading varint is not the `CLOSE_WEBTRANSPORT_SESSION` type —
+/// the session's Extended CONNECT stream carries no other capsule type this
+/// client understands, so a mismatched type is treated as "not there yet"
+/// rather than a distinct error the caller has no use for.
+#[must_use]
+pub fn decode_close_webtransport_session(buf: &[u8]) -> Option<(u32, Vec<u8>)> {
+    let (capsule_type, type_len) = varint::decode(buf)?;
+    if capsule_type != CLOSE_WEBTRANSPORT_SESSION_CAPSULE_TYPE {
+        return None;
+    }
+    let (payload_len, len_len) = varint::decode(&buf[type_len..])?;
+    let payload_len = usize::try_from(payload_len).ok()?;
+    if payload_len < 4 {
+        return None;
+    }
+    let header_len = type_len + len_len;
+    let total_len = header_len.checked_add(payload_len)?;
+    if buf.len() < total_len {
+        return None;
+    }
+    let payload = &buf[header_len..total_len];
+    let close_code = u32::from_be_bytes(payload[0..4].try_into().ok()?);
+    Some((close_code, payload[4..].to_vec()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +101,39 @@ mod tests {
         assert_eq!(bytes[2], 4);
         assert_eq!(&bytes[3..7], &0u32.to_be_bytes());
         assert_eq!(bytes.len(), 7);
+    }
+
+    #[test]
+    fn decodes_a_capsule_this_module_encoded() {
+        let bytes = encode_close_webtransport_session(42, b"bye").unwrap();
+        let (close_code, reason) = decode_close_webtransport_session(&bytes).unwrap();
+        assert_eq!(close_code, 42);
+        assert_eq!(reason, b"bye");
+    }
+
+    #[test]
+    fn decodes_an_empty_reason() {
+        let bytes = encode_close_webtransport_session(0, b"").unwrap();
+        let (close_code, reason) = decode_close_webtransport_session(&bytes).unwrap();
+        assert_eq!(close_code, 0);
+        assert!(reason.is_empty());
+    }
+
+    #[test]
+    fn reports_not_yet_decodable_on_a_truncated_capsule() {
+        let bytes = encode_close_webtransport_session(42, b"bye").unwrap();
+        assert!(decode_close_webtransport_session(&bytes[..bytes.len() - 1]).is_none());
+        assert!(decode_close_webtransport_session(&bytes[..1]).is_none());
+        assert!(decode_close_webtransport_session(&[]).is_none());
+    }
+
+    #[test]
+    fn rejects_a_different_capsule_type() {
+        // A varint-encoded type that is not `0x2843`, followed by bytes that
+        // would otherwise parse as a valid length/payload — must not be
+        // mistaken for `CLOSE_WEBTRANSPORT_SESSION`.
+        let mut bytes = vec![0x01];
+        bytes.extend_from_slice(&encode_close_webtransport_session(0, b"x").unwrap()[2..]);
+        assert!(decode_close_webtransport_session(&bytes).is_none());
     }
 }

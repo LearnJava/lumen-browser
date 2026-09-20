@@ -1044,6 +1044,12 @@ struct WebTransportSession {
     /// Same role as `peer_uni_stream_leftover`, for a peer-initiated bidi
     /// stream (GAP-WEBTRANSPORT срез 4e).
     peer_bidi_stream_leftover: std::collections::HashMap<u64, Vec<u8>>,
+    /// Bytes read off the session's own Extended CONNECT stream, accumulated
+    /// across [`HttpClient::webtransport_poll_closed`] calls until
+    /// [`h3::capsule::decode_close_webtransport_session`] recognizes a
+    /// complete `CLOSE_WEBTRANSPORT_SESSION` capsule the peer sent (GAP-WEBTRANSPORT,
+    /// remaining sub-slice of срез 5).
+    pending_close_capsule: Vec<u8>,
 }
 
 type WebTransportSessions = Arc<std::sync::Mutex<std::collections::HashMap<i32, WebTransportSession>>>;
@@ -4659,6 +4665,7 @@ impl JsFetchProvider for HttpClient {
                 peer_uni_stream_leftover: std::collections::HashMap::new(),
                 pending_peer_bidi_headers: std::collections::HashMap::new(),
                 peer_bidi_stream_leftover: std::collections::HashMap::new(),
+                pending_close_capsule: Vec::new(),
             },
         );
 
@@ -4968,6 +4975,50 @@ impl JsFetchProvider for HttpClient {
             reason.as_bytes(),
         )
         .map_err(|e| Error::Network(format!("WebTransport close session: {e}")))
+    }
+
+    /// GAP-WEBTRANSPORT, remaining sub-slice of срез 5: detects a **peer**-initiated
+    /// close (a `CLOSE_WEBTRANSPORT_SESSION` capsule arriving on the session's
+    /// own Extended CONNECT stream, read via the same
+    /// [`h3::client_transport::h3_webtransport_read_stream_on_driver`] every
+    /// other stream read uses — the session stream is not special-cased at
+    /// the transport layer, only at this accumulate-and-decode layer) or an
+    /// abrupt connection loss (any error surfacing from polling the socket).
+    /// Either outcome removes `handle`'s entry from
+    /// [`Self::webtransport_sessions`], same as a locally initiated close —
+    /// a session with no further use for its driver either way.
+    fn webtransport_poll_closed(&self, handle: i32) -> Result<lumen_core::ext::WebTransportSessionState> {
+        use lumen_core::ext::WebTransportSessionState;
+
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        let session_id = session.session_id;
+
+        let bytes = match h3::client_transport::h3_webtransport_read_stream_on_driver(
+            &mut session.driver,
+            session_id,
+        ) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                sessions.remove(&handle);
+                return Ok(WebTransportSessionState::ConnectionLost);
+            }
+        };
+        session.pending_close_capsule.extend_from_slice(&bytes);
+
+        if let Some((close_code, reason)) =
+            h3::capsule::decode_close_webtransport_session(&session.pending_close_capsule)
+        {
+            sessions.remove(&handle);
+            return Ok(WebTransportSessionState::ClosedByPeer {
+                close_code,
+                reason: String::from_utf8_lossy(&reason).into_owned(),
+            });
+        }
+
+        Ok(WebTransportSessionState::Open)
     }
 }
 
