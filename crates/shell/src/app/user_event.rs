@@ -284,6 +284,7 @@ impl Lumen {
                         raw.status,
                         raw.redirected,
                         &raw.csp_header,
+                        &raw.report_to_endpoints,
                         raw.sync_xhr_document_policy,
                         raw.sync_xhr_permissions_policy,
                     )
