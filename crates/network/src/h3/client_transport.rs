@@ -572,6 +572,11 @@ pub enum WebTransportStreamError {
     /// A driver turn failed while flushing the stream header onto the wire — a
     /// socket error, a bad frame, or a rejected send action.
     Driver(super::request_driver::RequestDriverError),
+    /// [`h3_webtransport_write_stream_on_driver`] was asked to write to a
+    /// `stream_id` [`h3_webtransport_open_uni_stream_on_driver`] never opened
+    /// on this driver (or that `stream_id` belongs to some other stream
+    /// space entirely) — the caller passed back a stale or foreign id.
+    UnknownStream(u64),
 }
 
 impl core::fmt::Display for WebTransportStreamError {
@@ -582,6 +587,7 @@ impl core::fmt::Display for WebTransportStreamError {
             }
             Self::Header(e) => write!(f, "WebTransport: stream header: {e}"),
             Self::Driver(e) => write!(f, "WebTransport: opening unidirectional stream: {e}"),
+            Self::UnknownStream(id) => write!(f, "WebTransport: unknown stream id {id}"),
         }
     }
 }
@@ -591,7 +597,7 @@ impl std::error::Error for WebTransportStreamError {
         match self {
             Self::Header(e) => Some(e),
             Self::Driver(e) => Some(e),
-            Self::StreamsExhausted => None,
+            Self::StreamsExhausted | Self::UnknownStream(_) => None,
         }
     }
 }
@@ -651,6 +657,39 @@ pub fn h3_webtransport_open_uni_stream_on_driver<T: DatagramTransport>(
 
     driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)?;
     Ok(stream_id)
+}
+
+/// Writes application bytes to a WebTransport unidirectional stream already
+/// opened by [`h3_webtransport_open_uni_stream_on_driver`] and flushes them
+/// onto the wire.
+///
+/// Queues `data` on the stream's existing [`super::stream::SendStream`] (the
+/// stream-type/session-id header `h3_webtransport_open_uni_stream_on_driver`
+/// wrote stays untouched at the front of the stream, since `SendStream::write`
+/// only ever appends) and issues one `transmit` — same "one flush, no
+/// response to wait for" shape as opening the stream itself, since a
+/// WebTransport unidirectional stream carries no reply.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::UnknownStream`] if `stream_id` was never opened
+/// on `driver` (send half absent — the caller passed a stale or foreign id),
+/// or [`WebTransportStreamError::Driver`] if the flushing turn fails.
+pub fn h3_webtransport_write_stream_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    stream_id: u64,
+    data: &[u8],
+) -> Result<(), WebTransportStreamError> {
+    driver
+        .turn_mut()
+        .pump_mut()
+        .dispatch_mut()
+        .streams_mut()
+        .send_stream_mut(stream_id)
+        .ok_or(WebTransportStreamError::UnknownStream(stream_id))?
+        .write(data);
+
+    driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
 }
 
 #[cfg(test)]
@@ -995,5 +1034,59 @@ mod tests {
             WebTransportStreamError::StreamsExhausted => {}
             other => panic!("expected StreamsExhausted, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn webtransport_write_stream_appends_after_the_header() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let stream_id = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the uni stream");
+
+        h3_webtransport_write_stream_on_driver(&mut driver, stream_id, b"hello")
+            .expect("writes to the open stream");
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .expect("the uni stream's send half still exists");
+        // 3-byte header (varint 0x54 + varint session id 0) + 5-byte payload.
+        assert_eq!(send.write_offset(), 8);
+    }
+
+    #[test]
+    fn webtransport_write_stream_on_an_unknown_id_is_reported() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let err = h3_webtransport_write_stream_on_driver(&mut driver, 42, b"hello").unwrap_err();
+        match err {
+            WebTransportStreamError::UnknownStream(id) => assert_eq!(id, 42),
+            other => panic!("expected UnknownStream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webtransport_write_stream_can_be_called_more_than_once() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let stream_id = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the uni stream");
+
+        h3_webtransport_write_stream_on_driver(&mut driver, stream_id, b"foo").unwrap();
+        h3_webtransport_write_stream_on_driver(&mut driver, stream_id, b"bar").unwrap();
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .unwrap();
+        // 3-byte header + 3 + 3 payload bytes across two writes.
+        assert_eq!(send.write_offset(), 9);
     }
 }
