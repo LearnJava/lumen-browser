@@ -66,7 +66,10 @@ impl Lumen {
             // below hand it to `navigate_to`. `dialog` never reaches here
             // (it closes a `<dialog>`, no navigation), so it is not gated —
             // CSP3 §6.4.3 restricts submission *targets*, and a `dialog`
-            // submission has none.
+            // submission has none. GAP-CSPENF срез 52: `upgrade_navigation_url`
+            // rewrites the resolved address BEFORE this gate sees it (UIR
+            // §4.1 step 5 precedes CSP's step 6) — both branches below apply
+            // it to the same `resolved` the gate and `navigate_to` then share.
             match submit_event {
                 lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
                     // HTML LS §4.10.21.4 step 11: fire a **cancelable**
@@ -144,6 +147,7 @@ impl Lumen {
                             };
                             let get_url = forms::make_get_url(&action, &url_body);
                             let resolved = self.source.resolve_href(&get_url);
+                            let resolved = crate::csp_enforce::upgrade_navigation_url(csp_gate.as_ref(), &resolved);
                             if self.form_action_navigation_blocked(csp_gate.as_ref(), &resolved) {
                                 return;
                             }
@@ -159,6 +163,7 @@ impl Lumen {
                             // stderr и никуда не шла — вход на любой сайт с
                             // POST-формой логина был невозможен.
                             let resolved = self.source.resolve_href(&action);
+                            let resolved = crate::csp_enforce::upgrade_navigation_url(csp_gate.as_ref(), &resolved);
                             if self.form_action_navigation_blocked(csp_gate.as_ref(), &resolved) {
                                 return;
                             }
