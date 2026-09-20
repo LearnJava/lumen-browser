@@ -1506,6 +1506,43 @@ OPEN (корневая причина плавания среза 30 не лок
 `appmanifest` baseline получить не может. `websockets` (786 id, ~25 мин на прогон), `encoding`
 (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), долг среза 4 не тронуты.
 
+### TEST-3: срез 41 (2026-09-20) — `fedcm` закрыт целиком как `ERROR`; новых багов нет
+
+**Выбор кандидата.** Первый из оставшихся малых по списку среза 40 (`fedcm`, 192 файла в каталоге).
+Счёт id заранее: `running 81 all vendored` — на порядок ниже порога обрыва, прогон взят целиком.
+
+**Baseline.** `--update-expected --recursive --processes 4 --binary target/dev-release/lumen.exe` — 1:37
+(бинарь `dev-release` от `2f45ea738`; после него в `main` менялись только baseline-данные и доки).
+Итог: **0/81 harness OK, 0 подтестов**, 81 новый `.ini`, все `expected: ERROR`. Первый запуск без `--binary`
+не дошёл до прогона (дефолт ищет `target/release/lumen.exe`, в слоте только `dev-release`) и ничего не записал.
+
+**Причина — одна и сверена с логом.** В логе `--update-expected` 243 строки `ExecutorException` (по три на
+файл), и все 243 — `browsingContext.navigate(https://localhost:18443/fedcm/…)` с `TLS handshake: invalid peer
+certificate: certificate not valid for name "localhost"` — [BUG-1069](../../bugs/BUG-1069-OPEN.md). Уникальных
+навигационных URL 81, по числу файлов; строк без TLS — 0. Соответствие «файл → строка» проверено по счёту и
+по множеству URL, а не пофайловым сопоставлением с `.ini`. Все 81 — `.https.`, так что здесь оценка BUG-1069 по
+имени файла не занижена (в отличие от `signed-exchange`).
+
+**Сужение.** Не понадобилось: три `--check` подряд (~1:30 каждый) — 0 регрессий, 0 unexpected pass,
+0 других отклонений, ни одной строки `note:`. Плавающих нет: статус `ERROR` у файла наступает до тела теста.
+Baseline 246 → 247.
+
+**Ограничение записанного.** Baseline из одних `ERROR` — нижняя планка: регрессировать ему некуда, поэтому
+гейт `--check` по `fedcm` пуст, пока BUG-1069 не починен. Как движок реализует FedCM
+(`navigator.credentials.get({identity})`, `IdentityCredential`), этим baseline **не измерено** — до утверждений
+не дошёл ни один файл.
+
+**Следствие для baseline.** Починка BUG-1069 (перевыпуск сертификата с SAN `localhost`) сдвинет все 81
+записи; baseline регенерируется (`--update-expected` + три `--check`) в том же коммите или сразу следом.
+Эта категория, как `connection-allowlist` и `signed-exchange`, попадёт в ту же регенерацию.
+
+Дальше: из оставшихся малых — `shared-storage` (124), `webnn` (183, 0 хитов); перед прогоном брать счёт id
+(`running N all vendored`) и обрывать, если он на порядок выше прежних срезов. `appmanifest` baseline
+получить не может. `websockets` (786 id, ~25 мин на прогон), `encoding` (только с
+`--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), долг среза 4 не тронуты. Отдельная
+мысль для следующей сессии: три категории подряд (`connection-allowlist`, `signed-exchange`, `fedcm`) упёрлись в
+BUG-1069, владелец которого — P2; его починка (тулинг, без Rust) даёт больше, чем очередной baseline из `ERROR`.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
