@@ -1173,6 +1173,13 @@ struct PendingWsSession {
     /// frame instead of leaving the session idle-open (WHATWG "close the
     /// WebSocket connection" during the establish step).
     close_requested: Arc<Mutex<Option<(u16, String)>>>,
+    /// GAP-WSASYNC срез 4 (BUG-856): aborted by `close()` while still
+    /// `Connecting`, in addition to recording `close_requested` above — the
+    /// background thread's `provider.connect_cancellable` call watches this
+    /// and shuts its socket down mid-handshake instead of only noticing the
+    /// close request after the handshake resolves on its own (up to
+    /// `FETCH_READ_TIMEOUT`, 60s, for a server that never answers Upgrade).
+    cancel: lumen_core::ext::AbortToken,
 }
 
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -1209,6 +1216,7 @@ impl lumen_core::ext::JsWebSocketSession for PendingWsSession {
             PendingWsState::Failed(_) => Ok(()),
             PendingWsState::Connecting => {
                 *self.close_requested.lock().unwrap() = Some((code, reason.to_string()));
+                self.cancel.abort();
                 Ok(())
             }
         }
@@ -1280,18 +1288,20 @@ pub(crate) fn install_websocket(
             };
             let state = Arc::new(Mutex::new(PendingWsState::Connecting));
             let close_requested: Arc<Mutex<Option<(u16, String)>>> = Arc::new(Mutex::new(None));
+            let cancel = lumen_core::ext::AbortToken::new();
             reg_c.lock().unwrap().insert(
                 id,
                 Box::new(PendingWsSession {
                     state: Arc::clone(&state),
                     close_requested: Arc::clone(&close_requested),
+                    cancel: cancel.clone(),
                 }),
             );
 
             let provider = Arc::clone(provider);
             let lcb_bg = Arc::clone(&lcb_ws);
             std::thread::spawn(move || {
-                let result = provider.connect(&url, &protos);
+                let result = provider.connect_cancellable(&url, &protos, &cancel);
                 let mut new_state = match result {
                     Ok(session) => {
                         let close_req = close_requested.lock().unwrap().take();
@@ -1313,6 +1323,16 @@ pub(crate) fn install_websocket(
                         // `close(1006, '', wasClean=false)` itself (mirrors
                         // the old synchronous-failure branch it used to take
                         // when `_lumen_ws_connect` returned `0`).
+                        let mut queue = std::collections::VecDeque::new();
+                        queue.push_back(JsWsEvent::Error("WebSocket connection failed".to_string()));
+                        PendingWsState::Failed(queue)
+                    }
+                    // GAP-WSASYNC срез 4 (BUG-856): `close()` aborted the
+                    // handshake — expected outcome of a user action, not a
+                    // network failure, so no `eprintln!`. Same `error`-only
+                    // queue as the branches above: the shim synthesizes the
+                    // matching `close` event on top of it.
+                    Err(lumen_core::error::Error::Aborted(_)) => {
                         let mut queue = std::collections::VecDeque::new();
                         queue.push_back(JsWsEvent::Error("WebSocket connection failed".to_string()));
                         PendingWsState::Failed(queue)
