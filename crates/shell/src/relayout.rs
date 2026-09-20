@@ -1082,6 +1082,25 @@ impl Lumen {
         }
     }
 
+    /// BUG-935 S26: independent drain for [`Self::pending_lazy_image_reqs`],
+    /// called once per `about_to_wait` pass regardless of whether a relayout
+    /// runs this tick. S25 found the queue's only consumer was the `if let`
+    /// inside [`Self::apply_relayout_result`] (`:1054`) — safe as long as
+    /// *some* later relayout is guaranteed to happen, which is true for
+    /// [`Self::try_relayout_raf_incremental`] (the only `defer_js_push=true`
+    /// producer, called from a continuous rAF+DOM-mutation loop) but not for
+    /// a page's *last* relayout ever, after which the queue would sit
+    /// forever unfetched. Parking this here — the per-tick pump every
+    /// producer already routes through — closes that gap independently of
+    /// which relayout path fires next or whether one fires again at all.
+    #[cfg(feature = "v8")]
+    pub(crate) fn drain_pending_lazy_image_reqs(&mut self) {
+        let reqs = take_pending_lazy_image_reqs(&self.pending_lazy_image_reqs);
+        if !reqs.is_empty() {
+            self.fetch_and_register_lazy_images(reqs);
+        }
+    }
+
     /// ADR-016 M2.2: build the immutable-snapshot relayout job that the engine
     /// thread runs off the UI thread — shared by the fire-and-forget
     /// [`Self::submit_relayout_job`] (latest-wins) and the blocking
@@ -1649,6 +1668,22 @@ pub(crate) fn diff_cv_state(
     out
 }
 
+/// BUG-935 S26: the pure half of [`Lumen::drain_pending_lazy_image_reqs`] —
+/// swaps the queued `<img loading=lazy>` requests out of the shared slot,
+/// leaving it empty, regardless of whether the lock is currently held by a
+/// poisoned prior panic (`Err` case: the slot's contents are unrecoverable
+/// either way, so this returns empty rather than propagating the poison).
+/// Split out so the drain decision is testable without a live `Lumen`/network
+/// stack — same rationale as [`Lumen::should_defer_query`] below.
+pub(crate) fn take_pending_lazy_image_reqs(
+    slot: &std::sync::Arc<std::sync::Mutex<Vec<(u32, String)>>>,
+) -> Vec<(u32, String)> {
+    match slot.lock() {
+        Ok(mut guard) => std::mem::take(&mut *guard),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Extract `initial-scale` from the `<meta name=viewport>` of a page's document.
 ///
 /// Returns `1.0` when the page has no viewport meta or omits `initial-scale`.
@@ -1695,5 +1730,39 @@ mod thread2_defer_query_tests {
     #[test]
     fn defers_when_both_conditions_hold() {
         assert!(Lumen::should_defer_query(true, 4, 3));
+    }
+}
+
+#[cfg(test)]
+mod bug935_s26_pending_lazy_image_drain_tests {
+    use super::take_pending_lazy_image_reqs;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn empty_slot_drains_to_empty() {
+        let slot = Arc::new(Mutex::new(Vec::new()));
+        assert!(take_pending_lazy_image_reqs(&slot).is_empty());
+    }
+
+    #[test]
+    fn drain_takes_everything_and_leaves_slot_empty() {
+        let slot = Arc::new(Mutex::new(vec![
+            (1u32, "a.png".to_string()),
+            (2u32, "b.png".to_string()),
+        ]));
+        let reqs = take_pending_lazy_image_reqs(&slot);
+        assert_eq!(reqs, vec![(1, "a.png".to_string()), (2, "b.png".to_string())]);
+        assert!(
+            slot.lock().expect("лок").is_empty(),
+            "S25's independent-drain gap: a stale entry left behind here would \
+             sit forever if no later relayout happens to pick it up"
+        );
+    }
+
+    #[test]
+    fn second_drain_after_first_is_empty() {
+        let slot = Arc::new(Mutex::new(vec![(1u32, "a.png".to_string())]));
+        let _first = take_pending_lazy_image_reqs(&slot);
+        assert!(take_pending_lazy_image_reqs(&slot).is_empty());
     }
 }
