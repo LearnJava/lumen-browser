@@ -1,6 +1,6 @@
 # BUG-940 — у `<audio>` нет `currentSrc`: `<video>` получил его починкой BUG-825, `audio_element.rs` — отдельный шим и не унаследовал ничего
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-21 (P3)
 **Тип:** дефект реализованного кода — один член IDL, у соседнего элемента реализованный целиком.
 **Заведён:** 2026-09-01 (WPT-RUN-6, срез 30 — реплей `currentSrc.html` под настоящим `testharness.js`)
 **Область:** js (`crates/js/src/audio_element.rs` — `patchAudioElement`; ср. `crates/js/src/video_bindings.rs:935`/`:1069`/`:1160`, где `_currentSrc` заведён, обновляется алгоритмом выбора ресурса и опубликован геттером)
@@ -48,3 +48,22 @@ replay-test [1] audio.currentSrc after setting src attribute "" ::
 Общая форма, из-за которой это и разъехалось, уже записана в `CLAUDE.md`:
 пофичный шим вне `WEB_API_SHIM*` — это свой `rt.eval`, до которого правка
 страничного шима не доходит. Перед «починили везде» — грепать соседние шимы.
+
+## Исправление
+
+Заведена `_currentSrc` рядом с остальными переменными состояния
+`patchAudioElement`, обновляется в `startLoad` сразу после вычисления
+абсолютного URL — до media-src CSP гейта, так что заблокированный кандидат
+тоже называет себя в `currentSrc` (тот же порядок, что в `video_element.js`'s
+`startFetch`). Опубликована геттером `Object.defineProperty(el, 'currentSrc', …)`
+с начальным значением `''`.
+
+Новый юнит-тест
+`current_src_is_empty_string_until_resource_selection_picks_a_url`
+(`crates/js/src/audio_element.rs`, `tests_v8`) проверяет все три состояния из
+симптома: до присвоения `src`, после присвоения пустой строки, после
+присвоения настоящего URL.
+
+`cargo test -p lumen-js --features v8-backend` — зелёный (24/24 в
+`audio_element::tests_v8`). `cargo clippy --workspace --all-targets -- -D
+warnings` — чист.
