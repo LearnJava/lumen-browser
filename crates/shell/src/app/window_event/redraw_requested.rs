@@ -1248,7 +1248,17 @@ impl Lumen {
                 let time_for = |node: lumen_dom::NodeId| -> f64 {
                     let nid = node.index() as u32;
                     match playback.get(&nid) {
-                        Some(st) => st.current_ms(clock_ms) as f64 / 1000.0,
+                        Some(st) => {
+                            let rate = self
+                                .video_gif_store
+                                .playback_rates
+                                .lock()
+                                .unwrap()
+                                .get(&nid)
+                                .copied()
+                                .unwrap_or(1.0);
+                            st.current_ms(clock_ms, rate) as f64 / 1000.0
+                        }
                         None => nav_t,
                     }
                 };

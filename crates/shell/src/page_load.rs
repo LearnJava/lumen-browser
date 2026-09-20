@@ -379,7 +379,15 @@ impl Lumen {
                 if cycle == 0 {
                     return None;
                 }
-                let cur_ms = state.current_ms(elapsed_ms);
+                let rate = self
+                    .video_gif_store
+                    .playback_rates
+                    .lock()
+                    .unwrap()
+                    .get(nid)
+                    .copied()
+                    .unwrap_or(1.0);
+                let cur_ms = state.current_ms(elapsed_ms, rate);
                 let loop_ms = cur_ms % cycle;
                 let gif = self.video_gif_frames.get(nid)?;
                 let idx = gif.frame_index_at(loop_ms);
@@ -565,7 +573,15 @@ impl Lumen {
                     .unwrap_or((1.0, false));
                 sink.set_volume(if muted { 0.0 } else { volume });
             }
-            let cur_ms = state.current_ms(elapsed_ms);
+            let rate = self
+                .video_gif_store
+                .playback_rates
+                .lock()
+                .unwrap()
+                .get(nid)
+                .copied()
+                .unwrap_or(1.0);
+            let cur_ms = state.current_ms(elapsed_ms, rate);
             let last = self.video_ffmpeg_last_ms.get(nid).copied();
             if state.paused {
                 if last != Some(cur_ms) {
@@ -578,7 +594,7 @@ impl Lumen {
             // but that lags up to one poll tick behind. Stop advancing here
             // too, so a redraw tick in that window can't keep calling
             // `frame_at`/`decode_audio_pcm` past the demuxer's EOF.
-            if state.is_ended(elapsed_ms) {
+            if state.is_ended(elapsed_ms, rate) {
                 continue;
             }
             has_playing = true;
@@ -1929,6 +1945,8 @@ impl Lumen {
         // Same reasoning for volume/muted — a same-index node on the new page
         // must start at the spec default, not the previous page's setting.
         self.video_gif_store.audio_levels.lock().unwrap().clear();
+        // Same reasoning for playbackRate (GAP-MEDIADECODE срез 18).
+        self.video_gif_store.playback_rates.lock().unwrap().clear();
 
         // Update shields panel domain and clear per-page blocked counts.
         {

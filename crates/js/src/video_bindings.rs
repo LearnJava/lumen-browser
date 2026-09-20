@@ -34,6 +34,7 @@
 //! | `__lumen_video_height` | `(nid: f64) → f64` | GIF pixel height |
 //! | `__lumen_video_set_volume` | `(nid: f64, volume: f64)` | Route `video.volume =` to the audio sink |
 //! | `__lumen_video_set_muted` | `(nid: f64, muted: bool)` | Route `video.muted =` to the audio sink |
+//! | `__lumen_video_set_playback_rate` | `(nid: f64, rate: f64, now_ms: f64)` | Route `video.playbackRate =` to the `currentTime` timer |
 //! | `__lumen_video_can_play_type` | `(mime: String) → String` | canPlayType probe |
 //! | `__lumen_video_ffmpeg_load` | `(nid: f64, src: String)` | Queue FFmpeg-container load (feature `ffmpeg-video`, GAP-MEDIADECODE срез 6) |
 //! | `__lumen_texttracks_json` | `(nid: f64) → String` | JSON of parsed `<track>` cues |
@@ -86,6 +87,22 @@ fn is_ffmpeg_mime(base: &str) -> bool {
 #[cfg(all(feature = "v8-backend", not(feature = "ffmpeg-video")))]
 fn is_ffmpeg_mime(_base: &str) -> bool {
     false
+}
+
+/// Current `video.playbackRate` for `nid`, spec default `1.0` when unset —
+/// GAP-MEDIADECODE срез 18. Pulled out because every reader of
+/// `VideoPlaybackState::current_ms`/`is_ended`/`freeze` in this file needs
+/// the same lookup.
+#[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+fn playback_rate_of(store: &std::sync::Arc<crate::video_gif_store::VideoGifStore>, nid: u32) -> f64 {
+    store
+        .playback_rates
+        .lock()
+        .unwrap()
+        .get(&nid)
+        .copied()
+        .unwrap_or(1.0)
 }
 
 /// V8 port of `install_video_bindings` (Ph3 V8 migration S5-S7 batch 3; the
@@ -159,11 +176,12 @@ pub(crate) fn install_video_bindings_v8(
     {
         let store = get_video_gif_store();
         let pause = into_v8_fn2(move |nid: f64, now_ms: f64| {
-            if let Some(s) = &store
-                && let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32))
-            {
-                e.freeze(now_ms as u64);
-                e.paused = true;
+            if let Some(s) = &store {
+                let rate = playback_rate_of(s, nid as u32);
+                if let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32)) {
+                    e.freeze(now_ms as u64, rate);
+                    e.paused = true;
+                }
             }
         });
         rt.register_native("__lumen_video_pause", pause)?;
@@ -191,11 +209,12 @@ pub(crate) fn install_video_bindings_v8(
             store
                 .as_ref()
                 .and_then(|s| {
+                    let rate = playback_rate_of(s, nid as u32);
                     s.playback
                         .lock()
                         .unwrap()
                         .get(&(nid as u32))
-                        .map(|e| e.current_ms(now_ms as u64) as f64 / 1000.0)
+                        .map(|e| e.current_ms(now_ms as u64, rate) as f64 / 1000.0)
                 })
                 .unwrap_or(0.0)
         });
@@ -236,11 +255,12 @@ pub(crate) fn install_video_bindings_v8(
             store
                 .as_ref()
                 .and_then(|s| {
+                    let rate = playback_rate_of(s, nid as u32);
                     s.playback
                         .lock()
                         .unwrap()
                         .get(&(nid as u32))
-                        .map(|e| e.is_ended(now_ms as u64))
+                        .map(|e| e.is_ended(now_ms as u64, rate))
                 })
                 .unwrap_or(false)
         });
@@ -308,6 +328,32 @@ pub(crate) fn install_video_bindings_v8(
             }
         });
         rt.register_native("__lumen_video_set_muted", set_muted)?;
+    }
+
+    // GAP-MEDIADECODE срез 18: route `video.playbackRate =` to the native
+    // `currentTime` timer. The old rate must be read and applied via
+    // `freeze()` BEFORE the new rate is stored — otherwise the elapsed
+    // portion since `play_epoch_ms` would get retroactively rescaled by the
+    // new rate on the very next `current_ms` call, corrupting whatever
+    // position had already accumulated under the old rate (same reasoning
+    // as why `seek` re-anchors the epoch instead of touching `position_ms`
+    // under the existing rate).
+    {
+        let store = get_video_gif_store();
+        let set_rate = into_v8_fn3(move |nid: f64, rate: f64, now_ms: f64| {
+            if let Some(s) = &store {
+                let nid = nid as u32;
+                let old_rate = playback_rate_of(s, nid);
+                if let Some(e) = s.playback.lock().unwrap().get_mut(&nid)
+                    && !e.paused
+                {
+                    e.freeze(now_ms as u64, old_rate);
+                    e.play_epoch_ms = Some(now_ms as u64);
+                }
+                s.playback_rates.lock().unwrap().insert(nid, rate);
+            }
+        });
+        rt.register_native("__lumen_video_set_playback_rate", set_rate)?;
     }
 
     {
@@ -698,6 +744,64 @@ tt.length === 1
         assert_eq!(failed_78, JsValue::Bool(false), "78 has no failure recorded");
     }
 
+    /// GAP-MEDIADECODE срез 18: `__lumen_video_set_playback_rate` scales the
+    /// elapsed portion of `currentTime` going forward, without retroactively
+    /// touching the position already accumulated under the old rate.
+    #[test]
+    fn native_video_set_playback_rate_scales_current_time() {
+        use crate::video_gif_store::{set_video_gif_store, VideoGifStore, VideoPlaybackState};
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = Arc::new(VideoGifStore::default());
+        store.playback.lock().unwrap().insert(1, VideoPlaybackState {
+            paused: false,
+            position_ms: 0,
+            play_epoch_ms: Some(1000),
+            cycle_ms: 0,
+            loop_count: 0,
+            width: 0,
+            height: 0,
+        });
+        set_video_gif_store(store.clone());
+
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).unwrap();
+        // Doubling the rate exactly at the existing epoch must not shift the
+        // position already accumulated (still 0 at this instant).
+        rt.eval("__lumen_video_set_playback_rate(1, 2.0, 1000);").unwrap();
+        let before = rt.eval("__lumen_video_current_time(1, 1000)").unwrap();
+        assert_eq!(before, JsValue::Number(0.0), "rate change must not jump currentTime");
+
+        // 1000ms of real time later, the doubled rate should read as 2s, not 1s.
+        let after = rt.eval("__lumen_video_current_time(1, 2000)").unwrap();
+        assert_eq!(after, JsValue::Number(2.0), "elapsed time after the change should be scaled by the new rate");
+    }
+
+    /// A paused node's `position_ms` must not shift when the rate changes —
+    /// only the elapsed-since-epoch portion is scaled, and a paused node has
+    /// no epoch.
+    #[test]
+    fn native_video_set_playback_rate_does_not_move_paused_position() {
+        use crate::video_gif_store::{set_video_gif_store, VideoGifStore, VideoPlaybackState};
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = Arc::new(VideoGifStore::default());
+        store.playback.lock().unwrap().insert(1, VideoPlaybackState {
+            paused: true,
+            position_ms: 5000,
+            play_epoch_ms: None,
+            cycle_ms: 0,
+            loop_count: 0,
+            width: 0,
+            height: 0,
+        });
+        set_video_gif_store(store.clone());
+
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).unwrap();
+        rt.eval("__lumen_video_set_playback_rate(1, 2.0, 1000);").unwrap();
+        let cur = rt.eval("__lumen_video_current_time(1, 9000)").unwrap();
+        assert_eq!(cur, JsValue::Number(5.0), "a paused node's position must be unaffected by rate");
+    }
+
     // ── BUG-825: the HTMLMediaElement state machine on <video> ────────────────
     //
     // These need the real DOM (the stub above has no `Event`, no listener
@@ -788,6 +892,27 @@ tt.length === 1
             .unwrap();
             settle(&rt);
             assert!(truthy(&rt, "n === 1 && v.muted === true"), "expected exactly one volumechange");
+        }
+
+        /// GAP-MEDIADECODE срез 18: `playbackRate` fires `ratechange` on a
+        /// real change and stays silent on a no-op write, the same rule
+        /// `volume`/`muted` already follow — and the native call it triggers
+        /// (`__lumen_video_set_playback_rate`) must not throw even with no
+        /// decoded resource behind the node.
+        #[test]
+        fn playback_rate_fires_ratechange_only_on_a_real_change() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var n = 0;
+                 var v = document.createElement('video');
+                 v.addEventListener('ratechange', function() { n++; });
+                 v.playbackRate = 2;
+                 v.playbackRate = 2;
+                 v.playbackRate = 1.5;",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(truthy(&rt, "n === 2 && v.playbackRate === 1.5"), "expected exactly two ratechange events");
         }
 
         /// The volume range check is a DOMException, not a silent clamp — the
