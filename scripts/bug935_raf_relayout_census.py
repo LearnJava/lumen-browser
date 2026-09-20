@@ -37,9 +37,13 @@ RELAYOUT_RE = re.compile(
 # incremental path first (see `try_relayout_raf_incremental`'s new logging) —
 # a census comparing before/after the routing swap must count both kinds, not
 # just the off-thread one the original census (S11) was written against.
+# BUG-935 S14: the incremental line also reports `restyle={0|1}` (S13) — the
+# cheap cascade-skip branch vs. the expensive full-cascade fallback branch —
+# an optional trailing group so the off-thread line (which has no such field)
+# still matches.
 ANY_RELAYOUT_RE = re.compile(
     r'\[engine\] relayout ([\d.]+)ms \((off-thread|incremental, on-thread)\) '
-    r'dl=(\d+) styled=(\d+)'
+    r'dl=(\d+) styled=(\d+)(?: restyle=(\d))?'
 )
 
 
@@ -191,11 +195,12 @@ def main() -> int:
             proc.kill()
         log_f.close()
 
-    def read_span(start: int, end: int) -> list[tuple[float, str, int, int]]:
+    def read_span(start: int, end: int) -> list[tuple[float, str, int, int, str]]:
         with open(log_path, encoding='utf-8', errors='replace') as f:
             f.seek(start)
             data = f.read(end - start)
-        return [(float(m.group(1)), m.group(2), int(m.group(3)), int(m.group(4)))
+        return [(float(m.group(1)), m.group(2), int(m.group(3)), int(m.group(4)),
+                  m.group(5) if m.group(5) is not None else '-')
                 for m in ANY_RELAYOUT_RE.finditer(data)]
 
     before_settle = read_span(0, settle_mark_byte)
@@ -209,16 +214,20 @@ def main() -> int:
 
     for name, rows in (('settle', during_settle), ('scroll', during_scroll)):
         if rows:
-            by_kind: dict[str, list[tuple[float, str, int, int]]] = {}
+            by_kind: dict[str, list[tuple[float, str, int, int, str]]] = {}
             for r in rows:
                 by_kind.setdefault(r[1], []).append(r)
             for kind, krows in sorted(by_kind.items()):
                 ms = [r[0] for r in krows]
                 dls = sorted(set(r[2] for r in krows))
                 styleds = sorted(set(r[3] for r in krows))
+                extra = ''
+                if kind == 'incremental, on-thread':
+                    restyled = sum(1 for r in krows if r[4] == '1')
+                    extra = f', restyle=1 in {restyled}/{len(krows)}'
                 print(f'  {name} [{kind}] x{len(krows)}: relayout ms min/avg/max = '
                       f'{min(ms):.1f}/{statistics.mean(ms):.1f}/{max(ms):.1f}, '
-                      f'dl in {dls}, styled in {styleds}')
+                      f'dl in {dls}, styled in {styleds}{extra}')
 
     if scroll_rtts:
         print(f'\nscroll RTT ms: min={min(scroll_rtts):.1f} '

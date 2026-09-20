@@ -429,15 +429,20 @@ impl Lumen {
     /// before the full [`Self::relayout`].
     ///
     /// BUG-935 S12 tried swapping this order (incremental first, unconditionally)
-    /// and measured it live on `lenta.ru` — see the bug file's S12 section. It is
-    /// a **confirmed regression**, not a fix: `try_relayout_raf_incremental`'s
-    /// cascade-skip fast path (`page_prev_cascade_styles`) is never populated by
-    /// its own non-restyle fallback branch (`relayout_page_incremental` returns no
-    /// counters to seed it), so every tick took the full-cascade-plus-graft branch
-    /// — synchronously on the UI thread instead of off-thread — costing
-    /// 650–850ms per tick and one 7.3s+7.4s back-to-back stall, strictly worse
-    /// than the off-thread baseline this order avoids. Do not re-attempt this
-    /// swap without first fixing the cache-seeding gap.
+    /// and measured a confirmed regression on `lenta.ru`, root-caused to the
+    /// cascade-skip fast path (`page_prev_cascade_styles`) being structurally
+    /// unreachable. BUG-935 S13 fixed that gap. BUG-935 S14 re-tried the swap
+    /// under the S13 fix — `restyle=1` was reached this time (the fix works),
+    /// but the census still failed to complete: two ticks stalled 6.7s/7.0s on
+    /// the UI thread even though the restyle branch's own profiled substages
+    /// summed to <1ms, coinciding with a 12s `js` component in the same
+    /// `[frame]` line — the on-thread incremental path likely blocks on
+    /// `src.document.lock()` (`relayout.rs:333`) for as long as the engine
+    /// thread's concurrent `run_animation_frame` turn holds/contends for it,
+    /// a cost the off-thread `submit_relayout_job` path never makes the UI
+    /// thread pay directly. Reverted again — do not re-attempt this swap
+    /// without first confirming (and, if real, fixing) that lock-contention
+    /// hypothesis; see the bug file's S14 section for the full log evidence.
     pub(crate) fn relayout_raf_dirty(&mut self) {
         if !self.submit_relayout_job() && !self.try_relayout_raf_incremental() {
             self.relayout();
@@ -651,9 +656,10 @@ impl Lumen {
     ///
     /// ADR-016 M4: in the single-thread fallback path, tries the incremental layout
     /// ([`Self::try_relayout_raf_incremental`]) before the full [`Self::relayout`].
-    /// BUG-935 S12 measured swapping this order and reverted it — see
-    /// [`Self::relayout_raf_dirty`]'s doc comment for the confirmed-regression
-    /// finding, which applies identically here.
+    /// BUG-935 S12/S14 measured swapping this order (S14 under the S13 cache-seed
+    /// fix) and reverted it both times — see [`Self::relayout_raf_dirty`]'s doc
+    /// comment for the confirmed-regression finding, which applies identically
+    /// here.
     pub(crate) fn relayout_raf_dirty_readback(&mut self) {
         if !self.readback_relayout_job() && !self.try_relayout_raf_incremental() {
             self.relayout();
