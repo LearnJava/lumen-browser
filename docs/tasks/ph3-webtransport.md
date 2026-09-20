@@ -118,12 +118,40 @@ uni-стриму (`SendStream` не знает про направление), �
 5 новых юнит-тестов (id=0/4, длина заголовка при session-id=0/100, overflow,
 переиспользование write/close), 2314 тестов `lumen-network`,
 `clippy -p lumen-network --all-targets -D warnings` и `cargo check --workspace`
-зелёные. Не сделано: подключение к `HttpClient::webtransport_sessions` и к JS
-(`createBidirectionalStream()` пока по-прежнему реджектится,
-`ReadableStream`/`WritableStream`-обёртка для bidi отдельно) — срез 4b;
-приём входящих (`incomingBidirectionalStreams`/`incomingUnidirectionalStreams`)
-и датаграммы (RFC 9221) остаются отдельными под-срезами. Статус остаётся
+зелёные. Не сделано (на момент 4a): подключение к
+`HttpClient::webtransport_sessions` и к JS (`createBidirectionalStream()`
+пока по-прежнему реджектится, `ReadableStream`/`WritableStream`-обёртка для
+bidi отдельно) — срез 4b; приём входящих
+(`incomingBidirectionalStreams`/`incomingUnidirectionalStreams`) и
+датаграммы (RFC 9221) остаются отдельными под-срезами. Статус остаётся
 `planned`.
+
+**Срез 4b — done (2026-09-20, P1) — подключение bidi-стрима к сессии и к
+JS.** `HttpClient::webtransport_open_bidi_stream(handle)`
+(`crates/network/src/lib.rs`) зеркалит `webtransport_open_uni_stream`:
+per-сессии счётчик `next_bidi_stream_number` (отдельное id-пространство от
+uni, RFC 9000 §2.1), `peer_initial_max_stream_data_bidi` берётся из
+`ClientConnectConfig::initial_max_stream_data_bidi_remote` (аналог
+`initial_max_stream_data_uni` у uni-стрима). Новый нативный биндинг
+`_lumen_webtransport_open_bidi_stream(handle)`
+(`crates/js/src/webtransport.rs`) и
+`JsFetchProvider::webtransport_open_bidi_stream` (default — «не
+поддерживается», как остальные точки расширения). `createBidirectionalStream()`
+больше не реджектится безусловно: при отсутствии `_handle` — тот же
+синхронный reject, что и у `createUnidirectionalStream()`; иначе открывает
+реальный QUIC bidi-стрим и резолвит `WebTransportBidirectionalStream`, чей
+`writable` переиспользует `openUniStreamWritable` без изменений (`SendStream`
+не знает своего направления, write/close/abort идентичны uni-стриму) — тест
+`create_bidirectional_stream_write_reaches_the_native_with_the_right_ids`
+закрепляет составную цепочку. `readable` — пока `emptyReadableStream()`:
+входящие байты WebTransport-стрима (uni или bidi) в JS не доходят ни в одном
+из направлений — это остаётся вместе с приёмом входящих стримов, следующий
+под-срез. 4 новых юнит-теста `lumen-js` (unsupported/success для нативного
+биндинга, reject-before-ready, write end-to-end для bidi) — 30/30
+`webtransport`-тестов `lumen-js --features v8-backend` зелёные, 17/17
+webtransport-тестов `lumen-network` не затронуты и зелёные, `clippy -p
+lumen-network -p lumen-core -p lumen-js --all-targets --features
+lumen-js/v8-backend -D warnings` и `cargo check` тех же крейтов зелёные.
 
 **Срез 3a — done (2026-09-20, P1) — транспортный примитив для uni-стримов.**
 `crates/network/src/h3/client_transport.rs::h3_webtransport_open_uni_stream_on_driver` —
@@ -172,5 +200,6 @@ session id = id Extended CONNECT-стрима — draft-ietf-webtrans-http3 §4.
   7 юнит-тестов зелёные.
 - [x] Extended CONNECT доходит до живого `ready` (срезы 2a/2b, см. таблицу выше).
 - [x] Uni streams end-to-end: open/write/close/abort (срезы 3a-3d, 2026-09-20).
-- [ ] Bidi streams, datagrams, lifecycle — остаток среза 3, срезы 4–5.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, streams/datagrams/lifecycle ещё стабы).
+- [x] Bidi streams — открытие + write/close/abort до JS (срезы 4a-4b, 2026-09-20).
+- [ ] Bidi readable (приём входящих байт), incoming streams, datagrams, lifecycle — срезы 4c/5.
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write живые, readable/datagrams/lifecycle ещё стабы).

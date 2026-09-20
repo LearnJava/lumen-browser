@@ -2320,6 +2320,23 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Opens a WebTransport bidirectional stream on the session `handle`
+    /// names — GAP-WEBTRANSPORT/`P3-webtransport` срез 4b, the bidi
+    /// counterpart of [`webtransport_open_uni_stream`](Self::webtransport_open_uni_stream).
+    /// The write half reuses `webtransport_write_uni_stream`/
+    /// `webtransport_close_uni_stream`/`webtransport_abort_uni_stream` above —
+    /// their `stream_id` parameter is direction-agnostic on the wire.
+    ///
+    /// Returns the opened stream's QUIC identifier. Default implementation
+    /// always reports "unsupported", matching every other WebTransport
+    /// extension point; only `lumen-network::HttpClient` overrides it.
+    fn webtransport_open_bidi_stream(&self, handle: i32) -> Result<u64> {
+        let _ = handle;
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —

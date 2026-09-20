@@ -35,6 +35,7 @@ pub(crate) fn install_webtransport_v8(
     use lumen_core::ext::JsRuntime as _;
 
     let uni_fetch_provider = fetch_provider.clone();
+    let bidi_fetch_provider = fetch_provider.clone();
     let write_fetch_provider = fetch_provider.clone();
     let close_fetch_provider = fetch_provider.clone();
     let abort_fetch_provider = fetch_provider.clone();
@@ -85,6 +86,30 @@ pub(crate) fn install_webtransport_v8(
         }
     });
     rt.register_native("_lumen_webtransport_open_uni_stream", open_uni)?;
+
+    // GAP-WEBTRANSPORT срез 4b: `createBidirectionalStream()`'s transport
+    // call — opens a client-initiated QUIC bidi-stream on the session
+    // `handle` names (`h3_webtransport_open_bidi_stream_on_driver`, срез 4a)
+    // and reports its stream id. The write half of the resolved stream
+    // reuses `_lumen_webtransport_write_stream`/`_lumen_webtransport_close_stream`/
+    // `_lumen_webtransport_abort_stream` below (stream-id-generic, same as
+    // the uni-stream's writable); the read half is not wired yet — no
+    // incoming WebTransport stream data reaches JS on either uni or bidi
+    // streams in this slice.
+    let open_bidi = into_v8_fn1(move |handle: i32| -> String {
+        let Some(ref provider) = bidi_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_open_bidi_stream(handle) {
+            Ok(stream_id) => format!(r#"{{"ok":true,"streamId":{stream_id}}}"#),
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_open_bidi_stream", open_bidi)?;
 
     // GAP-WEBTRANSPORT срез 3c: the write-bytes primitive the previous
     // slice's comment ("no write-bytes primitive exists yet") deferred —
@@ -415,8 +440,34 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     get: function() { return this._incomingUnidi; }, enumerable: true, configurable: true,
   });
 
+  // GAP-WEBTRANSPORT срез 4b: same "no live handle → reject synchronously"
+  // shape as `createUnidirectionalStream()` (срез 3b); otherwise opens a
+  // real QUIC bidi-stream on it (`_lumen_webtransport_open_bidi_stream`,
+  // срез 4a's transport primitive) and resolves a
+  // `WebTransportBidirectionalStream` whose `writable` reuses
+  // `openUniStreamWritable` (a `SendStream`'s write/close/abort do not know
+  // their own direction) — `readable` stays an `emptyReadableStream()` for
+  // now, since no incoming WebTransport stream data reaches JS yet.
   WebTransport.prototype.createBidirectionalStream = function() {
-    return Promise.reject(notConnectedError());
+    if (this._handle === null) {
+      return Promise.reject(notConnectedError());
+    }
+    var result;
+    try {
+      result = JSON.parse(_lumen_webtransport_open_bidi_stream(this._handle));
+    } catch (e) {
+      result = { ok: false, message: 'WebTransport: malformed native response.' };
+    }
+    if (!result || !result.ok) {
+      return Promise.reject(new WebTransportError({
+        source: 'stream',
+        message: (result && result.message) || 'Failed to open a WebTransport bidirectional stream.',
+      }));
+    }
+    return Promise.resolve(new WebTransportBidirectionalStream(
+      emptyReadableStream(),
+      openUniStreamWritable(this._handle, result.streamId)
+    ));
   };
   // GAP-WEBTRANSPORT срез 3b/3c: rejects synchronously (session not `ready`
   // yet or `ready` failed, same as `createBidirectionalStream()`'s
@@ -498,6 +549,9 @@ mod tests_v8 {
     struct StubFetch {
         result: std::sync::Mutex<Option<lumen_core::error::Result<lumen_core::ext::JsWebTransportSession>>>,
         uni_stream_result: lumen_core::error::Result<u64>,
+        /// GAP-WEBTRANSPORT срез 4b: same shape as `uni_stream_result`, for
+        /// `webtransport_open_bidi_stream`.
+        bidi_stream_result: lumen_core::error::Result<u64>,
         write_stream_result: lumen_core::error::Result<()>,
         /// The `(handle, stream_id, bytes)` triple the last `write` call
         /// received, if any — lets a test assert the JS layer forwarded the
@@ -524,6 +578,12 @@ mod tests_v8 {
         }
         fn webtransport_open_uni_stream(&self, _handle: i32) -> lumen_core::error::Result<u64> {
             match &self.uni_stream_result {
+                Ok(id) => Ok(*id),
+                Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
+            }
+        }
+        fn webtransport_open_bidi_stream(&self, _handle: i32) -> lumen_core::error::Result<u64> {
+            match &self.bidi_stream_result {
                 Ok(id) => Ok(*id),
                 Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
             }
@@ -595,6 +655,7 @@ mod tests_v8 {
         let stub = Arc::new(StubFetch {
             result: std::sync::Mutex::new(Some(result)),
             uni_stream_result,
+            bidi_stream_result: Ok(9),
             write_stream_result,
             last_write: std::sync::Mutex::new(None),
             close_stream_result: Ok(()),
@@ -972,6 +1033,7 @@ mod tests_v8 {
                 status: 200,
             }))),
             uni_stream_result: Ok(2),
+            bidi_stream_result: Ok(9),
             write_stream_result: Ok(()),
             last_write: std::sync::Mutex::new(None),
             close_stream_result: Err(lumen_core::error::Error::Network("boom".to_string())),
@@ -1051,6 +1113,91 @@ mod tests_v8 {
         check(&rt, "_wtAbortOk");
         let last = *stub.last_abort.lock().unwrap();
         assert_eq!(last, Some((3, 2, 0)));
+    }
+
+    /// GAP-WEBTRANSPORT срез 4b: direct native-call coverage for
+    /// `_lumen_webtransport_open_bidi_stream`, same "no `setTimeout` pumping
+    /// in this harness" workaround as the uni-stream native-call tests.
+    #[test]
+    fn native_open_bidi_stream_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_open_bidi_stream(0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_open_bidi_stream_reports_stream_id_on_success() {
+        let (rt, _stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 0, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        let r = rt.eval("_lumen_webtransport_open_bidi_stream(0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":true"#), "expected ok:true, got {s}");
+                assert!(s.contains(r#""streamId":9"#), "expected streamId 9, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// `createBidirectionalStream()` rejects synchronously with the same
+    /// "no live handle yet" shape as `createUnidirectionalStream()`
+    /// (`create_unidirectional_stream_rejects_before_ready`).
+    #[test]
+    fn create_bidirectional_stream_rejects_before_ready() {
+        let rt = rt_with_webtransport();
+        rt.eval(
+            "globalThis._wtTestResult = false; \
+            (function() { \
+                var wt = new WebTransport('https://example.com/wt'); \
+                wt.createBidirectionalStream().catch(function(e) { \
+                    globalThis._wtTestResult = (e instanceof WebTransportError) && e.source === 'session'; \
+                }); \
+            })();",
+        )
+        .unwrap();
+        check(&rt, "_wtTestResult");
+    }
+
+    /// End-to-end: `createBidirectionalStream()` resolves a real
+    /// `WebTransportBidirectionalStream` whose `writable.write()` reaches
+    /// `_lumen_webtransport_write_stream` with the session's handle and the
+    /// stream id `createBidirectionalStream()` itself opened — same
+    /// composition proof as `create_unidirectional_stream_write_reaches_the_native_with_the_right_ids`,
+    /// for the bidi transport primitive (срез 4a/4b).
+    #[test]
+    fn create_bidirectional_stream_write_reaches_the_native_with_the_right_ids() {
+        let (rt, stub) = rt_with_webtransport_provider_full(
+            Ok(lumen_core::ext::JsWebTransportSession { handle: 3, status: 200 }),
+            Ok(2),
+            Ok(()),
+        );
+        rt.eval(
+            "globalThis._wtWriteOk = false; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { \
+                return globalThis._wt.createBidirectionalStream(); \
+            }).then(function(stream) { \
+                return (stream instanceof WebTransportBidirectionalStream) && \
+                    stream.readable instanceof ReadableStream ? \
+                    stream.writable.getWriter().write(new Uint8Array([1, 2, 3])) : \
+                    Promise.reject(new Error('not a WebTransportBidirectionalStream')); \
+            }).then(function() { \
+                globalThis._wtWriteOk = true; \
+            });",
+        )
+        .unwrap();
+        rt.eval("_lumen_tick_timers()").unwrap();
+        check(&rt, "_wtWriteOk");
+        let last = stub.last_write.lock().unwrap().clone().expect("write was recorded");
+        assert_eq!(last, (3, 9, vec![1, 2, 3]));
     }
 
     #[test]
