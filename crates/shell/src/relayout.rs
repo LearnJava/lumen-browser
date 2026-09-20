@@ -460,14 +460,24 @@ impl Lumen {
     /// under the S13 fix — `restyle=1` was reached this time (the fix works),
     /// but the census still failed to complete: two ticks stalled 6.7s/7.0s on
     /// the UI thread even though the restyle branch's own profiled substages
-    /// summed to <1ms, coinciding with a 12s `js` component in the same
-    /// `[frame]` line — the on-thread incremental path likely blocks on
-    /// `src.document.lock()` (`relayout.rs:333`) for as long as the engine
-    /// thread's concurrent `run_animation_frame` turn holds/contends for it,
-    /// a cost the off-thread `submit_relayout_job` path never makes the UI
-    /// thread pay directly. Reverted again — do not re-attempt this swap
-    /// without first confirming (and, if real, fixing) that lock-contention
-    /// hypothesis; see the bug file's S14 section for the full log evidence.
+    /// summed to <1ms, and S14 guessed `src.document.lock()` contention with the
+    /// engine thread's concurrent `run_animation_frame` turn as the cause.
+    /// **BUG-935 S15 instrumented and refuted that guess** (`lock_wait_ms=0.00`
+    /// on every measured tick, including the outlier): the real cost is
+    /// [`Self::apply_relayout_result`]'s `route_query_js` JS-observer push
+    /// (rects/styles/`deliver_layout_observers`/lazy-images) — a blocking
+    /// round-trip into the engine thread's ordered FIFO, called from *every*
+    /// producer, including the default off-thread one via
+    /// [`Self::poll_engine_commit`]. The difference is *when* it is issued:
+    /// [`Self::poll_engine_commit`] only calls it once [`EngineThread::take_committed`]
+    /// reports a finished job, by which point the FIFO's earlier long item
+    /// (the rAF JS turn / a synchronous `fetch`) has already drained, so the
+    /// query lands on an idle queue. This on-thread path calls it synchronously
+    /// right after the rAF JS turn that dirtied the DOM, landing *behind* that
+    /// same turn if it is still running (e.g. mid-`fetch`) — hence the
+    /// multi-second stalls. Reverted again — do not re-attempt this swap
+    /// without first decoupling that JS-push from the synchronous layout apply
+    /// (see the bug file's S15 section, "Не сделано / следующий срез").
     pub(crate) fn relayout_raf_dirty(&mut self) {
         if !self.submit_relayout_job() && !self.try_relayout_raf_incremental() {
             self.relayout();
