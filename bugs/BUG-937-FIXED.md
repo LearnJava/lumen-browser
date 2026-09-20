@@ -1,7 +1,7 @@
 # BUG-937 — `postMessage(offscreenCanvas, [offscreenCanvas])` доезжает до воркера сырым сентинелом: половина отправителя реализована целиком, половина получателя не исполняется никогда
 
-**Статус:** OPEN
-**Тип:** дефект реализованного кода — обе половины переноса написаны, получатель отключён одной отсутствующей строкой в списке установки воркерного контекста.
+**Статус:** FIXED 2026-09-21 (P3)
+**Тип:** дефект реализованного кода — обе половины переноса написаны, получатель был отключён одной отсутствующей строкой в списке установки воркерного контекста.
 **Заведён:** 2026-09-01 (WPT-RUN-6, срез 30 — живой замер, вариант `worker-offscreen-transfer`)
 **Область:** js (`crates/js/src/worker.rs:1685-1693` — воркерный поток зовёт только `install_worker_globals_v8`, без `offscreen_canvas::install_offscreen_canvas_bindings_v8`; `crates/js/src/worker.rs:542-566` — `_deserializeTransfers`, который из-за этого не срабатывает)
 **Владелец:** P3.
@@ -97,3 +97,49 @@ that references `OffscreenCanvas` sees `undefined`». Следствие — н�
 который сегодня описывает намеренный пропуск. Проверять:
 `--variant worker-offscreen-transfer` должен дать `getContext=function`
 и `OffscreenCanvas=function`.
+
+## Исправление (2026-09-21)
+
+`run_worker_thread_v8` зовёт `offscreen_canvas::install_offscreen_canvas_bindings_v8`
+сразу после `install_worker_globals_v8`, до исполнения тела скрипта воркера.
+Origin для сид-шума канвы (`document_noise_seed`, BUG-454) выводится тем же
+`file_input::origin_for_url`, что и `page_origin` на главном потоке, но из
+`script_url` воркера — same-origin проверок у переданного `OffscreenCanvas`
+нет, origin нужен только для детерминированного шума. Порядок установки
+относительно `install_worker_globals_v8` не важен: `worker_global_shim`
+ссылается на `OffscreenCanvas.prototype` только внутри тела
+`_deserializeTransfers`, которое вызывается лениво при первом входящем
+сообщении, а не в момент eval'а самого шима.
+
+Doc-комментарий на `run_worker_thread_v8`, описывавший намеренный пропуск,
+заменён на описание фактической установки.
+
+Прямой репро (`verify_replaced_content_gaps.py --variant worker-offscreen-transfer`,
+dev-release): было
+
+```
+worker-said typeof=object ctor=Object keys=__lumen_sentinel__/w/h/p
+            sentinel=yes getContext=undefined
+            OffscreenCanvas=undefined native=undefined
+```
+
+стало
+
+```
+worker-said typeof=object ctor= keys=__canvas_id__/width/height/_2d_context
+            sentinel=no getContext=function
+            OffscreenCanvas=function native=function
+```
+
+(`ctor=` пустая строка — `OffscreenCanvas` объявлен как анонимный
+class-expression, присвоенный `globalThis.OffscreenCanvas`, так что имя не
+выводится ни в воркере, ни на главном потоке; косметика, вне области этого
+бага). Новый юнит-тест `worker::tests_v8::v8_worker_end_to_end_has_offscreen_canvas`
+гоняет реальный воркерный поток (`spawn_worker_v8`, не только
+`install_worker_globals_v8`) и проверяет `typeof OffscreenCanvas` +
+`typeof _lumen_offscreen_canvas_from_image_data` изнутри него.
+
+`cargo test -p lumen-js --profile dev-release --features v8-backend` —
+все тесты `worker::`/`shared_worker::` зелёные (155/155).
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+чист.
