@@ -4667,6 +4667,37 @@ impl JsFetchProvider for HttpClient {
         h3::client_transport::h3_webtransport_write_stream_on_driver(&mut session.driver, stream_id, data)
             .map_err(|e| Error::Network(format!("WebTransport write stream: {e}")))
     }
+
+    /// GAP-WEBTRANSPORT срез 3d: closes the already-open unidirectional
+    /// stream `stream_id` on the session `handle` names, sending a QUIC
+    /// STREAM FIN ([`h3::client_transport::h3_webtransport_close_uni_stream_on_driver`])
+    /// — `WritableStreamDefaultWriter.close()`'s native counterpart.
+    fn webtransport_close_uni_stream(&self, handle: i32, stream_id: u64) -> Result<()> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        h3::client_transport::h3_webtransport_close_uni_stream_on_driver(&mut session.driver, stream_id)
+            .map_err(|e| Error::Network(format!("WebTransport close stream: {e}")))
+    }
+
+    /// GAP-WEBTRANSPORT срез 3d: abruptly terminates the already-open
+    /// unidirectional stream `stream_id` on the session `handle` names with
+    /// `error_code`, sending a QUIC RESET_STREAM
+    /// ([`h3::client_transport::h3_webtransport_reset_uni_stream_on_driver`])
+    /// — `WritableStreamDefaultWriter.abort(reason)`'s native counterpart.
+    fn webtransport_abort_uni_stream(&self, handle: i32, stream_id: u64, error_code: u64) -> Result<()> {
+        let mut sessions = self.webtransport_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| Error::Network("WebTransport session not found".to_string()))?;
+        h3::client_transport::h3_webtransport_reset_uni_stream_on_driver(
+            &mut session.driver,
+            stream_id,
+            error_code,
+        )
+        .map_err(|e| Error::Network(format!("WebTransport abort stream: {e}")))
+    }
 }
 
 impl HttpClient {

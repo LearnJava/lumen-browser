@@ -89,6 +89,16 @@ warnings` и `cargo check --workspace` зелёные. Handle пока не по
 обёрнутые в WHATWG ReadableStream/WritableStream (переиспользовать stream-инфраструктуру
 из `dom.rs`). **Требует срез 2.**
 
+**Срез 3a-3d — done (2026-09-20, P1) — uni-стримы end-to-end.** Открытие
+(`h3_webtransport_open_uni_stream_on_driver`), запись
+(`h3_webtransport_write_stream_on_driver`) и close/abort
+(`h3_webtransport_close_uni_stream_on_driver`/`h3_webtransport_reset_uni_stream_on_driver`,
+срез 3d) — `createUnidirectionalStream()` резолвит настоящий `WritableStream`
+чей `write`/`close`/`abort` все доходят до реального QUIC uni-стрима. Полная
+хронология срезов 3a/3b/3c/3d — см. `ROADMAP.md`'s `P3-webtransport` строку.
+Bidi-стримы и приём входящих стримов остаются отдельным под-срезом (не
+начаты).
+
 **Срез 3a — done (2026-09-20, P1) — транспортный примитив для uni-стримов.**
 `crates/network/src/h3/client_transport.rs::h3_webtransport_open_uni_stream_on_driver` —
 аллоцирует client-initiated unidirectional QUIC stream id (RFC 9000 §2.1: младшие
@@ -135,5 +145,6 @@ session id = id Extended CONNECT-стрима — draft-ietf-webtrans-http3 §4.
   `_lumen_webtransport_open` (i32-сентинел, BUG-457), `install_v8!` подключён.
   7 юнит-тестов зелёные.
 - [x] Extended CONNECT доходит до живого `ready` (срезы 2a/2b, см. таблицу выше).
-- [ ] Uni/bidi streams, datagrams, lifecycle — срезы 3–5.
+- [x] Uni streams end-to-end: open/write/close/abort (срезы 3a-3d, 2026-09-20).
+- [ ] Bidi streams, datagrams, lifecycle — остаток среза 3, срезы 4–5.
 - [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, streams/datagrams/lifecycle ещё стабы).

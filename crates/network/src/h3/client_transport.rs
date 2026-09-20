@@ -577,6 +577,11 @@ pub enum WebTransportStreamError {
     /// on this driver (or that `stream_id` belongs to some other stream
     /// space entirely) — the caller passed back a stale or foreign id.
     UnknownStream(u64),
+    /// [`h3_webtransport_reset_uni_stream_on_driver`] could not queue the
+    /// RESET_STREAM frame it built — the Application Data space has no send
+    /// keys installed yet, or the frame overflowed the scheduler's payload
+    /// budget (unreachable for a frame this small on any real path MTU).
+    Enqueue(super::send_state::SendStateError),
 }
 
 impl core::fmt::Display for WebTransportStreamError {
@@ -588,6 +593,7 @@ impl core::fmt::Display for WebTransportStreamError {
             Self::Header(e) => write!(f, "WebTransport: stream header: {e}"),
             Self::Driver(e) => write!(f, "WebTransport: opening unidirectional stream: {e}"),
             Self::UnknownStream(id) => write!(f, "WebTransport: unknown stream id {id}"),
+            Self::Enqueue(e) => write!(f, "WebTransport: queuing RESET_STREAM: {e}"),
         }
     }
 }
@@ -597,6 +603,7 @@ impl std::error::Error for WebTransportStreamError {
         match self {
             Self::Header(e) => Some(e),
             Self::Driver(e) => Some(e),
+            Self::Enqueue(e) => Some(e),
             Self::StreamsExhausted | Self::UnknownStream(_) => None,
         }
     }
@@ -692,6 +699,86 @@ pub fn h3_webtransport_write_stream_on_driver<T: DatagramTransport>(
     driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
 }
 
+/// Gracefully closes a WebTransport unidirectional stream's sending half
+/// (RFC 9000 §3.1, STREAM FIN) — `WritableStreamDefaultWriter.close()` on the
+/// stream [`h3_webtransport_open_uni_stream_on_driver`] opened.
+///
+/// Marks the stream's [`super::stream::SendStream`] finished
+/// ([`super::stream::SendStream::finish`]) and flushes: no further
+/// [`h3_webtransport_write_stream_on_driver`] call reaches the wire after
+/// this (`SendStream::write` silently drops once `finish` was called, RFC
+/// 9000 §3.1), and the send half moves to `DataSent` once the FIN itself
+/// clears the socket — the normal, non-error end of a WebTransport
+/// unidirectional stream (draft-ietf-webtrans-http3 §4.2 says nothing special
+/// happens on the wire beyond the QUIC FIN).
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::UnknownStream`] if `stream_id` was never opened
+/// on `driver`, or [`WebTransportStreamError::Driver`] if the flushing turn
+/// fails.
+pub fn h3_webtransport_close_uni_stream_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    stream_id: u64,
+) -> Result<(), WebTransportStreamError> {
+    driver
+        .turn_mut()
+        .pump_mut()
+        .dispatch_mut()
+        .streams_mut()
+        .send_stream_mut(stream_id)
+        .ok_or(WebTransportStreamError::UnknownStream(stream_id))?
+        .finish();
+
+    driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
+}
+
+/// Abruptly terminates a WebTransport unidirectional stream's sending half
+/// with `error_code` (RFC 9000 §3.1/§19.4, RESET_STREAM) —
+/// `WritableStreamDefaultWriter.abort(reason)` on the stream
+/// [`h3_webtransport_open_uni_stream_on_driver`] opened.
+///
+/// Unlike [`h3_webtransport_close_uni_stream_on_driver`]'s FIN, a RESET_STREAM
+/// is not something [`super::stream::SendStream::poll_transmit`] ever emits —
+/// it is a control frame, not stream data, so it is built here directly (final
+/// size = the stream's write offset at the moment of reset, RFC 9000 §19.4)
+/// and queued straight into the connection's Application Data send scheduler
+/// ([`super::send_state::ConnectionSendState::enqueue`]) before the discarded
+/// unsent bytes and reset bookkeeping are recorded on the [`super::stream::SendStream`]
+/// itself ([`super::stream::SendStream::reset`]).
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::UnknownStream`] if `stream_id` was never opened
+/// on `driver`, [`WebTransportStreamError::Enqueue`] if the RESET_STREAM frame
+/// could not be queued, or [`WebTransportStreamError::Driver`] if the flushing
+/// turn fails.
+pub fn h3_webtransport_reset_uni_stream_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    stream_id: u64,
+    error_code: u64,
+) -> Result<(), WebTransportStreamError> {
+    let dispatch = driver.turn_mut().pump_mut().dispatch_mut();
+    let send = dispatch
+        .streams_mut()
+        .send_stream_mut(stream_id)
+        .ok_or(WebTransportStreamError::UnknownStream(stream_id))?;
+    let final_size = send.write_offset();
+    send.reset(error_code);
+
+    driver
+        .turn_mut()
+        .turn_mut()
+        .send_mut()
+        .enqueue(
+            super::loss::PacketNumberSpace::ApplicationData,
+            super::quic_frame::Frame::ResetStream { stream_id, app_error_code: error_code, final_size },
+        )
+        .map_err(WebTransportStreamError::Enqueue)?;
+
+    driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +798,8 @@ mod tests {
             }
         }
     }
+
+    use super::super::stream::SendState;
 
     fn loopback(port: u16) -> SocketAddr {
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
@@ -1088,5 +1177,108 @@ mod tests {
             .unwrap();
         // 3-byte header + 3 + 3 payload bytes across two writes.
         assert_eq!(send.write_offset(), 9);
+    }
+
+    #[test]
+    fn webtransport_close_stream_marks_the_send_half_finished() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let stream_id = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the uni stream");
+        h3_webtransport_write_stream_on_driver(&mut driver, stream_id, b"bye").unwrap();
+
+        h3_webtransport_close_uni_stream_on_driver(&mut driver, stream_id)
+            .expect("closes the open stream");
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .expect("the uni stream's send half still exists");
+        // `finish()` marks the FIN pending; `transmit()` inside the close call
+        // already flushed it onto the (mock) wire, so the header + payload +
+        // FIN chunk moved the state past `Send`.
+        assert_eq!(send.state(), SendState::DataSent);
+    }
+
+    #[test]
+    fn webtransport_write_after_close_is_silently_dropped() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let stream_id = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the uni stream");
+        h3_webtransport_close_uni_stream_on_driver(&mut driver, stream_id).unwrap();
+        let offset_at_close = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .unwrap()
+            .write_offset();
+
+        // The native binding itself keeps accepting the call (the JS layer is
+        // responsible for refusing writes on a closed `WritableStream`); the
+        // QUIC layer just drops the bytes, per `SendStream::write`'s contract
+        // once `finish()` has been called.
+        h3_webtransport_write_stream_on_driver(&mut driver, stream_id, b"too late").unwrap();
+
+        let offset_after = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .unwrap()
+            .write_offset();
+        assert_eq!(offset_after, offset_at_close, "no bytes queued after finish()");
+    }
+
+    #[test]
+    fn webtransport_close_on_an_unknown_id_is_reported() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let err = h3_webtransport_close_uni_stream_on_driver(&mut driver, 42).unwrap_err();
+        match err {
+            WebTransportStreamError::UnknownStream(id) => assert_eq!(id, 42),
+            other => panic!("expected UnknownStream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webtransport_reset_stream_moves_to_reset_sent_and_discards_unsent_data() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let stream_id = h3_webtransport_open_uni_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the uni stream");
+        h3_webtransport_write_stream_on_driver(&mut driver, stream_id, b"partial").unwrap();
+
+        h3_webtransport_reset_uni_stream_on_driver(&mut driver, stream_id, 0x42)
+            .expect("resets the open stream");
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .expect("the uni stream's send half still exists");
+        assert_eq!(send.state(), SendState::ResetSent);
+        assert_eq!(send.reset_error(), Some(0x42));
+    }
+
+    #[test]
+    fn webtransport_reset_stream_on_an_unknown_id_is_reported() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let err = h3_webtransport_reset_uni_stream_on_driver(&mut driver, 42, 1).unwrap_err();
+        match err {
+            WebTransportStreamError::UnknownStream(id) => assert_eq!(id, 42),
+            other => panic!("expected UnknownStream, got {other:?}"),
+        }
     }
 }
