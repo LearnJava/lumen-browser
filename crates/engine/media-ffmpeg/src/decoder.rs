@@ -22,7 +22,9 @@ use crate::ffi::{
     describe_error, sws_freeContext, sws_getContext, sws_scale, AVChannelLayout, AVCodec,
     AVCodecContext, AVFormatContext, AVFormatContextHead, AVFrameHead, AVIOContext,
     AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_VIDEO, AVSEEK_FLAG_BACKWARD, AVFMT_FLAG_CUSTOM_IO,
-    AVERROR_EOF, AV_NOPTS_VALUE, AV_PIX_FMT_RGBA, SWS_BILINEAR,
+    AVERROR_EOF, AV_NOPTS_VALUE, AV_PIX_FMT_RGBA, SWS_BILINEAR, AV_SAMPLE_FMT_FLT,
+    AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_S16P, AV_SAMPLE_FMT_U8,
+    AV_SAMPLE_FMT_U8P,
 };
 
 /// `FFmpeg`-бэкенд `VideoDecoder` (ADR-030). Существует только под feature
@@ -101,6 +103,20 @@ extern "C" fn seek_cb(opaque: *mut c_void, offset: i64, whence: c_int) -> i64 {
     new_pos
 }
 
+/// Конвертирует один PCM-сэмпл с плавающей точкой (`AV_SAMPLE_FMT_FLT`/
+/// `_FLTP`, ожидаемый диапазон `[-1.0, 1.0]`) в `i16` с насыщением —
+/// значения за пределами диапазона (перегруз кодека/контейнера) обрезаются
+/// вместо переполнения при масштабировании на `i16::MAX`.
+fn f32_sample_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16
+}
+
+/// Конвертирует один PCM-сэмпл `AV_SAMPLE_FMT_U8`/`_U8P` (беззнаковый,
+/// центр молчания на 128) в `i16` (центр молчания на 0).
+fn u8_sample_to_i16(sample: u8) -> i16 {
+    (i16::from(sample) - 128) * 256
+}
+
 /// Одна открытая сессия декодирования — владеет FFmpeg-контекстами и
 /// байтами контейнера на всё время своей жизни; `Drop` освобождает их в
 /// порядке, обратном созданию (кодек → демуксер → custom IO → буфер байт).
@@ -119,9 +135,18 @@ pub struct FfmpegSession {
     /// `dimensions()` не лгала до первого `frame_at()`, и чтобы
     /// `frame_at(0.0)` сразу после `open()` не платил за повторный seek.
     first_frame: (f64, Vec<u8>),
-    /// Метаданные аудиодорожки, снятые один раз в `open()` (срез 12) —
-    /// декодирования PCM пока нет, только детект sample_rate/channels.
+    /// Метаданные аудиодорожки, снятые один раз в `open()` (срез 12).
     audio_track: Option<AudioTrackInfo>,
+    /// Индекс аудиопотока в `fmt_ctx`, `-1` — аудиодорожки нет/не декодируется
+    /// (срез 13). Отдельный от `stream_index` (видео) — оба читаются из
+    /// одного и того же демуксера через общий `av_read_frame`.
+    audio_stream_index: c_int,
+    /// Открытый (`avcodec_open2`) кодек-контекст аудиодорожки, `null` —
+    /// аудиодорожки нет/не декодируется. В отличие от среза 12 (закрывался
+    /// сразу после снятия метаданных), срез 13 держит его открытым на всё
+    /// время жизни сессии, чтобы `decode_audio_pcm` могло декодировать PCM
+    /// без повторного `avcodec_open2`.
+    audio_codec_ctx: *mut AVCodecContext,
 }
 
 // SAFETY: `FfmpegSession` — единственный владелец всех перечисленных
@@ -320,10 +345,14 @@ impl FfmpegSession {
         }
 
         // SAFETY: `fmt_ctx` — тот же живой демуксер, что и выше;
-        // `probe_audio_track` не трогает позицию чтения демуксера (не
+        // `open_audio_track` не трогает позицию чтения демуксера (не
         // вызывает `av_read_frame`), так что не мешает `av_find_best_stream`
         // видео-дорожки/декодированию первого видеокадра ниже.
-        let audio_track = unsafe { Self::probe_audio_track(fmt_ctx) };
+        let (audio_stream_index, audio_codec_ctx, audio_track) =
+            match unsafe { Self::open_audio_track(fmt_ctx) } {
+                Some((idx, ctx, info)) => (idx, ctx, Some(info)),
+                None => (-1, ptr::null_mut(), None),
+            };
 
         let mut session = Self {
             fmt_ctx,
@@ -338,6 +367,8 @@ impl FfmpegSession {
             duration_secs,
             first_frame: (0.0, Vec::new()),
             audio_track,
+            audio_stream_index,
+            audio_codec_ctx,
         };
 
         let (w, h, rgba) = session.decode_from_current_position(0.0).map_err(|e| {
@@ -350,18 +381,22 @@ impl FfmpegSession {
         Ok(session)
     }
 
-    /// Ищет первую декодируемую аудиодорожку и снимает её метаданные
+    /// Ищет первую декодируемую аудиодорожку, снимает её метаданные
     /// (`sample_rate`/`channels`) через generic `AVOption`-геттеры
-    /// (`av_opt_get_int("ar")`/`av_opt_get_chlayout("ch_layout")`) на
-    /// временно открытом `AVCodecContext` — без знания layout'а
-    /// `AVCodecContext`/`AVFrame` для аудио, кодек закрывается сразу после
-    /// снятия метаданных (декодирования PCM в этом срезе нет). Отсутствие
-    /// аудиодорожки/недекодируемый аудиокодек — не ошибка, `None`.
+    /// (`av_opt_get_int("ar")`/`av_opt_get_chlayout("ch_layout")`) и, в
+    /// отличие от среза 12, оставляет `AVCodecContext` открытым (не
+    /// закрывает его) — срез 13's `decode_audio_pcm` декодирует PCM через
+    /// него же, без повторного `avcodec_alloc_context3`/`avcodec_open2`.
+    /// Отсутствие аудиодорожки/недекодируемый аудиокодек/нечитаемые
+    /// метаданные — не ошибка, `None` (и тогда контекст, если он успел
+    /// открыться, освобождается здесь же).
     ///
     /// # Safety
     /// `fmt_ctx` — валидный, открытый `avformat_open_input`+
     /// `avformat_find_stream_info` демуксер.
-    unsafe fn probe_audio_track(fmt_ctx: *mut AVFormatContext) -> Option<AudioTrackInfo> {
+    unsafe fn open_audio_track(
+        fmt_ctx: *mut AVFormatContext,
+    ) -> Option<(c_int, *mut AVCodecContext, AudioTrackInfo)> {
         let mut audio_decoder: *const AVCodec = ptr::null();
         // SAFETY: `fmt_ctx` валиден по контракту функции; `&mut audio_decoder`
         // — валидный указатель на локальную переменную этого стека.
@@ -446,20 +481,238 @@ impl FfmpegSession {
             av_channel_layout_uninit(&mut layout);
         }
 
-        // SAFETY: и метаданные, и кодек больше не нужны после этой точки —
-        // decode PCM-кадров в этом срезе нет, аудио-контекст не переживает
-        // эту функцию.
-        unsafe {
-            let mut ctx = audio_codec_ctx;
-            avcodec_free_context(&mut ctx);
+        match (sample_rate_ret, channels) {
+            (ret, Some(channels)) if ret >= 0 && sample_rate > 0 => Some((
+                audio_stream_index,
+                audio_codec_ctx,
+                AudioTrackInfo { sample_rate: sample_rate as u32, channels },
+            )),
+            _ => {
+                // SAFETY: метаданные нечитаемы — этот контекст не будет
+                // сохранён вызывающей стороной (`open()` хранит его только
+                // при `Some`), освобождаем сами, чтобы не утечь.
+                unsafe {
+                    let mut ctx = audio_codec_ctx;
+                    avcodec_free_context(&mut ctx);
+                }
+                None
+            }
+        }
+    }
+
+    /// Декодирует следующую порцию PCM аудиодорожки, продолжая от текущей
+    /// позиции чтения `fmt_ctx` (общей с видеодорожкой — `frame_at`,
+    /// вызванный до этого метода, продвигает и её), до накопления
+    /// `max_samples` сэмплов на канал или EOF. Без `swresample`: формат
+    /// сэмплов декодера (`frame.format`) конвертируется в интерливленный
+    /// S16 вручную — [`Self::frame_to_interleaved_i16`] знает конечный
+    /// список форматов, остальные — явная ошибка, а не тихое искажение
+    /// звука.
+    fn decode_audio_pcm(&mut self, max_samples: usize) -> Result<Vec<i16>, String> {
+        if self.audio_stream_index < 0 || self.audio_codec_ctx.is_null() {
+            return Err("контейнер не несёт декодируемой аудиодорожки".to_string());
+        }
+        let Some(channels) = self.audio_track.map(|t| t.channels as usize) else {
+            return Err("метаданные аудиодорожки недоступны".to_string());
+        };
+        if channels == 0 || channels > 8 {
+            return Err(format!(
+                "FFmpeg: неподдерживаемое число каналов аудио ({channels}) — AVFrameHead.data вмещает не больше 8 планов"
+            ));
         }
 
-        match (sample_rate_ret, channels) {
-            (ret, Some(channels)) if ret >= 0 && sample_rate > 0 => {
-                Some(AudioTrackInfo { sample_rate: sample_rate as u32, channels })
+        // SAFETY: `av_packet_alloc` — обычная C-аллокация; null проверяется
+        // сразу ниже перед любым использованием.
+        let pkt = unsafe { av_packet_alloc() };
+        // SAFETY: `av_frame_alloc` — обычная C-аллокация; null проверяется
+        // сразу ниже перед любым использованием.
+        let frame = unsafe { av_frame_alloc() };
+        if pkt.is_null() || frame.is_null() {
+            // SAFETY: `av_packet_free`/`av_frame_free` документированно
+            // принимают указатель на null-переменную как no-op.
+            unsafe {
+                let mut pkt = pkt;
+                av_packet_free(&mut pkt);
+                let mut frame = frame;
+                av_frame_free(&mut frame);
             }
-            _ => None,
+            return Err("av_packet_alloc/av_frame_alloc вернул null".to_string());
         }
+
+        let target_len = max_samples.saturating_mul(channels);
+        let mut samples: Vec<i16> = Vec::new();
+        let mut convert_err: Option<String> = None;
+        'outer: while samples.len() < target_len {
+            // SAFETY: `self.fmt_ctx` открыт и жив на весь срок жизни
+            // `self`; `pkt` — валидный, только что выделенный `AVPacket`.
+            let read_ret = unsafe { av_read_frame(self.fmt_ctx, pkt) };
+            if read_ret < 0 {
+                break; // EOF демуксера.
+            }
+            // SAFETY: `pkt` заполнен успешным `av_read_frame` выше.
+            let pkt_stream = unsafe { (*pkt).stream_index };
+            if pkt_stream != self.audio_stream_index {
+                // SAFETY: `pkt` — тот же валидный пакет, `av_packet_unref`
+                // — штатный способ освободить его данные без деалокации
+                // самой структуры (она переиспользуется в цикле).
+                unsafe {
+                    av_packet_unref(pkt);
+                }
+                continue;
+            }
+            // SAFETY: `self.audio_codec_ctx` открыт `avcodec_open2` в
+            // `open_audio_track`; `pkt` содержит данные аудиодорожки.
+            let send_ret = unsafe { avcodec_send_packet(self.audio_codec_ctx, pkt) };
+            // SAFETY: `pkt` больше не нужен после `avcodec_send_packet`
+            // (FFmpeg копирует/референсит данные внутри), безопасно
+            // освободить перед следующей итерацией.
+            unsafe {
+                av_packet_unref(pkt);
+            }
+            if send_ret < 0 {
+                continue;
+            }
+            loop {
+                // SAFETY: `self.audio_codec_ctx` открыт; `frame` —
+                // валидный, выделенный выше `AVFrame`, переиспользуемый
+                // между попытками приёма.
+                let recv_ret = unsafe { avcodec_receive_frame(self.audio_codec_ctx, frame) };
+                if recv_ret != 0 {
+                    break;
+                }
+                // SAFETY: `avcodec_receive_frame` вернул успех — поля
+                // `frame` заполнены декодером по заявленному в `ffi.rs`
+                // layout'у.
+                let (fmt, nb_samples) = unsafe { ((*frame).format, (*frame).nb_samples) };
+                if nb_samples <= 0 {
+                    continue;
+                }
+                // SAFETY: `frame` только что успешно декодирован
+                // `avcodec_receive_frame` выше, `fmt`/`nb_samples` —
+                // значения из того же `frame`.
+                match unsafe {
+                    Self::frame_to_interleaved_i16(frame, fmt, nb_samples as usize, channels)
+                } {
+                    Ok(chunk) => samples.extend(chunk),
+                    Err(e) => {
+                        convert_err = Some(e);
+                        break 'outer;
+                    }
+                }
+                if samples.len() >= target_len {
+                    break 'outer;
+                }
+            }
+        }
+
+        // SAFETY: `pkt`/`frame` были выделены в начале этой функции и не
+        // передавались никому за её пределы.
+        unsafe {
+            let mut pkt = pkt;
+            av_packet_free(&mut pkt);
+            let mut frame = frame;
+            av_frame_free(&mut frame);
+        }
+
+        if let Some(e) = convert_err {
+            return Err(e);
+        }
+        if samples.is_empty() {
+            return Err("не удалось декодировать ни одного PCM-семпла (EOF или битый поток)".to_string());
+        }
+        Ok(samples)
+    }
+
+    /// Конвертирует декодированный аудио-`frame` в интерливленный PCM S16.
+    /// Поддержаны только форматы из [`AV_SAMPLE_FMT_U8`]/`_S16`/`_FLT`
+    /// (packed) и их planar-варианты (`_U8P`/`_S16P`/`_FLTP`) — этого
+    /// достаточно для AAC/Opus/Vorbis, которые декодеры обычно отдают как
+    /// `FLTP`. `S32`/`DBL`/`S64` и их planar-варианты — явная ошибка:
+    /// добавлять их стоит вместе с живым `.mp4`/`.webm`, который реально
+    /// их использует (тот же принцип, что и у остального FFI-слоя — не
+    /// объявлять непроверенное живьём).
+    ///
+    /// # Safety
+    /// `frame` — валидный, только что успешно декодированный `AVFrameHead`
+    /// с `format == fmt` и `(*frame).nb_samples == nb_samples`; `channels`
+    /// не превышает 8 (число слотов `AVFrameHead::data`) — проверено
+    /// вызывающей стороной ([`Self::decode_audio_pcm`]).
+    unsafe fn frame_to_interleaved_i16(
+        frame: *mut AVFrameHead,
+        fmt: c_int,
+        nb_samples: usize,
+        channels: usize,
+    ) -> Result<Vec<i16>, String> {
+        let mut out = vec![0i16; nb_samples * channels];
+        match fmt {
+            AV_SAMPLE_FMT_S16 => {
+                // SAFETY: packed S16 — `data[0]` содержит `nb_samples *
+                // channels` интерливленных `i16`, контракт функции.
+                let src = unsafe { (*frame).data[0] }.cast::<i16>();
+                for (i, slot) in out.iter_mut().enumerate() {
+                    // SAFETY: `i < nb_samples * channels == out.len()`.
+                    *slot = unsafe { *src.add(i) };
+                }
+            }
+            AV_SAMPLE_FMT_S16P => {
+                for ch in 0..channels {
+                    // SAFETY: `data[ch]` — `ch < channels <= 8`, planar
+                    // S16 буфер этого канала на `nb_samples` элементов.
+                    let src = unsafe { (*frame).data[ch] }.cast::<i16>();
+                    for i in 0..nb_samples {
+                        // SAFETY: `i < nb_samples`, `src` — planar S16
+                        // буфер этого канала ровно на `nb_samples`
+                        // элементов (см. `SAFETY` над `src`).
+                        out[i * channels + ch] = unsafe { *src.add(i) };
+                    }
+                }
+            }
+            AV_SAMPLE_FMT_FLT => {
+                // SAFETY: packed float — `data[0]` содержит `nb_samples *
+                // channels` интерливленных `f32` в диапазоне `[-1.0, 1.0]`.
+                let src = unsafe { (*frame).data[0] }.cast::<f32>();
+                for (i, slot) in out.iter_mut().enumerate() {
+                    // SAFETY: `i < nb_samples * channels == out.len()`.
+                    *slot = f32_sample_to_i16(unsafe { *src.add(i) });
+                }
+            }
+            AV_SAMPLE_FMT_FLTP => {
+                for ch in 0..channels {
+                    // SAFETY: planar float — тот же аргумент, что и `S16P`.
+                    let src = unsafe { (*frame).data[ch] }.cast::<f32>();
+                    for i in 0..nb_samples {
+                        // SAFETY: `i < nb_samples`, тот же аргумент, что и
+                        // `S16P` выше.
+                        out[i * channels + ch] = f32_sample_to_i16(unsafe { *src.add(i) });
+                    }
+                }
+            }
+            AV_SAMPLE_FMT_U8 => {
+                // SAFETY: packed unsigned 8-bit, центр на 128.
+                let src = unsafe { (*frame).data[0] };
+                for (i, slot) in out.iter_mut().enumerate() {
+                    // SAFETY: `i < nb_samples * channels == out.len()`.
+                    *slot = u8_sample_to_i16(unsafe { *src.add(i) });
+                }
+            }
+            AV_SAMPLE_FMT_U8P => {
+                for ch in 0..channels {
+                    // SAFETY: тот же аргумент, что и `S16P`, для U8 planar.
+                    let src = unsafe { (*frame).data[ch] };
+                    for i in 0..nb_samples {
+                        // SAFETY: `i < nb_samples`, тот же аргумент, что и
+                        // `S16P` выше.
+                        out[i * channels + ch] = u8_sample_to_i16(unsafe { *src.add(i) });
+                    }
+                }
+            }
+            other => {
+                return Err(format!(
+                    "FFmpeg: неподдерживаемый формат сэмплов аудио (AVSampleFormat={other}) — нужен swresample или явная поддержка этого формата"
+                ));
+            }
+        }
+        Ok(out)
     }
 
     /// Декодирует кадры от текущей позиции чтения демуксера вперёд, пока
@@ -683,18 +936,25 @@ impl VideoDecodeSession for FfmpegSession {
     fn audio_track(&self) -> Option<AudioTrackInfo> {
         self.audio_track
     }
+
+    fn decode_audio_pcm(&mut self, max_samples: usize) -> Result<Vec<i16>, String> {
+        Self::decode_audio_pcm(self, max_samples)
+    }
 }
 
 impl Drop for FfmpegSession {
     fn drop(&mut self) {
-        // SAFETY: `self.codec_ctx`/`self.fmt_ctx`/`self.avio_ctx`/
-        // `self.reader` были созданы вместе в `open()` и с тех пор ничем
-        // не переиспользованы — это единственный `Drop`, освобождение в
-        // порядке кодек → демуксер → custom IO → буфер байт зеркалирует
-        // порядок создания в обратную сторону, как и в `open()`'s cleanup
-        // веток отказа.
+        // SAFETY: `self.codec_ctx`/`self.audio_codec_ctx`/`self.fmt_ctx`/
+        // `self.avio_ctx`/`self.reader` были созданы вместе в `open()` и с
+        // тех пор ничем не переиспользованы — это единственный `Drop`,
+        // освобождение в порядке кодек(и) → демуксер → custom IO → буфер
+        // байт зеркалирует порядок создания в обратную сторону, как и в
+        // `open()`'s cleanup веток отказа. `avcodec_free_context` безопасно
+        // принимает указатель на уже-null `audio_codec_ctx` (контейнер без
+        // декодируемой аудиодорожки, срез 12/13) как no-op.
         unsafe {
             avcodec_free_context(&mut self.codec_ctx);
+            avcodec_free_context(&mut self.audio_codec_ctx);
             avformat_close_input(&mut self.fmt_ctx);
             // `AVFMT_FLAG_CUSTOM_IO` — `avformat_close_input` не трогает
             // `avio_ctx`, освобождаем сами.
