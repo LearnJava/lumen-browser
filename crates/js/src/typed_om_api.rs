@@ -431,16 +431,57 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   StylePropertyMap.prototype = Object.create(StylePropertyMapReadOnly.prototype);
   StylePropertyMap.prototype.constructor = StylePropertyMap;
   StylePropertyMap.prototype.__computed__ = false;
+
+  // §6.2's set()/append() are variadic — `styleMap.set('background-position',
+  // CSS.px(1), CSS.px(2))` — but without a per-property grammar table Lumen
+  // cannot know each property's separator. This hardcodes the properties WPT
+  // and real pages actually exercise as comma-separated layer lists; every
+  // other property falls back to space-joining, which matches shorthands like
+  // `margin`/`background-position` and is a no-op for the single-value case.
+  var COMMA_LIST_PROPERTIES = {
+    'background': 1, 'background-image': 1, 'background-position': 1, 'background-size': 1,
+    'background-repeat': 1, 'mask': 1, 'mask-image': 1,
+    'transition': 1, 'transition-property': 1, 'transition-duration': 1,
+    'transition-timing-function': 1, 'transition-delay': 1,
+    'animation': 1, 'animation-name': 1, 'animation-duration': 1, 'animation-timing-function': 1,
+    'animation-delay': 1, 'animation-iteration-count': 1, 'animation-direction': 1,
+    'animation-fill-mode': 1, 'animation-play-state': 1,
+    'will-change': 1, 'font-family': 1, 'grid-template-columns': 1, 'grid-template-rows': 1
+  };
+
+  function serialiseOneValue(value) {
+    if (value instanceof CSSStyleValue) return value.cssText;
+    if (value && typeof value === 'object' && value.cssText !== undefined) return value.cssText;
+    return String(value);
+  }
+
   StylePropertyMap.prototype.set = function(prop, value) {
-    var val;
-    if (value instanceof CSSStyleValue) {
-      val = value.cssText;
-    } else if (value && typeof value === 'object' && value.cssText !== undefined) {
-      val = value.cssText;
-    } else {
-      val = String(value);
+    var name = camelToKebab(String(prop));
+    var rest = Array.prototype.slice.call(arguments, 1).map(serialiseOneValue);
+    if (rest.length === 0) {
+      throw new TypeError('StylePropertyMap.set: at least one value is required');
     }
-    _lumen_set_style_property(this.__nid__, String(prop), val);
+    var sep = Object.prototype.hasOwnProperty.call(COMMA_LIST_PROPERTIES, name) ? ', ' : ' ';
+    _lumen_set_style_property(this.__nid__, name, rest.join(sep));
+  };
+  // §6.2 `append()` — adds a layer to a property whose grammar is a
+  // comma-separated list (background-image, transition, ...) instead of
+  // replacing the whole value the way `set()` does. Spec throws
+  // `NotSupportedError` for a property that has no such list grammar; there is
+  // no DOMException binding in this shim, so a TypeError carries the same
+  // "you can't do that" signal.
+  StylePropertyMap.prototype.append = function(prop) {
+    var name = camelToKebab(String(prop));
+    if (!Object.prototype.hasOwnProperty.call(COMMA_LIST_PROPERTIES, name)) {
+      throw new TypeError('StylePropertyMap.append: "' + name + '" does not support multiple values');
+    }
+    var added = Array.prototype.slice.call(arguments, 1).map(serialiseOneValue);
+    if (added.length === 0) {
+      throw new TypeError('StylePropertyMap.append: at least one value is required');
+    }
+    var existing = this.__lookup__(name);
+    var layers = existing === '' ? [] : splitTopLevelCommas(existing);
+    _lumen_set_style_property(this.__nid__, name, layers.concat(added).join(', '));
   };
   StylePropertyMap.prototype.delete = function(prop) {
     _lumen_delete_style_property(this.__nid__, String(prop));
