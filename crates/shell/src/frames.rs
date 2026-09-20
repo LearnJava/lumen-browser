@@ -722,10 +722,11 @@ pub(crate) fn frame_image_key(base: &ResourceBase, raw_src: &str) -> String {
 /// `LayoutBox::style.background_layers`, not the DOM), so — unlike `<img>`/
 /// `<link>` (fetched pre-layout, срез 11) — the caller must have a layout
 /// already. `spawn_frame` calls this once, right after its own synchronous
-/// initial layout: like the page (`parse_and_layout` calls
-/// [`fetch_and_decode_background_images`] exactly once too, BUG-939), a
-/// `background-image` set or changed by a later relayout/mutation is not
-/// picked up — a known limitation shared with the page, not a regression.
+/// initial layout: a `background-image` set or changed by a later
+/// relayout/mutation inside this frame is not picked up. BUG-939 fixed the
+/// same gap for the top-level page (`spawn_dynamic_background_image_loads`,
+/// hooked into every relayout via `relayout.rs`) but did not extend to
+/// frames — this is that residual, not a regression.
 ///
 /// Returns `(images, raw_to_key, blocked_by_img_src)`: `images` is the
 /// `LoadedPage::images`-shaped list to fold into [`FrameHandle::images`];

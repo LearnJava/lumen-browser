@@ -1415,6 +1415,52 @@ impl Lumen {
         self.spawn_image_requests(requests, csp_gate);
     }
 
+    /// BUG-939: same argument as BUG-730 above, for `background-image` instead
+    /// of `<img>`.
+    ///
+    /// `fetch_and_decode_background_images` (`page_pipeline.rs`) only ever runs
+    /// once, against the layout tree the initial pipeline pass built. A
+    /// `background-image` set or changed from JS (`el.style.backgroundImage =
+    /// "url(...)"`) is never re-collected afterwards — the cascade sees the
+    /// mutation (`getComputedStyle` reflects the new value) but no fetch is
+    /// ever queued, so the image never appears. Hooked into the same
+    /// post-relayout point as [`Self::spawn_dynamic_image_loads`] so every
+    /// relayout producer picks it up, whichever one relaid the page out.
+    ///
+    /// `collect_background_image_requests` returns bare URLs (backgrounds have
+    /// no DOM node to anchor intrinsic-size hints on), so each is wrapped into
+    /// an [`lumen_layout::ImageRequest`] with a sentinel `node_id` — the same
+    /// "no DOM origin" sentinel `collect_bg_image_inner` already uses for
+    /// `content: url(...)` segments — purely to reuse
+    /// [`Self::spawn_image_requests`]'s fetch/decode/dedup plumbing; that
+    /// function never reads `node_id`; only `apply_stream_intrinsic_sizes`
+    /// does, and it walks `<img>` requests exclusively, so this sentinel value
+    /// on background entries is never consulted downstream.
+    pub(crate) fn spawn_dynamic_background_image_loads(&mut self) {
+        let (requests, csp_gate) = {
+            let Some(layout) = self.layout_box.as_ref() else { return };
+            let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
+            let Some(src) = self.layout_source.as_ref() else { return };
+            let Ok(doc) = src.document.lock() else { return };
+            let root = doc.root();
+            let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
+            let requests = urls
+                .into_iter()
+                .map(|url| lumen_layout::ImageRequest {
+                    node_id: lumen_dom::NodeId::from_index(0),
+                    url,
+                    has_explicit_width: false,
+                    has_explicit_height: false,
+                    is_lazy: false,
+                    fetch_priority: None,
+                    crossorigin: None,
+                })
+                .collect();
+            (requests, csp_gate)
+        };
+        self.spawn_image_requests(requests, csp_gate);
+    }
+
     /// BUG-735: разнести intrinsic-размеры уже декодированных картинок по `<img>`
     /// живого документа и, если DOM от этого изменился, запросить релейаут.
     ///
