@@ -1530,6 +1530,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mutation_incremental_with_counters_seeds_a_cache_matching_a_fresh_full_cascade() {
+        // BUG-935 S13: `layout_mutation_incremental` already ran a full cascade
+        // internally and threw the resulting `CounterMap` away, which meant
+        // nothing reachable from a continuous rAF+DOM-mutation loop ever seeded
+        // `Lumen::page_prev_cascade_styles` — the restyle fast path's precondition
+        // was structurally unmet regardless of call order (see the bug file's
+        // S12). `layout_mutation_incremental_with_counters` hands that map back;
+        // it must equal what a from-scratch full cascade of the same resulting
+        // DOM produces — `CascadeStyles::eq` compares cascade *results*, not
+        // pass-ordinal bookkeeping, so this is the same check
+        // `mutation_incremental_style_change_matches_full` runs for geometry.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_with_counters};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html_before = r#"<div style="height:40px"></div><div style="height:60px"></div>"#;
+        let prev = full_layout(html_before);
+
+        let html_after = r#"<div style="height:40px"></div><div style="height:80px"></div>"#;
+        let doc = parse_html(html_after);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+        let (_incr, incr_counters) = layout_mutation_incremental_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev,
+        );
+        let (_full, full_counters) =
+            layout_measured_hyp_with_counters(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+
+        assert_eq!(incr_counters.into_styles(), full_counters.into_styles());
+    }
+
     // ── BUG-341 S5: layout_mutation_incremental_restyle ───────────────────
 
     #[test]
