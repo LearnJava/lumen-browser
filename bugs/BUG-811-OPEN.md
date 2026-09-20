@@ -3447,3 +3447,43 @@ RFC 8941 Structured Fields). Карта прокинута тем же путё�
 v8 -- -D warnings` — чисто.
 
 Остаток общего списка дорожки не изменился: `manifest-src`.
+
+**Срез 61 (2026-09-20, `p6-gap-cspenf-srez61`) — финал, дорожка закрыта:**
+разведка `manifest-src` (последний пункт списка) подтвердила диагноз,
+записанный ещё в срезе, давшем строки 1575-1577: тип-система готова —
+`CspDirective::ManifestSrc` (`crates/network/src/csp.rs:118`) разбирается
+(`parse_into`, `crates/network/src/csp.rs:496`) и честно участвует в
+`effective_sources`/`fetch_directive_allows` с обычным фолбэком на
+`default-src`. Гейтить нечего не из-за CSP-кода, а из-за отсутствия
+producer'а: `<link rel="manifest">` нигде не парсится (grep по `crates/dom`,
+`crates/loader`, `crates/network`, `crates/shell` — ноль совпадений;
+единственное "manifest" в шелле — `crates/shell/src/update.rs:261`
+`MANIFEST_URL`, self-update приложения, к Web App Manifest отношения не
+имеет), и JSON манифеста никогда не фетчится. `crates/storage/src/web_manifest.rs`
+(таблица `web_manifests`) существует, но `WebManifests::` не вызывается
+нигде за пределами своего файла — мёртвая заготовка под будущий
+PWA-install UX. WPT-категория `appmanifest` целиком ручная по дизайну
+спеки (`WPT-VENDOR-appmanifest` в ROADMAP.md, DONE 2026-07-24) — все тесты
+`-manual(.tentative).html`, автоматизированного WPT-давления на реализацию
+Web App Manifest нет и не будет. Это переводит `manifest-src` из
+«доработка в один срез по образцу script-src/img-src» (директива
+распознана, не хватает `_blocked`-гейта на существующем producer'е) в
+«блокировано отсутствием целой фичи вне CSP» — тот же принцип, что
+нереализованная функциональность не дефект CSP-дорожки
+(`feedback_feature_gap_is_not_a_bug`). Web App Manifest fetch (парсинг
+`<link rel=manifest>`, сетевой запрос, заполнение уже существующей
+`web_manifests`) отдельной строкой ROADMAP.md не заводится: единственный
+потребитель — сам гейт `manifest-src`, автоматизированного теста нет,
+приоритета без PWA-install UX не появилось; если он материализуется,
+`manifest_src_blocked`/`violating_fetch_policy(..., &CspDirective::ManifestSrc, ...)`
+добавляется по образцу `font_src_blocked` (`crates/shell/src/csp_enforce.rs:629`)
+без затрагивания CSP-кода.
+
+**Итог дорожки:** GAP-CSPENF закрывается срезом 61. Все директивы с
+реальным producer'ом в движке (`script-src`, `style-src`, `img-src`,
+`connect-src`, `frame-src`/`frame-ancestors`, `worker-src`, `font-src`,
+`object-src`, `media-src`, `default-src`, `trusted-types`,
+`require-trusted-types-for`) гейтятся и диспатчат
+`securitypolicyviolation`/шлют `report-uri`+`report-to`; `manifest-src`
+остаётся инертной директивой не по недоработке CSP, а потому что ресурс,
+который она должна фильтровать, в движке не существует.
