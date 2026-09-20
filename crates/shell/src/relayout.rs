@@ -7,6 +7,25 @@
 
 use crate::*;
 
+/// BUG-935 S31: measurement-only override for `defer_js_push` at the two call
+/// sites S27 converted (`relayout`/`poll_engine_commit`, `:188`/`:1267`
+/// below). S28/S29/S30 each tried an interleaved A/B of `true` vs `false` by
+/// editing the literal and doing a full rebuild between runs — every attempt
+/// lost the comparison to machine noise that grew *during* the rebuild+link
+/// gap (minutes), not during the measurement itself. Reading an env var once
+/// (no rebuild, just a process restart) narrows that gap to seconds, so the
+/// next census attempt does not have to fight the same clock. `None` (the
+/// default, unset) leaves both sites at their shipped `true` — this must
+/// never change measured behavior for anyone who has not set the var.
+fn defer_js_push_override() -> Option<bool> {
+    static OVERRIDE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| match std::env::var("LUMEN_BUG935_DEFER_JS_PUSH").ok().as_deref() {
+        Some("1") => Some(true),
+        Some("0") => Some(false),
+        _ => None,
+    })
+}
+
 impl Lumen {
     /// Заменяет display list страницы, бампая его версию (BUG-405 срез 39).
     ///
@@ -185,7 +204,7 @@ impl Lumen {
         lumen_layout::clear_animated_heights();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        self.apply_relayout_result(new_dl, lb, viewport, true);
+        self.apply_relayout_result(new_dl, lb, viewport, defer_js_push_override().unwrap_or(true));
         if let Some(t0) = engine_t0 {
             let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
             self.engine_stats.record(engine_ms);
@@ -1264,7 +1283,7 @@ impl Lumen {
         // (finding B) and S26 added an independent drain for
         // `pending_lazy_image_reqs` so a push that never gets picked up by a
         // *next* `apply_relayout_result` still gets fetched (finding C).
-        self.apply_relayout_result(content, layout_box, viewport, true);
+        self.apply_relayout_result(content, layout_box, viewport, defer_js_push_override().unwrap_or(true));
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off
