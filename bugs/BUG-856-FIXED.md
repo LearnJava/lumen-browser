@@ -1,6 +1,6 @@
 # BUG-856 — конструктор `WebSocket` блокирует документ до конца хэндшейка: сервер, который принял TCP и молчит, замораживает страницу навсегда
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-WSASYNC](../ROADMAP.md))
+**Статус:** FIXED 2026-09-21 (P6, срез 6 `GAP-WSASYNC`)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-WSASYNC` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 25 — живой замер, маркеры `ws-connect-hang`, `ws-connect-refused`, `ws-close-connecting`)
 **Область:** `crates/js/src/v8_runtime.rs:3502` — комментарий модели прямо говорит «Phase 0 model: **synchronous connect**»; `_lumen_ws_connect` (`v8_runtime.rs:3517`) зовёт `provider.connect(&url, &protos)` в потоке JS и возвращает хэндл только после ответа. Ниже по стеку — `crates/network/src/lib.rs::HttpClient::connect` (impl `JsWebSocketProvider`) → `crates/network/src/websocket/mod.rs::connect_deflate`
@@ -103,7 +103,7 @@ Windows, `--seconds 6`):
   сервер отвечает паузой 10 с (`/sleep_10_v13`), так что тест это не заденет,
   но правильная фикса — отменяемый хэндшейк (токен отмены до
   `TcpStream`/`read_exact`, по образцу `AbortWatchdog`), не заведённая здесь.
-- [BUG-869](BUG-869-OPEN.md) (синхронный `send()`, бэкпрешер) — отдельная
+- [BUG-869](BUG-869-FIXED.md) (синхронный `send()`, бэкпрешер) — отдельная
   половина той же `GAP-WSASYNC`, не тронута.
 - [BUG-862](BUG-862-FIXED.md) (`send(null)` кидает `TypeError` в
   `_lumen_ws_bytelen`) — увидено попутно в `ws-echo`, уже заведено, не
@@ -154,7 +154,26 @@ ws-close-connecting`, dev-release, Windows, `--seconds 8`): против `/sleep
 Не в этом срезе:
 - Реальный прогон `run_report.py --root websockets --recursive` — ни один
   срез 1–4 его не делал, только живые probe.
-- [BUG-869](BUG-869-OPEN.md) фактически закрыт срезами 2–3 (`GAP-WSASYNC`),
+- [BUG-869](BUG-869-FIXED.md) фактически закрыт срезами 2–3 (`GAP-WSASYNC`),
   но статус `GAP-WSASYNC` в `ROADMAP.md` остаётся `planned` до WPT-прогона
   выше.
 - [BUG-862](BUG-862-FIXED.md) — закрыт P6 отдельным срезом, 2026-09-20.
+
+## Срез 6 (2026-09-21, `p6-gap-wsasync-srez6`) — закрытие: пункт «Как проверить фикс» выполнен
+
+Оба симптома из шапки бага починены срезами 1 и 4: `wsh-after-ctor
+readyState=0` (конструктор не блокирует) и `close()` во время `CONNECTING`
+доводит до `CLOSED` за миллисекунды вместо `FETCH_READ_TIMEOUT` (60 с).
+Второй пункт «Как проверить фикс» — реальный `run_report.py --all --root
+websockets --recursive` — выполнен срезом 5 (426/785 harness OK, 27
+`UNEXPECTED-PASS` относительно baseline от 2026-08-18, прямое подтверждение
+через WPT-корпус, а не только живые probe). Оба критерия закрытия
+выполнены, оставшийся `FETCH_READ_TIMEOUT`-хвост (сервер, не отвечающий на
+Upgrade дольше 60 с при **отсутствии** явного `close()`) — не симптом этого
+бага, а общая политика таймаута сетевого слоя, применяемая ко всем
+сокетам/фетчам одинаково, вне скоупа `GAP-WSASYNC`.
+
+Отдельная, не связанная находка среза 5 — [BUG-1072](BUG-1072-OPEN.md)
+(зависание самого процесса `lumen.exe` на одном конкретном тесте
+back/forward cache) остаётся открытой самостоятельной задачей, класса
+`hung-browser`, и не блокирует закрытие этого бага.

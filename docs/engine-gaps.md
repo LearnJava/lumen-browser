@@ -53,7 +53,6 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 ## Networking, storage, policy
 
 - **CSP is parsed and never enforced**, and `securitypolicyviolation` is dispatched nowhere ([BUG-811](../bugs/BUG-811-OPEN.md)) — a wait on it can only hang.
-- **`new WebSocket(url)` blocks the whole document until the handshake settles** ([BUG-856](../bugs/BUG-856-OPEN.md)). Open one only against a server you control.
 - **`sessionStorage` has no quota**, so a `while (true)` filling it hangs the page ([BUG-870](../bugs/BUG-870-OPEN.md)).
 - **A leaked IndexedDB connection stalls every later upgrade and delete on that name** — correct per spec, but it means a probe must close its connections or the next test waits forever.
 
