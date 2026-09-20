@@ -946,6 +946,22 @@ fn websocket_constants_defined() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// GAP-WSASYNC срез 1: `_lumen_ws_connect` now resolves the handshake on a
+/// background thread instead of the calling thread, so a single
+/// `_lumen_pump_websockets()` right after the constructor can race it even
+/// against a mock provider with no real I/O. Pumps in a loop (bounded, 1 s)
+/// until `cond_js` evaluates to `true`, returning whether it did.
+fn pump_until(rt: &V8JsRuntime, cond_js: &str) -> bool {
+    for _ in 0..200 {
+        rt.eval("_lumen_pump_websockets();").unwrap();
+        if rt.eval(cond_js).unwrap() == lumen_core::JsValue::Bool(true) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
 // Mock WS provider: connect always fails (no server).
 struct FailWsProvider;
 impl lumen_core::ext::JsWebSocketProvider for FailWsProvider {
@@ -964,35 +980,34 @@ fn v8_runtime_with_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 #[test]
 fn websocket_connect_fail_sets_closed_state() {
     let rt = v8_runtime_with_ws(make_doc());
-    // connect fails immediately → readyState = 3 (CLOSED)
-    let r = rt
-        .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.readyState")
-        .unwrap();
-    assert_eq!(r, lumen_core::JsValue::Number(3.0));
+    // GAP-WSASYNC срез 1: connect fails off-thread now — pump until the
+    // `error`+synthesized-`close` pair lands and readyState reaches CLOSED.
+    rt.eval("var ws = new WebSocket('ws://127.0.0.1:1');").unwrap();
+    assert!(pump_until(&rt, "ws.readyState === 3"));
 }
 
 #[test]
 fn websocket_connect_fail_no_handle() {
     let rt = v8_runtime_with_ws(make_doc());
-    let r = rt
-        .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws._handle === 0")
-        .unwrap();
+    // The handle is non-zero immediately (still-connecting registry entry);
+    // it only resets to 0 once the terminal close/error event is delivered.
+    rt.eval("var ws = new WebSocket('ws://127.0.0.1:1');").unwrap();
+    assert!(pump_until(&rt, "ws.readyState === 3"));
+    let r = rt.eval("ws._handle === 0").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
 #[test]
 fn websocket_connect_fail_fires_onerror() {
     let rt = v8_runtime_with_ws(make_doc());
-    // onerror is called asynchronously via setTimeout(fn, 0) in the shim.
-    // We can't pump the timeout in this test — just verify the handler is set.
-    let r = rt
-        .eval(
-            "var fired = false;
-                     var ws = new WebSocket('ws://127.0.0.1:1');
-                     ws.onerror = function() { fired = true; };
-                     ws.readyState === 3",
-        )
-        .unwrap();
+    rt.eval(
+        "var fired = false;
+                 var ws = new WebSocket('ws://127.0.0.1:1');
+                 ws.onerror = function() { fired = true; };",
+    )
+    .unwrap();
+    assert!(pump_until(&rt, "ws.readyState === 3"));
+    let r = rt.eval("fired").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
@@ -1022,10 +1037,19 @@ fn v8_runtime_with_csp_blocked_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 #[test]
 fn websocket_connect_src_block_reaches_native_side_channel() {
     let rt = v8_runtime_with_csp_blocked_ws(make_doc());
-    let r = rt
-        .eval("_lumen_ws_connect('wss://blocked.example/x', ''); _lumen_ws_last_csp_block()")
-        .unwrap();
-    match r {
+    // GAP-WSASYNC срез 1: the block is detected on the background connect
+    // thread now, so the side channel populates asynchronously — poll it
+    // (read-and-clear, so the first non-empty read is the final one).
+    rt.eval("_lumen_ws_connect('wss://blocked.example/x', '');").unwrap();
+    let mut result = lumen_core::JsValue::Undefined;
+    for _ in 0..200 {
+        result = rt.eval("_lumen_ws_last_csp_block()").unwrap();
+        if matches!(&result, lumen_core::JsValue::Array(arr) if !arr.is_empty()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    match result {
         lumen_core::JsValue::Array(arr) => {
             assert_eq!(arr.len(), 2);
             assert_eq!(arr[0], lumen_core::JsValue::String("wss://blocked.example/x".into()));
@@ -1038,15 +1062,19 @@ fn websocket_connect_src_block_reaches_native_side_channel() {
 #[test]
 fn websocket_connect_src_block_fires_security_policy_violation_event() {
     let rt = v8_runtime_with_csp_blocked_ws(make_doc());
+    // GAP-WSASYNC срез 1: the block now surfaces through the normal
+    // `error` poll event (which fires the violation itself), not the old
+    // synchronous `!h` constructor branch a `_lumen_tick_timers()` used to
+    // be enough to drain — pump until the listener has run.
     rt.eval(
         "var seen = null; \
          document.addEventListener('securitypolicyviolation', function(e) { \
              seen = [e.violatedDirective, e.blockedURI, e.originalPolicy].join('|'); \
          }); \
-         var ws = new WebSocket('wss://blocked.example/x'); \
-         _lumen_tick_timers();",
+         var ws = new WebSocket('wss://blocked.example/x');",
     )
     .unwrap();
+    assert!(pump_until(&rt, "seen !== null"));
     assert_eq!(
         rt.eval("seen").unwrap(),
         lumen_core::JsValue::String(
@@ -1202,26 +1230,23 @@ fn v8_runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 #[test]
 fn websocket_mock_connect_open_state() {
     let rt = v8_runtime_with_mock_ws(make_doc());
-    // Phase 0: pump explicitly to deliver Open event → readyState = 1.
-    let r = rt
-        .eval("var ws = new WebSocket('ws://mock'); _lumen_pump_websockets(); ws.readyState")
-        .unwrap();
-    assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    // Phase 0: pump (in a loop — GAP-WSASYNC срез 1 resolves the handshake
+    // off-thread, so a single pump right after the constructor can race it)
+    // to deliver the Open event → readyState = 1.
+    rt.eval("var ws = new WebSocket('ws://mock');").unwrap();
+    assert!(pump_until(&rt, "ws.readyState === 1"));
 }
 
 #[test]
 fn websocket_mock_open_fires_onopen() {
     let rt = v8_runtime_with_mock_ws(make_doc());
-    let r = rt
-        .eval(
-            "var opened = false;
-                     var ws = new WebSocket('ws://mock');
-                     ws.onopen = function() { opened = true; };
-                     _lumen_pump_websockets();
-                     opened",
-        )
-        .unwrap();
-    assert_eq!(r, lumen_core::JsValue::Bool(true));
+    rt.eval(
+        "var opened = false;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onopen = function() { opened = true; };",
+    )
+    .unwrap();
+    assert!(pump_until(&rt, "opened === true"));
 }
 
 /// `new WebSocket(url, protocols)` forwards the requested sub-protocol; on open,
@@ -1230,13 +1255,9 @@ fn websocket_mock_open_fires_onopen() {
 #[test]
 fn websocket_subprotocol_surfaced_on_open() {
     let rt = v8_runtime_with_mock_ws(make_doc());
-    let r = rt
-        .eval(
-            "var ws = new WebSocket('ws://mock', ['chat', 'superchat']);
-                     _lumen_pump_websockets();
-                     ws.protocol",
-        )
-        .unwrap();
+    rt.eval("var ws = new WebSocket('ws://mock', ['chat', 'superchat']);").unwrap();
+    assert!(pump_until(&rt, "ws.readyState === 1"));
+    let r = rt.eval("ws.protocol").unwrap();
     assert_eq!(r, lumen_core::JsValue::String("chat".into()));
 }
 
@@ -1244,13 +1265,9 @@ fn websocket_subprotocol_surfaced_on_open() {
 #[test]
 fn websocket_subprotocol_string_arg() {
     let rt = v8_runtime_with_mock_ws(make_doc());
-    let r = rt
-        .eval(
-            "var ws = new WebSocket('ws://mock', 'json');
-                     _lumen_pump_websockets();
-                     ws.protocol",
-        )
-        .unwrap();
+    rt.eval("var ws = new WebSocket('ws://mock', 'json');").unwrap();
+    assert!(pump_until(&rt, "ws.readyState === 1"));
+    let r = rt.eval("ws.protocol").unwrap();
     assert_eq!(r, lumen_core::JsValue::String("json".into()));
 }
 
@@ -1258,15 +1275,14 @@ fn websocket_subprotocol_string_arg() {
 fn websocket_mock_message_via_pump() {
     let rt = v8_runtime_with_mock_ws(make_doc());
     // Set handler before pump so onmessage fires when the message is dispatched.
-    let r = rt
-        .eval(
-            "var received = null;
-                     var ws = new WebSocket('ws://mock');
-                     ws.onmessage = function(e) { received = e.data; };
-                     _lumen_pump_websockets();
-                     received",
-        )
-        .unwrap();
+    rt.eval(
+        "var received = null;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onmessage = function(e) { received = e.data; };",
+    )
+    .unwrap();
+    assert!(pump_until(&rt, "received !== null"));
+    let r = rt.eval("received").unwrap();
     assert_eq!(r, lumen_core::JsValue::String("hello".into()));
 }
 
@@ -2100,14 +2116,15 @@ fn v8_runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 fn websocket_binary_blob_mode_delivers_uint8array() {
     let rt = v8_runtime_with_binary_ws(make_doc());
     // Default binaryType='blob' → Uint8Array (our Phase 0 representation).
+    rt.eval(
+        "var received = null;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onmessage = function(e) { received = e.data; };",
+    )
+    .unwrap();
+    assert!(pump_until(&rt, "received !== null"));
     let r = rt
-        .eval(
-            "var received = null;
-                     var ws = new WebSocket('ws://mock');
-                     ws.onmessage = function(e) { received = e.data; };
-                     _lumen_pump_websockets();
-                     received instanceof Uint8Array && received[0] === 1 && received[1] === 2 && received[2] === 3",
-        )
+        .eval("received instanceof Uint8Array && received[0] === 1 && received[1] === 2 && received[2] === 3")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -2116,15 +2133,16 @@ fn websocket_binary_blob_mode_delivers_uint8array() {
 fn websocket_binary_arraybuffer_mode_delivers_arraybuffer() {
     let rt = v8_runtime_with_binary_ws(make_doc());
     // binaryType='arraybuffer' → ArrayBuffer.
+    rt.eval(
+        "var received = null;
+                 var ws = new WebSocket('ws://mock');
+                 ws.binaryType = 'arraybuffer';
+                 ws.onmessage = function(e) { received = e.data; };",
+    )
+    .unwrap();
+    assert!(pump_until(&rt, "received !== null"));
     let r = rt
-        .eval(
-            "var received = null;
-                     var ws = new WebSocket('ws://mock');
-                     ws.binaryType = 'arraybuffer';
-                     ws.onmessage = function(e) { received = e.data; };
-                     _lumen_pump_websockets();
-                     received instanceof ArrayBuffer && new Uint8Array(received)[0] === 1",
-        )
+        .eval("received instanceof ArrayBuffer && new Uint8Array(received)[0] === 1")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -2133,14 +2151,13 @@ fn websocket_binary_arraybuffer_mode_delivers_arraybuffer() {
 fn websocket_binary_hex_length_matches_byte_count() {
     let rt = v8_runtime_with_binary_ws(make_doc());
     // 3 bytes → Uint8Array of length 3.
-    let r = rt
-        .eval(
-            "var len = 0;
-                     var ws = new WebSocket('ws://mock');
-                     ws.onmessage = function(e) { len = e.data.length; };
-                     _lumen_pump_websockets();
-                     len === 3",
-        )
-        .unwrap();
+    rt.eval(
+        "var len = 0;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onmessage = function(e) { len = e.data.length; };",
+    )
+    .unwrap();
+    assert!(pump_until(&rt, "len === 3"));
+    let r = rt.eval("len === 3").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
