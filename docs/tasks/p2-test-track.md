@@ -1382,6 +1382,41 @@ tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`
 `readyState/005.html?default`) — сужать приёмом среза 33 (`expected: [OK, TIMEOUT]`) и подтверждать тремя
 `--check` подряд (~25 мин каждый). Baseline этим заходом не закоммичен (только фикс тулинга).
 
+### TEST-3: срез 38 (2026-09-20) — `long-animation-frame` закрыт чисто
+
+Первая категория из класса «BUG-1006», взятая заново после закрытия [BUG-1006](../../bugs/BUG-1006-FIXED.md):
+41 id (счёт по id, как требовал срез 37 — `running 41 all vendored` в первой строке лога),
+запуск без внешнего `timeout`. `--update-expected --recursive --processes 4` — 6:04
+(25/41 harness OK, 7/116 сабтестов, 37 новых `.ini`; бинарь `dev-release` от `origin/main`
+`ab551b4d4`, `cargo build` перед прогоном 1m30s). Три `--check` подряд (5:28 и далее) —
+**0 регрессий, 0 unexpected pass, 0 других отклонений**; сужение known-intermittent
+не понадобилось — в трёх прогонах ни один статус не плавал. Baseline 243 → 244.
+
+Что записано как сегодняшняя правда движка (7 файлов `ERROR`, 9 `TIMEOUT`, остальное `OK` с непройденными
+подтестами):
+
+- **TIMEOUT/NOTRUN почти везде — [BUG-948](../../bugs/BUG-948-OPEN.md):** `long-animation-frame` намеренно
+  нет в `supportedEntryTypes`, и ни одна `PerformanceLongAnimationFrameTiming` не производится, поэтому
+  `PerformanceObserver`-тесты ждут запись, которая не придёт. Отдельного бага не заводилось.
+- **`ERROR` на `*|body:nth-child(2)` — [BUG-1063](../../bugs/BUG-1063-OPEN.md):** в логе прогона это
+  `*|body`, `*|iframe`, `*|button` от `test_driver.click`/`send_keys` (тот же `get_selector`,
+  что в срезе 36) — файлы, зовущие `test_driver`, гаснут до первого утверждения. Сколько именно из 7
+  `ERROR` — этот класс, по файлам не сверялось.
+- Остальные `ERROR` (в т.ч. `conditional-tracing*.html`) не разбирались: срез про охват baseline,
+  а не про триаж категории.
+
+**Следствие для baseline.** Починка BUG-948 (или BUG-1063) даст массу unexpected-pass и снятые
+`TIMEOUT`; baseline регенерируется (`--update-expected` + три `--check`) в том же коммите или
+сразу следом.
+
+**Окружение.** `tests/wpt/.venv` в слоте `p2-work` уже был (создан срезом 37) — повторно не создавался.
+
+Дальше: из оставшихся малых — `signed-exchange` (74 файла), `connection-allowlist` (102), `fedcm` (103),
+`appmanifest` (102); выбирать по числу **id** после раскрытия query-вариантов и обрывать прогон,
+если оно на порядок выше прежних срезов. `websockets` (786 id, ~25 мин на прогон) — дособрать
+сужением `[OK, TIMEOUT]` для трёх плавающих подтестов (см. раздел BUG-1006 выше). `encoding` — только
+с `--exclude-prefix /encoding/legacy-mb-`. `IndexedDB` (срез 34), долг среза 4 и BUG-1038 не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
