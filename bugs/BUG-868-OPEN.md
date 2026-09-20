@@ -5,6 +5,14 @@
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 26 — живой замер, вариант `worker-port`)
 **Область:** `crates/js/src/worker.rs:918` — `Worker.prototype.postMessage(data, transfer)` зовёт `_lumenSerializeWithTransfers`, который понимает только `OffscreenCanvas` (`__canvas_id__`); `crates/js/src/worker.rs:366` — воркерный `globalThis.postMessage = function(data)` объявлен **без** второго параметра и сериализует `JSON.stringify(data)`; `MessageChannel`/`MessagePort` определены только в шиме страницы (`crates/js/src/dom.rs:12010`, `:12019` — `globalThis.MessageChannel = MessageChannel` внутри `WEB_API_SHIM`, который в воркер не попадает)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
+**Обновление 2026-09-20 (P6, GAP-WORKERSCOPE срез 1):** [BUG-872](BUG-872-FIXED.md) закрыт —
+`MessageChannel`/`MessagePort`/`MessageEvent` (и остальные шесть интерфейсных объектов) теперь
+существуют в воркерной области (`worker::install_worker_scope_globals_v8` эвалирует тот же
+`MESSAGE_CHANNEL_SHIM`, что и страница). `new MessageChannel()` **внутри** воркера больше не
+`ReferenceError` — строка 15 симптома ниже устарела. Остаётся ровно то, что заголовок бага и
+называет: список `transfer` не пересекает саму границу «страница ↔ воркер», а
+`MessagePort`-объекты в такой список не входят вовсе — `_lumenSerializeWithTransfers` (строка 6)
+по-прежнему понимает только `OffscreenCanvas`.
 
 ## Симптом
 

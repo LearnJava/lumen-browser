@@ -250,8 +250,11 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
         }
       },
       _deliver: function(data) {
-        var ev = { data: data, type: 'message', target: this,
-                   bubbles: false, cancelable: false, ports: [] };
+        // Lumen's MessageEvent constructor takes (data, init) — see dom.rs shim.
+        var ev;
+        try { ev = new MessageEvent(data, { bubbles: false, cancelable: false, ports: [] }); }
+        catch (e) { ev = { type: 'message', data: data, bubbles: false, cancelable: false, ports: [] }; }
+        ev.target = this;
         if (this._onmessage) { try { this._onmessage(ev); } catch(e) { _lumen_sw_report_exception(e); } }
         for (var i = 0; i < this._listeners.length; i++) {
           try { this._listeners[i](ev); } catch(e) { _lumen_sw_report_exception(e); }
@@ -434,8 +437,11 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
       _deliver: function(json) {
         var data;
         try { data = JSON.parse(json); } catch(e) { data = json; }
-        var ev = { data: data, type: 'message', target: this,
-                   bubbles: false, cancelable: false, ports: [] };
+        // Lumen's MessageEvent constructor takes (data, init) — see dom.rs shim.
+        var ev;
+        try { ev = new MessageEvent(data, { bubbles: false, cancelable: false, ports: [] }); }
+        catch (e) { ev = { type: 'message', data: data, bubbles: false, cancelable: false, ports: [] }; }
+        ev.target = this;
         if (this._onmessage) { try { this._onmessage(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
         for (var i = 0; i < this._listeners.length; i++) {
           try { this._listeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
