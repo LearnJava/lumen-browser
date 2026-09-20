@@ -117,9 +117,9 @@ Windows, `--seconds 10`):
 взаимоисключающе синхронны на одном потоке). Не измерялось отдельно;
 задел на будущий срез, если понадобится.
 
-Не проверялось: реальный прогон `run_report.py --root websockets`
-(только живой probe выше). [BUG-862](BUG-862-OPEN.md) (`send(null)` кидает
-`TypeError`) не тронут, отдельная задача.
+Реальный прогон `run_report.py --root websockets --recursive` сделан срезом 5
+GAP-WSASYNC (P6, 2026-09-20) — см. `ROADMAP.md`. [BUG-862](BUG-862-FIXED.md)
+(`send(null)` кидает `TypeError`) закрыт тем же срезом.
 
 ## Срез 3 (2026-09-20, `p6-gap-wsasync-srez3`) — `close()` под backpressure больше не блокирует поток JS
 
@@ -159,6 +159,5 @@ wcb-checked
 что проверяется.
 
 Не в этом срезе: [BUG-856](BUG-856-OPEN.md) (`close()` во время хэндшейка,
-не отвечающего дольше `FETCH_READ_TIMEOUT`, 60 с) и
-[BUG-862](BUG-862-OPEN.md) (`send(null)`) — оба отдельные задачи той же
-`GAP-WSASYNC`.
+не отвечающего дольше `FETCH_READ_TIMEOUT`, 60 с) — отдельная задача той же
+`GAP-WSASYNC`. [BUG-862](BUG-862-FIXED.md) (`send(null)`) закрыт срезом 5.
