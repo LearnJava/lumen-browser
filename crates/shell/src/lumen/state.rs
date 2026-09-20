@@ -809,10 +809,15 @@ pub(crate) struct Lumen {
     /// fire-and-forget engine-thread `task` instead of a blocking `query` (the
     /// blocking round-trip was BUG-935 S15's confirmed multi-second stall
     /// source), so `take_lazy_image_requests()`'s result is not available to
-    /// the caller synchronously — the task appends it here instead, and the
-    /// next `apply_relayout_result` call (any producer) drains and fetches it.
-    /// Empty and unused off the deferred path (every other producer still
-    /// fetches its own `lazy_reqs` synchronously, byte-identical to before).
+    /// the caller synchronously — the task appends it here instead, and
+    /// either the next `apply_relayout_result` call (any producer) or,
+    /// failing that, [`Self::drain_pending_lazy_image_reqs`] (BUG-935 S26,
+    /// run once per `about_to_wait` pass independently of whether a relayout
+    /// happens) drains and fetches it. The independent drain exists because
+    /// S25 found no relayout is guaranteed to follow — a page's *last*
+    /// relayout would otherwise leave the queue unfetched forever. Empty and
+    /// unused off the deferred path (every other producer still fetches its
+    /// own `lazy_reqs` synchronously, byte-identical to before).
     pub(crate) pending_lazy_image_reqs: Arc<Mutex<Vec<(u32, String)>>>,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to

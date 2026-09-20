@@ -464,6 +464,11 @@ impl Lumen {
         // ADR-016 M2.2: apply any off-thread layout result the engine thread has
         // committed since the last iteration (no-op when the engine thread is off).
         self.poll_engine_commit();
+        // BUG-935 S26: independent drain — see the method doc for why this
+        // can't rely on the next `apply_relayout_result` call to pick the
+        // queue up (there might not be one).
+        #[cfg(feature = "v8")]
+        self.drain_pending_lazy_image_reqs();
         // ADR-016 M0.3 + M2.2: run the debounced transform-first-zoom relayout when
         // its deadline elapses; otherwise fold the deadline into the wakeup so the
         // parked loop wakes exactly then. When the engine thread is enabled, route
