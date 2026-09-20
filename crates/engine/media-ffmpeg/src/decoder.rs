@@ -10,18 +10,19 @@
 use std::ffi::{c_int, c_void, CString};
 use std::ptr;
 
-use lumen_core::ext::{VideoDecodeSession, VideoDecoder};
+use lumen_core::ext::{AudioTrackInfo, VideoDecodeSession, VideoDecoder};
 
 use crate::ffi::{
-    av_find_best_stream, av_frame_alloc, av_frame_free, av_free, av_malloc, av_packet_alloc,
-    av_packet_free, av_packet_unref, av_read_frame, av_seek_frame, avcodec_alloc_context3,
-    avcodec_flush_buffers, avcodec_free_context, avcodec_open2, avcodec_parameters_to_context,
-    avcodec_receive_frame, avcodec_send_packet, avformat_alloc_context, avformat_close_input,
+    av_channel_layout_uninit, av_find_best_stream, av_frame_alloc, av_frame_free, av_free,
+    av_malloc, av_opt_get_chlayout, av_opt_get_int, av_packet_alloc, av_packet_free,
+    av_packet_unref, av_read_frame, av_seek_frame, avcodec_alloc_context3, avcodec_flush_buffers,
+    avcodec_free_context, avcodec_open2, avcodec_parameters_to_context, avcodec_receive_frame,
+    avcodec_send_packet, avformat_alloc_context, avformat_close_input,
     avformat_find_stream_info, avformat_open_input, avio_alloc_context, avio_context_free,
-    describe_error, sws_freeContext, sws_getContext, sws_scale, AVCodec, AVCodecContext,
-    AVFormatContext, AVFormatContextHead, AVFrameHead, AVIOContext, AVMEDIA_TYPE_VIDEO,
-    AVSEEK_FLAG_BACKWARD, AVFMT_FLAG_CUSTOM_IO, AVERROR_EOF, AV_NOPTS_VALUE, AV_PIX_FMT_RGBA,
-    SWS_BILINEAR,
+    describe_error, sws_freeContext, sws_getContext, sws_scale, AVChannelLayout, AVCodec,
+    AVCodecContext, AVFormatContext, AVFormatContextHead, AVFrameHead, AVIOContext,
+    AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_VIDEO, AVSEEK_FLAG_BACKWARD, AVFMT_FLAG_CUSTOM_IO,
+    AVERROR_EOF, AV_NOPTS_VALUE, AV_PIX_FMT_RGBA, SWS_BILINEAR,
 };
 
 /// `FFmpeg`-бэкенд `VideoDecoder` (ADR-030). Существует только под feature
@@ -118,6 +119,9 @@ pub struct FfmpegSession {
     /// `dimensions()` не лгала до первого `frame_at()`, и чтобы
     /// `frame_at(0.0)` сразу после `open()` не платил за повторный seek.
     first_frame: (f64, Vec<u8>),
+    /// Метаданные аудиодорожки, снятые один раз в `open()` (срез 12) —
+    /// декодирования PCM пока нет, только детект sample_rate/channels.
+    audio_track: Option<AudioTrackInfo>,
 }
 
 // SAFETY: `FfmpegSession` — единственный владелец всех перечисленных
@@ -315,6 +319,12 @@ impl FfmpegSession {
             return Err(format!("FFmpeg: avcodec_open2: {msg}"));
         }
 
+        // SAFETY: `fmt_ctx` — тот же живой демуксер, что и выше;
+        // `probe_audio_track` не трогает позицию чтения демуксера (не
+        // вызывает `av_read_frame`), так что не мешает `av_find_best_stream`
+        // видео-дорожки/декодированию первого видеокадра ниже.
+        let audio_track = unsafe { Self::probe_audio_track(fmt_ctx) };
+
         let mut session = Self {
             fmt_ctx,
             codec_ctx,
@@ -327,6 +337,7 @@ impl FfmpegSession {
             height: 0,
             duration_secs,
             first_frame: (0.0, Vec::new()),
+            audio_track,
         };
 
         let (w, h, rgba) = session.decode_from_current_position(0.0).map_err(|e| {
@@ -337,6 +348,118 @@ impl FfmpegSession {
         session.first_frame = (0.0, rgba);
 
         Ok(session)
+    }
+
+    /// Ищет первую декодируемую аудиодорожку и снимает её метаданные
+    /// (`sample_rate`/`channels`) через generic `AVOption`-геттеры
+    /// (`av_opt_get_int("ar")`/`av_opt_get_chlayout("ch_layout")`) на
+    /// временно открытом `AVCodecContext` — без знания layout'а
+    /// `AVCodecContext`/`AVFrame` для аудио, кодек закрывается сразу после
+    /// снятия метаданных (декодирования PCM в этом срезе нет). Отсутствие
+    /// аудиодорожки/недекодируемый аудиокодек — не ошибка, `None`.
+    ///
+    /// # Safety
+    /// `fmt_ctx` — валидный, открытый `avformat_open_input`+
+    /// `avformat_find_stream_info` демуксер.
+    unsafe fn probe_audio_track(fmt_ctx: *mut AVFormatContext) -> Option<AudioTrackInfo> {
+        let mut audio_decoder: *const AVCodec = ptr::null();
+        // SAFETY: `fmt_ctx` валиден по контракту функции; `&mut audio_decoder`
+        // — валидный указатель на локальную переменную этого стека.
+        let audio_stream_index = unsafe {
+            av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, &mut audio_decoder, 0)
+        };
+        if audio_stream_index < 0 {
+            return None;
+        }
+
+        // SAFETY: `audio_stream_index` в границах `nb_streams` — гарантия
+        // `av_find_best_stream` при неотрицательном возврате; `fmt_ctx`
+        // жив, `streams`/`codecpar` читаются по head-layout из `ffi.rs`.
+        let codecpar = unsafe {
+            let head = fmt_ctx.cast::<AVFormatContextHead>();
+            let stream = *(*head).streams.add(audio_stream_index as usize);
+            (*stream).codecpar
+        };
+
+        // SAFETY: `audio_decoder` — не-null указатель на `AVCodec` из
+        // успешного `av_find_best_stream` выше.
+        let audio_codec_ctx = unsafe { avcodec_alloc_context3(audio_decoder) };
+        if audio_codec_ctx.is_null() {
+            return None;
+        }
+        // SAFETY: `audio_codec_ctx` только что выделен, `codecpar` —
+        // валидный указатель из того же потока, что и `audio_decoder`.
+        let params_ret = unsafe { avcodec_parameters_to_context(audio_codec_ctx, codecpar) };
+        if params_ret < 0 {
+            // SAFETY: `avcodec_open2` ещё не вызывался — контекст в
+            // допустимом для `avcodec_free_context` состоянии.
+            unsafe {
+                let mut ctx = audio_codec_ctx;
+                avcodec_free_context(&mut ctx);
+            }
+            return None;
+        }
+        // SAFETY: `audio_codec_ctx` сконфигурирован предыдущим вызовом,
+        // `audio_decoder` — тот же кодек, что и при `avcodec_alloc_context3`.
+        let open_ret = unsafe { avcodec_open2(audio_codec_ctx, audio_decoder, ptr::null_mut()) };
+        if open_ret < 0 {
+            // SAFETY: `avcodec_open2` не переходит в открытое состояние при
+            // ошибке — `avcodec_free_context` освобождает контекст в
+            // допустимом для него состоянии.
+            unsafe {
+                let mut ctx = audio_codec_ctx;
+                avcodec_free_context(&mut ctx);
+            }
+            return None;
+        }
+
+        let ar_name = CString::new("ar").unwrap_or_default();
+        let mut sample_rate: i64 = -1;
+        // SAFETY: `audio_codec_ctx` открыт `avcodec_open2` выше — его
+        // `AVClass`-таблица опций (унаследованная от базового
+        // `AVCodecContext`) содержит опцию `"ar"`, подтверждено живым
+        // прогоном (срез 12, `D:\Temp\ffmpeg-ffi-poc`); `ar_name` живёт до
+        // конца этого вызова, `&mut sample_rate` — валидный указатель на
+        // локальную переменную.
+        let sample_rate_ret = unsafe {
+            av_opt_get_int(audio_codec_ctx.cast::<c_void>(), ar_name.as_ptr(), 0, &mut sample_rate)
+        };
+
+        let ch_layout_name = CString::new("ch_layout").unwrap_or_default();
+        let mut layout = AVChannelLayout::default();
+        // SAFETY: то же самое, что и выше, для опции `"ch_layout"`; `layout`
+        // — стековая переменная ровно размера `AVChannelLayout` (24 байта,
+        // см. `ffi.rs`), `av_opt_get_chlayout` пишет не больше этого объёма.
+        let ch_layout_ret = unsafe {
+            av_opt_get_chlayout(audio_codec_ctx.cast::<c_void>(), ch_layout_name.as_ptr(), 0, &mut layout)
+        };
+        let channels = if ch_layout_ret >= 0 && layout.nb_channels > 0 {
+            Some(layout.nb_channels as u16)
+        } else {
+            None
+        };
+        // SAFETY: `layout` было заполнено (или оставлено нулевым при
+        // отказе) вызовом выше — `av_channel_layout_uninit` документированно
+        // безопасен и на нулевой/mask-based layout (единственный путь без
+        // heap-аллокации, no-op в этом случае).
+        unsafe {
+            av_channel_layout_uninit(&mut layout);
+        }
+
+        // SAFETY: и метаданные, и кодек больше не нужны после этой точки —
+        // decode PCM-кадров в этом срезе нет, аудио-контекст не переживает
+        // эту функцию.
+        unsafe {
+            let mut ctx = audio_codec_ctx;
+            avcodec_free_context(&mut ctx);
+        }
+
+        match (sample_rate_ret, channels) {
+            (ret, Some(channels)) if ret >= 0 && sample_rate > 0 => {
+                Some(AudioTrackInfo { sample_rate: sample_rate as u32, channels })
+            }
+            _ => None,
+        }
     }
 
     /// Декодирует кадры от текущей позиции чтения демуксера вперёд, пока
@@ -555,6 +678,10 @@ impl VideoDecodeSession for FfmpegSession {
 
         let (_w, _h, rgba) = self.decode_from_current_position(secs)?;
         Ok(rgba)
+    }
+
+    fn audio_track(&self) -> Option<AudioTrackInfo> {
+        self.audio_track
     }
 }
 
