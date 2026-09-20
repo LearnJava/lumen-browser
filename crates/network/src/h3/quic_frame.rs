@@ -28,6 +28,14 @@
 //! - CONNECTION_CLOSE transport/application (§19.19).
 //! - HANDSHAKE_DONE (§19.20).
 //!
+//! One extension frame is also represented: DATAGRAM, both the
+//! length-delimited and to-end-of-packet forms (RFC 9221 §4) — [`Frame::Datagram`].
+//! It is out of the base RFC 9000 §19 registry but shares this codec's shape
+//! (self-delimiting varint type, packet-payload scope) and its use is gated by
+//! the `max_datagram_frame_size` transport parameter
+//! ([`super::transport_params::TransportParameters::max_datagram_frame_size`]),
+//! not by anything this module enforces.
+//!
 //! An unknown frame type, a truncated field, or an out-of-range value (e.g. a
 //! NEW_CONNECTION_ID length outside `1..=20`) is a
 //! [`QuicFrameError`] mapping to `FRAME_ENCODING_ERROR` (RFC 9000 §19,
@@ -95,6 +103,12 @@ pub const TYPE_CONNECTION_CLOSE_TRANSPORT: u64 = 0x1c;
 pub const TYPE_CONNECTION_CLOSE_APP: u64 = 0x1d;
 /// HANDSHAKE_DONE (RFC 9000 §19.20).
 pub const TYPE_HANDSHAKE_DONE: u64 = 0x1e;
+/// DATAGRAM without a Length field — the payload runs to the end of the QUIC
+/// packet (RFC 9221 §4, extension to the RFC 9000 §19 registry).
+pub const TYPE_DATAGRAM: u64 = 0x30;
+/// DATAGRAM with an explicit Length field, allowing it to be coalesced with a
+/// following frame in the same packet (RFC 9221 §4).
+pub const TYPE_DATAGRAM_WITH_LEN: u64 = 0x31;
 
 /// STREAM frame FIN flag (RFC 9000 §19.8) — the low bit of the type.
 const STREAM_FIN: u64 = 0x01;
@@ -326,6 +340,10 @@ pub enum Frame {
     /// HANDSHAKE_DONE — server signals the handshake is confirmed
     /// (RFC 9000 §19.20).
     HandshakeDone,
+    /// DATAGRAM — an unreliable, unordered application payload delivered
+    /// outside any stream (RFC 9221 §4). Ack-eliciting like any other frame
+    /// carrying application data, but never retransmitted on loss.
+    Datagram(Vec<u8>),
 }
 
 impl Frame {
@@ -394,6 +412,14 @@ impl Frame {
                 parse_connection_close(&mut buf, ty == TYPE_CONNECTION_CLOSE_TRANSPORT)?
             }
             TYPE_HANDSHAKE_DONE => Self::HandshakeDone,
+            TYPE_DATAGRAM => {
+                // No Length field: the datagram payload extends to the end of
+                // the packet (RFC 9221 §4), mirroring the LEN-less STREAM form.
+                let rest = buf.to_vec();
+                buf = &buf[buf.len()..];
+                Self::Datagram(rest)
+            }
+            TYPE_DATAGRAM_WITH_LEN => Self::Datagram(take_length_prefixed(&mut buf)?),
             other => return Err(QuicFrameError::UnknownType(other)),
         };
         let consumed = input.len() - buf.len();
@@ -429,6 +455,7 @@ impl Frame {
             Self::ConnectionClose { frame_type: Some(_), .. } => TYPE_CONNECTION_CLOSE_TRANSPORT,
             Self::ConnectionClose { frame_type: None, .. } => TYPE_CONNECTION_CLOSE_APP,
             Self::HandshakeDone => TYPE_HANDSHAKE_DONE,
+            Self::Datagram(_) => TYPE_DATAGRAM_WITH_LEN,
         }
     }
 
@@ -571,6 +598,13 @@ impl Frame {
                 put_length_prefixed(reason, out)?;
             }
             Self::HandshakeDone => put_varint(TYPE_HANDSHAKE_DONE, out)?,
+            Self::Datagram(data) => {
+                // Always the length-delimited form so this frame is safe to
+                // coalesce ahead of another frame in the same packet, the same
+                // choice already made for STREAM above.
+                put_varint(TYPE_DATAGRAM_WITH_LEN, out)?;
+                put_length_prefixed(data, out)?;
+            }
         }
         Ok(())
     }
@@ -1000,5 +1034,53 @@ mod tests {
     fn large_varint_values_roundtrip() {
         roundtrip(&Frame::MaxData(varint::MAX_VARINT));
         roundtrip(&Frame::Crypto { offset: varint::MAX_VARINT, data: vec![0xab] });
+    }
+
+    #[test]
+    fn datagram_roundtrips_in_length_delimited_form() {
+        roundtrip(&Frame::Datagram(vec![0x01, 0x02, 0x03]));
+        roundtrip(&Frame::Datagram(vec![]));
+    }
+
+    #[test]
+    fn datagram_encode_always_uses_the_length_delimited_type() {
+        let mut buf = Vec::new();
+        Frame::Datagram(b"hi".to_vec()).encode(&mut buf).unwrap();
+        assert_eq!(buf, vec![TYPE_DATAGRAM_WITH_LEN as u8, 2, b'h', b'i']);
+        assert_eq!(Frame::Datagram(b"hi".to_vec()).frame_type(), TYPE_DATAGRAM_WITH_LEN);
+    }
+
+    #[test]
+    fn datagram_without_length_consumes_to_end_of_packet() {
+        // The 0x30 form has no Length field — a receiver must treat the rest of
+        // the packet payload as the datagram, per RFC 9221 §4.
+        let mut wire = vec![TYPE_DATAGRAM as u8];
+        wire.extend_from_slice(b"payload");
+        let (frame, consumed) = Frame::parse(&wire).unwrap();
+        assert_eq!(frame, Frame::Datagram(b"payload".to_vec()));
+        assert_eq!(consumed, wire.len());
+    }
+
+    #[test]
+    fn datagram_without_length_can_be_empty() {
+        let wire = vec![TYPE_DATAGRAM as u8];
+        let (frame, consumed) = Frame::parse(&wire).unwrap();
+        assert_eq!(frame, Frame::Datagram(Vec::new()));
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn datagram_is_ack_eliciting() {
+        assert!(Frame::Datagram(vec![1]).is_ack_eliciting());
+    }
+
+    #[test]
+    fn datagram_coalesces_with_a_following_frame() {
+        // Only the length-delimited form may precede another frame in the same
+        // packet — this is why encode() never emits the 0x30 form itself.
+        let frames = vec![Frame::Datagram(b"dg".to_vec()), Frame::Ping];
+        let mut buf = Vec::new();
+        encode_all(&frames, &mut buf).unwrap();
+        assert_eq!(parse_all(&buf).unwrap(), frames);
     }
 }
