@@ -56,21 +56,22 @@
 `Vec` с комментарием-пометкой. Юнит-тест: `fetch_page_collects_early_hint_link_headers_from_103`
 (`crates/network/src/lib.rs`), два последовательных `103` с разными `Link` перед `200 OK`.
 
-### Срез 3 — S — Проброс Early Hints в preload-конвейер — ОТКРЫТО
-Распарсить `Link: rel=preload/preconnect` из 103 → эмитить `SubresourceHintFound`
-(переиспользовать существующий preload-путь) ДО получения финального body. Preconnect/
-prefetch стартуют раньше — суть RFC 8297. **Блокер:** сегодня `Link`-заголовок нигде не
-парсится (grep `parse_link_header`/case-insensitive `"link"` lookup в `crates/network` и
-`crates/shell` — 0 совпадений), есть только HTML `<link rel=…>`-сканер
-(`crates/engine/html-parser/src/preload_scanner.rs`, `PreloadHint`/`scan_preload_hints`) —
-его `rel`-словарь стоит переиспользовать. И `fetch_page`/`fetch_page_streaming`
-(`crates/network/src/lib.rs`) синхронно блокируются до финального ответа — «до body»
-эмиссия хинта требует либо callback-параметра (по аналогии с `PageChunkSink`), либо
-эмиссии `SubresourceHintFound` из уже собранных `PageResponse::early_hint_links` сразу
-после `fetch_page` возвращается (не «до body», но не хуже текущего нуля). Естественная
-точка вызова — `crates/shell/src/page_source.rs` (там же, где сейчас `early_hint_links`
-отброшен через `early_hint_links: _`), с проброс в `dispatch_preload_hints`
-(`crates/shell/src/page_pipeline.rs:107-181`).
+### Срез 3 — S — Проброс Early Hints в preload-конвейер — **сделано 2026-09-20 (P1)**
+`lumen_html_parser::preload_scanner::parse_link_header` (новая функция, реэкспорт
+`lumen_html_parser::parse_link_header`) парсит одно значение HTTP-заголовка `Link`
+(RFC 8288 §3: `<url>; rel=…; as=…`, запятая — разделитель элементов верхнего уровня,
+не внутри `<…>`/кавычек) в тот же `Vec<PreloadHint>`, что и HTML-сканер, переиспользуя
+его `rel`-словарь (`preload`/`preconnect`/`dns-prefetch`/`modulepreload`/`prefetch`/
+`stylesheet`). `crates/shell/src/page_source.rs`: новая `emit_early_hints()` вызывается
+из `load_bytes`/`load_bytes_streaming` сразу после `fetch_page`/`fetch_page_streaming`
+возвращаются (`sink` теперь клонируется перед `.with_sink()`, чтобы остаться доступным)
+— URL резолвится от `final_url` (BUG-757-совместимо), хинты уходят в
+`dispatch_preload_hints` (`page_pipeline.rs:121`) тем же путём, что и author-хинты из
+разметки. Не «до body» (клиент `lumen-network` синхронный из конца в конец), но строго
+раньше, чем те же `<link>` увидел бы HTML preload-сканер — тело ещё не распарсено.
+Дедуп — call-local `HashSet` (не общий с `preload_seen` HTML-скана): `SubresourceHintFound`
+сегодня только строка в stderr-логе (реальный fetch делает JS-шим на DOM-элементе),
+поэтому цена возможного дубликата — одна лишняя строка лога, не лишний сетевой запрос.
 
 ### Срез 4 — S — HTML-атрибут `fetchpriority`
 Читать `fetchpriority` на `<img>`/`<link>`/`<script>` в preload-сканере/DOM; override

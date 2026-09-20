@@ -234,7 +234,7 @@ impl PageSource {
 
                 let lumen_url = Url::parse(url)?;
                 let mut builder = HttpClient::new()
-                    .with_sink(sink)
+                    .with_sink(Arc::clone(&sink))
                     .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
                     .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
                     .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
@@ -248,7 +248,7 @@ impl PageSource {
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
-                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links: _ } =
+                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links } =
                     client.fetch_page(&lumen_url, body.as_deref(), *upgrade_insecure_requests)?;
                 // BUG-640: redirect signal — the only one obtainable without
                 // a `lumen-network` change (`fetch_with_redirect`'s hop
@@ -256,6 +256,7 @@ impl PageSource {
                 let redirected = final_url != lumen_url;
                 fetch_span.set_bytes(bytes.len());
                 eprintln!("Получено {} байт", bytes.len());
+                emit_early_hints(&early_hint_links, &final_url, &sink);
                 let coop = resp_headers.iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
                     .map(|(_, v)| v.as_str());
@@ -343,7 +344,7 @@ impl PageSource {
 
         let lumen_url = Url::parse(url)?;
         let mut builder = HttpClient::new()
-            .with_sink(sink)
+            .with_sink(Arc::clone(&sink))
             .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
             .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
             .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
@@ -354,11 +355,12 @@ impl PageSource {
             );
         }
         let client = crate::config::global().apply_http(builder);
-        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links: _ } =
+        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links } =
             client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref(), *upgrade_insecure_requests)?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.
         let redirected = final_url != lumen_url;
         eprintln!("Получено {} байт (streaming)", bytes.len());
+        emit_early_hints(&early_hint_links, &final_url, &sink);
         let coop = resp_headers.iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
             .map(|(_, v)| v.as_str());
@@ -449,6 +451,38 @@ pub(crate) struct RawPage {
     /// Whether the final URL differs from the originally-requested one — see
     /// `nav_timing`'s doc comment for why this can't be an exact hop count.
     pub(crate) redirected: bool,
+}
+
+/// Parse every `Link:` header value collected from `103 Early Hints`
+/// informational responses (GAP-EARLYHINTS срез 3, RFC 8297) and dispatch the
+/// resulting preload/preconnect hints the same way the HTML preload-scanner
+/// dispatches author hints found in markup ([`crate::page_pipeline::dispatch_preload_hints`]).
+///
+/// Runs once `fetch_page`/`fetch_page_streaming` has already returned — RFC
+/// 8297's whole point is to start these fetches **before** the final
+/// response arrives, but `lumen-network`'s client is synchronous end-to-end
+/// (see the срез 3 note in `docs/tasks/ph3-early-hints.md`), so this is the
+/// earliest point available today: still strictly before the HTML
+/// preload-scanner would see the same `<link>` in markup, since the body
+/// hasn't been parsed yet.
+///
+/// Uses a fresh, call-local `seen` set rather than the `preload_seen` set
+/// `parse_and_layout` accumulates across the HTML scan — `load_bytes`/
+/// `load_bytes_streaming` run before that set exists, and threading it
+/// through every call site (dump modes, omnibox, streaming navigation) for a
+/// dedup-only benefit is not worth the churn: the event is a stderr log line
+/// today (`Event::SubresourceHintFound`'s doc comment), not a fetch trigger,
+/// so a duplicate against the later HTML scan costs nothing but a log line.
+fn emit_early_hints(early_hint_links: &[String], final_url: &lumen_core::url::Url, sink: &Arc<dyn EventSink>) {
+    let hints: Vec<lumen_html_parser::PreloadHint> = early_hint_links
+        .iter()
+        .flat_map(|v| lumen_html_parser::parse_link_header(v))
+        .collect();
+    if hints.is_empty() {
+        return;
+    }
+    let base = ResourceBase::Url(final_url.to_string());
+    crate::page_pipeline::dispatch_preload_hints(&hints, &base, sink, &mut std::collections::HashSet::new());
 }
 
 /// Whether `resp_headers` carry `Cache-Control: no-store`, per RFC 9111 §5.2.
@@ -934,6 +968,50 @@ mod tests {
     }
 
     // ---- GAP-POLICYREPORT (BUG-953): sync-xhr disposition ----
+
+    // ---- GAP-EARLYHINTS срез 3: emit_early_hints ----
+
+    struct CollectingSink(std::sync::Mutex<Vec<crate::Event>>);
+    impl EventSink for CollectingSink {
+        fn emit(&self, e: &crate::Event) {
+            self.0.lock().unwrap().push(e.clone());
+        }
+    }
+
+    #[test]
+    fn emit_early_hints_dispatches_preload_and_preconnect_hints() {
+        let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(std::sync::Mutex::new(Vec::new())));
+        let final_url = lumen_core::url::Url::parse("https://example.test/page").unwrap();
+        let links = vec![
+            r#"<https://cdn.example/>; rel=preconnect"#.to_owned(),
+            r#"</font.woff2>; rel=preload; as=font"#.to_owned(),
+        ];
+
+        emit_early_hints(&links, &final_url, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: see `dispatch_preload_hints_emits_events` (page_resources.rs)
+        // for why this downcast is sound in a single-threaded test.
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        assert_eq!(events.len(), 2);
+        let crate::Event::SubresourceHintFound { url, .. } = &events[0] else { panic!() };
+        assert_eq!(url, "https://cdn.example/");
+        let crate::Event::SubresourceHintFound { url: url2, .. } = &events[1] else { panic!() };
+        assert_eq!(url2, "https://example.test/font.woff2");
+    }
+
+    #[test]
+    fn emit_early_hints_no_link_headers_is_a_silent_noop() {
+        let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(std::sync::Mutex::new(Vec::new())));
+        let final_url = lumen_core::url::Url::parse("https://example.test/page").unwrap();
+
+        emit_early_hints(&[], &final_url, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: see above.
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        assert!(events.is_empty());
+    }
 
     #[test]
     fn document_policy_no_header_is_none() {
