@@ -14,6 +14,13 @@ use lumen_driver::{AutomationHandle, LiveWindowSession};
 
 use crate::protocol::{dispatch, BidiState};
 
+/// `true`, если ошибка чтения означает «собеседник исчез», а не «пришли
+/// некорректные данные»: EOF посреди (или до) кадра, сброс/обрыв соединения.
+fn peer_hung_up(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{BrokenPipe, ConnectionAborted, ConnectionReset, UnexpectedEof};
+    matches!(e.kind(), UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe)
+}
+
 /// Handle one accepted TCP stream: WS upgrade → BiDi command loop.
 ///
 /// Blocks until the connection is closed (by `session.end`, read timeout, or error).
@@ -78,6 +85,15 @@ pub fn handle(mut stream: TcpStream, automation: AutomationHandle, required_toke
             {
                 break;
             }
+            Err(WsError::Io(e)) if peer_hung_up(&e) => {
+                // Клиент пропал без Close-кадра: раннер убит сигналом или упал,
+                // TCP оборван посреди кадра или между кадрами. Это конец сессии,
+                // а не дефект протокола — раньше здесь печаталось
+                // `frame error: io: failed to fill whole buffer`, и три сессии
+                // WPT-RUN-7 принимали это за «краш браузера» (BUG-1006).
+                eprintln!("[bidi] client disconnected without a Close frame: {e}");
+                break;
+            }
             Err(e) => {
                 eprintln!("[bidi] frame error: {e}");
                 break;
@@ -108,4 +124,31 @@ pub fn handle(mut stream: TcpStream, automation: AutomationHandle, required_toke
     // reader-потоке вернул ошибку, и дождаться его выхода.
     let _ = stream.shutdown(Shutdown::Both);
     let _ = reader.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peer_hung_up;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn peer_disappearing_is_not_a_protocol_error() {
+        // `read_exact` на оборванном сокете даёт именно UnexpectedEof
+        // ("failed to fill whole buffer").
+        for kind in [
+            ErrorKind::UnexpectedEof,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::BrokenPipe,
+        ] {
+            assert!(peer_hung_up(&Error::from(kind)), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn other_io_errors_stay_frame_errors() {
+        for kind in [ErrorKind::InvalidData, ErrorKind::PermissionDenied, ErrorKind::Other] {
+            assert!(!peer_hung_up(&Error::from(kind)), "{kind:?}");
+        }
+    }
 }
