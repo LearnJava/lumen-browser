@@ -1294,9 +1294,19 @@ function _lumen_ws_pump_one(ws) {
                 ws._handle = 0;
                 break;
             } else if (ev.t === 'error') {
+                // GAP-WSASYNC срез 1: connect() now resolves off-thread, so a
+                // `connect-src` refusal or an ordinary handshake failure both
+                // surface here instead of the old synchronous `!h` branch in
+                // the constructor below — same violation-report side channel,
+                // same synthesized `close(1006, '', wasClean=false)` (no real
+                // close handshake ever happened, since no connection opened).
+                var wsCspAsync = (typeof _lumen_ws_last_csp_block === 'function') ? _lumen_ws_last_csp_block() : null;
+                _lumen_fire_connect_src_violation(wsCspAsync);
                 var err = new Event('error', { isTrusted: true }); err.message = ev.msg;
                 _lumen_ws_fire(ws, err);
-                ws.readyState = 3; ws._handle = 0; break;
+                ws.readyState = 3; ws._handle = 0;
+                _lumen_ws_fire(ws, new CloseEvent(1006, '', false, { isTrusted: true }));
+                break;
             }
         } catch(ignore) {}
     }
@@ -1331,13 +1341,13 @@ function WebSocket(url, protocols) {
     }
     var h = _lumen_ws_connect(this.url, protoCsv);
     if (!h) {
+        // GAP-WSASYNC срез 1: real connect failures (refused, timed out,
+        // `connect-src` blocked, ...) no longer land here — `_lumen_ws_connect`
+        // always hands back a handle and resolves the outcome asynchronously
+        // through the `error`/`close` poll events above. `!h` now means only
+        // "no WebSocket provider installed" (embedder didn't wire one up).
         this.readyState = 3;
-        // GAP-CSPENF срез 11: `_lumen_ws_connect` returning 0 can mean an
-        // ordinary connect failure or a `connect-src` refusal — read the
-        // side channel before it is overwritten by the next connect.
-        var wsCsp = (typeof _lumen_ws_last_csp_block === 'function') ? _lumen_ws_last_csp_block() : null;
         setTimeout(function() {
-            _lumen_fire_connect_src_violation(wsCsp);
             var e = new Event('error', { isTrusted: true }); e.message = 'WebSocket connection failed';
             _lumen_ws_fire(self, e);
             _lumen_ws_fire(self, new CloseEvent(1006, '', false, { isTrusted: true }));

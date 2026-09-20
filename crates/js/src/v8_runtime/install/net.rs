@@ -1140,6 +1140,88 @@ pub(crate) fn install_webauthn(
     Ok(())
 }
 
+/// Registry entry inserted for `_lumen_ws_connect` the instant a handle is
+/// handed back to JS — before the handshake (DNS + TCP + TLS + HTTP Upgrade)
+/// has even started. `provider.connect()` stays a synchronous call (mirrors
+/// every other `Js*Provider` in this crate); what moves is *where* it runs —
+/// a background thread instead of the JS thread — so the constructor can
+/// return immediately with `readyState` CONNECTING (GAP-WSASYNC срез 1,
+/// BUG-856) instead of freezing the whole document — no ticks, no timers,
+/// no rendering — until the remote host answers or never does.
+///
+/// `JsWebSocketSession::poll()`/`send_text()`/`send_binary()`/`close()` are
+/// all called from the JS thread through the registry's `dyn` trait object,
+/// so this wrapper implements the same trait and delegates to the real
+/// session once the background thread resolves it — callers never need to
+/// know a handle is still connecting.
+enum PendingWsState {
+    /// Background thread is still inside `provider.connect()`.
+    Connecting,
+    /// Handshake succeeded — the real session pre-queues its own `Open`
+    /// event (`JsWebSocketProvider::connect` impl), so `poll()` just
+    /// delegates to it from here on.
+    Open(Box<dyn lumen_core::ext::JsWebSocketSession>),
+    /// Handshake failed (network error or `connect-src` block) — the
+    /// `Error`+`Close` pair to hand back to `poll()`, one at a time.
+    Failed(std::collections::VecDeque<JsWsEvent>),
+}
+
+struct PendingWsSession {
+    state: Arc<Mutex<PendingWsState>>,
+    /// Set by `close()` if called while still `Connecting`; the background
+    /// thread checks it right after a successful connect and sends a Close
+    /// frame instead of leaving the session idle-open (WHATWG "close the
+    /// WebSocket connection" during the establish step).
+    close_requested: Arc<Mutex<Option<(u16, String)>>>,
+}
+
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+impl lumen_core::ext::JsWebSocketSession for PendingWsSession {
+    fn send_text(&self, text: &str) -> lumen_core::error::Result<()> {
+        match &*self.state.lock().unwrap() {
+            PendingWsState::Open(session) => session.send_text(text),
+            PendingWsState::Connecting | PendingWsState::Failed(_) => {
+                Err(lumen_core::error::Error::Network("WebSocket is not open".to_string()))
+            }
+        }
+    }
+
+    fn send_binary(&self, data: &[u8]) -> lumen_core::error::Result<()> {
+        match &*self.state.lock().unwrap() {
+            PendingWsState::Open(session) => session.send_binary(data),
+            PendingWsState::Connecting | PendingWsState::Failed(_) => {
+                Err(lumen_core::error::Error::Network("WebSocket is not open".to_string()))
+            }
+        }
+    }
+
+    fn poll(&self) -> Option<JsWsEvent> {
+        match &mut *self.state.lock().unwrap() {
+            PendingWsState::Connecting => None,
+            PendingWsState::Open(session) => session.poll(),
+            PendingWsState::Failed(queue) => queue.pop_front(),
+        }
+    }
+
+    fn close(&self, code: u16, reason: &str) -> lumen_core::error::Result<()> {
+        match &*self.state.lock().unwrap() {
+            PendingWsState::Open(session) => session.close(code, reason),
+            PendingWsState::Failed(_) => Ok(()),
+            PendingWsState::Connecting => {
+                *self.close_requested.lock().unwrap() = Some((code, reason.to_string()));
+                Ok(())
+            }
+        }
+    }
+
+    fn protocol(&self) -> String {
+        match &*self.state.lock().unwrap() {
+            PendingWsState::Open(session) => session.protocol(),
+            PendingWsState::Connecting | PendingWsState::Failed(_) => String::new(),
+        }
+    }
+}
+
 /// The WebSocket API over the shell's `JsWebSocketProvider`.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_websocket(
@@ -1149,8 +1231,12 @@ pub(crate) fn install_websocket(
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) -> JsResult<()> {
     // ── WebSocket API ─────────────────────────────────────────────────────────
-    // Phase 0 model: synchronous connect, background recv thread, JS polls.
-    // _lumen_ws_connect(url)  → handle u32 (0 = error)
+    // GAP-WSASYNC срез 1: async connect — handle returned immediately,
+    // handshake runs on a background thread, background recv thread (started
+    // once the handshake resolves), JS polls. Frame writes (`send_text`/
+    // `send_binary`) are still synchronous on the JS thread — that half
+    // (BUG-869, backpressure) is not this slice.
+    // _lumen_ws_connect(url)  → handle u32 (0 = error, no provider only)
     // _lumen_ws_send(h, text) → bool
     // _lumen_ws_send_bin(h, data) → bool
     // _lumen_ws_close(h, code, reason)
@@ -1165,11 +1251,11 @@ pub(crate) fn install_websocket(
         let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
 
         // GAP-CSPENF срез 11: same single-shared-slot side channel as
-        // `last_csp_block` above (fetch/XHR, срез 10) — the `WebSocket`
-        // constructor connects synchronously, one at a time, so one slot per
-        // runtime is enough. `(blocked_uri, original_policy)`, consumed (and
-        // cleared) by `_lumen_ws_last_csp_block` right after `_lumen_ws_connect`
-        // returns `0`.
+        // `last_csp_block` above (fetch/XHR, срез 10). Connect is async now
+        // (GAP-WSASYNC срез 1), so a `connect-src` block surfaces through the
+        // normal `error`+`close` poll pair rather than a synchronous `0`
+        // return; the shim reads this slot right after an `error` event to
+        // decide whether to also fire a `SecurityPolicyViolationEvent`.
         let last_csp_block: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
 
         let (reg_c, nid_c, wp) = (Arc::clone(&registry), Arc::clone(&next_id), ws_provider);
@@ -1181,26 +1267,63 @@ pub(crate) fn install_websocket(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            match provider.connect(&url, &protos) {
-                Ok(session) => {
-                    let id = {
-                        let mut n = nid_c.lock().unwrap();
-                        let id = *n;
-                        *n = n.wrapping_add(1).max(1);
-                        id
-                    };
-                    reg_c.lock().unwrap().insert(id, session);
-                    id
-                }
-                Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
-                    *lcb_ws.lock().unwrap() = Some((blocked_uri, original_policy));
-                    0
-                }
-                Err(e) => {
-                    eprintln!("[JS WebSocket] connect error: {e}");
-                    0
-                }
-            }
+
+            let id = {
+                let mut n = nid_c.lock().unwrap();
+                let id = *n;
+                *n = n.wrapping_add(1).max(1);
+                id
+            };
+            let state = Arc::new(Mutex::new(PendingWsState::Connecting));
+            let close_requested: Arc<Mutex<Option<(u16, String)>>> = Arc::new(Mutex::new(None));
+            reg_c.lock().unwrap().insert(
+                id,
+                Box::new(PendingWsSession {
+                    state: Arc::clone(&state),
+                    close_requested: Arc::clone(&close_requested),
+                }),
+            );
+
+            let provider = Arc::clone(provider);
+            let lcb_bg = Arc::clone(&lcb_ws);
+            std::thread::spawn(move || {
+                let result = provider.connect(&url, &protos);
+                let mut new_state = match result {
+                    Ok(session) => {
+                        let close_req = close_requested.lock().unwrap().take();
+                        if let Some((code, reason)) = close_req {
+                            // JS called close() before the handshake resolved:
+                            // send the close frame instead of leaving the
+                            // session open — the session's own pre-queued
+                            // `Open` event stays queued, so the shim still
+                            // observes `open` immediately followed by
+                            // `close`/`error`, but the connection itself
+                            // never lingers.
+                            let _ = session.close(code, &reason);
+                        }
+                        PendingWsState::Open(session)
+                    }
+                    Err(lumen_core::error::Error::CspConnectSrcBlocked { blocked_uri, original_policy }) => {
+                        *lcb_bg.lock().unwrap() = Some((blocked_uri, original_policy));
+                        // Just `error` — the shim synthesizes the matching
+                        // `close(1006, '', wasClean=false)` itself (mirrors
+                        // the old synchronous-failure branch it used to take
+                        // when `_lumen_ws_connect` returned `0`).
+                        let mut queue = std::collections::VecDeque::new();
+                        queue.push_back(JsWsEvent::Error("WebSocket connection failed".to_string()));
+                        PendingWsState::Failed(queue)
+                    }
+                    Err(e) => {
+                        eprintln!("[JS WebSocket] connect error: {e}");
+                        let mut queue = std::collections::VecDeque::new();
+                        queue.push_back(JsWsEvent::Error(e.to_string()));
+                        PendingWsState::Failed(queue)
+                    }
+                };
+                std::mem::swap(&mut *state.lock().unwrap(), &mut new_state);
+            });
+
+            id
         });
 
         // _lumen_ws_last_csp_block() → [blockedUri, originalPolicy] | []

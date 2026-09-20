@@ -70,3 +70,44 @@ CONNECTING; страница замерзает до того, как выпол
    --variant ws-connect-hang --variant ws-close-connecting` — ожидается
    `wsh-after-ctor readyState=0` и ненулевое число тиков в обоих.
 2. WPT: `run_report.py --all --root websockets --recursive`.
+
+## Срез 1 (2026-09-20, `p6-gap-wsasync`) — асинхронный `connect()`, главный симптом закрыт
+
+`_lumen_ws_connect` (`crates/js/src/v8_runtime/install/net.rs::install_websocket`)
+больше не зовёт `provider.connect()` в потоке JS. Хэндл выдаётся немедленно
+(новая обёртка `PendingWsSession`, реализующая `JsWebSocketSession` поверх
+`Arc<Mutex<PendingWsState>>`), а сам хэндшейк уходит в фоновый поток; когда
+он завершается — `Open`/`Error` доставляются через тот же `_lumen_ws_poll`,
+которым страница уже пользовалась для входящих кадров. `connect-src`-блок
+(GAP-CSPENF срез 11) теперь тоже доставляется асинхронно через пару
+`error`+синтетический `close(1006, '', wasClean=false)` в шиме — раньше это
+было единственным путём, где `_lumen_ws_connect` мог вернуть `0`
+синхронно; теперь `!h` означает только «нет `WebSocketProvider`».
+
+Прямое измерение (`verify_focus_mutation_animation_gaps.py`, dev-release,
+Windows, `--seconds 6`):
+
+| вариант | тики (было → стало) | ключевой маркер |
+|---|---|---|
+| `ws-connect-hang` | 0 → **8** | `wsh-after-ctor readyState=0` — конструктор не блокирует |
+| `ws-connect-refused` | 9 → 8 | `wsr-after-ctor readyState=0`, затем `wsr-error`, `wsr-close code=1006 clean=false` (было `readyState=3` сразу из конструктора) |
+| `ws-close-connecting` | 0 → 6 | `wsc-before readyState=0`, `wsc-send-throws InvalidStateError`, `wsc-after-close readyState=2` |
+
+**Не в этом срезе:**
+- `close()`, вызванный во время хэндшейка к серверу, который **не отвечает
+  дольше `FETCH_READ_TIMEOUT` (60 с)** (`crates/network/src/lib.rs`), не
+  переводит `readyState` в `CLOSED` раньше этого таймаута — фоновый поток
+  ждёт внутри `websocket::WebSocket::connect_deflate`
+  (`upgrade::perform_with_deflate`), и `close_requested` проверяется только
+  после того, как тот вызов вернётся. У WPT-теста `close-connecting.html`
+  сервер отвечает паузой 10 с (`/sleep_10_v13`), так что тест это не заденет,
+  но правильная фикса — отменяемый хэндшейк (токен отмены до
+  `TcpStream`/`read_exact`, по образцу `AbortWatchdog`), не заведённая здесь.
+- [BUG-869](BUG-869-OPEN.md) (синхронный `send()`, бэкпрешер) — отдельная
+  половина той же `GAP-WSASYNC`, не тронута.
+- [BUG-862](BUG-862-OPEN.md) (`send(null)` кидает `TypeError` в
+  `_lumen_ws_bytelen`) — увидено попутно в `ws-echo`, уже заведено, не
+  дублируется.
+
+Не проверялось: реальный прогон `run_report.py --root websockets` (только
+живой probe выше).
