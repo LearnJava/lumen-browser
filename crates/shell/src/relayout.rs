@@ -948,6 +948,10 @@ impl Lumen {
         // post-layout point every relayout producer routes through, so a
         // script-appended `<img>` is picked up whichever path relaid it out.
         self.spawn_dynamic_image_loads(viewport);
+        // BUG-939: same point for `background-image` set/changed from JS —
+        // `fetch_and_decode_background_images` in the initial pipeline only
+        // runs once and never sees a later cascade mutation.
+        self.spawn_dynamic_background_image_loads();
         // BUG-735: и по той же причине — свежеперестроенное поддерево могло
         // принести НОВЫЙ `<img>` с уже декодированным `src` (React перерисовал
         // блок: узел другой, картинка та же). Второго `ImageDecoded` для него не
