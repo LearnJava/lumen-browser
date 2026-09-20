@@ -795,6 +795,13 @@
         _networkState = NETWORK_EMPTY;
       }
       _rate  = _defaultRate;
+      // Mirror the reset natively — otherwise a `load()` after `playbackRate`
+      // had been changed would leave the native `currentTime` timer scaled
+      // by the stale rate until the page happened to set `playbackRate`
+      // again (GAP-MEDIADECODE срез 18).
+      if (nid && typeof __lumen_video_set_playback_rate === 'function') {
+        __lumen_video_set_playback_rate(nid, _rate, nowMs());
+      }
       _error = null;
       resourceSelection(gen);
     }
@@ -1133,6 +1140,12 @@
     // §4.8.11.10: same rule for `ratechange` over playbackRate and
     // defaultPlaybackRate. Neither property existed at all before BUG-825, so
     // `v.playbackRate = 2` merely created an expando.
+    //
+    // GAP-MEDIADECODE срез 18: the native store's `currentTime` timer is
+    // rescaled by this value (`__lumen_video_set_playback_rate`); the actual
+    // decode/PCM rate is NOT — a faster/slower `currentTime` on a real
+    // decode backend is a separate, more invasive piece of work (see the
+    // remainder note left in ROADMAP.md's GAP-MEDIADECODE row, срез 17).
     Object.defineProperty(el, 'playbackRate', {
       get: function(){ return _rate; },
       set: function(v) {
@@ -1140,6 +1153,9 @@
         if (isNaN(n) || !isFinite(n)) throw new TypeError('playbackRate must be a finite number');
         if (n === _rate) return;
         _rate = n;
+        if (nid && typeof __lumen_video_set_playback_rate === 'function') {
+          __lumen_video_set_playback_rate(nid, n, nowMs());
+        }
         queueEvent('ratechange');
       },
       configurable: true,

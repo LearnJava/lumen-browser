@@ -53,22 +53,29 @@ pub struct VideoPlaybackState {
 }
 
 impl VideoPlaybackState {
-    /// Playback position in ms at a given real-clock instant.
-    pub fn current_ms(&self, real_now_ms: u64) -> u64 {
+    /// Playback position in ms at a given real-clock instant, scaled by
+    /// `rate` (`video.playbackRate` — GAP-MEDIADECODE срез 18). `rate` only
+    /// scales the elapsed portion since `play_epoch_ms`, not `position_ms`
+    /// itself: a rate change is expected to call [`Self::freeze`] first (with
+    /// the *old* rate) so the accumulated position never gets retroactively
+    /// rescaled, exactly like a `seek` re-anchors the epoch instead of
+    /// touching past position.
+    pub fn current_ms(&self, real_now_ms: u64, rate: f64) -> u64 {
         if let Some(epoch) = self.play_epoch_ms {
-            self.position_ms + real_now_ms.saturating_sub(epoch)
+            let elapsed = real_now_ms.saturating_sub(epoch) as f64 * rate;
+            self.position_ms + (elapsed.max(0.0) as u64)
         } else {
             self.position_ms
         }
     }
 
     /// Whether playback has naturally ended (finite loop count exhausted).
-    pub fn is_ended(&self, real_now_ms: u64) -> bool {
+    pub fn is_ended(&self, real_now_ms: u64, rate: f64) -> bool {
         if self.cycle_ms == 0 || self.loop_count == 0 {
             return false;
         }
         let total = self.cycle_ms.saturating_mul(u64::from(self.loop_count));
-        self.current_ms(real_now_ms) >= total
+        self.current_ms(real_now_ms, rate) >= total
     }
 
     /// Duration in seconds exposed to JS as `video.duration`.
@@ -80,9 +87,10 @@ impl VideoPlaybackState {
         ms as f64 / 1000.0
     }
 
-    /// Snapshot `position_ms` to the current playback position and clear epoch.
-    pub fn freeze(&mut self, real_now_ms: u64) {
-        self.position_ms = self.current_ms(real_now_ms);
+    /// Snapshot `position_ms` to the current playback position (at `rate`)
+    /// and clear epoch.
+    pub fn freeze(&mut self, real_now_ms: u64, rate: f64) {
+        self.position_ms = self.current_ms(real_now_ms, rate);
         self.play_epoch_ms = None;
     }
 }
@@ -128,6 +136,15 @@ pub struct VideoGifStore {
     /// the page had already set. Absent entry = spec default (`volume: 1.0`,
     /// `muted: false`).
     pub audio_levels: Mutex<HashMap<u32, (f32, bool)>>,
+    /// `video.playbackRate` last set via JS, keyed by node — GAP-MEDIADECODE
+    /// срез 18. Same reasoning as `audio_levels`: kept out of
+    /// `VideoPlaybackState` because that struct is wholesale reconstructed on
+    /// every decode completion and tab-switch restore. Absent entry = spec
+    /// default (`1.0`). Only scales the native `currentTime` timer (the
+    /// `current_ms`/`is_ended`/`freeze` elapsed-time math); it does not touch
+    /// decode/PCM speed — that would need resampling and is out of scope
+    /// here (see the remainder note on GAP-MEDIADECODE срез 17).
+    pub playback_rates: Mutex<HashMap<u32, f64>>,
 }
 
 impl VideoGifStore {
