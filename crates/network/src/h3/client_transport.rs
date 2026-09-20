@@ -554,14 +554,26 @@ pub fn h3_extended_connect_on_driver<T: DatagramTransport>(
 /// id that demultiplexes it to a session.
 const WEBTRANSPORT_UNI_STREAM_TYPE: u64 = 0x54;
 
+/// draft-ietf-webtrans-http3 §4.3: the HTTP/3 frame type identifying a
+/// `WEBTRANSPORT_STREAM` frame — the first frame a client-initiated
+/// bidirectional WebTransport stream carries, session id as its payload.
+/// Unlike [`WEBTRANSPORT_UNI_STREAM_TYPE`] (a QUIC stream-type byte, since
+/// unidirectional QUIC streams carry one natively — RFC 9000 §2.1), a
+/// bidirectional QUIC stream has no such field, so HTTP/3 frames it instead;
+/// once this frame is sent the rest of the stream is raw WebTransport
+/// application data, not further HTTP/3 framing (no length prefix, unlike a
+/// `DATA` frame).
+const WEBTRANSPORT_STREAM_FRAME_TYPE: u64 = 0x41;
+
 /// Why [`h3_webtransport_open_uni_stream_on_driver`] could not open a
 /// WebTransport unidirectional stream.
 #[derive(Debug)]
 pub enum WebTransportStreamError {
-    /// Every client-initiated unidirectional QUIC stream identifier has been
-    /// handed out (RFC 9000 §2.1: `2^60` per type, the same bound
-    /// [`super::request_mux::OpenError::StreamsExhausted`] applies to bidi
-    /// streams) — unreachable on any real session.
+    /// Every client-initiated stream identifier of the requested direction
+    /// (unidirectional or bidirectional) has been handed out (RFC 9000 §2.1:
+    /// `2^60` per type, the same bound
+    /// [`super::request_mux::OpenError::StreamsExhausted`] applies to) —
+    /// unreachable on any real session.
     StreamsExhausted,
     /// The stream header (stream type, then session id — both QUIC varints)
     /// could not be encoded because a value exceeded the varint's 62-bit range
@@ -588,7 +600,7 @@ impl core::fmt::Display for WebTransportStreamError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::StreamsExhausted => {
-                write!(f, "WebTransport: client unidirectional stream identifiers exhausted")
+                write!(f, "WebTransport: client stream identifiers exhausted")
             }
             Self::Header(e) => write!(f, "WebTransport: stream header: {e}"),
             Self::Driver(e) => write!(f, "WebTransport: opening unidirectional stream: {e}"),
@@ -660,6 +672,70 @@ pub fn h3_webtransport_open_uni_stream_on_driver<T: DatagramTransport>(
         .dispatch_mut()
         .streams_mut()
         .open_send_stream(stream_id, peer_initial_max_stream_data_uni)
+        .write(&header);
+
+    driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)?;
+    Ok(stream_id)
+}
+
+/// Opens a WebTransport bidirectional stream (draft-ietf-webtrans-http3 §4.3)
+/// on `driver`'s connection, for the session `session_id` names —
+/// `createBidirectionalStream()`'s transport primitive, the bidi counterpart
+/// of [`h3_webtransport_open_uni_stream_on_driver`].
+///
+/// Allocates the `bidi_stream_number`-th client-initiated bidirectional QUIC
+/// stream (RFC 9000 §2.1: the low two bits `0b00` mark client-initiated
+/// bidirectional, so the *n*-th such stream is identifier `4n`) — the caller
+/// owns `bidi_stream_number`, incrementing it per session starting at `0`,
+/// a separate counter from [`h3_webtransport_open_uni_stream_on_driver`]'s
+/// (different identifier space) and from the client bidirectional streams
+/// ordinary requests and [`h3_extended_connect_on_driver`] use (this function
+/// is for streams a live WebTransport session opens *after* it is
+/// established, never the Extended CONNECT stream itself).
+///
+/// Unlike a unidirectional QUIC stream, a bidirectional one carries no native
+/// stream-type field (RFC 9000 §2.1), so HTTP/3 frames the direction instead:
+/// this writes the `WEBTRANSPORT_STREAM` frame (type `0x41`, then
+/// `session_id`, both QUIC varints) as the stream's first bytes and flushes
+/// it onto the wire — same "write header, one `transmit`, no reply to wait
+/// for" shape as the uni primitive, because opening the stream itself never
+/// blocks on the peer.
+///
+/// Returns the opened stream's QUIC identifier. The send half is written and
+/// closed through the same [`h3_webtransport_write_stream_on_driver`] /
+/// [`h3_webtransport_close_uni_stream_on_driver`] / [`h3_webtransport_reset_uni_stream_on_driver`]
+/// this module already exposes — they operate on a `stream_id` and the
+/// underlying [`super::stream::SendStream`] is identical for a uni or a bidi
+/// stream, only the id's low bits differ. The receive half (the `readable`
+/// side `WebTransportBidirectionalStream` exposes) is not this function's
+/// concern: [`super::stream_manager::StreamManager`] lazily creates a
+/// [`super::stream::RecvStream`] the first time the peer sends data on this
+/// id, through the connection's ordinary incoming-frame path — no explicit
+/// "open the receive half" call exists for either uni or bidi streams.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::StreamsExhausted`], [`WebTransportStreamError::Header`],
+/// or [`WebTransportStreamError::Driver`] — see their docs.
+pub fn h3_webtransport_open_bidi_stream_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    bidi_stream_number: u64,
+    peer_initial_max_stream_data_bidi: u64,
+    session_id: u64,
+) -> Result<u64, WebTransportStreamError> {
+    let stream_id =
+        bidi_stream_number.checked_mul(4).ok_or(WebTransportStreamError::StreamsExhausted)?;
+
+    let mut header = Vec::with_capacity(varint::encoded_len(WEBTRANSPORT_STREAM_FRAME_TYPE).unwrap_or(1) + 8);
+    varint::encode(WEBTRANSPORT_STREAM_FRAME_TYPE, &mut header).map_err(WebTransportStreamError::Header)?;
+    varint::encode(session_id, &mut header).map_err(WebTransportStreamError::Header)?;
+
+    driver
+        .turn_mut()
+        .pump_mut()
+        .dispatch_mut()
+        .streams_mut()
+        .open_send_stream(stream_id, peer_initial_max_stream_data_bidi)
         .write(&header);
 
     driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)?;
@@ -1123,6 +1199,89 @@ mod tests {
             WebTransportStreamError::StreamsExhausted => {}
             other => panic!("expected StreamsExhausted, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn webtransport_bidi_stream_allocates_the_first_identifier_and_writes_the_header() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let stream_id = h3_webtransport_open_bidi_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the first bidi stream");
+        assert_eq!(stream_id, 0, "the first client bidi stream identifier is 4*0");
+
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .expect("the bidi stream's send half was opened");
+        // Header: 2-byte varint 0x41 (frame type — 65 exceeds the 1-byte 0-63
+        // range) + 1-byte varint 0 (session id).
+        assert_eq!(send.write_offset(), 3);
+    }
+
+    #[test]
+    fn webtransport_bidi_stream_identifiers_advance_by_four() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let first = h3_webtransport_open_bidi_stream_on_driver(&mut driver, 0, 1 << 20, 0).unwrap();
+        let second = h3_webtransport_open_bidi_stream_on_driver(&mut driver, 1, 1 << 20, 0).unwrap();
+        assert_eq!(first, 0);
+        assert_eq!(second, 4);
+    }
+
+    #[test]
+    fn webtransport_bidi_stream_header_carries_the_session_id() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        // Same varint-length switch as the uni stream test: a session id
+        // above the 1-byte boundary forces the header's second field to 2
+        // bytes too.
+        let stream_id = h3_webtransport_open_bidi_stream_on_driver(&mut driver, 0, 1 << 20, 100)
+            .expect("opens the bidi stream");
+        let send = driver
+            .turn_mut()
+            .pump_mut()
+            .dispatch_mut()
+            .streams_mut()
+            .send_stream(stream_id)
+            .expect("the bidi stream's send half was opened");
+        // 2-byte frame type (0x41) + 2-byte session id (100) = 4 bytes.
+        assert_eq!(send.write_offset(), 4);
+    }
+
+    #[test]
+    fn webtransport_bidi_stream_number_overflow_is_reported_not_wrapped() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        let err = h3_webtransport_open_bidi_stream_on_driver(&mut driver, u64::MAX, 1 << 20, 0)
+            .unwrap_err();
+        match err {
+            WebTransportStreamError::StreamsExhausted => {}
+            other => panic!("expected StreamsExhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webtransport_bidi_stream_write_close_and_reset_reuse_the_uni_primitives() {
+        // The send half is identical between uni and bidi streams (only the
+        // id's low bits differ), so write/close/reset must work unmodified
+        // on a bidi-opened stream id — this is the whole reason those three
+        // functions were not duplicated for bidi.
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let stream_id = h3_webtransport_open_bidi_stream_on_driver(&mut driver, 0, 1 << 20, 0)
+            .expect("opens the bidi stream");
+
+        h3_webtransport_write_stream_on_driver(&mut driver, stream_id, b"hello")
+            .expect("writes to the open bidi stream");
+        h3_webtransport_close_uni_stream_on_driver(&mut driver, stream_id)
+            .expect("closes the bidi stream's send half");
     }
 
     #[test]
