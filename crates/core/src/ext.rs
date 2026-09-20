@@ -2239,6 +2239,34 @@ pub trait JsFetchProvider: Send + Sync {
     fn permissions_policy_sync_xhr_disposition(&self) -> Option<PolicyDisposition> {
         None
     }
+
+    /// Open a WebTransport session (RFC 9220 Extended CONNECT over HTTP/3)
+    /// to `url`'s origin — GAP-WEBTRANSPORT/`P3-webtransport` срез 2b.
+    ///
+    /// Default implementation always reports "unsupported": only
+    /// `lumen-network::HttpClient` (the live QUIC transport) overrides it.
+    /// Test doubles that implement only `fetch_sync` keep compiling
+    /// unchanged, matching every other extension point in this trait.
+    fn webtransport_connect(&self, url: &str) -> Result<JsWebTransportSession> {
+        let _ = url;
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+}
+
+/// Outcome of successfully opening a WebTransport session —
+/// [`JsFetchProvider::webtransport_connect`].
+#[derive(Debug, Clone, Copy)]
+pub struct JsWebTransportSession {
+    /// Opaque handle the JS binding hands back to script. Later slices
+    /// (uni/bidi streams, datagrams) look the live session up by this id;
+    /// срез 2b itself only needs it to resolve/reject `ready`.
+    pub handle: i32,
+    /// The Extended CONNECT response's `:status` (RFC 9220 §3). Only a
+    /// `2xx` here means the session is open — the caller judges pass/fail
+    /// from it, this struct only reports what arrived.
+    pub status: u16,
 }
 
 /// Enforcing vs report-only outcome of a Document-Policy/Permissions-Policy

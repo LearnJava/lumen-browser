@@ -63,11 +63,26 @@ RequestDriver` (тот же паттерн, что и у `send_request`); `exten
 `DatagramTransport` (как и `h3_exchange`), драйвит `transmit`/`poll` до финальной головы
 turn-budget'ом. Новые ошибки `ConnectFetchError::ExtendedConnect{Dispatch,Driver,Incomplete}`.
 2286/2286 тестов `lumen-network`, `clippy -p lumen-network --all-targets -D warnings` и
-`cargo check --workspace` зелёные. **Не сделано (срез 2b, следующий шаг):**
-`crates/js/src/webtransport.rs`'s `_lumen_webtransport_open` всё ещё всегда отвечает
-«нет сессии» — примитив среза 2a им пока не вызывается; нужны резолв origin → живое H3-
-соединение (пул соединений), вызов `h3_extended_connect_on_driver` из нативного биндинга
-и превращение его результата в резолв/реджект промиса `ready`.
+`cargo check --workspace` зелёные.
+
+**Срез 2b — done (2026-09-20, P1) — доводка до `ready`.** `JsFetchProvider` (lumen-core)
+получил `webtransport_connect(url) -> Result<JsWebTransportSession>` с default-реализацией
+«не поддерживается» (тестовые двойники не ломаются); `lumen-network::HttpClient`
+перекрывает его — парсит URL, зовёт `h3::client_transport::h3_connect` (свежий QUIC-коннект,
+резолвер клиента, не через Alt-Svc/`http3_enabled` — WebTransport QUIC-native по определению,
+не апгрейд HTTP-запроса), затем `h3_extended_connect_on_driver` (срез 2a) с
+`protocol = b"webtransport"`; 2xx → `Ok(JsWebTransportSession{handle,status})`, иначе/на любую
+ошибку `Err`. Подтверждённый driver не дропается — оседает в новом
+`HttpClient::webtransport_sessions` (`HashMap<i32, (RequestDriver<UdpDatagram>, stream_id)>`)
+под свежим handle, для среза 3 (streams). `crates/js/src/webtransport.rs`'s
+`_lumen_webtransport_open` теперь принимает `fetch_provider` (как `install_dom`'s остальные
+сетевые биндинги) и возвращает JSON-строку (`{"ok":true,"status":N}` / `{"ok":false,"message":…}`)
+— шим `WebTransport`'s `setTimeout`-колбэк резолвит `ready` на `ok:true`, иначе реджектит
+`ready`/`closed` `WebTransportError`-ом. `closed` намеренно не settl'ится на успехе — lifecycle
+(срез 5) ещё не подключён. 3964+151 тестов `lumen-js --features v8-backend` и 2297 тестов
+`lumen-network` зелёные, `clippy -p lumen-core -p lumen-network -p lumen-js --all-targets -D
+warnings` и `cargo check --workspace` зелёные. Handle пока не покидает Rust — срез 3
+(uni/bidi streams) первый, кому он понадобится в JS.
 
 ### Срез 3 — M — Uni/Bidirectional streams
 `createUnidirectionalStream`/`createBidirectionalStream` → реальные QUIC-стримы,
@@ -95,6 +110,6 @@ turn-budget'ом. Новые ошибки `ConnectFetchError::ExtendedConnect{Di
   `WebTransportBidirectionalStream`, URL-валидация, один нативный биндинг
   `_lumen_webtransport_open` (i32-сентинел, BUG-457), `install_v8!` подключён.
   7 юнит-тестов зелёные.
-- [ ] (после QUIC) Extended CONNECT, uni/bidi streams, datagrams, lifecycle.
-  Остаётся срезам 2–5 — см. таблицу выше.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (каркас).
+- [x] Extended CONNECT доходит до живого `ready` (срезы 2a/2b, см. таблицу выше).
+- [ ] Uni/bidi streams, datagrams, lifecycle — срезы 3–5.
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, streams/datagrams/lifecycle ещё стабы).
