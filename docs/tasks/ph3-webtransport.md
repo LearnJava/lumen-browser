@@ -89,6 +89,30 @@ warnings` и `cargo check --workspace` зелёные. Handle пока не по
 обёрнутые в WHATWG ReadableStream/WritableStream (переиспользовать stream-инфраструктуру
 из `dom.rs`). **Требует срез 2.**
 
+**Срез 3a — done (2026-09-20, P1) — транспортный примитив для uni-стримов.**
+`crates/network/src/h3/client_transport.rs::h3_webtransport_open_uni_stream_on_driver` —
+аллоцирует client-initiated unidirectional QUIC stream id (RFC 9000 §2.1: младшие
+два бита `0b10`, n-й стрим — `4n + 2`; отдельное от `RequestMux`-счётчика
+пространство id, координация не нужна — весь этот драйвер посвящён одной
+WT-сессии), пишет заголовок WT-стрима (varint stream type `0x54`, затем varint
+session id = id Extended CONNECT-стрима — draft-ietf-webtrans-http3 §4.2, сверено
+по дататрекеру IETF) через существующую цепочку аксессоров
+`driver.turn_mut().pump_mut().dispatch_mut().streams_mut()` (никаких новых полей/методов
+в `RequestDispatch`/`RequestPump`/`RequestTurn`/`RequestDriver` не потребовалось — вся
+цепочка уже была `pub`), один `transmit()` без ожидания ответа (uni-стрим не отвечает).
+`WebTransportStreamError` — переполнение id (`2^60`, чисто теоретическое, как у
+`RequestMux::OpenError::StreamsExhausted`), ошибка кодирования varint, ошибка
+драйвера. 4 новых юнит-теста на `MockDatagramTransport` (id=2/6, длина заголовка
+для session-id=0 и session-id=100 — проверяет переключение длины varint), 2301
+тестов `lumen-network`, `clippy -p lumen-network --all-targets -D warnings` зелёный.
+Не сделано: подключение к `HttpClient::webtransport_sessions` (нужен per-сессии
+счётчик `next_uni_stream_number`) и к JS (`_lumen_webtransport_open` пока не
+возвращает `handle` наружу в JS — без него `createUnidirectionalStream()` нечем
+адресовать сессию; `WritableStream`-обёртка с маршалингом `Uint8Array`→`Vec<u8>`)
+— срез 3b. Bidi-стримы и приём входящих стримов — отдельные под-срезы (эта функция
+даёт только client-initiated uni, самый простой случай: отдельное от bidi id-пространство,
+не требует координации с `RequestMux`).
+
 ### Срез 4 — S — Datagrams
 `datagrams.readable/writable` поверх `h3/datagram.rs` (QUIC DATAGRAM). **Требует срез 2.**
 
