@@ -4,10 +4,20 @@
 //! (StylePropertyMapReadOnly) access to CSS values via `CSSStyleValue` objects.
 //!
 //! Classes:
-//! - `CSSStyleValue` — base class for all CSS values
-//! - `CSSUnitValue` — numeric value with unit (e.g. 10px, 2.5em)
+//! - `CSSStyleValue` — base class for all CSS values; `.parse`/`.parseAll` fall back to the
+//!   same generic dimension/identifier/opaque split used for reading the cascade (no
+//!   per-property grammar table)
+//! - `CSSUnitValue` — numeric value with unit (e.g. 10px, 2.5em); `CSS.px(1)` and friends on
+//!   the `CSS` namespace construct one per unit name
 //! - `CSSKeywordValue` — keyword value (e.g. auto, inherit)
-//! - `CSSNumericValue` — base class for numeric values (not fully implemented in Phase 0)
+//! - `CSSNumericValue` — base class for numeric values; `add`/`sub`/`mul`/`div`/`min`/`max`
+//!   build a `CSSMathValue` tree (construction + `calc()` serialisation only — no resolution
+//!   context, so `to()`/`equals()` on a math value are not implemented)
+//! - `CSSMathValue` family — `CSSMathSum`/`CSSMathProduct`/`CSSMathNegate`/`CSSMathInvert`/
+//!   `CSSMathMin`/`CSSMathMax`
+//! - `CSSUnparsedValue`/`CSSVariableReferenceValue` — `var()` reference values
+//!
+//! Not implemented: `CSSTransformValue`/`CSSColorValue` families (GAP-TYPEDOM remainder).
 //!
 //! Maps:
 //! - `StylePropertyMapReadOnly` — `element.computedStyleMap()`, reads the resolved cascade
@@ -78,15 +88,25 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     return null;
   }
 
+  // ── CSSNumericValue — base for numeric operations (§7) ────────────────────────
+  // Spec order is CSSNumericValue before CSSUnitValue/CSSMathValue: both extend
+  // it, and `add()`/`sub()`/... below dispatch on `instanceof CSSNumericValue`.
+  function CSSNumericValue() {
+    CSSStyleValue.call(this);
+  }
+  CSSNumericValue.prototype = Object.create(CSSStyleValue.prototype);
+  CSSNumericValue.prototype.constructor = CSSNumericValue;
+
   // ── CSSUnitValue — numeric value with unit ────────────────────────────────────
   function CSSUnitValue(value, unit) {
+    CSSNumericValue.call(this);
     var v = Number(value) || 0;
     var u = normaliseUnit(unit === undefined ? 'px' : unit);
-    CSSStyleValue.call(this, String(v) + unitSuffix(u));
+    this.cssText = String(v) + unitSuffix(u);
     this.value = v;
     this.unit = u;
   }
-  CSSUnitValue.prototype = Object.create(CSSStyleValue.prototype);
+  CSSUnitValue.prototype = Object.create(CSSNumericValue.prototype);
   CSSUnitValue.prototype.constructor = CSSUnitValue;
   CSSUnitValue.prototype.to = function(newUnit) {
     var target = normaliseUnit(newUnit);
@@ -108,12 +128,166 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   CSSKeywordValue.prototype = Object.create(CSSStyleValue.prototype);
   CSSKeywordValue.prototype.constructor = CSSKeywordValue;
 
-  // ── CSSNumericValue — base for numeric operations ────────────────────────────
-  function CSSNumericValue() {
-    CSSStyleValue.call(this);
+  // ── CSSMathValue hierarchy — arithmetic on numeric values (§8) ────────────────
+  // Construction and serialisation only: resolving a mixed-unit tree to a single
+  // numeric value (`to()`/`equals()` on a CSSMathValue, CSSMathSum.values as a
+  // CSSNumericArray with unit-typed elements) needs a resolution context this
+  // slice does not add. `add()`/`sub()`/`mul()`/`div()`/`min()`/`max()` on
+  // CSSNumericValue build a correctly `calc()`-serialising tree, which is what
+  // `style.set('width', a.add(b))` actually consumes downstream.
+  function toNumericValue(v) {
+    if (v instanceof CSSNumericValue) return v;
+    if (typeof v === 'number') return new CSSUnitValue(v, 'number');
+    throw new TypeError('CSSNumericValue: operand is not a CSSNumericValue or number');
   }
-  CSSNumericValue.prototype = Object.create(CSSStyleValue.prototype);
-  CSSNumericValue.prototype.constructor = CSSNumericValue;
+
+  function CSSMathValue(operator) {
+    CSSNumericValue.call(this);
+    this.operator = operator;
+  }
+  CSSMathValue.prototype = Object.create(CSSNumericValue.prototype);
+  CSSMathValue.prototype.constructor = CSSMathValue;
+
+  function CSSMathSum(values) {
+    CSSMathValue.call(this, 'sum');
+    this.values = values;
+    this.cssText = 'calc(' + values.map(function(v) { return v.toString(); }).join(' + ') + ')';
+  }
+  CSSMathSum.prototype = Object.create(CSSMathValue.prototype);
+  CSSMathSum.prototype.constructor = CSSMathSum;
+
+  function CSSMathProduct(values) {
+    CSSMathValue.call(this, 'product');
+    this.values = values;
+    this.cssText = 'calc(' + values.map(function(v) { return v.toString(); }).join(' * ') + ')';
+  }
+  CSSMathProduct.prototype = Object.create(CSSMathValue.prototype);
+  CSSMathProduct.prototype.constructor = CSSMathProduct;
+
+  function CSSMathNegate(value) {
+    CSSMathValue.call(this, 'negate');
+    this.value = value;
+    this.cssText = 'calc(-1 * ' + value.toString() + ')';
+  }
+  CSSMathNegate.prototype = Object.create(CSSMathValue.prototype);
+  CSSMathNegate.prototype.constructor = CSSMathNegate;
+
+  function CSSMathInvert(value) {
+    CSSMathValue.call(this, 'invert');
+    this.value = value;
+    this.cssText = 'calc(1 / ' + value.toString() + ')';
+  }
+  CSSMathInvert.prototype = Object.create(CSSMathValue.prototype);
+  CSSMathInvert.prototype.constructor = CSSMathInvert;
+
+  function CSSMathMin(values) {
+    CSSMathValue.call(this, 'min');
+    this.values = values;
+    this.cssText = 'min(' + values.map(function(v) { return v.toString(); }).join(', ') + ')';
+  }
+  CSSMathMin.prototype = Object.create(CSSMathValue.prototype);
+  CSSMathMin.prototype.constructor = CSSMathMin;
+
+  function CSSMathMax(values) {
+    CSSMathValue.call(this, 'max');
+    this.values = values;
+    this.cssText = 'max(' + values.map(function(v) { return v.toString(); }).join(', ') + ')';
+  }
+  CSSMathMax.prototype = Object.create(CSSMathValue.prototype);
+  CSSMathMax.prototype.constructor = CSSMathMax;
+
+  // §7.4: flatten same-operator sums/products into one, so `a.add(b).add(c)`
+  // serialises as `calc(a + b + c)` rather than nesting `calc(calc(a + b) + c)`.
+  function flattenSameOperator(values, ctor) {
+    var out = [];
+    values.forEach(function(v) {
+      if (v instanceof ctor) {
+        out = out.concat(v.values);
+      } else {
+        out.push(v);
+      }
+    });
+    return out;
+  }
+
+  CSSNumericValue.prototype.add = function() {
+    var operands = [this].concat(Array.prototype.slice.call(arguments).map(toNumericValue));
+    return new CSSMathSum(flattenSameOperator(operands, CSSMathSum));
+  };
+  CSSNumericValue.prototype.sub = function() {
+    var operands = [this].concat(Array.prototype.slice.call(arguments).map(function(v) {
+      return new CSSMathNegate(toNumericValue(v));
+    }));
+    return new CSSMathSum(flattenSameOperator(operands, CSSMathSum));
+  };
+  CSSNumericValue.prototype.mul = function() {
+    var operands = [this].concat(Array.prototype.slice.call(arguments).map(toNumericValue));
+    return new CSSMathProduct(flattenSameOperator(operands, CSSMathProduct));
+  };
+  CSSNumericValue.prototype.div = function() {
+    var operands = [this].concat(Array.prototype.slice.call(arguments).map(function(v) {
+      return new CSSMathInvert(toNumericValue(v));
+    }));
+    return new CSSMathProduct(flattenSameOperator(operands, CSSMathProduct));
+  };
+  CSSNumericValue.prototype.min = function() {
+    var operands = [this].concat(Array.prototype.slice.call(arguments).map(toNumericValue));
+    return new CSSMathMin(operands);
+  };
+  CSSNumericValue.prototype.max = function() {
+    var operands = [this].concat(Array.prototype.slice.call(arguments).map(toNumericValue));
+    return new CSSMathMax(operands);
+  };
+  CSSNumericValue.prototype.negate = function() {
+    return new CSSMathNegate(this);
+  };
+  CSSNumericValue.prototype.invert = function() {
+    return new CSSMathInvert(this);
+  };
+
+  // ── CSSUnparsedValue / CSSVariableReferenceValue (§9) — var() references ──────
+  function CSSVariableReferenceValue(variable, fallback) {
+    var name = String(variable);
+    if (name.slice(0, 2) !== '--') {
+      throw new TypeError('CSSVariableReferenceValue: "' + name + '" is not a custom property name');
+    }
+    this.variable = name;
+    this.fallback = fallback === undefined ? null : fallback;
+  }
+  CSSVariableReferenceValue.prototype.toString = function() {
+    return 'var(' + this.variable + (this.fallback ? ', ' + this.fallback.toString() : '') + ')';
+  };
+
+  function CSSUnparsedValue(members) {
+    var list = Array.prototype.slice.call(members || []);
+    for (var i = 0; i < list.length; i++) {
+      if (typeof list[i] !== 'string' && !(list[i] instanceof CSSVariableReferenceValue)) {
+        throw new TypeError('CSSUnparsedValue: member ' + i + ' is not a string or CSSVariableReferenceValue');
+      }
+      this[i] = list[i];
+    }
+    this.length = list.length;
+  }
+  CSSUnparsedValue.prototype = Object.create(CSSStyleValue.prototype);
+  CSSUnparsedValue.prototype.constructor = CSSUnparsedValue;
+  Object.defineProperty(CSSUnparsedValue.prototype, 'cssText', {
+    get: function() {
+      var out = '';
+      for (var i = 0; i < this.length; i++) {
+        out += this[i].toString();
+      }
+      return out;
+    },
+    configurable: true
+  });
+  if (typeof Symbol !== 'undefined' && Symbol.iterator) {
+    CSSUnparsedValue.prototype[Symbol.iterator] = function() {
+      var self = this, i = 0;
+      return { next: function() {
+        return i < self.length ? { value: self[i++], done: false } : { value: undefined, done: true };
+      } };
+    };
+  }
 
   var NUMBER_WITH_UNIT = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(%|[a-zA-Z]+)?$/;
   var CSS_IDENTIFIER   = /^-?[A-Za-z_][\w-]*$/;
@@ -136,6 +310,48 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     if (name.slice(0, 2) === '--') return name;
     return name.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
   }
+
+  // Splits on commas that are not inside a nested `(...)` — the same rule
+  // `parseAll` needs to break e.g. `1px, calc(1px, 2px)` (not a real property
+  // value, but the split rule is unit-agnostic) into top-level items only.
+  function splitTopLevelCommas(text) {
+    var parts = [];
+    var depth = 0;
+    var start = 0;
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charAt(i);
+      if (c === '(') depth++;
+      else if (c === ')') depth--;
+      else if (c === ',' && depth === 0) {
+        parts.push(text.slice(start, i));
+        start = i + 1;
+      }
+    }
+    parts.push(text.slice(start));
+    return parts.map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+  }
+
+  // ── CSSStyleValue.parse / .parseAll (§4.3) ─────────────────────────────────────
+  // `property` is accepted but not consulted for a property-specific grammar —
+  // Lumen has no per-property Typed OM parser table yet, so both fall back to
+  // the same generic dimension/identifier/opaque split `cssValueFromString`
+  // uses for reading the cascade. Good enough for round-tripping a value this
+  // API itself produced; a value needing real property-aware parsing (e.g.
+  // rejecting `10px` for `color`) is not caught here.
+  CSSStyleValue.parse = function(property, cssText) {
+    var text = String(cssText).trim();
+    if (text === '') {
+      throw new TypeError('CSSStyleValue.parse: empty value for "' + String(property) + '"');
+    }
+    return cssValueFromString(text);
+  };
+  CSSStyleValue.parseAll = function(property, cssText) {
+    var parts = splitTopLevelCommas(String(cssText));
+    if (parts.length === 0) {
+      throw new TypeError('CSSStyleValue.parseAll: empty value for "' + String(property) + '"');
+    }
+    return parts.map(cssValueFromString);
+  };
 
   // ── StylePropertyMapReadOnly (§6.1) — element.computedStyleMap() ──────────────
   // The read half of both maps. Which declarations it reads is fixed by the
@@ -236,8 +452,30 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   global.CSS.CSSUnitValue = CSSUnitValue;
   global.CSS.CSSKeywordValue = CSSKeywordValue;
   global.CSS.CSSNumericValue = CSSNumericValue;
+  global.CSS.CSSMathValue = CSSMathValue;
+  global.CSS.CSSMathSum = CSSMathSum;
+  global.CSS.CSSMathProduct = CSSMathProduct;
+  global.CSS.CSSMathNegate = CSSMathNegate;
+  global.CSS.CSSMathInvert = CSSMathInvert;
+  global.CSS.CSSMathMin = CSSMathMin;
+  global.CSS.CSSMathMax = CSSMathMax;
+  global.CSS.CSSUnparsedValue = CSSUnparsedValue;
+  global.CSS.CSSVariableReferenceValue = CSSVariableReferenceValue;
   global.CSS.StylePropertyMap = StylePropertyMap;
   global.CSS.StylePropertyMapReadOnly = StylePropertyMapReadOnly;
+
+  // §4.2's `CSS.px(1)` etc. factories — one CSSUnitValue constructor per unit
+  // name, hung directly off the `CSS` namespace object above.
+  var UNIT_FACTORY_NAMES = [
+    'number', 'percent', 'em', 'ex', 'ch', 'ic', 'rem', 'lh', 'rlh',
+    'vw', 'vh', 'vi', 'vb', 'vmin', 'vmax',
+    'cm', 'mm', 'q', 'in', 'pt', 'pc', 'px', 'fr',
+    'deg', 'grad', 'rad', 'turn', 's', 'ms', 'hz', 'khz',
+    'dpi', 'dpcm', 'dppx', 'x'
+  ];
+  UNIT_FACTORY_NAMES.forEach(function(name) {
+    global.CSS[name] = function(value) { return new CSSUnitValue(value, name); };
+  });
 
   // ── Window/globalThis reference ───────────────────────────────────────────────
   if (typeof window === 'object' && window) {
@@ -245,6 +483,15 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     window.CSSUnitValue = CSSUnitValue;
     window.CSSKeywordValue = CSSKeywordValue;
     window.CSSNumericValue = CSSNumericValue;
+    window.CSSMathValue = CSSMathValue;
+    window.CSSMathSum = CSSMathSum;
+    window.CSSMathProduct = CSSMathProduct;
+    window.CSSMathNegate = CSSMathNegate;
+    window.CSSMathInvert = CSSMathInvert;
+    window.CSSMathMin = CSSMathMin;
+    window.CSSMathMax = CSSMathMax;
+    window.CSSUnparsedValue = CSSUnparsedValue;
+    window.CSSVariableReferenceValue = CSSVariableReferenceValue;
     window.StylePropertyMap = StylePropertyMap;
     window.StylePropertyMapReadOnly = StylePropertyMapReadOnly;
   }
