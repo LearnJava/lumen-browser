@@ -127,7 +127,26 @@ pub(crate) struct AVFrameHead {
     pub pts: i64,
 }
 
+/// Минимальный layout `AVChannelLayout` (`libavutil/channel_layout.h`) —
+/// только ведущие поля `order`/`nb_channels`, которые нужны срезу 12
+/// (детект числа каналов аудиодорожки). `u_mask_or_map`/`opaque` — хвост
+/// структуры (union `mask`/`map` + heap-указатель для custom-порядка),
+/// объявлен целиком (не "head"), потому что `av_opt_get_chlayout` пишет во
+/// все 24 байта структуры — если передать укороченный тип, FFmpeg запишет
+/// за границы аллокации. Подтверждено живым прогоном (срез 12,
+/// `D:\Temp\ffmpeg-ffi-poc`): `nb_channels == 2` на `test.mp4` (aac,
+/// stereo), совпадает с `ffprobe`.
+#[repr(C)]
+#[derive(Default)]
+pub(crate) struct AVChannelLayout {
+    pub order: c_int,
+    pub nb_channels: c_int,
+    u_mask_or_map: u64,
+    opaque: *mut c_void,
+}
+
 pub(crate) const AVMEDIA_TYPE_VIDEO: c_int = 0;
+pub(crate) const AVMEDIA_TYPE_AUDIO: c_int = 1;
 /// `AV_PIX_FMT_RGBA` (`libavutil/pixfmt.h`).
 pub(crate) const AV_PIX_FMT_RGBA: c_int = 26;
 pub(crate) const SWS_BILINEAR: c_int = 4;
@@ -193,6 +212,31 @@ unsafe extern "C" {
         frame: *mut AVFrameHead,
     ) -> c_int;
     pub(crate) fn avcodec_flush_buffers(ctx: *mut AVCodecContext);
+
+    /// Generic `AVOption` getter (`libavutil/opt.h`) — читает поле по имени
+    /// опции через `AVClass`-рефлексию, без знания реального смещения поля
+    /// внутри `AVCodecContext`. Имя опции для частоты дискретизации — `"ar"`
+    /// (алиас `sample_rate` в реестре опций не зарегистрирован, подтверждено
+    /// живым прогоном срез 12 — `av_opt_get_int(.., "sample_rate", ..)`
+    /// возвращает `AVERROR_OPTION_NOT_FOUND`, `"ar"` — `0`).
+    pub(crate) fn av_opt_get_int(
+        obj: *mut c_void,
+        name: *const c_char,
+        search_flags: c_int,
+        out_val: *mut i64,
+    ) -> c_int;
+    /// Тот же механизм для `AVChannelLayout` — имя опции `"ch_layout"`.
+    pub(crate) fn av_opt_get_chlayout(
+        obj: *mut c_void,
+        name: *const c_char,
+        search_flags: c_int,
+        layout: *mut AVChannelLayout,
+    ) -> c_int;
+    /// Освобождает heap-аллокацию `AVChannelLayout` для custom-порядка
+    /// каналов (`order == AV_CHANNEL_ORDER_CUSTOM`) — no-op для
+    /// mask-based layout (единственный путь, который срез 12 читает), но
+    /// вызывается безусловно, чтобы не завязываться на это предположение.
+    pub(crate) fn av_channel_layout_uninit(layout: *mut AVChannelLayout);
 
     pub(crate) fn av_packet_alloc() -> *mut AVPacket;
     pub(crate) fn av_packet_free(pkt: *mut *mut AVPacket);
