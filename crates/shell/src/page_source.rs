@@ -25,7 +25,19 @@ pub(crate) enum PageSource {
     /// одноразовым: `reload()` стирает его сразу после того, как передал
     /// источник загрузчику ([`PageSource::forget_nav_body`]), поэтому ни F5,
     /// ни back/forward, ни восстановление сессии не повторяют POST.
-    Url { url: String, body: Option<Box<lumen_network::NavigationBody>> },
+    Url {
+        url: String,
+        body: Option<Box<lumen_network::NavigationBody>>,
+        /// UIR §4.1 steps 1-2: `true` when the document that initiated this
+        /// navigation (link click, `window.open`, `location.*`, form
+        /// submit) declared `upgrade-insecure-requests` — makes
+        /// `load_bytes`/`load_bytes_streaming` send
+        /// `Upgrade-Insecure-Requests: 1` on the request (GAP-CSPENF срез
+        /// 54). `false` for every construction site with no CSP context to
+        /// consult (address bar, history, automation, `iframe` navigation —
+        /// not covered by this slice).
+        upgrade_insecure_requests: bool,
+    },
     /// `about:blank` — пустой документ без сетевого запроса (HTML spec §7.5).
     /// `url_str()` возвращает "about:blank" для адресной строки и истории.
     AboutBlank,
@@ -58,7 +70,20 @@ impl PageSource {
     /// оставляет `body` невыраженным в каждом из десятка call-site-ов, где
     /// тела заведомо нет (адресная строка, история, вкладки, автоматизация).
     pub(crate) fn url(url: impl Into<String>) -> Self {
-        PageSource::Url { url: url.into(), body: None }
+        PageSource::Url { url: url.into(), body: None, upgrade_insecure_requests: false }
+    }
+
+    /// Set the `Upgrade-Insecure-Requests: 1` request flag (GAP-CSPENF срез
+    /// 54) on an already-built `Url` source — no-op on every other variant,
+    /// none of which makes a network request a server could react to. Call
+    /// sites that know the initiating document's CSP gate
+    /// (`csp_enforce::navigation_wants_uir_header`) chain this onto the
+    /// `PageSource` they hand to `navigate_to`/`navigate_replace`.
+    pub(crate) fn with_uir_header(mut self, flag: bool) -> Self {
+        if let PageSource::Url { upgrade_insecure_requests, .. } = &mut self {
+            *upgrade_insecure_requests = flag;
+        }
+        self
     }
 
     /// Тело навигации, если этот источник — отправка формы методом POST.
@@ -199,7 +224,7 @@ impl PageSource {
                     redirected: false,
                 })
             }
-            PageSource::Url { url, body } => {
+            PageSource::Url { url, body, upgrade_insecure_requests } => {
                 use lumen_core::url::Url;
                 use lumen_network::{
                     BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
@@ -222,7 +247,7 @@ impl PageSource {
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
                 let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
-                    client.fetch_page(&lumen_url, body.as_deref())?;
+                    client.fetch_page(&lumen_url, body.as_deref(), *upgrade_insecure_requests)?;
                 // BUG-640: redirect signal — the only one obtainable without
                 // a `lumen-network` change (`fetch_with_redirect`'s hop
                 // countdown is never surfaced as a count).
@@ -303,7 +328,7 @@ impl PageSource {
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
         on_chunk: &mut dyn FnMut(&[u8], &lumen_core::url::Url),
     ) -> Result<RawPage, Box<dyn Error>> {
-        let PageSource::Url { url, body } = self else {
+        let PageSource::Url { url, body, upgrade_insecure_requests } = self else {
             return self.load_bytes(sink, cookie_jar);
         };
         use lumen_core::url::Url;
@@ -325,7 +350,7 @@ impl PageSource {
         }
         let client = crate::config::global().apply_http(builder);
         let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
-            client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref())?;
+            client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref(), *upgrade_insecure_requests)?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.
         let redirected = final_url != lumen_url;
         eprintln!("Получено {} байт (streaming)", bytes.len());

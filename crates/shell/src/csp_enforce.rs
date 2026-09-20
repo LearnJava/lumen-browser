@@ -497,6 +497,18 @@ pub(crate) fn upgrade_navigation_url(
     }
 }
 
+/// `true` if `csp_gate`'s policies declare `upgrade-insecure-requests` — UIR
+/// §4.1 steps 1-2 ("upgrade insecure navigations set"): a navigation request
+/// whose CLIENT (the initiating document, same tuple every `navigate-to`
+/// gate in this module already reads) opted in carries
+/// `Upgrade-Insecure-Requests: 1` on the outgoing request, independent of
+/// whether [`upgrade_navigation_url`] actually rewrote the scheme — the
+/// header is a hint to the server, not a record of a rewrite that happened
+/// (GAP-CSPENF срез 54, `HttpClient::fetch_page`'s new `send_uir_header`).
+pub(crate) fn navigation_wants_uir_header(csp_gate: Option<&(Vec<CspPolicy>, String)>) -> bool {
+    csp_gate.is_some_and(|(policy, _)| policy.iter().any(|p| p.upgrade_insecure_requests))
+}
+
 /// `true` if `img-src` (or `default-src`) forbids fetching `url` — срез 4.
 /// Absence of a policy is not checked here (the caller only calls this when
 /// a policy exists); a `url` that fails to parse is treated as allowed — the

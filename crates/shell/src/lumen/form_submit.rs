@@ -151,7 +151,8 @@ impl Lumen {
                             if self.form_action_navigation_blocked(csp_gate.as_ref(), &resolved) {
                                 return;
                             }
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                            let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
                         }
                         _ => {
                             // HTML LS §form-submission step 23, «submit as
@@ -167,7 +168,8 @@ impl Lumen {
                             if self.form_action_navigation_blocked(csp_gate.as_ref(), &resolved) {
                                 return;
                             }
-                            let mut nav = PageSource::from_arg(Some(&resolved));
+                            let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
+                            let mut nav = PageSource::from_arg(Some(&resolved)).with_uir_header(uir);
                             if let PageSource::Url { body: slot, .. } = &mut nav {
                                 *slot = Some(Box::new(lumen_network::NavigationBody::post(
                                     content_type,

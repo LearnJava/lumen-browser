@@ -91,7 +91,7 @@ fn fetch_page_sends_post_body_and_content_type() {
         "application/x-www-form-urlencoded",
         b"user=admin&pass=secret".to_vec(),
     );
-    let page = client.fetch_page(&url, Some(&body)).expect("post navigation");
+    let page = client.fetch_page(&url, Some(&body), false).expect("post navigation");
     assert_eq!(page.body, b"ok");
 
     let seen = captured.lock().expect("captured");
@@ -125,7 +125,7 @@ fn post_navigation_becomes_get_after_302() {
     let body = NavigationBody::post("application/x-www-form-urlencoded", b"user=admin".to_vec());
     let mut streamed = Vec::new();
     let page = client
-        .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), Some(&body))
+        .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), Some(&body), false)
         .expect("post navigation");
     assert_eq!(page.body, b"home");
     assert_eq!(streamed, b"home");

@@ -909,7 +909,8 @@ impl Lumen {
                             if !has_noopener {
                                 lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
                             }
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                            let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
                             // Fallback install for a popup document with no
                             // scripts at all (never reaches
                             // `run_scripts_with_dom`, so never consumes the
@@ -989,7 +990,8 @@ impl Lumen {
                             // to run).
                             lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
                             self.switch_tab(tab_idx);
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                            let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
                         } else {
                             let has_noopener = rel_attr
                                 .split_ascii_whitespace()
@@ -1012,7 +1014,8 @@ impl Lumen {
                             // lose, same reason opener installation moved
                             // off it in GAP-NAVCTX срез 5.
                             lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
-                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                            let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
                             if !has_noopener {
                                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                                     j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
@@ -1077,7 +1080,8 @@ impl Lumen {
                                     },
                                 });
                             }
-                            let target = PageSource::from_arg(Some(&resolved));
+                            let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
+                            let target = PageSource::from_arg(Some(&resolved)).with_uir_header(uir);
                             self.navigate_to(target);
                         }
                     } else {

@@ -3974,7 +3974,15 @@ impl HttpClient {
     /// неверна: HTTP-кэш на чтение (ответ на POST — не тело этого адреса),
     /// его же на запись и перехватчик (Service Worker получил бы синтетический
     /// ответ, ничего не зная об отправленных полях).
-    pub fn fetch_page(&self, url: &Url, body: Option<&NavigationBody>) -> Result<PageResponse> {
+    /// `send_uir_header` — GAP-CSPENF срез 54: `true` when the document that
+    /// initiated this navigation declared `upgrade-insecure-requests`
+    /// (UIR §4.1 steps 1-2, "upgrade insecure navigations set"), adding
+    /// `Upgrade-Insecure-Requests: 1` to the outgoing request independent of
+    /// the URL's scheme — a hint to the server, not a record of a scheme
+    /// rewrite (that already happened before `url` reached this call, via
+    /// `csp_enforce::upgrade_navigation_url` in the shell).
+    pub fn fetch_page(&self, url: &Url, body: Option<&NavigationBody>, send_uir_header: bool) -> Result<PageResponse> {
+        let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
         let req_body = body.map(|b| RequestBody {
             method: &b.method,
             content_type: &b.content_type,
@@ -4009,12 +4017,13 @@ impl HttpClient {
                 });
             }
             if !snap.conditional_headers.is_empty() {
+                let combined_extra_headers = format!("{uir_header}{}", snap.conditional_headers);
                 let (resp, final_url) = fetch_with_redirect(
                     url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
                     self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-                    self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
+                    self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
                     self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4047,7 +4056,7 @@ impl HttpClient {
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-            self.mixed_content.as_ref(), destination, None, "",
+            self.mixed_content.as_ref(), destination, None, uir_header,
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
@@ -4079,12 +4088,15 @@ impl HttpClient {
     ///
     /// `body` — как у [`HttpClient::fetch_page`]: тело POST-навигации, которое
     /// точно так же выключает кэш и перехватчик.
+    /// `send_uir_header` — see [`HttpClient::fetch_page`].
     pub fn fetch_page_streaming(
         &self,
         url: &Url,
         on_chunk: PageChunkSink<'_>,
         body: Option<&NavigationBody>,
+        send_uir_header: bool,
     ) -> Result<PageResponse> {
+        let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
         let req_body = body.map(|b| RequestBody {
             method: &b.method,
             content_type: &b.content_type,
@@ -4121,12 +4133,13 @@ impl HttpClient {
                 });
             }
             if !snap.conditional_headers.is_empty() {
+                let combined_extra_headers = format!("{uir_header}{}", snap.conditional_headers);
                 let (resp, final_url) = fetch_with_redirect(
                     url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
                     self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-                    self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
+                    self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
                     self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4162,7 +4175,7 @@ impl HttpClient {
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
-            self.mixed_content.as_ref(), destination, None, "",
+            self.mixed_content.as_ref(), destination, None, uir_header,
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
@@ -6768,7 +6781,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world", "streamed chunks must reconstruct the body");
         assert_eq!(body, b"hello world", "returned body must be the full decoded body");
@@ -6786,7 +6799,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world");
         assert_eq!(body, b"hello world");
@@ -6814,7 +6827,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         // sink получает декодированные байты; возвращаемое тело тоже декодировано.
         assert_eq!(streamed, b"Hello, World!");
@@ -6833,7 +6846,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None, false)
             .expect("streaming fetch");
         // Тело 302-редиректа (пустое) НЕ стримится — только финальный 200.
         assert_eq!(streamed, b"done");
@@ -6853,7 +6866,7 @@ mod tests {
         });
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/login/")).unwrap();
-        let page = client.fetch_page(&url, None).expect("fetch");
+        let page = client.fetch_page(&url, None, false).expect("fetch");
         assert_eq!(page.body, b"hi");
         assert_eq!(page.final_url.as_str(), format!("http://127.0.0.1:{port}/auth/login/"));
         server.join().unwrap();
@@ -6892,7 +6905,7 @@ mod tests {
         // до-редиректного адреса.
         let mut chunk_urls: Vec<String> = Vec::new();
         let page = client
-            .fetch_page_streaming(&url, &mut |_, u| chunk_urls.push(u.to_string()), None)
+            .fetch_page_streaming(&url, &mut |_, u| chunk_urls.push(u.to_string()), None, false)
             .expect("streaming fetch");
         let expected = format!("http://127.0.0.1:{port}/b/c/");
         assert_eq!(page.final_url.as_str(), expected);
@@ -6914,7 +6927,7 @@ mod tests {
         });
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/login/")).unwrap();
-        let page = client.fetch_page(&url, None).expect("fetch");
+        let page = client.fetch_page(&url, None, false).expect("fetch");
         assert_eq!(page.final_url.as_str(), url.as_str());
         server.join().unwrap();
     }
@@ -11159,7 +11172,7 @@ mod proxy_tests {
     fn fetch_page_data_url_returns_body_without_network() {
         let client = HttpClient::new();
         let url = Url::parse("data:text/html,%3Ch1%3Ehi%3C%2Fh1%3E").unwrap();
-        let page = client.fetch_page(&url, None).unwrap();
+        let page = client.fetch_page(&url, None, false).unwrap();
         assert_eq!(page.body, b"<h1>hi</h1>");
     }
 
