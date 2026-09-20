@@ -298,6 +298,11 @@ impl Lumen {
             self.layout_box = Some(prev_lb);
             return false;
         };
+        // BUG-935 S12: time this UI-thread path the same way `relayout()` times
+        // the full sync path (`engine_t0` above) — before this section it ran
+        // silently, and a census comparing it against `submit_relayout_job`'s
+        // off-thread cost (S11) had nothing on this side to read.
+        let incr_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         self.engine_applied_generation = self.engine_job_generation;
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
@@ -369,6 +374,7 @@ impl Lumen {
             );
             (dl, lb, None)
         };
+        let used_restyle = fresh_cascade_styles.is_some();
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
@@ -379,6 +385,15 @@ impl Lumen {
         if let Some(styles) = fresh_cascade_styles {
             self.page_prev_cascade_styles = Some(styles);
             self.page_prev_interactive = new_interactive;
+        }
+        if let Some(t0) = incr_t0 {
+            let incr_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            eprintln!(
+                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={}",
+                self.display_list.len(),
+                self.prev_styles.len(),
+                used_restyle as u8,
+            );
         }
         true
     }
@@ -404,6 +419,17 @@ impl Lumen {
     /// path below is never reached (BUG-935). In the single-thread fallback path,
     /// tries the incremental layout ([`Self::try_relayout_raf_incremental`])
     /// before the full [`Self::relayout`].
+    ///
+    /// BUG-935 S12 tried swapping this order (incremental first, unconditionally)
+    /// and measured it live on `lenta.ru` — see the bug file's S12 section. It is
+    /// a **confirmed regression**, not a fix: `try_relayout_raf_incremental`'s
+    /// cascade-skip fast path (`page_prev_cascade_styles`) is never populated by
+    /// its own non-restyle fallback branch (`relayout_page_incremental` returns no
+    /// counters to seed it), so every tick took the full-cascade-plus-graft branch
+    /// — synchronously on the UI thread instead of off-thread — costing
+    /// 650–850ms per tick and one 7.3s+7.4s back-to-back stall, strictly worse
+    /// than the off-thread baseline this order avoids. Do not re-attempt this
+    /// swap without first fixing the cache-seeding gap.
     pub(crate) fn relayout_raf_dirty(&mut self) {
         if !self.submit_relayout_job() && !self.try_relayout_raf_incremental() {
             self.relayout();
@@ -617,6 +643,9 @@ impl Lumen {
     ///
     /// ADR-016 M4: in the single-thread fallback path, tries the incremental layout
     /// ([`Self::try_relayout_raf_incremental`]) before the full [`Self::relayout`].
+    /// BUG-935 S12 measured swapping this order and reverted it — see
+    /// [`Self::relayout_raf_dirty`]'s doc comment for the confirmed-regression
+    /// finding, which applies identically here.
     pub(crate) fn relayout_raf_dirty_readback(&mut self) {
         if !self.readback_relayout_job() && !self.try_relayout_raf_incremental() {
             self.relayout();
