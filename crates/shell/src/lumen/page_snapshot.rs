@@ -18,6 +18,17 @@ impl Lumen {
         // Список уезжает в снапшот, активный слот остаётся пустым — версия
         // обязана смениться так же, как при обычной замене (BUG-405 срез 39).
         self.bump_display_list_epoch();
+        // GAP-MEDIADECODE срез 14: PCM audio sinks are not carried into the
+        // snapshot — a backgrounded tab should not keep an audio device open
+        // (mirrors real browsers muting/suspending hidden-tab media), and
+        // `video_ffmpeg_sessions`/`video_ffmpeg_last_ms` already restore the
+        // visual side wholesale on `restore_page_snapshot` without needing
+        // the audio timing to follow. Dropping here means it is always empty
+        // by the time any `restore_page_snapshot` runs (the tab being
+        // restored last left through this same method).
+        #[cfg(feature = "ffmpeg-video")]
+        self.video_ffmpeg_audio_sinks.clear();
+        self.video_ffmpeg_last_audio_ms.clear();
         let snap = PageSnapshot {
             display_list: std::mem::take(&mut self.display_list),
             title: self.title.take(),

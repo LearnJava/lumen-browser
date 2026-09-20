@@ -392,6 +392,9 @@ pub(crate) fn run_window_mode(
         video_gif_frames: HashMap::new(),
         video_ffmpeg_sessions: HashMap::new(),
         video_ffmpeg_last_ms: HashMap::new(),
+        #[cfg(feature = "ffmpeg-video")]
+        video_ffmpeg_audio_sinks: HashMap::new(),
+        video_ffmpeg_last_audio_ms: HashMap::new(),
         frames: Vec::new(),
         frame_env: None,
         frame_nav_requests: Vec::new(),

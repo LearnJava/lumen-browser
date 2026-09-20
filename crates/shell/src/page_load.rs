@@ -518,6 +518,11 @@ impl Lumen {
             );
             self.video_ffmpeg_sessions.insert(nid, session);
             self.video_ffmpeg_last_ms.remove(&nid);
+            // GAP-MEDIADECODE срез 14: a reload of the same node (e.g. a new
+            // `src`) must not keep feeding PCM decoded against the OLD
+            // session into a sink still open from the previous one.
+            self.video_ffmpeg_audio_sinks.remove(&nid);
+            self.video_ffmpeg_last_audio_ms.remove(&nid);
             self.request_redraw();
         }
 
@@ -535,16 +540,23 @@ impl Lumen {
         // whenever the position actually moved.
         let playback = self.video_gif_store.playback.lock().unwrap();
         let mut has_playing = false;
-        let mut due: Vec<(u32, u64)> = Vec::new();
+        let mut due: Vec<(u32, u64, bool)> = Vec::new();
         for (nid, state) in playback.iter() {
             if !self.video_ffmpeg_sessions.contains_key(nid) {
                 continue;
+            }
+            // GAP-MEDIADECODE срез 14: mirror pause onto any already-open PCM
+            // sink immediately, not just when this node happens to be `due`
+            // below — otherwise pausing mid-playback would let whatever PCM
+            // is still queued keep audibly playing until it drains.
+            if let Some(sink) = self.video_ffmpeg_audio_sinks.get(nid) {
+                sink.set_paused(state.paused);
             }
             let cur_ms = state.current_ms(elapsed_ms);
             let last = self.video_ffmpeg_last_ms.get(nid).copied();
             if state.paused {
                 if last != Some(cur_ms) {
-                    due.push((*nid, cur_ms));
+                    due.push((*nid, cur_ms, false));
                 }
                 continue;
             }
@@ -552,16 +564,53 @@ impl Lumen {
             // Cap re-decode rate at roughly 30fps — `frame_at` reseeks and
             // decodes on every call, unlike the GIF path's precomputed table.
             if last.is_none_or(|l| cur_ms.saturating_sub(l) >= 33) {
-                due.push((*nid, cur_ms));
+                due.push((*nid, cur_ms, true));
             }
         }
         drop(playback);
 
         let has_due = !due.is_empty();
-        for (nid, cur_ms) in due {
+        for (nid, cur_ms, is_playing) in due {
             let Some(session) = self.video_ffmpeg_sessions.get_mut(&nid) else { continue };
             let secs = cur_ms as f64 / 1000.0;
-            match session.frame_at(secs) {
+            let frame_result = session.frame_at(secs);
+            // GAP-MEDIADECODE срез 14: decode the audio track's next PCM
+            // chunk right AFTER `frame_at`, not before. `frame_at` always
+            // re-seeks the demuxer to `secs` and decodes forward
+            // (`crates/engine/media-ffmpeg/src/decoder.rs`); `decode_audio_pcm`
+            // has no seek of its own and just continues reading from wherever
+            // that left the shared read cursor. Calling it right after keeps
+            // the audio chunk anchored close to the position just shown,
+            // instead of drifting from an independently-advancing cursor.
+            // Only for playing nodes — a paused seek redraws the frame but
+            // must not make a sound.
+            let pcm_chunk = is_playing
+                .then(|| session.audio_track())
+                .flatten()
+                .and_then(|track| {
+                    let last_audio_ms = self
+                        .video_ffmpeg_last_audio_ms
+                        .get(&nid)
+                        .copied()
+                        .unwrap_or_else(|| cur_ms.saturating_sub(33));
+                    // Cap a single chunk's span so a long stall (window
+                    // minimized, a slow tick) cannot force one huge decode.
+                    let ms_elapsed = cur_ms.saturating_sub(last_audio_ms).clamp(1, 500);
+                    let samples_per_channel =
+                        ((ms_elapsed as f64 / 1000.0) * f64::from(track.sample_rate)).round() as usize;
+                    if samples_per_channel == 0 {
+                        return None;
+                    }
+                    match session.decode_audio_pcm(samples_per_channel) {
+                        Ok(samples) => Some((track, samples)),
+                        Err(e) => {
+                            eprintln!("video FFmpeg аудио: ошибка декодирования nid={nid}: {e}");
+                            None
+                        }
+                    }
+                });
+
+            match frame_result {
                 Ok(rgba) => {
                     let (width, height) = session.dimensions();
                     let key = format!("video:{nid}");
@@ -582,6 +631,32 @@ impl Lumen {
                     self.video_ffmpeg_last_ms.insert(nid, cur_ms);
                 }
                 Err(e) => eprintln!("video FFmpeg: ошибка кадра nid={nid}: {e}"),
+            }
+
+            if let Some((track, samples)) = pcm_chunk {
+                // A missing/unavailable audio device is retried every due
+                // tick (no "already failed" marker) — same non-dedup stance
+                // the video path already takes for `frame_at` errors just
+                // above, and simpler than tracking a second failure set for
+                // a rare, non-fatal condition.
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    self.video_ffmpeg_audio_sinks.entry(nid)
+                {
+                    match crate::platform::video_audio_sink::VideoPcmAudioSink::new() {
+                        Some(sink) => {
+                            eprintln!(
+                                "video FFmpeg аудио: открыт вывод nid={nid} ({} Гц, {} кан.)",
+                                track.sample_rate, track.channels
+                            );
+                            e.insert(sink);
+                        }
+                        None => eprintln!("video FFmpeg аудио: нет аудио-устройства nid={nid}"),
+                    }
+                }
+                if let Some(sink) = self.video_ffmpeg_audio_sinks.get(&nid) {
+                    sink.push_pcm(samples, track.sample_rate, track.channels);
+                }
+                self.video_ffmpeg_last_audio_ms.insert(nid, cur_ms);
             }
         }
 
@@ -1762,6 +1837,12 @@ impl Lumen {
         self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().clear();
         self.video_ffmpeg_sessions.clear();
         self.video_ffmpeg_last_ms.clear();
+        // GAP-MEDIADECODE срез 14: drop any open PCM audio sinks/timing from
+        // the previous page's videos — a session-less sink playing on into
+        // the new page would be audible with nothing on screen to match it.
+        #[cfg(feature = "ffmpeg-video")]
+        self.video_ffmpeg_audio_sinks.clear();
+        self.video_ffmpeg_last_audio_ms.clear();
         // GAP-MEDIADECODE срез 9: previous page's failure records must not leak
         // onto a same-index node in the new page.
         self.video_gif_store.load_failures.lock().unwrap().clear();

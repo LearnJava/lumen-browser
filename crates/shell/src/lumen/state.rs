@@ -875,6 +875,22 @@ pub(crate) struct Lumen {
     /// advanced past the previous one (`frame_at` reseeks/decodes on every
     /// call, unlike the GIF path's pre-decoded frame table).
     pub(crate) video_ffmpeg_last_ms: HashMap<u32, u64>,
+    /// GAP-MEDIADECODE срез 14: streaming PCM output sinks for FFmpeg-backed
+    /// `<video>` nodes that have an audio track (keyed by nid). Created
+    /// lazily on the first tick a playing node needs one — most nodes never
+    /// need an entry (muted video, silent track, or `ffmpeg-video` disabled).
+    /// Not carried across a tab switch: dropped wholesale in
+    /// `take_page_snapshot` (closes the output device) and recreated lazily
+    /// if the tab becomes active and playing again, same reasoning as not
+    /// keeping a live audio device open for a backgrounded tab.
+    #[cfg(feature = "ffmpeg-video")]
+    pub(crate) video_ffmpeg_audio_sinks: HashMap<u32, crate::platform::video_audio_sink::VideoPcmAudioSink>,
+    /// Playback position (ms) as of the last PCM chunk decoded for a node's
+    /// audio track — the audio-side counterpart of `video_ffmpeg_last_ms`,
+    /// tracked separately because the two are throttled independently (video
+    /// re-decode caps at ~30fps; audio must not skip a tick's worth of
+    /// samples or it audibly stutters).
+    pub(crate) video_ffmpeg_last_audio_ms: HashMap<u32, u64>,
     /// BUG-480 срез 1: живые sub-документы `<iframe>` текущей страницы.
     /// Держат DOM+JS детей; заменяется целиком в [`Lumen::apply_loaded_page`].
     /// В PageSnapshot не попадает — после bfcache-восстановления фреймы без
