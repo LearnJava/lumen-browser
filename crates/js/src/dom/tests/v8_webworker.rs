@@ -168,6 +168,113 @@ fn worker_add_event_listener_fires_on_pump() {
     assert_eq!(result, lumen_core::JsValue::Number(14.0));
 }
 
+// ── BUG-868 GAP-WORKERSCOPE срез 2: MessagePort transfer across the
+// page↔worker boundary ────────────────────────────────────────────────────
+
+#[test]
+fn worker_message_port_transfer_page_to_worker_round_trip() {
+    use std::time::Duration;
+    let rt = v8_runtime_with_dom(make_doc());
+    // The worker receives one transferred port on its first message,
+    // wires up a reply on it, and posts back once its own onmessage sees
+    // `e.ports.length === 1` — the exact idiom BUG-868 originally reported
+    // as staying at `0` forever.
+    let worker_src = "onmessage = function(e) {\
+        if (e.data === 'init' && e.ports.length === 1) {\
+            var p = e.ports[0];\
+            p.onmessage = function(e2) { p.postMessage('pong:' + e2.data); };\
+            postMessage('got-port');\
+        }\
+    };";
+    rt.eval(&format!(
+        "var workerUrl = URL.createObjectURL(new Blob([\"{worker_src}\"], {{type: 'text/javascript'}})); \
+         var w = new Worker(workerUrl); \
+         var log = []; \
+         w.onmessage = function(e) {{ log.push(e.data); }}; \
+         var ch = new MessageChannel(); \
+         ch.port2.onmessage = function(e) {{ log.push(e.data); }}; \
+         w.postMessage('init', [ch.port1]);"
+    ))
+    .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        rt.pump_workers();
+        if rt.eval("log.length").unwrap() == lumen_core::JsValue::Number(1.0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rt.eval("log[0]").unwrap(), lumen_core::JsValue::String("got-port".into()));
+
+    // The page's surviving `ch.port2` now talks to the worker's reconstructed
+    // proxy for the transferred `ch.port1` — round-trip through the worker.
+    rt.eval("ch.port2.postMessage('ping');").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        rt.pump_workers();
+        if rt.eval("log.length").unwrap() == lumen_core::JsValue::Number(2.0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        rt.eval("log[1]").unwrap(),
+        lumen_core::JsValue::String("pong:ping".into())
+    );
+}
+
+#[test]
+fn worker_message_port_transfer_worker_to_page_round_trip() {
+    use std::time::Duration;
+    let rt = v8_runtime_with_dom(make_doc());
+    // The worker creates its OWN channel and transfers one port out through
+    // its own `postMessage` — the other reported half of BUG-868
+    // (`self.postMessage('made-port', [p])` leaving `e.ports === undefined`
+    // on the page).
+    let worker_src = "var ch = new MessageChannel(); \
+        ch.port1.onmessage = function(e) { ch.port1.postMessage('worker-pong:' + e.data); }; \
+        postMessage('made-port', [ch.port2]);";
+    rt.eval(&format!(
+        "var workerUrl = URL.createObjectURL(new Blob([\"{worker_src}\"], {{type: 'text/javascript'}})); \
+         var w = new Worker(workerUrl); \
+         var pagePort = null; \
+         var log = []; \
+         w.onmessage = function(e) {{ \
+             if (e.data === 'made-port' && e.ports.length === 1) {{ \
+                 pagePort = e.ports[0]; \
+                 pagePort.onmessage = function(e2) {{ log.push(e2.data); }}; \
+                 log.push('made-port'); \
+             }} \
+         }};"
+    ))
+    .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        rt.pump_workers();
+        if rt.eval("log.length").unwrap() == lumen_core::JsValue::Number(1.0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rt.eval("log[0]").unwrap(), lumen_core::JsValue::String("made-port".into()));
+
+    rt.eval("pagePort.postMessage('hi');").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        rt.pump_workers();
+        if rt.eval("log.length").unwrap() == lumen_core::JsValue::Number(2.0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        rt.eval("log[1]").unwrap(),
+        lumen_core::JsValue::String("worker-pong:hi".into())
+    );
+}
+
 // ── BUG-591: worker parent-side reporting ────────────────────────────────
 
 #[test]

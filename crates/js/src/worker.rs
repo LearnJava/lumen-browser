@@ -38,6 +38,11 @@ use lumen_core::ext::JsRuntime as _;
 pub enum WorkerInMsg {
     /// JSON-serialized data from `worker.postMessage(data)`.
     Post(String),
+    /// JSON-serialized data addressed to a specific transferred `MessagePort`
+    /// (BUG-868 GAP-WORKERSCOPE срез 2) rather than the worker's own
+    /// `onmessage` — carries the port id assigned by
+    /// `_lumen_port_prepare_transfer` at transfer time and the cloned payload.
+    PortPost(u32, String),
     /// Terminate the worker event loop cleanly.
     Terminate,
 }
@@ -72,6 +77,14 @@ pub type WorkerMessageQueue = Arc<Mutex<Vec<(u32, String)>>>;
 /// Worker threads read this store to implement `importScripts('blob:lumen/…')`.
 pub type WorkerBlobStore = Arc<Mutex<HashMap<String, String>>>;
 
+/// Outbound port-message queue: messages posted by a `MessagePort` living
+/// inside a worker thread, addressed to its transferred partner on the page
+/// (BUG-868 GAP-WORKERSCOPE срез 2) — same `(id, json)` shape as
+/// [`WorkerMessageQueue`], but `id` is a port id from
+/// `_lumen_port_prepare_transfer`, not a worker id. Drained by
+/// `V8JsRuntime::pump_workers` alongside `worker_messages`.
+pub type WorkerPortMessageQueue = Arc<Mutex<Vec<(u32, String)>>>;
+
 /// Outbound error-report queue: uncaught exceptions from an already-started
 /// worker (top-level script failure, or an exception from a message/timer
 /// callback), parallel to [`WorkerMessageQueue`] (BUG-591 worker parent-side
@@ -102,6 +115,18 @@ pub(crate) type WorkerCloseFlag = Arc<AtomicBool>;
 pub fn post_to_worker(registry: &WorkerRegistry, id: u32, json: String) {
     if let Some(h) = registry.lock().unwrap().get(&id) {
         let _ = h.tx.send(WorkerInMsg::Post(json));
+    }
+}
+
+/// Send a JSON-serialized message to a `MessagePort` transferred into a live
+/// worker thread (BUG-868 GAP-WORKERSCOPE срез 2).
+///
+/// No-op if `worker_id` is not registered — same dead-worker contract as
+/// [`post_to_worker`].
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn post_to_worker_port(registry: &WorkerRegistry, worker_id: u32, port_id: u32, json: String) {
+    if let Some(h) = registry.lock().unwrap().get(&worker_id) {
+        let _ = h.tx.send(WorkerInMsg::PortPost(port_id, json));
     }
 }
 
@@ -372,13 +397,45 @@ pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> 
     rt.eval(&crate::dom::worker_exposed_shim())?;
     rt.eval(WORKER_ERROR_EVENT_SHIM)?;
     rt.eval(WORKER_MESSAGE_EVENT_SHIM)?;
+    // BUG-868 GAP-WORKERSCOPE срез 2: a worker scope has no `structuredClone`
+    // at all — the page's is a full HTML LS §2.7 implementation
+    // (`web_api_shim_tail_b.js`) that depends on page-only machinery
+    // (`window`, `DOMException`, `__lumen_platform_cloners`), so it is not
+    // shared here. `MessagePort.postMessage` (evaluated right below) calls
+    // `structuredClone` unconditionally, same as the page scope, so without
+    // this every worker-side send — local or transferred — threw
+    // `ReferenceError` before reaching any transfer/queue logic at all. This
+    // covers the JSON-safe value space this worker's own wire format already
+    // assumes (`postMessage`/`_lumen_worker_post_reply` serialize via
+    // `JSON.stringify`), not the page's full clone-spec surface (no Map/Set/
+    // typed arrays/transfer list) — good enough for message payloads, and a
+    // narrower miss than the total absence it replaces.
+    rt.eval(
+        "if (typeof globalThis.structuredClone !== 'function') {\
+           globalThis.structuredClone = function(val) {\
+             if (val === undefined || val === null) return val;\
+             var t = typeof val;\
+             if (t === 'function' || t === 'symbol') {\
+               throw new TypeError('structuredClone: value could not be cloned');\
+             }\
+             if (t !== 'object') return val;\
+             if (val instanceof Date) return new Date(val.getTime());\
+             if (Array.isArray(val)) return val.map(function(v) { return structuredClone(v); });\
+             var out = {};\
+             for (var k in val) {\
+               if (Object.prototype.hasOwnProperty.call(val, k)) out[k] = structuredClone(val[k]);\
+             }\
+             return out;\
+           };\
+         }",
+    )?;
     // GAP-WORKERSCOPE: `MessageChannel`/`MessagePort` (BUG-872) — the same
     // self-contained shim the page scope uses (it depends only on
     // `setTimeout`, resolved dynamically at call time, so evaluating it here
-    // ahead of `WORKER_TIMERS_SHIM`/`sw_globals_shim` is safe). A worker-scope
-    // `MessagePort` from `new MessageChannel()` stays local to that scope —
-    // it does not cross the agent boundary into a transferred port on the
-    // other side of `postMessage` (BUG-868, still open).
+    // ahead of `WORKER_TIMERS_SHIM`/`sw_globals_shim` is safe). BUG-868
+    // GAP-WORKERSCOPE срез 2 wired the transfer path itself — see
+    // `_lumen_port_prepare_transfer`/`_lumen_port_post_to_worker`/
+    // `_lumen_port_post_reply` (message_channel_shim.js, worker.rs).
     rt.eval(crate::dom::MESSAGE_CHANNEL_SHIM)?;
     Ok(())
 }
@@ -600,9 +657,21 @@ fn worker_global_shim(worker_id: u32) -> String {
   // can only reach a global.
   globalThis._lumen_report_worker_exception = _lumen_report_worker_exception;
 
-  // postMessage(data) — send data back to the main thread.
-  globalThis.postMessage = function(data) {{
-    _lumen_worker_post_reply(JSON.stringify(data));
+  // postMessage(data[, transfer]) — send data back to the main thread.
+  // BUG-868 GAP-WORKERSCOPE срез 2: when transfer contains MessagePort
+  // objects, mirrors `Worker.prototype.postMessage`'s page-side envelope —
+  // a worker has exactly one parent, so `_lumen_port_prepare_transfer` binds
+  // with `null` (no destination worker id needed for the reply direction).
+  globalThis.postMessage = function(data, transfer) {{
+    var portIds = (typeof _lumen_port_prepare_transfer === 'function')
+      ? _lumen_port_prepare_transfer(transfer, null) : [];
+    var toSend = (portIds.length && typeof _lumen_port_walk_serialize === 'function')
+      ? _lumen_port_walk_serialize(data) : data;
+    var payload = JSON.stringify(toSend);
+    if (portIds.length) {{
+      payload = JSON.stringify({{ __lumen_msg__: true, data: JSON.parse(payload), ports: portIds }});
+    }}
+    _lumen_worker_post_reply(payload);
   }};
 
   Object.defineProperty(globalThis, 'onmessage', {{
@@ -652,20 +721,47 @@ fn worker_global_shim(worker_id: u32) -> String {
   }}
 
   // Called by the worker message loop for each incoming postMessage.
+  // BUG-868 GAP-WORKERSCOPE срез 2: a message carrying transferred
+  // `MessagePort`s arrives wrapped in `{{__lumen_msg__:true, data, ports}}` —
+  // see `Worker.prototype.postMessage` (worker.rs, page side). `ports`
+  // reifies to `ev.ports` in transfer order; a port reference embedded
+  // inside `data` itself resolves to the same objects.
   globalThis._lumen_worker_dispatch_message = function(data) {{
+    var payload = data, ports = [];
+    if (data && typeof data === 'object' && data.__lumen_msg__ === true) {{
+      payload = data.data;
+      if (typeof _lumen_port_reify_list === 'function') ports = _lumen_port_reify_list(data.ports, null);
+      if (typeof _lumen_port_walk_deserialize === 'function') payload = _lumen_port_walk_deserialize(payload, null);
+    }}
     // Reconstruct any OffscreenCanvas objects serialized by the main thread.
     var resolved = (typeof _lumen_offscreen_canvas_from_image_data !== 'undefined')
-      ? _deserializeTransfers(data)
-      : data;
+      ? _deserializeTransfers(payload)
+      : payload;
     // Lumen's MessageEvent constructor takes (data, init) — see dom.rs shim.
     var ev;
     try {{ ev = new MessageEvent(resolved, {{ bubbles: false, cancelable: false }}); }}
     catch (e) {{ ev = {{ type: 'message', data: resolved, bubbles: false, cancelable: false }}; }}
     ev.target = globalThis;
+    ev.ports = ports;
     if (_onmessage) {{ try {{ _onmessage(ev); }} catch(e) {{ _lumen_report_worker_exception(e); }} }}
     for (var i = 0; i < _msgListeners.length; i++) {{
       try {{ _msgListeners[i](ev); }} catch(e) {{ _lumen_report_worker_exception(e); }}
     }}
+  }};
+
+  // Called by the worker's own message loop (`run_worker_thread_v8`) for a
+  // message addressed to a `MessagePort` transferred into this worker
+  // (BUG-868 GAP-WORKERSCOPE срез 2), not to the worker's own `onmessage` —
+  // `json` is the raw JSON text of the cloned payload.
+  globalThis._lumen_worker_deliver_port_message = function(portId, json) {{
+    if (typeof _lumenPortRegistry === 'undefined') return;
+    var p = _lumenPortRegistry[portId];
+    if (!p) return;
+    var data;
+    try {{ data = JSON.parse(json); }} catch(e) {{ data = null; }}
+    if (typeof _lumen_port_walk_deserialize === 'function') data = _lumen_port_walk_deserialize(data, null);
+    p._deliverOrQueue({{ type: 'message', data: data, target: p,
+                        currentTarget: p, bubbles: false, cancelable: false }});
   }};
 
   // Minimal console (no DOM — write to stderr via native binding).
@@ -1404,11 +1500,27 @@ const WORKER_SHIM: &str = r#"(function() {
   // postMessage(data[, transfer]) — send structured data to the worker thread.
   // When transfer contains OffscreenCanvas objects (identified by __canvas_id__),
   // their pixel buffers are serialized into the payload so the worker can
-  // reconstruct them as OffscreenCanvas instances.
+  // reconstruct them as OffscreenCanvas instances. BUG-868 GAP-WORKERSCOPE
+  // срез 2: when transfer contains MessagePort objects, `_lumen_port_prepare_transfer`
+  // (message_channel_shim.js) binds each port's local partner to this worker
+  // and assigns it a bridge id; the message goes out wrapped in an envelope
+  // carrying those ids so the worker side can rebuild `e.ports`.
   // No-op when the worker never started (`_id === null`, BUG-364 script-fetch failure).
   Worker.prototype.postMessage = function(data, transfer) {
     if (this._id === null) return;
-    _lumen_worker_post(this._id, _lumenSerializeWithTransfers(data, transfer));
+    var portIds = (typeof _lumen_port_prepare_transfer === 'function')
+      ? _lumen_port_prepare_transfer(transfer, this._id) : [];
+    // Replace embedded MessagePort references with sentinels BEFORE the
+    // canvas-aware walk below — once `_lumenSerializeWithTransfers` has
+    // JSON.stringify'd the tree, a port's own fields (`_other`, `_queue`, …)
+    // would already be baked into garbage output instead of a sentinel.
+    var toSend = (portIds.length && typeof _lumen_port_walk_serialize === 'function')
+      ? _lumen_port_walk_serialize(data) : data;
+    var payload = _lumenSerializeWithTransfers(toSend, transfer);
+    if (portIds.length) {
+      payload = JSON.stringify({ __lumen_msg__: true, data: JSON.parse(payload), ports: portIds });
+    }
+    _lumen_worker_post(this._id, payload);
   };
 
   // terminate() — immediately stop the worker; no more messages delivered.
@@ -1455,13 +1567,25 @@ const WORKER_SHIM: &str = r#"(function() {
 
   // Internal: deliver a message from the worker thread to this Worker instance.
   Worker.prototype._deliver = function(json) {
-    var data;
-    try { data = JSON.parse(json); } catch(e) { data = json; }
+    var raw;
+    try { raw = JSON.parse(json); } catch(e) { raw = json; }
+    // BUG-868 GAP-WORKERSCOPE срез 2: a message carrying transferred
+    // `MessagePort`s arrives wrapped in `{__lumen_msg__:true, data, ports}` —
+    // see `Worker.prototype.postMessage`. `ports` reifies to `ev.ports` in
+    // transfer order; any port reference embedded inside `data` itself is
+    // resolved to the SAME objects via `_lumen_port_walk_deserialize`.
+    var data = raw, ports = [];
+    if (raw && typeof raw === 'object' && raw.__lumen_msg__ === true) {
+      data = raw.data;
+      if (typeof _lumen_port_reify_list === 'function') ports = _lumen_port_reify_list(raw.ports, this._id);
+      if (typeof _lumen_port_walk_deserialize === 'function') data = _lumen_port_walk_deserialize(data, this._id);
+    }
     // Lumen's MessageEvent constructor takes (data, init) — see dom.rs shim.
     var ev;
     try { ev = new MessageEvent(data, { bubbles: false, cancelable: false }); }
     catch (e) { ev = { type: 'message', data: data, bubbles: false, cancelable: false }; }
     ev.target = this;
+    ev.ports = ports;
     if (this._onmessage) { try { this._onmessage(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     for (var i = 0; i < this._listeners.length; i++) {
       try { this._listeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
@@ -1551,6 +1675,26 @@ const WORKER_SHIM: &str = r#"(function() {
   };
 
   // Called by V8JsRuntime::pump_workers() with an array of
+  // { id: u32, json: String } objects representing messages posted by a
+  // `MessagePort` living inside a worker thread to its transferred partner
+  // on this page (BUG-868 GAP-WORKERSCOPE срез 2) — `id` here is a port id
+  // from `_lumen_port_prepare_transfer`, not a worker id, so it is routed
+  // through `_lumenPortRegistry` rather than `_workerRegistry`.
+  globalThis._lumen_deliver_port_messages = function(msgs) {
+    if (typeof _lumenPortRegistry === 'undefined') return;
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i];
+      var p = _lumenPortRegistry[m.id];
+      if (!p) continue;
+      var data;
+      try { data = JSON.parse(m.json); } catch(e) { data = m.json; }
+      if (typeof _lumen_port_walk_deserialize === 'function') data = _lumen_port_walk_deserialize(data, null);
+      p._deliverOrQueue({ type: 'message', data: data, target: p,
+                          currentTarget: p, bubbles: false, cancelable: false });
+    }
+  };
+
+  // Called by V8JsRuntime::pump_workers() with an array of
   // { id: u32, json: {message, filename, lineno, colno} } objects representing
   // uncaught-exception reports from worker threads (BUG-591).
   globalThis._lumen_deliver_worker_errors = function(errs) {
@@ -1582,6 +1726,7 @@ const WORKER_SHIM: &str = r#"(function() {
 /// `_object_url_store` are available for blob-URL resolution in the constructor.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // BUG-868 GAP-WORKERSCOPE срез 2 added port_queue
 pub(crate) fn install_worker_bindings_v8(
     rt: &V8JsRuntime,
     registry: &WorkerRegistry,
@@ -1590,6 +1735,7 @@ pub(crate) fn install_worker_bindings_v8(
     next_id: &Arc<Mutex<u32>>,
     blob_store: &WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    port_queue: &WorkerPortMessageQueue,
 ) -> JsResult<()> {
     // GAP-CSPENF срез 13: single-slot side channel carrying
     // `(blocked_uri, original_policy)` from `_lumen_worker_fetch_script`'s
@@ -1603,6 +1749,12 @@ pub(crate) fn install_worker_bindings_v8(
     // `_lumen_worker_fetch_script_url` right after — same one-slot shape and
     // justification as `last_csp_block` above.
     let last_fetch_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    // BUG-868 GAP-WORKERSCOPE срез 2: global counter for `MessagePort`
+    // transfer ids, shared by the page and every worker it spawns (cloned
+    // into `spawn_worker_v8` below) — a port id only needs to be unique
+    // within one page's own worker set, since each side's `_lumenPortRegistry`
+    // is a separate `globalThis` map with no cross-page namespace to collide in.
+    let port_next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     // _lumen_create_worker(script: String, script_url: String, is_module: bool) → u32
     //
     // `script_url` is the worker's own resolved script URL (the opaque URL
@@ -1624,12 +1776,50 @@ pub(crate) fn install_worker_bindings_v8(
         let nid = Arc::clone(next_id);
         let bs = Arc::clone(blob_store);
         let fp = fetch_provider.clone();
+        let pq = Arc::clone(port_queue);
+        let pnid = Arc::clone(&port_next_id);
         rt.register_native(
             "_lumen_create_worker",
             into_v8_fn3(move |script: String, script_url: String, is_module: bool| -> u32 {
                 spawn_worker_v8(
                     &reg, &q, &errs, &nid, &bs, script, script_url, is_module, fp.clone(),
+                    &pq, &pnid,
                 )
+            }),
+        )?;
+    }
+
+    // _lumen_next_port_id() → u32 (BUG-868 GAP-WORKERSCOPE срез 2)
+    //
+    // Allocates the next `MessagePort` transfer id — called from
+    // `message_channel_shim.js`'s `_lumen_port_prepare_transfer` on whichever
+    // side (page or worker) initiates a transfer, so the same monotonic
+    // counter must be visible from both; see `port_next_id`'s doc comment.
+    {
+        let pnid = Arc::clone(&port_next_id);
+        rt.register_native(
+            "_lumen_next_port_id",
+            into_v8_fn0(move || -> u32 {
+                let mut n = pnid.lock().unwrap();
+                let id = *n;
+                *n += 1;
+                id
+            }),
+        )?;
+    }
+
+    // _lumen_port_post_to_worker(worker_id: u32, port_id: u32, json: String)
+    //
+    // Page → worker delivery for a `MessagePort` transferred into that worker
+    // (BUG-868 GAP-WORKERSCOPE срез 2) — the port-addressed sibling of
+    // `_lumen_worker_post`, routed through the same `WorkerInMsg` channel via
+    // the `PortPost` variant instead of `Post`.
+    {
+        let reg = Arc::clone(registry);
+        rt.register_native(
+            "_lumen_port_post_to_worker",
+            into_v8_fn3(move |worker_id: u32, port_id: u32, json: String| {
+                post_to_worker_port(&reg, worker_id, port_id, json);
             }),
         )?;
     }
@@ -1859,6 +2049,8 @@ fn spawn_worker_v8(
     script_url: String,
     is_module: bool,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    port_queue: &WorkerPortMessageQueue,
+    port_next_id: &Arc<Mutex<u32>>,
 ) -> u32 {
     let id = {
         let mut n = next_id.lock().unwrap();
@@ -1871,12 +2063,15 @@ fn spawn_worker_v8(
     let reply = Arc::clone(queue);
     let err_reply = Arc::clone(errors);
     let store = Arc::clone(blob_store);
+    let port_reply = Arc::clone(port_queue);
+    let port_nid = Arc::clone(port_next_id);
 
     let handle = thread::Builder::new()
         .name(format!("lumen-worker-v8-{id}"))
         .spawn(move || {
             run_worker_thread_v8(
                 id, script, script_url, is_module, rx, reply, err_reply, store, fetch_provider,
+                port_reply, port_nid,
             )
         })
         .expect("failed to spawn Web Worker thread (v8)");
@@ -1913,6 +2108,8 @@ fn run_worker_thread_v8(
     errors: WorkerErrorQueue,
     blob_store: WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    port_reply: WorkerPortMessageQueue,
+    port_next_id: Arc<Mutex<u32>>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -1942,6 +2139,8 @@ fn run_worker_thread_v8(
         &script_url,
         is_module,
         Arc::clone(&close_flag),
+        Arc::clone(&port_reply),
+        Arc::clone(&port_next_id),
     ) {
         eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
         return;
@@ -2026,13 +2225,34 @@ fn run_worker_thread_v8(
                 Err(_) => break,
             },
         };
-        let WorkerInMsg::Post(json) = msg else { break };
-        if rt.set_global("_lw_msg__", lumen_core::JsValue::String(json)).is_ok() {
-            let _ = rt.eval(
-                "if(typeof _lumen_worker_dispatch_message==='function')\
-                 {_lumen_worker_dispatch_message(JSON.parse(_lw_msg__));\
-                  if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();}",
-            );
+        match msg {
+            WorkerInMsg::Post(json) => {
+                if rt.set_global("_lw_msg__", lumen_core::JsValue::String(json)).is_ok() {
+                    let _ = rt.eval(
+                        "if(typeof _lumen_worker_dispatch_message==='function')\
+                         {_lumen_worker_dispatch_message(JSON.parse(_lw_msg__));\
+                          if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();}",
+                    );
+                }
+            }
+            // BUG-868 GAP-WORKERSCOPE срез 2: a message addressed to a
+            // `MessagePort` transferred into this worker, not to the
+            // worker's own `onmessage` — routed to `_lumenPortRegistry`
+            // instead of `_lumen_worker_dispatch_message`.
+            WorkerInMsg::PortPost(port_id, json) => {
+                let set_id = rt
+                    .set_global("_lw_port_id__", lumen_core::JsValue::Number(f64::from(port_id)))
+                    .is_ok();
+                let set_msg = rt.set_global("_lw_port_msg__", lumen_core::JsValue::String(json)).is_ok();
+                if set_id && set_msg {
+                    let _ = rt.eval(
+                        "if(typeof _lumen_worker_deliver_port_message==='function')\
+                         {_lumen_worker_deliver_port_message(_lw_port_id__, _lw_port_msg__);\
+                          if(typeof _lumen_flush_timers==='function')_lumen_flush_timers();}",
+                    );
+                }
+            }
+            WorkerInMsg::Terminate => break,
         }
     }
     // `rt` drops here: `V8JsRuntime::drop` sends `Shutdown` to its own JS
@@ -2093,11 +2313,41 @@ fn install_worker_globals_v8(
     script_url: &str,
     is_module: bool,
     close_flag: WorkerCloseFlag,
+    port_reply: WorkerPortMessageQueue,
+    port_next_id: Arc<Mutex<u32>>,
 ) -> JsResult<()> {
     rt.register_native(
         "_lumen_worker_post_reply",
         into_v8_fn1(move |json: String| {
             reply.lock().unwrap().push((worker_id, json));
+        }),
+    )?;
+
+    // _lumen_port_post_reply(port_id: u32, json: String) — BUG-868
+    // GAP-WORKERSCOPE срез 2: worker → page delivery for a `MessagePort`
+    // reconstructed inside this worker from a page-side transfer, or
+    // created here and transferred out via the worker's own `postMessage`.
+    // A worker has exactly one parent, so unlike `_lumen_port_post_to_worker`
+    // this needs no destination id — `port_reply` already routes to this
+    // worker's own page-side queue slot.
+    rt.register_native(
+        "_lumen_port_post_reply",
+        into_v8_fn2(move |port_id: u32, json: String| {
+            port_reply.lock().unwrap().push((port_id, json));
+        }),
+    )?;
+
+    // _lumen_next_port_id() → u32 — same global counter the page side
+    // allocates from (`install_worker_bindings_v8`), so a port id assigned
+    // by a worker (transferring one of its own ports out) never collides
+    // with one assigned by the page.
+    rt.register_native(
+        "_lumen_next_port_id",
+        into_v8_fn0(move || -> u32 {
+            let mut n = port_next_id.lock().unwrap();
+            let id = *n;
+            *n += 1;
+            id
         }),
     )?;
 
@@ -2388,7 +2638,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new()))).unwrap();
         let result = rt.eval("typeof Worker === 'function'").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
@@ -2398,7 +2648,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
 
         let decoded = rt.eval("atob('aGVsbG8=')").unwrap();
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
@@ -2418,7 +2668,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
         let result = rt
             .eval(
                 "var et = new EventTarget(); \
@@ -2438,7 +2688,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
 
         let ok = rt
             .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof TypeError;}})()")
@@ -2464,6 +2714,8 @@ mod tests_v8 {
             script_url,
             false,
             Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(0u32)),
         )
         .unwrap();
         (rt, errors)
@@ -2646,6 +2898,8 @@ mod tests_v8 {
             "http://example.test/support/ErrorEvent.js".to_string(),
             false,
             None,
+            &Arc::new(Mutex::new(Vec::new())),
+            &Arc::new(Mutex::new(0u32)),
         );
 
         post_to_worker(&reg, worker_id, "\"boom\"".to_string());
@@ -2697,6 +2951,8 @@ mod tests_v8 {
             "http://example.test/support/ErrorEvent-error.js".to_string(),
             false,
             None,
+            &Arc::new(Mutex::new(Vec::new())),
+            &Arc::new(Mutex::new(0u32)),
         );
         std::thread::sleep(Duration::from_millis(400));
 
@@ -2720,7 +2976,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
 
         for expr in [
             "typeof performance === 'object'",
@@ -2762,7 +3018,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
         let after = epoch_ms();
 
         let origin = match rt.eval("performance.timeOrigin").unwrap() {
@@ -2792,7 +3048,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
 
         assert_eq!(
             rt.eval("typeof _perf_observer_notify").unwrap(),
@@ -2829,7 +3085,7 @@ mod tests_v8 {
                         postMessage(performance.now() >= t0 && performance.timeOrigin > 0);\
                       };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -2852,7 +3108,7 @@ mod tests_v8 {
 
         // Worker echoes its received message doubled.
         let script = "onmessage = function(e) { postMessage(e.data * 2); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         post_to_worker(&reg, worker_id, "21".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -2882,7 +3138,7 @@ mod tests_v8 {
             "');onmessage = function(e) { postMessage(add(e.data, 8)); };",
         )
         .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         post_to_worker(&reg, worker_id, "34".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -2914,7 +3170,7 @@ mod tests_v8 {
              onmessage = function(e) { postMessage(mul(e.data, 3)); };"
                 .to_string();
 
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
         post_to_worker(&reg, worker_id, "7".to_string());
         std::thread::sleep(Duration::from_millis(300));
 
@@ -2936,7 +3192,7 @@ mod tests_v8 {
 
         // Worker posts a reply to every message.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         // Terminate immediately before any postMessage.
         terminate_worker(&reg, worker_id);
@@ -2960,7 +3216,7 @@ mod tests_v8 {
         );
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
 
         rt.eval(
             "importScripts(\
@@ -2980,7 +3236,7 @@ mod tests_v8 {
         let store = make_store();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
 
         let result = rt.eval("importScripts('https://external.example/lib.js')");
         assert!(result.is_err(), "importScripts with http URL should throw");
@@ -2993,7 +3249,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new()))).unwrap();
 
         let result = rt
             .eval(r#"_lumenSerializeWithTransfers({x: 1, y: "hello"}, [])"#)
@@ -3011,7 +3267,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new()))).unwrap();
         crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt, "https://example.test").unwrap();
 
         let result = rt
@@ -3089,7 +3345,7 @@ mod tests_v8 {
         // First message replies then closes; a second message must produce
         // no further reply.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); self.close(); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         post_to_worker(&reg, worker_id, "1".to_string());
         std::thread::sleep(Duration::from_millis(200));
@@ -3110,7 +3366,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
         for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
             assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
         }
@@ -3134,7 +3390,7 @@ mod tests_v8 {
               .then(function(t) { postMessage(t); });\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3166,7 +3422,7 @@ mod tests_v8 {
             x.send();\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3191,7 +3447,7 @@ mod tests_v8 {
         let net = TestNet::new(&[("https://example.test/resources/testharness.js", "globalThis._ms3 = 30;")]);
         install_worker_globals_v8(
             &rt, 0, Arc::clone(&queue), Arc::clone(&errors), store,
-            Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)),
+            Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
         ).unwrap();
 
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
@@ -3233,7 +3489,7 @@ mod tests_v8 {
         install_worker_globals_v8(
             &rt, 0, Arc::clone(&queue), Arc::clone(&errors), store,
             Some(Arc::new(CspBlockedImportNet)), "https://example.test/worker.js", false,
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
         ).unwrap();
 
         let err = rt.eval("importScripts('https://blocked.example/lib.js')");
@@ -3273,7 +3529,7 @@ mod tests_v8 {
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
             make_store(), None, "https://example.test:8443/a/w.js?q=1#h?c", false,
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
         ).unwrap();
 
         for (expr, want) in [
@@ -3311,7 +3567,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)),
+            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
         ).unwrap();
 
         let thrown = rt
@@ -3337,7 +3593,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)),
+            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
         ).unwrap();
 
         assert_eq!(
@@ -3381,7 +3637,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "data:text/javascript,1", false, Arc::new(AtomicBool::new(false)),
+            make_store(), None, "data:text/javascript,1", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
         ).unwrap();
 
         assert_eq!(
@@ -3513,6 +3769,8 @@ mod tests_v8 {
             "https://example.test/w.js".to_string(),
             true,
             Some(net),
+            &Arc::new(Mutex::new(Vec::new())),
+            &Arc::new(Mutex::new(0u32)),
         );
 
         post_to_worker(&reg, worker_id, "0".to_string());
@@ -3553,6 +3811,8 @@ mod tests_v8 {
             "https://example.test/w.js".to_string(),
             false,
             None,
+            &Arc::new(Mutex::new(Vec::new())),
+            &Arc::new(Mutex::new(0u32)),
         );
         std::thread::sleep(Duration::from_millis(300));
 
@@ -3583,6 +3843,8 @@ mod tests_v8 {
             "https://example.test/w.js",
             true,
             Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(0u32)),
         )
         .unwrap();
 
@@ -3613,6 +3875,8 @@ mod tests_v8 {
             "https://example.test/w.js",
             false,
             Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(0u32)),
         )
         .unwrap();
 
@@ -3874,7 +4138,7 @@ mod tests_v8 {
                       setInterval(function() { n++; postMessage('interval:' + n); }, 20);"
             .to_string();
         let worker_id =
-            spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+            spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
 
         let mut got: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -3925,7 +4189,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)),
+            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
         ).unwrap();
         for expr in [
             "typeof MessageChannel",
@@ -3943,16 +4207,18 @@ mod tests_v8 {
             );
         }
         // Constructing and wiring up a worker-scope `MessageChannel` does not
-        // throw. `postMessage` itself still needs `structuredClone`, which —
-        // like the page scope — this shim depends on rather than defines;
-        // unlike the page scope, a worker has no `structuredClone` at all
-        // (pre-existing gap, shared with the service-worker scope's own
-        // `MESSAGE_CHANNEL_SHIM` use — BUG-868, not this GAP's slice).
+        // throw, and — BUG-868 GAP-WORKERSCOPE срез 2 — neither does actually
+        // posting on it: `structuredClone` used to be entirely absent from
+        // the worker scope, so this `postMessage` threw `ReferenceError`
+        // before reaching any transfer/queue logic at all (see
+        // `install_worker_scope_globals_v8`'s minimal worker-scope clone).
         assert_eq!(
             rt.eval(
                 "var ch = new MessageChannel(); \
-                 ch.port1 instanceof MessagePort && ch.port2 instanceof MessagePort && \
-                 typeof ch.port1.postMessage === 'function'"
+                 var ok = ch.port1 instanceof MessagePort && ch.port2 instanceof MessagePort && \
+                 typeof ch.port1.postMessage === 'function'; \
+                 ch.port1.postMessage('hi'); \
+                 ok"
             )
             .unwrap(),
             lumen_core::JsValue::Bool(true)
