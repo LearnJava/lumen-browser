@@ -38,7 +38,7 @@
 функции.
 
 Не входит в объём: `transfer` по-прежнему игнорируется (см. `structuredClone`
-и [BUG-868](BUG-868-OPEN.md) — третий известный путь потери `transfer`),
+и [BUG-868](BUG-868-FIXED.md) — третий известный путь потери `transfer`),
 доставка через `<iframe>`/`window.open()` (`frame_bridge.rs`,
 `web_api_shim_tail_mc.js`) — отдельные, уже корректно валидирующие origin
 пути, этим фиксом не тронуты.

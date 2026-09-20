@@ -64,7 +64,7 @@ shared-воркера. То есть подозрение на BUG-815 (тайм
 Прямо на нём стоят `workers/modules/dedicated-worker-options-type.html` и
 `shared-worker-options-type.html` (по 3 зависших подтеста), и он же —
 предусловие для `MessageEvent`-фактов [BUG-867](BUG-867-OPEN.md) и
-`MessageChannel` из [BUG-868](BUG-868-OPEN.md): те два бага про поведение,
+`MessageChannel` из [BUG-868](BUG-868-FIXED.md): те два бага про поведение,
 этот — про сами интерфейсные объекты, чинить их можно одним фрагментом
 шима.
 
@@ -123,7 +123,7 @@ shared-воркера. То есть подозрение на BUG-815 (тайм
 (`structuredClone`, `web_api_shim_tail_b.js:562`). Это не регрессия текущего среза: то же самое
 было верно и для service-worker области до него — воркерный `MessageChannel` был
 `ReferenceError` и раньше просто не доходил до этой стадии. И, главное, **перенос**
-`MessagePort` через саму границу «страница ↔ воркер» ([BUG-868](BUG-868-OPEN.md)) этим срезом
+`MessagePort` через саму границу «страница ↔ воркер» ([BUG-868](BUG-868-FIXED.md)) этим срезом
 не тронут — `new MessageChannel()` внутри воркера остаётся локальным этой области объектом,
 `transfer`-список у `postMessage` воркера по-прежнему теряется.
 

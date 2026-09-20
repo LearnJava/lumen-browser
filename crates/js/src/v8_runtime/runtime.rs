@@ -254,6 +254,11 @@ pub struct V8JsRuntime {
     /// Outbound queue drained by [`Self::pump_workers`]. Mirrors
     /// [`crate::QuickJsRuntime`]'s `worker_messages` field.
     pub(super) worker_messages: crate::worker::WorkerMessageQueue,
+    /// Outbound queue for messages posted by a `MessagePort` living inside a
+    /// worker thread to its transferred partner on this page (BUG-868
+    /// GAP-WORKERSCOPE срез 2), drained by [`Self::pump_workers`] alongside
+    /// `worker_messages` — keyed by port id, not worker id.
+    pub(super) worker_port_messages: crate::worker::WorkerPortMessageQueue,
     /// Outbound uncaught-exception report queue drained by [`Self::pump_workers`]
     /// (BUG-591 worker parent-side reporting) — parallel to `worker_messages`
     /// but for `Worker`'s `error` event rather than `message`.
@@ -374,6 +379,7 @@ impl V8JsRuntime {
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
+            worker_port_messages: Arc::new(Mutex::new(Vec::new())),
             worker_errors: Arc::new(Mutex::new(Vec::new())),
             worker_next_id: Arc::new(Mutex::new(0)),
             worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
@@ -434,6 +440,20 @@ impl V8JsRuntime {
             let script = format!(
                 "if(typeof _lumen_deliver_worker_errors==='function')\
                  _lumen_deliver_worker_errors({json})"
+            );
+            let _ = self.eval(&script);
+        }
+
+        // BUG-868 GAP-WORKERSCOPE срез 2: deliver messages posted by a
+        // `MessagePort` living inside a worker thread to its transferred
+        // partner on this page — routed by port id, not worker id, so a
+        // separate delivery function from `_lumen_deliver_worker_messages`.
+        let port_messages = crate::worker::drain_messages(&self.worker_port_messages);
+        if !port_messages.is_empty() {
+            let json = crate::build_worker_messages_json(&port_messages);
+            let script = format!(
+                "if(typeof _lumen_deliver_port_messages==='function')\
+                 _lumen_deliver_port_messages({json})"
             );
             let _ = self.eval(&script);
         }

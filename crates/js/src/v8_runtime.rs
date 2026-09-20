@@ -1016,6 +1016,7 @@ impl V8JsRuntime {
             &self.worker_next_id,
             &self.worker_blob_store,
             fp_worker,
+            &self.worker_port_messages,
         ) {
             eprintln!("v8: worker::install_worker_bindings_v8 failed: {e}");
         }
