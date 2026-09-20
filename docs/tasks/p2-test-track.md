@@ -1465,6 +1465,47 @@ OPEN (корневая причина плавания среза 30 не лок
 `webnn` (183, 0 хитов). `appmanifest` baseline получить не может. `websockets` (786 id, ~25 мин на прогон),
 `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), долг среза 4 не тронуты.
 
+### TEST-3: срез 40 (2026-09-20) — `signed-exchange` закрыт с одним сужением; новых багов нет
+
+**Восстановление после обрыва.** Сессия среза оборвалась перед коммитом: baseline и четыре `--check`
+уже были в worktree (`tests/wpt/metadata/signed-exchange/` неотслеживаемый, `.tmp/se-check1..4.log`).
+Логи прочитаны до любого прогона: check1 — 0 регрессий и 1 unexpected pass, check2–4 — по 0/0/0. Повторно
+`--update-expected` не запускался (он перезаписал бы уже суженный baseline).
+
+**Baseline.** 60 id (74 файла категории, остальные — ресурсы), 59 `.ini`; `--update-expected --recursive
+--processes 4`. Итог: 3/60 harness OK, 4/52 сабтестов PASS.
+
+**Сужение (приём срезов 33/35).** Единственный плавающий: `reporting/sxg-reporting-navigation-cert_fetch_error.tentative.html`
+— в check1 `TIMEOUT` (baseline) дал `OK`; записано `expected: [TIMEOUT, OK]`. После этого три `--check`
+подряд (4:24, 6:29, 4:50) — **0 регрессий, 0 unexpected pass, 0 других отклонений**. Так как в этой
+сессии бинарь `dev-release` пересобран от `main` `2f45ea738`, а прежние три проверки шли на старом, добавлен
+четвёртый `--check` на новом бинаре — тоже 0/0/0. Baseline 245 → 246.
+
+**Что записано как сегодняшняя правда (27 `ERROR`, 29 `TIMEOUT` + 1 `[TIMEOUT, OK]` на уровне теста; на уровне
+подтестов 29 `FAIL`, 19 `TIMEOUT`). Разбиение по каталогам чистое, причины сверены с логом check4:**
+- **27 `ERROR` — все файлы вне `reporting/`** (в т.ч. 8 `.https.`): страница грузит `.sxg` по
+  `https://localhost:18443/…` и получает `TLS handshake: invalid peer certificate: certificate not valid for name
+  "localhost"`. Это [BUG-1069](../../bugs/BUG-1069-OPEN.md), и здесь он бьёт не только по `.https.`-именам:
+  у 19 из 27 в имени `https` нет, поэтому оценка «1992 из 2024» по имени файла занижена. По счёту лог
+  сходится (18 загрузок `.sxg` + 4 из `service-workers/` + 6 `.https.`-страниц по две строки = 46 строк
+  TLS), но соответствие «файл → строка лога» проверено не по каждому файлу.
+- **29 `TIMEOUT` + 1 плавающий — все файлы `reporting/`:** в логе 29 строк
+  `resolve not-web-platform.test:18443 … (os error 11001)`. Это НЕ [BUG-1070](../../bugs/BUG-1070-OPEN.md)
+  (`*.localhost`), а альтернативный домен WPT, который резолвится только записью в hosts-файле
+  (`tests/wpt/host_audit.py`, комментарий `browsers/lumen.py::env_options`, WPT-RUN-10 — семейство
+  alt-домена оставлено открытым). Отдельный баг не заводился: окружение, не движок, и менять hosts
+  вне рабочей папки нельзя. Число 29 совпадает с числом `TIMEOUT`-файлов, но привязка строка → файл
+  тоже сделана по счёту.
+- Как движок обрабатывает `application/signed-exchange`, этим baseline не измерено: до утверждений
+  теста не дошёл ни один файл (4 PASS-подтеста — не про SXG-обработку).
+
+**Следствие для baseline.** Починка BUG-1069 сдвинет 27 `ERROR` этой категории, а разрешение
+`not-web-platform.test` — 29 `TIMEOUT` `reporting/`: baseline регенерируется тем же приёмом.
+
+Дальше: из оставшихся малых — `fedcm` (103), `shared-storage` (124), `webnn` (183, 0 хитов).
+`appmanifest` baseline получить не может. `websockets` (786 id, ~25 мин на прогон), `encoding`
+(только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), долг среза 4 не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
