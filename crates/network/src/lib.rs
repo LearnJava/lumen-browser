@@ -1250,11 +1250,29 @@ fn connect_inner(
     let mut conn = ClientConnection::new(config, server_name)
         .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
 
+    // BUG-935 (S9): callers that want an unbounded post-connect read (WS/SSE,
+    // which pass `read_timeout: None` so the long-lived body can idle
+    // forever) left `complete_io` below with no bound either — a peer that
+    // accepts the TCP connect (passes `CONNECT_TIMEOUT`) and then stalls
+    // mid-handshake (no ServerHello, or hangs after the ClientHello) blocked
+    // this ordered `EngineThread` task forever. Same FIFO-deadlock class as
+    // the TCP-connect (S4), `EngineThread::query()` (S6), WS-handshake (S7)
+    // and SSE-handshake (S8) fixes; bound just the handshake with the same
+    // `FETCH_READ_TIMEOUT`, then release it so the long-lived body keeps its
+    // documented unbounded read.
+    if read_timeout.is_none() {
+        let _ = tcp.set_read_timeout(Some(FETCH_READ_TIMEOUT));
+    }
+
     // Завершаем handshake до отправки данных — иначе ALPN protocol неизвестен,
     // а нам нужно знать версию (HTTP/1.1 vs HTTP/2) до формирования request bytes.
     let mut tcp = tcp;
     conn.complete_io(&mut tcp)
         .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+    if read_timeout.is_none() {
+        let _ = tcp.set_read_timeout(None);
+    }
     let is_h2 = check_negotiated_alpn(conn.alpn_protocol())?;
 
     let mut c = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))));
@@ -5717,6 +5735,54 @@ mod tests {
             cfg.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()],
         );
+    }
+
+    /// BUG-935 (S9) regression: `connect_inner` used to hand `complete_io`
+    /// the raw socket with no read timeout whenever the caller passed
+    /// `read_timeout: None` (WS/SSE, which want the *post-handshake* body to
+    /// idle unboundedly) — a peer that accepts the TCP connect and then
+    /// stalls mid-TLS-handshake (never sends a ServerHello) blocked the
+    /// ordered `EngineThread` task forever, the same class S4/S6/S7/S8 fixed
+    /// for TCP-connect, `EngineThread::query()`, and the WS/SSE HTTP
+    /// handshakes. This drives `ClientConnection::complete_io` directly
+    /// against a stalled TCP peer with a short socket read timeout — the
+    /// same mechanism `connect_inner` now applies — to prove the handshake
+    /// turns into a bounded error instead of hanging.
+    #[test]
+    fn tls_handshake_read_times_out_against_a_stalled_server() {
+        use std::time::{Duration, Instant};
+
+        let listener = bind_ephemeral_listener();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            // Accept and hold the connection open without ever sending a
+            // single TLS byte back — the stalled-handshake case.
+            let (sock, _) = listener.accept().expect("accept");
+            thread::sleep(Duration::from_secs(2));
+            drop(sock);
+        });
+
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("tcp connect");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .expect("set_read_timeout");
+
+        let server_name = ServerName::try_from("example.com".to_owned()).expect("server name");
+        let config = tls_config_for_profile(tls::TlsProfile::Standard);
+        let mut conn = ClientConnection::new(config, server_name).expect("client connection");
+
+        let started = Instant::now();
+        let result = conn.complete_io(&mut stream);
+        assert!(
+            result.is_err(),
+            "stalled server must time out the handshake read, not hang forever"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "handshake blocked past its read timeout"
+        );
+
+        server.join().unwrap();
     }
 
     #[test]
