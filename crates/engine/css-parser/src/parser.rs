@@ -1710,6 +1710,21 @@ impl<'a> Parser<'a> {
         vec![]
     }
 
+    /// CSS Syntax L3 §5.4.3 "consume a qualified rule": a `}` ends the
+    /// *enclosing* block, so recovery from a malformed prelude stops right
+    /// before it and leaves it for the caller's own loop — it is not part of
+    /// the discarded construct.
+    ///
+    /// BUG-1068: consuming it desynchronised the parser for the rest of the
+    /// sheet. A declaration starting with a non-ident character — the IE7
+    /// star hack `*zoom:1`, still shipped by minified vendor bundles — enters
+    /// [`Self::parse_implicit_nested_rule`] (CSS Nesting L1 §4 lets a nested
+    /// rule start with `*`), finds no `{`, and recovers; swallowing the
+    /// block's own `}` made every *following* top-level rule parse as a
+    /// nested `parent descendant` rule that matches nothing. One such
+    /// declaration in `rust-lang.org`'s vendor bundle (`.cf{*zoom:1}`, byte
+    /// 7355 of 73 375) cost the page all 650+ layout utilities after it, so
+    /// the site rendered unstyled — see `bugs/BUG-1068-FIXED.md`.
     fn recover_to_block_end(&mut self) {
         while let Some(c) = self.peek() {
             match c {
@@ -1722,6 +1737,7 @@ impl<'a> Parser<'a> {
                     self.consume();
                     return;
                 }
+                '}' => return,
                 _ => {
                     self.consume();
                 }
@@ -1808,3 +1824,7 @@ mod at_rules_tests;
 #[cfg(test)]
 #[path = "parser/tests/nesting.rs"]
 mod nesting_tests;
+
+#[cfg(test)]
+#[path = "parser/tests/recovery.rs"]
+mod recovery_tests;
