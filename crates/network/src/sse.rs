@@ -274,6 +274,37 @@ pub(crate) struct EventSource {
     closed: bool,
 }
 
+/// Read the HTTP status line and headers off `reader` (up to the blank line
+/// that ends the header section). Split out of [`EventSource::open_connection`]
+/// so the read-timeout regression test can drive it directly against a raw
+/// socket, the same way `websocket::upgrade::perform` is tested (BUG-935).
+fn read_response_head<R: BufRead>(reader: &mut R) -> Result<(u16, Vec<(String, String)>)> {
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .map_err(|e| Error::Network(format!("sse: read status: {e}")))?;
+    let status = parse_status(&status_line)?;
+
+    let mut headers: Vec<(String, String)> = Vec::new();
+    loop {
+        let mut line = String::new();
+        let n = reader
+            .read_line(&mut line)
+            .map_err(|e| Error::Network(format!("sse: read header: {e}")))?;
+        if n == 0 {
+            return Err(Error::Network("sse: EOF in headers".into()));
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = trimmed.split_once(':') {
+            headers.push((k.trim().to_owned(), v.trim().to_owned()));
+        }
+    }
+    Ok((status, headers))
+}
+
 impl EventSource {
     /// Open an SSE connection. `url` must be `http://` or `https://`.
     pub(crate) fn connect(
@@ -303,9 +334,17 @@ impl EventSource {
     /// Establish (or re-establish) the HTTP connection.
     fn open_connection(&mut self) -> Result<()> {
         let (host, port, is_tls) = require_http_scheme(&self.url)?;
-        // No read timeout: an EventSource connection is meant to sit idle
-        // between server-sent events far longer than any bounded fetch (BUG-307
-        // added a timeout to plain request/response `connect()` calls, not here).
+        // No read timeout on the socket once streaming starts: an EventSource
+        // connection is meant to sit idle between server-sent events far
+        // longer than any bounded fetch (BUG-307's timeout is for plain
+        // request/response `connect()` calls, not a long-lived socket). The
+        // opening HTTP exchange below (status line + headers) is a
+        // short-lived request/response, not the long-lived idle stream —
+        // bounded the same way fetch bounds its response read and the
+        // WebSocket Upgrade handshake bounds its own (BUG-935: a server/proxy
+        // that accepts the TCP/TLS connection but never answers the SSE
+        // request otherwise hangs `read_line` forever on the ordered
+        // EngineThread task).
         let conn = connect(&host, port, is_tls, self.resolver.as_ref(), crate::tls::TlsProfile::Standard, None, None)?;
 
         // Build SSE request: must send Accept and Cache-Control per spec §9.2.1.
@@ -337,33 +376,13 @@ impl EventSource {
         raw.flush()
             .map_err(|e| Error::Network(format!("sse: flush: {e}")))?;
 
+        // Bound the status-line/headers read: see comment above `connect` call.
+        let _ = raw.set_read_timeout(Some(crate::FETCH_READ_TIMEOUT));
         let mut reader = BufReader::new(raw);
-
-        // Read status line.
-        let mut status_line = String::new();
-        reader
-            .read_line(&mut status_line)
-            .map_err(|e| Error::Network(format!("sse: read status: {e}")))?;
-        let status = parse_status(&status_line)?;
-
-        // Read headers until blank line.
-        let mut headers: Vec<(String, String)> = Vec::new();
-        loop {
-            let mut line = String::new();
-            let n = reader
-                .read_line(&mut line)
-                .map_err(|e| Error::Network(format!("sse: read header: {e}")))?;
-            if n == 0 {
-                return Err(Error::Network("sse: EOF in headers".into()));
-            }
-            let trimmed = line.trim_end_matches(['\r', '\n']);
-            if trimmed.is_empty() {
-                break;
-            }
-            if let Some((k, v)) = trimmed.split_once(':') {
-                headers.push((k.trim().to_owned(), v.trim().to_owned()));
-            }
-        }
+        let (status, headers) = read_response_head(&mut reader)?;
+        // Handshake done — release the read timeout before the stream becomes
+        // the long-lived idle body reader stored in `self.stream`.
+        let _ = reader.get_ref().set_read_timeout(None);
 
         if status != 200 {
             return Err(Error::Network(format!("sse: server returned {status}")));
@@ -892,6 +911,43 @@ mod tests {
         let events = p.push_bytes(b"retry: 800\ndata: a\n\n");
         assert_eq!(events[0].retry_ms, Some(800));
         assert_eq!(p.take_retry(), None);
+    }
+
+    // ── Хендшейк без таймаута на чтение (BUG-935) ──────────────────────────
+
+    /// Сервер принимает TCP и держит соединение, ни разу не отвечая — тот же
+    /// класс, что и WS-хендшейк из S7 (`ws_handshake_read_times_out_against_a_stalled_server`,
+    /// `crates/network/src/lib.rs`), только для SSE: до этого среза
+    /// `open_connection` читал статус-строку/заголовки без предела и вис на
+    /// `read_line` навсегда за сервером/прокси, который принял соединение, но
+    /// не ответил.
+    #[test]
+    fn sse_handshake_read_times_out_against_a_stalled_server() {
+        use std::time::Instant;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().expect("accept");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            drop(sock);
+        });
+
+        let stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("tcp connect");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .expect("set_read_timeout");
+
+        let started = Instant::now();
+        let mut reader = BufReader::new(stream);
+        read_response_head(&mut reader)
+            .expect_err("stalled server must time out the head read, not hang forever");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "handshake blocked past its read timeout"
+        );
+
+        server.join().unwrap();
     }
 
     // ── Обрамление тела ответа (BUG-844) ──────────────────────────────────
