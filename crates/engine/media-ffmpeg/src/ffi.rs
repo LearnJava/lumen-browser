@@ -147,6 +147,16 @@ pub(crate) struct AVChannelLayout {
 
 pub(crate) const AVMEDIA_TYPE_VIDEO: c_int = 0;
 pub(crate) const AVMEDIA_TYPE_AUDIO: c_int = 1;
+/// `enum AVSampleFormat` (`libavutil/samplefmt.h`) — только значения, для
+/// которых срез 13 умеет конвертировать в интерливленный S16 без
+/// `swresample` (не весь список: `S32`/`S32P`/`DBL`/`DBLP`/`S64`/`S64P`
+/// сегодня дают явную ошибку, а не тихое искажение звука).
+pub(crate) const AV_SAMPLE_FMT_U8: c_int = 0;
+pub(crate) const AV_SAMPLE_FMT_S16: c_int = 1;
+pub(crate) const AV_SAMPLE_FMT_FLT: c_int = 3;
+pub(crate) const AV_SAMPLE_FMT_U8P: c_int = 5;
+pub(crate) const AV_SAMPLE_FMT_S16P: c_int = 6;
+pub(crate) const AV_SAMPLE_FMT_FLTP: c_int = 8;
 /// `AV_PIX_FMT_RGBA` (`libavutil/pixfmt.h`).
 pub(crate) const AV_PIX_FMT_RGBA: c_int = 26;
 pub(crate) const SWS_BILINEAR: c_int = 4;

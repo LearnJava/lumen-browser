@@ -105,4 +105,51 @@ mod tests {
 
         assert_eq!(session.audio_track(), None);
     }
+
+    /// GAP-MEDIADECODE срез 13: AAC-дорожка действительно декодируется в
+    /// PCM, не только детектируется (срез 12). `test.mp4` для этого не
+    /// подходит, хоть и несёт AAC 22050 Hz стерео — независимая проверка
+    /// (`ffmpeg -af volumedetect` и сырой PCM-дамп через `ffmpeg`) вскрыла,
+    /// что его аудиодорожка бит-в-бит тишина на всём протяжении файла (сама
+    /// фикстура такая, не дефект декодера — срез 12 знал только
+    /// `sample_rate`/`channels`, не содержимое). Используется другая
+    /// WPT-фикстура с реальным (не тихим) звуком —
+    /// `fetch/api/request/destination/resources/dummy_video.mp4` (h264 +
+    /// AAC mono 44100 Hz, `mean_volume=-3.5dB` по независимому промеру).
+    #[test]
+    fn decode_audio_pcm_returns_nonsilent_samples_for_dummy_video_mp4() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/wpt/fetch/api/request/destination/resources/dummy_video.mp4"
+        );
+        let bytes = std::fs::read(path).expect("тестовый .mp4 должен быть на диске");
+
+        let decoder = FfmpegVideoDecoder;
+        let mut session = decoder.open(&bytes).expect("open() должен декодировать dummy_video.mp4");
+
+        let pcm = session
+            .decode_audio_pcm(4096)
+            .expect("dummy_video.mp4 несёт декодируемую AAC-дорожку");
+        assert!(!pcm.is_empty(), "декодер не вернул ни одного PCM-сэмпла");
+        assert!(
+            pcm.iter().any(|&s| s != 0),
+            "аудиодорожка dummy_video.mp4 не должна декодироваться как тишина"
+        );
+    }
+
+    /// `2x2-green.webm` не несёт аудиодорожки — `decode_audio_pcm` должен
+    /// вернуть диагностируемую ошибку, а не панику/пустой `Ok`.
+    #[test]
+    fn decode_audio_pcm_errors_for_silent_webm() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/wpt/css/css-sizing/aspect-ratio/support/2x2-green.webm"
+        );
+        let bytes = std::fs::read(path).expect("тестовый .webm должен быть на диске");
+
+        let decoder = FfmpegVideoDecoder;
+        let mut session = decoder.open(&bytes).expect("open() должен декодировать 2x2-green.webm");
+
+        assert!(session.decode_audio_pcm(1024).is_err());
+    }
 }
