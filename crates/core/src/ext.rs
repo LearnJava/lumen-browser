@@ -2337,6 +2337,30 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Drains whatever bytes have arrived so far on the WebTransport bidi
+    /// stream `stream_id` (a
+    /// [`webtransport_open_bidi_stream`](Self::webtransport_open_bidi_stream)
+    /// return value) on the session `handle` names — GAP-WEBTRANSPORT/
+    /// `P3-webtransport` срез 4c, the read half `WebTransportBidirectionalStream.readable`
+    /// needs. Never blocks: a caller polls it repeatedly (ultimately a JS
+    /// `ReadableStream` pull), so an empty result means either nothing has
+    /// arrived yet or a reordered segment is still buffered — check
+    /// `finished` to tell "nothing more is coming" from "not yet".
+    ///
+    /// Returns `(bytes, finished)`: `bytes` is empty when nothing new is
+    /// readable, `finished` is whether the stream's receive half has reached
+    /// its final size (RFC 9000 §3.2 `DataRead`) or been reset.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_read_bidi_stream(&self, handle: i32, stream_id: u64) -> Result<(Vec<u8>, bool)> {
+        let _ = (handle, stream_id);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —

@@ -39,6 +39,7 @@ pub(crate) fn install_webtransport_v8(
     let write_fetch_provider = fetch_provider.clone();
     let close_fetch_provider = fetch_provider.clone();
     let abort_fetch_provider = fetch_provider.clone();
+    let read_fetch_provider = fetch_provider.clone();
 
     // GAP-WEBTRANSPORT срез 3b: `_lumen_webtransport_open(url)` now also
     // reports the session `handle` `webtransport_connect` allocated — срез
@@ -93,9 +94,10 @@ pub(crate) fn install_webtransport_v8(
     // and reports its stream id. The write half of the resolved stream
     // reuses `_lumen_webtransport_write_stream`/`_lumen_webtransport_close_stream`/
     // `_lumen_webtransport_abort_stream` below (stream-id-generic, same as
-    // the uni-stream's writable); the read half is not wired yet — no
-    // incoming WebTransport stream data reaches JS on either uni or bidi
-    // streams in this slice.
+    // the uni-stream's writable); the read half is `_lumen_webtransport_read_stream`
+    // below (срез 4c) — a unidirectional stream carries no read half by
+    // definition (RFC 9000 §2.1), so `createUnidirectionalStream()` needs no
+    // counterpart.
     let open_bidi = into_v8_fn1(move |handle: i32| -> String {
         let Some(ref provider) = bidi_fetch_provider else {
             return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
@@ -173,6 +175,33 @@ pub(crate) fn install_webtransport_v8(
         }
     });
     rt.register_native("_lumen_webtransport_abort_stream", abort_stream)?;
+
+    // GAP-WEBTRANSPORT срез 4c: the read-bytes primitive
+    // `WebTransportBidirectionalStream.readable`'s `pull()` polls —
+    // `webtransport_read_bidi_stream`/`h3_webtransport_read_stream_on_driver`
+    // drain one non-blocking sweep of the session's transport and hand back
+    // whatever became readable on `streamId`. `bytes` rides as a JSON number
+    // array (matching this module's other JSON-string replies) rather than a
+    // second native-call shape; `finished` tells the shim's poll loop when to
+    // stop calling and close the `ReadableStream` instead.
+    let read_stream = into_v8_fn2(move |handle: i32, stream_id: f64| -> String {
+        let Some(ref provider) = read_fetch_provider else {
+            return r#"{"ok":false,"message":"WebTransport is not supported in this context."}"#
+                .to_string();
+        };
+        match provider.webtransport_read_bidi_stream(handle, stream_id as u64) {
+            Ok((bytes, finished)) => {
+                let bytes_json =
+                    bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(",");
+                format!(r#"{{"ok":true,"bytes":[{bytes_json}],"finished":{finished}}}"#)
+            }
+            Err(e) => {
+                let message = e.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r#"{{"ok":false,"message":"{message}"}}"#)
+            }
+        }
+    });
+    rt.register_native("_lumen_webtransport_read_stream", read_stream)?;
 
     rt.eval(WEBTRANSPORT_SHIM)?;
     Ok(())
@@ -332,6 +361,51 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     });
   }
 
+  // GAP-WEBTRANSPORT срез 4c: the readable half of a bidi-stream that opened
+  // on the wire — pulls bytes via `_lumen_webtransport_read_stream(handle,
+  // streamId)` (`h3_webtransport_read_stream_on_driver`, a non-blocking
+  // sweep of the QUIC transport every call). Each `pull()` polls in a
+  // `setTimeout(0)` loop until either bytes arrive (`enqueue` once and
+  // return — the stream calls `pull()` again for the next chunk), the
+  // stream's receive half is finished (`close()`), or the native call itself
+  // fails (`error()` with a `WebTransportError`).
+  function openBidiStreamReadable(handle, streamId) {
+    return new ReadableStream({
+      pull: function(controller) {
+        return new Promise(function(resolve) {
+          function attempt() {
+            var result;
+            try {
+              result = JSON.parse(_lumen_webtransport_read_stream(handle, streamId));
+            } catch (e) {
+              result = { ok: false, message: 'WebTransport: malformed native response.' };
+            }
+            if (!result || !result.ok) {
+              controller.error(new WebTransportError({
+                source: 'stream',
+                message: (result && result.message) || 'Failed to read a WebTransport stream.',
+              }));
+              resolve();
+              return;
+            }
+            if (result.bytes && result.bytes.length) {
+              controller.enqueue(new Uint8Array(result.bytes));
+              resolve();
+              return;
+            }
+            if (result.finished) {
+              controller.close();
+              resolve();
+              return;
+            }
+            setTimeout(attempt, 0);
+          }
+          attempt();
+        });
+      },
+    });
+  }
+
   // ── WebTransportDatagramDuplexStream (spec §7) ────────────────────────────
   class WebTransportDatagramDuplexStream {
     constructor() {
@@ -440,14 +514,14 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
     get: function() { return this._incomingUnidi; }, enumerable: true, configurable: true,
   });
 
-  // GAP-WEBTRANSPORT срез 4b: same "no live handle → reject synchronously"
+  // GAP-WEBTRANSPORT срез 4b/4c: same "no live handle → reject synchronously"
   // shape as `createUnidirectionalStream()` (срез 3b); otherwise opens a
   // real QUIC bidi-stream on it (`_lumen_webtransport_open_bidi_stream`,
   // срез 4a's transport primitive) and resolves a
   // `WebTransportBidirectionalStream` whose `writable` reuses
   // `openUniStreamWritable` (a `SendStream`'s write/close/abort do not know
-  // their own direction) — `readable` stays an `emptyReadableStream()` for
-  // now, since no incoming WebTransport stream data reaches JS yet.
+  // their own direction) and whose `readable` polls the peer's bytes back
+  // through `openBidiStreamReadable` (срез 4c).
   WebTransport.prototype.createBidirectionalStream = function() {
     if (this._handle === null) {
       return Promise.reject(notConnectedError());
@@ -465,7 +539,7 @@ const WEBTRANSPORT_SHIM: &str = r#"(function() {
       }));
     }
     return Promise.resolve(new WebTransportBidirectionalStream(
-      emptyReadableStream(),
+      openBidiStreamReadable(this._handle, result.streamId),
       openUniStreamWritable(this._handle, result.streamId)
     ));
   };
@@ -542,6 +616,12 @@ mod tests_v8 {
         rt
     }
 
+    /// Queued answers [`StubFetch::webtransport_read_bidi_stream`] hands back
+    /// in order, one per call.
+    type ReadStreamResults = std::sync::Mutex<
+        std::collections::VecDeque<lumen_core::error::Result<(Vec<u8>, bool)>>,
+    >;
+
     /// A fetch provider whose `webtransport_connect` answers deterministically
     /// (`Ok`/`Err`) instead of network I/O — GAP-WEBTRANSPORT срез 2b. Its
     /// `webtransport_open_uni_stream` (срез 3b) and `webtransport_write_uni_stream`
@@ -565,6 +645,13 @@ mod tests_v8 {
         /// The `(handle, stream_id, error_code)` triple the last `abort` call
         /// received, if any — GAP-WEBTRANSPORT срез 3d.
         last_abort: std::sync::Mutex<Option<(i32, u64, u64)>>,
+        /// GAP-WEBTRANSPORT срез 4c: the queued answers
+        /// `webtransport_read_bidi_stream` hands back in order, one per call
+        /// (`pop_front`) — lets a test script a multi-poll sequence (bytes
+        /// then finished, or an error). Empty defaults to `Ok((vec![], true))`
+        /// so a test that never touches `readable` still terminates the
+        /// shim's poll loop instead of spinning.
+        read_stream_results: ReadStreamResults,
     }
     impl lumen_core::ext::JsFetchProvider for StubFetch {
         fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
@@ -619,6 +706,16 @@ mod tests_v8 {
                 Err(e) => Err(lumen_core::error::Error::Network(e.to_string())),
             }
         }
+        fn webtransport_read_bidi_stream(
+            &self,
+            _handle: i32,
+            _stream_id: u64,
+        ) -> lumen_core::error::Result<(Vec<u8>, bool)> {
+            match self.read_stream_results.lock().unwrap().pop_front() {
+                Some(r) => r,
+                None => Ok((Vec::new(), true)),
+            }
+        }
     }
 
     /// Unlike [`rt_with_webtransport`], does not call `install_webtransport_v8`
@@ -662,6 +759,7 @@ mod tests_v8 {
             abort_stream_result: Ok(()),
             last_close: std::sync::Mutex::new(None),
             last_abort: std::sync::Mutex::new(None),
+            read_stream_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1040,6 +1138,7 @@ mod tests_v8 {
             abort_stream_result: Ok(()),
             last_close: std::sync::Mutex::new(None),
             last_abort: std::sync::Mutex::new(None),
+            read_stream_results: std::sync::Mutex::new(std::collections::VecDeque::new()),
         });
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
         rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
@@ -1198,6 +1297,73 @@ mod tests_v8 {
         check(&rt, "_wtWriteOk");
         let last = stub.last_write.lock().unwrap().clone().expect("write was recorded");
         assert_eq!(last, (3, 9, vec![1, 2, 3]));
+    }
+
+    /// GAP-WEBTRANSPORT срез 4c: direct native-call coverage for
+    /// `_lumen_webtransport_read_stream`, same "no provider → unsupported"
+    /// shape as every other WebTransport native.
+    #[test]
+    fn native_read_stream_reports_unsupported_with_no_provider() {
+        let rt = rt_with_webtransport();
+        let r = rt.eval("_lumen_webtransport_read_stream(0, 0)").unwrap();
+        match r {
+            lumen_core::JsValue::String(s) => {
+                assert!(s.contains(r#""ok":false"#), "expected ok:false, got {s}");
+            }
+            other => panic!("expected a String, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: `createBidirectionalStream()`'s `readable` polls
+    /// `_lumen_webtransport_read_stream` — a first poll answering bytes with
+    /// `finished:false` yields one chunk, and a second answering
+    /// `finished:true` with no bytes closes the stream (`reader.read()`'s
+    /// `done`), without a `setTimeout` retry needed for either since
+    /// `pull()` calls the native synchronously before ever queuing a timer.
+    #[test]
+    fn create_bidirectional_stream_readable_yields_bytes_then_closes() {
+        let rt = V8JsRuntime::new().unwrap();
+        let doc = Arc::new(Mutex::new(Document::new()));
+        let mut reads = std::collections::VecDeque::new();
+        reads.push_back(Ok((vec![1u8, 2, 3], false)));
+        reads.push_back(Ok((Vec::new(), true)));
+        let stub = Arc::new(StubFetch {
+            result: std::sync::Mutex::new(Some(Ok(lumen_core::ext::JsWebTransportSession {
+                handle: 3,
+                status: 200,
+            }))),
+            uni_stream_result: Ok(2),
+            bidi_stream_result: Ok(9),
+            write_stream_result: Ok(()),
+            last_write: std::sync::Mutex::new(None),
+            close_stream_result: Ok(()),
+            abort_stream_result: Ok(()),
+            last_close: std::sync::Mutex::new(None),
+            last_abort: std::sync::Mutex::new(None),
+            read_stream_results: std::sync::Mutex::new(reads),
+        });
+        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = stub.clone();
+        rt.install_dom(doc, "", Some(provider), None, None, None, None, None, None, None, false)
+            .unwrap();
+        rt.eval(
+            "globalThis._wtFirstLen = -1; globalThis._wtDone = false; \
+            globalThis._wt = new WebTransport('https://example.com/wt'); \
+            globalThis._wt.ready.then(function() { \
+                return globalThis._wt.createBidirectionalStream(); \
+            }).then(function(stream) { \
+                var reader = stream.readable.getReader(); \
+                return reader.read().then(function(res1) { \
+                    globalThis._wtFirstLen = res1.value ? res1.value.length : -1; \
+                    return reader.read(); \
+                }).then(function(res2) { \
+                    globalThis._wtDone = res2.done === true; \
+                }); \
+            });",
+        )
+        .unwrap();
+        rt.eval("_lumen_tick_timers()").unwrap();
+        check(&rt, "_wtFirstLen === 3");
+        check(&rt, "_wtDone");
     }
 
     #[test]

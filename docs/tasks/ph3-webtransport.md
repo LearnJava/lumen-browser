@@ -126,6 +126,41 @@ bidi отдельно) — срез 4b; приём входящих
 датаграммы (RFC 9221) остаются отдельными под-срезами. Статус остаётся
 `planned`.
 
+**Срез 4c — done (2026-09-20, P1) — bidi `readable` (приём входящих байт
+на стриме, который открыли мы).** `_lumen_webtransport_read_stream(handle,
+streamId)` (`webtransport_read_bidi_stream` в trait `JsFetchProvider`,
+`h3_webtransport_read_stream_on_driver` в `client_transport.rs`) — каждый
+вызов дренирует одним non-blocking проходом всё, что уже стоит в очереди
+сокета сессии (`RequestDriver::poll_incoming_nonblocking`, новый метод:
+`DatagramEventLoop::poll_nonblocking`/`ConnectionDriver::wait_nonblocking`
+читают с нулевым read-timeout, в отличие от `wait()`, который блокируется
+до ближайшего QUIC-дедлайна — тот может быть секундами в будущем, а сессия
+между чтениями больше никем не дренится), затем отдаёт то, что стало
+читаемым на `streamId`. Попутно найден и починен латентный баг:
+`RequestDispatch::on_stream_frame_with_sink` гейтит входящий STREAM-фрейм
+по `mux.is_active(stream_id)` — стримы, которые WebTransport открывает
+напрямую через `streams_mut()` (`h3_webtransport_open_bidi_stream_on_driver`),
+мультиплексору неизвестны, так что любой ответ пира на такой стрим валил
+бы **весь** datagram ingest ошибкой `MuxError::UnknownStream` (до этого
+среза непротестировано против живого пира). `RequestDispatch::register_foreign_stream`
+регистрирует такой id как легитимный вне мультиплексора — входящий STREAM
+на нём реассемблируется в `StreamManager`, но не порождает `H3Response`;
+`h3_webtransport_open_bidi_stream_on_driver` теперь зовёт его сама. Шим:
+`openBidiStreamReadable` — `pull()`-based `ReadableStream`, опрашивает
+нативный биндинг синхронно (без `setTimeout`, пока не пусто и не
+`finished`), при пустом непоследнем ответе планирует retry через
+`setTimeout(0)`. 6 новых тестов `lumen-network` (`request_dispatch`:
+foreign-stream reassembly/mux-isolation; `event_loop`: `poll_nonblocking`;
+`request_driver`: `poll_incoming_nonblocking` composes с обычным
+request/response на одном соединении), 2 новых теста `lumen-js`
+(`_lumen_webtransport_read_stream` unsupported-with-no-provider,
+end-to-end byte delivery + close). `cargo clippy -p lumen-network`,
+`cargo clippy -p lumen-js --features v8-backend` (`-D warnings`) зелёные.
+Не сделано: incoming (peer-initiated) uni/bidi-стримы — другой механизм
+(обнаружение нового id, открытого пиром, а не чтение с уже открытого нами)
+— срез 4d; датаграммы (срез 4/datagrams в декомпозиции ниже); lifecycle
+(срез 5).
+
 **Срез 4b — done (2026-09-20, P1) — подключение bidi-стрима к сессии и к
 JS.** `HttpClient::webtransport_open_bidi_stream(handle)`
 (`crates/network/src/lib.rs`) зеркалит `webtransport_open_uni_stream`:
@@ -201,5 +236,6 @@ session id = id Extended CONNECT-стрима — draft-ietf-webtrans-http3 §4.
 - [x] Extended CONNECT доходит до живого `ready` (срезы 2a/2b, см. таблицу выше).
 - [x] Uni streams end-to-end: open/write/close/abort (срезы 3a-3d, 2026-09-20).
 - [x] Bidi streams — открытие + write/close/abort до JS (срезы 4a-4b, 2026-09-20).
-- [ ] Bidi readable (приём входящих байт), incoming streams, datagrams, lifecycle — срезы 4c/5.
-- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write живые, readable/datagrams/lifecycle ещё стабы).
+- [x] Bidi readable — приём входящих байт на стриме, который открыли мы (срез 4c, 2026-09-20).
+- [ ] Incoming (peer-initiated) streams, datagrams, lifecycle — срезы 4d/5.
+- [x] `CAPABILITIES.md` — WebTransport 🟡 (`ready` живой, uni+bidi write+bidi read живые, incoming streams/datagrams/lifecycle ещё стабы).

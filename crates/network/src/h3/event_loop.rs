@@ -143,6 +143,33 @@ impl<T: DatagramTransport> DatagramEventLoop<T> {
             Err(e) => Err(e),
         }
     }
+
+    /// Checks once, without blocking, whether a datagram is already queued on
+    /// the socket — unlike [`Self::wait`], the read timeout is fixed at
+    /// [`Duration::ZERO`] rather than derived from `timers`, so this never
+    /// waits for a QUIC deadline that may be seconds away.
+    ///
+    /// For a connection past its request/response phase (e.g. a WebTransport
+    /// session between application-driven reads) nothing else is polling this
+    /// transport, so a caller that wants "is there anything to ingest right
+    /// now" — a JS-visible read poll, not a blocking event-loop turn — uses
+    /// this instead of [`Self::wait`].
+    ///
+    /// Returns `Ok(Some(n))` when a datagram of `n` bytes arrived (its bytes
+    /// are then [`Self::datagram`]), or `Ok(None)` when none was queued.
+    ///
+    /// # Errors
+    ///
+    /// Any socket error from [`DatagramTransport::recv`] other than the
+    /// portable "read timed out" signal ([`recv_timed_out`]).
+    pub fn poll_nonblocking(&mut self) -> io::Result<Option<usize>> {
+        self.transport.set_read_timeout(Some(Duration::ZERO))?;
+        match self.transport.recv(&mut self.buf) {
+            Ok(n) => Ok(Some(n)),
+            Err(e) if recv_timed_out(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +276,34 @@ mod tests {
             Wakeup::Datagram(n) => assert_eq!(ev.datagram(n), b"quic-datagram"),
             other => panic!("expected datagram, got {other:?}"),
         }
+    }
+
+    // ---- poll_nonblocking --------------------------------------------------
+
+    #[test]
+    fn poll_nonblocking_returns_a_queued_datagram() {
+        let mut transport = mock();
+        transport.push_inbound(b"quic-datagram".to_vec());
+        let mut ev = DatagramEventLoop::new(transport);
+
+        let n = ev.poll_nonblocking().unwrap();
+        assert_eq!(n, Some(13));
+        assert_eq!(ev.datagram(13), b"quic-datagram");
+    }
+
+    #[test]
+    fn poll_nonblocking_returns_none_on_an_empty_queue() {
+        let mut ev = DatagramEventLoop::new(mock());
+        assert_eq!(ev.poll_nonblocking().unwrap(), None);
+    }
+
+    #[test]
+    fn poll_nonblocking_arms_a_zero_read_timeout_regardless_of_timers() {
+        // Unlike `wait`, this must never block for a QUIC deadline — even a
+        // deadline far in the future must not change the armed timeout.
+        let mut ev = DatagramEventLoop::new(mock());
+        ev.poll_nonblocking().unwrap();
+        assert_eq!(ev.transport().read_timeout(), Some(Duration::ZERO));
     }
 
     #[test]

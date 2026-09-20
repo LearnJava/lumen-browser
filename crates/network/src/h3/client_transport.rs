@@ -707,11 +707,14 @@ pub fn h3_webtransport_open_uni_stream_on_driver<T: DatagramTransport>(
 /// this module already exposes — they operate on a `stream_id` and the
 /// underlying [`super::stream::SendStream`] is identical for a uni or a bidi
 /// stream, only the id's low bits differ. The receive half (the `readable`
-/// side `WebTransportBidirectionalStream` exposes) is not this function's
-/// concern: [`super::stream_manager::StreamManager`] lazily creates a
+/// side `WebTransportBidirectionalStream` exposes) needs no separate "open"
+/// call either — [`super::stream_manager::StreamManager`] lazily creates a
 /// [`super::stream::RecvStream`] the first time the peer sends data on this
-/// id, through the connection's ordinary incoming-frame path — no explicit
-/// "open the receive half" call exists for either uni or bidi streams.
+/// id — but it does need this id known outside the HTTP/3 request mux before
+/// that data arrives: [`super::request_dispatch::RequestDispatch::register_foreign_stream`]
+/// marks it so an inbound STREAM frame reassembles into the stream layer
+/// ([`h3_webtransport_read_stream_on_driver`]) instead of failing the whole
+/// datagram ingest as an unknown-to-the-mux stream.
 ///
 /// # Errors
 ///
@@ -730,16 +733,70 @@ pub fn h3_webtransport_open_bidi_stream_on_driver<T: DatagramTransport>(
     varint::encode(WEBTRANSPORT_STREAM_FRAME_TYPE, &mut header).map_err(WebTransportStreamError::Header)?;
     varint::encode(session_id, &mut header).map_err(WebTransportStreamError::Header)?;
 
-    driver
-        .turn_mut()
-        .pump_mut()
-        .dispatch_mut()
-        .streams_mut()
-        .open_send_stream(stream_id, peer_initial_max_stream_data_bidi)
-        .write(&header);
+    let dispatch = driver.turn_mut().pump_mut().dispatch_mut();
+    dispatch.register_foreign_stream(stream_id);
+    dispatch.streams_mut().open_send_stream(stream_id, peer_initial_max_stream_data_bidi).write(&header);
 
     driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)?;
     Ok(stream_id)
+}
+
+/// Drains every datagram already queued on `driver`'s socket right now
+/// ([`RequestDriver::poll_incoming_nonblocking`]) and returns whatever
+/// contiguous bytes have since become readable on `stream_id` — a
+/// WebTransport bidirectional stream [`h3_webtransport_open_bidi_stream_on_driver`]
+/// opened (its receive half only exists once the caller registered the id
+/// with [`super::request_dispatch::RequestDispatch::register_foreign_stream`],
+/// which that function already does).
+///
+/// Never blocks: unlike the request/response phase, nothing else keeps
+/// polling this transport once the session is established, so a caller
+/// reading a WebTransport stream (ultimately a JS `ReadableStream` poll) must
+/// get an immediate, possibly-empty answer rather than wait for a QUIC
+/// deadline that may be seconds away.
+///
+/// Returns an empty vector both when nothing arrived and when the stream had
+/// no contiguous prefix to deliver yet (data buffered out of order) — the
+/// caller cannot distinguish "nothing sent" from "a gap precedes what was
+/// sent" from this alone; call [`h3_webtransport_stream_finished_on_driver`]
+/// to check whether the stream's receive half is done.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::Driver`] wrapping whatever
+/// [`RequestDriver::poll_incoming_nonblocking`] reported: a socket error, an
+/// authenticated connection error, or a per-stream frame that breached flow
+/// control or the final-size rules.
+pub fn h3_webtransport_read_stream_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    stream_id: u64,
+) -> Result<Vec<u8>, WebTransportStreamError> {
+    driver
+        .poll_incoming_nonblocking(Instant::now())
+        .map_err(WebTransportStreamError::Driver)?;
+    Ok(driver.turn_mut().pump_mut().dispatch_mut().streams_mut().read(stream_id))
+}
+
+/// Whether a WebTransport stream's receive half has delivered every byte up
+/// to a known final size (RFC 9000 §3.2 `DataRead`, or a `RESET_STREAM` the
+/// application has observed) — the caller's signal to stop polling
+/// [`h3_webtransport_read_stream_on_driver`] for `stream_id`.
+///
+/// Returns `false` for a `stream_id` with no receive state yet (the peer has
+/// not sent anything on it): a stream not finished is indistinguishable from
+/// one not started from this call alone.
+#[must_use]
+pub fn h3_webtransport_stream_finished_on_driver<T: DatagramTransport>(
+    driver: &RequestDriver<T>,
+    stream_id: u64,
+) -> bool {
+    driver
+        .turn()
+        .pump()
+        .dispatch()
+        .streams()
+        .recv_stream_ref(stream_id)
+        .is_some_and(super::stream_manager::recv_stream_finished)
 }
 
 /// Writes application bytes to a WebTransport unidirectional stream already
