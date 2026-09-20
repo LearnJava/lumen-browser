@@ -2361,6 +2361,48 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Discovers unidirectional WebTransport streams the peer opened toward
+    /// us on the session `handle` names — GAP-WEBTRANSPORT/`P3-webtransport`
+    /// срез 4d, `incomingUnidirectionalStreams`'s discovery primitive. Never
+    /// blocks: drains one non-blocking sweep of the transport and returns the
+    /// ids of every stream whose WebTransport stream header has fully
+    /// arrived and been classified since the last call — a caller polls this
+    /// repeatedly (ultimately a JS `ReadableStream` pull on
+    /// `incomingUnidirectionalStreams` itself), same shape as
+    /// [`webtransport_read_bidi_stream`](Self::webtransport_read_bidi_stream)'s
+    /// per-stream poll.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_poll_incoming_uni_streams(&self, handle: i32) -> Result<Vec<u64>> {
+        let _ = handle;
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+
+    /// Reads a peer-initiated unidirectional WebTransport stream's bytes —
+    /// the read half `incomingUnidirectionalStreams` hands JS once
+    /// [`webtransport_poll_incoming_uni_streams`](Self::webtransport_poll_incoming_uni_streams)
+    /// reports `stream_id` ready. Never blocks, same `(bytes, finished)`
+    /// contract as
+    /// [`webtransport_read_bidi_stream`](Self::webtransport_read_bidi_stream).
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_read_incoming_uni_stream(
+        &self,
+        handle: i32,
+        stream_id: u64,
+    ) -> Result<(Vec<u8>, bool)> {
+        let _ = (handle, stream_id);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —
