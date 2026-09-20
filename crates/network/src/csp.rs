@@ -173,6 +173,11 @@ pub struct CspPolicy {
     pub require_trusted_types_for_script: bool,
     /// Parsed `trusted-types` directive, if present.
     pub trusted_types: Option<TrustedTypesDirective>,
+    /// The header/`<meta>` text this policy was parsed from, verbatim — CSP3
+    /// §7.8's `SecurityPolicyViolationEvent.originalPolicy` names the text of
+    /// the ONE policy that was violated, not every policy the document
+    /// declared (GAP-CSPENF срез 56, `bugs/BUG-811-OPEN.md`).
+    pub raw: String,
 }
 
 impl CspPolicy {
@@ -409,7 +414,10 @@ fn host_matches(pattern: &str, host: &str) -> bool {
 /// assert!(policy.directives.contains_key(&CspDirective::ScriptSrc));
 /// ```
 pub fn parse_csp_header(header: &str) -> CspPolicy {
-    let mut policy = CspPolicy::default();
+    let mut policy = CspPolicy {
+        raw: header.to_owned(),
+        ..CspPolicy::default()
+    };
     parse_into(&mut policy, header);
     policy
 }
@@ -418,6 +426,7 @@ pub fn parse_csp_header(header: &str) -> CspPolicy {
 pub fn parse_csp_report_only_header(header: &str) -> CspPolicy {
     let mut policy = CspPolicy {
         report_only: true,
+        raw: header.to_owned(),
         ..CspPolicy::default()
     };
     parse_into(&mut policy, header);

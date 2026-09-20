@@ -55,12 +55,15 @@ impl Lumen {
             let upgraded = csp_gate.as_ref().and_then(|(policy, _)| {
                 crate::csp_enforce::upgrade_insecure_url(policy, &eff_base.resolve_str(&url))
             });
-            if let Some((policy, original_policy)) = &csp_gate {
+            if let Some((policy, _)) = &csp_gate {
                 let resolved = upgraded.clone().unwrap_or_else(|| eff_base.resolve_str(&url));
-                if crate::csp_enforce::img_src_blocked(policy, &resolved, self_origin.as_ref()) {
-                    let original_policy = original_policy.clone();
+                // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной политики.
+                if let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+                    policy, &lumen_network::csp::CspDirective::ImgSrc, &resolved, self_origin.as_ref(),
+                ) {
+                    let policy_text = policy_text.to_owned();
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                        j.fire_csp_violation("img-src", &resolved, &original_policy);
+                        j.fire_csp_violation("img-src", &resolved, &policy_text);
                         j.fire_image_error(nid);
                     });
                     continue;
@@ -1839,13 +1842,15 @@ impl Lumen {
                     let gate_url = csp_gate.as_ref()
                         .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved))
                         .unwrap_or_else(|| resolved.clone());
-                    if let Some((policy, original_policy)) = &csp_gate
-                        && crate::csp_enforce::font_src_blocked(policy, &gate_url, self_origin.as_ref())
+                    if let Some((policy, _)) = &csp_gate
+                        && let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+                            policy, &lumen_network::csp::CspDirective::FontSrc, &gate_url, self_origin.as_ref(),
+                        )
                     {
-                        let original_policy = original_policy.clone();
+                        let policy_text = policy_text.to_owned();
                         let blocked_url = gate_url.clone();
                         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                            j.fire_csp_violation("font-src", &blocked_url, &original_policy);
+                            j.fire_csp_violation("font-src", &blocked_url, &policy_text);
                         });
                         continue;
                     }
