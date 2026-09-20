@@ -60,6 +60,7 @@ use super::driver::DriverAction;
 use super::event_loop::Wakeup;
 use super::h3_exchange::{BodySink, H3Response};
 use super::loss::PacketNumberSpace;
+use super::quic_frame::Frame;
 use super::request_dispatch::{DispatchError, SentRequest};
 use super::request_exchange::ClientRequest;
 use super::request_pump::PumpEvent;
@@ -183,6 +184,19 @@ pub struct RequestDriver<T: DatagramTransport> {
     turn: RequestTurn<T>,
     /// The responses completed so far, in completion order.
     responses: Vec<H3Response>,
+    /// Every QUIC DATAGRAM frame's payload ingested so far (RFC 9221), in
+    /// arrival order — [`RequestIngest::residual`](super::request_turn::RequestIngest::residual)
+    /// entries [`Self::poll_incoming_nonblocking`] sees are not per-stream data,
+    /// so [`RequestTurn::route_deferred`](super::request_turn::RequestTurn::route_deferred)
+    /// sets them aside rather than routing them through the pump; nothing
+    /// consumed them before WebTransport's datagram support needed to. The
+    /// payload is still HTTP/3-framed (RFC 9297 §2.1: a quarter stream id
+    /// prefix, then the WebTransport session's data) — stripping and matching
+    /// that prefix against a session is the caller's job
+    /// (`h3_webtransport_poll_incoming_datagrams_on_driver` in
+    /// `client_transport.rs`), since a `RequestDriver` knows nothing about
+    /// WebTransport sessions.
+    datagrams: Vec<Vec<u8>>,
 }
 
 impl<T: DatagramTransport> RequestDriver<T> {
@@ -191,7 +205,7 @@ impl<T: DatagramTransport> RequestDriver<T> {
     /// responses collected yet.
     #[must_use]
     pub fn new(turn: RequestTurn<T>) -> Self {
-        Self { turn, responses: Vec::new() }
+        Self { turn, responses: Vec::new(), datagrams: Vec::new() }
     }
 
     /// The request turn, borrowed immutably.
@@ -215,6 +229,14 @@ impl<T: DatagramTransport> RequestDriver<T> {
     #[must_use]
     pub fn take_responses(&mut self) -> Vec<H3Response> {
         core::mem::take(&mut self.responses)
+    }
+
+    /// Takes every QUIC DATAGRAM payload ingested so far
+    /// ([`Self::poll_incoming_nonblocking`]) out of the driver, in arrival
+    /// order, leaving it empty.
+    #[must_use]
+    pub fn take_datagrams(&mut self) -> Vec<Vec<u8>> {
+        core::mem::take(&mut self.datagrams)
     }
 
     /// Splits the driver into its request turn and the responses it collected.
@@ -523,6 +545,11 @@ impl<T: DatagramTransport> RequestDriver<T> {
                     PumpEvent::Response(resp) => self.responses.push(resp),
                     PumpEvent::StopSending { reset, .. } => resets.push(reset),
                     PumpEvent::Progress | PumpEvent::Aborted { .. } | PumpEvent::Ignored => {}
+                }
+            }
+            for frame in ingest.residual {
+                if let Frame::Datagram(payload) = frame {
+                    self.datagrams.push(payload);
                 }
             }
             for reset in resets {
@@ -892,6 +919,51 @@ mod tests {
         assert_eq!(d.poll_incoming_nonblocking(now).unwrap(), 1);
         assert_eq!(d.responses().len(), 1);
         assert_eq!(d.responses()[0].body, b"pong");
+    }
+
+    #[test]
+    fn poll_incoming_nonblocking_accumulates_datagram_frames() {
+        let now = base();
+        let mut transport = transport();
+        transport.push_inbound(one_rtt_packet(0, &[Frame::Datagram(b"dg-1".to_vec())]));
+        let mut d = request_driver(transport, now);
+
+        let drained = d.poll_incoming_nonblocking(now).unwrap();
+        assert_eq!(drained, 1);
+        assert_eq!(d.take_datagrams(), vec![b"dg-1".to_vec()]);
+        // Taking leaves the accumulator empty for the next drain.
+        assert!(d.take_datagrams().is_empty());
+    }
+
+    #[test]
+    fn poll_incoming_nonblocking_accumulates_multiple_datagrams_in_arrival_order() {
+        let now = base();
+        let mut transport = transport();
+        transport.push_inbound(one_rtt_packet(
+            0,
+            &[Frame::Datagram(b"first".to_vec()), Frame::Datagram(b"second".to_vec())],
+        ));
+        let mut d = request_driver(transport, now);
+
+        d.poll_incoming_nonblocking(now).unwrap();
+        assert_eq!(d.take_datagrams(), vec![b"first".to_vec(), b"second".to_vec()]);
+    }
+
+    #[test]
+    fn poll_incoming_nonblocking_composes_datagrams_with_an_ordinary_request() {
+        let now = base();
+        let mut transport = transport();
+        transport.push_inbound(one_rtt_packet(
+            0,
+            &[response_stream(0, b"200", b"pong"), Frame::Datagram(b"dg".to_vec())],
+        ));
+        let mut d = request_driver(transport, now);
+        d.send_request(&post(b"/echo", b"ping")).unwrap();
+        d.transmit(now).unwrap();
+
+        assert_eq!(d.poll_incoming_nonblocking(now).unwrap(), 1);
+        assert_eq!(d.responses().len(), 1);
+        assert_eq!(d.take_datagrams(), vec![b"dg".to_vec()]);
     }
 
     // ---- run: drive to completion --------------------------------------

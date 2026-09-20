@@ -991,6 +991,88 @@ pub fn h3_webtransport_reset_uni_stream_on_driver<T: DatagramTransport>(
     driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
 }
 
+/// Sends a QUIC DATAGRAM frame (RFC 9221) carrying `data` on the WebTransport
+/// session `session_id` names — `WebTransportDatagramDuplexStream.writable`'s
+/// transport primitive.
+///
+/// HTTP/3 datagrams are demultiplexed to a session by a quarter stream id
+/// prefix (RFC 9297 §2.1: the Extended CONNECT stream's id divided by 4 —
+/// that id is always a client-initiated bidirectional stream, `4n`, so the
+/// division is exact) encoded as the frame payload's first QUIC varint; this
+/// writes that prefix, then `data` unmodified, straight into the connection's
+/// Application Data send scheduler ([`super::send_state::ConnectionSendState::enqueue`])
+/// rather than through the stream layer — a QUIC DATAGRAM carries no stream
+/// id of its own to route through `streams_mut()` (RFC 9221 §4), unlike every
+/// other WebTransport primitive this module exposes.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::Header`] if `session_id`'s quarter id could not
+/// be encoded (unreachable for any real stream id — well inside the varint's
+/// 62-bit range), [`WebTransportStreamError::Enqueue`] if the Application
+/// Data space has no send keys installed yet or the frame overflowed the
+/// scheduler's payload budget, or [`WebTransportStreamError::Driver`] if the
+/// flushing turn fails.
+pub fn h3_webtransport_send_datagram_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    session_id: u64,
+    data: &[u8],
+) -> Result<(), WebTransportStreamError> {
+    let quarter_id = session_id / 4;
+    let mut payload =
+        Vec::with_capacity(varint::encoded_len(quarter_id).unwrap_or(1) + data.len());
+    varint::encode(quarter_id, &mut payload).map_err(WebTransportStreamError::Header)?;
+    payload.extend_from_slice(data);
+
+    driver
+        .turn_mut()
+        .turn_mut()
+        .send_mut()
+        .enqueue(
+            super::loss::PacketNumberSpace::ApplicationData,
+            super::quic_frame::Frame::Datagram(payload),
+        )
+        .map_err(WebTransportStreamError::Enqueue)?;
+
+    driver.transmit(Instant::now()).map_err(WebTransportStreamError::Driver)
+}
+
+/// Drains every datagram already queued on `driver`'s socket right now
+/// ([`RequestDriver::poll_incoming_nonblocking`]) and returns the
+/// WebTransport application payload of every QUIC DATAGRAM (RFC 9221) whose
+/// quarter stream id prefix (RFC 9297 §2.1) names the session `session_id`,
+/// in arrival order — `WebTransportDatagramDuplexStream.readable`'s transport
+/// primitive.
+///
+/// One [`RequestDriver`] backs exactly one WebTransport session (see
+/// [`h3_webtransport_poll_new_peer_streams_on_driver`]'s doc), so in practice
+/// every drained datagram matches; the quarter id is still checked — and a
+/// mismatch silently dropped — rather than assumed, since nothing in this
+/// module enforces that invariant against a misbehaving peer. A datagram too
+/// short to hold even the quarter-id varint is likewise dropped rather than
+/// surfaced as an error: it cannot have come from a spec-conforming peer, and
+/// a malformed datagram is not this session's problem to report.
+///
+/// # Errors
+///
+/// [`WebTransportStreamError::Driver`] wrapping whatever
+/// [`RequestDriver::poll_incoming_nonblocking`] reported.
+pub fn h3_webtransport_poll_incoming_datagrams_on_driver<T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    session_id: u64,
+) -> Result<Vec<Vec<u8>>, WebTransportStreamError> {
+    driver.poll_incoming_nonblocking(Instant::now()).map_err(WebTransportStreamError::Driver)?;
+    let quarter_id = session_id / 4;
+    Ok(driver
+        .take_datagrams()
+        .into_iter()
+        .filter_map(|payload| {
+            let (id, len) = varint::decode(&payload)?;
+            (id == quarter_id).then(|| payload[len..].to_vec())
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1696,5 +1778,101 @@ mod tests {
         varint::encode(100, &mut header).unwrap();
         assert!(parse_webtransport_uni_header(&header[..header.len() - 1]).is_none());
         assert_eq!(parse_webtransport_uni_header(&header), Some(header.len()));
+    }
+
+    // ---- datagrams (RFC 9221 / RFC 9297 §2.1) --------------------------
+    //
+    // Unlike the stream primitives above, a sent QUIC DATAGRAM leaves no
+    // stream-layer state to inspect afterwards, and its outbound bytes are
+    // addressed with the *peer's* connection id (RFC 9001 Appendix A's
+    // `dcid()`) — looping them straight back into this same connection's
+    // inbound queue does not decode, since receive expects a short header
+    // naming `local_cid()` instead (the shape every other test in this
+    // module's incoming half already uses `one_rtt_packet` to build). So
+    // `send`'s tests only check the frame reached the wire, and the decode
+    // side is exercised independently with a hand-built `Frame::Datagram`,
+    // exactly as [`webtransport_poll_incoming_datagrams_drops_a_datagram_for_a_different_session`]
+    // already does below.
+
+    #[test]
+    fn webtransport_send_datagram_writes_a_frame_onto_the_wire() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        h3_webtransport_send_datagram_on_driver(&mut driver, 0, b"hello")
+            .expect("sends the datagram");
+
+        let sent = &driver.turn_mut().turn_mut().driver_mut().events_mut().transport_mut().sent;
+        assert!(!sent.is_empty(), "the DATAGRAM frame should have been flushed");
+    }
+
+    #[test]
+    fn webtransport_send_datagram_can_be_called_more_than_once() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+
+        h3_webtransport_send_datagram_on_driver(&mut driver, 0, b"first").unwrap();
+        h3_webtransport_send_datagram_on_driver(&mut driver, 0, b"second").unwrap();
+
+        let sent = &driver.turn_mut().turn_mut().driver_mut().events_mut().transport_mut().sent;
+        assert_eq!(sent.len(), 2);
+    }
+
+    /// A QUIC DATAGRAM frame carrying the RFC 9297 §2.1 quarter-stream-id
+    /// prefix for `session_id`, then `payload` — the shape a peer's own
+    /// datagram takes on the wire.
+    fn peer_datagram(session_id: u64, payload: &[u8]) -> Frame {
+        let mut bytes = Vec::new();
+        varint::encode(session_id / 4, &mut bytes).unwrap();
+        bytes.extend_from_slice(payload);
+        Frame::Datagram(bytes)
+    }
+
+    #[test]
+    fn webtransport_poll_incoming_datagrams_strips_the_quarter_id_prefix() {
+        let now = Instant::now();
+        let mut t = transport();
+        t.push_inbound(one_rtt_packet(0, &[peer_datagram(0, b"hello")]));
+        let mut driver = extended_connect_driver(t, now);
+
+        let received =
+            h3_webtransport_poll_incoming_datagrams_on_driver(&mut driver, 0).unwrap();
+        assert_eq!(received, vec![b"hello".to_vec()]);
+    }
+
+    #[test]
+    fn webtransport_poll_incoming_datagrams_preserves_arrival_order() {
+        let now = Instant::now();
+        let mut t = transport();
+        t.push_inbound(one_rtt_packet(0, &[peer_datagram(0, b"first"), peer_datagram(0, b"second")]));
+        let mut driver = extended_connect_driver(t, now);
+
+        let received =
+            h3_webtransport_poll_incoming_datagrams_on_driver(&mut driver, 0).unwrap();
+        assert_eq!(received, vec![b"first".to_vec(), b"second".to_vec()]);
+    }
+
+    #[test]
+    fn webtransport_poll_incoming_datagrams_drops_a_datagram_for_a_different_session() {
+        // Quarter id 1 names session 4 (RFC 9297 §2.1), not this driver's
+        // session 0 — a misbehaving peer's frame is silently dropped rather
+        // than misattributed.
+        let now = Instant::now();
+        let mut t = transport();
+        t.push_inbound(one_rtt_packet(0, &[peer_datagram(4, b"not for you")]));
+        let mut driver = extended_connect_driver(t, now);
+
+        let received =
+            h3_webtransport_poll_incoming_datagrams_on_driver(&mut driver, 0).unwrap();
+        assert!(received.is_empty());
+    }
+
+    #[test]
+    fn webtransport_poll_incoming_datagrams_returns_empty_on_a_silent_transport() {
+        let now = Instant::now();
+        let mut driver = extended_connect_driver(transport(), now);
+        let received =
+            h3_webtransport_poll_incoming_datagrams_on_driver(&mut driver, 0).unwrap();
+        assert!(received.is_empty());
     }
 }

@@ -2453,6 +2453,41 @@ pub trait JsFetchProvider: Send + Sync {
             "WebTransport is not supported by this fetch provider".to_string(),
         ))
     }
+
+    /// Sends `data` as a QUIC DATAGRAM (RFC 9221) on the WebTransport session
+    /// `handle` names — `WebTransportDatagramDuplexStream.writable`'s
+    /// transport primitive (GAP-WEBTRANSPORT/`P3-webtransport` срез
+    /// datagrams-b).
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_send_datagram(&self, handle: i32, data: &[u8]) -> Result<()> {
+        let _ = (handle, data);
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
+
+    /// Drains every QUIC DATAGRAM (RFC 9221) already queued on the
+    /// WebTransport session `handle` names' socket and returns each one's
+    /// application payload, in arrival order —
+    /// `WebTransportDatagramDuplexStream.readable`'s non-blocking poll
+    /// primitive (GAP-WEBTRANSPORT/`P3-webtransport` срез datagrams-b). Never
+    /// blocks, same "poll now, empty if nothing arrived" contract as
+    /// [`webtransport_read_bidi_stream`](Self::webtransport_read_bidi_stream);
+    /// unlike a stream there is no `finished` half to report, since RFC 9221
+    /// datagrams are unreliable and unordered by the transport itself.
+    ///
+    /// Default implementation always reports "unsupported", matching every
+    /// other WebTransport extension point; only `lumen-network::HttpClient`
+    /// overrides it.
+    fn webtransport_poll_incoming_datagrams(&self, handle: i32) -> Result<Vec<Vec<u8>>> {
+        let _ = handle;
+        Err(crate::error::Error::Network(
+            "WebTransport is not supported by this fetch provider".to_string(),
+        ))
+    }
 }
 
 /// Outcome of successfully opening a WebTransport session —
