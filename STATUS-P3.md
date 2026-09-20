@@ -1,7 +1,5 @@
-BUGS.md:229
-BUGS.md:229
-BUGS.md:261
+BUGS.md:260
+BUGS.md:267
 BUGS.md:268
 BUGS.md:269
-BUGS.md:270
 BUGS.md:46
