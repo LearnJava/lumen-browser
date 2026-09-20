@@ -89,6 +89,11 @@ impl Lumen {
                 // arm below already applies for `_top`.
                 if links::is_navigable_href(&href) {
                     let resolved = resolve_and_upgrade_frame_href(csp_gate.as_ref(), &nav_base, &href);
+                    // GAP-CSPENF срез 55: политика РЕБЁНКА — та же, что уже
+                    // резолвит и апгрейжит `resolved` выше — тот же приём, что
+                    // `click.rs`'s собственная `_blank`-ветка уже даёт
+                    // top-level ссылке.
+                    let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate.as_ref());
                     let t = target_attr.trim();
                     // GAP-NAVCTX срез 12 (BUG-883): `target` reaches this arm
                     // both for the reserved `_blank` and for a genuine name
@@ -105,7 +110,7 @@ impl Lumen {
                         // `click.rs`'s identical branch for why.
                         lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
                         self.switch_tab(tab_idx);
-                        self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                        self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
                         return true;
                     }
                     // GAP-NAVCTX срез 10 (BUG-797): same pending-opener
@@ -137,7 +142,7 @@ impl Lumen {
                     if !t.is_empty() && !t.eq_ignore_ascii_case("_blank") {
                         lumen_js::window_messaging::arm_pending_window_name(t.to_owned());
                     }
-                    self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                    self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
                     if !has_noopener {
                         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                             j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
@@ -332,7 +337,10 @@ impl Lumen {
             self.navigate_fragment(frag);
             return;
         }
-        self.navigate_to(PageSource::from_arg(Some(&resolved)));
+        // GAP-CSPENF срез 55: та же политика РЕБЁНКА, что уже апгрейжает схему
+        // строкой выше.
+        let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate);
+        self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
     }
 
     /// Навигация ФРЕЙМА по ссылке ребёнка.
@@ -371,7 +379,8 @@ impl Lumen {
                 return;
             }
         }
-        self.navigate_frame_to(idx, &resolved, nav_base);
+        let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate);
+        self.navigate_frame_to(idx, &resolved, nav_base, Some(uir));
     }
 
     /// Заменить под-документ фрейма `idx` документом по адресу `href`.
@@ -390,7 +399,21 @@ impl Lumen {
     /// идёт и обратная навигация по истории ([`Self::traverse_frame`]),
     /// которой новый push уже не нужен: он случился здесь, при первой
     /// навигации.
-    pub(crate) fn navigate_frame_to(&mut self, idx: usize, href: &str, nav_base: &ResourceBase) {
+    ///
+    /// `uir_override` — GAP-CSPENF срез 55, прямиком в [`frames::spawn_frame`]'s
+    /// одноимённый параметр: `None` — решает `csp_gate` ХОЗЯИНА целевого
+    /// фрейма (верно для `click.rs`/`frame_dynamic.rs`/
+    /// `frame_form_submit.rs` — там инициатор и хозяин совпадают), `Some(flag)`
+    /// — вызывающая сторона уже прочитала политику НАСТОЯЩЕГО инициатора,
+    /// отличного от хозяина (сегодня — только ссылка ВНУТРИ самого фрейма,
+    /// `frame_links.rs::navigate_frame_from_link`).
+    pub(crate) fn navigate_frame_to(
+        &mut self,
+        idx: usize,
+        href: &str,
+        nav_base: &ResourceBase,
+        uir_override: Option<bool>,
+    ) {
         // Снимок identity+адреса ДО замены хэндла: после неё `idx` уже не
         // адресует этот фрейм (см. doc `replace_frame_document`).
         let history_step = self
@@ -398,7 +421,7 @@ impl Lumen {
             .get(idx)
             .filter(|h| h.parent_doc.is_none())
             .map(|h| (h.host, h.url.clone()));
-        if !self.replace_frame_document(idx, href, nav_base) {
+        if !self.replace_frame_document(idx, href, nav_base, uir_override) {
             return;
         }
         let Some((host, prev_url)) = history_step else { return };
@@ -433,7 +456,13 @@ impl Lumen {
     /// применяет [`Self::on_frame_nav_done`]. История и сброс hover/focus/
     /// active читают только адрес и identity, известные ДО сети, поэтому
     /// синхронный «принят» — всё, что им нужно.
-    fn replace_frame_document(&mut self, idx: usize, href: &str, nav_base: &ResourceBase) -> bool {
+    fn replace_frame_document(
+        &mut self,
+        idx: usize,
+        href: &str,
+        nav_base: &ResourceBase,
+        uir_override: Option<bool>,
+    ) -> bool {
         let Some(env) = self.frame_env.clone() else {
             eprintln!("iframe: навигация '{href}' без окружения загрузки страницы — пропуск");
             return false;
@@ -457,7 +486,7 @@ impl Lumen {
         let proxy = self.load_proxy.clone();
         std::thread::spawn(move || {
             let old_doc = Arc::clone(&prep.old_doc);
-            let handles = frames::run_frame_navigation(&prep, &href, &nav_base, &page_doc, &env);
+            let handles = frames::run_frame_navigation(&prep, &href, &nav_base, &page_doc, &env, uir_override);
             let _ = proxy.send_event(LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles });
         });
         true
@@ -522,7 +551,10 @@ impl Lumen {
             .position(|h| h.host == host && h.parent_doc.is_none())?;
         let prev_url = self.frames[idx].url.clone();
         let nav_base = self.frames[idx].base.clone();
-        self.replace_frame_document(idx, target_url, &nav_base)
+        // История не несёт своей CSP-политики — тот же документ уже был
+        // показан раньше, а не заново гейтится: `None` отдаёт решение
+        // `csp_gate` хозяина, как и любая другая навигация ХОЗЯИНОМ.
+        self.replace_frame_document(idx, target_url, &nav_base, None)
             .then_some(prev_url)
     }
 

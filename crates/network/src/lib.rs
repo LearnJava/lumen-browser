@@ -3658,7 +3658,7 @@ impl HttpClient {
         url: &Url,
         destination: RequestDestination,
     ) -> Result<Vec<u8>> {
-        self.fetch_subresource_inner(url, destination)
+        self.fetch_subresource_inner(url, destination, false)
             .map(|(body, _content_type)| body)
     }
 
@@ -3673,14 +3673,31 @@ impl HttpClient {
         url: &Url,
         destination: RequestDestination,
     ) -> Result<(Vec<u8>, Option<String>)> {
-        self.fetch_subresource_inner(url, destination)
+        self.fetch_subresource_inner(url, destination, false)
+    }
+
+    /// Same fetch as [`Self::fetch_subresource`] with `RequestDestination::
+    /// Document`, plus an optional `Upgrade-Insecure-Requests: 1` header —
+    /// GAP-CSPENF срез 55: `<iframe>`/`<frame>` navigation is a document
+    /// fetch that never went through [`Self::fetch_page`], so it never got
+    /// the header срез 54 added there. `send_uir_header` is `true` when the
+    /// PARENT document that initiated this frame's navigation declared
+    /// `upgrade-insecure-requests` (UIR §4.1 steps 1-2 apply to "the
+    /// navigable and its descendant navigables" — the same `csp_gate` tuple
+    /// `frames.rs::spawn_frame` already reads once for `frame-src`/URL
+    /// upgrade, not the child's own, not-yet-fetched policy).
+    pub fn fetch_subresource_document(&self, url: &Url, send_uir_header: bool) -> Result<Vec<u8>> {
+        self.fetch_subresource_inner(url, RequestDestination::Document, send_uir_header)
+            .map(|(body, _content_type)| body)
     }
 
     fn fetch_subresource_inner(
         &self,
         url: &Url,
         destination: RequestDestination,
+        send_uir_header: bool,
     ) -> Result<(Vec<u8>, Option<String>)> {
+        let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         // BUG-839: Resource Timing needs the two ends of the request. Wall
@@ -3710,6 +3727,7 @@ impl HttpClient {
             }
             if !snap.conditional_headers.is_empty() {
                 // Stale entry with validators — conditional GET.
+                let combined_extra_headers = format!("{uir_header}{}", snap.conditional_headers);
                 let (resp, _final_url) = fetch_with_redirect(
                     url,
                     5,
@@ -3730,7 +3748,7 @@ impl HttpClient {
                     self.mixed_content.as_ref(),
                     Some(destination),
                     None,
-                    &snap.conditional_headers,
+                    &combined_extra_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
                     self.proxy.as_deref(),
@@ -3793,7 +3811,7 @@ impl HttpClient {
             self.mixed_content.as_ref(),
             Some(destination),
             None,
-            "",
+            uir_header,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
