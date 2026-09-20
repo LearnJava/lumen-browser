@@ -35,8 +35,14 @@ use crate::{
 /// Default timeout for a single automation round-trip to the live window.
 ///
 /// Generous enough for a real page navigation (network fetch + layout) but
-/// still bounded — a hung shell must not block the caller forever.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// still bounded — a hung shell must not block the caller forever. Must
+/// exceed `lumen_network`'s `FETCH_READ_TIMEOUT` (60s, private to that
+/// crate): the automation command channel is an ordered FIFO shared with
+/// synchronous network reads (BUG-935 S4-S10), so any command queued behind
+/// a slow-but-bounded fetch/handshake can legitimately take up to that long
+/// to resolve — a shorter value here reports a spurious "automation command
+/// timed out" for a shell that is not actually hung (BUG-935 S11).
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(65);
 
 /// [`BrowserSession`] adapter that drives a live `lumen-shell` window through
 /// its [`AutomationHandle`] channel (SDC-2).
