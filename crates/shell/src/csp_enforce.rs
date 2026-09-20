@@ -81,7 +81,7 @@
 //! (`frames.rs::load_frame_fonts`) не тронуты.
 //!
 //! Срез 20 добавил `'sha256-…'`/`'sha384-…'`/`'sha512-…'` (CSP3 §8.1) к
-//! [`inline_script_blocked`] — до этого среза `CspSource::Hash` разбирался
+//! `inline_script_blocked` — до этого среза `CspSource::Hash` разбирался
 //! (`crates/network/src/csp.rs`), но не участвовал в проверке: инлайновый
 //! скрипт под политикой, чей единственный разрешённый источник — хэш, читался
 //! как всегда заблокированный. Тело скрипта хэшируется новым
@@ -95,7 +95,7 @@
 //!
 //! Срез 21 добавил `style-src`/`default-src` против инлайновых `<style>` —
 //! [`inline_style_blocked`], тот же `'unsafe-inline'`/`'nonce-…'`/
-//! `'sha256-…'`-набор, что [`inline_script_blocked`] уже даёт скриптам,
+//! `'sha256-…'`-набор, что `inline_script_blocked` уже даёт скриптам,
 //! только применённый к `CspDirective::StyleSrc`. Гейт стоит в
 //! `doc_extract::walk_style_blocks`, до склейки каскада: заблокированный
 //! `<style>`-узел не попадает в текст, который парсит [`lumen_css_parser`],
@@ -153,7 +153,7 @@
 //! минуя промежуточный `child-src`, который спека требует проверить первым.
 //! Новый [`CspPolicy::fetch_directive_allows_via_child_src`] — тот же метод,
 //! что срез 23 уже даёт `style-src-attr` (одним уровнем глубже общего
-//! случая), применённый к [`frame_src_blocked`] (этот файл) и
+//! случая), применённый к `frame_src_blocked` (этот файл) и
 //! `worker_src_gate` (`crates/network/src/lib.rs`, вне этого файла — та же
 //! причина, что у срезов 10/13: нет `&Document` в точке принятия решения).
 //!
@@ -249,6 +249,27 @@
 //! фетчится этим движком, гейтить нечего), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает). См.
 //! `bugs/BUG-811-OPEN.md`.
+//!
+//! Срез 56 закрыл дрейф, который [`document_csp_policy`]'s doc comment сам
+//! называл открытым: каждая точка диспетчеризации `securitypolicyviolation`
+//! несла ЕГО объединённый (`"; "`-joined) текст всех политик документа как
+//! `originalPolicy`, даже когда нарушила ровно одна — CSP3 §7.8 хочет текст
+//! ИМЕННО нарушенной политики. [`CspPolicy`] (`crates/network/src/csp.rs`)
+//! получил поле `raw` (сырой текст, из которого распарсена именно эта
+//! политика); новые `violating_*` функции этого файла ищут первую политику
+//! из `&[CspPolicy]`, которая ФАКТИЧЕСКИ нарушена данной проверкой, и
+//! возвращают `Some(&её.raw)` вместо `bool` — каждый call site, что диспатчит
+//! событие, зовёт `violating_*` вместо `document_csp_policy`'s объединённого
+//! текста. Не покрыто этим срезом: `blocked_inline_style_count`/
+//! `blocked_style_attr_nodes` (`page_pipeline.rs`/`frames.rs`) — обе точки
+//! давно свернули список нарушений в счётчик до диспетчеризации, тело
+//! конкретного `<style>`/атрибута к моменту диспатча уже потеряно, поэтому
+//! они продолжают нести объединённый текст; per-инстанс исправление требует
+//! сначала пронести тела через `doc_extract`'s API, не только счётчик.
+//! CSP3 §7.8 также хочет ОТДЕЛЬНЫЙ отчёт на КАЖДУЮ нарушенную политику, если
+//! их несколько сразу — этот срез даёт текст первой нарушившей, не список
+//! всех; многополитийное одновременное нарушение одного и того же ресурса
+//! встречается редко и остаётся отдельным пробелом.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;
@@ -316,25 +337,19 @@ pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(Vec<C
     Some((policies, combined))
 }
 
-/// `true`, если `script-src` (или `default-src`) документа запрещает
-/// инлайновое исполнение с данным `nonce` (атрибут `nonce` элемента
-/// `<script>`, `None` — атрибута нет) и телом `body` — срез 20 добавил
-/// проверку `'sha256-…'`/`'sha384-…'`/`'sha512-…'` (CSP3 §8.1): тело
-/// хэшируется под КАЖДЫМ алгоритмом, названным хотя бы одним источником
-/// директивы (обычно один, но политика вправе перечислить несколько), а не
-/// только под первым встреченным — совпадение любого достаточно.
-///
-/// Отсутствие директивы, применимой к скриптам, — не нарушение (страница не
-/// объявляла ограничения). `'strict-dynamic'` без совпавшего nonce/хэша НЕ
-/// разрешает голый инлайн (CSP3 §8.2) — здесь не учитывается умышленно, тем
-/// самым инлайн без nonce/хэша остаётся заблокированным.
-pub(crate) fn inline_script_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
+/// Срез 56: test-only now — production callers switched to
+/// [`violating_inline_policy`] so a fired `securitypolicyviolation` carries
+/// the specific violated policy's text, not just a bool. Kept for the unit
+/// tests below, which exercise [`inline_directive_blocked`] through this
+/// name.
+#[cfg(test)]
+fn inline_script_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
     inline_directive_blocked(policies, &CspDirective::ScriptSrc, nonce, body)
 }
 
 /// `true`, если `style-src` (или `default-src`) документа запрещает данный
 /// инлайновый `<style>` — срез 21, тот же `'unsafe-inline'`/`'nonce-…'`/
-/// `'sha256-…'` набор источников, что [`inline_script_blocked`] уже даёт
+/// `'sha256-…'` набор источников, что инлайновый `<script>` уже даёт
 /// скриптам, применённый к `CspDirective::StyleSrc`. Атрибут `style=` и
 /// событийные обработчики этим не покрыты — только тело `<style>`.
 pub(crate) fn inline_style_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
@@ -378,7 +393,7 @@ fn single_style_attribute_blocked(policy: &CspPolicy, body: &str) -> bool {
     !allowed
 }
 
-/// Общая проверка [`inline_script_blocked`]/[`inline_style_blocked`]: любой
+/// Общая проверка `inline_script_blocked`/[`inline_style_blocked`]: любой
 /// совпавший источник (`'unsafe-inline'` ИЛИ nonce ИЛИ хэш) допускает
 /// инлайн; отсутствие директивы, применимой к `directive`, — не нарушение.
 fn inline_directive_blocked(
@@ -429,11 +444,13 @@ pub(crate) fn fire_script_src_violation(
     ));
 }
 
-/// `true` if `script-src` (or `default-src`) forbids fetching the external
-/// `<script src>` at `url` — срез 6, external counterpart to
-/// [`inline_script_blocked`]. Same "don't invent a violation" stance as
-/// [`img_src_blocked`]: a `url` that fails to parse is treated as allowed.
-pub(crate) fn script_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
+/// Срез 56: test-only now — the one production caller
+/// (`scripts.rs::resolve_script_sources`) switched to
+/// [`violating_fetch_policy`] so a blocked external `<script src>` reports the
+/// specific violated policy's text, not just a bool. Kept for the unit tests
+/// below.
+#[cfg(test)]
+fn script_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
@@ -525,7 +542,7 @@ pub(crate) fn img_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Op
 
 /// `true` if `style-src` (or `default-src`) forbids fetching the external
 /// `<link rel=stylesheet>` at `url` — срез 7, same fetch-gate shape as
-/// [`img_src_blocked`]/[`script_src_blocked`]: absence of a policy is not
+/// [`img_src_blocked`]/`script_src_blocked`: absence of a policy is not
 /// checked here (the caller only calls this when a policy exists), and a
 /// `url` that fails to parse is treated as allowed.
 pub(crate) fn style_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
@@ -537,17 +554,13 @@ pub(crate) fn style_src_blocked(policies: &[CspPolicy], url: &str, self_origin: 
         .any(|policy| !policy.fetch_directive_allows(&CspDirective::StyleSrc, &parsed, self_origin))
 }
 
-/// `true` if `frame-src` (falling back to `child-src`, then `default-src` —
-/// срез 26) forbids navigating a nested `<iframe>`/`<frame>` to `url` — срез
-/// 15, same fetch-gate shape as
-/// [`img_src_blocked`]/[`script_src_blocked`]/[`style_src_blocked`]: absence
-/// of a policy is not checked here (the caller only calls this when a policy
-/// exists), and a `url` that fails to parse is treated as allowed (the
-/// caller's own scheme special-cases — `about:blank`, empty `src` — are
-/// expected to have already been filtered out before this is called, since
-/// those never reach the network/filesystem and CSP3 §6.5 does not restrict
-/// them).
-pub(crate) fn frame_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
+/// Срез 56: test-only now — the one production caller
+/// (`frames.rs`'s `frame_src_check`) switched to
+/// [`violating_fetch_policy_via_child_src`] so a blocked `<iframe>` navigation
+/// reports the specific violated policy's text, not just a bool. Kept for the
+/// unit tests below.
+#[cfg(test)]
+fn frame_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
@@ -556,18 +569,12 @@ pub(crate) fn frame_src_blocked(policies: &[CspPolicy], url: &str, self_origin: 
     })
 }
 
-/// `true` if `media-src` (or `default-src`) forbids fetching `url` as a
-/// `<track src>` WebVTT body — срез 17, same fetch-gate shape as
-/// [`img_src_blocked`]/[`style_src_blocked`]/[`frame_src_blocked`].
-///
-/// This is the shell's half of the `media-src` gate, and it exists because
-/// `<track>` bodies are fetched **twice** by this engine from two unrelated
-/// places: the JS shim's own `readTrackBody` (gated by the native
-/// `_lumen_check_media_src` binding, `lumen-network`) and — before any JS runs
-/// — `tracks::load_video_tracks`, the shell's overlay snapshot, which has a
-/// `&Document` and so is gated here instead. Gating only the shim's half left
-/// the bytes going out anyway.
-pub(crate) fn media_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
+/// Срез 56: test-only now — the one production caller
+/// (`page_pipeline.rs`'s `load_video_tracks` closure) switched to
+/// [`violating_fetch_policy`] so a blocked `<track src>` reports the specific
+/// violated policy's text, not just a bool. Kept for the unit tests below.
+#[cfg(test)]
+fn media_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
@@ -625,14 +632,13 @@ pub(crate) fn form_action_blocked(
         .any(|policy| !policy.form_action_allowed(&parsed, self_origin))
 }
 
-/// `true` if `base-uri` forbids setting this document's base URL to
-/// `base_url` via `<base href>` — срез 32, the third navigation directive
-/// this module enforces (see [`frame_ancestors_blocked`]/[`form_action_blocked`]
-/// for the first two): no `default-src` fallback, absence of a policy is not
-/// checked here (the caller only calls this when a policy exists), and a
-/// `base_url` that fails to parse is treated as allowed, same as every
-/// fetch-gate above.
-pub(crate) fn base_uri_blocked(
+/// Срез 56: test-only now — the one production caller
+/// (`page_pipeline.rs::base_uri_href_blocked`) switched to
+/// [`violating_base_uri_policy`] so a blocked `<base href>` reports the
+/// specific violated policy's text, not just a bool. Kept for the unit tests
+/// below.
+#[cfg(test)]
+fn base_uri_blocked(
     policies: &[CspPolicy],
     base_url: &str,
     self_origin: Option<&Origin>,
@@ -648,7 +654,7 @@ pub(crate) fn base_uri_blocked(
 /// `true` if `navigate-to` forbids this document from navigating to
 /// `target_url` — срез 33, the fourth navigation directive this module
 /// enforces (see [`frame_ancestors_blocked`]/[`form_action_blocked`]/
-/// [`base_uri_blocked`] for the first three): no `default-src` fallback,
+/// `base_uri_blocked` for the first three): no `default-src` fallback,
 /// absence of a policy is not checked here (the caller only calls this when a
 /// policy exists), and a `target_url` that fails to parse is treated as
 /// allowed, same as every fetch-gate above.
@@ -663,6 +669,73 @@ pub(crate) fn navigate_to_blocked(
     policies
         .iter()
         .any(|policy| !policy.navigate_to_allowed(&parsed, self_origin))
+}
+
+/// Срез 56: text of the FIRST policy in `policies` whose `directive` (or
+/// `default-src` fallback) forbids fetching `url` — the specific policy
+/// `SecurityPolicyViolationEvent.originalPolicy` (CSP3 §7.8) should carry,
+/// unlike [`document_csp_policy`]'s combined text of every policy the
+/// document declared. `None` both when nothing is violated and when `url`
+/// fails to parse (same "don't invent a violation" stance as every
+/// `*_blocked` fetch-gate above).
+pub(crate) fn violating_fetch_policy<'a>(
+    policies: &'a [CspPolicy],
+    directive: &CspDirective,
+    url: &str,
+    self_origin: Option<&Origin>,
+) -> Option<&'a str> {
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    policies
+        .iter()
+        .find(|policy| !policy.fetch_directive_allows(directive, &parsed, self_origin))
+        .map(|policy| policy.raw.as_str())
+}
+
+/// Same as [`violating_fetch_policy`], through the extra `child-src` fallback
+/// step `frame-src`/`worker-src` get (CSP3 §6.4) — mirrors
+/// `frame_src_blocked`'s own fallback chain.
+pub(crate) fn violating_fetch_policy_via_child_src<'a>(
+    policies: &'a [CspPolicy],
+    directive: &CspDirective,
+    url: &str,
+    self_origin: Option<&Origin>,
+) -> Option<&'a str> {
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    policies
+        .iter()
+        .find(|policy| !policy.fetch_directive_allows_via_child_src(directive, &parsed, self_origin))
+        .map(|policy| policy.raw.as_str())
+}
+
+/// Inline counterpart of [`violating_fetch_policy`]: text of the first policy
+/// whose inline check (`'unsafe-inline'`/nonce/hash) forbids `body` for
+/// `directive` — same predicate `inline_script_blocked`/
+/// [`inline_style_blocked`] already share via [`single_inline_directive_blocked`].
+pub(crate) fn violating_inline_policy<'a>(
+    policies: &'a [CspPolicy],
+    directive: &CspDirective,
+    nonce: Option<&str>,
+    body: &str,
+) -> Option<&'a str> {
+    policies
+        .iter()
+        .find(|policy| single_inline_directive_blocked(policy, directive, nonce, body))
+        .map(|policy| policy.raw.as_str())
+}
+
+/// `base-uri` counterpart of [`violating_fetch_policy`] — text of the first
+/// policy whose `base-uri` forbids `base_url`, same predicate
+/// `base_uri_blocked` already uses.
+pub(crate) fn violating_base_uri_policy<'a>(
+    policies: &'a [CspPolicy],
+    base_url: &str,
+    self_origin: Option<&Origin>,
+) -> Option<&'a str> {
+    let parsed = lumen_core::url::Url::parse(base_url).ok()?;
+    policies
+        .iter()
+        .find(|policy| !policy.base_uri_allowed(&parsed, self_origin))
+        .map(|policy| policy.raw.as_str())
 }
 
 #[cfg(test)]

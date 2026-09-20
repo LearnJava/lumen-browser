@@ -3215,3 +3215,73 @@ warnings` — чисто. `scripts/scoped-test.sh` — один красный �
 что и у срезов 50-54 (заголовок решается заново на каждый вызов из уже
 читаемой в момент навигации политики). Остаток общего списка дорожки не
 изменился: `report-to`, `manifest-src`, честная per-policy `originalPolicy`.
+
+## Срез 56 (2026-09-20, `p6-gap-cspenf-srez56`) — честная per-policy `originalPolicy`
+
+Закрыл дрейф, который срез 40 (§3.4, независимые политики) сам оставил
+открытым и который прошлый список «не покрыто» держал с тех пор: каждая
+точка диспетчеризации `securitypolicyviolation` несла ЕГО объединённый
+(`"; "`-joined) текст ВСЕХ политик документа как `originalPolicy`, даже когда
+нарушила ровно одна — CSP3 §7.8 хочет текст именно нарушенной политики.
+
+- **`lumen_network::csp::CspPolicy`** (`crates/network/src/csp.rs`) получил
+  поле `raw: String` — сырой текст, из которого распарсена именно эта
+  политика; `parse_csp_header`/`parse_csp_report_only_header` заполняют его
+  из уже принятого параметра `header`, без нового прохода.
+- **`csp_enforce.rs`** получил четыре `violating_*` функции
+  (`violating_fetch_policy`, `violating_fetch_policy_via_child_src` —
+  `frame-src`/`worker-src`-фолбэк, `violating_inline_policy`,
+  `violating_base_uri_policy`): каждая ищет первую политику из `&[CspPolicy]`,
+  которая ФАКТИЧЕСКИ нарушена данной проверкой, и возвращает `Some(&её.raw)`
+  вместо `bool`. Старые `_blocked` функции с производственным вызовом только
+  через один call site (`inline_script_blocked`, `script_src_blocked`,
+  `frame_src_blocked`, `media_src_blocked`, `base_uri_blocked`) стали
+  `#[cfg(test)]`-only — их предикат теперь целиком выражен через
+  `violating_*`, а старые unit-тесты остались как регресс-проверка самого
+  предиката.
+- Каждый call site, что диспатчит `securitypolicyviolation` и имел под рукой
+  `self_origin`/URL/тело в момент диспатча (или мог получить их дёшево),
+  переключён на `violating_*` вместо `document_csp_policy`'s объединённого
+  текста: `scripts.rs` (внешний и инлайновый `<script src>`/классический и
+  модульный — `ResolvedScript.csp_blocked` сменил тип `bool` → `Option<String>`,
+  захватывая текст ИМЕННО в `resolve_script_sources`, где `self_origin` ещё в
+  скоупе — `run_scripts_with_dom` его не имеет), `frames.rs` (`frame-src` на
+  навигации `<iframe>`, и img-src/style-src/font-src/bg-img-src в агрегате
+  среза 25), `page_load.rs` (img-src в стриминговом/lazy пути, font-src),
+  `page_pipeline.rs` (img-src, media-src — `<track>` захватывает текст сразу
+  внутри `load_video_tracks`'s замыкания вместо счётчика URL, style-src,
+  bg-img-src — `fetch_and_decode_background_images`/
+  `subresources::fetch_and_decode_background_images` сменили `Vec<String>`
+  заблокированных на `Vec<(String, String)>` с текстом политики), `base-uri`
+  (`base_uri_href_blocked` теперь возвращает `(resolved, policy_text)` одним
+  проходом вместо повторного `document_csp_policy` в точке диспатча).
+- **Не покрыто этим срезом**: `blocked_inline_style_count`/
+  `blocked_style_attr_nodes` (`page_pipeline.rs`, `frames.rs`, `relayout.rs`)
+  — все три давно свернули список нарушений инлайновых `<style>`/атрибутов
+  `style=""` в СЧЁТЧИК до диспетчеризации; тело конкретного блока/атрибута к
+  моменту диспатча уже потеряно, поэтому они продолжают нести объединённый
+  текст. Починка требует сначала пронести тела через `doc_extract`'s API
+  (`walk_style_blocks`/`walk_style_attrs`/`collect_style_attr_csp_blocked`),
+  не только счётчик — отдельный, более узкий срез. CSP3 §7.8 также хочет
+  ОТДЕЛЬНЫЙ отчёт на КАЖДУЮ нарушенную политику при одновременном нарушении
+  нескольких — этот срез даёт текст ПЕРВОЙ нарушившей, не список всех;
+  одновременное нарушение одного ресурса несколькими политиками сразу
+  встречается редко и остаётся отдельным пробелом.
+
+`cargo test -p lumen-shell --profile dev-release --features v8 --bin lumen --
+csp frame navigate form click` — 370 passed (без нового падения). `cargo test
+-p lumen-network --profile dev-release --lib` — 2294 passed. `cargo clippy -p
+lumen-network -p lumen-shell --all-targets --features v8 -- -D warnings` —
+чисто. `scripts/scoped-test.sh` дважды дал разные, невоспроизводимые красные
+(`lumen-driver::cases::snapshot_cpu::cpu_snapshots_match_references` — тот же
+известный несвязанный класс дрейфа, что [BUG-1008](BUG-1008-OPEN.md); во
+второй прогон вместо него — таймингово-чувствительные `lumen-js::
+dom::tests::v8_webworker::*`/`v8_runtime::tests::dom_suspend_focus::
+bounded_document_lock_waits_out_another_thread`, ни разу не тот же набор
+между прогонами и ни один не в затронутых этим срезом файлах) — не
+регрессия этого среза.
+
+Остаток общего списка дорожки не изменился: `report-to` (нужны группы
+эндпоинтов из `Report-To`, этот движок его не разбирает), `manifest-src`
+(движок не фетчит веб-манифест вовсе — гейтить нечего), агрегированный
+инлайн-счётчик выше.

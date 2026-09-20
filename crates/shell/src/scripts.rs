@@ -157,11 +157,16 @@ pub(crate) struct ResolvedScript {
     /// `None` не диспатчит ничего: у инлайнового скрипта «from an external
     /// file» ложно, и события по спецификации нет вовсе.
     pub(crate) external_ok: Option<bool>,
-    /// GAP-CSPENF срез 6: `true` when `external_ok == Some(false)` because
+    /// GAP-CSPENF срез 6: `Some(_)` when `external_ok == Some(false)` because
     /// `script-src`/`default-src` blocked the fetch (not a network/decode
     /// failure) — the caller uses this to fire `securitypolicyviolation`
     /// alongside the element's `error` event, with `url` as `blockedURI`.
-    pub(crate) csp_blocked: bool,
+    /// Срез 56: carries the SPECIFIC violating policy's raw text (captured in
+    /// [`resolve_script_sources`], where `self_origin` is still in scope),
+    /// not `run_scripts_with_dom`'s later, combined `document_csp_policy`
+    /// text — that document does not have `self_origin` available to
+    /// re-derive which policy actually blocked this URL.
+    pub(crate) csp_blocked: Option<String>,
 }
 
 impl ResolvedScript {
@@ -172,15 +177,22 @@ impl ResolvedScript {
     /// сообщить странице об отказе. Заодно узел остаётся границей отрезка в
     /// [`ParserInsertLog`] — настоящий парсер тоже вставил его в дерево.
     fn failed(node: NodeId) -> Self {
-        Self { node, source: String::new(), url: None, external_ok: Some(false), csp_blocked: false }
+        Self { node, source: String::new(), url: None, external_ok: Some(false), csp_blocked: None }
     }
 
     /// Внешний `<script src>`, чей fetch `script-src`/`default-src`
     /// запретил до сети (GAP-CSPENF срез 6) — тот же "нет тела → `error`"
     /// исход, что и [`Self::failed`], плюс резолвленный `url` для
-    /// `securitypolicyviolation.blockedURI`.
-    fn blocked_by_csp(node: NodeId, url: String) -> Self {
-        Self { node, source: String::new(), url: Some(url), external_ok: Some(false), csp_blocked: true }
+    /// `securitypolicyviolation.blockedURI` и `policy_text` — сырой текст
+    /// нарушенной политики (срез 56) для `originalPolicy`.
+    fn blocked_by_csp(node: NodeId, url: String, policy_text: String) -> Self {
+        Self {
+            node,
+            source: String::new(),
+            url: Some(url),
+            external_ok: Some(false),
+            csp_blocked: Some(policy_text),
+        }
     }
 }
 
@@ -339,7 +351,7 @@ pub(crate) fn resolve_script_sources(
             source: body.clone(),
             url: None,
             external_ok: None,
-            csp_blocked: false,
+            csp_blocked: None,
         }),
         ScriptSource::External(nid, src) => {
             let resolved_url = base.resolve_str(src);
@@ -354,9 +366,10 @@ pub(crate) fn resolve_script_sources(
                 .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url));
             let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
             if let Some((policy, _)) = &csp_gate
-                && crate::csp_enforce::script_src_blocked(policy, gate_url, self_origin.as_ref())
+                && let Some(policy_text) =
+                    crate::csp_enforce::violating_fetch_policy(policy, &lumen_network::csp::CspDirective::ScriptSrc, gate_url, self_origin.as_ref())
             {
-                return Some(ResolvedScript::blocked_by_csp(*nid, gate_url.to_owned()));
+                return Some(ResolvedScript::blocked_by_csp(*nid, gate_url.to_owned(), policy_text.to_owned()));
             }
             match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
@@ -367,7 +380,7 @@ pub(crate) fn resolve_script_sources(
                         source: content,
                         url: None,
                         external_ok: Some(true),
-                        csp_blocked: false,
+                        csp_blocked: None,
                     })
                 }
                 Err(e) => {
@@ -413,7 +426,7 @@ pub(crate) fn resolve_script_sources(
                             // относительных импортов внутри модуля.
                             url: Some(url.clone()),
                             external_ok: Some(true),
-                            csp_blocked: false,
+                            csp_blocked: None,
                         })
                     }
                     Err(e) => {
@@ -779,11 +792,9 @@ pub(crate) fn run_scripts_with_dom(
                     // нарушение — `securitypolicyviolation` с резолвленным
                     // `url` как `blockedURI`.
                     if *external_ok == Some(false) {
-                        if *csp_blocked
-                            && let Some((_, original_policy)) = &csp_policy
-                        {
+                        if let Some(policy_text) = csp_blocked {
                             let blocked_uri = url.as_deref().unwrap_or("");
-                            crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, original_policy);
+                            crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, policy_text);
                         }
                         fire_parser_script_event(&rt, *nid, *external_ok);
                         continue;
@@ -793,14 +804,22 @@ pub(crate) fn run_scripts_with_dom(
                     // None`); внешний `<script src>` покрыт срезом 6 выше,
                     // до этого места (fetch не выполнялся вовсе).
                     if external_ok.is_none()
-                        && let Some((policy, original_policy)) = &csp_policy
+                        && let Some((policy, _)) = &csp_policy
                     {
                         let nonce = {
                             let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
                             doc.get(*nid).get_attr("nonce").map(str::to_owned)
                         };
-                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref(), src) {
-                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", original_policy);
+                        // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной
+                        // политики (`violating_inline_policy`), не
+                        // объединённый `csp_policy.1`.
+                        if let Some(policy_text) = crate::csp_enforce::violating_inline_policy(
+                            policy,
+                            &lumen_network::csp::CspDirective::ScriptSrc,
+                            nonce.as_deref(),
+                            src,
+                        ) {
+                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", policy_text);
                             fire_parser_script_event(&rt, *nid, *external_ok);
                             continue;
                         }
@@ -845,11 +864,9 @@ pub(crate) fn run_scripts_with_dom(
                     // GAP-CSPENF срез 6: та же CSP-разметка, что у
                     // классических скриптов выше.
                     if item.external_ok == Some(false) {
-                        if item.csp_blocked
-                            && let Some((_, original_policy)) = &csp_policy
-                        {
+                        if let Some(policy_text) = &item.csp_blocked {
                             let blocked_uri = item.url.as_deref().unwrap_or("");
-                            crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, original_policy);
+                            crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, policy_text);
                         }
                         fire_parser_script_event(&rt, item.node, item.external_ok);
                         continue;
@@ -858,14 +875,19 @@ pub(crate) fn run_scripts_with_dom(
                     // скриптов, — инлайновый модуль исполняется JS-текстом
                     // ровно так же, как инлайновый классический.
                     if item.external_ok.is_none()
-                        && let Some((policy, original_policy)) = &csp_policy
+                        && let Some((policy, _)) = &csp_policy
                     {
                         let nonce = {
                             let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
                             doc.get(item.node).get_attr("nonce").map(str::to_owned)
                         };
-                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref(), &item.source) {
-                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", original_policy);
+                        if let Some(policy_text) = crate::csp_enforce::violating_inline_policy(
+                            policy,
+                            &lumen_network::csp::CspDirective::ScriptSrc,
+                            nonce.as_deref(),
+                            &item.source,
+                        ) {
+                            crate::csp_enforce::fire_script_src_violation(&rt, "inline", policy_text);
                             fire_parser_script_event(&rt, item.node, item.external_ok);
                             continue;
                         }

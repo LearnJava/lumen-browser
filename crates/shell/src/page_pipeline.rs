@@ -425,17 +425,18 @@ pub(crate) fn effective_base(doc: &Document, base: &ResourceBase) -> ResourceBas
 /// `securitypolicyviolation` report fired once per document in
 /// `parse_and_layout`, the same one-shot-push shape every other GAP-CSPENF
 /// срез already uses for a directive whose choke point is a pure function
-/// with no `js_ctx`.
-fn base_uri_href_blocked(doc: &Document, base: &ResourceBase, href: &str) -> Option<String> {
+/// with no `js_ctx`. Returns `(resolved href, violating policy's raw text)` —
+/// срез 56 made the second element the SPECIFIC policy `base-uri` violated,
+/// not `document_csp_policy`'s combined text of every policy the document
+/// declared (`SecurityPolicyViolationEvent.originalPolicy`, CSP3 §7.8).
+fn base_uri_href_blocked(doc: &Document, base: &ResourceBase, href: &str) -> Option<(String, String)> {
     let root = doc.root();
     let (policy, _original) = crate::csp_enforce::document_csp_policy(doc, root)?;
     let resolved = base.resolve_str(href);
     let self_origin = base.origin();
-    if crate::csp_enforce::base_uri_blocked(&policy, &resolved, self_origin.as_ref()) {
-        Some(resolved)
-    } else {
-        None
-    }
+    let policy_text =
+        crate::csp_enforce::violating_base_uri_policy(&policy, &resolved, self_origin.as_ref())?;
+    Some((resolved, policy_text.to_owned()))
 }
 
 /// Fetch + parse the page CSS and build the matching font stack (BUG-443).
@@ -1135,14 +1136,19 @@ pub(crate) fn parse_and_layout(
     if !blocked_by_img_src.is_empty()
         && let Some(js) = &js_ctx
     {
-        let original_policy = {
+        let img_src_policy = {
             let d = doc_arc.lock().unwrap();
             let root = d.root();
-            crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
+            crate::csp_enforce::document_csp_policy(&d, root)
         };
-        if let Some(original_policy) = original_policy {
+        if let Some((policy, original_policy)) = &img_src_policy {
+            let self_origin = base.origin();
+            // Срез 56: `originalPolicy` — текст ИМЕННО нарушенной политики.
             for url in &blocked_by_img_src {
-                js.fire_csp_violation("img-src", url, &original_policy);
+                let text = crate::csp_enforce::violating_fetch_policy(
+                    policy, &lumen_network::csp::CspDirective::ImgSrc, url, self_origin.as_ref(),
+                ).unwrap_or(original_policy);
+                js.fire_csp_violation("img-src", url, text);
             }
         }
     }
@@ -1157,7 +1163,7 @@ pub(crate) fn parse_and_layout(
     // showed the shim's gate alone still let `GET /cap.vtt` onto the wire from
     // here, so both halves are needed for the "not a single outgoing byte"
     // invariant to actually hold for `<track>`.
-    let (page_tracks, media_src_original_policy, blocked_by_media_src) = {
+    let (page_tracks, blocked_by_media_src) = {
         let d = doc_arc.lock().unwrap();
         let eff_base = effective_base(&d, base);
         let root = d.root();
@@ -1174,31 +1180,34 @@ pub(crate) fn parse_and_layout(
                 // остальным parser-driven подресурсам (`gate_url`, а не
                 // `abs`, идёт и в `media_src_blocked`, и в `fetch_vtt_text`).
                 let gate_url = crate::csp_enforce::upgrade_insecure_url(policy, &abs).unwrap_or(abs);
-                if crate::csp_enforce::media_src_blocked(policy, &gate_url, self_origin.as_ref()) {
-                    blocked.borrow_mut().push(gate_url);
+                // Срез 56: захватываем текст ИМЕННО нарушенной политики
+                // здесь же, пока `policy`/`self_origin` в скоупе — дешевле и
+                // точнее, чем пересчитывать `document_csp_policy` заново в
+                // точке диспатча ниже.
+                if let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+                    policy, &lumen_network::csp::CspDirective::MediaSrc, &gate_url, self_origin.as_ref(),
+                ) {
+                    blocked.borrow_mut().push((gate_url, policy_text.to_owned()));
                     return None;
                 }
                 return fetch_vtt_text(&gate_url, &eff_base, sink, cookie_jar.clone());
             }
             fetch_vtt_text(src, &eff_base, sink, cookie_jar.clone())
         });
-        (tracks, media_policy.map(|(_, original)| original), blocked.into_inner())
+        (tracks, blocked.into_inner())
     };
 
     // Same deferred-dispatch shape as the `img-src` push above
     // (`blocked_by_img_src`, срез 4): the violation is reported once the JS
     // runtime exists, because the block itself happened before it did.
     #[cfg(feature = "v8")]
-    if !blocked_by_media_src.is_empty()
-        && let Some(js) = &js_ctx
-        && let Some(original_policy) = &media_src_original_policy
-    {
-        for url in &blocked_by_media_src {
-            js.fire_csp_violation("media-src", url, original_policy);
+    if let Some(js) = &js_ctx {
+        for (url, policy_text) in &blocked_by_media_src {
+            js.fire_csp_violation("media-src", url, policy_text);
         }
     }
     #[cfg(not(feature = "v8"))]
-    let _ = (&blocked_by_media_src, &media_src_original_policy);
+    let _ = &blocked_by_media_src;
 
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
@@ -1294,14 +1303,18 @@ pub(crate) fn parse_and_layout(
     if !blocked_by_style_src.is_empty()
         && let Some(js) = &js_ctx
     {
-        let original_policy = {
+        let style_src_policy = {
             let d = doc_arc.lock().unwrap();
             let root = d.root();
-            crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
+            crate::csp_enforce::document_csp_policy(&d, root)
         };
-        if let Some(original_policy) = original_policy {
+        if let Some((policy, original_policy)) = &style_src_policy {
+            let self_origin = base.origin();
             for url in &blocked_by_style_src {
-                js.fire_csp_violation("style-src", url, &original_policy);
+                let text = crate::csp_enforce::violating_fetch_policy(
+                    policy, &lumen_network::csp::CspDirective::StyleSrc, url, self_origin.as_ref(),
+                ).unwrap_or(original_policy);
+                js.fire_csp_violation("style-src", url, text);
             }
         }
     }
@@ -1359,15 +1372,8 @@ pub(crate) fn parse_and_layout(
             d.base_href()
                 .and_then(|href| base_uri_href_blocked(&d, base, href))
         };
-        if let Some(blocked_href) = blocked {
-            let original_policy = {
-                let d = doc_arc.lock().unwrap();
-                let root = d.root();
-                crate::csp_enforce::document_csp_policy(&d, root).map(|(_, original)| original)
-            };
-            if let Some(original_policy) = original_policy {
-                js.fire_csp_violation("base-uri", &blocked_href, &original_policy);
-            }
+        if let Some((blocked_href, policy_text)) = blocked {
+            js.fire_csp_violation("base-uri", &blocked_href, &policy_text);
         }
     }
 
@@ -1412,7 +1418,7 @@ pub(crate) fn parse_and_layout(
     // one-shot-push, что срез 4 уже применяет к `blocked_by_img_src` — здесь
     // это не "до JS-рантайма", а просто "после параллельного фетча".
     let mut images = images;
-    let (bg_original_policy, blocked_by_bg_img_src) = {
+    let blocked_by_bg_img_src = {
         let _s = lumen_core::trace::span("fetch-bg-images", "net");
         let d = doc_arc.lock().unwrap();
         let eff_base = effective_base(&d, base);
@@ -1428,19 +1434,16 @@ pub(crate) fn parse_and_layout(
         for (src, image) in decoded {
             images.push((src, image));
         }
-        (bg_policy.map(|(_, original)| original), blocked)
+        blocked
     };
     #[cfg(feature = "v8")]
-    if !blocked_by_bg_img_src.is_empty()
-        && let Some(js) = &js_ctx
-        && let Some(original_policy) = &bg_original_policy
-    {
-        for url in &blocked_by_bg_img_src {
-            js.fire_csp_violation("img-src", url, original_policy);
+    if let Some(js) = &js_ctx {
+        for (url, policy_text) in &blocked_by_bg_img_src {
+            js.fire_csp_violation("img-src", url, policy_text);
         }
     }
     #[cfg(not(feature = "v8"))]
-    let _ = (blocked_by_bg_img_src, bg_original_policy);
+    let _ = &blocked_by_bg_img_src;
     // BUG-480 срез 15: картинки под-документов фреймов едут в ОБЩИЙ список
     // страницы. Их ключи разрешены относительно базы ребёнка
     // (`frames::frame_image_key`), поэтому со своими ключами страницы они не

@@ -11,6 +11,13 @@
 
 use crate::*;
 
+/// `(decoded background images, `(resolved URL, violating policy's raw text)`
+/// for every `img-src`-blocked one)` — [`fetch_and_decode_background_images`]'s
+/// return shape, named to keep that signature under clippy's
+/// `type_complexity` threshold (срез 56 added the policy text half of the
+/// blocked pair).
+type BackgroundImagesOutcome = (Vec<(String, Arc<lumen_image::Image>)>, Vec<(String, String)>);
+
 /// P3-webvtt срез 3: фетчит текст `.vtt` по `src` из `<track>` (файл или URL).
 /// `None` — ресурс не скачался; страница продолжает жить без субтитров.
 pub(crate) fn fetch_vtt_text(
@@ -44,10 +51,12 @@ pub(crate) fn fetch_vtt_text(
 /// `document_csp_policy`, что срезы 4/7/17 уже передают своим вызовам), если
 /// она есть. URL, запрещённый `img-src`/`default-src`, не доходит до
 /// `fetch_image_bytes` вовсе (тот же принцип «ни одного исходящего байта») и
-/// вместо этого попадает во второй элемент возврата — резолвленные URL для
-/// отложенного `securitypolicyviolation` (эта функция запускается до layout,
-/// поэтому у вызывающей стороны есть URL и до, и после фетча — здесь удобнее
-/// вернуть уже резолвленный, раз gate его всё равно резолвит).
+/// вместо этого попадает во второй элемент возврата — резолвленный URL плюс
+/// текст ИМЕННО нарушенной политики (срез 56) для отложенного
+/// `securitypolicyviolation` (эта функция запускается до layout, поэтому у
+/// вызывающей стороны есть URL и до, и после фетча — здесь удобнее вернуть уже
+/// резолвленный, раз gate его всё равно резолвит; политика захватывается тут
+/// же, а не пересчитывается заново в точке диспатча).
 pub(crate) fn fetch_and_decode_background_images(
     layout: &LayoutBox,
     base: &ResourceBase,
@@ -55,7 +64,7 @@ pub(crate) fn fetch_and_decode_background_images(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
     csp_gate: Option<(&[lumen_network::csp::CspPolicy], Option<&lumen_network::Origin>)>,
-) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<String>) {
+) -> BackgroundImagesOutcome {
     // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
     // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,
     // который эмиттер кладёт в `DrawBackgroundImage.src`.
@@ -68,8 +77,10 @@ pub(crate) fn fetch_and_decode_background_images(
                 ResolvedResource::Url(u) => u.clone(),
                 ResolvedResource::File(p) => p.display().to_string(),
             };
-            if crate::csp_enforce::img_src_blocked(policy, &abs, self_origin) {
-                return Err(abs);
+            if let Some(policy_text) = crate::csp_enforce::violating_fetch_policy(
+                policy, &lumen_network::csp::CspDirective::ImgSrc, &abs, self_origin,
+            ) {
+                return Err((abs, policy_text.to_owned()));
             }
         }
         let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
