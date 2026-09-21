@@ -287,3 +287,6 @@ mod v8_bug930_canvas_wide_gamut;
 
 #[cfg(feature = "v8-backend")]
 mod v8_gap_typedom_transform;
+
+#[cfg(feature = "v8-backend")]
+mod v8_gap_typedom_color;

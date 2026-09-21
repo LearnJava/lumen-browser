@@ -22,8 +22,24 @@
 //!   `geometry_shim.js`), resolving lengths/angles via `CSSUnitValue.to()` —
 //!   no layout context, so a percentage or relative unit throws instead of
 //!   guessing a used value
+//! - `CSSColorValue` family (§5) — `CSSRGB`/`CSSHSL`/`CSSHWB`/`CSSLab`/`CSSLCH`/
+//!   `CSSOKLab`/`CSSOKLCH`/`CSSColor`; component validation checks a leaf
+//!   `CSSUnitValue`'s unit (or, for a `CSSMathValue` tree, every non-`<number>`
+//!   leaf, treating `<number>` operands of a product as the multiplicative
+//!   identity so `CSS.percent(10).mul(2)` types as `<percentage>`) against the
+//!   number/percentage/angle a channel needs — not the full §8.5 numeric-type
+//!   algorithm, so `CSS.percent(10).mul(CSS.percent(20))` is still accepted as
+//!   `<percentage>` here where the spec would type it `<percentage^2>` and
+//!   reject it. A bare JS number normalises to a percentage (`0.5` →
+//!   `CSS.percent(50)`) for every RGB/HSL/HWB channel; hue takes it as
+//!   degrees (matching `hsl()`/`hwb()`/`lch()`/`oklch()`), and Lab/LCH's
+//!   numeric channels keep it as a raw `<number>` instead. Lab/LCH channels
+//!   accept any number/`CSSNumericValue` without the reference-range checks
+//!   the spec defines per colour space.
 //!
-//! Not implemented: `CSSColorValue` family (GAP-TYPEDOM remainder).
+//! Not implemented: `to()`/`equals()` on a `CSSMathValue` or `CSSColorValue`
+//! (no resolution context); `StylePropertyMap.set` reading a `CSSColorValue`
+//! back out through the cascade (round-trips only via its own `cssText`).
 //!
 //! Maps:
 //! - `StylePropertyMapReadOnly` — `element.computedStyleMap()`, reads the resolved cascade
@@ -568,6 +584,190 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     };
   }
 
+  // ── CSSColorValue hierarchy (§5) — colour-space-aware component list ──────────
+  // Construction, component validation/storage and serialisation only — see the
+  // file doc comment for what the type check does and does not cover.
+  function isNoneKeyword(v) {
+    return v instanceof CSSKeywordValue && v.value === 'none';
+  }
+  var ANGLE_UNITS = UNIT_GROUPS[1]; // deg/grad/rad/turn, same table conversionFactor uses.
+  function leafMatches(v, unitOk) {
+    if (v instanceof CSSUnitValue) return unitOk(v.unit);
+    if (v instanceof CSSMathNegate || v instanceof CSSMathInvert) return leafMatches(v.value, unitOk);
+    if (v instanceof CSSMathSum || v instanceof CSSMathMin || v instanceof CSSMathMax) {
+      return v.values.every(function(x) { return leafMatches(x, unitOk); });
+    }
+    if (v instanceof CSSMathProduct) {
+      // A product's type is its non-<number> operand's type (<number> is the
+      // multiplicative identity for this purpose) — unlike sum/min/max, not
+      // every operand needs to satisfy `unitOk` itself, e.g.
+      // `CSS.percent(10).mul(2)` is <percentage>, not "matches nothing".
+      var bareNumbers = v.values.filter(function(x) { return leafMatches(x, function(u) { return u === 'number'; }); });
+      var rest = v.values.filter(function(x) { return bareNumbers.indexOf(x) === -1; });
+      if (rest.length === 0) return unitOk('number');
+      return rest.every(function(x) { return leafMatches(x, unitOk); });
+    }
+    return false;
+  }
+  function matchesPercent(v) { return leafMatches(v, function(u) { return u === 'percent'; }); }
+  function matchesNumber(v) { return leafMatches(v, function(u) { return u === 'number'; }); }
+  function matchesAngle(v) {
+    return leafMatches(v, function(u) { return Object.prototype.hasOwnProperty.call(ANGLE_UNITS, u); });
+  }
+  // A component that is neither <number> nor <percentage> nor <angle> (e.g. a
+  // string, or `CSS.px(1)`) has no home in a colour channel; the three
+  // `matches*` predicates above are how each normaliser tells those apart.
+  function normaliseComponent(v, what, kind) {
+    if (isNoneKeyword(v)) return v;
+    if (kind === 'angle') {
+      if (typeof v === 'number') return new CSSUnitValue(v, 'deg');
+      if (v instanceof CSSNumericValue && matchesAngle(v)) return v;
+      throw new TypeError('CSSColorValue: ' + what + ' must be an angle, a number, or the keyword "none"');
+    }
+    if (typeof v === 'number') {
+      // <number>-typed channels (Lab/LCH lightness and colour axes) keep the
+      // raw value; every other kind treats a bare number as a fraction of 1,
+      // matching CSSRGB's r/g/b/alpha convention (`0.5` -> `CSS.percent(50)`).
+      return kind === 'numberish' ? new CSSUnitValue(v, 'number') : new CSSUnitValue(v * 100, 'percent');
+    }
+    if (v instanceof CSSNumericValue) {
+      if (kind === 'percent' && matchesPercent(v)) return v;
+      if (kind === 'number-or-percent' && (matchesPercent(v) || matchesNumber(v))) return v;
+      if (kind === 'numberish') return v;
+    }
+    throw new TypeError('CSSColorValue: ' + what + ' must be a number, a matching CSSNumericValue, or the keyword "none"');
+  }
+
+  function serialiseColorComponent(v) {
+    return isNoneKeyword(v) ? 'none' : v.toString();
+  }
+  function colorFnCssText(fn, parts, alpha) {
+    var body = fn + '(' + parts.map(serialiseColorComponent).join(' ');
+    var alphaText = serialiseColorComponent(alpha);
+    return (alphaText === '100%' ? body : body + ' / ' + alphaText) + ')';
+  }
+
+  // Not `CSSStyleValue.call(this)` — every concrete subclass below defines
+  // `cssText` as a getter-only accessor (same reason as `CSSTransformValue`
+  // above), and assigning `this.cssText` here would throw against it.
+  function CSSColorValue() {}
+  CSSColorValue.prototype = Object.create(CSSStyleValue.prototype);
+  CSSColorValue.prototype.constructor = CSSColorValue;
+
+  // Defines a validated get/set accessor for one component (§5's attributes
+  // reject an out-of-type assignment the same way the constructor does).
+  function defineColorComponent(ctor, name, kind) {
+    var key = '_' + name;
+    Object.defineProperty(ctor.prototype, name, {
+      get: function() { return this[key]; },
+      set: function(v) { this[key] = normaliseComponent(v, name, kind); },
+      configurable: true
+    });
+  }
+
+  function CSSRGB(r, g, b, alpha) {
+    CSSColorValue.call(this);
+    this.r = r; this.g = g; this.b = b;
+    this.alpha = alpha === undefined ? 1 : alpha;
+  }
+  CSSRGB.prototype = Object.create(CSSColorValue.prototype);
+  CSSRGB.prototype.constructor = CSSRGB;
+  defineColorComponent(CSSRGB, 'r', 'number-or-percent');
+  defineColorComponent(CSSRGB, 'g', 'number-or-percent');
+  defineColorComponent(CSSRGB, 'b', 'number-or-percent');
+  defineColorComponent(CSSRGB, 'alpha', 'percent');
+  Object.defineProperty(CSSRGB.prototype, 'cssText', {
+    get: function() { return colorFnCssText('rgb', [this.r, this.g, this.b], this.alpha); },
+    configurable: true
+  });
+
+  function CSSHSL(h, s, l, alpha) {
+    CSSColorValue.call(this);
+    this.h = h; this.s = s; this.l = l;
+    this.alpha = alpha === undefined ? 1 : alpha;
+  }
+  CSSHSL.prototype = Object.create(CSSColorValue.prototype);
+  CSSHSL.prototype.constructor = CSSHSL;
+  defineColorComponent(CSSHSL, 'h', 'angle');
+  defineColorComponent(CSSHSL, 's', 'percent');
+  defineColorComponent(CSSHSL, 'l', 'percent');
+  defineColorComponent(CSSHSL, 'alpha', 'percent');
+  Object.defineProperty(CSSHSL.prototype, 'cssText', {
+    get: function() { return colorFnCssText('hsl', [this.h, this.s, this.l], this.alpha); },
+    configurable: true
+  });
+
+  function CSSHWB(h, w, b, alpha) {
+    CSSColorValue.call(this);
+    this.h = h; this.w = w; this.b = b;
+    this.alpha = alpha === undefined ? 1 : alpha;
+  }
+  CSSHWB.prototype = Object.create(CSSColorValue.prototype);
+  CSSHWB.prototype.constructor = CSSHWB;
+  defineColorComponent(CSSHWB, 'h', 'angle');
+  defineColorComponent(CSSHWB, 'w', 'percent');
+  defineColorComponent(CSSHWB, 'b', 'percent');
+  defineColorComponent(CSSHWB, 'alpha', 'percent');
+  Object.defineProperty(CSSHWB.prototype, 'cssText', {
+    get: function() { return colorFnCssText('hwb', [this.h, this.w, this.b], this.alpha); },
+    configurable: true
+  });
+
+  function makeLabLike(ctorName, fnName, chanNames) {
+    var ctor = function(c0, c1, c2, alpha) {
+      CSSColorValue.call(this);
+      this[chanNames[0]] = c0; this[chanNames[1]] = c1; this[chanNames[2]] = c2;
+      this.alpha = alpha === undefined ? 1 : alpha;
+    };
+    ctor.prototype = Object.create(CSSColorValue.prototype);
+    ctor.prototype.constructor = ctor;
+    defineColorComponent(ctor, chanNames[0], 'numberish');
+    defineColorComponent(ctor, chanNames[1], 'numberish');
+    defineColorComponent(ctor, chanNames[2], chanNames[2] === 'h' ? 'angle' : 'numberish');
+    defineColorComponent(ctor, 'alpha', 'percent');
+    Object.defineProperty(ctor.prototype, 'cssText', {
+      get: function() {
+        return colorFnCssText(fnName, [this[chanNames[0]], this[chanNames[1]], this[chanNames[2]]], this.alpha);
+      },
+      configurable: true
+    });
+    return ctor;
+  }
+  var CSSLab = makeLabLike('CSSLab', 'lab', ['l', 'a', 'b']);
+  var CSSLCH = makeLabLike('CSSLCH', 'lch', ['l', 'c', 'h']);
+  var CSSOKLab = makeLabLike('CSSOKLab', 'oklab', ['l', 'a', 'b']);
+  var CSSOKLCH = makeLabLike('CSSOKLCH', 'oklch', ['l', 'c', 'h']);
+
+  // §5's `color()` reification — an explicit colour-space name plus a
+  // variable-length channel list (no per-space channel-count check: a
+  // 2-channel `color(srgb 1 0)` is accepted here where a real colour space
+  // has exactly 3).
+  var KNOWN_COLOR_SPACES = {
+    srgb: 1, 'srgb-linear': 1, 'display-p3': 1, 'a98-rgb': 1,
+    'prophoto-rgb': 1, rec2020: 1, xyz: 1, 'xyz-d50': 1, 'xyz-d65': 1
+  };
+  function CSSColor(colorSpace, channels, alpha) {
+    CSSColorValue.call(this);
+    var space = String(colorSpace);
+    if (!Object.prototype.hasOwnProperty.call(KNOWN_COLOR_SPACES, space)) {
+      throw new TypeError('CSSColor: "' + space + '" is not a recognised colour space');
+    }
+    this.colorSpace = space;
+    this.channels = Array.prototype.slice.call(channels || []).map(function(c) {
+      return normaliseComponent(c, 'channel', 'numberish');
+    });
+    this.alpha = alpha === undefined ? 1 : alpha;
+  }
+  CSSColor.prototype = Object.create(CSSColorValue.prototype);
+  CSSColor.prototype.constructor = CSSColor;
+  defineColorComponent(CSSColor, 'alpha', 'percent');
+  Object.defineProperty(CSSColor.prototype, 'cssText', {
+    get: function() {
+      return colorFnCssText('color', [new CSSKeywordValue(this.colorSpace)].concat(this.channels), this.alpha);
+    },
+    configurable: true
+  });
+
   var NUMBER_WITH_UNIT = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(%|[a-zA-Z]+)?$/;
   var CSS_IDENTIFIER   = /^-?[A-Za-z_][\w-]*$/;
 
@@ -791,6 +991,15 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   global.CSS.CSSSkewY = CSSSkewY;
   global.CSS.CSSPerspective = CSSPerspective;
   global.CSS.CSSMatrixComponent = CSSMatrixComponent;
+  global.CSS.CSSColorValue = CSSColorValue;
+  global.CSS.CSSRGB = CSSRGB;
+  global.CSS.CSSHSL = CSSHSL;
+  global.CSS.CSSHWB = CSSHWB;
+  global.CSS.CSSLab = CSSLab;
+  global.CSS.CSSLCH = CSSLCH;
+  global.CSS.CSSOKLab = CSSOKLab;
+  global.CSS.CSSOKLCH = CSSOKLCH;
+  global.CSS.CSSColor = CSSColor;
   global.CSS.StylePropertyMap = StylePropertyMap;
   global.CSS.StylePropertyMapReadOnly = StylePropertyMapReadOnly;
 
@@ -832,6 +1041,15 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     window.CSSSkewY = CSSSkewY;
     window.CSSPerspective = CSSPerspective;
     window.CSSMatrixComponent = CSSMatrixComponent;
+    window.CSSColorValue = CSSColorValue;
+    window.CSSRGB = CSSRGB;
+    window.CSSHSL = CSSHSL;
+    window.CSSHWB = CSSHWB;
+    window.CSSLab = CSSLab;
+    window.CSSLCH = CSSLCH;
+    window.CSSOKLab = CSSOKLab;
+    window.CSSOKLCH = CSSOKLCH;
+    window.CSSColor = CSSColor;
     window.StylePropertyMap = StylePropertyMap;
     window.StylePropertyMapReadOnly = StylePropertyMapReadOnly;
   }
