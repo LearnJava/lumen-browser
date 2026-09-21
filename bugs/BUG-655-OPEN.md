@@ -76,7 +76,7 @@ reject'иться, `document.pointerLockElement` — оставаться `null`
 
 Итоговый прогон категории (`--all --root pointerlock --recursive`, 20 id,
 10/20 harness OK, 2/22 сабтестов) в основном упирается в отдельные, уже
-заведённые дефекты: [BUG-622](BUG-622-OPEN.md) (`document.defaultView`
+заведённые дефекты: [BUG-622](BUG-622-DUPLICATE.md) (`document.defaultView`
 отсутствует — доминирующая причина `Error: Browsing context for element was
 detached` в половине FAIL), [BUG-462](BUG-462-OPEN.md)/[BUG-574](BUG-574-OPEN.md)
 (`Node.prototype.contains` — `elementDocument.contains is not a function`),

@@ -1,8 +1,25 @@
 # BUG-622: `document.defaultView` is missing entirely (should return `window`)
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — live `document` object literal, ~`dom.rs:6989+`)
+**Статус:** DUPLICATE → [BUG-1017](BUG-1017-FIXED.md)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — live `document` object literal)
 **Найден:** P2, WPT-VENDOR-inert, 2026-08-04
+
+## Слит: 2026-09-21 (P3)
+
+Дубликат [BUG-1017](BUG-1017-FIXED.md) — тот же дефект (`document.defaultView`
+не определён на живом документе), независимо переоткрыт и исправлен месяцем
+позже под другим номером (P1, 2026-09-06), не сверяясь с этой открытой
+записью. Исключение из обычного правила «выживает первый по дате»: BUG-1017
+уже влит с юнит-тестами и упомянут в исходном коде/коммитах под своим
+номером — переномеровка означала бы переписывать влитую историю. Уникальные
+измерения этой записи (реконфирмация WPT-VENDOR-pointerevents 2026-08-05,
+объяснение 307 TIMEOUT в `editing/` через WPT-RUN-6 срез 3 2026-08-21)
+перенесены в раздел «Перенесено из BUG-622» строки BUG-1017 в
+[BUGS-FIXED.md](../BUGS-FIXED.md). Живой повторный прогон подтверждает фикс
+актуален: `cargo test -p lumen-js --features v8-backend --lib
+document_default_view_is_the_window` — зелёный.
+
+Текст ниже сохранён как исходная запись, содержимое не менялось.
 
 ## Симптом
 

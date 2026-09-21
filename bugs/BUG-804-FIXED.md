@@ -119,7 +119,7 @@ function _lumen_resource_track(nid, local) {
 
 ## Почему это TIMEOUT, а не FAIL
 
-Тот же класс, что [BUG-622](BUG-622-OPEN.md), [BUG-795](BUG-795-DUPLICATE.md)
+Тот же класс, что [BUG-622](BUG-622-DUPLICATE.md), [BUG-795](BUG-795-DUPLICATE.md)
 и хелпер-404 из среза 7: тест регистрирует `async_test`/`promise_test`,
 который резолвится только из обработчика события. Событие не приходит,
 `harness_status` не публикуется, wptrunner убивает страницу по таймауту.
