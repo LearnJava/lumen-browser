@@ -1630,6 +1630,53 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `pointerevents`/`navigation-api`/`html-ruby-extensions` из оставшихся не приценивались. BUG-1069 —
 по-прежнему рычаг: `websockets` показал, что он закрывает ещё и весь `?wpt_flags=h2`-класс (430 URL).
 
+### TEST-3: срез 44 (2026-09-21) — `pointerevents`: 164 из 258 id падают на селекторах `test_driver`, найден BUG-1073
+
+**Выбор кандидата.** Категории без `tests/wpt/metadata/<cat>/` пересчитаны по дереву (`os.listdir`): из ~40 оставшихся крупные без
+`.https.`-перекоса — `navigation-api` (477, 0 `.https.`), `editing`, `workers`, `wasm`, `pointerevents` (201 файл, 16 `.https.`). Взят
+`pointerevents` как самый малый из них: `running 258 all vendored` (с вариантами `?mouse`/`?pen`/`?touch`), потолок в 5400 с не мешает.
+`html-ruby-extensions` и `html-longdesc` по-прежнему отброшены — рефтесты без `testharness.js`. Число категорий 248 → 249.
+
+**Baseline.** `--update-expected --recursive --processes 4` (`.tmp/run_cat2.sh`) — 12:15. **23/258 harness OK, 301/489 подтестов**, 179 новых `.ini`
+(222 секции). Бинарь `dev-release` собран от `origin/main` `268d02d35`.
+
+**Причины по 258 строкам `TEST_END` лога** (счёт по самим строкам; сопоставление «START → END» по соседству ломается — 4 процесса пишут вперемешку):
+
+| Причина | id | Доказательство |
+|---|---|---|
+| hex-экранированный `id` в селекторе, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 152 | `eval: JS runtime error: #2 = < < f e  is not a valid selector` — `testdriver-extra.js::get_selector` |
+| `*\|` в селекторе безымянного элемента, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 12 | `:root > *\|body:nth-child(2) is not a valid selector` |
+| сертификат `localhost`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 24 | 72 = 24×3 строки `ExecutorException`, все `TLS handshake … not valid for name "localhost"` |
+| harness `TIMEOUT` с подтестами | 31 | `Test TIMEOUT, expected OK` — не разбирались |
+| harness `OK` | 23 | — |
+| harness `ERROR` с подтестами | 5 | не разбирались |
+| прочие `ERROR` | 11 | `Cannot read properties of null (reading 'getElement…'/'firstElement…'/'addEvent…')`, `iframe.contentDocument.addEventListener is not a function`, 3 `Unhandled rejection` — не разбирались |
+
+164 из 258 (64 %) — не про pointer events вообще: тест не доходит до первого подтеста, потому что исполнитель `executorlumen.py` отдаёт странице
+селектор из `get_selector`, а движок его отвергает (`docs/engine-gaps.md`, строка про `test_driver.click`/`send_keys`/`action_sequence`). Это самая
+массовая причина из всех снятых категорий; BUG-1063 и BUG-1065 дописаны цифрами среза. Починка одного места разбора селекторов (P3, `css-parser`)
+сдвинет сразу 164 файла этой категории и такие же в `shadow-dom` и других, где есть `test_driver`.
+
+**Проверка — и почему она заняла пять попыток.** `--check` №1 и №2 подряд — 0 регрессий, 0 unexpected pass, 0 других отклонений
+(`23/258`, `301/489` оба раза). Дальше **четыре прогона подряд оборвались** — на 93, 93, 12 и 71 тесте из 258; `--check` в каждом красный по 126–242 «регрессиям»
+`got MISSING (no result produced (crash before test_start / early abort))`. Это не регрессии: в логе `[probe] Vulkan: present=WHITE` и `GL: present=WHITE`
+у двух из четырёх одновременно стартовавших `lumen.exe`, затем `panicked … wgpu error: Validation Error — In Surface::configure — Invalid surface`
+(`wgpu_core.rs:3526`), `ConnectionRefusedError [WinError 1225]`, `IO Completion Port failed to signal process shutdown`, три релонча подряд
+`did not print [bidi] token`, `TestRunnerManager` падает. Пятый прогон — чистый (`23/258`, `301/489`, 0 регрессий, `present=WHITE` в логе нет).
+Заведён [BUG-1073](../../bugs/BUG-1073-OPEN.md). Причина не установлена: одиночный и тройной ручной запуск `lumen.exe --bidi-port` сбой не воспроизвёл;
+версия «нагрузка от чужой сборки» проверена и не объясняет (четвёртый обрыв — при 0 `rustc` в системе). Гипотеза о состоянии рабочего стола не проверена.
+Итог: три чистых `--check` (№1, №2, пятый прогон); четыре оборванных в счёт не идут — они не дошли до результата, а не дали иной.
+
+**Как отличать обрыв от регрессии.** `check: N regression(s)` при `tests: K/258`, где K сильно меньше числа id, и в логе `present=WHITE`/`Invalid surface`/
+`did not print [bidi] token` — перезапуск с нуля, а не разбор «регрессий». Разбирать их по списку бессмысленно: 100+ `got MISSING` — это хвост очереди.
+
+**Ограничение записанного.** 164 + 24 = 188 id (73 %) записаны как `ERROR` — нижняя планка, регрессировать некуда. Гейт держат 23 harness-`OK`, 31 `TIMEOUT`,
+301 проходящих подтеста и FAIL/NOTRUN-секции подтестов. После починки BUG-1063/1065/1069 baseline регенерируется, и сдвиг `ERROR → OK/FAIL/TIMEOUT` ожидаем.
+Что делает pointer-events-логика движка, этим baseline измерено только по 23 + 31 файлам; 31 `TIMEOUT` и 11 «прочих» `ERROR` не разбирались.
+
+Дальше: `navigation-api` (477 id, 0 `.https.`), `editing`, `workers`, `wasm`; `webnn` и вся `.https.`-группа по-прежнему дают `ERROR` (BUG-1069);
+`encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
