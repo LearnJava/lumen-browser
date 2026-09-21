@@ -54,13 +54,19 @@ in-memory поля) — подписка переживает пересозда
 Параметр `push_backend: Option<Arc<dyn PushBackend>>` доведён до `install_dom` →
 `run_scripts_with_dom` → `render_bytes`/`parse_and_layout` → `FrameLoadEnv` (та же позиция,
 что у `cache_backend`, во всех ~100 сигнатурах/call-сайтах, включая тесты `lumen-js`/
-`lumen-shell`). **Не сделано в этом срезе:** ни один реальный call-сайт (`page_source.rs`,
-`app/user_event.rs`) не строит настоящий `Arc<dyn PushBackend>` — оба передают `None` с
-явным комментарием. У `sw_backend`/`cache_backend` есть пер-табовое поле
-(`frames.rs`/`lumen/state.rs`, пересоздаётся в `tabs_cmd.rs`/`page_snapshot.rs`/
-`window_mode.rs`); у `push_backend` такого поля пока нет — это первая задача среза 2 или
-отдельного среза до него, иначе подписки останутся недостижимы из живой вкладки несмотря
-на полностью рабочий и протестированный слой ниже.
+`lumen-shell`).
+
+**Проводка до живой вкладки — сделано 2026-09-21 (P1, ветка p1-pushapi-tab-wiring):**
+`push_store: Arc<lumen_storage::PushStore>` — session-scoped поле `App`
+(`crates/shell/src/lumen/state.rs`, рядом с `cache_store`; `PushStore` сам партиционирует по
+`(origin, scope)`, поэтому пер-табовая обёртка вроде `SwStore` не нужна). Инициализация в
+`window_mode.rs` (`PushStore::new(PushSubscriptions::open_in_memory())`, тот же паттерн, что
+`cache_store`/`cookie_jar` — in-memory на сессию, без файла профиля). Главный навигационный
+путь `app/user_event.rs` теперь строит `Some(Arc::clone(&self.push_store) as Arc<dyn
+PushBackend>)` вместо хардкода `None` — `_lumen_push_*`-натив достижим из живой вкладки.
+Fallback-путь `page_source.rs::PageSource::load` (headless/тесты без `GpuSession`-окна)
+по-прежнему передаёт `None` — как и `cache_backend` там же, у него нет доступа к
+session-scoped стораджам `App`, это не push-специфичный пробел.
 
 ### Срез 2 — S — Реальные ключи подписки (ECDH P-256)
 Генерить настоящую P-256 keypair (переиспользовать `p256` из WebAuthn/subtle_crypto),

@@ -739,6 +739,11 @@ pub(crate) struct Lumen {
     /// responses from entries the page previously cached into this store. Also the
     /// fallback cache consulted by `ServiceWorkerInterceptor`. In-memory SQLite.
     pub(crate) cache_store: Arc<lumen_storage::CacheStorage>,
+    /// Session-scoped Push API subscription store (PushBackend, `_lumen_push_*`
+    /// natives). Shared across all tabs/origins — `PushStore` partitions by
+    /// `(origin, scope)` internally, same pattern as `cache_store`. In-memory
+    /// SQLite; persisted only for the lifetime of the session.
+    pub(crate) push_store: Arc<lumen_storage::PushStore>,
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
