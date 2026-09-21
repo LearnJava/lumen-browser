@@ -1,4 +1,4 @@
-//! Minimal GLSL ES 1.0 interpreter for `SoftwareWebGl` (task #34, §7F).
+//! Minimal GLSL ES 1.0 / ES 3.00 interpreter for `SoftwareWebGl` (task #34, §7F).
 //!
 //! Parses and evaluates the vertex and fragment shaders attached to a WebGL
 //! program so that `drawArrays` can compute correct per-vertex positions,
@@ -13,15 +13,24 @@
 //! - Declarations: `uniform`, `attribute`, `varying`, `precision`.
 //! - Expressions: arithmetic (+−×÷), unary minus/not, comparison, logical
 //!   and/or, swizzle (`.xyzw` / `.rgba`), vector/matrix constructors, built-in
-//!   functions (`vec2/3/4`, `mat4`, `texture2D`, `mix`, `clamp`, `abs`, `min`,
-//!   `max`, `pow`, `sqrt`, `length`, `normalize`, `dot`, `cross`, `sin`, `cos`,
-//!   `tan`, `step`, `smoothstep`, `fract`, `floor`, `ceil`, `mod`, `sign`).
+//!   functions (`vec2/3/4`, `mat4`, `texture2D`/`texture`, `mix`, `clamp`, `abs`,
+//!   `min`, `max`, `pow`, `sqrt`, `length`, `normalize`, `dot`, `cross`, `sin`,
+//!   `cos`, `tan`, `step`, `smoothstep`, `fract`, `floor`, `ceil`, `mod`, `sign`).
 //! - Statements: variable declaration/init, assignment (with compound `+=` etc.),
 //!   `if`/`else`, `for`, `return`, `discard`.
 //! - Built-in outputs: `gl_Position` (vertex), `gl_FragColor` (fragment).
 //!
+//! GLSL ES 3.00 (WebGL2, `#version 300 es`) subset: the preprocessor line is
+//! skipped like any other `#...` directive, and top-level `in`/`out` storage
+//! qualifiers are mapped by [`ShaderStage`] onto the ES 1.0 model — vertex `in`
+//! = `attribute`, vertex `out`/fragment `in` = `varying`, fragment `out` =
+//! a user-named colour output (aliased to `gl_FragColor` at the end of `main`,
+//! see [`ParsedShader::frag_out_name`]). `texture()` is accepted as a synonym
+//! of `texture2D`.
+//!
 //! Unsupported (but silently ignored): user-defined functions (only `main()` is
-//! called), arrays (beyond `mat4` columns), `#version`, preprocessor macros.
+//! called), arrays (beyond `mat4` columns), preprocessor macros, multiple
+//! render targets (only one `out` variable is tracked per fragment shader).
 
 // Долг по документации: файл написан до включения `missing_docs` и пока не
 // покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
@@ -334,7 +343,16 @@ pub enum GlType {
 
 /// Storage qualifier (used during top-level declaration parsing).
 #[derive(Debug, Clone, PartialEq)]
-enum Storage { Uniform, Attribute, Varying, Local, Const }
+enum Storage { Uniform, Attribute, Varying, FragOut, Local, Const }
+
+/// Which shader stage a source string belongs to — needed to resolve GLSL ES
+/// 3.00's stage-relative `in`/`out` qualifiers onto ES 1.0's
+/// `attribute`/`varying`/`gl_FragColor` model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShaderStage {
+    Vertex,
+    Fragment,
+}
 
 /// An assignable location (lvalue).
 #[derive(Debug, Clone)]
@@ -400,6 +418,10 @@ pub struct ParsedShader {
     pub uniforms: HashMap<String, GlType>,
     pub attributes: HashMap<String, GlType>,
     pub varyings: HashMap<String, GlType>,
+    /// GLSL ES 3.00 fragment shader only: the name of the user-declared
+    /// `out vec4 <name>;` colour output (e.g. `out vec4 outColor;`). `None`
+    /// for ES 1.0 shaders, which write `gl_FragColor` directly.
+    pub frag_out_name: Option<String>,
     main_body: Vec<Stmt>,
 }
 
@@ -408,11 +430,12 @@ pub struct ParsedShader {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    stage: ShaderStage,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+    fn new(tokens: Vec<Token>, stage: ShaderStage) -> Self {
+        Self { tokens, pos: 0, stage }
     }
 
     fn peek(&self) -> &Token {
@@ -488,12 +511,27 @@ impl Parser {
             return;
         }
 
-        // Storage qualifier
+        // Storage qualifier. GLSL ES 3.00's `in`/`out` are resolved relative to
+        // `self.stage`, onto the same three ES 1.0 buckets (see `ShaderStage`).
         let storage = match self.peek() {
             Token::KwUniform => { self.advance(); Some(Storage::Uniform) },
             Token::KwAttribute => { self.advance(); Some(Storage::Attribute) },
             Token::KwVarying => { self.advance(); Some(Storage::Varying) },
             Token::KwConst => { self.advance(); Some(Storage::Const) },
+            Token::KwIn => {
+                self.advance();
+                Some(match self.stage {
+                    ShaderStage::Vertex => Storage::Attribute,
+                    ShaderStage::Fragment => Storage::Varying,
+                })
+            },
+            Token::KwOut => {
+                self.advance();
+                Some(match self.stage {
+                    ShaderStage::Vertex => Storage::Varying,
+                    ShaderStage::Fragment => Storage::FragOut,
+                })
+            },
             _ => None,
         };
 
@@ -555,6 +593,7 @@ impl Parser {
             Storage::Uniform => { shader.uniforms.insert(name, ty); },
             Storage::Attribute => { shader.attributes.insert(name, ty); },
             Storage::Varying => { shader.varyings.insert(name, ty); },
+            Storage::FragOut => { shader.frag_out_name = Some(name); },
             _ => {},
         }
     }
@@ -912,10 +951,12 @@ fn expr_to_lvalue(e: Expr) -> LValue {
 
 // ─── Public API: parse ───────────────────────────────────────────────────────
 
-/// Parse a GLSL ES shader source string.
-pub fn parse(src: &str) -> ParsedShader {
+/// Parse a GLSL ES shader source string. `stage` resolves ES 3.00's
+/// stage-relative `in`/`out` qualifiers (`#version 300 es` itself needs no
+/// special handling — the lexer already skips any `#...` line as a directive).
+pub fn parse(src: &str, stage: ShaderStage) -> ParsedShader {
     let tokens = Lexer::new(src).tokenize();
-    let mut p = Parser::new(tokens);
+    let mut p = Parser::new(tokens, stage);
     p.parse_shader()
 }
 
@@ -984,7 +1025,18 @@ pub fn exec_main(shader: &ParsedShader, env: &mut ShaderEnv) {
     for name in shader.varyings.keys() {
         env.varyings.entry(name.clone()).or_insert(Val::Float(0.0));
     }
+    // GLSL ES 3.00 fragment shader: pre-seed the user's `out vec4` colour
+    // output as a plain local (it is written to by name like any other
+    // variable — there is no dedicated AST node for it).
+    if let Some(name) = &shader.frag_out_name {
+        env.locals.entry(name.clone()).or_insert(Val::Vec4([0.0, 0.0, 0.0, 0.0]));
+    }
     exec_stmts(&shader.main_body, env);
+    // Alias the named output onto `gl_FragColor` so callers (webgl.rs) can
+    // keep reading `env.frag_color` regardless of ES 1.0 vs ES 3.00 source.
+    if let Some(name) = &shader.frag_out_name && let Some(val) = env.locals.get(name) {
+        env.frag_color = val.to_vec4();
+    }
 }
 
 fn exec_stmts(stmts: &[Stmt], env: &mut ShaderEnv) -> Flow {
@@ -1577,7 +1629,11 @@ mod tests {
     fn empty_uniforms() -> HashMap<String, Val> { HashMap::new() }
 
     fn run(src: &str, env: &mut ShaderEnv) {
-        let s = parse(src);
+        run_stage(src, ShaderStage::Fragment, env);
+    }
+
+    fn run_stage(src: &str, stage: ShaderStage, env: &mut ShaderEnv) {
+        let s = parse(src, stage);
         exec_main(&s, env);
     }
 
@@ -1701,5 +1757,70 @@ mod tests {
         let mut env = ShaderEnv::new(&uniforms);
         run("precision mediump float; void main() { gl_FragColor = vec4(0.5); }", &mut env);
         assert!((env.frag_color[0] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn es3_version_line_skipped() {
+        let uniforms = empty_uniforms();
+        let mut env = ShaderEnv::new(&uniforms);
+        run_stage(
+            "#version 300 es\nprecision mediump float;\nout vec4 outColor;\nvoid main() { outColor = vec4(0.25); }",
+            ShaderStage::Fragment,
+            &mut env,
+        );
+        assert!((env.frag_color[0] - 0.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn es3_vertex_in_maps_to_attribute() {
+        let uniforms = empty_uniforms();
+        let mut env = ShaderEnv::new(&uniforms);
+        env.attributes.insert("a_pos".into(), Val::Vec2([0.5, -0.5]));
+        run_stage(
+            "#version 300 es\nin vec2 a_pos;\nvoid main() { gl_Position = vec4(a_pos, 0.0, 1.0); }",
+            ShaderStage::Vertex,
+            &mut env,
+        );
+        assert_eq!(env.position, [0.5, -0.5, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn es3_vertex_out_matches_fragment_in() {
+        // Vertex `out` writes a varying; fragment `in` reads the same
+        // interpolated varying — both stages sharing the ES 1.0 varyings map.
+        let uniforms = empty_uniforms();
+        let mut vs_env = ShaderEnv::new(&uniforms);
+        vs_env.attributes.insert("a_color".into(), Val::Vec4([0.2, 0.4, 0.6, 1.0]));
+        run_stage(
+            "#version 300 es\nin vec4 a_color;\nout vec4 v_color;\nvoid main() { v_color = a_color; }",
+            ShaderStage::Vertex,
+            &mut vs_env,
+        );
+        let v_color = vs_env.varyings.get("v_color").cloned().unwrap_or_default();
+        assert_eq!(v_color.to_vec4(), [0.2, 0.4, 0.6, 1.0]);
+
+        let mut fs_env = ShaderEnv::new(&uniforms);
+        fs_env.varyings.insert("v_color".into(), v_color);
+        run_stage(
+            "#version 300 es\nin vec4 v_color;\nout vec4 outColor;\nvoid main() { outColor = v_color; }",
+            ShaderStage::Fragment,
+            &mut fs_env,
+        );
+        assert_eq!(fs_env.frag_color, [0.2, 0.4, 0.6, 1.0]);
+    }
+
+    #[test]
+    fn es3_texture_builtin_is_alias_of_texture2d() {
+        let uniforms: HashMap<String, Val> = [
+            ("u_tex".into(), Val::Sampler(0)),
+            ("__tex_0".into(), Val::Vec4([0.1, 0.2, 0.3, 1.0])),
+        ].into();
+        let mut env = ShaderEnv::new(&uniforms);
+        run_stage(
+            "#version 300 es\nuniform sampler2D u_tex;\nin vec2 v_uv;\nout vec4 outColor;\nvoid main() { outColor = texture(u_tex, v_uv); }",
+            ShaderStage::Fragment,
+            &mut env,
+        );
+        assert_eq!(env.frag_color, [0.1, 0.2, 0.3, 1.0]);
     }
 }
