@@ -11,8 +11,21 @@ use crate::v8_runtime::V8JsRuntime;
 fn rt_with_dom() -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false)
-        .unwrap();
+    rt.install_dom(
+        make_doc(),
+        "",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+    )
+    .unwrap();
     rt
 }
 

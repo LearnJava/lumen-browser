@@ -68,10 +68,21 @@ Fallback-путь `page_source.rs::PageSource::load` (headless/тесты без
 по-прежнему передаёт `None` — как и `cache_backend` там же, у него нет доступа к
 session-scoped стораджам `App`, это не push-специфичный пробел.
 
-### Срез 2 — S — Реальные ключи подписки (ECDH P-256)
-Генерить настоящую P-256 keypair (переиспользовать `p256` из WebAuthn/subtle_crypto),
-`p256dh` = uncompressed public point (65B), `auth` = 16 случайных байт (RFC 8291).
-`getKey()` отдаёт реальные ArrayBuffer. Юнит: `p256dh` — валидная SEC1-точка.
+### Срез 2 — S — Реальные ключи подписки (ECDH P-256) — **сделано 2026-09-21 (P1)**
+`generate_push_keys` (`crates/js/src/push_api.rs`) — P-256 keypair (OS CSPRNG seed →
+`p256::SecretKey::from_slice`, тот же паттерн, что `subtle_crypto.rs`'s `"ECDH"`
+`generateKey`) + 16-байтный auth-секрет. `p256dh` = uncompressed SEC1 point (65B,
+ведущий байт `0x04`), `auth` = 16 случайных байт (RFC 8291). Приватный скаляр
+никогда не проходит через JS: нативный `_lumen_push_subscribe(origin, scope,
+endpoint, userVisibleOnly)` генерирует ключи сам и возвращает JS только
+`[p256dhBase64, authBase64]`; `getKey()` отдаёт реальные `ArrayBuffer` из них.
+Приватный ключ персистится в новой колонке `push_subscriptions.private_key`
+(v2-миграция) через расширенный `PushBackend::push_subscribe` — задел под
+расшифровку push-сообщений в срезе 4; `push_get`/`getSubscription()` его не
+возвращают. 4 юнита на `generate_push_keys` (SEC1-точка, длина auth, различность
+между вызовами, валидность приватного скаляра) + 1 end-to-end (`getKey('p256dh')`
+через живой `PushManager`), 19/19 тестов `push_api`, 14/14 `lumen-storage`
+push-тестов.
 
 ### Срез 3 — S — permissionState через реальный permission-стор
 Связать `permissionState()`/`subscribe()` с механизмом разрешений (notifications/push):
@@ -98,8 +109,8 @@ Endpoint = реальный push-сервис (или локальный relay �
 - Регресс: существующие 7 тестов `push_api.rs:159-254` продолжают проходить (форма API).
 
 ## Definition of done
-- [ ] Нативные push-биндинги реализованы, подписки persist в SQLite.
-- [ ] Реальные P-256 ключи `p256dh`/`auth`.
+- [x] Нативные push-биндинги реализованы, подписки persist в SQLite.
+- [x] Реальные P-256 ключи `p256dh`/`auth`.
 - [ ] `permissionState` связан с permission-стором (не хардкод `granted`).
 - [ ] (полный DoD) Доставка WebPush + `push`-событие в SW; при отсутствии сервиса — mock.
 - [ ] Тесты зелёные; `CAPABILITIES.md`/`ROADMAP.md`/`subsystems/` обновлены.
