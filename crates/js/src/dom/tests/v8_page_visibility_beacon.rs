@@ -246,6 +246,79 @@ fn document_write_is_noop_after_complete() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// document.open()/close() — HTML LS §8.4.4 (BUG-888, GAP-DOCWRITE): re-open a
+// loaded document so write() can insert again, then close() re-runs the
+// readyState machinery to fire DOMContentLoaded/load again.
+#[test]
+fn document_open_reenables_write_after_complete() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "_lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 document.open(); \
+                 document.write('<span id=\"reopened\">hi</span>'); \
+                 document.readyState === 'loading' && \
+                 document.getElementById('reopened') !== null"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn document_open_clears_body() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "_lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 document.open(); \
+                 document.body.childNodes.length"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+}
+
+#[test]
+fn document_close_fires_dcl_and_load_again() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        // `addEventListener('load', ...)` while still 'loading' registers a
+        // persistent listener (added past 'complete' it fires once via
+        // microtask instead — a separate quirk unrelated to open()/close()),
+        // so it is added here, before the first `_lumen_apply_ready_state`,
+        // to prove close() re-runs the 'complete' transition a second time.
+        "var loadCount = 0; \
+                 window.addEventListener('load', function() { loadCount++; }); \
+                 _lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 document.open(); \
+                 document.write('<span id=\"x\">x</span>'); \
+                 document.close(); \
+                 document.readyState === 'complete' && loadCount === 2"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn document_close_without_open_is_noop() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "_lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 document.close(); \
+                 document.readyState"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("complete".into()));
+}
+
+#[test]
+fn document_open_while_loading_is_noop() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "document.open(); \
+                 document.readyState === 'loading' && \
+                 document.body.childNodes.length > 0"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-571: a `<script>` built through the DOM API and inserted into the
 // live document runs when it becomes connected (HTML LS §4.12.1
 // "prepare the script element"). Before this it stayed inert forever —

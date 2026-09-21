@@ -10399,6 +10399,10 @@ var _FS_ATTR = 'data-lumen-fullscreen';
 var _doc_hidden = false;
 var _doc_visibility_state = 'visible';
 var _doc_ready_state = 'loading';
+// GAP-DOCWRITE: true between an explicit document.open() (called after the
+// document has already reached 'interactive'/'complete') and the matching
+// document.close() — see the write()/open()/close() block below.
+var _doc_explicit_open = false;
 var __dom_node_warned = false;
 // BUG-324: cache for the live page's `document.implementation`, so repeated
 // access returns the same object (`document.implementation === document.implementation`).
@@ -11054,6 +11058,33 @@ var document = {
         var args = Array.prototype.slice.call(arguments);
         args.push('\n');
         document.write.apply(document, args);
+    },
+    // HTML LS §8.4.4 document.open()/close() (BUG-888) — the explicit entry
+    // point `write()` above needed: `write()` after load is a deliberate
+    // no-op (BUG-701), so the common legacy pattern
+    // `document.open(); document.write(html); document.close();` (ad/analytics
+    // snippets rewriting the page after it already loaded) requires open() to
+    // put `write()` back into its 'loading' window. This does not implement
+    // the spec's full "erase a document" (fresh Document, new parser); it
+    // clears `<body>`'s children and reuses the existing readyState machinery,
+    // which is enough for `write()` to insert into and for close() to
+    // re-fire DOMContentLoaded/load through `_lumen_apply_ready_state`.
+    open: function() {
+        // Spec no-op cases (mid-parse, or a stream already open): both show up
+        // here as readyState still 'loading'.
+        if (_doc_ready_state === 'loading') return document;
+        _doc_explicit_open = true;
+        var body = document.body;
+        if (body) { while (body.firstChild) body.removeChild(body.firstChild); }
+        _doc_ready_state = 'loading';
+        return document;
+    },
+    close: function() {
+        // Spec no-op: close() without a matching open() has no insertion point.
+        if (!_doc_explicit_open) return;
+        _doc_explicit_open = false;
+        _lumen_apply_ready_state('interactive');
+        _lumen_apply_ready_state('complete');
     },
     // addEventListener intercepts DOMContentLoaded to fire immediately when already ready
     addEventListener: function(type, fn, opts) {
