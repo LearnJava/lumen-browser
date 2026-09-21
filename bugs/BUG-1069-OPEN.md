@@ -70,3 +70,4 @@ DnsName("web-platform.test") or DnsName("127.0.0.1")
   `…-writable-insecure-context…http.sub.html`), получают `FAIL` независимо от сертификата — верный ответ движка на
   неверный хост. Починка сертификата этого не лечит.
 - `*.localhost` в SAN не решает нерезолвимость самих поддоменов на Windows — см. [BUG-1070](BUG-1070-OPEN.md).
+- `pointerevents` (срез 44 WPT-RUN-7, 2026-09-21): **24 id из 258** — те же `TLS handshake … not valid for name "localhost"` (`coalesced_events_attributes.https.html`, `pointerevent_pointerrawupdate*.https.html`, `pointerlock/*.https.html`, `idlharness.https.window.html` и др.); остальные `ERROR` категории — не сертификат, а [BUG-1065](BUG-1065-OPEN.md)/[BUG-1063](BUG-1063-OPEN.md).

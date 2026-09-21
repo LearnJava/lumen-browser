@@ -81,3 +81,7 @@ Baseline `tests/wpt/metadata/shadow-dom/**` записан с `expected: ERROR` 
 После фикса они перестанут быть `ERROR` → `--check` покажет их как unexpected-pass /
 deviation; это ожидаемо, а не регрессия — baseline регенерируется тем же коммитом, что
 и фикс (или сразу следом).
+
+## Срез 44 WPT-RUN-7 (2026-09-21, `pointerevents`)
+
+`pointerevents` (258 id): **12 id** упали на `*|`-пути этого бага (`:root > *|body:nth-child(2)`), ещё **152** — на ветке с `id` ([BUG-1065](BUG-1065-OPEN.md)); вместе 164 из 258 (64 %) — harness-`ERROR` до первого подтеста. Baseline записан с `expected: ERROR` для этих файлов — нижняя планка, гейт по ним пуст, пока баг не закрыт; после фикса регенерировать (`--update-expected` + три `--check`), сдвиг `ERROR → OK/FAIL/TIMEOUT` ожидаем, а не регрессия.
