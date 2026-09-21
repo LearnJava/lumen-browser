@@ -129,6 +129,19 @@ impl ResourceBase {
         None
     }
 
+    /// Собственный URL страницы (GAP-REFERRER срез 1) — источник `Referer`
+    /// для `fetch()`/`XMLHttpRequest`/`sendBeacon` и (срез 2) для подресурсов
+    /// (`<img>`/`<script src>`/`<link>`/…), см.
+    /// `HttpClient::with_document_context`. `None` для файловой base:
+    /// `file:` не несёт tuple origin, поэтому реферер спецификацией не
+    /// предусмотрен для таких документов.
+    pub(crate) fn url(&self) -> Option<lumen_core::url::Url> {
+        if let ResourceBase::Url(base_url) = self {
+            return lumen_core::url::Url::parse(base_url).ok();
+        }
+        None
+    }
+
     /// Построить `HttpClient` для загрузки подресурсов. Если страница загружена
     /// по HTTPS, подключает mixed-content enforcement (SpecDefault по W3C Mixed
     /// Content spec). Caller выбирает `RequestDestination` и вызывает
@@ -166,6 +179,21 @@ impl ResourceBase {
         // `run_window_mode`; absent in headless/PDF/dump modes (loop stays open).
         if let Some(interceptor) = sw_fetch_interceptor() {
             client = client.with_interceptor(interceptor);
+        }
+        // GAP-REFERRER срез 2: same `Referer` the JS fetch client already
+        // attaches (`page_pipeline.rs`, срез 1) — every subresource pass
+        // (`<img>`/`<script src>`/`<link>`/`@import`/`@font-face`/…) shares
+        // this one `HttpClient` constructor, so wiring it once here reaches
+        // all of them instead of repeating the call at each of the six
+        // `http_client_for_subresource` call sites. Reading `<meta
+        // name=referrer>`/the `Referrer-Policy` response header/a
+        // `referrerpolicy` attribute is still left for a later срез — this
+        // always uses the project default.
+        if let Some(document_url) = self.url() {
+            client = client.with_document_context(
+                document_url,
+                lumen_network::ReferrerPolicy::default_policy(),
+            );
         }
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()

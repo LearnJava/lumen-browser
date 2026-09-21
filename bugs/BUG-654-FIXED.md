@@ -73,7 +73,7 @@ trades run time for signal accuracy, not for pass count.
 
 ## Дополнительная находка при разборе прогона
 
-The now-unmasked failure text surfaced [BUG-622](BUG-622-OPEN.md)
+The now-unmasked failure text surfaced [BUG-622](BUG-622-DUPLICATE.md)
 (`document.defaultView` missing entirely) as the single largest failure
 cluster in the corrected run — dozens of hits via
 `testdriver-extra.js::get_context`'s `element.ownerDocument.defaultView`

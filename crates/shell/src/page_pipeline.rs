@@ -826,6 +826,10 @@ pub(crate) fn parse_and_layout(
             // disposition regardless of whether either header was present —
             // `with_sync_xhr_policy(None, None)` is the same as never calling it.
             client = client.with_sync_xhr_policy(sync_xhr_document_policy, sync_xhr_permissions_policy);
+            // GAP-REFERRER: `Referer`/`Origin` on `fetch()`/`XMLHttpRequest`/
+            // `sendBeacon` — `with_document_context` is now attached by
+            // `http_client_for_subresource` itself (срез 2), reaching this
+            // client the same way it reaches every subresource fetch.
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);

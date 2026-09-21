@@ -57,7 +57,7 @@ Touched files and their direct cause, one run:
   `Error: Browsing context for element was detached` — thrown by
   `tools/wptrunner/wptrunner/testdriver-extra.js:118`'s
   `get_context(element)` when `element.ownerDocument.defaultView` is falsy —
-  reconfirmation of [BUG-622](BUG-622-OPEN.md) (`document.defaultView`
+  reconfirmation of [BUG-622](BUG-622-DUPLICATE.md) (`document.defaultView`
   missing entirely), not a new finding.
 
 ## Как воспроизвести
