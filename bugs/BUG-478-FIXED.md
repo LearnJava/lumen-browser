@@ -72,7 +72,7 @@ WPT-RUN-5 (до фикса BUG-591/716) исключение никуда не �
 в TIMEOUT с пустым логом.
 
 Важная поправка к готче в `CLAUDE.md`: элемент-адресованный `test_driver`-экшен
-падает **не** на `document.defaultView` ([BUG-622](BUG-622-OPEN.md), это
+падает **не** на `document.defaultView` ([BUG-622](BUG-622-DUPLICATE.md), это
 следующий по порядку отказ, `testdriver-extra.js::get_context`), а раньше — на
 этом баге. `elementsFromPoint`/`elementFromPoint` ([BUG-464](BUG-464-FIXED.md),
 [BUG-477](BUG-477-DUPLICATE.md)) — третье звено той же цепочки: даже с

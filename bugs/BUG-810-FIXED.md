@@ -45,7 +45,7 @@ executor` — и на этом всё: `testdriver-extra.js` отклоняет 
 строки: его экшены адресованы элементом, а `get_context`
 (`tools/wptrunner/wptrunner/testdriver-extra.js:112-120`) читает
 `element.ownerDocument.defaultView` — которого нет
-([BUG-622](BUG-622-OPEN.md), перепроверено пробой `--dump-layout`:
+([BUG-622](BUG-622-DUPLICATE.md), перепроверено пробой `--dump-layout`:
 `typeof document.defaultView === "undefined"`) — и бросает «Browsing context
 for element was detached» ещё на странице. Наблюдаемый исход тот же: тихий
 TIMEOUT. Поэтому механизм в классификаторе один, а починки нужны две
@@ -101,7 +101,7 @@ TIMEOUT. Поэтому механизм в классификаторе оди�
    вообще нигде, и именно поэтому механизм пришлось искать маркером по
    исходникам, а не читать из логов прогона.
 
-Ортогонально и не здесь: `document.defaultView` ([BUG-622](BUG-622-OPEN.md))
+Ортогонально и не здесь: `document.defaultView` ([BUG-622](BUG-622-DUPLICATE.md))
 блокирует любые экшены с элементом-мишенью ещё до транспорта, а BUG-716
 превращает каждый отказ в зависание вместо провала.
 
