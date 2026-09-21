@@ -6,11 +6,12 @@
 //! `createBuffer`/`bindBuffer`/`bufferData`, `createShader`/`compileShader`/
 //! `createProgram`/`linkProgram`/`useProgram`, `vertexAttribPointer`/
 //! `enableVertexAttribArray`, `uniform4f`, `clearColor`/`clear`, `viewport`,
-//! `drawArrays` and `readPixels` all drive a real software rasterizer whose
-//! pixels can be read back. `clear`/`drawArrays` also *present*: they push the
-//! framebuffer into the backing `<canvas>` element's `canvas2d` buffer (see
-//! [`present`]), the same `canvas:{nid}` the shell composites into the page —
-//! so a WebGL canvas is visible on screen, not just readable via `readPixels`.
+//! `drawArrays`/`drawElements` and `readPixels` all drive a real software
+//! rasterizer whose pixels can be read back. `clear`/`drawArrays`/
+//! `drawElements` also *present*: they push the framebuffer into the backing
+//! `<canvas>` element's `canvas2d` buffer (see [`present`]), the same
+//! `canvas:{nid}` the shell composites into the page — so a WebGL canvas is
+//! visible on screen, not just readable via `readPixels`.
 //!
 //! # State model
 //!
@@ -194,7 +195,11 @@ const WEBGL_SHIM: &str = r#"(function() {
         // Size-only allocation: zero-fill.
         for (var j = 0; j < data; j++) arr.push(0);
       }
-      _lumen_webgl_buffer_data(cid, target>>>0, arr);
+      if ((target>>>0) === gl.ELEMENT_ARRAY_BUFFER) {
+        _lumen_webgl_buffer_data_elements(cid, target>>>0, arr);
+      } else {
+        _lumen_webgl_buffer_data(cid, target>>>0, arr);
+      }
     };
     gl.bufferSubData = function() {};
 
@@ -260,7 +265,9 @@ const WEBGL_SHIM: &str = r#"(function() {
 
     // ── Draw ──
     gl.drawArrays = function(mode, first, count) { _lumen_webgl_draw_arrays(cid, mode>>>0, first|0, count|0); };
-    gl.drawElements = function() {};
+    gl.drawElements = function(mode, count, type, offset) {
+      _lumen_webgl_draw_elements(cid, mode>>>0, count|0, type>>>0, offset|0);
+    };
 
     // ── Readback (WebGL: bottom-left origin) ──
     gl.readPixels = function(x, y, width, height, format, type, pixels) {
@@ -503,6 +510,13 @@ pub(crate) fn install_webgl_canvas_v8(
         }),
     )?;
     rt.register_native(
+        "_lumen_webgl_buffer_data_elements",
+        into_v8_fn3(|id: u32, target: u32, data: Vec<f64>| {
+            let indices: Vec<u32> = data.into_iter().map(|v| v.max(0.0) as u32).collect();
+            with_ctx(id, (), |gl| gl.buffer_data_elements(target, indices));
+        }),
+    )?;
+    rt.register_native(
         "_lumen_webgl_create_shader",
         into_v8_fn2(|id: u32, kind: u32| -> u32 { with_ctx(id, 0, |gl| gl.create_shader(kind)) }),
     )?;
@@ -644,6 +658,13 @@ pub(crate) fn install_webgl_canvas_v8(
         "_lumen_webgl_draw_arrays",
         into_v8_fn4(|id: u32, mode: u32, first: i32, count: i32| {
             with_ctx(id, (), |gl| gl.draw_arrays(mode, first, count));
+            present(id);
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_draw_elements",
+        into_v8_fn5(|id: u32, mode: u32, count: i32, gl_type: u32, offset: i32| {
+            with_ctx(id, (), |gl| gl.draw_elements(mode, count, gl_type, offset));
             present(id);
         }),
     )?;
@@ -910,6 +931,45 @@ var u = gl.getUniformLocation(prog, 'u_color');
 gl.uniform4f(u, 0.0, 1.0, 0.0, 1.0);
 gl.viewport(0, 0, 8, 8);
 gl.drawArrays(gl.TRIANGLES, 0, 6);
+var px = new Uint8Array(4);
+gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+px[1]"#,
+            )
+            .unwrap();
+        assert_eq!(g, JsValue::Number(255.0));
+    }
+
+    /// Срез 2 (ph3-webgl2.md): `drawElements` sources vertices through a bound
+    /// `ELEMENT_ARRAY_BUFFER` index buffer instead of a contiguous range.
+    #[test]
+    fn draw_elements_indexed_pipeline_paints_pixels() {
+        let rt = with_webgl();
+        let g = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl');
+var vs = gl.createShader(gl.VERTEX_SHADER);
+gl.shaderSource(vs, 'void main(){}'); gl.compileShader(vs);
+var fs = gl.createShader(gl.FRAGMENT_SHADER);
+gl.shaderSource(fs, 'void main(){}'); gl.compileShader(fs);
+var prog = gl.createProgram();
+gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+gl.linkProgram(prog); gl.useProgram(prog);
+var buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+// 4 unique vertices; index buffer below assembles the two triangles.
+var verts = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+var loc = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+var ibuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+var idx = new Uint16Array([0, 1, 2, 2, 1, 3]);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+var u = gl.getUniformLocation(prog, 'u_color');
+gl.uniform4f(u, 0.0, 1.0, 0.0, 1.0);
+gl.viewport(0, 0, 8, 8);
+gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
 var px = new Uint8Array(4);
 gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
 px[1]"#,
