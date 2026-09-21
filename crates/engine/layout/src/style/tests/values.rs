@@ -1550,6 +1550,19 @@ use super::*;
     }
 
     #[test]
+    fn bug_1010_attr_in_own_custom_property_value_resolves() {
+        // BUG-1010: `attr()` inside a custom property's OWN declared value
+        // must resolve there too, not just when a typed property references
+        // the custom property via `var()`.
+        let (doc, node) = make_doc_with_div(r#"<div data-x="200"></div>"#);
+        let sheet = lumen_css_parser::parse("div { --x: attr(data-x px); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        assert_eq!(style.custom_props.get("--x").map(String::as_str), Some("200px"));
+    }
+
+    #[test]
     fn css_function_direct_call_resolves() {
         // CSS Functions and Mixins L1 — a direct call in a property value
         // (`width: --double(10px);`) should bind the positional argument and
@@ -1588,6 +1601,15 @@ use super::*;
         );
         let w = s.width.expect("width should be set");
         assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(20.0));
+        // BUG-1010: the custom property's OWN computed value (what
+        // `getComputedStyle().getPropertyValue('--gap')` reads) must have its
+        // `--fn()` call substituted — not remain the raw, wholly unexpanded
+        // `--double(10px)` source text. The substitution stops at the same
+        // point a typed property's own pipeline would (var()/function calls
+        // expanded, `calc()` arithmetic left for the property-specific parser
+        // to fold at point of use), so `calc(10px * 2)` is the correct result
+        // here, not a further-reduced `20px`.
+        assert_eq!(s.custom_props.get("--gap").map(String::as_str), Some("calc(10px * 2)"));
     }
 
     #[test]

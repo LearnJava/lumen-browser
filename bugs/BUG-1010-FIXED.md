@@ -1,6 +1,6 @@
 # BUG-1010: A custom property's own computed value never resolves `attr()`/`--fn()`/`@apply` — only `var()`/`env()` do
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-21 (P3)
 **Компонент:** layout (`crates/engine/layout/src/style/substitute.rs::expand_vars_and_env`, consumed by `crates/engine/layout/src/lib.rs::collect_custom_properties_rec` — the channel `getComputedStyle().getPropertyValue('--x')` actually reads, per [BUG-499](BUG-499-FIXED.md)'s fix)
 **Найден:** P3 2026-09-06, investigating [BUG-519](BUG-519-OPEN.md)
 
@@ -48,3 +48,51 @@ This means [BUG-518](BUG-518-FIXED.md)'s slices ("expected effect on the vendore
 `collect_custom_properties_rec` needs the same `attr()`/`--fn()`/`@apply` expansion `apply_declaration`'s pipeline already does for typed properties, threaded through with the right context: `functions`/`mixins`/`layer_order` come from the `Stylesheet` (plus shadow-tree overlays per [BUG-1009](BUG-1009-FIXED.md)/[BUG-518](BUG-518-FIXED.md) срез 5 — `collect_custom_properties_rec` currently only has `LayoutBox`/`viewport`, no `Document`/`sheet` at all), and `attr()` needs the owning DOM node. This is a real plumbing change (new parameters through `collect_custom_properties`'s public signature and every caller in `crates/shell`), not a one-line fix — likely its own slice. `expand_vars_and_env`'s docstring/name should also change to reflect the wider scope once it does more than `var`/`env`.
 
 A minimal, narrower alternative: make the *cascade-time* `custom_props` pass (`cascade.rs:1219-1231`) itself resolve `attr()`/`--fn()`/`@apply` before inserting (not just `var()`, which it doesn't do either) — that would fix `getComputedStyle` for free by making `collect_custom_properties_rec`'s existing `expand_vars_and_env` a no-op re-application of already-resolved text, but requires solving the ordering problem noted in the pass's own comment (a custom property can legitimately reference another one declared later in source, which today works only because `expand_vars`/`expand_custom_functions` recurse through the raw map on demand at point-of-use, not at insertion time).
+
+## Исправление
+
+Взят "minimal narrower alternative" вариант выше, но реализован не в пре-пассе
+(там проблема упорядочивания реальна — custom property может ссылаться на
+другую, объявленную позже в source), а в главном каскадном проходе
+(`cascade.rs`, цикл по `matched`), который и так уже вычисляет
+`effective_decl` — версию значения декларации с раскрытыми `attr()`/`--fn()`
+для КАЖДОЙ декларации, включая `--`-префиксные, перед вызовом
+`apply_declaration`. Проблема была именно в том, что `apply_declaration`
+(`apply.rs:52-54`) явно игнорирует `--`-префиксные свойства («обрабатываются в
+отдельном pass до этого момента») — раскрытое значение вычислялось и тут же
+терялось.
+
+Фикс — записывать `effective_decl.value` в `style.custom_props` напрямую для
+`--`-префиксных свойств вместо (бесполезного) вызова `apply_declaration`,
+и то же самое для деклараций, произведённых раскрытием `@apply` (мини-цикл
+внутри ветки `MIXIN_APPLY_MARKER`). Запись гейтится флагом
+`custom_prop_expanded`, выставляемым только если сработала ветка
+`attr()`-раскрытия или `--fn()`-раскрытия: декларация, которую ни одна ветка
+не тронула (голый литерал или чистая цепочка `var()`/`env()` без `attr()`/
+`--fn()`) не переписывается — иначе это тихо отменяло бы отказ пре-пасса по
+`validate_against_syntax` для зарегистрированной (`@property` с `syntax`)
+custom property. Чистые `var()`/`env()`-цепочки по-прежнему резолвятся позже,
+в `collect_custom_properties_rec` → `expand_vars_and_env` (BUG-499) — не
+тронуто.
+
+Ограничение (сознательно вне скоупа): `--fn()`-вызов резолвится вплоть до
+собственного `calc()`, но арифметика `calc()` не сворачивается в число для
+custom property — это ожидаемо, т.к. вычисленное значение generic custom
+property не обязано быть тем же типом, что и её потребитель (тот же уровень
+раскрытия typed-свойство получает от `apply_declaration` до
+property-specific парсинга).
+
+Тесты: `cascade.rs`'ный юнит `css_function_call_through_custom_property_chain_resolves`
+расширен проверкой `s.custom_props.get("--gap") == Some("calc(10px * 2)")`
+(было бы `"--double(10px)"` без фикса); новый
+`bug_1010_attr_in_own_custom_property_value_resolves` покрывает прямой
+`attr()`-случай (`--x: attr(data-x px)` → `"200px"`). `cargo test -p
+lumen-layout` 3991/3991 (стабильно, 2 полных прогона подряд), `cargo clippy -p
+lumen-layout --all-targets -- -D warnings` чист.
+
+Вне скоупа этого среза: полный доступ `collect_custom_properties_rec` к
+`Document`/`sheet` для случаев, не покрытых главным каскадным циклом
+(shadow-tree оверлеи из BUG-1009/BUG-518 среза 5 применительно именно к
+custom-property-снапшоту), и переоценка `css-mixins` категории через реальный
+WPT-прогон — оба остаются самостоятельными задачами, не переисследованы в
+этом срезе.

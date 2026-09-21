@@ -141,7 +141,7 @@ paint/layout-geometry code touched). No live WPT run (`tests/wpt/
 run_smoke.py` broken in this environment, unrelated to this bug).
 
 **Found but NOT fixed this slice — filed separately as
-[BUG-1010](BUG-1010-OPEN.md):** a custom property's own computed value never
+[BUG-1010](BUG-1010-FIXED.md):** a custom property's own computed value never
 resolves `attr()`/`--fn()`/`@apply`, only `var()`/`env()` — confirmed at both
 the `ComputedStyle` level and through the actual `getComputedStyle()` JS
 channel. Since all 9 files here (and the entire vendored `css-mixins`

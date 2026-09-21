@@ -1386,18 +1386,36 @@ pub fn compute_style(
                 )
             {
                 for d in &expanded {
-                    apply_declaration(
-                        &mut style, d, em_basis, viewport, parent_weight, inherited,
-                        ua_baseline_ref, is_quirks, dark_mode,
-                    );
+                    // BUG-1010: a mixin's `@result` block can itself set a
+                    // custom property — `apply_declaration` ignores `--`-prefixed
+                    // properties (they have their own pass), so write the
+                    // already-fully-resolved value straight into `custom_props`
+                    // instead of silently dropping it.
+                    if let Some(name) = d.property.strip_prefix("--") {
+                        style.custom_props.make_mut().insert(format!("--{name}"), d.value.clone());
+                    } else {
+                        apply_declaration(
+                            &mut style, d, em_basis, viewport, parent_weight, inherited,
+                            ua_baseline_ref, is_quirks, dark_mode,
+                        );
+                    }
                 }
             }
             continue;
         }
+        // BUG-1010: tracks whether `effective_decl` below actually differs from
+        // `decl` (an `attr()`/`--fn()` expansion happened) — a registered
+        // custom property (`@property` with a `syntax`) that FAILED the
+        // pre-pass's `validate_against_syntax` check was deliberately skipped
+        // there (its old/initial value stands), so an untouched `decl` must
+        // not be re-inserted into `custom_props` here, or this pass would
+        // silently undo that rejection for every `--`-prefixed declaration.
+        let mut custom_prop_expanded = false;
         // CSS Values L4 §7.7: expand attr() typed references before applying.
         let attr_buf;
         let effective_decl: &Declaration = if decl.value.contains("attr(") {
             let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+            custom_prop_expanded = true;
             attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
             &attr_buf
         } else {
@@ -1425,6 +1443,7 @@ pub fn compute_style(
             };
             match expand_custom_functions(&pre, &sheet.function_rules, &style.custom_props, 0, em_basis, viewport) {
                 Some(v) => {
+                    custom_prop_expanded = true;
                     func_buf = Declaration {
                         property: effective_decl.property.clone(),
                         value: v,
@@ -1437,7 +1456,24 @@ pub fn compute_style(
         } else {
             effective_decl
         };
-        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, ua_baseline_ref, is_quirks, dark_mode);
+        // BUG-1010: `effective_decl` above already resolved `attr()`/`--fn()`
+        // for this declaration's own value (the same pipeline typed properties
+        // get) — but `apply_declaration` ignores `--`-prefixed properties
+        // entirely (they have their own pre-pass), so that resolved value was
+        // silently discarded and only the pre-pass's raw text ever reached
+        // `custom_props`. Write it back here instead, overwriting the raw
+        // pre-pass entry for this property with the point-of-declaration
+        // resolved one. Gated on `custom_prop_expanded`: a declaration that
+        // went untouched by both branches above (plain literal, or a bare
+        // `var()`/`env()` chain — BUG-499 already finishes those off later via
+        // `expand_vars_and_env` at snapshot time) must not be re-inserted
+        // here, or this would silently undo the pre-pass's syntax-validation
+        // rejection for a registered (`@property`) custom property.
+        if custom_prop_expanded && let Some(name) = effective_decl.property.strip_prefix("--") {
+            style.custom_props.make_mut().insert(format!("--{name}"), effective_decl.value.clone());
+        } else if !effective_decl.property.starts_with("--") {
+            apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, ua_baseline_ref, is_quirks, dark_mode);
+        }
     }
 
     // CSS Display L3 §2.7 — blockification: the root element's own box can
