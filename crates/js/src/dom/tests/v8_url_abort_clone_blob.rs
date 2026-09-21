@@ -591,6 +591,28 @@ fn btoa_atob_on_window() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-1016: invalid input must throw the spec `DOMException
+/// InvalidCharacterError` (HTML LS §8.3), not a plain `TypeError`.
+#[test]
+fn atob_invalid_input_throws_dom_exception() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("(function() { try { atob('!!!'); return 'no throw'; } catch (e) { return (e instanceof DOMException) + ':' + e.name; } })()")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("true:InvalidCharacterError".into()));
+}
+
+/// BUG-1016: same as [`atob_invalid_input_throws_dom_exception`], for `btoa`
+/// on a character outside Latin-1.
+#[test]
+fn btoa_out_of_latin1_throws_dom_exception() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("(function() { try { btoa('\\u0100'); return 'no throw'; } catch (e) { return (e instanceof DOMException) + ':' + e.name; } })()")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("true:InvalidCharacterError".into()));
+}
+
 // ─── Blob tests ─────────────────────────────────────────────────────
 
 #[test]

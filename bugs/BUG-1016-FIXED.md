@@ -1,6 +1,6 @@
 # BUG-1016 — `atob`/`btoa` бросают `TypeError` вместо `DOMException InvalidCharacterError`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-21 (P3)
 **Заведён:** 2026-09-06 (P2, WPT-RUN-7 срез 17 — `html/webappapis`)
 **Область:** js (`crates/js/src/worker.rs::atob_native_v8`/`btoa_native_v8`, зарегистрированы
 и для главного окна через `crates/js/src/v8_runtime.rs:922` → `install_worker_bindings_v8`,
@@ -64,6 +64,40 @@ LUMEN_PROFILE=dev-release tests/wpt/.venv/bin/python3 tests/wpt/run_report.py \
   --root html/webappapis --recursive --limit 1
 ```
 или напрямую `run_smoke.py html/webappapis/atob/base64.any.html`.
+
+## Фикс (2026-09-21, P3)
+
+Реализован путь из §Возможный путь фикса для window и dedicated worker (два места,
+покрытые тест-файлом): `worker.rs`'s `atob_native_v8`/`btoa_native_v8` понижены до
+сырых примитивов, зарегистрированных под `_lumen_{atob,btoa}_impl` (возвращают
+`undefined` на ошибке, ничего не бросают сами — конструировать `DOMException` из
+native V8-кода нечем, см. §Возможный путь фикса), новый JS-шим
+`WORKER_ATOB_BTOA_SHIM` объявляет публичные `atob`/`btoa`, вызывает примитив и
+бросает `new DOMException(msg, 'InvalidCharacterError')` на `undefined`; worker-скоуп
+получил `DOM_EXCEPTION_POLYFILL` (которого там раньше не было вовсе, см. комментарий
+у `structuredClone`, GAP-WORKERSCOPE срез 2). Окно (`web_api_shim_mid_c.js`) — уже
+чистый JS с собственным b64-алгоритмом, менять пришлось только `throw new TypeError`
+→ `throw new DOMException(..., 'InvalidCharacterError')`, без нового native-кода.
+Тесты: `worker::tests_v8::v8_worker_atob_btoa_throw_dom_exception`,
+обновлён `v8_atob_throws_on_invalid_input`; для окна —
+`dom::tests::v8_url_abort_clone_blob::{atob_invalid_input_throws_dom_exception,
+btoa_out_of_latin1_throws_dom_exception}`.
+
+**`sw_worker.rs` НЕ тронут — сознательное решение, не пропуск.** Дубль там
+регистрирует `atob`/`btoa` без throw вовсе (просто `undefined`), и это не
+случайность: `install_sw_globals_v8`'s собственный `caches.put()` (строка ~235)
+зовёт глобальный `btoa(text)` на произвольном UTF-8-тексте сетевого ответа —
+любой не-ASCII текст (кириллица, эмодзи, вообще что угодно не-Latin1) тривиально
+встречается в реальных телах ответов. Применение того же `WORKER_ATOB_BTOA_SHIM`
+здесь означало бы, что `caches.put()` начинает падать на каждом нелатинском теле
+ответа — Cache API service worker'а сломался бы для обычного некэшируемого сейчас
+контента. Симптом этого бага (308 упавших ассертов) целиком из `.any.html`/
+`.any.worker.html` — окно и dedicated worker, ServiceWorker этим тест-файлом не
+покрыт — так что фикс полностью закрывает измеренный симптом без этого риска.
+Если `sw_worker.rs`'s `atob`/`btoa` когда-нибудь тоже нужно привести к спеке,
+это отдельная задача: `caches.put()`'s использование `btoa` как небросающего
+"encode arbitrary bytes" сначала нужно перевести на выделенный internal-примитив
+(`_lumen_sw_b64_encode` или подобный), не завязанный на публичный спековый `btoa`.
 
 ## Не проверялось
 

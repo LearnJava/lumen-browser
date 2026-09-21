@@ -2444,8 +2444,14 @@ fn install_worker_globals_v8(
         )?;
     }
 
-    rt.register_native_scoped("atob", Box::new(atob_native_v8))?;
-    rt.register_native_scoped("btoa", Box::new(btoa_native_v8))?;
+    rt.register_native_scoped("_lumen_atob_impl", Box::new(atob_native_v8))?;
+    rt.register_native_scoped("_lumen_btoa_impl", Box::new(btoa_native_v8))?;
+    // BUG-1016: `DOMException` isn't otherwise installed in a worker scope
+    // (see BUG-868/GAP-WORKERSCOPE note above on `structuredClone`) — needed
+    // here so the wrapper below can throw the spec `InvalidCharacterError`
+    // instead of a plain `TypeError`.
+    rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL)?;
+    rt.eval(WORKER_ATOB_BTOA_SHIM)?;
 
     // Before the dedicated-worker shim: it is what gives the scope `performance`
     // (BUG-401) and `EventTarget`, and the `performance` time origin is taken at
@@ -2480,8 +2486,33 @@ fn install_worker_globals_v8(
     Ok(())
 }
 
-/// `atob(str)` — V8 scoped native; throws a `TypeError` on invalid base64
-/// input, matching the QuickJS `atob` native's `Err(rquickjs::Error::Exception)`.
+/// `atob`/`btoa` wrapper (BUG-1016) — calls the `_lumen_{atob,btoa}_impl`
+/// natives and throws the spec `DOMException InvalidCharacterError` (HTML LS
+/// §8.3) on `undefined`, instead of the natives throwing a plain `TypeError`
+/// themselves (they cannot construct a `DOMException` — no native
+/// equivalent, see `DOM_EXCEPTION_POLYFILL`).
+#[cfg(feature = "v8-backend")]
+pub(crate) const WORKER_ATOB_BTOA_SHIM: &str = r#"(function() {
+  var _atobImpl = _lumen_atob_impl, _btoaImpl = _lumen_btoa_impl;
+  globalThis.atob = function(data) {
+    var r = _atobImpl(String(data));
+    if (r === undefined) throw new DOMException("atob: invalid base64 input", "InvalidCharacterError");
+    return r;
+  };
+  globalThis.btoa = function(data) {
+    var r = _btoaImpl(String(data));
+    if (r === undefined) throw new DOMException("btoa: string contains characters outside Latin-1", "InvalidCharacterError");
+    return r;
+  };
+})();"#;
+
+/// `_lumen_atob_impl(str)` — V8 scoped native, base64 decode only. Registered
+/// under this name, not `atob` — [`WORKER_ATOB_BTOA_SHIM`] wraps it as the
+/// real `atob` and throws the spec `DOMException InvalidCharacterError`
+/// (HTML LS §8.3) when this returns `undefined`; constructing a `DOMException`
+/// needs the JS-level constructor (no native equivalent — see
+/// `DOM_EXCEPTION_POLYFILL`), so the throw itself cannot live in this
+/// native (BUG-1016 — this used to throw a plain `TypeError` here).
 #[cfg(feature = "v8-backend")]
 fn atob_native_v8(
     scope: &mut v8::PinScope,
@@ -2493,18 +2524,17 @@ fn atob_native_v8(
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    match b64_decode(&encoded).and_then(|b| String::from_utf8(b).ok()) {
-        Some(s) => {
-            if let Some(v) = v8::String::new(scope, &s) {
-                rv.set(v.into());
-            }
-        }
-        None => throw_type_error(scope, "atob: invalid base64 input"),
+    if let Some(s) = b64_decode(&encoded).and_then(|b| String::from_utf8(b).ok())
+        && let Some(v) = v8::String::new(scope, &s)
+    {
+        rv.set(v.into());
     }
+    // Else leave `rv` unset (`undefined`) — the JS wrapper throws.
 }
 
-/// `btoa(str)` — V8 scoped native; throws a `TypeError` for characters
-/// outside Latin-1 (U+00FF), matching the QuickJS `btoa` native.
+/// `_lumen_btoa_impl(str)` — V8 scoped native, base64 encode only. See
+/// [`atob_native_v8`] on why the throw for out-of-Latin1 input lives in
+/// [`WORKER_ATOB_BTOA_SHIM`], not here.
 #[cfg(feature = "v8-backend")]
 fn btoa_native_v8(
     scope: &mut v8::PinScope,
@@ -2517,22 +2547,11 @@ fn btoa_native_v8(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
     if s.chars().any(|c| c as u32 > 255) {
-        throw_type_error(scope, "btoa: string contains characters outside Latin-1");
         return;
     }
     let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
     if let Some(v) = v8::String::new(scope, &b64_encode(&bytes)) {
         rv.set(v.into());
-    }
-}
-
-/// Schedule a JS `TypeError` on `scope`. Mirrors `webassembly.rs`'s
-/// same-named helper for the S9 scoped natives.
-#[cfg(feature = "v8-backend")]
-fn throw_type_error(scope: &mut v8::PinScope, msg: &str) {
-    if let Some(s) = v8::String::new(scope, msg) {
-        let exc = v8::Exception::type_error(scope, s);
-        scope.throw_exception(exc);
     }
 }
 
@@ -2665,6 +2684,28 @@ mod tests_v8 {
         assert_eq!(encoded, lumen_core::JsValue::String("aGVsbG8=".into()));
     }
 
+    /// BUG-1016: a worker's `atob`/`btoa` must throw the spec `DOMException
+    /// InvalidCharacterError` (HTML LS §8.3) on invalid input, not the
+    /// migration-era plain `TypeError` the QuickJS-derived native used to
+    /// throw directly.
+    #[test]
+    fn v8_worker_atob_btoa_throw_dom_exception() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+
+        let atob_name = rt
+            .eval("(function() { try { atob('not valid base64!'); return 'no throw'; } catch (e) { return (e instanceof DOMException) + ':' + e.name; } })()")
+            .unwrap();
+        assert_eq!(atob_name, lumen_core::JsValue::String("true:InvalidCharacterError".into()));
+
+        let btoa_name = rt
+            .eval("(function() { try { btoa('\\u0100'); return 'no throw'; } catch (e) { return (e instanceof DOMException) + ':' + e.name; } })()")
+            .unwrap();
+        assert_eq!(btoa_name, lumen_core::JsValue::String("true:InvalidCharacterError".into()));
+    }
+
     /// [BUG-591] `EventTarget.prototype.dispatchEvent`'s catch arms now call
     /// `_lumen_report_exception` for a throwing listener, but that native is
     /// only installed in the *page* shim (`WEB_API_SHIM_MID`), not in
@@ -2692,6 +2733,8 @@ mod tests_v8 {
         );
     }
 
+    /// BUG-1016: this used to assert `instanceof TypeError` — the pre-fix
+    /// behaviour [`v8_worker_atob_btoa_throw_dom_exception`] now replaces.
     #[test]
     fn v8_atob_throws_on_invalid_input() {
         let rt = V8JsRuntime::new().unwrap();
@@ -2700,7 +2743,7 @@ mod tests_v8 {
         install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
 
         let ok = rt
-            .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof TypeError;}})()")
+            .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof DOMException && e.name === 'InvalidCharacterError';}})()")
             .unwrap();
         assert_eq!(ok, lumen_core::JsValue::Bool(true));
     }

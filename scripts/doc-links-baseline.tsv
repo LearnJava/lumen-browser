@@ -49,6 +49,7 @@ CAPABILITIES.md	bugs/BUG-752-OPEN.md	stale-status-suffix	bugs/BUG-752-FIXED.md
 CAPABILITIES.md	bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 CSS-SPECS.md	../bugs/BUG-1009-FIXED.md	wrong-relative-path	bugs/BUG-1009-FIXED.md
 CSS-SPECS.md	../bugs/BUG-897-OPEN.md	wrong-relative-path	bugs/BUG-897-OPEN.md
+ROADMAP.md	bugs/BUG-1016-OPEN.md	stale-status-suffix	bugs/BUG-1016-FIXED.md
 ROADMAP.md	bugs/BUG-1026-OPEN.md	stale-status-suffix	bugs/BUG-1026-FIXED.md
 ROADMAP.md	bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 ROADMAP.md	bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
@@ -300,6 +301,7 @@ docs/tasks/README.md	ph3-service-workers.md	missing
 docs/tasks/README.md	ph3-web-animations-api.md	missing	
 docs/tasks/README.md	ph3-websockets-sse-fetch.md	missing	
 docs/tasks/README.md	ph3-woff2-webfonts.md	missing	
+docs/tasks/p2-test-track.md	../../bugs/BUG-1016-OPEN.md	stale-status-suffix	bugs/BUG-1016-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-594-OPEN.md	stale-status-suffix	bugs/BUG-594-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-596-OPEN.md	stale-status-suffix	bugs/BUG-596-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-598-OPEN.md	stale-status-suffix	bugs/BUG-598-FIXED.md

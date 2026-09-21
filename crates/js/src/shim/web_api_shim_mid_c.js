@@ -4,7 +4,7 @@ var _b64c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 function btoa(str) {
     var s = String(str), out = '';
     for (var i = 0; i < s.length; i++) {
-        if (s.charCodeAt(i) > 0xff) throw new TypeError('btoa: character out of Latin1 range');
+        if (s.charCodeAt(i) > 0xff) throw new DOMException('btoa: character out of Latin1 range', 'InvalidCharacterError');
     }
     for (var j = 0; j < s.length; j += 3) {
         var b0 = s.charCodeAt(j), b1 = s.charCodeAt(j+1) || 0, b2 = s.charCodeAt(j+2) || 0;
@@ -25,7 +25,7 @@ function atob(str) {
             { valid = false; break; }
     }
     if (s.length % 4 !== 0 || !valid)
-        throw new TypeError('atob: invalid base64 string');
+        throw new DOMException('atob: invalid base64 string', 'InvalidCharacterError');
     var idx = {}, i; for (i = 0; i < _b64c.length; i++) idx[_b64c[i]] = i;
     var out = '';
     for (var j = 0; j < s.length; j += 4) {
