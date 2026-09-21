@@ -167,14 +167,18 @@ impl ResourceBase {
     /// [`document_referrer_policy`]) instead of always the project default.
     ///
     /// Not every one of `http_client_for_subresource`'s six call sites has a
-    /// `&Document` in scope without further plumbing (the `<img>`/`<link>`/
-    /// `@import`/`@font-face`/`<iframe src>`/preload-scanner fetch chains
-    /// don't) — those still call the plain, default-policy method above.
-    /// Wired so far: the top-level document's own `fetch()`/`XMLHttpRequest`/
-    /// `sendBeacon`/`Worker`/`<embed>`/`<object>`/media client
-    /// (`page_pipeline.rs`, `tab_lifecycle::hibernate.rs`) and `<script src>`
-    /// (`scripts.rs::resolve_script_sources`), both of which already receive
-    /// `&Document` for CSP gating.
+    /// `&Document` in scope without further plumbing (the `<img>`/
+    /// `@font-face`/video/preload-scanner fetch chains don't) — those still
+    /// call the plain, default-policy method above. Wired so far: the
+    /// top-level document's own `fetch()`/`XMLHttpRequest`/`sendBeacon`/
+    /// `Worker`/`<embed>`/`<object>`/media client (`page_pipeline.rs`,
+    /// `tab_lifecycle::hibernate.rs`), `<script src>`
+    /// (`scripts.rs::resolve_script_sources`) — both already receiving
+    /// `&Document` for CSP gating — and (GAP-REFERRER срез 4) `<link
+    /// rel=stylesheet>`/`@import` (`stylesheets.rs::load_linked_stylesheets`/
+    /// `inline_css_imports`, both already taking `&Document`) and `<iframe
+    /// src>` (`frames.rs::spawn_frame`, which already locks the parent
+    /// `Document` for `csp_gate`).
     pub(crate) fn http_client_for_subresource_with_policy(
         &self,
         sink: Arc<dyn EventSink>,

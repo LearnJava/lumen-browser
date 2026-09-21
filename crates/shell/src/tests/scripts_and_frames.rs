@@ -1565,13 +1565,13 @@ impl EventSink for NullSink {
 fn fetch_iframe_source_reports_reason_and_url_for_unsupported_schemes() {
     let base = ResourceBase::File(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
-    let err = fetch_iframe_source("javascript:alert(1)", &base, &sink, None, false)
+    let err = fetch_iframe_source("javascript:alert(1)", &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy())
         .err()
         .expect("javascript: не поддерживается");
     assert!(err.reason.contains("javascript:"), "причина называет схему: {}", err.reason);
     assert_eq!(err.attempted_url, "javascript:alert(1)");
 
-    let err = fetch_iframe_source("data:text/html,x", &base, &sink, None, false)
+    let err = fetch_iframe_source("data:text/html,x", &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy())
         .err()
         .expect("data: не поддерживается");
     assert!(err.reason.contains("data:"), "причина называет схему: {}", err.reason);
@@ -1590,7 +1590,7 @@ fn fetch_iframe_source_treats_about_blank_as_an_empty_document() {
     let base = ResourceBase::File(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     for src in ["about:blank", "ABOUT:BLANK", "about:blank?x=1", "about:blank#frag"] {
-        match fetch_iframe_source(src, &base, &sink, None, false) {
+        match fetch_iframe_source(src, &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy()) {
             Ok(crate::frames::FrameSource::Inline(html)) => {
                 assert!(html.is_empty(), "{src}: документ пуст")
             }
@@ -1599,13 +1599,13 @@ fn fetch_iframe_source_treats_about_blank_as_an_empty_document() {
     }
     // Пустой `src` уже вёл себя так же — формы должны совпасть.
     assert!(matches!(
-        fetch_iframe_source("", &base, &sink, None, false),
+        fetch_iframe_source("", &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy()),
         Ok(crate::frames::FrameSource::Inline(ref h)) if h.is_empty()
     ));
     // Прочие `about:`-адреса по-прежнему отказывают: спека выделяет только
     // `about:blank` (и `about:srcdoc`, у которого свой путь через атрибут).
     assert!(
-        fetch_iframe_source("about:config", &base, &sink, None, false).is_err(),
+        fetch_iframe_source("about:config", &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy()).is_err(),
         "about:config грузиться не должен"
     );
 }
@@ -1617,7 +1617,7 @@ fn fetch_iframe_source_treats_about_blank_as_an_empty_document() {
 fn fetch_iframe_source_reports_missing_file() {
     let base = ResourceBase::File(PathBuf::from("samples/page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
-    let err = fetch_iframe_source("frame4-does-not-exist.html", &base, &sink, None, false)
+    let err = fetch_iframe_source("frame4-does-not-exist.html", &base, &sink, None, false, lumen_network::ReferrerPolicy::default_policy())
         .err()
         .expect("файла нет на диске");
     assert!(err.attempted_url.starts_with("file://"), "url = {}", err.attempted_url);

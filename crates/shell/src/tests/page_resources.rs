@@ -799,6 +799,7 @@ fn inline_css_imports_prepends_imported_content() {
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
         None,
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     assert!(blocked.is_empty(), "no CSP gate, nothing should be reported blocked");
     let b_pos = out.find("color: blue").expect("imported content present");
@@ -821,6 +822,7 @@ fn inline_css_imports_result_ends_with_source_text() {
             &mut std::collections::HashSet::new(), 0,
             lumen_encoding::Encoding::Utf8,
             None,
+            lumen_network::ReferrerPolicy::default_policy(),
         );
         assert!(out.ends_with(text), "результат не оканчивается исходником: {out:?}");
     }
@@ -881,6 +883,7 @@ fn inline_css_imports_nested_order() {
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
         None,
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     let c = out.find(".c{}").unwrap();
     let b = out.find(".b{}").unwrap();
@@ -902,6 +905,7 @@ fn inline_css_imports_cycle_guard() {
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
         None,
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     // Каждый лист загружен максимум один раз (guard по `seen`).
     assert_eq!(out.matches(".b{}").count(), 1);
@@ -919,6 +923,7 @@ fn inline_css_imports_media_gate() {
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
         None,
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     assert!(!out.contains(".print-only{}"), "print-only @import must be skipped for screen");
     assert!(out.contains(".a{}"));
@@ -936,6 +941,7 @@ fn inline_css_imports_missing_file_is_skipped() {
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
         None,
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     assert!(out.contains(".a{}"));
 }
@@ -966,6 +972,7 @@ fn inline_css_imports_style_src_blocks_cross_origin_import() {
         0,
         lumen_encoding::Encoding::Utf8,
         Some((std::slice::from_ref(&policy), None)),
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     assert_eq!(blocked, vec!["https://evil.example/b.css".to_owned()]);
     assert_eq!(out, text, "blocked import must fetch nothing, leaving the text untouched");
@@ -1018,6 +1025,7 @@ fn inline_css_imports_style_src_none_blocks_file_import() {
         0,
         lumen_encoding::Encoding::Utf8,
         Some((std::slice::from_ref(&policy), None)),
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     assert_eq!(blocked.len(), 1, "the file:-scheme import target must be reported blocked: {blocked:?}");
     assert!(!out.contains("color: blue"), "blocked import body must never be inlined: {out:?}");
@@ -1035,6 +1043,7 @@ fn inline_css_imports_no_import_passthrough() {
         &mut std::collections::HashSet::new(), 0,
         lumen_encoding::Encoding::Utf8,
         None,
+        lumen_network::ReferrerPolicy::default_policy(),
     );
     assert_eq!(out, text);
 }

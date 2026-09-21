@@ -520,6 +520,7 @@ fn build_page_cascade(
             0,
             crate::stylesheets::document_encoding(doc),
             csp_policy.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
+            crate::resource_base::document_referrer_policy(doc),
         );
         // BUG-743: всё, что не пришло из инлайновых <style>, откладывается
         // отдельно — так поздний динамический <style> пересобирает каскад без

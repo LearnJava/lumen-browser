@@ -98,6 +98,12 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
     let doc_encoding = document_encoding(doc);
+    // GAP-REFERRER срез 4: `<link rel=stylesheet>`/`@import` now carry the
+    // document's own resolved policy (`<meta name=referrer>`/`Referrer-Policy`
+    // header), the same way `<script src>`/top-level `fetch()` already do
+    // (срез 3) — one of the six call sites `http_client_for_subresource`'s
+    // doc comment still listed as default-only.
+    let referrer_policy = crate::resource_base::document_referrer_policy(doc);
 
     // GAP-CSPENF срез 7: посчитать политику один раз здесь же, до параллельной
     // фазы — та же одноразовая точка, что срез 4 использует в
@@ -136,6 +142,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             charset_attr.as_deref(),
             doc_encoding,
             gate_ref,
+            referrer_policy,
         )
         .ok_or(None)?;
         Ok(inline_css_imports(
@@ -148,6 +155,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             0,
             encoding,
             gate_ref,
+            referrer_policy,
         ))
     });
 
@@ -196,6 +204,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
 /// 43-45 уже дали картинкам и `<script src>`); `None` = политики без
 /// `upgrade-insecure-requests` вовсе, тогда ветка `ResolvedResource::Url`
 /// фетчит `url` как раньше, без изменений.
+#[allow(clippy::too_many_arguments)] // fetch context threaded through, same shape as `inline_css_imports`
 fn fetch_stylesheet_text(
     href: &str,
     base: &ResourceBase,
@@ -204,6 +213,7 @@ fn fetch_stylesheet_text(
     link_charset_attr: Option<&str>,
     referring_encoding: lumen_encoding::Encoding,
     csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<(String, ResourceBase, lumen_encoding::Encoding)> {
     match base.resolve(href) {
         ResolvedResource::File(path) => match std::fs::read(&path) {
@@ -257,7 +267,11 @@ fn fetch_stylesheet_text(
             // PERF-1: one span per stylesheet fetch.
             let mut fetch_span = lumen_core::trace::span(format!("css {url}"), "net");
             let resource = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
-                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                let client = base.http_client_for_subresource_with_policy(
+                    sink.clone(),
+                    cookie_jar.clone(),
+                    referrer_policy,
+                );
                 client
                     .fetch_subresource_with_content_type(&sub_url, RequestDestination::Style)
                     .map(|(body, content_type)| crate::prefetch::CachedResource {
@@ -333,6 +347,7 @@ pub(crate) fn inline_css_imports(
     depth: u32,
     referring_encoding: lumen_encoding::Encoding,
     csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> (String, Vec<String>) {
     let mut blocked = Vec::new();
     // Быстрый путь: нет токена `@import` вовсе → лишний парс не нужен
@@ -387,6 +402,7 @@ pub(crate) fn inline_css_imports(
             None, // `@import` has no `<link charset>`-equivalent attribute
             referring_encoding,
             csp_gate,
+            referrer_policy,
         ) else {
             continue;
         };
@@ -400,6 +416,7 @@ pub(crate) fn inline_css_imports(
             depth + 1,
             imp_encoding,
             csp_gate,
+            referrer_policy,
         );
         blocked.extend(nested_blocked);
         prefix.push_str(&resolved);
@@ -480,6 +497,11 @@ pub(crate) fn build_stylesheet_node_registry(
     };
     let self_origin = base.origin();
     let gate_ref = csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref()));
+    // GAP-REFERRER срез 4: same document-resolved policy as
+    // `load_linked_stylesheets` — this registry hits the same
+    // `PREFETCH_CACHE` entry, so the two must agree on the request that
+    // filled it.
+    let referrer_policy = crate::resource_base::document_referrer_policy(doc);
 
     let mut out = Vec::with_capacity(owners.len());
     for owner in owners {
@@ -501,6 +523,7 @@ pub(crate) fn build_stylesheet_node_registry(
                     charset_attr.as_deref(),
                     doc_encoding,
                     gate_ref,
+                    referrer_policy,
                 ) {
                     out.push(StylesheetNodeEntry {
                         node: id.index() as u32,
