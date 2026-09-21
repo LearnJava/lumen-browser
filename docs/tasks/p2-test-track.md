@@ -1718,6 +1718,41 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 многофазные категории; `webnn` и вся `.https.`-группа по-прежнему дают `ERROR` (BUG-1069); `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB`
 (срез 34), `appmanifest` не тронуты.
 
+### TEST-3: срез 46 (2026-09-21) — `workers`: вложенных воркеров нет (BUG-1076), 25 id — https (BUG-1069)
+
+**Выбор кандидата.** Следующая по списку среза 45: `workers` (337 id, `tests/wpt/metadata/workers/` до среза не было). Число категорий 250 → 251.
+
+**Baseline.** `--update-expected --recursive --processes 4` — ~16 мин. **248/337 harness OK, 554/1447 подтестов**, 168 новых `.ini`
+(итого 170 с двумя, созданными вручную при сужении). Бинарь `dev-release` был пересобран между сужением и финальными проверками — три финальных `--check`
+сняты на пересобранном.
+
+**Что нашлось** (`harness ERROR` — 31 id, `TIMEOUT` — 58 id, остальные проходят на уровне harness):
+
+| Причина | id | Доказательство |
+|---|---|---|
+| https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 25 | 14 `*.any.serviceworker.html` + 11 `*.https.*`; в логе `https://localhost:18443/workers/…` |
+| в воркере нет `Worker` — вложенные воркеры, новый [BUG-1076](../../bugs/BUG-1076-OPEN.md) | не менее 8 | `ReferenceError: Worker is not defined` (30 строк лога); одиночный прогон `baseurl/alpha/worker-in-worker.html` — 0/1, соседи 1/1 |
+| harness `ERROR` без https в имени: `modules/{dedicated,shared}-worker-import-{csp,referrer}.html`, `semantics/structured-clone/{dedicated,shared}.html` | 6 | не разбирались |
+| harness `TIMEOUT` | 58 | 18 из них — `SharedWorker`/`.any.sharedworker.html`, 11 — модульные воркеры/`import`; причина по файлам не устанавливалась. Строки лога не привязаны к id при `--processes 4` |
+
+Известные открытые дефекты того же слоя: [BUG-866](../../bugs/BUG-866-OPEN.md), [BUG-867](../../bugs/BUG-867-OPEN.md), [BUG-1000](../../bugs/BUG-1000-OPEN.md) (SharedWorker),
+[BUG-1071](../../bugs/BUG-1071-OPEN.md) (`WebSocket` в воркере). В логе есть ещё `[shared-worker] v8 script error: Runtime("Unexpected token '<'")` и
+`network error: unsupported scheme: blob` — не диагностировались; в одиночном прогоне `baseurl/alpha` (`importScripts-in-sharedworker`, `xhr-in-sharedworker`, оба 1/1) `<` не воспроизвёлся,
+то есть при `--processes 4` строку нельзя приписать конкретному файлу.
+
+**Проверка — флапающие пришлось сузить.** Первые три `--check` после `--update-expected` дали 4, 7 и 4 «регрессии» (плюс 7, 5 и 0 `unexpected pass`). Нестабильны шесть существующих `.ini`:
+`constructors/SharedWorker/URLMismatchError.htm`, `interfaces/WorkerUtils/importScripts/catch.sub.any.js` (`Cross-origin syntax error`), `modules/dedicated-worker-import.any.js`,
+`modules/shared-worker-import-meta.html`, `semantics/reporting-errors/004.html`, `shared-worker-from-blob-url.window.js` — `OK`/`PASS` ↔ `TIMEOUT`/`NOTRUN`/`FAIL`;
+ещё два файла (`semantics/run-a-worker/002.html`, `semantics/xhr/004.html` — оба про shared worker) на `--update-expected` прошли целиком, а в проверках падали, поэтому их `.ini` созданы вручную
+с допустимым `[PASS, FAIL]`. Причина нестабильности не установлена (гипотеза — гонка `SharedWorker`-хаба и оконных потоков между четырьмя параллельными `lumen.exe`; не проверялась).
+После сужения — **три подряд чистых `--check`** на пересобранном бинаре (247–248/337 harness OK, 553–556/1446 подтестов, 0 регрессий, 0 unexpected pass, 0 других отклонений), по ~16 мин.
+
+**Ограничение записанного.** 25 https-id записаны как `ERROR` — нижняя планка; после починки BUG-1069 baseline регенерируется, сдвиг `ERROR → TIMEOUT` (или лучше) ожидаем.
+Восемь суженных файлов держат гейт слабее (два допустимых значения); 58 `TIMEOUT` держатся только на «не стало хуже».
+
+Дальше: `editing`, `wasm`; `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты; правка `executorlumen.py` под многофазные
+`?phase=` (срез 45) по-прежнему открыта.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
