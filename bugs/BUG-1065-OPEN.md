@@ -69,3 +69,10 @@ for (...) selector += '\\' + id.charCodeAt(i).toString(16) + ' ';
 ## Срез 44 WPT-RUN-7 (2026-09-21, `pointerevents`)
 
 Эта ветка (`#2 = …`, hex-эскейп каждого символа `id`) дала **152 из 258 id** категории `pointerevents` — самая массовая причина harness-`ERROR` из всех категорий, снятых до сих пор (в `shadow-dom` видна была только `*|`-ветка, [BUG-1063](BUG-1063-OPEN.md): здесь 12 id). Обе ветки вместе — 164 из 258. Baseline записан с `expected: ERROR`; после фикса регенерировать в том же или следующем коммите.
+
+## Срез 47 WPT-RUN-7 (2026-09-21, `editing`)
+
+`editing`: **13 id из 700** — `eval: JS runtime error: #\66 \69 \72 \73 \74  is not a valid selector` и аналоги (`#\73 \65 \63 \6f \6e \64 `, `#\70 \61 \64 \64 \69 \6e \67 `,
+`#\62 \6f \72 \64 \65 \72 ` …), например `/editing/other/delete-at-end-boundary-of-div-followed-by-inline-element-containing-hidden-select-element-with-non-editable-node.html`,
+`/editing/other/empty-elements-insertion.html`, `/editing/run/caret-navigation-after-removing-line-break.html`. Основная масса `ERROR` в `editing` — соседний
+[BUG-1063](BUG-1063-OPEN.md) (263 id); после починки обоих баги перегенерировать baseline категории.

@@ -1753,6 +1753,43 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 Дальше: `editing`, `wasm`; `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты; правка `executorlumen.py` под многофазные
 `?phase=` (срез 45) по-прежнему открыта.
 
+### TEST-3: срез 47 (2026-09-21) — `editing`: 263 из 293 harness-`ERROR` — селектор `*|` (BUG-1063)
+
+**Выбор кандидата.** Следующая по списку среза 46: `editing` (`tests/wpt/metadata/editing/` до среза не было; 379 файлов, после раскрытия `?…`-вариантов — **700 id**). Число категорий 251 → 252.
+
+**Baseline.** `--update-expected --all --root editing --recursive --processes 4` — ~25 мин. **382/700 harness OK, 66 939/103 698 подтестов**, 163 `.ini`
+(`other` 85, `run` 43, `plaintext-only` 11, `whitespaces` 5 + `chrome-compat` 10, `edit-context` 8, `event.html`). Три `--check` подряд по ~25 мин: **0 регрессий, 0 unexpected pass, 0 других отклонений**,
+числа идентичны прогону baseline (382/700, 66 939/103 698) — флапающих файлов нет, сужать `.ini` не пришлось.
+
+**Что нашлось** (`harness ERROR` — 293 id, `TIMEOUT` — 25 id):
+
+| Причина | id | Доказательство |
+|---|---|---|
+| селектор с namespace-префиксом `*|`: `:root > *|body:nth-child(N) > *|div:nth-child(M) … is not a valid selector`, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 263 | `testdriver-extra.js::get_selector` для элемента без `id`; `editing/other/*`, `editing/run/*`, `editing/plaintext-only/*` |
+| hex-эскейп `id`: `#\66 \69 \72 \73 \74  is not a valid selector`, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 13 | `editing/other/empty-elements-insertion.html`, `editing/run/caret-navigation-after-removing-line-break.html` и др. |
+| https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 10 | `edit-context/*.https.html`, `plaintext-only/paste.https.html?…` |
+| `EditContext is not defined` | 2 | `edit-context/edit-context-bidi-caret-association.tentative.html` — интерфейс не реализован, баг не заводился |
+| `element click intercepted` | 3 | `other/exec-command-with-text-editor.tentative.html?type=…` — не разбирались |
+| `childDocument.getSelection is not a function` | 1 | `other/exec-command-without-editable-element.tentative.html` — не разбирался |
+| требуется `testRunner` для чтения/записи буфера обмена | 1 | `other/paste_text_with_text_transform.html` — свойство harness Chromium, не дефект |
+| harness `TIMEOUT` | 25 | `other/delete-in-child-of-{head,html}.tentative.html` (по 4), `other/insertparagraph-in-child-of-{head,html}.tentative.html` (по 8), `run/undo-redo.html` (1) — причина не устанавливалась |
+
+**Главное.** Это самая массовая единичная причина harness-`ERROR` из всех снятых категорий: 263 из 700 id (38 %), в `pointerevents` было 12, в `shadow-dom` — единицы. Починка
+[BUG-1063](../../bugs/BUG-1063-OPEN.md) + [BUG-1065](../../bugs/BUG-1065-OPEN.md) переведёт ~276 файлов из `ERROR` в реальные подтесты (остаётся ~17 `ERROR`). Из 103 698 подтестов
+66 939 проходят, но это в основном `editing/run/*` с тысячами подтестов на файл, где `execCommand` уже реализован частично — баланс по id (382 из 700) честнее.
+
+**Ограничение записанного.** 263 + 13 + 10 id записаны как `ERROR` — нижняя планка; после починки BUG-1063/1065/1069 baseline регенерируется (`--update-expected` + три `--check`),
+сдвиг `ERROR → OK`/`FAIL` ожидаем и не является регрессией. 25 `TIMEOUT` держатся только на «не стало хуже».
+
+**Окружение этой сессии (что было сломано, чтобы следующая не тратила час).** Тулчейн `1.97.0` в `~/.rustup` повреждён (в `bin` есть `cargo.exe`/`cargo-clippy.exe`, нет `rustc.exe`;
+`rustup` при каждом `cargo` пытается доустановить компоненты и падает на `detected conflict: bin\cargo-clippy.exe`) — вне рабочей папки, не чинился; `sccache` в `~/.cargo/bin` отсутствует.
+Бинарь собран **не на пинованном 1.97.0**, а на установленном `stable` (1.98.1): `RUSTC_WRAPPER= RUSTUP_TOOLCHAIN=stable cargo build --profile dev-release --bin lumen` (2 мин 23 с при тёплых зависимостях).
+Скачивание prebuilt V8 (`rusty_v8_release_x86_64-pc-windows-msvc.lib.gz`, 39 МБ) из `build.rs` обрывалось (`Decompression error Err(Buf)`) — `release-assets.githubusercontent.com` отвечал `SSL: UNEXPECTED_EOF`
+через раз; решение — докачать архив повторяющимся `urllib` с `Range` в `.tmp/` (gitignored) и передать `RUSTY_V8_ARCHIVE=<абсолютный путь к .gz>`. `pywebsocket3` в свежем venv нужно патчить
+(`ssl.wrap_socket`, README §Troubleshooting) — иначе `OSError: Servers failed to start: wss:18889` до первого теста; venv создан в корне репозитория (`.venv-wpt/`, вне git).
+
+Дальше: `wasm` (831 файл), `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
