@@ -140,12 +140,14 @@ fn maybe_upgrade_frame_src(
 /// `csp_enforce::navigation_wants_uir_header`, вычисленный вызывающей
 /// стороной один раз из уже читаемого `csp_gate` (тот же порядок, что срез 52
 /// уже даёт апгрейду схемы через `maybe_upgrade_frame_src`).
+#[allow(clippy::too_many_arguments)] // fetch context threaded through, same shape as stylesheets.rs
 pub(crate) fn fetch_iframe_source(
     src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     send_uir_header: bool,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<FrameSource, FetchError> {
     if src.trim().is_empty() {
         return Ok(FrameSource::Inline(String::new()));
@@ -203,7 +205,11 @@ pub(crate) fn fetch_iframe_source(
                     return Err(FetchError { reason, attempted_url: url });
                 }
             };
-            let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar);
+            let client = base.http_client_for_subresource_with_policy(
+                Arc::clone(sink),
+                cookie_jar,
+                referrer_policy,
+            );
             match client.fetch_subresource_document(&sub_url, send_uir_header) {
                 Ok(bytes) => Ok(FrameSource::Url {
                     html: String::from_utf8_lossy(&bytes).into_owned(),
@@ -596,6 +602,7 @@ pub(crate) fn fetch_frame_subresources(
         0,
         crate::stylesheets::document_encoding(doc),
         csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
+        crate::resource_base::document_referrer_policy(doc),
     );
     // GAP-CSPENF срез 7: `style-src` gates the fetch here (blocked sheets
     // return the same `false` outcome a network failure would); срез 8 stops
@@ -1960,10 +1967,17 @@ pub(crate) fn spawn_frame(
     // (первичная вставка и навигация — оба пути идут через
     // `fetch_iframe_source`). `about:blank`/пустой `src` не проверяются:
     // CSP3 §6.5 их не ограничивает, они не долетают ни до сети, ни до диска.
-    let csp_gate = {
+    let (csp_gate, referrer_policy) = {
         let doc = parent.lock().unwrap();
         let root = doc.root();
-        crate::csp_enforce::document_csp_policy(&doc, root)
+        (
+            crate::csp_enforce::document_csp_policy(&doc, root),
+            // GAP-REFERRER срез 4: the `<iframe src>` navigation carries the
+            // PARENT document's resolved referrer policy — same one-shot
+            // lock as `csp_gate` above, same reasoning as `<link>`/`@import`
+            // (`stylesheets.rs`) in this срез.
+            crate::resource_base::document_referrer_policy(&doc),
+        )
     };
     let self_origin = base.origin();
     // GAP-CSPENF срез 55: `uir_override` побеждает, когда вызывающая сторона
@@ -2027,7 +2041,14 @@ pub(crate) fn spawn_frame(
                     frame_src_check(&href, nav_base)
                         .map(Err)
                         .unwrap_or_else(|| {
-                            fetch_iframe_source(&href, nav_base, sink, cookie_jar.clone(), send_uir_header)
+                            fetch_iframe_source(
+                                &href,
+                                nav_base,
+                                sink,
+                                cookie_jar.clone(),
+                                send_uir_header,
+                                referrer_policy,
+                            )
                         }),
                 )
             }
@@ -2036,7 +2057,16 @@ pub(crate) fn spawn_frame(
                 let src = maybe_upgrade_frame_src(csp_gate.as_ref(), src, base);
                 frame_src_check(&src, base)
                     .map(Err)
-                    .unwrap_or_else(|| fetch_iframe_source(&src, base, sink, cookie_jar.clone(), send_uir_header))
+                    .unwrap_or_else(|| {
+                        fetch_iframe_source(
+                            &src,
+                            base,
+                            sink,
+                            cookie_jar.clone(),
+                            send_uir_header,
+                            referrer_policy,
+                        )
+                    })
             }),
         },
     };
