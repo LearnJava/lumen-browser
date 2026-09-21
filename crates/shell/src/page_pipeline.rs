@@ -1236,6 +1236,9 @@ pub(crate) fn parse_and_layout(
         let eff_base = effective_base(&d, base);
         let root = d.root();
         let media_policy = crate::csp_enforce::document_csp_policy(&d, root);
+        // GAP-REFERRER срез 5: same one-shot read the other producers in
+        // this function already use.
+        let referrer_policy = crate::resource_base::document_referrer_policy(&d);
         let self_origin = base.origin();
         let blocked = std::cell::RefCell::new(Vec::new());
         let tracks = tracks::load_video_tracks(&d, &|src| {
@@ -1263,9 +1266,9 @@ pub(crate) fn parse_and_layout(
                     }
                     return None;
                 }
-                return fetch_vtt_text(&gate_url, &eff_base, sink, cookie_jar.clone());
+                return fetch_vtt_text(&gate_url, &eff_base, sink, cookie_jar.clone(), referrer_policy);
             }
-            fetch_vtt_text(src, &eff_base, sink, cookie_jar.clone())
+            fetch_vtt_text(src, &eff_base, sink, cookie_jar.clone(), referrer_policy)
         });
         (tracks, blocked.into_inner())
     };
@@ -1493,13 +1496,18 @@ pub(crate) fn parse_and_layout(
         let eff_base = effective_base(&d, base);
         let root = d.root();
         let bg_policy = crate::csp_enforce::document_csp_policy(&d, root);
+        // GAP-REFERRER срез 5: same one-shot read as `bg_policy` above,
+        // before `d` drops — this producer has no other point with a live
+        // `&Document`.
+        let referrer_policy = crate::resource_base::document_referrer_policy(&d);
         let self_origin = base.origin();
         drop(d);
         let csp_gate = bg_policy
             .as_ref()
             .map(|(policy, _)| (policy.as_slice(), self_origin.as_ref()));
-        let (decoded, blocked) =
-            fetch_and_decode_background_images(&layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate);
+        let (decoded, blocked) = fetch_and_decode_background_images(
+            &layout, &eff_base, sink, cookie_jar.clone(), target, csp_gate, referrer_policy,
+        );
         for (src, image) in decoded {
             images.push((src, image));
         }

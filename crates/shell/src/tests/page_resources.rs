@@ -646,6 +646,7 @@ fn frame_fonts_reports_csp_blocked_font_src() {
         None,
         csp_gate.as_ref(),
         self_origin.as_ref(),
+        lumen_network::ReferrerPolicy::default_policy(),
     );
 
     assert!(web_fonts.is_empty(), "font-src 'none' must block the fetch, not just report it");
@@ -668,8 +669,15 @@ fn frame_fonts_no_policy_does_not_report_blocked() {
     let base = ResourceBase::Url("https://example.com/frame/index.html".to_owned());
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let self_origin = base.origin();
-    let (_registry, _web_fonts, blocked) =
-        load_frame_fonts(&sheet.font_faces, &base, &sink, None, None, self_origin.as_ref());
+    let (_registry, _web_fonts, blocked) = load_frame_fonts(
+        &sheet.font_faces,
+        &base,
+        &sink,
+        None,
+        None,
+        self_origin.as_ref(),
+        lumen_network::ReferrerPolicy::default_policy(),
+    );
 
     assert!(blocked.is_empty(), "no policy must never report a font-src block");
 }
@@ -710,6 +718,7 @@ fn frame_background_images_reports_csp_blocked_img_src() {
         lumen_core::ColorSpace::Srgb,
         csp_gate.as_ref(),
         self_origin.as_ref(),
+        lumen_network::ReferrerPolicy::default_policy(),
     );
 
     assert!(images.is_empty(), "img-src 'none' must block the fetch, not just report it");
@@ -747,6 +756,7 @@ fn frame_background_images_no_policy_does_not_report_blocked() {
         lumen_core::ColorSpace::Srgb,
         None,
         self_origin.as_ref(),
+        lumen_network::ReferrerPolicy::default_policy(),
     );
 
     assert!(blocked.is_empty(), "no policy must never report an img-src block");

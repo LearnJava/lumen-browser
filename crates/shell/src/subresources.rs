@@ -22,11 +22,16 @@ type BackgroundImagesOutcome = (Vec<(String, Arc<lumen_image::Image>)>, Vec<(Str
 
 /// P3-webvtt срез 3: фетчит текст `.vtt` по `src` из `<track>` (файл или URL).
 /// `None` — ресурс не скачался; страница продолжает жить без субтитров.
+///
+/// GAP-REFERRER срез 5: `referrer_policy` — документа-владельца `<track>`
+/// (`document_referrer_policy`), вместо дефолта проекта — тот же приём, что
+/// срезы 3/4 уже дали остальным parser-driven подресурсам.
 pub(crate) fn fetch_vtt_text(
     src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<String> {
     match base.resolve(src) {
         ResolvedResource::File(path) => std::fs::read_to_string(&path).ok(),
@@ -34,7 +39,8 @@ pub(crate) fn fetch_vtt_text(
             use lumen_core::url::Url;
             use lumen_network::RequestDestination;
             let sub_url = Url::parse(&url).ok()?;
-            let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
+            let client =
+                base.http_client_for_subresource_with_policy(sink.clone(), cookie_jar, referrer_policy);
             let bytes = client
                 .fetch_subresource(&sub_url, RequestDestination::Media)
                 .ok()?;
@@ -66,6 +72,7 @@ pub(crate) fn fetch_and_decode_background_images(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
     csp_gate: Option<(&[lumen_network::csp::CspPolicy], Option<&lumen_network::Origin>)>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> BackgroundImagesOutcome {
     // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
     // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,
@@ -88,7 +95,7 @@ pub(crate) fn fetch_and_decode_background_images(
                 return Err((abs, violated.into_iter().map(str::to_owned).collect::<Vec<_>>()));
             }
         }
-        let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
+        let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone(), referrer_policy) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск bg-картинки {url}: {e}");
@@ -357,6 +364,12 @@ pub(crate) fn fetch_and_decode_images(
         crate::csp_enforce::document_csp_policy(doc, root)
     };
     let self_origin = base.origin();
+    // GAP-REFERRER срез 5: this producer already holds `&mut Document`
+    // (unlike `<img>`'s three still-default siblings this срез otherwise
+    // leaves alone), so the resolved policy is read directly instead of
+    // plumbing a caller-supplied parameter through — the one call site
+    // (`page_pipeline.rs`) has no cheaper way to get it either.
+    let referrer_policy = crate::resource_base::document_referrer_policy(doc);
 
     /// Результат параллельной фазы fetch+decode одной картинки. Применение к
     /// документу (intrinsic size) и сборка выходных векторов — отдельной
@@ -458,12 +471,13 @@ pub(crate) fn fetch_and_decode_images(
                     sink,
                     cookie_jar: cookie_jar.clone(),
                     target,
+                    referrer_policy,
                 }),
                 false,
             ),
             _ => (
                 image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
-                    decode_image(fetch_url, base, sink, cookie_jar.clone(), target)
+                    decode_image(fetch_url, base, sink, cookie_jar.clone(), target, referrer_policy)
                 }),
                 url_cross_origin,
             ),
@@ -522,8 +536,17 @@ pub(crate) fn fetch_image_bytes(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    fetch_subresource_bytes(raw_src, base, sink, cookie_jar, lumen_network::RequestDestination::Image, "img")
+    fetch_subresource_bytes(
+        raw_src,
+        base,
+        sink,
+        cookie_jar,
+        lumen_network::RequestDestination::Image,
+        "img",
+        referrer_policy,
+    )
 }
 
 /// Same fetch as [`fetch_image_bytes`], tagged as an `@font-face url()` body
@@ -541,8 +564,17 @@ pub(crate) fn fetch_font_bytes(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    fetch_subresource_bytes(raw_src, base, sink, cookie_jar, lumen_network::RequestDestination::Font, "font")
+    fetch_subresource_bytes(
+        raw_src,
+        base,
+        sink,
+        cookie_jar,
+        lumen_network::RequestDestination::Font,
+        "font",
+        referrer_policy,
+    )
 }
 
 /// GAP-MEDIADECODE срез 7: fetch an FFmpeg-container `<video src>` body.
@@ -556,8 +588,17 @@ pub(crate) fn fetch_video_bytes(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    fetch_subresource_bytes(raw_src, base, sink, cookie_jar, lumen_network::RequestDestination::Media, "video")
+    fetch_subresource_bytes(
+        raw_src,
+        base,
+        sink,
+        cookie_jar,
+        lumen_network::RequestDestination::Media,
+        "video",
+        referrer_policy,
+    )
 }
 
 fn fetch_subresource_bytes(
@@ -567,6 +608,7 @@ fn fetch_subresource_bytes(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     destination: lumen_network::RequestDestination,
     span_label: &str,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     match base.resolve(raw_src) {
         ResolvedResource::File(path) => std::fs::read(&path).map_err(|e| {
@@ -578,7 +620,8 @@ fn fetch_subresource_bytes(
             // Images/fonts are loaded in no-cors mode: cross-origin allowed, but
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
-            let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
+            let client =
+                base.http_client_for_subresource_with_policy(sink.clone(), cookie_jar, referrer_policy);
             // PERF-1: one span per fetch — back-to-back spans on a lane
             // reveal sequential UI-thread subresource loading.
             let mut fetch_span = lumen_core::trace::span(format!("{span_label} {url}"), "net");
@@ -604,8 +647,9 @@ pub(crate) fn decode_image(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> Option<image_cache::DecodedImage> {
-    let bytes = match fetch_image_bytes(raw_src, base, sink, cookie_jar) {
+    let bytes = match fetch_image_bytes(raw_src, base, sink, cookie_jar, referrer_policy) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("Пропуск картинки {raw_src}: {e}");
@@ -641,13 +685,16 @@ struct CorsImageFetch<'a> {
     sink: &'a Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
+    referrer_policy: lumen_network::ReferrerPolicy,
 }
 
 fn decode_image_cors(req: CorsImageFetch<'_>) -> Option<image_cache::DecodedImage> {
-    let CorsImageFetch { resolved_url, raw_src, self_origin, mode, base, sink, cookie_jar, target } = req;
+    let CorsImageFetch {
+        resolved_url, raw_src, self_origin, mode, base, sink, cookie_jar, target, referrer_policy,
+    } = req;
     use lumen_core::url::Url;
     let target_url = Url::parse(resolved_url).ok()?;
-    let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
+    let client = base.http_client_for_subresource_with_policy(sink.clone(), cookie_jar, referrer_policy);
     let credentials_mode = match mode {
         lumen_layout::CrossOriginMode::Anonymous => lumen_network::CredentialsMode::SameOrigin,
         lumen_layout::CrossOriginMode::UseCredentials => lumen_network::CredentialsMode::Include,
