@@ -82,12 +82,25 @@ u16/u32 индексов для `ELEMENT_ARRAY_BUFFER`. Новый метод
 `gl_FragColor`). Держать обратную совместимость с ES 1.0 (детект по наличию
 `#version 300`).
 
-### Срез 5 — M — Present framebuffer в страничный `<canvas>`
-Главный видимый gap. Связать `SoftwareWebGl::pixels()` (`webgl.rs:207`) с
-экранным `<canvas>`: путь по образцу `offscreen_canvas.rs::flush_dirty`
-(`offscreen_canvas.rs:127`) — помечать WebGL-контекст dirty на `drawArrays`/
-`clear`, отдавать RGBA в шелл-композитор для отрисовки в бокс `<canvas>`. Это
-делает WebGL реально видимым, а не только `readPixels`.
+### Срез 5 — M — Present framebuffer в страничный `<canvas>` — DONE 2026-09-21 (P1)
+Главный видимый gap закрыт. `webgl_canvas.rs::CONTEXTS` теперь хранит
+`WebGlEntry { gl, nid }` — `nid` берётся из `el.__nid__` в момент
+`getContext('webgl'|'webgl2')` и прокидывается через новый 3-аргументный
+`_lumen_webgl_create(nid, w, h)`. `_lumen_webgl_clear`/`_lumen_webgl_draw_arrays`
+после мутации framebuffer зовут новую `present(id)`: flip bottom-left→top-left
+(`flip_rows_rgba`, тот же переворот, что уже делал `readPixels` по под-прямоугольнику)
++ `canvas2d::present_rgba(nid, w, h, rgba)` — тот же хук, что уже использует
+WebGPU-present (`_lumen_webgpu_canvas_present`), так что шелл композитит WebGL
+как обычный `canvas:{nid}`. Контексты без backing-элемента (`nid` отсутствует,
+юнит-тесты `install_minimal_dom`) просто не презентуют — не паникуют.
+Остаток/побочный эффект: `CanvasNoiseGenerator` по-прежнему не подключён к
+software-GL пути, так что presented-бufer, как и `readPixels`, отдаёт точные
+пиксели — `drawImage(webglCanvas, …)` на 2D-канвас теперь тоже это унаследовал
+(см. CAPABILITIES.md, тот же класс остатка, что и у WebGPU-present). 2 новых
+теста (`clear_presents_to_page_canvas`, `context_without_nid_does_not_present`);
+ловушка — ассерты обязаны идти через `rt.flush_canvas_updates()`
+(marshal на JS-поток раннера), а не напрямую `canvas2d::flush_dirty()` с
+вызывающего потока теста — у раннера свой `thread_local!`.
 
 ### Срез 6 — XS — `uniform*v` / `uniformMatrix3fv`
 Добавить `uniform2fv`/`3fv`/`4fv`/`1iv` и `uniformMatrix3fv` (WebGL2 часто
@@ -109,6 +122,6 @@ u16/u32 индексов для `ELEMENT_ARRAY_BUFFER`. Новый метод
 - [ ] `drawElements` + `ELEMENT_ARRAY_BUFFER` (u16/u32 индексы) работают.
 - [ ] VAO (`createVertexArray`/`bindVertexArray`) реализованы.
 - [ ] GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется.
-- [ ] **Present:** результат WebGL композитится на страничный `<canvas>` (видно в окне, не только `readPixels`).
+- [x] **Present:** результат WebGL композитится на страничный `<canvas>` (видно в окне, не только `readPixels`) — срез 5, 2026-09-21.
 - [ ] graphic_test `NN-webgl2` проходит (порог 0.5%).
 - [ ] `CAPABILITIES.md` + `subsystems/paint.md` обновлены (webgl2 ✅/🟡).

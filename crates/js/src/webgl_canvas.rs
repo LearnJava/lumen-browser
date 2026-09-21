@@ -7,7 +7,10 @@
 //! `createProgram`/`linkProgram`/`useProgram`, `vertexAttribPointer`/
 //! `enableVertexAttribArray`, `uniform4f`, `clearColor`/`clear`, `viewport`,
 //! `drawArrays` and `readPixels` all drive a real software rasterizer whose
-//! pixels can be read back.
+//! pixels can be read back. `clear`/`drawArrays` also *present*: they push the
+//! framebuffer into the backing `<canvas>` element's `canvas2d` buffer (see
+//! [`present`]), the same `canvas:{nid}` the shell composites into the page —
+//! so a WebGL canvas is visible on screen, not just readable via `readPixels`.
 //!
 //! # State model
 //!
@@ -38,10 +41,19 @@ use lumen_paint::webgl;
 #[cfg(feature = "v8-backend")]
 use lumen_paint::webgl::SoftwareWebGl;
 
+/// A registered WebGL context plus the page `<canvas>` DOM node it presents
+/// into (`nid`, `HTMLCanvasElement.__nid__`). `nid` is `None` for contexts
+/// created without a backing element (unit tests' `install_minimal_dom`).
+#[cfg(feature = "v8-backend")]
+struct WebGlEntry {
+    gl: SoftwareWebGl,
+    nid: Option<u32>,
+}
+
 #[cfg(feature = "v8-backend")]
 thread_local! {
     /// Per-thread WebGL context registry, keyed by opaque context id.
-    static CONTEXTS: RefCell<HashMap<u32, SoftwareWebGl>> = RefCell::new(HashMap::new());
+    static CONTEXTS: RefCell<HashMap<u32, WebGlEntry>> = RefCell::new(HashMap::new());
     /// Monotonic context-id allocator (shared across runtimes on one thread).
     static NEXT_ID: Cell<u32> = const { Cell::new(1) };
 }
@@ -50,9 +62,49 @@ thread_local! {
 #[cfg(feature = "v8-backend")]
 fn with_ctx<R>(id: u32, default: R, f: impl FnOnce(&mut SoftwareWebGl) -> R) -> R {
     CONTEXTS.with(|c| match c.borrow_mut().get_mut(&id) {
-        Some(gl) => f(gl),
+        Some(entry) => f(&mut entry.gl),
         None => default,
     })
+}
+
+/// Flip the framebuffer from WebGL's bottom-left origin to the top-left
+/// origin `canvas2d::present_rgba` expects (same flip `gl.readPixels` already
+/// does in [`WEBGL_SHIM`], just for the whole buffer instead of a sub-rect).
+#[cfg(feature = "v8-backend")]
+fn flip_rows_rgba(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let w = width as usize;
+    let h = height as usize;
+    let stride = w * 4;
+    let mut out = vec![0u8; pixels.len()];
+    for row in 0..h {
+        let src_row = h - 1 - row;
+        let src = &pixels[src_row * stride..src_row * stride + stride];
+        let dst = &mut out[row * stride..row * stride + stride];
+        dst.copy_from_slice(src);
+    }
+    out
+}
+
+/// Present the current framebuffer of context `id` into its backing
+/// `<canvas>` (see [`WebGlEntry::nid`]), if it has one. Called after every
+/// draw call that can change the framebuffer (`clear`, `drawArrays`), mirroring
+/// `offscreen_canvas.rs::flush_dirty`'s dirty-then-upload model: repeated
+/// presents within one frame simply overwrite the same `canvas2d` buffer
+/// before the shell's once-per-tick `flush_dirty` drains it.
+#[cfg(feature = "v8-backend")]
+fn present(id: u32) {
+    let frame = CONTEXTS.with(|c| {
+        c.borrow().get(&id).and_then(|entry| {
+            entry.nid.map(|nid| {
+                let w = entry.gl.width();
+                let h = entry.gl.height();
+                (nid, w, h, flip_rows_rgba(entry.gl.pixels(), w, h))
+            })
+        })
+    });
+    if let Some((nid, w, h, rgba)) = frame {
+        crate::canvas2d::present_rgba(nid, w, h, &rgba);
+    }
 }
 
 /// Re-export of backend mode constants for callers/tests that build draw calls
@@ -332,7 +384,8 @@ const WEBGL_SHIM: &str = r#"(function() {
       if (t === 'webgl' || t === 'webgl2' || t === 'experimental-webgl') {
         if (!_ctx) {
           var d = _canvasDims(el);
-          var cid = _lumen_webgl_create(d[0], d[1]);
+          var nid = (el.__nid__ === undefined) ? -1 : el.__nid__;
+          var cid = _lumen_webgl_create(nid, d[0], d[1]);
           _ctx = _makeContext(cid);
           _ctx.canvas = el;
           _ctx.drawingBufferWidth = d[0];
@@ -393,14 +446,15 @@ pub(crate) fn install_webgl_canvas_v8(
 
     rt.register_native(
         "_lumen_webgl_create",
-        into_v8_fn2(|w: i32, h: i32| -> u32 {
+        into_v8_fn3(|nid: i32, w: i32, h: i32| -> u32 {
             let id = NEXT_ID.with(|n| {
                 let v = n.get();
                 n.set(v + 1);
                 v
             });
             let gl = SoftwareWebGl::new(w.max(1) as u32, h.max(1) as u32);
-            CONTEXTS.with(|c| c.borrow_mut().insert(id, gl));
+            let nid = if nid < 0 { None } else { Some(nid as u32) };
+            CONTEXTS.with(|c| c.borrow_mut().insert(id, WebGlEntry { gl, nid }));
             id
         }),
     )?;
@@ -428,6 +482,7 @@ pub(crate) fn install_webgl_canvas_v8(
         "_lumen_webgl_clear",
         into_v8_fn2(|id: u32, mask: u32| {
             with_ctx(id, (), |gl| gl.clear(mask));
+            present(id);
         }),
     )?;
     rt.register_native(
@@ -589,6 +644,7 @@ pub(crate) fn install_webgl_canvas_v8(
         "_lumen_webgl_draw_arrays",
         into_v8_fn4(|id: u32, mode: u32, first: i32, count: i32| {
             with_ctx(id, (), |gl| gl.draw_arrays(mode, first, count));
+            present(id);
         }),
     )?;
     rt.register_native(
@@ -768,6 +824,47 @@ document.createElement = function(tag) {
             .eval("document.createElement('canvas').toDataURL()")
             .unwrap();
         assert_eq!(url, JsValue::String("data:,".into()));
+    }
+
+    /// Срез 5 (ph3-webgl2.md): `clear`/`drawArrays` must push the framebuffer
+    /// into the page `<canvas>`'s `canvas2d` buffer (what the shell uploads as
+    /// `canvas:{nid}`), not just make it readable via `readPixels`.
+    #[test]
+    fn clear_presents_to_page_canvas() {
+        let rt = with_webgl();
+        rt.eval(
+            r#"var c = document.createElement('canvas');
+c.__nid__ = 42;
+var gl = c.getContext('webgl');
+gl.clearColor(0.0, 0.0, 1.0, 1.0);
+gl.clear(gl.COLOR_BUFFER_BIT);"#,
+        )
+        .unwrap();
+        // `flush_canvas_updates` marshals onto the runtime's own thread — the
+        // natives above ran there too, so a direct `canvas2d::flush_dirty()`
+        // call from this test thread would read an empty, unrelated
+        // `thread_local` instance instead (BUG-class: cross-thread `thread_local`).
+        let dirty = rt.flush_canvas_updates();
+        let (_, w, h, pixels) = dirty
+            .into_iter()
+            .find(|(nid, ..)| *nid == 42)
+            .expect("canvas 42 was presented");
+        assert_eq!((w, h), (8, 8));
+        assert_eq!(&pixels[0..4], &[0, 0, 255, 255]);
+    }
+
+    /// A context created without a backing `<canvas>` node (`__nid__` absent, as
+    /// in [`install_minimal_dom`]) must not panic and must not present anywhere.
+    #[test]
+    fn context_without_nid_does_not_present() {
+        let rt = with_webgl();
+        rt.eval(
+            r#"var gl = document.createElement('canvas').getContext('webgl');
+gl.clearColor(0.0, 1.0, 0.0, 1.0);
+gl.clear(gl.COLOR_BUFFER_BIT);"#,
+        )
+        .unwrap();
+        assert!(rt.flush_canvas_updates().is_empty());
     }
 
     #[test]
