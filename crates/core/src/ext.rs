@@ -5214,15 +5214,55 @@ pub struct SwFetchRequest {
     pub response_tx: std::sync::mpsc::SyncSender<Option<Vec<u8>>>,
 }
 
+/// A decrypted WebPush message body, ready to be wrapped in a `PushEvent` and
+/// dispatched to the SW (Ph3 push-api срез 5). Produced by
+/// `PushBackend::push_deliver`/`push_take_pending`.
+pub struct SwPushMessage {
+    /// Plaintext payload (RFC 8291 aes128gcm already stripped by
+    /// `push_crypto::decrypt`), handed to `PushEvent.data` as-is.
+    pub payload: Vec<u8>,
+}
+
+/// A `pushsubscriptionchange` event (Push API L1 §5): fired when
+/// `subscribe()` mints a fresh subscription that replaces one the SW already
+/// had for the same `(origin, scope)` — the closest analogue this engine has
+/// to a push service unilaterally rotating a subscription, since there is no
+/// real push service to do that spontaneously (Ph3 push-api срез 5).
+/// `(endpoint, p256dh_b64, auth_b64)` triples — the same wire shape
+/// `PushBackend::push_get` already returns minus `user_visible_only`.
+pub struct SwPushSubscriptionChangeMessage {
+    /// The subscription that was replaced.
+    pub old: (String, String, String),
+    /// The subscription that replaced it.
+    pub new: (String, String, String),
+}
+
+/// Message sent from the main thread to a Service Worker execution thread.
+///
+/// One `mpsc` channel per SW carries every event flavour the Rust side can
+/// dispatch into it — a `FetchEvent`, a `PushEvent`, or a
+/// `PushSubscriptionChangeEvent` — since a SW's V8 isolate is single-threaded
+/// and only the thread that owns it may touch it (mirrors `SwFetchRequest`'s
+/// existing role, just no longer the only variant).
+pub enum SwWorkerMessage {
+    /// Dispatch a `fetch` event.
+    Fetch(SwFetchRequest),
+    /// Dispatch a `push` event.
+    Push(SwPushMessage),
+    /// Dispatch a `pushsubscriptionchange` event.
+    PushSubscriptionChange(SwPushSubscriptionChangeMessage),
+}
+
 /// Opaque handle to a running Service Worker execution thread.
 ///
 /// Created by `lumen-js::sw_worker::spawn_sw_worker_v8` when a SW activates.
 /// Held by `ServiceWorkerInterceptor` (in `lumen-storage`) to route fetch
-/// requests to the correct SW thread.
+/// requests, and by `lumen-js::push_api` to route push events, to the correct
+/// SW thread.
 pub struct SwWorkerHandle {
-    /// Channel to send fetch requests to the SW thread.
+    /// Channel to send events to the SW thread.
     /// `mpsc::Sender` is `Clone` — store a clone when dispatch and lock are separate.
-    pub tx: std::sync::mpsc::Sender<SwFetchRequest>,
+    pub tx: std::sync::mpsc::Sender<SwWorkerMessage>,
     /// Thread join handle — kept alive so the thread doesn't detach.
     pub _thread: std::thread::JoinHandle<()>,
 }

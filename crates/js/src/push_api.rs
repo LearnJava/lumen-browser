@@ -74,19 +74,34 @@ fn generate_push_keys() -> PushKeys {
 /// `push_backend` is `None` when the caller has no persistent storage wired
 /// (headless dump modes) — subscriptions then behave as before срез 1: the
 /// native bindings become no-ops and `getSubscription()` always resolves `null`.
+///
+/// `sw_worker_store` (Ph3 push-api срез 5) is the same map
+/// `install_service_worker` uses to route fetch events — `subscribe()`
+/// dispatches `pushsubscriptionchange` through it when it replaces an
+/// existing subscription for `(origin, scope)`, and `_lumen_push_deliver_test`
+/// dispatches `push`. `None` (headless/no SW backend) makes both no-ops, same
+/// shape as `push_backend`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_push_api_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn4};
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
     use lumen_core::ext::JsRuntime as _;
 
     let be = push_backend.clone();
+    let store = sw_worker_store.clone();
     let subscribe = into_v8_fn4(
         move |origin: String, scope: String, endpoint: String, user_visible_only: bool| -> Vec<String> {
             let keys = generate_push_keys();
             if let Some(be) = be.as_ref() {
+                // Срез 5: a subscription already on record for this scope means
+                // this call is a rotation, not a fresh subscribe — there is no
+                // real push service to rotate one spontaneously, so a repeat
+                // `subscribe()` is this engine's stand-in trigger for
+                // `pushsubscriptionchange` (Push API L1 §5).
+                let old = be.push_get(&origin, &scope);
                 be.push_subscribe(
                     &origin,
                     &scope,
@@ -96,6 +111,15 @@ pub(crate) fn install_push_api_v8(
                     &keys.private_key_b64,
                     user_visible_only,
                 );
+                if let Some((old_endpoint, old_p256dh, old_auth, _)) = old {
+                    dispatch_push_subscription_change(
+                        store.as_ref(),
+                        &origin,
+                        &scope,
+                        (old_endpoint, old_p256dh, old_auth),
+                        (endpoint.clone(), keys.p256dh_b64.clone(), keys.auth_b64.clone()),
+                    );
+                }
             }
             vec![keys.p256dh_b64, keys.auth_b64]
         },
@@ -125,7 +149,7 @@ pub(crate) fn install_push_api_v8(
     });
     rt.register_native("_lumen_push_unsubscribe", unsubscribe)?;
 
-    let be = push_backend;
+    let be = push_backend.clone();
     // Срез 3: no backend (headless dump modes) reads as "prompt" — the same
     // default a fresh origin gets from a real `Permissions` store, never
     // "granted".
@@ -136,8 +160,81 @@ pub(crate) fn install_push_api_v8(
     });
     rt.register_native("_lumen_push_permission_state", permission_state)?;
 
+    // Срез 5 mock relay: no real WebPush service exists to deliver a message
+    // over the wire (see `docs/tasks/ph3-push-api.md` срез 4's note — the only
+    // way to exercise decrypt+dispatch today is a mock relay), so this native
+    // is the stand-in "a message arrived" entry point — not part of the W3C
+    // Push API surface itself, hence no shim wrapper calls it from page JS.
+    // Decrypts+enqueues via `PushBackend::push_deliver` (RFC 8291, срез 4),
+    // pops the plaintext, and dispatches it into the SW as a `push` event.
+    let be = push_backend;
+    let store = sw_worker_store;
+    let deliver_test = into_v8_fn3(
+        move |origin: String, scope: String, payload_b64: String| -> bool {
+            let Some(be) = be.as_ref() else { return false };
+            let Some(payload) = crate::sw_worker::base64_decode(&payload_b64) else {
+                return false;
+            };
+            if !be.push_deliver(&origin, &scope, &payload) {
+                return false;
+            }
+            let Some(plaintext) = be.push_take_pending(&origin, &scope) else {
+                return false;
+            };
+            dispatch_push(store.as_ref(), &origin, &scope, plaintext)
+        },
+    );
+    rt.register_native("_lumen_push_deliver_test", deliver_test)?;
+
     rt.eval(PUSH_API_SHIM)?;
     Ok(())
+}
+
+/// Send a `push` event through the SW thread registered for `(origin, scope)`,
+/// if one is running. `false` if there is no store, no such SW, or the
+/// channel is gone (SW thread died) — best-effort, same shape as the rest of
+/// this module.
+#[cfg(feature = "v8-backend")]
+fn dispatch_push(
+    store: Option<&lumen_core::ext::SwWorkerStore>,
+    origin: &str,
+    scope: &str,
+    payload: Vec<u8>,
+) -> bool {
+    let Some(store) = store else { return false };
+    let Ok(workers) = store.lock() else { return false };
+    let Some(handle) = workers.get(&(origin.to_string(), scope.to_string())) else {
+        return false;
+    };
+    handle
+        .tx
+        .send(lumen_core::ext::SwWorkerMessage::Push(
+            lumen_core::ext::SwPushMessage { payload },
+        ))
+        .is_ok()
+}
+
+/// Send a `pushsubscriptionchange` event through the SW thread registered for
+/// `(origin, scope)`, if one is running. Best-effort — see [`dispatch_push`].
+#[cfg(feature = "v8-backend")]
+fn dispatch_push_subscription_change(
+    store: Option<&lumen_core::ext::SwWorkerStore>,
+    origin: &str,
+    scope: &str,
+    old: (String, String, String),
+    new: (String, String, String),
+) -> bool {
+    let Some(store) = store else { return false };
+    let Ok(workers) = store.lock() else { return false };
+    let Some(handle) = workers.get(&(origin.to_string(), scope.to_string())) else {
+        return false;
+    };
+    handle
+        .tx
+        .send(lumen_core::ext::SwWorkerMessage::PushSubscriptionChange(
+            lumen_core::ext::SwPushSubscriptionChangeMessage { old, new },
+        ))
+        .is_ok()
 }
 
 /// JavaScript shim implementing W3C Push API L1.
@@ -379,7 +476,7 @@ mod tests {
     fn with_push_api(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
         eval_with_location(&rt);
-        install_push_api_v8(&rt, None).unwrap();
+        install_push_api_v8(&rt, None, None).unwrap();
         f(&rt);
     }
 
@@ -469,7 +566,7 @@ mod tests {
         backend.push_set_permission("https://push.test", "denied");
         let rt = V8JsRuntime::new().unwrap();
         eval_with_location(&rt);
-        install_push_api_v8(&rt, Some(backend)).unwrap();
+        install_push_api_v8(&rt, Some(backend), None).unwrap();
         rt.eval(
             "var pm = new PushManager({scope: '/'}); \
              var state = null; \
@@ -491,7 +588,7 @@ mod tests {
         backend.push_set_permission("https://push.test", "denied");
         let rt = V8JsRuntime::new().unwrap();
         eval_with_location(&rt);
-        install_push_api_v8(&rt, Some(backend)).unwrap();
+        install_push_api_v8(&rt, Some(backend), None).unwrap();
         rt.eval(
             "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
              var errName = null; \
@@ -545,7 +642,7 @@ mod tests {
         ));
         let rt = V8JsRuntime::new().unwrap();
         eval_with_location(&rt);
-        install_push_api_v8(&rt, Some(backend)).unwrap();
+        install_push_api_v8(&rt, Some(backend), None).unwrap();
         rt.eval(
             "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
              var sub = null; \
@@ -603,7 +700,7 @@ mod tests {
 
         let rt1 = V8JsRuntime::new().unwrap();
         eval_with_location(&rt1);
-        install_push_api_v8(&rt1, Some(Arc::clone(&backend))).unwrap();
+        install_push_api_v8(&rt1, Some(Arc::clone(&backend)), None).unwrap();
         rt1.eval(
             "var reg = new ServiceWorkerRegistration(); reg.scope = '/app/'; \
              var endpoint = null; \
@@ -621,7 +718,7 @@ mod tests {
         // Fresh JS context (new isolate/heap), same backend Arc — models a reload.
         let rt2 = V8JsRuntime::new().unwrap();
         eval_with_location(&rt2);
-        install_push_api_v8(&rt2, Some(backend)).unwrap();
+        install_push_api_v8(&rt2, Some(backend), None).unwrap();
         rt2.eval(
             "var reg = new ServiceWorkerRegistration(); reg.scope = '/app/'; \
              var seen = null; \
@@ -640,7 +737,7 @@ mod tests {
         ));
         let rt = V8JsRuntime::new().unwrap();
         eval_with_location(&rt);
-        install_push_api_v8(&rt, Some(backend)).unwrap();
+        install_push_api_v8(&rt, Some(backend), None).unwrap();
         rt.eval(
             "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
              var sub = null; var afterUnsub = 'pending'; \
@@ -652,5 +749,159 @@ mod tests {
         .unwrap();
         let after = rt.eval("afterUnsub").unwrap();
         assert_eq!(after, JsValue::Null);
+    }
+
+    // ── Ph3 push-api срез 5: SW dispatch ────────────────────────────────────
+
+    /// A single-entry `SwWorkerStore` pointing at a real running SW thread
+    /// (`crate::sw_worker::spawn_sw_worker_v8`) — the same store shape
+    /// `install_service_worker`/`ServiceWorkerInterceptor` share in production,
+    /// built by hand here since this test doesn't go through SW activation.
+    fn store_with_worker(
+        origin: &str,
+        scope: &str,
+        script: &str,
+    ) -> lumen_core::ext::SwWorkerStore {
+        let cache = std::sync::Arc::new(lumen_storage::CacheStorage::open_in_memory().unwrap());
+        let handle = crate::sw_worker::spawn_sw_worker_v8(
+            origin.to_string(),
+            scope.to_string(),
+            script.to_string(),
+            cache as Arc<dyn lumen_core::ext::CacheBackend>,
+            None,
+            None,
+        );
+        let mut map = std::collections::HashMap::new();
+        map.insert((origin.to_string(), scope.to_string()), handle);
+        std::sync::Arc::new(std::sync::Mutex::new(map))
+    }
+
+    /// Reads back a marker the SW script stashed on its own `push`/
+    /// `pushsubscriptionchange` handler by sending it a `Fetch` request —
+    /// `SwWorkerHandle.tx` is a single FIFO `mpsc::Sender`, so a `Fetch` sent
+    /// after another message is guaranteed to be handled after it.
+    fn read_marker(store: &lumen_core::ext::SwWorkerStore, origin: &str, scope: &str) -> Option<Vec<u8>> {
+        let workers = store.lock().unwrap();
+        let handle = workers.get(&(origin.to_string(), scope.to_string()))?;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: format!("{origin}/__test_marker"),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .ok()?;
+        rx.recv_timeout(std::time::Duration::from_secs(5)).ok()?
+    }
+
+    /// Срез 5 DoD: a second `subscribe()` for the same scope — this engine's
+    /// stand-in for a push service rotating a subscription, since there is no
+    /// real one to do it spontaneously — fires `pushsubscriptionchange` in the
+    /// SW with the previous and the new endpoint.
+    #[test]
+    fn test_resubscribe_dispatches_push_subscription_change_to_sw() {
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
+        let store = store_with_worker(
+            "https://push.test",
+            "/",
+            r#"
+var __marker = 'ничего';
+self.addEventListener('pushsubscriptionchange', function(event) {
+    __marker = event.oldSubscription.endpoint + '|' + event.newSubscription.endpoint;
+});
+self.addEventListener('fetch', function(event) {
+    event.respondWith(Promise.resolve(new Response(__marker)));
+});
+"#,
+        );
+
+        let rt = V8JsRuntime::new().unwrap();
+        eval_with_location(&rt);
+        install_push_api_v8(&rt, Some(Arc::clone(&backend)), Some(Arc::clone(&store))).unwrap();
+        rt.eval(
+            "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
+             var first = null; var second = null; \
+             reg.pushManager.subscribe({userVisibleOnly: true}) \
+                .then(function(s) { first = s.endpoint; \
+                     return reg.pushManager.subscribe({userVisibleOnly: true}); }) \
+                .then(function(s) { second = s.endpoint; });",
+        )
+        .unwrap();
+        let first = rt.eval("first").unwrap();
+        let second = rt.eval("second").unwrap();
+        let (JsValue::String(first), JsValue::String(second)) = (first, second) else {
+            panic!("expected both subscribe() calls to resolve with an endpoint string");
+        };
+        assert_ne!(first, second, "each subscribe() mints a fresh endpoint");
+
+        let marker = read_marker(&store, "https://push.test", "/").unwrap();
+        assert_eq!(marker, format!("{first}|{second}").into_bytes());
+    }
+
+    /// A first (non-replacing) `subscribe()` must not fire
+    /// `pushsubscriptionchange` — there is no previous subscription to report.
+    #[test]
+    fn test_first_subscribe_does_not_dispatch_push_subscription_change() {
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
+        let store = store_with_worker(
+            "https://push.test",
+            "/",
+            r#"
+var __fired = false;
+self.addEventListener('pushsubscriptionchange', function(event) { __fired = true; });
+self.addEventListener('fetch', function(event) {
+    event.respondWith(Promise.resolve(new Response(__fired ? 'да' : 'нет')));
+});
+"#,
+        );
+
+        let rt = V8JsRuntime::new().unwrap();
+        eval_with_location(&rt);
+        install_push_api_v8(&rt, Some(backend), Some(Arc::clone(&store))).unwrap();
+        rt.eval(
+            "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
+             reg.pushManager.subscribe({userVisibleOnly: true});",
+        )
+        .unwrap();
+
+        let marker = read_marker(&store, "https://push.test", "/").unwrap();
+        assert_eq!(marker, "нет".as_bytes().to_vec());
+    }
+
+    /// Срез 5 mock relay: no subscription on record for `(origin, scope)` —
+    /// `push_deliver` finds nothing to decrypt against, so the native must
+    /// report failure and never touch the SW.
+    #[test]
+    fn test_push_deliver_test_native_fails_without_subscription() {
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
+        let rt = V8JsRuntime::new().unwrap();
+        eval_with_location(&rt);
+        install_push_api_v8(&rt, Some(backend), None).unwrap();
+        let result = rt
+            .eval("_lumen_push_deliver_test('https://push.test', '/', btoa('не важно'))")
+            .unwrap();
+        assert_eq!(result, JsValue::Bool(false));
+    }
+
+    /// Same native, but no backend at all (headless dump modes) — must not
+    /// panic, just report failure like every other push native without one.
+    #[test]
+    fn test_push_deliver_test_native_is_a_no_op_without_backend() {
+        with_push_api(|rt| {
+            let result = rt
+                .eval("_lumen_push_deliver_test('https://push.test', '/', btoa('x'))")
+                .unwrap();
+            assert_eq!(result, JsValue::Bool(false));
+        });
     }
 }
