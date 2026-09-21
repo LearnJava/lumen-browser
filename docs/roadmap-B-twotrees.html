@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-21",
  "counts": {
-  "open": 260,
+  "open": 261,
   "fixed": 759,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1019,
+ "total_bugs": 1020,
  "phases": [
   {
    "id": "P0",
@@ -1806,8 +1806,8 @@
     {
      "id": "P3-webgl2",
      "title": "WebGL2 подмножество",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02, дрейф упоминания GLSL ES 3.0 исправлен ревизией 2026-09-21 — интерпретатор всё ещё ES 1.0, `webgl_bindings.rs` не подключён, см. docs/tasks/ph3-webgl2.md): `getContext('webgl2')` — тот же функциональный контекст, что и `webgl` (без webgl2-only поверхности); `drawElements`/VAO/GLSL ES 3.00 не реализованы (срезы 2-4 брифа). **Ревизия 2026-09-21 (P1), срез 5:** главный видимый gap закрыт — `clear`/`drawArrays` теперь презентуют framebuffer в страничный `<canvas>` (`webgl_canvas.rs::present`, тот же `canvas2d::present_rgba`/`canvas:{nid}`-хук, что и WebGPU-present), а не только `readPixels`. **Ревизия 2026-09-21 (P1), срез 2:** `drawElements`+`ELEMENT_ARRAY_BUFFER` реализованы — `SoftwareWebGl` получил отдельное хранилище индексов (расширяются до u32 независимо от исходного `Uint8/16/32Array`), `bind_buffer` трекает оба таргета; `draw_arrays`/шейдерный путь/flat-fill рефакторены на общий `draw_indexed(mode, indices)`, которым делятся `drawArrays` (непрерывный диапазон) и новый `draw_elements` (срез индексного буфера по byte-offset+gl_type). Натив `_lumen_webgl_draw_elements` + JS `gl.drawElements`, тот же `present()`-хук после мутации framebuffer. 5 новых тестов `webgl.rs` + 1 V8-тест `webgl_canvas.rs`. **Ревизия 2026-09-21 (P1), срез 3:** VAO (`createVertexArray`/`bindVertexArray`/`deleteVertexArray`/`isVertexArray`) — новый тип `VertexArrayObject` в `SoftwareWebGl` (атрибуты + захваченный `ELEMENT_ARRAY_BUFFER`-биндинг), `attribs_mut`/`attribs_active`/`element_array_binding[_mut]` прозрачно адресуют default-VAO или активный; `vertexAttribPointer`/`enable-disableVertexAttribArray`/`bindBuffer(ELEMENT_ARRAY_BUFFER,…)`/`drawElements` переведены на эти аксессоры. 5 новых тестов `webgl.rs` (изоляция attrib-pointers и element-buffer биндинга между VAO, откат на default при неизвестном id, неявный rebind при удалении активного VAO) + 2 V8-теста `webgl_canvas.rs`. **Ревизия 2026-09-21 (P1), срез 4:** GLSL ES 3.00 в `glsl.rs` — `parse()` получил параметр `ShaderStage` (`Vertex`/`Fragment`, передаётся из `Shader::kind` в `webgl.rs::compile_shader`), новые ветки `in`/`out` в `parse_top_level` резолвятся относительно стадии на существующие ES 1.0 бакеты (vertex `in`→`attributes`, vertex `out`/fragment `in`→`varyings`, fragment `out vec4 <name>`→новое поле `ParsedShader::frag_out_name`, которое `exec_main` копирует в `frag_color` после `main()`); `#version 300 es` не потребовал кода — лексер уже пропускал любую `#`-строку; `texture()` уже был алиасом `texture2D` с среза 1. 5 новых тестов `glsl.rs` + 1 V8-тест `webgl_canvas.rs` (полный ES 3.00 compile→link→draw→readback pipeline). Остаток: срез 6 (`uniform*v`) брифа."
+     "status": "done",
+     "note": "PARTIAL (сверка с кодом 2026-07-02, дрейф упоминания GLSL ES 3.0 исправлен ревизией 2026-09-21 — интерпретатор всё ещё ES 1.0, `webgl_bindings.rs` не подключён, см. docs/tasks/ph3-webgl2.md): `getContext('webgl2')` — тот же функциональный контекст, что и `webgl` (без webgl2-only поверхности); `drawElements`/VAO/GLSL ES 3.00 не реализованы (срезы 2-4 брифа). **Ревизия 2026-09-21 (P1), срез 5:** главный видимый gap закрыт — `clear`/`drawArrays` теперь презентуют framebuffer в страничный `<canvas>` (`webgl_canvas.rs::present`, тот же `canvas2d::present_rgba`/`canvas:{nid}`-хук, что и WebGPU-present), а не только `readPixels`. **Ревизия 2026-09-21 (P1), срез 2:** `drawElements`+`ELEMENT_ARRAY_BUFFER` реализованы — `SoftwareWebGl` получил отдельное хранилище индексов (расширяются до u32 независимо от исходного `Uint8/16/32Array`), `bind_buffer` трекает оба таргета; `draw_arrays`/шейдерный путь/flat-fill рефакторены на общий `draw_indexed(mode, indices)`, которым делятся `drawArrays` (непрерывный диапазон) и новый `draw_elements` (срез индексного буфера по byte-offset+gl_type). Натив `_lumen_webgl_draw_elements` + JS `gl.drawElements`, тот же `present()`-хук после мутации framebuffer. 5 новых тестов `webgl.rs` + 1 V8-тест `webgl_canvas.rs`. **Ревизия 2026-09-21 (P1), срез 3:** VAO (`createVertexArray`/`bindVertexArray`/`deleteVertexArray`/`isVertexArray`) — новый тип `VertexArrayObject` в `SoftwareWebGl` (атрибуты + захваченный `ELEMENT_ARRAY_BUFFER`-биндинг), `attribs_mut`/`attribs_active`/`element_array_binding[_mut]` прозрачно адресуют default-VAO или активный; `vertexAttribPointer`/`enable-disableVertexAttribArray`/`bindBuffer(ELEMENT_ARRAY_BUFFER,…)`/`drawElements` переведены на эти аксессоры. 5 новых тестов `webgl.rs` (изоляция attrib-pointers и element-buffer биндинга между VAO, откат на default при неизвестном id, неявный rebind при удалении активного VAO) + 2 V8-теста `webgl_canvas.rs`. **Ревизия 2026-09-21 (P1), срез 4:** GLSL ES 3.00 в `glsl.rs` — `parse()` получил параметр `ShaderStage` (`Vertex`/`Fragment`, передаётся из `Shader::kind` в `webgl.rs::compile_shader`), новые ветки `in`/`out` в `parse_top_level` резолвятся относительно стадии на существующие ES 1.0 бакеты (vertex `in`→`attributes`, vertex `out`/fragment `in`→`varyings`, fragment `out vec4 <name>`→новое поле `ParsedShader::frag_out_name`, которое `exec_main` копирует в `frag_color` после `main()`); `#version 300 es` не потребовал кода — лексер уже пропускал любую `#`-строку; `texture()` уже был алиасом `texture2D` с среза 1. 5 новых тестов `glsl.rs` + 1 V8-тест `webgl_canvas.rs` (полный ES 3.00 compile→link→draw→readback pipeline). **Ревизия 2026-09-21 (P1), срез 6:** `uniform2fv`/`3fv`/`4fv`/`1iv` уже были прокинуты как тонкие обёртки над скалярными `uniform1..4f`/`uniform1i` (единственный элемент массива — интерпретатор не поддерживает uniform-массивы); добавлен `uniformMatrix3fv` (был `function() {}`-стабом) — `SoftwareWebGl::uniform_matrix3fv` встраивает 3×3-матрицу в тот же padded-`Val::Mat4`, которым уже пользуется GLSL-конструктор `mat3()`. Натив `_lumen_webgl_uniform_mat3fv` + `gl.uniformMatrix3fv`. 2 новых теста `webgl.rs` + 1 V8-тест `webgl_canvas.rs`. `cargo clippy -p lumen-paint -p lumen-js --all-targets --features lumen-js/v8-backend -D warnings` зелёные. **Ревизия 2026-09-21 (P1), graphic_test + два попутных фикса — DoD закрыт:** `graphic_tests/157-webgl2.html` (5 full-viewport quad-панелей: drawArrays/drawElements/VAO/GLSL ES 3.00 texture()/uniformMatrix3fv, без AA-пикселей на границе) вскрыл два реальных дефекта — (1) `getContext('webgl2')` на canvas, пришедшем прямо из разобранного HTML (не `document.createElement`), отдавал `null`, т.к. `WEBGL_SHIM` расширял `getContext` только через перехват `document.createElement('canvas')`; фикс — `install_webgl_canvas_v8` дополнительно проходит `document.getElementsByTagName('canvas')` по уже построенному дереву; (2) `gl.TEXTURE_2D`/`gl.TEXTURE0..7` никогда не были определены на объекте контекста — `bindTexture(gl.TEXTURE_2D, tex)` молча не биндил ничего, `texture()` в GLSL ES 3.00 фрагмент-шейдере всегда отдавал fallback. Добавлены именованные константы + 2 новых теста (`preexisting_parser_canvas_gets_webgl_stub`, `named_texture_constants_reach_texture_sampling`). Живой прогон подтвердил: все 5 панелей дают нулевой диф с Edge; единственный остаток — `KNOWN_DEBTORS['157']` (BUG-1076): плавающая chrome-панель `#demoBar`, ставшая видимой в живом окне побочным эффектом уже закрытого BUG-1059, перекрывает часть вьюпорта в любом real-JS графическом тесте (тот же класс уже задел TEST-57/BUG-099) — заведённая среда-регрессия, вне скоупа этой задачи."
     },
     {
      "id": "P3-avif",
@@ -8974,6 +8974,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1076": {
+   "status": "open",
+   "title": "Побочный эффект BUG-1059 (закрыт 2026-09-19, починил рендер): плавающая dev-панель `#demoBar` (CC-18, \"не часть Lumen\") теперь всегда видна в живом окне, а `mse…",
+   "component": "тулинг графтестов / shell chrome (`assets/chrome/chrome.html` `.demo-bar`; `crates/shell/src/chrome_ui.rs`/`chrome_float.rs`)",
+   "date": null,
+   "debtor": true
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -15799,6 +15806,9 @@
   ],
   "тулинг WPT (`tests/wpt/certs/host-cert.pem` — SAN `web-platform.test`/`127.0.0.1` против `browser_host = \"localhost\"`, `browsers/lumen.py::env_options`)": [
    "BUG-1069"
+  ],
+  "тулинг графтестов / shell chrome (`assets/chrome/chrome.html` `.demo-bar`; `crates/shell/src/chrome_ui.rs`/`chrome_float.rs`)": [
+   "BUG-1076"
   ]
  }
 }
