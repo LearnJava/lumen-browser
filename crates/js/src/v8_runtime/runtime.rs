@@ -245,6 +245,20 @@ pub struct V8JsRuntime {
     /// Shared counter backing `deterministic_monotonic`'s clock advance, reset
     /// to 0 by [`Self::set_deterministic_mode`].
     pub(super) deterministic_clock_ms: Arc<AtomicU64>,
+    /// GAP-USERACT (BUG-751): HTML LS §6.4 transient activation — clock
+    /// reading (`install::platform::install_user_activation`'s own copy of the
+    /// `_lumen_now_ms` clock) at the most recent activation-triggering input
+    /// event. Meaningful only once `activation_ever` is `true`.
+    pub(super) activation_last_ms: Arc<AtomicU64>,
+    /// GAP-USERACT: `navigator.userActivation.hasBeenActive` — set once by the
+    /// first activation-triggering input event this document ever saw, never
+    /// cleared afterwards (HTML LS §6.4 "sticky activation").
+    pub(super) activation_ever: Arc<AtomicBool>,
+    /// GAP-USERACT: set by `_lumen_consume_user_activation` ("consume user
+    /// activation", HTML LS §6.4) — forces `isActive` to `false` until the
+    /// next activation-triggering input event re-arms it, without touching
+    /// `activation_ever`.
+    pub(super) activation_consumed: Arc<AtomicBool>,
     /// Live SW execution threads keyed by `(origin, scope)`.
     pub(super) sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     /// `sessionStorage` partition of the browsing context this runtime serves
@@ -385,6 +399,9 @@ impl V8JsRuntime {
             self_doc_key: AtomicUsize::new(0),
             deterministic_monotonic: AtomicBool::new(false),
             deterministic_clock_ms: Arc::new(AtomicU64::new(0)),
+            activation_last_ms: Arc::new(AtomicU64::new(0)),
+            activation_ever: Arc::new(AtomicBool::new(false)),
+            activation_consumed: Arc::new(AtomicBool::new(false)),
             sw_worker_store: None,
             ss_store: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),

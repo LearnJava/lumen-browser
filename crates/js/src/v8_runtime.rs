@@ -169,6 +169,9 @@ impl V8JsRuntime {
         };
         let monotonic_clock = self.deterministic_monotonic.load(Ordering::Relaxed);
         let deterministic_clock_ms = Arc::clone(&self.deterministic_clock_ms);
+        let activation_last_ms = Arc::clone(&self.activation_last_ms);
+        let activation_ever = Arc::clone(&self.activation_ever);
+        let activation_consumed = Arc::clone(&self.activation_consumed);
         // BUG-371: the file-API grants are bound to this document's origin.
         // Derived here, before `page_url` is moved into the `self.run` closure
         // below, and never taken from a JS argument.
@@ -412,6 +415,17 @@ impl V8JsRuntime {
                 deterministic_seed,
                 monotonic_clock,
                 Arc::clone(&deterministic_clock_ms),
+            )?;
+
+            install::install_user_activation(
+                scope,
+                ctx,
+                store,
+                deterministic_seed,
+                Arc::clone(&deterministic_clock_ms),
+                Arc::clone(&activation_last_ms),
+                Arc::clone(&activation_ever),
+                Arc::clone(&activation_consumed),
             )?;
 
             install::install_timer_wakeup(

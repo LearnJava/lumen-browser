@@ -119,6 +119,10 @@ const WINDOW_MANAGEMENT_SHIM: &str = r#"(function() {
       throw new DOMException(
         'getScreenDetails() requires transient activation.', 'InvalidStateError');
     }
+    // W3C WMWPA §3.2 — consume user activation once the check passes (GAP-USERACT).
+    if (typeof _lumen_consume_user_activation === 'function') {
+      _lumen_consume_user_activation();
+    }
   }
 
   // Fails closed, mirroring local_font_access.rs::requireLocalFontsPermission: no

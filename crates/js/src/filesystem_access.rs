@@ -2602,6 +2602,11 @@ function requireUserActivation(what) {
   if (activation && activation.isActive === false) {
     fsThrow('SecurityError', 'Must be handling a user gesture to show ' + what);
   }
+  // FS §8.1 "show a x picker" — consume user activation once the check passes
+  // (GAP-USERACT).
+  if (typeof _lumen_consume_user_activation === 'function') {
+    _lumen_consume_user_activation();
+  }
 }
 
 // ── Picker globals (Promise-returning per FS §8.1) ───────────────────────────

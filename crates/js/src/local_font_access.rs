@@ -153,6 +153,11 @@ const LOCAL_FONT_ACCESS_SHIM: &str = r#"(function() {
       throw new DOMException(
         'Transient activation is required to request local fonts.', 'SecurityError');
     }
+    // WICG Local Font Access §2 — consume user activation once the check
+    // passes (GAP-USERACT).
+    if (typeof _lumen_consume_user_activation === 'function') {
+      _lumen_consume_user_activation();
+    }
   }
 
   // §2 step 4. Fails closed: no Permissions API, an unusable one, or anything

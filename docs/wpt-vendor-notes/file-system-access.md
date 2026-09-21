@@ -18,10 +18,11 @@ Test category, added 2026-07-28 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 `showPicker-errors.https.window.js`). Заодно закрыт
 [BUG-750](../../bugs/BUG-750-FIXED.md).
 
-Остаток по категории — не в самом API: оставшиеся 3 сабтеста
-`showPicker-errors` требуют `SecurityError` без транзиентной активации, а
-`navigator.userActivation.isActive` в движке захардкожен в `true`
-([BUG-751](../../bugs/BUG-751-OPEN.md)). `idlharness.https.any.js` по-прежнему
+Остаток по категории — не в самом API: `showPicker-errors`'s 3 сабтеста,
+требующие `SecurityError` без транзиентной активации, теперь опираются на
+реальный гейт (GAP-USERACT, [BUG-751](../../bugs/BUG-751-FIXED.md) fixed
+2026-09-21) — не перепроверено живым `run_report.py` в рамках этого фикса.
+`idlharness.https.any.js` по-прежнему
 не измеряет ничего: TIMEOUT по HTTPS-порт-гэпу, и `idlharness.js`/
 `WebIDLParser.js` в дереве не вендорены — форма интерфейсов проверена пробой
 `--dump-display-list` и юнит-тестами `filesystem_access::tests_v8`, а не

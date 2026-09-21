@@ -70,6 +70,8 @@ fn request_fullscreen_returns_promise() {
 #[test]
 fn request_fullscreen_sets_fullscreen_element() {
     let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0);")
+        .unwrap();
     rt.eval("document.body.requestFullscreen();").unwrap();
     assert!(bool_eval(&rt, "document.fullscreenElement !== null"));
 }
@@ -77,6 +79,8 @@ fn request_fullscreen_sets_fullscreen_element() {
 #[test]
 fn request_fullscreen_sets_sentinel_attr() {
     let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0);")
+        .unwrap();
     rt.eval("document.body.requestFullscreen();").unwrap();
     assert!(bool_eval(&rt, "document.body.hasAttribute('data-lumen-fullscreen')"));
 }
@@ -84,6 +88,8 @@ fn request_fullscreen_sets_sentinel_attr() {
 #[test]
 fn request_fullscreen_fires_fullscreenchange_event() {
     let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0);")
+        .unwrap();
     rt.eval(
         "var fired = false; \
                  document.addEventListener('fullscreenchange', function() { fired = true; }); \
@@ -207,9 +213,11 @@ fn request_fullscreen_error_calls_document_on_handler() {
     assert!(bool_eval(&rt, "seen === 'fullscreenerror'"));
 }
 
-/// Without transient activation the request is refused. Lumen's
-/// `navigator.userActivation` reports active unconditionally (BUG-758),
-/// so the gate is exercised here by overriding that single signal.
+/// Without transient activation the request is refused (GAP-USERACT,
+/// BUG-758/BUG-751 — fixed). No gesture is dispatched in this test, and
+/// `Object.defineProperty` also pins the signal to `false` regardless of
+/// the real transient-activation clock, so the assertion holds independent
+/// of that clock's window/consume details.
 #[test]
 fn request_fullscreen_rejects_without_transient_activation() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -226,10 +234,12 @@ fn request_fullscreen_rejects_without_transient_activation() {
 }
 
 /// The happy path still resolves — the new checks must not gate a
-/// connected, non-popover element under the default activation model.
+/// connected, non-popover element that DOES have transient activation.
 #[test]
 fn request_fullscreen_resolves_for_connected_element() {
     let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0);")
+        .unwrap();
     rt.eval(
         "var res = 'pending'; \
                  document.body.requestFullscreen().then(function() { res = 'resolved'; }, \
@@ -478,11 +488,27 @@ fn navigator_connection_save_data_false() {
     assert!(bool_eval(&rt, "navigator.connection.saveData === false"));
 }
 
-// ── navigator.userActivation ────────────────────────────────────────────────
+// ── navigator.userActivation (GAP-USERACT, BUG-751/BUG-758) ──────────────────
+// Full model coverage (marking, decay window, consume) lives in
+// `dom::tests::v8_gap_useract`; this file only checks the object shape and
+// that it starts out with no activation at all — this suite's other tests
+// deliberately never dispatch a gesture unless the `requestFullscreen()` gate
+// requires one.
 
 #[test]
-fn user_activation_has_been_active() {
+fn user_activation_starts_inactive_and_never_active() {
     let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "navigator.userActivation.hasBeenActive === false && \
+                 navigator.userActivation.isActive === false"
+    ));
+}
+
+#[test]
+fn user_activation_reflects_a_real_gesture() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0);")
+        .unwrap();
     assert!(bool_eval(&rt,
         "navigator.userActivation.hasBeenActive === true && \
                  navigator.userActivation.isActive === true"

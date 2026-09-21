@@ -1025,10 +1025,30 @@ function _lumen_dispatch(nid, event) {
     return _lumen_propagate(nid, event);
 }
 
+// GAP-USERACT (BUG-751): HTML LS §6.4 "activation triggering input event" —
+// mousedown/pointerdown/click and keydown/keyup outside a bare modifier key.
+// Called only from the trusted dispatch helpers below, never from a page's
+// own dispatchEvent(), so a script cannot fake `navigator.userActivation`.
+var _LUMEN_MODIFIER_ONLY_KEYS = {
+    Control: 1, Shift: 1, Alt: 1, Meta: 1, AltGraph: 1,
+    CapsLock: 1, NumLock: 1, ScrollLock: 1, Fn: 1, FnLock: 1,
+    Hyper: 1, Super: 1, Symbol: 1, SymbolLock: 1
+};
+function _lumen_note_activation_input(type, key) {
+    var isKeyEvent = (type === 'keydown' || type === 'keyup');
+    if (isKeyEvent && key && _LUMEN_MODIFIER_ONLY_KEYS[key]) {
+        return;
+    }
+    if (type === 'mousedown' || type === 'pointerdown' || type === 'click' || isKeyEvent) {
+        _lumen_mark_user_activation();
+    }
+}
+
 // Dispatch a trusted event of `type` starting at `start_nid`.
 // Called from Rust on user input (click, keydown, etc.).
 // These events are marked as isTrusted=true because they come through the shell's native event loop.
 function _lumen_dispatch_bubble(start_nid, type) {
+    _lumen_note_activation_input(type);
     return _lumen_propagate(start_nid, new Event(type, { bubbles: true, cancelable: true, isTrusted: true }));
 }
 
@@ -1043,6 +1063,7 @@ function _lumen_dispatch_rich(start_nid, event) {
 // Creates a trusted MouseEvent and dispatches it through the DOM.
 // mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
 function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, buttons, mod) {
+    _lumen_note_activation_input(type);
     var ev = new MouseEvent(type, {
         bubbles: true, cancelable: true, isTrusted: true,
         clientX: clientX, clientY: clientY,
@@ -1160,6 +1181,7 @@ function _lumen_predict_pointer_events(coalesced) {
 // last dispatch (Level 3 §4.1), oldest first, NOT including this event's own
 // (clientX, clientY). Omitted/empty for non-move event types.
 function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod, coalesced) {
+    _lumen_note_activation_input(type);
     var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
     var ev = new PointerEvent(type, {
         bubbles: bubbles, cancelable: bubbles, isTrusted: true,
@@ -1283,6 +1305,7 @@ function _lumen_set_field_value(nid, value) {
 }
 
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
+    _lumen_note_activation_input(type, key);
     var ev = new KeyboardEvent(type, {
         bubbles: true, cancelable: true, isTrusted: true,
         key: key, code: code, keyCode: keyCode, charCode: keyCode,
