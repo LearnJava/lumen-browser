@@ -87,7 +87,13 @@ grep "OPEN" BUGS.md
 git branch --merged main          # влиты в main — безопасно удалять
 git branch -vv | grep ': gone]'   # upstream удалён
 git worktree list                 # осиротевшие / зомби-worktree
+bash scripts/worktree-pool.sh gc  # каталоги в .claude/worktrees/, которых git не знает
 ```
+
+`git worktree list` не видит пустые каталоги без регистрации (остаются после
+неудачного `worktree remove` на Windows) — их находит только `gc`.
+`gc --fix` убирает их и делает `git worktree prune`; ad-hoc worktree с невлитыми
+коммитами и слоты с влитой веткой он лишь перечисляет.
 
 Безопасная чистка (делать сразу, в своём worktree/коммите):
 ```bash

@@ -16,6 +16,7 @@
 #   bash scripts/worktree-pool.sh <slot> <branch> [base]   # занять слот веткой
 #   bash scripts/worktree-pool.sh release <slot> [base]    # освободить слот
 #   bash scripts/worktree-pool.sh list                     # что сейчас в слотах
+#   bash scripts/worktree-pool.sh gc [--fix]               # мусор в .claude/worktrees/
 #
 #   slot   — каталог в .claude/worktrees/: p1-work … p6-work, perf-base
 #   branch — ветка задачи (p<N>-<task>); существующая — переключаемся на неё,
@@ -54,6 +55,63 @@ slot_gitdir() {
   gd=$(sed -n 's/^gitdir: *//p' "$p/.git" | head -1)
   [ -n "$gd" ] && [ -d "$gd" ] && printf '%s\n' "$gd"
 }
+
+# gc: сверка .claude/worktrees/ с реестром git. По умолчанию только отчёт;
+# `--fix` убирает лишь безопасное: `git worktree prune` и пустые каталоги без
+# регистрации в git (их не видят ни `worktree list`, ни `prune`, ни `remove`).
+# Всё, где есть содержимое или невлитые коммиты, только перечисляется.
+# Код возврата: 0 — чисто, 1 — есть находки (после --fix считаются оставшиеся).
+if [ "${1:-}" = "gc" ]; then
+  fix=0
+  [ "${2:-}" = "--fix" ] && fix=1
+  [ "$fix" = 1 ] && git worktree prune
+  findings=0
+  for d in "$POOL"/*/; do
+    d=${d%/}
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    if ! slot_gitdir "$d" >/dev/null; then
+      if [ -z "$(ls -A "$d" 2>/dev/null)" ]; then
+        if [ "$fix" = 1 ] && rmdir "$d" 2>/dev/null; then
+          echo "убран пустой каталог без регистрации в git: $name"
+          continue
+        fi
+        echo "ПУСТОЙ каталог без регистрации в git: $name (gc --fix уберёт)"
+      else
+        echo "НЕ worktree, но с содержимым: $name (проверь вручную, git его не знает)"
+      fi
+      findings=$((findings + 1))
+      continue
+    fi
+    b=$(git -C "$d" branch --show-current 2>/dev/null)
+    ahead=$(git -C "$d" log --oneline "main..HEAD" 2>/dev/null | wc -l | tr -d ' ')
+    dirty=$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    case "$name" in
+      *-work | perf-base)
+        # Слот постоянный. «0 коммитов вне main» не значит «влита»: свежая ветка,
+        # ещё без коммитов, выглядит так же. Поэтому требуем merge-коммит в main,
+        # в чьём сообщении названа эта ветка ("Влить ветку <b>" / "Merge <b>").
+        if [ -n "$b" ] && [ "$ahead" = 0 ] && [ "$dirty" = 0 ] \
+           && [ -n "$(git log main --merges -F --grep="$b" -1 --format=%h)" ]; then
+          echo "слот $name держит влитую ветку $b: bash scripts/worktree-pool.sh release $name"
+          findings=$((findings + 1))
+        fi ;;
+      *)
+        # Ad-hoc worktree: по правилам живёт только на время одноразовой задачи.
+        if [ "$ahead" != 0 ]; then
+          echo "ad-hoc $name (${b:-detached}): $ahead коммит(ов) НЕ влито в main — влей или реши судьбу, не удаляй молча"
+        elif [ "$dirty" != 0 ]; then
+          echo "ad-hoc $name (${b:-detached}): $dirty незакоммиченных записей"
+        else
+          echo "ad-hoc $name (${b:-detached}): влит и чист — git worktree remove .claude/worktrees/$name"
+        fi
+        findings=$((findings + 1)) ;;
+    esac
+  done
+  [ "$findings" = 0 ] && echo 'worktree-пул чист.'
+  [ "$findings" = 0 ]
+  exit $?
+fi
 
 if [ "${1:-}" = "list" ]; then
   printf '%-12s %-30s %-7s %s\n' SLOT BRANCH DIRTY TARGET
