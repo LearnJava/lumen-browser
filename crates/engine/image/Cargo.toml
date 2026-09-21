@@ -5,11 +5,15 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Lumen: декодер растровых изображений (PNG, JPEG, WebP, GIF, AVIF)"
+description = "Lumen: декодер растровых изображений (PNG, JPEG, WebP, GIF, AVIF, JPEG XL)"
 
 [features]
-# Enable AVIF decoding via libavif (requires cmake + nasm on the build host).
+# Enable AVIF decoding via `image`'s `avif-native` (dav1d + mp4parse).
 # Without this feature: AVIF files are recognised by signature but return AvifError::Decode.
+# GAP-avif срез 1 (2026-09-21): this used to map to `image`'s "avif" feature,
+# which pulls only `ravif`/`rav1e` — an AV1 *encoder*, no decoder at all, so
+# the flag never actually decoded anything regardless of the build host.
+# "avif-native" is the real decode path.
 avif = ["dep:image"]
 
 [dependencies]
@@ -29,11 +33,30 @@ gif = "0.14"
 # weezl в дереве в любом случае (docs/plan/tech-stack.md §5).
 weezl = "0.1"
 flate2.workspace = true
-# Provisional: image 0.25 для AVIF-декодирования через libavif (Phase 0).
+# Provisional: image 0.25 для AVIF-декодирования через dav1d+mp4parse (Phase 0).
 # Trait-anchor: lumen_core::ext::ImageDecoder (AvifImageDecoder).
 # Graduation: permanent когда AVIF станет обязательным форматом в pipeline.
-# Требует cmake + nasm — подключается через feature "avif".
-image = { version = "0.25", default-features = false, features = ["avif"], optional = true }
+# Не в дефолтной сборке (GAP-avif срез 1, 2026-09-21): единственный реальный
+# декодер в `image` — feature "avif-native" (dav1d C через `dav1d-sys`).
+# Без системного dav1d в pkg-config `dav1d-sys` клонирует videolan/dav1d по
+# сети и собирает его meson+ninja (+nasm для SIMD) — сборка требует интернет
+# посреди `cargo build`, что несовместимо с герметичной сборкой проекта, и
+# meson/ninja не входят в toolchain Windows/MSVC по умолчанию. Чистого-Rust
+# AV1-декодера с готовой обвязкой под AVIF-контейнер в экосистеме нет:
+# `rav1d` (memory-safe порт dav1d) существует на crates.io, но публикует
+# только `Dav1d*`-C-ABI, без safe Rust API — интеграция означала бы писать
+# собственный демукс ISOBMFF (`avif-parse`, есть) + unsafe-обвязку над этим
+# C-ABI, что by объём сопоставимо с отдельной задачей, а не срезом внутри
+# этой. Остаётся за feature "avif", как и раньше — но теперь она реально
+# декодирует при включении, а не молча падает как feature "avif" делала.
+image = { version = "0.25", default-features = false, features = ["avif-native"], optional = true }
+# Provisional: чистый-Rust JPEG XL декодер (GAP-avif срез 3, 2026-09-21).
+# Trait-anchor: lumen_core::ext::ImageDecoder (JxlImageDecoder).
+# Graduation: permanent — JPEG XL реальный веб-формат, как остальные в этом
+# файле. Не optional/за фичей: без нативных зависимостей (проверено деревом
+# `cargo tree`), не требует ни cmake/meson, ни nasm, ни сети при сборке —
+# ровно то, чего не хватает AVIF-декодеру выше.
+jxl-oxide = "0.12"
 # ADR-027 (LIB-4): renders external SVG (`<img src=*.svg>`, `background-image:
 # url(*.svg)`) — the own SVG-to-DisplayList path (`lumen-layout`/`lumen-paint`)
 # draws zero `linearGradient`/`radialGradient`, `clipPath`, `mask`, `filter`,

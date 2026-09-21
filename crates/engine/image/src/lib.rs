@@ -19,7 +19,7 @@ pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
 pub use gif::{decode_gif, decode_gif_animated, AnimatedGif, GifError, GifLoopCount, is_gif};
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
-pub use jxl::{JxlError, decode_jxl, is_jxl};
+pub use jxl::{JxlError, JxlImageDecoder, decode_jxl, is_jxl};
 pub use heic::{HeicError, decode_heic, is_heic};
 pub use svg::{decode_svg, SvgError};
 
@@ -36,11 +36,12 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// выбирал подходящий fallback вместо пустой коробки.
 ///
 /// Содержит только форматы, которые реально декодируются в готовые пиксели.
-/// `image/jxl` / `image/heic` / `image/heif` НЕ входят: их декодеры — заглушки
-/// (`decode_jxl` / `decode_heic` всегда возвращают `Err`), поэтому объявлять их
-/// поддерживаемыми означало бы заставить picker выбрать такой `<source>` и
-/// показать пустую коробку — ровно то, что эта функция призвана предотвратить.
-/// `image/avif` остаётся: декодер настоящий, лишь за feature-флагом `avif`.
+/// `image/heic` / `image/heif` НЕ входят: `decode_heic` — заглушка (всегда
+/// `Err`), объявлять их поддерживаемыми означало бы заставить picker выбрать
+/// такой `<source>` и показать пустую коробку — ровно то, что эта функция
+/// призвана предотвратить. `image/avif` остаётся: декодер настоящий, лишь за
+/// feature-флагом `avif`. `image/jxl` реальный декодер (`jxl-oxide`, GAP-avif
+/// срез 3-4) — входит без оговорок, не за feature.
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
     &[
@@ -50,6 +51,7 @@ pub fn supported_mime_types() -> &'static [&'static str] {
         "image/gif",
         "image/webp",
         "image/avif",
+        "image/jxl",
         "image/svg+xml",
     ]
 }
@@ -108,7 +110,7 @@ pub fn decode_to(bytes: &[u8], target: lumen_core::ColorSpace) -> Result<Image, 
 /// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодирование не удалось.
 /// - [`ImageError::Avif`] — AVIF ftyp-бокс обнаружен, но декодирование не удалось.
 /// - [`ImageError::Svg`] — SVG-сигнатура распознана, но `usvg` не смог разобрать документ.
-/// - [`ImageError::Jxl`] — JPEG XL сигнатура обнаружена, но декодирование не поддерживается.
+/// - [`ImageError::Jxl`] — JPEG XL сигнатура (naked/ISOBMFF) обнаружена, но декодирование не удалось.
 /// - [`ImageError::Heic`] — HEIC/HEIF ftyp-бокс обнаружен, но декодирование не поддерживается.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     decode_to(bytes, lumen_core::ColorSpace::Srgb)
@@ -143,7 +145,8 @@ fn decode_raw(bytes: &[u8]) -> Result<Image, ImageError> {
         return decode_svg(bytes).map_err(ImageError::Svg);
     }
     if is_jxl(bytes) {
-        return Err(ImageError::Jxl(decode_jxl(bytes).unwrap_err()));
+        let (width, height, data) = decode_jxl(bytes).map_err(ImageError::Jxl)?;
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
     }
     if is_heic(bytes) {
         return Err(ImageError::Heic(decode_heic(bytes).unwrap_err()));
@@ -166,7 +169,7 @@ pub enum ImageError {
     Avif(AvifError),
     /// SVG-сигнатура распознана, но `usvg` не смог разобрать документ.
     Svg(SvgError),
-    /// JPEG XL сигнатура распознана, но декодирование не поддерживается (Phase 0).
+    /// JPEG XL сигнатура (naked/ISOBMFF) распознана, но декодирование не удалось.
     Jxl(JxlError),
     /// HEIC/HEIF ftyp-бокс обнаружен, но декодирование не поддерживается (Phase 1).
     Heic(HeicError),
@@ -1299,19 +1302,21 @@ mod tests {
     }
 
     #[test]
-    fn jxl_decode_always_fails_phase0() {
-        let bytes = vec![0xFF, 0x0A];
-        let result = decode(&bytes);
-        assert!(matches!(result, Err(ImageError::Jxl(_))));
+    fn jxl_signature_dispatches_to_jxl_decoder() {
+        // Сигнатура распознана, но байты после неё мусорные — декодер должен
+        // вернуть Err(Jxl(_)), а не запаниковать и не молча пропустить формат.
+        let mut bytes = vec![0xFF, 0x0A];
+        bytes.extend_from_slice(&[0u8; 16]);
+        let err = decode(&bytes).unwrap_err();
+        assert!(matches!(err, ImageError::Jxl(_)), "ожидался Jxl(_), получено {err:?}");
     }
 
     #[test]
-    fn supported_mime_types_excludes_jxl_stub() {
-        // `decode_jxl` — заглушка (всегда Err), поэтому image/jxl НЕ должен
-        // числиться поддерживаемым: иначе picture-picker выберет
-        // `<source type="image/jxl">` и покажет пустую коробку вместо fallback.
+    fn supported_mime_types_includes_jxl() {
+        // `decode_jxl` — реальный декодер (`jxl-oxide`, GAP-avif срез 3-4),
+        // поэтому image/jxl должен числиться поддерживаемым.
         let types = supported_mime_types();
-        assert!(!types.contains(&"image/jxl"), "image/jxl (декодер-заглушка) не должен числиться поддерживаемым");
+        assert!(types.contains(&"image/jxl"), "image/jxl должен числиться поддерживаемым");
     }
 
     fn make_ftyp_bytes(major: &[u8; 4]) -> Vec<u8> {

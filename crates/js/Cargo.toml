@@ -32,9 +32,9 @@ lumen-font = { workspace = true }
 # lumen-image: needed for createImageBitmap(Blob) (P1-imagebitmap) — decodes the Blob's
 # raw bytes (PNG/JPEG/WebP/GIF/AVIF) to RGBA8 via lumen_image::decode, same decoder the
 # shell already uses for <img>/background-image. Workspace-internal crate (no new
-# external dep); `avif` feature matches the shell's existing choice (already requires
-# cmake+nasm on the build host for the shell binary, so this adds no new toolchain need).
-lumen-image = { workspace = true, features = ["avif"] }
+# external dep); `avif` feature matches the shell's choice (see its Cargo.toml comment —
+# not enabled: needs `pkg-config`+system `dav1d`, absent on this toolchain, GAP-avif срез 1).
+lumen-image.workspace = true
 # lumen-html-parser: needed for real innerHTML/outerHTML/insertAdjacentHTML fragment
 # parsing (BUG-368/BUG-351) — `_lumen_set_inner_html` was a Phase-0 text-only stub;
 # reuses the same tree builder the shell already drives for full-document parsing
