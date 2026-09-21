@@ -81,7 +81,19 @@ native V8-кода нечем, см. §Возможный путь фикса), 
 Тесты: `worker::tests_v8::v8_worker_atob_btoa_throw_dom_exception`,
 обновлён `v8_atob_throws_on_invalid_input`; для окна —
 `dom::tests::v8_url_abort_clone_blob::{atob_invalid_input_throws_dom_exception,
-btoa_out_of_latin1_throws_dom_exception}`.
+btoa_out_of_latin1_throws_dom_exception}`. `cargo build -p lumen-js --profile
+dev-release --features v8-backend` и `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings` чисты; `cargo test -p lumen-js --features
+v8-backend --lib` 4084/4085 (единственный провал — предсуществующий флейк
+`frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`,
+воспроизводится и в изоляции от этой правки, известная утечка состояния через
+глобальный dirty-реестр между тестами). `scripts/scoped-test.sh` запущен, но не
+дожил до завершения за ~4 часа в этой сессии (среда собирала workspace
+аномально долго — `rustc`/`cargo`/`sccache` были живы и меняли PID весь этот
+срок, не завис) и остановлен явно; изменение приватно для `lumen-js`
+(переименованные native-регистрации и новая `pub(crate)`-константа, публичная
+сигнатура `install_worker_globals_v8` не тронута), так что кросс-крейтовый риск
+низкий, но полный `--workspace`-гейт этой правкой не подтверждён.
 
 **`sw_worker.rs` НЕ тронут — сознательное решение, не пропуск.** Дубль там
 регистрирует `atob`/`btoa` без throw вовсе (просто `undefined`), и это не
