@@ -95,7 +95,9 @@ Slot discipline:
 - An interrupted `git worktree add` (timed-out tool call) leaves `index.lock` without an `index` and a half-populated tree. The script detects exactly that case (lock present, index absent, no own commits) and repairs it with `reset --hard` instead of refusing.
 - A slot cannot sit on `main` — the main working tree holds it. `release` therefore parks the slot on a detached HEAD at `main`.
 
-Ad-hoc worktrees are still allowed for one-off needs (merge helpers, experiments); path must be inside the browser folder — `../lumen-<task>/` and `/tmp/...` are forbidden — and they must be removed with `git worktree remove` right after use.
+Ad-hoc worktrees are still allowed for one-off needs (merge helpers, experiments); path must be inside the browser folder — `../lumen-<task>/` and `/tmp/...` are forbidden — and they must be removed with `git worktree remove` right after use. **Then check that the directory is really gone** (`ls .claude/worktrees`): on Windows `worktree remove` can drop the files and leave an empty directory that git no longer knows, so neither `worktree list`, `prune` nor `remove` will ever find it. Work that is not merged into `main` is never left behind in an ad-hoc worktree — merge it, or tell the user.
+
+**End of every session that created a worktree:** `bash scripts/worktree-pool.sh gc` — reports empty directories git does not know, ad-hoc worktrees (merged/dirty/unmerged) and pool slots still holding a merged branch. `gc --fix` removes only the safe part (`git worktree prune` + empty unregistered directories); anything with content or unmerged commits is listed, never deleted. Exit code 1 means findings remain.
 
 ### Safety rules in worktrees
 
