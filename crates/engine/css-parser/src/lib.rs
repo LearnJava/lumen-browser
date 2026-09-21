@@ -27,6 +27,7 @@ pub use parser::{
     Rule, ScopeRule,
     SimpleSelector, Specificity, StartingStyleRule, Stylesheet, StylesheetNodeEntry, StylesheetRevision,
     SupportsCondition, SupportsRule, CssomRuleRef, CssomRuleMutationError, CssomOp,
+    ViewTransitionNavigation, ViewTransitionRule,
 };
 
 /// CSS properties recognised by Lumen's layout engine.
