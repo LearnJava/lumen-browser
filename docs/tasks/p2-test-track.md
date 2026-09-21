@@ -1790,6 +1790,46 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 
 Дальше: `wasm` (831 файл), `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
 
+### TEST-3: срез 48 (2026-09-22) — `wasm`: в воркерах нет `WebAssembly.instantiateStreaming` (BUG-1078), оконный стриминг не по спецификации (BUG-1079)
+
+**Выбор кандидата.** Следующая по списку среза 47: `wasm` (`tests/wpt/metadata/wasm/` до среза не было; 831 файл, **612 id**). Число категорий 252 → 253.
+
+**Baseline.** `--update-expected --all --root wasm --recursive --processes 10` — **8:35**. **445/612 harness OK, 24 465/190 878 подтестов**, 377 `.ini`. Раскладка top-level статусов по `.ini`:
+445 `OK`, **78 `SKIP`** (`Executor does not support jsshell` — `.any.js` с `// META: global=…,jsshell`, исполнитель такой вариант не гонит), 50 `TIMEOUT`, 39 `ERROR`
+(78 + 50 + 39 = 167 = 612 − 445). Основной объём подтестов — `core/*.wast.js.html` (сгенерированные из спецификации wast-файлы по несколько тысяч подтестов на файл).
+
+**Параллелизм.** Прогон шёл с `--processes 10` по указанию пользователя (2026-09-21); `run_report.py` дефолта не имеет (`None` → 1 процесс), значение 4 в срезах 44–47 передавалось явным флагом. Дефолт `--processes 4 → 10`
+менялся только в `run_corpus.py` (`ae8eeb7b6`, полный прогон корпуса), `run_report.py` не тронут.
+
+**Флапы под 10 процессами** (две категории отклонений, обе пойманы только повторными `--check`):
+
+| Файл | Что колеблется | Что сделано |
+|---|---|---|
+| `webapi/origin.sub.any.{html,worker,sharedworker}.html` | harness `TIMEOUT` без подтестов ↔ `OK` с четырьмя подтестами `FAIL` (иногда два `PASS`) | `.ini` сужен: harness `[TIMEOUT, OK]`, подтесты `[PASS, FAIL, TIMEOUT, NOTRUN]`. Причина не выясняется |
+| `core/bulk-memory/memory_copy.wast.js.html`, `core/memory64/memory_copy64.wast.js.html` | harness `TIMEOUT` с частичными подтестами (4 454 из 4 582; 3 988 из 4 582) ↔ `TIMEOUT` без единого (0/0); в логе `navigate: automation command timed out` | не сужался: статус harness тот же, гейт по подтестам, которые не были отданы, не срабатывает. Из-за этого **сумма подтестов между прогонами плавает** (24 465 → 20 013 → 16 025 → 24 467) — числа в этом срезе не служат критерием идентичности прогонов, критерий — `--check` |
+
+Ход проверок: первые три `--check` красные (2 регрессии; 2; 6 регрессий + 2 unexpected pass — всё в `origin.sub.any.*`), после сужения `.ini` (в два приёма — `PASS` добавлен после
+`checkB1` с 2 unexpected pass) **три чистых `--check` подряд: 0 регрессий, 0 unexpected pass, 0 других отклонений**, числа идентичны (24 467/190 882, 445/612).
+
+**Что нашлось** (по логу baseline и одиночному прогону `wasm/webapi`, 56 id, 2026-09-22):
+
+| Причина | Масштаб | Доказательство |
+|---|---|---|
+| в воркерной области нет `WebAssembly.compileStreaming`/`instantiateStreaming`, [BUG-1078](../../bugs/BUG-1078-OPEN.md) | 212 + 152 сообщений `is not a function` в логе | `instantiateStreaming-bad-imports.any.worker.html` 0/106, `invalid-args.any.worker.html` 0/44; в окне те же методы есть (проба `--dump-layout`) |
+| оконный стриминг не по спецификации, [BUG-1079](../../bugs/BUG-1079-OPEN.md) | `instantiateStreaming-bad-imports.any.html` 9/106, `invalid-args.any.html` 4/44, `instantiateStreaming.any.html` 0/25 | промис резолвится вместо отклонения на неверный `imports`; `CompileError` вместо `TypeError`; расширяемый `exports` |
+| `WebAssembly.Global.prototype.type` отсутствует | 24 сообщения | `jsapi/global/type.tentative.any.js` — предложение type reflection, `tentative`; отдельно не заводилось (упомянуто в BUG-1079) |
+| harness `TIMEOUT` (50) / `ERROR` (39) | 89 id | причины не разбирались, кроме перечисленного |
+
+**Ограничение записанного.** 89 id (`TIMEOUT`/`ERROR`) записаны по фактическому исходу — «не стало хуже»; 78 `SKIP` — пробел исполнителя (`jsshell`), а не движка.
+
+**Окружение этой сессии.** Как в срезе 47: `1.97.0` в `~/.rustup` без `rustc.exe` и не докачивается (`tls handshake eof`) — бинарь собран на `stable`: `RUSTC_WRAPPER= RUSTUP_TOOLCHAIN=stable cargo build --profile dev-release --bin lumen`;
+V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсолютный путь>` (2 мин 44 с). `pywebsocket3` в `tests/wpt/.venv` был не пропатчен — первый запуск умер за 23 с на
+`OSError: Servers failed to start: wss:18889`; патч по `tests/wpt/README.md` §Troubleshooting применён (venv не под git — в каждом новом слоте повторять). **Ловушка:** `TaskStop` фонового цикла `for … do bash …` не убивает сам цикл —
+он стартует следующую итерацию, а дочерние `python`/`lumen` остаются; убивать надо процессы слота (по пути `worktrees\p2-work` в командной строке) и цикл. Файл `tests/wpt/xml/xslt/strip-space-crash.xml` исчезает с диска сразу после
+`git restore` (внешний удалитель, вероятно антивирус); в слоте помечен `git update-index --skip-worktree`, иначе `worktree-pool.sh` отказывается переключать слот («незакоммиченная работа»).
+
+Дальше: `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
