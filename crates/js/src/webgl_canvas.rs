@@ -152,6 +152,15 @@ const WEBGL_SHIM: &str = r#"(function() {
       DEPTH_TEST: 0x0B71, BLEND: 0x0BE2, CULL_FACE: 0x0B44, SCISSOR_TEST: 0x0C11,
       // ── Pixel formats ──
       RGB: 0x1907, RGBA: 0x1908,
+      // ── Textures ── (срез 6, ph3-webgl2.md: `bindTexture`/`activeTexture`/
+      // `texImage2D` already forwarded to the software rasterizer, but the
+      // context object never named these enums — every caller had to pass
+      // raw hex, so `gl.bindTexture(gl.TEXTURE_2D, tex)` silently bound
+      // nothing (`gl.TEXTURE_2D === undefined`) and `texture()` in a GLSL ES
+      // 3.00 fragment shader always sampled the no-texture fallback)
+      TEXTURE_2D: 0x0DE1,
+      TEXTURE0: 0x84C0, TEXTURE1: 0x84C1, TEXTURE2: 0x84C2, TEXTURE3: 0x84C3,
+      TEXTURE4: 0x84C4, TEXTURE5: 0x84C5, TEXTURE6: 0x84C6, TEXTURE7: 0x84C7,
       // ── getParameter pnames ──
       VENDOR: 0x1F00, RENDERER: 0x1F01, VERSION: 0x1F02, SHADING_LANGUAGE_VERSION: 0x8B8C,
       MAX_TEXTURE_SIZE: 0x0D33, MAX_VIEWPORT_DIMS: 0x0D3A,
@@ -288,7 +297,11 @@ const WEBGL_SHIM: &str = r#"(function() {
       for (var mi = 0; mi < 16; mi++) arr.push(+(data[mi] || 0));
       _lumen_webgl_uniform_mat4fv(cid, _locVal(location), arr);
     };
-    gl.uniformMatrix3fv = function() {}; // mat3 not tracked
+    gl.uniformMatrix3fv = function(location, transpose, data) {
+      var arr = [];
+      for (var mi = 0; mi < 9; mi++) arr.push(+(data[mi] || 0));
+      _lumen_webgl_uniform_mat3fv(cid, _locVal(location), arr);
+    };
 
     // ── Draw ──
     gl.drawArrays = function(mode, first, count) { _lumen_webgl_draw_arrays(cid, mode>>>0, first|0, count|0); };
@@ -454,6 +467,22 @@ const WEBGL_SHIM: &str = r#"(function() {
       }
       return el;
     };
+  }
+
+  // Срез 6 (ph3-webgl2.md): a <canvas> that came straight from the parsed
+  // HTML source never goes through `document.createElement` above, so
+  // without this pass its `getContext('webgl'|'webgl2')` would fall through
+  // to the DOM-core prototype method (`web_api_shim_mid.js`'s
+  // `HTMLCanvasElement.prototype.getContext`, which only wires up
+  // '2d'/'bitmaprenderer'/'webgpu') and return null — the WebGL path only
+  // ever worked for JS-constructed canvases. `install_webgl_canvas_v8` runs
+  // after the DOM-core shim has already built `document` from the parsed
+  // tree, so every canvas already in the page exists as a real element here.
+  if (typeof document !== 'undefined' && typeof document.getElementsByTagName === 'function') {
+    var _existingCanvases = document.getElementsByTagName('canvas');
+    for (var _eci = 0; _eci < _existingCanvases.length; _eci++) {
+      _addCanvasStubs(_existingCanvases[_eci]);
+    }
   }
 })();
 "#;
@@ -682,6 +711,13 @@ pub(crate) fn install_webgl_canvas_v8(
         into_v8_fn3(|id: u32, loc: i32, data: Vec<f64>| {
             let fs: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
             with_ctx(id, (), |gl| gl.uniform_matrix4fv(loc, &fs));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_uniform_mat3fv",
+        into_v8_fn3(|id: u32, loc: i32, data: Vec<f64>| {
+            let fs: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
+            with_ctx(id, (), |gl| gl.uniform_matrix3fv(loc, &fs));
         }),
     )?;
     rt.register_native(
@@ -941,6 +977,97 @@ gl.drawArrays(gl.TRIANGLES, 0, 6);
 var px = new Uint8Array(4);
 gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
 px[1]"#,
+            )
+            .unwrap();
+        assert_eq!(g, JsValue::Number(255.0));
+    }
+
+    /// Срез 6 (ph3-webgl2.md): `gl.TEXTURE_2D`/`gl.TEXTUREn` were missing
+    /// from the context object — `bindTexture(gl.TEXTURE_2D, tex)` silently
+    /// bound nothing (`gl.TEXTURE_2D === undefined`, coerced to `0` and
+    /// compared against the real `0x0DE1`), so `texture()` in a GLSL ES 3.00
+    /// fragment shader always sampled the no-texture fallback instead of the
+    /// uploaded pixel. Uses only named constants, the way real page code must.
+    #[test]
+    fn named_texture_constants_reach_texture_sampling() {
+        let rt = with_webgl();
+        let g = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl2');
+var vs = gl.createShader(gl.VERTEX_SHADER);
+gl.shaderSource(vs, '#version 300 es\nin vec2 a_pos;\nin vec2 a_uv;\nout vec2 v_uv;\nvoid main(){ v_uv = a_uv; gl_Position = vec4(a_pos, 0.0, 1.0); }');
+gl.compileShader(vs);
+var fs = gl.createShader(gl.FRAGMENT_SHADER);
+gl.shaderSource(fs, '#version 300 es\nprecision mediump float;\nin vec2 v_uv;\nuniform sampler2D u_tex;\nout vec4 outColor;\nvoid main(){ outColor = texture(u_tex, v_uv); }');
+gl.compileShader(fs);
+var prog = gl.createProgram();
+gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+gl.linkProgram(prog); gl.useProgram(prog);
+var buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+  -1,-1,0,0,  1,-1,1,0,  -1,1,0,1,
+  -1,1,0,1,   1,-1,1,0,  1,1,1,1
+]), gl.STATIC_DRAW);
+var posLoc = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(posLoc);
+gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 16, 0);
+var uvLoc = gl.getAttribLocation(prog, 'a_uv');
+gl.enableVertexAttribArray(uvLoc);
+gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 16, 8);
+var tex = gl.createTexture();
+gl.activeTexture(gl.TEXTURE0);
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 255, 255, 255]));
+gl.uniform1i(gl.getUniformLocation(prog, 'u_tex'), 0);
+gl.viewport(0, 0, 8, 8);
+gl.drawArrays(gl.TRIANGLES, 0, 6);
+var px = new Uint8Array(4);
+gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+px[0] + ',' + px[1] + ',' + px[2] + ',' + px[3]"#,
+            )
+            .unwrap();
+        assert_eq!(g, JsValue::String("0,255,255,255".into()));
+    }
+
+    /// Срез 6 (ph3-webgl2.md): `uniformMatrix3fv` reaches the software
+    /// rasterizer (embedded as a padded `mat4`, same trick the GLSL `mat3()`
+    /// constructor uses) instead of the previous silent no-op stub. A zero
+    /// 3×3 matrix collapses every vertex to clip-space origin, so the
+    /// triangles degenerate to zero area and paint nothing — the clear
+    /// colour survives, proving the uniform actually reached the vertex
+    /// shader's `vec4(...) * u_m` multiply.
+    #[test]
+    fn uniform_matrix3fv_reaches_vertex_shader() {
+        let rt = with_webgl();
+        let g = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl2');
+gl.viewport(0, 0, 8, 8);
+gl.clearColor(1, 0, 0, 1);
+gl.clear(gl.COLOR_BUFFER_BIT);
+var vs = gl.createShader(gl.VERTEX_SHADER);
+gl.shaderSource(vs, '#version 300 es\nin vec2 a_pos;\nuniform mat3 u_m;\nvoid main(){ gl_Position = vec4(a_pos, 0.0, 1.0) * u_m; }');
+gl.compileShader(vs);
+var fs = gl.createShader(gl.FRAGMENT_SHADER);
+gl.shaderSource(fs, '#version 300 es\nprecision mediump float;\nout vec4 outColor;\nvoid main(){ outColor = vec4(0.0, 1.0, 0.0, 1.0); }');
+gl.compileShader(fs);
+var prog = gl.createProgram();
+gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+gl.linkProgram(prog); gl.useProgram(prog);
+var buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+var verts = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+var loc = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+var uloc = gl.getUniformLocation(prog, 'u_m');
+gl.uniformMatrix3fv(uloc, false, new Float32Array([0,0,0, 0,0,0, 0,0,0]));
+gl.drawArrays(gl.TRIANGLES, 0, 6);
+var px = new Uint8Array(4);
+gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+px[0]"#,
             )
             .unwrap();
         assert_eq!(g, JsValue::Number(255.0));
@@ -1225,6 +1352,43 @@ gl.getAttribLocation(p, 'a_pos')"#,
 var e = gl.getExtension('WEBGL_lose_context');
 e !== null && typeof e.loseContext === 'function'"#,
         );
+        assert!(ok);
+    }
+
+    /// Срез 6 (ph3-webgl2.md): a `<canvas>` that exists in `document` before
+    /// `install_webgl_canvas_v8` runs — as every parser-built canvas does,
+    /// since the DOM-core shim builds `document` from the already-parsed tree
+    /// first — must still get a functional `getContext('webgl2')`. Before this
+    /// slice only `document.createElement('canvas')`-built canvases were
+    /// wrapped, so a canvas straight out of the HTML source fell through to
+    /// the DOM-core prototype method and got `null`.
+    #[test]
+    fn preexisting_parser_canvas_gets_webgl_stub() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"var _existing = { _tag: 'canvas', width: 8, height: 8,
+  getAttribute: function(){ return ''; }, setAttribute: function(){},
+  getContext: function(t) { return (String(t) === '2d') ? { __base_2d: true, canvas: this } : null; },
+  toDataURL: function(){ return 'data:image/png;base64,BASE'; },
+  toBlob: function(cb){ if (typeof cb === 'function') cb('base-blob'); } };
+var document = {
+  createElement: function(tag) {
+    return { _tag: tag, width: 8, height: 8,
+             getAttribute: function(){ return ''; }, setAttribute: function(){},
+             getContext: function(t) {
+               return (String(t) === '2d') ? { __base_2d: true, canvas: this } : null;
+             },
+             toDataURL: function(){ return 'data:image/png;base64,BASE'; },
+             toBlob: function(cb){ if (typeof cb === 'function') cb('base-blob'); } };
+  },
+  getElementsByTagName: function(tag) {
+    return (String(tag) === 'canvas') ? [_existing] : [];
+  }
+};"#,
+        )
+        .unwrap();
+        super::install_webgl_canvas_v8(&rt, &fp()).unwrap();
+        let ok = bool_eval(&rt, "_existing.getContext('webgl2') !== null");
         assert!(ok);
     }
 }

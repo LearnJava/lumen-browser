@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 157 webgl2</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #0f172a; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+    .row { display: flex; gap: 12px; }
+    canvas { background: #1e293b; display: block; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- Graphics only, no text (docs/graphic-tests.md) — also keeps the
+         whole row above the live window's floating chrome demo panel
+         (position:fixed, bottom-left, CC-18/BUG-1059), which a real-JS
+         graphic test must not extend into. Panel order left→right:
+         drawArrays (ES 1.0) · drawElements (u16 index) · VAO bind/unbind/
+         rebind · GLSL ES 3.00 in/out + texture() · uniformMatrix3fv (zero
+         collapses draw) — see COVERAGE.md for what each proves. -->
+    <div class="row">
+      <canvas id="c1" width="150" height="150"></canvas>
+      <canvas id="c2" width="150" height="150"></canvas>
+      <canvas id="c3" width="150" height="150"></canvas>
+      <canvas id="c4" width="150" height="150"></canvas>
+      <canvas id="c5" width="150" height="150"></canvas>
+    </div>
+
+  </div>
+
+  <script>
+    // c1: getContext('webgl2') + drawArrays with a full-viewport quad —
+    // the two triangles cover clip space [-1,1]x[-1,1] exactly, so every
+    // pixel is either fully covered or fully background: no antialiased
+    // edge for the software rasterizer and the real Edge GPU path to
+    // disagree on.
+    function fullQuadProgram(gl) {
+      var vs = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vs,
+        'attribute vec2 a_pos;\n' +
+        'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }');
+      gl.compileShader(vs);
+      var fs = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fs,
+        'precision mediump float;\n' +
+        'uniform vec4 u_color;\n' +
+        'void main() { gl_FragColor = u_color; }');
+      gl.compileShader(fs);
+      var prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      gl.useProgram(prog);
+      return prog;
+    }
+
+    // c1: drawArrays — solid green fills the whole canvas over a red clear,
+    // proving the clear color is fully overpainted by the draw.
+    (function () {
+      var gl = document.getElementById('c1').getContext('webgl2');
+      gl.viewport(0, 0, 150, 150);
+      gl.clearColor(1, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      var prog = fullQuadProgram(gl);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+        gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, 'a_pos');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      var colorLoc = gl.getUniformLocation(prog, 'u_color');
+      gl.uniform4f(colorLoc, 0.0, 1.0, 0.0, 1.0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    })();
+
+    // c2: drawElements — a 4-vertex quad (corner list, no duplication)
+    // indexed by a Uint16Array ELEMENT_ARRAY_BUFFER, filled solid blue.
+    (function () {
+      var gl = document.getElementById('c2').getContext('webgl2');
+      gl.viewport(0, 0, 150, 150);
+      gl.clearColor(1, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      var prog = fullQuadProgram(gl);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 1, -1, 1, 1, -1, 1]),
+        gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, 'a_pos');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      var ibuf = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,
+        new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
+      var colorLoc = gl.getUniformLocation(prog, 'u_color');
+      gl.uniform4f(colorLoc, 0.0, 0.0, 1.0, 1.0);
+      gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    })();
+
+    // c3: createVertexArray/bindVertexArray — configure attrib state inside
+    // a VAO, switch to the default VAO (no attrib bound, drawArrays is a
+    // no-op there) and back. The visible orange fill only appears because
+    // rebinding the VAO restores its captured attrib pointer.
+    (function () {
+      var gl = document.getElementById('c3').getContext('webgl2');
+      gl.viewport(0, 0, 150, 150);
+      gl.clearColor(1, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      var prog = fullQuadProgram(gl);
+      var vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+        gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, 'a_pos');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+      gl.bindVertexArray(vao);
+      var colorLoc = gl.getUniformLocation(prog, 'u_color');
+      gl.uniform4f(colorLoc, 1.0, 0.647, 0.0, 1.0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    })();
+
+    // c4: `#version 300 es` in/out varyings + texture() sampling a 1x1
+    // texture — the interpreter resolves texture() to the texture's average
+    // colour regardless of UV, so a solid 1x1 upload gives a deterministic
+    // full-canvas fill.
+    (function () {
+      var gl = document.getElementById('c4').getContext('webgl2');
+      gl.viewport(0, 0, 150, 150);
+      gl.clearColor(1, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      var vs = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vs,
+        '#version 300 es\n' +
+        'in vec2 a_pos;\n' +
+        'in vec2 a_uv;\n' +
+        'out vec2 v_uv;\n' +
+        'void main() { v_uv = a_uv; gl_Position = vec4(a_pos, 0.0, 1.0); }');
+      gl.compileShader(vs);
+      var fs = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fs,
+        '#version 300 es\n' +
+        'precision mediump float;\n' +
+        'in vec2 v_uv;\n' +
+        'uniform sampler2D u_tex;\n' +
+        'out vec4 outColor;\n' +
+        'void main() { outColor = texture(u_tex, v_uv); }');
+      gl.compileShader(fs);
+      var prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      gl.useProgram(prog);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      // interleaved a_pos.xy, a_uv.xy per vertex.
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1, 0, 0,
+        1, -1, 1, 0,
+        -1, 1, 0, 1,
+        -1, 1, 0, 1,
+        1, -1, 1, 0,
+        1, 1, 1, 1
+      ]), gl.STATIC_DRAW);
+      var posLoc = gl.getAttribLocation(prog, 'a_pos');
+      gl.enableVertexAttribArray(posLoc);
+      gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 16, 0);
+      var uvLoc = gl.getAttribLocation(prog, 'a_uv');
+      gl.enableVertexAttribArray(uvLoc);
+      gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 16, 8);
+      var tex = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      // 1x1 cyan texel — texture() must return this colour regardless of UV.
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA,
+        gl.UNSIGNED_BYTE, new Uint8Array([0, 255, 255, 255]));
+      var texLoc = gl.getUniformLocation(prog, 'u_tex');
+      gl.uniform1i(texLoc, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    })();
+
+    // c5: uniformMatrix3fv — a zeroed 3x3 matrix collapses every vertex to
+    // the clip-space origin, degenerating both triangles to zero area, so
+    // nothing paints over the clear colour. If uniformMatrix3fv were a
+    // silent stub (pre-срез-6 behaviour) the untouched full-viewport quad
+    // would fill the canvas gold instead — a clear visual regression signal.
+    (function () {
+      var gl = document.getElementById('c5').getContext('webgl2');
+      gl.viewport(0, 0, 150, 150);
+      gl.clearColor(0.051, 0.588, 0.533, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      var vs = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vs,
+        '#version 300 es\n' +
+        'in vec2 a_pos;\n' +
+        'uniform mat3 u_m;\n' +
+        'void main() { gl_Position = vec4(a_pos, 0.0, 1.0) * u_m; }');
+      gl.compileShader(vs);
+      var fs = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fs,
+        '#version 300 es\n' +
+        'precision mediump float;\n' +
+        'out vec4 outColor;\n' +
+        'void main() { outColor = vec4(0.918, 0.702, 0.031, 1.0); }');
+      gl.compileShader(fs);
+      var prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      gl.useProgram(prog);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+        gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, 'a_pos');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      var uloc = gl.getUniformLocation(prog, 'u_m');
+      gl.uniformMatrix3fv(uloc, false, new Float32Array([0, 0, 0, 0, 0, 0, 0, 0, 0]));
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    })();
+  </script>
+</body>
+</html>

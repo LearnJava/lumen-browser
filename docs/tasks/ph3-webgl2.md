@@ -167,9 +167,51 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 (marshal на JS-поток раннера), а не напрямую `canvas2d::flush_dirty()` с
 вызывающего потока теста — у раннера свой `thread_local!`.
 
-### Срез 6 — XS — `uniform*v` / `uniformMatrix3fv`
-Добавить `uniform2fv`/`3fv`/`4fv`/`1iv` и `uniformMatrix3fv` (WebGL2 часто
-их использует), прокинуть в `SoftwareWebGl::uniform_*` и JS-шим.
+### Срез 6 — XS — `uniform*v` / `uniformMatrix3fv` — DONE 2026-09-21 (P1)
+`uniform1fv`/`2fv`/`3fv`/`4fv`/`1iv` уже были прокинуты в JS-шиме
+(`webgl_canvas.rs`) как тонкие обёртки над скалярными `uniform1..4f`/`uniform1i`
+натива (единственный элемент массива — интерпретатор не поддерживает
+uniform-массивы, только один вектор на локацию, так что это точный
+эквивалент). Оставался только `uniformMatrix3fv` — был `function() {}`-стабом
+(«mat3 not tracked»). Новый `SoftwareWebGl::uniform_matrix3fv(location,
+values: &[f32; 9])` встраивает 3×3-матрицу в тот же padded-`Val::Mat4`
+(единичная диагональ в неиспользуемой строке/столбце), которым уже пользуется
+GLSL-конструктор `mat3()` — существующая `Mat4`-арифметика интерпретатора
+подхватывает её без изменений. Новый натив `_lumen_webgl_uniform_mat3fv` +
+`gl.uniformMatrix3fv` в шиме. 2 новых теста `webgl.rs` (встраивание,
+игнорирование отрицательной локации/короткого входа) + 1 V8-тест
+`webgl_canvas.rs` (`uniformMatrix3fv` с нулевой матрицей вырождает треугольник
+в точку — доказывает, что юниформ реально доходит до вершинного шейдера).
+`Val` получил `#[derive(PartialEq)]` для теста сравнения. `cargo clippy
+-p lumen-paint -p lumen-js --all-targets --features lumen-js/v8-backend
+-D warnings` зелёные.
+
+**Ревизия 2026-09-21 (P1), graphic_test + два попутных фикса:** писать
+`graphic_tests/157-webgl2.html` с настоящими `<canvas>`-элементами из HTML
+(не `document.createElement`, как во всех прежних unit-тестах) вскрыло
+дефект #1: `getContext('webgl'|'webgl2')` на canvas, пришедшем прямо из
+разобранного HTML, отдавал `null` — `WEBGL_SHIM` расширял `getContext` только
+через перехват `document.createElement('canvas')`, а парсер-элементы через
+него никогда не проходят. Фикс: `install_webgl_canvas_v8` дополнительно
+проходит `document.getElementsByTagName('canvas')` по уже построенному
+дереву документа (DOM-core шим строит `document` раньше этого install) и
+навешивает те же стабы на каждый существующий canvas. Тест
+`preexisting_parser_canvas_gets_webgl_stub`.
+
+Дефект #2, вскрытый той же тестовой страницей (5 full-viewport quad-панелей:
+`drawArrays`/`drawElements`/VAO/GLSL ES 3.00 `texture()`/`uniformMatrix3fv`,
+ни одного AA-пикселя на границе — software- и Edge GPU-путь не могут
+разойтись на сглаживании): `gl.TEXTURE_2D`/`gl.TEXTURE0..7` никогда не были
+определены на объекте контекста — `bindTexture(gl.TEXTURE_2D, tex)` молча не
+биндил ничего (`gl.TEXTURE_2D === undefined`), поэтому `texture()` в GLSL
+ES 3.00 фрагмент-шейдере всегда отдавал fallback вместо загруженного пикселя.
+Добавлены именованные константы + `named_texture_constants_reach_texture_sampling`
+(`webgl_canvas.rs`). Живой прогон `graphic_tests/run.py --only 157` подтвердил:
+все 5 панелей дают нулевой диф с Edge. Единственный остаток — `KNOWN_DEBTORS['157']`
+(BUG-1077): плавающая chrome-панель `#demoBar`, ставшая видимой в живом окне
+побочным эффектом уже закрытого BUG-1059, перекрывает часть вьюпорта в любом
+real-JS графическом тесте (тот же класс уже задел TEST-57/BUG-099) — вне
+скоупа этой задачи.
 
 ## Tests
 
@@ -188,5 +230,6 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 - [x] **VAO (`createVertexArray`/`bindVertexArray`) реализованы** — срез 3, 2026-09-21.
 - [x] **GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется** — срез 4, 2026-09-21.
 - [x] **Present:** результат WebGL композитится на страничный `<canvas>` (видно в окне, не только `readPixels`) — срез 5, 2026-09-21.
-- [ ] graphic_test `NN-webgl2` проходит (порог 0.5%).
-- [ ] `CAPABILITIES.md` + `subsystems/paint.md` обновлены (webgl2 ✅/🟡).
+- [x] **`uniform*v`/`uniformMatrix3fv`** реализованы — срез 6, 2026-09-21.
+- [x] graphic_test `157-webgl2` добавлен — DEBTOR 5.06% (`KNOWN_DEBTORS['157']`, BUG-1077), не 0.5%: весь диф — контур плавающей chrome-панели `#demoBar` (CC-18), ставшей видимой в живом окне побочным эффектом уже закрытого BUG-1059; все 5 WebGL-панелей дают нулевой диф с Edge. Не дефект этой задачи — тот же класс регрессии окружения задел и TEST-57/BUG-099.
+- [x] `CAPABILITIES.md` + `subsystems/paint.md` обновлены (webgl2 ✅/🟡).
