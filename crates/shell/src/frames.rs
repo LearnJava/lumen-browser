@@ -1986,6 +1986,15 @@ pub(crate) fn spawn_frame(
             crate::resource_base::document_referrer_policy(&doc),
         )
     };
+    // GAP-REFERRER срез 6: a `referrerpolicy` attribute on the host element
+    // overrides the document policy for this element's own request only
+    // (spec §6.6 "referrer policy attribute") — parsed here rather than
+    // in `lumen-dom` since only this crate depends on `lumen-network`.
+    let referrer_policy = info
+        .referrer_policy
+        .as_deref()
+        .and_then(lumen_network::ReferrerPolicy::parse)
+        .unwrap_or(referrer_policy);
     let self_origin = base.origin();
     // GAP-CSPENF срез 55: `uir_override` побеждает, когда вызывающая сторона
     // уже прочитала политику настоящего инициатора (см. doc-comment функции);

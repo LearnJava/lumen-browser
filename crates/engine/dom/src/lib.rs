@@ -2060,6 +2060,12 @@ pub struct IframeInfo {
     /// Значение атрибута `name`, если задан — будущий ключ `window[name]`
     /// для именованного доступа к фреймам (BUG-480).
     pub name: Option<String>,
+    /// Значение атрибута `referrerpolicy` (Referrer Policy spec §6.6), сырое
+    /// — переопределяет политику документа-владельца только для запроса
+    /// `src` этого элемента (GAP-REFERRER срез 6). Парсится вызывающей
+    /// стороной (`ReferrerPolicy::parse`), т.к. `lumen-dom` не зависит от
+    /// `lumen-network`.
+    pub referrer_policy: Option<String>,
 }
 
 /// Нормализует значение атрибута `fetchpriority` (HTML LS §2.5.7):
@@ -2102,7 +2108,8 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
             .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
         let fetch_priority = normalize_fetch_priority(node.get_attr("fetchpriority"));
         let name = node.get_attr("name").filter(|s| !s.is_empty()).map(str::to_owned);
-        out.push(IframeInfo { node: id, src, srcdoc, sandbox, is_sandboxed, loading_lazy, fetch_priority, name });
+        let referrer_policy = node.get_attr("referrerpolicy").filter(|s| !s.is_empty()).map(str::to_owned);
+        out.push(IframeInfo { node: id, src, srcdoc, sandbox, is_sandboxed, loading_lazy, fetch_priority, name, referrer_policy });
     }
     for &child in &node.children.clone() {
         collect_iframes_inner(doc, child, out);
@@ -4463,6 +4470,31 @@ mod tests {
         assert_eq!(iframes[1].fetch_priority, Some("low".to_string()));
         assert!(!iframes[2].loading_lazy, "absent loading must not set loading_lazy");
         assert_eq!(iframes[2].fetch_priority, None, "fetchpriority=auto must map to None");
+    }
+
+    /// GAP-REFERRER срез 6: `referrerpolicy` — сырое значение атрибута,
+    /// парсится/применяется вызывающей стороной (`lumen-shell`), которая
+    /// одна зависит от `lumen-network`.
+    #[test]
+    fn collect_iframes_reads_referrerpolicy_attribute() {
+        let mut doc = Document::new();
+        let iframe1 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe1).data {
+            attrs.push(Attribute { name: QualName::html("src"), value: "a.html".to_string() });
+            attrs.push(Attribute {
+                name: QualName::html("referrerpolicy"),
+                value: "no-referrer".to_string(),
+            });
+        }
+        let iframe2 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe2).data {
+            attrs.push(Attribute { name: QualName::html("src"), value: "b.html".to_string() });
+        }
+        doc.append_child(doc.root(), iframe1);
+        doc.append_child(doc.root(), iframe2);
+        let iframes = collect_iframes(&doc);
+        assert_eq!(iframes[0].referrer_policy, Some("no-referrer".to_string()));
+        assert_eq!(iframes[1].referrer_policy, None, "absent attribute must be None");
     }
 
     #[test]

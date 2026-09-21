@@ -13,12 +13,19 @@
 //! now override that default for the top-level document's own `fetch()`/
 //! `XMLHttpRequest`/`sendBeacon`/`Worker`/`<embed>`/`<object>`/media clients
 //! (`page_pipeline.rs`/`hibernate.rs`, `resource_base::document_referrer_policy`)
-//! and for `<script src>` (`scripts.rs::resolve_script_sources`). Still on the
-//! project default: every other subresource fetch reached only via
-//! `ResourceBase::http_client_for_subresource`'s default-policy overload
-//! (`<img>`/`<link>`/`@import`/`@font-face`/`<iframe src>`/preload scanner —
-//! none of them hold a `&Document` at their call site without further
-//! threading), and a `referrerpolicy` element attribute override.
+//! and for `<script src>` (`scripts.rs::resolve_script_sources`). Срезы 4/5:
+//! every remaining subresource producer (`<link>`/`@import`/`<iframe src>`/
+//! `<img>`/`@font-face`/`<track>`/video/audio) reads the same document policy.
+//! Срез 6: a `referrerpolicy` element attribute (spec §6.6) now overrides the
+//! document policy for that element's own request on `<script src>`
+//! (`scripts.rs::resolve_script_sources`), `<link rel=stylesheet>`/`@import`
+//! (`stylesheets.rs::load_linked_stylesheets`, the override also reaches the
+//! sheet's own `@import`s) and `<iframe src>` (`frames.rs::spawn_frame`, via
+//! `lumen_dom::IframeInfo::referrer_policy`). Still on the document default,
+//! not the attribute: `<img>`/`@font-face`/`<track>`/video (their per-request
+//! plumbing point doesn't carry a single element attribute the way the three
+//! above do) and the preload scanner (structurally without a `Document` —
+//! scans the byte stream before one exists).
 
 use crate::origin::Origin;
 use lumen_core::url::Url;

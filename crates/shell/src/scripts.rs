@@ -361,6 +361,16 @@ pub(crate) fn resolve_script_sources(
             csp_blocked: Vec::new(),
         }),
         ScriptSource::External(nid, src) => {
+            // GAP-REFERRER срез 6: `referrerpolicy` on this `<script>` element
+            // overrides the document policy for its own fetch only — `doc`
+            // is already in scope here (CSP gate above reads it too), so the
+            // attribute is read straight off the node rather than threaded
+            // through `ScriptSource`.
+            let referrer_policy = doc
+                .get(*nid)
+                .get_attr("referrerpolicy")
+                .and_then(lumen_network::ReferrerPolicy::parse)
+                .unwrap_or(referrer_policy);
             let resolved_url = base.resolve_str(src);
             // GAP-CSPENF срез 45: `upgrade-insecure-requests` переписывает
             // схему ДО гейта `script-src` (тот же порядок Fetch §4.1, что
