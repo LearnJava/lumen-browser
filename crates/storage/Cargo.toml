@@ -36,6 +36,11 @@ hmac = "0.12"
 # Permanent (§5): OS CSPRNG for generating random key material (keys, salts, nonces).
 # Already in the dependency graph via lumen-js and lumen-network.
 getrandom = "0.2"
+# Permanent (§5): P-256 ECDH for WebPush message decryption (RFC 8291) —
+# `PushStore::push_deliver` needs the subscription's private scalar to derive
+# the shared secret with the push service's ephemeral key. Already in the
+# dependency graph via lumen-js and lumen-network (same version/features).
+p256 = { version = "0.13", features = ["ecdh"] }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]

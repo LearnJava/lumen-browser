@@ -41,6 +41,8 @@ pub mod plugins;
 pub mod profile_vault;
 pub mod profiles;
 pub mod psl;
+pub mod push_crypto;
+pub mod push_messages;
 pub mod push_store;
 pub mod push_subscriptions;
 pub mod referrer_policy;
@@ -94,6 +96,7 @@ pub use permissions_policy::{
 pub use plugins::{PluginManifest, Plugins};
 pub use profiles::{Profile, ProfileRegistry};
 pub use psl::PslProvider;
+pub use push_messages::PushMessages;
 pub use push_store::PushStore;
 pub use push_subscriptions::{PushSubscription, PushSubscriptions};
 pub use referrer_policy::{ReferrerPolicies, ReferrerPolicy};
