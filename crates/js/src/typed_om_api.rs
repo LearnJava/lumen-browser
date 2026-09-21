@@ -16,8 +16,14 @@
 //! - `CSSMathValue` family — `CSSMathSum`/`CSSMathProduct`/`CSSMathNegate`/`CSSMathInvert`/
 //!   `CSSMathMin`/`CSSMathMax`
 //! - `CSSUnparsedValue`/`CSSVariableReferenceValue` — `var()` reference values
+//! - `CSSTransformValue` and the `CSSTransformComponent` family — `CSSTranslate`/
+//!   `CSSRotate`/`CSSScale`/`CSSSkew`/`CSSSkewX`/`CSSSkewY`/`CSSPerspective`/
+//!   `CSSMatrixComponent`; `toMatrix()` builds a `DOMMatrix` (from
+//!   `geometry_shim.js`), resolving lengths/angles via `CSSUnitValue.to()` —
+//!   no layout context, so a percentage or relative unit throws instead of
+//!   guessing a used value
 //!
-//! Not implemented: `CSSTransformValue`/`CSSColorValue` families (GAP-TYPEDOM remainder).
+//! Not implemented: `CSSColorValue` family (GAP-TYPEDOM remainder).
 //!
 //! Maps:
 //! - `StylePropertyMapReadOnly` — `element.computedStyleMap()`, reads the resolved cascade
@@ -289,6 +295,279 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     };
   }
 
+  // ── CSSTransformComponent hierarchy (§11) — individual transform functions ────
+  // Spec keeps this family separate from CSSStyleValue (it is `toMatrix()` +
+  // `is2D` + a stringifier, not a value that reads/writes a property), so
+  // unlike everything above it these do not extend CSSStyleValue. `toMatrix()`
+  // needs the DOMMatrix from geometry_shim.js, which is evaluated earlier in
+  // the same combined shim string (dom.rs's DOM_SHIM), so it is already a
+  // global by the time this file runs.
+  function requireNumericValue(v, what) {
+    if (!(v instanceof CSSNumericValue)) {
+      throw new TypeError('CSSTransformComponent: ' + what + ' must be a CSSNumericValue');
+    }
+    return v;
+  }
+  // Length/angle resolution has no layout context here (no element, no
+  // viewport) — only unit-to-unit conversions `CSSUnitValue.to()` already
+  // knows (the UNIT_GROUPS table above) are honoured; a percentage or an
+  // `em` throws, same as `to()` does, instead of inventing a used value.
+  function numericToPx(nv) {
+    if (!(nv instanceof CSSUnitValue)) {
+      throw new TypeError('CSSTransformComponent: cannot resolve to a length without a used value');
+    }
+    if (nv.unit === 'number' && nv.value === 0) return 0;
+    return nv.to('px').value;
+  }
+  function numericToDeg(nv) {
+    if (!(nv instanceof CSSUnitValue)) {
+      throw new TypeError('CSSTransformComponent: cannot resolve to an angle without a used value');
+    }
+    return nv.to('deg').value;
+  }
+  function numericToFactor(v) {
+    var nv = toNumericValue(v);
+    if (!(nv instanceof CSSUnitValue) || nv.unit !== 'number') {
+      throw new TypeError('CSSTransformComponent: cannot resolve to a number without a used value');
+    }
+    return nv.value;
+  }
+
+  function CSSTransformComponent() {}
+  CSSTransformComponent.prototype.toString = function() { return this.cssText; };
+  Object.defineProperty(CSSTransformComponent.prototype, 'is2D', {
+    get: function() { return this._is2D; },
+    configurable: true
+  });
+
+  function CSSTranslate(x, y, z) {
+    CSSTransformComponent.call(this);
+    this.x = requireNumericValue(x, 'x');
+    this.y = requireNumericValue(y, 'y');
+    if (z === undefined) {
+      this.z = new CSSUnitValue(0, 'px');
+      this._is2D = true;
+    } else {
+      this.z = requireNumericValue(z, 'z');
+      this._is2D = false;
+    }
+  }
+  CSSTranslate.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSTranslate.prototype.constructor = CSSTranslate;
+  Object.defineProperty(CSSTranslate.prototype, 'cssText', {
+    get: function() {
+      return this._is2D
+        ? 'translate(' + this.x + ', ' + this.y + ')'
+        : 'translate3d(' + this.x + ', ' + this.y + ', ' + this.z + ')';
+    },
+    configurable: true
+  });
+  CSSTranslate.prototype.toMatrix = function() {
+    return new DOMMatrix().translate(numericToPx(this.x), numericToPx(this.y), numericToPx(this.z));
+  };
+
+  function CSSRotate() {
+    CSSTransformComponent.call(this);
+    if (arguments.length === 1) {
+      this.x = 0; this.y = 0; this.z = 1;
+      this.angle = requireNumericValue(arguments[0], 'angle');
+      this._is2D = true;
+    } else if (arguments.length === 4) {
+      this.x = Number(arguments[0]);
+      this.y = Number(arguments[1]);
+      this.z = Number(arguments[2]);
+      this.angle = requireNumericValue(arguments[3], 'angle');
+      this._is2D = false;
+    } else {
+      throw new TypeError('CSSRotate: expected 1 or 4 arguments');
+    }
+  }
+  CSSRotate.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSRotate.prototype.constructor = CSSRotate;
+  Object.defineProperty(CSSRotate.prototype, 'cssText', {
+    get: function() {
+      return this._is2D
+        ? 'rotate(' + this.angle + ')'
+        : 'rotate3d(' + this.x + ', ' + this.y + ', ' + this.z + ', ' + this.angle + ')';
+    },
+    configurable: true
+  });
+  CSSRotate.prototype.toMatrix = function() {
+    var deg = numericToDeg(this.angle);
+    return this._is2D
+      ? new DOMMatrix().rotate(deg)
+      : new DOMMatrix().rotateAxisAngle(this.x, this.y, this.z, deg);
+  };
+
+  function CSSScale(x, y, z) {
+    CSSTransformComponent.call(this);
+    this.x = toNumericValue(x);
+    this.y = toNumericValue(y);
+    if (z === undefined) {
+      this.z = new CSSUnitValue(1, 'number');
+      this._is2D = true;
+    } else {
+      this.z = toNumericValue(z);
+      this._is2D = false;
+    }
+  }
+  CSSScale.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSScale.prototype.constructor = CSSScale;
+  Object.defineProperty(CSSScale.prototype, 'cssText', {
+    get: function() {
+      return this._is2D
+        ? 'scale(' + this.x + ', ' + this.y + ')'
+        : 'scale3d(' + this.x + ', ' + this.y + ', ' + this.z + ')';
+    },
+    configurable: true
+  });
+  CSSScale.prototype.toMatrix = function() {
+    return new DOMMatrix().scale(numericToFactor(this.x), numericToFactor(this.y), numericToFactor(this.z));
+  };
+
+  function CSSSkew(ax, ay) {
+    CSSTransformComponent.call(this);
+    this.ax = requireNumericValue(ax, 'ax');
+    this.ay = requireNumericValue(ay, 'ay');
+    this._is2D = true;
+  }
+  CSSSkew.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSSkew.prototype.constructor = CSSSkew;
+  Object.defineProperty(CSSSkew.prototype, 'cssText', {
+    get: function() { return 'skew(' + this.ax + ', ' + this.ay + ')'; },
+    configurable: true
+  });
+  // Matches the `skew(ax, ay)` case of `_dm_func_to_matrix` in geometry_shim.js
+  // exactly (skewX's matrix, then skewY's, in that multiplication order) —
+  // chaining the public instance methods from identity reaches the same result.
+  CSSSkew.prototype.toMatrix = function() {
+    return new DOMMatrix().skewX(numericToDeg(this.ax)).skewY(numericToDeg(this.ay));
+  };
+
+  function CSSSkewX(ax) {
+    CSSTransformComponent.call(this);
+    this.ax = requireNumericValue(ax, 'ax');
+    this._is2D = true;
+  }
+  CSSSkewX.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSSkewX.prototype.constructor = CSSSkewX;
+  Object.defineProperty(CSSSkewX.prototype, 'cssText', {
+    get: function() { return 'skewX(' + this.ax + ')'; },
+    configurable: true
+  });
+  CSSSkewX.prototype.toMatrix = function() { return new DOMMatrix().skewX(numericToDeg(this.ax)); };
+
+  function CSSSkewY(ay) {
+    CSSTransformComponent.call(this);
+    this.ay = requireNumericValue(ay, 'ay');
+    this._is2D = true;
+  }
+  CSSSkewY.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSSkewY.prototype.constructor = CSSSkewY;
+  Object.defineProperty(CSSSkewY.prototype, 'cssText', {
+    get: function() { return 'skewY(' + this.ay + ')'; },
+    configurable: true
+  });
+  CSSSkewY.prototype.toMatrix = function() { return new DOMMatrix().skewY(numericToDeg(this.ay)); };
+
+  function CSSPerspective(length) {
+    CSSTransformComponent.call(this);
+    var isNoneKeyword = length instanceof CSSKeywordValue && length.value === 'none';
+    if (!(length instanceof CSSNumericValue) && !isNoneKeyword) {
+      throw new TypeError('CSSPerspective: length must be a CSSNumericValue or the keyword "none"');
+    }
+    this.length = length;
+    this._is2D = false;
+  }
+  CSSPerspective.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSPerspective.prototype.constructor = CSSPerspective;
+  Object.defineProperty(CSSPerspective.prototype, 'cssText', {
+    get: function() { return 'perspective(' + this.length + ')'; },
+    configurable: true
+  });
+  // Same `m[11] = -1 / d` construction as the private `_dm_perspective()` in
+  // geometry_shim.js (not exported, so rebuilt here from the public 16-value
+  // DOMMatrix constructor form instead of calling it directly).
+  CSSPerspective.prototype.toMatrix = function() {
+    var m = [1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1];
+    if (this.length instanceof CSSNumericValue) {
+      var d = numericToPx(this.length);
+      if (d !== 0) { m[11] = -1 / d; }
+    }
+    return new DOMMatrix(m);
+  };
+
+  function CSSMatrixComponent(matrix, options) {
+    CSSTransformComponent.call(this);
+    var m = (matrix instanceof DOMMatrixReadOnly) ? matrix : new DOMMatrix(matrix);
+    this.matrix = new DOMMatrix(m);
+    this._is2D = (options && options.is2D !== undefined) ? !!options.is2D : m.is2D;
+  }
+  CSSMatrixComponent.prototype = Object.create(CSSTransformComponent.prototype);
+  CSSMatrixComponent.prototype.constructor = CSSMatrixComponent;
+  Object.defineProperty(CSSMatrixComponent.prototype, 'cssText', {
+    get: function() { return this.matrix.toString(); },
+    configurable: true
+  });
+  CSSMatrixComponent.prototype.toMatrix = function() { return new DOMMatrix(this.matrix); };
+
+  // ── CSSTransformValue (§11.1) — element.style's transform as a component list ─
+  function CSSTransformValue(transforms) {
+    // Not `CSSStyleValue.call(this)` — that assigns `this.cssText` as an own
+    // field, which throws in strict mode against the getter-only `cssText`
+    // accessor this prototype defines below (same pattern as
+    // CSSUnparsedValue above).
+    var list = Array.prototype.slice.call(transforms || []);
+    if (list.length === 0) {
+      throw new TypeError('CSSTransformValue: transforms must not be empty');
+    }
+    for (var i = 0; i < list.length; i++) {
+      if (!(list[i] instanceof CSSTransformComponent)) {
+        throw new TypeError('CSSTransformValue: item ' + i + ' is not a CSSTransformComponent');
+      }
+      this[i] = list[i];
+    }
+    this.length = list.length;
+  }
+  CSSTransformValue.prototype = Object.create(CSSStyleValue.prototype);
+  CSSTransformValue.prototype.constructor = CSSTransformValue;
+  Object.defineProperty(CSSTransformValue.prototype, 'is2D', {
+    get: function() {
+      for (var i = 0; i < this.length; i++) {
+        if (!this[i].is2D) return false;
+      }
+      return true;
+    },
+    configurable: true
+  });
+  Object.defineProperty(CSSTransformValue.prototype, 'cssText', {
+    get: function() {
+      var parts = [];
+      for (var i = 0; i < this.length; i++) { parts.push(this[i].toString()); }
+      return parts.join(' ');
+    },
+    configurable: true
+  });
+  // Same reduction `_dm_parse_transform_string` uses for a `<transform-list>`
+  // string (`acc = component × acc`, accumulated left to right) — so a
+  // CSSTransformValue built from the same functions as a transform string
+  // reaches the identical DOMMatrix.
+  CSSTransformValue.prototype.toMatrix = function() {
+    var acc = new DOMMatrix();
+    for (var i = 0; i < this.length; i++) {
+      acc = this[i].toMatrix().multiply(acc);
+    }
+    return acc;
+  };
+  if (typeof Symbol !== 'undefined' && Symbol.iterator) {
+    CSSTransformValue.prototype[Symbol.iterator] = function() {
+      var self = this, i = 0;
+      return { next: function() {
+        return i < self.length ? { value: self[i++], done: false } : { value: undefined, done: true };
+      } };
+    };
+  }
+
   var NUMBER_WITH_UNIT = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(%|[a-zA-Z]+)?$/;
   var CSS_IDENTIFIER   = /^-?[A-Za-z_][\w-]*$/;
 
@@ -502,6 +781,16 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   global.CSS.CSSMathMax = CSSMathMax;
   global.CSS.CSSUnparsedValue = CSSUnparsedValue;
   global.CSS.CSSVariableReferenceValue = CSSVariableReferenceValue;
+  global.CSS.CSSTransformComponent = CSSTransformComponent;
+  global.CSS.CSSTransformValue = CSSTransformValue;
+  global.CSS.CSSTranslate = CSSTranslate;
+  global.CSS.CSSRotate = CSSRotate;
+  global.CSS.CSSScale = CSSScale;
+  global.CSS.CSSSkew = CSSSkew;
+  global.CSS.CSSSkewX = CSSSkewX;
+  global.CSS.CSSSkewY = CSSSkewY;
+  global.CSS.CSSPerspective = CSSPerspective;
+  global.CSS.CSSMatrixComponent = CSSMatrixComponent;
   global.CSS.StylePropertyMap = StylePropertyMap;
   global.CSS.StylePropertyMapReadOnly = StylePropertyMapReadOnly;
 
@@ -533,6 +822,16 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
     window.CSSMathMax = CSSMathMax;
     window.CSSUnparsedValue = CSSUnparsedValue;
     window.CSSVariableReferenceValue = CSSVariableReferenceValue;
+    window.CSSTransformComponent = CSSTransformComponent;
+    window.CSSTransformValue = CSSTransformValue;
+    window.CSSTranslate = CSSTranslate;
+    window.CSSRotate = CSSRotate;
+    window.CSSScale = CSSScale;
+    window.CSSSkew = CSSSkew;
+    window.CSSSkewX = CSSSkewX;
+    window.CSSSkewY = CSSSkewY;
+    window.CSSPerspective = CSSPerspective;
+    window.CSSMatrixComponent = CSSMatrixComponent;
     window.StylePropertyMap = StylePropertyMap;
     window.StylePropertyMapReadOnly = StylePropertyMapReadOnly;
   }

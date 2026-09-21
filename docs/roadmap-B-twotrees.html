@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-21",
  "counts": {
-  "open": 270,
-  "fixed": 747,
+  "open": 269,
+  "fixed": 748,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6739,7 +6739,7 @@
        "title": "GAP: CSS Typed OM",
        "status": "planned",
        "size": "L",
-       "note": "CSS Typed OM реализован на четверть: есть `CSSStyleValue`, `CSSUnitValue`, `CSSKeywordValue`, частичный `CSSNumericValue` и две карты свойств; нет фабрик единиц на объекте `CSS`, иерархии `CSSMathValue`, семейств `CSSTransformValue`/`CSSColorValue`, `CSSUnparsedValue`/`CSSVariableReferenceValue`, `CSSStyleValue.parse`/`.parseAll` и записи через `StylePropertyMap.set`. Пересекается с дорожкой CSSOM по границе «объектная модель стилей», но это отдельная спека и отдельный файл `crates/js/src/typed_om_api.rs`. **Срез 1 (2026-09-21, P6, `p6-gap-typedom`):** закрыта половина остатка — фабрики единиц на `CSS` (`CSS.px(1)` и 34 другие), `CSSStyleValue.parse`/`.parseAll` (без per-property грамматики — общий разбор размерность/идентификатор/непрозрачная строка), иерархия `CSSMathValue` (`CSSMathSum`/`Product`/`Negate`/`Invert`/`Min`/`Max`, только построение и `calc()`-сериализация, без `to()`/`equals()` — нет контекста разрешения смешанных единиц) с `CSSNumericValue.add`/`sub`/`mul`/`div`/`min`/`max`/`negate`/`invert`, и `CSSUnparsedValue`/`CSSVariableReferenceValue`. Попутно исправлена цепочка прототипов `CSSUnitValue` — раньше наследовал от `CSSStyleValue` напрямую в обход `CSSNumericValue` (спека §6), из-за чего `instanceof CSSNumericValue` был `false` и `add()`/`sub()` на юнит-значении падали бы `TypeError`. Остаток: `CSSTransformValue`/`CSSColorValue` семейства, запись через `StylePropertyMap.set` сложных (не-cssText) значений, `to()`/`equals()` на математическом дереве. **Срез 2 (2026-09-21, P6, `p6-gap-typedom-srez2`):** `StylePropertyMap` `set()`/`append()` стали вариативными (§6.2) — `set(prop, ...values)` и новый `append(prop, ...values)` (которого не было вообще), с жёстким списком свойств, поддерживающих список через запятую (`background`, `transition`, `animation`, `will-change`, `font-family`, `grid-template-columns/rows` и т.п.); остальные свойства join'ятся пробелом. `append()` на свойстве вне списка бросает `TypeError` (спека хочет `NotSupportedError`, но в шиме нет биндинга `DOMException`). Остаток не сузился: `CSSTransformValue`/`CSSColorValue` семейства и `to()`/`equals()` на математическом дереве по-прежнему нет. Статус остаётся `planned`.",
+       "note": "CSS Typed OM реализован на четверть: есть `CSSStyleValue`, `CSSUnitValue`, `CSSKeywordValue`, частичный `CSSNumericValue` и две карты свойств; нет фабрик единиц на объекте `CSS`, иерархии `CSSMathValue`, семейств `CSSTransformValue`/`CSSColorValue`, `CSSUnparsedValue`/`CSSVariableReferenceValue`, `CSSStyleValue.parse`/`.parseAll` и записи через `StylePropertyMap.set`. Пересекается с дорожкой CSSOM по границе «объектная модель стилей», но это отдельная спека и отдельный файл `crates/js/src/typed_om_api.rs`. **Срез 1 (2026-09-21, P6, `p6-gap-typedom`):** закрыта половина остатка — фабрики единиц на `CSS` (`CSS.px(1)` и 34 другие), `CSSStyleValue.parse`/`.parseAll` (без per-property грамматики — общий разбор размерность/идентификатор/непрозрачная строка), иерархия `CSSMathValue` (`CSSMathSum`/`Product`/`Negate`/`Invert`/`Min`/`Max`, только построение и `calc()`-сериализация, без `to()`/`equals()` — нет контекста разрешения смешанных единиц) с `CSSNumericValue.add`/`sub`/`mul`/`div`/`min`/`max`/`negate`/`invert`, и `CSSUnparsedValue`/`CSSVariableReferenceValue`. Попутно исправлена цепочка прототипов `CSSUnitValue` — раньше наследовал от `CSSStyleValue` напрямую в обход `CSSNumericValue` (спека §6), из-за чего `instanceof CSSNumericValue` был `false` и `add()`/`sub()` на юнит-значении падали бы `TypeError`. Остаток: `CSSTransformValue`/`CSSColorValue` семейства, запись через `StylePropertyMap.set` сложных (не-cssText) значений, `to()`/`equals()` на математическом дереве. **Срез 2 (2026-09-21, P6, `p6-gap-typedom-srez2`):** `StylePropertyMap` `set()`/`append()` стали вариативными (§6.2) — `set(prop, ...values)` и новый `append(prop, ...values)` (которого не было вообще), с жёстким списком свойств, поддерживающих список через запятую (`background`, `transition`, `animation`, `will-change`, `font-family`, `grid-template-columns/rows` и т.п.); остальные свойства join'ятся пробелом. `append()` на свойстве вне списка бросает `TypeError` (спека хочет `NotSupportedError`, но в шиме нет биндинга `DOMException`). Остаток сузился до `CSSColorValue` семейства и `to()`/`equals()` на математическом дереве. **Срез 3 (2026-09-21, P6, `p6-gap-typedom-srez3`):** реализована `CSSTransformComponent` иерархия и `CSSTransformValue` (§11) — `CSSTranslate`/`CSSRotate`/`CSSScale`/`CSSSkew`/`CSSSkewX`/`CSSSkewY`/`CSSPerspective`/`CSSMatrixComponent`, каждый с сериализацией (`toString`) и `toMatrix()`, строящим `DOMMatrix` (переиспользован geometry_shim.js); без контекста разрешения (нет элемента/вьюпорта) `toMatrix()` конвертирует длины/углы только через `CSSUnitValue.to()` (тот же UNIT_GROUPS, что и в срезе 1) и бросает `TypeError` на процентах/относительных единицах вместо угадывания used value. Статус остаётся `planned` — `CSSColorValue` семейство не тронуто.",
        "bugs": [
         "BUG-554"
        ]
@@ -8504,13 +8504,6 @@
    "component": "paint (`crates/engine/paint/src/renderer.rs` — `MaskLayerComposite`)",
    "date": null,
    "debtor": true
-  },
-  "BUG-937": {
-   "status": "open",
-   "title": "`postMessage(offscreenCanvas, [offscreenCanvas])` доезжает до воркера сырым сентинелом транспорта: воркер получает `{__lumen_sentinel__, w, h, p}` с конструктор…",
-   "component": "js (`crates/js/src/worker.rs:1685-1693` — установка воркерного контекста; `:542-566` — `_deserializeTransfers`)",
-   "date": null,
-   "debtor": false
   },
   "BUG-940": {
    "status": "open",
@@ -14258,6 +14251,13 @@
    "component": "js/network (`crates/js/src/v8_runtime.rs`, `crates/network/src/websocket/mod.rs`)",
    "date": "2026-09-21",
    "debtor": false
+  },
+  "BUG-937": {
+   "status": "fixed",
+   "title": "`postMessage(offscreenCanvas, [offscreenCanvas])` доезжал до воркера сырым сентинелом транспорта: воркер получал `{__lumen_sentinel__, w, h, p}` с конструктором…",
+   "component": "js (`crates/js/src/worker.rs` — `run_worker_thread_v8`)",
+   "date": "2026-09-21",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14971,9 +14971,6 @@
   "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)": [
    "BUG-712"
   ],
-  "js (`crates/js/src/worker.rs:1685-1693` — установка воркерного контекста; `:542-566` — `_deserializeTransfers`)": [
-   "BUG-937"
-  ],
   "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
    "BUG-766"
   ],
@@ -14985,6 +14982,9 @@
   ],
   "js (`crates/js/src/worker.rs` — `WORKER_SHIM`, бутстрап globals dedicated-воркера; `SHARED_WORKER_SHIM`/`sw_worker.rs` не проверялись)": [
    "BUG-1066"
+  ],
+  "js (`crates/js/src/worker.rs` — `run_worker_thread_v8`)": [
+   "BUG-937"
   ],
   "js (`crates/js/src/worker.rs` — прелюдия воркерного изолята; нативы `_lumen_ws_*` из `crates/js/src/v8_runtime/install/net.rs`)": [
    "BUG-1071"
