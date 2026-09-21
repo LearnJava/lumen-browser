@@ -87,6 +87,7 @@ mod nav_body;
 mod origin;
 mod pool;
 mod range;
+pub mod referrer_policy;
 mod sandbox;
 pub mod socks5;
 pub mod sse;
@@ -98,6 +99,7 @@ pub mod remote;
 pub use remote::RemoteNetworkTransport;
 pub use nav_body::NavigationBody;
 pub use auth::StaticCredentialProvider;
+pub use referrer_policy::ReferrerPolicy;
 pub use ctap2::{CompositeCredentialProvider, CtapRoamingTransport};
 pub use socks5::Socks5Proxy;
 pub use webauthn::VirtualAuthenticator;
@@ -3053,6 +3055,17 @@ pub struct HttpClient {
     /// two headers are separate policies per spec, each firing its own
     /// `document-policy-violation`/`permissions-policy-violation` report.
     sync_xhr_policy: (Option<lumen_core::ext::PolicyDisposition>, Option<lumen_core::ext::PolicyDisposition>),
+    /// GAP-REFERRER срез 1: the document's own URL + referrer policy, used by
+    /// [`Self::fetch_request_impl`] (the shared `fetch()`/`XMLHttpRequest`/
+    /// `sendBeacon` path) to compute the `Referer` header
+    /// ([`referrer_policy::compute_referrer`]) and, for non-GET/HEAD methods,
+    /// the `Origin` header (Fetch §"append a request's Origin header").
+    /// `None` for `HttpClient`s not scoped to a document (WebSocket dialers,
+    /// most tests) — neither header is sent, matching pre-GAP-REFERRER
+    /// behavior. Set once via [`Self::with_document_context`] by the caller
+    /// that owns the document (`crates/shell/src/page_pipeline.rs`), the same
+    /// provenance as `connect_src_policy` above.
+    document_context: Option<(Url, ReferrerPolicy)>,
 }
 
 impl HttpClient {
@@ -3087,7 +3100,20 @@ impl HttpClient {
             object_src_policy: None,
             media_src_policy: None,
             sync_xhr_policy: (None, None),
+            document_context: None,
         }
+    }
+
+    /// Attach the document's own URL + referrer policy — GAP-REFERRER срез 1.
+    /// `referrer_url` is the document's URL (spec's "referrer source");
+    /// `policy` is the resolved referrer policy (this слайс always passes
+    /// [`ReferrerPolicy::default_policy`] — reading `<meta name=referrer>`/
+    /// the `Referrer-Policy` response header is left for a later срез). Only
+    /// [`Self::fetch_request_impl`] reads this.
+    #[must_use]
+    pub fn with_document_context(mut self, referrer_url: Url, policy: ReferrerPolicy) -> Self {
+        self.document_context = Some((referrer_url, policy));
+        self
     }
 
     /// Attach the document's CSP `connect-src` (or `default-src`) gate —
@@ -5261,7 +5287,29 @@ impl HttpClient {
             content_type: b.content_type,
             bytes: b.bytes,
         });
-        let author_headers = build_author_headers(req.headers, request_body.is_some());
+        let mut author_headers = build_author_headers(req.headers, request_body.is_some());
+        // GAP-REFERRER срез 1: `Referer` (Referrer Policy §8.3) and, for
+        // non-GET/HEAD, `Origin` (Fetch §"append a request's Origin header")
+        // — computed from the document context attached at construction time
+        // (`with_document_context`), not from `req.headers`: both are on the
+        // forbidden author-header list (`build_author_headers` already drops
+        // them), so a page can never spoof either through `fetch()`/
+        // `setRequestHeader`.
+        if let Some((referrer_url, policy)) = &self.document_context {
+            if let Some(referer) = referrer_policy::compute_referrer(*policy, referrer_url, &url) {
+                author_headers.push_str("Referer: ");
+                author_headers.push_str(&referer);
+                author_headers.push_str("\r\n");
+            }
+            if method_upper != "GET"
+                && method_upper != "HEAD"
+                && let Ok(doc_origin) = Origin::from_url(referrer_url)
+            {
+                author_headers.push_str("Origin: ");
+                author_headers.push_str(&doc_origin.serialize());
+                author_headers.push_str("\r\n");
+            }
+        }
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
         let (resp, final_url) = fetch_with_redirect(
@@ -10295,6 +10343,125 @@ world\r\n\
         assert!(!req.contains("sid=stolen"), "{req}");
         assert!(!req.contains("X-Smuggled"), "{req}");
         assert!(req.contains("Host: 127.0.0.1\r\n"), "движковый Host обязан уцелеть: {req}");
+    }
+
+    /// GAP-REFERRER срез 1 (гейт для BUG-859): без `with_document_context`
+    /// ни один запрос не несёт `Referer`/`Origin` — это pre-existing
+    /// поведение, которое остальные тесты этого модуля (выше) уже проверяют
+    /// косвенно, но не называют по имени. Явный гейт защищает от регрессии,
+    /// где `document_context` стал бы `Some` по умолчанию.
+    #[test]
+    fn js_fetch_without_document_context_sends_no_referer_or_origin() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let client = HttpClient::new();
+        client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/api"),
+                method: "POST",
+                headers: &[],
+                body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
+                token: None,
+            })
+            .expect("POST must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(!req.to_ascii_lowercase().contains("referer:"), "{req}");
+        assert!(!req.to_ascii_lowercase().contains("origin:"), "{req}");
+    }
+
+    /// GAP-REFERRER срез 1: same-origin `fetch()` carries the full document
+    /// URL as `Referer` under the project default policy
+    /// (`strict-origin-when-cross-origin`) — the exact `control` variant
+    /// BUG-859's direct measurement found silently missing.
+    #[test]
+    fn js_fetch_same_origin_sends_full_referer_and_no_origin_on_get() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let document_url = Url::parse(&format!("http://127.0.0.1:{port}/page.html?x=1")).unwrap();
+        let client = HttpClient::new()
+            .with_document_context(document_url, referrer_policy::ReferrerPolicy::default_policy());
+        client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/api"),
+                method: "GET",
+                headers: &[],
+                body: None,
+                token: None,
+            })
+            .expect("GET must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(
+            req.contains(&format!("Referer: http://127.0.0.1:{port}/page.html?x=1\r\n")),
+            "{req}"
+        );
+        // GET carries no Origin (Fetch §"append a request's Origin header"
+        // only fires for non-GET/HEAD on a same-origin request).
+        assert!(!req.to_ascii_lowercase().contains("origin:"), "{req}");
+    }
+
+    /// GAP-REFERRER срез 1: same-origin POST (the `sendBeacon`/`fetch` POST
+    /// case BUG-859 measured) carries both `Referer` and `Origin`.
+    #[test]
+    fn js_fetch_same_origin_post_sends_referer_and_origin() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let document_url = Url::parse(&format!("http://127.0.0.1:{port}/page.html")).unwrap();
+        let client = HttpClient::new()
+            .with_document_context(document_url, referrer_policy::ReferrerPolicy::default_policy());
+        client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/beacon"),
+                method: "POST",
+                headers: &[],
+                body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
+                token: None,
+            })
+            .expect("POST must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(req.contains(&format!("Referer: http://127.0.0.1:{port}/page.html\r\n")), "{req}");
+        assert!(req.contains(&format!("Origin: http://127.0.0.1:{port}\r\n")), "{req}");
+    }
+
+    /// GAP-REFERRER срез 1: cross-origin request under the default policy
+    /// sends origin-only `Referer` — the second half of `privacy.md`'s
+    /// `strict-origin-when-cross-origin` contract.
+    #[test]
+    fn js_fetch_cross_origin_sends_origin_only_referer() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        // Document URL names a different port — a distinct tuple origin from
+        // the target, exactly like `strict-origin-when-cross-origin`'s
+        // cross-origin branch.
+        let document_url = Url::parse("http://127.0.0.1:1/page.html").unwrap();
+        let client = HttpClient::new()
+            .with_document_context(document_url, referrer_policy::ReferrerPolicy::default_policy());
+        client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/api"),
+                method: "GET",
+                headers: &[],
+                body: None,
+                token: None,
+            })
+            .expect("GET must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(req.contains("Referer: http://127.0.0.1:1\r\n"), "{req}");
     }
 
     /// Тело несёт свой `Content-Type` само (`RequestBody` → `write_request`);
