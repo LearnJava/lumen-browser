@@ -226,6 +226,32 @@ fn collect_multiple_images() {
     assert!(urls.contains(&"b.jpg"));
 }
 
+/// GAP-REFERRER срез 7: `referrerpolicy` на `<img>` собирается наряду с
+/// `crossorigin`; отсутствие атрибута — `None`, не пустая строка.
+#[test]
+fn collect_img_reads_referrerpolicy_attribute() {
+    let doc = lumen_html_parser::parse(
+        r#"<body><img src="a.png" referrerpolicy="no-referrer"><img src="b.png"></body>"#,
+    );
+    let reqs = collect_image_requests(&doc, vp());
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].referrer_policy_attr.as_deref(), Some("no-referrer"));
+    assert_eq!(reqs[1].referrer_policy_attr, None, "absent attribute must be None");
+}
+
+/// `<video poster>` не несёт `referrerpolicy` (HTML LS §6.6 не связывает
+/// атрибут с `<video>`) — BUG-848-путь всегда даёт `None`, даже если сам
+/// автор его написал по ошибке.
+#[test]
+fn collect_video_poster_ignores_referrerpolicy_attribute() {
+    let doc = lumen_html_parser::parse(
+        r#"<body><video poster="p.jpg" referrerpolicy="no-referrer"></video></body>"#,
+    );
+    let reqs = collect_image_requests(&doc, vp());
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].referrer_policy_attr, None);
+}
+
 // ── collect_background_image_requests ────────────────────────────────────
 
 fn layout_with(html: &str, css: &str) -> LayoutBox {
