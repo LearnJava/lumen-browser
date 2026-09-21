@@ -937,9 +937,14 @@ impl V8JsRuntime {
             eprintln!("v8: pointer_capture::install_pointer_capture_bindings_v8 failed: {e}");
         }
         install_v8!(presentation_api::install_presentation_api_v8);
-        // Срез 1 (persist): needs the per-process push-subscription store,
-        // so not the plain `install_v8!` macro (mirrors `pointer_capture` above).
-        if let Err(e) = crate::push_api::install_push_api_v8(self, push_backend.clone()) {
+        // Срез 1 (persist)/срез 5 (SW dispatch): needs the per-process
+        // push-subscription store and the SW worker store, so not the plain
+        // `install_v8!` macro (mirrors `pointer_capture` above).
+        if let Err(e) = crate::push_api::install_push_api_v8(
+            self,
+            push_backend.clone(),
+            self.sw_worker_store.clone(),
+        ) {
             eprintln!("v8: push_api::install_push_api_v8 failed: {e}");
         }
         install_v8!(reporting_api::install_reporting_api_bindings_v8);

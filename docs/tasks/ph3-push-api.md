@@ -123,9 +123,45 @@ warnings` and `-p lumen-js --all-targets --features v8-backend -D warnings` gree
 Remaining: nothing yet calls `push_deliver`/`push_take_pending` from JS — dispatching the
 plaintext into the Service Worker as a `push` event is срез 5.
 
-### Срез 5 — S — Диспатч `push`-события в Service Worker
-При приходе сообщения — сконструировать `PushEvent` (`data`: PushMessageData) и
-диспатчить в SW (`worker.rs`). `pushsubscriptionchange` при ротации подписки.
+### Срез 5 — S — Диспатч `push`-события в Service Worker — **сделано 2026-09-21 (P1)**
+`lumen_core::ext::SwWorkerHandle::tx` расширен с одноцелевого канала фетч-запросов
+до `SwWorkerMessage` (`Fetch`/`Push`/`PushSubscriptionChange`) — то, что реально
+исполняет каждое сообщение, остаётся единственным потоком, владеющим V8-изолятом
+SW (`crates/js/src/sw_worker.rs`, не `worker.rs` — тот для dedicated/shared воркеров).
+`_sw_fire_push(payloadB64)` строит `PushEvent`/`PushMessageData` (`.text()`/`.json()`/
+`.arrayBuffer()`/`.blob()`, байты через тот же base64-конвейер, что и весь остальной
+файл) и вызывает зарегистрированные `push`-обработчики; `_sw_fire_push_subscription_change`
+зеркалит это для `PushSubscriptionChangeEvent` (`oldSubscription`/`newSubscription`,
+минимальный объект с `endpoint`/`getKey()`). `dispatch_push_v8`/
+`dispatch_push_subscription_change_v8` — тонкие Rust-обёртки (глобалы + `eval`), тот же
+паттерн, что `dispatch_fetch_v8`.
+
+Реального push-сервиса нет (см. срез 4) — точка входа "сообщение пришло" —
+`_lumen_push_deliver_test(origin, scope, payloadB64)` (`crates/js/src/push_api.rs`,
+не часть W3C Push API, шим её не оборачивает): декодирует payload, зовёт
+`PushBackend::push_deliver` (RFC 8291 расшифровка, срез 4) → `push_take_pending`
+(плейнтекст) → шлёт `SwWorkerMessage::Push` через `SwWorkerStore` на `(origin, scope)`.
+
+`pushsubscriptionchange`: нет реального push-сервиса, который мог бы ротировать
+подписку сам по себе, поэтому стенд-ин триггер — повторный `subscribe()` для того же
+`(origin, scope)`, у которого уже была подписка (`push_get` до `push_subscribe`
+детектирует замену); первый (не заменяющий) `subscribe()` событие не шлёт.
+
+`install_push_api_v8` получил третий параметр `sw_worker_store: Option<SwWorkerStore>`
+(та же карта, что `install_service_worker`) — `None` (headless/без SW) делает и
+диспатч push, и pushsubscriptionchange безопасными no-op, как остальные push-натива.
+2 новых теста `crates/storage/src/sw_interceptor.rs` (тип канала), 5 новых
+`crates/js/src/sw_worker.rs` (PushEvent/PushMessageData round-trip, отсутствие
+обработчика — no-op, PushSubscriptionChangeEvent, полный цикл через реальный SW-поток
+Push→Fetch-маркер), 4 новых `crates/js/src/push_api.rs` (resubscribe → диспатч с
+верным old/new endpoint, первый subscribe → без диспатча, `_lumen_push_deliver_test`
+без подписки/без бэкенда → `false`). `cargo clippy -p lumen-core -p lumen-storage -p
+lumen-js --all-targets --features lumen-js/v8-backend -D warnings` и
+`cargo check --workspace --all-targets --features lumen-js/v8-backend` зелёные.
+Остаток: `showNotification`/уведомление из `push`-обработчика — отдельная от Push API
+`Notifications`-поверхность, уже реализована (`P3-notifications`), но не проверялась
+именно в связке с `push`-событием; реальный WebPush-транспорт (не mock) вне скоупа
+Push API — нет push-сервиса, который мог бы прислать сообщение с интернета.
 
 ### Срез 6 — XS — Доки
 `CAPABILITIES.md` (JS/ServiceWorker) 🟡; `ROADMAP.md:165` уточнить остаток;
@@ -142,5 +178,5 @@ plaintext into the Service Worker as a `push` event is срез 5.
 - [x] Нативные push-биндинги реализованы, подписки persist в SQLite.
 - [x] Реальные P-256 ключи `p256dh`/`auth`.
 - [x] `permissionState` связан с permission-стором (не хардкод `granted`).
-- [ ] (полный DoD) Доставка WebPush + `push`-событие в SW; при отсутствии сервиса — mock.
-- [ ] Тесты зелёные; `CAPABILITIES.md`/`ROADMAP.md`/`subsystems/` обновлены.
+- [x] (полный DoD) Доставка WebPush + `push`-событие в SW; при отсутствии сервиса — mock.
+- [ ] Тесты зелёные; `CAPABILITIES.md`/`ROADMAP.md`/`subsystems/` обновлены (срез 6).

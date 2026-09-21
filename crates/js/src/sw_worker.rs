@@ -2,9 +2,11 @@
 //!
 //! Each activated SW gets a persistent V8 runtime running in a dedicated
 //! `std::thread`. The shell calls `spawn_sw_worker_v8` when a SW activates;
-//! `ServiceWorkerInterceptor` (lumen-storage) sends `SwFetchRequest` messages
-//! to the thread, which dispatches a `FetchEvent` and returns the response
-//! body. The rquickjs-backed `spawn_sw_worker` was removed in S12b-B17.
+//! `ServiceWorkerInterceptor` (lumen-storage) sends `SwWorkerMessage::Fetch`
+//! messages to the thread, which dispatches a `FetchEvent` and returns the
+//! response body; `lumen-js::push_api` sends `Push`/`PushSubscriptionChange`
+//! (Ph3 push-api срез 5). The rquickjs-backed `spawn_sw_worker` was removed
+//! in S12b-B17.
 
 use std::time::Duration;
 
@@ -14,7 +16,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 #[cfg(feature = "v8-backend")]
-use lumen_core::ext::{CacheBackend, SwFetchRequest, SwWorkerHandle};
+use lumen_core::ext::{CacheBackend, SwWorkerHandle, SwWorkerMessage};
 
 #[cfg(feature = "v8-backend")]
 use crate::v8_compat::{into_v8_fn1, into_v8_fn4};
@@ -329,6 +331,76 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
   }};
 
+  // PushMessageData (Push API L1 §6) — wraps the plaintext bytes handed over
+  // by `_sw_fire_push`. Bytes cross the JS boundary as base64 (same reason as
+  // everywhere else in this file), decoded once and cached on first access
+  // to each accessor's own representation, per spec ("Get the data content").
+  function PushMessageData(bytesB64) {{
+    this._bin = _sw_b64_to_bin(bytesB64);
+  }}
+  PushMessageData.prototype.arrayBuffer = function() {{
+    var b = this._bin, buf = new ArrayBuffer(b.length), view = new Uint8Array(buf);
+    for (var i = 0; i < b.length; i++) view[i] = b.charCodeAt(i) & 0xFF;
+    return buf;
+  }};
+  PushMessageData.prototype.text = function() {{ return _sw_bin_to_utf8(this._bin); }};
+  PushMessageData.prototype.json = function() {{ return JSON.parse(this.text()); }};
+  PushMessageData.prototype.blob = function() {{
+    return new Blob([this.arrayBuffer()]);
+  }};
+  globalThis.PushMessageData = PushMessageData;
+
+  // A minimal PushSubscription-shaped object for `pushsubscriptionchange`'s
+  // `oldSubscription`/`newSubscription` (Push API L1 §5) — not the page-side
+  // `PushSubscription` class (`crate::push_api`'s shim, a different global
+  // scope); this one only needs to carry the fields the spec puts on the
+  // event, `endpoint` and `getKey()`.
+  function _sw_make_subscription(endpoint, p256dhB64, authB64) {{
+    return {{
+      endpoint: endpoint,
+      expirationTime: null,
+      getKey: function(name) {{
+        var b64 = name === 'p256dh' ? p256dhB64 : (name === 'auth' ? authB64 : null);
+        if (!b64) return null;
+        var b = _sw_b64_to_bin(b64), buf = new ArrayBuffer(b.length), view = new Uint8Array(buf);
+        for (var i = 0; i < b.length; i++) view[i] = b.charCodeAt(i) & 0xFF;
+        return buf;
+      }},
+    }};
+  }}
+
+  // _sw_fire_push: dispatch PushEvent (Push API L1 §5). No respondWith-style
+  // return value — the SW's job is `waitUntil(showNotification(...))`
+  // side effects, nothing the Rust side reads back.
+  globalThis._sw_fire_push = function(payloadB64) {{
+    var fns = _handlers['push'] || [];
+    var evt = {{
+      type: 'push',
+      data: new PushMessageData(payloadB64),
+      waitUntil: function(p) {{}},
+    }};
+    for (var i = 0; i < fns.length; i++) {{
+      try {{ fns[i](evt); }} catch(e) {{ }}
+    }}
+  }};
+
+  // _sw_fire_push_subscription_change: dispatch PushSubscriptionChangeEvent
+  // (Push API L1 §5) — fired when `subscribe()` replaces an existing
+  // subscription for this scope (see `crate::push_api`'s `subscribe` native).
+  globalThis._sw_fire_push_subscription_change = function(
+      oldEndpoint, oldP256dhB64, oldAuthB64, newEndpoint, newP256dhB64, newAuthB64) {{
+    var fns = _handlers['pushsubscriptionchange'] || [];
+    var evt = {{
+      type: 'pushsubscriptionchange',
+      oldSubscription: _sw_make_subscription(oldEndpoint, oldP256dhB64, oldAuthB64),
+      newSubscription: _sw_make_subscription(newEndpoint, newP256dhB64, newAuthB64),
+      waitUntil: function(p) {{}},
+    }};
+    for (var i = 0; i < fns.length; i++) {{
+      try {{ fns[i](evt); }} catch(e) {{ }}
+    }}
+  }};
+
   // Minimal console stub.
   globalThis.console = {{
     log: function() {{}}, warn: function() {{}}, error: function() {{}},
@@ -438,7 +510,7 @@ pub(crate) fn spawn_sw_worker_v8(
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
 ) -> SwWorkerHandle {
-    let (tx, rx) = std::sync::mpsc::channel::<SwFetchRequest>();
+    let (tx, rx) = std::sync::mpsc::channel::<SwWorkerMessage>();
     let thread_name = format!("lumen-sw-v8-{origin}{scope}");
     let handle = std::thread::Builder::new()
         .name(thread_name)
@@ -454,7 +526,7 @@ fn run_sw_thread_v8(
     origin: String,
     scope: String,
     script: String,
-    rx: Receiver<SwFetchRequest>,
+    rx: Receiver<SwWorkerMessage>,
     cache_backend: Arc<dyn CacheBackend>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
@@ -491,9 +563,17 @@ fn run_sw_thread_v8(
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('install');}");
     let _ = rt.eval("if(typeof _sw_fire_event==='function'){_sw_fire_event('activate');}");
 
-    while let Ok(req) = rx.recv() {
-        let body = dispatch_fetch_v8(&rt, &req.url, &req.method);
-        let _ = req.response_tx.send(body);
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            SwWorkerMessage::Fetch(req) => {
+                let body = dispatch_fetch_v8(&rt, &req.url, &req.method);
+                let _ = req.response_tx.send(body);
+            }
+            SwWorkerMessage::Push(push) => dispatch_push_v8(&rt, &push.payload),
+            SwWorkerMessage::PushSubscriptionChange(change) => {
+                dispatch_push_subscription_change_v8(&rt, &change)
+            }
+        }
     }
 }
 
@@ -512,6 +592,44 @@ fn dispatch_fetch_v8(rt: &V8JsRuntime, url: &str, method: &str) -> Option<Vec<u8
         Ok(lumen_core::JsValue::String(s)) => Some(s.into_bytes()),
         _ => None,
     }
+}
+
+/// Dispatch a `push` event (Ph3 push-api срез 5): plaintext bytes cross as
+/// base64, same convention as every other byte-carrying native in this file.
+#[cfg(feature = "v8-backend")]
+fn dispatch_push_v8(rt: &V8JsRuntime, payload: &[u8]) {
+    let _ = rt.set_global(
+        "_sw_push_payload__",
+        lumen_core::JsValue::String(base64_encode(payload)),
+    );
+    let _ = rt.eval("if(typeof _sw_fire_push==='function'){_sw_fire_push(_sw_push_payload__);}");
+}
+
+/// Dispatch a `pushsubscriptionchange` event (Ph3 push-api срез 5).
+#[cfg(feature = "v8-backend")]
+fn dispatch_push_subscription_change_v8(
+    rt: &V8JsRuntime,
+    change: &lumen_core::ext::SwPushSubscriptionChangeMessage,
+) {
+    // Endpoints/keys are already plain strings (endpoint) or base64
+    // (p256dh/auth) courtesy of `PushBackend::push_get`'s wire shape — no
+    // further encoding needed before crossing into JS.
+    let args = [
+        change.old.0.clone(),
+        change.old.1.clone(),
+        change.old.2.clone(),
+        change.new.0.clone(),
+        change.new.1.clone(),
+        change.new.2.clone(),
+    ];
+    for (i, arg) in args.iter().enumerate() {
+        let _ = rt.set_global(&format!("_sw_psc_arg{i}__"), lumen_core::JsValue::String(arg.clone()));
+    }
+    let _ = rt.eval(
+        "if(typeof _sw_fire_push_subscription_change==='function'){\
+             _sw_fire_push_subscription_change(_sw_psc_arg0__,_sw_psc_arg1__,_sw_psc_arg2__,\
+                 _sw_psc_arg3__,_sw_psc_arg4__,_sw_psc_arg5__);}",
+    );
 }
 
 /// V8 port of [`install_sw_globals`]. Registers the same three cache natives
@@ -1035,6 +1153,128 @@ mod tests_v8 {
         );
     }
 
+    /// Ph3 push-api срез 5: `_sw_fire_push` builds a `PushEvent` whose `.data`
+    /// (`PushMessageData`) round-trips through `.text()`/`.json()`/
+    /// `.arrayBuffer()` — the three accessors a `push` handler actually uses.
+    #[test]
+    fn sw_fire_push_dispatches_push_event_with_data() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+            .unwrap();
+        rt.eval(
+            "self.addEventListener('push', function(event) {
+                 globalThis.__text = event.data.text();
+                 globalThis.__json = event.data.json().hello;
+                 globalThis.__abLen = event.data.arrayBuffer().byteLength;
+             });",
+        )
+        .unwrap();
+        let json_text = r#"{"hello":"мир"}"#;
+        let payload_b64 = base64_encode(json_text.as_bytes());
+        rt.eval(&format!("_sw_fire_push('{payload_b64}');")).unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__text").unwrap(),
+            lumen_core::JsValue::String(json_text.into())
+        );
+        assert_eq!(
+            rt.eval("globalThis.__json").unwrap(),
+            lumen_core::JsValue::String("мир".into())
+        );
+        assert_eq!(
+            rt.eval("globalThis.__abLen").unwrap(),
+            lumen_core::JsValue::Number(json_text.len() as f64)
+        );
+    }
+
+    /// A `push` handler is optional (spec allows a SW with none registered) —
+    /// firing must not panic/throw when `_handlers['push']` is empty.
+    #[test]
+    fn sw_fire_push_without_handler_is_a_no_op() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+            .unwrap();
+        assert!(rt.eval(&format!("_sw_fire_push('{}');", base64_encode(b"x"))).is_ok());
+    }
+
+    /// Ph3 push-api срез 5: `_sw_fire_push_subscription_change` exposes both
+    /// `oldSubscription`/`newSubscription` with a working `endpoint`/`getKey()`.
+    #[test]
+    fn sw_fire_push_subscription_change_dispatches_event() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+            .unwrap();
+        rt.eval(
+            "self.addEventListener('pushsubscriptionchange', function(event) {
+                 globalThis.__old = event.oldSubscription.endpoint;
+                 globalThis.__new = event.newSubscription.endpoint;
+                 globalThis.__newKeyLen = new Uint8Array(event.newSubscription.getKey('p256dh')).length;
+             });",
+        )
+        .unwrap();
+        let old_p256dh = base64_encode(&[1u8; 65]);
+        let new_p256dh = base64_encode(&[2u8; 65]);
+        rt.eval(&format!(
+            "_sw_fire_push_subscription_change('https://push.example/old','{old_p256dh}','',
+                                                'https://push.example/new','{new_p256dh}','');"
+        ))
+        .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__old").unwrap(),
+            lumen_core::JsValue::String("https://push.example/old".into())
+        );
+        assert_eq!(
+            rt.eval("globalThis.__new").unwrap(),
+            lumen_core::JsValue::String("https://push.example/new".into())
+        );
+        assert_eq!(rt.eval("globalThis.__newKeyLen").unwrap(), lumen_core::JsValue::Number(65.0));
+    }
+
+    /// End-to-end through the real SW thread: `SwWorkerMessage::Push` sent on
+    /// `handle.tx` reaches the running V8 isolate and fires the `push`
+    /// handler. There is no response channel for `Push` (unlike `Fetch`), so
+    /// the push handler stashes its result where a follow-up `fetch` can read
+    /// it back — the SW's message loop is a single `rx.recv()` FIFO, so the
+    /// `Fetch` sent right after is guaranteed to process after the `Push`.
+    #[test]
+    fn v8_sw_push_message_dispatches_through_worker_thread() {
+        let cache = MockCache::new();
+        let handle = spawn_sw_worker_v8(
+            "https://example.com".to_string(),
+            "/".to_string(),
+            r#"
+var __received = null;
+self.addEventListener('push', function(event) { __received = event.data.text(); });
+self.addEventListener('fetch', function(event) {
+    event.respondWith(Promise.resolve(new Response(__received || 'ничего')));
+});
+"#
+            .to_string(),
+            Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
+        );
+
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Push(lumen_core::ext::SwPushMessage {
+                payload: "привет с сервера".as_bytes().to_vec(),
+            }))
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle
+            .tx
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
+                url: "https://example.com/marker".to_string(),
+                method: "GET".to_string(),
+                response_tx: tx,
+            }))
+            .unwrap();
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(result, Some("привет с сервера".as_bytes().to_vec()));
+    }
+
     /// `indexedDB` в области воркера. `sw.js` t-банка обращается к ней на
     /// верхнем уровне; пока класса не было, воркер умирал там же, где и на
     /// `importScripts` — до регистрации обработчиков.
@@ -1166,11 +1406,11 @@ self.addEventListener('fetch', function(event) {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         handle
             .tx
-            .send(lumen_core::ext::SwFetchRequest {
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
                 url: "https://example.com/api/data".to_string(),
                 method: "GET".to_string(),
                 response_tx: tx,
-            })
+            }))
             .unwrap();
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
@@ -1198,11 +1438,11 @@ self.addEventListener('fetch', function(event) {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         handle
             .tx
-            .send(lumen_core::ext::SwFetchRequest {
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
                 url: "https://example.com/missing.js".to_string(),
                 method: "GET".to_string(),
                 response_tx: tx,
-            })
+            }))
             .unwrap();
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
@@ -1225,11 +1465,11 @@ self.addEventListener('fetch', function(event) {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         handle
             .tx
-            .send(lumen_core::ext::SwFetchRequest {
+            .send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
                 url: "https://example.com/page".to_string(),
                 method: "GET".to_string(),
                 response_tx: tx,
-            })
+            }))
             .unwrap();
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();

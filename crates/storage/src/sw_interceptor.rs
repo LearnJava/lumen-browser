@@ -110,15 +110,15 @@ impl ServiceWorkerInterceptor {
     /// `respondWith()` body. Returns `None` on timeout, channel error, or when
     /// the SW did not call `respondWith()` with a body.
     fn dispatch_to_worker(
-        tx: &std::sync::mpsc::Sender<lumen_core::ext::SwFetchRequest>,
+        tx: &std::sync::mpsc::Sender<lumen_core::ext::SwWorkerMessage>,
         url: &Url,
     ) -> Option<Vec<u8>> {
         let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-        tx.send(lumen_core::ext::SwFetchRequest {
+        tx.send(lumen_core::ext::SwWorkerMessage::Fetch(lumen_core::ext::SwFetchRequest {
             url: url.to_string(),
             method: "GET".to_string(),
             response_tx,
-        })
+        }))
         .ok()?;
         // Wait up to 5 s for the SW to respond.
         response_rx
@@ -259,9 +259,12 @@ mod tests {
         match_url: &'static str,
         body: &'static [u8],
     ) -> lumen_core::ext::SwWorkerHandle {
-        let (tx, rx) = std::sync::mpsc::channel::<lumen_core::ext::SwFetchRequest>();
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_core::ext::SwWorkerMessage>();
         let thread = std::thread::spawn(move || {
-            while let Ok(req) = rx.recv() {
+            while let Ok(msg) = rx.recv() {
+                let lumen_core::ext::SwWorkerMessage::Fetch(req) = msg else {
+                    continue;
+                };
                 let resp = if req.url == match_url {
                     Some(body.to_vec())
                 } else {
