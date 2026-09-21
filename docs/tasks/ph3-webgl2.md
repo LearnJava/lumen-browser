@@ -25,10 +25,10 @@ WebGL **1.0** уже функционален; «webgl2» пока только 
   `vertexAttribPointer`/`enableVertexAttribArray`, `uniform1f..4f`/`uniform1i`/
   `uniformMatrix4fv`, `activeTexture`/`bindTexture`/`texImage2D`, `drawArrays`,
   `readPixels`.
-- `crates/js/src/webgl_bindings.rs:40` — старый `WEBGL_SHIM`: **stub** для
-  `webgl`/`webgl2`, только `getParameter(UNMASKED_*)` для нормализации
-  fingerprint. Никакого рендера. Возвращает `is_webgl2 ? 'WebGL 2.0'` строки
-  (`webgl_bindings.rs:67`) — это косметика, не движок.
+- `crates/js/src/webgl_bindings.rs` — старый fingerprint-only `WEBGL_SHIM` (dead
+  file: не объявлен как `mod` в `lib.rs`, ни во что не компилируется). Срез 1
+  подтвердил, что он не мог перекрывать функциональный шим — упоминание ниже
+  было устаревшим.
 - `crates/engine/paint/src/webgl.rs:114` — `SoftwareWebGl`: CPU-растеризатор.
   `draw_arrays` (`webgl.rs:498`) с shaded-путём и flat-fill fallback.
   `drawElements` реализован (срез 2, 2026-09-21) — общий `draw_indexed` путь.
@@ -53,13 +53,26 @@ WebGL **1.0** уже функционален; «webgl2» пока только 
 
 ## Срезы (декомпозиция)
 
-### Срез 1 — S — `getContext('webgl2')` возвращает функциональный контекст
-В `WEBGL_SHIM` (`webgl_canvas.rs:220`) сейчас `getContext` обрабатывает `'webgl'`
-(проверить точную ветку в файле после стр. 279). Добавить обработку `'webgl2'`/
-`'experimental-webgl2'` → тот же `_makeContext(cid)` + флаг `is_webgl2`, чтобы
-`getParameter(VERSION)` вернул `'WebGL 2.0'`, а также добавить WebGL2-константы
-(`UNIFORM_BUFFER`, `SYNC_*`, `RGBA8`, `HALF_FLOAT` и т.п.). Убедиться, что
-fingerprint-shim `webgl_bindings.rs` не затирает функциональный webgl2.
+### Срез 1 — S — `getContext('webgl2')` возвращает функциональный контекст — DONE 2026-09-21 (P1)
+`_makeContext(cid, isWebgl2)` (`webgl_canvas.rs:135`) получил второй параметр:
+`getContext` (`webgl_canvas.rs:391`) передаёт `t === 'webgl2'` при создании
+контекста (тот же `_ctx`, что и для `'webgl'`/`'experimental-webgl'` — контекст
+один функциональный объект на канвас, различаются только версия и набор
+enum'ов). `getParameter(VERSION)`/`SHADING_LANGUAGE_VERSION` теперь возвращают
+`'WebGL 2.0'`/`'WebGL GLSL ES 3.00'` для webgl2-контекста вместо всегда
+`'WebGL 1.0'`. Добавлены WebGL2-only enum'ы (`RGBA8`, `HALF_FLOAT`,
+`UNIFORM_BUFFER`, `PIXEL_PACK_BUFFER`/`PIXEL_UNPACK_BUFFER`,
+`COPY_READ_BUFFER`/`COPY_WRITE_BUFFER`, `TRANSFORM_FEEDBACK_BUFFER`,
+`SYNC_GPU_COMMANDS_COMPLETE`/`SYNC_FLUSH_COMMANDS_BIT`,
+`ALREADY_SIGNALED`/`TIMEOUT_EXPIRED`/`CONDITION_SATISFIED`/`WAIT_FAILED`) —
+условно, только на webgl2-контексте (`gl.UNIFORM_BUFFER === undefined` на
+webgl1, как и в реальных браузерах, для feature-detection). `webgl_bindings.rs`
+(старый fingerprint-stub) не подключён как модуль (`lib.rs` не содержит `mod
+webgl_bindings`) — не мог затирать функциональный контекст, документация была
+устаревшей. 5 новых тестов `webgl_canvas.rs` (версия 1 vs 2, отсутствие/наличие
+WebGL2-enum'ов, полный draw+readback pipeline на webgl2-контексте). `cargo
+clippy -p lumen-js -p lumen-paint --all-targets --features lumen-js/v8-backend
+-D warnings` зелёные.
 
 ### Срез 2 — S — `drawElements` + `ELEMENT_ARRAY_BUFFER` — DONE 2026-09-21 (P1)
 `SoftwareWebGl` получил отдельное хранилище индексов (`element_buffers`,
@@ -131,7 +144,7 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 
 ## Definition of done
 
-- [ ] `getContext('webgl2')` возвращает функциональный контекст (не fingerprint-stub).
+- [x] **`getContext('webgl2')` возвращает функциональный контекст** (не fingerprint-stub) — срез 1, 2026-09-21.
 - [x] **`drawElements` + `ELEMENT_ARRAY_BUFFER`** (u8/u16/u32 индексы) работают — срез 2, 2026-09-21.
 - [ ] VAO (`createVertexArray`/`bindVertexArray`) реализованы.
 - [ ] GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется.
