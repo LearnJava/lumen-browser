@@ -207,6 +207,12 @@ pub struct Stylesheet {
     /// parse+store. Применение при первом match (transition-from-display)
     /// отложено вместе с реальным transition runtime.
     pub starting_style_rules: Vec<StartingStyleRule>,
+    /// CSS View Transitions Module Level 2 §3 — `@view-transition { navigation:
+    /// auto | none; }`. Phase 0: parse+store. Cross-document (MPA) opt-in
+    /// detection (both documents must declare `navigation: auto`, same-origin)
+    /// and the actual navigation-transition pipeline are shell-side
+    /// (`docs/tasks/ph3-view-transitions-mpa.md` срезы 2+).
+    pub view_transition_rules: Vec<ViewTransitionRule>,
     /// CSS Containment L3 §3 — `@container <name>? (cond) { rules }`.
     /// Условие хранится как сырая строка (типизация query — отложена,
     /// нужна полная media-query-like grammar для container features).
@@ -346,6 +352,7 @@ impl Default for Stylesheet {
             page_rules: Vec::new(),
             scope_rules: Vec::new(),
             starting_style_rules: Vec::new(),
+            view_transition_rules: Vec::new(),
             container_rules: Vec::new(),
             font_palette_values: Vec::new(),
             color_profiles: Vec::new(),
@@ -382,6 +389,7 @@ impl Clone for Stylesheet {
             page_rules: self.page_rules.clone(),
             scope_rules: self.scope_rules.clone(),
             starting_style_rules: self.starting_style_rules.clone(),
+            view_transition_rules: self.view_transition_rules.clone(),
             container_rules: self.container_rules.clone(),
             font_palette_values: self.font_palette_values.clone(),
             color_profiles: self.color_profiles.clone(),
@@ -418,6 +426,7 @@ impl PartialEq for Stylesheet {
             && self.page_rules == other.page_rules
             && self.scope_rules == other.scope_rules
             && self.starting_style_rules == other.starting_style_rules
+            && self.view_transition_rules == other.view_transition_rules
             && self.container_rules == other.container_rules
             && self.font_palette_values == other.font_palette_values
             && self.color_profiles == other.color_profiles
@@ -467,6 +476,7 @@ impl Stylesheet {
             page_rules,
             scope_rules,
             starting_style_rules,
+            view_transition_rules,
             container_rules,
             font_palette_values,
             color_profiles,
@@ -489,6 +499,7 @@ impl Stylesheet {
         self.page_rules.extend(page_rules);
         self.scope_rules.extend(scope_rules);
         self.starting_style_rules.extend(starting_style_rules);
+        self.view_transition_rules.extend(view_transition_rules);
         self.container_rules.extend(container_rules);
         self.font_palette_values.extend(font_palette_values);
         self.color_profiles.extend(color_profiles);
@@ -1148,6 +1159,7 @@ impl<'a> Parser<'a> {
         let mut page_rules: Vec<PageRule> = Vec::new();
         let mut scope_rules: Vec<ScopeRule> = Vec::new();
         let mut starting_style_rules: Vec<StartingStyleRule> = Vec::new();
+        let mut view_transition_rules: Vec<ViewTransitionRule> = Vec::new();
         let mut container_rules: Vec<ContainerRule> = Vec::new();
         let mut color_profiles: Vec<ColorProfileRule> = Vec::new();
         let mut function_rules: Vec<FunctionRule> = Vec::new();
@@ -1230,6 +1242,9 @@ impl<'a> Parser<'a> {
                                 starting_style_rules.push(s)
                             }
                             AtRuleOutcome::Container(c) => container_rules.push(c),
+                            AtRuleOutcome::ViewTransition(v) => {
+                                view_transition_rules.push(v)
+                            }
                             AtRuleOutcome::None => {}
                         }
                     }
@@ -1311,6 +1326,7 @@ impl<'a> Parser<'a> {
             page_rules,
             scope_rules,
             starting_style_rules,
+            view_transition_rules,
             container_rules,
             color_profiles,
             function_rules,
@@ -1828,3 +1844,7 @@ mod nesting_tests;
 #[cfg(test)]
 #[path = "parser/tests/recovery.rs"]
 mod recovery_tests;
+
+#[cfg(test)]
+#[path = "parser/tests/view_transitions.rs"]
+mod view_transitions_tests;

@@ -137,6 +137,27 @@ pub struct StartingStyleRule {
     pub rules: Vec<Rule>,
 }
 
+/// `navigation` descriptor of `@view-transition` — CSS View Transitions
+/// Module Level 2 §3. `Auto` opts the document in to cross-document (MPA)
+/// view transitions; the initial/default value is `None` (no opt-in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewTransitionNavigation {
+    #[default]
+    None,
+    Auto,
+}
+
+/// `@view-transition { navigation: auto | none; }` — CSS View Transitions
+/// Module Level 2 §3. No prelude (unlike `@page`/`@counter-style`); the
+/// block holds a single `navigation` descriptor consumed by the shell's
+/// cross-document navigation pipeline (`docs/tasks/ph3-view-transitions-mpa.md`
+/// срез 2) to decide whether a same-origin navigation should snapshot the
+/// departing document and cross-fade into the arriving one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ViewTransitionRule {
+    pub navigation: ViewTransitionNavigation,
+}
+
 /// `@keyframes name { offset { decls } ... }` — CSS Animations L1 §3.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyframesRule {
@@ -360,6 +381,7 @@ pub(crate) enum AtRuleOutcome {
     Scope(ScopeRule),
     StartingStyle(StartingStyleRule),
     Container(ContainerRule),
+    ViewTransition(ViewTransitionRule),
     ColorProfile(ColorProfileRule),
     Function(FunctionRule),
     Mixin(MixinRule),
@@ -808,6 +830,11 @@ impl<'a> Parser<'a> {
             return self
                 .parse_mixin_rule()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::Mixin);
+        }
+        if name.eq_ignore_ascii_case("view-transition") {
+            return self
+                .parse_view_transition_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::ViewTransition);
         }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
@@ -1446,6 +1473,34 @@ impl<'a> Parser<'a> {
             selector,
             declarations,
         })
+    }
+
+    /// Парсит `@view-transition { navigation: auto | none; }` — CSS View
+    /// Transitions Module Level 2 §3. No prelude — the block goes straight
+    /// after the at-keyword. Unknown descriptors and unrecognized
+    /// `navigation` values are ignored (lenient, like every other at-rule
+    /// descriptor block here); a missing `navigation` descriptor keeps the
+    /// spec default (`None`, no opt-in).
+    pub(crate) fn parse_view_transition_rule(&mut self) -> Option<ViewTransitionRule> {
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let declarations = self.parse_declaration_block();
+        let mut navigation = ViewTransitionNavigation::None;
+        for d in &declarations {
+            if d.property.eq_ignore_ascii_case("navigation") {
+                let v = d.value.trim();
+                if v.eq_ignore_ascii_case("auto") {
+                    navigation = ViewTransitionNavigation::Auto;
+                } else if v.eq_ignore_ascii_case("none") {
+                    navigation = ViewTransitionNavigation::None;
+                }
+            }
+        }
+        Some(ViewTransitionRule { navigation })
     }
 
     /// Парсит `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6.
