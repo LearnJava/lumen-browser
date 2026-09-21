@@ -50,6 +50,13 @@ pub const ARRAY_BUFFER: u32 = 0x8892;
 /// `gl.ELEMENT_ARRAY_BUFFER` bind target.
 pub const ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 
+/// `gl.UNSIGNED_BYTE` index/component type (1 byte per element).
+pub const UNSIGNED_BYTE: u32 = 0x1401;
+/// `gl.UNSIGNED_SHORT` index/component type (2 bytes per element).
+pub const UNSIGNED_SHORT: u32 = 0x1403;
+/// `gl.UNSIGNED_INT` index/component type (4 bytes per element).
+pub const UNSIGNED_INT: u32 = 0x1405;
+
 /// `gl.COLOR_BUFFER_BIT` clear mask.
 pub const COLOR_BUFFER_BIT: u32 = 0x4000;
 /// `gl.DEPTH_BUFFER_BIT` clear mask (no-op: software path has no depth buffer).
@@ -126,6 +133,12 @@ pub struct SoftwareWebGl {
     buffers: HashMap<u32, Vec<f32>>,
     /// Currently bound `ARRAY_BUFFER` id (0 = none).
     bound_array_buffer: u32,
+    /// Index buffer storage: id → u32-widened indices uploaded via `bufferData`
+    /// against `ELEMENT_ARRAY_BUFFER` (source may be `Uint8Array`/`Uint16Array`/
+    /// `Uint32Array`; widened once here so `draw_elements` doesn't care).
+    element_buffers: HashMap<u32, Vec<u32>>,
+    /// Currently bound `ELEMENT_ARRAY_BUFFER` id (0 = none).
+    bound_element_array_buffer: u32,
     /// Monotonic id allocator for buffers.
     next_buffer_id: u32,
     /// Shader objects by id.
@@ -178,6 +191,8 @@ impl SoftwareWebGl {
             viewport: (0, 0, w as i32, h as i32),
             buffers: HashMap::new(),
             bound_array_buffer: 0,
+            element_buffers: HashMap::new(),
+            bound_element_array_buffer: 0,
             next_buffer_id: 1,
             shaders: HashMap::new(),
             next_shader_id: 1,
@@ -259,12 +274,13 @@ impl SoftwareWebGl {
         id
     }
 
-    /// `gl.bindBuffer(target, buffer)`. `buffer == 0` unbinds. Only
-    /// `ARRAY_BUFFER` is tracked; `ELEMENT_ARRAY_BUFFER` is accepted but unused
-    /// (indexed `drawElements` is not implemented).
+    /// `gl.bindBuffer(target, buffer)`. `buffer == 0` unbinds. Tracks both
+    /// `ARRAY_BUFFER` (vertex data) and `ELEMENT_ARRAY_BUFFER` (indices).
     pub fn bind_buffer(&mut self, target: u32, buffer: u32) {
         if target == ARRAY_BUFFER {
             self.bound_array_buffer = buffer;
+        } else if target == ELEMENT_ARRAY_BUFFER {
+            self.bound_element_array_buffer = buffer;
         }
     }
 
@@ -273,6 +289,16 @@ impl SoftwareWebGl {
     pub fn buffer_data_f32(&mut self, target: u32, data: Vec<f32>) {
         if target == ARRAY_BUFFER && self.bound_array_buffer != 0 {
             self.buffers.insert(self.bound_array_buffer, data);
+        }
+    }
+
+    /// `gl.bufferData(ELEMENT_ARRAY_BUFFER, data, usage)` for index data.
+    /// Stores `data` (already widened to u32 by the caller, regardless of the
+    /// source typed array's element type) against the currently bound
+    /// `ELEMENT_ARRAY_BUFFER`.
+    pub fn buffer_data_elements(&mut self, target: u32, data: Vec<u32>) {
+        if target == ELEMENT_ARRAY_BUFFER && self.bound_element_array_buffer != 0 {
+            self.element_buffers.insert(self.bound_element_array_buffer, data);
         }
     }
 
@@ -501,14 +527,56 @@ impl SoftwareWebGl {
         }
         let first = first as usize;
         let count = count as usize;
+        let indices: Vec<usize> = (first..first + count).collect();
+        self.draw_indexed(mode, &indices);
+    }
+
+    /// `gl.drawElements(mode, count, type, offset)`. Indexed variant of
+    /// [`Self::draw_arrays`]: vertex indices are sourced from the bound
+    /// `ELEMENT_ARRAY_BUFFER` instead of a contiguous range. `offset` is in
+    /// **bytes** (WebGL semantics); `gl_type` selects the byte width used to
+    /// convert it to an element start index (`UNSIGNED_BYTE`/`_SHORT`/`_INT`).
+    pub fn draw_elements(&mut self, mode: u32, count: i32, gl_type: u32, offset_bytes: i32) {
+        if count <= 0 || offset_bytes < 0 {
+            return;
+        }
+        let elem_size = match gl_type {
+            UNSIGNED_BYTE => 1,
+            UNSIGNED_SHORT => 2,
+            UNSIGNED_INT => 4,
+            _ => return,
+        };
+        let start = offset_bytes as usize / elem_size;
+        let count = count as usize;
+        let idx_buf = match self.element_buffers.get(&self.bound_element_array_buffer) {
+            Some(b) => b,
+            None => return,
+        };
+        let end = match start.checked_add(count) {
+            Some(e) if e <= idx_buf.len() => e,
+            _ => return,
+        };
+        let indices: Vec<usize> = idx_buf[start..end].iter().map(|&v| v as usize).collect();
+        self.draw_indexed(mode, &indices);
+    }
+
+    /// Shared draw path for [`Self::draw_arrays`] and [`Self::draw_elements`]:
+    /// runs the shaded pipeline if a program is linked, else flat-fills with
+    /// `draw_color`. `indices` is the vertex index for each element to draw,
+    /// in draw order (a contiguous range for `drawArrays`, index-buffer
+    /// contents for `drawElements`).
+    fn draw_indexed(&mut self, mode: u32, indices: &[usize]) {
+        if indices.is_empty() {
+            return;
+        }
 
         // Try shaded path (returns false → fall through to flat-fill fallback).
-        if self.draw_arrays_shaded(mode, first, count) {
+        if self.draw_arrays_shaded(mode, indices) {
             return;
         }
 
         // ── Flat-fill fallback (task #28 behaviour) ───────────────────────
-        let positions = match self.collect_positions(first, count) {
+        let positions = match self.collect_positions(indices) {
             Some(p) if !p.is_empty() => p,
             _ => return,
         };
@@ -557,10 +625,11 @@ impl SoftwareWebGl {
 
     // ── GLSL shaded draw path ────────────────────────────────────────────────
 
-    /// Try to execute the active vertex + fragment program for `drawArrays`.
-    /// Returns `false` when no program is active or shaders are not yet parsed,
-    /// in which case the caller should fall back to flat-fill.
-    fn draw_arrays_shaded(&mut self, mode: u32, first: usize, count: usize) -> bool {
+    /// Try to execute the active vertex + fragment program for `drawArrays`/
+    /// `drawElements`. Returns `false` when no program is active or shaders
+    /// are not yet parsed, in which case the caller should fall back to
+    /// flat-fill. `indices` gives the vertex index to run per draw element.
+    fn draw_arrays_shaded(&mut self, mode: u32, indices: &[usize]) -> bool {
         let prog_id = self.current_program;
         if prog_id == 0 { return false; }
 
@@ -586,8 +655,8 @@ impl SoftwareWebGl {
         let uniform_map = self.build_uniform_map(prog_id);
 
         // Execute vertex shader for each vertex.
-        let mut vertices: Vec<VertexOutput> = Vec::with_capacity(count);
-        for vi in first..first + count {
+        let mut vertices: Vec<VertexOutput> = Vec::with_capacity(indices.len());
+        for &vi in indices {
             let attrs = self.collect_vertex_attribs(vi, &attrib_locs);
             let mut env = glsl::ShaderEnv::new(&uniform_map);
             // Seed gl_Position from attribute 0 (conventional position attribute)
@@ -799,8 +868,8 @@ impl SoftwareWebGl {
 
     // ── Internal rasterization ──────────────────────────────────────────────
 
-    /// Gather NDC `(x, y)` for vertices `first..first+count` from attribute 0.
-    fn collect_positions(&self, first: usize, count: usize) -> Option<Vec<(f32, f32)>> {
+    /// Gather NDC `(x, y)` for the given vertex `indices` from attribute 0.
+    fn collect_positions(&self, indices: &[usize]) -> Option<Vec<(f32, f32)>> {
         let attr = self.attribs.get(&0)?;
         if !attr.enabled || attr.size < 2 {
             return None;
@@ -811,8 +880,8 @@ impl SoftwareWebGl {
         } else {
             attr.stride_floats
         };
-        let mut out = Vec::with_capacity(count);
-        for v in first..first + count {
+        let mut out = Vec::with_capacity(indices.len());
+        for &v in indices {
             let base = attr.offset_floats + v * stride;
             if base + 1 >= data.len() {
                 break;
@@ -1122,6 +1191,88 @@ mod tests {
         gl.uniform4f(0, 1.0, 0.0, 0.0, 1.0);
         gl.draw_arrays(TRIANGLES, 0, 0);
         assert_eq!(gl.pixel(0, 0), [0, 0, 0, 0]);
+    }
+
+    /// Upload a u32 index buffer and bind it as `ELEMENT_ARRAY_BUFFER`.
+    fn setup_indices(gl: &mut SoftwareWebGl, indices: &[u32]) {
+        let buf = gl.create_buffer();
+        gl.bind_buffer(ELEMENT_ARRAY_BUFFER, buf);
+        gl.buffer_data_elements(ELEMENT_ARRAY_BUFFER, indices.to_vec());
+    }
+
+    #[test]
+    fn draw_elements_indexed_quad() {
+        // 4 unique vertices forming a full-viewport quad, referenced twice each
+        // via an index buffer describing two triangles (0,1,2) and (2,1,3).
+        let mut gl = SoftwareWebGl::new(8, 8);
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+        setup_indices(&mut gl, &[0, 1, 2, 2, 1, 3]);
+        gl.uniform4f(0, 0.0, 1.0, 0.0, 1.0); // opaque green
+        gl.draw_elements(TRIANGLES, 6, UNSIGNED_INT, 0);
+        assert_eq!(gl.pixel(4, 4), [0, 255, 0, 255]);
+        assert_eq!(gl.pixel(0, 0), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn draw_elements_honors_byte_offset() {
+        // Skip the first (degenerate) triangle by offsetting past it.
+        let mut gl = SoftwareWebGl::new(8, 8);
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+        // First triangle is degenerate (0,0,0); real triangle starts at index 3.
+        setup_indices(&mut gl, &[0, 0, 0, 0, 1, 2]);
+        gl.uniform4f(0, 1.0, 0.0, 0.0, 1.0);
+        gl.draw_elements(TRIANGLES, 3, UNSIGNED_INT, 3 * 4); // 3 indices * 4 bytes each
+        assert_eq!(gl.pixel(0, 7), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn draw_elements_without_index_buffer_is_noop() {
+        let mut gl = SoftwareWebGl::new(4, 4);
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+        gl.uniform4f(0, 1.0, 0.0, 0.0, 1.0);
+        gl.draw_elements(TRIANGLES, 3, UNSIGNED_SHORT, 0);
+        assert_eq!(gl.pixel(0, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn draw_elements_out_of_range_is_noop() {
+        let mut gl = SoftwareWebGl::new(4, 4);
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+        setup_indices(&mut gl, &[0, 1, 2]);
+        gl.uniform4f(0, 1.0, 0.0, 0.0, 1.0);
+        // Requesting 6 indices past a 3-element buffer must not panic or draw.
+        gl.draw_elements(TRIANGLES, 6, UNSIGNED_INT, 0);
+        assert_eq!(gl.pixel(0, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn draw_elements_shaded_path_runs_program() {
+        let mut gl = SoftwareWebGl::new(8, 8);
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+        setup_indices(&mut gl, &[0, 1, 2, 2, 1, 3]);
+
+        let vs = gl.create_shader(VERTEX_SHADER);
+        gl.shader_source(vs, "void main(){ gl_Position = a_position; }".into());
+        gl.compile_shader(vs);
+        let fs = gl.create_shader(FRAGMENT_SHADER);
+        gl.shader_source(fs, "void main(){ gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0); }".into());
+        gl.compile_shader(fs);
+        let prog = gl.create_program();
+        gl.attach_shader(prog, vs);
+        gl.attach_shader(prog, fs);
+        gl.link_program(prog);
+        gl.use_program(prog);
+        // Attribute location 0 must resolve to `a_position` for the vertex
+        // shader above to see the uploaded position buffer.
+        gl.get_attrib_location(prog, "a_position");
+
+        gl.draw_elements(TRIANGLES, 6, UNSIGNED_INT, 0);
+        assert_eq!(gl.pixel(4, 4), [0, 0, 255, 255]);
     }
 
     #[test]

@@ -31,8 +31,8 @@ WebGL **1.0** уже функционален; «webgl2» пока только 
   (`webgl_bindings.rs:67`) — это косметика, не движок.
 - `crates/engine/paint/src/webgl.rs:114` — `SoftwareWebGl`: CPU-растеризатор.
   `draw_arrays` (`webgl.rs:498`) с shaded-путём и flat-fill fallback.
-  **Нет**: `drawElements` (индексы; `ELEMENT_ARRAY_BUFFER` принимается, но не
-  используется — см. `webgl.rs:263`), VAO, instancing, MRT, UBO.
+  `drawElements` реализован (срез 2, 2026-09-21) — общий `draw_indexed` путь.
+  **Нет**: VAO, instancing, MRT, UBO.
 - `crates/engine/paint/src/glsl.rs:1` — GLSL ES **1.0** интерпретатор.
   `glsl.rs:24` явно: `#version` и препроцессор **не поддержаны**; `attribute`/
   `varying`/`gl_FragColor` (ES 1.0), а не `in`/`out`/`texture()` (ES 3.0).
@@ -61,12 +61,25 @@ WebGL **1.0** уже функционален; «webgl2» пока только 
 (`UNIFORM_BUFFER`, `SYNC_*`, `RGBA8`, `HALF_FLOAT` и т.п.). Убедиться, что
 fingerprint-shim `webgl_bindings.rs` не затирает функциональный webgl2.
 
-### Срез 2 — S — `drawElements` + `ELEMENT_ARRAY_BUFFER`
-`webgl.rs:273` `buffer_data_f32` хранит только float-буферы; добавить хранение
-u16/u32 индексов для `ELEMENT_ARRAY_BUFFER`. Новый метод
-`SoftwareWebGl::draw_elements(mode, count, type, offset)` по образцу
-`draw_arrays` (`webgl.rs:498`), но обходящий вершины через индексный буфер.
-Прокинуть натив `_lumen_webgl_draw_elements` и JS-метод `gl.drawElements`.
+### Срез 2 — S — `drawElements` + `ELEMENT_ARRAY_BUFFER` — DONE 2026-09-21 (P1)
+`SoftwareWebGl` получил отдельное хранилище индексов (`element_buffers`,
+`bound_element_array_buffer`, `buffer_data_elements`) — `bind_buffer` теперь
+трекает оба таргета (`ARRAY_BUFFER`/`ELEMENT_ARRAY_BUFFER`), индексы всегда
+хранятся расширенными до u32 независимо от исходного типа (`Uint8Array`/
+`Uint16Array`/`Uint32Array`). `draw_arrays`/`draw_arrays_shaded`/
+`collect_positions` рефакторены на общий `draw_indexed(mode, indices: &[usize])`:
+`drawArrays` передаёт непрерывный диапазон, новый `draw_elements(mode, count,
+gl_type, offset_bytes)` — срез индексного буфера (offset в байтах, gl_type ∈
+`UNSIGNED_BYTE`/`_SHORT`/`_INT` даёт размер элемента для конвертации в индекс
+начала); оба пути делят и шейдерный, и flat-fill рендер без дублирования.
+JS-шим: `_lumen_webgl_buffer_data_elements` (новый натив, `bufferData` в
+`webgl_canvas.rs` роутит по таргету), `gl.drawElements` → `_lumen_webgl_draw_elements`
+(тот же `present()`-хук после мутации framebuffer, что и `drawArrays`). 5 новых
+тестов `webgl.rs` (индексированный quad, byte-offset, отсутствующий индексный
+буфер — noop, выход за границы — noop не паникует, шейдерный путь) + 1 новый
+V8-тест `webgl_canvas.rs` (полный pipeline с `Uint16Array`-индексами через
+`readPixels`). `cargo clippy -p lumen-paint -p lumen-js --all-targets --features
+lumen-js/v8-backend -D warnings` зелёные.
 
 ### Срез 3 — S/M — VAO (`createVertexArray`/`bindVertexArray`)
 Сейчас атрибуты — плоский `attribs: HashMap<u32, AttribPointer>`
@@ -119,7 +132,7 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 ## Definition of done
 
 - [ ] `getContext('webgl2')` возвращает функциональный контекст (не fingerprint-stub).
-- [ ] `drawElements` + `ELEMENT_ARRAY_BUFFER` (u16/u32 индексы) работают.
+- [x] **`drawElements` + `ELEMENT_ARRAY_BUFFER`** (u8/u16/u32 индексы) работают — срез 2, 2026-09-21.
 - [ ] VAO (`createVertexArray`/`bindVertexArray`) реализованы.
 - [ ] GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется.
 - [x] **Present:** результат WebGL композитится на страничный `<canvas>` (видно в окне, не только `readPixels`) — срез 5, 2026-09-21.
