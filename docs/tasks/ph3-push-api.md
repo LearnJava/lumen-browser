@@ -84,9 +84,19 @@ endpoint, userVisibleOnly)` генерирует ключи сам и возвр
 через живой `PushManager`), 19/19 тестов `push_api`, 14/14 `lumen-storage`
 push-тестов.
 
-### Срез 3 — S — permissionState через реальный permission-стор
-Связать `permissionState()`/`subscribe()` с механизмом разрешений (notifications/push):
-`'prompt'` по умолчанию, `'denied'` блокирует subscribe. Убрать хардкод `'granted'`.
+### Срез 3 — S — permissionState через реальный permission-стор — **сделано 2026-09-21 (P1)**
+`lumen_storage::PermissionKind::Push` (новый вариант, `"push"`) поверх уже существовавшей
+(но никуда не подключённой) SQLite-таблицы `permissions` (`crates/storage/src/permissions.rs`).
+`lumen_core::ext::PushBackend` получил `push_permission_state(origin) -> String`
+(`"granted"`/`"denied"`/`"prompt"`) и `push_set_permission(origin, state)`; `PushStore`
+реализует оба через `Permissions::query`/`set` (второй конструкторский параметр
+`Arc<Permissions>` — своя in-memory таблица на сессию, тот же паттерн, что `cache_store`).
+JS: новый нативный `_lumen_push_permission_state(origin)`, `permissionState()` отдаёт его
+результат вместо хардкода `'granted'`; `subscribe()` при `'denied'` отклоняет промис
+`DOMException(..., 'NotAllowedError')`, `'prompt'` (дефолт — нет решения на записи) по-прежнему
+пропускает subscribe. `navigator.permissions.query({name:'push'})` (`permissions.rs`)
+намеренно не тронут — остаётся статическим `DENIED`: реальной доставки push всё ещё нет
+(срезы 4-5), а этот флаг должен отражать, что вызов действительно что-то делает.
 
 ### Срез 4 — M — Push-канал доставки (WebPush, RFC 8030)
 Endpoint = реальный push-сервис (или локальный relay для теста). Поднять подписку на
@@ -111,6 +121,6 @@ Endpoint = реальный push-сервис (или локальный relay �
 ## Definition of done
 - [x] Нативные push-биндинги реализованы, подписки persist в SQLite.
 - [x] Реальные P-256 ключи `p256dh`/`auth`.
-- [ ] `permissionState` связан с permission-стором (не хардкод `granted`).
+- [x] `permissionState` связан с permission-стором (не хардкод `granted`).
 - [ ] (полный DoD) Доставка WebPush + `push`-событие в SW; при отсутствии сервиса — mock.
 - [ ] Тесты зелёные; `CAPABILITIES.md`/`ROADMAP.md`/`subsystems/` обновлены.

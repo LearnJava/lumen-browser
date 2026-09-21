@@ -357,9 +357,10 @@ pub(crate) fn run_window_mode(
         cache_store: Arc::new(
             lumen_storage::CacheStorage::open_in_memory().expect("cache_store init"),
         ),
-        push_store: Arc::new(lumen_storage::PushStore::new(Arc::new(
-            lumen_storage::PushSubscriptions::open_in_memory().expect("push_store init"),
-        ))),
+        push_store: Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().expect("push_store init")),
+            Arc::new(lumen_storage::Permissions::open_in_memory().expect("push_store permissions init")),
+        )),
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),

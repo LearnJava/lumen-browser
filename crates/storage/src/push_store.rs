@@ -9,15 +9,18 @@ use std::sync::Arc;
 
 use lumen_core::ext::PushBackend;
 
+use crate::permissions::{PermissionKind, PermissionState, Permissions};
 use crate::push_subscriptions::PushSubscriptions;
 
-/// [`PushBackend`] over a shared [`PushSubscriptions`] table.
+/// [`PushBackend`] over a shared [`PushSubscriptions`] table plus a
+/// [`Permissions`] store for `PushManager.permissionState()` (срез 3).
 ///
 /// One instance is shared (via `Arc`) across every origin/tab in the
-/// process — the table itself partitions rows by `(origin, scope)`, so
-/// unlike `SwStore` there is no need for one adapter per origin.
+/// process — both tables partition rows by origin (subscriptions further by
+/// scope), so unlike `SwStore` there is no need for one adapter per origin.
 pub struct PushStore {
     subs: Arc<PushSubscriptions>,
+    permissions: Arc<Permissions>,
 }
 
 impl std::fmt::Debug for PushStore {
@@ -27,10 +30,17 @@ impl std::fmt::Debug for PushStore {
 }
 
 impl PushStore {
-    /// Wrap an existing [`PushSubscriptions`] table.
-    pub fn new(subs: Arc<PushSubscriptions>) -> Self {
-        Self { subs }
+    /// Wrap an existing [`PushSubscriptions`] table and [`Permissions`] store.
+    pub fn new(subs: Arc<PushSubscriptions>, permissions: Arc<Permissions>) -> Self {
+        Self { subs, permissions }
     }
+}
+
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 impl PushBackend for PushStore {
@@ -73,6 +83,26 @@ impl PushBackend for PushStore {
         };
         self.subs.unsubscribe(sub.id).is_ok()
     }
+
+    fn push_permission_state(&self, origin: &str) -> String {
+        // Best-effort (trait contract): a storage failure reads as "prompt",
+        // the same answer as no grant on record — it must never read as
+        // "granted", which would silently unblock subscribe().
+        match self.permissions.query(origin, &PermissionKind::Push, now_unix_secs()) {
+            Ok(PermissionState::Granted) => "granted".to_string(),
+            Ok(PermissionState::Denied) => "denied".to_string(),
+            Ok(PermissionState::Prompt) | Err(_) => "prompt".to_string(),
+        }
+    }
+
+    fn push_set_permission(&self, origin: &str, state: &str) {
+        let state = match state {
+            "granted" => PermissionState::Granted,
+            "denied" => PermissionState::Denied,
+            _ => PermissionState::Prompt,
+        };
+        let _ = self.permissions.set(origin, &PermissionKind::Push, state, None);
+    }
 }
 
 #[cfg(test)]
@@ -80,7 +110,10 @@ mod tests {
     use super::*;
 
     fn make() -> PushStore {
-        PushStore::new(Arc::new(PushSubscriptions::open_in_memory().unwrap()))
+        PushStore::new(
+            Arc::new(PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(Permissions::open_in_memory().unwrap()),
+        )
     }
 
     #[test]
@@ -118,10 +151,42 @@ mod tests {
     #[test]
     fn shared_across_clones_survives_handle_drop() {
         let subs = Arc::new(PushSubscriptions::open_in_memory().unwrap());
-        let store_a = PushStore::new(Arc::clone(&subs));
+        let perms = Arc::new(Permissions::open_in_memory().unwrap());
+        let store_a = PushStore::new(Arc::clone(&subs), Arc::clone(&perms));
         store_a.push_subscribe("https://x.test", "/", "ep", "k", "a", "priv", true);
         drop(store_a);
-        let store_b = PushStore::new(subs);
+        let store_b = PushStore::new(subs, perms);
         assert!(store_b.push_get("https://x.test", "/").is_some());
+    }
+
+    #[test]
+    fn permission_state_defaults_to_prompt() {
+        let store = make();
+        assert_eq!(store.push_permission_state("https://x.test"), "prompt");
+    }
+
+    #[test]
+    fn permission_state_reflects_explicit_grant_and_denial() {
+        let store = make();
+        store.push_set_permission("https://x.test", "granted");
+        assert_eq!(store.push_permission_state("https://x.test"), "granted");
+        store.push_set_permission("https://x.test", "denied");
+        assert_eq!(store.push_permission_state("https://x.test"), "denied");
+    }
+
+    #[test]
+    fn permission_state_is_isolated_per_origin() {
+        let store = make();
+        store.push_set_permission("https://a.test", "denied");
+        assert_eq!(store.push_permission_state("https://a.test"), "denied");
+        assert_eq!(store.push_permission_state("https://b.test"), "prompt");
+    }
+
+    #[test]
+    fn permission_set_back_to_prompt_via_unrecognised_state() {
+        let store = make();
+        store.push_set_permission("https://x.test", "granted");
+        store.push_set_permission("https://x.test", "nonsense");
+        assert_eq!(store.push_permission_state("https://x.test"), "prompt");
     }
 }

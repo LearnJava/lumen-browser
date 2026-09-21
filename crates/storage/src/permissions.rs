@@ -48,6 +48,8 @@ pub enum PermissionKind {
     Midi,
     /// Persistent storage (Storage Standard).
     PersistentStorage,
+    /// Push subscriptions (Push API, `PushManager.permissionState()`).
+    Push,
     /// Forward-compat для не-описанных типов.
     Other(String),
 }
@@ -62,6 +64,7 @@ impl PermissionKind {
             Self::Clipboard => "clipboard",
             Self::Midi => "midi",
             Self::PersistentStorage => "persistent-storage",
+            Self::Push => "push",
             Self::Other(s) => s.as_str(),
         }
     }
@@ -75,6 +78,7 @@ impl PermissionKind {
             "clipboard" => Self::Clipboard,
             "midi" => Self::Midi,
             "persistent-storage" => Self::PersistentStorage,
+            "push" => Self::Push,
             other => Self::Other(other.to_string()),
         }
     }
@@ -486,6 +490,7 @@ mod tests {
             PermissionKind::Clipboard,
             PermissionKind::Midi,
             PermissionKind::PersistentStorage,
+            PermissionKind::Push,
             PermissionKind::Other("custom".into()),
         ] {
             assert_eq!(PermissionKind::parse(k.as_str()), k);

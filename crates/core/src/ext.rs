@@ -3427,6 +3427,17 @@ pub trait PushBackend: Send + Sync {
 
     /// Remove the subscription for `(origin, scope)`. Returns `true` if one existed.
     fn push_unsubscribe(&self, origin: &str, scope: &str) -> bool;
+
+    /// Current push permission state for `origin`: `"granted"` | `"denied"` |
+    /// `"prompt"`. No grant on record is `"prompt"` (the W3C Permissions
+    /// default), never `"granted"`.
+    fn push_permission_state(&self, origin: &str) -> String;
+
+    /// Record a push permission decision for `origin`. `state` is one of
+    /// `"granted"` / `"denied"` / `"prompt"`; anything else is treated as
+    /// `"prompt"`. Site-permission UI hook — no interactive prompt calls this
+    /// yet, so the state only moves when set explicitly.
+    fn push_set_permission(&self, origin: &str, state: &str);
 }
 
 // ============================================================================
