@@ -129,6 +129,18 @@ impl ResourceBase {
         None
     }
 
+    /// Собственный URL страницы (GAP-REFERRER срез 1) — источник `Referer`
+    /// для `fetch()`/`XMLHttpRequest`/`sendBeacon`, см.
+    /// `HttpClient::with_document_context`. `None` для файловой base:
+    /// `file:` не несёт tuple origin, поэтому реферер спецификацией не
+    /// предусмотрен для таких документов.
+    pub(crate) fn url(&self) -> Option<lumen_core::url::Url> {
+        if let ResourceBase::Url(base_url) = self {
+            return lumen_core::url::Url::parse(base_url).ok();
+        }
+        None
+    }
+
     /// Построить `HttpClient` для загрузки подресурсов. Если страница загружена
     /// по HTTPS, подключает mixed-content enforcement (SpecDefault по W3C Mixed
     /// Content spec). Caller выбирает `RequestDestination` и вызывает
