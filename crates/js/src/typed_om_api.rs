@@ -11,8 +11,12 @@
 //!   the `CSS` namespace construct one per unit name
 //! - `CSSKeywordValue` — keyword value (e.g. auto, inherit)
 //! - `CSSNumericValue` — base class for numeric values; `add`/`sub`/`mul`/`div`/`min`/`max`
-//!   build a `CSSMathValue` tree (construction + `calc()` serialisation only — no resolution
-//!   context, so `to()`/`equals()` on a math value are not implemented)
+//!   build a `CSSMathValue` tree. `to()` resolves a tree to a single `CSSUnitValue` by
+//!   evaluating it (sum/min/max convert every operand to a shared unit, a product allows at
+//!   most one non-`<number>` operand) — not the full §8.5 numeric-type algorithm, so a tree
+//!   whose resolved shape has no single unit (two non-`<number>` product operands, mismatched
+//!   summed units, inverting a non-`<number>`) throws rather than guessing. `equals()` is
+//!   structural tree comparison (§7.1.4) and needs no resolution context at all.
 //! - `CSSMathValue` family — `CSSMathSum`/`CSSMathProduct`/`CSSMathNegate`/`CSSMathInvert`/
 //!   `CSSMathMin`/`CSSMathMax`
 //! - `CSSUnparsedValue`/`CSSVariableReferenceValue` — `var()` reference values
@@ -37,9 +41,11 @@
 //!   accept any number/`CSSNumericValue` without the reference-range checks
 //!   the spec defines per colour space.
 //!
-//! Not implemented: `to()`/`equals()` on a `CSSMathValue` or `CSSColorValue`
-//! (no resolution context); `StylePropertyMap.set` reading a `CSSColorValue`
-//! back out through the cascade (round-trips only via its own `cssText`).
+//! Not implemented: `to()`/`equals()` directly on a `CSSColorValue` (the spec does not define
+//! them there — only a colour's numeric channels, plain `CSSNumericValue` instances, have
+//! them, and those go through the same `CSSNumericValue.prototype` as everything else);
+//! `StylePropertyMap.set` reading a `CSSColorValue` back out through the cascade (round-trips
+//! only via its own `cssText`).
 //!
 //! Maps:
 //! - `StylePropertyMapReadOnly` — `element.computedStyleMap()`, reads the resolved cascade
@@ -130,17 +136,9 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   }
   CSSUnitValue.prototype = Object.create(CSSNumericValue.prototype);
   CSSUnitValue.prototype.constructor = CSSUnitValue;
-  CSSUnitValue.prototype.to = function(newUnit) {
-    var target = normaliseUnit(newUnit);
-    var factor = conversionFactor(this.unit, target);
-    // §4.5.1 `to()` throws when the conversion is not defined. Returning the
-    // number unchanged under the new unit label — what this did before
-    // BUG-387 — is a silently wrong value, which is worse than no answer.
-    if (factor === null) {
-      throw new TypeError("CSSUnitValue.to: cannot convert '" + this.unit + "' to '" + target + "'");
-    }
-    return new CSSUnitValue(this.value * factor, target);
-  };
+  // `to()`/`equals()` live on CSSNumericValue.prototype below (§7.1.4,
+  // §4.5.1) — a CSSUnitValue resolves to itself under evalNumeric, so no
+  // override is needed here.
 
   // ── CSSKeywordValue — keyword value ────────────────────────────────────────────
   function CSSKeywordValue(value) {
@@ -151,12 +149,11 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   CSSKeywordValue.prototype.constructor = CSSKeywordValue;
 
   // ── CSSMathValue hierarchy — arithmetic on numeric values (§8) ────────────────
-  // Construction and serialisation only: resolving a mixed-unit tree to a single
-  // numeric value (`to()`/`equals()` on a CSSMathValue, CSSMathSum.values as a
-  // CSSNumericArray with unit-typed elements) needs a resolution context this
-  // slice does not add. `add()`/`sub()`/`mul()`/`div()`/`min()`/`max()` on
-  // CSSNumericValue build a correctly `calc()`-serialising tree, which is what
+  // `add()`/`sub()`/`mul()`/`div()`/`min()`/`max()` on CSSNumericValue build a
+  // correctly `calc()`-serialising tree, which is what
   // `style.set('width', a.add(b))` actually consumes downstream.
+  // `CSSMathSum.values` stays a plain array, not a `CSSNumericArray` (no
+  // `.every()`-style methods beyond what Array already gives).
   function toNumericValue(v) {
     if (v instanceof CSSNumericValue) return v;
     if (typeof v === 'number') return new CSSUnitValue(v, 'number');
@@ -265,6 +262,107 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   };
   CSSNumericValue.prototype.invert = function() {
     return new CSSMathInvert(this);
+  };
+
+  // ── CSSNumericValue.to() (§7.1.5 partial) ─────────────────────────────────────
+  // Resolves a math tree down to `{value, unit}` in one of the UNIT_GROUPS
+  // groups above, then `to()` converts that pair the same way it already does
+  // for a bare CSSUnitValue. This is not the full §8.5 numeric-type algorithm
+  // (no exponent bookkeeping across nested products, no percentage hint) — a
+  // tree whose resolved shape is not a single unit (two non-`<number>`
+  // operands multiplied together, mismatched units summed, `1 / <length>`)
+  // throws instead of inventing a compound or approximate answer, same
+  // philosophy as `CSSUnitValue.to()` throwing on an unconvertible unit.
+  function evalNumeric(v) {
+    if (v instanceof CSSUnitValue) return { value: v.value, unit: v.unit };
+    if (v instanceof CSSMathNegate) {
+      var negated = evalNumeric(v.value);
+      return { value: -negated.value, unit: negated.unit };
+    }
+    if (v instanceof CSSMathInvert) {
+      var inverted = evalNumeric(v.value);
+      if (inverted.unit !== 'number') {
+        throw new TypeError('CSSNumericValue.to: cannot invert a non-<number> operand to a single unit');
+      }
+      return { value: 1 / inverted.value, unit: 'number' };
+    }
+    if (v instanceof CSSMathSum || v instanceof CSSMathMin || v instanceof CSSMathMax) {
+      var parts = v.values.map(evalNumeric);
+      var unit = parts[0].unit;
+      var converted = parts.map(function(p) {
+        var factor = conversionFactor(p.unit, unit);
+        if (factor === null) {
+          throw new TypeError('CSSNumericValue.to: "' + v.operator + '" mixes incompatible units');
+        }
+        return p.value * factor;
+      });
+      var result;
+      if (v instanceof CSSMathSum) {
+        result = converted.reduce(function(a, b) { return a + b; }, 0);
+      } else if (v instanceof CSSMathMin) {
+        result = Math.min.apply(Math, converted);
+      } else {
+        result = Math.max.apply(Math, converted);
+      }
+      return { value: result, unit: unit };
+    }
+    if (v instanceof CSSMathProduct) {
+      var scalar = 1;
+      var nonNumber = null;
+      v.values.forEach(function(item) {
+        var r = evalNumeric(item);
+        if (r.unit === 'number') {
+          scalar *= r.value;
+        } else if (nonNumber === null) {
+          nonNumber = r;
+        } else {
+          throw new TypeError('CSSNumericValue.to: product of two non-<number> operands has no single-unit representation');
+        }
+      });
+      return nonNumber === null ? { value: scalar, unit: 'number' } : { value: nonNumber.value * scalar, unit: nonNumber.unit };
+    }
+    throw new TypeError('CSSNumericValue.to: cannot resolve this value to a single unit');
+  }
+  CSSNumericValue.prototype.to = function(newUnit) {
+    var target = normaliseUnit(newUnit);
+    var resolved = evalNumeric(this);
+    var factor = conversionFactor(resolved.unit, target);
+    if (factor === null) {
+      throw new TypeError("CSSNumericValue.to: cannot convert '" + resolved.unit + "' to '" + target + "'");
+    }
+    return new CSSUnitValue(resolved.value * factor, target);
+  };
+
+  // ── CSSNumericValue.equals() (§7.1.4) ─────────────────────────────────────────
+  // Structural equality of the syntax tree (same operator, same operands in
+  // the same order, same unit/value at every leaf) — unlike `to()` this needs
+  // no resolution context, since the spec's algorithm never converts units.
+  function numericEquals(a, b) {
+    if (a === b) return true;
+    if (!(a instanceof CSSNumericValue) || !(b instanceof CSSNumericValue)) return false;
+    if (a instanceof CSSUnitValue && b instanceof CSSUnitValue) {
+      return a.unit === b.unit && a.value === b.value;
+    }
+    if (a instanceof CSSMathNegate && b instanceof CSSMathNegate) return numericEquals(a.value, b.value);
+    if (a instanceof CSSMathInvert && b instanceof CSSMathInvert) return numericEquals(a.value, b.value);
+    var sameListKind = (a instanceof CSSMathSum && b instanceof CSSMathSum) ||
+      (a instanceof CSSMathProduct && b instanceof CSSMathProduct) ||
+      (a instanceof CSSMathMin && b instanceof CSSMathMin) ||
+      (a instanceof CSSMathMax && b instanceof CSSMathMax);
+    if (sameListKind) {
+      if (a.values.length !== b.values.length) return false;
+      for (var i = 0; i < a.values.length; i++) {
+        if (!numericEquals(a.values[i], b.values[i])) return false;
+      }
+      return true;
+    }
+    return false;
+  }
+  CSSNumericValue.prototype.equals = function() {
+    var self = this;
+    return Array.prototype.slice.call(arguments).every(function(other) {
+      return numericEquals(self, other);
+    });
   };
 
   // ── CSSUnparsedValue / CSSVariableReferenceValue (§9) — var() references ──────
