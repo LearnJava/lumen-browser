@@ -225,7 +225,7 @@ fn collect_link_hrefs_finds_stylesheet() {
     );
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
-    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _)| h.as_str()).collect();
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _, _)| h.as_str()).collect();
     assert_eq!(only_hrefs, vec!["style.css"]);
 }
 
@@ -243,7 +243,7 @@ fn collect_link_hrefs_finds_xml_stylesheet_pi() {
     );
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
-    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _)| h.as_str()).collect();
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _, _)| h.as_str()).collect();
     assert_eq!(only_hrefs, vec!["style.css"]);
 }
 
@@ -1083,8 +1083,24 @@ fn collect_link_hrefs_media_gate() {
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
     // print.css отсеян; huge.css отсеян (viewport 1024px < 5000px); остальные — да.
-    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _)| h.as_str()).collect();
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _, _)| h.as_str()).collect();
     assert_eq!(only_hrefs, vec!["screen.css", "all.css", "plain.css", "wide.css"]);
+}
+
+/// GAP-REFERRER срез 6: `referrerpolicy` на `<link>` собирается наряду с
+/// `charset` — переопределяет политику документа только для этого листа.
+#[test]
+fn collect_link_hrefs_reads_referrerpolicy_attribute() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                <link rel="stylesheet" href="a.css" referrerpolicy="no-referrer">
+                <link rel="stylesheet" href="b.css">
+            </head><body></body></html>"#,
+    );
+    let mut hrefs = Vec::new();
+    collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
+    assert_eq!(hrefs[0].3.as_deref(), Some("no-referrer"));
+    assert_eq!(hrefs[1].3, None, "absent attribute must be None");
 }
 
 #[test]

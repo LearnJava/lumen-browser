@@ -103,7 +103,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     // header), the same way `<script src>`/top-level `fetch()` already do
     // (срез 3) — one of the six call sites `http_client_for_subresource`'s
     // doc comment still listed as default-only.
-    let referrer_policy = crate::resource_base::document_referrer_policy(doc);
+    let doc_referrer_policy = crate::resource_base::document_referrer_policy(doc);
 
     // GAP-CSPENF срез 7: посчитать политику один раз здесь же, до параллельной
     // фазы — та же одноразовая точка, что срез 4 использует в
@@ -120,7 +120,15 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
     // `@import "b.css"` = `/css/b.css`) разрешались корректно.
     let gate_ref = csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref()));
-    let parts = parallel_map(&hrefs, |_, (_, href, charset_attr)| {
+    let parts = parallel_map(&hrefs, |_, (_, href, charset_attr, referrer_policy_attr)| {
+        // GAP-REFERRER срез 6: `referrerpolicy` на этом конкретном `<link>`
+        // переопределяет политику документа только для его собственного
+        // запроса (и для `@import`-ов внутри его листа — тот же источник,
+        // что спек-примеры используют для унаследованной политики импорта).
+        let referrer_policy = referrer_policy_attr
+            .as_deref()
+            .and_then(lumen_network::ReferrerPolicy::parse)
+            .unwrap_or(doc_referrer_policy);
         if let Some((policy, _original)) = &csp_gate {
             let resolved_url = base.resolve_str(href);
             // GAP-CSPENF срез 47: гейт `style-src` обязан видеть тот же
@@ -162,7 +170,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     let mut css = String::new();
     let mut outcomes = Vec::with_capacity(parts.len());
     let mut blocked_by_style_src = Vec::new();
-    for ((node, _, _), part) in hrefs.iter().zip(parts) {
+    for ((node, _, _, _), part) in hrefs.iter().zip(parts) {
         match part {
             Ok((text, blocked_imports)) => {
                 outcomes.push((*node, true));
@@ -647,7 +655,7 @@ fn parse_pi_pseudo_attrs(data: &str) -> Vec<(String, String)> {
 /// собирались одни адреса, и связи «этот лист — этот элемент» не существовало.
 /// `charset` — легаси-атрибут `<link>` (HTML LS), один из ярусов CSS Syntax L3
 /// «determine the fallback encoding» (BUG-509).
-pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String, Option<String>)>, media_ctx: &lumen_css_parser::MediaContext) {
+pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String, Option<String>, Option<String>)>, media_ctx: &lumen_css_parser::MediaContext) {
     let node = doc.get(id);
     if let NodeData::ProcessingInstruction { target, data } = &node.data {
         if target == "xml-stylesheet" {
@@ -665,7 +673,9 @@ pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(Node
                 && !alternate.eq_ignore_ascii_case("yes")
                 && link_media_matches(media, media_ctx)
             {
-                out.push((id, href.to_owned(), None));
+                // `<?xml-stylesheet?>` не несёт `referrerpolicy`-псевдоатрибута
+                // ни по одной спеке — всегда на политику документа.
+                out.push((id, href.to_owned(), None, None));
             }
         }
         return;
@@ -699,7 +709,14 @@ pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(Node
                 .iter()
                 .find(|a| a.name.local == "charset")
                 .map(|a| a.value.clone());
-            out.push((id, href.to_owned(), charset));
+            // GAP-REFERRER срез 6: `referrerpolicy` на `<link>` переопределяет
+            // политику документа только для запроса этого листа.
+            let referrer_policy = attrs
+                .iter()
+                .find(|a| a.name.local == "referrerpolicy")
+                .map(|a| a.value.clone())
+                .filter(|s| !s.is_empty());
+            out.push((id, href.to_owned(), charset, referrer_policy));
         }
         return;
     }
