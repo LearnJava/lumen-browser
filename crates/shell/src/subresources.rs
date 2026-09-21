@@ -447,6 +447,19 @@ pub(crate) fn fetch_and_decode_images(
             return ImgOutcome::Blocked;
         }
         let url_cross_origin = is_cross_origin(&resolved_url);
+        // GAP-REFERRER срез 7: `referrerpolicy` on this `<img>` element
+        // overrides the document policy for its own fetch only — same
+        // element-wins-over-document rule срез 6 already gives
+        // `<script src>`/`<link>`/`<iframe src>`. The other three producers of
+        // `ImageRequest` (`<video poster>`, `<input type=image>`, SVG
+        // `<image>`) never carry the attribute (HTML LS §6.6), so their
+        // `referrer_policy_attr` is always `None` and this falls through to
+        // the document policy unchanged.
+        let referrer_policy = req
+            .referrer_policy_attr
+            .as_deref()
+            .and_then(lumen_network::ReferrerPolicy::parse)
+            .unwrap_or(referrer_policy);
         // BUG-269: apply intrinsic size whenever the author left AT LEAST ONE
         // dimension unset (not only when BOTH are unset). A replaced element
         // with a fixed width and `height: auto` must derive its height from the

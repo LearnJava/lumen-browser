@@ -645,8 +645,17 @@ pub(crate) fn fetch_frame_subresources(
             }
         }
         let fetch_src: &str = upgraded.as_deref().unwrap_or(&req.url);
+        // GAP-REFERRER срез 7: same element-wins-over-document override as
+        // `subresources.rs::fetch_and_decode_images` — a frame's own `<img>`
+        // can carry `referrerpolicy` independently of the frame document's
+        // policy above.
+        let img_referrer_policy = req
+            .referrer_policy_attr
+            .as_deref()
+            .and_then(lumen_network::ReferrerPolicy::parse)
+            .unwrap_or(referrer_policy);
         let img = crate::image_cache::IMAGE_CACHE.get_or_decode_current(&key, || {
-            decode_image(fetch_src, base, sink, cookie_jar.clone(), target, referrer_policy)
+            decode_image(fetch_src, base, sink, cookie_jar.clone(), target, img_referrer_policy)
         });
         (key, img, None)
     });

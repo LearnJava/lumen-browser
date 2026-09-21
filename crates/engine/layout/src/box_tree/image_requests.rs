@@ -20,6 +20,13 @@ pub struct ImageRequest {
     /// идёт no-cors, как раньше); `Some(_)` включает реальную CORS-проверку
     /// ответа для cross-origin URL (shell, `fetch_and_decode_images`).
     pub crossorigin: Option<CrossOriginMode>,
+    /// `referrerpolicy` (HTML LS §6.6 — атрибут определён только на
+    /// `a`/`area`/`iframe`/`img`/`link`/`script`, `<video poster>`/`<input
+    /// type=image>`/SVG `<image>` его не несут) — GAP-REFERRER срез 7. Сырое
+    /// значение атрибута; `lumen-layout` не знает про `lumen-network`, разбор
+    /// в `lumen_network::ReferrerPolicy` — на стороне shell, тем же приёмом,
+    /// что уже даёт `<script src>`/`<link>`/`<iframe src>` (срез 6).
+    pub referrer_policy_attr: Option<String>,
 }
 
 /// Значение CORS settings attribute (HTML LS §2.5.1). Отсутствие атрибута —
@@ -258,6 +265,10 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
             .iter()
             .find(|a| a.name.local.eq_ignore_ascii_case("crossorigin"))
             .map(|a| CrossOriginMode::parse(&a.value));
+        let referrer_policy_attr = attrs
+            .iter()
+            .find(|a| a.name.local.eq_ignore_ascii_case("referrerpolicy"))
+            .map(|a| a.value.to_string());
         let source = resolve_image_source(doc, id, viewport);
         if !source.url.is_empty() {
             out.push(ImageRequest {
@@ -268,6 +279,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
                 is_lazy,
                 fetch_priority,
                 crossorigin,
+                referrer_policy_attr,
             });
         }
         return; // void element — нет children
@@ -290,6 +302,9 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
             // атрибут только с `<img>`/`<link>`/`<script>`/`<video>`/`<audio>`,
             // и здесь конкретно про сам ресурс-URL (poster/src/href), не тег.
             crossorigin: None,
+            // `referrerpolicy` тоже не определён на этих трёх тегах (HTML LS
+            // §6.6 перечисляет только `a`/`area`/`iframe`/`img`/`link`/`script`).
+            referrer_policy_attr: None,
         });
     }
     for &child in &node.children {

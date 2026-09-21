@@ -1496,6 +1496,7 @@ impl Lumen {
                     is_lazy: false,
                     fetch_priority: None,
                     crossorigin: None,
+                    referrer_policy_attr: None,
                 })
                 .collect();
             (requests, csp_gate)

@@ -59,11 +59,22 @@ pub(crate) fn fetch_frame_lazy_images(
     // Each thread gets its own `Arc` clone rather than sharing the caller's
     // `&Arc<dyn EventSink>` reference across the pool — same pattern
     // `fetch_frame_subresources` uses for the same reason (srez 11).
-    let decoded = parallel_map(&pending, |_, (_nid, url)| {
+    // GAP-REFERRER срез 7: same element-wins-over-document override as the
+    // frame's eager `<img>` pass (`fetch_frame_subresources`) — looked up by
+    // node id in `lazy_requests`, same way `wants_intrinsic` below already
+    // does for BUG-269.
+    let lazy_requests = &frame.lazy_requests;
+    let decoded = parallel_map(&pending, |_, (nid, url)| {
         let sink: &Arc<dyn EventSink> = &sink.clone();
         let key = frame_image_key(&base, url);
+        let img_referrer_policy = lazy_requests
+            .iter()
+            .find(|r| r.node_id.index() as u32 == *nid)
+            .and_then(|r| r.referrer_policy_attr.as_deref())
+            .and_then(lumen_network::ReferrerPolicy::parse)
+            .unwrap_or(referrer_policy);
         let img = crate::image_cache::IMAGE_CACHE.get_or_decode_current(&key, || {
-            decode_image(url, &base, sink, cookie_jar.clone(), target, referrer_policy)
+            decode_image(url, &base, sink, cookie_jar.clone(), target, img_referrer_policy)
         });
         (key, img)
     });
