@@ -2418,4 +2418,9 @@ runtime or the shim. Read them before a JS/Web-API change.
   `btoa`/`atob`) — still mock zero-filled bytes, real ECDH P-256 is срез 2. `install_dom`'s
   `push_backend` parameter reaches every call site (mirroring `cache_backend`'s position exactly),
   but no live tab constructs a real backend yet — see `docs/tasks/ph3-push-api.md` срез 1's "not
-  done" note before assuming subscriptions persist across a real page reload.
+  done" note before assuming subscriptions persist across a real page reload (tab wiring and
+  real ECDH keys landed in later срезы, still same file). Срез 3 (2026-09-21) makes
+  `PushManager.permissionState()`/`subscribe()` read `lumen_core::ext::PushBackend::
+  push_permission_state`, backed by `lumen_storage::Permissions`/`PermissionKind::Push` — default
+  `"prompt"`, never the former hardcoded `"granted"`; `subscribe()` rejects with
+  `DOMException(..., 'NotAllowedError')` when `"denied"`, still proceeds on `"prompt"`.

@@ -79,7 +79,7 @@ pub(crate) fn install_push_api_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn2, into_v8_fn4};
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn4};
     use lumen_core::ext::JsRuntime as _;
 
     let be = push_backend.clone();
@@ -117,13 +117,24 @@ pub(crate) fn install_push_api_v8(
     });
     rt.register_native("_lumen_push_get", get)?;
 
-    let be = push_backend;
+    let be = push_backend.clone();
     let unsubscribe = into_v8_fn2(move |origin: String, scope: String| -> bool {
         be.as_ref()
             .map(|be| be.push_unsubscribe(&origin, &scope))
             .unwrap_or(false)
     });
     rt.register_native("_lumen_push_unsubscribe", unsubscribe)?;
+
+    let be = push_backend;
+    // Срез 3: no backend (headless dump modes) reads as "prompt" — the same
+    // default a fresh origin gets from a real `Permissions` store, never
+    // "granted".
+    let permission_state = into_v8_fn1(move |origin: String| -> String {
+        be.as_ref()
+            .map(|be| be.push_permission_state(&origin))
+            .unwrap_or_else(|| "prompt".to_string())
+    });
+    rt.register_native("_lumen_push_permission_state", permission_state)?;
 
     rt.eval(PUSH_API_SHIM)?;
     Ok(())
@@ -148,6 +159,13 @@ const PUSH_API_SHIM: &str = r#"(function() {
     this._keys = keys || {};
     this._scope = scope || '';
   };
+
+  // Reads the native permission store; no native (headless) reads as
+  // 'prompt', matching a fresh origin's default in a real store.
+  function _push_permission_state() {
+    if (typeof _lumen_push_permission_state !== 'function') return 'prompt';
+    try { return _lumen_push_permission_state(location.origin); } catch (e) { return 'prompt'; }
+  }
 
   // getKey(name) -> ArrayBuffer | null
   PushSubscription.prototype.getKey = function(name) {
@@ -200,6 +218,13 @@ const PUSH_API_SHIM: &str = r#"(function() {
       return Promise.reject(new TypeError('applicationServerKey must be an ArrayBuffer'));
     }
 
+    // §subscribe: an origin the user (or site-permission UI) already denied
+    // must not mint a fresh subscription — 'prompt' (no decision on record
+    // yet) still proceeds, matching the pre-срез-3 best-effort behaviour.
+    if (_push_permission_state() === 'denied') {
+      return Promise.reject(new DOMException('Push permission denied', 'NotAllowedError'));
+    }
+
     var scope = (self.registration && self.registration.scope) || '';
     var endpoint = 'https://push.lumen.local/v1/subscription/' + Math.random().toString(36).substr(2, 9);
     var userVisibleOnly = options.userVisibleOnly !== false;
@@ -236,9 +261,10 @@ const PUSH_API_SHIM: &str = r#"(function() {
   };
 
   // permissionState() -> Promise<'granted'|'denied'|'prompt'>
-  // Phase 0: always returns 'granted'
+  // Срез 3: reads the native permission store (lumen_storage::Permissions,
+  // PermissionKind::Push) instead of the former hardcoded 'granted'.
   PushManager.prototype.permissionState = function() {
-    return Promise.resolve('granted');
+    return Promise.resolve(_push_permission_state());
   };
 
   // Attach PushManager to ServiceWorkerRegistration.prototype
@@ -318,6 +344,8 @@ mod tests {
         rt.eval(
             "var ServiceWorkerRegistration = function() {}; \
              var location = {origin: 'https://push.test'}; \
+             function DOMException(msg, name) { this.message = msg; this.name = name; } \
+             globalThis.DOMException = DOMException; \
              var _B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; \
              function btoa(s) { \
                var out = ''; \
@@ -414,6 +442,85 @@ mod tests {
         });
     }
 
+    /// Срез 3 DoD: no backend (headless) reads as 'prompt', not the former
+    /// hardcoded 'granted'.
+    #[test]
+    fn test_permission_state_defaults_to_prompt_without_backend() {
+        with_push_api(|rt| {
+            rt.eval(
+                "var pm = new PushManager({scope: '/'}); \
+                 var state = null; \
+                 pm.permissionState().then(function(s) { state = s; });",
+            )
+            .unwrap();
+            let result = rt.eval("state").unwrap();
+            assert_eq!(result, JsValue::String("prompt".to_string()));
+        });
+    }
+
+    /// Срез 3 DoD: `permissionState()` reflects an explicit grant/denial
+    /// recorded in the native permission store.
+    #[test]
+    fn test_permission_state_reflects_backend_grant() {
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
+        backend.push_set_permission("https://push.test", "denied");
+        let rt = V8JsRuntime::new().unwrap();
+        eval_with_location(&rt);
+        install_push_api_v8(&rt, Some(backend)).unwrap();
+        rt.eval(
+            "var pm = new PushManager({scope: '/'}); \
+             var state = null; \
+             pm.permissionState().then(function(s) { state = s; });",
+        )
+        .unwrap();
+        let result = rt.eval("state").unwrap();
+        assert_eq!(result, JsValue::String("denied".to_string()));
+    }
+
+    /// Срез 3 DoD: 'denied' blocks subscribe() with a NotAllowedError,
+    /// instead of silently minting a subscription.
+    #[test]
+    fn test_subscribe_rejects_when_permission_denied() {
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
+        backend.push_set_permission("https://push.test", "denied");
+        let rt = V8JsRuntime::new().unwrap();
+        eval_with_location(&rt);
+        install_push_api_v8(&rt, Some(backend)).unwrap();
+        rt.eval(
+            "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
+             var errName = null; \
+             reg.pushManager.subscribe({userVisibleOnly: true}) \
+                .then(function() { errName = 'resolved'; }, \
+                      function(e) { errName = e.name; });",
+        )
+        .unwrap();
+        let result = rt.eval("errName").unwrap();
+        assert_eq!(result, JsValue::String("NotAllowedError".to_string()));
+    }
+
+    /// A 'prompt' permission (the default — no decision on record) still lets
+    /// subscribe() proceed, matching the pre-срез-3 best-effort behaviour.
+    #[test]
+    fn test_subscribe_succeeds_when_permission_is_prompt() {
+        with_push_api(|rt| {
+            rt.eval(
+                "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
+                 var sub = null; \
+                 reg.pushManager.subscribe({userVisibleOnly: true}) \
+                    .then(function(s) { sub = s; });",
+            )
+            .unwrap();
+            let result = rt.eval("sub instanceof PushSubscription").unwrap();
+            assert_eq!(result, JsValue::Bool(true));
+        });
+    }
+
     #[test]
     fn test_push_subscription_get_key() {
         with_push_api(|rt| {
@@ -432,11 +539,10 @@ mod tests {
     /// SEC1 point (leading `0x04`), not the former zero-filled mock.
     #[test]
     fn test_subscribe_returns_real_p256dh_key() {
-        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(
-            lumen_storage::PushStore::new(Arc::new(
-                lumen_storage::PushSubscriptions::open_in_memory().unwrap(),
-            )),
-        );
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
         let rt = V8JsRuntime::new().unwrap();
         eval_with_location(&rt);
         install_push_api_v8(&rt, Some(backend)).unwrap();
@@ -490,11 +596,10 @@ mod tests {
     /// `Arc<dyn PushBackend>` rather than an in-memory JS field.
     #[test]
     fn test_subscribe_then_reload_context_sees_persisted_subscription() {
-        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(
-            lumen_storage::PushStore::new(Arc::new(
-                lumen_storage::PushSubscriptions::open_in_memory().unwrap(),
-            )),
-        );
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
 
         let rt1 = V8JsRuntime::new().unwrap();
         eval_with_location(&rt1);
@@ -529,11 +634,10 @@ mod tests {
 
     #[test]
     fn test_unsubscribe_removes_from_backend() {
-        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(
-            lumen_storage::PushStore::new(Arc::new(
-                lumen_storage::PushSubscriptions::open_in_memory().unwrap(),
-            )),
-        );
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(lumen_storage::PushStore::new(
+            Arc::new(lumen_storage::PushSubscriptions::open_in_memory().unwrap()),
+            Arc::new(lumen_storage::Permissions::open_in_memory().unwrap()),
+        ));
         let rt = V8JsRuntime::new().unwrap();
         eval_with_location(&rt);
         install_push_api_v8(&rt, Some(backend)).unwrap();
