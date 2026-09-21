@@ -57,15 +57,18 @@ snapshot между документами через уже существую�
 
 ## Срезы (декомпозиция)
 
-### Срез 1 — S — парсинг at-rule `@view-transition`
-Добавить `ViewTransitionRule { navigation: Navigation }` (`Auto`/`None`) в parser.rs рядом с
-`MediaRule`/`PageRule`; распознать блок `@view-transition { navigation: auto; }` в at-rule
-свитче парсера; сложить в `Stylesheet`. Юнит-тесты на парсинг (auto/none/отсутствие).
+### Срез 1 — S — парсинг at-rule `@view-transition` — DONE
+`ViewTransitionRule { navigation: ViewTransitionNavigation }` (`Auto`/`None`) в
+`css-parser/src/parser/at_rules.rs`, рядом с `MediaRule`/`PageRule`; `Stylesheet.view_transition_rules`.
+7 юнит-тестов в новом `parser/tests/view_transitions.rs` (`at_rules.rs` уже на пределе лимита
+2000 строк).
 
-### Срез 2 — XS — извлечение opt-in из документа
-В шелле после парсинга каждого документа определить, объявлен ли `navigation: auto` (helper
-над `Stylesheet.view_transition_rules`). Кэшировать флаг для текущей и для новой страницы —
-переход стартует только если **оба** документа opt-in и same-origin (спек L2 §navigation).
+### Срез 2 — XS — извлечение opt-in из документа — DONE
+`page_pipeline::view_transition_navigation_opted_in` (последнее объявление в документе
+побеждает) + `mpa_view_transition_allowed` (same-origin + оба документа opt-in). Пока не
+подключены к навигационному пайплайну — `#[allow(dead_code)]`, 6 юнит-тестов в
+`tests/page_pipeline.rs`. **Не кэшируется** на `LoadedPage`/`LayoutSource` — это часть среза 3
+(нужно решить, где именно живёт флаг исходящей страницы на границе навигации).
 
 ### Срез 3 — S — snapshot старого документа при навигации
 На границе навигации (перед заменой на новый layout, `parse_and_layout` ~`main.rs:4300+`),
@@ -98,7 +101,9 @@ KNOWN_DEBTOR из-за async-тайминга Edge).
 
 ## Definition of done
 
-- [ ] `@view-transition { navigation: auto/none }` парсится в `Stylesheet`.
+- [x] `@view-transition { navigation: auto/none }` парсится в `Stylesheet` (срез 1, landed).
+- [x] Opt-in helper (`view_transition_navigation_opted_in`/`mpa_view_transition_allowed`, срез 2,
+      landed) — same-origin + двусторонний opt-in, пока не подключён к навигации (срезы 3-4).
 - [ ] Same-origin навигация с двусторонним opt-in запускает cross-fade **через существующий
       SPA-движок** (нового драйвера не заведено).
 - [ ] Cross-origin / односторонний opt-in / ошибка snapshot → навигация без анимации.
