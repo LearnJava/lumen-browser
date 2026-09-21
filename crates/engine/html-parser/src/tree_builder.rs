@@ -919,6 +919,14 @@ impl IncrementalTreeBuilder {
                 if name == "meta" && let Some(refresh) = parse_meta_refresh(attrs) {
                     self.doc.set_meta_refresh(refresh);
                 }
+                // GAP-REFERRER срез 3: `<meta name="referrer" content="…">`
+                // — every occurrence kept, a later one overrides an earlier
+                // one (spec §3.1), unlike `meta_refresh`'s first-wins.
+                if name == "meta"
+                    && let Some(content) = parse_meta_referrer(attrs)
+                {
+                    self.doc.add_meta_referrer(content);
+                }
             }
             Token::StartTag {
                 ref name,
@@ -3783,6 +3791,23 @@ fn parse_viewport_meta(attrs: &[(String, String)]) -> Option<ViewportMeta> {
     Some(meta)
 }
 
+/// Parse `<meta name="referrer" content="…">` attributes (GAP-REFERRER
+/// срез 3, spec §3.1) into the raw policy keyword(s) text. Returns `None` if
+/// the tag is not a referrer meta (`name` mismatch or missing `content`) —
+/// deliberately does not validate `content` against known keywords here:
+/// that parse (`ReferrerPolicy::parse_list`) lives in `lumen-network`, which
+/// this crate must not depend on (see `Document::meta_referrer`'s doc
+/// comment), so an unrecognised value is still recorded and skipped later,
+/// same as every other unrecognised token.
+fn parse_meta_referrer(attrs: &[(String, String)]) -> Option<String> {
+    let name_val = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("name"))?.1.as_str();
+    if !name_val.eq_ignore_ascii_case("referrer") {
+        return None;
+    }
+    let content = &attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("content"))?.1;
+    Some(content.clone())
+}
+
 /// Parse `<meta http-equiv="refresh" content="…">` attributes into a
 /// [`MetaRefresh`] (BUG-566, HTML LS §4.2.5.3 "shared declarative refresh
 /// steps").
@@ -5179,6 +5204,37 @@ mod tests {
         let mr = doc.meta_refresh().expect("refresh meta must be set");
         assert_eq!(mr.delay_seconds, 1);
         assert_eq!(mr.url.as_deref(), Some("https://first.example"));
+    }
+
+    // ─── GAP-REFERRER срез 3: <meta name="referrer"> ──────────────────────────
+
+    #[test]
+    fn meta_referrer_is_recorded() {
+        let doc = parse(r#"<html><head><meta name="referrer" content="no-referrer"></head><body></body></html>"#);
+        assert_eq!(doc.meta_referrer(), &["no-referrer".to_owned()]);
+    }
+
+    #[test]
+    fn meta_referrer_absent_when_no_such_meta() {
+        let doc = parse(r#"<html><head><meta name="viewport" content="width=device-width"></head><body></body></html>"#);
+        assert!(doc.meta_referrer().is_empty());
+    }
+
+    /// Unlike `meta_refresh` (first occurrence wins), every occurrence is
+    /// kept — a later one must override an earlier one (spec §3.1), which
+    /// `resource_base::document_referrer_policy` relies on.
+    #[test]
+    fn meta_referrer_every_occurrence_is_kept_in_order() {
+        let doc = parse(concat!(
+            r#"<html><head>"#,
+            r#"<meta name="referrer" content="no-referrer">"#,
+            r#"<meta name="referrer" content="unsafe-url">"#,
+            r#"</head><body></body></html>"#,
+        ));
+        assert_eq!(
+            doc.meta_referrer(),
+            &["no-referrer".to_owned(), "unsafe-url".to_owned()]
+        );
     }
 
     // ─── Declarative Shadow DOM (WHATWG HTML §14.5) ───────────────────────────

@@ -342,6 +342,11 @@ pub(crate) fn resolve_script_sources(
         crate::csp_enforce::document_csp_policy(doc, root)
     };
     let self_origin = base.origin();
+    // GAP-REFERRER срез 3: `<script src>`'s `Referer` respects the
+    // document's own `<meta name=referrer>`/`Referrer-Policy` header instead
+    // of always the project default — see
+    // `resource_base::document_referrer_policy`'s doc comment.
+    let referrer_policy = crate::resource_base::document_referrer_policy(doc);
 
     // Внешние `<script src>` грузятся параллельно (сеть — главный тормоз), но
     // результат собирается строго в исходном порядке: классические скрипты
@@ -413,7 +418,9 @@ pub(crate) fn resolve_script_sources(
                 // PERF-1: one span per external script fetch.
                 let mut fetch_span = lumen_core::trace::span(format!("script {url}"), "net");
                 let resource = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
-                    let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                    let client = base.http_client_for_subresource_with_policy(
+                        sink.clone(), cookie_jar.clone(), referrer_policy,
+                    );
                     client
                         .fetch_subresource(&sub_url, RequestDestination::Script)
                         .map(|body| crate::prefetch::CachedResource { body, content_type: None })

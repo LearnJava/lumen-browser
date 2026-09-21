@@ -8,10 +8,17 @@
 //! Срез 2: the same algorithm reaches engine-issued subresource fetches too
 //! (`<img>`/`<script src>`/`<link>`/`@import`/`@font-face`/…, all GET-only —
 //! `Origin` does not apply there) via
-//! `ResourceBase::http_client_for_subresource`. Still not wired: reading
-//! `<meta name=referrer>`, the `Referrer-Policy` response header or a
-//! `referrerpolicy` element attribute — every request still uses the project
-//! default (`docs/plan/privacy.md` §9.1: `strict-origin-when-cross-origin`).
+//! `ResourceBase::http_client_for_subresource`, always the project default.
+//! Срез 3: `<meta name=referrer>` and the `Referrer-Policy` response header
+//! now override that default for the top-level document's own `fetch()`/
+//! `XMLHttpRequest`/`sendBeacon`/`Worker`/`<embed>`/`<object>`/media clients
+//! (`page_pipeline.rs`/`hibernate.rs`, `resource_base::document_referrer_policy`)
+//! and for `<script src>` (`scripts.rs::resolve_script_sources`). Still on the
+//! project default: every other subresource fetch reached only via
+//! `ResourceBase::http_client_for_subresource`'s default-policy overload
+//! (`<img>`/`<link>`/`@import`/`@font-face`/`<iframe src>`/preload scanner —
+//! none of them hold a `&Document` at their call site without further
+//! threading), and a `referrerpolicy` element attribute override.
 
 use crate::origin::Origin;
 use lumen_core::url::Url;

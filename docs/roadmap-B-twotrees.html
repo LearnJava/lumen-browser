@@ -76,11 +76,11 @@
  "generated": "2026-09-21",
  "counts": {
   "open": 261,
-  "fixed": 757,
+  "fixed": 758,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1018,
+ "total_bugs": 1019,
  "phases": [
   {
    "id": "P0",
@@ -6770,7 +6770,7 @@
        "title": "GAP: Referer/Origin и модель referrer policy",
        "status": "planned",
        "size": "M",
-       "note": "Ни один исходящий запрос не несёт `Referer` и `Origin` — ни сабресурс (`<img>`, `<script src>`), ни `fetch()`, ни `sendBeacon`, включая POST того же происхождения; замерено сервером пробы, а не логом браузера. Расходится с собственным планом: `docs/plan/privacy.md` обещает `strict-origin-when-cross-origin`, то есть полный `Referer` для same-origin. Работа — модель referrer policy (источник политики, понижение при переходе границы происхождения, `Origin` для небезопасных методов), а не одна строка генерации заголовка. **Срез 1 (2026-09-21, P6):** `fetch()`/`XMLHttpRequest`/`sendBeacon` (три из четырёх измеренных запросов) теперь несут `Referer`/`Origin` — новый модуль `crates/network/src/referrer_policy.rs` (`ReferrerPolicy`, `compute_referrer` по §8.3), `HttpClient::with_document_context` заполняется в `crates/shell/src/page_pipeline.rs` рядом с `with_connect_src_policy`, всегда дефолтом проекта (`strict-origin-when-cross-origin`). **Срез 2 (2026-09-21, P6):** остаток `<img>`/`<script src>`/`<link>`/`@import`/`@font-face` закрыт — `ResourceBase::http_client_for_subresource` (единственный конструктор `HttpClient` для всех подресурсов, шесть точек вызова) теперь сам вызывает `with_document_context` тем же дефолтом, и `HttpClient::fetch_subresource_inner` (путь всех этих запросов, отдельный от `fetch()`/XHR) считает и подставляет `Referer` — `Origin` туда не добавляется, подресурсные запросы всегда GET. Дублирующий вызов `with_document_context` в `page_pipeline.rs` для JS-клиента убран как избыточный. Остаток: источник политики только дефолт — `<meta name=referrer>`/заголовок ответа/`referrerpolicy` не читаются. Статус остаётся `planned`.",
+       "note": "Ни один исходящий запрос не несёт `Referer` и `Origin` — ни сабресурс (`<img>`, `<script src>`), ни `fetch()`, ни `sendBeacon`, включая POST того же происхождения; замерено сервером пробы, а не логом браузера. Расходится с собственным планом: `docs/plan/privacy.md` обещает `strict-origin-when-cross-origin`, то есть полный `Referer` для same-origin. Работа — модель referrer policy (источник политики, понижение при переходе границы происхождения, `Origin` для небезопасных методов), а не одна строка генерации заголовка. **Срез 1 (2026-09-21, P6):** `fetch()`/`XMLHttpRequest`/`sendBeacon` (три из четырёх измеренных запросов) теперь несут `Referer`/`Origin` — новый модуль `crates/network/src/referrer_policy.rs` (`ReferrerPolicy`, `compute_referrer` по §8.3), `HttpClient::with_document_context` заполняется в `crates/shell/src/page_pipeline.rs` рядом с `with_connect_src_policy`, всегда дефолтом проекта (`strict-origin-when-cross-origin`). **Срез 2 (2026-09-21, P6):** остаток `<img>`/`<script src>`/`<link>`/`@import`/`@font-face` закрыт — `ResourceBase::http_client_for_subresource` (единственный конструктор `HttpClient` для всех подресурсов, шесть точек вызова) теперь сам вызывает `with_document_context` тем же дефолтом, и `HttpClient::fetch_subresource_inner` (путь всех этих запросов, отдельный от `fetch()`/XHR) считает и подставляет `Referer` — `Origin` туда не добавляется, подресурсные запросы всегда GET. Дублирующий вызов `with_document_context` в `page_pipeline.rs` для JS-клиента убран как избыточный. Остаток: источник политики только дефолт — `<meta name=referrer>`/заголовок ответа/`referrerpolicy` не читаются. Статус остаётся `planned`. **Срез 3 (2026-09-21, P6):** источник политики расширен — `<meta name=\"referrer\">` (парсится HTML tree builder-ом, `Document::meta_referrer`, живёт как `lumen-dom` не может зависеть от `lumen-network`) и ответный заголовок `Referrer-Policy` (`page_source::referrer_policy_header`, стемпится на документ рядом с `csp_header`) комбинируются в `resource_base::document_referrer_policy` (заголовок первым, затем каждый `<meta>` в порядке документа переопределяет — позже разобранный источник побеждает, невалидный пропускается) и заменяют дефолт для клиента верхнего документа (`fetch()`/`XMLHttpRequest`/`sendBeacon`/`Worker`/`<embed>`/`<object>`/медиа — `page_pipeline.rs`, `tab_lifecycle::hibernate.rs`) и `<script src>` (`scripts.rs::resolve_script_sources`), оба уже держат `&Document` для CSP-гейта. Остаток: `<img>`/`<link>`/`@import`/`@font-face`/`<iframe src>`/preload-сканер по-прежнему на дефолте — их вызовы `ResourceBase::http_client_for_subresource` не имеют `&Document` без дополнительного протаскивания; атрибут `referrerpolicy` у элементов не читается. Статус остаётся `planned`.",
        "bugs": [
         "BUG-859"
        ]
@@ -8869,13 +8869,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1054": {
-   "status": "open",
-   "title": "`node.nodeValue = null`/`node.data = null` на Text/Comment/ProcessingInstruction даёт буквальную строку `\"null\"` вместо `\"\"` — все три сеттера зовут `String(v)`…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_character_data`/`_LUMEN_WRAPPER_CD_MEMBERS`/`_lumen_make_processing_instruction`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1055": {
    "status": "open",
    "title": "`element.appendChild(x)` молча ничего не делает (не бросает, не вставляет) для любого детач-узла без `__nid__` — `new Comment()`, `new Text()`, `document.create…",
@@ -8978,6 +8971,13 @@
    "status": "open",
    "title": "При одновременном старте 4 экземпляров `lumen.exe --bidi-port` (`run_report.py --processes 4`) два из четырёх получают `present=WHITE` на Vulkan и GL и падают п…",
    "component": "paint/shell — выбор wgpu-бэкенда (`[probe]`, `crates/engine/paint/src/backends/wgpu_backend.rs`, `Renderer::new`/`Surface::configure`); причина не локализована",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1074": {
+   "status": "open",
+   "title": "`Element.nodeValue`/`DocumentFragment.nodeValue` возвращают `undefined` вместо спекового `null` (DOM §4.4) — свойство отсутствует в дескрипторах обёртки, тогда…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — элементная обёртка/`DocumentFragment`)",
    "date": null,
    "debtor": false
   },
@@ -14265,6 +14265,13 @@
    "component": "js (`crates/js/src/worker.rs::atob_native_v8`/`btoa_native_v8`; `crates/js/src/shim/web_api_shim_mid_c.js`)",
    "date": "2026-09-21",
    "debtor": false
+  },
+  "BUG-1054": {
+   "status": "fixed",
+   "title": "`node.nodeValue = null`/`node.data = null` на Text/Comment/ProcessingInstruction давал буквальную строку `\"null\"` вместо `\"\"` — четыре сеттера (три из заявки, ч…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_character_data`/`_LUMEN_WRAPPER_CD_MEMBERS`/`_LUMEN_WRAPPER_PI_MEMBERS`/`_lumen_make_processing_instruction`)",
+   "date": "2026-09-21",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14824,7 +14831,7 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_font_face_try_one_source`; `crates/js/src/shim/web_api_shim_mid_b.js` — `_lumen_fetch`)": [
    "BUG-1013"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_character_data`/`_LUMEN_WRAPPER_CD_MEMBERS`/`_lumen_make_processing_instruction`)": [
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_character_data`/`_LUMEN_WRAPPER_CD_MEMBERS`/`_LUMEN_WRAPPER_PI_MEMBERS`/`_lumen_make_processing_instruction`)": [
    "BUG-1054"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`/`_lumen_serialize_style`)": [
@@ -14847,6 +14854,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — фабрики коллекций `getElementsByTagName`/`getElementsByClassName`/`querySelectorAll`/`children`)": [
    "BUG-994"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — элементная обёртка/`DocumentFragment`)": [
+   "BUG-1074"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`)": [
    "BUG-463",

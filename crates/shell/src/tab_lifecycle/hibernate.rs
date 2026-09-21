@@ -99,7 +99,14 @@ pub(crate) fn restore_js_context(
     let sw = crate::sw_store_for_base(&base, sw_backend);
     let (fetch_provider, ws_provider, sse_provider) = match &base {
         ResourceBase::Url(_) => {
-            let client = base.http_client_for_subresource(event_sink, cookie_jar);
+            // GAP-REFERRER срез 3: same reasoning as `page_pipeline.rs`'s
+            // top-level client — this document's resolved policy, not always
+            // the project default.
+            let client = base.http_client_for_subresource_with_policy(
+                event_sink,
+                cookie_jar,
+                crate::resource_base::document_referrer_policy(&doc),
+            );
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
