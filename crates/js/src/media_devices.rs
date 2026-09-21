@@ -336,6 +336,11 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
           new DOMException('getDisplayMedia() requires transient activation.', 'InvalidStateError')
         );
       }
+      // Screen Capture §4.1 — consume user activation once the check passes
+      // (GAP-USERACT).
+      if (typeof _lumen_consume_user_activation === 'function') {
+        _lumen_consume_user_activation();
+      }
       // §4.1 step 3 — an explicit falsy `video` constraint must fail with TypeError.
       // Absent/undefined `video` defaults to `true` per spec and must NOT reject
       // (confirmed by the vendored tests/wpt/screen-capture/getdisplaymedia.https.html,

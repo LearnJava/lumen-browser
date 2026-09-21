@@ -243,9 +243,10 @@ the time — read dates.
   `structuredClone` gained an extension point for `[Serializable]` platform
   interfaces (`window.__lumen_platform_cloners` in `dom.rs`, a closed-over
   (test, clone) list) — a platform object cloned as a plain object loses its class and
-  its internal slots. The picker gate reads `navigator.userActivation`, which the
-  engine hardcodes to `isActive: true`, so it is structurally right and currently
-  inert ([BUG-751](../bugs/BUG-751-OPEN.md)).
+  its internal slots. The picker gate reads `navigator.userActivation`, backed by a
+  real transient-activation clock since GAP-USERACT ([BUG-751](../bugs/BUG-751-FIXED.md),
+  fixed 2026-09-21) — a real mousedown/pointerdown/click/keydown-keyup gesture is
+  required, not always granted.
 - **`FileSystemObserver` is a snapshot differ, not an OS watcher (BUG-389, P3,
   2026-08-10).** There is no file-watching dependency in the workspace and none was
   added: `_lumen_fs_observe` snapshots the observed subtree, `_lumen_fs_poll_changes`

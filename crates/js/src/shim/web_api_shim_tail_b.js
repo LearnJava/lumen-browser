@@ -4198,11 +4198,12 @@ function _lumen_fs_request_error(nid, el) {
     if (_lumen_get_attr(nid, _LPOP_ATTR) !== undefined) return 'element is a showing popover';
     // Transient activation, or the algorithm is triggered by user generated
     // orchestration. navigator.userActivation is the engine single answer to
-    // that question (the FSA and local-font gates read the same property); it
-    // currently reports active unconditionally, so this branch only starts
-    // firing once the engine tracks real gestures - BUG-758.
+    // that question (the FSA and local-font gates read the same property;
+    // GAP-USERACT, BUG-758/BUG-751 — fixed, real transient-activation clock).
     var activation = (typeof navigator !== 'undefined') ? navigator.userActivation : undefined;
     if (activation && activation.isActive === false) return 'no transient user activation';
+    // Fullscreen §4.3 — consume user activation once the check passes.
+    if (typeof _lumen_consume_user_activation === 'function') _lumen_consume_user_activation();
     return null;
 }
 
@@ -5182,9 +5183,23 @@ function _wa_doc_get_animations() {
 })();
 
 // ── navigator.userActivation (HTML LS §6.4) ───────────────────────────────────
-// Single-user interactive desktop app: always reports the user has activated.
+// GAP-USERACT (BUG-751): backed by the engine's own transient-activation
+// clock. `_lumen_mark_user_activation` is called from the shell-driven
+// trusted-input dispatch helpers below (never from a page's own
+// dispatchEvent()), and `isActive`/`hasBeenActive` read the live state
+// through natives registered by `install_user_activation`
+// (v8_runtime/install/platform.rs) — not a static snapshot.
 Object.defineProperty(navigator, 'userActivation', {
-  value: Object.freeze({ isActive: true, hasBeenActive: true }),
+  value: Object.create(Object.prototype, {
+    isActive: {
+      get: function() { return _lumen_user_activation_is_active(); },
+      enumerable: true, configurable: false,
+    },
+    hasBeenActive: {
+      get: function() { return _lumen_user_activation_has_been_active(); },
+      enumerable: true, configurable: false,
+    },
+  }),
   configurable: true, writable: false, enumerable: true,
 });
 

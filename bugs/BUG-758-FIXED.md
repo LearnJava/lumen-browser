@@ -1,6 +1,6 @@
 # BUG-758 — движок не отслеживает transient user activation: `navigator.userActivation` всегда активен
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-21 (P6, тот же фикс, что [BUG-751](BUG-751-FIXED.md)/GAP-USERACT)
 **Компонент:** js (`crates/js/src/dom.rs` — литерал `navigator.userActivation`),
 потребители: `_lumen_fs_request_error` (там же, Fullscreen §4.3),
 `crates/js/src/filesystem_access.rs:2601` (FSA §8.1),
@@ -82,3 +82,19 @@ crates/shell/src/*.rs` даёт только `<a>`-«activation behavior» и д
   активации там реализован, но при текущем ответе `userActivation` мёртв.
 * [BUG-386](BUG-386-FIXED.md) — тот же класс: разрешительный ответ вместо
   проверки.
+* [BUG-751](BUG-751-FIXED.md) — тот же дефект, найденный независимо тем же
+  днём при закрытии другого бага; закрыты вместе одним фиксом (GAP-USERACT).
+
+## Исправлено
+
+**2026-09-21 (P6, `p6-gap-useract`).** Дубликат [BUG-751](BUG-751-FIXED.md) —
+исходный текст файла описывает ровно тот же дефект и предлагает ровно тот же
+план («Как чинить» 1-3 выше), реализованный при закрытии GAP-USERACT.
+`_lumen_fs_request_error` (`web_api_shim_tail_b.js`, `requestFullscreen()`'s
+Fullscreen §4.3 гейт) теперь читает живой `navigator.userActivation` и,
+дополнительно к тому, что просил этот файл, зовёт
+`_lumen_consume_user_activation()` при успешном проходе. Полное описание
+фикса — в [BUG-751-FIXED.md](BUG-751-FIXED.md)'s разделе «Исправлено».
+5 тестов `dom::tests::v8_fullscreen_locks` (в т.ч. упомянутый ниже
+`request_fullscreen_rejects_without_transient_activation`) адаптированы под
+реальный гейт — `cargo test -p lumen-js --features v8-backend` 4087/4087.

@@ -127,6 +127,95 @@ pub(crate) fn install_performance_now(
     Ok(())
 }
 
+/// Milliseconds an activation-triggering input event stays "active" for HTML
+/// LS §6.4 transient activation, before `navigator.userActivation.isActive`
+/// decays back to `false` on its own (mirrors Chromium/Firefox's 5 s window —
+/// the spec deliberately leaves the exact duration to the user agent).
+const ACTIVATION_WINDOW_MS: u64 = 5000;
+
+/// Reads the same clock `install_performance_now`'s `_lumen_now_ms` uses,
+/// without advancing `deterministic_clock_ms` — that counter is
+/// `_lumen_now_ms`'s own tick under `--monotonic-clock`, and peeking it here
+/// too would silently double-advance `performance.now()` on every activating
+/// input event.
+fn activation_now_ms(deterministic: bool, deterministic_clock_ms: &AtomicU64) -> u64 {
+    if deterministic {
+        deterministic_clock_ms.load(Ordering::Relaxed)
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+}
+
+/// HTML LS §6.4 transient activation backing `navigator.userActivation`
+/// (GAP-USERACT, BUG-751). `_lumen_mark_user_activation` is called from the
+/// shim's trusted-input dispatch helpers (`_lumen_dispatch_bubble`'s 'click'
+/// branch, `_lumen_dispatch_mouse_event`, `_lumen_dispatch_pointer_event`,
+/// `_lumen_dispatch_key_event` in `web_api_shim_mid.js`) — never from a
+/// page-authored `dispatchEvent()`, per `crates/shell/src/input/mod.rs`'s
+/// isTrusted=true guarantee for real input. `_lumen_consume_user_activation`
+/// is the "consume user activation" algorithm the File System Access, Window
+/// Management, Local Font Access and Screen Capture gates each call once
+/// their check passes.
+///
+/// Deterministic-mode caveat: with `--deterministic` and no
+/// `--monotonic-clock`, the clock is frozen, so a single mark keeps
+/// `isActive` `true` until an explicit consume — the automation-friendly
+/// behaviour BUG-751 asked for, not a bug in this implementation.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn install_user_activation(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<OwnedNativeFn>,
+    deterministic_seed: Option<u64>,
+    deterministic_clock_ms: Arc<AtomicU64>,
+    activation_last_ms: Arc<AtomicU64>,
+    activation_ever: Arc<AtomicBool>,
+    activation_consumed: Arc<AtomicBool>,
+) -> JsResult<()> {
+    let det = deterministic_seed.is_some();
+    {
+        let clock = Arc::clone(&deterministic_clock_ms);
+        let last = Arc::clone(&activation_last_ms);
+        let ever = Arc::clone(&activation_ever);
+        let consumed = Arc::clone(&activation_consumed);
+        reg!(scope, ctx, store, "_lumen_mark_user_activation", move || {
+            last.store(activation_now_ms(det, &clock), Ordering::Relaxed);
+            ever.store(true, Ordering::Relaxed);
+            consumed.store(false, Ordering::Relaxed);
+        });
+    }
+    {
+        let consumed = Arc::clone(&activation_consumed);
+        reg!(scope, ctx, store, "_lumen_consume_user_activation", move || {
+            consumed.store(true, Ordering::Relaxed);
+        });
+    }
+    {
+        let clock = Arc::clone(&deterministic_clock_ms);
+        let last = Arc::clone(&activation_last_ms);
+        let ever = Arc::clone(&activation_ever);
+        let consumed = Arc::clone(&activation_consumed);
+        reg!(scope, ctx, store, "_lumen_user_activation_is_active", move || -> bool {
+            if !ever.load(Ordering::Relaxed) || consumed.load(Ordering::Relaxed) {
+                return false;
+            }
+            let now = activation_now_ms(det, &clock);
+            now.saturating_sub(last.load(Ordering::Relaxed)) < ACTIVATION_WINDOW_MS
+        });
+    }
+    {
+        let ever = Arc::clone(&activation_ever);
+        reg!(scope, ctx, store, "_lumen_user_activation_has_been_active", move || -> bool {
+            ever.load(Ordering::Relaxed)
+        });
+    }
+    Ok(())
+}
+
 /// Timer and `requestAnimationFrame` wakeup notifications for the shell.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_timer_wakeup(
