@@ -1,7 +1,11 @@
 # BUG-554: CSS Typed OM value-type hierarchy and unit-factory functions almost entirely missing — only a narrow base slice exists
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-TYPEDOM](../ROADMAP.md))
-**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-TYPEDOM` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
+**Статус:** FIXED 2026-09-21 — [GAP-TYPEDOM](../ROADMAP.md) закрыт срезом 5 (`p6-gap-typedom-srez5`)
+**Тип:** нереализованная функциональность, не дефект реализованного кода — велась как задача `GAP-TYPEDOM` в [ROADMAP.md](../ROADMAP.md), P3 как баг не брал. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
+
+## Закрытие
+
+Реализовано срезами 1-5 (P6, 2026-09-21, `ROADMAP.md:907`): фабрики единиц `CSS.<unit>()`, `CSSStyleValue.parse`/`.parseAll`, иерархия `CSSMathValue` с арифметикой `CSSNumericValue.add`/`sub`/`mul`/`div`/`min`/`max`/`negate`/`invert`, `CSSUnparsedValue`/`CSSVariableReferenceValue`, `StylePropertyMap.set`/`.append` вариативные, `CSSTransformValue`/`CSSTransformComponent` семейство, `CSSColorValue` семейство, и наконец `CSSNumericValue.to()`/`.equals()` (срез 5) — `to()` резолвит дерево `CSSMathValue` через `evalNumeric` (сумма/min/max сводятся к общей единице таблицы `UNIT_GROUPS`, произведение допускает не более одного не-`<number>`-операнда), `equals()` — структурное сравнение дерева без контекста разрешения. Не полный алгоритм численных типов §8.5 (нет учёта показателей степени по вложенным произведениям, нет типизации `<percentage^2>`) — задокументировано как сознательное упрощение в `typed_om_api.rs`. `CSSColorValue.to()`/`.equals()` спекой не определены — доки-дрейф остатка среза 4 был неточен, каналы цвета получают оба метода как обычные `CSSNumericValue`.
 **Дата:** 2026-08-04
 **Компонент:** js (`crates/js/src/typed_om_api.rs`)
 **Найден:** WPT-RUN-3 срез 37 (`ROADMAP.md`) — массовый прогон `css/css-typed-om`

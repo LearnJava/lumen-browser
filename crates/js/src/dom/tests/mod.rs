@@ -290,3 +290,6 @@ mod v8_gap_typedom_transform;
 
 #[cfg(feature = "v8-backend")]
 mod v8_gap_typedom_color;
+
+#[cfg(feature = "v8-backend")]
+mod v8_gap_typedom_numeric;
