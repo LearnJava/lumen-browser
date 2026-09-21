@@ -12,7 +12,10 @@
 //! `cargo build -p lumen-image --features avif`. Без неё `is_avif()` работает,
 //! `decode_avif()` возвращает `AvifError::Decode`.
 //!
-//! Feature "avif" подтягивает `image = "0.25"` → `libavif` (cmake + nasm).
+//! Feature "avif" подтягивает `image = "0.25"` с её feature "avif-native" →
+//! `dav1d` (C, через `dav1d-sys`) + `mp4parse`. Без системного dav1d в
+//! pkg-config сборка клонирует videolan/dav1d по сети и собирает его
+//! meson+ninja(+nasm) — GAP-avif срез 1, `docs/tasks/ph3-avif.md`.
 
 /// Ошибка декодирования AVIF.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +88,8 @@ fn decode_avif_impl(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), AvifError> {
 #[cfg(not(feature = "avif"))]
 fn decode_avif_impl(_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), AvifError> {
     Err(AvifError::Decode(
-        "AVIF: включите feature 'avif' в lumen-image (требует cmake + nasm)".to_string(),
+        "AVIF: включите feature 'avif' в lumen-image (требует dav1d, см. docs/tasks/ph3-avif.md)"
+            .to_string(),
     ))
 }
 
