@@ -1860,6 +1860,44 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 Дальше: `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34) не тронуты; из оставшихся — категории без запускаемых тестов (`appmanifest`, `annotation-*`, `avif`, `gif`,
 `dpub-aria`, `graphics-aam`, `html-longdesc`, `print`, `cssom`) baseline получить не могут; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
 
+### TEST-3: срез 50 (2026-09-22) — `encoding` (без `legacy-mb-*`): 106/132 harness OK, шесть новых багов
+
+**Выбор кандидата.** `encoding` — первый в списке «Дальше» среза 49; провалившаяся попытка среза 35–36 (1338 id, ~4 ч на диапазонных `legacy-mb-*`) учтена: взято только с
+`--exclude-prefix /encoding/legacy-mb-` (отсекает 1206 id, остаётся **132 id**). `tests/wpt/metadata/encoding/` до среза не было. Число категорий 254 → 255 (без `legacy-mb-*`: 1206 id
+диапазонных query-вариантов baseline не получили и получать не должны — `TIMEOUT`/`ERROR` на них заведомо плавают).
+
+**Baseline.** `--update-expected --all --root encoding --recursive --exclude-prefix /encoding/legacy-mb- --processes 10`. **106/132 harness OK, 4 243/23 436 подтестов**, 46 `.ini`.
+Раскладка top-level: 106 `OK`, 18 `ERROR`, 8 `TIMEOUT`.
+
+**Проверка.** Три `--check` подряд (те же флаги + `--binary target/dev-release/lumen.exe`, ≈2:49 каждый): **0 регрессий, 0 unexpected pass, 0 других отклонений**, exit 0, числа идентичны
+(106/132, 4 243/23 436). Флапающих файлов нет.
+
+**Что нашлось.**
+
+| Причина | Масштаб | Доказательство |
+|---|---|---|
+| В воркерной области нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream`/`TextEncoderStream`, [BUG-1080](../../bugs/BUG-1080-OPEN.md) | 51 воркерный id, ≈15 000 сообщений (главная масса подтестов, не прошедших в категории) | `api-basics.any.worker.html` 0/6 при `.any.html` 6/6 |
+| Воркерный `XMLHttpRequest` без `overrideMimeType`, [BUG-1081](../../bugs/BUG-1081-OPEN.md) | 26 сообщений | `replacement-encodings`/`unsupported-encodings` `.any.worker.html` |
+| Одиночный суррогат кодируется в WTF-8, [BUG-1082](../../bugs/BUG-1082-OPEN.md) | `api-surrogates-utf8` 1/6, `textencoder-utf16-surrogates` 2/7, `streams/encode-utf8` 3/19 | проба `--dump-layout` |
+| Потоковый `TextDecoder` не срезает BOM, разнесённый по чанкам, [BUG-1083](../../bugs/BUG-1083-OPEN.md) | `streams/decode-ignore-bom` 5/12, `textdecoder-copy` 0/2 | проба `--dump-layout` |
+| `TextDecoderStream` принимает не-`BufferSource`, [BUG-1084](../../bugs/BUG-1084-OPEN.md) | `streams/decode-bad-chunks` 0/5 | проба `--dump-layout` |
+| `WebAssembly.Memory({shared:true})` отдаёт `ArrayBuffer`, [BUG-1085](../../bugs/BUG-1085-OPEN.md) | 55 подтестов (`encodeInto.any.html` 54, `textdecoder-copy.any.html` 1); хелпер `common/sab.js` подключают 12 файлов из 5 категорий | `Error("WebAssembly.Memory does not support shared:true")` |
+| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 16 из 18 `ERROR`: `sharedarraybuffer.https.html` и 15 `*.any.serviceworker.html` (`certificate not valid for name "localhost"`, 48 строк в логе) | service-worker-варианты до кода движка не доходят |
+
+Остальные top-level отклонения **не разбирались**: `ERROR` `single-byte-decoder-iframe.window.html`, `streams/decode-utf8.any.html` (5/5 подтестов, но harness `ERROR`); `TIMEOUT`
+`idlharness.any.worker.html`/`.sharedworker.html`, `streams/decode-utf8.any.worker.html`/`.sharedworker.html`, `streams/realms.window.html`, `unsupported-labels.window.html`,
+`utf-32.html`, `utf-32-from-win1252.html` (0/8). Часть воркерных `TIMEOUT` вероятно следствие BUG-1080 — это гипотеза, не проверялась. Багов на них не заводилось.
+
+**Ограничение записанного.** 16 id (`ERROR` на https-origin) — нижняя планка: baseline по ним придётся перегенерировать после BUG-1069, а по воркерным вариантам — после BUG-1080 (число
+`FAIL` там упадёт, гейт `--check` увидит это как unexpected pass). Категория покрыта без `legacy-mb-*` (1206 id) — гейт по ним мёртв по-прежнему.
+
+**Окружение этой сессии.** Запуск через `tests/wpt/.venv/Scripts/python.exe` (системный `python` не находит `mozlog`); в Git Bash нужен `MSYS_NO_PATHCONV=1`, иначе
+`--exclude-prefix /encoding/legacy-mb-` превращается в `C:/Program Files/Git/encoding/legacy-mb-` и молча отсекает 0 id (тогда раннер берёт 1338 id); `--binary target/dev-release/lumen.exe`
+обязателен — по умолчанию раннер ищет `target/release/lumen.exe`. Бинарь тот же, на котором писался baseline (`target/dev-release/lumen.exe`, 00:43 22.09).
+
+Дальше: `IndexedDB` (срез 34) не тронута; категории без запускаемых тестов (`appmanifest`, `annotation-*`, `avif`, `gif`, `dpub-aria`, `graphics-aam`, `html-longdesc`, `print`, `cssom`)
+baseline получить не могут; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
