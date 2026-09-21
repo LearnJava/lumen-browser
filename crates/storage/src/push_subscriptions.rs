@@ -23,9 +23,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::migrations::{run_migrations, set_common_pragmas, Migration};
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: r#"
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: r#"
     CREATE TABLE IF NOT EXISTS push_subscriptions (
         id                 INTEGER PRIMARY KEY,
         origin             TEXT NOT NULL,
@@ -39,7 +40,17 @@ const MIGRATIONS: &[Migration] = &[Migration {
     );
     CREATE INDEX IF NOT EXISTS push_origin_idx ON push_subscriptions(origin);
     "#,
-}];
+    },
+    Migration {
+        // ECDH private key (SEC1 scalar, base64), matching `p256dh`. Needed to
+        // decrypt incoming push messages (RFC 8291) — never exposed to JS,
+        // internal-only column.
+        version: 2,
+        sql: r#"
+    ALTER TABLE push_subscriptions ADD COLUMN private_key TEXT NOT NULL DEFAULT '';
+    "#,
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushSubscription {
@@ -52,6 +63,10 @@ pub struct PushSubscription {
     pub p256dh: String,
     /// Base64 auth-secret для расшифровки.
     pub auth: String,
+    /// Base64 ECDH private key (SEC1 scalar), соответствующий `p256dh`.
+    /// Внутреннее поле — никогда не отдаётся в JS, нужно только для
+    /// расшифровки входящих push-сообщений (RFC 8291).
+    pub private_key: String,
     /// `true` если пользователь видит уведомление о каждом push (Push API §5
     /// userVisibleOnly). Phase 0: только этот режим (silent push не поддержан).
     pub user_visible_only: bool,
@@ -99,6 +114,7 @@ impl PushSubscriptions {
         endpoint: &str,
         p256dh: &str,
         auth: &str,
+        private_key: &str,
         user_visible_only: bool,
         created_at: i64,
     ) -> Result<i64> {
@@ -107,12 +123,13 @@ impl PushSubscriptions {
             .lock()
             .map_err(|_| Error::Storage("push_subscriptions mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO push_subscriptions (origin, scope, endpoint, p256dh, auth, user_visible_only, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO push_subscriptions (origin, scope, endpoint, p256dh, auth, private_key, user_visible_only, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (origin, scope) DO UPDATE SET
                  endpoint = excluded.endpoint,
                  p256dh = excluded.p256dh,
                  auth = excluded.auth,
+                 private_key = excluded.private_key,
                  user_visible_only = excluded.user_visible_only,
                  created_at = excluded.created_at",
             params![
@@ -121,6 +138,7 @@ impl PushSubscriptions {
                 endpoint,
                 p256dh,
                 auth,
+                private_key,
                 user_visible_only as i32,
                 created_at
             ],
@@ -142,7 +160,7 @@ impl PushSubscriptions {
             .lock()
             .map_err(|_| Error::Storage("push_subscriptions mutex poisoned".into()))?;
         conn.query_row(
-            "SELECT id, origin, scope, endpoint, p256dh, auth, user_visible_only, created_at
+            "SELECT id, origin, scope, endpoint, p256dh, auth, private_key, user_visible_only, created_at
              FROM push_subscriptions WHERE id = ?1",
             params![id],
             row_to_sub,
@@ -157,7 +175,7 @@ impl PushSubscriptions {
             .lock()
             .map_err(|_| Error::Storage("push_subscriptions mutex poisoned".into()))?;
         conn.query_row(
-            "SELECT id, origin, scope, endpoint, p256dh, auth, user_visible_only, created_at
+            "SELECT id, origin, scope, endpoint, p256dh, auth, private_key, user_visible_only, created_at
              FROM push_subscriptions WHERE origin = ?1 AND scope = ?2",
             params![origin, scope],
             row_to_sub,
@@ -173,7 +191,7 @@ impl PushSubscriptions {
             .map_err(|_| Error::Storage("push_subscriptions mutex poisoned".into()))?;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, origin, scope, endpoint, p256dh, auth, user_visible_only, created_at
+                "SELECT id, origin, scope, endpoint, p256dh, auth, private_key, user_visible_only, created_at
                  FROM push_subscriptions WHERE origin = ?1 ORDER BY scope ASC",
             )
             .map_err(|e| Error::Storage(format!("push_subscriptions list prepare: {e}")))?;
@@ -194,7 +212,7 @@ impl PushSubscriptions {
             .map_err(|_| Error::Storage("push_subscriptions mutex poisoned".into()))?;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, origin, scope, endpoint, p256dh, auth, user_visible_only, created_at
+                "SELECT id, origin, scope, endpoint, p256dh, auth, private_key, user_visible_only, created_at
                  FROM push_subscriptions ORDER BY created_at ASC",
             )
             .map_err(|e| Error::Storage(format!("push_subscriptions list_all prepare: {e}")))?;
@@ -255,8 +273,9 @@ fn row_to_sub(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushSubscription> {
         endpoint: row.get(3)?,
         p256dh: row.get(4)?,
         auth: row.get(5)?,
-        user_visible_only: row.get::<_, i32>(6)? != 0,
-        created_at: row.get(7)?,
+        private_key: row.get(6)?,
+        user_visible_only: row.get::<_, i32>(7)? != 0,
+        created_at: row.get(8)?,
     })
 }
 
@@ -278,6 +297,7 @@ mod tests {
                 "https://push.mozilla.com/abc",
                 "pubkey-base64",
                 "auth-secret-base64",
+                "privkey-base64",
                 true,
                 100,
             )
@@ -292,8 +312,8 @@ mod tests {
     #[test]
     fn subscribe_same_scope_updates() {
         let s = make();
-        let id1 = s.subscribe("https://x/", "/", "ep1", "k1", "a1", true, 100).unwrap();
-        let id2 = s.subscribe("https://x/", "/", "ep2", "k2", "a2", true, 200).unwrap();
+        let id1 = s.subscribe("https://x/", "/", "ep1", "k1", "a1", "priv", true, 100).unwrap();
+        let id2 = s.subscribe("https://x/", "/", "ep2", "k2", "a2", "priv", true, 200).unwrap();
         assert_eq!(id1, id2);
         let sub = s.get(id1).unwrap().unwrap();
         assert_eq!(sub.endpoint, "ep2");
@@ -303,8 +323,8 @@ mod tests {
     #[test]
     fn get_by_scope() {
         let s = make();
-        s.subscribe("https://x/", "/", "ep", "k", "a", true, 100).unwrap();
-        s.subscribe("https://x/", "/app/", "ep2", "k2", "a2", true, 200).unwrap();
+        s.subscribe("https://x/", "/", "ep", "k", "a", "priv", true, 100).unwrap();
+        s.subscribe("https://x/", "/app/", "ep2", "k2", "a2", "priv", true, 200).unwrap();
         let sub = s.get_by_scope("https://x/", "/app/").unwrap().unwrap();
         assert_eq!(sub.endpoint, "ep2");
     }
@@ -312,9 +332,9 @@ mod tests {
     #[test]
     fn list_for_origin() {
         let s = make();
-        s.subscribe("https://x/", "/", "ep1", "k", "a", true, 100).unwrap();
-        s.subscribe("https://x/", "/app/", "ep2", "k", "a", true, 200).unwrap();
-        s.subscribe("https://y/", "/", "ep3", "k", "a", true, 300).unwrap();
+        s.subscribe("https://x/", "/", "ep1", "k", "a", "priv", true, 100).unwrap();
+        s.subscribe("https://x/", "/app/", "ep2", "k", "a", "priv", true, 200).unwrap();
+        s.subscribe("https://y/", "/", "ep3", "k", "a", "priv", true, 300).unwrap();
         let list = s.list_for_origin("https://x/").unwrap();
         assert_eq!(list.len(), 2);
     }
@@ -322,7 +342,7 @@ mod tests {
     #[test]
     fn unsubscribe_works() {
         let s = make();
-        let id = s.subscribe("https://x/", "/", "ep", "k", "a", true, 100).unwrap();
+        let id = s.subscribe("https://x/", "/", "ep", "k", "a", "priv", true, 100).unwrap();
         s.unsubscribe(id).unwrap();
         assert!(s.get(id).unwrap().is_none());
     }
@@ -330,9 +350,9 @@ mod tests {
     #[test]
     fn unsubscribe_origin_removes_all_scopes() {
         let s = make();
-        s.subscribe("https://x/", "/", "ep1", "k", "a", true, 100).unwrap();
-        s.subscribe("https://x/", "/app/", "ep2", "k", "a", true, 200).unwrap();
-        s.subscribe("https://y/", "/", "ep3", "k", "a", true, 300).unwrap();
+        s.subscribe("https://x/", "/", "ep1", "k", "a", "priv", true, 100).unwrap();
+        s.subscribe("https://x/", "/app/", "ep2", "k", "a", "priv", true, 200).unwrap();
+        s.subscribe("https://y/", "/", "ep3", "k", "a", "priv", true, 300).unwrap();
         let n = s.unsubscribe_origin("https://x/").unwrap();
         assert_eq!(n, 2);
         assert_eq!(s.count().unwrap(), 1);
@@ -341,16 +361,16 @@ mod tests {
     #[test]
     fn silent_push_user_visible_only_false() {
         let s = make();
-        let id = s.subscribe("https://x/", "/", "ep", "k", "a", false, 100).unwrap();
+        let id = s.subscribe("https://x/", "/", "ep", "k", "a", "priv", false, 100).unwrap();
         assert!(!s.get(id).unwrap().unwrap().user_visible_only);
     }
 
     #[test]
     fn list_all_ordered_by_creation() {
         let s = make();
-        s.subscribe("https://c/", "/", "ep3", "k", "a", true, 300).unwrap();
-        s.subscribe("https://a/", "/", "ep1", "k", "a", true, 100).unwrap();
-        s.subscribe("https://b/", "/", "ep2", "k", "a", true, 200).unwrap();
+        s.subscribe("https://c/", "/", "ep3", "k", "a", "priv", true, 300).unwrap();
+        s.subscribe("https://a/", "/", "ep1", "k", "a", "priv", true, 100).unwrap();
+        s.subscribe("https://b/", "/", "ep2", "k", "a", "priv", true, 200).unwrap();
         let list = s.list_all().unwrap();
         assert_eq!(list.len(), 3);
         assert_eq!(list[0].endpoint, "ep1");
@@ -361,8 +381,8 @@ mod tests {
     fn count_works() {
         let s = make();
         assert_eq!(s.count().unwrap(), 0);
-        s.subscribe("https://a/", "/", "ep", "k", "a", true, 100).unwrap();
-        s.subscribe("https://b/", "/", "ep", "k", "a", true, 200).unwrap();
+        s.subscribe("https://a/", "/", "ep", "k", "a", "priv", true, 100).unwrap();
+        s.subscribe("https://b/", "/", "ep", "k", "a", "priv", true, 200).unwrap();
         assert_eq!(s.count().unwrap(), 2);
     }
 }

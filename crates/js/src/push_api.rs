@@ -9,10 +9,60 @@
 //! (`lumen_storage::PushStore` over the SQLite `push_subscriptions` table),
 //! keyed by `(origin, scope)` — `getSubscription()` reads the store, not an
 //! in-memory field, so a subscription survives the JS context being torn down
-//! and rebuilt (reload). Key material (`p256dh`/`auth`) is still mock
-//! (zero-filled) — real ECDH P-256 keys are срез 2.
+//! and rebuilt (reload).
+//!
+//! Срез 2 (real keys): `subscribe()` mints a real P-256 ECDH keypair
+//! (`generate_push_keys`, same `p256`+`getrandom` pattern as
+//! `subtle_crypto.rs`'s `"ECDH"` branch of `generateKey`) instead of the
+//! former zero-filled `ArrayBuffer`. `p256dh` is the 65-byte uncompressed
+//! SEC1 point (RFC 8291 §4), `auth` is 16 random bytes. The private scalar
+//! never leaves Rust — it is persisted alongside the public material (for a
+//! future push-message decrypt step, срез 4) but is not part of any native
+//! return value the JS shim can see.
 
 use std::sync::Arc;
+
+use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+
+/// Real P-256 ECDH keypair + auth secret for a new push subscription
+/// (RFC 8291 §4). `p256dh`/`auth`/`private_key` are base64-encoded, matching
+/// the wire format `lumen_core::ext::PushBackend`/`PushStore` already use for
+/// opaque key material.
+struct PushKeys {
+    p256dh_b64: String,
+    auth_b64: String,
+    private_key_b64: String,
+}
+
+/// Generate a fresh ECDH P-256 keypair + 16-byte auth secret.
+///
+/// Mirrors `subtle_crypto.rs`'s `"ECDH"` `generateKey` branch (OS CSPRNG seed
+/// -> `p256::SecretKey::from_slice`) rather than reusing it directly — that
+/// path allocates into the JS-visible `CRYPTO_KEYS` registry, which a push
+/// subscription's private key must never enter.
+///
+/// A 32-byte OS-random seed is rejected by `from_slice` only if it happens to
+/// encode the scalar `0` (probability ~2^-256) — retrying with a fresh seed
+/// converges without ever needing `unwrap`/`expect` on the result.
+fn generate_push_keys() -> PushKeys {
+    let secret = loop {
+        let mut seed = [0u8; 32];
+        getrandom::getrandom(&mut seed).unwrap_or(());
+        if let Ok(k) = p256::SecretKey::from_slice(&seed) {
+            break k;
+        }
+    };
+    let public_point = secret.public_key().to_encoded_point(false);
+
+    let mut auth = [0u8; 16];
+    getrandom::getrandom(&mut auth).unwrap_or(());
+
+    PushKeys {
+        p256dh_b64: lumen_core::hash::base64_encode(public_point.as_bytes()),
+        auth_b64: lumen_core::hash::base64_encode(&auth),
+        private_key_b64: lumen_core::hash::base64_encode(&secret.to_bytes()),
+    }
+}
 
 /// V8 port of the former rquickjs `init_push_api` (Ph3 V8 migration S12b-G3,
 /// rquickjs side removed in the same batch): identical JS shim, evaluated via
@@ -29,20 +79,25 @@ pub(crate) fn install_push_api_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>>,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn2, into_v8_fn6};
+    use crate::v8_compat::{into_v8_fn2, into_v8_fn4};
     use lumen_core::ext::JsRuntime as _;
 
     let be = push_backend.clone();
-    let subscribe = into_v8_fn6(
-        move |origin: String,
-              scope: String,
-              endpoint: String,
-              p256dh: String,
-              auth: String,
-              user_visible_only: bool| {
+    let subscribe = into_v8_fn4(
+        move |origin: String, scope: String, endpoint: String, user_visible_only: bool| -> Vec<String> {
+            let keys = generate_push_keys();
             if let Some(be) = be.as_ref() {
-                be.push_subscribe(&origin, &scope, &endpoint, &p256dh, &auth, user_visible_only);
+                be.push_subscribe(
+                    &origin,
+                    &scope,
+                    &endpoint,
+                    &keys.p256dh_b64,
+                    &keys.auth_b64,
+                    &keys.private_key_b64,
+                    user_visible_only,
+                );
             }
+            vec![keys.p256dh_b64, keys.auth_b64]
         },
     );
     rt.register_native("_lumen_push_subscribe", subscribe)?;
@@ -77,14 +132,8 @@ pub(crate) fn install_push_api_v8(
 /// JavaScript shim implementing W3C Push API L1.
 #[cfg(feature = "v8-backend")]
 const PUSH_API_SHIM: &str = r#"(function() {
-  // ArrayBuffer <-> base64, for handing key material to/from the native
-  // store (which persists opaque base64 strings, not ArrayBuffers).
-  function _push_ab2b64(buf) {
-    var bytes = new Uint8Array(buf);
-    var bin = '';
-    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
-  }
+  // base64 -> ArrayBuffer, for handing key material back from the native
+  // store (which persists/returns opaque base64 strings, not ArrayBuffers).
   function _push_b642ab(b64) {
     var bin = atob(b64);
     var bytes = new Uint8Array(bin.length);
@@ -135,8 +184,8 @@ const PUSH_API_SHIM: &str = r#"(function() {
   };
 
   // subscribe(options) -> Promise<PushSubscription>
-  // Phase 0: generated endpoint + mock keys (real ECDH is срез 2), persisted
-  // to the native store keyed by (origin, this.registration.scope).
+  // Real P-256 ECDH keypair + auth secret, minted natively (срез 2) and
+  // persisted to the native store keyed by (origin, this.registration.scope).
   PushManager.prototype.subscribe = function(options) {
     var self = this;
     options = options || {};
@@ -153,21 +202,16 @@ const PUSH_API_SHIM: &str = r#"(function() {
 
     var scope = (self.registration && self.registration.scope) || '';
     var endpoint = 'https://push.lumen.local/v1/subscription/' + Math.random().toString(36).substr(2, 9);
+    var userVisibleOnly = options.userVisibleOnly !== false;
+
     var keys = {
       'p256dh': new ArrayBuffer(65),
       'auth': new ArrayBuffer(16)
     };
-    var userVisibleOnly = options.userVisibleOnly !== false;
-
     if (typeof _lumen_push_subscribe === 'function') {
-      _lumen_push_subscribe(
-        location.origin,
-        scope,
-        endpoint,
-        _push_ab2b64(keys.p256dh),
-        _push_ab2b64(keys.auth),
-        userVisibleOnly
-      );
+      var row = _lumen_push_subscribe(location.origin, scope, endpoint, userVisibleOnly);
+      keys.p256dh = _push_b642ab(row[0]);
+      keys.auth = _push_b642ab(row[1]);
     }
 
     return Promise.resolve(new PushSubscription(endpoint, keys, scope));
@@ -215,6 +259,46 @@ const PUSH_API_SHIM: &str = r#"(function() {
   globalThis.PushSubscription = PushSubscription;
   globalThis.PushManager = PushManager;
 })();"#;
+
+#[cfg(test)]
+mod key_generation_tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
+    use super::generate_push_keys;
+
+    #[test]
+    fn p256dh_is_a_valid_uncompressed_sec1_point() {
+        let keys = generate_push_keys();
+        let point = lumen_core::hash::base64_decode(&keys.p256dh_b64).unwrap();
+        // RFC 8291 §4: 65-byte uncompressed SEC1 point, leading 0x04 tag.
+        assert_eq!(point.len(), 65);
+        assert_eq!(point[0], 0x04);
+    }
+
+    #[test]
+    fn auth_secret_is_16_bytes() {
+        let keys = generate_push_keys();
+        let auth = lumen_core::hash::base64_decode(&keys.auth_b64).unwrap();
+        assert_eq!(auth.len(), 16);
+    }
+
+    #[test]
+    fn each_call_generates_distinct_key_material() {
+        let a = generate_push_keys();
+        let b = generate_push_keys();
+        assert_ne!(a.p256dh_b64, b.p256dh_b64);
+        assert_ne!(a.auth_b64, b.auth_b64);
+        assert_ne!(a.private_key_b64, b.private_key_b64);
+    }
+
+    #[test]
+    fn private_key_is_a_valid_p256_scalar() {
+        let keys = generate_push_keys();
+        let raw = lumen_core::hash::base64_decode(&keys.private_key_b64).unwrap();
+        assert!(p256::SecretKey::from_slice(&raw).is_ok());
+    }
+}
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
@@ -342,6 +426,35 @@ mod tests {
                 .unwrap();
             assert_eq!(result, JsValue::String("buffer".to_string()));
         });
+    }
+
+    /// Срез 2 DoD: `getKey('p256dh')` returns a real 65-byte uncompressed
+    /// SEC1 point (leading `0x04`), not the former zero-filled mock.
+    #[test]
+    fn test_subscribe_returns_real_p256dh_key() {
+        let backend: Arc<dyn lumen_core::ext::PushBackend> = Arc::new(
+            lumen_storage::PushStore::new(Arc::new(
+                lumen_storage::PushSubscriptions::open_in_memory().unwrap(),
+            )),
+        );
+        let rt = V8JsRuntime::new().unwrap();
+        eval_with_location(&rt);
+        install_push_api_v8(&rt, Some(backend)).unwrap();
+        rt.eval(
+            "var reg = new ServiceWorkerRegistration(); reg.scope = '/'; \
+             var sub = null; \
+             reg.pushManager.subscribe({userVisibleOnly: true}) \
+                .then(function(s) { sub = s; });",
+        )
+        .unwrap();
+        let result = rt
+            .eval(
+                "var key = new Uint8Array(sub.getKey('p256dh')); \
+                 var auth = new Uint8Array(sub.getKey('auth')); \
+                 (key.length === 65 && key[0] === 4 && auth.length === 16) ? 'valid' : 'invalid'",
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String("valid".to_string()));
     }
 
     #[test]

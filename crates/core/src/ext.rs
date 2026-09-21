@@ -3405,7 +3405,10 @@ pub trait CacheBackend: Send + Sync {
 /// this trait, keeping the dependency graph acyclic.
 pub trait PushBackend: Send + Sync {
     /// Create or replace the subscription for `(origin, scope)`.
-    /// `p256dh`/`auth` are base64-encoded key material (opaque to the store).
+    /// `p256dh`/`auth`/`private_key` are base64-encoded key material (opaque
+    /// to the store). `private_key` is the ECDH private key matching
+    /// `p256dh` — persisted for a future push-message decrypt step (RFC
+    /// 8291), never returned by [`Self::push_get`].
     #[allow(clippy::too_many_arguments)]
     fn push_subscribe(
         &self,
@@ -3414,6 +3417,7 @@ pub trait PushBackend: Send + Sync {
         endpoint: &str,
         p256dh: &str,
         auth: &str,
+        private_key: &str,
         user_visible_only: bool,
     );
 

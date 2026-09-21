@@ -41,6 +41,7 @@ impl PushBackend for PushStore {
         endpoint: &str,
         p256dh: &str,
         auth: &str,
+        private_key: &str,
         user_visible_only: bool,
     ) {
         // Best-effort (trait contract): a storage failure must not abort the
@@ -55,6 +56,7 @@ impl PushBackend for PushStore {
             endpoint,
             p256dh,
             auth,
+            private_key,
             user_visible_only,
             created_at,
         );
@@ -84,7 +86,7 @@ mod tests {
     #[test]
     fn subscribe_then_get() {
         let store = make();
-        store.push_subscribe("https://x.test", "/", "https://push/ep", "p256", "auth", true);
+        store.push_subscribe("https://x.test", "/", "https://push/ep", "p256", "auth", "priv", true);
         let got = store.push_get("https://x.test", "/").unwrap();
         assert_eq!(got, ("https://push/ep".into(), "p256".into(), "auth".into(), true));
     }
@@ -98,8 +100,8 @@ mod tests {
     #[test]
     fn resubscribe_same_scope_overwrites() {
         let store = make();
-        store.push_subscribe("https://x.test", "/", "ep1", "k1", "a1", true);
-        store.push_subscribe("https://x.test", "/", "ep2", "k2", "a2", false);
+        store.push_subscribe("https://x.test", "/", "ep1", "k1", "a1", "priv", true);
+        store.push_subscribe("https://x.test", "/", "ep2", "k2", "a2", "priv", false);
         let got = store.push_get("https://x.test", "/").unwrap();
         assert_eq!(got, ("ep2".into(), "k2".into(), "a2".into(), false));
     }
@@ -107,7 +109,7 @@ mod tests {
     #[test]
     fn unsubscribe_removes_and_reports_existence() {
         let store = make();
-        store.push_subscribe("https://x.test", "/", "ep", "k", "a", true);
+        store.push_subscribe("https://x.test", "/", "ep", "k", "a", "priv", true);
         assert!(store.push_unsubscribe("https://x.test", "/"));
         assert!(store.push_get("https://x.test", "/").is_none());
         assert!(!store.push_unsubscribe("https://x.test", "/"));
@@ -117,7 +119,7 @@ mod tests {
     fn shared_across_clones_survives_handle_drop() {
         let subs = Arc::new(PushSubscriptions::open_in_memory().unwrap());
         let store_a = PushStore::new(Arc::clone(&subs));
-        store_a.push_subscribe("https://x.test", "/", "ep", "k", "a", true);
+        store_a.push_subscribe("https://x.test", "/", "ep", "k", "a", "priv", true);
         drop(store_a);
         let store_b = PushStore::new(subs);
         assert!(store_b.push_get("https://x.test", "/").is_some());
