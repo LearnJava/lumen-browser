@@ -361,6 +361,40 @@ pub(crate) struct LayoutSource {
     pub(crate) dynamic_css: Option<DynamicCssBase>,
 }
 
+/// CSS View Transitions Module Level 2 §3: whether `stylesheet` opts a
+/// document in to cross-document (MPA) view transitions, i.e. its cascade
+/// declared `@view-transition { navigation: auto; }`. Mirrors CSS's
+/// last-declaration-wins for a document-level descriptor — with more than
+/// one `@view-transition` block, the last one in document order decides.
+/// See `docs/tasks/ph3-view-transitions-mpa.md` срез 2. Not called from the
+/// navigation pipeline yet — wiring lands in срезы 3-4; until then only the
+/// tests below and [`mpa_view_transition_allowed`] use it.
+#[allow(dead_code)]
+pub(crate) fn view_transition_navigation_opted_in(
+    stylesheet: &lumen_css_parser::Stylesheet,
+) -> bool {
+    stylesheet
+        .view_transition_rules
+        .last()
+        .is_some_and(|r| r.navigation == lumen_css_parser::ViewTransitionNavigation::Auto)
+}
+
+/// Whether a navigation from `from` to `to` qualifies for a cross-document
+/// view transition: same origin (spec §navigation — cross-origin MPA
+/// transitions are out of scope) and **both** the departing and arriving
+/// document opt in via `@view-transition { navigation: auto; }`.
+#[allow(dead_code)] // wired in срезы 3-4, see the comment above `view_transition_navigation_opted_in`
+pub(crate) fn mpa_view_transition_allowed(
+    from_origin: &lumen_network::Origin,
+    from_stylesheet: &lumen_css_parser::Stylesheet,
+    to_origin: &lumen_network::Origin,
+    to_stylesheet: &lumen_css_parser::Stylesheet,
+) -> bool {
+    from_origin.same_origin(to_origin)
+        && view_transition_navigation_opted_in(from_stylesheet)
+        && view_transition_navigation_opted_in(to_stylesheet)
+}
+
 /// Everything one page load's cascade is built from: the collected CSS text,
 /// its parsed form and the font stack the text measurer needs.
 ///

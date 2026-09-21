@@ -1485,3 +1485,57 @@ fn xml_flavoured_false_for_plain_html() {
         &ResourceBase::Url("https://example.com/page".to_owned())
     ));
 }
+
+// ── P3-viewtransnav срез 2: cross-document view transition opt-in ────────
+
+fn origin_of(url: &str) -> lumen_network::Origin {
+    let parsed = lumen_core::url::Url::parse(url).expect("valid test URL");
+    lumen_network::Origin::from_url(&parsed).expect("non-opaque test origin")
+}
+
+#[test]
+fn view_transition_opt_in_true_when_navigation_auto() {
+    let sheet = lumen_css_parser::parse("@view-transition { navigation: auto; }");
+    assert!(view_transition_navigation_opted_in(&sheet));
+}
+
+#[test]
+fn view_transition_opt_in_false_when_navigation_none() {
+    let sheet = lumen_css_parser::parse("@view-transition { navigation: none; }");
+    assert!(!view_transition_navigation_opted_in(&sheet));
+}
+
+#[test]
+fn view_transition_opt_in_false_when_rule_absent() {
+    let sheet = lumen_css_parser::parse("h1 { color: red; }");
+    assert!(!view_transition_navigation_opted_in(&sheet));
+}
+
+#[test]
+fn view_transition_opt_in_last_rule_wins() {
+    let sheet = lumen_css_parser::parse(
+        "@view-transition { navigation: auto; } @view-transition { navigation: none; }",
+    );
+    assert!(!view_transition_navigation_opted_in(&sheet));
+}
+
+#[test]
+fn mpa_view_transition_requires_both_documents_opted_in() {
+    let same = origin_of("https://example.com/a");
+    let other_same = origin_of("https://example.com/b");
+    let opted_in = lumen_css_parser::parse("@view-transition { navigation: auto; }");
+    let not_opted_in = lumen_css_parser::parse("h1 { color: red; }");
+
+    assert!(mpa_view_transition_allowed(&same, &opted_in, &other_same, &opted_in));
+    assert!(!mpa_view_transition_allowed(&same, &opted_in, &other_same, &not_opted_in));
+    assert!(!mpa_view_transition_allowed(&same, &not_opted_in, &other_same, &opted_in));
+}
+
+#[test]
+fn mpa_view_transition_rejects_cross_origin() {
+    let a = origin_of("https://example.com/a");
+    let b = origin_of("https://other.example/b");
+    let opted_in = lumen_css_parser::parse("@view-transition { navigation: auto; }");
+
+    assert!(!mpa_view_transition_allowed(&a, &opted_in, &b, &opted_in));
+}

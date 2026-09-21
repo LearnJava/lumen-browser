@@ -179,6 +179,8 @@ use crate::page_pipeline::{
 };
 #[cfg(test)]
 use crate::page_pipeline::is_xml_flavoured_document;
+#[cfg(test)]
+use crate::page_pipeline::{mpa_view_transition_allowed, view_transition_navigation_opted_in};
 use crate::scripts::{
     collect_inline_scripts, collect_scripts_ordered, resolve_script_sources,
     run_scripts_with_dom,
