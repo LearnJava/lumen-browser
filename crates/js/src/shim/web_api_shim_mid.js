@@ -7605,9 +7605,18 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
         // `tabIndex` reflects the `tabindex` content attribute; with the
-        // attribute absent or unparseable the default is 0 for elements that
-        // are focusable anyway and −1 for everything else. `<body>`/`<html>`
-        // report −1 even though a script may focus them, matching browsers.
+        // attribute absent or unparseable the default is a fixed per-tag table
+        // (HTML LS §6.6.6 "tabIndex" getter steps), NOT "is this element
+        // focusable right now" — a `<button disabled>`/`<input type=hidden>`
+        // still default to 0 despite being currently unfocusable, while
+        // `<embed>`/`<div contenteditable>`/a shadow host default to −1 despite
+        // being currently focusable. BUG-1012: this used to answer the latter
+        // question (`_lumen_is_focusable`), which agrees with the spec table
+        // only by coincidence on some tags and disagrees on five, caught by
+        // WPT `tabindex-getter.html`: `<a>`/svg `<a>` without `href` read −1
+        // instead of the spec's unconditional 0, `<embed>` and a second
+        // `<summary>` in one `<details>` read 0 instead of −1, and
+        // `<div contenteditable>` read 0 instead of −1.
         // BUG-452: `tabIndex` is a hand-written accessor rather than a row of
         // the `_lumen_define_reflection` table, so it did not inherit that
         // table's `long` range guard — `tabindex="2147483648"` read back
@@ -7616,8 +7625,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var parsed = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex')));
             if (parsed !== null && parsed >= _LUMEN_LONG_MIN && parsed <= _LUMEN_LONG_MAX) return parsed;
             var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
-            if (tag === 'BODY' || tag === 'HTML') return -1;
-            return _lumen_is_focusable(nid) ? 0 : -1;
+            if (_LUMEN_TABINDEX_DEFAULT_ZERO_TAGS[tag] === 1) return 0;
+            if (tag === 'SUMMARY' && _lumen_summary_details_parent(nid) !== -1) return 0;
+            return -1;
         },
         // The SETTER takes a WebIDL `long`, so its argument is converted with
         // ToNumber + truncation, NOT parsed with the content-attribute rules:

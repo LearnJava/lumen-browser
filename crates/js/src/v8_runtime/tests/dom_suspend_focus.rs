@@ -699,16 +699,21 @@ fn tab_index_reflects_the_content_attribute() {
              d.tabIndex === -1",
     );
     // Out of the reflected `long` range → the DEFAULT, not the value read back
-    // verbatim. Which default that is comes from focusability, not from this
-    // rule: §2.4.4.1 parses `'2147483648'` successfully (the range cap lives in
-    // §2.6.2 reflection, not in the parse), so the `tabindex` focus flag is set
-    // and the element's default is 0 — hence the assertion is «not verbatim»
-    // plus the focusable default, not a hardcoded −1.
+    // verbatim. BUG-1012: which default that is comes from a fixed per-tag
+    // table (HTML LS §6.6.6 "tabIndex" getter steps: 0 for `a`/`area`/
+    // `button`/`frame`/`iframe`/`input`/`object`/`select`/`textarea`, or a
+    // `summary` that is the summary for its parent `details`, −1 otherwise),
+    // NOT from whether the element happens to be focusable right now — a
+    // plain `<div>` stays at its table default of −1 no matter what invalid
+    // or out-of-range `tabindex` it carries. WPT `tabindex-getter.html`
+    // confirms the table directly (e.g. `<embed>`/`<div contenteditable>`
+    // default to −1 despite being currently focusable, `<a>` without `href`
+    // defaults to 0 despite being currently unfocusable).
     assert_js_true(
         &rt,
         "var d = document.getElementById('plain');\
              d.setAttribute('tabindex', '2147483648');\
-             d.tabIndex === 0",
+             d.tabIndex === -1",
     );
 }
 
