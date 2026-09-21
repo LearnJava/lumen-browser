@@ -890,6 +890,17 @@ var _LUMEN_FOCUSABLE_TAGS = {
     SELECT: 1, TEXTAREA: 1, BUTTON: 1, IFRAME: 1, EMBED: 1, OBJECT: 1, SUMMARY: 1,
 };
 
+// Tags whose `tabIndex` IDL getter defaults to 0 with no `tabindex` attribute
+// present (HTML LS §6.6.6 "tabIndex" getter steps) — a fixed per-tag table,
+// unconditional on any other attribute (`<button disabled>`/`<input
+// type=hidden>` still default to 0; `<embed>` is NOT in this table despite
+// being in `_LUMEN_FOCUSABLE_TAGS` above, and defaults to −1). `SUMMARY` is
+// handled separately below: it defaults to 0 only when it is *the* summary
+// for its parent `<details>` (`_lumen_summary_details_parent`).
+var _LUMEN_TABINDEX_DEFAULT_ZERO_TAGS = {
+    A: 1, AREA: 1, BUTTON: 1, FRAME: 1, IFRAME: 1, INPUT: 1, OBJECT: 1, SELECT: 1, TEXTAREA: 1,
+};
+
 // HTML LS §2.4.4.1 «rules for parsing integers»: skip ASCII whitespace, take an
 // optional sign, require at least one ASCII digit, then «collect a sequence of
 // code points that are ASCII digits» and STOP. Returns null on error (absent,
