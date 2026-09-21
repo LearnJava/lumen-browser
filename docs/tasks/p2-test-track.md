@@ -1898,6 +1898,42 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 Дальше: `IndexedDB` (срез 34) не тронута; категории без запускаемых тестов (`appmanifest`, `annotation-*`, `avif`, `gif`, `dpub-aria`, `graphics-aam`, `html-longdesc`, `print`, `cssom`)
 baseline получить не могут; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
 
+### TEST-3: срез 51 (2026-09-22) — `trusted-types`: 148/234 harness OK, два новых бага, остальное — уже заведённые дефекты
+
+**Выбор кандидата.** Категории без `tests/wpt/metadata/<cat>/` пересчитаны по дереву, из оставшихся отобраны по доле `.https.`-файлов (BUG-1069 делает такие id `ERROR` целиком).
+`trusted-types` — 235 файлов, 30 `.https.`, самая малая доля среди категорий разумного размера (`webaudio` 297/60, `IndexedDB` 231/3, но её срез 34 не закрылся; `referrer-policy` 1 393 файла).
+`webxr` (164 из 166), `encrypted-media` (96 из 103), `WebCryptoAPI` (123 из 125), `permissions-policy` (137 из 162), `fenced-frame`, `speculation-rules`, `mixed-content`, `upgrade-insecure-requests` — почти целиком
+`.https.` и дали бы `ERROR`-baseline. Число категорий 255 → 256.
+
+**Baseline.** `--update-expected --all --root trusted-types --recursive --processes 10 --binary target/dev-release/lumen.exe` — 6:28. `running 234 all vendored`. **148/234 harness OK, 1 036/2 747 подтестов**,
+191 `.ini`. Раскладка top-level: 148 `OK`, 53 `TIMEOUT` (25 — воркерные, 8 — `trusted-types-navigation.html?…`), 33 `ERROR` (20 — `.https.`).
+
+**Проверка.** Три `--check` подряд (те же флаги, 5:49 первый): **0 регрессий, 0 unexpected pass, 0 других отклонений**, exit 0, числа идентичны (148/234, 1 036/2 747). Флапающих файлов нет.
+
+**Что нашлось.** Категория падает почти целиком на трёх известных дефектах и двух новых:
+
+| Причина | Масштаб | Доказательство |
+|---|---|---|
+| `document.createAttributeNS`/`createAttribute` отсутствуют, [BUG-689](../../bugs/BUG-689-OPEN.md) | 372 сообщения (360 + 12), главная масса `FAIL` | `set-attributes-*`, `Element-setAttribute-setAttributeNS-sinks`, `trusted-types-event-handlers` |
+| Ни один sink не спрашивает политику, [BUG-946](../../bugs/BUG-946-OPEN.md) | `setAttribute(name, "2+2")` не бросает (95), `elem[attr] = value` не бросает (32), `expected "safe_output" but got "unsafe_input"` (60) — sink не звал политику; `Node-multiple-arguments*` (40 сообщений `expected "'createScript';" but got ""`) — вероятно тот же корень, не проверялось | `trusted-types-event-handlers.html`, `set-attributes-mutations-in-callback.tentative.html` |
+| CSP-репорты и enforcement, [BUG-811](../../bugs/BUG-811-OPEN.md) | `a single violation reported expected 1 but got 0` — 92 сообщения (`trusted-types-reporting-*`, `-report-only`) — по природе CSP, каждый файл отдельно не проверялся | — |
+| В воркерах нет `trustedTypes`, **новый** [BUG-1086](../../bugs/BUG-1086-OPEN.md) | 23 из 28 не-service-worker воркерных id — `TIMEOUT`, ни одного проходящего подтеста | сырой лог `--log-raw`: `[worker-0] v8 script error: Runtime("trustedTypes is not defined")`, `[shared-worker] [ERR] trustedTypes is not defined` |
+| Интерфейсы Trusted Types не WebIDL-формы, **новый** [BUG-1087](../../bugs/BUG-1087-OPEN.md) | `idlharness.window.html` 39/100 (61 `FAIL`) | проба `--dump-layout`: `typeof self.TrustedTypePolicyFactory` → `undefined`, `trustedTypes.constructor.name` → `Object` |
+| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 20 `.https.` id, из них 15 `*ServiceWorker*` (120 строк `certificate not valid for name "localhost"` в логе) | service-worker-варианты до кода движка не доходят |
+
+Остальные top-level отклонения **не разбирались** и багов на них не заводилось: `ERROR` `HTMLElement-generic.html` (40/72), `block-text-node-insertion-into-*script-element.html`, `inheriting-csp-for-local-schemes.html`,
+`modify-attributes-in-callback.html`, `script-enforcement-001/003/006/007.html`, `trusted-types-reporting-check-report-*-create-policy/-sink-mismatch.html`; `TIMEOUT` `default-policy*.html`,
+`empty-default-policy*.html`, `navigate-to-javascript-url-*`, `should-*-blocked-by-csp-*`, `eval-*`, `csp-block-eval.html`, `trusted-types-navigation.html?…` (8 вариантов),
+`*-children-change.html`, `trusted-types-source-file-path.html`. Часть из них, вероятно, следствия BUG-946/BUG-811 — это гипотеза, не проверялась.
+
+**Ограничение записанного.** 20 `.https.` id (`ERROR`) — нижняя планка: baseline придётся перегенерировать после BUG-1069. Воркерные варианты (28 id) — после BUG-1086 (число `FAIL`/`TIMEOUT` упадёт, гейт `--check`
+увидит это как unexpected pass); секции `FAIL` от BUG-689/946/811 — после их починок.
+
+**Окружение этой сессии.** Запуск через `tests/wpt/.venv/Scripts/python.exe`, в Git Bash `MSYS_NO_PATHCONV=1`, `--binary target/dev-release/lumen.exe` (бинарь тот же, 00:43 22.09, что и в срезе 50).
+Один прогон — 6–7 мин; три `--check` подряд гонялись одним фоновым скриптом с `.done`-файлом, который опрашивался циклом `ping -n 16 127.0.0.1` в переднем плане (`sleep` в переднем плане заблокирован).
+
+Дальше: `webaudio` (297/60 `.https.`), `IndexedDB` (срез 34), `referrer-policy` (1 393 файла, 2 `.https.` — но большой прогон); категории почти целиком `.https.` — после BUG-1069.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
