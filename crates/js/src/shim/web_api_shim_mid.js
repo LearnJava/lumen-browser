@@ -3101,12 +3101,14 @@ function _lumen_make_processing_instruction(target, data) {
         get nodeType()      { return 7; }, // Node.PROCESSING_INSTRUCTION_NODE
         get nodeName()      { return target; },
         get target()        { return target; },
+        // `[LegacyNullToEmptyString]` (DOM §4.10) is why `null` becomes ''
+        // here while `undefined` stringifies to 'undefined'.
         get data()          { return _data; },
-        set data(v)         { _data = String(v); },
+        set data(v)         { _data = v === null ? '' : String(v); },
         get nodeValue()     { return _data; },
-        set nodeValue(v)    { _data = String(v); },
+        set nodeValue(v)    { _data = v === null ? '' : String(v); },
         get textContent()   { return _data; },
-        set textContent(v)  { _data = String(v); },
+        set textContent(v)  { _data = v === null ? '' : String(v); },
         get length()        { return _data.length; },
         get ownerDocument() { return document; },
         get parentNode()    { return null; },
@@ -3705,10 +3707,12 @@ function _lumen_make_character_data(nodeType, nodeName, data, proto) {
     var _data = (data === undefined) ? '' : String(data);
     var obj = Object.create(proto);
     // data / nodeValue / textContent are the same mutable CharacterData string.
+    // `[LegacyNullToEmptyString]` (DOM §4.10) is why `null` becomes '' here
+    // while `undefined` stringifies to 'undefined'.
     ['data', 'nodeValue', 'textContent'].forEach(function(_prop) {
         Object.defineProperty(obj, _prop, {
             get: function() { return _data; },
-            set: function(v) { _data = String(v); },
+            set: function(v) { _data = v === null ? '' : String(v); },
             enumerable: true, configurable: true,
         });
     });
@@ -8443,11 +8447,13 @@ _lumen_canvas_define_dim('height', 1, 150);
 // `CharacterData.prototype.length`/`substringData`/`appendData`/`insertData`/
 // `deleteData`/`replaceData` are all built on top of this `data` accessor, so both
 // Text and Comment get the full interface here.
+// `[LegacyNullToEmptyString]` (DOM §4.10) is why `null` becomes '' below
+// while `undefined` stringifies to 'undefined' (BUG-1054).
 var _LUMEN_WRAPPER_CD_MEMBERS = {
     get data()        { return _lumen_get_text_content(this.__nid__); },
-    set data(v)       { _lumen_set_text_content(this.__nid__, String(v)); },
+    set data(v)       { _lumen_set_text_content(this.__nid__, v === null ? '' : String(v)); },
     get nodeValue()   { return _lumen_get_text_content(this.__nid__); },
-    set nodeValue(v)  { _lumen_set_text_content(this.__nid__, String(v)); },
+    set nodeValue(v)  { _lumen_set_text_content(this.__nid__, v === null ? '' : String(v)); },
 };
 
 // GAP-XMLDOC срез 23 (BUG-786): a live ProcessingInstruction is CharacterData
@@ -8457,9 +8463,9 @@ var _LUMEN_WRAPPER_CD_MEMBERS = {
 // reassigned after parsing — no setter, matching the WebIDL readonly attribute.
 var _LUMEN_WRAPPER_PI_MEMBERS = {
     get data()        { return _lumen_get_text_content(this.__nid__); },
-    set data(v)       { _lumen_set_text_content(this.__nid__, String(v)); },
+    set data(v)       { _lumen_set_text_content(this.__nid__, v === null ? '' : String(v)); },
     get nodeValue()   { return _lumen_get_text_content(this.__nid__); },
-    set nodeValue(v)  { _lumen_set_text_content(this.__nid__, String(v)); },
+    set nodeValue(v)  { _lumen_set_text_content(this.__nid__, v === null ? '' : String(v)); },
     get target()      { return _lumen_get_tag_name(this.__nid__); },
 };
 
