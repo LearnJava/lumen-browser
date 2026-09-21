@@ -5,11 +5,13 @@
 //! GAP-REFERRER срез 1: policy keyword parsing + the strip/downgrade
 //! algorithm, applied to `fetch()`/`XMLHttpRequest`/`navigator.sendBeacon`
 //! (the surfaces [BUG-859](../../../bugs/BUG-859-OPEN.md) measured directly).
-//! Not in this slice: reading `<meta name=referrer>`, the `Referrer-Policy`
-//! response header or the `referrerpolicy` attribute — every request in this
-//! slice uses the project default (`docs/plan/privacy.md` §9.1:
-//! `strict-origin-when-cross-origin`), and subresource fetches
-//! (`<img>`/`<script src>`/`<link>`) are not wired yet.
+//! Срез 2: the same algorithm reaches engine-issued subresource fetches too
+//! (`<img>`/`<script src>`/`<link>`/`@import`/`@font-face`/…, all GET-only —
+//! `Origin` does not apply there) via
+//! `ResourceBase::http_client_for_subresource`. Still not wired: reading
+//! `<meta name=referrer>`, the `Referrer-Policy` response header or a
+//! `referrerpolicy` element attribute — every request still uses the project
+//! default (`docs/plan/privacy.md` §9.1: `strict-origin-when-cross-origin`).
 
 use crate::origin::Origin;
 use lumen_core::url::Url;
