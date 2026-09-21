@@ -554,6 +554,10 @@ pub(crate) fn fetch_frame_subresources(
         let root = doc.root();
         crate::csp_enforce::document_csp_policy(doc, root)
     };
+    // GAP-REFERRER срез 5: this function already holds `&mut Document` (the
+    // frame's own), same reasoning as `subresources.rs::fetch_and_decode_images`
+    // — read straight off it rather than threading a parameter through.
+    let referrer_policy = crate::resource_base::document_referrer_policy(doc);
     // GAP-CSPENF срез 27: `frame-ancestors` is a navigation directive, not a
     // fetch directive — it governs whether this sub-document may be
     // embedded AT ALL, not one of its own subresource fetches. Checked
@@ -642,7 +646,7 @@ pub(crate) fn fetch_frame_subresources(
         }
         let fetch_src: &str = upgraded.as_deref().unwrap_or(&req.url);
         let img = crate::image_cache::IMAGE_CACHE.get_or_decode_current(&key, || {
-            decode_image(fetch_src, base, sink, cookie_jar.clone(), target)
+            decode_image(fetch_src, base, sink, cookie_jar.clone(), target, referrer_policy)
         });
         (key, img, None)
     });
@@ -746,6 +750,7 @@ pub(crate) fn frame_image_key(base: &ResourceBase, raw_src: &str) -> String {
 /// images only). `csp_gate` is the CHILD's own policy, computed once by the
 /// caller (same one-shot read as [`fetch_frame_subresources`]'s `csp_gate`).
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)] // GAP-REFERRER срез 5 added the 8th, docs/lint-policy.md §10
 pub(crate) fn fetch_frame_background_images(
     layout: &lumen_layout::LayoutBox,
     base: &ResourceBase,
@@ -754,6 +759,7 @@ pub(crate) fn fetch_frame_background_images(
     target: lumen_core::ColorSpace,
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> (
     Vec<(String, Arc<lumen_image::Image>)>,
     Vec<(String, String)>,
@@ -774,7 +780,7 @@ pub(crate) fn fetch_frame_background_images(
             }
         }
         let fetch_url: &str = upgraded.as_deref().unwrap_or(url);
-        let bytes = match fetch_image_bytes(fetch_url, base, sink, cookie_jar.clone()) {
+        let bytes = match fetch_image_bytes(fetch_url, base, sink, cookie_jar.clone(), referrer_policy) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("iframe: пропуск bg-картинки {url}: {e}");
@@ -921,6 +927,7 @@ pub(crate) fn load_frame_fonts(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
+    referrer_policy: lumen_network::ReferrerPolicy,
 ) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
     let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
     let mut blocked_by_font_src = Vec::new();
@@ -939,7 +946,7 @@ pub(crate) fn load_frame_fonts(
             blocked_by_font_src.push(gate_url);
             continue;
         }
-        let Ok(raw) = fetch_font_bytes(&gate_url, base, sink, cookie_jar.clone()) else {
+        let Ok(raw) = fetch_font_bytes(&gate_url, base, sink, cookie_jar.clone(), referrer_policy) else {
             continue;
         };
         let bytes = match lumen_font::maybe_decode_font(&raw) {
@@ -2252,6 +2259,11 @@ pub(crate) fn spawn_frame(
         crate::csp_enforce::document_csp_policy(&d, root)
     };
     let child_self_origin = child_base.origin();
+    // GAP-REFERRER срез 5: same one-shot read as `child_csp_gate` above, the
+    // CHILD's own resolved policy for its own `@font-face url()`/background
+    // images — `load_frame_fonts`/`fetch_frame_background_images` below.
+    let child_referrer_policy =
+        crate::resource_base::document_referrer_policy(&child_doc_arc.lock().unwrap());
     // FRAME-5: синхронно (см. doc-comment `load_frame_fonts`) — тем же
     // приёмом, что срез 11 уже применяет к картинкам и таблицам стилей
     // ребёнка выше в этой функции.
@@ -2262,6 +2274,7 @@ pub(crate) fn spawn_frame(
         cookie_jar.clone(),
         child_csp_gate.as_ref(),
         child_self_origin.as_ref(),
+        child_referrer_policy,
     );
     let frame_layout = frame_measurer(&frame_sheet.font_faces, &font_registry, &web_fonts).map(|measurer| {
         layout_frame_document(
@@ -2290,6 +2303,7 @@ pub(crate) fn spawn_frame(
                 env.target,
                 child_csp_gate.as_ref(),
                 child_self_origin.as_ref(),
+                child_referrer_policy,
             )
         })
         .unwrap_or_default();

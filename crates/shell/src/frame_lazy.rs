@@ -48,6 +48,14 @@ pub(crate) fn fetch_frame_lazy_images(
         return FrameLazyLoaded::default();
     }
     let base = frame.base.clone();
+    // GAP-REFERRER срез 5: the frame's own resolved policy — same one-shot
+    // read `fetch_frame_subresources` already does for the frame's eager
+    // `<img>` pass, this is its lazy-load counterpart.
+    let referrer_policy = frame
+        .doc
+        .lock()
+        .map(|d| crate::resource_base::document_referrer_policy(&d))
+        .unwrap_or_else(|_| lumen_network::ReferrerPolicy::default_policy());
     // Each thread gets its own `Arc` clone rather than sharing the caller's
     // `&Arc<dyn EventSink>` reference across the pool — same pattern
     // `fetch_frame_subresources` uses for the same reason (srez 11).
@@ -55,7 +63,7 @@ pub(crate) fn fetch_frame_lazy_images(
         let sink: &Arc<dyn EventSink> = &sink.clone();
         let key = frame_image_key(&base, url);
         let img = crate::image_cache::IMAGE_CACHE.get_or_decode_current(&key, || {
-            decode_image(url, &base, sink, cookie_jar.clone(), target)
+            decode_image(url, &base, sink, cookie_jar.clone(), target, referrer_policy)
         });
         (key, img)
     });

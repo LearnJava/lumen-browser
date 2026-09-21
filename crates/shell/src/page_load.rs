@@ -36,6 +36,12 @@ impl Lumen {
             let root = doc.root();
             crate::csp_enforce::document_csp_policy(&doc, root)
         });
+        // GAP-REFERRER срез 5: same one-shot read as `csp_gate` above — this
+        // deferred path's only point with a live `&Document`.
+        let referrer_policy = self.layout_source.as_ref().map_or_else(
+            lumen_network::ReferrerPolicy::default_policy,
+            |src| crate::resource_base::document_referrer_policy(&src.document.lock().unwrap()),
+        );
         // BUG-752: this deferred path re-reads `<base href>` on every batch
         // (not once at page load), same as `_lumen_document_base_url()` on the
         // JS side — a script can insert/change `<base>` well after the initial
@@ -76,7 +82,9 @@ impl Lumen {
             // Ключ реестра картинок остаётся сырым `url`; апгрейд (срез 43)
             // меняет только адрес запроса.
             let fetch_url: &str = upgraded.as_deref().unwrap_or(&url);
-            let bytes = match fetch_image_bytes(fetch_url, &eff_base, &self.event_sink, Some(self.active_cookie_jar())) {
+            let bytes = match fetch_image_bytes(
+                fetch_url, &eff_base, &self.event_sink, Some(self.active_cookie_jar()), referrer_policy,
+            ) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -285,12 +293,19 @@ impl Lumen {
                 let root = doc.root();
                 crate::csp_enforce::document_csp_policy(&doc, root)
             });
+            // GAP-REFERRER срез 5: same one-shot read as `csp_gate` above.
+            let referrer_policy = self.layout_source.as_ref().map_or_else(
+                lumen_network::ReferrerPolicy::default_policy,
+                |ls| crate::resource_base::document_referrer_policy(&ls.document.lock().unwrap()),
+            );
             let upgraded = csp_gate.as_ref().and_then(|(policy, _)| {
                 crate::csp_enforce::upgrade_insecure_url(policy, &base.resolve_str(&src))
             });
             let fetch_url: &str = upgraded.as_deref().unwrap_or(&src);
 
-            let bytes = match fetch_image_bytes(fetch_url, &base, &self.event_sink, Some(self.active_cookie_jar())) {
+            let bytes = match fetch_image_bytes(
+                fetch_url, &base, &self.event_sink, Some(self.active_cookie_jar()), referrer_policy,
+            ) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("video GIF: пропуск {src}: {e}");
@@ -457,12 +472,19 @@ impl Lumen {
                 .as_ref()
                 .map(|ls| effective_base(&ls.document.lock().unwrap(), &base))
                 .unwrap_or(base);
+            // GAP-REFERRER срез 5: this producer's only point with a live
+            // `&Document`, same read as `fetch_and_register_lazy_images`.
+            let referrer_policy = self.layout_source.as_ref().map_or_else(
+                lumen_network::ReferrerPolicy::default_policy,
+                |ls| crate::resource_base::document_referrer_policy(&ls.document.lock().unwrap()),
+            );
 
             let bytes = match crate::subresources::fetch_video_bytes(
                 &src,
                 &base,
                 &self.event_sink,
                 Some(self.active_cookie_jar()),
+                referrer_policy,
             ) {
                 Ok(b) => b,
                 Err(e) => {
@@ -1613,6 +1635,12 @@ impl Lumen {
         // entry is shared with the final pipeline pass (same generation) and a
         // stale producer from a superseded navigation bypasses the cache.
         let generation = self.load_generation;
+        // GAP-REFERRER срез 5: this producer's only point with a live
+        // `&Document` — same one-shot read the other deferred image
+        // producers in this file use.
+        let referrer_policy = self.layout_source.as_ref().and_then(|src| {
+            src.document.lock().ok().map(|d| crate::resource_base::document_referrer_policy(&d))
+        }).unwrap_or_else(lumen_network::ReferrerPolicy::default_policy);
         for req in requests {
             if req.is_lazy {
                 continue;
@@ -1653,7 +1681,7 @@ impl Lumen {
                 // апгрейд меняет только адрес запроса (срез 43).
                 let fetch_url: &str = upgraded.as_deref().unwrap_or(&req.url);
                 let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, &req.url, || {
-                    decode_image(fetch_url, &base, &sink, Some(cookie_jar), target)
+                    decode_image(fetch_url, &base, &sink, Some(cookie_jar), target, referrer_policy)
                 });
                 match decoded {
                     // BUG-1048: was a silent drop ("streaming best-effort: финальный
@@ -2012,6 +2040,12 @@ impl Lumen {
                 let root = doc.root();
                 crate::csp_enforce::document_csp_policy(&doc, root)
             });
+            // GAP-REFERRER срез 5: same one-shot read as `csp_gate` above,
+            // captured before the detached thread below the same way it is.
+            let referrer_policy = self.layout_source.as_ref().map_or_else(
+                lumen_network::ReferrerPolicy::default_policy,
+                |src| crate::resource_base::document_referrer_policy(&src.document.lock().unwrap()),
+            );
             let self_origin = base_opt.as_ref().and_then(|b| b.origin());
             for pf in page.pending_web_fonts {
                 if let Some(base) = base_opt.clone() {
@@ -2043,7 +2077,7 @@ impl Lumen {
                     let cookie_jar = self.active_cookie_jar();
                     let proxy = self.load_proxy.clone();
                     std::thread::spawn(move || {
-                        let raw = match fetch_font_bytes(&gate_url, &base, &sink, Some(cookie_jar)) {
+                        let raw = match fetch_font_bytes(&gate_url, &base, &sink, Some(cookie_jar), referrer_policy) {
                             Ok(b) => b,
                             Err(e) => {
                                 eprintln!("@font-face «{}»: не загружен {}: {e}", pf.family, pf.url);
