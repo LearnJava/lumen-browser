@@ -132,7 +132,7 @@ const WEBGL_SHIM: &str = r#"(function() {
     return o.__wid || 0;
   }
 
-  function _makeContext(cid) {
+  function _makeContext(cid, isWebgl2) {
     var gl = {
       // ── Primitive modes ──
       POINTS: 0x0000, LINES: 0x0001, LINE_LOOP: 0x0002, LINE_STRIP: 0x0003,
@@ -158,6 +158,28 @@ const WEBGL_SHIM: &str = r#"(function() {
       MAX_VERTEX_ATTRIBS: 0x8869, MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8B4D,
       UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246
     };
+    // WebGL 2.0 §3.1: pixel formats, buffer targets and query object enums
+    // that only a `webgl2` context exposes. Left off `webgl` contexts so
+    // `gl.UNIFORM_BUFFER === undefined` there, matching the spec's "context
+    // creation parameters differ by type" rather than aliasing both onto one
+    // enum table (WebGL 1.0 contexts never see UBOs, so scripts feature-detect
+    // WebGL2 by checking these are defined).
+    if (isWebgl2) {
+      gl.RGBA8 = 0x8058;
+      gl.HALF_FLOAT = 0x140B;
+      gl.UNIFORM_BUFFER = 0x8A11;
+      gl.PIXEL_PACK_BUFFER = 0x88EB;
+      gl.PIXEL_UNPACK_BUFFER = 0x88EC;
+      gl.COPY_READ_BUFFER = 0x8F36;
+      gl.COPY_WRITE_BUFFER = 0x8F37;
+      gl.TRANSFORM_FEEDBACK_BUFFER = 0x8C8E;
+      gl.SYNC_GPU_COMMANDS_COMPLETE = 0x9117;
+      gl.SYNC_FLUSH_COMMANDS_BIT = 0x00000001;
+      gl.ALREADY_SIGNALED = 0x911A;
+      gl.TIMEOUT_EXPIRED = 0x911B;
+      gl.CONDITION_SATISFIED = 0x911C;
+      gl.WAIT_FAILED = 0x911D;
+    }
 
     // ── State / capability no-ops ──
     gl.enable = function() {};
@@ -302,8 +324,9 @@ const WEBGL_SHIM: &str = r#"(function() {
         case gl.VENDOR: return _vendor;
         case gl.UNMASKED_RENDERER_WEBGL:
         case gl.RENDERER: return _renderer;
-        case gl.VERSION: return 'WebGL 1.0';
-        case gl.SHADING_LANGUAGE_VERSION: return 'WebGL GLSL ES 1.0';
+        case gl.VERSION: return isWebgl2 ? 'WebGL 2.0' : 'WebGL 1.0';
+        case gl.SHADING_LANGUAGE_VERSION:
+          return isWebgl2 ? 'WebGL GLSL ES 3.00' : 'WebGL GLSL ES 1.0';
         case gl.MAX_TEXTURE_SIZE: return 4096;
         case gl.MAX_VIEWPORT_DIMS: return [4096, 4096];
         case gl.MAX_VERTEX_ATTRIBS: return 16;
@@ -393,7 +416,7 @@ const WEBGL_SHIM: &str = r#"(function() {
           var d = _canvasDims(el);
           var nid = (el.__nid__ === undefined) ? -1 : el.__nid__;
           var cid = _lumen_webgl_create(nid, d[0], d[1]);
-          _ctx = _makeContext(cid);
+          _ctx = _makeContext(cid, t === 'webgl2');
           _ctx.canvas = el;
           _ctx.drawingBufferWidth = d[0];
           _ctx.drawingBufferHeight = d[1];
@@ -805,6 +828,78 @@ c.getContext('2d') === null"#,
             &rt,
             r#"var c = document.createElement('canvas');
 c.getContext('webgl') === c.getContext('webgl')"#,
+        );
+        assert!(ok);
+    }
+
+    /// Срез 1 (ph3-webgl2.md): `getContext('webgl2')` must not be a fingerprint
+    /// stub — `getParameter(VERSION)` reports 'WebGL 2.0' distinctly from the
+    /// 'WebGL 1.0' a `webgl` context reports, and the context is functional
+    /// (not null / not missing draw methods).
+    #[test]
+    fn webgl2_context_reports_version_2() {
+        let rt = with_webgl();
+        let version = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl2');
+gl.getParameter(gl.VERSION)"#,
+            )
+            .unwrap();
+        assert_eq!(version, JsValue::String("WebGL 2.0".into()));
+    }
+
+    #[test]
+    fn webgl1_context_still_reports_version_1() {
+        let rt = with_webgl();
+        let version = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl');
+gl.getParameter(gl.VERSION)"#,
+            )
+            .unwrap();
+        assert_eq!(version, JsValue::String("WebGL 1.0".into()));
+    }
+
+    /// WebGL 1.0 contexts must not see WebGL2-only enums (UBO/sync/pixel-buffer
+    /// targets) — scripts feature-detect WebGL2 by checking these are defined.
+    #[test]
+    fn webgl2_only_enums_absent_on_webgl1_context() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var gl = document.createElement('canvas').getContext('webgl');
+gl.UNIFORM_BUFFER === undefined"#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn webgl2_context_exposes_ubo_and_sync_enums() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var gl = document.createElement('canvas').getContext('webgl2');
+gl.UNIFORM_BUFFER === 0x8A11 && gl.RGBA8 === 0x8058
+  && gl.SYNC_GPU_COMMANDS_COMPLETE === 0x9117"#,
+        );
+        assert!(ok);
+    }
+
+    /// The context is functional, not a stub — `drawArrays` on a `webgl2`
+    /// context reaches the same software rasterizer `webgl` does.
+    #[test]
+    fn webgl2_context_draws_and_reads_back_pixels() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
+c.width = 4; c.height = 4;
+var gl = c.getContext('webgl2');
+gl.clearColor(1, 0, 0, 1);
+gl.clear(gl.COLOR_BUFFER_BIT);
+var px = new Uint8Array(4);
+gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+px[0] === 255 && px[1] === 0 && px[2] === 0 && px[3] === 255"#,
         );
         assert!(ok);
     }
