@@ -1830,6 +1830,36 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 
 Дальше: `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
 
+### TEST-3: срез 49 (2026-09-22) — `webnn`: 572 из 574 id — harness-`ERROR` на https-origin (BUG-1069), движковых находок нет
+
+**Выбор кандидата.** `appmanifest` (первый в списке «Дальше» среза 48) baseline получить не может: все 67 `.html` — `-manual`, пять не-`-manual` страниц — посадочные без `testharness.js`
+(`docs/wpt-vendor-notes/appmanifest.md`); `--all --root appmanifest --recursive --update-expected` за 3 с отвечает `no tests selected`. Взят `webnn` (`tests/wpt/metadata/webnn/` до среза не было;
+196 файлов, из них 185 с `.https.` в имени; **574 id** после раскрытия `?…`-вариантов). Число категорий 253 → 254.
+
+**Baseline.** `--update-expected --all --root webnn --recursive --processes 10` — **3:09**. **2/574 harness OK, 9/10 подтестов**, 179 `.ini`. Раскладка top-level статусов: 572 `ERROR`, 2 `OK`, `TIMEOUT` нет.
+Оба `OK` — `permissions-policy/webnn-supported-by-permissions-policy.html` (0/1: `document.permissionsPolicy.features should advertise webnn.` — `FAIL`, записан в `.ini`)
+и `validation_tests/elementwise-binary.https.any.html?op=min&device=cpu` (9/9).
+
+**Проверка.** Сразу после генерации три `--check` подряд (`--processes 10`): **0 регрессий, 0 unexpected pass, 0 других отклонений**, exit 0, числа идентичны (2/574, 9/10). Флапающих файлов нет.
+
+**Что нашлось.**
+
+| Причина | Масштаб | Доказательство |
+|---|---|---|
+| harness-`ERROR` до первого подтеста: TLS-сертификат тестового сервера не покрывает `localhost`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 5 148 строк `certificate not valid for name "localhost"` в логе baseline; 572 из 574 id | `browsingContext.navigate(https://localhost:18443/webnn/...) failed: … invalid peer certificate` |
+| `document.permissionsPolicy.features` не содержит `webnn` | 1 подтест | `permissions-policy/webnn-supported-by-permissions-policy.html`; WebNN в Lumen не реализован (`navigator.ml` не встречается ни в `crates/js/src/shim/`, ни в `crates/js/src/*.rs`, строки про WebNN нет в `CAPABILITIES.md`) — пробел скоупа, не дефект; баг не заводился |
+
+Новых багов нет: ни один из 572 `ERROR` не дошёл до кода, который исполняет движок.
+
+**Ограничение записанного.** Baseline по 572 id — нижняя планка (`ERROR`): гейт `--check` по `webnn` ловит только новые `TIMEOUT` и порчу двух `OK`-id. Реальный охват появится после [BUG-1069](../../bugs/BUG-1069-OPEN.md) —
+тогда baseline `webnn` (и остальной `.https.`-группы: `connection-allowlist`, `workers`, `editing` и др.) придётся перегенерировать.
+
+**Окружение этой сессии.** Как в срезах 47–48: бинарь собран на `stable` (`RUSTC_WRAPPER= RUSTUP_TOOLCHAIN=stable cargo build --profile dev-release --bin lumen`, 1 мин 24 с при тёплом `target/`;
+в `~/.rustup` для 1.97.0 по-прежнему нет `rustc.exe`); `pywebsocket3` в `tests/wpt/.venv` слота `p2-work` уже пропатчен; `strip-space-crash.xml` помечен `skip-worktree`.
+
+Дальше: `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34) не тронуты; из оставшихся — категории без запускаемых тестов (`appmanifest`, `annotation-*`, `avif`, `gif`,
+`dpub-aria`, `graphics-aam`, `html-longdesc`, `print`, `cssom`) baseline получить не могут; правка `executorlumen.py` под многофазные `?phase=` (срез 45) по-прежнему открыта.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
