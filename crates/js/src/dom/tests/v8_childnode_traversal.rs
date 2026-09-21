@@ -526,6 +526,47 @@ fn node_iterator_next_node_and_previous_node() {
 }
 
 #[test]
+fn tree_walker_rooted_at_document_finds_comment_before_document_element() {
+    // BUG-1046: `createTreeWalker(document, …)`/`createNodeIterator(document, …)`
+    // found nothing at all — `_root_nid`/`_cur_nid` read `.__nid__`, which
+    // `document` (a plain object literal) never carries, so every walk bailed
+    // out before touching a single node.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _c = document.createComment('top-level');
+                document.insertBefore(_c, document.documentElement);
+                var _tw = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT);
+            "#).unwrap();
+    let root_is_document = rt.eval("_tw.root === document").unwrap();
+    assert_eq!(root_is_document, lumen_core::JsValue::Bool(true));
+    let found = rt.eval("var _n = _tw.nextNode(); _n && _n.data").unwrap();
+    assert_eq!(found, lumen_core::JsValue::String("top-level".into()));
+    // Idiom `while (w.nextNode())` must terminate — no second comment exists.
+    let no_more = rt.eval("_tw.nextNode() === null").unwrap();
+    assert_eq!(no_more, lumen_core::JsValue::Bool(true));
+    // Walking back off the found comment returns to `document` itself, not a
+    // freshly minted Element wrapper around the document's arena id.
+    let parent_is_document = rt.eval(r#"
+                var _tw2 = document.createTreeWalker(document, NodeFilter.SHOW_ALL);
+                var _first = _tw2.firstChild();
+                _tw2.parentNode() === document
+            "#).unwrap();
+    assert_eq!(parent_is_document, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn node_iterator_rooted_at_document_finds_all_element_descendants() {
+    // BUG-1046 companion: `_NodeIterator.prototype._ensure` had the exact same
+    // `.__nid__`-on-`document` bug as TreeWalker.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _ni = document.createNodeIterator(document, NodeFilter.SHOW_ELEMENT);
+            "#).unwrap();
+    let first_tag = rt.eval("var _n1 = _ni.nextNode(); _n1 && _n1.tagName.toLowerCase()").unwrap();
+    assert_eq!(first_tag, lumen_core::JsValue::String("html".into()));
+}
+
+#[test]
 fn document_adopt_node_returns_node() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(r#"

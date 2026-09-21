@@ -2456,15 +2456,44 @@ var NodeFilter = {
     SHOW_DOCUMENT_FRAGMENT: 0x400,
 };
 
+// Wraps an arena nid with the wrapper matching its real node kind — needed
+// wherever a traversal result can land on `document` itself (nodeType 9), a
+// doctype or a document fragment, not just a plain element/text/comment.
+// `_lumen_make_element` alone would mint a bogus Element for all three.
+function _lumen_make_node_by_nid(nid) {
+    if (nid === _lumen_root_nid) return document;
+    if (_lumen_is_doctype(nid)) return _lumen_make_doctype(nid);
+    if (_lumen_is_document_fragment(nid)) return _lumen_make_document_fragment(nid);
+    return _lumen_make_element(nid);
+}
+
 // Returns NodeFilter.FILTER_ACCEPT / SKIP / REJECT for a node nid given
 // whatToShow bitmask and an optional filter callback or NodeFilter object.
 function _nf_accepts(nid, whatToShow, filter) {
-    // whatToShow bitmask check
-    var nt = _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : (_lumen_is_processing_instruction_node(nid) ? 7 : 1)); // 1=element, 3=text, 7=PI, 8=comment
-    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : (nt === 8 ? NodeFilter.SHOW_COMMENT : (nt === 7 ? NodeFilter.SHOW_PROCESSING_INSTRUCTION : NodeFilter.SHOW_ELEMENT));
+    // whatToShow bitmask check — DOM LS §4.3's full nodeType set, not just
+    // element/text/comment/PI: `nid` can be `document` itself (root of a
+    // document-rooted walker), a DocumentType or a DocumentFragment.
+    var nt;
+    if (nid === _lumen_root_nid) { nt = 9; }
+    else if (_lumen_is_doctype(nid)) { nt = 10; }
+    else if (_lumen_is_document_fragment(nid)) { nt = 11; }
+    else if (_lumen_is_text_node(nid)) { nt = 3; }
+    else if (_lumen_is_comment_node(nid)) { nt = 8; }
+    else if (_lumen_is_processing_instruction_node(nid)) { nt = 7; }
+    else { nt = 1; }
+    var bit;
+    switch (nt) {
+        case 3:  bit = NodeFilter.SHOW_TEXT; break;
+        case 7:  bit = NodeFilter.SHOW_PROCESSING_INSTRUCTION; break;
+        case 8:  bit = NodeFilter.SHOW_COMMENT; break;
+        case 9:  bit = NodeFilter.SHOW_DOCUMENT; break;
+        case 10: bit = NodeFilter.SHOW_DOCUMENT_TYPE; break;
+        case 11: bit = NodeFilter.SHOW_DOCUMENT_FRAGMENT; break;
+        default: bit = NodeFilter.SHOW_ELEMENT;
+    }
     if (!(whatToShow & bit)) return NodeFilter.FILTER_SKIP;
     if (!filter) return NodeFilter.FILTER_ACCEPT;
-    var el = _lumen_make_element(nid);
+    var el = _lumen_make_node_by_nid(nid);
     var result;
     if (typeof filter === 'function') {
         try { result = filter(el); } catch(e) { result = NodeFilter.FILTER_REJECT; }
@@ -2497,11 +2526,11 @@ function _TreeWalker(root, whatToShow, filter) {
 }
 
 _TreeWalker.prototype._root_nid = function() {
-    return this.root && this.root.__nid__ !== undefined ? this.root.__nid__ : null;
+    return _lumen_tree_nid(this.root);
 };
 
 _TreeWalker.prototype._cur_nid = function() {
-    return this.currentNode && this.currentNode.__nid__ !== undefined ? this.currentNode.__nid__ : null;
+    return _lumen_tree_nid(this.currentNode);
 };
 
 // Returns the parent node within the root subtree, or null.
@@ -2523,7 +2552,7 @@ _TreeWalker.prototype.parentNode = function() {
     while (candidate !== null && candidate !== root) {
         var r = _nf_accepts(candidate, this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_element(candidate);
+            this.currentNode = _lumen_make_node_by_nid(candidate);
             return this.currentNode;
         }
         candidate = _lumen_u2n(_lumen_get_parent(candidate));
@@ -2541,17 +2570,19 @@ _TreeWalker.prototype.parentNode = function() {
 
 // Returns the first child of currentNode that passes the filter.
 _TreeWalker.prototype.firstChild = function() {
-    var children = _lumen_get_children(this._cur_nid() || 0);
+    var cur = this._cur_nid();
+    if (cur === null) return null;
+    var children = _lumen_get_children(cur);
     for (var i = 0; i < children.length; i++) {
         var r = _nf_accepts(children[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_element(children[i]);
+            this.currentNode = _lumen_make_node_by_nid(children[i]);
             return this.currentNode;
         }
         if (r !== NodeFilter.FILTER_REJECT) {
             // SKIP — recurse into its children (DOM spec §4.5.5)
             var saved = this.currentNode;
-            this.currentNode = _lumen_make_element(children[i]);
+            this.currentNode = _lumen_make_node_by_nid(children[i]);
             var found = this.firstChild();
             if (found) return found;
             this.currentNode = saved;
@@ -2562,16 +2593,18 @@ _TreeWalker.prototype.firstChild = function() {
 
 // Returns the last child of currentNode that passes the filter.
 _TreeWalker.prototype.lastChild = function() {
-    var children = _lumen_get_children(this._cur_nid() || 0);
+    var cur = this._cur_nid();
+    if (cur === null) return null;
+    var children = _lumen_get_children(cur);
     for (var i = children.length - 1; i >= 0; i--) {
         var r = _nf_accepts(children[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_element(children[i]);
+            this.currentNode = _lumen_make_node_by_nid(children[i]);
             return this.currentNode;
         }
         if (r !== NodeFilter.FILTER_REJECT) {
             var saved = this.currentNode;
-            this.currentNode = _lumen_make_element(children[i]);
+            this.currentNode = _lumen_make_node_by_nid(children[i]);
             var found = this.lastChild();
             if (found) return found;
             this.currentNode = saved;
@@ -2592,7 +2625,7 @@ _TreeWalker.prototype.previousSibling = function() {
     for (var i = idx - 1; i >= 0; i--) {
         var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_element(sibs[i]);
+            this.currentNode = _lumen_make_node_by_nid(sibs[i]);
             return this.currentNode;
         }
     }
@@ -2611,7 +2644,7 @@ _TreeWalker.prototype.nextSibling = function() {
     for (var i = idx + 1; i < sibs.length; i++) {
         var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_element(sibs[i]);
+            this.currentNode = _lumen_make_node_by_nid(sibs[i]);
             return this.currentNode;
         }
     }
@@ -2628,7 +2661,7 @@ _TreeWalker.prototype.previousNode = function() {
     for (var i = idx - 1; i >= 0; i--) {
         var r = _nf_accepts(all[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_element(all[i]);
+            this.currentNode = _lumen_make_node_by_nid(all[i]);
             return this.currentNode;
         }
     }
@@ -2645,7 +2678,7 @@ _TreeWalker.prototype.nextNode = function() {
     for (var i = idx + 1; i < all.length; i++) {
         var r = _nf_accepts(all[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
-            this.currentNode = _lumen_make_element(all[i]);
+            this.currentNode = _lumen_make_node_by_nid(all[i]);
             return this.currentNode;
         }
     }
@@ -2666,7 +2699,7 @@ function _NodeIterator(root, whatToShow, filter) {
 
 _NodeIterator.prototype._ensure = function() {
     if (this._all === null) {
-        var root_nid = this.root && this.root.__nid__ !== undefined ? this.root.__nid__ : null;
+        var root_nid = _lumen_tree_nid(this.root);
         this._all = root_nid !== null ? _tw_subtree(root_nid) : [];
     }
 };
@@ -2678,7 +2711,7 @@ _NodeIterator.prototype.nextNode = function() {
         var r = _nf_accepts(this._all[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
             this._pos = i;
-            var el = _lumen_make_element(this._all[i]);
+            var el = _lumen_make_node_by_nid(this._all[i]);
             this.referenceNode = el;
             this.pointerBeforeReferenceNode = false;
             return el;
@@ -2694,7 +2727,7 @@ _NodeIterator.prototype.previousNode = function() {
         var r = _nf_accepts(this._all[i], this.whatToShow, this.filter);
         if (r === NodeFilter.FILTER_ACCEPT) {
             this._pos = i;
-            var el = _lumen_make_element(this._all[i]);
+            var el = _lumen_make_node_by_nid(this._all[i]);
             this.referenceNode = el;
             this.pointerBeforeReferenceNode = true;
             return el;

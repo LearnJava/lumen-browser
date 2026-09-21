@@ -1,8 +1,32 @@
 # BUG-1046: `TreeWalker`/`NodeIterator` с корнем `document` не обходят ничего — `nextNode()` молча отдаёт `null` при любом `whatToShow`, а `firstChild()`/`lastChild()` рядом работают
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_TreeWalker.prototype._root_nid:5181`, `nextNode:5321`, `previousNode:5304`, `firstChild:5225`, `_NodeIterator.prototype._ensure:5349`, `_nf_accepts:5143`; фабрики — `crates/js/src/shim/web_api_shim_mid.js::createTreeWalker:9890` / `createNodeIterator:9894`)
+**Статус:** FIXED 2026-09-21 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid_b2.js` — `_TreeWalker.prototype._root_nid`/`_cur_nid`, `_NodeIterator.prototype._ensure`, `_nf_accepts`; фабрики — `crates/js/src/shim/web_api_shim_mid.js::createTreeWalker` / `createNodeIterator`)
 **Найден:** P6, 2026-09-09, задача E2E-2 (проба «TreeWalker и SHOW_COMMENT»)
+
+## Исправление (P3, 2026-09-21)
+
+`_root_nid`/`_cur_nid` переведены на общий хелпер `_lumen_tree_nid(...)`
+(уже существовал в шиме и отображает `document` в `_lumen_root_nid`), вместо
+прямого чтения `.__nid__`. `firstChild`/`lastChild` лишились фолбэка
+`_cur_nid() || 0`, маскировавшего дефект случайным попаданием в корень арены.
+`_nf_accepts` теперь различает все восемь nodeType-веток DOM §4.3 (через
+`_lumen_is_doctype`/`_lumen_is_document_fragment` и сравнение с
+`_lumen_root_nid`), а не только text/comment/PI/"всё остальное = элемент", и
+раздаёт биты `SHOW_DOCUMENT`/`SHOW_DOCUMENT_TYPE`/`SHOW_DOCUMENT_FRAGMENT`.
+Новый `_lumen_make_node_by_nid(nid)` возвращает сам `document` (или
+`DocumentType`/`DocumentFragment`), когда обход попадает на такой узел,
+вместо бутафорского `Element`-обёртки поверх чужого nid.
+
+Регресс-тесты: `tree_walker_rooted_at_document_finds_comment_before_document_element`,
+`node_iterator_rooted_at_document_finds_all_element_descendants`
+(`crates/js/src/dom/tests/v8_childnode_traversal.rs`).
+
+`cargo test -p lumen-js --features v8-backend` зелёный, `cargo clippy
+--workspace --all-targets -- -D warnings` чист. `dom/traversal/TreeWalker.html`/
+`NodeIterator*.html` в WPT по-прежнему не доходят до ассертов из-за
+[BUG-863](BUG-863-OPEN.md) (`createCDATASection`) — счёт по категории
+изменится отдельным срезом после его починки.
 
 ## Симптом
 
