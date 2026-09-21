@@ -113,6 +113,19 @@ struct AttribPointer {
     offset_floats: usize,
 }
 
+/// A vertex array object: the bindable snapshot of attribute pointers plus
+/// the `ELEMENT_ARRAY_BUFFER` binding (WebGL 2.0 §5.13 / `OES_vertex_array_object`).
+/// The `ARRAY_BUFFER` binding itself is *not* part of a VAO's state — only
+/// captured into an [`AttribPointer`] at `vertexAttribPointer` time, same as
+/// the default (id 0) VAO already behaved before this type existed.
+#[derive(Debug, Clone, Default)]
+struct VertexArrayObject {
+    /// Vertex attribute pointers by attribute index, scoped to this VAO.
+    attribs: HashMap<u32, AttribPointer>,
+    /// `ELEMENT_ARRAY_BUFFER` binding captured for this VAO.
+    bound_element_array_buffer: u32,
+}
+
 /// Pure-Rust software WebGL 1.0 context.
 ///
 /// One instance backs one `<canvas>` WebGL context. All state is owned here;
@@ -151,8 +164,16 @@ pub struct SoftwareWebGl {
     next_program_id: u32,
     /// Currently active program (`useProgram`), 0 = none.
     current_program: u32,
-    /// Vertex attribute pointers by attribute index.
+    /// Vertex attribute pointers by attribute index, for the default (id 0)
+    /// vertex array — active whenever no VAO is bound.
     attribs: HashMap<u32, AttribPointer>,
+    /// Vertex array objects by id, created via `createVertexArray`.
+    vaos: HashMap<u32, VertexArrayObject>,
+    /// Monotonic id allocator for vertex array objects.
+    next_vao_id: u32,
+    /// Currently bound vertex array object id (0 = default VAO, i.e. `self.attribs`
+    /// / `self.bound_element_array_buffer` rather than an entry in `self.vaos`).
+    bound_vertex_array: u32,
     /// Flat fragment colour (most recent `uniform4f`), RGBA in `[0, 1]`.
     /// Used as the fallback colour when no shader program is active.
     draw_color: [f32; 4],
@@ -200,6 +221,9 @@ impl SoftwareWebGl {
             next_program_id: 1,
             current_program: 0,
             attribs: HashMap::new(),
+            vaos: HashMap::new(),
+            next_vao_id: 1,
+            bound_vertex_array: 0,
             draw_color: [1.0, 1.0, 1.0, 1.0],
             uniform_vals: HashMap::new(),
             texture_solid: HashMap::new(),
@@ -276,11 +300,93 @@ impl SoftwareWebGl {
 
     /// `gl.bindBuffer(target, buffer)`. `buffer == 0` unbinds. Tracks both
     /// `ARRAY_BUFFER` (vertex data) and `ELEMENT_ARRAY_BUFFER` (indices).
+    ///
+    /// `ELEMENT_ARRAY_BUFFER` is part of vertex-array-object state (WebGL 2.0
+    /// §5.13): the binding lands on the currently bound VAO, or on the
+    /// default VAO (id 0) when none is bound.
     pub fn bind_buffer(&mut self, target: u32, buffer: u32) {
         if target == ARRAY_BUFFER {
             self.bound_array_buffer = buffer;
         } else if target == ELEMENT_ARRAY_BUFFER {
-            self.bound_element_array_buffer = buffer;
+            *self.element_array_binding_mut() = buffer;
+        }
+    }
+
+    /// `gl.createVertexArray()` → opaque VAO id (never 0). A fresh VAO starts
+    /// with no attribute pointers enabled and no `ELEMENT_ARRAY_BUFFER` bound.
+    pub fn create_vertex_array(&mut self) -> u32 {
+        let id = self.next_vao_id;
+        self.next_vao_id += 1;
+        self.vaos.insert(id, VertexArrayObject::default());
+        id
+    }
+
+    /// `gl.bindVertexArray(vao)`. `vao == 0` (or an id that was never
+    /// created/was deleted) binds the default vertex array; any known VAO id
+    /// becomes the active one, so subsequent `vertexAttribPointer`/
+    /// `enableVertexAttribArray`/`bindBuffer(ELEMENT_ARRAY_BUFFER, …)` calls
+    /// read and write its state instead of the default's.
+    pub fn bind_vertex_array(&mut self, vao: u32) {
+        self.bound_vertex_array = if vao == 0 || self.vaos.contains_key(&vao) {
+            vao
+        } else {
+            0
+        };
+    }
+
+    /// `gl.deleteVertexArray(vao)`. Per spec, deleting the currently bound
+    /// VAO implicitly binds the default vertex array (id 0).
+    pub fn delete_vertex_array(&mut self, vao: u32) {
+        self.vaos.remove(&vao);
+        if self.bound_vertex_array == vao {
+            self.bound_vertex_array = 0;
+        }
+    }
+
+    /// `gl.isVertexArray(vao)`. `true` for a VAO id that is currently alive
+    /// (created and not yet deleted); the default VAO (id 0) is not itself
+    /// an object, so it reports `false`, matching real WebGL2.
+    pub fn is_vertex_array(&self, vao: u32) -> bool {
+        vao != 0 && self.vaos.contains_key(&vao)
+    }
+
+    /// Mutable borrow of the active vertex array's attribute-pointer map —
+    /// the default (`self.attribs`) or the bound VAO's, transparently.
+    fn attribs_mut(&mut self) -> &mut HashMap<u32, AttribPointer> {
+        if self.bound_vertex_array == 0 {
+            &mut self.attribs
+        } else {
+            &mut self.vaos.entry(self.bound_vertex_array).or_default().attribs
+        }
+    }
+
+    /// Shared borrow of the active vertex array's attribute-pointer map.
+    fn attribs_active(&self) -> &HashMap<u32, AttribPointer> {
+        if self.bound_vertex_array == 0 {
+            &self.attribs
+        } else {
+            match self.vaos.get(&self.bound_vertex_array) {
+                Some(vao) => &vao.attribs,
+                None => &self.attribs,
+            }
+        }
+    }
+
+    /// Mutable borrow of the active vertex array's `ELEMENT_ARRAY_BUFFER` binding.
+    fn element_array_binding_mut(&mut self) -> &mut u32 {
+        if self.bound_vertex_array == 0 {
+            &mut self.bound_element_array_buffer
+        } else {
+            &mut self.vaos.entry(self.bound_vertex_array).or_default().bound_element_array_buffer
+        }
+    }
+
+    /// Shared read of the active vertex array's `ELEMENT_ARRAY_BUFFER` binding.
+    fn element_array_binding(&self) -> u32 {
+        if self.bound_vertex_array == 0 {
+            self.bound_element_array_buffer
+        } else {
+            self.vaos.get(&self.bound_vertex_array).map_or(0, |vao| vao.bound_element_array_buffer)
         }
     }
 
@@ -297,8 +403,12 @@ impl SoftwareWebGl {
     /// source typed array's element type) against the currently bound
     /// `ELEMENT_ARRAY_BUFFER`.
     pub fn buffer_data_elements(&mut self, target: u32, data: Vec<u32>) {
-        if target == ELEMENT_ARRAY_BUFFER && self.bound_element_array_buffer != 0 {
-            self.element_buffers.insert(self.bound_element_array_buffer, data);
+        if target != ELEMENT_ARRAY_BUFFER {
+            return;
+        }
+        let buffer = self.element_array_binding();
+        if buffer != 0 {
+            self.element_buffers.insert(buffer, data);
         }
     }
 
@@ -415,12 +525,12 @@ impl SoftwareWebGl {
 
     /// `gl.enableVertexAttribArray(index)`.
     pub fn enable_vertex_attrib_array(&mut self, index: u32) {
-        self.attribs.entry(index).or_default().enabled = true;
+        self.attribs_mut().entry(index).or_default().enabled = true;
     }
 
     /// `gl.disableVertexAttribArray(index)`.
     pub fn disable_vertex_attrib_array(&mut self, index: u32) {
-        if let Some(a) = self.attribs.get_mut(&index) {
+        if let Some(a) = self.attribs_mut().get_mut(&index) {
             a.enabled = false;
         }
     }
@@ -437,8 +547,9 @@ impl SoftwareWebGl {
         stride_bytes: usize,
         offset_bytes: usize,
     ) {
-        let entry = self.attribs.entry(index).or_default();
-        entry.buffer = self.bound_array_buffer;
+        let buffer = self.bound_array_buffer;
+        let entry = self.attribs_mut().entry(index).or_default();
+        entry.buffer = buffer;
         entry.size = size.clamp(1, 4);
         entry.stride_floats = stride_bytes / 4;
         entry.offset_floats = offset_bytes / 4;
@@ -548,7 +659,7 @@ impl SoftwareWebGl {
         };
         let start = offset_bytes as usize / elem_size;
         let count = count as usize;
-        let idx_buf = match self.element_buffers.get(&self.bound_element_array_buffer) {
+        let idx_buf = match self.element_buffers.get(&self.element_array_binding()) {
             Some(b) => b,
             None => return,
         };
@@ -711,7 +822,7 @@ impl SoftwareWebGl {
     ) -> HashMap<String, Val> {
         let mut out = HashMap::new();
         for (&loc, name) in attrib_locs {
-            let ap = match self.attribs.get(&loc) { Some(a) => a, None => continue };
+            let ap = match self.attribs_active().get(&loc) { Some(a) => a, None => continue };
             if !ap.enabled { continue; }
             let data = match self.buffers.get(&ap.buffer) { Some(d) => d, None => continue };
             let stride = if ap.stride_floats == 0 { ap.size } else { ap.stride_floats };
@@ -870,7 +981,7 @@ impl SoftwareWebGl {
 
     /// Gather NDC `(x, y)` for the given vertex `indices` from attribute 0.
     fn collect_positions(&self, indices: &[usize]) -> Option<Vec<(f32, f32)>> {
-        let attr = self.attribs.get(&0)?;
+        let attr = self.attribs_active().get(&0)?;
         if !attr.enabled || attr.size < 2 {
             return None;
         }
@@ -1273,6 +1384,99 @@ mod tests {
 
         gl.draw_elements(TRIANGLES, 6, UNSIGNED_INT, 0);
         assert_eq!(gl.pixel(4, 4), [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn vertex_array_ids_are_nonzero_and_unique() {
+        let mut gl = SoftwareWebGl::new(1, 1);
+        let a = gl.create_vertex_array();
+        let b = gl.create_vertex_array();
+        assert_ne!(a, 0);
+        assert_ne!(b, 0);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn bound_vao_isolates_attrib_pointers() {
+        // Attribute 0 wired on the default VAO...
+        let mut gl = SoftwareWebGl::new(4, 4);
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+
+        // ...switching to a fresh VAO must not see it: no attribute 0 enabled
+        // there, so a draw finds no positions and paints nothing.
+        let vao = gl.create_vertex_array();
+        gl.bind_vertex_array(vao);
+        gl.uniform4f(0, 0.0, 1.0, 0.0, 1.0);
+        gl.draw_arrays(TRIANGLES, 0, 3);
+        assert_eq!(gl.pixel(0, 0), [0, 0, 0, 0]);
+
+        // Binding back to the default VAO (id 0) restores the original pointer.
+        gl.bind_vertex_array(0);
+        gl.draw_arrays(TRIANGLES, 0, 3);
+        assert_eq!(gl.pixel(0, 0), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn vao_captures_its_own_element_array_buffer_binding() {
+        let mut gl = SoftwareWebGl::new(8, 8);
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+
+        // Default VAO: full quad (2 triangles), painted green.
+        setup_positions(&mut gl, &verts);
+        setup_indices(&mut gl, &[0, 1, 2, 2, 1, 3]);
+        gl.uniform4f(0, 0.0, 1.0, 0.0, 1.0);
+        gl.draw_elements(TRIANGLES, 6, UNSIGNED_INT, 0);
+        assert_eq!(gl.pixel(4, 4), [0, 255, 0, 255]);
+
+        // A second VAO gets its own attrib pointer and its own (shorter)
+        // index buffer — one triangle only, painted red.
+        let vao = gl.create_vertex_array();
+        gl.bind_vertex_array(vao);
+        setup_positions(&mut gl, &verts);
+        setup_indices(&mut gl, &[0, 1, 2]);
+        gl.uniform4f(0, 1.0, 0.0, 0.0, 1.0);
+        gl.draw_elements(TRIANGLES, 3, UNSIGNED_INT, 0);
+        assert_eq!(gl.pixel(4, 4), [255, 0, 0, 255]);
+
+        // Switching back to the default VAO must still see its own 6-index
+        // buffer, not the second VAO's 3-index one — if the
+        // `ELEMENT_ARRAY_BUFFER` binding leaked across VAOs, this
+        // `drawElements(count=6)` would run past a 3-element buffer and
+        // no-op instead of repainting the quad green.
+        gl.bind_vertex_array(0);
+        gl.uniform4f(0, 0.0, 1.0, 0.0, 1.0);
+        gl.draw_elements(TRIANGLES, 6, UNSIGNED_INT, 0);
+        assert_eq!(gl.pixel(4, 4), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn binding_unknown_vao_id_falls_back_to_default() {
+        let mut gl = SoftwareWebGl::new(1, 1);
+        gl.bind_vertex_array(999); // never created
+        // Falls back to the default VAO rather than tracking a dangling id.
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+        gl.uniform4f(0, 0.0, 1.0, 0.0, 1.0);
+        gl.draw_arrays(TRIANGLES, 0, 3);
+        assert_eq!(gl.pixel(0, 0), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn deleting_bound_vao_rebinds_default() {
+        let mut gl = SoftwareWebGl::new(4, 4);
+        let vao = gl.create_vertex_array();
+        gl.bind_vertex_array(vao);
+        gl.delete_vertex_array(vao);
+
+        // Deleting the bound VAO must have implicitly rebound the default one:
+        // attribute pointers set now land in the default VAO's state, visible
+        // to a draw without any further `bindVertexArray(0)` call.
+        let verts = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
+        setup_positions(&mut gl, &verts);
+        gl.uniform4f(0, 1.0, 0.0, 0.0, 1.0);
+        gl.draw_arrays(TRIANGLES, 0, 3);
+        assert_eq!(gl.pixel(0, 0), [255, 0, 0, 255]);
     }
 
     #[test]
