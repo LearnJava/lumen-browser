@@ -606,6 +606,22 @@ impl SoftwareWebGl {
         }
     }
 
+    /// `gl.uniformMatrix3fv(location, transpose, values)`. Stores a 3×3 float
+    /// matrix (column-major, 9 elements), embedded into the same padded
+    /// `Val::Mat4` representation the GLSL `mat3()` constructor produces
+    /// (identity in the unused row/column) so the interpreter's existing
+    /// `Mat4`-only arithmetic handles it unchanged.
+    pub fn uniform_matrix3fv(&mut self, location: i32, values: &[f32]) {
+        if location >= 0 && values.len() >= 9 {
+            let fs = values;
+            let m = [
+                fs[0], fs[1], fs[2], 0.0, fs[3], fs[4], fs[5], 0.0, fs[6], fs[7], fs[8], 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ];
+            self.uniform_vals.insert(location, Val::Mat4(m));
+        }
+    }
+
     /// `gl.activeTexture(unit_enum)`. Sets the active texture unit.
     pub fn active_texture(&mut self, unit_enum: u32) {
         self.active_texture_unit = unit_enum.saturating_sub(0x84C0); // GL_TEXTURE0
@@ -1208,6 +1224,37 @@ mod tests {
         let mut gl = SoftwareWebGl::new(1, 1);
         assert_eq!(gl.get_attrib_location(999, "x"), -1);
         assert_eq!(gl.get_uniform_location(999, "x"), -1);
+    }
+
+    #[test]
+    fn uniform_matrix3fv_embeds_into_padded_mat4() {
+        let mut gl = SoftwareWebGl::new(1, 1);
+        let prog = gl.create_program();
+        let loc = gl.get_uniform_location(prog, "u_normal");
+        #[rustfmt::skip]
+        let m3 = [
+            1.0, 2.0, 3.0,
+            4.0, 5.0, 6.0,
+            7.0, 8.0, 9.0,
+        ];
+        gl.uniform_matrix3fv(loc, &m3);
+        let map = gl.build_uniform_map(prog);
+        assert_eq!(
+            map.get("u_normal"),
+            Some(&Val::Mat4([
+                1.0, 2.0, 3.0, 0.0, 4.0, 5.0, 6.0, 0.0, 7.0, 8.0, 9.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]))
+        );
+    }
+
+    #[test]
+    fn uniform_matrix3fv_ignores_negative_location_and_short_input() {
+        let mut gl = SoftwareWebGl::new(1, 1);
+        let prog = gl.create_program();
+        let loc = gl.get_uniform_location(prog, "u_normal");
+        gl.uniform_matrix3fv(-1, &[1.0; 9]);
+        gl.uniform_matrix3fv(loc, &[1.0; 8]); // too short, ignored
+        assert!(!gl.build_uniform_map(prog).contains_key("u_normal"));
     }
 
     #[test]

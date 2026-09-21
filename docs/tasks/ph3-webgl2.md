@@ -167,9 +167,24 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 (marshal на JS-поток раннера), а не напрямую `canvas2d::flush_dirty()` с
 вызывающего потока теста — у раннера свой `thread_local!`.
 
-### Срез 6 — XS — `uniform*v` / `uniformMatrix3fv`
-Добавить `uniform2fv`/`3fv`/`4fv`/`1iv` и `uniformMatrix3fv` (WebGL2 часто
-их использует), прокинуть в `SoftwareWebGl::uniform_*` и JS-шим.
+### Срез 6 — XS — `uniform*v` / `uniformMatrix3fv` — DONE 2026-09-21 (P1)
+`uniform1fv`/`2fv`/`3fv`/`4fv`/`1iv` уже были прокинуты в JS-шиме
+(`webgl_canvas.rs`) как тонкие обёртки над скалярными `uniform1..4f`/`uniform1i`
+натива (единственный элемент массива — интерпретатор не поддерживает
+uniform-массивы, только один вектор на локацию, так что это точный
+эквивалент). Оставался только `uniformMatrix3fv` — был `function() {}`-стабом
+(«mat3 not tracked»). Новый `SoftwareWebGl::uniform_matrix3fv(location,
+values: &[f32; 9])` встраивает 3×3-матрицу в тот же padded-`Val::Mat4`
+(единичная диагональ в неиспользуемой строке/столбце), которым уже пользуется
+GLSL-конструктор `mat3()` — существующая `Mat4`-арифметика интерпретатора
+подхватывает её без изменений. Новый натив `_lumen_webgl_uniform_mat3fv` +
+`gl.uniformMatrix3fv` в шиме. 2 новых теста `webgl.rs` (встраивание,
+игнорирование отрицательной локации/короткого входа) + 1 V8-тест
+`webgl_canvas.rs` (`uniformMatrix3fv` с нулевой матрицей вырождает треугольник
+в точку — доказывает, что юниформ реально доходит до вершинного шейдера).
+`Val` получил `#[derive(PartialEq)]` для теста сравнения. `cargo clippy
+-p lumen-paint -p lumen-js --all-targets --features lumen-js/v8-backend
+-D warnings` зелёные.
 
 ## Tests
 
@@ -188,5 +203,6 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 - [x] **VAO (`createVertexArray`/`bindVertexArray`) реализованы** — срез 3, 2026-09-21.
 - [x] **GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется** — срез 4, 2026-09-21.
 - [x] **Present:** результат WebGL композитится на страничный `<canvas>` (видно в окне, не только `readPixels`) — срез 5, 2026-09-21.
+- [x] **`uniform*v`/`uniformMatrix3fv`** реализованы — срез 6, 2026-09-21.
 - [ ] graphic_test `NN-webgl2` проходит (порог 0.5%).
-- [ ] `CAPABILITIES.md` + `subsystems/paint.md` обновлены (webgl2 ✅/🟡).
+- [x] `CAPABILITIES.md` + `subsystems/paint.md` обновлены (webgl2 ✅/🟡).

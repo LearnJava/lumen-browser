@@ -288,7 +288,11 @@ const WEBGL_SHIM: &str = r#"(function() {
       for (var mi = 0; mi < 16; mi++) arr.push(+(data[mi] || 0));
       _lumen_webgl_uniform_mat4fv(cid, _locVal(location), arr);
     };
-    gl.uniformMatrix3fv = function() {}; // mat3 not tracked
+    gl.uniformMatrix3fv = function(location, transpose, data) {
+      var arr = [];
+      for (var mi = 0; mi < 9; mi++) arr.push(+(data[mi] || 0));
+      _lumen_webgl_uniform_mat3fv(cid, _locVal(location), arr);
+    };
 
     // ── Draw ──
     gl.drawArrays = function(mode, first, count) { _lumen_webgl_draw_arrays(cid, mode>>>0, first|0, count|0); };
@@ -685,6 +689,13 @@ pub(crate) fn install_webgl_canvas_v8(
         }),
     )?;
     rt.register_native(
+        "_lumen_webgl_uniform_mat3fv",
+        into_v8_fn3(|id: u32, loc: i32, data: Vec<f64>| {
+            let fs: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
+            with_ctx(id, (), |gl| gl.uniform_matrix3fv(loc, &fs));
+        }),
+    )?;
+    rt.register_native(
         "_lumen_webgl_active_texture",
         into_v8_fn2(|id: u32, unit: u32| {
             with_ctx(id, (), |gl| gl.active_texture(unit));
@@ -941,6 +952,49 @@ gl.drawArrays(gl.TRIANGLES, 0, 6);
 var px = new Uint8Array(4);
 gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
 px[1]"#,
+            )
+            .unwrap();
+        assert_eq!(g, JsValue::Number(255.0));
+    }
+
+    /// Срез 6 (ph3-webgl2.md): `uniformMatrix3fv` reaches the software
+    /// rasterizer (embedded as a padded `mat4`, same trick the GLSL `mat3()`
+    /// constructor uses) instead of the previous silent no-op stub. A zero
+    /// 3×3 matrix collapses every vertex to clip-space origin, so the
+    /// triangles degenerate to zero area and paint nothing — the clear
+    /// colour survives, proving the uniform actually reached the vertex
+    /// shader's `vec4(...) * u_m` multiply.
+    #[test]
+    fn uniform_matrix3fv_reaches_vertex_shader() {
+        let rt = with_webgl();
+        let g = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl2');
+gl.viewport(0, 0, 8, 8);
+gl.clearColor(1, 0, 0, 1);
+gl.clear(gl.COLOR_BUFFER_BIT);
+var vs = gl.createShader(gl.VERTEX_SHADER);
+gl.shaderSource(vs, '#version 300 es\nin vec2 a_pos;\nuniform mat3 u_m;\nvoid main(){ gl_Position = vec4(a_pos, 0.0, 1.0) * u_m; }');
+gl.compileShader(vs);
+var fs = gl.createShader(gl.FRAGMENT_SHADER);
+gl.shaderSource(fs, '#version 300 es\nprecision mediump float;\nout vec4 outColor;\nvoid main(){ outColor = vec4(0.0, 1.0, 0.0, 1.0); }');
+gl.compileShader(fs);
+var prog = gl.createProgram();
+gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+gl.linkProgram(prog); gl.useProgram(prog);
+var buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+var verts = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+var loc = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+var uloc = gl.getUniformLocation(prog, 'u_m');
+gl.uniformMatrix3fv(uloc, false, new Float32Array([0,0,0, 0,0,0, 0,0,0]));
+gl.drawArrays(gl.TRIANGLES, 0, 6);
+var px = new Uint8Array(4);
+gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+px[0]"#,
             )
             .unwrap();
         assert_eq!(g, JsValue::Number(255.0));

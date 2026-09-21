@@ -42,7 +42,7 @@ use std::collections::HashMap;
 // ─── Value type ────────────────────────────────────────────────────────────
 
 /// Runtime value inside the GLSL interpreter.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Val {
     #[default]
     Void,
