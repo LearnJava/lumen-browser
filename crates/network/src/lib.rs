@@ -3832,6 +3832,20 @@ impl HttpClient {
         send_uir_header: bool,
     ) -> Result<(Vec<u8>, Option<String>)> {
         let uir_header = if send_uir_header { "Upgrade-Insecure-Requests: 1\r\n" } else { "" };
+        // GAP-REFERRER срез 2: `Referer` for engine-issued subresource fetches
+        // (`<img>`/`<script src>`/`<link>`/cascade `@import`/`@font-face`/…) —
+        // srez 1 wired only `fetch()`/`XMLHttpRequest`/`sendBeacon`. Subresource
+        // requests are always GET (no `method` param on this path), so unlike
+        // `fetch_request_impl` there is no `Origin` to append (Fetch §"append a
+        // request's Origin header" only triggers for non-GET/HEAD).
+        let referer_header = self
+            .document_context
+            .as_ref()
+            .and_then(|(referrer_url, policy)| {
+                referrer_policy::compute_referrer(*policy, referrer_url, url)
+            })
+            .map(|referer| format!("Referer: {referer}\r\n"))
+            .unwrap_or_default();
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         // BUG-839: Resource Timing needs the two ends of the request. Wall
@@ -3861,7 +3875,8 @@ impl HttpClient {
             }
             if !snap.conditional_headers.is_empty() {
                 // Stale entry with validators — conditional GET.
-                let combined_extra_headers = format!("{uir_header}{}", snap.conditional_headers);
+                let combined_extra_headers =
+                    format!("{uir_header}{referer_header}{}", snap.conditional_headers);
                 let (resp, _final_url) = fetch_with_redirect(
                     url,
                     5,
@@ -3925,6 +3940,7 @@ impl HttpClient {
             }
         }
 
+        let extra_headers = format!("{uir_header}{referer_header}");
         let (resp, _final_url) = fetch_with_redirect(
             url,
             5,
@@ -3945,7 +3961,7 @@ impl HttpClient {
             self.mixed_content.as_ref(),
             Some(destination),
             None,
-            uir_header,
+            &extra_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
@@ -10462,6 +10478,53 @@ world\r\n\
 
         let req = captured.lock().unwrap()[0].clone();
         assert!(req.contains("Referer: http://127.0.0.1:1\r\n"), "{req}");
+    }
+
+    /// GAP-REFERRER срез 2: `fetch_subresource` (the `<img>`/`<script
+    /// src>`/`<link>`/… path, distinct from `fetch_request`'s
+    /// `fetch()`/XHR path) also carries `Referer` once
+    /// `with_document_context` is attached — same default policy, same
+    /// same-origin-full-URL behavior.
+    #[test]
+    fn subresource_fetch_same_origin_sends_full_referer() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "img-bytes")
+        });
+        let document_url = Url::parse(&format!("http://127.0.0.1:{port}/page.html?x=1")).unwrap();
+        let client = HttpClient::new()
+            .with_document_context(document_url, referrer_policy::ReferrerPolicy::default_policy());
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/logo.png")).unwrap();
+        client
+            .fetch_subresource(&url, RequestDestination::Image)
+            .expect("subresource fetch must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(
+            req.contains(&format!("Referer: http://127.0.0.1:{port}/page.html?x=1\r\n")),
+            "{req}"
+        );
+    }
+
+    /// GAP-REFERRER срез 2 gate: without `with_document_context`, a
+    /// subresource fetch carries no `Referer` — pre-existing behavior other
+    /// tests in this module exercised implicitly before this slice.
+    #[test]
+    fn subresource_fetch_without_document_context_sends_no_referer() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "img-bytes")
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/logo.png")).unwrap();
+        client
+            .fetch_subresource(&url, RequestDestination::Image)
+            .expect("subresource fetch must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(!req.to_ascii_lowercase().contains("referer:"), "{req}");
     }
 
     /// Тело несёт свой `Content-Type` само (`RequestBody` → `write_request`);
