@@ -2423,4 +2423,19 @@ runtime or the shim. Read them before a JS/Web-API change.
   `PushManager.permissionState()`/`subscribe()` read `lumen_core::ext::PushBackend::
   push_permission_state`, backed by `lumen_storage::Permissions`/`PermissionKind::Push` — default
   `"prompt"`, never the former hardcoded `"granted"`; `subscribe()` rejects with
-  `DOMException(..., 'NotAllowedError')` when `"denied"`, still proceeds on `"prompt"`.
+  `DOMException(..., 'NotAllowedError')` when `"denied"`, still proceeds on `"prompt"`. **Срез 5
+  (2026-09-21) — SW dispatch.** `lumen_core::ext::SwWorkerHandle::tx` widened from a fetch-only
+  channel to `SwWorkerMessage` (`Fetch`/`Push`/`PushSubscriptionChange`) — the SW's V8 isolate
+  stays owned by its one thread, so delivery has to go through the same channel `dispatch_fetch_v8`
+  already used, not a second entry point. `sw_worker.rs::_sw_fire_push(payloadB64)` builds a
+  `PushEvent`/`PushMessageData` (`.text()`/`.json()`/`.arrayBuffer()`/`.blob()`, base64 over the
+  same conveyor as the rest of the file) and runs the registered `push` handlers;
+  `_sw_fire_push_subscription_change` mirrors this for `PushSubscriptionChangeEvent`
+  (`oldSubscription`/`newSubscription`). `push_api.rs::_lumen_push_deliver_test(origin, scope,
+  payloadB64)` is the test/mock entry point standing in for a real push service: decode → `PushBackend::
+  push_deliver` (срез 4's RFC 8291 decrypt) → `push_take_pending` → `SwWorkerMessage::Push` via
+  `SwWorkerStore`. `pushsubscriptionchange` has no real trigger (no push service to rotate a
+  subscription), so the stand-in is a second `subscribe()` call for an `(origin, scope)` that
+  `push_get` already finds subscribed — the *first* `subscribe()` for a pair never dispatches.
+  `install_push_api_v8` gained a third parameter, `sw_worker_store: Option<SwWorkerStore>`; `None`
+  (headless/no SW) makes both dispatch paths safe no-ops, same shape as the other push natives.
