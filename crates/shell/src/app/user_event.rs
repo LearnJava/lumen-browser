@@ -290,6 +290,7 @@ impl Lumen {
                         &raw.report_to_endpoints,
                         raw.sync_xhr_document_policy,
                         raw.sync_xhr_permissions_policy,
+                        raw.referrer_policy_header.as_deref(),
                     )
                     .map_err(|e| e.to_string());
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)

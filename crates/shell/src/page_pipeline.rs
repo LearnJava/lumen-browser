@@ -60,8 +60,12 @@ pub(crate) fn render_bytes(
     // form, so unlike `csp_header` these arrive already resolved, not raw.
     sync_xhr_document_policy: Option<lumen_core::ext::PolicyDisposition>,
     sync_xhr_permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
+    // GAP-REFERRER срез 3: raw `Referrer-Policy` response header text, stamped
+    // onto the parsed document next to `csp_header` — see
+    // `page_source::referrer_policy_header`.
+    referrer_policy_header: Option<&str>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -744,6 +748,9 @@ pub(crate) fn parse_and_layout(
     // below, no per-document merge needed.
     sync_xhr_document_policy: Option<lumen_core::ext::PolicyDisposition>,
     sync_xhr_permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
+    // GAP-REFERRER срез 3: see `render_bytes`'s doc comment on this same
+    // parameter — stamped onto the document right next to `csp_header`.
+    referrer_policy_header: Option<&str>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -784,6 +791,11 @@ pub(crate) fn parse_and_layout(
     // a `report-to <group>` directive resolves against this map from
     // whichever call site fires `securitypolicyviolation`.
     doc.set_report_to_endpoints(report_to_endpoints.clone());
+    // GAP-REFERRER срез 3: same point, same reasoning — combined with the
+    // document's own `<meta name=referrer>` (already on `doc` from parsing)
+    // by `resource_base::document_referrer_policy` at each point that needs
+    // the resolved policy.
+    doc.set_referrer_policy_header(referrer_policy_header.map(str::to_owned));
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
@@ -792,7 +804,15 @@ pub(crate) fn parse_and_layout(
     // sse_provider — в new EventSource(). Все три используют один HttpClient.
     let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
-            let mut client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar.clone());
+            // GAP-REFERRER срез 3: this client's `Referer` respects the
+            // document's own `<meta name=referrer>`/`Referrer-Policy` header
+            // instead of always the project default — see
+            // `resource_base::document_referrer_policy`'s doc comment.
+            let mut client = base.http_client_for_subresource_with_policy(
+                Arc::clone(sink),
+                cookie_jar.clone(),
+                crate::resource_base::document_referrer_policy(&doc),
+            );
             // GAP-CSPENF срез 10: gate JS-issued fetch()/XMLHttpRequest against
             // `connect-src` (or `default-src`) — WebSocket/EventSource share this
             // `HttpClient` but are not gated here, that's a separate directive
@@ -827,9 +847,10 @@ pub(crate) fn parse_and_layout(
             // `with_sync_xhr_policy(None, None)` is the same as never calling it.
             client = client.with_sync_xhr_policy(sync_xhr_document_policy, sync_xhr_permissions_policy);
             // GAP-REFERRER: `Referer`/`Origin` on `fetch()`/`XMLHttpRequest`/
-            // `sendBeacon` — `with_document_context` is now attached by
-            // `http_client_for_subresource` itself (срез 2), reaching this
-            // client the same way it reaches every subresource fetch.
+            // `sendBeacon` — `with_document_context` is attached by
+            // `http_client_for_subresource_with_policy` above, using this
+            // document's resolved policy (срез 3) rather than always the
+            // project default (срез 2).
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);

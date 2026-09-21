@@ -151,6 +151,36 @@ impl ResourceBase {
         sink: Arc<dyn EventSink>,
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     ) -> lumen_network::HttpClient {
+        // GAP-REFERRER срез 3: callers that hold a `&Document` (and so can
+        // resolve `<meta name=referrer>`/the `Referrer-Policy` header) go
+        // through `http_client_for_subresource_with_policy` instead — see its
+        // doc comment for which call sites still land here on the default.
+        self.http_client_for_subresource_with_policy(
+            sink,
+            cookie_jar,
+            lumen_network::ReferrerPolicy::default_policy(),
+        )
+    }
+
+    /// Same as [`Self::http_client_for_subresource`], with the document's own
+    /// resolved referrer policy (GAP-REFERRER срез 3,
+    /// [`document_referrer_policy`]) instead of always the project default.
+    ///
+    /// Not every one of `http_client_for_subresource`'s six call sites has a
+    /// `&Document` in scope without further plumbing (the `<img>`/`<link>`/
+    /// `@import`/`@font-face`/`<iframe src>`/preload-scanner fetch chains
+    /// don't) — those still call the plain, default-policy method above.
+    /// Wired so far: the top-level document's own `fetch()`/`XMLHttpRequest`/
+    /// `sendBeacon`/`Worker`/`<embed>`/`<object>`/media client
+    /// (`page_pipeline.rs`, `tab_lifecycle::hibernate.rs`) and `<script src>`
+    /// (`scripts.rs::resolve_script_sources`), both of which already receive
+    /// `&Document` for CSP gating.
+    pub(crate) fn http_client_for_subresource_with_policy(
+        &self,
+        sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        referrer_policy: lumen_network::ReferrerPolicy,
+    ) -> lumen_network::HttpClient {
         use lumen_network::{
             BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
             MixedContentMode,
@@ -185,15 +215,11 @@ impl ResourceBase {
         // (`<img>`/`<script src>`/`<link>`/`@import`/`@font-face`/…) shares
         // this one `HttpClient` constructor, so wiring it once here reaches
         // all of them instead of repeating the call at each of the six
-        // `http_client_for_subresource` call sites. Reading `<meta
-        // name=referrer>`/the `Referrer-Policy` response header/a
-        // `referrerpolicy` attribute is still left for a later срез — this
-        // always uses the project default.
+        // `http_client_for_subresource` call sites. срез 3: `referrer_policy`
+        // is the caller's resolved policy (see this method's doc comment) —
+        // still the project default at every call site not yet upgraded.
         if let Some(document_url) = self.url() {
-            client = client.with_document_context(
-                document_url,
-                lumen_network::ReferrerPolicy::default_policy(),
-            );
+            client = client.with_document_context(document_url, referrer_policy);
         }
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
@@ -202,6 +228,30 @@ impl ResourceBase {
         }
         client
     }
+}
+
+/// Resolve `doc`'s own referrer policy from `<meta name=referrer>` + the
+/// `Referrer-Policy` response header (GAP-REFERRER срез 3) — the raw
+/// materials `Document::referrer_policy_header`/`meta_referrer` carry,
+/// combined the way spec §3/§8.3 combines header and markup: the header
+/// (if it parses) first, then each `<meta>` in document order (if it
+/// parses) overriding it — a later source always wins, an unparseable one
+/// is simply skipped, same as `ReferrerPolicy::parse_list` already does
+/// within a single comma-separated value. Falls back to the project default
+/// (`docs/plan/privacy.md` §9.1) when nothing parses.
+pub(crate) fn document_referrer_policy(doc: &Document) -> lumen_network::ReferrerPolicy {
+    let mut policy = lumen_network::ReferrerPolicy::default_policy();
+    if let Some(header) = doc.referrer_policy_header()
+        && let Some(parsed) = lumen_network::ReferrerPolicy::parse_list(header)
+    {
+        policy = parsed;
+    }
+    for content in doc.meta_referrer() {
+        if let Some(parsed) = lumen_network::ReferrerPolicy::parse_list(content) {
+            policy = parsed;
+        }
+    }
+    policy
 }
 
 /// The URI scheme `s` begins with (RFC 3986 §3.1: `ALPHA *( ALPHA / DIGIT /

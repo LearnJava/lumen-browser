@@ -603,6 +603,23 @@ pub struct Document {
     /// срез 23 "не покрыто").
     #[serde(default)]
     style_attr_csp_blocked: HashSet<NodeId>,
+    /// Raw text of the response's `Referrer-Policy` header (GAP-REFERRER
+    /// срез 3), or `None` if the server sent none / this is a non-network
+    /// source. Combined with [`Self::meta_referrer`] by the shell — kept raw
+    /// here, not parsed into `lumen_network::ReferrerPolicy`, because `dom`
+    /// must not depend on `lumen-network` (see [`Self::csp_header`], same
+    /// reasoning). Set once by the shell in `parse_and_layout`, next to
+    /// `csp_header`.
+    #[serde(default)]
+    referrer_policy_header: Option<String>,
+    /// Raw `content` of every `<meta name="referrer">` encountered, in tree
+    /// order (GAP-REFERRER срез 3, spec §3/§8.3: a later meta overrides an
+    /// earlier one and the response header). Appended by the HTML parser as
+    /// it encounters each one — same live-during-parse pattern as
+    /// [`Self::viewport_meta`]/[`Self::meta_refresh`], except every
+    /// occurrence is kept (not just the first) since a later one must win.
+    #[serde(default)]
+    meta_referrer: Vec<String>,
 }
 
 /// Default for [`Document::character_set`] — matches [`Document::new`] and
@@ -655,6 +672,8 @@ impl Document {
             csp_header: Vec::new(),
             report_to_endpoints: HashMap::new(),
             style_attr_csp_blocked: HashSet::new(),
+            referrer_policy_header: None,
+            meta_referrer: Vec::new(),
         }
     }
 
@@ -732,6 +751,33 @@ impl Document {
     /// travels as bare node ids rather than a policy reference.
     pub fn set_style_attr_csp_blocked(&mut self, blocked: HashSet<NodeId>) {
         self.style_attr_csp_blocked = blocked;
+    }
+
+    /// Raw `Referrer-Policy` response header text of this document, if any
+    /// (GAP-REFERRER срез 3). Combined with [`Self::meta_referrer`] by the
+    /// shell's `document_referrer_policy`.
+    pub fn referrer_policy_header(&self) -> Option<&str> {
+        self.referrer_policy_header.as_deref()
+    }
+
+    /// Set the document's `Referrer-Policy` response header text. Called
+    /// once by the shell right after parsing, next to [`Self::set_csp_header`].
+    pub fn set_referrer_policy_header(&mut self, header: Option<String>) {
+        self.referrer_policy_header = header;
+    }
+
+    /// Raw `content` of every `<meta name="referrer">` this document has, in
+    /// tree order (GAP-REFERRER срез 3).
+    pub fn meta_referrer(&self) -> &[String] {
+        &self.meta_referrer
+    }
+
+    /// Record one `<meta name="referrer" content="…">` occurrence. Called by
+    /// the HTML parser as it encounters each one — unlike
+    /// [`Self::set_meta_refresh`], every occurrence is kept, not just the
+    /// first, because a later one overrides an earlier one (spec §3.1).
+    pub fn add_meta_referrer(&mut self, content: String) {
+        self.meta_referrer.push(content);
     }
 
     pub fn root(&self) -> NodeId {

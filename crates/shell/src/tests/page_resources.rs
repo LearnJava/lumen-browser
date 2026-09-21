@@ -1385,3 +1385,78 @@ fn keybinding_plain_f_opens_hints() {
         Some(KeyCommand::HintModeOpen)
     );
 }
+
+// -- GAP-REFERRER срез 3: resource_base::document_referrer_policy ----------
+
+#[test]
+fn document_referrer_policy_defaults_without_header_or_meta() {
+    let doc = lumen_html_parser::parse("<html><body></body></html>");
+    assert_eq!(
+        crate::resource_base::document_referrer_policy(&doc),
+        lumen_network::ReferrerPolicy::default_policy()
+    );
+}
+
+#[test]
+fn document_referrer_policy_reads_the_response_header() {
+    let mut doc = lumen_html_parser::parse("<html><body></body></html>");
+    doc.set_referrer_policy_header(Some("no-referrer".to_owned()));
+    assert_eq!(
+        crate::resource_base::document_referrer_policy(&doc),
+        lumen_network::ReferrerPolicy::NoReferrer
+    );
+}
+
+#[test]
+fn document_referrer_policy_reads_meta_referrer() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head><meta name="referrer" content="same-origin"></head><body></body></html>"#,
+    );
+    assert_eq!(
+        crate::resource_base::document_referrer_policy(&doc),
+        lumen_network::ReferrerPolicy::SameOrigin
+    );
+}
+
+/// A later `<meta name=referrer>` overrides an earlier one (spec §3.1).
+#[test]
+fn document_referrer_policy_last_meta_wins() {
+    let doc = lumen_html_parser::parse(concat!(
+        r#"<html><head>"#,
+        r#"<meta name="referrer" content="no-referrer">"#,
+        r#"<meta name="referrer" content="unsafe-url">"#,
+        r#"</head><body></body></html>"#,
+    ));
+    assert_eq!(
+        crate::resource_base::document_referrer_policy(&doc),
+        lumen_network::ReferrerPolicy::UnsafeUrl
+    );
+}
+
+/// `<meta name=referrer>` overrides the response header (spec §8.3: markup
+/// encountered after the header arrives takes precedence).
+#[test]
+fn document_referrer_policy_meta_overrides_header() {
+    let mut doc = lumen_html_parser::parse(
+        r#"<html><head><meta name="referrer" content="origin"></head><body></body></html>"#,
+    );
+    doc.set_referrer_policy_header(Some("unsafe-url".to_owned()));
+    assert_eq!(
+        crate::resource_base::document_referrer_policy(&doc),
+        lumen_network::ReferrerPolicy::Origin
+    );
+}
+
+/// An unrecognised meta value is skipped, not treated as an override — the
+/// last *valid* source wins, per `ReferrerPolicy::parse_list`.
+#[test]
+fn document_referrer_policy_unrecognised_meta_is_skipped() {
+    let mut doc = lumen_html_parser::parse(
+        r#"<html><head><meta name="referrer" content="bogus-value"></head><body></body></html>"#,
+    );
+    doc.set_referrer_policy_header(Some("same-origin".to_owned()));
+    assert_eq!(
+        crate::resource_base::document_referrer_policy(&doc),
+        lumen_network::ReferrerPolicy::SameOrigin
+    );
+}

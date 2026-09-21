@@ -204,6 +204,7 @@ impl PageSource {
                 cross_origin_isolated: false,
                 cache_control_no_store: false,
                 csp_header: Vec::new(),
+                referrer_policy_header: None,
                 report_to_endpoints: HashMap::new(),
                 sync_xhr_document_policy: None,
                 sync_xhr_permissions_policy: None,
@@ -219,6 +220,7 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
+                    referrer_policy_header: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
@@ -276,6 +278,7 @@ impl PageSource {
                     cross_origin_isolated,
                     cache_control_no_store: cache_control_no_store(&resp_headers),
                     csp_header: content_security_policy_header(&resp_headers),
+                    referrer_policy_header: referrer_policy_header(&resp_headers),
                     report_to_endpoints: report_to_endpoints(&resp_headers),
                     sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
                     sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
@@ -292,6 +295,7 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
+                    referrer_policy_header: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
@@ -308,6 +312,7 @@ impl PageSource {
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
                     csp_header: Vec::new(),
+                    referrer_policy_header: None,
                     report_to_endpoints: HashMap::new(),
                     sync_xhr_document_policy: None,
                     sync_xhr_permissions_policy: None,
@@ -379,6 +384,7 @@ impl PageSource {
             cross_origin_isolated,
             cache_control_no_store: cache_control_no_store(&resp_headers),
             csp_header: content_security_policy_header(&resp_headers),
+            referrer_policy_header: referrer_policy_header(&resp_headers),
             report_to_endpoints: report_to_endpoints(&resp_headers),
             sync_xhr_document_policy: document_policy_sync_xhr_disposition(&resp_headers),
             sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
@@ -409,7 +415,7 @@ impl PageSource {
         // `app/user_event.rs` where both are threaded from `self`.
         let push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>> = None;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, push_backend, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy)?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, push_backend, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref())?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -436,6 +442,10 @@ pub(crate) struct RawPage {
     /// document's `<meta>` policies. Empty for every non-network source
     /// (file / snapshot / `about:` page).
     pub(crate) csp_header: Vec<String>,
+    /// Raw `Referrer-Policy` response header text (GAP-REFERRER срез 3),
+    /// stamped onto the parsed [`Document`] next to `csp_header` for the same
+    /// reason — `None` for every non-network source, same as `csp_header`.
+    pub(crate) referrer_policy_header: Option<String>,
     /// `{group name -> endpoint URLs}` resolved from the response's
     /// `Report-To` header(s) (GAP-CSPENF срез 59, see `report_to_endpoints`).
     /// Stamped onto the parsed [`Document`] next to `csp_header` — a CSP
@@ -543,6 +553,23 @@ pub(crate) fn content_security_policy_header(resp_headers: &[(String, String)]) 
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// The response's `Referrer-Policy` header text (GAP-REFERRER срез 3), or
+/// `None` if the server sent none. Unlike `content_security_policy_header`
+/// (each occurrence its own independent policy per CSP3 §3.4), a repeated
+/// `Referrer-Policy` header is one comma-separated list per RFC 9110 §5.3 —
+/// joining every occurrence with `,` and letting
+/// `ReferrerPolicy::parse_list`'s existing last-valid-token rule resolve it
+/// reproduces that combination without a second parsing path.
+pub(crate) fn referrer_policy_header(resp_headers: &[(String, String)]) -> Option<String> {
+    let values: Vec<&str> = resp_headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("referrer-policy"))
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty())
+        .collect();
+    if values.is_empty() { None } else { Some(values.join(",")) }
 }
 
 /// Parse one `Report-To` response header instance (Reporting API v0,
@@ -836,6 +863,43 @@ mod tests {
             content_security_policy_header(&headers),
             vec!["script-src 'none'".to_owned(), "img-src 'self'".to_owned()]
         );
+    }
+
+    // ---- GAP-REFERRER срез 3: referrer_policy_header ----
+
+    #[test]
+    fn referrer_policy_header_is_read_from_the_response() {
+        let headers = vec![
+            ("Server".to_owned(), "nginx".to_owned()),
+            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
+        ];
+        assert_eq!(referrer_policy_header(&headers).as_deref(), Some("no-referrer"));
+    }
+
+    #[test]
+    fn referrer_policy_header_name_match_is_case_insensitive() {
+        let headers = vec![("referrer-POLICY".to_owned(), "same-origin".to_owned())];
+        assert_eq!(referrer_policy_header(&headers).as_deref(), Some("same-origin"));
+    }
+
+    #[test]
+    fn referrer_policy_header_none_when_absent() {
+        let headers = vec![("Server".to_owned(), "nginx".to_owned())];
+        assert_eq!(referrer_policy_header(&headers), None);
+    }
+
+    /// Unlike CSP (each occurrence its own independent policy), a repeated
+    /// `Referrer-Policy` header is one comma-separated list per RFC 9110
+    /// §5.3 — joined so `ReferrerPolicy::parse_list`'s last-valid-token rule
+    /// resolves the combination the same way a single header with commas
+    /// would.
+    #[test]
+    fn referrer_policy_header_repeated_joins_with_comma() {
+        let headers = vec![
+            ("Referrer-Policy".to_owned(), "origin".to_owned()),
+            ("Referrer-Policy".to_owned(), "unsafe-url".to_owned()),
+        ];
+        assert_eq!(referrer_policy_header(&headers).as_deref(), Some("origin,unsafe-url"));
     }
 
     /// Report-only must never block: it is a different header name and this

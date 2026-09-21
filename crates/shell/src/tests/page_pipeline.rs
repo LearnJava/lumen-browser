@@ -1145,6 +1145,7 @@ fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
         &std::collections::HashMap::new(),
         None,
         None,
+        None,
     )
     .expect("pipeline must not fail on a well-formed page")
 }
