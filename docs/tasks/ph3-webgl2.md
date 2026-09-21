@@ -123,12 +123,29 @@ VAO) + 2 новых V8-теста `webgl_canvas.rs` (переключение VA
 после `deleteVertexArray`). `cargo clippy -p lumen-paint -p lumen-js
 --all-targets --features lumen-js/v8-backend -D warnings` зелёные.
 
-### Срез 4 — M — GLSL ES 3.00 в интерпретаторе
-В `glsl.rs`: распознавать `#version 300 es` (пропускать строку), маппить
-`in`/`out` (вместо `attribute`/`varying`), встроенную `texture()` (= `texture2D`),
-и выходную переменную фрагмента (произвольное `out vec4`, а не только
-`gl_FragColor`). Держать обратную совместимость с ES 1.0 (детект по наличию
-`#version 300`).
+### Срез 4 — M — GLSL ES 3.00 в интерпретаторе — DONE 2026-09-21 (P1)
+`glsl.rs::parse` получил параметр `ShaderStage` (`Vertex`/`Fragment`) — так же,
+как срезы 1-3 узнают WebGL2 из явного флага `getContext`, а не из угадывания.
+`#version 300 es` не потребовал отдельного кода: лексер уже пропускал любую
+строку с `#` как директиву препроцессора (было верно и для ES 1.0). Новые
+ветки `Token::KwIn`/`Token::KwOut` в `parse_top_level` резолвятся относительно
+`stage` на существующие три ES 1.0 бакета: vertex `in` → `attributes`, vertex
+`out`/fragment `in` → `varyings` (тот же механизм интерполяции, что и
+`varying`), fragment `out vec4 <name>;` → новое поле `ParsedShader::frag_out_name`.
+`exec_main` пре-сидит имя fragment-output как обычный local (`Val::Vec4([0;4])`,
+как уже делалось для `varyings`) и после выполнения `main()` копирует его
+финальное значение в `env.frag_color` — так `webgl.rs` продолжает читать один
+и тот же `frag_color` независимо от ES 1.0 (`gl_FragColor`) или ES 3.00
+(именованный `out`). `texture()` уже был алиасом `texture2D` с среза 1
+(`eval_call` match `"texture2D" | "texture"`), доработки не потребовалось.
+Единственный внешний вызывающий (`webgl.rs::compile_shader`) передаёт стадию
+по `Shader::kind` (`VERTEX_SHADER`/`FRAGMENT_SHADER`). 5 новых тестов `glsl.rs`
+(`#version 300 es` пропускается, vertex `in`→attribute, vertex
+`out`/fragment `in` делят varying, `texture()` как алиас, реальный сэмплер) +
+1 новый V8-тест `webgl_canvas.rs` (`es3_glsl_shader_pipeline_paints_pixels`:
+полный compile→link→drawArrays→readPixels на паре ES 3.00 шейдеров с `in`/`out`
+и произвольным `out vec4 outColor`). `cargo clippy -p lumen-paint -p lumen-js
+--all-targets --features lumen-js/v8-backend -D warnings` зелёные.
 
 ### Срез 5 — M — Present framebuffer в страничный `<canvas>` — DONE 2026-09-21 (P1)
 Главный видимый gap закрыт. `webgl_canvas.rs::CONTEXTS` теперь хранит
@@ -169,7 +186,7 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 - [x] **`getContext('webgl2')` возвращает функциональный контекст** (не fingerprint-stub) — срез 1, 2026-09-21.
 - [x] **`drawElements` + `ELEMENT_ARRAY_BUFFER`** (u8/u16/u32 индексы) работают — срез 2, 2026-09-21.
 - [x] **VAO (`createVertexArray`/`bindVertexArray`) реализованы** — срез 3, 2026-09-21.
-- [ ] GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется.
+- [x] **GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется** — срез 4, 2026-09-21.
 - [x] **Present:** результат WebGL композитится на страничный `<canvas>` (видно в окне, не только `readPixels`) — срез 5, 2026-09-21.
 - [ ] graphic_test `NN-webgl2` проходит (порог 0.5%).
 - [ ] `CAPABILITIES.md` + `subsystems/paint.md` обновлены (webgl2 ✅/🟡).

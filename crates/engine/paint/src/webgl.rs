@@ -438,7 +438,12 @@ impl SoftwareWebGl {
     /// that `drawArrays` can execute vertex and fragment programs.
     pub fn compile_shader(&mut self, shader: u32) {
         if let Some(s) = self.shaders.get_mut(&shader) {
-            let parsed = Arc::new(glsl::parse(&s.source));
+            let stage = if s.kind == VERTEX_SHADER {
+                glsl::ShaderStage::Vertex
+            } else {
+                glsl::ShaderStage::Fragment
+            };
+            let parsed = Arc::new(glsl::parse(&s.source, stage));
             s.parsed = Some(parsed);
             s.compiled = true;
         }

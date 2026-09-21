@@ -910,6 +910,42 @@ gl.UNIFORM_BUFFER === 0x8A11 && gl.RGBA8 === 0x8058
         assert!(ok);
     }
 
+    /// Срез 4 (ph3-webgl2.md): `#version 300 es` shaders with `in`/`out`
+    /// storage qualifiers and a user-named fragment colour output run through
+    /// the full compile→link→draw→readback pipeline, not just `clear`.
+    #[test]
+    fn es3_glsl_shader_pipeline_paints_pixels() {
+        let rt = with_webgl();
+        let g = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl2');
+var vs = gl.createShader(gl.VERTEX_SHADER);
+gl.shaderSource(vs, '#version 300 es\nin vec2 a_pos;\nvoid main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }');
+gl.compileShader(vs);
+var fs = gl.createShader(gl.FRAGMENT_SHADER);
+gl.shaderSource(fs, '#version 300 es\nprecision mediump float;\nout vec4 outColor;\nvoid main(){ outColor = vec4(0.0, 1.0, 0.0, 1.0); }');
+gl.compileShader(fs);
+var prog = gl.createProgram();
+gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+gl.linkProgram(prog); gl.useProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error('link');
+var buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+var verts = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+var loc = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+gl.viewport(0, 0, 8, 8);
+gl.drawArrays(gl.TRIANGLES, 0, 6);
+var px = new Uint8Array(4);
+gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+px[1]"#,
+            )
+            .unwrap();
+        assert_eq!(g, JsValue::Number(255.0));
+    }
+
     /// The context is functional, not a stub — `drawArrays` on a `webgl2`
     /// context reaches the same software rasterizer `webgl` does.
     #[test]
