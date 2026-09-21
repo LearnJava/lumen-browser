@@ -94,12 +94,34 @@ V8-тест `webgl_canvas.rs` (полный pipeline с `Uint16Array`-индек
 `readPixels`). `cargo clippy -p lumen-paint -p lumen-js --all-targets --features
 lumen-js/v8-backend -D warnings` зелёные.
 
-### Срез 3 — S/M — VAO (`createVertexArray`/`bindVertexArray`)
-Сейчас атрибуты — плоский `attribs: HashMap<u32, AttribPointer>`
-(`webgl.rs:142`). Добавить объекты VAO (набор AttribPointer + element-binding),
-методы `create_vertex_array`/`bind_vertex_array`/`delete_vertex_array`; при
-активном VAO читать атрибуты из него. JS-шим fingerprint (`webgl_bindings.rs:56`)
-уже эмулирует VAO-заглушку — заменить на реальную в `webgl_canvas`.
+### Срез 3 — S/M — VAO (`createVertexArray`/`bindVertexArray`) — DONE 2026-09-21 (P1)
+`SoftwareWebGl` получил новый тип `VertexArrayObject` (набор `attribs:
+HashMap<u32, AttribPointer>` + захваченный `bound_element_array_buffer`,
+теми же полями, что раньше были плоскими полями самого контекста) и
+`vaos: HashMap<u32, VertexArrayObject>` + `bound_vertex_array` (0 = default,
+т.е. старые `self.attribs`/`self.bound_element_array_buffer`, ничего не
+переехало физически — просто появился второй адресуемый слой). Новые
+приватные аксессоры `attribs_mut`/`attribs_active`/`element_array_binding[_mut]`
+прозрачно читают/пишут либо default, либо активный VAO — через них
+переведены `enable/disableVertexAttribArray`, `vertexAttribPointer`,
+`bindBuffer(ELEMENT_ARRAY_BUFFER, …)`, `bufferData(ELEMENT_ARRAY_BUFFER, …)`,
+`drawElements` и шейдерный путь (`collect_vertex_attribs`/`collect_positions`)
+— ни один из них не хранит больше прямых ссылок на старые поля. `create_vertex_array`
+(id≠0, монотонный)/`bind_vertex_array` (неизвестный id откатывается на
+default, не запоминает висячий id)/`delete_vertex_array` (спека: удаление
+активного VAO неявно биндит default)/`is_vertex_array`. JS-шим:
+`_lumen_webgl_create_vertex_array`/`_bind_vertex_array`/`_delete_vertex_array`/
+`_is_vertex_array` натив + `gl.createVertexArray`/`bindVertexArray`/
+`deleteVertexArray`/`isVertexArray`, тот же `_wrap`/`_unwrap` паттерн, что и у
+буферов; `webgl_bindings.rs` (упомянутый выше fingerprint-стаб) на самом деле
+не существует в дереве — устаревшее упоминание, срез 1 уже фиксировал, что
+он не подключён как `mod`. 5 новых тестов `webgl.rs` (id-уникальность,
+изоляция attrib-pointers между VAO, изоляция `ELEMENT_ARRAY_BUFFER`-биндинга,
+откат на default при неизвестном id, неявный rebind при удалении активного
+VAO) + 2 новых V8-теста `webgl_canvas.rs` (переключение VAO прячет/возвращает
+атрибут через полный draw+readback pipeline; `isVertexArray` true→false
+после `deleteVertexArray`). `cargo clippy -p lumen-paint -p lumen-js
+--all-targets --features lumen-js/v8-backend -D warnings` зелёные.
 
 ### Срез 4 — M — GLSL ES 3.00 в интерпретаторе
 В `glsl.rs`: распознавать `#version 300 es` (пропускать строку), маппить
@@ -146,7 +168,7 @@ software-GL пути, так что presented-бufer, как и `readPixels`, о
 
 - [x] **`getContext('webgl2')` возвращает функциональный контекст** (не fingerprint-stub) — срез 1, 2026-09-21.
 - [x] **`drawElements` + `ELEMENT_ARRAY_BUFFER`** (u8/u16/u32 индексы) работают — срез 2, 2026-09-21.
-- [ ] VAO (`createVertexArray`/`bindVertexArray`) реализованы.
+- [x] **VAO (`createVertexArray`/`bindVertexArray`) реализованы** — срез 3, 2026-09-21.
 - [ ] GLSL ES 3.00 (`#version 300 es`, `in`/`out`, `texture()`) исполняется.
 - [x] **Present:** результат WebGL композитится на страничный `<canvas>` (видно в окне, не только `readPixels`) — срез 5, 2026-09-21.
 - [ ] graphic_test `NN-webgl2` проходит (порог 0.5%).

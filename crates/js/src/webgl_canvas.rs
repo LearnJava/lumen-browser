@@ -204,6 +204,11 @@ const WEBGL_SHIM: &str = r#"(function() {
     gl.clearStencil = function() {};
 
     // ── Buffers ──
+    gl.createVertexArray = function() { return _wrap(_lumen_webgl_create_vertex_array(cid)); };
+    gl.bindVertexArray = function(vao) { _lumen_webgl_bind_vertex_array(cid, _unwrap(vao)); };
+    gl.deleteVertexArray = function(vao) { _lumen_webgl_delete_vertex_array(cid, _unwrap(vao)); };
+    gl.isVertexArray = function(vao) { return _lumen_webgl_is_vertex_array(cid, _unwrap(vao)); };
+
     gl.createBuffer = function() { return _wrap(_lumen_webgl_create_buffer(cid)); };
     gl.deleteBuffer = function() {};
     gl.bindBuffer = function(target, buffer) {
@@ -514,6 +519,26 @@ pub(crate) fn install_webgl_canvas_v8(
             with_ctx(id, (), |gl| gl.clear(mask));
             present(id);
         }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_create_vertex_array",
+        into_v8_fn1(|id: u32| -> u32 { with_ctx(id, 0, |gl| gl.create_vertex_array()) }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_bind_vertex_array",
+        into_v8_fn2(|id: u32, vao: u32| {
+            with_ctx(id, (), |gl| gl.bind_vertex_array(vao));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_delete_vertex_array",
+        into_v8_fn2(|id: u32, vao: u32| {
+            with_ctx(id, (), |gl| gl.delete_vertex_array(vao));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_webgl_is_vertex_array",
+        into_v8_fn2(|id: u32, vao: u32| -> bool { with_ctx(id, false, |gl| gl.is_vertex_array(vao)) }),
     )?;
     rt.register_native(
         "_lumen_webgl_create_buffer",
@@ -1071,6 +1096,57 @@ px[1]"#,
             )
             .unwrap();
         assert_eq!(g, JsValue::Number(255.0));
+    }
+
+    /// Срез 3 (ph3-webgl2.md): `createVertexArray`/`bindVertexArray` reach a
+    /// real VAO on the software backend, not a fingerprint no-op — switching
+    /// to a fresh VAO hides the attribute pointer wired on the default one.
+    #[test]
+    fn bind_vertex_array_isolates_attrib_state() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
+c.width = 4; c.height = 4;
+var gl = c.getContext('webgl2');
+var buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+gl.uniform4f(null, 0.0, 1.0, 0.0, 1.0);
+
+var vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
+gl.drawArrays(gl.TRIANGLES, 0, 3);
+var px1 = new Uint8Array(4);
+gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
+var emptyOnFreshVao = (px1[3] === 0);
+
+gl.bindVertexArray(null);
+gl.drawArrays(gl.TRIANGLES, 0, 3);
+var px2 = new Uint8Array(4);
+gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px2);
+var paintedOnDefaultVao = (px2[1] === 255);
+
+emptyOnFreshVao && paintedOnDefaultVao"#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn is_vertex_array_reflects_create_and_delete() {
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var gl = document.createElement('canvas').getContext('webgl2');
+var vao = gl.createVertexArray();
+var wasArray = gl.isVertexArray(vao);
+gl.deleteVertexArray(vao);
+var isArrayAfterDelete = gl.isVertexArray(vao);
+wasArray === true && isArrayAfterDelete === false"#,
+        );
+        assert!(ok);
     }
 
     #[test]
