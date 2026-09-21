@@ -98,10 +98,30 @@ JS: новый нативный `_lumen_push_permission_state(origin)`, `permiss
 намеренно не тронут — остаётся статическим `DENIED`: реальной доставки push всё ещё нет
 (срезы 4-5), а этот флаг должен отражать, что вызов действительно что-то делает.
 
-### Срез 4 — M — Push-канал доставки (WebPush, RFC 8030)
-Endpoint = реальный push-сервис (или локальный relay для теста). Поднять подписку на
-доставку, принимать зашифрованные сообщения, расшифровать (RFC 8291 aes128gcm).
-Это самый крупный срез; при отсутствии внешнего push-сервиса — mock-relay в тестах.
+### Срез 4 — M — Push-канал доставки (WebPush, RFC 8030) — **сделано 2026-09-21 (P1)**
+`crates/storage/src/push_crypto.rs` — RFC 8291 aes128gcm decrypt: ECDH(P-256) shared
+secret → HKDF (RFC 5869, hand-rolled — same generic shape as `subtle_crypto.rs::
+hkdf_derive`, reimplemented because the two crates can't share a private helper) →
+CEK/nonce → AES-128-GCM decrypt, RFC 8188 §2.1 single-record framing (salt/record-size/
+keyid header, padding delimiter strip). No `ece`/webpush crate vendored (ADR-027 §5) —
+built from the already-vendored `p256`+`hmac`+`sha2`+`aes-gcm` (new `p256` dependency
+added to `lumen-storage`, same version/features already in `lumen-js`/`lumen-network`).
+`crates/storage/src/push_messages.rs` — new `PushMessages` table, in-memory FIFO queue
+of decrypted plaintexts keyed by `subscription_id` (an undelivered message has no
+cross-restart value, unlike the subscription itself). `PushBackend` (`lumen-core::ext`)
+gained `push_deliver(origin, scope, payload) -> bool` (looks up the subscription,
+decrypts `payload` with its stored `private_key`/`auth`, enqueues the plaintext) and
+`push_take_pending(origin, scope) -> Option<Vec<u8>>` (FIFO pop), both implemented on
+`PushStore`. No external push service exists to interop against — `push.lumen.local`
+endpoints (срез 1) are not reachable from anywhere — so, as this срез anticipated,
+correctness is verified by a mock relay: `push_crypto::encrypt_for_test` (test-only)
+produces a spec-shaped ciphertext that `push_deliver`'s tests decrypt via the real
+`decrypt()` path. 15 new unit tests (8 `push_crypto` incl. wrong-key/corrupted-ciphertext/
+malformed-input rejection, 6 `push_messages` FIFO/isolation, 5 `push_store` end-to-end
+deliver→take-pending). `cargo clippy -p lumen-storage -p lumen-core --all-targets -D
+warnings` and `-p lumen-js --all-targets --features v8-backend -D warnings` green.
+Remaining: nothing yet calls `push_deliver`/`push_take_pending` from JS — dispatching the
+plaintext into the Service Worker as a `push` event is срез 5.
 
 ### Срез 5 — S — Диспатч `push`-события в Service Worker
 При приходе сообщения — сконструировать `PushEvent` (`data`: PushMessageData) и

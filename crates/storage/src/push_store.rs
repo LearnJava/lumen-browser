@@ -10,6 +10,8 @@ use std::sync::Arc;
 use lumen_core::ext::PushBackend;
 
 use crate::permissions::{PermissionKind, PermissionState, Permissions};
+use crate::push_crypto;
+use crate::push_messages::PushMessages;
 use crate::push_subscriptions::PushSubscriptions;
 
 /// [`PushBackend`] over a shared [`PushSubscriptions`] table plus a
@@ -18,9 +20,18 @@ use crate::push_subscriptions::PushSubscriptions;
 /// One instance is shared (via `Arc`) across every origin/tab in the
 /// process — both tables partition rows by origin (subscriptions further by
 /// scope), so unlike `SwStore` there is no need for one adapter per origin.
+///
+/// `messages` (срез 4) is owned outright, not shared via the constructor —
+/// unlike subscriptions/permissions it has no cross-restart value (an
+/// undelivered push message queued in one process run is meaningless in the
+/// next), so there is nothing external to inject. `None` only if the
+/// in-memory SQLite connection itself fails to open — best-effort, like the
+/// rest of this trait: `push_deliver`/`push_take_pending` then act as if the
+/// queue were always empty rather than panicking.
 pub struct PushStore {
     subs: Arc<PushSubscriptions>,
     permissions: Arc<Permissions>,
+    messages: Option<PushMessages>,
 }
 
 impl std::fmt::Debug for PushStore {
@@ -32,7 +43,11 @@ impl std::fmt::Debug for PushStore {
 impl PushStore {
     /// Wrap an existing [`PushSubscriptions`] table and [`Permissions`] store.
     pub fn new(subs: Arc<PushSubscriptions>, permissions: Arc<Permissions>) -> Self {
-        Self { subs, permissions }
+        Self {
+            subs,
+            permissions,
+            messages: PushMessages::open_in_memory().ok(),
+        }
     }
 }
 
@@ -102,6 +117,24 @@ impl PushBackend for PushStore {
             _ => PermissionState::Prompt,
         };
         let _ = self.permissions.set(origin, &PermissionKind::Push, state, None);
+    }
+
+    fn push_deliver(&self, origin: &str, scope: &str, payload: &[u8]) -> bool {
+        let Ok(Some(sub)) = self.subs.get_by_scope(origin, scope) else {
+            return false;
+        };
+        let Some(plaintext) = push_crypto::decrypt(&sub.private_key, &sub.auth, payload) else {
+            return false;
+        };
+        let Some(messages) = self.messages.as_ref() else {
+            return false;
+        };
+        messages.enqueue(sub.id, &plaintext, now_unix_secs()).is_ok()
+    }
+
+    fn push_take_pending(&self, origin: &str, scope: &str) -> Option<Vec<u8>> {
+        let sub = self.subs.get_by_scope(origin, scope).ok()??;
+        self.messages.as_ref()?.take_oldest(sub.id).ok()?
     }
 }
 
@@ -188,5 +221,71 @@ mod tests {
         store.push_set_permission("https://x.test", "granted");
         store.push_set_permission("https://x.test", "nonsense");
         assert_eq!(store.push_permission_state("https://x.test"), "prompt");
+    }
+
+    /// Срез 4 DoD: `push_deliver` decrypts a spec-shaped WebPush body with
+    /// the subscription's real (mock-relay-encrypted) key material and
+    /// queues the plaintext for `push_take_pending`.
+    #[test]
+    fn deliver_then_take_pending_roundtrips_plaintext() {
+        let (private_key, p256dh, auth) = push_crypto::test_keypair();
+        let store = make();
+        store.push_subscribe("https://x.test", "/", "ep", &p256dh, &auth, &private_key, true);
+        let payload = push_crypto::encrypt_for_test(&p256dh, &auth, b"hello from push service").unwrap();
+        assert!(store.push_deliver("https://x.test", "/", &payload));
+        assert_eq!(
+            store.push_take_pending("https://x.test", "/"),
+            Some(b"hello from push service".to_vec())
+        );
+        assert_eq!(store.push_take_pending("https://x.test", "/"), None);
+    }
+
+    #[test]
+    fn deliver_without_subscription_fails() {
+        let store = make();
+        let (_, p256dh, auth) = push_crypto::test_keypair();
+        let payload = push_crypto::encrypt_for_test(&p256dh, &auth, b"hi").unwrap();
+        assert!(!store.push_deliver("https://x.test", "/", &payload));
+    }
+
+    #[test]
+    fn deliver_with_corrupted_payload_fails_and_queues_nothing() {
+        let (private_key, p256dh, auth) = push_crypto::test_keypair();
+        let store = make();
+        store.push_subscribe("https://x.test", "/", "ep", &p256dh, &auth, &private_key, true);
+        assert!(!store.push_deliver("https://x.test", "/", b"not a valid webpush body"));
+        assert_eq!(store.push_take_pending("https://x.test", "/"), None);
+    }
+
+    #[test]
+    fn take_pending_is_fifo_across_multiple_deliveries() {
+        let (private_key, p256dh, auth) = push_crypto::test_keypair();
+        let store = make();
+        store.push_subscribe("https://x.test", "/", "ep", &p256dh, &auth, &private_key, true);
+        let first = push_crypto::encrypt_for_test(&p256dh, &auth, b"first").unwrap();
+        let second = push_crypto::encrypt_for_test(&p256dh, &auth, b"second").unwrap();
+        assert!(store.push_deliver("https://x.test", "/", &first));
+        assert!(store.push_deliver("https://x.test", "/", &second));
+        assert_eq!(store.push_take_pending("https://x.test", "/"), Some(b"first".to_vec()));
+        assert_eq!(store.push_take_pending("https://x.test", "/"), Some(b"second".to_vec()));
+    }
+
+    #[test]
+    fn take_pending_without_subscription_is_none() {
+        let store = make();
+        assert_eq!(store.push_take_pending("https://x.test", "/"), None);
+    }
+
+    #[test]
+    fn deliver_is_isolated_per_scope() {
+        let (private_key, p256dh, auth) = push_crypto::test_keypair();
+        let store = make();
+        store.push_subscribe("https://x.test", "/a/", "ep", &p256dh, &auth, &private_key, true);
+        let (private_key_b, p256dh_b, auth_b) = push_crypto::test_keypair();
+        store.push_subscribe("https://x.test", "/b/", "ep", &p256dh_b, &auth_b, &private_key_b, true);
+        let payload = push_crypto::encrypt_for_test(&p256dh, &auth, b"for-a").unwrap();
+        assert!(store.push_deliver("https://x.test", "/a/", &payload));
+        assert_eq!(store.push_take_pending("https://x.test", "/b/"), None);
+        assert_eq!(store.push_take_pending("https://x.test", "/a/"), Some(b"for-a".to_vec()));
     }
 }

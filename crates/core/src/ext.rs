@@ -3438,6 +3438,24 @@ pub trait PushBackend: Send + Sync {
     /// `"prompt"`. Site-permission UI hook — no interactive prompt calls this
     /// yet, so the state only moves when set explicitly.
     fn push_set_permission(&self, origin: &str, state: &str);
+
+    /// Deliver a raw WebPush message body (RFC 8030 push-service payload,
+    /// aes128gcm content-encoding per RFC 8291/8188) to the subscription for
+    /// `(origin, scope)`. Decrypts it with the subscription's stored ECDH
+    /// private key and auth secret, then enqueues the plaintext for the next
+    /// `push`-event dispatch (Ph3 push-api срез 5).
+    ///
+    /// Returns `true` if there was a subscription for `(origin, scope)` and
+    /// `payload` decrypted and authenticated successfully; `false` otherwise
+    /// (no such subscription, malformed payload, wrong key, or a corrupted/
+    /// tampered body) — the message is dropped rather than queued, same
+    /// best-effort shape as the rest of this trait.
+    fn push_deliver(&self, origin: &str, scope: &str, payload: &[u8]) -> bool;
+
+    /// Pop the oldest undelivered plaintext push message queued for
+    /// `(origin, scope)` by [`Self::push_deliver`], removing it from the
+    /// pending queue. `None` if there is no subscription or no pending message.
+    fn push_take_pending(&self, origin: &str, scope: &str) -> Option<Vec<u8>>;
 }
 
 // ============================================================================
