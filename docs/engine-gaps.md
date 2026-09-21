@@ -28,7 +28,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 - **`window.open()` and `<a target=_blank>` replace the *calling* document** ([BUG-883](../bugs/BUG-883-OPEN.md)) — the opener's timers never fire again.
 - **A frame inserted after the shell's single sub-document pass** (from a `load` handler, a timer, rAF), or a `src` assigned to an already-inserted frame, produces no request at all ([BUG-885](../bugs/BUG-885-FIXED.md)); a frame built by a top-level inline script loads fine. Write frames into the markup with their final URL.
-- **`document.open()`/`close()` do not exist** ([BUG-888](../bugs/BUG-888-OPEN.md)); an entry made by `history.pushState(state, "")` (no URL argument) fires no `popstate` on traversal ([BUG-886](../bugs/BUG-886-OPEN.md)).
+- An entry made by `history.pushState(state, "")` (no URL argument) fires no `popstate` on traversal ([BUG-886](../bugs/BUG-886-OPEN.md)).
 - **`.xhtml`/`.xht`/`.svg` parameter entities (`<!ENTITY % …>`), external DTD subset and `SYSTEM` entities are unimplemented** ([BUG-786](../bugs/BUG-786-FIXED.md)/[BUG-685](../bugs/BUG-685-FIXED.md), GAP-XMLDOC закрыт срезом 40 2026-09-16) — everything else in the XML/XHTML path (CDATA, HTML LS §13.2.6.5 foreign content, namespace prefixes, live `xmlns`/`xmlns:*` resolver, `lookupNamespaceURI`/`lookupPrefix`) is done; this residual is stably 0 corpus hits, low priority.
 
 ## Resource loading
