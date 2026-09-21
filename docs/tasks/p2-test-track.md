@@ -1677,6 +1677,47 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 Дальше: `navigation-api` (477 id, 0 `.https.`), `editing`, `workers`, `wasm`; `webnn` и вся `.https.`-группа по-прежнему дают `ERROR` (BUG-1069);
 `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB` (срез 34), `appmanifest` не тронуты.
 
+### TEST-3: срез 45 (2026-09-21) — `navigation-api`: 70 из 475 id падают на относительном URL в `navigation.navigate()`, найден BUG-1075
+
+**Выбор кандидата.** Следующая по списку среза 44: `navigation-api` (475 id, 0 `.https.`, категория без `tests/wpt/metadata/navigation-api/`). Число категорий
+249 → 250. Категория уже измерялась вручную ([BUG-639](../../bugs/BUG-639-OPEN.md): 6/417 подтестов) — теперь у неё есть baseline-гейт.
+
+**Baseline.** `--update-expected --recursive --processes 4` — ~19 мин. **307/475 harness OK, 8/430 подтестов**, 437 новых `.ini`. Бинарь `dev-release`
+не пересобирался в ходе среза — baseline и все `--check` сняты одним и тем же `lumen.exe`.
+
+**Причины по 475 строкам `TEST_END` лога** (счёт по самим строкам):
+
+| Причина | id | Доказательство |
+|---|---|---|
+| `navigation.navigate()` с относительным URL, [BUG-1075](../../bugs/BUG-1075-OPEN.md) | 67 | `browsingContext.navigate(…) failed: navigation failed: invalid url: "#frag": relative URL without a base`; в логе 146 строк `Reload: #…`/`Reload: ?…` |
+| `navigate()` с непарсящимся абсолютным URL (`https://example.com\0mozilla.org`) — тот же корень | 2 | тот же `browsingContext.navigate … invalid url` |
+| `navigate('file:///')` | 1 | `network error: file: not a local path: file:///` — не разбиралась |
+| исполнитель: `AssertionError: Got results from …?phase=…, expected …` | 10 | многофазные тесты (`?phase=start`/`initial`, `navigate-history-back-after-pushState`) — результат приходит от другого URL, чем ждёт `executorlumen.py`; **на стороне исполнителя, не диагностировано** |
+| `Cannot read properties of null (reading 'postMessage')` | 4 | не разбирались |
+| hex-экранированный `id` в селекторе, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 1 | `#\N \N … is not a valid selector` |
+| harness `TIMEOUT` без результата | 17 | `Timed out waiting for testharnessreport.js results` — не разбирались |
+| harness `TIMEOUT` с подтестами | 46 | — |
+| harness `ERROR` с подтестами | 19 | — |
+| harness `OK` | 307 | из них 283 — `Subtests passed 0/1` (единственный подтест падает) |
+
+Итог: проходят только 8 из 430 подтестов — Navigation API остаётся Phase-0-partial ([BUG-639](../../bugs/BUG-639-OPEN.md)); 283 harness-`OK` с `0/1` —
+тесты, у которых единственный подтест падает на отсутствующем `navigation.reload`/`updateCurrentEntry`/`NavigationDestination`
+(`TypeError: … is not a function` в логе). BUG-1075 маскирует остальное: 70 id не доходят даже до этого.
+
+**Проверка — флапающие пришлось сузить.** Первые три `--check` после `--update-expected` дали 5, 1 и 2 «регрессии» плюс `unexpected pass`: нестабильны десять файлов —
+восемь `navigate-event/cross-window/*-crossorigin-sameorigindomain.sub.html` (`OK` ↔ `TIMEOUT`),
+`navigation-methods/traverseTo-navigates-multiple-iframes.html` (`OK` ↔ `TIMEOUT`, подтест `FAIL` ↔ `NOTRUN`) и `focus-reset/basic.html` (`OK` ↔ `ERROR`).
+Причина не установлена (гипотеза — гонка окон при `window.open`/`iframe` между четырьмя параллельными `lumen.exe`; не проверялась). Эти `.ini` сужены до
+`expected: [OK, TIMEOUT]` / `[OK, ERROR]` с подтестами `[FAIL, TIMEOUT, NOTRUN]` / `[FAIL, NOTRUN]`. После сужения — **три подряд чистых `--check`**
+(307–309/475 harness OK, 8/430, 0 регрессий, 0 unexpected pass, 0 других отклонений), по ~17 мин.
+
+**Ограничение записанного.** 70 + 10 + 4 + 1 = 85 id записаны как `ERROR` — нижняя планка; после починки BUG-1075 baseline регенерируется, сдвиг
+`ERROR → OK/FAIL/TIMEOUT` ожидаем. Гейт держат 307 harness-`OK` и подтесты; десять суженных файлов держат его слабее (два допустимых значения).
+
+Дальше: `editing`, `workers`, `wasm`; десять `AssertionError: Got results from …?phase=` — правка `executorlumen.py` (P2, отдельный срез), она сдвинет и другие
+многофазные категории; `webnn` и вся `.https.`-группа по-прежнему дают `ERROR` (BUG-1069); `encoding` (только с `--exclude-prefix /encoding/legacy-mb-`), `IndexedDB`
+(срез 34), `appmanifest` не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
