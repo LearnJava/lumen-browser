@@ -41,7 +41,6 @@ Branch names: short kebab-case. **Developer sessions (P1–P6) must prefix the b
 - Rewriting published history.
 - `git config` changes (never).
 - Skipping hooks (`--no-verify`).
-- `git push` without explicit user request.
 
 ---
 

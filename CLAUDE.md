@@ -95,7 +95,7 @@ Full protocol, worktree pool, 7-step completion checklist — [`docs/git-workflo
 - **Merge and push after EVERY commit** (user, 2026-08-19): gate → commit → `git merge --no-ff` into `main` → `git push origin main`. Nothing waits for the end of a task — unpushed work does not exist for the other sessions.
 - **Do not wait for CI before merging.** The local gate is the only pre-merge check; watch `main` afterwards and fix it if CI goes red.
 - Commit message in Russian, subject under 80 chars, body explains *why*.
-- **Forbidden:** direct commit to main · force-push · rewriting history · `git config` · `--no-verify` · `git push` without an explicit user request.
+- **Forbidden:** direct commit to main · force-push · rewriting history · `git config` · `--no-verify`.
 
 ---
 
