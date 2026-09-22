@@ -130,7 +130,7 @@
 - **Browser fundamentals — Phase 3+** (полный список — в [ROADMAP.md](../../ROADMAP.md), трек «Browser fundamentals»):
   - **WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime с AbortController** (`[P3]`).
   - **HTTP auth (Basic + Digest)** (`[P3]`, готово) — `HttpClient::with_credentials` + RFC 7617/7616 в `lumen-network::auth`. Negotiate/NTLM + client certificates (mTLS) — отложены.
-  - **OCSP stapling + CT log enforcement + invalid cert UI** (`[P3]`).
+  - **OCSP stapling + CT log enforcement + invalid cert UI** (`[P3]`, готово) — `LumenVerifier` (`lumen-network::tls::verifier`) слоит A3 (стэплед-OCSP `revoked` → hard-fail) и A4 (CT SCT-сбор, ≥2 логов) поверх webpki chain-валидации; `CertInterstitial` (`lumen-shell::panels::cert_interstitial`) блокирует навигацию на `Error::CertInvalid` с Back/Proceed anyway, `tls::bypass` — session-scoped hostname-реестр обхода. `PanelCertData` несёт реальные revocation/CT-строки и красный заголовок при ошибке.
   - **Safe Browsing equivalent** (`[P3]`, готово) — `SafeBrowsingList` (SQLite) + `SafeBrowsingFilter` поверх `RequestFilter`-точки; полные SHA-256 + 20 канонических вариантов на URL; без облачного API.
   - **Back/forward cache (bfcache)** (`[P4]`).
   - **Navigation API + History API runtime** (`[P4]`, готово) — History API полностью привязан к реальному back-forward стеку; `window.navigation` (entries/navigate/back/forward/traverseTo, intercept round-trip, `navigate`/`navigatesuccess`/`navigateerror`/`currententrychange`) читает/пишет тот же стек; multi-step `history.go(n)`/`traverseTo(key)`, пересекающий полнодокументную границу, корректно перезагружает нужный документ перед применением same-document destination.
