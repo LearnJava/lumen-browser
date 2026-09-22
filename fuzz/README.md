@@ -62,18 +62,20 @@ Currently listed:
 
 - `fuzz_css_parser` — [BUG-788](../bugs/BUG-788-OPEN.md), `parse` blows up to
   hundreds of MiB on a kilobyte of malformed CSS.
-- `fuzz_image` — [BUG-790](../bugs/BUG-790-OPEN.md), a 78-byte GIF whose header
-  declares a 65281×57098 logical screen asks the allocator for 14.9 GiB.
 
-`fuzz_image` is worth a note, because its history is the argument for keeping
-the two mechanisms separate. It was delisted on 2026-08-20 together with the
+`fuzz_image`'s history is the argument for keeping the two mechanisms
+separate. It was delisted on 2026-08-20 together with the
 [BUG-787](../bugs/BUG-787-FIXED.md) fix (GIF LZW unpack never returned) and
 re-listed the same day: the first run in which it was blocking immediately
-found BUG-790 — a different defect in the same target. BUG-787 itself has not
-regressed, and you can see that without reading a fuzz log: its repro lives in
-`regressions/fuzz_image-gif-lzw-hang` and is replayed by the **blocking**
-replay step, which `KNOWN_FAILING` does not cover. So a fixed bug keeps its
-guarantee even while the target is muted for the next one.
+found [BUG-790](../bugs/BUG-790-FIXED.md) — a different defect in the same
+target (a 65281×57098 logical screen asking the allocator for 14.9 GiB) —
+delisted again on 2026-09-23 with its own fix (upper bound on GIF logical
+screen area). Neither BUG-787 nor BUG-790 has regressed, and you can see that
+without reading a fuzz log: their repros live in
+`regressions/fuzz_image-gif-lzw-hang` and `regressions/fuzz_image-gif-huge-screen`
+and are replayed by the **blocking** replay step, which `KNOWN_FAILING` does
+not cover. So a fixed bug keeps its guarantee even while the target is muted
+for the next one.
 
 The corpus is **not** persisted between CI runs — each run starts from the
 committed seeds. That is why the sweep is weekly rather than nightly: without

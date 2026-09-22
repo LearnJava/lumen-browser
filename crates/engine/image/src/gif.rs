@@ -131,6 +131,15 @@ const PALETTE_CHANNELS: usize = 3;
 /// `gif`/`weezl` принимают до 11, повторяем их границу, чтобы не сузить приём файлов).
 const LZW_MIN_CODE_SIZE_RANGE: core::ops::RangeInclusive<u8> = 1..=11;
 
+/// Верхняя граница площади логического экрана GIF, в пикселях (BUG-790).
+///
+/// Логический экран (Logical Screen Descriptor) — два `u16` заголовка, принимаемые как есть:
+/// `frame_image` выделяет под них буфер `width × height × 4` байт независимо от размера
+/// реального кадра (78-байтный файл с экраном 65281×57098 и кадром 1×1 просил 14.9 ГБ).
+/// 64 МП (≈8192×8192) — заметно больше любого реального веб-контента, но убирает возможность
+/// получить многогигабайтную аллокацию из двух полей заголовка.
+const MAX_GIF_SCREEN_PIXELS: usize = 64 * 1024 * 1024;
+
 /// Порядок строк, в котором чересстрочный (interlaced) GIF выдаёт их из потока:
 /// четыре прохода — каждый восьмой от 0, каждый восьмой от 4, каждый четвёртый от 2,
 /// каждый второй от 1 (GIF spec §20.c.ii). `rows[i]` — экранная строка для `i`-й
@@ -535,6 +544,12 @@ pub fn decode_gif_animated(bytes: &[u8]) -> Result<AnimatedGif, GifError> {
     if width == 0 || height == 0 {
         return Err(GifError::DecodeError("нулевой размер GIF".to_string()));
     }
+    let screen_pixels = (width as usize).saturating_mul(height as usize);
+    if screen_pixels > MAX_GIF_SCREEN_PIXELS {
+        return Err(GifError::DecodeError(format!(
+            "логический экран {width}x{height} ({screen_pixels} пикс.) превышает предел {MAX_GIF_SCREEN_PIXELS}"
+        )));
+    }
 
     let loop_count = match reader.repeat() {
         gif::Repeat::Finite(n) => GifLoopCount::Finite(n),
@@ -917,6 +932,42 @@ mod tests {
             crate::decode(LZW_ENDS_EARLY_GIF).is_err(),
             "lumen_image::decode обязан вернуть ошибку, а не крутиться"
         );
+    }
+
+    // ── BUG-790: логический экран без границы просит гигабайты на 78 байтах ─
+
+    /// Байт-в-байт репро (78 байт, `base64 -d`) из `bugs/BUG-790-OPEN.md`: `GIF89a`,
+    /// логический экран 65281×57098 (3.73 млрд пикселей), дескриптор кадра 1×1.
+    /// До фикса `frame_image` выделял бы `65281 × 57098 × 4` = 14.9 ГБ.
+    const HUGE_SCREEN_GIF: &[u8] = &[
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0xff, 0x0a, 0xdf, 0xe0, 0x00, 0x10, 0xd8, 0x73,
+        0x07, 0x00, 0x00, 0x00, 0x21, 0xf9, 0x04, 0x60, 0x07, 0x00, 0xff, 0x00, 0x2c, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x35, 0x44, 0x01, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x3b,
+    ];
+
+    #[test]
+    fn bug790_huge_logical_screen_rejected_instead_of_oom() {
+        match decode_gif_animated(HUGE_SCREEN_GIF) {
+            Err(GifError::DecodeError(msg)) => {
+                assert!(msg.contains("превышает предел"), "неожиданное сообщение: {msg}");
+            }
+            r => panic!("ожидалась DecodeError из-за превышения предела площади, получено {r:?}"),
+        }
+        assert!(
+            crate::decode(HUGE_SCREEN_GIF).is_err(),
+            "lumen_image::decode обязан вернуть ошибку, а не запрашивать гигабайты"
+        );
+    }
+
+    #[test]
+    fn max_gif_screen_pixels_boundary_accepted() {
+        // Ровно на пороге — экран должен ещё приниматься (сам буфер тут не строится,
+        // проверяется только то, что метаданные проходят без ошибки).
+        let w = 8192u32;
+        let h = MAX_GIF_SCREEN_PIXELS as u32 / w;
+        assert!((w as usize) * (h as usize) <= MAX_GIF_SCREEN_PIXELS);
     }
 
     // ── чересстрочные кадры (deinterlace) ───────────────────────────────────
