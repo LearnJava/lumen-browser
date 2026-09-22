@@ -133,6 +133,14 @@ pub struct CertInfo {
     pub san_list: Vec<String>,
     /// Human-readable TLS protocol version string (e.g. `"TLS 1.3"`, `"TLS 1.2"`).
     pub tls_version: String,
+    /// Human-readable revocation verdict from stapled OCSP (ph3-tls-hardening
+    /// A3), e.g. `"Good (OCSP stapled)"` or `"No revocation info"`. Empty
+    /// when not yet evaluated (stub data).
+    pub revocation_status: String,
+    /// Human-readable Certificate Transparency verdict (ph3-tls-hardening
+    /// A4), e.g. `"2 SCTs from distinct known logs"`. Empty when not yet
+    /// evaluated (stub data).
+    pub ct_status: String,
 }
 
 impl CertInfo {
@@ -155,7 +163,67 @@ impl CertInfo {
             fingerprint_sha256: String::new(),
             san_list: vec![host.to_owned()],
             tls_version: tls_version.to_owned(),
+            revocation_status: String::new(),
+            ct_status: String::new(),
         }
+    }
+
+    /// Build a `CertInfo` from a real leaf certificate (ph3-tls-hardening
+    /// A5), combining [`super::cert_fields::extract_leaf_fields`]'s
+    /// subject/issuer/validity/SAN with the [`super::ocsp::OcspVerdict`] (A3)
+    /// and [`super::ct::CtVerdict`] (A4) this connection already computed.
+    ///
+    /// `cert_der` should be `peer_certificates()[0]` — the only per-connection
+    /// source these leaf fields are readable from (rustls hands the raw
+    /// extension bytes to the verifier, not back out through
+    /// `ClientConnection`; see `tls::verifier` module docs). A leaf that
+    /// fails to parse (malformed DER — should not happen for a certificate
+    /// that already passed webpki chain validation) falls back to
+    /// [`Self::stub_for`]'s blanks for the unparsed fields, but still carries
+    /// a real fingerprint, TLS version, and the OCSP/CT verdicts.
+    pub fn from_peer_cert(
+        cert_der: &[u8],
+        tls_version: &str,
+        ocsp_verdict: crate::tls::ocsp::OcspVerdict,
+        ct_verdict: crate::tls::ct::CtVerdict,
+    ) -> Self {
+        let fields = crate::tls::cert_fields::extract_leaf_fields(cert_der).unwrap_or_default();
+        Self {
+            subject_cn: fields.subject_cn,
+            subject_org: fields.subject_org,
+            issuer_cn: fields.issuer_cn,
+            issuer_org: fields.issuer_org,
+            not_before: fields.not_before,
+            not_after: fields.not_after,
+            fingerprint_sha256: crate::tls::cert_fields::sha256_fingerprint_hex(cert_der),
+            san_list: fields.san_list,
+            tls_version: tls_version.to_owned(),
+            revocation_status: describe_ocsp_verdict(ocsp_verdict),
+            ct_status: describe_ct_verdict(ct_verdict),
+        }
+    }
+}
+
+/// Render an [`crate::tls::ocsp::OcspVerdict`] for display in the cert panel.
+fn describe_ocsp_verdict(verdict: crate::tls::ocsp::OcspVerdict) -> String {
+    use crate::tls::ocsp::OcspVerdict;
+    match verdict {
+        OcspVerdict::Good => String::from("Good (OCSP stapled)"),
+        // Reachable only if this constructor is ever called independently of
+        // `LumenVerifier` — the verifier already hard-fails `Revoked` before
+        // a connection with this cert reaches here.
+        OcspVerdict::Revoked => String::from("Revoked (OCSP stapled)"),
+        OcspVerdict::Unknown => String::from("No revocation info (no stapled OCSP)"),
+    }
+}
+
+/// Render a [`crate::tls::ct::CtVerdict`] for display in the cert panel.
+fn describe_ct_verdict(verdict: crate::tls::ct::CtVerdict) -> String {
+    use crate::tls::ct::CtVerdict;
+    match verdict {
+        CtVerdict::Sufficient(n) => format!("{n} SCTs from distinct known logs"),
+        CtVerdict::Insufficient(0) => String::from("No CT evidence found"),
+        CtVerdict::Insufficient(n) => format!("Only {n} SCT(s) from distinct known logs"),
     }
 }
 
