@@ -14,6 +14,17 @@
 //! await pc.setLocalDescription(offer);
 //! ```
 //! while keeping IP addresses private (§12 Unique Features — anti-fingerprinting).
+//!
+//! **Out of scope by design (GAP-WEBRTC, BUG-727):** each `RTCPeerConnection`
+//! instance is fully isolated — there is no real media/candidate exchange, so
+//! `ontrack`, `ondatachannel`, `onconnectionstatechange`, and
+//! `oniceconnectionstatechange` never fire (`_dispatch()` is only called from
+//! `_gatherMdns()` for the synthetic `icecandidate`). Any WPT test built on the
+//! canonical two-peer pattern (local/remote peer, awaiting an event on the
+//! remote side) hangs to the harness timeout instead of its own bounded wait —
+//! see `docs/wpt-status.md` entries for `webrtc-stats` and siblings. Wiring
+//! real cross-peer event delivery is left to a future real-transport
+//! implementation, not this stub.
 
 /// V8 port of the rquickjs WebRTC mDNS-only stub installer (removed S12b-B13; Ph3 V8
 /// migration S5-S7): identical JS shim, evaluated via

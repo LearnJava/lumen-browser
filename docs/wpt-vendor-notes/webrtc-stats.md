@@ -36,7 +36,7 @@ already-documented [BUG-380](../../bugs/BUG-380-FIXED.md) stale-result-reuse
 artifact that always follows a TIMEOUT in the browsing context, not an
 independent finding.
 
-New finding [BUG-727](../../bugs/BUG-727-OPEN.md): tracing every TIMEOUT
+New finding [BUG-727](../../bugs/BUG-727-FIXED.md): tracing every TIMEOUT
 back to source, each hangs on a promise awaiting a **remote**-peer event —
 `exchangeOfferAndListenToOntrack` awaits `remotePc.ontrack`;
 `openChannelPair`/`RTCDataChannel-stats.html` await `remotePc.ondatachannel`.
@@ -66,7 +66,7 @@ New `BUG-727` filed (only).
 `tests/wpt/webrtc-stats/`, 8 файлов, 8 id по глобу, без variant-фан-аута,
 1 `testdriver.js` (idlharness), 3 `.https.`). `run_report.py --all --root
 webrtc-stats --recursive` — ~82 с, **0/8 harness OK, 0/23 сабтестов**,
-стопроцентный отказ. Найден [BUG-727](../../bugs/BUG-727-OPEN.md): стаб
+стопроцентный отказ. Найден [BUG-727](../../bugs/BUG-727-FIXED.md): стаб
 диспатчит `_dispatch` только для `icecandidate` (из `_gatherMdns()`) —
 `ontrack`/`ondatachannel`/`on(ice)connectionstatechange` не вызываются
 никогда, а инстансы `RTCPeerConnection` не связаны друг с другом вовсе, так
