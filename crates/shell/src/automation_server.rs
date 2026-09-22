@@ -149,6 +149,16 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
                         message: format!("нет вкладки с id {tab_id}"),
                     },
                 },
+                // PH3-GPUSANDBOX: `Gpu*` — канал renderer-процесса (см.
+                // `GpuInit`/`GpuRender` doc-комментарии в lumen-ipc), не
+                // канал таб-команд этого сервера.
+                IpcRequest::GpuInit { .. }
+                | IpcRequest::GpuRender { .. }
+                | IpcRequest::GpuResize { .. }
+                | IpcRequest::GpuSurfaceLost => IpcResponse::GpuError {
+                    message: "ipc-server: Gpu*-сообщения не поддерживаются в режиме таб-команд"
+                        .to_owned(),
+                },
             };
 
             if channel.send(&resp).is_err() {
