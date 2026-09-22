@@ -111,6 +111,38 @@ treatment before the derive can be added; that is the other half of the gap,
 a separate srez. Spawn from `main.rs` (step 4) and `RemoteRenderBackend`
 (step 5) still cannot land until `DisplayCommand` itself serializes.
 
+Srez A7 (2026-09-22, `p1-gpusandbox-a7-displaycommand-serde`) — closes the
+other half of the `Serialize`/`Deserialize` gap: `DisplayCommand`
+(`crates/engine/paint/src/display_list/commands.rs`) and all 21 embedded
+types now derive `Serialize`/`Deserialize` — `Color`, `CornerRadii`,
+`BorderStyle`, `OutlineStyle`, `FontWeight`, `FontStyle`, `FontStretch`,
+`FontPaletteSelection`/`PaletteColorOverride`, `TextOrientation`,
+`ObjectFit`, `ObjectPosition`/`PositionComponent`, `ImageRendering`,
+`BackgroundSize`/`BgSizeAxis`, `BackgroundRepeat`, `GradientStop`/
+`ColorSpace` (`lumen-core`), `ResolvedClipShape`/`BlendMode`/`MaskMode`
+(the `lumen-paint`-owned copies at `display_list/paint_types.rs` — distinct
+from same-named types in `lumen-layout`, verified each field path back to
+what `DisplayCommand` actually references), `Mat4` (a bare `[f32; 16]`
+newtype — no glam/nalgebra involved, so serde's array blanket impl covers it
+with no `serde-big-array`), `FilterFn`, and `StrokeParams`/`StrokeLinecap`/
+`StrokeLinejoin` (`crates/engine/paint/src/svg_path.rs` — a second,
+paint-owned copy of the linecap/linejoin enums, not `lumen-layout`'s CSS
+`stroke-linecap`/`stroke-linejoin` property types). No raw pointers, `Box<dyn
+Trait>`, or third-party non-serde types anywhere in the closure — every
+addition was a plain `#[derive(...)]` line, no manual `impl Serialize`
+needed. `lumen-paint` gained a `serde` dependency (same workspace entry
+`lumen-layout` already uses, srez A6) plus a `bincode` dev-dependency for the
+round-trip test. New test `every_variant_roundtrips_through_bincode`
+(`commands.rs`) builds one sample of every `DisplayCommand` variant and
+round-trips the whole set through `bincode` (the actual `lumen-ipc` wire
+format, not just serde's abstract data model), plus a coverage guard
+(`every_variant_is_covered_by_the_roundtrip_sample`) that fails if a future
+variant is added without a matching sample. Not done: spawn from `main.rs`
+(step 4) and `RemoteRenderBackend` (step 5) — those still need
+`RendererProcessHandle::spawn()` wired into the shell's live render path
+and an actual `IpcRequest::GpuRender { display_list: bincode::serialize(&dl) }`
+call site, neither of which exists yet; that is the next srez.
+
 ---
 
 ## Goal

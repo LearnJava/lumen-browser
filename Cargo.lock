@@ -2637,6 +2637,7 @@ dependencies = [
 name = "lumen-paint"
 version = "0.5.0"
 dependencies = [
+ "bincode",
  "femtovg",
  "glutin",
  "glutin-winit",
@@ -2649,6 +2650,7 @@ dependencies = [
  "lumen-image",
  "lumen-layout",
  "rgb",
+ "serde",
  "tiny-skia",
  "wgpu",
  "winit",

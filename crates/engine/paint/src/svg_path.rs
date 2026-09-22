@@ -16,6 +16,8 @@
 
 use std::f32::consts::PI;
 
+use serde::{Deserialize, Serialize};
+
 /// One SVG path command (absolute coords, after normalization).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathSegment {
@@ -888,7 +890,7 @@ fn miter_offset(i: usize, m: usize, seg_normals: &[[f32; 2]], half_w: f32, close
 // ─── Advanced stroke: linecap / linejoin / miterlimit / dasharray ────────────
 
 /// Stroke caps applied at open sub-path endpoints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum StrokeLinecap {
     /// Flat cap at endpoint (butt).
     #[default]
@@ -900,7 +902,7 @@ pub enum StrokeLinecap {
 }
 
 /// Join style at connected segment vertices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum StrokeLinejoin {
     /// Pointed miter join (clamped by miterlimit).
     #[default]
@@ -912,7 +914,7 @@ pub enum StrokeLinejoin {
 }
 
 /// Parameters for advanced stroke tessellation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StrokeParams {
     /// Half of `stroke-width` in px (≥ 0).
     pub half_width: f32,

@@ -7,6 +7,7 @@
 //! (анкер `enum ShapeValue` до конца `impl Default` для `MaskLayer`) без правок тел.
 
 use lumen_core::ColorSpace;
+use serde::{Deserialize, Serialize};
 
 use crate::style::values::background::{BackgroundImage, BackgroundOrigin, BackgroundRepeat, BackgroundSize, MaskClip};
 use crate::style::values::box_model::FillRule;
@@ -144,7 +145,7 @@ pub enum TransformFn {
 /// CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
 /// все 9 стандартных функций кроме `drop-shadow` (требует rendering
 /// pass — отложено).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FilterFn {
     /// `blur(<length>)` — радиус gaussian blur.
     Blur(f32),
@@ -177,7 +178,7 @@ pub enum FilterFn {
 /// <length-percentage>, <color-stop>`) — без позиции цвета, чисто
 /// midpoint-маркер — пока не моделируем: они отрабатывают на интерполяции
 /// между соседями и не имеют animation-смысла на уровне per-stop pair.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GradientStop {
     pub color: Color,
     /// Source color space of this stop. `Srgb` for legacy `<color>` values;

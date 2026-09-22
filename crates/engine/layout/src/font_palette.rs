@@ -11,12 +11,13 @@
 //! copies it into `DrawText.font_palette`.
 
 use lumen_css_parser::FontPaletteValuesRule;
+use serde::{Deserialize, Serialize};
 
 use crate::style::{parse_color, Color, ComputedStyle, FontPalette};
 
 /// Resolved CPAL color override: `(palette_index, color)`.
 /// Renderer substitutes these colors when painting COLR v0/v1 glyph layers.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaletteColorOverride {
     /// 0-based CPAL palette entry index to override.
     pub index: u16,
@@ -77,7 +78,7 @@ pub struct ResolvedFontPalette {
 /// Renderer-facing `font-palette` selection, copied into `DrawText`.
 ///
 /// `None` in `DrawText.font_palette` means `normal` (default CPAL palette 0).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FontPaletteSelection {
     /// `font-palette: light` — first CPAL palette flagged
     /// USABLE_WITH_LIGHT_BACKGROUND (CPAL paletteType bit 0).

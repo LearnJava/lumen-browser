@@ -14,6 +14,13 @@ lumen-layout.workspace = true
 lumen-font.workspace = true
 lumen-image.workspace = true
 
+# Why this dependency: permanent, same workspace entry lumen-layout already uses
+# (srez A6, docs/tasks/ph3-gpu-process-sandbox.md) for Length/CalcNode. Here it
+# closes the other half of the gap — DisplayCommand itself and the paint-owned
+# color/gradient/path/mask types it embeds — so the whole enum can travel over
+# the lumen-renderer IPC transport (bincode, same wire format as lumen-ipc).
+serde = { workspace = true }
+
 # Exception #1 + #2 из §5: wgpu-surface привязан к winit-окну; оба опциональны
 # и гейтируются фичей backend-wgpu (ADR-010).
 winit = { workspace = true, optional = true }
@@ -58,6 +65,7 @@ lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
 lumen-layout.workspace = true
 lumen-core.workspace = true
+bincode.workspace = true
 
 [features]
 # ВАЖНО: ни один флаг ниже НЕ выбирает бэкенд — они лишь решают, что вообще

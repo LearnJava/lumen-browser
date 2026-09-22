@@ -3,8 +3,9 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-18).
 
 use super::*;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DisplayCommand {
     FillRect {
         rect: Rect,
@@ -773,3 +774,221 @@ impl DisplayCommand {
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // P3-gpusandbox srez A7: `DisplayCommand` derives `Serialize`/`Deserialize`
+    // (plus every type it embeds — colors, gradients, fonts, SVG paths, masks)
+    // so a display list can travel over the lumen-renderer IPC transport, which
+    // frames payloads as bincode (`lumen_ipc::IpcChannel`). Round-trip through
+    // bincode specifically, not just serde_json, since that's the actual wire
+    // format (srez A6, calc.rs, established the same pattern for Length/CalcNode).
+    fn roundtrip(cmd: &DisplayCommand) {
+        let bytes = bincode::serialize(cmd).unwrap();
+        let back: DisplayCommand = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(*cmd, back);
+    }
+
+    /// One instance of every `DisplayCommand` variant, exercising every
+    /// embedded type at least once.
+    fn all_variants() -> Vec<DisplayCommand> {
+        let rect = Rect::new(1.0, 2.0, 3.0, 4.0);
+        let color = Color { r: 10, g: 20, b: 30, a: 255 };
+        let stop = GradientStop::default();
+        vec![
+            DisplayCommand::FillRect { rect, color },
+            DisplayCommand::FillRoundedRect { rect, color, radii: CornerRadii::default() },
+            DisplayCommand::DrawBorder {
+                rect,
+                widths: [1.0, 2.0, 3.0, 4.0],
+                colors: [color, color, color, color],
+                styles: [BorderStyle::Solid, BorderStyle::Dashed, BorderStyle::Dotted, BorderStyle::Double],
+                radii: CornerRadii::default(),
+            },
+            DisplayCommand::DrawOutline {
+                rect,
+                width: 2.0,
+                style: OutlineStyle::Auto,
+                color,
+                offset: 1.0,
+            },
+            DisplayCommand::DrawText {
+                rect,
+                text: "hi".to_string(),
+                font_size: 16.0,
+                color,
+                font_family: vec!["Inter".to_string()],
+                font_weight: FontWeight(400),
+                font_style: FontStyle::Italic,
+                font_stretch: FontStretch(1000),
+                font_variation_axes: vec![(*b"wght", 700.0)],
+                font_features: vec![(*b"liga", 1)],
+                font_palette: Some(FontPaletteSelection::Light),
+                tab_size: 8.0,
+                highlight_name: Some("mark".to_string()),
+                text_orientation: Some(TextOrientation::Sideways),
+            },
+            DisplayCommand::DrawImage {
+                rect,
+                src: "img.png".to_string(),
+                alt: "alt text".to_string(),
+                object_fit: ObjectFit::Cover,
+                object_position: ObjectPosition::default(),
+                image_rendering: ImageRendering::Pixelated,
+            },
+            DisplayCommand::LazyImageSlot {
+                rect,
+                node_id: 7,
+                src: "lazy.png".to_string(),
+                object_fit: ObjectFit::Contain,
+                object_position: ObjectPosition::default(),
+            },
+            DisplayCommand::DrawBackgroundImage {
+                rect,
+                origin_rect: rect,
+                src: "bg.png".to_string(),
+                size: BackgroundSize::Cover,
+                position: ObjectPosition::default(),
+                repeat: BackgroundRepeat::RepeatX,
+                image_rendering: ImageRendering::Auto,
+            },
+            DisplayCommand::DrawLinearGradient {
+                rect,
+                angle_deg: 45.0,
+                stops: vec![stop.clone()],
+                repeating: false,
+            },
+            DisplayCommand::DrawRadialGradient {
+                rect,
+                center_x_pct: 0.5,
+                center_y_pct: 0.5,
+                radius_x: 10.0,
+                radius_y: 20.0,
+                stops: vec![stop.clone()],
+                repeating: true,
+            },
+            DisplayCommand::DrawConicGradient {
+                rect,
+                center_x_pct: 0.5,
+                center_y_pct: 0.5,
+                from_angle_deg: 0.0,
+                stops: vec![stop.clone()],
+                repeating: false,
+            },
+            DisplayCommand::PushClipRect { rect },
+            DisplayCommand::PushClipRoundedRect { rect, radii: [1.0, 2.0, 3.0, 4.0] },
+            DisplayCommand::PushClipPath { shape: ResolvedClipShape::Circle { cx: 1.0, cy: 2.0, r: 3.0 } },
+            DisplayCommand::PopClip,
+            DisplayCommand::PushOpacity { alpha: 0.5, bounds: Some(rect) },
+            DisplayCommand::PopOpacity,
+            DisplayCommand::PushBlendMode { mode: BlendMode::Multiply, bounds: rect },
+            DisplayCommand::PopBlendMode,
+            DisplayCommand::DrawLayerSnapshot { id: 42, rect, alpha: 0.75 },
+            DisplayCommand::PushMaskImage {
+                rect,
+                src: "mask.png".to_string(),
+                size: BackgroundSize::Contain,
+                position: ObjectPosition::default(),
+                repeat: BackgroundRepeat::NoRepeat,
+                image_rendering: ImageRendering::Smooth,
+            },
+            DisplayCommand::PushMaskLinearGradient {
+                rect,
+                angle_deg: 90.0,
+                stops: vec![stop.clone()],
+                repeating: false,
+            },
+            DisplayCommand::PushMaskRadialGradient {
+                rect,
+                center_x_pct: 0.5,
+                center_y_pct: 0.5,
+                stops: vec![stop.clone()],
+                repeating: false,
+            },
+            DisplayCommand::PushMaskConicGradient {
+                rect,
+                center_x_pct: 0.5,
+                center_y_pct: 0.5,
+                from_angle_deg: 0.0,
+                stops: vec![stop.clone()],
+                repeating: false,
+            },
+            DisplayCommand::PopMask,
+            DisplayCommand::PushMaskLayer { rect, mode: MaskMode::Luminance },
+            DisplayCommand::PopMaskLayer,
+            DisplayCommand::PushTransform { matrix: Mat4::IDENTITY },
+            DisplayCommand::PopTransform,
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(3.0), FilterFn::Sepia(0.5)], bounds: Some(rect) },
+            DisplayCommand::PopFilter,
+            DisplayCommand::PushBackdropFilter { filters: vec![FilterFn::Grayscale(1.0)], bounds: rect },
+            DisplayCommand::PopBackdropFilter,
+            DisplayCommand::BeginStickyLayer {
+                flow_rect: rect,
+                top: Some(0.0),
+                bottom: None,
+                left: Some(5.0),
+                right: None,
+            },
+            DisplayCommand::EndStickyLayer,
+            DisplayCommand::BeginFixedLayer,
+            DisplayCommand::EndFixedLayer,
+            DisplayCommand::PushScrollLayer { clip_rect: rect, scroll_x: 1.0, scroll_y: 2.0 },
+            DisplayCommand::PopScrollLayer,
+            DisplayCommand::DrawSvgPath { vertices: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], color },
+            DisplayCommand::DrawSvgFill { contours: vec![vec![[0.0, 0.0], [1.0, 1.0]]], color },
+            DisplayCommand::DrawSvgStroke {
+                contours: vec![vec![[0.0, 0.0], [1.0, 1.0]]],
+                color,
+                params: crate::svg_path::StrokeParams::default(),
+            },
+            DisplayCommand::BoxModelOverlay { margin: rect, border: rect, padding: rect, content: rect },
+            DisplayCommand::DrawScrollbar {
+                track_rect: rect,
+                thumb_rect: rect,
+                vertical: true,
+                thumb_color: [0.1, 0.2, 0.3, 1.0],
+                track_color: [0.4, 0.5, 0.6, 1.0],
+            },
+            DisplayCommand::PageBreak,
+            DisplayCommand::DrawCrossFade {
+                dest: rect,
+                src_a: "a.png".to_string(),
+                src_b: "b.png".to_string(),
+                progress: 0.3,
+            },
+        ]
+    }
+
+    #[test]
+    fn every_variant_roundtrips_through_bincode() {
+        for cmd in &all_variants() {
+            roundtrip(cmd);
+        }
+    }
+
+    #[test]
+    fn every_variant_is_covered_by_the_roundtrip_sample() {
+        // Guards against a new variant being added without a matching sample
+        // above — `variant_name()` must see every entry in `all_variants()`.
+        let names: std::collections::HashSet<&'static str> =
+            all_variants().iter().map(DisplayCommand::variant_name).collect();
+        let expected = [
+            "FillRect", "FillRoundedRect", "DrawBorder", "DrawOutline", "DrawText", "DrawImage",
+            "LazyImageSlot", "DrawBackgroundImage", "DrawLinearGradient", "DrawRadialGradient",
+            "DrawConicGradient", "PushClipRect", "PushClipRoundedRect", "PushClipPath", "PopClip",
+            "PushOpacity", "PopOpacity", "PushBlendMode", "PopBlendMode", "DrawLayerSnapshot",
+            "PushMaskImage", "PushMaskLinearGradient", "PushMaskRadialGradient",
+            "PushMaskConicGradient", "PopMask", "PushMaskLayer", "PopMaskLayer", "PushTransform",
+            "PopTransform", "PushFilter", "PopFilter", "PushBackdropFilter", "PopBackdropFilter",
+            "BeginStickyLayer", "EndStickyLayer", "BeginFixedLayer", "EndFixedLayer",
+            "PushScrollLayer", "PopScrollLayer", "DrawSvgPath", "DrawSvgFill", "DrawSvgStroke",
+            "BoxModelOverlay", "DrawScrollbar", "DrawCrossFade", "PageBreak",
+        ];
+        assert_eq!(names.len(), expected.len());
+        for name in expected {
+            assert!(names.contains(name), "missing sample for variant {name}");
+        }
+    }
+}

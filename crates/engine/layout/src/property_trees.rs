@@ -34,6 +34,7 @@
 #![allow(missing_docs)]
 
 use lumen_core::geom::{Rect, Size};
+use serde::{Deserialize, Serialize};
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::motion_path::resolve_motion_transform;
@@ -56,7 +57,7 @@ impl PropertyTreeNodeId {
 /// 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU).
 /// Для Sprint 0 хранится как 16 `f32`-х; на этапе compositor offload P2
 /// положит её в GPU buffer напрямую.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Mat4(pub [f32; 16]);
 
 impl Mat4 {
