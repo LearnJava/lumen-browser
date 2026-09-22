@@ -2120,6 +2120,13 @@ def main() -> int:
         print(f'--recheck: {len(fail_ids)} тест(ов) из последнего прогона')
 
     # --- Прогон ---
+    # BUG-1062: серия подряд идущих диффов > ~90% почти наверняка означает
+    # сломанный захват экрана (пустой/чужой кадр), а не массовую регрессию
+    # рендера — тот же класс, что и провал калибровки ниже. --continue-on-fail
+    # не должен маскировать эту страховку: она про сломанный инструмент, не
+    # про провалы тестов.
+    BROKEN_CAPTURE_STREAK = 5
+    consecutive_high_diff = 0
     for tid, html, threshold, label in TESTS:
         if run_filter is not None and tid not in run_filter:
             continue
@@ -2165,6 +2172,35 @@ def main() -> int:
                 print(f'         юнит-зависимости: {", ".join(DEPS[tid])}'
                       f'  (python graphic_tests/run.py --bisect {tid})')
         results.append(entry)
+
+        # BUG-1062: провал калибровки TEST-00 обесценивает crop offset для
+        # всех остальных тестов — они кропнут не ту область и сравнят мусор.
+        # Обрывать немедленно, ненулевым кодом, без 155 бессмысленных
+        # сравнений; --continue-on-fail тут не действует (см. комментарий
+        # выше цикла).
+        if tid == '00' and status == 'ERROR':
+            print(f'\nКалибровка TEST-00 не удалась — захват экрана сломан, '
+                  'результаты прогона невалидны. --continue-on-fail это не '
+                  'переопределяет; исправь захват (см. bugs/BUG-1062-FIXED.md) '
+                  'и прогони заново.')
+            if not args.only and not args.bisect:
+                save_results(results, crop_offset, tid)
+            return 1
+
+        if pct >= 90.0:
+            consecutive_high_diff += 1
+        else:
+            consecutive_high_diff = 0
+        if consecutive_high_diff >= BROKEN_CAPTURE_STREAK:
+            print(f'\n{consecutive_high_diff} тестов подряд с диффом > 90% '
+                  '— похоже на сломанный захват экрана (пустой/чужой кадр), '
+                  'а не на массовую регрессию рендера. Обрываю прогон; '
+                  '--continue-on-fail это не переопределяет (см. '
+                  'bugs/BUG-1062-FIXED.md).')
+            if not args.only and not args.bisect:
+                save_results(results, crop_offset, tid)
+            return 1
+
         if not passed and not args.continue_on_fail and (debtor_verdict != 'OK' or console_errors):
             halted_at = tid
             break
