@@ -28,6 +28,42 @@ cycles"). Round-trip test `test_gpu_round_trip` added. No renderer binary, no
 wiring into the shell yet — that is srez A2 (Phase A steps 1/3-6: new
 `lumen-renderer` crate skeleton, `RendererProcessHandle`).
 
+Srez A2 (2026-09-22, `p1-gpusandbox-a2-renderer-skeleton`) — Phase A step 1,
+IPC-plumbing part only: new binary crate `crates/renderer` (`lumen-renderer`),
+added to the workspace `members` list. `src/main.rs` mirrors
+`crates/network/src/bin/network_service.rs`: `IpcServer::bind()`, print the port
+to stdout, `accept()` one connection, loop on `IpcRequest`. `GpuInit`/`GpuResize`/
+`GpuSurfaceLost` reply `GpuReady`; `GpuRender` replies `GpuFrameDone` without
+touching `display_list` — **no `wgpu::Instance`/`Device` exists yet**, so no
+actual GPU work happens. Non-GPU variants (`Fetch`/`Ping`/`Shutdown`/`Auth`/
+`CreateTab`/`CloseTab`/`NavigateTab`/`Screenshot`) are rejected with `GpuError` so
+the match stays exhaustive, same pattern as `network_service.rs`. Also fixed, in
+the same branch: srez A1 had left `network_service.rs`'s `match` on `IpcRequest`
+non-exhaustive (missing the new `Gpu*` arms) — `cargo check -p lumen-network` was
+red on `main` from the srez A1 merge onward; added a `GpuError`-rejecting arm
+there too. Not done in this srez: `RendererProcessHandle` (step 3), spawning
+`lumen-renderer` from `crates/shell/src/main.rs` (step 4), `RemoteRenderBackend`
+(step 5) — the shell still uses the in-process `backend_factory::create_backend()`
+path; `lumen-renderer` is not invoked by anything yet. That is srez A3.
+
+Srez A3 (2026-09-22, `p1-gpusandbox-a3-renderer-handle`) — Phase A step 3 only:
+`RendererProcessHandle` at `crates/shell/src/renderer_process.rs`, mirroring
+`NetworkServiceHandle` (`network_service.rs`) — `spawn()` launches
+`lumen-renderer(.exe)` next to the current binary, reads the port line it
+prints to stdout, connects `IpcClient`, and returns `(handle, client)`; `Drop`
+kills the child. Module gated `#![allow(dead_code)]` (same pattern as
+`download.rs`) — **nothing calls `spawn()` yet**. Deliberately not done in this
+srez: wiring it into `crates/shell/src/main.rs` (step 4) to replace
+`backend_factory::create_backend()`, and `RemoteRenderBackend` (step 5) — since
+`lumen-renderer` (srez A2) still has no real `wgpu::Device` and only
+acknowledges `GpuRender` without submitting work, swapping the live backend for
+it today would blank the screen. Also fixed, same branch: srez A1 had left
+`crates/shell/src/automation_server.rs`'s `--ipc-server` tab-control `match` on
+`IpcRequest` non-exhaustive too (same shape as the `network_service.rs` gap
+srez A2 fixed) — added the same `GpuError`-rejecting arm there. Next srez (A4)
+is steps 4-5: give `lumen-renderer` a real `wgpu::Device` first, then wire
+`RendererProcessHandle`/`RemoteRenderBackend` into the shell's live render path.
+
 ---
 
 ## Goal

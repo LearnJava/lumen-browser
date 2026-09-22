@@ -17,7 +17,7 @@ performance.getEntriesByType('resource').length; // 0
 
 При этом `PerformanceObserver.supportedEntryTypes` содержит `'resource'`, а
 `observe()` тип принимает — то есть страница получает обещание, которое
-никогда не исполняется. Это ровно та же форма, что [BUG-809](BUG-809-OPEN.md)
+никогда не исполняется. Это ровно та же форма, что [BUG-809](BUG-809-FIXED.md)
 (`layout-shift`): объявленный тип без производителя записей.
 
 ## Прямое измерение

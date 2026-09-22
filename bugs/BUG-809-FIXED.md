@@ -1,6 +1,6 @@
 # BUG-809 — Layout Instability объявлен, но ни одна запись `layout-shift` не доставляется: шелловский триггер `deliver_layout_shift` не вызывается ниоткуда
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-LAYOUTSHIFT](../ROADMAP.md))
+**Статус:** FIXED 2026-09-22 (P6, ДОРАБОТКА → [GAP-LAYOUTSHIFT](../ROADMAP.md))
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-LAYOUTSHIFT` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 17 — категория `layout-instability`, 35 TIMEOUT из 37 прогнанных, 94.6 %)
 **Область:** `crates/shell/src/main.rs:2925` (объявление `deliver_layout_shift` в трейте, помечено `#[allow(dead_code)]`), `crates/shell/src/main.rs:3359` (реализация — зовёт JS-хук), `crates/js/src/dom.rs:11035` (`_lumen_deliver_layout_shift`), `crates/js/src/dom.rs:10907` (`_PERF_SUPPORTED_ENTRY_TYPES`, где `layout-shift` объявлен поддерживаемым)
@@ -221,3 +221,108 @@ pre-script снимок против финальной пост-скрипто�
 которые не должны считаться сдвигом по L1 §3, а наша функция считает их по
 голым border-box координатам) — отдельная задача, не эта. Статус
 GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 5, P6):** два approximation-gap'а
+из среза 4 закрыты. Новая `lumen_layout::collect_layout_shift_rects`
+(`crates/engine/layout/src/lib.rs`) — geometry-снимок специально для
+`compute_layout_shift_score`, отдельный от `collect_layout_rects`, который эту
+формулу до сих пор кормил тем же снимком, что идёт в `getBoundingClientRect`:
+
+* не применяет `forward_box_transform` (собственный CSS `transform`/
+  `translate` узла) — composited-трансформация двигает paint-вывод, а не
+  layout-бокс, который пересчитал бы релэйаут (`translate-change.html`
+  ожидает счёт `0` для правки `translate`);
+* пропускает узлы с `style.visibility != Visible` — скрытый элемент не
+  отрисован, а L1 §5.2.4 засчитывает только отрисованные (`visibility-hidden.html`
+  ожидает счёт `0` для правки `top` под `visibility: hidden`). Узел,
+  скрытый и в prev-, и в next-снимке, просто отсутствует в обеих картах, и
+  `compute_layout_shift_score`'s `prev.get(node)` промах трактует его как
+  «вошёл/вышел из дерева» — не сдвиг, тот же путь, что уже обрабатывает
+  `display: none`.
+
+Все четыре точки посева `prev_layout_shift_rects`/`prescript_layout_rects`
+(`relayout.rs::apply_relayout_result`, `page_load.rs::reload`/
+`apply_loaded_page`/hibernate-восстановление, `page_pipeline.rs::
+collect_js_layout_snapshot`'s pre-script снимок) переведены на новую функцию;
+`rects`, что уходит в JS (`update_layout_rects`), не тронут — там by design
+нужна gBCR-геометрия с трансформацией.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, расширен вариантами
+`cls-translate`/`cls-visibility-hidden`, dev-release, Windows, 2026-09-22):
+обе новые пробы печатают `no-entry=true` вместо `cls-entry value=…` — сдвиг
+больше не засчитывается. `cls-shift`/`cls-shift-buffered`/`cls-attribution`
+(срезы 1-4) не регрессировали — тот же вывод, что и раньше.
+
+**Не в этом срезе:** формула остаётся приближением (сумма клипованных
+площадей вместо объединения непересекающихся регионов, см. doc-комментарий
+`compute_layout_shift_score`) — остаток `translate`/`visibility`-класса
+исчерпан, но не весь класс approximation-gap'ов спеки (например `opacity`,
+`content-visibility`, scroll-driven сдвиги — не измерены в этом срезе).
+Статус GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 6, P6):** третье исключение —
+`opacity: 0` (L1 §5.2.4, тот же "не отрисован" повод, что уже применён к
+`visibility: hidden`). В отличие от `visibility`, CSS `opacity` не
+наследуется — собственное вычисленное значение узла ничего не говорит о том,
+не обнулил ли уже прозрачность родитель (`opacity-zero.html`: у родителя
+`opacity: 0`, у ребёнка `opacity: 0.5`, сдвиг ребёнка всё равно не должен
+засчитываться). `collect_layout_shift_rects_rec`
+(`crates/engine/layout/src/lib.rs`) поэтому явно тащит вниз по обходу флаг
+`ancestor_opacity_zero`, а не полагается на собственное поле узла — так, как
+это бы делал каскад, наследуйся `opacity` тоже. Условие исключения теперь
+`!Visible || opacity_zero`, оба независимы: элемент с `visibility: hidden`
+внутри непрозрачного предка по-прежнему исключается собственным полем, а
+элемент под `opacity: 0` предком исключается пробросом, даже если сам
+`visible` и с ненулевой собственной `opacity`.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, новый вариант
+`cls-opacity-zero` — вложенный узел под `opacity: 0` предком, повторяет
+`opacity-zero.html`, dev-release, Windows, 2026-09-22): печатает
+`no-entry=true` вместо `cls-entry value=…`. `cls-shift`/`cls-translate`/
+`cls-visibility-hidden` (срезы 1-5) не регрессировали. `cargo test -p
+lumen-layout --lib`: 3992 passed. `dump_golden.py`: те же 4/12
+несовпадения, что на main без этой правки (BUG-1008, известный дрейф) —
+display-list-нейтрально.
+
+**Не в этом срезе:** `content-visibility`/scroll-driven approximation-gaps
+остаются неизмеренными — `content-visibility` не реализован в движке вообще
+(`content-visibility-hidden.html`/`content-visibility-auto-*.html` упрутся в
+отсутствующее свойство раньше, чем в формулу CLS), отдельная, более крупная
+задача. Статус GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 7, P6, финал):** scroll-driven
+gap закрыт, `content-visibility`-остаток из среза 6 оказался доки-дрейфом —
+свойство в движке реализовано (`content_visibility.rs`, CSS Containment L3
+§4.4, ведёт свою собственную задачу BB-4/BUG-852), просто мимо этой записи.
+
+Четвёртое исключение в `collect_layout_shift_rects_rec`
+(`crates/engine/layout/src/lib.rs`) — `position: fixed`/`sticky`
+(`ignore-fixed-and-sticky.html`). Их containing block — viewport, поэтому
+relayout во время скролла пересчитывает их page-space `b.rect` на дельту
+скролла, хотя на экране они не двигались; без исключения каждый
+скролл-триггерный relayout выглядел бы как сдвиг на всю дистанцию скролла.
+Исключены так же, как `visibility: hidden` — пропуском записи в карту
+(в отличие от `opacity`, `position` не наследует "не отрисован" потомкам, так
+что их собственные боксы участвуют в диффе как обычно).
+
+Отдельно подтверждено (без правки кода): `content-visibility: hidden`
+уже корректно исключён из CLS. Пропущенное поддерево вообще не попадает в
+box tree (`content_visibility.rs`, `box_tree/build.rs:605`,
+`layout_dispatch.rs:531-536`), поэтому сдвиг внутри него уже читается как
+«вошёл в дерево» — та же ветка, что уже обрабатывает `display: none`, без
+отдельного исключения.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, два новых варианта
+`cls-fixed-scroll`/`cls-content-visibility-hidden`, dev-release, Windows,
+2026-09-22): оба печатают `no-entry=true`. `cls-shift`/`cls-translate`/
+`cls-visibility-hidden`/`cls-opacity-zero` (срезы 1-6) не регрессировали.
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` и
+`-p lumen-shell --all-targets -- -D warnings` чисты.
+
+Остаток объёма — исключительно formula-approximation, не измеренная в этом
+срезе: `content-visibility: auto`, ставший релевантным на скролле (CV-ratchet
+× scroll взаимодействие), и любые scroll-driven кейсы за пределами
+fixed/sticky, если найдутся. Не запланированная заранее задача — ревизия по
+факту находки, если её кто-то измерит. Измеренная в постановке заявка
+(доставка, атрибуция, три класса approximation-gap) выполнена целиком.
+Статус GAP-LAYOUTSHIFT — `done`.

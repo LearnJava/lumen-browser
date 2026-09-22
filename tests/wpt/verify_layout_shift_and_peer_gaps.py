@@ -150,6 +150,122 @@ setTimeout(function () {
 }, 300);
 </script>
 """, "cls-source node=shifter"),
+    # GAP-LAYOUTSHIFT срез 5: `translate-change.html` — a CSS `translate` edit
+    # moves the paint output, not the layout box; must not score.
+    "cls-translate": ("""
+<style>#t { position: relative; translate: 20px 0; width: 100px; height: 100px; background: blue; }</style>
+<div id=t></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("t").style.translate = "0 100px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 5: `visibility-hidden.html` — a `visibility: hidden`
+    # element moving must not score, since nothing rendered actually moved.
+    "cls-visibility-hidden": ("""
+<div id=t style="position: absolute; top: 0; width: 400px; height: 400px; visibility: hidden; background: blue"></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("t").style.top = "200px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 6: `opacity-zero.html` — a nested element inside an
+    # `opacity: 0` ancestor moving must not score either, even though the
+    # child's own `opacity` (unlike `visibility`) does not inherit the zero.
+    "cls-opacity-zero": ("""
+<div id=t style="position: absolute; top: 0; width: 400px; height: 400px; opacity: 0; background: blue">
+<div id=c style="position: relative; top: 0; width: 200px; height: 200px; opacity: 0.5; background: yellow"></div>
+</div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("c").style.top = "100px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 7: `ignore-fixed-and-sticky.html` — a fixed
+    # element's containing block is the viewport, so its page-space rect
+    # tracks the scroll offset even though nothing moved on screen; scrolling
+    # then forcing a relayout must not score a shift for it.
+    "cls-fixed-scroll": ("""
+<style>body { height: 2000px; } #t { position: fixed; top: 0; left: 0; width: 100px; height: 100px; background: blue; }</style>
+<div id=t></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        window.scrollTo(0, 50);
+        document.body.style.height = "2500px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 7: `content-visibility-hidden.html` — a skipped
+    # subtree's children never enter the box tree at all (`content_visibility.rs`),
+    # so a shift inside them should already read as "entered the tree" (not a
+    # shift) rather than needing a dedicated exclusion. Confirms that reading.
+    "cls-content-visibility-hidden": ("""
+<style>#t { content-visibility: hidden; contain-intrinsic-size: 1px; width: 100px; }</style>
+<div id=t><div id=c style="position: relative; top: 0; width: 100px; height: 100px; background: blue"></div></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("c").style.top = "200px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
     # Sanity: the stub does dispatch one event of its own (`_gatherMdns`), so a
     # silent result on the two-peer variant is not "RTC events never fire".
     "rtc-icecandidate": ("""

@@ -2654,6 +2654,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-renderer"
+version = "0.5.0"
+dependencies = [
+ "lumen-core",
+ "lumen-ipc",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-shell"
 version = "0.5.0"
 dependencies = [

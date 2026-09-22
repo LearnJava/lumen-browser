@@ -1872,6 +1872,82 @@ pub fn collect_layout_rects(
     out
 }
 
+/// GAP-LAYOUTSHIFT срез 5 (BUG-809): geometry snapshot for
+/// `compute_layout_shift_score`, deliberately *not* [`collect_layout_rects`].
+///
+/// Two approximation gaps that formula's doc-comment flagged as follow-up
+/// work, both traced to reusing `collect_layout_rects`'s gBCR-flavoured
+/// geometry for a spec that wants different inputs:
+///
+/// * **Own-node CSS `transform`/`translate` must not count.** L1 §3.1 scores
+///   *layout* shifts; a composited transform moves the paint output without
+///   touching the border box a reflow would recompute (`translate-change.html`
+///   expects score `0` for a `translate` edit). `collect_layout_rects` applies
+///   [`forward_box_transform`](crate::property_trees::forward_box_transform)
+///   because `getBoundingClientRect()` *should* report the transformed box —
+///   right for that caller, wrong for this one. This walk uses the raw
+///   `b.rect` instead.
+/// * **`visibility: hidden` elements must not count.** L1 §5.2.4 only scores
+///   elements that were actually rendered; a hidden element moving is invisible
+///   by definition (`visibility-hidden.html` expects score `0` for a `top`
+///   edit on a `visibility: hidden` box). Skipped here by omission — an
+///   element hidden in both the previous and current snapshot is absent from
+///   both maps, so [`compute_layout_shift_score`](crate) 's
+///   `prev.get(node)` miss treats it exactly like "entered/left the tree":
+///   not a shift.
+///
+/// Inline fragments (BUG-488's `InlineRun` union) are out of scope here —
+/// neither probe exercises them, and the plain-block walk below is what the
+/// filed approximation gaps need.
+///
+/// GAP-LAYOUTSHIFT срез 6 (BUG-809): a third exclusion, `opacity: 0`
+/// (L1 §5.2.4, same "not actually rendered" clause `visibility: hidden`
+/// already used). Unlike `visibility`, CSS `opacity` does not inherit — a
+/// node's own computed value says nothing about whether an *ancestor's*
+/// zero opacity already collapses the whole subtree to transparent paint
+/// output (`opacity-zero.html`: parent `opacity: 0`, child `opacity: 0.5`,
+/// child's own shift still must not count). So this walk threads an
+/// `ancestor_opacity_zero` flag down explicitly instead of trusting each
+/// node's own field, mirroring how the cascade would have propagated
+/// `visibility: hidden` if `opacity` inherited too.
+///
+/// GAP-LAYOUTSHIFT срез 7 (BUG-809): a fourth exclusion, `position: fixed`/
+/// `sticky` (`ignore-fixed-and-sticky.html`). Their containing block is the
+/// viewport, so a relayout while the page is scrolled recomputes their page-
+/// space `b.rect` by the scroll delta even though nothing moved on screen —
+/// without this exclusion `compute_layout_shift_score` would score every
+/// scroll-triggered relayout as a shift of the fixed/sticky element's full
+/// travel distance. Excluded the same way `visibility: hidden` already is
+/// (omission from the map, not a flag threaded to children — unlike
+/// `opacity`, `position` does not cascade a "not rendered" state to
+/// descendants, so their own boxes still participate normally).
+pub fn collect_layout_shift_rects(root: &LayoutBox) -> std::collections::HashMap<u32, [f32; 4]> {
+    let mut out = std::collections::HashMap::new();
+    collect_layout_shift_rects_rec(root, false, &mut out);
+    out
+}
+
+fn collect_layout_shift_rects_rec(
+    root: &LayoutBox,
+    ancestor_opacity_zero: bool,
+    out: &mut std::collections::HashMap<u32, [f32; 4]>,
+) {
+    let mut stack: Vec<(&LayoutBox, bool)> = vec![(root, ancestor_opacity_zero)];
+    while let Some((b, opacity_zero)) = stack.pop() {
+        let opacity_zero = opacity_zero || b.style.opacity <= 0.0;
+        let not_rendered = !matches!(b.style.visibility, Visibility::Visible) || opacity_zero;
+        let scroll_pinned = matches!(b.style.position, Position::Fixed | Position::Sticky);
+        if not_rendered || scroll_pinned {
+            stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
+            continue;
+        }
+        let r = b.rect;
+        out.entry(b.node.index() as u32)
+            .or_insert([r.x, r.y, r.width, r.height]);
+        stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
+    }
+}
+
 // LAYOUT-1 срез 3: явный стек вместо рекурсии — `getBoundingClientRect`
 // пересчитывается на каждый relayout (BUG-987). Pre-order без пост-обработки
 // после цикла по детям, LIFO-стек с детьми в обратном порядке сохраняет

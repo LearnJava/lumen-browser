@@ -162,6 +162,7 @@ mod update;
 mod zip_reader;
 mod zoom;
 mod network_service;
+mod renderer_process;
 
 // SPLIT SH-5: helpers that used to live at the bottom of this file.
 use crate::display_list_metrics::{

@@ -1,0 +1,19 @@
+[package]
+name = "lumen-renderer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lumen-core = { workspace = true }
+# Exception #7 (§5): serde + bincode via lumen-ipc, same transport used by the
+# network service (ADR-009) — GPU IPC messages ride the same framing layer.
+lumen-ipc = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true
