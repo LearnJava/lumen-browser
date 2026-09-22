@@ -149,6 +149,15 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
                         message: format!("нет вкладки с id {tab_id}"),
                     },
                 },
+                // PH3-GPUSANDBOX: GpuInit/GpuRender/GpuResize/GpuSurfaceLost belong
+                // to the lumen-renderer channel (renderer_process.rs), not this
+                // shell tab-control channel — reject so the match stays exhaustive.
+                IpcRequest::GpuInit { .. }
+                | IpcRequest::GpuRender { .. }
+                | IpcRequest::GpuResize { .. }
+                | IpcRequest::GpuSurfaceLost => IpcResponse::GpuError {
+                    message: "ipc-server: GPU-канал не поддерживается здесь".to_owned(),
+                },
             };
 
             if channel.send(&resp).is_err() {
