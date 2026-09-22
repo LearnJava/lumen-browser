@@ -11,6 +11,7 @@ members = [
     "crates/mcp",
     "crates/js",
     "crates/network",
+    "crates/renderer",
     "crates/storage",
     "crates/knowledge",
     "crates/bench",
