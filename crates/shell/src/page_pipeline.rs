@@ -106,6 +106,7 @@ pub(crate) fn render_bytes(
             // Stamped in by the `LoadEvent::LoadDone`/`RenderDone` handler from
             // the `RawPage` — `render_bytes` doesn't take it as a parameter.
             cert_info: None,
+            prescript_layout_rects: parsed.prescript_layout_rects,
         },
         layout_source,
         parsed.js_ctx,
@@ -252,6 +253,17 @@ pub(crate) struct LoadedPage {
     /// sources, or a request that reused a pooled HTTP/2 connection (see
     /// `lumen_network::Response::cert_info`).
     pub(crate) cert_info: Option<lumen_network::CertInfo>,
+    /// GAP-LAYOUTSHIFT срез 4 (BUG-809): the layout geometry snapshot taken
+    /// right before any parse-time `<script>` ran (see `parse_time_snapshot`
+    /// in [`parse_and_layout`]), if the page had one. `apply_loaded_page`
+    /// diffs it against the post-script layout once, on this page's first
+    /// settled frame, so a shift a synchronous script made during parsing —
+    /// invisible to the normal relayout diff, since by the time
+    /// `prev_layout_shift_rects` is first seeded the script has already run —
+    /// still lands a `layout-shift` entry in the performance buffer
+    /// (`buffered: true` semantics). `None` for a page with no parse-time
+    /// script, matching `parse_time_snapshot`'s own gate.
+    pub(crate) prescript_layout_rects: Option<std::collections::HashMap<u32, [f32; 4]>>,
 }
 
 impl LoadedPage {
@@ -283,6 +295,7 @@ impl LoadedPage {
             frame_env: None,
             nav: crate::nav_timing::NavResponseMeta::default(),
             cert_info: None,
+            prescript_layout_rects: None,
         }
     }
 }
@@ -337,6 +350,9 @@ pub(crate) struct ParsedPage {
     pub(crate) frame_env: frames::FrameLoadEnv,
     /// BUG-480 срез 1: живые sub-документы `<iframe>` этой страницы.
     pub(crate) frames: Vec<FrameHandle>,
+    /// See [`LoadedPage::prescript_layout_rects`] — same snapshot, carried
+    /// through this intermediate shape on its way there.
+    pub(crate) prescript_layout_rects: Option<std::collections::HashMap<u32, [f32; 4]>>,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -1051,6 +1067,10 @@ pub(crate) fn parse_and_layout(
     let parse_time_stylesheet = parse_time_snapshot
         .is_some()
         .then(|| Arc::new(cascade.sheet.clone()));
+    // GAP-LAYOUTSHIFT срез 4 (BUG-809): the rects half of `parse_time_snapshot`,
+    // kept around after the snapshot itself moves into `run_scripts_with_dom`
+    // below — see [`LoadedPage::prescript_layout_rects`] for why.
+    let prescript_layout_rects = parse_time_snapshot.as_ref().map(|s| s.rects.clone());
 
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     // BUG-480 срез 1: клоны провайдеров/хранилищ для sub-документов <iframe> —
@@ -1623,6 +1643,7 @@ pub(crate) fn parse_and_layout(
         dynamic_css,
         frames,
         frame_env,
+        prescript_layout_rects,
     })
 }
 

@@ -6,6 +6,8 @@
 //! (`fn` -> `pub(crate) fn`, required for a caller in the parent module) differ.
 
 use crate::*;
+#[cfg(feature = "v8")]
+use crate::relayout::compute_layout_shift_score;
 
 impl Lumen {
     /// Fetch, decode and register lazy images whose node IDs were queued by JS.
@@ -1245,6 +1247,8 @@ impl Lumen {
             nav: crate::nav_timing::NavResponseMeta::default(),
             // lumen-driver path has no TLS handshake plumbing to this boundary.
             cert_info: None,
+            // lumen-driver's headless pipeline has no parse-time snapshot pass.
+            prescript_layout_rects: None,
         })
     }
 
@@ -1879,6 +1883,12 @@ impl Lumen {
         // while a live `--mcp-live-port` read immediately after `wait: stable` still
         // returned the container's own width. Same `collect_scroll_containers` +
         // `update_scroll_states` pairing `relayout()` already uses (`relayout.rs`).
+        // GAP-LAYOUTSHIFT срез 4 (BUG-809): moved out of `page` before the
+        // block below so `page.title`/`page.cert_info` (read further down,
+        // after `page` is otherwise consumed) stay intact — a plain field
+        // move, not a clone, since nothing else reads it.
+        #[cfg(feature = "v8")]
+        let prescript_layout_rects = page.prescript_layout_rects;
         #[cfg(feature = "v8")]
         if self.js_present
             && let Some(lb_ref) = self.layout_box.as_ref()
@@ -1893,10 +1903,23 @@ impl Lumen {
                 },
             );
             let rects = collect_layout_rects(lb_ref, &doc_guard);
-            // GAP-LAYOUTSHIFT: seed the CLS diff baseline from this freshly
-            // loaded page's first settled frame — see the reload() site above
-            // for why an unseeded baseline silently scores every subsequent
-            // shift as zero.
+            // GAP-LAYOUTSHIFT срез 4: a synchronous parse-time `<script>` may
+            // have already shifted layout before this, this page's very first
+            // settled frame — the normal relayout diff never sees that shift,
+            // since `prev_layout_shift_rects` is seeded from `rects` (the
+            // POST-script geometry) right below, same as before this slice.
+            // Diffing against the pre-script snapshot here, once, delivers
+            // that shift into the performance buffer with the same
+            // `buffered: true` semantics a real browser gives it — this is
+            // the `layout-instability/buffered-flag.html` case срез 1/3 left
+            // open (see `bugs/BUG-809-OPEN.md`).
+            let buffered_shift = prescript_layout_rects
+                .as_ref()
+                .map(|pre| compute_layout_shift_score(pre, &rects, viewport.width, viewport.height))
+                .filter(|shift| shift.score > 0.0);
+            // Seed the CLS diff baseline from this freshly loaded page's first
+            // settled frame — see the reload() site above for why an unseeded
+            // baseline silently scores every subsequent shift as zero.
             self.prev_layout_shift_rects = rects.clone();
             let client_rects = collect_client_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
@@ -1923,6 +1946,12 @@ impl Lumen {
                 js.update_stylesheet(stylesheet);
                 js.update_viewport_size(vw, vh);
                 js.update_scroll_states(scroll_states);
+                // Delivered last, like `deliver_layout_shift`'s ordinary
+                // relayout call site — `had_input` is unconditionally `false`
+                // here, since page load precedes any user input by definition.
+                if let Some(shift) = buffered_shift {
+                    js.deliver_layout_shift(shift.score, &shift.sources, false);
+                }
             });
         }
         self.title = page.title.clone();
