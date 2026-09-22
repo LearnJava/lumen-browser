@@ -123,3 +123,25 @@ OK→ERROR между тремя `--check`-прогонами): в изоляц�
 что здесь: полнокорпусный прогон `referrer-policy` (1390 файлов) доминирован DNS-таймаутом на
 `www1.localhost` (см. `docs/tasks/p2-test-track.md#test-3-срез-54`) и не оставляет бюджета на
 повторные `--check` ради локализации флапа.
+
+## Ещё один экземпляр того же класса (2026-09-22, WPT-RUN-7 срез 55)
+
+`fetch` (906 id): два независимых чистых `--check` (без инфраструктурного сбоя раннера,
+см. `docs/tasks/p2-test-track.md#test-3-срез-55-2026-09-22`) дали 13 и 34 регрессии
+соответственно, пересекающиеся лишь частично — `fetch/orb/tentative/unknown-mime-type.sub.any.html`
+(`.worker.html` тоже) и `fetch/orb/tentative/compressed-image-sniffing.sub.html` (`OK`→`TIMEOUT`)
+повторились в обоих прогонах, но `fetch/orb/tentative/known-mime-type.sub.any.html` (25 сабтестов
+`PASS`→`NOTRUN`/`TIMEOUT`, самый крупный кластер второго прогона) и
+`fetch/metadata/generated/svg-image.sub.html` отсутствовали в первом прогоне вовсе, а
+`fetch/metadata/generated/element-frame.sub.html`/`element-script.sub.html` регрессировали на
+РАЗНЫХ сабтестах (`sec-fetch-dest`/`sec-fetch-site` — разные заголовки) между прогонами. Тот же
+почерк: TIMEOUT/NOTRUN-кластер вокруг `fetch/orb/tentative/*` и `fetch/metadata/generated/*`
+(оба — генерируемые id с большим числом параллельных cross-origin подзапросов на файл, как и
+`referrer-policy/4K*` выше) нестабилен между идентичными прогонами; в отличие от этого,
+`fetch/api/redirect/redirect-schemes.any.html` [`redirects 1`] регрессировал ОДИНАКОВО во всех
+трёх прогонах (включая невалидный из-за обрыва раннера) и трижды воспроизведён изолированно
+`run_smoke.py` — не отнесён к этому классу, заведён отдельно как
+[BUG-1098](BUG-1098-OPEN.md) (детерминированный дефект, не флап). Baseline `fetch` принят как
+записан первым `--update-expected`; TIMEOUT/NOTRUN-кластер `orb/tentative`/`metadata/generated`
+не перегенерирован — тот же случай, что `referrer-policy/4K*` часть 3, требует отдельной
+локализации вне бюджета этого среза.
