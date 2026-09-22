@@ -347,7 +347,6 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Called when layout shift is detected during reflow (shift >5px).
     /// `value` = fractional shift distance; `had_input` = whether user input occurred recently.
-    #[allow(dead_code)]
     fn deliver_layout_shift(&self, value: f64, had_input: bool);
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     ///

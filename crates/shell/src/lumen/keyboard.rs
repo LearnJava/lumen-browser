@@ -19,6 +19,9 @@ impl Lumen {
         if key_event.state != ElementState::Pressed {
             return;
         }
+        // GAP-LAYOUTSHIFT: mark real user input for the CLS `had_input` flag
+        // (Layout Instability L1 §3), same as `on_mouse_input`'s press branch.
+        self.last_input_epoch_s = self.epoch.elapsed().as_secs_f32();
         let PhysicalKey::Code(code) = key_event.physical_key else {
             return;
         };
