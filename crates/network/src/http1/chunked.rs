@@ -412,5 +412,6 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
         headers,
         body: raw,
         early_hint_links,
+        cert_info: conn.cert_info.clone(),
     })
 }
