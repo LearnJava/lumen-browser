@@ -14,6 +14,7 @@
 
 pub mod cert_error;
 pub mod fingerprint;
+pub mod ocsp;
 pub mod verifier;
 
 pub use fingerprint::{
