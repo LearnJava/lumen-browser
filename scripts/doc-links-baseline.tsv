@@ -263,6 +263,7 @@ bugs/BUG-752-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.m
 bugs/BUG-778-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
 bugs/BUG-786-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-786-FIXED.md	BUG-806-OPEN.md	stale-status-suffix	bugs/BUG-806-FIXED.md
+bugs/BUG-787-FIXED.md	BUG-790-OPEN.md	stale-status-suffix	bugs/BUG-790-FIXED.md
 bugs/BUG-797-FIXED.md	BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 bugs/BUG-797-FIXED.md	docs/perf-method.md	wrong-relative-path	docs/perf-method.md
 bugs/BUG-800-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
@@ -317,7 +318,7 @@ docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/shape.rs	missing	
 docs/decisions/TEMPLATE.md	ADR-NNN-title.md	missing	
 docs/engine-gaps.md	../bugs/BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
-docs/plan/tech-stack.md	crates/core/src/ext.rs	missing
+docs/plan/tech-stack.md	crates/core/src/ext.rs	missing	
 docs/roadmap-trees.md	roadmap-svg-columns.html	missing	
 docs/roadmap-trees.md	roadmap-svg-gitgraph.html	missing	
 docs/tasks/README.md	ph3-color-management.md	missing	
@@ -334,6 +335,7 @@ docs/tasks/p2-test-track.md	../../bugs/BUG-594-OPEN.md	stale-status-suffix	bugs/
 docs/tasks/p2-test-track.md	../../bugs/BUG-596-OPEN.md	stale-status-suffix	bugs/BUG-596-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-598-OPEN.md	stale-status-suffix	bugs/BUG-598-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
+docs/tasks/p2-test-track.md	../../bugs/BUG-790-OPEN.md	stale-status-suffix	bugs/BUG-790-FIXED.md
 docs/tasks/p2-test-track.md	../../bugs/BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 docs/tasks/p2-test-track.md	bugs/BUG-986-FIXED.md	wrong-relative-path	bugs/BUG-986-FIXED.md
 docs/tasks/p2-test-track.md	bugs/BUG-995-FIXED.md	wrong-relative-path	bugs/BUG-995-FIXED.md
