@@ -567,7 +567,8 @@ fn visual_viewport_page_top_tracks_page_scroll() {
     assert_eq!(top, scroll_y);
 }
 
-/// No pinch-zoom is modeled, so offset/scale stay at their unzoomed defaults.
+/// No pinch-zoom or layout/visual viewport split is modeled, so the offsets
+/// stay 0 and `scale` defaults to 1.0 before any zoom.
 #[test]
 fn visual_viewport_offset_and_scale_default_unzoomed() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -575,6 +576,17 @@ fn visual_viewport_offset_and_scale_default_unzoomed() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
     let r = rt.eval("visualViewport.scale").unwrap();
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
+}
+
+/// GAP-VVPORT срез 2: `scale` tracks the shell's page zoom (Ctrl+=/Ctrl+-),
+/// not just a hardcoded 1.0 — `update_zoom_factor` is the same write path
+/// `relayout.rs` uses alongside `update_viewport_size`.
+#[test]
+fn visual_viewport_scale_tracks_zoom_factor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_zoom_factor(1.5);
+    let r = rt.eval("visualViewport.scale").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(1.5));
 }
 
 // ── BUG-529: window.innerWidth/innerHeight/outerWidth/outerHeight ──────────

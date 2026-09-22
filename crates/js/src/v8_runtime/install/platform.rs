@@ -255,6 +255,7 @@ pub(crate) fn install_timer_wakeup(
 
 /// Element box geometry backing `getBoundingClientRect` and the observers.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // GAP-VVPORT: +zoom_factor
 pub(crate) fn install_element_geometry(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
@@ -262,6 +263,7 @@ pub(crate) fn install_element_geometry(
     layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
+    zoom_factor: Arc<Mutex<f32>>,
     flush: FlushHandles,
 ) -> JsResult<()> {
     // ── element geometry (for getBoundingClientRect / ResizeObserver / IntersectionObserver) ──
@@ -316,6 +318,14 @@ pub(crate) fn install_element_geometry(
         reg!(scope, ctx, store, "_lumen_get_viewport_size", move || -> Vec<f64> {
             let s = *vs.lock().unwrap();
             vec![f64::from(s[0]), f64::from(s[1])]
+        });
+    }
+
+    // Current page zoom factor (GAP-VVPORT), backing `visualViewport.scale`.
+    {
+        let zf = Arc::clone(&zoom_factor);
+        reg!(scope, ctx, store, "_lumen_get_zoom_factor", move || -> f64 {
+            f64::from(*zf.lock().unwrap())
         });
     }
     Ok(())

@@ -53,3 +53,13 @@ Phase 3 по объёму (нужен настоящий visual viewport с ма
 `<iframe>`). Остаток — тот же, что был изначально: `scale`/`offset*` не
 отражают реальный pinch-zoom, потому что модели pinch-zoom/`<meta viewport>`
 scale-клэмпинга у движка нет.
+
+**Обновление 2026-09-22 (GAP-VVPORT срез 2, P6):** `scale` подключён к
+реальному пользовательскому зуму шелла (Ctrl+=/Ctrl+-/Ctrl+0) — новый
+нативный `_lumen_get_zoom_factor` читает `zoom_factor: Arc<Mutex<f32>>` в
+JS-рантайме, наполняемый `js.update_zoom_factor()` рядом с
+`update_viewport_size()` в `relayout.rs`. Это честный page zoom, не
+pinch-zoom и не `<meta viewport>` scale-клэмпинг — движок их не моделирует.
+`offsetLeft`/`offsetTop`/`pageLeft` остаются `0`: layout- и visual-вьюпорт
+всё ещё один и тот же прямоугольник, сдвигаться некуда без настоящего
+различения между ними — та же Phase 3 задача, что и раньше.

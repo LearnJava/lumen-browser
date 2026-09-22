@@ -999,6 +999,7 @@ impl Lumen {
                 drop(doc_guard);
                 let customs = collect_custom_properties(lb_ref, viewport);
                 let (vw, vh) = (viewport.width, viewport.height);
+                let zoom_factor = self.zoom_factor;
                 let dark_mode = self.dark_mode;
                 let reduced_motion = self.a11y_store.reduced_motion();
                 // CSSOM-7 (BUG-977): push the live cascade alongside the rest
@@ -1056,6 +1057,7 @@ impl Lumen {
                         timed_step!("update_custom_properties", js.update_custom_properties(customs));
                         timed_step!("update_stylesheet", js.update_stylesheet(stylesheet));
                         timed_step!("update_viewport_size", js.update_viewport_size(vw, vh));
+                        timed_step!("update_zoom_factor", js.update_zoom_factor(zoom_factor));
                         timed_step!("deliver_layout_observers", js.deliver_layout_observers());
                         timed_step!(
                             "deliver_media_query_changes",
@@ -1080,6 +1082,7 @@ impl Lumen {
                         js.update_custom_properties(customs);
                         js.update_stylesheet(stylesheet);
                         js.update_viewport_size(vw, vh);
+                        js.update_zoom_factor(zoom_factor);
                         js.deliver_layout_observers();
                         // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                         // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,

@@ -166,6 +166,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after every resize and on initial load.
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_viewport_size(&self, width: f32, height: f32);
+    /// Update the current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0), backing
+    /// `window.visualViewport.scale` (GAP-VVPORT). Call alongside
+    /// [`Self::update_viewport_size`] — same cadence, same cheap write.
+    #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
+    fn update_zoom_factor(&self, zoom: f32);
     /// CSSOM-7 (BUG-977): push the page's current cascade for the
     /// synchronous same-tick flush (CSSOM-4/BUG-493's `maybe_flush`), which
     /// the interactive shell never fed before this — `FlushHandles::stylesheet`
@@ -995,6 +1000,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_viewport_size(&self, width: f32, height: f32) {
         self.rt.update_viewport_size(width, height);
+    }
+    fn update_zoom_factor(&self, zoom: f32) {
+        self.rt.update_zoom_factor(zoom);
     }
     fn update_stylesheet(&self, sheet: Arc<lumen_css_parser::Stylesheet>) {
         self.rt.update_stylesheet(sheet);
