@@ -38,6 +38,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
@@ -79,6 +80,17 @@ pub enum DownloadStatus {
     Failed(String),
     /// Cancelled by the user before completion.
     Cancelled,
+}
+
+impl DownloadStatus {
+    /// Whether this status is one a download settles into permanently — used
+    /// to make `poll()` idempotent against a duplicate terminal event for the
+    /// same id (a download only completes once in production; unit tests
+    /// that spawn a real background thread *and* inject a synthetic terminal
+    /// event for the same id can otherwise race two terminal writes).
+    fn is_terminal(&self) -> bool {
+        matches!(self, DownloadStatus::Done { .. } | DownloadStatus::Failed(_) | DownloadStatus::Cancelled)
+    }
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
@@ -129,6 +141,9 @@ pub enum DownloadAction {
     Cancel(DownloadId),
     /// Close the panel (header × button).
     Close,
+    /// Drop every finished (`Done`/`Failed`/`Cancelled`) entry (header
+    /// "Clear" button, shown only when at least one exists).
+    ClearFinished,
     /// Click landed on the panel but not on an actionable control — swallow it
     /// (do not fall through to the page).
     Inside,
@@ -167,6 +182,18 @@ pub struct DownloadManager {
     cancel_flags: HashMap<DownloadId, Arc<AtomicBool>>,
     /// Whether the download panel is currently visible.
     pub visible: bool,
+    /// Durable history — GAP: `ph3-permission-download-ui.md` Part B.1.
+    /// Session-local [`DownloadId`]s stay a plain counter (existing tests and
+    /// call sites depend on the exact sequence); `store_ids` maps them to the
+    /// SQLite row id so progress/terminal writes and `clear_finished` can
+    /// address the right record without widening `DownloadId` itself.
+    ///
+    /// `None` when no store could be opened (`open_history` I/O failure, or
+    /// — in practice never — a failed in-memory `Connection`): downloads
+    /// still work for the session, they just don't survive a restart, rather
+    /// than the whole manager refusing to construct.
+    store: Option<lumen_storage::Downloads>,
+    store_ids: HashMap<DownloadId, i64>,
 }
 
 impl Default for DownloadManager {
@@ -176,16 +203,79 @@ impl Default for DownloadManager {
 }
 
 impl DownloadManager {
-    /// Create a new, empty download manager.
+    /// Create a new download manager backed by an in-memory (non-durable)
+    /// history store — used by tests.
     pub fn new() -> Self {
+        Self::with_store(lumen_storage::Downloads::open_in_memory().ok())
+    }
+
+    /// Create a download manager backed by a durable SQLite history store at
+    /// `path`, loading finished entries from a previous session. Falls back
+    /// to no persistence (rather than panicking or silently switching to an
+    /// in-memory store the user would not expect) if the file cannot be opened.
+    ///
+    /// Named `open_history`, not `open`, because `open(&mut self)` already
+    /// exists below (shows the panel).
+    pub fn open_history(path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref();
+        let store = lumen_storage::Downloads::open(path)
+            .inspect_err(|e| {
+                eprintln!("downloads: cannot open {} ({e}); history will not persist", path.display());
+            })
+            .ok();
+        Self::with_store(store)
+    }
+
+    fn with_store(store: Option<lumen_storage::Downloads>) -> Self {
         let (tx, rx) = mpsc::channel();
-        Self {
+        let mut mgr = Self {
             entries: Vec::new(),
             rx,
             tx,
             next_id: 1,
             cancel_flags: HashMap::new(),
             visible: false,
+            store,
+            store_ids: HashMap::new(),
+        };
+        mgr.load_history();
+        mgr
+    }
+
+    /// Populate `entries` from finished rows in `store` (oldest first, so the
+    /// live queue keeps appending after them in the panel's most-recent-last
+    /// order). `Pending`/in-flight rows have no live thread to resume after a
+    /// restart and are dropped rather than shown as permanently stuck.
+    fn load_history(&mut self) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let Ok(rows) = store.list_all(200) else {
+            return;
+        };
+        for row in rows.into_iter().rev() {
+            let status = match row.status {
+                lumen_storage::DownloadStatus::Done => {
+                    DownloadStatus::Done { bytes: row.bytes_received as u64 }
+                }
+                lumen_storage::DownloadStatus::Cancelled => DownloadStatus::Cancelled,
+                lumen_storage::DownloadStatus::Failed => {
+                    DownloadStatus::Failed(row.error.unwrap_or_default())
+                }
+                lumen_storage::DownloadStatus::Pending => continue,
+            };
+            let id = DownloadId(self.next_id);
+            self.next_id += 1;
+            self.store_ids.insert(id, row.id);
+            self.entries.push(DownloadEntry {
+                id,
+                url: row.url,
+                dest: PathBuf::from(row.file_path),
+                filename: row.filename,
+                status,
+                received: row.bytes_received as u64,
+                total: row.total_size.map(|t| t as u64),
+            });
         }
     }
 
@@ -208,6 +298,13 @@ impl DownloadManager {
 
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_flags.insert(id, Arc::clone(&cancel));
+
+        if let Some(store) = self.store.as_ref()
+            && let Ok(row_id) =
+                store.start(&url, &filename, &dest.to_string_lossy(), "", None, now_unix())
+        {
+            self.store_ids.insert(id, row_id);
+        }
 
         self.entries.push(DownloadEntry {
             id,
@@ -241,6 +338,11 @@ impl DownloadManager {
             && matches!(e.status, DownloadStatus::InProgress | DownloadStatus::Pending)
         {
             e.status = DownloadStatus::Cancelled;
+            if let Some(store) = self.store.as_ref()
+                && let Some(&row_id) = self.store_ids.get(&id)
+            {
+                let _ = store.cancel(row_id, now_unix());
+            }
         }
     }
 
@@ -307,29 +409,60 @@ impl DownloadManager {
                         e.received = received;
                         e.total = Some(total);
                     }
+                    if let Some(store) = self.store.as_ref()
+                        && let Some(&row_id) = self.store_ids.get(&id)
+                    {
+                        let _ = store.update_progress(row_id, received as i64);
+                    }
                 }
                 DownloadEvent::Done { id, bytes } => {
                     if let Some(e) = self.entries.iter_mut().find(|e| e.id == id)
-                        && !matches!(e.status, DownloadStatus::Cancelled)
+                        && !e.status.is_terminal()
                     {
-                        // Don't override an explicit cancel the user already saw.
+                        // A download reaches exactly one terminal state; don't
+                        // let a stray/duplicate event re-decide an already-
+                        // finished entry (e.g. an explicit cancel the user
+                        // already saw, or — under `--test-threads`-parallel
+                        // load — a real background thread's own event racing
+                        // a test's synthetic one for the same id).
                         e.status = DownloadStatus::Done { bytes };
                         e.received = bytes;
                         e.total = Some(bytes);
+                        if let Some(store) = self.store.as_ref()
+                            && let Some(&row_id) = self.store_ids.get(&id)
+                        {
+                            let _ = store.update_progress(row_id, bytes as i64);
+                            let _ = store.complete(row_id, now_unix());
+                        }
                     }
                     self.cancel_flags.remove(&id);
                 }
                 DownloadEvent::Failed { id, reason } => {
                     if let Some(e) = self.entries.iter_mut().find(|e| e.id == id)
-                        && !matches!(e.status, DownloadStatus::Cancelled)
+                        && !e.status.is_terminal()
                     {
+                        if let Some(store) = self.store.as_ref()
+                            && let Some(&row_id) = self.store_ids.get(&id)
+                        {
+                            let _ = store.fail(row_id, now_unix(), &reason);
+                        }
                         e.status = DownloadStatus::Failed(reason);
                     }
                     self.cancel_flags.remove(&id);
                 }
                 DownloadEvent::Cancelled { id } => {
-                    if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
+                    let mut was_recorded = false;
+                    if let Some(e) = self.entries.iter_mut().find(|e| e.id == id)
+                        && !e.status.is_terminal()
+                    {
                         e.status = DownloadStatus::Cancelled;
+                        was_recorded = true;
+                    }
+                    if was_recorded
+                        && let Some(store) = self.store.as_ref()
+                        && let Some(&row_id) = self.store_ids.get(&id)
+                    {
+                        let _ = store.cancel(row_id, now_unix());
                     }
                     self.cancel_flags.remove(&id);
                 }
@@ -352,6 +485,12 @@ impl DownloadManager {
             .count()
     }
 
+    /// Whether at least one entry is in a terminal state — gates the header
+    /// "Clear" button (nothing to clear otherwise).
+    pub fn has_finished_entries(&self) -> bool {
+        self.entries.iter().any(|e| e.status.is_terminal())
+    }
+
     /// Toggle panel visibility.
     pub fn toggle_visible(&mut self) {
         self.visible = !self.visible;
@@ -365,6 +504,22 @@ impl DownloadManager {
     /// Hide the panel.
     pub fn close(&mut self) {
         self.visible = false;
+    }
+
+    /// Drop every entry in a terminal state (`Done`/`Failed`/`Cancelled`) from
+    /// both the in-memory list and the durable store. In-flight (`Pending`/
+    /// `InProgress`) entries are untouched.
+    pub fn clear_finished(&mut self) {
+        self.entries.retain(|e| {
+            let finished = e.status.is_terminal();
+            if finished {
+                self.store_ids.remove(&e.id);
+            }
+            !finished
+        });
+        if let Some(store) = self.store.as_ref() {
+            let _ = store.clear_completed();
+        }
     }
 }
 
@@ -478,6 +633,14 @@ fn run_download(
             });
         }
     }
+}
+
+/// Current Unix timestamp in seconds, for `lumen_storage::Downloads`'
+/// `started_at`/`completed_at` columns (same `now_unix` shape as
+/// `adblock.rs`/`update.rs`; each call site keeps its own copy rather than
+/// sharing a helper crate for one line).
+fn now_unix() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// Resolve the OS Downloads directory.
@@ -691,6 +854,9 @@ const ACTION_BTN_GAP: f32 = 6.0;
 const ACTION_BTN_PAD_X: f32 = 8.0;
 /// Square header close (×) button side.
 const CLOSE_BTN: f32 = 20.0;
+/// Header "Clear" text-button label, sized with `action_btn_w` at header
+/// font size — shown left of the × when [`DownloadManager::has_finished_entries`].
+const CLEAR_LABEL: &str = "Очистить";
 
 /// Geometry of the popover for a given window size: top-left corner and size.
 ///
@@ -715,6 +881,13 @@ fn close_button_rect(panel_x: f32, panel_y: f32, panel_w: f32) -> Rect {
         CLOSE_BTN,
         CLOSE_BTN,
     )
+}
+
+/// Rect of the header "Clear" text button, left of the × close button.
+fn clear_button_rect(panel_x: f32, panel_y: f32, panel_w: f32) -> Rect {
+    let w = action_btn_w(CLEAR_LABEL);
+    let close = close_button_rect(panel_x, panel_y, panel_w);
+    Rect::new(close.x - ACTION_BTN_GAP - w, panel_y + (HEADER_H - ACTION_BTN_H) / 2.0, w, ACTION_BTN_H)
 }
 
 /// Width of an action button sized to fit `label` (rough glyph-width estimate;
@@ -774,6 +947,11 @@ pub fn hit_test(manager: &DownloadManager, x: f32, y: f32, (win_w, win_h): (u32,
     }
     if rect_contains(&close_button_rect(panel_x, panel_y, panel_w), x, y) {
         return Some(DownloadAction::Close);
+    }
+    if manager.has_finished_entries()
+        && rect_contains(&clear_button_rect(panel_x, panel_y, panel_w), x, y)
+    {
+        return Some(DownloadAction::ClearFinished);
     }
     for (i, entry) in manager.entries().iter().skip(skip).enumerate() {
         let card_y = panel_y + HEADER_H + (i as f32) * CARD_H;
@@ -849,6 +1027,20 @@ pub fn build_download_bar(manager: &DownloadManager, (win_w, win_h): (u32, u32),
         pal.text_dim,
         FontWeight::NORMAL,
     ));
+
+    // Header "Clear" button — only when there is something finished to drop.
+    if manager.has_finished_entries() {
+        let rect = clear_button_rect(panel_x, panel_y, panel_w);
+        out.push(make_text(
+            CLEAR_LABEL.to_string(),
+            rect.x,
+            rect.y + (ACTION_BTN_H - META_FONT) / 2.0,
+            rect.width,
+            META_FONT,
+            pal.text_dim,
+            FontWeight::NORMAL,
+        ));
+    }
 
     // Cards (most recent first; oldest scrolled off the top).
     for (i, entry) in entries.iter().skip(skip).enumerate() {
@@ -1121,6 +1313,90 @@ mod tests {
         let mut dm = DownloadManager::new();
         // Should not panic.
         dm.cancel(DownloadId(999));
+    }
+
+    // ── Durable history (ph3-permission-download-ui.md Part B.1/B.2) ──────────
+
+    fn history_db_path(label: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "lumen_test_downloads_{label}_{}_{n}.db",
+            std::process::id(),
+        ))
+    }
+
+    #[test]
+    fn open_history_reloads_finished_entries_after_restart() {
+        let path = history_db_path("reload");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut dm = DownloadManager::open_history(&path);
+            let done_id = dm.start_download("file:///tmp/d.bin".into(), PathBuf::from("/tmp/d.bin"));
+            done_entry(&mut dm, done_id, 4096);
+            let failed_id =
+                dm.start_download("file:///tmp/f.bin".into(), PathBuf::from("/tmp/f.bin"));
+            dm.tx
+                .send(DownloadEvent::Failed { id: failed_id, reason: "boom".into() })
+                .unwrap();
+            dm.poll();
+            let cancelled_id =
+                dm.start_download("file:///tmp/c.bin".into(), PathBuf::from("/tmp/c.bin"));
+            dm.cancel(cancelled_id);
+            // Still in flight when the process "exits" — must not resurrect as
+            // a permanently-stuck entry on the next open.
+            dm.start_download("file:///tmp/p.bin".into(), PathBuf::from("/tmp/p.bin"));
+        }
+
+        let dm2 = DownloadManager::open_history(&path);
+        assert_eq!(dm2.entries().len(), 3, "only the three finished entries reload");
+        let by_name = |n: &str| dm2.entries().iter().find(|e| e.filename == n).unwrap();
+        assert!(matches!(by_name("d.bin").status, DownloadStatus::Done { bytes: 4096 }));
+        assert!(matches!(&by_name("f.bin").status, DownloadStatus::Failed(r) if r == "boom"));
+        assert!(matches!(by_name("c.bin").status, DownloadStatus::Cancelled));
+        assert!(!dm2.entries().iter().any(|e| e.filename == "p.bin"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn clear_finished_removes_only_terminal_states_and_persists() {
+        let path = history_db_path("clear");
+        let _ = std::fs::remove_file(&path);
+
+        let mut dm = DownloadManager::open_history(&path);
+        let done_id = dm.start_download("file:///tmp/d2.bin".into(), PathBuf::from("/tmp/d2.bin"));
+        done_entry(&mut dm, done_id, 10);
+        let active_id =
+            dm.start_download("file:///tmp/active.bin".into(), PathBuf::from("/tmp/active.bin"));
+        assert!(dm.has_finished_entries());
+
+        dm.clear_finished();
+        assert!(!dm.has_finished_entries());
+        assert_eq!(dm.entries().len(), 1);
+        assert_eq!(dm.entries()[0].id, active_id);
+
+        // Persisted too: reopening sees nothing (the active one was never
+        // completed/cancelled/failed, so it stays a "pending" row — dropped
+        // by load_history's own in-flight filter, not by clear_finished).
+        drop(dm);
+        let dm2 = DownloadManager::open_history(&path);
+        assert_eq!(dm2.entries().len(), 0);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_history_missing_directory_falls_back_without_panicking() {
+        // An unwritable/non-existent parent must degrade to session-only
+        // history instead of panicking (BUG-class: production `.expect()`).
+        let path = PathBuf::from("Z:/does/not/exist/downloads.db");
+        let mut dm = DownloadManager::open_history(&path);
+        let id = dm.start_download("file:///tmp/x.bin".into(), PathBuf::from("/tmp/x.bin"));
+        assert_eq!(dm.entries().len(), 1);
+        assert_eq!(dm.entries()[0].id, id);
     }
 
     #[test]
@@ -1445,6 +1721,54 @@ mod tests {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "В папке")
         });
         assert!(has_open && has_folder);
+    }
+
+    #[test]
+    fn build_bar_shows_failed_and_cancelled_meta() {
+        let mut dm = DownloadManager::new();
+        dm.open();
+        let failed_id = dm.start_download("file:///tmp/fail.bin".into(), PathBuf::from("/tmp/fail.bin"));
+        dm.tx
+            .send(DownloadEvent::Failed { id: failed_id, reason: "network error".into() })
+            .unwrap();
+        dm.poll();
+        let cancelled_id =
+            dm.start_download("file:///tmp/canc.bin".into(), PathBuf::from("/tmp/canc.bin"));
+        dm.cancel(cancelled_id);
+
+        let dl = build_download_bar(&dm, (1280, 800), &Palette::DARK);
+        let has_failed_meta = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("network error"))
+        });
+        let has_cancelled_meta = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "Отменено")
+        });
+        assert!(has_failed_meta);
+        assert!(has_cancelled_meta);
+    }
+
+    #[test]
+    fn clear_button_shown_only_with_finished_entries_and_hit_testable() {
+        let mut dm = DownloadManager::new();
+        dm.open();
+        assert!(!dm.has_finished_entries());
+        let (px, py, pw, _, _) = panel_geometry(&dm, 1280, 800);
+        assert_eq!(hit_test(&dm, clear_button_rect(px, py, pw).x + 2.0, clear_button_rect(px, py, pw).y + 2.0, (1280, 800)), Some(DownloadAction::Inside), "no Clear button before anything finished");
+
+        let id = dm.start_download("file:///tmp/done.bin".into(), PathBuf::from("/tmp/done.bin"));
+        done_entry(&mut dm, id, 10);
+        assert!(dm.has_finished_entries());
+
+        let dl = build_download_bar(&dm, (1280, 800), &Palette::DARK);
+        let has_clear_label = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == CLEAR_LABEL)
+        });
+        assert!(has_clear_label);
+
+        let (px, py, pw, _, _) = panel_geometry(&dm, 1280, 800);
+        let r = clear_button_rect(px, py, pw);
+        let hit = hit_test(&dm, r.x + 2.0, r.y + 2.0, (1280, 800));
+        assert_eq!(hit, Some(DownloadAction::ClearFinished));
     }
 
     #[test]

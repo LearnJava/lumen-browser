@@ -422,6 +422,34 @@
   lights the button while the popover itself is open). 34 `download` + 12
   `toolbar` tests green (2 new in each); `cargo clippy -p lumen-shell
   --all-targets -- -D warnings` clean.
+- **Done (`ph3-permission-download-ui.md` Part B, download history persistence
+  + clear-finished, 2026-09-22):** `DownloadManager` (`download.rs`) now owns
+  an `Option<lumen_storage::Downloads>` (already-existing, fully-tested SQLite
+  store; the gap was that nothing in `lumen-shell` opened or wrote through
+  it). `DownloadManager::open_history(path)` — the production constructor,
+  wired in `window_mode.rs` to `<exe_dir>/data/downloads.db` — opens the
+  store, loads finished (`Done`/`Failed`/`Cancelled`) rows into `entries` via
+  `load_history` (an in-flight `Pending` row from an interrupted session has
+  no live thread to resume and is dropped, not shown permanently stuck), and
+  falls back to `store: None` — session-only history, not a panic — if the
+  file can't be opened; `DownloadManager::new()` (tests) keeps an in-memory
+  store. Every state transition writes through: `start_download` inserts a
+  row and remembers its SQLite id in a session-local `store_ids: HashMap
+  <DownloadId, i64>` (`DownloadId` itself stays a plain counter — existing
+  tests/call sites depend on the exact sequence); `poll()`'s
+  Progress/Done/Failed/Cancelled arms and `cancel()` call the matching
+  `Downloads::{update_progress,complete,fail,cancel}`. New header "Очистить"
+  button (`clear_button_rect`, left of the × close button, shown only when
+  `DownloadManager::has_finished_entries()`) calls `clear_finished()` —
+  drops every terminal-state entry from both `entries` and the store via
+  `Downloads::clear_completed`, in-flight entries untouched. New
+  `DownloadAction::ClearFinished` dispatched in
+  `app/window_event/mouse_input.rs` alongside the existing
+  Open/Reveal/Cancel/Close actions. +7 `download` tests (history reload
+  across a real `open_history` reopen, clear-finished persists, missing-path
+  fallback doesn't panic, Failed/Cancelled meta + Clear-button rendering);
+  `cargo clippy -p lumen-shell --all-targets -- -D warnings` clean, full
+  `lumen-shell` suite (2077 tests) green.
 - **Done (PERF-6 session-health journal, 2026-07-18):** new module
   [`crates/shell/src/health_log.rs`](../crates/shell/src/health_log.rs) extends the
   `--activity-log` surface with a privacy-first, local-only journal of *problems*

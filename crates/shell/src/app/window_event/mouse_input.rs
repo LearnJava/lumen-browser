@@ -181,6 +181,9 @@ impl Lumen {
                         DownloadAction::Cancel(id) => {
                             self.downloads.cancel(id);
                         }
+                        DownloadAction::ClearFinished => {
+                            self.downloads.clear_finished();
+                        }
                         DownloadAction::Close | DownloadAction::Outside => {
                             self.downloads.close();
                         }

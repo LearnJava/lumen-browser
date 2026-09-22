@@ -426,7 +426,9 @@ pub(crate) fn run_window_mode(
         frame_select_dropdown: None,
         text_drag: None,
         active_frame: None,
-        downloads: download::DownloadManager::new(),
+        downloads: download::DownloadManager::open_history(
+            adblock::browser_data_dir().join("downloads.db"),
+        ),
         tab_strip: tabs::strip::TabStrip::new(),
         container_store: tabs::containers::ContainerStore::new(),
         bg_tabs: HashMap::new(),
