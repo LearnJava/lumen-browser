@@ -1934,6 +1934,43 @@ baseline получить не могут; правка `executorlumen.py` по�
 
 Дальше: `webaudio` (297/60 `.https.`), `IndexedDB` (срез 34), `referrer-policy` (1 393 файла, 2 `.https.` — но большой прогон); категории почти целиком `.https.` — после BUG-1069.
 
+### TEST-3: срез 52 (2026-09-22) — `webaudio`: 249/321 harness OK, четыре новых бага, остальное — уже заведённые дефекты
+
+**Выбор кандидата.** Из списка «Дальше» среза 51 взят `webaudio` (358 файлов, 60 `.https.`, 282 testharness-файла). `html-ruby-extensions` (193 файла) baseline получить не может — все 193 файла reftest'ы (`testharness.js` нет ни в одном),
+а исполнитель `run_report.py` прогоняет только testharness; `IndexedDB` по-прежнему не пробовать без диагностики (срез 34, диагностика 2026-09-17). Число категорий 256 → 257.
+
+**Baseline.** `--update-expected --all --root webaudio --recursive --processes 10 --binary target/dev-release/lumen.exe` — 4:00. `running 321 all vendored`. **249/321 harness OK, 2 422/3 923 подтестов**, 222 `.ini`.
+Раскладка top-level: 68 `ERROR` (59 из них `.https.`, 38 — `the-audioworklet-interface`), 4 `TIMEOUT` (`audiocontext-not-fully-active`, `audiocontext-state-change-after-close.http.window.js`, `audiocontext-suspend-resume-close`, `suspend-with-navigation`); 1 452 `FAIL`-подтеста.
+
+**Проверка.** Три `--check` подряд (те же флаги, 3:43 / 4:53 / 3:50): **0 регрессий, 0 unexpected pass, 0 других отклонений**, exit 0, числа идентичны (249/321, 2 422/3 923). Флапающих файлов нет.
+
+**Что нашлось.** Раскладка сообщений `FAIL`: 1 066 из 1 451 — голое `assert_true: expected true got false` (обёртка `should_throw`/`audit`, причина не видна по тексту — разобрана пробой), 38 — `expected "running" but got "no state change"`, 25+ — сравнение каналов
+с допуском (DSP), 20 — `renderQuantumSize … got (undefined)`, 14 — `context.createIIRFilter is not a function`, 8 — `playoutStats`.
+
+| Причина | Масштаб | Доказательство |
+|---|---|---|
+| Конструкторы узлов не валидируют, **новый** [BUG-1090](../../bugs/BUG-1090-OPEN.md) | `ctor-*.html` — 197 подтестов в 20 файлах, `did not throw` (`ctor-panner` 21/44, `ctor-analyser` 13/20, `ctor-audiobuffer` 11/15) | проба `--dump-layout`: `new AnalyserNode()`, `new AnalyserNode(1)`, `new PannerNode(ctx,{refDistance:-1})` не бросают |
+| Нет `renderSizeHint`/`renderQuantumSize`, **новый** [BUG-1088](../../bugs/BUG-1088-OPEN.md) | 20 сообщений, `audiocontext-rendersizehint.html` + `offlineaudiocontext-rendersizehint.html` 35 подтестов; 7 `*-rendersizehint*.https.html` — `ERROR` | проба: `renderQuantumSize` → `undefined`, `renderSizeHint: 'bogus'` не бросает |
+| Нет `sinkId`/`setSinkId`/`playbackStats`/`playoutStats`, **новый** [BUG-1089](../../bugs/BUG-1089-OPEN.md) | `audiocontext-playoutstats.html` 8 `promise_test`; `audiocontext-sinkid-*.https.html` — `ERROR` | проба: все члены и `AudioSinkInfo`/`AudioPlaybackStats` → `undefined` |
+| `PannerNode`/`ConvolverNode`/`DynamicsCompressorNode` пропускают вход, **новый** [BUG-1091](../../bugs/BUG-1091-OPEN.md) | `distance-{linear,inverse,exponential}.html` — 309 подтестов, `Got 1.` | шапка `web_audio.rs` («Not rendered»), «осознанный остаток» [BUG-828](../../bugs/BUG-828-FIXED.md) без задачи |
+| Нет `IIRFilterNode`/`createIIRFilter`, [BUG-707](../../bugs/BUG-707-OPEN.md) | 14 `Unhandled rejection … createIIRFilter is not a function`, 43 строки в логе | проба: `typeof IIRFilterNode` → `undefined`. **`ConstantSourceNode` в BUG-707 уже устарел** — `typeof ConstantSourceNode` → `function`, `createConstantSource` есть; `createMediaStreamDestination()` по-прежнему отдаёт `AudioNode` |
+| Нет валидации сеттеров, [BUG-708](../../bugs/BUG-708-OPEN.md) | `convolver-channels` (31), `realtimeanalyser-fft-sizing` (28), `audioparam-exceptional-values` (39), `audioparam-nominal-range` (23) — сопоставлено по заголовку BUG-708, файлы отдельно не проверялись | — |
+| `AudioWorklet` не грузит модули, [BUG-779](../../bugs/BUG-779-OPEN.md) | 38 `ERROR` в `the-audioworklet-interface`, все `.https.` | BUG-1069 маскирует, что там дальше |
+| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 59 из 68 `ERROR` | `certificate not valid for name "localhost"` |
+
+Остальные отклонения **не разбирались** и багов на них не заводилось: 38 сообщений `expected "running" but got "no state change"` — текст выдаёт хелпер `media-playback-while-not-visible-utils.js` из `media-playback-while-not-visible-permission-policy/` (Permissions Policy
+`media-playback-while-not-visible`; гипотеза — политика не реализована; по файлам не разбиралось); 4 `TIMEOUT` (`suspend`/`close`/`navigation`-состояния `AudioContext`); 9 `ERROR` не `.https.` (`audioparam-*RampToValueAtTime`, `setTargetAtTime`,
+`setValueAtTime`, `setValueCurveAtTime`, `test-analyser-resume-after-suspended`, `startrendering-after-discard`, `mediastreamaudiosourcenode-ctor`, `promise-methods-after-discard`); сравнения каналов с допуском (DSP-числа
+`audionode-channel-rules`, `panner-automation-basic`, `convolver-*`, `constant-source` `start/stop`) — часть, вероятно, следствие BUG-1091, это гипотеза.
+
+**Ограничение записанного.** 59 `.https.` id (`ERROR`) — нижняя планка: baseline придётся перегенерировать после BUG-1069. Секции `FAIL` от BUG-1088/1089/1090/1091/707/708/779 — после их починок (гейт `--check` увидит это как unexpected pass).
+
+**Окружение этой сессии.** Запуск через `tests/wpt/.venv/Scripts/python.exe`, `MSYS_NO_PATHCONV=1`, `--binary target/dev-release/lumen.exe` слота `p2-work` (тот же бинарь, 00:43 22.09, что в срезах 50–51). Фоновые скрипты `.tmp/s52_base.sh`/`s52_check.sh` с `.done`-файлом
+опрашивались циклом `ping -n 16 127.0.0.1` в переднем плане. Первая попытка записать четыре bug-файла одним `cat > … <<'EOF'` (четыре heredoc'а в одном вызове Bash с обратными кавычками и `'` в тексте) упала с `unexpected EOF while looking for matching` —
+ни один файл не создался; файлы с кириллицей и разметкой писать инструментом `Write`.
+
+Дальше: `referrer-policy` (1 393 файла, 2 `.https.` — большой прогон), `svg` (682 testharness-файла, 11 `.https.`), `fetch` (166 `.https.`, часть в BUG-1069); категории почти целиком `.https.` — после BUG-1069.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
