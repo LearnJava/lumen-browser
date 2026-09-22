@@ -117,6 +117,34 @@
         assert_eq!(media_context_from_viewport(vp, false).media_type, "screen");
     }
 
+    /// RP-9 срез 3: сквозной тест на `@media print{}` внутри инлайнового листа
+    /// — `bug270_*` выше проверяет только сам флаг/`MediaContext`, этот тест
+    /// проверяет, что `compute_style` фактически отсекает декларации внутри
+    /// `@media print` при экранном рендере и применяет их в print-режиме
+    /// (тот же sticky-флаг `set_print_media`, что использует PDF-пайплайн).
+    #[test]
+    fn media_print_block_is_screen_gated_in_cascade() {
+        let doc = lumen_html_parser::parse("<div>Hi</div>");
+        let sheet = lumen_css_parser::parse(
+            "@media print { div { display: none; } } @media screen { div { color: rgb(1, 2, 3); } }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let vp = Size::new(800.0, 600.0);
+
+        set_print_media(false);
+        let screen_style = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_ne!(screen_style.display, Display::None, "@media print must not apply on screen");
+        assert_eq!(screen_style.color, rgba(1, 2, 3, 255), "@media screen must apply on screen");
+
+        set_print_media(true);
+        let print_style = compute_style(&doc, div, &sheet, &root, vp, false);
+        assert_eq!(print_style.display, Display::None, "@media print must apply while printing");
+
+        // Reset so later tests on this thread see the screen default.
+        set_print_media(false);
+    }
+
     #[test]
     fn initial_letter_parse() {
         // normal → no effect.
