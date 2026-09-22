@@ -164,3 +164,25 @@ pass сразу на пяти файлах (включая `subresource/sxg-subr
 (`expected: [OK, TIMEOUT]`), сделанные по итогам прогонов 1–3, откачены — baseline принят таким,
 каким его записал исходный `--update-expected`, дальнейшее сужение не проводилось (тот же выбор,
 что для `fetch` в срезе 55).
+
+## Ещё один экземпляр того же класса (2026-09-23, WPT-RUN-7 срез 61)
+
+`shared-storage` (90 файлов): `--update-expected` дал 47/90 harness OK, 24/221 сабтестов,
+86 `.ini` записано. Три `--check` подряд на том же бинаре и baseline, без изменений между
+прогонами: прогон 1 — 5 регрессий + 3 unexpected pass + 1 status-change; прогон 2 —
+4 регрессии + 3 unexpected pass + 1 status-change; прогон 3 — 4 регрессии + 3 unexpected
+pass + 1 status-change. Три набора регрессий пересекаются частично, но не совпадают —
+`shared-storage-writable-service-worker-img.tentative.https.sub.html` (OK→TIMEOUT на
+сабтесте «same origin img» + status-change NOTRUN на «cross origin img») и
+`shared-storage-permissions-policy-none`/`select-url-permissions-policy-none`
+(FAIL→TIMEOUT) держатся в двух прогонах из трёх, но третий регрессирующий файл каждый раз
+другой (`cross-origin-create-worklet-credentials-omit`, `shared-storage-permissions-policy-self`,
+`shared-storage-writable-setters` — по одному на прогон). Unexpected-pass тройка тоже плавает
+по конкретным `*-permissions-policy-*`/`cross-origin-create-worklet-credentials-*` файлам, но
+неизменно из одного и того же семейства (permissions-policy TIMEOUT↔PASS,
+create-worklet-credentials TIMEOUT↔OK). Тот же почерк, что `fetch`/`signed-exchange` выше: все
+подозрительные файлы используют `SharedStorageWorklet`/service worker/cross-origin iframe —
+конструкции с несколькими параллельными подключениями и фиксированным таймаутом теста, где
+исход гонки меняется от прогона к прогону без изменений на стороне движка. Baseline принят
+таким, каким его записал исходный `--update-expected`, дальнейшее сужение не проводилось (тот
+же выбор, что для `fetch`/`signed-exchange`).
