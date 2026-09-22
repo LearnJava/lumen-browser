@@ -366,10 +366,9 @@ pub(crate) struct LayoutSource {
 /// declared `@view-transition { navigation: auto; }`. Mirrors CSS's
 /// last-declaration-wins for a document-level descriptor — with more than
 /// one `@view-transition` block, the last one in document order decides.
-/// See `docs/tasks/ph3-view-transitions-mpa.md` срез 2. Not called from the
-/// navigation pipeline yet — wiring lands in срезы 3-4; until then only the
-/// tests below and [`mpa_view_transition_allowed`] use it.
-#[allow(dead_code)]
+/// See `docs/tasks/ph3-view-transitions-mpa.md` срез 2. Used from the
+/// navigation pipeline since срез 3 (`Lumen::maybe_capture_mpa_view_transition_snapshot`,
+/// outgoing side only — the incoming side is checked in срез 4).
 pub(crate) fn view_transition_navigation_opted_in(
     stylesheet: &lumen_css_parser::Stylesheet,
 ) -> bool {
@@ -383,7 +382,7 @@ pub(crate) fn view_transition_navigation_opted_in(
 /// view transition: same origin (spec §navigation — cross-origin MPA
 /// transitions are out of scope) and **both** the departing and arriving
 /// document opt in via `@view-transition { navigation: auto; }`.
-#[allow(dead_code)] // wired in срезы 3-4, see the comment above `view_transition_navigation_opted_in`
+#[allow(dead_code)] // wired in срез 4, see the comment above `view_transition_navigation_opted_in`
 pub(crate) fn mpa_view_transition_allowed(
     from_origin: &lumen_network::Origin,
     from_stylesheet: &lumen_css_parser::Stylesheet,
@@ -393,6 +392,20 @@ pub(crate) fn mpa_view_transition_allowed(
     from_origin.same_origin(to_origin)
         && view_transition_navigation_opted_in(from_stylesheet)
         && view_transition_navigation_opted_in(to_stylesheet)
+}
+
+/// The half of [`mpa_view_transition_allowed`] decidable at the navigation
+/// boundary (срез 3): the incoming document hasn't loaded yet, so only the
+/// outgoing document's opt-in and the navigation's same-origin-ness are known.
+/// `Lumen::maybe_capture_mpa_view_transition_snapshot` calls this to decide
+/// whether to snapshot the outgoing frame; срез 4 re-checks the incoming side
+/// via [`mpa_view_transition_allowed`] once its stylesheet exists.
+pub(crate) fn mpa_view_transition_departure_candidate(
+    from_origin: &lumen_network::Origin,
+    from_stylesheet: &lumen_css_parser::Stylesheet,
+    to_origin: &lumen_network::Origin,
+) -> bool {
+    from_origin.same_origin(to_origin) && view_transition_navigation_opted_in(from_stylesheet)
 }
 
 /// Everything one page load's cascade is built from: the collected CSS text,

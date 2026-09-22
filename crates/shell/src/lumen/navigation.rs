@@ -180,6 +180,10 @@ impl Lumen {
         // Assign a fresh key to the incoming page before it becomes current.
         self.nav_key_counter += 1;
         self.current_nav_key = format!("nav-{}", self.nav_key_counter);
+        // P3-viewtransnav срез 3: snapshot the outgoing document for a possible
+        // cross-document view transition, before `self.source` below points at
+        // the incoming page.
+        self.maybe_capture_mpa_view_transition_snapshot(&source);
         // Load new page.
         self.source = source;
         self.commit_nav_state();
@@ -230,6 +234,9 @@ impl Lumen {
         // not survive the navigation.
         self.focused_node = None;
         self.focused_frame = None;
+        // P3-viewtransnav срез 3: see `navigate_to_inner` — same snapshot, this
+        // is `location.replace()`'s equivalent navigation boundary.
+        self.maybe_capture_mpa_view_transition_snapshot(&source);
         self.source = source;
         // BUG-352: `navigate_replace` doesn't route through `commit_nav_state`
         // (that call updates JS's `window.navigation`, not needed for a plain
@@ -761,5 +768,38 @@ impl Lumen {
         if let Some(delta) = Self::key_traversal_delta(&self.nav_back, &self.nav_fwd, key) {
             self.navigate_by(delta);
         }
+    }
+
+    /// CSS View Transitions Module Level 2 §3 — cross-document (MPA) srez 3:
+    /// snapshot the outgoing document's current frame into
+    /// [`Self::pending_mpa_view_transition_snapshot`] if it is a candidate for
+    /// a cross-document view transition into `new_source`.
+    ///
+    /// Only the outgoing side of the opt-in check is possible here — `new_source`
+    /// hasn't loaded yet, so its `@view-transition` rule (if any) is unknown.
+    /// Same-origin is checked now since both URLs are already known; the
+    /// incoming document's own opt-in is checked later, once its stylesheet
+    /// exists (srez 4), by [`crate::page_pipeline::view_transition_navigation_opted_in`].
+    ///
+    /// Must run **before** `self.source` is overwritten with `new_source` —
+    /// both `navigate_to_inner` and `navigate_replace` call this right before
+    /// that assignment.
+    fn maybe_capture_mpa_view_transition_snapshot(&mut self, new_source: &PageSource) {
+        self.pending_mpa_view_transition_snapshot = None;
+        let Some(ls) = self.layout_source.as_ref() else { return };
+        let Some(from_origin) = self.source.resource_base().and_then(|b| b.origin()) else {
+            return;
+        };
+        let Some(to_origin) = new_source.resource_base().and_then(|b| b.origin()) else {
+            return;
+        };
+        if !crate::page_pipeline::mpa_view_transition_departure_candidate(
+            &from_origin,
+            &ls.stylesheet,
+            &to_origin,
+        ) {
+            return;
+        }
+        self.pending_mpa_view_transition_snapshot = Some(self.display_list.clone());
     }
 }
