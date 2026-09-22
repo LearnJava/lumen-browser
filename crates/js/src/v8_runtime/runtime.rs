@@ -100,6 +100,9 @@ pub struct V8JsRuntime {
     pub(super) hit_test_tree: Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>,
     /// Current viewport size `[width, height]` in CSS px.
     pub(super) viewport_size: Arc<Mutex<[f32; 2]>>,
+    /// Current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0 in the shell), backing
+    /// `window.visualViewport.scale` (GAP-VVPORT). 1.0 = no zoom.
+    pub(super) zoom_factor: Arc<Mutex<f32>>,
     /// Lazy image load requests queued by `_lumen_request_lazy_image_load` from JS.
     pub(super) lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     /// Scroll state per scroll-container node, updated after each relayout.
@@ -363,6 +366,7 @@ impl V8JsRuntime {
             client_rects: Arc::new(Mutex::new(HashMap::new())),
             hit_test_tree: Arc::new(Mutex::new(None)),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
+            zoom_factor: Arc::new(Mutex::new(1.0)),
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
@@ -681,6 +685,12 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::update_viewport_size`].
     pub fn update_viewport_size(&self, width: f32, height: f32) {
         *self.viewport_size.lock().unwrap_or_else(|e| e.into_inner()) = [width, height];
+    }
+
+    /// Update the current page zoom factor, backing
+    /// `window.visualViewport.scale` (GAP-VVPORT).
+    pub fn update_zoom_factor(&self, zoom: f32) {
+        *self.zoom_factor.lock().unwrap_or_else(|e| e.into_inner()) = zoom;
     }
 
     /// Push the page's current stylesheet for CSSOM-4/BUG-493's synchronous

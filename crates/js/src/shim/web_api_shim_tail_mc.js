@@ -123,10 +123,13 @@ window.scrollBy = function(x, y) {
 // ── window.visualViewport (Visual Viewport API) ─────────────────────────────
 // width/height/pageTop are backed by the same natives as the scroll API just
 // above. No pinch-zoom or meta-viewport scale clamping is implemented, so
-// offsetLeft/offsetTop/pageLeft stay 0 and scale stays 1 — the object exists
-// so pages that merely reference `window.visualViewport` stop throwing
+// offsetLeft/offsetTop/pageLeft stay 0 — the object exists so pages that
+// merely reference `window.visualViewport` stop throwing
 // ReferenceError/TypeError, regardless of whether the underlying zoom is
-// modeled (BUG-481). GAP-VVPORT: `resize`/`scroll` now dispatch for real —
+// modeled (BUG-481). `scale` reflects the shell's page zoom (Ctrl+=/Ctrl+-,
+// `_lumen_get_zoom_factor`) — real page zoom, not pinch-zoom or
+// `<meta viewport>` scale clamping, neither of which the engine models.
+// GAP-VVPORT: `resize`/`scroll` now dispatch for real —
 // `_lumen_fire_window_resize_event`/`_lumen_fire_window_scroll_event`
 // (`web_api_shim_tail_b.js`) also fire on this object, since layout and
 // visual viewport are the same size/offset here. `onresize`/`onscroll` are
@@ -149,7 +152,7 @@ Object.defineProperties(VisualViewport.prototype, {
     offsetTop:  { get: function() { return 0; } },
     pageLeft:   { get: function() { return 0; } },
     pageTop:    { get: function() { return _lumen_get_page_scroll_y(); } },
-    scale:      { get: function() { return 1; } }
+    scale:      { get: function() { return _lumen_get_zoom_factor(); } }
 });
 window.visualViewport = new VisualViewport();
 
