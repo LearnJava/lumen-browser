@@ -1273,6 +1273,85 @@ fn html_element_direct_construction_throws() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// CE-1 срез 2 (HTML LS §4.13.5 "upgrade an element"): an element created
+// with `document.createElement` *before* its tag is defined must, once
+// `customElements.define` runs, be upgraded through the real class
+// constructor — not just have connectedCallback called on the old wrapper.
+// Asserts the constructor's own side effects (`ctorRan`, a method it
+// attaches to `this`) are visible and that the resulting object really is
+// `instanceof` the class.
+#[test]
+fn custom_element_upgrade_via_define_runs_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _pre_el = document.createElement('x-upgrade-el');
+                document.body.appendChild(_pre_el);
+            "#).unwrap();
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class XUpgradeEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; this.hello = function() { return 7; }; }
+                }
+                customElements.define('x-upgrade-el', XUpgradeEl);
+                var el = document.querySelector('x-upgrade-el');
+                (ctorRan === 1) && (el instanceof XUpgradeEl) && (el instanceof HTMLElement) &&
+                    (typeof el.hello === 'function') && (el.hello() === 7)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// The same upgrade, triggered by insertion (element created after define but
+// through a path that does not yet run the constructor — createElement's own
+// synchronous construction is объём (3), a later срез) rather than by
+// `define()` itself, and checks connectedCallback fires exactly once even
+// though upgrade and "already connected" both run in the same call. `el`
+// itself (obtained from `createElement` *before* the upgrading `appendChild`)
+// keeps pointing at the pre-upgrade wrapper — the documented wrapper-identity
+// limitation on `_lumen_ce_upgrade_element` — so the post-upgrade checks read
+// through `document.querySelector` instead, which reflects the live wrapper.
+#[test]
+fn custom_element_upgrade_via_append_runs_constructor_once() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                var connectedCount = 0;
+                class XUpgradeAppendEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; }
+                    connectedCallback() { connectedCount++; }
+                }
+                customElements.define('x-upgrade-append-el', XUpgradeAppendEl);
+                var el = document.createElement('x-upgrade-append-el');
+                document.body.appendChild(el);
+                var live = document.querySelector('x-upgrade-append-el');
+                (ctorRan === 1) && (connectedCount === 1) &&
+                    (live instanceof XUpgradeAppendEl)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// `CustomElementRegistry.prototype.upgrade` is the explicit API surface for
+// the same algorithm (HTML LS §4.13.3) — must also run the real constructor.
+#[test]
+fn custom_element_registry_upgrade_method_runs_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _pre_el2 = document.createElement('x-explicit-upgrade-el');
+                document.body.appendChild(_pre_el2);
+            "#).unwrap();
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class XExplicitUpgradeEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; }
+                }
+                customElements.define('x-explicit-upgrade-el', XExplicitUpgradeEl);
+                var el = document.querySelector('x-explicit-upgrade-el');
+                customElements.upgrade(el);
+                var afterSecondCall = ctorRan;
+                (ctorRan === 1) && (afterSecondCall === 1) && (el instanceof XExplicitUpgradeEl)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── HTMLTemplateElement.content + DocumentFragment ────────────────────────
 
 #[test]
