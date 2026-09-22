@@ -1,7 +1,8 @@
 # BUG-727 — `RTCPeerConnection` stub never fires `ontrack`/`ondatachannel`/`on(ice)connectionstatechange` — any two-peer WPT test hangs to the harness timeout
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-WEBRTC](../ROADMAP.md))
-**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-WEBRTC` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
+**Статус:** FIXED 2026-09-22 (решение о скоупе — [GAP-WEBRTC](../ROADMAP.md) закрыт P6)
+**Тип:** нереализованная функциональность, не дефект реализованного кода — велась как задача `GAP-WEBRTC` в [ROADMAP.md](../ROADMAP.md), P3 как баг не брал. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
+**Решение (2026-09-22, пользователь):** реальная кросс-пировая проводка событий (`ontrack`/`ondatachannel`/`on(ice)connectionstatechange`) не реализуется — стоимость (переработка изоляции инстансов `RTCPeerConnection` на общий канал между пирами) не оправдана против цены (WPT-категории уже вне скоупа). Закрыто документационно: комментарий в шапке [`crates/js/src/webrtc_stub.rs`](../crates/js/src/webrtc_stub.rs) явно называет эти колбэки out-of-scope by design; `docs/wpt-status.md` уже помечал все `webrtc*`-категории 🚫 (включая `webrtc-stats`) до этого решения — новых правок в WPT-статус не потребовалось.
 **Компонент:** js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)
 **Найден:** P2, WPT-VENDOR-webrtc-stats, 2026-08-09
 
