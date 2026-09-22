@@ -10,6 +10,8 @@
 // `missing_docs`. Область — файл, счётчики — docs/lint-policy.md §10.
 #![allow(missing_docs)]
 
+use serde::{Deserialize, Serialize};
+
 use lumen_core::geom::Size;
 
 use crate::style::Length;
@@ -20,7 +22,7 @@ use crate::style::Length;
 /// один операнд был unitless. В Phase 0 мы не валидируем строго типы
 /// операндов (`px * px` математически считается, но семантически бессмысленно
 /// — реальный CSS такого не пишет, а наш resolve всё равно даёт `f32`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CalcNode {
     /// Листовое length-значение (`10px`, `2em`, `50%`, …).
     Length(Length),
@@ -49,7 +51,7 @@ pub enum CalcNode {
 
 /// CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
 /// (нормализованы в нижний регистр в лексере).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MathFn {
     // §10.7 trig
     Sin,
@@ -78,7 +80,7 @@ pub enum MathFn {
 
 /// CSS Values L4 §10.5.1 — стратегия округления для `round()`.
 /// Опускание keyword-а в `round(A[, B])` ≡ `Nearest`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoundStrategy {
     /// Ближайшее кратное step; при равноудалённости — в сторону +∞
     /// (`f32::round` round-half-away-from-zero, но spec в §10.5.1 говорит
@@ -1075,4 +1077,99 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
         _ => return None,
     };
     Some(CalcNode::Length(length))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // P3-gpusandbox srez A6: `Length`/`CalcNode` derive `Serialize`/
+    // `Deserialize` so a future `DisplayCommand` (lumen-paint) can travel
+    // over the lumen-renderer IPC transport, which frames payloads as
+    // bincode (`lumen_ipc::IpcChannel`, see crates/ipc/src/lib.rs). Round-trip
+    // through bincode specifically, not just serde_json, since bincode is the
+    // wire format that will actually carry these values.
+    fn roundtrip(node: CalcNode) {
+        let bytes = bincode::serialize(&node).unwrap();
+        let back: CalcNode = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(node, back);
+    }
+
+    #[test]
+    fn length_variants_roundtrip_through_bincode() {
+        for l in [
+            Length::Px(10.0),
+            Length::Em(1.5),
+            Length::Rem(2.0),
+            Length::Ch(3.0),
+            Length::Ex(4.0),
+            Length::Percent(50.0),
+            Length::Vh(5.0),
+            Length::Vw(6.0),
+            Length::Vmin(7.0),
+            Length::Vmax(8.0),
+            Length::Cqw(9.0),
+            Length::Cqh(10.0),
+            Length::Cqi(11.0),
+            Length::Cqb(12.0),
+            Length::Cqmin(13.0),
+            Length::Cqmax(14.0),
+            Length::MinContent,
+            Length::MaxContent,
+            Length::FitContent(None),
+            Length::FitContent(Some(Box::new(Length::Px(20.0)))),
+        ] {
+            let bytes = bincode::serialize(&l).unwrap();
+            let back: Length = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(l, back);
+        }
+    }
+
+    #[test]
+    fn calc_node_leaves_roundtrip_through_bincode() {
+        roundtrip(CalcNode::Length(Length::Px(10.0)));
+        roundtrip(CalcNode::Number(2.0));
+    }
+
+    #[test]
+    fn calc_node_arithmetic_roundtrips_through_bincode() {
+        let node = CalcNode::Add(
+            Box::new(CalcNode::Length(Length::Px(10.0))),
+            Box::new(CalcNode::Mul(
+                Box::new(CalcNode::Length(Length::Percent(50.0))),
+                Box::new(CalcNode::Number(2.0)),
+            )),
+        );
+        roundtrip(node);
+    }
+
+    #[test]
+    fn calc_node_min_max_clamp_roundtrip_through_bincode() {
+        roundtrip(CalcNode::Min(vec![CalcNode::Number(1.0), CalcNode::Number(2.0)]));
+        roundtrip(CalcNode::Max(vec![CalcNode::Number(1.0), CalcNode::Number(2.0)]));
+        roundtrip(CalcNode::Clamp(
+            Box::new(CalcNode::Number(0.0)),
+            Box::new(CalcNode::Number(5.0)),
+            Box::new(CalcNode::Number(10.0)),
+        ));
+    }
+
+    #[test]
+    fn calc_node_math_fn_roundtrips_through_bincode() {
+        roundtrip(CalcNode::Func(MathFn::Sin, vec![CalcNode::Number(0.5)]));
+        roundtrip(CalcNode::Func(
+            MathFn::Round(RoundStrategy::Up),
+            vec![CalcNode::Number(1.5), CalcNode::Number(1.0)],
+        ));
+    }
+
+    // Parsed `calc()` text via the real lexer/parser, not hand-built nodes —
+    // exercises the actual shape `parse_math_function_value` produces.
+    #[test]
+    fn parsed_calc_expression_roundtrips_through_bincode() {
+        let length = parse_math_function_value("calc(10px + 2em * 3)").unwrap();
+        let bytes = bincode::serialize(&length).unwrap();
+        let back: Length = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(length, back);
+    }
 }
