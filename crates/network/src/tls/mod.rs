@@ -14,11 +14,13 @@
 
 pub mod cert_error;
 pub mod fingerprint;
+pub mod verifier;
 
 pub use fingerprint::{
     CertInfo, ChromeJa3Snapshot, JA4ChromeSnapshot, TlsHandshakeInfo,
     CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
 };
+pub use verifier::LumenVerifier;
 
 use std::sync::{Arc, OnceLock};
 use rustls::ClientConfig;
@@ -181,10 +183,20 @@ pub fn build_client_config(profile: TlsProfile, root_store: rustls::RootCertStor
         TlsProfile::Strict | TlsProfile::Tor => &[&rustls::version::TLS13],
     };
 
-    let mut cfg = ClientConfig::builder_with_provider(Arc::new(provider))
+    let provider = Arc::new(provider);
+    // ph3-tls-hardening A2: `LumenVerifier` wraps the standard webpki chain
+    // verifier — today a pure pass-through, but the only seam A3 (OCSP
+    // stapling) and A4 (CT enforcement) can attach to, since rustls hands
+    // the stapled OCSP response to the verifier and nowhere else (see
+    // `tls::verifier` module docs). `provider` is passed through so
+    // signature verification accepts exactly this profile's algorithm set.
+    let verifier = verifier::LumenVerifier::new(root_store, &provider)
+        .expect("root store is non-empty (trusted_root_store always adds webpki-roots)");
+    let mut cfg = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(versions)
         .expect("protocol versions valid for the configured cipher suites")
-        .with_root_certificates(root_store)
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
 
     cfg.alpn_protocols = match profile {
@@ -201,25 +213,30 @@ pub fn build_client_config(profile: TlsProfile, root_store: rustls::RootCertStor
 mod tests {
     use super::*;
 
-    fn empty_root_store() -> rustls::RootCertStore {
-        rustls::RootCertStore::empty()
-    }
+    // ph3-tls-hardening A2: `build_client_config` now builds a `LumenVerifier`
+    // (wraps `WebPkiServerVerifier`), which rejects an empty `RootCertStore`
+    // at construction (`NoRootAnchors`) — unlike the old
+    // `.with_root_certificates(..)` path, which accepted one silently and
+    // only failed later at verify time. These tests only care about
+    // cipher/ALPN config, not trust, but must now pass a real, non-empty
+    // store — production always does (`trusted_root_store()`), so this is
+    // more representative anyway.
 
     #[test]
     fn standard_profile_has_h2_alpn() {
-        let cfg = build_client_config(TlsProfile::Standard, empty_root_store());
+        let cfg = build_client_config(TlsProfile::Standard, trusted_root_store());
         assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
     }
 
     #[test]
     fn strict_profile_has_h2_alpn() {
-        let cfg = build_client_config(TlsProfile::Strict, empty_root_store());
+        let cfg = build_client_config(TlsProfile::Strict, trusted_root_store());
         assert_eq!(cfg.alpn_protocols[0], b"h2");
     }
 
     #[test]
     fn tor_profile_http11_only() {
-        let cfg = build_client_config(TlsProfile::Tor, empty_root_store());
+        let cfg = build_client_config(TlsProfile::Tor, trusted_root_store());
         assert_eq!(cfg.alpn_protocols, vec![b"http/1.1".to_vec()]);
     }
 
@@ -296,7 +313,7 @@ lwI=
     #[test]
     fn all_tls_profiles_buildable() {
         for profile in &[TlsProfile::Standard, TlsProfile::Strict, TlsProfile::Tor] {
-            let _ = build_client_config(*profile, empty_root_store());
+            let _ = build_client_config(*profile, trusted_root_store());
         }
     }
 }
