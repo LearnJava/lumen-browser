@@ -10,7 +10,7 @@
 реализована — `document.styleSheets`, `<style>`/`<link>.sheet`, `CSSStyleSheet`/`CSSRule`/`CSSRuleList`/
 `CSSStyleRule`/`CSSMediaRule` как глобалы, `selectorText`/`style.cssText`/`media.mediaText`, только чтение.
 Записывающая половина (`insertRule`/`deleteRule`, `new CSSStyleSheet()`, `adoptedStyleSheets`) остаётся
-отдельной задачей CSSOM-5 ([BUG-897](BUG-897-OPEN.md)); симптомы ниже, где они называют только чтение,
+отдельной задачей CSSOM-5 ([BUG-897](BUG-897-FIXED.md)); симптомы ниже, где они называют только чтение,
 больше не воспроизводятся — где называют `insertRule`/конструктор, воспроизводятся по-прежнему.
 
 ## Симптом

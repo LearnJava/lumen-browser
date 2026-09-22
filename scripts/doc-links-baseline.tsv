@@ -41,7 +41,6 @@ BUGS.md	bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 BUGS.md	bugs/BUG-606-OPEN.md	stale-status-suffix	bugs/BUG-606-FIXED.md
 BUGS.md	bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 BUGS.md	bugs/BUG-723-OPEN.md	stale-status-suffix	bugs/BUG-723-FIXED.md
-BUGS.md	bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 CAPABILITIES.md	bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
 CAPABILITIES.md	bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 CAPABILITIES.md	bugs/BUG-699-OPEN.md	stale-status-suffix	bugs/BUG-699-FIXED.md
@@ -50,7 +49,6 @@ CAPABILITIES.md	bugs/BUG-751-OPEN.md	stale-status-suffix	bugs/BUG-751-FIXED.md
 CAPABILITIES.md	bugs/BUG-752-OPEN.md	stale-status-suffix	bugs/BUG-752-FIXED.md
 CAPABILITIES.md	bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 CSS-SPECS.md	../bugs/BUG-1009-FIXED.md	wrong-relative-path	bugs/BUG-1009-FIXED.md
-CSS-SPECS.md	../bugs/BUG-897-OPEN.md	wrong-relative-path	bugs/BUG-897-OPEN.md
 ROADMAP.md	bugs/BUG-1016-OPEN.md	stale-status-suffix	bugs/BUG-1016-FIXED.md
 ROADMAP.md	bugs/BUG-1026-OPEN.md	stale-status-suffix	bugs/BUG-1026-FIXED.md
 ROADMAP.md	bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
@@ -269,7 +267,6 @@ bugs/BUG-860-DUPLICATE.md	BUG-704-OPEN.md	stale-status-suffix	bugs/BUG-704-FIXED
 bugs/BUG-884-FIXED.md	BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 bugs/BUG-887-FIXED.md	BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 bugs/BUG-895-FIXED.md	BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
-bugs/BUG-897-OPEN.md	BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
 bugs/BUG-929-FIXED.md	BUG-452-OPEN.md	stale-status-suffix	bugs/BUG-452-FIXED.md
 bugs/BUG-961-FIXED.md	BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
 bugs/BUG-962-OPEN.md	bugs/BUG-479-FIXED.md	wrong-relative-path	bugs/BUG-479-FIXED.md
