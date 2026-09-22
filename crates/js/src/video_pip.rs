@@ -151,11 +151,16 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
     } catch(e) {}
   }
 
-  /// Intercept future document.createElement('video') calls to patch new elements.
+  /// Intercept future document.createElement('video') calls to patch new
+  /// elements. Forwards every argument (not just `tag`) — GAP-CEREG срез 2
+  /// (BUG-890) added a second `options` parameter (`{customElements:
+  /// registry}`) to the native `createElement`, and an arity-1 wrapper here
+  /// silently dropped it on every page, defeating registry scoping for every
+  /// element, not just `<video>`.
   if (typeof document !== 'undefined' && document.createElement) {
     var _origCreate = document.createElement.bind(document);
-    document.createElement = function(tag) {
-      var el = _origCreate(tag);
+    document.createElement = function(tag, options) {
+      var el = _origCreate(tag, options);
       if (typeof tag === 'string' && tag.toLowerCase() === 'video') {
         patchVideoPip(el);
       }

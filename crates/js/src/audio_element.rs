@@ -635,10 +635,13 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
 
   // ── Intercept document.createElement('audio') ────────────────────────────────
 
+  // Forwards every argument (not just `tag`) — GAP-CEREG срез 2 (BUG-890)
+  // added a second `options` parameter (`{customElements: registry}`) to the
+  // native `createElement`; an arity-1 wrapper here would silently drop it.
   if (typeof document !== 'undefined' && document.createElement) {
     var _origCreate = document.createElement.bind(document);
-    document.createElement = function(tag) {
-      var el = _origCreate(tag);
+    document.createElement = function(tag, options) {
+      var el = _origCreate(tag, options);
       if (typeof tag === 'string' && tag.toLowerCase() === 'audio') patchAudioElement(el);
       return el;
     };
