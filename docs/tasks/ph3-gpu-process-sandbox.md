@@ -64,6 +64,35 @@ srez A2 fixed) — added the same `GpuError`-rejecting arm there. Next srez (A4)
 is steps 4-5: give `lumen-renderer` a real `wgpu::Device` first, then wire
 `RendererProcessHandle`/`RemoteRenderBackend` into the shell's live render path.
 
+Srez A4 (2026-09-22, `p1-gpusandbox-a4-renderbackend`) — Windows Job Object
+(step 8, out of order vs. the A4 note above): `RendererProcessHandle::spawn()`
+assigns the freshly-spawned `lumen-renderer.exe` to an anonymous Windows Job
+Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before reading the port line
+from stdout, so both an early `?`-return and the shell being killed outright
+(`TerminateProcess`/crash, bypassing `Drop`) take the child down with it — not
+just the ordinary `child.kill()` in `Drop`. Non-Windows: not implemented
+(platform limitation of step 8).
+
+Srez A5 (2026-09-22, `p1-gpusandbox-a5-renderer-device`) — step 1 (device half
+only): `crates/renderer/src/gpu_device.rs` — real headless `wgpu::Device`
+creation on `GpuInit`, same backend fallback chain as
+`lumen_paint::webgpu_compute::init_context` (DX12→Vulkan→GL on Windows,
+PRIMARY→GL elsewhere). Deliberately no surface: reconstructing a
+`raw-window-handle` from the `GpuSurfaceHandle` integers the shell sends over
+IPC is unsafe, platform-specific, and cannot be exercised without a real
+window on the other end — a separate srez. `GpuInit` now replies `GpuReady`
+only if device creation actually succeeded (`GpuError` otherwise, instead of
+always claiming success); `GpuRender` now requires a prior successful
+`GpuInit` (`GpuError` if not) but still only acknowledges — there is still no
+surface to submit a frame to. `wgpu` added to `crates/renderer/Cargo.toml`
+with the same per-OS backend-feature split as `lumen-paint`
+(`crates/engine/paint/Cargo.toml`) — no new workspace dependency, `wgpu` is
+already a permanent one (`docs/plan/tech-stack.md`), just extended to this
+crate. Not done: surface/present (step 5, still blocked on the
+`raw-window-handle` reconstruction above and separately on the
+`Length::Calc(Box<CalcNode>)` `Serialize` gap for `DisplayCommand`), spawn from
+`main.rs` (step 4), AppContainer (step 7).
+
 ---
 
 ## Goal
