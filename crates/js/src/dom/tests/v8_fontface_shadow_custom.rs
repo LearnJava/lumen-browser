@@ -1132,6 +1132,78 @@ fn custom_element_registry_scoped_shadow_root_inherits_to_children() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+#[test]
+fn custom_element_upgraded_via_inner_html() {
+    // GAP-CEREG срез 3 (BUG-890): the fragment parser behind `innerHTML` must
+    // run upgrade reactions too, not just `appendChild`/`insertBefore` — this
+    // used to be a silent no-op even for a globally defined element.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                function XEl() {}
+                XEl.prototype.connectedCallback = function() { log.push('connected'); };
+                customElements.define('x-innerhtml-el', XEl);
+                document.body.innerHTML = '<x-innerhtml-el></x-innerhtml-el>';
+                log.length === 1 && log[0] === 'connected'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_element_upgraded_via_insert_adjacent_html() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                function XEl() {}
+                XEl.prototype.connectedCallback = function() { log.push('connected'); };
+                customElements.define('x-iah-el', XEl);
+                document.body.insertAdjacentHTML('beforeend', '<x-iah-el></x-iah-el>');
+                log.length === 1 && log[0] === 'connected'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_element_scoped_registry_inherited_via_inner_html_in_shadow_root() {
+    // The gap this slice closes: markup parsed by `innerHTML` inside a shadow
+    // root scoped to a local registry must resolve against that registry, not
+    // the global one — implicit inheritance through the HTML parser, per
+    // HTML LS §4.13.1 scoped custom element registries.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                function ScopedEl() {}
+                ScopedEl.prototype.connectedCallback = function() { log.push('scoped'); };
+                function GlobalEl() {}
+                GlobalEl.prototype.connectedCallback = function() { log.push('global'); };
+                customElements.define('dual-ih-el', GlobalEl);
+                var reg = new CustomElementRegistry();
+                reg.define('dual-ih-el', ScopedEl);
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var root = host.attachShadow({ mode: 'open', customElements: reg });
+                root.innerHTML = '<dual-ih-el></dual-ih-el>';
+                log.length === 1 && log[0] === 'scoped'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_element_upgraded_via_inner_html_at_any_depth() {
+    // The fragment parser can introduce a custom element nested inside plain
+    // wrapper markup, not just as the top-level parsed node.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                function XEl() {}
+                XEl.prototype.connectedCallback = function() { log.push('connected'); };
+                customElements.define('x-nested-el', XEl);
+                document.body.innerHTML = '<div><span><x-nested-el></x-nested-el></span></div>';
+                log.length === 1 && log[0] === 'connected'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── HTMLTemplateElement.content + DocumentFragment ────────────────────────
 
 #[test]

@@ -7422,6 +7422,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
                         'The value provided (' + where + ') is not one of beforebegin, ' +
                         'afterbegin, beforeend, or afterend.', 'SyntaxError');
             }
+            // GAP-CEREG срез 3 (BUG-890): `before`/`prepend`/`append`/`after`
+            // above never ran upgrade reactions (they predate custom elements
+            // entirely), so this parsed fragment needs its own walk — same
+            // subtree upgrade `innerHTML` now runs, see `_lumen_set_inner_html`.
+            for (var _iahu = 0; _iahu < newIds.length; _iahu++) {
+                _lumen_ce_upgrade_subtree(newIds[_iahu]);
+            }
         },
         // Replaces all children of this element.
         replaceChildren: function() { var nid = this.__nid__;
@@ -12341,6 +12348,17 @@ _lumen_set_text_content = function(nid, text) {
 _lumen_set_inner_html = function(nid, html) {
     _lumen_native_set_inner_html(nid, html);
     _lumen_style_children_changed(nid);
+    // GAP-CEREG срез 3 (BUG-890): the fragment parser behind `innerHTML` never
+    // ran custom-element upgrade reactions at all, so even a *globally*
+    // defined custom element sitting in markup assigned this way stayed inert
+    // — and a scoped registry (`attachShadow({customElements: reg})`) never
+    // got the chance to apply either, since nothing walked the new subtree to
+    // find out. `nid` itself is skipped: it already existed and was not
+    // (re)connected, only its children are new.
+    var _cesih_kids = _lumen_get_children(nid);
+    for (var _cesih_i = 0; _cesih_i < _cesih_kids.length; _cesih_i++) {
+        _lumen_ce_upgrade_subtree(_cesih_kids[_cesih_i]);
+    }
 };
 
 // ── Custom Elements registry ──────────────────────────────────────────────────
@@ -12397,6 +12415,22 @@ function _lumen_ce_maybe_connected(el) {
         try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
             _lumen_console_error('CE connectedCallback: ' + e);
         }
+    }
+}
+
+// GAP-CEREG срез 3 (BUG-890): runs the upgrade reaction over `nid` and every
+// descendant, depth-first — the shallow, single-node `_lumen_ce_maybe_connected`
+// above is what `appendChild`/`insertBefore` use for a node script handed them
+// directly, but markup parsed from a string (`innerHTML`, `insertAdjacentHTML`)
+// can introduce custom elements at any depth in one shot, each of which must
+// resolve its own scope independently via `_lumen_ce_registry_for_nid` — a
+// scoped shadow root's registry has to reach arbitrarily deep, not just the
+// fragment's immediate children.
+function _lumen_ce_upgrade_subtree(nid) {
+    _lumen_ce_maybe_connected(_lumen_make_element(nid));
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) {
+        _lumen_ce_upgrade_subtree(kids[i]);
     }
 }
 
