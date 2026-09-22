@@ -391,6 +391,25 @@ impl Lumen {
                 // transition, so its captured snapshot must not survive it.
                 self.pending_mpa_view_transition_snapshot = None;
             }
+            LoadEvent::CertError(url, host, cert_err, generation) => {
+                if generation != self.load_generation { return; }
+                self.nav_start = None;
+                // A6: same settled-error bookkeeping as `LoadError` above
+                // (BUG-308's `wait{document_ready}`), but routed to the cert
+                // interstitial instead of the generic message — the reason
+                // the user sees is "your connection is not private", not a
+                // raw network-error string.
+                self.load_failed = true;
+                self.cert_interstitial.open(url, host, cert_err);
+                let msg = self.cert_interstitial.reason_text().unwrap_or_default();
+                self.load_error_message = Some(msg.clone());
+                click_log::log_load_err(&self.source.describe(), &msg);
+                health_log::log_load_error(&self.source.describe(), &msg);
+                eprintln!("TLS-сертификат отклонён {}: {msg}", self.source.describe());
+                self.stream_builder = None;
+                self.stream_sheet = lumen_css_parser::Stylesheet::default();
+                self.pending_mpa_view_transition_snapshot = None;
+            }
             LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles } => {
                 self.on_frame_nav_done(&host_doc, host, &old_doc, generation, handles);
             }

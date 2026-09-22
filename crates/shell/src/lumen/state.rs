@@ -1464,6 +1464,10 @@ pub(crate) struct Lumen {
     /// Centred 500×440 overlay showing X.509 cert data (subject CN/Org, issuer,
     /// validity dates, SHA-256 fingerprint, SAN list, TLS version).
     pub(crate) cert_panel: panels::cert_panel::CertPanel,
+    /// Blocking cert-error interstitial (ph3-tls-hardening A6) — opened when
+    /// a navigation's TLS handshake fails cert verification
+    /// (`LoadEvent::CertError`), offering Back / "Proceed anyway".
+    pub(crate) cert_interstitial: panels::cert_interstitial::CertInterstitial,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///

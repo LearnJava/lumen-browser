@@ -1943,9 +1943,9 @@
     {
      "id": "P3-tlshard",
      "title": "TLS hardening: OCSP + CT + invalid-cert UI",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "phases.md §Фаза 3: OCSP stapling + Certificate Transparency log enforcement + invalid-cert UI. Negotiate/NTLM + client-cert mTLS отложены. Бриф docs/tasks/ph3-tls-security-hardening.md"
+     "note": "Срезы 1-6 (CertInvalid/LumenVerifier/OCSP/CT/реальный CertInfo/live-wiring) + срез A6 (2026-09-22): блокирующий CertInterstitial (Back/Proceed anyway), session-scoped tls::bypass реестр, PanelCertData revocation/ct_status/error-строки с красным заголовком. Part A (OCSP stapling + CT log enforcement + invalid-cert UI) завершена. Negotiate/NTLM + client-cert mTLS (Part B) отложены — отдельная задача. Бриф docs/tasks/ph3-tls-security-hardening.md"
     },
     {
      "id": "P3-gpusandbox",
