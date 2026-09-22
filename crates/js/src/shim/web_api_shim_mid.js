@@ -12430,8 +12430,16 @@ var _LUMEN_CE_ALREADY_CONSTRUCTED = {};
 // ctor()`, interning it exactly like `_lumen_make_element` does for every
 // other node — required for node identity (`===`) and for `document
 // .createElement('my-el') === el` once упгрейд (срез 2) starts reusing this.
+// `__ceUpgraded__ = true` marks the node as having gone through the real
+// constructor — set here rather than by each caller so both a bare `new
+// MyEl()` (срез 1) and the upgrade path (срез 2, `_lumen_ce_upgrade_element`)
+// agree on the flag: without it, `_lumen_ce_maybe_connected` on a directly
+// constructed element (never `__ceUpgraded__`) would route it right back
+// through `_lumen_ce_upgrade_element` on its first `appendChild` and run the
+// constructor a second time.
 function _lumen_ce_build_wrapper(nid, ctor) {
     var built = _lumen_build_element(nid, ctor.prototype);
+    built.__ceUpgraded__ = true;
     return _lumen_wrapper_cache_set(nid, built);
 }
 
@@ -12471,13 +12479,20 @@ function _lumen_ce_registry_for_nid(nid) {
 }
 
 // Calls connectedCallback on `el` if its tag is in its scope's registry.
+// `el` may still be pre-upgrade (created by `document.createElement`/the
+// parser before its tag was defined, or before объём (3) wires those paths
+// through the constructor) — insertion is one of the moments HTML LS
+// §4.13.5 requires an "undefined"-state custom element to be upgraded, so
+// that case is routed through the real-constructor path below instead of
+// just flipping the flag.
 function _lumen_ce_maybe_connected(el) {
     if (!el || el.__nid__ === undefined) return;
     var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
     var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
     if (!entry) return;
     if (!el.__ceUpgraded__) {
-        el.__ceUpgraded__ = true;
+        _lumen_ce_upgrade_element(el, entry);
+        return;
     }
     if (typeof entry.ctor.prototype.connectedCallback === 'function') {
         try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
@@ -12533,12 +12548,42 @@ function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
     }
 }
 
-// Upgrades a single element wrapper: marks upgraded and calls connectedCallback.
+// CE-1 срез 2 (HTML LS §4.13.5 "upgrade an element"): runs the definition's
+// real constructor over the existing native node, reusing the same
+// construction-stack mechanism срез 1 built for a bare `new MyEl()` — this
+// is its other writer. Pushing `nid` first makes `HTMLElement`'s constructor
+// (top of this file) consume it instead of minting a new node, and hand
+// back a wrapper built off `entry.ctor.prototype`; `_lumen_ce_build_wrapper`
+// interns it via `_lumen_wrapper_cache_set`, REPLACING whatever wrapper
+// `nid` had (a plain pre-upgrade one, or none). Any JS reference obtained
+// before the upgrade keeps pointing at the pre-upgrade object — the same
+// wrapper-identity limitation every other `_lumen_wrapper_cache_set` call in
+// this file already has (subsystems/js.md, BUG-732 et al.); not addressed
+// here. A `ctor` that never calls `super()` (most of the pre-срез-1 test
+// suite still registers a bare `function Foo() {}`) leaves the pushed `nid`
+// unconsumed — harmless, since it is popped unconditionally below and the
+// pre-existing wrapper is left as-is, only the callback still fires.
 function _lumen_ce_upgrade_element(el, entry) {
-    if (!el || el.__ceUpgraded__) return;
-    el.__ceUpgraded__ = true;
-    if (typeof entry.ctor.prototype.connectedCallback === 'function') {
-        try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
+    if (!el || el.__nid__ === undefined || el.__ceUpgraded__) return;
+    var nid  = el.__nid__;
+    var ctor = entry.ctor;
+    var stack = _lumen_ce_construction_stacks.get(ctor);
+    if (!stack) {
+        stack = [];
+        _lumen_ce_construction_stacks.set(ctor, stack);
+    }
+    stack.push(nid);
+    try {
+        new ctor();
+    } catch (e) {
+        _lumen_console_error('CE upgrade constructor: ' + e);
+    }
+    stack.pop();
+    var upgraded = _lumen_make_element(nid);
+    upgraded.__ceUpgraded__ = true;
+    if (_lumen_resource_is_connected(nid)
+        && typeof ctor.prototype.connectedCallback === 'function') {
+        try { ctor.prototype.connectedCallback.call(upgraded); } catch(e) {
             _lumen_console_error('CE connectedCallback (upgrade): ' + e);
         }
     }
