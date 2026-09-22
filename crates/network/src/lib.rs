@@ -1347,7 +1347,7 @@ fn connect_inner(
     // а нам нужно знать версию (HTTP/1.1 vs HTTP/2) до формирования request bytes.
     let mut tcp = tcp;
     conn.complete_io(&mut tcp)
-        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+        .map_err(|e| handshake_io_error("TLS handshake", e))?;
 
     if read_timeout.is_none() {
         let _ = tcp.set_read_timeout(None);
@@ -1416,6 +1416,19 @@ pub(crate) fn tls_config_for_profile(profile: tls::TlsProfile) -> Arc<rustls::Cl
             // Fallback: construct on-the-fly if not cached (shouldn't happen)
             Arc::new(tls::build_client_config(profile, tls::trusted_root_store()))
         })
+}
+
+/// Turn a `complete_io` failure into an `Error`: `Error::CertInvalid` when
+/// `rustls` reported a certificate-trust problem (ph3-tls-hardening A1, see
+/// [`tls::cert_error::from_io_error`]), otherwise the existing
+/// `Error::Network(format!("{context}: {e}"))` shape so
+/// `is_transient_handshake_error`/`classify_failure_stage`'s string matching
+/// on non-cert handshake failures is unaffected.
+fn handshake_io_error(context: &str, e: std::io::Error) -> Error {
+    match tls::cert_error::from_io_error(&e) {
+        Some(cert_err) => Error::CertInvalid(cert_err),
+        None => Error::Network(format!("{context}: {e}")),
+    }
 }
 
 /// Проверить ALPN-протокол, выбранный сервером.
@@ -1723,7 +1736,7 @@ fn fetch_single(
 
             let mut tcp_copy = tcp;
             tls_conn.complete_io(&mut tcp_copy)
-                .map_err(|e| Error::Network(format!("TLS handshake over tunnel: {e}")))?;
+                .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
 
             let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
 
@@ -7850,6 +7863,33 @@ mod tests {
             "EOF before status line".to_owned()
         )));
         assert!(!is_transient_handshake_error(&Error::Network("HTTP 500".to_owned())));
+        // ph3-tls-hardening A1: `Error::CertInvalid` is a distinct variant
+        // (not `Error::Network`), so the `msg.contains("TLS handshake:")`
+        // check never matches it either — same "don't retry" outcome as the
+        // string-matched `UnknownIssuer` case above, reached by construction
+        // rather than by text.
+        assert!(!is_transient_handshake_error(&Error::CertInvalid(
+            lumen_core::error::CertError::Expired
+        )));
+    }
+
+    #[test]
+    fn handshake_io_error_maps_cert_failure_to_cert_invalid() {
+        let rustls_err = rustls::Error::InvalidCertificate(rustls::CertificateError::Expired);
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, rustls_err);
+        assert!(matches!(
+            handshake_io_error("TLS handshake", io_err),
+            Error::CertInvalid(lumen_core::error::CertError::Expired)
+        ));
+    }
+
+    #[test]
+    fn handshake_io_error_falls_back_to_network_for_non_cert_failure() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, rustls::Error::DecryptError);
+        match handshake_io_error("TLS handshake", io_err) {
+            Error::Network(msg) => assert!(msg.starts_with("TLS handshake: ")),
+            other => panic!("expected Error::Network, got {other:?}"),
+        }
     }
 
     #[test]
@@ -8941,6 +8981,16 @@ mod tests {
         );
         assert_eq!(
             classify_failure_stage("unexpected ALPN protocol: \"spdy\""),
+            RequestStage::Tls
+        );
+        // `Error::CertInvalid`'s `Display` starts with the same "TLS
+        // handshake:" prefix (see `error.rs`), so `emit_request_failed`'s
+        // `other.to_string()` fallback classifies it the same as the
+        // string-typed `Error::Network` cases above.
+        assert_eq!(
+            classify_failure_stage(
+                &Error::CertInvalid(lumen_core::error::CertError::Expired).to_string()
+            ),
             RequestStage::Tls
         );
         // Всё, что не относится к connect-фазе, — обмен данными (Read).
