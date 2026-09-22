@@ -1,9 +1,10 @@
 //! Custom `ServerCertVerifier` wrapping rustls's `WebPkiServerVerifier`
-//! (ph3-tls-hardening, part A2).
+//! (ph3-tls-hardening, parts A2 + A3).
 //!
 //! `LumenVerifier` delegates chain validation to the standard webpki
-//! verifier unchanged — this slice adds no new trust policy, it only
-//! establishes the seam later slices need:
+//! verifier first, unchanged, then layers a revocation check on top using
+//! the stapled OCSP response ([`crate::tls::ocsp`], part A3) — the seam this
+//! module exists to provide:
 //!
 //! - A3 (OCSP stapling) and A4 (CT enforcement) both need the raw bytes
 //!   handed to [`rustls::client::danger::ServerCertVerifier::verify_server_cert`]
@@ -20,11 +21,11 @@
 //!   `crates/network/src/lib.rs`). `LumenVerifier` must stay side-effect-free
 //!   per call — no `Mutex<Option<..>>` "last seen cert" slot — or concurrent
 //!   connections on the same profile would race and read each other's
-//!   certificate. A3/A4's hard-fail decisions belong entirely in the
-//!   `Result` returned by `verify_server_cert`; any data a later slice needs
-//!   to surface to the UI (e.g. leaf cert fields for [`CertInfo`]) must come
-//!   from a per-connection source — `ClientConnection::peer_certificates()`
-//!   after a successful handshake — not from this verifier.
+//!   certificate. A3's hard-fail decision (`CertError::Revoked`) is returned
+//!   directly from `verify_server_cert`; A4's data (and any later slice's,
+//!   e.g. leaf cert fields for [`CertInfo`]) must come from a per-connection
+//!   source — `ClientConnection::peer_certificates()` after a successful
+//!   handshake — not from this verifier.
 //!
 //! [`CertInfo`]: crate::tls::CertInfo
 
@@ -34,15 +35,17 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::client::WebPkiServerVerifier;
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
+use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
-/// Wraps rustls's standard webpki chain verifier.
-///
-/// Today this is a pure pass-through (A2's own acceptance criterion is
-/// "normal HTTPS still passes") — it exists so `build_client_config` goes
-/// through `.dangerous().with_custom_certificate_verifier(..)` instead of
-/// the default `.with_root_certificates(..)`, which is the only seam A3/A4
-/// can attach revocation/transparency policy to later.
+use super::ocsp::{self, OcspVerdict};
+
+/// Wraps rustls's standard webpki chain verifier and layers a stapled-OCSP
+/// revocation check on top (A3): a `certStatus: revoked` staple hard-fails
+/// with `RustlsError::InvalidCertificate(CertificateError::Revoked)`, which
+/// [`crate::tls::cert_error::from_io_error`] already maps to
+/// `CertError::Revoked` (part A1). Every other OCSP outcome — no staple,
+/// `good`, or any unparseable shape — is soft-fail per [`ocsp`]'s own scope
+/// and does not affect the result webpki already computed.
 #[derive(Debug)]
 pub struct LumenVerifier {
     inner: Arc<WebPkiServerVerifier>,
@@ -74,8 +77,15 @@ impl ServerCertVerifier for LumenVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, RustlsError> {
-        self.inner
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+        let verified = self
+            .inner
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)?;
+        // A3: layer the stapled-OCSP revocation check on top of webpki's chain trust.
+        // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
+        if ocsp::parse_stapled_response(ocsp_response) == OcspVerdict::Revoked {
+            return Err(RustlsError::InvalidCertificate(CertificateError::Revoked));
+        }
+        Ok(verified)
     }
 
     fn verify_tls12_signature(
