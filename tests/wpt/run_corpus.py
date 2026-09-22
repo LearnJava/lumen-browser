@@ -1100,8 +1100,8 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="run every category in the manifest")
     parser.add_argument("--pilot", action="store_true", help=f"run the pilot selection ({len(PILOT_CATEGORIES)} categories)")
     parser.add_argument("--categories", default=None, help="comma-separated category list")
-    parser.add_argument("--processes", type=int, default=8,
-                        help="wptrunner --processes per shard (default: 8; six concurrent "
+    parser.add_argument("--processes", type=int, default=7,
+                        help="wptrunner --processes per shard (default: 7; six concurrent "
                              "`lumen` instances plus a shard's orphans pushed a 7.6 GB "
                              "Linux box into OOM — see kill_tree — pass a lower value "
                              "on a machine that small)")
