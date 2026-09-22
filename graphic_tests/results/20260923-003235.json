@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-09-23T00:38:48",
+  "timestamp": "2026-09-23T00:32:35",
   "git": {
     "commit": "9028698b6",
     "branch": "p6-bug-1008",
     "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p6-queue-refill-2: РѕС‡РµСЂРµРґРё P1 (+10 Р·Р°РґР°С‡) Рё P6 (11 РїСѓРЅРєС‚РѕРІ)"
   },
   "crop_offset": [
-    0,
-    0
+    8,
+    99
   ],
   "halted_at": null,
   "summary": {
     "total": 157,
-    "passed": 93,
-    "failed": 21,
-    "errors": 0,
-    "debtors": 43,
+    "passed": 0,
+    "failed": 152,
+    "errors": 1,
+    "debtors": 4,
     "skipped": 0
   },
   "tests": [
@@ -25,8 +25,8 @@
       "label": "calibration",
       "html": "00-calibration.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
+      "status": "ERROR",
+      "diff_pct": -1.0,
       "diff_region": null
     },
     {
@@ -35,9 +35,14 @@
       "label": "sanity",
       "html": "01-sanity.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 17.9704,
+      "diff_region": {
+        "top": 122,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "02",
@@ -46,11 +51,11 @@
       "html": "02-color-named.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.6836,
+      "diff_pct": 21.6686,
       "diff_region": {
-        "top": 124,
-        "left": 25,
-        "bottom": 304,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 964
       }
     },
@@ -60,12 +65,12 @@
       "label": "color-formats",
       "html": "03-color-formats.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3255,
+      "status": "FAIL",
+      "diff_pct": 21.2824,
       "diff_region": {
-        "top": 144,
-        "left": 25,
-        "bottom": 364,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 884
       }
     },
@@ -76,11 +81,11 @@
       "html": "04-color-alpha.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.6836,
+      "diff_pct": 21.7069,
       "diff_region": {
-        "top": 124,
-        "left": 25,
-        "bottom": 304,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 964
       }
     },
@@ -90,12 +95,12 @@
       "label": "border-width",
       "html": "05-border-width.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4001,
+      "status": "FAIL",
+      "diff_pct": 5.8426,
       "diff_region": {
-        "top": 172,
-        "left": 25,
-        "bottom": 269,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 879
       }
     },
@@ -105,12 +110,12 @@
       "label": "border-sides",
       "html": "06-border-sides.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4184,
+      "status": "FAIL",
+      "diff_pct": 5.7705,
       "diff_region": {
         "top": 25,
-        "left": 25,
-        "bottom": 240,
+        "left": 0,
+        "bottom": 719,
         "right": 904
       }
     },
@@ -120,9 +125,14 @@
       "label": "box-sizing",
       "html": "07-box-sizing.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 20.2214,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
+      }
     },
     {
       "id": "08",
@@ -130,9 +140,14 @@
       "label": "padding",
       "html": "08-padding.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 5.7665,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 289
+      }
     },
     {
       "id": "09",
@@ -140,9 +155,14 @@
       "label": "margin",
       "html": "09-margin.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.0872,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "10",
@@ -150,9 +170,14 @@
       "label": "min-max-width",
       "html": "10-min-max-width.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 8.1651,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "11",
@@ -160,12 +185,12 @@
       "label": "min-max-height",
       "html": "11-min-max-height.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.434,
+      "status": "FAIL",
+      "diff_pct": 5.5098,
       "diff_region": {
         "top": 25,
-        "left": 201,
-        "bottom": 144,
+        "left": 0,
+        "bottom": 719,
         "right": 864
       }
     },
@@ -175,12 +200,12 @@
       "label": "display",
       "html": "12-display.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2387,
+      "status": "FAIL",
+      "diff_pct": 21.2969,
       "diff_region": {
-        "top": 308,
-        "left": 25,
-        "bottom": 544,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 564
       }
     },
@@ -190,12 +215,12 @@
       "label": "visibility-opacity",
       "html": "13-visibility-opacity.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3526,
+      "status": "FAIL",
+      "diff_pct": 21.3825,
       "diff_region": {
-        "top": 148,
-        "left": 25,
-        "bottom": 402,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 964
       }
     },
@@ -205,9 +230,14 @@
       "label": "overflow",
       "html": "14-overflow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 5.1861,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 604
+      }
     },
     {
       "id": "15",
@@ -215,9 +245,14 @@
       "label": "box-shadow",
       "html": "15-box-shadow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.2014,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "16",
@@ -226,12 +261,12 @@
       "html": "16-outline.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.8038,
+      "diff_pct": 20.5066,
       "diff_region": {
-        "top": 15,
-        "left": 21,
-        "bottom": 244,
-        "right": 836
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
       }
     },
     {
@@ -240,9 +275,14 @@
       "label": "calc",
       "html": "17-calc.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 9.3578,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "18",
@@ -251,11 +291,11 @@
       "html": "18-images.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 15.0563,
+      "diff_pct": 29.3004,
       "diff_region": {
         "top": 28,
-        "left": 25,
-        "bottom": 718,
+        "left": 0,
+        "bottom": 719,
         "right": 908
       },
       "debtor": {
@@ -270,18 +310,18 @@
       "label": "object-fit",
       "html": "19-object-fit.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 8.9202,
+      "status": "FAIL",
+      "diff_pct": 14.6932,
       "diff_region": {
         "top": 26,
-        "left": 26,
-        "bottom": 449,
+        "left": 0,
+        "bottom": 719,
         "right": 805
       },
       "debtor": {
         "bug": "BUG-219",
         "baseline": 9.05,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -290,12 +330,12 @@
       "label": "quirks-bgcolor",
       "html": "20-quirks-bgcolor.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2441,
+      "status": "FAIL",
+      "diff_pct": 15.9378,
       "diff_region": {
-        "top": 140,
-        "left": 25,
-        "bottom": 300,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 624
       }
     },
@@ -306,11 +346,11 @@
       "html": "21-border-style.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.2358,
+      "diff_pct": 10.3078,
       "diff_region": {
         "top": 25,
-        "left": 25,
-        "bottom": 452,
+        "left": 0,
+        "bottom": 719,
         "right": 804
       }
     },
@@ -320,12 +360,12 @@
       "label": "CSS transform translate/rotate/scale/skew/matrix",
       "html": "22-transform.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1632,
+      "status": "FAIL",
+      "diff_pct": 13.3274,
       "diff_region": {
-        "top": 287,
-        "left": 149,
-        "bottom": 692,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 792
       }
     },
@@ -335,12 +375,12 @@
       "label": "::before / ::after block-level generation",
       "html": "23-pseudo-elements.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4796,
+      "status": "FAIL",
+      "diff_pct": 15.9755,
       "diff_region": {
         "top": 57,
-        "left": 291,
-        "bottom": 205,
+        "left": 0,
+        "bottom": 719,
         "right": 378
       }
     },
@@ -350,13 +390,13 @@
       "label": "vertical-align inline y-offset + inline-block positioning",
       "html": "24-vertical-align.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4682,
+      "status": "FAIL",
+      "diff_pct": 21.2477,
       "diff_region": {
-        "top": 172,
-        "left": 20,
-        "bottom": 227,
-        "right": 104
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
       }
     },
     {
@@ -365,9 +405,14 @@
       "label": "table layout: cells horizontal, rows vertical",
       "html": "25-table-layout.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 9.9202,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
+      }
     },
     {
       "id": "26",
@@ -375,9 +420,14 @@
       "label": "mask-image: linear/radial gradient mask (Phase 0 fallback = no-op)",
       "html": "26-mask-image.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 7.7355,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "27",
@@ -385,12 +435,12 @@
       "label": "direction: rtl — LTR/RTL start/end alignment via colored bars",
       "html": "27-direction-rtl.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.308,
+      "status": "FAIL",
+      "diff_pct": 15.5069,
       "diff_region": {
-        "top": 190,
-        "left": 143,
-        "bottom": 282,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 859
       }
     },
@@ -400,9 +450,14 @@
       "label": "CSS Containment: contain:size (height=0) · contain:paint (clip) · contain:layout · contain:strict",
       "html": "28-css-containment.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 7.0251,
+      "diff_region": {
+        "top": 122,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "29",
@@ -410,9 +465,14 @@
       "label": "@container queries: min-width applies/not · named container · max-width",
       "html": "29-container-queries.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 5.2661,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "30",
@@ -421,12 +481,12 @@
       "html": "30-css-filter.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.5831,
+      "diff_pct": 17.6023,
       "diff_region": {
         "top": 31,
-        "left": 31,
-        "bottom": 540,
-        "right": 889
+        "left": 0,
+        "bottom": 719,
+        "right": 767
       }
     },
     {
@@ -435,12 +495,12 @@
       "label": "clip-path: inset/circle/ellipse/polygon bounding-box clip",
       "html": "31-clip-path.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0623,
+      "status": "FAIL",
+      "diff_pct": 16.7978,
       "diff_region": {
-        "top": 181,
-        "left": 61,
-        "bottom": 610,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 635
       }
     },
@@ -450,18 +510,18 @@
       "label": "list markers: ::marker box geometry, outside/inside, disc/decimal/alpha/roman",
       "html": "32-list-markers.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.7613,
+      "status": "FAIL",
+      "diff_pct": 18.5843,
       "diff_region": {
-        "top": 33,
-        "left": 60,
-        "bottom": 495,
+        "top": 32,
+        "left": 0,
+        "bottom": 719,
         "right": 922
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 3.75,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -470,12 +530,12 @@
       "label": "multi-column: column-count/width layout + column-rule solid/dashed/dotted",
       "html": "33-multi-column.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1023,
+      "status": "FAIL",
+      "diff_pct": 11.3109,
       "diff_region": {
-        "top": 172,
-        "left": 191,
-        "bottom": 555,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 578
       }
     },
@@ -485,18 +545,18 @@
       "label": "form controls: input/checkbox/radio/button/textarea/select static rendering",
       "html": "34-forms.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.0155,
+      "status": "FAIL",
+      "diff_pct": 23.4752,
       "diff_region": {
         "top": 25,
-        "left": 25,
-        "bottom": 319,
+        "left": 0,
+        "bottom": 719,
         "right": 590
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 3.02,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -505,13 +565,13 @@
       "label": "CSS Grid named areas: grid-template-areas + grid-area: <name>",
       "html": "35-grid-named-areas.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0307,
+      "status": "FAIL",
+      "diff_pct": 21.0398,
       "diff_region": {
-        "top": 661,
-        "left": 123,
-        "bottom": 718,
-        "right": 226
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
       }
     },
     {
@@ -520,12 +580,12 @@
       "label": "border-radius: uniform/pill/circle/asymmetric SDF rendering",
       "html": "36-border-radius.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2077,
+      "status": "FAIL",
+      "diff_pct": 10.2094,
       "diff_region": {
         "top": 25,
-        "left": 25,
-        "bottom": 592,
+        "left": 0,
+        "bottom": 719,
         "right": 774
       }
     },
@@ -535,9 +595,14 @@
       "label": "float: left/right placement + clear: both clearance",
       "html": "37-float-clear.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.1707,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "38",
@@ -545,9 +610,14 @@
       "label": "z-index stacking context paint order (CSS 2.1 Appendix E)",
       "html": "38-z-index.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.1273,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "39",
@@ -555,9 +625,14 @@
       "label": "linear-gradient / radial-gradient GPU pipeline",
       "html": "39-gradients.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 15.8282,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "40",
@@ -565,13 +640,13 @@
       "label": "conic-gradient / repeating-conic-gradient (CSS Images L4 §3.7)",
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0543,
+      "status": "FAIL",
+      "diff_pct": 18.0321,
       "diff_region": {
-        "top": 217,
-        "left": 414,
-        "bottom": 396,
-        "right": 788
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 786
       }
     },
     {
@@ -580,9 +655,14 @@
       "label": "display:table/row/cell with row groups (CSS 2.1 §17)",
       "html": "41-table.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 17.623,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
+      }
     },
     {
       "id": "42",
@@ -590,13 +670,13 @@
       "label": "position:sticky — flow position + BeginStickyLayer/EndStickyLayer (CSS Positioning L3 §6.3)",
       "html": "42-position-sticky.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2713,
+      "status": "FAIL",
+      "diff_pct": 15.5914,
       "diff_region": {
-        "top": 201,
-        "left": 1,
-        "bottom": 300,
-        "right": 130
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
       }
     },
     {
@@ -605,9 +685,14 @@
       "label": "CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content",
       "html": "43-intrinsic-sizing.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 9.6979,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 286
+      }
     },
     {
       "id": "44",
@@ -615,12 +700,12 @@
       "label": "Media Queries L3 — @media screen/print/min-width(em)/orientation/aspect-ratio",
       "html": "44-media-queries.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1389,
+      "status": "FAIL",
+      "diff_pct": 12.4866,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 0,
+        "bottom": 719,
         "right": 1023
       }
     },
@@ -630,18 +715,18 @@
       "label": "CSS Backgrounds L3 §3 — multiple background layers, position/size/repeat/clip/origin",
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.0611,
+      "status": "FAIL",
+      "diff_pct": 17.3452,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 460,
+        "bottom": 719,
         "right": 1023
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 0.87,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -650,18 +735,18 @@
       "label": "CSS Transforms L2 — individual translate / rotate / scale properties",
       "html": "46-individual-transforms.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.3733,
+      "status": "FAIL",
+      "diff_pct": 17.023,
       "diff_region": {
-        "top": 75,
-        "left": 16,
-        "bottom": 576,
+        "top": 74,
+        "left": 0,
+        "bottom": 719,
         "right": 680
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.96,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -670,18 +755,18 @@
       "label": "SVG basic shapes — rect/circle/ellipse/line in document flow, viewBox scale",
       "html": "47-svg-basic.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.4604,
+      "status": "FAIL",
+      "diff_pct": 17.4826,
       "diff_region": {
-        "top": 38,
-        "left": 29,
-        "bottom": 646,
+        "top": 26,
+        "left": 0,
+        "bottom": 719,
         "right": 987
       },
       "debtor": {
         "bug": "BUG-176",
         "baseline": 1.2,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -690,12 +775,12 @@
       "label": "CSS Overflow L4 §3.2 — -webkit-line-clamp / line-clamp multi-line truncation, staircase heights 1–4 lines",
       "html": "48-line-clamp.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2604,
+      "status": "FAIL",
+      "diff_pct": 13.1951,
       "diff_region": {
         "top": 33,
-        "left": 256,
-        "bottom": 688,
+        "left": 0,
+        "bottom": 719,
         "right": 767
       }
     },
@@ -705,12 +790,12 @@
       "label": "CSS Compositing L1 §8.3 — background-blend-mode: multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/luminosity",
       "html": "49-background-blend-mode.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1389,
+      "status": "FAIL",
+      "diff_pct": 16.4838,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 0,
+        "bottom": 719,
         "right": 1023
       }
     },
@@ -720,9 +805,14 @@
       "label": "CSS Variables L1 — var() basic/nested/fallback + calc(var()) + inheritance",
       "html": "50-css-variables.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 8.2457,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
+      }
     },
     {
       "id": "51",
@@ -730,18 +820,18 @@
       "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.1142,
+      "status": "FAIL",
+      "diff_pct": 16.762,
       "diff_region": {
-        "top": 22,
-        "left": 21,
-        "bottom": 454,
-        "right": 648
+        "top": 23,
+        "left": 0,
+        "bottom": 719,
+        "right": 402
       },
       "debtor": {
         "bug": "BUG-124",
         "baseline": 1.67,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -750,18 +840,18 @@
       "label": "text-shadow blur — PushFilter{Blur(sigma)} wrapping: sharp/4px/10px/20px blur progression + multi-shadow + glow",
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.2909,
+      "status": "FAIL",
+      "diff_pct": 22.2928,
       "diff_region": {
-        "top": 63,
-        "left": 111,
-        "bottom": 324,
+        "top": 67,
+        "left": 0,
+        "bottom": 719,
         "right": 911
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.36,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -770,18 +860,18 @@
       "label": "background-origin — positioning area: border-box/padding-box/content-box vs background-clip; 0%/100% anchoring",
       "html": "53-background-origin.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.7628,
+      "status": "FAIL",
+      "diff_pct": 11.153,
       "diff_region": {
         "top": 36,
-        "left": 33,
-        "bottom": 515,
-        "right": 800
+        "left": 0,
+        "bottom": 715,
+        "right": 761
       },
       "debtor": {
         "bug": "BUG-219",
         "baseline": 1.16,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -790,12 +880,12 @@
       "label": "SVG <path> stroke tessellation — open/closed stroke, fill+stroke, miter join, butt cap, widths 2-14px",
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2493,
+      "status": "FAIL",
+      "diff_pct": 16.146,
       "diff_region": {
         "top": 26,
-        "left": 27,
-        "bottom": 681,
+        "left": 0,
+        "bottom": 719,
         "right": 976
       }
     },
@@ -805,18 +895,18 @@
       "label": "<video> replaced element — grey DrawImage placeholder; UA default 300×150; CSS/attr dimensions; border + border-radius",
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.5808,
+      "status": "FAIL",
+      "diff_pct": 15.5831,
       "diff_region": {
-        "top": 123,
-        "left": 123,
-        "bottom": 410,
-        "right": 713
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 711
       },
       "debtor": {
         "bug": "BUG-192",
         "baseline": 0.54,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -826,11 +916,11 @@
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.1729,
+      "diff_pct": 21.9339,
       "diff_region": {
-        "top": 152,
-        "left": 25,
-        "bottom": 518,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 846
       }
     },
@@ -841,17 +931,17 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.4917,
+      "diff_pct": 8.6088,
       "diff_region": {
-        "top": 183,
-        "left": 94,
-        "bottom": 400,
-        "right": 705
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 701
       },
       "debtor": {
         "bug": "BUG-099",
         "baseline": 0.88,
-        "verdict": "REMOVE"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -860,18 +950,18 @@
       "label": "CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter drop-cap (large yellow, float:left) + ::first-line green bold first line",
       "html": "58-first-letter-line.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.4599,
+      "status": "FAIL",
+      "diff_pct": 6.2253,
       "diff_region": {
         "top": 37,
-        "left": 33,
-        "bottom": 185,
-        "right": 1002
+        "left": 0,
+        "bottom": 715,
+        "right": 1007
       },
       "debtor": {
         "bug": "BUG-100",
         "baseline": 2.41,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -880,18 +970,18 @@
       "label": "CSS Images L4 §5/§4 — image-set() DPR selection + cross-fade() two-image blend; -webkit- vendor prefix variants",
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 9.2794,
+      "status": "FAIL",
+      "diff_pct": 14.2335,
       "diff_region": {
         "top": 28,
-        "left": 25,
-        "bottom": 395,
+        "left": 0,
+        "bottom": 719,
         "right": 1022
       },
       "debtor": {
         "bug": "BUG-219",
         "baseline": 10.03,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -900,12 +990,12 @@
       "label": "SVG stroke advanced: stroke-linecap (butt/round/square), stroke-linejoin (miter/bevel/round), stroke-miterlimit, stroke-dasharray, stroke-dashoffset, fill-rule (nonzero/evenodd)",
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2045,
+      "status": "FAIL",
+      "diff_pct": 7.0238,
       "diff_region": {
         "top": 20,
-        "left": 28,
-        "bottom": 650,
+        "left": 0,
+        "bottom": 719,
         "right": 989
       }
     },
@@ -916,11 +1006,11 @@
       "html": "61-view-transitions.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.1401,
+      "diff_pct": 7.1601,
       "diff_region": {
         "top": 32,
-        "left": 40,
-        "bottom": 273,
+        "left": 0,
+        "bottom": 719,
         "right": 982
       },
       "debtor": {
@@ -935,18 +1025,18 @@
       "label": "CSS Scroll Snap L1: scroll-snap-type (y/x mandatory, both proximity), scroll-snap-align (start), scroll-snap-stop (always); static layout geometry of snap containers",
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.5426,
+      "status": "FAIL",
+      "diff_pct": 21.1472,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 708,
+        "bottom": 719,
         "right": 1023
       },
       "debtor": {
         "bug": "BUG-644",
         "baseline": 0.75,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -955,18 +1045,18 @@
       "label": "CSS Masonry layout (Houdini) Phase 0: waterfall grid — items placed in column with min height; column-count, gap",
       "html": "63-masonry.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.5698,
+      "status": "FAIL",
+      "diff_pct": 22.1201,
       "diff_region": {
-        "top": 31,
-        "left": 11,
-        "bottom": 437,
+        "top": 34,
+        "left": 0,
+        "bottom": 719,
         "right": 1023
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.81,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -975,18 +1065,18 @@
       "label": "CSS 2.1 §17 Table layout: emit_table_box() renders table/thead/tbody/tr/td cells with separate border-spacing, cell backgrounds, borders; col_span/row_span in struct",
       "html": "64-table.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 7.5735,
+      "status": "FAIL",
+      "diff_pct": 26.9189,
       "diff_region": {
-        "top": 41,
-        "left": 21,
-        "bottom": 406,
+        "top": 42,
+        "left": 0,
+        "bottom": 719,
         "right": 1023
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 8.99,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -995,18 +1085,18 @@
       "label": "CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers",
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.0936,
+      "status": "FAIL",
+      "diff_pct": 22.2477,
       "diff_region": {
-        "top": 1,
-        "left": 1,
-        "bottom": 695,
+        "top": 29,
+        "left": 0,
+        "bottom": 719,
         "right": 989
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.69,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1015,18 +1105,18 @@
       "label": "CSS ::selection pseudo-element: background-color + color override; swatch boxes show parsed selection colours; page renders correctly with ::selection rules present",
       "html": "66-selection-pseudo.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.1035,
+      "status": "FAIL",
+      "diff_pct": 21.6155,
       "diff_region": {
-        "top": 41,
-        "left": 41,
-        "bottom": 349,
-        "right": 315
+        "top": 42,
+        "left": 0,
+        "bottom": 719,
+        "right": 301
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.07,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1035,18 +1125,18 @@
       "label": "CSS Values L4 §7.7 attr() typed substitution: content:attr(data-label) generates ::before labels from HTML attributes; 5 labelled bar rows with distinct colours and widths",
       "html": "67-attr-typed.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.3569,
+      "status": "FAIL",
+      "diff_pct": 21.8343,
       "diff_region": {
-        "top": 61,
-        "left": 41,
-        "bottom": 446,
+        "top": 62,
+        "left": 0,
+        "bottom": 719,
         "right": 690
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.36,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1055,12 +1145,12 @@
       "label": "CSS Fonts L4 §6.3 font-variation-settings: parsing and layout stability; coloured boxes with varied wght/wdth/slnt axes and inherited settings",
       "html": "68-font-variation-settings.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0022,
+      "status": "FAIL",
+      "diff_pct": 15.513,
       "diff_region": {
         "top": 21,
-        "left": 24,
-        "bottom": 232,
+        "left": 0,
+        "bottom": 719,
         "right": 768
       }
     },
@@ -1070,9 +1160,14 @@
       "label": "CSS 2.1 §17.6 border-spacing: equal and asymmetric gaps between table cells; three tables showing 12px equal, 8px/24px asymmetric, and 0 spacing",
       "html": "69-border-spacing.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 20.8995,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
+      }
     },
     {
       "id": "70",
@@ -1080,18 +1175,18 @@
       "label": "CSS Images L3 §5.5 object-fit / object-position: SVG viewBox scaling modes fill/contain/cover/none/scale-down and object-position alignment",
       "html": "70-object-fit.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.3921,
+      "status": "FAIL",
+      "diff_pct": 16.6576,
       "diff_region": {
         "top": 26,
-        "left": 20,
-        "bottom": 718,
-        "right": 192
+        "left": 0,
+        "bottom": 719,
+        "right": 285
       },
       "debtor": {
         "bug": "BUG-176",
         "baseline": 1.63,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1100,12 +1195,12 @@
       "label": "CSS Transitions L2 §3.4 @starting-style: entry animation support — @starting-style rules parse without crashing; static rendering of two coloured boxes is unaffected",
       "html": "71-starting-style.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0027,
+      "status": "FAIL",
+      "diff_pct": 15.2724,
       "diff_region": {
-        "top": 260,
-        "left": 292,
-        "bottom": 459,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 491
       }
     },
@@ -1115,12 +1210,12 @@
       "label": "CSS Scoping L1 §6.1-6.2 :host / ::slotted: shadow host gets blue background via :host; :host(.special) colours second host amber; :host(.missing) does not match third host; ::slotted children get coloured boxes",
       "html": "72-host-slotted.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0019,
+      "status": "FAIL",
+      "diff_pct": 21.0727,
       "diff_region": {
         "top": 41,
-        "left": 32,
-        "bottom": 300,
+        "left": 0,
+        "bottom": 719,
         "right": 330
       }
     },
@@ -1130,9 +1225,14 @@
       "label": "CSS Gap Decorations L1: gap-rule-width/style/color — flex-row with solid red rules, flex-wrap with dashed cyan rules, grid with solid orange rules",
       "html": "73-gap-rule.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 16.9107,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "74",
@@ -1140,12 +1240,12 @@
       "label": "CSS Fonts L4 §5.2: font-stretch keyword + % values, cascade/inheritance, no-double wdth injection — coloured boxes",
       "html": "74-font-stretch.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0064,
+      "status": "FAIL",
+      "diff_pct": 7.7821,
       "diff_region": {
         "top": 25,
-        "left": 27,
-        "bottom": 220,
+        "left": 0,
+        "bottom": 719,
         "right": 924
       }
     },
@@ -1155,13 +1255,13 @@
       "label": "CSS Masonry Layout §9: masonry-auto-flow: next (source order) / ordered (CSS order property) / definite-first — coloured boxes in 3 masonry grids",
       "html": "75-masonry-auto-flow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2469,
+      "status": "FAIL",
+      "diff_pct": 15.5235,
       "diff_region": {
-        "top": 61,
-        "left": 121,
-        "bottom": 342,
-        "right": 902
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 288
       }
     },
     {
@@ -1170,12 +1270,12 @@
       "label": "CSS Motion Path L1: offset-path + offset-distance + offset-rotate (auto/fixed) — boxes translated along horizontal, diagonal, and cubic-bezier paths",
       "html": "76-motion-path.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0194,
+      "status": "FAIL",
+      "diff_pct": 5.6259,
       "diff_region": {
-        "top": 305,
-        "left": 102,
-        "bottom": 525,
+        "top": 122,
+        "left": 0,
+        "bottom": 719,
         "right": 999
       }
     },
@@ -1186,11 +1286,11 @@
       "html": "77-anchor-positioning.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 12.9395,
+      "diff_pct": 14.6084,
       "diff_region": {
         "top": 41,
-        "left": 41,
-        "bottom": 505,
+        "left": 0,
+        "bottom": 719,
         "right": 940
       },
       "debtor": {
@@ -1205,18 +1305,18 @@
       "label": "CSS Scroll-Driven Animations L1: scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline: scroll()/view()/named",
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 5.4304,
+      "status": "FAIL",
+      "diff_pct": 18.3458,
       "diff_region": {
         "top": 28,
-        "left": 25,
-        "bottom": 536,
+        "left": 0,
+        "bottom": 719,
         "right": 904
       },
       "debtor": {
         "bug": "BUG-127",
         "baseline": 3.6,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1225,18 +1325,18 @@
       "label": "CSS Text Decoration L4: text-underline-offset (px/auto/negative) + text-underline-position (under) wired to push_text_decoration",
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 6.8594,
+      "status": "FAIL",
+      "diff_pct": 18.8562,
       "diff_region": {
-        "top": 43,
-        "left": 60,
-        "bottom": 477,
+        "top": 45,
+        "left": 0,
+        "bottom": 719,
         "right": 600
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 5.65,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1245,18 +1345,18 @@
       "label": "CSS Tables L2 §17.6: border-collapse separate (4px spacing) vs collapse (no spacing) + mixed border widths + cell backgrounds",
       "html": "80-border-collapse.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 4.0148,
+      "status": "DEBTOR",
+      "diff_pct": 10.4352,
       "diff_region": {
         "top": 22,
-        "left": 21,
-        "bottom": 483,
-        "right": 668
+        "left": 0,
+        "bottom": 719,
+        "right": 658
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 9.91,
-        "verdict": "RATCHET"
+        "verdict": "OK"
       }
     },
     {
@@ -1265,12 +1365,12 @@
       "label": "CSS View Transitions L1 §10: view-transition-name property — named elements render identically to un-named elements (property has no visual effect outside a transition)",
       "html": "81-view-transition-name.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0027,
+      "status": "FAIL",
+      "diff_pct": 16.092,
       "diff_region": {
-        "top": 260,
-        "left": 152,
-        "bottom": 459,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 351
       }
     },
@@ -1280,18 +1380,18 @@
       "label": "SVG <use> element: clone shapes/groups/symbols from <defs>, x/y offset, xlink:href, nested chains",
       "html": "82-svg-use.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.564,
+      "status": "FAIL",
+      "diff_pct": 18.21,
       "diff_region": {
         "top": 35,
-        "left": 20,
-        "bottom": 633,
-        "right": 609
+        "left": 0,
+        "bottom": 719,
+        "right": 603
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 2.38,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1301,11 +1401,11 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 8.1957,
+      "diff_pct": 12.7273,
       "diff_region": {
-        "top": 31,
-        "left": 51,
-        "bottom": 516,
+        "top": 34,
+        "left": 0,
+        "bottom": 719,
         "right": 972
       },
       "debtor": {
@@ -1320,18 +1420,18 @@
       "label": "text-decoration-skip-ink: auto/none/all — underline gaps over glyph descenders (CSS Text Decoration L4 §3.5)",
       "html": "84-text-decoration-skip-ink.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 6.039,
+      "status": "FAIL",
+      "diff_pct": 18.5375,
       "diff_region": {
-        "top": 33,
-        "left": 41,
-        "bottom": 417,
-        "right": 451
+        "top": 32,
+        "left": 0,
+        "bottom": 719,
+        "right": 433
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 6.02,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1341,20 +1441,22 @@
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.1571,
+      "diff_pct": 16.3831,
       "diff_region": {
-        "top": 5,
-        "left": 345,
-        "bottom": 674,
-        "right": 1023
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 1009
       },
       "deps": [
         "22",
         "14"
       ],
       "affected": [
+        "c0: translate clipped",
         "c1: rotate corners clipped",
         "c2: scale clipped",
+        "c3: CONTROL no clip",
         "c4: negative translate clipped",
         "c5: rotated clip container"
       ]
@@ -1365,17 +1467,25 @@
       "label": "INTERACTION: border-radius × overflow:hidden — скруглённый клип детей (углы, круг, pill, вложенность)",
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1763,
+      "status": "FAIL",
+      "diff_pct": 16.4016,
       "diff_region": {
         "top": 25,
-        "left": 25,
-        "bottom": 674,
+        "left": 0,
+        "bottom": 719,
         "right": 1004
       },
       "deps": [
         "36",
         "14"
+      ],
+      "affected": [
+        "c0: rounded clip of bar",
+        "c1: circle clip",
+        "c2: CONTROL no clip",
+        "c3: nested rounded clips",
+        "c4: radius+border clip",
+        "c5: pill clip"
       ]
     },
     {
@@ -1384,12 +1494,21 @@
       "label": "INTERACTION: opacity × z-index — атомарный stacking context, групповая композиция без двойного затемнения, вложенная opacity",
       "html": "102-opacity-stacking.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "status": "FAIL",
+      "diff_pct": 15.6201,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 290
+      },
       "deps": [
         "13",
         "38"
+      ],
+      "affected": [
+        "c0: z-index trapped by opacity",
+        "c3: negative z inside opacity"
       ]
     },
     {
@@ -1398,17 +1517,25 @@
       "label": "INTERACTION: filter × transform — фильтр поверх трансформированного слоя, filter как containing block",
       "html": "103-filter-transform.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2597,
+      "status": "FAIL",
+      "diff_pct": 13.0596,
       "diff_region": {
-        "top": 256,
-        "left": 394,
-        "bottom": 645,
-        "right": 783
+        "top": 35,
+        "left": 0,
+        "bottom": 719,
+        "right": 983
       },
       "deps": [
         "30",
         "22"
+      ],
+      "affected": [
+        "c0: grayscale on rotated",
+        "c1: blur on translated",
+        "c2: filter inside rotated parent",
+        "c3: filter as containing block",
+        "c4: hue-rotate on scaled",
+        "c5: CONTROL no filter"
       ]
     },
     {
@@ -1417,12 +1544,12 @@
       "label": "INTERACTION: mask-image × gradients × border-radius — градиентная маска поверх градиентного фона и скруглений",
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0726,
+      "status": "FAIL",
+      "diff_pct": 14.5736,
       "diff_region": {
         "top": 25,
-        "left": 25,
-        "bottom": 674,
+        "left": 0,
+        "bottom": 719,
         "right": 1004
       },
       "deps": [
@@ -1430,6 +1557,14 @@
         "39",
         "40",
         "36"
+      ],
+      "affected": [
+        "c0: linear mask + gradient + radius",
+        "c1: radial mask + radial bg",
+        "c2: linear mask + conic bg",
+        "c3: mask + circle shape",
+        "c4: CONTROL no mask",
+        "c5: mask over border"
       ]
     },
     {
@@ -1438,12 +1573,21 @@
       "label": "INTERACTION: float/clear × margin — отступы флоатов, clearance+margin, перенос флоатов на новую строку",
       "html": "105-float-clear-margin.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "status": "FAIL",
+      "diff_pct": 15.6281,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 288
+      },
       "deps": [
         "37",
         "09"
+      ],
+      "affected": [
+        "c0: two left floats + margins",
+        "c3: float wrap to next line"
       ]
     },
     {
@@ -1452,17 +1596,25 @@
       "label": "INTERACTION: transform × z-index — transform создаёт stacking context, z-дети заперты внутри",
       "html": "106-transform-zindex.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2752,
+      "status": "FAIL",
+      "diff_pct": 13.0603,
       "diff_region": {
-        "top": 81,
-        "left": 70,
-        "bottom": 638,
-        "right": 620
+        "top": 28,
+        "left": 0,
+        "bottom": 719,
+        "right": 921
       },
       "deps": [
         "22",
         "38"
+      ],
+      "affected": [
+        "c0: negative z in transformed parent",
+        "c1: transformed (z:0) vs z:1 sibling",
+        "c2: z:2 over transformed z:1",
+        "c3: z children in rotated parent",
+        "c4: z children in scaled parent",
+        "c5: CONTROL no transform"
       ]
     },
     {
@@ -1471,18 +1623,26 @@
       "label": "INTERACTION: box-shadow × border-radius × overflow — скруглённый силуэт тени, клип тени родителем",
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0258,
+      "status": "FAIL",
+      "diff_pct": 14.362,
       "diff_region": {
         "top": 65,
-        "left": 65,
-        "bottom": 599,
+        "left": 0,
+        "bottom": 719,
         "right": 929
       },
       "deps": [
         "15",
         "36",
         "14"
+      ],
+      "affected": [
+        "c0: rounded shadow",
+        "c1: spread shadow on circle",
+        "c2: shadow clipped by parent",
+        "c3: CONTROL shadow escapes",
+        "c4: two hard shadows + radius",
+        "c5: blur shadow + radius + border"
       ]
     },
     {
@@ -1491,16 +1651,24 @@
       "label": "INTERACTION: вложенные transform — композиция матриц (rotate∘rotate⁻¹=identity, scale×translate, 3×rotate=сумма)",
       "html": "108-nested-transforms.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3711,
+      "status": "FAIL",
+      "diff_pct": 10.497,
       "diff_region": {
-        "top": 94,
-        "left": 94,
-        "bottom": 620,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 950
       },
       "deps": [
         "22"
+      ],
+      "affected": [
+        "c0: rotate∘rotate⁻¹ = identity",
+        "c1: REFERENCE axis-aligned",
+        "c2: scale scales child translate",
+        "c3: translate then rotate",
+        "c4: 3× rotate(10deg)",
+        "c5: REFERENCE rotate(30deg)"
       ]
     },
     {
@@ -1510,12 +1678,12 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.3645,
+      "diff_pct": 11.945,
       "diff_region": {
-        "top": 78,
-        "left": 16,
-        "bottom": 682,
-        "right": 634
+        "top": 85,
+        "left": 0,
+        "bottom": 719,
+        "right": 1001
       },
       "deps": [
         "31",
@@ -1525,8 +1693,10 @@
       "affected": [
         "c0: circle clip on rotated",
         "c1: inset clip on scaled",
+        "c2: triangle clip on translated",
         "c3: clipped parent, transformed child",
-        "c4: clip-path ∩ border-radius"
+        "c4: clip-path ∩ border-radius",
+        "c5: CONTROL no clip"
       ]
     },
     {
@@ -1535,9 +1705,14 @@
       "label": "anchor-name: --foo — базовое объявление якоря, визуализация элемента (стаб)",
       "html": "85-anchor-name-basic.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.2062,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "86",
@@ -1545,13 +1720,13 @@
       "label": "position-anchor: --foo — привязка к якорю, fallback позиция без inset-area (стаб)",
       "html": "86-position-anchor-fallback.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1459,
+      "status": "FAIL",
+      "diff_pct": 21.3139,
       "diff_region": {
-        "top": 201,
-        "left": 299,
-        "bottom": 217,
-        "right": 422
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 405
       }
     },
     {
@@ -1560,9 +1735,14 @@
       "label": "inset-area: none none — якорь не влияет на позицию при none keywords (стаб)",
       "html": "87-inset-area-none.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.1816,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "88",
@@ -1570,9 +1750,14 @@
       "label": "anchor-name в вложенных элементах — иерархия DOM, поиск якорей (стаб)",
       "html": "88-anchor-nested.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.1792,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "89",
@@ -1580,9 +1765,14 @@
       "label": "несколько anchor-name элементов — регистрация множества якорей в дереве (стаб)",
       "html": "89-anchor-multiple-names.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.1791,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "90",
@@ -1590,18 +1780,18 @@
       "label": "AVIF image decoder — <picture> с AVIF source + PNG fallback, direct <img src=\"...avif\">",
       "html": "90-avif-image.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.9181,
+      "status": "FAIL",
+      "diff_pct": 21.8262,
       "diff_region": {
-        "top": 23,
-        "left": 126,
-        "bottom": 590,
-        "right": 925
+        "top": 22,
+        "left": 0,
+        "bottom": 719,
+        "right": 919
       },
       "debtor": {
         "bug": "BUG-209",
         "baseline": 1.29,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1610,9 +1800,14 @@
       "label": "CSS Color L5 §4: relative color syntax — rgb/hsl/oklch(from <color> …) с channel keywords, calc() над каналами, channel reorder, alpha-канал над непрозрачным фоном",
       "html": "91-relative-color.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 11.3447,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 287
+      }
     },
     {
       "id": "92",
@@ -1620,9 +1815,14 @@
       "label": "CSS Color 4 §6.2: system color keywords — Canvas, ButtonFace, Highlight, GrayText, AccentColor и т.д. как фон и border-color",
       "html": "92-system-colors.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.2157,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "93",
@@ -1630,18 +1830,18 @@
       "label": "CSS Basic UI L4 §4.4: field-sizing: content — input/textarea подгоняют размер под текст содержимого вместо UA-дефолта",
       "html": "93-field-sizing.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.0802,
+      "status": "FAIL",
+      "diff_pct": 22.7233,
       "diff_region": {
         "top": 13,
-        "left": 13,
-        "bottom": 286,
-        "right": 245
+        "left": 0,
+        "bottom": 719,
+        "right": 291
       },
       "debtor": {
         "bug": "BUG-225",
         "baseline": 3.54,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1650,9 +1850,14 @@
       "label": "CSS Sizing L4 §4.5: interpolate-size: allow-keywords — наследуемый opt-in для интерполяции keyword-размеров; в покое (статичный снимок) layout не меняется",
       "html": "94-interpolate-size.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.0668,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "95",
@@ -1660,18 +1865,18 @@
       "label": "CSS Fonts L5 §4: font-size-adjust — при одинаковом font-size used-размер масштабируется как adjust/aspect шрифта; видимый x-height строк уменьшается сверху вниз",
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.9473,
+      "status": "FAIL",
+      "diff_pct": 22.9415,
       "diff_region": {
-        "top": 50,
-        "left": 40,
-        "bottom": 521,
-        "right": 485
+        "top": 52,
+        "left": 0,
+        "bottom": 719,
+        "right": 484
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 3.0,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1680,9 +1885,14 @@
       "label": "CSS Color 4 §10: color() предопределённые пространства — srgb-linear, a98-rgb, prophoto-rgb, xyz, xyz-d65, xyz-d50; in-gamut цвета совпадают с эталоном после маппинга в sRGB",
       "html": "96-color-function-spaces.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.0767,
+      "diff_region": {
+        "top": 122,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "97",
@@ -1690,18 +1900,18 @@
       "label": "CSS Lists L3 §4: counter-set — порядок reset→increment→set (set перекрывает increment), создание счётчика на never-reset; ::before content: counter(c) показывает 5/6/0/1/42",
       "html": "97-counter-set.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.7559,
+      "status": "FAIL",
+      "diff_pct": 21.3869,
       "diff_region": {
-        "top": 54,
-        "left": 46,
-        "bottom": 632,
-        "right": 340
+        "top": 55,
+        "left": 0,
+        "bottom": 719,
+        "right": 315
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 2.78,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1710,9 +1920,14 @@
       "label": "CSS Cascade L5 §6.4.6: revert-layer — откат свойства к значению нижнего каскадного слоя; верхний ряд theme(red), нижний ряд revert-layer→base(green)",
       "html": "98-revert-layer.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 20.7247,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "99",
@@ -1720,12 +1935,12 @@
       "label": "CSS Motion Path L1 §2.2: offset-path: ray(<angle>) — восемь боксов по лучам 0/45/.../315deg формируют кольцо вокруг центра; turn-единица; offset-distance 0 держит центр",
       "html": "99-offset-path-ray.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0217,
+      "status": "FAIL",
+      "diff_pct": 5.279,
       "diff_region": {
-        "top": 154,
-        "left": 667,
-        "bottom": 194,
+        "top": 122,
+        "left": 0,
+        "bottom": 719,
         "right": 707
       }
     },
@@ -1735,18 +1950,18 @@
       "label": "CSS UI L4 §6.1: accent-color — тинт чекбокса/радио/range/progress; пять рядов с разными accent (red/green/orange/purple/UA-blue); <meter> исключён (семантические цвета)",
       "html": "110-accent-color.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.5112,
+      "status": "FAIL",
+      "diff_pct": 22.5308,
       "diff_region": {
         "top": 25,
-        "left": 25,
-        "bottom": 192,
+        "left": 0,
+        "bottom": 719,
         "right": 521
       },
       "debtor": {
         "bug": "BUG-214",
         "baseline": 1.42,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1755,13 +1970,13 @@
       "label": "CSS Basic UI L4 §4.2: appearance: none — снимает нативную отрисовку формы (тик чекбокса/радио, трек/ползунок range, бар progress); контролы внутри светлых обёрток остаются пустыми, лишний синий индикатор = регрессия",
       "html": "111-appearance-none.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2333,
+      "status": "FAIL",
+      "diff_pct": 21.2313,
       "diff_region": {
-        "top": 179,
-        "left": 35,
-        "bottom": 268,
-        "right": 122
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
       }
     },
     {
@@ -1770,13 +1985,13 @@
       "label": "CSS Shapes L1 §3/§4: clip-path fill-rule — path()/polygon() с evenodd оставляют полую середину у self-intersecting пентаграммы и пересечения квадратов; nonzero (default) заливает форму целиком",
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0003,
+      "status": "FAIL",
+      "diff_pct": 16.0314,
       "diff_region": {
-        "top": 137,
-        "left": 280,
-        "bottom": 137,
-        "right": 281
+        "top": 90,
+        "left": 0,
+        "bottom": 719,
+        "right": 321
       }
     },
     {
@@ -1785,18 +2000,18 @@
       "label": "CSS Shapes L1 §4: shape-outside: path() — inline-block квадраты обтекают треугольный float по флэттенному SVG-контуру; колонка path() должна совпасть с эталонной колонкой polygon() (одинаковая лесенка)",
       "html": "113-shape-outside-path.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.3563,
+      "status": "FAIL",
+      "diff_pct": 16.784,
       "diff_region": {
-        "top": 41,
-        "left": 41,
-        "bottom": 240,
+        "top": 67,
+        "left": 0,
+        "bottom": 719,
         "right": 958
       },
       "debtor": {
         "bug": "BUG-215",
         "baseline": 1.3,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1805,9 +2020,14 @@
       "label": "CSS Box Sizing L4 §5: contain-intrinsic-size — боксы с contain: size берут размер из contain-intrinsic-size, игнорируя огромного ребёнка; inline-block боксы 200×120/120×200/200×100 (em), блок высотой 90px; зелёный ребёнок не должен вылезать",
       "html": "114-contain-intrinsic-size.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.2155,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "115",
@@ -1815,9 +2035,14 @@
       "label": "CSS Tables L2 §17.6.1.1: empty-cells — в separate-модели hide прячет border+фон у пустых <td></td>; верхняя таблица (hide) показывает шахматку только из заполненных ячеек, нижняя (show) рисует рамки+фон всех ячеек",
       "html": "115-empty-cells.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 20.9897,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "116",
@@ -1825,12 +2050,12 @@
       "label": "CSS Images L4 §3.1: gradient color-interpolation-method (`in <space>`) — одинаковый red→blue линейный градиент в srgb/srgb-linear/oklab/lab/hsl; Lumen дробит список стопов через color-mix-математику, рендерер лерпит плотные стопы в sRGB; середины полос заметно различаются по пространству",
       "html": "116-gradient-interpolation.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.3768,
+      "status": "FAIL",
+      "diff_pct": 21.5005,
       "diff_region": {
-        "top": 147,
-        "left": 27,
-        "bottom": 560,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 1006
       }
     },
@@ -1840,18 +2065,18 @@
       "label": "CSS Generated Content L3 §3.2: quotes + content open-quote/close-quote — auto curly quotes, вложенные <q> (primary “”→secondary ‘’), кастомные пары « » / ‹ ›, quotes:none без знаков; глубина вложенности считается в document order через counters pre-pass",
       "html": "117-quotes.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.1852,
+      "status": "FAIL",
+      "diff_pct": 21.8854,
       "diff_region": {
-        "top": 56,
-        "left": 41,
-        "bottom": 277,
-        "right": 448
+        "top": 57,
+        "left": 0,
+        "bottom": 719,
+        "right": 385
       },
       "debtor": {
         "bug": "BUG-216",
         "baseline": 1.13,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1860,9 +2085,14 @@
       "label": "Media Queries L4 §5.3-5.6: hover/any-hover/pointer/any-pointer — на десктопе (мышь) matched-свотчи (hover:hover, any-hover:hover, pointer:fine, any-pointer:fine) зелёные, no-match (hover:none, pointer:coarse) остаются красными",
       "html": "118-media-hover-pointer.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 20.6883,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "119",
@@ -1870,9 +2100,14 @@
       "label": "CSS Fill & Stroke L3 §6 / SVG2 §13.7: paint-order — thick-stroked <path> с centred stroke; верхний ряд normal (полная ширина обводки поверх заливки), нижний paint-order:stroke (заливка поверх обводки → видимая обводка вдвое тоньше, заливка крупнее)",
       "html": "119-paint-order.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 18.5444,
+      "diff_region": {
+        "top": 122,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "120",
@@ -1880,18 +2115,18 @@
       "label": "Media Queries L5 §5.5-5.6: prefers-contrast/prefers-reduced-data — без пользовательских предпочтений matched-свотчи (no-preference) зелёные, no-match (more/less/custom/reduce) остаются красными",
       "html": "120-media-contrast-data.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.2639,
+      "status": "FAIL",
+      "diff_pct": 23.9522,
       "diff_region": {
         "top": 47,
-        "left": 271,
-        "bottom": 174,
+        "left": 0,
+        "bottom": 719,
         "right": 458
       },
       "debtor": {
         "bug": "BUG-217",
         "baseline": 3.26,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1900,9 +2135,14 @@
       "label": "CSS Conditional L4 §4.2: @supports selector() — распознаваемые селекторы (:has/:is/::slotted) применяют блок (зелёные a/b/c), неизвестные псевдо не применяют (красные d/e), not selector(<unknown>) истинно (зелёный f)",
       "html": "121-supports-selector.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 20.6883,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "122",
@@ -1911,11 +2151,11 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.5775,
+      "diff_pct": 10.0208,
       "diff_region": {
-        "top": 32,
-        "left": 41,
-        "bottom": 295,
+        "top": 33,
+        "left": 0,
+        "bottom": 719,
         "right": 627
       },
       "debtor": {
@@ -1930,9 +2170,14 @@
       "label": "CSS Conditional L4 §4 / Fonts L4 §4.3: @supports font-tech()/font-format() — реализованные технологии (variations/features-opentype) и декодируемые форматы (woff2/truetype) применяют блок (зелёные a/b/c/d); features-graphite и embedded-opentype не поддержаны ни Lumen, ни Edge (красные e/f); not font-tech(features-graphite) истинно (зелёный g)",
       "html": "123-supports-font-tech-format.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 20.6883,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "124",
@@ -1940,9 +2185,14 @@
       "label": "Media Queries L5 §5.7: prefers-reduced-transparency — без пользовательских предпочтений no-preference matched (зелёный a), reduce не матчит (красный b), невалидное low → Unsupported (красный c); Edge тоже по умолчанию no-preference",
       "html": "124-prefers-reduced-transparency.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.2155,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "125",
@@ -1950,9 +2200,14 @@
       "label": "Media Queries L5 §6.2: scripting — Lumen с QuickJS по умолчанию scripting:enabled matched (зелёный a), none/initial-only не матчат (красные b/c), невалидное sometimes → Unsupported (красный d); Edge тоже scripting enabled",
       "html": "125-media-scripting.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.2155,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "126",
@@ -1960,18 +2215,18 @@
       "label": "Media Queries L5 §5.8: inverted-colors — без инверсии цветов none matched (зелёный a), inverted не матчит (красный b), невалидное maybe → Unsupported (красный c); Edge тоже по умолчанию inverted-colors:none",
       "html": "126-media-inverted-colors.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.2639,
+      "status": "FAIL",
+      "diff_pct": 24.46,
       "diff_region": {
         "top": 47,
-        "left": 47,
-        "bottom": 174,
-        "right": 234
+        "left": 0,
+        "bottom": 719,
+        "right": 291
       },
       "debtor": {
         "bug": "BUG-126",
         "baseline": 3.26,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1980,9 +2235,14 @@
       "label": "ICC colour management (ICC-6): Display P3 PNG (iCCP matrix-shaper). Свотчи закодированы так, что корректный P3→sRGB matrix-shaper трансформ восстанавливает известные in-gamut sRGB-цвета; Edge и Lumen, оба управляя цветом, дают идентичные пиксели. CMYK-ICC (A2B0 LUT) не в графтесте — Edge не применяет встроенный CMYK-профиль (свой SWOP), поэтому покрыт детерминированным Rust-тестом icc_color_management.rs",
       "html": "128-icc-color-management.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.0357,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "129",
@@ -1990,12 +2250,12 @@
       "label": "BUG-243: динамический SVG, построенный на клиенте через document.createElementNS + setAttribute + appendChild/append (как docs/roadmap-*.html), без текста — только solid-фигуры (rect/circle/path/g+transform). Узлы должны попасть в нативную арену и отрисоваться как в Edge. ТРЕБУЕТ JS-пути захвата (gdigrab по умолчанию), не --ipc/CPU (детерминированный снимок не исполняет скрипты)",
       "html": "129-svg-dynamic-createelementns.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.051,
+      "status": "FAIL",
+      "diff_pct": 6.4193,
       "diff_region": {
         "top": 99,
-        "left": 52,
-        "bottom": 648,
+        "left": 0,
+        "bottom": 719,
         "right": 522
       }
     },
@@ -2006,11 +2266,11 @@
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 6.8826,
+      "diff_pct": 9.3416,
       "diff_region": {
         "top": 112,
-        "left": 149,
-        "bottom": 590,
+        "left": 0,
+        "bottom": 719,
         "right": 945
       }
     },
@@ -2020,12 +2280,12 @@
       "label": "BUG-243 (dynamic SVG, без текста): alpha-композитинг через fill-opacity/stroke-opacity — Venn из полупрозрачных дисков, рампа fill-opacity, стопка одноцветных квадратов, полупрозрачные обводки. Смешанные области должны совпасть с Edge (прямая sRGB-альфа). ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "131-svg-dynamic-opacity-layering.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1649,
+      "status": "FAIL",
+      "diff_pct": 9.975,
       "diff_region": {
-        "top": 437,
-        "left": 637,
-        "bottom": 664,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 964
       }
     },
@@ -2035,18 +2295,18 @@
       "label": "BUG-243 (dynamic SVG, без текста): инстансинг <defs>/<symbol>/<use> — мульти-фигурный символ, инстанцированный сеткой и кольцом с per-instance translate/scale/rotate. Путь shadow-clone, построенный из JS. ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "132-svg-dynamic-use-symbol.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.8258,
+      "status": "FAIL",
+      "diff_pct": 8.4188,
       "diff_region": {
-        "top": 69,
-        "left": 49,
-        "bottom": 700,
-        "right": 679
+        "top": 84,
+        "left": 0,
+        "bottom": 719,
+        "right": 677
       },
       "debtor": {
         "bug": "BUG-246",
         "baseline": 2.67,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2055,12 +2315,12 @@
       "label": "BUG-243 (dynamic SVG, без текста): fill-rule nonzero vs evenodd на самопересекающихся <path>/<polygon> (пентаграммы, концентрические квадраты-кольца) — evenodd-колонка показывает дырки, которые nonzero заливает. ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "133-svg-dynamic-fill-rule.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.042,
+      "status": "FAIL",
+      "diff_pct": 7.366,
       "diff_region": {
-        "top": 104,
-        "left": 140,
-        "bottom": 689,
+        "top": 56,
+        "left": 0,
+        "bottom": 719,
         "right": 1000
       }
     },
@@ -2070,18 +2330,18 @@
       "label": "BUG-243 (dynamic SVG, без текста): обводки — stroke-width/linecap/linejoin/dasharray/dashoffset на <rect>/<line>/<polyline>/<path> (концентрические рамки, пунктиры с разными капами, ступенчатые полилинии с разными join). ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "134-svg-dynamic-stroke-styles.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.3652,
+      "status": "FAIL",
+      "diff_pct": 11.1038,
       "diff_region": {
         "top": 20,
-        "left": 56,
-        "bottom": 684,
+        "left": 0,
+        "bottom": 719,
         "right": 974
       },
       "debtor": {
         "bug": "BUG-247",
         "baseline": 2.99,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2091,17 +2351,17 @@
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.1389,
+      "diff_pct": 14.79,
       "diff_region": {
         "top": 101,
-        "left": 501,
-        "bottom": 626,
-        "right": 998
+        "left": 0,
+        "bottom": 719,
+        "right": 874
       },
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.54,
-        "verdict": "REMOVE"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2111,17 +2371,17 @@
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.3455,
+      "diff_pct": 9.5034,
       "diff_region": {
-        "top": 51,
-        "left": 81,
-        "bottom": 709,
-        "right": 972
+        "top": 91,
+        "left": 0,
+        "bottom": 719,
+        "right": 955
       },
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.55,
-        "verdict": "REMOVE"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2130,18 +2390,18 @@
       "label": "BUG-243 (dynamic SVG, без текста): presentation-трансформы rotate(angle cx cy)/scale/matrix()/skewX — вертушки из лепестков-треугольников, кольцо повёрнутых прямоугольников, зеркальные matrix()-шевроны, skewX-сетка. Покрывает все ветки parse_svg_transform. ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "137-svg-dynamic-transform-pinwheel.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.0091,
+      "status": "FAIL",
+      "diff_pct": 9.6292,
       "diff_region": {
         "top": 69,
-        "left": 115,
-        "bottom": 716,
+        "left": 0,
+        "bottom": 719,
         "right": 910
       },
       "debtor": {
         "bug": "BUG-247",
         "baseline": 1.36,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2150,12 +2410,12 @@
       "label": "BUG-243 (dynamic SVG, без текста): kitchen-sink «дашборд» — вложенные <g>, <defs>/<use>, fill-opacity, <path>-«пирог» из полигональных секторов, bar-chart, area+line-chart (polyline stroke + полупрозрачная заливка), <circle>/<ellipse>. Самая сложная композиция, всё solid/детерминировано. ТРЕБУЕТ JS-захвата (gdigrab)",
       "html": "138-svg-dynamic-dashboard.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1066,
+      "status": "FAIL",
+      "diff_pct": 9.0411,
       "diff_region": {
         "top": 30,
-        "left": 21,
-        "bottom": 640,
+        "left": 0,
+        "bottom": 719,
         "right": 1006
       }
     },
@@ -2165,9 +2425,14 @@
       "label": "RP-4 общий float-поток (CSS 2.1 §9.5): (1) clear:left во вложенном НЕ-BFC обёртке клирит float родителя — синий блок падает под красный float на полную ширину; (2) overflow:hidden BFC-блок рядом с float сдвигается за его правый край, не лезет под; (3) float внутри не-BFC обёртки стыкуется справа от внешнего float (наследуется float-контекст). Только solid-боксы без перекрытий (текст игнорируется, rule 3)",
       "html": "139-float-flow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.1911,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "140",
@@ -2175,18 +2440,18 @@
       "label": "P4 ::placeholder pseudo-element (CSS Pseudo-Elements L4 §4.10): input::placeholder { color } без правила и с правилом(-ями), опционально opacity. Swatch-боксы показывают резолвленный цвет (как в 66-selection-pseudo — реальный текст не сравнивается, только solid-цвет)",
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.3822,
+      "status": "FAIL",
+      "diff_pct": 21.6172,
       "diff_region": {
-        "top": 41,
-        "left": 41,
-        "bottom": 462,
-        "right": 386
+        "top": 42,
+        "left": 0,
+        "bottom": 719,
+        "right": 358
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.27,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2195,18 +2460,18 @@
       "label": "P4 backface-visibility culling (CSS Transforms L2 §5.1): rotateY(180deg)/rotateX(180deg) + backface-visibility:hidden прячет бокс (виден фон контейнера); rotateY(0deg) или backface-visibility:visible (default) — бокс остаётся виден. Только solid-боксы, без перекрытий",
       "html": "141-backface-visibility.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.4563,
+      "status": "FAIL",
+      "diff_pct": 16.4609,
       "diff_region": {
         "top": 74,
-        "left": 141,
-        "bottom": 418,
+        "left": 0,
+        "bottom": 719,
         "right": 612
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.44,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2215,18 +2480,18 @@
       "label": "P4 @color-profile + color(--name c1 c2 c3) (CSS Color L5 §4): именованный custom-профиль, реальная ICC-трансформация отложена — каналы трактуются как sRGB напрямую, каждый swatch должен совпасть с эквивалентным sRGB-цветом",
       "html": "142-color-profile.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 10.1562,
+      "status": "FAIL",
+      "diff_pct": 31.3429,
       "diff_region": {
         "top": 5,
-        "left": 5,
-        "bottom": 168,
+        "left": 0,
+        "bottom": 719,
         "right": 960
       },
       "debtor": {
         "bug": "BUG-282",
         "baseline": 10.16,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2235,9 +2500,14 @@
       "label": "P4 @function (CSS Functions and Mixins L1): именованная custom-функция --name(<args>), вызванная из property value. Покрывает прямой вызов с явным аргументом, нулевой вызов (default-параметр), calc() внутри result:, вызов через custom-property цепочку (var()), локальную --x: ...; декларацию, feeding result: через clamp(). Только solid-боксы, геометрия/цвет полностью детерминированы вычислением функции",
       "html": "143-css-function.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 21.2062,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "144",
@@ -2245,9 +2515,14 @@
       "label": "P4 anchor()/anchor-size() (CSS Anchor Positioning L1 §3.1, §4): anchor(bottom)/anchor(left) hug the anchor edges; anchor(top)/anchor(75%) mixes a side keyword with a percentage; anchor(--missing top, 20px)/anchor(--missing left, 700px) exercises the fallback path when the referenced anchor does not exist; anchor-size(width)/anchor-size(height) sizes a box to match the anchor exactly. Только solid-боксы, геометрия полностью детерминирована resolve_anchor_func/resolve_anchor_size",
       "html": "144-anchor-function.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 5.1765,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      }
     },
     {
       "id": "145",
@@ -2255,18 +2530,18 @@
       "label": "P3-vertical CSS Writing Modes L4 §3-4: writing-mode vertical-rl/vertical-lr × text-orientation mixed/upright/sideways, Latin+CJK (日本語) text. Проверяет per-glyph поворот (CPU/wgpu рендереры) — mixed держит CJK upright и поворачивает латиницу на 90°, upright не поворачивает ничего, sideways поворачивает всё. Текстовый тест — ожидаем font-parity debtor (rule 3, Inter vs Edge sans metrics)",
       "html": "145-writing-mode.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.5315,
+      "status": "FAIL",
+      "diff_pct": 9.4672,
       "diff_region": {
-        "top": 27,
-        "left": 24,
-        "bottom": 339,
+        "top": 28,
+        "left": 0,
+        "bottom": 715,
         "right": 1023
       },
       "debtor": {
         "bug": "BUG-290",
         "baseline": 3.39,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2275,9 +2550,14 @@
       "label": "P1-imagebitmap createImageBitmap + ImageBitmapRenderingContext (HTML LS §4.12.5): ImageData → createImageBitmap → getContext('bitmaprenderer').transferFromImageBitmap presents an identical copy on a second <canvas>, plus a cropped (sx,sy,sw,sh) variant; createImageBitmap(OffscreenCanvas) snapshots without detaching the source (drawn again and re-presented afterwards). Только solid-боксы/векторная заливка, без текста",
       "html": "146-imagebitmap.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 6.393,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 291
+      }
     },
     {
       "id": "147",
@@ -2285,18 +2565,18 @@
       "label": "P4-mask-repeat-space CSS Backgrounds L3 §3.4 background-repeat: space — целые плитки прижаты к обоим краям, остаток распределён равными зазорами (space_axis_geometry, общий с mask-repeat: space); рядом repeat/round для сравнения. Только картинка-плитка, без текста",
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.3614,
+      "status": "FAIL",
+      "diff_pct": 11.9915,
       "diff_region": {
         "top": 41,
-        "left": 49,
-        "bottom": 440,
+        "left": 0,
+        "bottom": 719,
         "right": 982
       },
       "debtor": {
         "bug": "BUG-330",
         "baseline": 2.91,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2305,12 +2585,12 @@
       "label": "P4-isolation CSS Compositing & Blending L1 §2.1 isolation: isolate — изолированная группа: mix-blend-mode детей композитится с прозрачным фоном группы, а не с фоном страницы; слева блендинг с amber-фоном, справа изоляция (чистый цвет квадрата). Multiply/difference + вложенные квадраты. Только solid-боксы, без текста",
       "html": "148-isolation.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2062,
+      "status": "FAIL",
+      "diff_pct": 21.2998,
       "diff_region": {
-        "top": 196,
-        "left": 25,
-        "bottom": 346,
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
         "right": 446
       }
     },
@@ -2321,17 +2601,17 @@
       "html": "149-nested-overflow-scroll.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.3833,
+      "diff_pct": 18.9194,
       "diff_region": {
-        "top": 22,
-        "left": 21,
-        "bottom": 526,
-        "right": 648
+        "top": 23,
+        "left": 0,
+        "bottom": 719,
+        "right": 664
       },
       "debtor": {
         "bug": "BUG-288",
         "baseline": 4.0,
-        "verdict": "RATCHET"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2341,11 +2621,11 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.4881,
+      "diff_pct": 25.4069,
       "diff_region": {
-        "top": 46,
-        "left": 37,
-        "bottom": 686,
+        "top": 47,
+        "left": 0,
+        "bottom": 719,
         "right": 704
       }
     },
@@ -2356,12 +2636,12 @@
       "html": "151-unicode-bidi.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 6.258,
+      "diff_pct": 24.2668,
       "diff_region": {
         "top": 44,
-        "left": 29,
-        "bottom": 718,
-        "right": 996
+        "left": 0,
+        "bottom": 719,
+        "right": 994
       }
     },
     {
@@ -2370,13 +2650,13 @@
       "label": "P4-place-content CSS Box Alignment L3 §5 + CSS Grid L1 §12.3: align-content / justify-content / place-content в grid-контейнере. 14 панелей с треками заведомо меньше панели: justify-content start/center/end/space-between/space-around/space-evenly по inline-оси, align-content center/end/space-between по блочной, place-content в двух формах (два значения «end center» и одно «space-evenly»), stretch auto-строк при дефолтном align-content: normal, item со span 1/4 поверх раздвинутых space-between зазоров и контроль переполнения (треки выше панели центрируются unsafely, §5.3 — уезжают за start-край, как в Edge). Только solid-боксы, без текста",
       "html": "152-grid-place-content.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.1302,
+      "status": "FAIL",
+      "diff_pct": 21.0067,
       "diff_region": {
-        "top": 183,
-        "left": 287,
-        "bottom": 513,
-        "right": 1009
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 724
       }
     },
     {
@@ -2385,13 +2665,13 @@
       "label": "P3-zoom CSS Viewport L1 §5 zoom: множитель вкладывается в вычисленные длины (не в матрицу отрисовки), поэтому бокс реально занимает меньше места. 6 панелей: эталон без zoom; тот же бокс под zoom: 0.5 и zoom: 80% (две формы записи одного множителя); перемножение по дереву (0.8 × 0.5 = 0.4 от эталона); три обязанные совпасть полосы (zoom отсутствует / normal / невалидное значение — последнее отбрасывается по CSS Syntax, а не читается как какой-то множитель); и форма, ради которой zoom и объявляют, — строка фиксированной ширины 440px с min-width, gap и margin, влезающая в 234px-панель только после масштабирования. Все длины абсолютные (px): относительные единицы резолвятся против уже отмасштабированных базисов и покрыты юнит-тестами. Только solid-боксы, без текста",
       "html": "153-zoom.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4331,
+      "status": "FAIL",
+      "diff_pct": 21.3973,
       "diff_region": {
-        "top": 11,
-        "left": 262,
-        "bottom": 455,
-        "right": 849
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 481
       }
     },
     {
@@ -2400,13 +2680,13 @@
       "label": "LIB-4 (ADR-027): внешний SVG через resvg вместо своего SVG-движка — <img src=local.svg> с linearGradient+clipPath и background-image: url(local.svg) с radialGradient+pattern. Свой SVG-to-DisplayList путь (lumen-layout/lumen-paint) рисует ноль linearGradient/radialGradient/clipPath/mask/filter/pattern/marker; эталон подтверждает не плоские/пустые боксы, а настоящие градиенты и повторяющийся паттерн",
       "html": "154-svg-external-image-gradients.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.262,
+      "status": "FAIL",
+      "diff_pct": 21.4182,
       "diff_region": {
         "top": 32,
-        "left": 21,
-        "bottom": 166,
-        "right": 412
+        "left": 0,
+        "bottom": 719,
+        "right": 385
       }
     },
     {
@@ -2416,12 +2696,12 @@
       "html": "155-svg-inline-gradients.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.0694,
+      "diff_pct": 22.6443,
       "diff_region": {
         "top": 26,
-        "left": 20,
-        "bottom": 329,
-        "right": 681
+        "left": 0,
+        "bottom": 719,
+        "right": 654
       }
     },
     {
@@ -2430,18 +2710,18 @@
       "label": "LIB-9 (остаток LIB-5): SVG <mask> элемент через PushMaskLayer/PopMaskLayer (CSS Masking L1 §5) — инфраструктура уже была реализована во всех трёх бэкендах, но её не строил ни один emit-путь. 6 панелей: rect замаскирован в левую половину, circle замаскирован меньшим circle, составная маска из трёх rect (\"H\"), luminance (по умолчанию) — серый #808080 даёт полупрозрачность, mask-type=\"alpha\" — тот же серый даёт полную видимость (та же заливка маски, два разных результата — прямое сравнение режимов), путь замаскирован через CSS `mask:` (не только presentation-атрибут). Реализация: mask=\"url(#id)\"/CSS mask резолвится в BoxKind::SvgShape::svg_mask (box_tree/svg.rs::resolve_svg_mask, тот же паттерн, что LIB-5 для градиентов — доступ к Document есть только на этапе построения box tree); paint эмитит изолирующий PushOpacity{1.0} + собственную заливку формы + PushMaskLayer + контент маски + PopMaskLayer + PopOpacity (svg_text_decoration.rs::emit_svg_shape_masked). cpu_raster.rs получил настоящую (не заглушку) реализацию PushMaskLayer/PopMaskLayer — LayerComposite::MaskLayer читает alpha/luminance напрямую из отрендеренного слоя маски, без MaskSpec-заглушки. Область: только SvgShape-элементы (rect/circle/ellipse/line/path/polygon/polyline) — mask на <g>-группах вне этого среза (падает на прежнее, до-LIB-9, поведение). femtovg-бэкенд остаётся scissor-заглушкой (ADR-017: фолбэк, wgpu — дефолт, где маска полностью работает)",
       "html": "156-svg-mask.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.5754,
+      "status": "FAIL",
+      "diff_pct": 23.0859,
       "diff_region": {
         "top": 46,
-        "left": 20,
-        "bottom": 341,
+        "left": 0,
+        "bottom": 719,
         "right": 650
       },
       "debtor": {
         "bug": "BUG-936",
         "baseline": 2.46,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -2450,13 +2730,18 @@
       "label": "P3-webgl2 срез 6 (docs/tasks/ph3-webgl2.md): getContext('webgl2') реального software-растеризатора, presented на страничный <canvas> (срез 5). 5 канвасов, все full-viewport quad (clip [-1,1]x[-1,1], без частичного покрытия — ни один пиксель не AA-граница, чтобы software- и Edge GPU-путь не разошлись на сглаживании): drawArrays ES 1.0 (зелёный поверх красного clear) · drawElements с Uint16Array ELEMENT_ARRAY_BUFFER (синий) · createVertexArray/bindVertexArray(null)/rebind (оранжевый — виден только если VAO реально восстанавливает attrib state) · GLSL ES 3.00 in/out + texture() сэмплит 1×1 текстуру (голубой, texture() возвращает усреднённый цвет текстуры независимо от UV) · uniformMatrix3fv нулевой матрицей вырождает треугольники в точку — видим только clear-цвет (не золотой цвет quad), что доказывает, что юниформ реально доходит до вершинного шейдера, а не тихо игнорируется. ТРЕБУЕТ JS-захвата (gdigrab) — как 57/129-138, cpu_raster не исполняет JS",
       "html": "157-webgl2.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.0,
-      "diff_region": null,
+      "status": "DEBTOR",
+      "diff_pct": 5.0898,
+      "diff_region": {
+        "top": 120,
+        "left": 0,
+        "bottom": 719,
+        "right": 285
+      },
       "debtor": {
         "bug": "BUG-1077",
         "baseline": 5.06,
-        "verdict": "REMOVE"
+        "verdict": "OK"
       }
     }
   ]
