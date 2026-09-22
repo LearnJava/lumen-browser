@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-23",
  "counts": {
-  "open": 276,
-  "fixed": 767,
+  "open": 274,
+  "fixed": 768,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1043,
+ "total_bugs": 1042,
  "phases": [
   {
    "id": "P0",
@@ -8745,13 +8745,6 @@
    "date": "2026-09-05",
    "debtor": false
   },
-  "BUG-1008": {
-   "status": "open",
-   "title": "`cpu_snapshots_match_references` красный на `main` (`e11f78862`, без локальных изменений): 7 страниц расходятся — `55-text-rendering` (28713 байт), `32-list-mar…",
-   "component": "test/snapshot (`crates/driver/tests/cases/snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1011": {
    "status": "open",
    "title": "Перегенерация baseline прошла штатно (134/150 harness OK), но четыре последовательных `--check` на том же бинаре дали четыре разных результата (0, 1, 1, 4 регре…",
@@ -8819,13 +8812,6 @@
    "status": "open",
    "title": "`enctype=\"text/plain\"` формы кодируется как `application/x-www-form-urlencoded`: `enctype_of_form` значение распознаёт и возвращает (`forms.rs:989`), но кодиров…",
    "component": "shell (`crates/shell/src/lumen/form_submit.rs`, кодировка тела формы; `crates/shell/src/forms.rs` — нет кодировщика)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1043": {
-   "status": "open",
-   "title": "`python graphic_tests/dump_golden.py` красный на чистом `main`: 4 несовпадения из 12 (`samples/page.html` и `graphic_tests/65-flex-align-content.html`, оба дамп…",
-   "component": "graphic_tests эталоны (`graphic_tests/dump-golden/`) либо метрики строки (`crates/engine/font`/`layout`) — не локализовано",
    "date": null,
    "debtor": false
   },
@@ -14464,6 +14450,13 @@
    "date": "2026-09-22",
    "debtor": false
   },
+  "BUG-1008": {
+   "status": "fixed",
+   "title": "`cpu_snapshots_match_references` красный на `main` (`e11f78862`, без локальных изменений): 7 страниц расходятся — `55-text-rendering` (28713 байт), `32-list-mar…",
+   "component": "test/snapshot (`crates/driver/tests/cases/snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)",
+   "date": "2026-09-23",
+   "debtor": true
+  },
   "BUG-727": {
    "status": "fixed",
    "title": "`RTCPeerConnection`-стаб никогда не диспатчит `ontrack`/`ondatachannel`/`onconnectionstatechange`/`oniceconnectionstatechange` — `_dispatch()` вызывается только…",
@@ -14694,9 +14687,6 @@
   ],
   "graphic_tests tooling (`graphic_tests/run.py::_load_previous`)": [
    "BUG-1039"
-  ],
-  "graphic_tests эталоны (`graphic_tests/dump-golden/`) либо метрики строки (`crates/engine/font`/`layout`) — не локализовано": [
-   "BUG-1043"
   ],
   "html-parser": [
    "BUG-021"
