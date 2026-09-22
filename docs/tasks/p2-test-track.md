@@ -2276,6 +2276,42 @@ baseline) — 0 регрессий, но 2 НОВЫХ unexpected pass на др�
 `websockets`, `referrer-policy`/`4K*`, `fetch`, либо новая категория `mixed-content` (533) /
 `speculation-rules` (409).
 
+### TEST-3: срез 60 (2026-09-23) — `fedcm`: baseline перегенерирован после BUG-1069, FedCM API не реализовано, новых багов нет
+
+Первый пункт списка «Дальше» среза 59. Бинарь `dev-release` из среза 59 (без изменений в
+`crates/` между срезами) переиспользован без пересборки.
+
+**Baseline.** `--update-expected --all --root fedcm --recursive --processes 7
+--binary target/dev-release/lumen.exe`: **5/81 harness OK** (было 0/81 в срезе 41, все —
+`ERROR` по BUG-1069), 1/12 подтестов, 80 `.ini` перезаписано, 1 удалено (стало чисто),
+0 без изменений — весь baseline среза 41 состоял из одних `ERROR`, поэтому регенерация
+задела все 81 файла, как и предсказывалось в срезе 41.
+
+**Три `--check` подряд сошлись сразу — 0 регрессий, 0 unexpected pass, 0 других
+отклонений на каждом из трёх прогонов**, ни одного расхождения между ними (в отличие от
+диффузного флапа `connection-allowlist`/`signed-exchange` в срезах 58/59). Baseline
+принят как есть. Категорий по-прежнему 261 (перегенерация уже учтённой категории).
+
+**Что нашлось.** Все 81 `ERROR` среза 41 сдвинулись: 76 файлов стали чистым `TIMEOUT`
+(TLS-барьер снят, но сам вызов `navigator.credentials.get({identity})` зависает —
+`testdriver` явно логирует `set_fedcm_delay_enabled`/`reset_fedcm_cooldown not
+implemented by Lumen's minimal WPT executor` на каждом файле), 4 файла дошли до
+`harness: OK` с частично упавшими сабтестами (`fedcm-opaque-rp-origin.https.html`,
+`fedcm-register/fedcm-no-registered-idps.https.html`,
+`fedcm-accounts-push/{fedcm-identity-discovery.tentative.sub,store-account-list.tentative}.https.html`
+— все явно проверяют реакцию на отсутствие/некорректность IdP, поэтому доходят до
+`assert_*` без реального FedCM-диалога), 1 файл стал полностью чистым (`.ini` удалён).
+Причина по-прежнему одна и та же, что отмечена ещё в срезе 39 (line 2140-2141): FedCM API
+(`navigator.credentials.get({identity})`, `IdentityCredential`, диалог выбора аккаунта)
+в движке не реализован — это отдельный, давно известный пробел реализации, а не дефект
+теста или тулинга, отдельный BUG-NNN не заводится (по аналогии со срезом 57, где
+`ServiceWorkerRegistration` был уже заведённым BUG-657, а не новой находкой). Новых
+движковых багов не найдено.
+
+Дальше — по списку среза 56/57/58/59: `shared-storage`, `websockets`,
+`referrer-policy`/`4K*`, `fetch`, либо новая категория `mixed-content` (533) /
+`speculation-rules` (409).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
