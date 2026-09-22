@@ -1046,20 +1046,13 @@ pub(crate) fn parse_and_layout(
     // none pays nothing for it. Its geometry is what the document has *now*:
     // no images decoded yet, no web fonts registered — exactly what a real
     // browser answers for a forced layout at this point.
-    let parse_time_snapshot = if classic_scripts.is_empty()
-        && module_scripts.is_empty()
-        && ext_scripts.is_empty()
-    {
-        None
-    } else {
-        Some(collect_js_layout_snapshot(
-            &layout_page(
-                &doc, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print,
-            ),
-            &doc,
-            viewport,
-        ))
-    };
+    let has_parse_time_scripts =
+        !classic_scripts.is_empty() || !module_scripts.is_empty() || !ext_scripts.is_empty();
+    let parse_time_box = has_parse_time_scripts.then(|| {
+        layout_page(&doc, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print)
+    });
+    let parse_time_snapshot =
+        parse_time_box.as_ref().map(|b| collect_js_layout_snapshot(b, &doc, viewport));
     // CSSOM-7 (BUG-977): same gate as `parse_time_snapshot` — nothing to flush
     // against if there is no script that could read it. `Stylesheet::clone()`
     // is a real (hand-written, revision-minting) deep copy, not an `Arc`
@@ -1070,7 +1063,12 @@ pub(crate) fn parse_and_layout(
     // GAP-LAYOUTSHIFT срез 4 (BUG-809): the rects half of `parse_time_snapshot`,
     // kept around after the snapshot itself moves into `run_scripts_with_dom`
     // below — see [`LoadedPage::prescript_layout_rects`] for why.
-    let prescript_layout_rects = parse_time_snapshot.as_ref().map(|s| s.rects.clone());
+    // срез 5: shift-flavoured geometry (no own-node transform, no
+    // `visibility: hidden` nodes), not `parse_time_snapshot.rects` — that
+    // field stays gBCR geometry for scripts reading it during parse. See
+    // `collect_layout_shift_rects`'s doc-comment.
+    let prescript_layout_rects =
+        parse_time_box.as_ref().map(lumen_layout::collect_layout_shift_rects);
 
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     // BUG-480 срез 1: клоны провайдеров/хранилищ для sub-документов <iframe> —

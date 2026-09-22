@@ -221,3 +221,41 @@ pre-script снимок против финальной пост-скрипто�
 которые не должны считаться сдвигом по L1 §3, а наша функция считает их по
 голым border-box координатам) — отдельная задача, не эта. Статус
 GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 5, P6):** два approximation-gap'а
+из среза 4 закрыты. Новая `lumen_layout::collect_layout_shift_rects`
+(`crates/engine/layout/src/lib.rs`) — geometry-снимок специально для
+`compute_layout_shift_score`, отдельный от `collect_layout_rects`, который эту
+формулу до сих пор кормил тем же снимком, что идёт в `getBoundingClientRect`:
+
+* не применяет `forward_box_transform` (собственный CSS `transform`/
+  `translate` узла) — composited-трансформация двигает paint-вывод, а не
+  layout-бокс, который пересчитал бы релэйаут (`translate-change.html`
+  ожидает счёт `0` для правки `translate`);
+* пропускает узлы с `style.visibility != Visible` — скрытый элемент не
+  отрисован, а L1 §5.2.4 засчитывает только отрисованные (`visibility-hidden.html`
+  ожидает счёт `0` для правки `top` под `visibility: hidden`). Узел,
+  скрытый и в prev-, и в next-снимке, просто отсутствует в обеих картах, и
+  `compute_layout_shift_score`'s `prev.get(node)` промах трактует его как
+  «вошёл/вышел из дерева» — не сдвиг, тот же путь, что уже обрабатывает
+  `display: none`.
+
+Все четыре точки посева `prev_layout_shift_rects`/`prescript_layout_rects`
+(`relayout.rs::apply_relayout_result`, `page_load.rs::reload`/
+`apply_loaded_page`/hibernate-восстановление, `page_pipeline.rs::
+collect_js_layout_snapshot`'s pre-script снимок) переведены на новую функцию;
+`rects`, что уходит в JS (`update_layout_rects`), не тронут — там by design
+нужна gBCR-геометрия с трансформацией.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, расширен вариантами
+`cls-translate`/`cls-visibility-hidden`, dev-release, Windows, 2026-09-22):
+обе новые пробы печатают `no-entry=true` вместо `cls-entry value=…` — сдвиг
+больше не засчитывается. `cls-shift`/`cls-shift-buffered`/`cls-attribution`
+(срезы 1-4) не регрессировали — тот же вывод, что и раньше.
+
+**Не в этом срезе:** формула остаётся приближением (сумма клипованных
+площадей вместо объединения непересекающихся регионов, см. doc-комментарий
+`compute_layout_shift_score`) — остаток `translate`/`visibility`-класса
+исчерпан, но не весь класс approximation-gap'ов спеки (например `opacity`,
+`content-visibility`, scroll-driven сдвиги — не измерены в этом срезе).
+Статус GAP-LAYOUTSHIFT остаётся `planned`.

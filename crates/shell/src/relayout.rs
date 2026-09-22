@@ -999,19 +999,24 @@ impl Lumen {
                     .and_then(|ls| ls.document.lock().ok())
             {
                 let rects = collect_layout_rects(lb_ref, &doc_guard);
-                // GAP-LAYOUTSHIFT (BUG-809): score this relayout's rect
-                // changes against the previous pass's snapshot before `rects`
-                // moves into the JS-push closures below, then advance the
-                // baseline so the *next* relayout diffs against this one.
+                // GAP-LAYOUTSHIFT срез 5 (BUG-809): scored off
+                // `collect_layout_shift_rects`, not `rects` above —
+                // `rects` is gBCR geometry (own-node CSS transform applied,
+                // hidden nodes included), which double-counts transform-only
+                // moves and visibility:hidden moves as shifts (see that
+                // function's doc-comment). Computed before `rects` moves into
+                // the JS-push closures below, then the baseline advances so
+                // the *next* relayout diffs against this one.
+                let shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
                 let layout_shift = compute_layout_shift_score(
                     &self.prev_layout_shift_rects,
-                    &rects,
+                    &shift_rects,
                     viewport.width,
                     viewport.height,
                 );
                 let layout_shift_score = layout_shift.score;
                 let layout_shift_sources = layout_shift.sources;
-                self.prev_layout_shift_rects = rects.clone();
+                self.prev_layout_shift_rects = shift_rects;
                 // had_recent_input (Layout Instability L1 §3): a shift within
                 // 500ms of a real mouse/key press does not count against CLS.
                 let had_input = now_s - self.last_input_epoch_s < 0.5;
