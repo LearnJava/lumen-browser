@@ -1204,6 +1204,75 @@ fn custom_element_upgraded_via_inner_html_at_any_depth() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// CE-1 срез 1 (HTML LS §4.13.5): `new MyEl()` on a class extending
+// `HTMLElement`, called directly (no markup/upgrade involved) — the
+// constructor must run (`super()` succeeding, not throwing "Illegal
+// constructor"), the resulting object must be `instanceof MyEl` and
+// `instanceof HTMLElement`, and it must be a real, connectable native node.
+#[test]
+fn custom_element_direct_construction_runs_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class MyEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; this.hello = function() { return 42; }; }
+                }
+                customElements.define('my-direct-el', MyEl);
+                var el = new MyEl();
+                (ctorRan === 1) && (el instanceof MyEl) && (el instanceof HTMLElement) &&
+                    (typeof el.hello === 'function') && (el.hello() === 42) &&
+                    (el.tagName.toLowerCase() === 'my-direct-el')
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// A directly-constructed custom element is a live, connectable node — not a
+// detached placeholder — so appending it must make it findable by query and
+// its later `connectedCallback` must fire like any other insertion.
+#[test]
+fn custom_element_direct_construction_is_connectable() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                class MyEl extends HTMLElement {
+                    constructor() { super(); }
+                    connectedCallback() { log.push('connected'); }
+                }
+                customElements.define('my-connect-el', MyEl);
+                var el = new MyEl();
+                document.body.appendChild(el);
+                document.querySelector('my-connect-el') === el && log.length === 1
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// A class that extends `HTMLElement` but was never passed to
+// `customElements.define` has no definition to recover from `new.target` —
+// HTML LS §4.13.5 step 3 says this throws, same as calling `new
+// HTMLElement()` directly.
+#[test]
+fn custom_element_direct_construction_without_define_throws() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                class Undefined extends HTMLElement {}
+                var threw = false;
+                try { new Undefined(); } catch (e) { threw = (e instanceof TypeError); }
+                threw
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn html_element_direct_construction_throws() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var threw = false;
+                try { new HTMLElement(); } catch (e) { threw = (e instanceof TypeError); }
+                threw
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── HTMLTemplateElement.content + DocumentFragment ────────────────────────
 
 #[test]

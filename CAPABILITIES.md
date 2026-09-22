@@ -30,8 +30,8 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - ✅ Shadow DOM: `attach_shadow`, `FlatTree` + `build_flat_tree` with `<slot name>` assignment.
 - ✅ Hibernation snapshot: `Document::to_bytes()/from_bytes()` (bincode); JS-wrapper refcounting for GC (`acquire/release_js_ref`, `dead_node_ids()`).
 - ✅ Drag-and-drop draggability; contenteditable editing layer (`Range`, `Selection`, `CommandHistory` undo/redo, paste/drag transfer).
-- ⬜ Arena compaction / free-list; auto-set `:target` from URL fragment is shell-side.
-- ~232 tests.
+- ✅ Arena free-list / slot reuse: `NodeId` packs a `u8` generation over a 24-bit index; `reclaim_dead_nodes` frees the slot and bumps its generation, `alloc()` reuses it, `Document::resolve(raw)` rejects a stale generation instead of aliasing (GAP-P3GCJSDOM срез 9). A slot's generation permanently retires at 255 reuses instead of wrapping. Auto-set `:target` from URL fragment is shell-side.
+- ~236 tests.
 
 ### lumen-html-parser (`crates/engine/html-parser`)
 - ✅ Iterator FSM tokenizer (RAWTEXT/RCDATA/DOCTYPE/comments); all 23 HTML5 insertion modes.

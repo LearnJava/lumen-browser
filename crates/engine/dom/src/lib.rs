@@ -143,42 +143,70 @@ impl fmt::Display for NodeLimitExceeded {
 
 impl std::error::Error for NodeLimitExceeded {}
 
+/// Number of low bits of [`NodeId`]'s packed `u32` that address an arena
+/// slot. The remaining high bits carry the slot's generation (срез 9,
+/// GAP-P3GCJSDOM). [`MAX_DOM_NODES`] (50,000) fits comfortably under
+/// `1 << NODE_INDEX_BITS` (16.7M), leaving headroom to raise the cap later
+/// without another wire-format change.
+const NODE_INDEX_BITS: u32 = 24;
+const NODE_INDEX_MASK: u32 = (1 << NODE_INDEX_BITS) - 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(u32);
 
 impl NodeId {
+    /// The arena slot index — bottom [`NODE_INDEX_BITS`] bits, generation
+    /// masked off. Use for `Vec` indexing inside the arena; a slot's
+    /// generation only matters at a boundary that must reject a stale
+    /// reference (see [`Self::raw`]/[`Self::generation`]).
     pub fn index(self) -> usize {
-        self.0 as usize
+        (self.0 & NODE_INDEX_MASK) as usize
     }
 
+    /// Build a `NodeId` from a bare arena index with generation `0`. Safe for
+    /// any internal, trusted context (fixtures, `Vec`-index round-trips) —
+    /// wrong at a boundary where a stale/foreign value is plausible (use
+    /// [`Document::resolve`] there instead), since it can't reconstruct a
+    /// slot's *current* generation.
     pub fn from_index(i: usize) -> Self {
         NodeId(i as u32)
     }
 
-    /// The full packed value, for round-tripping `self` through a channel
-    /// that isn't `NodeId` itself — the JS bridge (`__nid__` on a wrapper
-    /// object, a native call argument) and shell `u32`-keyed maps that cross
-    /// a tick boundary or an external protocol (WebDriver/BiDi `node_id`).
-    ///
-    /// Identical to [`Self::index`] today (`NodeId` carries no generation
-    /// bits yet — GAP-P3GCJSDOM срез 6). The distinct name exists so a future
-    /// srez that packs a generation into these bits (see
-    /// `docs/tasks/ph3-gc-js-dom.md`) only has to change this function's body
-    /// and [`Self::from_raw`]'s, not every call site that already picked the
-    /// right one: use `.raw()`/[`Self::from_raw`]/[`Document::resolve`] at
-    /// any boundary the id crosses out of and back into `NodeId`-typed Rust
-    /// code, and keep `.index()`/[`Self::from_index`] for `Vec` indexing
-    /// inside the arena where the value never leaves `NodeId` form.
+    /// This id's generation — how many times its arena slot has been freed
+    /// and reused before this `NodeId` was minted. Compared against the
+    /// slot's live generation by [`Document::resolve`] to reject a stale
+    /// handle into a slot that was freed and reallocated to a different node.
+    pub fn generation(self) -> u8 {
+        (self.0 >> NODE_INDEX_BITS) as u8
+    }
+
+    /// Pack an arena `index` and a slot `generation` into one `NodeId`.
+    /// `index` is truncated to [`NODE_INDEX_BITS`] bits — callers must keep
+    /// it under [`MAX_DOM_NODES`], which already fits with headroom.
+    fn pack(index: u32, generation: u8) -> Self {
+        NodeId(((generation as u32) << NODE_INDEX_BITS) | (index & NODE_INDEX_MASK))
+    }
+
+    /// The full packed value (index + generation, срез 9), for round-tripping
+    /// `self` through a channel that isn't `NodeId` itself — the JS bridge
+    /// (`__nid__` on a wrapper object, a native call argument) and shell
+    /// `u32`-keyed maps that cross a tick boundary or an external protocol
+    /// (WebDriver/BiDi `node_id`). Use `.raw()`/[`Self::from_raw`]/
+    /// [`Document::resolve`] at any boundary the id crosses out of and back
+    /// into `NodeId`-typed Rust code, and keep `.index()`/[`Self::from_index`]
+    /// for `Vec` indexing inside the arena, where the value never leaves
+    /// `NodeId` form and generation is irrelevant.
     pub fn raw(self) -> u32 {
         self.0
     }
 
     /// Inverse of [`Self::raw`]. Does not validate that `v` still names a
-    /// live node in any particular `Document` — prefer [`Document::resolve`]
-    /// when `v` came from a boundary where a stale/foreign value is
-    /// plausible (script-controlled state); use this only where the caller
-    /// already knows the arena it targets and validates separately (e.g.
-    /// immediately follows with [`Document::try_get`]).
+    /// live node of the current generation in any particular `Document` —
+    /// prefer [`Document::resolve`] when `v` came from a boundary where a
+    /// stale/foreign value is plausible (script-controlled state); use this
+    /// only where the caller already knows the arena it targets and
+    /// validates separately (e.g. immediately follows with
+    /// [`Document::try_get`], which is bounds-only and ignores generation).
     pub fn from_raw(v: u32) -> Self {
         NodeId(v)
     }
@@ -359,6 +387,15 @@ pub struct Node {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     pub data: NodeData,
+    /// This slot's current generation (срез 9, GAP-P3GCJSDOM) — bumped each
+    /// time [`Document::reclaim_dead_nodes`] frees the slot, so a `NodeId`
+    /// minted before the free (stale, kept alive only by an untrusted
+    /// external reference like a bare JS `u32`) fails [`Document::resolve`]
+    /// instead of aliasing into whatever node reuses the slot. Same length
+    /// and lifetime as the owning `nodes` entry, so it always exists — no
+    /// separate parallel `Vec` to keep in sync.
+    #[serde(default)]
+    generation: u8,
 }
 
 impl Node {
@@ -452,6 +489,26 @@ pub enum DocumentMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     nodes: Vec<Node>,
+    /// Arena slot indices freed by [`Document::reclaim_dead_nodes`] and
+    /// available for [`Document::alloc`] to reuse (срез 9, GAP-P3GCJSDOM). A
+    /// slot whose generation has saturated at `u8::MAX` (255 reuses) is
+    /// never inserted here — it permanently retires to today's append-only
+    /// behavior instead of ever wrapping into an aliasing generation.
+    ///
+    /// A `HashSet`, not a `Vec`: membership must be checkable in
+    /// [`Document::dead_node_ids`]'s per-slot scan (an already-free slot must
+    /// never be reported "newly dead" again — repeated idle GC ticks would
+    /// otherwise re-bump and exhaust its generation budget without a single
+    /// real reuse in between).
+    ///
+    /// Not serialised: the JS heap (the only source of a stale raw `NodeId`
+    /// across a slot reuse) is rebuilt from scratch on tab hibernation
+    /// restore (see [`Document::js_refs`]), so no stale reference can
+    /// outlive a restore — losing the free list just means those slots stop
+    /// being recycled after a restore, a conservative degradation, not a
+    /// correctness issue.
+    #[serde(skip)]
+    free_slots: HashSet<u32>,
     root: NodeId,
     mode: DocumentMode,
     target_id: Option<String>,
@@ -676,9 +733,11 @@ impl Document {
             parent: None,
             children: Vec::new(),
             data: NodeData::Document,
+            generation: 0,
         };
         Self {
             nodes: vec![root_node],
+            free_slots: HashSet::new(),
             root: NodeId(0),
             mode: DocumentMode::default(),
             target_id: None,
@@ -1084,20 +1143,24 @@ impl Document {
     }
 
     /// Decode a raw `u32` from [`NodeId::raw`] back into a live [`NodeId`],
-    /// or `None` if it does not name a node in this arena.
+    /// or `None` if it does not name a live node of the current generation
+    /// in this arena.
     ///
     /// The JS↔DOM bridge counterpart of [`Self::try_get`] — call this at any
     /// boundary that hands Rust a bare `u32` (a V8 native call argument, a
     /// shell `u32`-keyed map fed from JS) instead of constructing a `NodeId`
-    /// directly via [`NodeId::from_raw`]/[`NodeId::from_index`]. Today this
-    /// is a plain bounds check (same as [`Self::contains_id`]); once a
-    /// generation is packed into `NodeId` (GAP-P3GCJSDOM срез 6 design),
-    /// this becomes the single place that also rejects a stale generation
-    /// for a freed-then-reused slot — callers that already route through
-    /// `resolve` pick that up for free.
+    /// directly via [`NodeId::from_raw`]/[`NodeId::from_index`]. Unlike
+    /// [`Self::contains_id`] (a plain bounds check, generation-blind — safe
+    /// for trusted internal `NodeId`s that were never round-tripped through
+    /// a non-`NodeId` channel), this also rejects a stale generation: a raw
+    /// value minted before its slot was freed and reused (срез 9,
+    /// GAP-P3GCJSDOM) no longer matches the slot's live generation, so it
+    /// comes back `None` instead of silently aliasing into whatever node now
+    /// occupies that index.
     pub fn resolve(&self, raw: u32) -> Option<NodeId> {
         let id = NodeId::from_raw(raw);
-        self.contains_id(id).then_some(id)
+        let node = self.nodes.get(id.index())?;
+        (node.generation == id.generation()).then_some(id)
     }
 
     /// Bounds-checked [`Self::get_mut`]; see [`Self::try_get`].
@@ -1123,6 +1186,18 @@ impl Document {
             self.foreign_id_panic(id);
         }
         &mut self.nodes[id.index()]
+    }
+
+    /// The live `NodeId` for arena slot `index` — generation included
+    /// (срез 9, GAP-P3GCJSDOM). Internal-enumeration helper: unlike
+    /// [`NodeId::from_index`] (always generation `0`), this matches whatever
+    /// a real `HashMap<NodeId, _>`/`HashSet<NodeId>` lookup keyed by this
+    /// slot would accept (`js_refs`, `shadow_roots`, `template_contents`) —
+    /// required for any `for i in 0..doc.len()` walk once a slot may have
+    /// been freed and reused at least once, since a generation-`0` id no
+    /// longer equals the real key for such a slot.
+    pub(crate) fn node_id_at(&self, index: usize) -> NodeId {
+        NodeId::pack(index as u32, self.nodes[index].generation)
     }
 
     /// XML Namespaces §6 default-namespace lookup starting at `start`
@@ -1248,14 +1323,32 @@ impl Document {
         None
     }
 
+    /// Allocate a node, reusing a freed arena slot (срез 9, GAP-P3GCJSDOM)
+    /// when [`Document::free_slots`] is non-empty, otherwise appending a
+    /// fresh one. A reused slot's generation was already bumped when it was
+    /// freed (see [`Document::reclaim_dead_nodes`]), so the returned
+    /// `NodeId` packs the *new* generation — a stale raw value minted before
+    /// the free no longer matches it and [`Document::resolve`] rejects it.
     fn alloc(&mut self, data: NodeData) -> NodeId {
-        let id = NodeId(self.nodes.len() as u32);
+        if let Some(&index) = self.free_slots.iter().next() {
+            self.free_slots.remove(&index);
+            let generation = self.nodes[index as usize].generation;
+            self.nodes[index as usize] = Node {
+                parent: None,
+                children: Vec::new(),
+                data,
+                generation,
+            };
+            return NodeId::pack(index, generation);
+        }
+        let index = self.nodes.len() as u32;
         self.nodes.push(Node {
             parent: None,
             children: Vec::new(),
             data,
+            generation: 0,
         });
-        id
+        NodeId::pack(index, 0)
     }
 
     /// Number of nodes currently allocated in this document's arena (including the root).
@@ -1619,10 +1712,13 @@ impl Document {
     /// collection GAP-P3GCJSDOM срез 4 closes.
     ///
     /// **Phase 2 contract:** this method identifies collectable nodes;
-    /// [`Document::reclaim_dead_nodes`] frees their heap payload in place. The
-    /// arena stays append-only — slots are not reused and `NodeId`s are never
-    /// reassigned, so full compaction (which needs a generational `NodeId` to
-    /// stay safe) is still deferred to a later срез.
+    /// [`Document::reclaim_dead_nodes`] frees their heap payload **and**
+    /// their arena slot (срез 9, GAP-P3GCJSDOM) — the slot's generation is
+    /// bumped and it becomes available to [`Document::alloc`], so `NodeId`s
+    /// are no longer permanently reserved once dead. A stale `NodeId` minted
+    /// before the free still can't alias into whatever reuses the slot: its
+    /// packed generation no longer matches, so [`Document::resolve`] rejects
+    /// it (see `NodeId`'s doc comment for the bit layout).
     pub fn dead_node_ids(&self) -> Vec<NodeId> {
         // Build a set of "anchored orphan" nodes: shadow roots and template
         // content fragments have parent==None but must not be collected.
@@ -1639,7 +1735,14 @@ impl Document {
 
         let mut dead = Vec::new();
         for (i, node) in self.nodes.iter().enumerate() {
-            let id = NodeId::from_index(i);
+            if self.free_slots.contains(&(i as u32)) {
+                // Already freed (срез 9) — reporting it "dead" again would
+                // make the next `reclaim_dead_nodes` re-bump its generation
+                // with no real reuse in between, burning the 255-reuse
+                // budget on idle GC ticks alone.
+                continue;
+            }
+            let id = self.node_id_at(i);
             if id == self.root || node.parent.is_some() || anchored.contains(&id) {
                 continue;
             }
@@ -1689,9 +1792,16 @@ impl Document {
     /// [`Document::dead_node_ids`] call see that subtree as an ordinary
     /// detached candidate.
     ///
-    /// Does **not** reuse or free the arena slot itself — `NodeId`s stay
-    /// stable for the `Document`'s lifetime (no generational id yet; see
-    /// `docs/tasks/ph3-gc-js-dom.md`).
+    /// Also frees the arena slot itself (срез 9, GAP-P3GCJSDOM): the slot's
+    /// generation is bumped and its index pushed onto [`Document::free_slots`]
+    /// so [`Document::alloc`] can hand it out again, unless the generation
+    /// has already saturated at `u8::MAX` (255 reuses) — that slot
+    /// permanently retires to append-only instead of ever wrapping into an
+    /// aliasing generation. A `NodeId` minted for the freed node before this
+    /// call stops resolving via [`Document::resolve`] (generation mismatch);
+    /// `.index()`-based access (trusted internal code, never round-tripped
+    /// through a non-`NodeId` channel) is unaffected by this distinction,
+    /// same as before — see [`NodeId::index`]'s doc comment.
     pub fn reclaim_dead_nodes(&mut self, ids: &[NodeId]) {
         for &id in ids {
             self.shadow_roots.remove(&id);
@@ -1713,6 +1823,10 @@ impl Document {
                     *system_id = String::new();
                 }
                 NodeData::Document | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => {}
+            }
+            if let Some(next_generation) = node.generation.checked_add(1) {
+                node.generation = next_generation;
+                self.free_slots.insert(id.index() as u32);
             }
         }
     }
@@ -2040,7 +2154,7 @@ pub fn build_flat_tree(doc: &Document) -> FlatTree {
     let mut overrides: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
 
     for i in 0..doc.len() {
-        let id = NodeId::from_index(i);
+        let id = doc.node_id_at(i);
         if !doc.is_shadow_host(id) {
             continue;
         }
@@ -2367,16 +2481,77 @@ mod tests {
     }
 
     #[test]
-    fn raw_matches_index_today_no_generation_packed_yet() {
-        // GAP-P3GCJSDOM срез 6/7: `raw()`/`from_raw()` are bit-identical to
-        // `index()`/`from_index()` until a generation is packed into
-        // `NodeId` — this pins the invariant so that future srez's diff is
-        // exactly "these two functions' bodies changed", not a silent
-        // behavior drift caught late.
+    fn raw_matches_index_for_a_never_reused_slot() {
+        // A slot that has never gone through `reclaim_dead_nodes` still has
+        // generation 0, so its packed `raw()` value and its bare `index()`
+        // agree — same as before срез 9 packed a generation into `NodeId`.
         let mut doc = Document::new();
         let a = doc.create_element(QualName::html("a"));
         assert_eq!(a.raw() as usize, a.index());
         assert_eq!(NodeId::from_raw(7), NodeId::from_index(7));
+    }
+
+    #[test]
+    fn raw_diverges_from_index_after_slot_reuse() {
+        // GAP-P3GCJSDOM срез 9: once a slot has been freed and reallocated,
+        // the new `NodeId`'s `.raw()` (generation 1) differs from the old
+        // one even though both name the same arena `.index()` — the whole
+        // point of packing a generation into the id.
+        let mut doc = Document::new();
+        let old = doc.create_element(QualName::html("div"));
+        doc.reclaim_dead_nodes(&[old]);
+        let new = doc.create_element(QualName::html("span"));
+
+        assert_eq!(old.index(), new.index(), "slot must be reused, not a fresh append");
+        assert_ne!(old.raw(), new.raw(), "generation must differ across reuse");
+        assert_eq!(new.generation(), old.generation() + 1);
+    }
+
+    #[test]
+    fn resolve_rejects_a_stale_raw_value_after_slot_reuse() {
+        // GAP-P3GCJSDOM срез 9: a raw `u32` minted before a slot was freed
+        // and reused (e.g. a bare JS `__nid__` a script held onto) must not
+        // alias into whatever node now occupies that slot.
+        let mut doc = Document::new();
+        let old = doc.create_element(QualName::html("div"));
+        let old_raw = old.raw();
+        doc.reclaim_dead_nodes(&[old]);
+        let new = doc.create_element(QualName::html("span"));
+
+        assert_eq!(doc.resolve(old_raw), None, "stale generation must not resolve");
+        assert_eq!(doc.resolve(new.raw()), Some(new));
+    }
+
+    #[test]
+    fn slot_permanently_retires_after_255_reuses_instead_of_wrapping() {
+        // GAP-P3GCJSDOM срез 9: generation is a `u8` — the 255th free must
+        // not wrap back to generation 0, which would let a very old stale
+        // raw value alias into a much later node sharing the same slot.
+        // Once saturated, the slot falls back to today's pre-срез-9
+        // append-only behavior (never recycled again) rather than wrapping.
+        let mut doc = Document::new();
+        let mut id = doc.create_element(QualName::html("div"));
+        for _ in 0..255 {
+            doc.reclaim_dead_nodes(&[id]);
+            id = doc.create_element(QualName::html("div"));
+        }
+        assert_eq!(id.generation(), 255);
+
+        doc.reclaim_dead_nodes(&[id]);
+        let next = doc.create_element(QualName::html("span"));
+        assert_ne!(next.index(), id.index(), "a saturated slot must never be handed out again");
+    }
+
+    #[test]
+    fn dead_slot_is_not_rescanned_as_dead_again_before_reuse() {
+        // A slot sitting in the free list (freed but not yet reallocated)
+        // must never be reported by `dead_node_ids` again — otherwise a
+        // repeating idle GC tick would re-bump its generation with no real
+        // reuse in between and exhaust the 255-reuse budget for free.
+        let mut doc = Document::new();
+        let a = doc.create_element(QualName::html("div"));
+        doc.reclaim_dead_nodes(&[a]);
+        assert!(!doc.dead_node_ids().contains(&a));
     }
 
     #[test]

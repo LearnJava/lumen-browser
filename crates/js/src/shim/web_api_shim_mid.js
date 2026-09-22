@@ -3526,7 +3526,37 @@ DocumentType.prototype.constructor = DocumentType;
 function ProcessingInstruction() { throw new TypeError('Illegal constructor'); }
 ProcessingInstruction.prototype = Object.create(CharacterData.prototype);
 ProcessingInstruction.prototype.constructor = ProcessingInstruction;
-function HTMLElement() { throw new TypeError('Illegal constructor'); }
+// HTML LS §4.13.5 (custom element constructing algorithm), CE-1 срез 1: a
+// `class MyEl extends HTMLElement {}` reaches this function through
+// `super()`, so `new.target` is the *most derived* constructor in that
+// chain — the only way to recover which tag/registry a bare `new MyEl()`
+// is building, since there is no node yet on this path. `_lumen_ce_*`
+// globals are defined lazily further down the shim (the custom-elements
+// registry section) and read only when this function actually runs, same
+// as `_lumen_html_tag_prototypes` above — hoisting makes the forward
+// reference safe. Two paths: an upgrade or a defined-tag `createElement`
+// pushed the *existing* native nid onto the definition's own construction
+// stack first (§4.13.5 steps 7-8 — wired up in a later срез of CE-1), which
+// this consumes; an empty stack means script called `new MyEl()` directly,
+// which must mint a brand-new native node itself (§4.13.5 step 6).
+function HTMLElement() {
+    var newTarget = new.target;
+    var def = newTarget ? _lumen_ce_definition_by_ctor.get(newTarget) : undefined;
+    if (!def) throw new TypeError('Illegal constructor');
+    var stack = _lumen_ce_construction_stacks.get(newTarget);
+    if (stack && stack.length > 0) {
+        var top = stack[stack.length - 1];
+        if (top === _LUMEN_CE_ALREADY_CONSTRUCTED) {
+            throw new DOMException(
+                'This custom element has already been constructed', 'InvalidStateError');
+        }
+        stack[stack.length - 1] = _LUMEN_CE_ALREADY_CONSTRUCTED;
+        return _lumen_ce_build_wrapper(top, newTarget);
+    }
+    var nid = _lumen_create_element(def.name);
+    if (nid < 0) throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
+    return _lumen_ce_build_wrapper(nid, newTarget);
+}
 HTMLElement.prototype = Object.create(Element.prototype);
 HTMLElement.prototype.constructor = HTMLElement;
 // DOM §4.5 DOMImplementation — not constructible from script; instances are
@@ -8596,13 +8626,24 @@ function _lumen_wrapper_set_slot(obj, key, value) {
         { value: value, enumerable: false, configurable: true, writable: true });
 }
 
-function _lumen_build_element(nid) {
-    var isText    = _lumen_is_text_node(nid);
-    var isComment = isText ? false : _lumen_is_comment_node(nid);
-    // GAP-XMLDOC срез 23 (BUG-786): a live parser-created PI node — only
-    // possible when `_lumen_is_text_node`/`_lumen_is_comment_node` both miss.
-    var isPI      = (isText || isComment) ? false : _lumen_is_processing_instruction_node(nid);
-    var iface     = isText ? Text.prototype
+// `ifaceOverride` (CE-1 срез 1): a custom element constructed via `new
+// MyEl()` must get `MyEl.prototype` on its chain, not the generic
+// `HTMLElement.prototype` that `_lumen_element_prototype_for` would derive
+// from the tag name alone — see `_lumen_ce_build_wrapper` below, the only
+// caller that passes this.
+function _lumen_build_element(nid, ifaceOverride) {
+    var isText    = false;
+    var isComment = false;
+    var isPI      = false;
+    if (!ifaceOverride) {
+        isText    = _lumen_is_text_node(nid);
+        isComment = isText ? false : _lumen_is_comment_node(nid);
+        // GAP-XMLDOC срез 23 (BUG-786): a live parser-created PI node — only
+        // possible when `_lumen_is_text_node`/`_lumen_is_comment_node` both miss.
+        isPI      = (isText || isComment) ? false : _lumen_is_processing_instruction_node(nid);
+    }
+    var iface     = ifaceOverride ? ifaceOverride
+                  : isText ? Text.prototype
                   : (isComment ? Comment.prototype
                   : (isPI ? ProcessingInstruction.prototype : _lumen_element_prototype_for(nid)));
     var kind      = (isText || isComment) ? 'cd' : (isPI ? 'pi' : null);
@@ -12367,6 +12408,33 @@ var _lumen_ce_registry = {};
 // Maps tag name → array of resolve callbacks for whenDefined().
 var _lumen_ce_pending  = {};
 
+// CE-1 срез 1 (HTML LS §4.13.5, custom element constructing algorithm):
+// `HTMLElement`'s own constructor (defined near the top of this file, far
+// above the registry it needs — see the comment there) recovers a `new
+// MyEl()` call's tag/registry purely from `new.target`, since there is no
+// node yet on that path. `define()` below is the one writer.
+var _lumen_ce_definition_by_ctor = new WeakMap(); // ctor -> {name, registry, pending}
+// Per-definition (i.e. per-ctor) construction stack: entries an
+// upgrade/defined-tag-creation algorithm pushes *before* calling `new
+// ctor()`, so `HTMLElement`'s constructor hands back that existing native
+// node instead of minting a fresh one. Wiring a push side into
+// createElement/upgrade is later срезы of CE-1; this session only needs the
+// pop side and the "stack empty" branch (bare `new MyEl()`) to work.
+var _lumen_ce_construction_stacks = new WeakMap(); // ctor -> array
+// Sentinel pushed over a consumed stack entry so a subclass that calls
+// `super()` twice (or an upgrade algorithm bug) throws InvalidStateError
+// instead of silently building a second wrapper over the same nid.
+var _LUMEN_CE_ALREADY_CONSTRUCTED = {};
+
+// Builds the wrapper for a custom element being constructed via `new
+// ctor()`, interning it exactly like `_lumen_make_element` does for every
+// other node — required for node identity (`===`) and for `document
+// .createElement('my-el') === el` once упгрейд (срез 2) starts reusing this.
+function _lumen_ce_build_wrapper(nid, ctor) {
+    var built = _lumen_build_element(nid, ctor.prototype);
+    return _lumen_wrapper_cache_set(nid, built);
+}
+
 // GAP-CEREG срез 2 (BUG-890): a node's "associated custom element registry" —
 // HTML LS §4.13.1 scoped registries. `document.createElement`/`createElementNS`/
 // `importNode` accept a `{customElements: registry}` option and `attachShadow`
@@ -12508,6 +12576,7 @@ CustomElementRegistry.prototype.define = function(name, ctor, options) {
         ? ctor.observedAttributes.slice()
         : [];
     this._registry[name] = { ctor: ctor, observedAttributes: observed };
+    _lumen_ce_definition_by_ctor.set(ctor, { name: name, registry: this._registry, pending: this._pending });
     _lumen_ce_upgrade_all(name, { registry: this._registry, pending: this._pending });
     var pending = this._pending[name];
     if (pending) {

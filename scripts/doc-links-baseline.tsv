@@ -6,6 +6,7 @@
 .claude/skills/lumen-perf-audit/SKILL.md	../../../bugs/BUG-998-OPEN.md	stale-status-suffix	bugs/BUG-998-FIXED.md
 BUGS-FIXED.md	bugs/BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 BUGS-FIXED.md	bugs/BUG-1057-OPEN.md	stale-status-suffix	bugs/BUG-1057-FIXED.md
+BUGS-FIXED.md	bugs/BUG-1060-OPEN.md	stale-status-suffix	bugs/BUG-1060-FIXED.md
 BUGS-FIXED.md	bugs/BUG-250-FIXED.md	missing	
 BUGS-FIXED.md	bugs/BUG-384-OPEN.md	stale-status-suffix	bugs/BUG-384-FIXED.md
 BUGS-FIXED.md	bugs/BUG-444-OPEN.md	stale-status-suffix	bugs/BUG-444-FIXED.md
@@ -300,6 +301,7 @@ bugs/BUG-977-FIXED.md	BUG-975-OPEN.md	stale-status-suffix	bugs/BUG-975-FIXED.md
 bugs/BUG-982-FIXED.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 bugs/BUG-983-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-984-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
+bugs/BUG-984-FIXED.md	BUG-1060-OPEN.md	stale-status-suffix	bugs/BUG-1060-FIXED.md
 bugs/BUG-986-FIXED.md	bugs/BUG-995-FIXED.md	wrong-relative-path	bugs/BUG-995-FIXED.md
 bugs/BUG-987-FIXED.md	ROADMAP.md	wrong-relative-path	ROADMAP.md
 bugs/BUG-987-FIXED.md	bugs/BUG-996-FIXED.md	wrong-relative-path	bugs/BUG-996-FIXED.md
@@ -315,7 +317,7 @@ docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/shape.rs	missing	
 docs/decisions/TEMPLATE.md	ADR-NNN-title.md	missing	
 docs/engine-gaps.md	../bugs/BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
-docs/plan/tech-stack.md	crates/core/src/ext.rs	missing	
+docs/plan/tech-stack.md	crates/core/src/ext.rs	missing
 docs/roadmap-trees.md	roadmap-svg-columns.html	missing	
 docs/roadmap-trees.md	roadmap-svg-gitgraph.html	missing	
 docs/tasks/README.md	ph3-color-management.md	missing	

@@ -2159,7 +2159,21 @@ mod tests {
     // `Document`'s arena API (not `lumen_html_parser::parse`), since parsing
     // a matching HTML string would additionally exercise the parser's own
     // recursion, outside this test's scope.
-    const DEEP_CHAIN_DEPTH: usize = 200_000;
+    //
+    // BUG-1060: depth was 200_000. `find_dom_rec`/`query_all_rec` themselves
+    // are already iterative (a heap `Vec` stack, not the call stack) and walk
+    // the chain in O(depth) either way — building the fixture is what
+    // exploded. Every `Document::append_child` call runs
+    // `debug_assert!(!self.is_self_or_ancestor(child, parent))`, which walks
+    // `parent`'s whole ancestor chain; appending one node at a time down a
+    // straight chain makes that O(depth) check run at every depth, so the
+    // fixture alone is O(depth²) — only in the debug/test profile, since
+    // `debug_assert!` compiles out of `dev-release`/`release`. At 200_000 that
+    // is tens of billions of ancestor-chain steps, multi-minute hangs under
+    // `cargo test`. 20_000 keeps a >20x margin over the deepest overflow the
+    // old recursive walk hit in BUG-987 (150-800 levels) while cutting the
+    // O(depth²) fixture cost ~100x — seconds instead of minutes.
+    const DEEP_CHAIN_DEPTH: usize = 20_000;
 
     #[test]
     fn find_first_dom_node_by_selector_deep_chain_does_not_overflow_the_stack() {
