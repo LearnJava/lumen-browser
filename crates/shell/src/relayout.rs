@@ -992,6 +992,20 @@ impl Lumen {
                     .and_then(|ls| ls.document.lock().ok())
             {
                 let rects = collect_layout_rects(lb_ref, &doc_guard);
+                // GAP-LAYOUTSHIFT (BUG-809): score this relayout's rect
+                // changes against the previous pass's snapshot before `rects`
+                // moves into the JS-push closures below, then advance the
+                // baseline so the *next* relayout diffs against this one.
+                let layout_shift_score = compute_layout_shift_score(
+                    &self.prev_layout_shift_rects,
+                    &rects,
+                    viewport.width,
+                    viewport.height,
+                );
+                self.prev_layout_shift_rects = rects.clone();
+                // had_recent_input (Layout Instability L1 §3): a shift within
+                // 500ms of a real mouse/key press does not count against CLS.
+                let had_input = now_s - self.last_input_epoch_s < 0.5;
                 let client_rects = collect_client_rects(lb_ref, &doc_guard);
                 let hit_test_tree = Arc::new(lb_ref.clone());
                 let styles = collect_computed_styles(lb_ref, &doc_guard, None);
@@ -1059,6 +1073,12 @@ impl Lumen {
                         timed_step!("update_viewport_size", js.update_viewport_size(vw, vh));
                         timed_step!("update_zoom_factor", js.update_zoom_factor(zoom_factor));
                         timed_step!("deliver_layout_observers", js.deliver_layout_observers());
+                        if layout_shift_score > 0.0 {
+                            timed_step!(
+                                "deliver_layout_shift",
+                                js.deliver_layout_shift(layout_shift_score, had_input)
+                            );
+                        }
                         timed_step!(
                             "deliver_media_query_changes",
                             js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion)
@@ -1084,6 +1104,9 @@ impl Lumen {
                         js.update_viewport_size(vw, vh);
                         js.update_zoom_factor(zoom_factor);
                         js.deliver_layout_observers();
+                        if layout_shift_score > 0.0 {
+                            js.deliver_layout_shift(layout_shift_score, had_input);
+                        }
                         // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                         // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
                         // read from winit at window creation / refreshed on ThemeChanged.
@@ -1728,6 +1751,71 @@ pub(crate) fn diff_cv_state(
         }
     }
     out
+}
+
+/// GAP-LAYOUTSHIFT (BUG-809): the visible-area of one rect clipped to the
+/// `[0, 0, vw, vh]` viewport — the building block "impact region" is made
+/// of (Layout Instability L1 §3.1).
+fn clip_area_to_viewport(rect: [f32; 4], vw: f32, vh: f32) -> f32 {
+    let x0 = rect[0].max(0.0);
+    let y0 = rect[1].max(0.0);
+    let x1 = (rect[0] + rect[2]).min(vw);
+    let y1 = (rect[1] + rect[3]).min(vh);
+    (x1 - x0).max(0.0) * (y1 - y0).max(0.0)
+}
+
+/// GAP-LAYOUTSHIFT (BUG-809): score one relayout's rect changes the way
+/// Layout Instability L1 §3.1 scores a frame — `impact_fraction ×
+/// distance_fraction` — from a `prev`/`next` snapshot pair of
+/// [`lumen_layout::collect_layout_rects`] output.
+///
+/// A node present in only one snapshot (entered/left the tree, e.g. through
+/// `display: none` or a DOM mutation) is not a shift and is skipped — the
+/// spec scores *moved* elements only. A node whose rect moved less than
+/// half a CSS px is treated as unchanged (sub-pixel layout jitter, not a
+/// visible shift).
+///
+/// **Approximation, not the spec's exact geometry**: real §3.1 unions the
+/// old+new rects of every unstable element into one non-overlapping impact
+/// region before dividing by the viewport area; this sums each element's own
+/// clipped area instead, so a page whose several elements shift within
+/// overlapping regions double-counts that overlap (`impact_fraction` is
+/// clamped to 1.0, so it caps rather than diverges). Good enough to turn
+/// "no delivery at all" into a real score for the common one-or-few-elements
+/// shift case (`simple-block-movement.html`, `cls-shift` probe variants);
+/// `entry.sources[]` attribution — the other piece §3.1 needs for an exact
+/// union — is deferred to a later slice (BUG-809's "следующий шаг").
+pub(crate) fn compute_layout_shift_score(
+    prev: &std::collections::HashMap<u32, [f32; 4]>,
+    next: &std::collections::HashMap<u32, [f32; 4]>,
+    viewport_w: f32,
+    viewport_h: f32,
+) -> f64 {
+    if viewport_w <= 0.0 || viewport_h <= 0.0 {
+        return 0.0;
+    }
+    let mut impact_area = 0.0f64;
+    let mut max_distance_frac = 0.0f64;
+    for (node, new_rect) in next {
+        let Some(old_rect) = prev.get(node) else { continue };
+        let dx = new_rect[0] - old_rect[0];
+        let dy = new_rect[1] - old_rect[1];
+        if dx.abs() <= 0.5 && dy.abs() <= 0.5 {
+            continue;
+        }
+        let old_area = clip_area_to_viewport(*old_rect, viewport_w, viewport_h);
+        let new_area = clip_area_to_viewport(*new_rect, viewport_w, viewport_h);
+        impact_area += old_area.max(new_area) as f64;
+        let dist_frac = dx.abs().max(dy.abs()) as f64 / viewport_w.max(viewport_h) as f64;
+        if dist_frac > max_distance_frac {
+            max_distance_frac = dist_frac;
+        }
+    }
+    if impact_area <= 0.0 {
+        return 0.0;
+    }
+    let impact_fraction = (impact_area / (viewport_w as f64 * viewport_h as f64)).min(1.0);
+    impact_fraction * max_distance_frac
 }
 
 /// BUG-935 S26: the pure half of [`Lumen::drain_pending_lazy_image_reqs`] —

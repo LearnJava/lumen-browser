@@ -412,6 +412,21 @@ pub(crate) struct Lumen {
     /// между layout-проходами. Дренируется раз в кадр в `RedrawRequested` и
     /// уходит в JS как `contentvisibilityautostatechange`. Кап 256 записей.
     pub(crate) cv_events: Vec<ContentVisibilityChange>,
+    /// GAP-LAYOUTSHIFT: `[x, y, w, h]` border-box rects (same shape as
+    /// [`lumen_layout::collect_layout_rects`]) from the previous
+    /// `apply_relayout_result` — the "before" side of the CLS diff computed
+    /// on every subsequent relayout. Same base-for-diff role as
+    /// `cv_auto_state` above; a node absent from either side is treated as
+    /// "not shifted" (entered/left the tree), not as a shift from/to zero.
+    /// Cleared on navigation (same sites `cv_auto_state` resets at).
+    pub(crate) prev_layout_shift_rects: std::collections::HashMap<u32, [f32; 4]>,
+    /// GAP-LAYOUTSHIFT: `self.epoch.elapsed().as_secs_f32()` at the last
+    /// committed mouse-press or key-press — Layout Instability L1 §3's
+    /// `had_recent_input` (a shift within 500ms of real user input does not
+    /// count against CLS, since it is the page reacting to the user rather
+    /// than an unexpected shift). `f32::NEG_INFINITY` until the first input,
+    /// so `had_input` reads `false` for the entire pre-interaction period.
+    pub(crate) last_input_epoch_s: f32,
     /// GAP-CSSANIM срез 1: queue of `transitionrun`/`transitionstart`/
     /// `transitionend`/`transitioncancel` events the page's `TransitionScheduler`
     /// produced (`sync()` in `apply_relayout_result`, `tick()` in

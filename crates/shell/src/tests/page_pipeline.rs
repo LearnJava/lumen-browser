@@ -3,6 +3,7 @@
 //! полноэкранный опрос и состояние `content-visibility`.
 
 use super::*;
+use crate::relayout::compute_layout_shift_score;
 
 // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────
 
@@ -682,6 +683,72 @@ fn diff_cv_state_is_silent_for_a_removed_node() {
     let prev = cv_state(&[(1, true), (2, false)]);
     assert!(diff_cv_state(&prev, &[(cv_nid(2), false)]).is_empty());
     assert!(diff_cv_state(&cv_state(&[]), &[]).is_empty());
+}
+
+// ── GAP-LAYOUTSHIFT (BUG-809): CLS score from a prev/next rect diff ─────
+
+fn shift_rects(pairs: &[(u32, [f32; 4])]) -> std::collections::HashMap<u32, [f32; 4]> {
+    pairs.iter().copied().collect()
+}
+
+#[test]
+fn compute_layout_shift_score_is_zero_with_no_prior_snapshot() {
+    // First relayout of a page has nothing to diff against.
+    let next = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
+    assert_eq!(
+        compute_layout_shift_score(&shift_rects(&[]), &next, 800.0, 600.0),
+        0.0
+    );
+}
+
+#[test]
+fn compute_layout_shift_score_is_zero_for_an_unmoved_element() {
+    let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
+    let next = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
+    assert_eq!(compute_layout_shift_score(&prev, &next, 800.0, 600.0), 0.0);
+}
+
+#[test]
+fn compute_layout_shift_score_ignores_subpixel_jitter() {
+    // <0.5px movement is layout rounding noise, not a visible shift.
+    let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
+    let next = shift_rects(&[(1, [0.2, 0.0, 300.0, 200.0])]);
+    assert_eq!(compute_layout_shift_score(&prev, &next, 800.0, 600.0), 0.0);
+}
+
+#[test]
+fn compute_layout_shift_score_is_positive_for_simple_block_movement() {
+    // `layout-instability/simple-block-movement.html`: a 300x200 block moves
+    // down by 160px inside an 800x600 viewport.
+    let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
+    let next = shift_rects(&[(1, [0.0, 160.0, 300.0, 200.0])]);
+    let score = compute_layout_shift_score(&prev, &next, 800.0, 600.0);
+    assert!(score > 0.0, "expected a positive score, got {score}");
+    // impact_fraction = max(old, new) clipped area / viewport area (this
+    // function's approximation of the spec's exact union, see its doc
+    // comment) = (300*200) / (800*600) ≈ 0.125
+    // distance_fraction = 160 / max(800,600) = 0.2
+    let expected = 0.125 * 0.2;
+    assert!(
+        (score - expected).abs() < 1e-6,
+        "score={score}, expected≈{expected}"
+    );
+}
+
+#[test]
+fn compute_layout_shift_score_ignores_a_node_leaving_or_entering_the_tree() {
+    // An element that is not in both snapshots did not "shift" — it appeared
+    // or disappeared, which is a different (currently unscored) thing.
+    let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
+    let next = shift_rects(&[(2, [0.0, 160.0, 300.0, 200.0])]);
+    assert_eq!(compute_layout_shift_score(&prev, &next, 800.0, 600.0), 0.0);
+}
+
+#[test]
+fn compute_layout_shift_score_is_zero_for_a_degenerate_viewport() {
+    let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
+    let next = shift_rects(&[(1, [0.0, 160.0, 300.0, 200.0])]);
+    assert_eq!(compute_layout_shift_score(&prev, &next, 0.0, 600.0), 0.0);
 }
 
 #[test]

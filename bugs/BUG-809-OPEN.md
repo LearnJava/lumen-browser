@@ -110,3 +110,37 @@ RUM-библиотека (web-vitals.js и производные) на Lumen с
 3. WPT: `run_report.py --all --root layout-instability --recursive` — 35
    TIMEOUT уходят; часть тестов станет FAIL (пустой `sources`,
    отсутствующий `LayoutShift`), и это ожидаемый промежуточный результат.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 1, P6):** доставка подключена.
+`compute_layout_shift_score` (`crates/shell/src/relayout.rs`) считает
+`impact_fraction × distance_fraction` из диффа двух снимков
+`collect_layout_rects` — приближение к Layout Instability L1 §3 (сумма
+клипованных площадей вместо точного объединения непересекающихся
+прямоугольников; см. doc-комментарий на функции для точной формулировки
+расхождения). Вызывается из `apply_relayout_result`, единственной общей
+точки всех продюсеров relayout-а (`relayout()`, `try_relayout_raf_incremental`,
+`poll_engine_commit`, streaming layout) — тот самый пробел, который
+изначально не давал триггеру сработать ни разу. База для диффа
+(`Lumen::prev_layout_shift_rects`) заводится не только там: без семени на
+«первом осевшем кадре» страницы (`reload()`, оба JS-push блока
+`apply_loaded_page`, hibernate-восстановление) первый relayout после
+загрузки сравнивал бы новые rects с пустым снимком и всегда получал 0 — то
+есть страница бы жила, но CLS оставался мёртв ещё раз, только тише. `had_input`
+(`hadRecentInput`) — новое поле `Lumen::last_input_epoch_s`, обновляется на
+каждом нажатии мыши/клавиши (`on_mouse_input`/`handle_key`), сравнивается с
+окном 500мс.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, dev-release, Windows,
+2026-09-22): `cls-shift` печатает `cls-entry value=0.0127…` вместо
+зависания. `cls-attribution` печатает `cls-source node=none` — честный
+быстрый FAIL вместо TIMEOUT: `sources` заполняется по-прежнему пустым
+массивом, атрибуция элемента остаётся следующим шагом (симптом раздел уже
+это предсказывал).
+
+**Не в этом срезе:** `cls-shift-buffered` всё ещё виснет. Тот пробник
+двигает блок **синхронно** в `<script>` страницы, до того как первое
+семя baseline'а успевает осесть — диффить не с чем, счёт честно 0 (то же
+самое, что реальный браузер не засчитывает сдвиг до первого paint, но
+WPT-хелпер `buffered-flag.html` всё равно ждёт запись). `window.LayoutShift`/
+`window.LayoutShiftAttribution` конструкторы по-прежнему не веб-видимы.
+Статус GAP-LAYOUTSHIFT остаётся `planned`.

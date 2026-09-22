@@ -294,6 +294,8 @@ pub(crate) fn run_window_mode(
         cv_relevant: std::collections::HashSet::new(),
         cv_auto_state: std::collections::HashMap::new(),
         cv_events: Vec::new(),
+        prev_layout_shift_rects: std::collections::HashMap::new(),
+        last_input_epoch_s: f32::NEG_INFINITY,
         transition_events: Vec::new(),
         animation_events: Vec::new(),
         dark_mode: false,

@@ -10,6 +10,12 @@ impl Lumen {
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_mouse_input(&mut self, event_loop: &ActiveEventLoop, state: ElementState, button: MouseButton) {
+        // GAP-LAYOUTSHIFT: mark real user input for the CLS `had_input` flag
+        // (Layout Instability L1 §3) — any button press counts, not just the
+        // one that ends up hit-testing something.
+        if state == ElementState::Pressed {
+            self.last_input_epoch_s = self.epoch.elapsed().as_secs_f32();
+        }
         if button == MouseButton::Right {
             let dpr = self
                 .renderer

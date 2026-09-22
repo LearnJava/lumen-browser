@@ -1015,6 +1015,7 @@ impl Lumen {
                 self.cv_events.clear();
                 self.cv_skipped.clear();
                 self.cv_auto_state.clear();
+                self.prev_layout_shift_rects.clear();
                 self.refresh_cv_state();
                 // GAP-CSSANIM срез 1: stale transitions from the previous
                 // document must not surface as events on the new one.
@@ -1043,6 +1044,12 @@ impl Lumen {
                         },
                     );
                     let rects = collect_layout_rects(lb_ref, &doc_guard);
+                    // GAP-LAYOUTSHIFT: seed the CLS diff baseline from this
+                    // reload's first rendered frame — `apply_relayout_result`
+                    // only diffs against a baseline it set itself, so without
+                    // this the first post-reload relayout would compare
+                    // against an empty snapshot and score zero every time.
+                    self.prev_layout_shift_rects = rects.clone();
                     let client_rects = collect_client_rects(lb_ref, &doc_guard);
                     let hit_test_tree = Arc::new(lb_ref.clone());
                     let styles = collect_computed_styles(lb_ref, &doc_guard, None);
@@ -1827,6 +1834,7 @@ impl Lumen {
         self.cv_events.clear();
         self.cv_skipped.clear();
         self.cv_auto_state.clear();
+        self.prev_layout_shift_rects.clear();
         self.refresh_cv_state();
         // GAP-CSSANIM срез 1: stale transitions from the previous document
         // must not surface as events on the new one.
@@ -1881,6 +1889,11 @@ impl Lumen {
                 },
             );
             let rects = collect_layout_rects(lb_ref, &doc_guard);
+            // GAP-LAYOUTSHIFT: seed the CLS diff baseline from this freshly
+            // loaded page's first settled frame — see the reload() site above
+            // for why an unseeded baseline silently scores every subsequent
+            // shift as zero.
+            self.prev_layout_shift_rects = rects.clone();
             let client_rects = collect_client_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None);
@@ -2244,6 +2257,13 @@ impl Lumen {
             } else {
                 None
             };
+            // GAP-LAYOUTSHIFT: refresh the CLS baseline with this (possibly
+            // newer) rect snapshot too — cheap, and keeps it from going
+            // stale relative to whatever the lazy-image registration below
+            // just changed. Done here, before `geom` moves into the closure.
+            if let Some((rects, ..)) = &geom {
+                self.prev_layout_shift_rects = rects.clone();
+            }
             route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 let pairs: Vec<(u32, &str)> =
                     owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();

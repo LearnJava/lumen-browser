@@ -236,6 +236,7 @@ impl Lumen {
         self.cv_events.clear();
         self.cv_skipped.clear();
         self.cv_auto_state.clear();
+        self.prev_layout_shift_rects.clear();
         self.refresh_cv_state();
         self.transition_events.clear();
         self.animation_events.clear();
@@ -257,6 +258,10 @@ impl Lumen {
             && let Ok(doc_guard) = document_arc.lock()
         {
             let rects = collect_layout_rects(lb_ref, &doc_guard);
+            // GAP-LAYOUTSHIFT: seed the CLS diff baseline from the restored
+            // page's first settled frame — same reasoning as the fresh-load
+            // seed in `page_load.rs::apply_loaded_page`.
+            self.prev_layout_shift_rects = rects.clone();
             let client_rects = collect_client_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None);
