@@ -1860,8 +1860,8 @@
     {
      "id": "P3-viewtransnav",
      "title": "View Transitions для cross-document навигации (MPA)",
-     "status": "active",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): SPA startViewTransition + ::view-transition-* готовы (layout); дошить — cross-document (MPA) навигационные переходы. Срезы 1-3 (at-rule `@view-transition` + opt-in helper + snapshot исходящего документа на границе навигации) влиты 2026-09-22, срезы 4-6 (reveal через существующий cross-fade/отмена/доки) в работе"
+     "status": "done",
+     "note": "DONE 2026-09-22: SPA startViewTransition + ::view-transition-* (layout) + cross-document (MPA) навигационные переходы. Срезы 1-5 (at-rule `@view-transition` + opt-in helper + snapshot исходящего документа на границе навигации + reveal нового документа через существующий cross-fade + сброс pending-snapshot на всех путях ошибки навигации) + срез 6 (доки CAPABILITIES.md/CSS-SPECS.md/subsystems/shell.md, юнит-тесты перепроверены 21/21, graphic/interaction-тест обоснованно отложен на внешний E2E-стенд — см. docs/tasks/ph3-view-transitions-mpa.md)"
     },
     {
      "id": "RP",
@@ -2087,7 +2087,7 @@
        "id": "css-specs-t4",
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
-       "note": "7✅ 16🟡 0⬜ 0🚫 из 23 модулей CSS-SPECS.md (Tier 4)"
+       "note": "7✅ 17🟡 0⬜ 0🚫 из 24 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
     },
