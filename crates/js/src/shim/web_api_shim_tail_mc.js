@@ -126,9 +126,14 @@ window.scrollBy = function(x, y) {
 // offsetLeft/offsetTop/pageLeft stay 0 and scale stays 1 — the object exists
 // so pages that merely reference `window.visualViewport` stop throwing
 // ReferenceError/TypeError, regardless of whether the underlying zoom is
-// modeled (BUG-481). `onresize`/`onscroll`/`onscrollend` are declared (not
-// wired to any dispatch) so `'onresize' in visualViewport` reads true, the
-// same convention as the `window.onscroll` declaration above (BUG-822/834).
+// modeled (BUG-481). GAP-VVPORT: `resize`/`scroll` now dispatch for real —
+// `_lumen_fire_window_resize_event`/`_lumen_fire_window_scroll_event`
+// (`web_api_shim_tail_b.js`) also fire on this object, since layout and
+// visual viewport are the same size/offset here. `onresize`/`onscroll` are
+// plain EventTarget listeners, invoked through the generic `this['on'+type]`
+// branch in `EventTarget.prototype.dispatchEvent` (`event_target_shim.js`) —
+// no separate wiring needed. `onscrollend` stays undelivered: the Visual
+// Viewport API declares no `scrollend`.
 function VisualViewport() {
     EventTarget.call(this);
     this.onresize = null;

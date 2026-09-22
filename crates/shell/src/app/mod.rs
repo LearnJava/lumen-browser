@@ -243,6 +243,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // The shell runtime.deliver_observer_records delivers Rust-level observers.
                 self.runtime
                     .deliver_observer_records(runtime::ObserverKind::Resize);
+                // GAP-VVPORT: top-level `window` (and `window.visualViewport`,
+                // shim-side) `resize` event — before this, only a sub-document's
+                // `window` got one on its `<iframe>` box changing (FRAME-1,
+                // `frames.rs::sync_frame_viewports`); the actual OS window never
+                // fired one at all. ADR-016 M2.2c-2d: fire-and-forget push via
+                // route_task_js, same convention as the scroll/scrollend pair in
+                // `window_event/redraw_requested.rs`.
+                #[cfg(feature = "v8")]
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.fire_window_resize();
+                });
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 // Окно перетащили на монитор с другим DPI. Surface не пересоздаём —

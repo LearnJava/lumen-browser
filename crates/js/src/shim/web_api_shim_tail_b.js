@@ -5345,6 +5345,12 @@ function _lumen_fire_window_scroll_event() {
     var ev = new Event('scroll', { bubbles: false, cancelable: false });
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
+    // GAP-VVPORT: visual and layout viewport are the same size in this
+    // single-window shell with no pinch-zoom, so both fire from the same
+    // page-scroll step (Visual Viewport spec §2.4 「scroll」steps).
+    if (typeof window !== 'undefined' && window.visualViewport) {
+        window.visualViewport.dispatchEvent(new Event('scroll', { bubbles: false, cancelable: false }));
+    }
 }
 // BUG-822: the `scrollend` half of the same pair (CSSOM-View §14 «scrollend»).
 // The shell calls these once a scrolling sequence has *completed*, which for an
@@ -5386,11 +5392,18 @@ function _lumen_fire_image_error(nid) {
 
 // FRAME-1: fired on a sub-document's window when its viewport (the host
 // `<iframe>`'s content box) actually changes size (`frames.rs::sync_frame_viewports`).
+// Also the top-level path since GAP-VVPORT (`app/mod.rs::WindowEvent::Resized`).
 // Per HTML LS §7.4.4 the resize event targets `window` only — unlike `scroll`,
 // it has no legacy `document`-target form.
 function _lumen_fire_window_resize_event() {
     var ev = new Event('resize', { bubbles: false, cancelable: false });
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
+    // GAP-VVPORT: layout and visual viewport track the same size here (no
+    // pinch-zoom model), so the Visual Viewport API's own `resize` (spec §2.4)
+    // fires from the same size change as the layout-viewport `window` one.
+    if (typeof window !== 'undefined' && window.visualViewport) {
+        window.visualViewport.dispatchEvent(new Event('resize', { bubbles: false, cancelable: false }));
+    }
 }
 
 // ── WindowOrWorkerGlobalScope: window IS the real global object (HTML LS) ──

@@ -421,6 +421,38 @@ fn fire_window_scroll_reaches_a_window_listener() {
     assert_eq!(v, lumen_core::JsValue::Number(1.0));
 }
 
+/// GAP-VVPORT: `window.visualViewport` (added by BUG-481) never actually
+/// dispatched `resize`/`scroll` — the object existed only so pages stopped
+/// throwing on the bare reference. Both shim delivery functions now also
+/// dispatch on it, since layout and visual viewport track the same
+/// size/offset in this engine (no pinch-zoom model).
+#[test]
+fn fire_window_scroll_also_reaches_visual_viewport() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "globalThis.__vvScrolls = 0;
+         window.visualViewport.addEventListener('scroll', function() { globalThis.__vvScrolls++; });",
+    )
+    .unwrap();
+    rt.eval("_lumen_fire_window_scroll_event()").unwrap();
+    let v = rt.eval("__vvScrolls").unwrap();
+    assert_eq!(v, lumen_core::JsValue::Number(1.0));
+}
+
+#[test]
+fn fire_window_resize_reaches_window_and_visual_viewport() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "globalThis.__resizes = 0; globalThis.__vvResizes = 0;
+         window.addEventListener('resize', function() { globalThis.__resizes++; });
+         window.visualViewport.addEventListener('resize', function() { globalThis.__vvResizes++; });",
+    )
+    .unwrap();
+    rt.eval("_lumen_fire_window_resize_event()").unwrap();
+    assert_eq!(rt.eval("__resizes").unwrap(), lumen_core::JsValue::Number(1.0));
+    assert_eq!(rt.eval("__vvResizes").unwrap(), lumen_core::JsValue::Number(1.0));
+}
+
 /// `scrollIntoView` on an element whose ancestors are all unscrollable
 /// must scroll the viewport — it used to walk off the ancestor loop and
 /// do nothing at all.
