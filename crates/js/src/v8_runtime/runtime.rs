@@ -1220,6 +1220,37 @@ impl V8JsRuntime {
         })
     }
 
+    /// Force a full, synchronous V8 GC cycle for test assertions
+    /// (GAP-P3GCJSDOM срез 2, docs/tasks/ph3-gc-js-dom.md). Requires
+    /// `--expose-gc`, which `named_access::apply_v8_test_gc_flag` sets only
+    /// under `cfg!(test)` — calling this against a non-test isolate is a
+    /// silent no-op in release V8 builds, so it stays `#[cfg(test)]` itself.
+    ///
+    /// A GC pass alone is not enough to observe a `FinalizationRegistry`
+    /// callback: freeing the target only marks the registry's cleanup work
+    /// dirty. Running the actual JS cleanup callback is a task V8 posts to
+    /// the embedder's `Platform` task queue — a plain `perform_microtask_
+    /// checkpoint()` does **not** drain it, because it isn't a microtask;
+    /// nothing in this runtime otherwise pumps that queue (no `setTimeout`/
+    /// promise loop runs here), so without an explicit `Platform::
+    /// pump_message_loop` the callback would queue forever and every
+    /// `js_ref_count` in a test would look permanently leaked. Looping
+    /// several GC + pump rounds (rather than the theoretical minimum of one
+    /// of each) absorbs V8's conservative stack scanner occasionally keeping
+    /// an object alive for one extra pass because of a stale pointer in an
+    /// unrelated native stack frame.
+    #[cfg(test)]
+    pub(crate) fn force_gc_for_testing(&self) {
+        let platform = v8::V8::get_current_platform();
+        for _ in 0..5 {
+            let _ = self.eval("gc();");
+            self.run(|inner| {
+                inner.isolate.perform_microtask_checkpoint();
+                while v8::Platform::pump_message_loop(&platform, &inner.isolate, false) {}
+            });
+        }
+    }
+
     /// Install the import map (HTML LS §8.1.6.2) used to resolve bare module
     /// specifiers such as `"react"`.
     ///

@@ -296,3 +296,6 @@ mod v8_gap_typedom_numeric;
 
 #[cfg(feature = "v8-backend")]
 mod v8_gap_useract;
+
+#[cfg(feature = "v8-backend")]
+mod v8_gap_p3gcjsdom_wrapper_refcount;
