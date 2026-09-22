@@ -103,6 +103,9 @@ pub(crate) fn render_bytes(
                 redirected,
                 decoded_body_size: bytes.len() as u64,
             },
+            // Stamped in by the `LoadEvent::LoadDone`/`RenderDone` handler from
+            // the `RawPage` — `render_bytes` doesn't take it as a parameter.
+            cert_info: None,
         },
         layout_source,
         parsed.js_ctx,
@@ -241,6 +244,14 @@ pub(crate) struct LoadedPage {
     /// `deliver_nav_timing` call site (both of which read `page.nav` before
     /// the rest of this struct's fields are moved out).
     pub(crate) nav: crate::nav_timing::NavResponseMeta,
+    /// Real TLS certificate info for the top-level document (ph3-tls-hardening,
+    /// live-wiring slice; see `lumen_network::CertInfo`). Stamped in by the
+    /// `LoadEvent::LoadDone`/`RenderDone` handler (`app/user_event.rs`) from the
+    /// `RawPage` that fed `render_bytes` — not a `render_bytes` parameter, since
+    /// nothing in the render pipeline needs it. `None` for plain HTTP, non-network
+    /// sources, or a request that reused a pooled HTTP/2 connection (see
+    /// `lumen_network::Response::cert_info`).
+    pub(crate) cert_info: Option<lumen_network::CertInfo>,
 }
 
 impl LoadedPage {
@@ -271,6 +282,7 @@ impl LoadedPage {
             frames: Vec::new(),
             frame_env: None,
             nav: crate::nav_timing::NavResponseMeta::default(),
+            cert_info: None,
         }
     }
 }

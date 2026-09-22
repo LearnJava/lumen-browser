@@ -163,6 +163,7 @@ pub(crate) fn read_response(conn: &mut Connection) -> Result<Response> {
         headers,
         body,
         early_hint_links,
+        cert_info: conn.cert_info.clone(),
     })
 }
 
