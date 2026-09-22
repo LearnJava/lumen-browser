@@ -1971,6 +1971,31 @@ baseline получить не могут; правка `executorlumen.py` по�
 
 Дальше: `referrer-policy` (1 393 файла, 2 `.https.` — большой прогон), `svg` (682 testharness-файла, 11 `.https.`), `fetch` (166 `.https.`, часть в BUG-1069); категории почти целиком `.https.` — после BUG-1069.
 
+### TEST-3: срез 53 (2026-09-22) — `svg`: 633/674 harness OK, четыре новых бага, крупнейший кластер слайса — WebIDL-форма SVG DOM
+
+**Выбор кандидата.** Из списка «Дальше» среза 52 взят `svg` (2 `.https.` из 674 testharness-файлов — минимум `.https.`-доли из трёх кандидатов). `referrer-policy` (1 393 файла) отложена как более крупный прогон, `fetch` — частично упирается в BUG-1069. Число категорий 257 → 258.
+
+**Baseline.** `--update-expected --all --root svg --recursive --processes 10 --binary target/dev-release/lumen.exe` — 6:47. `running 674 all vendored`. **633/674 harness OK, 1537/5260 подтестов**, 592 `.ini`. Раскладка top-level: 38 `TIMEOUT`, 3 `ERROR` (все 0/0 подтестов, без детального блока в отчёте — не разобраны).
+
+**Проверка.** Три `--check` подряд (те же флаги, 7:04 / 7:35 / 7:30): **0 регрессий, 0 unexpected pass, 0 других отклонений**, exit 0, числа идентичны (633/674, 1537/5260). Флапающих файлов нет.
+
+**Что нашлось.** Сообщения `FAIL` (3 666 подтестов) агрегированы через встроенный HTML-отчёт `run_report.py` (`.tmp/wpt-report.html`, таблица подтестов с сообщением на каждый) — не текстовый лог, как в предыдущих срезах, а прямой парсинг DOM-таблицы отчёта (регекспом по `<tr class="sub ...">`), что впервые в этой задаче позволило точно посчитать долю каждого файла в каждом кластере сообщений, а не только текст самого частого сообщения.
+
+| Причина | Масштаб | Доказательство |
+|---|---|---|
+| 13 SVG/SMIL WebIDL-глобалов не заведены вовсе (`SVGAElement`, `SVGAngle`, `SVGNumber`, `SVGNumberList`, `SVGLengthList`, `SVGAnimatedAngle`/`-NumberList`/`-LengthList`, `SVGUnitTypes`, `SVGUseElementShadowRoot`, `ShadowAnimation`, `TimeEvent`, `SVGMPathElement`), **новый** [BUG-1092](../../bugs/BUG-1092-OPEN.md) | `svg/idlharness.window.html` 145/1005 `FAIL` этого файла; побочный эффект — 11/18 `fe*`-фильтровых элементов вне `SVG_TAG_MAP`, `SVGAnimatedNumber-initial-values.html` 102 подтеста | `grep -c` по всем 13 именам на `window.SVG*=` в `svg.rs` — 0 совпадений при 88 других присвоениях; `createSVGNumber()`/`createSVGAngle()` (`svg.rs:522-523`) возвращают объект-литерал |
+| Заведённые SVG-интерфейсы не той WebIDL-формы (члены на инстансе вместо прототипа, геттеры не бросают на прототипе, операции не enumerable, readonly `writable`), **новый** [BUG-1093](../../bugs/BUG-1093-OPEN.md) | остаток `svg/idlharness.window.html` — 860/1005 `FAIL`, ~20 интерфейсов (`SVGTextContentElement` 51, `SVGGraphicsElement` 48, `SVGPreserveAspectRatio` 47, `SVGLength` 46, `SVGSVGElement` 43, `SVGAElement` 42, `SVGTransform`/`SVGMarkerElement` по 39…) | тот же класс, что BUG-677/BUG-1087/дубликат BUG-544, впервые на всей SVG-иерархии разом |
+| SVG2 геометрические/красящие CSS-свойства не в `SUPPORTED_PROPERTIES` (`cx`/`cy`/`r`/`rx`/`ry`/`x`/`y`/`color-interpolation`/`path-length`), **новый** [BUG-1094](../../bugs/BUG-1094-OPEN.md) | 9 файлов, **100% каждого** — `CSS.supports()` гейтит `test_interpolation` перед стартом сравнения: `svg/geometry/animations/{cx,cy,r,rx,ry,x,y}-composition.html` (30×7=210), `svg/painting/color-interpolation-animation.html` (42), `svg/path/animations/path-length-interpolation.tentative.html` (32) = 284 подтеста | `grep` по всем 9 именам на `SUPPORTED_PROPERTIES` — 0 совпадений; все 9 файлов 0 pass / N fail |
+| Осознанно суженный остаток GAP-SMIL (`begin` syncbase/event-формы) даёт `TIMEOUT`, а не `FAIL`, **новый** [BUG-1095](../../bugs/BUG-1095-OPEN.md) | 38 из 41 «плохих» top-level результатов — `TIMEOUT`, вся `svg/animations/` | `_lumen_smil_parse_begin_offset` (`svg.rs:1013-1020`) возвращает `null` на syncbase/event-формы → анимация никогда не стартует → ожидаемое событие никогда не диспатчится → harness ждёт до тайм-аута раннера вместо конкретного `FAIL` |
+
+Остальные отклонения **не разбирались**: `Cannot read properties of undefined (reading 'baseVal'/'animVal')` — 231 подтест/70 файлов всего, из них 102 (`SVGAnimatedNumber-initial-values.html`) и 35 (внутри `idlharness.window.html`) уже учтены в BUG-1092/1093 выше, остаток ~94 подтеста/68 файлов не разобран; 186 подтестов `assert_equals: expected object "[object Object]" but got object "[object Object]"` (22 файла, крупнейшие — `SameObject-identity.html` 54, `rect-hittest-002.html` 45, `ellipse-hittest.html` 24, из них 34 внутри `idlharness.window.html` уже учтены — вероятно смежные грани BUG-1093, не подтверждено).
+
+**Ограничение записанного.** 3 `ERROR` (`restart-never-and-begin-click.html`, `outer-svg-intrinsic-size-002.html`, `SVGAnimatedEnumeration-initial-values.html`) не разобраны — тот же остаток, что и в BUG-1095. Секции `FAIL` от BUG-1092/1093/1094 — после их починок гейт `--check` увидит это как unexpected pass (баланс подтестов сдвинется значительно, это крупнейшие кластеры категории).
+
+**Окружение этой сессии.** Тот же бинарь `dev-release`, 00:43 22.09 (срезы 50–52) — `git log --stat 68b37bde0..90cc3b2ca -- crates` пуст, ни один файл движка не менялся между сборкой этого бинаря и текущим `HEAD`, пересборка не требовалась. Запуск через `tests/wpt/.venv/Scripts/python.exe`, `MSYS_NO_PATHCONV=1`. Фоновые скрипты `.tmp/s53_base.sh`/`s53_check.sh` с `.done`-файлом опрашивались циклом `ping -n 16 127.0.0.1` в переднем плане. Попытка пересобрать `dev-release` заново (`cargo build --profile dev-release -p lumen-shell`) упала на `rustup`-конфликте установки компонента (`detected conflict: 'bin\cargo-clippy.exe'`) — тулчейн `1.97.0` уже стоял с `cargo`/`clippy`, повторная попытка `rustup` его доустановить не нужна была вовсе; сборка не требовалась (см. выше), инцидент не блокировал работу.
+
+Дальше: `referrer-policy` (1 393 файла, 2 `.https.`), `fetch` (166 `.https.`, часть в BUG-1069).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
