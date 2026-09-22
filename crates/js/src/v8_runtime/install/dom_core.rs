@@ -36,12 +36,12 @@ pub(crate) fn install_document_meta(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_document_root", move || -> u32 {
             let doc = d.lock().unwrap();
-            doc.root().index() as u32
+            doc.root().raw()
         });
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_body", move || -> Option<u32> {
             let doc = d.lock().unwrap();
-            find_element_by_tag(&doc, "body").map(|n| n.index() as u32)
+            find_element_by_tag(&doc, "body").map(|n| n.raw())
         });
         // BUG-703: `document.head` — the sibling of `_lumen_get_body` that the
         // live `document` never had. Same tree scan (first `<head>` in document
@@ -50,14 +50,14 @@ pub(crate) fn install_document_meta(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_head", move || -> Option<u32> {
             let doc = d.lock().unwrap();
-            find_element_by_tag(&doc, "head").map(|n| n.index() as u32)
+            find_element_by_tag(&doc, "head").map(|n| n.raw())
         });
         // BUG-281: `document.documentElement` — the `<html>` element, distinct from
         // `_lumen_get_document_root` (the `Document` node itself, `nodeType === 9`).
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_html_element", move || -> Option<u32> {
             let doc = d.lock().unwrap();
-            doc.document_element().map(|n| n.index() as u32)
+            doc.document_element().map(|n| n.raw())
         });
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_document_title", move || -> String {
@@ -292,7 +292,7 @@ fn with_focus_state<R>(focused_nid: &Mutex<Option<u32>>, f: impl FnOnce() -> R) 
     let nid = focused_nid
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .map(|n| NodeId::from_index(n as usize));
+        .map(NodeId::from_raw);
     lumen_layout::set_interactive_state(None, nid, None);
     let result = f();
     lumen_layout::clear_interactive_state();
@@ -317,7 +317,7 @@ pub(crate) fn install_node_lookup(
                 matches!(&node.data, NodeData::Element { .. })
                     && node.get_attr("id") == Some(id.as_str())
             })
-            .map(|n| n.index() as u32)
+            .map(|n| n.raw())
         });
         // BUG-391: DOM LS требует `SyntaxError` DOMException на невалидный или
         // неподдерживаемый селектор в `querySelector(All)`/`matches`/`closest`.
@@ -333,7 +333,7 @@ pub(crate) fn install_node_lookup(
         reg!(scope, ctx, store, "_lumen_query_selector", move |sel: String| -> Option<u32> {
             with_focus_state(&fnid, || {
                 let doc = d.lock().unwrap();
-                query_all(&doc, &sel).into_iter().next().map(|n| n.index() as u32)
+                query_all(&doc, &sel).into_iter().next().map(|n| n.raw())
             })
         });
         let d = Arc::clone(&doc);
@@ -345,7 +345,7 @@ pub(crate) fn install_node_lookup(
                     let doc = d.lock().unwrap();
                     query_all(&doc, &sel)
                         .into_iter()
-                        .map(|n| n.index() as u32)
+                        .map(|n| n.raw())
                         .collect()
                 })
             }
@@ -362,8 +362,8 @@ pub(crate) fn install_node_lookup(
             move |node_id: u32, sel: String| -> Option<u32> {
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
-                    let scope = NodeId::from_index(node_id as usize);
-                    query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.index() as u32)
+                    let scope = NodeId::from_raw(node_id);
+                    query_all_scoped(&doc, scope, &sel).into_iter().next().map(|n| n.raw())
                 })
             }
         );
@@ -374,10 +374,10 @@ pub(crate) fn install_node_lookup(
             move |node_id: u32, sel: String| -> Vec<u32> {
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
-                    let scope = NodeId::from_index(node_id as usize);
+                    let scope = NodeId::from_raw(node_id);
                     query_all_scoped(&doc, scope, &sel)
                         .into_iter()
-                        .map(|n| n.index() as u32)
+                        .map(|n| n.raw())
                         .collect()
                 })
             }
@@ -389,7 +389,7 @@ pub(crate) fn install_node_lookup(
             move |node_id: u32, sel: String| -> bool {
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
-                    let nid = NodeId::from_index(node_id as usize);
+                    let nid = NodeId::from_raw(node_id);
                     matches_selector(&doc, nid, &sel)
                 })
             }
@@ -407,7 +407,7 @@ pub(crate) fn install_node_lookup(
             move |node_id: u32, sel: String| -> Option<u32> {
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
-                    let nid = NodeId::from_index(node_id as usize);
+                    let nid = NodeId::from_raw(node_id);
                     // BUG-919: `_lumen_subtree_has_details`'s insertion-hook
                     // pre-filter (`web_api_shim_tail_b.js`) can reach this
                     // with a stale/foreign id — same class of input as
@@ -415,7 +415,7 @@ pub(crate) fn install_node_lookup(
                     if !doc.contains_id(nid) {
                         return None;
                     }
-                    query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.index() as u32)
+                    query_all_within(&doc, nid, &sel).into_iter().next().map(|n| n.raw())
                 })
             }
         );
@@ -426,14 +426,14 @@ pub(crate) fn install_node_lookup(
             move |node_id: u32, sel: String| -> Vec<u32> {
                 with_focus_state(&fnid, || {
                     let doc = d.lock().unwrap();
-                    let nid = NodeId::from_index(node_id as usize);
+                    let nid = NodeId::from_raw(node_id);
                     // BUG-919: same stale-id guard as `_lumen_query_selector_scoped` above.
                     if !doc.contains_id(nid) {
                         return Vec::new();
                     }
                     query_all_within(&doc, nid, &sel)
                         .into_iter()
-                        .map(|n| n.index() as u32)
+                        .map(|n| n.raw())
                         .collect()
                 })
             }
@@ -458,7 +458,7 @@ pub(crate) fn install_node_properties(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_tag_name", move |node_id: u32| -> String {
             let doc = d.lock().unwrap();
-            let nid = NodeId::from_index(node_id as usize);
+            let nid = NodeId::from_raw(node_id);
             // BUG-986: stale/foreign NodeId — degrade instead of panicking.
             let Some(node) = doc.try_get(nid) else {
                 return String::new();
@@ -487,7 +487,7 @@ pub(crate) fn install_node_properties(
             "_lumen_get_local_name",
             move |node_id: u32| -> Option<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 match doc.try_get(nid).map(|n| &n.data) {
                     Some(NodeData::Element { name, .. }) => Some(name.local.clone()),
@@ -500,7 +500,7 @@ pub(crate) fn install_node_properties(
             "_lumen_is_text_node",
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Text(_)))
             }
         );
@@ -509,7 +509,7 @@ pub(crate) fn install_node_properties(
             "_lumen_is_comment_node",
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Comment(_)))
             }
         );
@@ -521,7 +521,7 @@ pub(crate) fn install_node_properties(
             "_lumen_is_processing_instruction_node",
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::ProcessingInstruction { .. }))
             }
         );
@@ -532,7 +532,7 @@ pub(crate) fn install_node_properties(
             "_lumen_is_doctype",
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Doctype { .. }))
             }
         );
@@ -545,14 +545,14 @@ pub(crate) fn install_node_properties(
                 .iter()
                 .copied()
                 .find(|&c| matches!(doc.try_get(c).map(|n| &n.data), Some(NodeData::Doctype { .. })))
-                .map(|n| n.index() as u32)
+                .map(|n| n.raw())
         });
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, 
             "_lumen_get_doctype_field",
             move |node_id: u32, which: String| -> Option<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 match doc.try_get(nid).map(|n| &n.data) {
                     Some(NodeData::Doctype {
@@ -573,7 +573,7 @@ pub(crate) fn install_node_properties(
             "_lumen_get_namespace_uri",
             move |node_id: u32| -> Option<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 match doc.try_get(nid).map(|n| &n.data) {
                     Some(NodeData::Element { name, .. }) => namespace_uri(&name.namespace),
@@ -586,7 +586,7 @@ pub(crate) fn install_node_properties(
             "_lumen_get_attr",
             move |node_id: u32, name: String| -> Option<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 doc.try_get(nid)?.get_attr(&name).map(|s| s.to_string())
             }
@@ -604,7 +604,7 @@ pub(crate) fn install_node_properties(
             // not exist yet).
             move |node_id: u32, name: String| -> Option<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 match doc.try_get(nid).map(|n| &n.data) {
                     Some(NodeData::Element { attrs, .. }) => attrs
@@ -623,7 +623,7 @@ pub(crate) fn install_node_properties(
             "_lumen_set_attr",
             move |node_id: u32, name: String, value: String| {
                 let mut doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 if !doc.contains_id(nid) {
                     return;
@@ -647,7 +647,7 @@ pub(crate) fn install_node_properties(
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_remove_attr", move |node_id: u32, name: String| {
             let mut doc = d.lock().unwrap();
-            let nid = NodeId::from_index(node_id as usize);
+            let nid = NodeId::from_raw(node_id);
             // BUG-986: stale/foreign NodeId — degrade instead of panicking.
             if !doc.contains_id(nid) {
                 return;
@@ -671,7 +671,7 @@ pub(crate) fn install_node_properties(
             // `None` for "not found" — distinct from an empty qualified name.
             move |node_id: u32, ns: Option<String>, local_name: String| -> Option<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 if !doc.contains_id(nid) {
                     return None;
@@ -691,7 +691,7 @@ pub(crate) fn install_node_properties(
             // always `Html`.
             move |node_id: u32, ns: Option<String>, qualified_name: String, value: String| {
                 let mut doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 if !doc.contains_id(nid) {
                     return;
@@ -716,7 +716,7 @@ pub(crate) fn install_node_properties(
             "_lumen_get_dirty_value",
             move |node_id: u32| -> Option<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 doc.dirty_value(nid).map(|s| s.to_string())
             }
         );
@@ -728,7 +728,7 @@ pub(crate) fn install_node_properties(
             "_lumen_set_dirty_value",
             move |node_id: u32, value: String| {
                 let mut doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 let changed = doc.dirty_value(nid) != Some(value.as_str());
                 doc.set_control_value(nid, value);
                 if changed {
@@ -746,7 +746,7 @@ pub(crate) fn install_node_properties(
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_clear_dirty_value", move |node_id: u32| {
             let mut doc = d.lock().unwrap();
-            let nid = NodeId::from_index(node_id as usize);
+            let nid = NodeId::from_raw(node_id);
             if doc.dirty_value(nid).is_some() {
                 doc.clear_control_value(nid);
                 record_dom_touch(&touched, nid);
@@ -763,7 +763,7 @@ pub(crate) fn install_node_properties(
             "_lumen_get_dirty_checked",
             move |node_id: u32| -> Option<bool> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 doc.dirty_checked(nid)
             }
         );
@@ -775,7 +775,7 @@ pub(crate) fn install_node_properties(
             "_lumen_set_dirty_checked",
             move |node_id: u32, checked: bool| {
                 let mut doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 let changed = doc.dirty_checked(nid) != Some(checked);
                 doc.set_control_checked(nid, checked);
                 if changed {
@@ -793,7 +793,7 @@ pub(crate) fn install_node_properties(
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_clear_dirty_checked", move |node_id: u32| {
             let mut doc = d.lock().unwrap();
-            let nid = NodeId::from_index(node_id as usize);
+            let nid = NodeId::from_raw(node_id);
             if doc.dirty_checked(nid).is_some() {
                 doc.clear_control_checked(nid);
                 record_dom_touch(&touched, nid);
@@ -806,7 +806,7 @@ pub(crate) fn install_node_properties(
             "_lumen_get_attr_names",
             move |node_id: u32| -> Vec<String> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: stale/foreign NodeId — degrade instead of panicking.
                 match doc.try_get(nid).map(|n| &n.data) {
                     Some(NodeData::Element { attrs, .. }) => {
@@ -821,7 +821,7 @@ pub(crate) fn install_node_properties(
             "_lumen_get_text_content",
             move |node_id: u32| -> String {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 if !doc.contains_id(nid) {
                     return String::new();
                 }
@@ -836,7 +836,7 @@ pub(crate) fn install_node_properties(
             "_lumen_set_text_content",
             move |node_id: u32, text: String| {
                 let mut doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 if !doc.contains_id(nid) {
                     log_foreign_node_id(&doc, "_lumen_set_text_content", node_id);
                     return;
@@ -856,7 +856,7 @@ pub(crate) fn install_node_properties(
                 // BUG-368: real HTML fragment serialization of `nid`'s children
                 // (was a Phase-0 stub that returned plain `textContent`).
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 if !doc.contains_id(nid) {
                     return String::new();
                 }
@@ -876,7 +876,7 @@ pub(crate) fn install_node_properties(
                 // with the result (was a Phase-0 stub that stored `html` verbatim
                 // as a single text node — no element/comment structure at all).
                 let mut doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 if !doc.contains_id(nid) {
                     log_foreign_node_id(&doc, "_lumen_set_inner_html", node_id);
                     return;
@@ -926,7 +926,7 @@ pub(crate) fn install_node_properties(
                 // BUG-351: serialize `nid` itself (open tag + attrs + children +
                 // close tag for elements; escaped data for text/comment).
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 if !doc.contains_id(nid) {
                     return String::new();
                 }
@@ -947,7 +947,7 @@ pub(crate) fn install_node_properties(
                 let mut doc = d.lock().unwrap();
                 parse_html_fragment(&mut doc, &html)
                     .into_iter()
-                    .map(|n| n.index() as u32)
+                    .map(|n| n.raw())
                     .collect()
             }
         );
@@ -970,14 +970,14 @@ pub(crate) fn install_tree_navigation(
             "_lumen_get_children",
             move |node_id: u32| -> Vec<u32> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: bubble/dispatch walks call this per ancestor — on a
                 // stale id degrade to an empty list instead of killing the
                 // window mid-dispatch (owa crash, 2026-09-04).
                 let Some(node) = doc.try_get(nid) else {
                     return Vec::new();
                 };
-                node.children.iter().map(|c| c.index() as u32).collect()
+                node.children.iter().map(|c| c.raw()).collect()
             }
         );
         let d = Arc::clone(&doc);
@@ -985,10 +985,10 @@ pub(crate) fn install_tree_navigation(
             "_lumen_get_parent",
             move |node_id: u32| -> Option<u32> {
                 let doc = d.lock().unwrap();
-                let nid = NodeId::from_index(node_id as usize);
+                let nid = NodeId::from_raw(node_id);
                 // BUG-986: returning None ends the bubble walk at the stale
                 // node — graceful, no process death.
-                doc.try_get(nid).and_then(|n| n.parent).map(|p| p.index() as u32)
+                doc.try_get(nid).and_then(|n| n.parent).map(|p| p.raw())
             }
         );
     }
@@ -1104,8 +1104,8 @@ pub(crate) fn install_tree_mutation(
             "_lumen_append_child",
             move |parent_id: u32, child_id: u32| {
                 let mut doc = d.lock().unwrap();
-                let parent = NodeId::from_index(parent_id as usize);
-                let child = NodeId::from_index(child_id as usize);
+                let parent = NodeId::from_raw(parent_id);
+                let child = NodeId::from_raw(child_id);
                 // BUG-986: appendChild was the native on the panic stack in all
                 // three live runs of 2026-09-04 (amazon WAF challenge, owa,
                 // bing) — a stale/foreign id must not kill the window.
@@ -1132,7 +1132,7 @@ pub(crate) fn install_tree_mutation(
             "_lumen_remove_child",
             move |_parent_id: u32, child_id: u32| {
                 let mut doc = d.lock().unwrap();
-                let child = NodeId::from_index(child_id as usize);
+                let child = NodeId::from_raw(child_id);
                 // BUG-986: same stale-id guard as `_lumen_append_child`.
                 if !doc.contains_id(child) {
                     log_foreign_node_id(&doc, "_lumen_remove_child", child_id);
@@ -1164,7 +1164,7 @@ pub(crate) fn install_tree_mutation(
             "_lumen_dom_acquire_ref",
             move |nid: u32| -> u32 {
                 let mut doc = d.lock().unwrap();
-                let node = NodeId::from_index(nid as usize);
+                let node = NodeId::from_raw(nid);
                 if !doc.contains_id(node) {
                     return 0;
                 }
@@ -1176,7 +1176,7 @@ pub(crate) fn install_tree_mutation(
             "_lumen_dom_release_ref",
             move |nid: u32| -> u32 {
                 let mut doc = d.lock().unwrap();
-                let node = NodeId::from_index(nid as usize);
+                let node = NodeId::from_raw(nid);
                 if !doc.contains_id(node) {
                     return 0;
                 }
@@ -1208,7 +1208,7 @@ pub(crate) fn install_shadow_dom(
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_attach_shadow", move |nid: u32, mode: String| -> u32 {
             let mut doc = d.lock().unwrap();
-            let host = NodeId::from_index(nid as usize);
+            let host = NodeId::from_raw(nid);
             let m = if mode == "closed" {
                 ShadowRootMode::Closed
             } else {
@@ -1221,7 +1221,7 @@ pub(crate) fn install_shadow_dom(
             record_dom_touch_unattributed(&touched);
             dirty.store(true, Ordering::Relaxed);
             stale.store(true, Ordering::Relaxed);
-            shadow.index() as u32
+            shadow.raw()
         });
     }
     // Returns the shadow root NodeId for `nid` if the root is Open, else None.
@@ -1230,13 +1230,13 @@ pub(crate) fn install_shadow_dom(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_shadow_root", move |nid: u32| -> Option<u32> {
             let doc = d.lock().unwrap();
-            let host = NodeId::from_index(nid as usize);
+            let host = NodeId::from_raw(nid);
             doc.shadow_root_of(host).and_then(|sr| {
                 if matches!(
                     doc.get(sr).data,
                     NodeData::ShadowRoot { mode: ShadowRootMode::Open }
                 ) {
-                    Some(sr.index() as u32)
+                    Some(sr.raw())
                 } else {
                     None
                 }
@@ -1248,7 +1248,7 @@ pub(crate) fn install_shadow_dom(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_is_shadow_root", move |nid: u32| -> bool {
             let doc = d.lock().unwrap();
-            let id = NodeId::from_index(nid as usize);
+            let id = NodeId::from_raw(nid);
             // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
             matches!(doc.try_get(id).map(|n| &n.data), Some(NodeData::ShadowRoot { .. }))
         });
@@ -1258,7 +1258,7 @@ pub(crate) fn install_shadow_dom(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_is_document_fragment", move |nid: u32| -> bool {
             let doc = d.lock().unwrap();
-            let id = NodeId::from_index(nid as usize);
+            let id = NodeId::from_raw(nid);
             // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
             matches!(doc.try_get(id).map(|n| &n.data), Some(NodeData::DocumentFragment))
         });
@@ -1268,7 +1268,7 @@ pub(crate) fn install_shadow_dom(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_create_fragment", move || -> u32 {
             let mut doc = d.lock().unwrap();
-            doc.create_fragment().index() as u32
+            doc.create_fragment().raw()
         });
     }
     // Return the content DocumentFragment NodeId for a <template> element, or None.
@@ -1276,9 +1276,9 @@ pub(crate) fn install_shadow_dom(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_template_content", move |nid: u32| -> Option<u32> {
             let mut doc = d.lock().unwrap();
-            let id = NodeId::from_index(nid as usize);
+            let id = NodeId::from_raw(nid);
             if let Some(frag) = doc.template_content(id) {
-                return Some(frag.index() as u32);
+                return Some(frag.raw());
             }
             // `<template>`, созданный из JS (`document.createElement`), не
             // проходил через tree-builder и потому не имел content-фрагмента:
@@ -1290,7 +1290,7 @@ pub(crate) fn install_shadow_dom(
             }
             let frag = doc.create_fragment();
             doc.set_template_content(id, frag);
-            Some(frag.index() as u32)
+            Some(frag.raw())
         });
     }
     // Deep-clone a subtree rooted at `nid`. Returns the new root NodeId.
@@ -1299,8 +1299,8 @@ pub(crate) fn install_shadow_dom(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_clone_subtree", move |nid: u32, deep: u32| -> u32 {
             let mut doc = d.lock().unwrap();
-            let id = NodeId::from_index(nid as usize);
-            doc.deep_clone(id, deep != 0).index() as u32
+            let id = NodeId::from_raw(nid);
+            doc.deep_clone(id, deep != 0).raw()
         });
     }
     // Insert `child` immediately before `reference` in `reference`'s parent.
@@ -1314,8 +1314,8 @@ pub(crate) fn install_shadow_dom(
             "_lumen_insert_before",
             move |_parent_id: u32, child_id: u32, reference_id: u32| {
                 let mut doc = d.lock().unwrap();
-                let child = NodeId::from_index(child_id as usize);
-                let reference = NodeId::from_index(reference_id as usize);
+                let child = NodeId::from_raw(child_id);
+                let reference = NodeId::from_raw(reference_id);
                 // BUG-986: same stale-id guard as `_lumen_append_child`.
                 if !doc.contains_id(child) || !doc.contains_id(reference) {
                     log_foreign_node_id(&doc, "_lumen_insert_before child", child_id);
@@ -1338,7 +1338,7 @@ pub(crate) fn install_shadow_dom(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_shadow_root_host", move |nid: u32| -> Option<u32> {
             let doc = d.lock().unwrap();
-            let mut cur = NodeId::from_index(nid as usize);
+            let mut cur = NodeId::from_raw(nid);
             // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
             // Only the entry id can be foreign; every later `cur` comes from
             // `node.parent`, already inside this document's arena.
@@ -1350,7 +1350,7 @@ pub(crate) fn install_shadow_dom(
                 // `host -> root` map (`Document::shadow_host_of`), not from
                 // walking `parent` one step further like every other ancestor.
                 if matches!(node.data, NodeData::ShadowRoot { .. }) {
-                    return doc.shadow_host_of(cur).map(|h| h.index() as u32);
+                    return doc.shadow_host_of(cur).map(|h| h.raw());
                 }
                 {
                     let p = node.parent?;
@@ -1384,9 +1384,9 @@ pub(crate) fn install_selection(
             let sel = doc.get_selection();
             match (sel.anchor, sel.focus) {
                 (Some(a), Some(f)) => Some(vec![
-                    a.container.index() as u32,
+                    a.container.raw(),
                     a.offset,
-                    f.container.index() as u32,
+                    f.container.raw(),
                     f.offset,
                 ]),
                 _ => None,
@@ -1403,8 +1403,8 @@ pub(crate) fn install_selection(
             "_lumen_set_selection",
             move |anchor_nid: u32, anchor_off: u32, focus_nid: u32, focus_off: u32| {
                 let mut doc = d.lock().unwrap();
-                let anchor_id = NodeId::from_index(anchor_nid as usize);
-                let focus_id = NodeId::from_index(focus_nid as usize);
+                let anchor_id = NodeId::from_raw(anchor_nid);
+                let focus_id = NodeId::from_raw(focus_nid);
                 // BUG-1031-class: a stale/foreign NodeId stored here panics
                 // later, whenever anything (contenteditable delete, caret
                 // read) resolves `Selection::anchor`/`focus` — reject it here
@@ -1468,11 +1468,11 @@ pub(crate) fn install_selection(
                 let doc = d.lock().unwrap();
                 let r = DomRange {
                     start: DomPosition {
-                        container: NodeId::from_index(start_nid as usize),
+                        container: NodeId::from_raw(start_nid),
                         offset: start_off,
                     },
                     end: DomPosition {
-                        container: NodeId::from_index(end_nid as usize),
+                        container: NodeId::from_raw(end_nid),
                         offset: end_off,
                     },
                 };
@@ -1485,7 +1485,7 @@ pub(crate) fn install_selection(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_node_child_count", move |nid: u32| -> u32 {
             let doc = d.lock().unwrap();
-            node_child_count(&doc, NodeId::from_index(nid as usize)) as u32
+            node_child_count(&doc, NodeId::from_raw(nid)) as u32
         });
     }
     {
@@ -1493,7 +1493,7 @@ pub(crate) fn install_selection(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_node_length", move |nid: u32| -> u32 {
             let doc = d.lock().unwrap();
-            node_length(&doc, NodeId::from_index(nid as usize)) as u32
+            node_length(&doc, NodeId::from_raw(nid)) as u32
         });
     }
     {
@@ -1501,7 +1501,7 @@ pub(crate) fn install_selection(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_node_text_content", move |nid: u32| -> String {
             let doc = d.lock().unwrap();
-            node_text_content(&doc, NodeId::from_index(nid as usize))
+            node_text_content(&doc, NodeId::from_raw(nid))
         });
     }
     {
@@ -1516,11 +1516,11 @@ pub(crate) fn install_selection(
                 let mut doc = d.lock().unwrap();
                 let r = DomRange {
                     start: DomPosition {
-                        container: NodeId::from_index(start_nid as usize),
+                        container: NodeId::from_raw(start_nid),
                         offset: start_off,
                     },
                     end: DomPosition {
-                        container: NodeId::from_index(end_nid as usize),
+                        container: NodeId::from_raw(end_nid),
                         offset: end_off,
                     },
                 };
@@ -1530,7 +1530,7 @@ pub(crate) fn install_selection(
                 record_dom_touch_unattributed(&touched);
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
-                vec![pos.container.index() as u32, pos.offset]
+                vec![pos.container.raw(), pos.offset]
             }
         );
     }
@@ -1553,7 +1553,7 @@ pub(crate) fn install_contenteditable(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_is_contenteditable", move |nid: u32| -> bool {
             let doc = d.lock().unwrap();
-            lumen_dom::find_editing_host(&doc, NodeId::from_index(nid as usize)).is_some()
+            lumen_dom::find_editing_host(&doc, NodeId::from_raw(nid)).is_some()
         });
     }
     Ok(())

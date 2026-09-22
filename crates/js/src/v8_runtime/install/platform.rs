@@ -366,7 +366,7 @@ pub(crate) fn install_point_hit_test(
         reg!(scope, ctx, store, "_lumen_element_from_point", move |x: f64, y: f64| -> Option<u32> {
             let root = tree.lock().unwrap().clone()?;
             lumen_paint::hit_test(lumen_core::geom::Point::new(x as f32, y as f32), &root)
-                .map(|r| r.node.index() as u32)
+                .map(|r| r.node.raw())
         });
     }
     {
@@ -377,7 +377,7 @@ pub(crate) fn install_point_hit_test(
             let mut seen = std::collections::HashSet::new();
             hits.into_iter()
                 .filter_map(|r| {
-                    let idx = r.node.index() as u32;
+                    let idx = r.node.raw();
                     seen.insert(idx).then_some(idx)
                 })
                 .collect()
@@ -1144,7 +1144,7 @@ pub(crate) fn install_crypto_and_typed_om(
             if let Ok(doc) = d.lock() {
                 // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking
                 // (same guard as `_lumen_get_tag_name`, BUG-986/BUG-1024).
-                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize))
+                if let Some(node) = doc.try_get(NodeId::from_raw(nid))
                     && let Some(style_attr) = node.get_attr("style")
                 {
                     let parsed = _parse_style_string(style_attr);
@@ -1159,7 +1159,7 @@ pub(crate) fn install_crypto_and_typed_om(
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_set_style_property", move |nid: u32, prop: String, val: String| {
             if let Ok(mut doc) = d.lock() {
-                let node_id = NodeId::from_index(nid as usize);
+                let node_id = NodeId::from_raw(nid);
                 // BUG-1031-class: stale/foreign NodeId — no-op instead of panicking.
                 if doc.try_get(node_id).is_none() {
                     return;
@@ -1186,7 +1186,7 @@ pub(crate) fn install_crypto_and_typed_om(
         let touched = Arc::clone(&dom_touched);
         reg!(scope, ctx, store, "_lumen_delete_style_property", move |nid: u32, prop: String| {
             if let Ok(mut doc) = d.lock() {
-                let node_id = NodeId::from_index(nid as usize);
+                let node_id = NodeId::from_raw(nid);
                 // BUG-1031-class: stale/foreign NodeId — no-op instead of panicking.
                 if doc.try_get(node_id).is_none() {
                     return;
@@ -1230,7 +1230,7 @@ pub(crate) fn install_crypto_and_typed_om(
             let mut pairs: Vec<(String, String)> = Vec::new();
             if let Ok(doc) = d.lock() {
                 // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
-                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize))
+                if let Some(node) = doc.try_get(NodeId::from_raw(nid))
                     && let Some(style_attr) = node.get_attr("style")
                 {
                     pairs = _parse_style_string(style_attr).into_iter().collect();

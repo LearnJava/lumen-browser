@@ -612,7 +612,7 @@ fn checked_node(doc: &lumen_dom::Document, nid: u32) -> Option<lumen_dom::NodeId
     if nid as usize >= doc.node_count() {
         return None;
     }
-    Some(lumen_dom::NodeId::from_index(nid as usize))
+    Some(lumen_dom::NodeId::from_raw(nid))
 }
 
 /// DEVX-8a-аналог (`lumen_dom::Document::is_self_or_ancestor` — приватный):
@@ -1245,7 +1245,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_body",
             into_v8_fn1(move |bid: u32| -> Option<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    find_element_by_tag(d, "body").map(|n| n.index() as u32)
+                    find_element_by_tag(d, "body").map(|n| n.raw())
                 }, None)
             }),
         )?;
@@ -1256,7 +1256,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_head",
             into_v8_fn1(move |bid: u32| -> Option<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    find_element_by_tag(d, "head").map(|n| n.index() as u32)
+                    find_element_by_tag(d, "head").map(|n| n.raw())
                 }, None)
             }),
         )?;
@@ -1266,7 +1266,7 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_f_document_element",
             into_v8_fn1(move |bid: u32| -> Option<u32> {
-                with_accessible_doc(&reg, bid, |d| d.document_element().map(|n| n.index() as u32), None)
+                with_accessible_doc(&reg, bid, |d| d.document_element().map(|n| n.raw()), None)
             }),
         )?;
     }
@@ -1293,7 +1293,7 @@ pub(crate) fn install_frame_bridge_v8(
                         matches!(&node.data, lumen_dom::NodeData::Element { .. })
                             && node.get_attr("id") == Some(id.as_str())
                     })
-                    .map(|n| n.index() as u32)
+                    .map(|n| n.raw())
                 }, None)
             }),
         )?;
@@ -1304,7 +1304,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_query",
             into_v8_fn2(move |bid: u32, sel: String| -> Option<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    lumen_layout::query_all(d, &sel).into_iter().next().map(|n| n.index() as u32)
+                    lumen_layout::query_all(d, &sel).into_iter().next().map(|n| n.raw())
                 }, None)
             }),
         )?;
@@ -1317,7 +1317,7 @@ pub(crate) fn install_frame_bridge_v8(
                 with_accessible_doc(&reg, bid, |d| {
                     lumen_layout::query_all(d, &sel)
                         .into_iter()
-                        .map(|n| n.index() as u32)
+                        .map(|n| n.raw())
                         .collect()
                 }, Vec::new())
             }),
@@ -1331,10 +1331,10 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_query_scoped",
             into_v8_fn3(move |bid: u32, nid: u32, sel: String| -> Option<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    lumen_layout::query_all_scoped(d, lumen_dom::NodeId::from_index(nid as usize), &sel)
+                    lumen_layout::query_all_scoped(d, lumen_dom::NodeId::from_raw(nid), &sel)
                         .into_iter()
                         .next()
-                        .map(|n| n.index() as u32)
+                        .map(|n| n.raw())
                 }, None)
             }),
         )?;
@@ -1345,9 +1345,9 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_query_all_scoped",
             into_v8_fn3(move |bid: u32, nid: u32, sel: String| -> Vec<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    lumen_layout::query_all_scoped(d, lumen_dom::NodeId::from_index(nid as usize), &sel)
+                    lumen_layout::query_all_scoped(d, lumen_dom::NodeId::from_raw(nid), &sel)
                         .into_iter()
-                        .map(|n| n.index() as u32)
+                        .map(|n| n.raw())
                         .collect()
                 }, Vec::new())
             }),
@@ -1359,11 +1359,11 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_children",
             into_v8_fn2(move |bid: u32, nid: u32| -> Vec<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    d.get(lumen_dom::NodeId::from_index(nid as usize))
+                    d.get(lumen_dom::NodeId::from_raw(nid))
                         .children
                         .iter()
                         .filter(|&&c| matches!(&d.get(c).data, lumen_dom::NodeData::Element { .. }))
-                        .map(|&c| c.index() as u32)
+                        .map(|&c| c.raw())
                         .collect()
                 }, Vec::new())
             }),
@@ -1375,10 +1375,10 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_parent_element",
             into_v8_fn2(move |bid: u32, nid: u32| -> Option<u32> {
                 with_accessible_doc(&reg, bid, |d| {
-                    let id = lumen_dom::NodeId::from_index(nid as usize);
+                    let id = lumen_dom::NodeId::from_raw(nid);
                     d.get(id).parent.and_then(|pid| {
                         matches!(&d.get(pid).data, lumen_dom::NodeData::Element { .. })
-                            .then(|| pid.index() as u32)
+                            .then(|| pid.raw())
                     })
                 }, None)
             }),
@@ -1390,7 +1390,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_attr",
             into_v8_fn3(move |bid: u32, nid: u32, name: String| -> Option<String> {
                 with_accessible_doc(&reg, bid, |d| {
-                    d.get(lumen_dom::NodeId::from_index(nid as usize))
+                    d.get(lumen_dom::NodeId::from_raw(nid))
                         .get_attr(&name)
                         .map(str::to_owned)
                 }, None)
@@ -1403,7 +1403,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_has_attr",
             into_v8_fn3(move |bid: u32, nid: u32, name: String| -> bool {
                 with_accessible_doc(&reg, bid, |d| {
-                    d.get(lumen_dom::NodeId::from_index(nid as usize))
+                    d.get(lumen_dom::NodeId::from_raw(nid))
                         .get_attr(&name)
                         .is_some()
                 }, false)
@@ -1416,7 +1416,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_tag",
             into_v8_fn2(move |bid: u32, nid: u32| -> String {
                 with_accessible_doc(&reg, bid, |d| {
-                    match &d.get(lumen_dom::NodeId::from_index(nid as usize)).data {
+                    match &d.get(lumen_dom::NodeId::from_raw(nid)).data {
                         lumen_dom::NodeData::Element { name, .. } => name.local.clone(),
                         _ => String::new(),
                     }
@@ -1431,7 +1431,7 @@ pub(crate) fn install_frame_bridge_v8(
             into_v8_fn2(move |bid: u32, nid: u32| -> bool {
                 with_accessible_doc(&reg, bid, |d| {
                     matches!(
-                        &d.get(lumen_dom::NodeId::from_index(nid as usize)).data,
+                        &d.get(lumen_dom::NodeId::from_raw(nid)).data,
                         lumen_dom::NodeData::Text(_)
                     )
                 }, false)
@@ -1445,7 +1445,7 @@ pub(crate) fn install_frame_bridge_v8(
             into_v8_fn2(move |bid: u32, nid: u32| -> bool {
                 with_accessible_doc(&reg, bid, |d| {
                     matches!(
-                        &d.get(lumen_dom::NodeId::from_index(nid as usize)).data,
+                        &d.get(lumen_dom::NodeId::from_raw(nid)).data,
                         lumen_dom::NodeData::Comment(_)
                     )
                 }, false)
@@ -1458,7 +1458,7 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_f_text",
             into_v8_fn2(move |bid: u32, nid: u32| -> String {
                 with_accessible_doc(&reg, bid, |d| {
-                    collect_text_content(d, lumen_dom::NodeId::from_index(nid as usize))
+                    collect_text_content(d, lumen_dom::NodeId::from_raw(nid))
                 }, String::new())
             }),
         )?;
@@ -3510,7 +3510,7 @@ mod tests {
                 .map(|n| n.local.eq_ignore_ascii_case(tag))
                 .unwrap_or(false)
         })
-        .map(|n| n.index() as u32)
+        .map(|n| n.raw())
     }
 
     fn clicks(rt: &V8JsRuntime) -> Vec<u32> {
@@ -3605,7 +3605,7 @@ mod tests {
                         .unwrap_or(false)
                 })
                 .expect("<b> существует");
-                d.get(b).children[0].index() as u32
+                d.get(b).children[0].raw()
             };
             // Текстовый узел, nid за границей арены и несуществующий bid —
             // все три дают «нет» и ничего не ставят в ящик.
