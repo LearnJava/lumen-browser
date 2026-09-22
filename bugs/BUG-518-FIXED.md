@@ -530,7 +530,7 @@ Re-investigated the "blocked on BUG-471" note above: BUG-471's own record
 shows its read half (`document.styleSheets`/`.sheet`/`cssRules`/rule
 classes) closed 2026-09-03 — only the write half (`insertRule`/`deleteRule`/
 `new CSSStyleSheet()`) is still open, tracked separately as
-[BUG-897](BUG-897-OPEN.md)/CSSOM-5. `mixin-cssom.tentative.html`'s 6
+[BUG-897](BUG-897-FIXED.md)/CSSOM-5. `mixin-cssom.tentative.html`'s 6
 subtests split cleanly along that line: 5 are pure `cssText` reads, only
 the 6th (`@apply` illegal at top level) needs `insertRule` — and even that
 needs it on an **owned** sheet specifically, which doesn't exist yet (only

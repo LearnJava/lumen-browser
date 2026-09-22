@@ -9,7 +9,7 @@
 `<style>`/`<link>.sheet`, `StyleSheetList`/`CSSStyleSheet`/`CSSRuleList`/`CSSStyleRule`/`CSSMediaRule`
 now exist, backed by `LayoutSource::stylesheet_nodes` published into `V8JsRuntime::stylesheet_nodes` —
 the exact plumbing this file asked for, read-only. Remaining scope (a mutable path a script could use
-to add/remove rules) is CSSOM-5 ([BUG-897](BUG-897-OPEN.md)).
+to add/remove rules) is CSSOM-5 ([BUG-897](BUG-897-FIXED.md)).
 
 ## Симптом
 
