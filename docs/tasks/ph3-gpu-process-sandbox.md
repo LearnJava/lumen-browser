@@ -9,8 +9,24 @@
 
 ## Status
 
-**Phase 3 future item** — not started. Do not begin until Phase 2 is closed and
-`lumen-plan.md` marks Phase 3 as active. Listed in `docs/plan/phases.md:136`.
+**Phase 3 future item**, brief originally said "do not begin until `lumen-plan.md`
+marks Phase 3 as active" — that formal marker is still absent, but the project has
+in practice already started Phase 3 work under other `ph3-*` briefs (e.g.
+`P3-tlshard`, done as of 2026-09-22, srezes 1-6 + A6). Started 2026-09-22 (P1)
+following that precedent, split into srezes per the XL-size warning above.
+
+Srez A1 (2026-09-22, `p1-gpusandbox-a1-ipc-messages`) — Phase A step 2 only:
+`IpcRequest`/`IpcResponse` extended with `GpuInit`/`GpuRender`/`GpuResize`/
+`GpuSurfaceLost` and `GpuReady`/`GpuFrameDone`/`GpuError` (`crates/ipc/src/lib.rs`).
+Added `GpuSurfaceHandle` (Win32/AppKit/Xlib/Wayland, raw `u64` fields) instead of
+depending on the `raw-window-handle` crate directly from `lumen-ipc` — a kernel
+window handle is not `Send` across processes as a typed object (see Risks §1); the
+renderer process (not yet created) will reconstruct a real `RawWindowHandle` from
+these integers. `display_list` stays `Vec<u8>` (opaque bincode bytes) so
+`lumen-ipc` does not gain a dependency on `lumen-paint` (layering, CLAUDE.md "No
+cycles"). Round-trip test `test_gpu_round_trip` added. No renderer binary, no
+wiring into the shell yet — that is srez A2 (Phase A steps 1/3-6: new
+`lumen-renderer` crate skeleton, `RendererProcessHandle`).
 
 ---
 

@@ -79,6 +79,72 @@ pub enum IpcRequest {
         /// Tab to render.
         tab_id: TabId,
     },
+    /// PH3-GPUSANDBOX Phase A: first message the renderer process expects
+    /// after spawn. Reply: `GpuReady` or `GpuError`.
+    GpuInit {
+        /// Window surface the renderer must draw into.
+        surface: GpuSurfaceHandle,
+        /// Initial surface width in physical pixels.
+        width: u32,
+        /// Initial surface height in physical pixels.
+        height: u32,
+    },
+    /// PH3-GPUSANDBOX: submit one frame's display list. `display_list` is a
+    /// bincode-serialized `lumen_paint::display_list::DisplayList`, carried
+    /// as opaque bytes so `lumen-ipc` does not depend on `lumen-paint`
+    /// (layering — CLAUDE.md "No cycles"). Reply: `GpuFrameDone` or `GpuError`.
+    GpuRender {
+        /// Bincode-serialized display list for this frame.
+        display_list: Vec<u8>,
+    },
+    /// PH3-GPUSANDBOX: the shell window surface was resized. Reply: `GpuReady`.
+    GpuResize {
+        /// New surface width in physical pixels.
+        width: u32,
+        /// New surface height in physical pixels.
+        height: u32,
+    },
+    /// PH3-GPUSANDBOX: the shell detected the swapchain surface was lost
+    /// (e.g. GPU device removed) and the renderer must recreate it. Reply:
+    /// `GpuReady`.
+    GpuSurfaceLost,
+}
+
+/// PH3-GPUSANDBOX: opaque, platform-tagged window-surface handle carried
+/// across the IPC boundary. The renderer process reconstructs a
+/// `raw_window_handle::RawWindowHandle` from these integers; `lumen-ipc`
+/// itself does not depend on the `raw-window-handle` crate, since a kernel
+/// window handle is not `Send` across processes as a typed object — only its
+/// raw integer value survives serialization (see
+/// `docs/tasks/ph3-gpu-process-sandbox.md` §Risks 1).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum GpuSurfaceHandle {
+    /// Windows: `HWND` and owning `HINSTANCE`, both cast to `u64`.
+    Win32 {
+        /// `HWND` of the render surface window.
+        hwnd: u64,
+        /// `HINSTANCE` that owns `hwnd`.
+        hinstance: u64,
+    },
+    /// macOS: pointer to the `NSView` backing the render surface.
+    AppKit {
+        /// `NSView*` cast to `u64`.
+        ns_view: u64,
+    },
+    /// Linux/X11: window id and the owning `Display*` connection.
+    Xlib {
+        /// X11 window id.
+        window: u64,
+        /// `Display*` cast to `u64`.
+        display: u64,
+    },
+    /// Linux/Wayland: surface and display protocol object pointers.
+    Wayland {
+        /// `wl_surface*` cast to `u64`.
+        surface: u64,
+        /// `wl_display*` cast to `u64`.
+        display: u64,
+    },
 }
 
 /// A response sent back over an IPC channel.
@@ -126,6 +192,17 @@ pub enum IpcResponse {
     TabError {
         /// Tab the failing command referenced.
         tab_id: TabId,
+        /// Human-readable failure reason.
+        message: String,
+    },
+    /// PH3-GPUSANDBOX: renderer finished `GpuInit`/`GpuResize`/`GpuSurfaceLost`
+    /// and is ready to accept `GpuRender`.
+    GpuReady,
+    /// PH3-GPUSANDBOX: renderer finished submitting a frame's GPU work
+    /// (`queue.submit()` returned).
+    GpuFrameDone,
+    /// PH3-GPUSANDBOX: the renderer failed to process a GPU request.
+    GpuError {
         /// Human-readable failure reason.
         message: String,
     },
@@ -522,6 +599,79 @@ mod tests {
             client.request(&IpcRequest::CloseTab { tab_id }).unwrap(),
             IpcResponse::TabClosed { tab_id: 7 }
         ));
+
+        server_thread.join().unwrap();
+    }
+
+    /// PH3-GPUSANDBOX Phase A: drive `GpuInit` → `GpuRender` → `GpuResize` →
+    /// `GpuSurfaceLost` through the framing layer, with the renderer process
+    /// acting as TCP server (mirrors the shell's `NetworkServiceHandle` role
+    /// for the network service).
+    #[test]
+    fn test_gpu_round_trip() {
+        let (server, port) = IpcServer::bind().unwrap();
+        let fake_display_list = vec![1u8, 2, 3, 4, 5];
+        let expected_display_list = fake_display_list.clone();
+
+        let server_thread = std::thread::spawn(move || {
+            let mut ch = server.accept().unwrap();
+            match ch.recv::<IpcRequest>().unwrap() {
+                IpcRequest::GpuInit { surface, width, height } => {
+                    assert!(matches!(
+                        surface,
+                        GpuSurfaceHandle::Win32 { hwnd: 0x1234, hinstance: 0x5678 }
+                    ));
+                    assert_eq!((width, height), (1024, 768));
+                    ch.send(&IpcResponse::GpuReady).unwrap();
+                }
+                other => panic!("expected GpuInit, got {other:?}"),
+            }
+            match ch.recv::<IpcRequest>().unwrap() {
+                IpcRequest::GpuRender { display_list } => {
+                    assert_eq!(display_list, expected_display_list);
+                    ch.send(&IpcResponse::GpuFrameDone).unwrap();
+                }
+                other => panic!("expected GpuRender, got {other:?}"),
+            }
+            match ch.recv::<IpcRequest>().unwrap() {
+                IpcRequest::GpuResize { width, height } => {
+                    assert_eq!((width, height), (800, 600));
+                    ch.send(&IpcResponse::GpuReady).unwrap();
+                }
+                other => panic!("expected GpuResize, got {other:?}"),
+            }
+            assert!(matches!(ch.recv::<IpcRequest>().unwrap(), IpcRequest::GpuSurfaceLost));
+            ch.send(&IpcResponse::GpuError { message: "device removed".into() })
+                .unwrap();
+        });
+
+        let mut client = IpcClient::connect(port).unwrap();
+        assert!(matches!(
+            client
+                .request(&IpcRequest::GpuInit {
+                    surface: GpuSurfaceHandle::Win32 { hwnd: 0x1234, hinstance: 0x5678 },
+                    width: 1024,
+                    height: 768,
+                })
+                .unwrap(),
+            IpcResponse::GpuReady
+        ));
+        assert!(matches!(
+            client
+                .request(&IpcRequest::GpuRender { display_list: fake_display_list })
+                .unwrap(),
+            IpcResponse::GpuFrameDone
+        ));
+        assert!(matches!(
+            client
+                .request(&IpcRequest::GpuResize { width: 800, height: 600 })
+                .unwrap(),
+            IpcResponse::GpuReady
+        ));
+        match client.request(&IpcRequest::GpuSurfaceLost).unwrap() {
+            IpcResponse::GpuError { message } => assert_eq!(message, "device removed"),
+            other => panic!("expected GpuError, got {other:?}"),
+        }
 
         server_thread.join().unwrap();
     }
