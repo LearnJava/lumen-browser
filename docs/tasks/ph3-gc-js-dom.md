@@ -1,14 +1,77 @@
 # Ph3 — GC integration JS ↔ DOM (cross-boundary cycle collection)
 
-**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
+**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5), `p1-ph3-gcjsdom-srez6` (срез 6) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
 
 ---
 
 ## Status
 
-**In progress (P1, срез 5, 2026-09-22).** Срез 5 closes the docs DoD item (see
-below) — the only item still open is arena free-list/compaction, deferred
-pending a generational `NodeId` (see срез 4 notes).
+**In progress (P1, срез 6, 2026-09-22).** The only item still open is arena
+free-list/compaction. Срез 6 does not implement it — it replaces the vague
+"needs a generational `NodeId`" pointer from срез 4 with a concrete, measured
+design so the next срез can execute instead of re-investigating.
+
+**Срез 6 — design only, no code.** Measured the actual blast radius before
+committing to an approach: `NodeId::from_index`/`.index()` appear **462
+times** outside `lumen-dom` (`grep -rn` across the workspace), and the JS↔DOM
+bridge decodes a bare `nid: u32` straight off the V8 call args at **dozens of
+call sites** (`crates/js/src/dom.rs`, `v8_runtime/install/dom_core.rs`,
+`frame_bridge.rs` — every one does `NodeId::from_index(nid as usize)` with no
+liveness check). A generational `NodeId` that widens the *type* (e.g. `struct
+NodeId { index: u32, generation: u32 }`) would force-touch every one of those
+462 sites plus the hibernation-snapshot and `lumen-ipc` wire formats
+simultaneously — the exact "wider change" срез 4 declined to start blind.
+
+**The safe alternative: pack the generation into the existing `u32`, don't
+widen the type.** `NodeId(u32)` stays exactly `NodeId(u32)` — same size, same
+`Serialize`/`Deserialize` shape, same wire bytes in hibernation snapshots and
+`lumen-ipc`. Split the 32 bits as `index: u24 | generation: u8`:
+`MAX_DOM_NODES` is 50,000, which fits `u24` (16.7M) with headroom to raise the
+cap later without another format change. `generation: u8` allows 255 reuses
+of a given slot before it permanently retires (falls back to today's
+append-only behavior for that slot, never wraps into an alias) — reuse
+frequency in a single `Document`'s lifetime is bounded by how many times a
+JS-driven detach+GC cycle can hit the *same* slot, which is orders of
+magnitude below 255 for any realistic page.
+
+Why this is safe *without* auditing all 462 call sites first (unlike the
+widened-type approach): every internal cache keyed `HashMap<NodeId, _>`
+(`layout::animation::overrides`, `counters::entries`, `shell::forms::FormState`,
+`shell::lumen::state::prev_styles`, …~15 more, grepped) already uses
+`NodeId`'s `#[derive(Eq, Hash)]` on the *whole* packed value. Once generation
+is part of that value, a stale key for a freed-then-reused slot simply stops
+matching the new node's key — no code change needed in any of those ~15
+call sites, and no aliasing is possible through them by construction (worst
+case: a stale cache entry lingers, harmless, until its owning cleanup pass
+runs — same as today).
+
+The sites that *do* need real changes are the ones that strip the packed
+value down to a bare integer and round-trip it through something that isn't
+`NodeId`'s own `Eq` — chiefly the JS bridge (`nid` as a plain V8 number) and a
+handful of shell call sites that box `node_id.index() as u32` into their own
+`u32`-keyed structures (`frame_lazy.rs`, `cursor_moved.rs:423`,
+`automation.rs:439`, `page_load.rs:1638`). Plan for the next срез: introduce
+`NodeId::raw(self) -> u32` (the full packed value, for anything that must
+round-trip through a non-`NodeId` channel) alongside the existing `.index()`
+(kept as the *unpacked* slot index, for `Vec` indexing — behavior-identical to
+today), and `NodeId::from_raw(u32) -> NodeId` / a fallible
+`Document::resolve(u32) -> Option<NodeId>` that rejects a generation mismatch
+instead of aliasing. Migrate the JS bridge call sites to `raw()`/`resolve()`
+first (they are the only ones where a stale reference is reachable from a
+live, long-running JS heap); the four shell sites above are lower-risk
+(same-tick round-trips) but should move too before `alloc()` is ever allowed
+to actually pop the free-list. Until that migration lands, `alloc()` stays
+append-only — landing the packed `NodeId` type change with `generation`
+always `0` and no consumer yet would be an inert, untestable no-op change
+(nothing exercises the packing), so it is *not* done here; the type change
+and its first real consumer (the free-list) land together in one срез once
+the call-site migration above is scoped.
+
+---
+
+**Previously (срез 5, now historical):** closed the docs DoD item — the only
+item still open was arena free-list/compaction, deferred pending a
+generational `NodeId` (see срез 4 notes).
 
 **срез 4 closes the "only remaining open DoD item" срез 3 deferred** — but not
 via full arena compaction (that still needs a generational `NodeId`, out of
