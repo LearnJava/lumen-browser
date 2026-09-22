@@ -28,9 +28,21 @@
   // it regardless of which report script is paired with it.
   window.__wptrunner_is_test_context = true;
 
+  // Captured now, at parse time, not read lazily from `location` inside the
+  // completion callback below: some tests (referrer-policy's `4K`/`4K+1`/
+  // `4K-1`, `generic/test-case.sub.js::runLengthTest`) legitimately call
+  // `history.replaceState` on themselves mid-test to pad their own URL past
+  // the 4096-byte referrer-truncation boundary. A lazy read would report
+  // that padding back as this test's identity and fail
+  // `TestharnessResultConverter.__call__`'s `result_url == test.url` in
+  // `executors/base.py` — root-caused via WPT-RUN-7 slice 54 baseline
+  // (292/862 ERROR, the entire `4K*` subtree, `AssertionError: Got results
+  // from /AAAA...`).
+  var __wptrunner_initial_test_url = location.pathname + location.search;
+
   function test_url() {
     // No fragment: WPT test ids never include one.
-    return location.pathname + location.search;
+    return __wptrunner_initial_test_url;
   }
 
   add_completion_callback(function(tests, harness_status) {
