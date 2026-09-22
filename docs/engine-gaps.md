@@ -8,6 +8,8 @@ Scope and lifecycle:
 - A line dies here when its bug moves to `BUGS-FIXED.md` — delete it, do not annotate it as fixed.
 - Method (what counts as evidence, how to launch a probe, how to read a WPT failure) — [`probe-method.md`](probe-method.md). Engine-side implementation traps — `subsystems/<crate>.md`.
 
+**Drift, 2026-09-23 (sweep queued in `STATUS-P6.md`):** twelve lines below still cite bugs that are already FIXED or DUPLICATE — BUG-577/622/651/685/786/873/874/883/885/926/982/1044 — against the rule above. Re-probe before trusting any of those lines.
+
 Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triage work, and it was being loaded in full at the start of every session regardless of the task.
 
 ---
