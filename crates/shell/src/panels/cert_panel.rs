@@ -54,6 +54,28 @@ impl PanelCertData {
     }
 }
 
+/// Copy the fields this panel already renders out of a real
+/// `lumen_network::CertInfo` (ph3-tls-hardening, live-wiring slice).
+///
+/// `CertInfo::revocation_status`/`ct_status` (A3/A4) have no home here yet —
+/// A6 (invalid-cert UI) is the slice that extends `PanelCertData` with an
+/// error/warning state and those two rows.
+impl From<lumen_network::CertInfo> for PanelCertData {
+    fn from(info: lumen_network::CertInfo) -> Self {
+        Self {
+            subject_cn: info.subject_cn,
+            subject_org: info.subject_org,
+            issuer_cn: info.issuer_cn,
+            issuer_org: info.issuer_org,
+            not_before: info.not_before,
+            not_after: info.not_after,
+            fingerprint_sha256: info.fingerprint_sha256,
+            san_list: info.san_list,
+            tls_version: info.tls_version,
+        }
+    }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Certificate viewer panel state.
@@ -175,6 +197,26 @@ mod tests {
             san_list: vec![String::from("example.com"), String::from("www.example.com")],
             tls_version: String::from("TLS 1.3"),
         }
+    }
+
+    #[test]
+    fn from_cert_info_copies_shared_fields() {
+        let info = lumen_network::CertInfo::from_peer_cert(
+            &[],
+            "TLS 1.3",
+            lumen_network::tls::ocsp::OcspVerdict::Unknown,
+            lumen_network::tls::ct::CtVerdict::Insufficient(0),
+        );
+        let data = PanelCertData::from(info.clone());
+        assert_eq!(data.subject_cn, info.subject_cn);
+        assert_eq!(data.subject_org, info.subject_org);
+        assert_eq!(data.issuer_cn, info.issuer_cn);
+        assert_eq!(data.issuer_org, info.issuer_org);
+        assert_eq!(data.not_before, info.not_before);
+        assert_eq!(data.not_after, info.not_after);
+        assert_eq!(data.fingerprint_sha256, info.fingerprint_sha256);
+        assert_eq!(data.san_list, info.san_list);
+        assert_eq!(data.tls_version, "TLS 1.3");
     }
 
     #[test]

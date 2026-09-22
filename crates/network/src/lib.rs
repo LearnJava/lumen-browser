@@ -567,6 +567,13 @@ pub(crate) struct Connection {
     /// True when ALPN negotiated HTTP/2. The connection cannot be used for
     /// HTTP/1.1; `fetch_single` hands the raw stream to the H2 driver.
     is_h2: bool,
+    /// Real certificate info captured right after this connection's TLS
+    /// handshake completed (ph3-tls-hardening, live-wiring slice), or `None`
+    /// for a plain-TCP connection. Set once in `connect_inner`/the proxy
+    /// CONNECT-tunnel branch of `fetch_single` and carried unchanged across
+    /// every subsequent request this pooled connection serves — a reused
+    /// connection didn't re-handshake, so its cert didn't change.
+    cert_info: Option<tls::CertInfo>,
 }
 
 impl Connection {
@@ -575,6 +582,7 @@ impl Connection {
             reader: BufReader::new(stream),
             closed: false,
             is_h2: false,
+            cert_info: None,
         }
     }
 
@@ -613,6 +621,14 @@ struct Response {
     /// discard 1xx header blocks entirely (`h2::conn`, `h3::h3_exchange`),
     /// so both leave this empty.
     early_hint_links: Vec<String>,
+    /// Real certificate info captured at this connection's TLS handshake
+    /// (ph3-tls-hardening, live-wiring slice), or `None` for plain HTTP.
+    /// Constructors that don't come from a live TLS connection (H3, data
+    /// URLs, Service Worker interception, tests) leave this `None` — H3 is
+    /// out of this task's scope (see `docs/tasks/ph3-tls-security-hardening.md`
+    /// §Goal), and a pooled HTTP/2 request that reused an already-open
+    /// connection (`h2_do_request_conn`) has no `Connection` to read it from.
+    cert_info: Option<tls::CertInfo>,
 }
 
 /// Map an [`h3::h3_exchange::H3Response`] onto the crate's [`Response`] at the
@@ -653,6 +669,9 @@ impl From<h3::h3_exchange::H3Response> for Response {
             // H3Response.informational keeps only status codes, never the
             // header blocks — see `h3_response_drops_informational_and_trailers`.
             early_hint_links: Vec::new(),
+            // H3 cert info is out of scope for ph3-tls-hardening (see
+            // docs/tasks/ph3-tls-security-hardening.md §Goal).
+            cert_info: None,
         }
     }
 }
@@ -1106,6 +1125,12 @@ pub struct PageResponse {
     /// на `Response::early_hint_links`. Пусто для кэш-хитов и перехвата
     /// Service Worker — у синтетического ответа не было сетевого round-trip.
     pub early_hint_links: Vec<String>,
+    /// Real TLS certificate info for the connection that served `final_url`
+    /// (ph3-tls-hardening, live-wiring slice; see [`tls::CertInfo`]).
+    /// `None` for plain HTTP, an HTTP-cache hit with no network round-trip,
+    /// a Service Worker/`FetchInterceptor` synthetic response, or a request
+    /// that reused a pooled HTTP/2 connection (see `Response::cert_info`).
+    pub cert_info: Option<tls::CertInfo>,
 }
 
 
@@ -1353,10 +1378,57 @@ fn connect_inner(
         let _ = tcp.set_read_timeout(None);
     }
     let is_h2 = check_negotiated_alpn(conn.alpn_protocol())?;
+    let cert_info = cert_info_from_completed_handshake(&conn);
 
     let mut c = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))));
     c.is_h2 = is_h2;
+    c.cert_info = cert_info;
     Ok(c)
+}
+
+/// Build a real [`tls::CertInfo`] from a `ClientConnection` right after its
+/// handshake completed (ph3-tls-hardening, live-wiring slice — A2-A5 built
+/// `LumenVerifier`/`CertInfo::from_peer_cert`/`ct::evaluate_ct` but nothing
+/// called them yet).
+///
+/// CT (A4) is a pure function of the leaf cert bytes, so it's safely
+/// recomputable here. OCSP (A3) is not: the stapled response is only ever
+/// handed to [`tls::verifier::LumenVerifier::verify_server_cert`], and
+/// per that module's docs a shared, cached `ClientConfig`/verifier must stay
+/// side-effect-free per call (a "last seen" `Mutex<Option<_>>` slot would
+/// race across concurrent connections on the same profile) — so the real
+/// verdict genuinely cannot be read back here yet. `Unknown` is always a
+/// safe under-statement: a `Revoked` staple already hard-fails the
+/// handshake before this function runs, so the only verdicts reachable at
+/// this point are "good" and "no staple", and this collapses both to the
+/// same "no revocation info" line rather than guessing. Threading the real
+/// verdict through is left to a follow-up slice.
+fn cert_info_from_completed_handshake(conn: &ClientConnection) -> Option<tls::CertInfo> {
+    let cert_der = conn.peer_certificates()?.first()?;
+    let tls_version = protocol_version_label(conn.protocol_version());
+    let ct_verdict = tls::ct::evaluate_ct(cert_der.as_ref());
+    Some(tls::CertInfo::from_peer_cert(
+        cert_der.as_ref(),
+        &tls_version,
+        tls::ocsp::OcspVerdict::Unknown,
+        ct_verdict,
+    ))
+}
+
+/// Render a negotiated [`rustls::ProtocolVersion`] for `CertInfo::tls_version`
+/// (e.g. `"TLS 1.3"`). Falls back to `"TLS"` when the handshake hasn't
+/// settled on a version yet — unreachable after a successful `complete_io`,
+/// kept only so this stays a total function.
+fn protocol_version_label(version: Option<rustls::ProtocolVersion>) -> String {
+    match version {
+        Some(rustls::ProtocolVersion::SSLv2) => "SSL 2.0".to_owned(),
+        Some(rustls::ProtocolVersion::SSLv3) => "SSL 3.0".to_owned(),
+        Some(rustls::ProtocolVersion::TLSv1_0) => "TLS 1.0".to_owned(),
+        Some(rustls::ProtocolVersion::TLSv1_1) => "TLS 1.1".to_owned(),
+        Some(rustls::ProtocolVersion::TLSv1_2) => "TLS 1.2".to_owned(),
+        Some(rustls::ProtocolVersion::TLSv1_3) => "TLS 1.3".to_owned(),
+        _ => "TLS".to_owned(),
+    }
 }
 
 
@@ -1739,9 +1811,11 @@ fn fetch_single(
                 .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
 
             let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
+            let cert_info = cert_info_from_completed_handshake(&tls_conn);
 
             conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
             conn.is_h2 = is_h2;
+            conn.cert_info = cert_info;
         }
     }
 
@@ -1864,6 +1938,7 @@ fn h2_do_request(
     body: Option<&RequestBody<'_>>,
 ) -> Result<Response> {
     use h2::conn::H2Conn;
+    let cert_info = conn.cert_info.clone();
     let stream = conn.into_stream();
     let mut h2 = H2Conn::connect_with_profile(stream, http_profile)?;
 
@@ -1894,7 +1969,7 @@ fn h2_do_request(
 
     // h2::conn::fetch_with_body discards 1xx header blocks entirely today —
     // see the comment on `Response::early_hint_links`.
-    Ok(Response { status, headers, body: resp_body, early_hint_links: Vec::new() })
+    Ok(Response { status, headers, body: resp_body, early_hint_links: Vec::new(), cert_info })
 }
 
 /// Дописать `content-type`/`content-length` в набор заголовков HTTP/2-запроса.
@@ -1945,7 +2020,9 @@ fn h2_do_request_conn(
         &extra_refs,
         body.map_or(&[][..], |b| b.bytes),
     )?;
-    Ok((Response { status, headers, body: resp_body, early_hint_links: Vec::new() }, h2))
+    // Pooled H2 connections carry no `Connection`/`CertInfo` to read back
+    // from — see the doc comment on `Response::cert_info`.
+    Ok((Response { status, headers, body: resp_body, early_hint_links: Vec::new(), cert_info: None }, h2))
 }
 
 /// Build the full HTTP/2 request header list — browser-fingerprint headers
@@ -2335,7 +2412,7 @@ fn fetch_with_redirect(
     if url.scheme() == "data" {
         let (content_type, body) = parse_data_url(url)?;
         return Ok((
-            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body, early_hint_links: Vec::new() },
+            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body, early_hint_links: Vec::new(), cert_info: None },
             url.clone(),
         ));
     }
@@ -2354,7 +2431,7 @@ fn fetch_with_redirect(
             .map_err(|e| Error::Network(format!("file: {}: {e}", path.display())))?;
         let content_type = guess_file_content_type(&path);
         return Ok((
-            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body, early_hint_links: Vec::new() },
+            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body, early_hint_links: Vec::new(), cert_info: None },
             url.clone(),
         ));
     }
@@ -4178,7 +4255,7 @@ impl HttpClient {
                 // Synthetic response (e.g. Service Worker intercept) — no
                 // real HTTP round-trip, so no real status; `200` reflects
                 // that it's a successful substitute, not "unknown".
-                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200, early_hint_links: Vec::new() });
+                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200, early_hint_links: Vec::new(), cert_info: None });
             }
         }
         let url_str = url.to_string();
@@ -4196,6 +4273,7 @@ impl HttpClient {
                     // Fresh HTTP-cache hit — no network round-trip, no status.
                     status: 0,
                     early_hint_links: Vec::new(),
+                    cert_info: None,
                 });
             }
             if !snap.conditional_headers.is_empty() {
@@ -4223,6 +4301,7 @@ impl HttpClient {
                         // 304: a real network round-trip happened, this is its real status.
                         status: resp.status,
                         early_hint_links: resp.early_hint_links,
+                        cert_info: resp.cert_info,
                     });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -4232,6 +4311,7 @@ impl HttpClient {
                     final_url,
                     status: resp.status,
                     early_hint_links: resp.early_hint_links,
+                    cert_info: resp.cert_info,
                 });
             }
         }
@@ -4256,7 +4336,7 @@ impl HttpClient {
         {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status, early_hint_links: resp.early_hint_links })
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status, early_hint_links: resp.early_hint_links, cert_info: resp.cert_info })
     }
 
     /// Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
@@ -4296,7 +4376,7 @@ impl HttpClient {
                 // Synthetic response (e.g. Service Worker intercept) — no
                 // real HTTP round-trip, so no real status; `200` reflects
                 // that it's a successful substitute, not "unknown".
-                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200, early_hint_links: Vec::new() });
+                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200, early_hint_links: Vec::new(), cert_info: None });
             }
         }
         let url_str = url.to_string();
@@ -4315,6 +4395,7 @@ impl HttpClient {
                     // Fresh HTTP-cache hit — no network round-trip, no status.
                     status: 0,
                     early_hint_links: Vec::new(),
+                    cert_info: None,
                 });
             }
             if !snap.conditional_headers.is_empty() {
@@ -4345,6 +4426,7 @@ impl HttpClient {
                         // 304: a real network round-trip happened, this is its real status.
                         status: resp.status,
                         early_hint_links: resp.early_hint_links,
+                        cert_info: resp.cert_info,
                     });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -4354,6 +4436,7 @@ impl HttpClient {
                     final_url,
                     status: resp.status,
                     early_hint_links: resp.early_hint_links,
+                    cert_info: resp.cert_info,
                 });
             }
         }
@@ -4377,7 +4460,7 @@ impl HttpClient {
         {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status, early_hint_links: resp.early_hint_links })
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status, early_hint_links: resp.early_hint_links, cert_info: resp.cert_info })
     }
 }
 
@@ -12354,5 +12437,36 @@ mod proxy_tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod ph3_tlshard_live_wiring_tests {
+    use super::*;
+
+    #[test]
+    fn protocol_version_label_known_versions() {
+        assert_eq!(protocol_version_label(Some(rustls::ProtocolVersion::TLSv1_3)), "TLS 1.3");
+        assert_eq!(protocol_version_label(Some(rustls::ProtocolVersion::TLSv1_2)), "TLS 1.2");
+        assert_eq!(protocol_version_label(Some(rustls::ProtocolVersion::TLSv1_1)), "TLS 1.1");
+        assert_eq!(protocol_version_label(Some(rustls::ProtocolVersion::TLSv1_0)), "TLS 1.0");
+    }
+
+    #[test]
+    fn protocol_version_label_none_is_total() {
+        assert_eq!(protocol_version_label(None), "TLS");
+    }
+
+    /// `Connection::new` (plain TCP or freshly wrapped TLS stream) must start
+    /// with no cert info — only `connect_inner`/the CONNECT-tunnel branch of
+    /// `fetch_single` populate it, right after a real handshake.
+    #[test]
+    fn fresh_connection_has_no_cert_info() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        let _ = listener.accept().unwrap();
+        let conn = Connection::new(RawStream::Plain(client));
+        assert!(conn.cert_info.is_none());
     }
 }

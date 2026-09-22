@@ -1077,6 +1077,8 @@ impl Lumen {
                 if let Some(t) = &self.title {
                     self.tab_strip.set_active_title(t.as_str());
                 }
+                // ph3-tls-hardening, live-wiring slice: same as `apply_loaded_page`.
+                self.cert_info = page.cert_info.map(crate::panels::cert_panel::PanelCertData::from);
                 self.anim_frame = None;
                 // Display list другой → старые match-rect-ы невалидны.
                 // Closing полностью сбрасывает query/active — пользователю
@@ -1241,6 +1243,8 @@ impl Lumen {
             // status/redirect signal at all — this is the rare no-window
             // GpuSession path (headless/tests), default to "unknown".
             nav: crate::nav_timing::NavResponseMeta::default(),
+            // lumen-driver path has no TLS handshake plumbing to this boundary.
+            cert_info: None,
         })
     }
 
@@ -1382,7 +1386,7 @@ impl Lumen {
                 let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone(), generation));
             }
 
-            let _ = proxy.send_event(LoadEvent::LoadDone(raw, generation));
+            let _ = proxy.send_event(LoadEvent::LoadDone(Box::new(raw), generation));
         });
         if let Err(err) = spawned {
             eprintln!("не удалось запустить поток стриминговой загрузки: {err}");
@@ -1925,6 +1929,9 @@ impl Lumen {
         if let Some(t) = &self.title {
             self.tab_strip.set_active_title(t.as_str());
         }
+        // ph3-tls-hardening, live-wiring slice: real cert info for the new
+        // top-level document, or `None` for plain HTTP / non-network sources.
+        self.cert_info = page.cert_info.clone().map(crate::panels::cert_panel::PanelCertData::from);
         self.anim_frame = None;
         self.find.close();
         self.address_bar.close();
@@ -2514,7 +2521,7 @@ pub(crate) enum LoadEvent {
     },
     /// Все байты получены — для финального полного pipeline.
     /// Последнее поле — generation навигации (U-1).
-    LoadDone(RawPage, u64),
+    LoadDone(Box<RawPage>, u64),
     /// Ошибка при загрузке страницы. Последнее поле — generation навигации (U-1).
     LoadError(String, u64),
     /// BUG-171 этап 2: финальный pipeline (parse → JS → fetch подресурсов →

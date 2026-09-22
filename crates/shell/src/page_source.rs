@@ -210,6 +210,7 @@ impl PageSource {
                 sync_xhr_permissions_policy: None,
                 status: 0,
                 redirected: false,
+                cert_info: None,
             }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
@@ -226,6 +227,7 @@ impl PageSource {
                     sync_xhr_permissions_policy: None,
                     status: 0,
                     redirected: false,
+                    cert_info: None,
                 })
             }
             PageSource::Url { url, body, upgrade_insecure_requests } => {
@@ -250,7 +252,7 @@ impl PageSource {
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
-                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links } =
+                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links, cert_info } =
                     client.fetch_page(&lumen_url, body.as_deref(), *upgrade_insecure_requests)?;
                 // BUG-640: redirect signal — the only one obtainable without
                 // a `lumen-network` change (`fetch_with_redirect`'s hop
@@ -284,6 +286,7 @@ impl PageSource {
                     sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
                     status,
                     redirected,
+                    cert_info,
                 })
             }
             PageSource::Snapshot { html, base_url } => {
@@ -301,6 +304,7 @@ impl PageSource {
                     sync_xhr_permissions_policy: None,
                     status: 0,
                     redirected: false,
+                    cert_info: None,
                 })
             }
             PageSource::Static { html, url } => {
@@ -318,6 +322,7 @@ impl PageSource {
                     sync_xhr_permissions_policy: None,
                     status: 0,
                     redirected: false,
+                    cert_info: None,
                 })
             }
         }
@@ -360,7 +365,7 @@ impl PageSource {
             );
         }
         let client = crate::config::global().apply_http(builder);
-        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links } =
+        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links, cert_info } =
             client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref(), *upgrade_insecure_requests)?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.
         let redirected = final_url != lumen_url;
@@ -390,6 +395,7 @@ impl PageSource {
             sync_xhr_permissions_policy: permissions_policy_sync_xhr_disposition(&resp_headers),
             status,
             redirected,
+            cert_info,
         })
     }
 
@@ -466,6 +472,11 @@ pub(crate) struct RawPage {
     /// Whether the final URL differs from the originally-requested one — see
     /// `nav_timing`'s doc comment for why this can't be an exact hop count.
     pub(crate) redirected: bool,
+    /// Real TLS certificate info for the response (ph3-tls-hardening,
+    /// live-wiring slice) — threaded from `lumen_network::PageResponse::cert_info`
+    /// into `LoadedPage::cert_info` by the `LoadDone`/`RenderDone` handler.
+    /// `None` for every non-network source, same as `csp_header`.
+    pub(crate) cert_info: Option<lumen_network::CertInfo>,
 }
 
 /// Parse every `Link:` header value collected from `103 Early Hints`

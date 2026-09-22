@@ -292,7 +292,15 @@ impl Lumen {
                         raw.sync_xhr_permissions_policy,
                         raw.referrer_policy_header.as_deref(),
                     )
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.to_string())
+                    // ph3-tls-hardening, live-wiring slice: `render_bytes` doesn't
+                    // need cert info to render, so it's stamped onto the result
+                    // here instead of threading it through that already-huge
+                    // parameter list.
+                    .map(|(mut page, layout_source, js_ctx)| {
+                        page.cert_info = raw.cert_info.clone();
+                        (page, layout_source, js_ctx)
+                    });
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)
                     // дропнется здесь, корректно завершив JS-поток.
                     let _ = proxy.send_event(LoadEvent::RenderDone(
