@@ -39,4 +39,4 @@
 ## Не проверялось
 
 - Полный набор отсутствующих в воркере интерфейсов (`WritableStream`, `TransformStream`, `CompressionStream`…) — по логу известны только пять перечисленных.
-- Service-worker-варианты: в baseline они `ERROR` на https-origin ([BUG-1069](BUG-1069-OPEN.md)), до кода не доходят.
+- Service-worker-варианты: в baseline они `ERROR` на https-origin ([BUG-1069](BUG-1069-FIXED.md)), до кода не доходят.

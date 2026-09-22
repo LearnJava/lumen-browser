@@ -15,7 +15,7 @@
 
 - `audiocontext-playoutstats.html` (прежнее имя атрибута; рядом лежит `audiocontext-playbackstats.html` с новым именем `playbackStats` — в `.ini` 4 подтеста `FAIL`) — `Cannot read properties of undefined (reading 'totalFramesDuration')` (4) и `(reading 'totalDuration')` (4): восемь `promise_test` падают из-за отсутствующего `playoutStats`.
 - `audiocontext-sinkid-{constructor,setsinkid,state-change}.https.html`, `context-time-monotonic-on-setsinkid.https.html`,
-  `setSinkId-with-MediaElementAudioSourceNode.https.html` — `ERROR` на https-origin ([BUG-1069](BUG-1069-OPEN.md)); отсутствие `setSinkId` подтверждено пробой, но вклад этих файлов
+  `setSinkId-with-MediaElementAudioSourceNode.https.html` — `ERROR` на https-origin ([BUG-1069](BUG-1069-FIXED.md)); отсутствие `setSinkId` подтверждено пробой, но вклад этих файлов
   в число подтестов не измерен и станет виден только после BUG-1069.
 
 ## Ожидание

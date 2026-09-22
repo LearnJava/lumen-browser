@@ -10,15 +10,25 @@ is not deterministic across machines/CI).
 
 `host-cert.pem`/`host-key.pem` are one self-signed leaf certificate (100-year
 expiry — this project's offline-only rule rules out ACME/live reissuance) for
-`CN=127.0.0.1` with SAN `IP:127.0.0.1, DNS:web-platform.test, DNS:127.0.0.1`.
-This no longer matches `browsers/lumen.py::env_options`'s `browser_host`
-verbatim (`WPT-RUN-10`, 2026-09-04, moved it to `"localhost"`) — not
-regenerated for that, because the mismatch is moot: see the trust note below,
-the cert is rejected before hostname matching would even run. `ca-cert.pem` is
-a copy of the same cert — `wptcommandline`'s `pregenerated` ssl type requires
-a CA cert path to exist, but nothing in this executor (`LumenBrowser` has no
-`webdriver_binary`-side trust-store injection) actually consumes it, so a
-minimal single self-signed cert stands in for a full CA chain.
+`CN=127.0.0.1` with SAN `IP:127.0.0.1, DNS:web-platform.test, DNS:127.0.0.1,
+DNS:localhost, DNS:*.localhost`. `ca-cert.pem` is a copy of the same cert —
+`wptcommandline`'s `pregenerated` ssl type requires a CA cert path to exist,
+but nothing in this executor (`LumenBrowser` has no `webdriver_binary`-side
+trust-store injection) actually consumes it, so a minimal single self-signed
+cert stands in for a full CA chain.
+
+**`localhost`/`*.localhost` added 2026-09-22 ([BUG-1069](../../bugs/BUG-1069-FIXED.md)).**
+The original SAN (`web-platform.test`/`127.0.0.1` only) stopped matching
+`browsers/lumen.py::env_options`'s `browser_host` (`WPT-RUN-10`, 2026-09-04,
+moved it to `"localhost"`), and this README's old note calling the mismatch
+"moot" (written before [BUG-785](../../bugs/BUG-785-FIXED.md) made the CA
+trusted) went stale: once the root is trusted, hostname matching is the only
+check left, and it failed on every single `.https.` test
+(`certificate not valid for name "localhost"`). `*.localhost` (wildcard)
+covers wptserve's subdomain tests (`www`, `www1`, `www2`, …, built as a
+prefix on `browser_host`) — whether those tests actually *resolve* on a given
+machine is a separate, still-open DNS problem
+([BUG-1070](../../bugs/BUG-1070-OPEN.md)), unaffected by this cert.
 
 **This cert is not trusted by Lumen's own TLS client** (`crates/network`) —
 Lumen validates against the real Mozilla root list like any browser, so a
@@ -38,7 +48,7 @@ cd tests/wpt/certs
 MSYS2_ARG_CONV_EXCL="*" OPENSSL_CONF=/mingw64/etc/ssl/openssl.cnf openssl req -x509 \
   -newkey rsa:2048 -nodes -keyout host-key.pem -out host-cert.pem -days 36500 \
   -subj "/CN=127.0.0.1" \
-  -addext "subjectAltName=IP:127.0.0.1,DNS:web-platform.test,DNS:127.0.0.1" \
+  -addext "subjectAltName=IP:127.0.0.1,DNS:web-platform.test,DNS:127.0.0.1,DNS:localhost,DNS:*.localhost" \
   -addext "basicConstraints=critical,CA:FALSE" \
   -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
   -addext "extendedKeyUsage=serverAuth"

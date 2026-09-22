@@ -20,7 +20,7 @@ new OfflineAudioContext({numberOfChannels:1, length:128, sampleRate:44100, rende
 В прогоне `webaudio` это даёт 20 сообщений `renderQuantumSize should be exactly N expected (number) N but got (undefined) undefined` и подтесты
 `audiocontext-rendersizehint.html` (18 в `.ini`) и `offlineaudiocontext-rendersizehint.html` (17). Файлы `*-rendersizehint*.https.html`
 (`analysernode`, `biquadfilter`, `convolver`, `scriptprocessor`, `audioworklet`, `offlineaudiocontext-suspend`, `rendersizehint-smoke-tests`) — `ERROR` на https-origin
-([BUG-1069](BUG-1069-OPEN.md)), их вклад появится после починки BUG-1069.
+([BUG-1069](BUG-1069-FIXED.md)), их вклад появится после починки BUG-1069.
 
 ## Ожидание
 

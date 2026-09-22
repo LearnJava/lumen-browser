@@ -866,7 +866,7 @@ data)`; вызывается и с главного `document`, и из
 молча роняет ЛЮБОЙ детач-узел без `__nid__` (`new Comment()`/`new Text()`
 туда же), заведено отдельно как [BUG-1055](BUG-1055-OPEN.md). Заодно
 найден и заведён отдельно (тоже не XML-специфично, Text/Comment/PI
-одинаково) [BUG-1054](BUG-1054-OPEN.md) — `nodeValue = null` не
+одинаково) [BUG-1054](BUG-1054-FIXED.md) — `nodeValue = null` не
 приводится к `""`.
 
 Тесты: `crates/js/tests/cases/bug786_srez25_pi_api.rs`, 5 новых

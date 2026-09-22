@@ -36,5 +36,5 @@
 ## Не проверялось
 
 - `SharedWorker` и `ServiceWorker`: `.any.sharedworker.html`/`.any.serviceworker.html`-варианты в этом же прогоне падают по другим причинам
-  (`?wpt_flags=h2` — TLS, [BUG-1069](BUG-1069-OPEN.md)), так что чистого замера нет.
+  (`?wpt_flags=h2` — TLS, [BUG-1069](BUG-1069-FIXED.md)), так что чистого замера нет.
 - `WebSocketStream` (`websockets/stream/`) в воркере.
