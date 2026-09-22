@@ -114,10 +114,20 @@ snapshot между документами через уже существую�
 `LoadEvent::LoadError` (там же) и синхронный fallback `reload()`'s `Err` рукав
 (`crates/shell/src/page_load.rs`).
 
-### Срез 6 — XS — доки/тесты
-`CAPABILITIES.md`, `CSS-SPECS.md` (View Transitions L2), `subsystems/*`. Graphic-тест по
-шаблону same-document VT (см. `project_test61_view_transitions_debtor` — MPA может стать
-KNOWN_DEBTOR из-за async-тайминга Edge).
+### Срез 6 — XS — доки/тесты — DONE
+`CAPABILITIES.md` (Misc-строка), `CSS-SPECS.md` (новая строка View Transitions L2, `#58`),
+`subsystems/shell.md` (Done-запись с инвариантом среза 5) обновлены. Юнит-тесты не добавлялись —
+они уже landed по срезам (7 css-parser + 10 opt-in-helper'ов page_pipeline + 3
+`departure_candidate_*`, все зелёные, перепроверено). SPA `startViewTransition`
+(`crates/js/src/view_transitions.rs`) не тронут ни одним из срезов 1-5 (grep подтверждает —
+все изменения только в `css-parser/parser/at_rules.rs`, `shell/page_pipeline.rs`,
+`shell/lumen/{navigation,state}.rs`, `shell/app/user_event.rs`, `shell/page_load.rs`), так что
+регрессии по построению нет. Graphic/interaction-тест **не заведён**: `graphic_tests` — это
+детерминированный однодокументный пайплайн (`parse_and_layout` один раз → скриншот), у него нет
+харнеса «навигация между двумя документами», а `KNOWN_DEBTORS`-ратчет рассчитан на статичный
+пиксельный baseline одной страницы, которого здесь нет. Реальная проверка cross-fade между двумя
+документами требует внешнего E2E-стенда (см. память `project_e2e_track_external_stand`) — не
+заводим здесь фиктивный тест ради галочки.
 
 ## Tests
 
@@ -136,5 +146,6 @@ KNOWN_DEBTOR из-за async-тайминга Edge).
 - [x] Same-origin навигация с двусторонним opt-in запускает cross-fade **через существующий
       SPA-движок** (нового драйвера не заведено) — срез 4, landed.
 - [x] Cross-origin / односторонний opt-in / ошибка snapshot → навигация без анимации (срез 5, landed).
-- [ ] SPA `startViewTransition` не задет — регрессий нет.
-- [ ] Юнит + graphic/interaction-тест зелёные (или обоснованный KNOWN_DEBTOR); доки обновлены.
+- [x] SPA `startViewTransition` не задет — регрессий нет (срез 6: подтверждено grep + перепрогон тестов).
+- [x] Юнит-тесты зелёные (21/21); доки обновлены. Graphic/interaction-тест обоснованно не заведён —
+      см. срез 6.
