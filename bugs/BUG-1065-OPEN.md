@@ -76,3 +76,12 @@ for (...) selector += '\\' + id.charCodeAt(i).toString(16) + ' ';
 `#\62 \6f \72 \64 \65 \72 ` …), например `/editing/other/delete-at-end-boundary-of-div-followed-by-inline-element-containing-hidden-select-element-with-non-editable-node.html`,
 `/editing/other/empty-elements-insertion.html`, `/editing/run/caret-navigation-after-removing-line-break.html`. Основная масса `ERROR` в `editing` — соседний
 [BUG-1063](BUG-1063-OPEN.md) (263 id); после починки обоих баги перегенерировать baseline категории.
+
+## Дополнение 2026-09-23 (триаж очереди P3): задеты и таблицы стилей, не только `querySelector`
+
+`parse_ident` (`crates/engine/css-parser/src/parser.rs`) не обрабатывает `\` вовсе, а тот же
+парсер разбирает таблицы стилей. Проба на dev-release от 2026-09-20 (`--dump-layout`):
+`<style>.w-1\/2{width:123px;height:10px}.md\:flex{width:77px;height:10px}</style>` +
+`<div class="w-1/2">`, `<div class="md:flex">` — оба правила не применились (блоки 1008×0).
+Это каждый класс Tailwind с экранированием (`md:`/`hover:`/`w-1/2`/`[…]`-arbitrary values) —
+адаптивная вёрстка любого Tailwind-сайта. Поэтому баг стоит вторым в `STATUS-P3.md`.
