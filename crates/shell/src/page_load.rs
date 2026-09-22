@@ -1635,7 +1635,7 @@ impl Lumen {
                 if req.is_lazy {
                     continue;
                 }
-                let nid = req.node_id.index() as u32;
+                let nid = req.node_id.raw();
                 if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
                     changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {

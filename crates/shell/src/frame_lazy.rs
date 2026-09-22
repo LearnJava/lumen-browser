@@ -69,7 +69,7 @@ pub(crate) fn fetch_frame_lazy_images(
         let key = frame_image_key(&base, url);
         let img_referrer_policy = lazy_requests
             .iter()
-            .find(|r| r.node_id.index() as u32 == *nid)
+            .find(|r| r.node_id.raw() == *nid)
             .and_then(|r| r.referrer_policy_attr.as_deref())
             .and_then(lumen_network::ReferrerPolicy::parse)
             .unwrap_or(referrer_policy);
@@ -98,10 +98,10 @@ pub(crate) fn fetch_frame_lazy_images(
         let wants_intrinsic = frame
             .lazy_requests
             .iter()
-            .find(|r| r.node_id.index() as u32 == *nid)
+            .find(|r| r.node_id.raw() == *nid)
             .is_some_and(|r| !(r.has_explicit_width && r.has_explicit_height));
         if wants_intrinsic {
-            let node_id = NodeId::from_index(*nid as usize);
+            let node_id = NodeId::from_raw(*nid);
             if let Ok(mut doc) = frame.doc.lock() {
                 lumen_layout::apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
             }

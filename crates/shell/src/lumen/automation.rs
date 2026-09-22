@@ -436,7 +436,7 @@ pub(crate) fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yN
         level: ax.state.level,
     };
     lumen_driver::A11yNode {
-        node_id: ax.node_id.index() as u32,
+        node_id: ax.node_id.raw(),
         role: ax.role.as_str().to_owned(),
         name: ax.name.clone(),
         description: ax.description.clone(),
