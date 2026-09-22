@@ -63,3 +63,15 @@ pinch-zoom и не `<meta viewport>` scale-клэмпинг — движок и�
 `offsetLeft`/`offsetTop`/`pageLeft` остаются `0`: layout- и visual-вьюпорт
 всё ещё один и тот же прямоугольник, сдвигаться некуда без настоящего
 различения между ними — та же Phase 3 задача, что и раньше.
+
+**Обновление 2026-09-22 (GAP-VVPORT срез 3, P6, финал):** Phase 3 сделан —
+`<meta viewport initial-scale>` больше не подмешивается в
+`zoom::effective_viewport` (это раньше меняло реальный box-layout viewport,
+`Lumen::relayout_viewport`), а идёт отдельным нативом
+`_lumen_get_meta_viewport_scale` в `visualViewport.scale`/`width`/`height`.
+Пользовательский Ctrl+=/Ctrl+-/Ctrl+0 (честный page zoom) реальную раскладку
+по-прежнему меняет и на `visualViewport.scale` больше не отражается — иначе
+был бы двойной счёт. Единственный оставшийся зазор — `offsetLeft`/
+`offsetTop`/`pageLeft` (панорамирование pinch-zoom): у движка нет touch-ввода
+вообще ни в какой форме, это структурная граница, не сужение задачи. Полная
+хронология — `ROADMAP.md`'s `GAP-VVPORT`. Статус — `done`.

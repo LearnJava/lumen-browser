@@ -100,9 +100,19 @@ pub struct V8JsRuntime {
     pub(super) hit_test_tree: Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>,
     /// Current viewport size `[width, height]` in CSS px.
     pub(super) viewport_size: Arc<Mutex<[f32; 2]>>,
-    /// Current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0 in the shell), backing
-    /// `window.visualViewport.scale` (GAP-VVPORT). 1.0 = no zoom.
+    /// Current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0 in the shell). 1.0 = no
+    /// zoom. GAP-VVPORT срез 3: no longer backs `visualViewport.scale` — full
+    /// page zoom reflows the layout viewport the same way it reflows the
+    /// visual viewport (real desktop "page zoom", not pinch-zoom), so the two
+    /// stay equal under it and it carries no visual/layout ratio.
     pub(super) zoom_factor: Arc<Mutex<f32>>,
+    /// `<meta name=viewport initial-scale>` of the current document (1.0 when
+    /// absent), backing `window.visualViewport.scale`/`width`/`height`
+    /// (GAP-VVPORT срез 3). Unlike `zoom_factor`, this does NOT feed the real
+    /// box-layout viewport (`Lumen::relayout_viewport`) — it is the ratio
+    /// between the layout viewport and the (currently un-panned, since the
+    /// engine has no pinch-zoom/touch input) visual viewport.
+    pub(super) meta_viewport_scale: Arc<Mutex<f32>>,
     /// Lazy image load requests queued by `_lumen_request_lazy_image_load` from JS.
     pub(super) lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     /// Scroll state per scroll-container node, updated after each relayout.
@@ -367,6 +377,7 @@ impl V8JsRuntime {
             hit_test_tree: Arc::new(Mutex::new(None)),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
             zoom_factor: Arc::new(Mutex::new(1.0)),
+            meta_viewport_scale: Arc::new(Mutex::new(1.0)),
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
@@ -687,10 +698,19 @@ impl V8JsRuntime {
         *self.viewport_size.lock().unwrap_or_else(|e| e.into_inner()) = [width, height];
     }
 
-    /// Update the current page zoom factor, backing
-    /// `window.visualViewport.scale` (GAP-VVPORT).
+    /// Update the current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0). No longer
+    /// backs `window.visualViewport.scale` as of GAP-VVPORT срез 3 — see
+    /// [`Self::update_meta_viewport_scale`].
     pub fn update_zoom_factor(&self, zoom: f32) {
         *self.zoom_factor.lock().unwrap_or_else(|e| e.into_inner()) = zoom;
+    }
+
+    /// Update `<meta name=viewport initial-scale>` of the current document,
+    /// backing `window.visualViewport.scale`/`width`/`height` (GAP-VVPORT
+    /// срез 3). `1.0` when the page has no viewport meta or omits
+    /// `initial-scale`.
+    pub fn update_meta_viewport_scale(&self, scale: f32) {
+        *self.meta_viewport_scale.lock().unwrap_or_else(|e| e.into_inner()) = scale;
     }
 
     /// Push the page's current stylesheet for CSSOM-4/BUG-493's synchronous

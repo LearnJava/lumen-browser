@@ -215,8 +215,10 @@ impl Lumen {
                 (s.width, s.height)
             },
         );
-        let meta_scale = meta_initial_scale(&layout_source);
-        let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, meta_scale, self.zoom_factor);
+        // GAP-VVPORT срез 3: `<meta viewport initial-scale>` no longer feeds the
+        // real box-layout viewport — only user zoom does (see
+        // `Lumen::relayout_viewport`'s doc comment for the split rationale).
+        let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, self.zoom_factor);
         let viewport = lumen_core::geom::Size::new(css_w, css_h);
         // content-visibility: auto (BB-4): relevance против восстановленного
         // scroll-положения; ratchet новой страницы стартует с нуля.

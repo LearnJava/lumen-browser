@@ -264,6 +264,7 @@ pub(crate) fn install_element_geometry(
     client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
     zoom_factor: Arc<Mutex<f32>>,
+    meta_viewport_scale: Arc<Mutex<f32>>,
     flush: FlushHandles,
 ) -> JsResult<()> {
     // ── element geometry (for getBoundingClientRect / ResizeObserver / IntersectionObserver) ──
@@ -321,11 +322,25 @@ pub(crate) fn install_element_geometry(
         });
     }
 
-    // Current page zoom factor (GAP-VVPORT), backing `visualViewport.scale`.
+    // Current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0). GAP-VVPORT срез 3: no
+    // longer backs `visualViewport.scale` (see `_lumen_get_meta_viewport_scale`
+    // below) — kept as a native for any future consumer that wants the raw
+    // page-zoom ratio itself.
     {
         let zf = Arc::clone(&zoom_factor);
         reg!(scope, ctx, store, "_lumen_get_zoom_factor", move || -> f64 {
             f64::from(*zf.lock().unwrap())
+        });
+    }
+
+    // `<meta name=viewport initial-scale>` of the current document (GAP-VVPORT
+    // срез 3), backing `visualViewport.scale`/`width`/`height` — the ratio
+    // between the layout viewport (`_lumen_get_viewport_size`) and the visual
+    // viewport.
+    {
+        let mvs = Arc::clone(&meta_viewport_scale);
+        reg!(scope, ctx, store, "_lumen_get_meta_viewport_scale", move || -> f64 {
+            f64::from(*mvs.lock().unwrap())
         });
     }
     Ok(())

@@ -263,6 +263,7 @@ impl V8JsRuntime {
             let hit_test_tree = Arc::clone(&self.hit_test_tree);
             let viewport_size = Arc::clone(&self.viewport_size);
             let zoom_factor = Arc::clone(&self.zoom_factor);
+            let meta_viewport_scale = Arc::clone(&self.meta_viewport_scale);
             let lazy_img_requests = Arc::clone(&self.lazy_img_requests);
             let scroll_states = Arc::clone(&self.scroll_states);
             let pending_scrolls = Arc::clone(&self.pending_scrolls);
@@ -445,6 +446,7 @@ impl V8JsRuntime {
                 Arc::clone(&client_rects),
                 Arc::clone(&viewport_size),
                 Arc::clone(&zoom_factor),
+                Arc::clone(&meta_viewport_scale),
                 flush_handles.clone(),
             )?;
 

@@ -578,15 +578,42 @@ fn visual_viewport_offset_and_scale_default_unzoomed() {
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
 }
 
-/// GAP-VVPORT срез 2: `scale` tracks the shell's page zoom (Ctrl+=/Ctrl+-),
-/// not just a hardcoded 1.0 — `update_zoom_factor` is the same write path
-/// `relayout.rs` uses alongside `update_viewport_size`.
+/// GAP-VVPORT срез 3: `scale` tracks `<meta viewport initial-scale>`
+/// (`update_meta_viewport_scale`, the same write path `relayout.rs` uses
+/// alongside `update_viewport_size`), not the shell's page zoom — real page
+/// zoom reflows the layout viewport itself (`Lumen::relayout_viewport`), so
+/// it must NOT also move `visualViewport.scale` or the two would double-count.
 #[test]
-fn visual_viewport_scale_tracks_zoom_factor() {
+fn visual_viewport_scale_tracks_meta_viewport_scale() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_meta_viewport_scale(1.5);
+    let r = rt.eval("visualViewport.scale").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(1.5));
+}
+
+/// Companion to the above: page zoom (Ctrl+=/Ctrl+-) must NOT move
+/// `visualViewport.scale` under GAP-VVPORT срез 3 — it already resizes the
+/// layout viewport that `visualViewport.width`/`height` derive from.
+#[test]
+fn visual_viewport_scale_ignores_zoom_factor() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.update_zoom_factor(1.5);
     let r = rt.eval("visualViewport.scale").unwrap();
-    assert_eq!(r, lumen_core::JsValue::Number(1.5));
+    assert_eq!(r, lumen_core::JsValue::Number(1.0));
+}
+
+/// `width`/`height` shrink by `<meta viewport initial-scale>` — the visual
+/// viewport is the portion of the (unaffected-by-meta-scale) layout viewport
+/// actually visible (GAP-VVPORT срез 3).
+#[test]
+fn visual_viewport_size_shrinks_by_meta_viewport_scale() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    rt.update_meta_viewport_scale(2.0);
+    let w = rt.eval("visualViewport.width").unwrap();
+    assert_eq!(w, lumen_core::JsValue::Number(400.0));
+    let h = rt.eval("visualViewport.height").unwrap();
+    assert_eq!(h, lumen_core::JsValue::Number(300.0));
 }
 
 // ── BUG-529: window.innerWidth/innerHeight/outerWidth/outerHeight ──────────

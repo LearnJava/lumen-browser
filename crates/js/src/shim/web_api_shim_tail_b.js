@@ -5345,8 +5345,8 @@ function _lumen_fire_window_scroll_event() {
     var ev = new Event('scroll', { bubbles: false, cancelable: false });
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
-    // GAP-VVPORT: visual and layout viewport are the same size in this
-    // single-window shell with no pinch-zoom, so both fire from the same
+    // GAP-VVPORT: no pinch-zoom/pan model, so the visual viewport's offset
+    // never diverges from the layout viewport's — both fire from the same
     // page-scroll step (Visual Viewport spec §2.4 「scroll」steps).
     if (typeof window !== 'undefined' && window.visualViewport) {
         window.visualViewport.dispatchEvent(new Event('scroll', { bubbles: false, cancelable: false }));
@@ -5398,9 +5398,13 @@ function _lumen_fire_image_error(nid) {
 function _lumen_fire_window_resize_event() {
     var ev = new Event('resize', { bubbles: false, cancelable: false });
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
-    // GAP-VVPORT: layout and visual viewport track the same size here (no
-    // pinch-zoom model), so the Visual Viewport API's own `resize` (spec §2.4)
-    // fires from the same size change as the layout-viewport `window` one.
+    // GAP-VVPORT: a layout-viewport resize always changes the visual
+    // viewport's size too (it stays `layout / meta_viewport_scale`), so the
+    // Visual Viewport API's own `resize` (spec §2.4) fires from the same size
+    // change as the layout-viewport `window` one. A resize caused only by
+    // `<meta viewport initial-scale>` becoming known after the initial parse
+    // (no window resize) does not fire this — a narrower gap than the pinch
+    // /meta-scale model this GAP does not implement at all.
     if (typeof window !== 'undefined' && window.visualViewport) {
         window.visualViewport.dispatchEvent(new Event('resize', { bubbles: false, cancelable: false }));
     }
