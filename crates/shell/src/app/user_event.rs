@@ -357,6 +357,12 @@ impl Lumen {
                         click_log::log_load_err(&self.source.describe(), &e);
                         health_log::log_load_error(&self.source.describe(), &e);
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
+                        // P3-viewtransnav срез 5: the outgoing snapshot was
+                        // captured for a navigation that never reached
+                        // `apply_loaded_page`/`maybe_reveal_mpa_view_transition` —
+                        // drop it rather than let a later unrelated reload
+                        // reveal a stale cross-fade.
+                        self.pending_mpa_view_transition_snapshot = None;
                     }
                 }
             }
@@ -372,6 +378,10 @@ impl Lumen {
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
+                // P3-viewtransnav срез 5: same fallback as the `RenderDone`
+                // error arm above — this navigation never reveals a
+                // transition, so its captured snapshot must not survive it.
+                self.pending_mpa_view_transition_snapshot = None;
             }
             LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles } => {
                 self.on_frame_nav_done(&host_doc, host, &old_doc, generation, handles);
