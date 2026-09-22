@@ -217,6 +217,55 @@ requestAnimationFrame(function () {
 });
 </script>
 """, "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 7: `ignore-fixed-and-sticky.html` — a fixed
+    # element's containing block is the viewport, so its page-space rect
+    # tracks the scroll offset even though nothing moved on screen; scrolling
+    # then forcing a relayout must not score a shift for it.
+    "cls-fixed-scroll": ("""
+<style>body { height: 2000px; } #t { position: fixed; top: 0; left: 0; width: 100px; height: 100px; background: blue; }</style>
+<div id=t></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        window.scrollTo(0, 50);
+        document.body.style.height = "2500px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 7: `content-visibility-hidden.html` — a skipped
+    # subtree's children never enter the box tree at all (`content_visibility.rs`),
+    # so a shift inside them should already read as "entered the tree" (not a
+    # shift) rather than needing a dedicated exclusion. Confirms that reading.
+    "cls-content-visibility-hidden": ("""
+<style>#t { content-visibility: hidden; contain-intrinsic-size: 1px; width: 100px; }</style>
+<div id=t><div id=c style="position: relative; top: 0; width: 100px; height: 100px; background: blue"></div></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("c").style.top = "200px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
     # Sanity: the stub does dispatch one event of its own (`_gatherMdns`), so a
     # silent result on the two-peer variant is not "RTC events never fire".
     "rtc-icecandidate": ("""

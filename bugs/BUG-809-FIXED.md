@@ -1,6 +1,6 @@
 # BUG-809 — Layout Instability объявлен, но ни одна запись `layout-shift` не доставляется: шелловский триггер `deliver_layout_shift` не вызывается ниоткуда
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-LAYOUTSHIFT](../ROADMAP.md))
+**Статус:** FIXED 2026-09-22 (P6, ДОРАБОТКА → [GAP-LAYOUTSHIFT](../ROADMAP.md))
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-LAYOUTSHIFT` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 17 — категория `layout-instability`, 35 TIMEOUT из 37 прогнанных, 94.6 %)
 **Область:** `crates/shell/src/main.rs:2925` (объявление `deliver_layout_shift` в трейте, помечено `#[allow(dead_code)]`), `crates/shell/src/main.rs:3359` (реализация — зовёт JS-хук), `crates/js/src/dom.rs:11035` (`_lumen_deliver_layout_shift`), `crates/js/src/dom.rs:10907` (`_PERF_SUPPORTED_ENTRY_TYPES`, где `layout-shift` объявлен поддерживаемым)
@@ -289,3 +289,40 @@ display-list-нейтрально.
 (`content-visibility-hidden.html`/`content-visibility-auto-*.html` упрутся в
 отсутствующее свойство раньше, чем в формулу CLS), отдельная, более крупная
 задача. Статус GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 7, P6, финал):** scroll-driven
+gap закрыт, `content-visibility`-остаток из среза 6 оказался доки-дрейфом —
+свойство в движке реализовано (`content_visibility.rs`, CSS Containment L3
+§4.4, ведёт свою собственную задачу BB-4/BUG-852), просто мимо этой записи.
+
+Четвёртое исключение в `collect_layout_shift_rects_rec`
+(`crates/engine/layout/src/lib.rs`) — `position: fixed`/`sticky`
+(`ignore-fixed-and-sticky.html`). Их containing block — viewport, поэтому
+relayout во время скролла пересчитывает их page-space `b.rect` на дельту
+скролла, хотя на экране они не двигались; без исключения каждый
+скролл-триггерный relayout выглядел бы как сдвиг на всю дистанцию скролла.
+Исключены так же, как `visibility: hidden` — пропуском записи в карту
+(в отличие от `opacity`, `position` не наследует "не отрисован" потомкам, так
+что их собственные боксы участвуют в диффе как обычно).
+
+Отдельно подтверждено (без правки кода): `content-visibility: hidden`
+уже корректно исключён из CLS. Пропущенное поддерево вообще не попадает в
+box tree (`content_visibility.rs`, `box_tree/build.rs:605`,
+`layout_dispatch.rs:531-536`), поэтому сдвиг внутри него уже читается как
+«вошёл в дерево» — та же ветка, что уже обрабатывает `display: none`, без
+отдельного исключения.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, два новых варианта
+`cls-fixed-scroll`/`cls-content-visibility-hidden`, dev-release, Windows,
+2026-09-22): оба печатают `no-entry=true`. `cls-shift`/`cls-translate`/
+`cls-visibility-hidden`/`cls-opacity-zero` (срезы 1-6) не регрессировали.
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` и
+`-p lumen-shell --all-targets -- -D warnings` чисты.
+
+Остаток объёма — исключительно formula-approximation, не измеренная в этом
+срезе: `content-visibility: auto`, ставший релевантным на скролле (CV-ratchet
+× scroll взаимодействие), и любые scroll-driven кейсы за пределами
+fixed/sticky, если найдутся. Не запланированная заранее задача — ревизия по
+факту находки, если её кто-то измерит. Измеренная в постановке заявка
+(доставка, атрибуция, три класса approximation-gap) выполнена целиком.
+Статус GAP-LAYOUTSHIFT — `done`.

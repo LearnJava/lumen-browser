@@ -1910,6 +1910,17 @@ pub fn collect_layout_rects(
 /// `ancestor_opacity_zero` flag down explicitly instead of trusting each
 /// node's own field, mirroring how the cascade would have propagated
 /// `visibility: hidden` if `opacity` inherited too.
+///
+/// GAP-LAYOUTSHIFT срез 7 (BUG-809): a fourth exclusion, `position: fixed`/
+/// `sticky` (`ignore-fixed-and-sticky.html`). Their containing block is the
+/// viewport, so a relayout while the page is scrolled recomputes their page-
+/// space `b.rect` by the scroll delta even though nothing moved on screen —
+/// without this exclusion `compute_layout_shift_score` would score every
+/// scroll-triggered relayout as a shift of the fixed/sticky element's full
+/// travel distance. Excluded the same way `visibility: hidden` already is
+/// (omission from the map, not a flag threaded to children — unlike
+/// `opacity`, `position` does not cascade a "not rendered" state to
+/// descendants, so their own boxes still participate normally).
 pub fn collect_layout_shift_rects(root: &LayoutBox) -> std::collections::HashMap<u32, [f32; 4]> {
     let mut out = std::collections::HashMap::new();
     collect_layout_shift_rects_rec(root, false, &mut out);
@@ -1924,7 +1935,9 @@ fn collect_layout_shift_rects_rec(
     let mut stack: Vec<(&LayoutBox, bool)> = vec![(root, ancestor_opacity_zero)];
     while let Some((b, opacity_zero)) = stack.pop() {
         let opacity_zero = opacity_zero || b.style.opacity <= 0.0;
-        if !matches!(b.style.visibility, Visibility::Visible) || opacity_zero {
+        let not_rendered = !matches!(b.style.visibility, Visibility::Visible) || opacity_zero;
+        let scroll_pinned = matches!(b.style.position, Position::Fixed | Position::Sticky);
+        if not_rendered || scroll_pinned {
             stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
             continue;
         }
