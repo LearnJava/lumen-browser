@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-23",
  "counts": {
-  "open": 278,
-  "fixed": 764,
+  "open": 276,
+  "fixed": 767,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1042,
+ "total_bugs": 1043,
  "phases": [
   {
    "id": "P0",
@@ -5365,7 +5365,7 @@
       {
        "id": "TEST-9",
        "title": "TEST-9: гибридный захват графтестов (`--ipc` дефолтом, gdigrab для GPU-подмножества)",
-       "status": "planned",
+       "status": "done",
        "size": "M",
        "note": "Гибридный захват в графическом прогоне: `--ipc` (собственный снимок Lumen) дефолтом, gdigrab — только для GPU-чувствительного подмножества. **Замер 2026-09-19, два прогона на одном dev-release-бинарнике** (`results/20260919-131021.json` — ipc, `20260919-133745.json` — gdigrab): 137/156 тестов совпадают, медиана расхождения 0.002 пп, максимум 0.497 пп; `--ipc` идёт <5 мин headless против ~20 мин foreground с фокусом. Расходятся 19 тестов (>0.5 пп), 9 меняют статус, и кластер осмысленный — трансформы/clip-path (100, 109, 130, 135, 136), фильтры/блюр/blend (30, 52, 56), AA-чувствительные края (16, 51, 53, 45, 147, 79, 117, 97), плюс 19, 55, 57, 59, 62, 78, 80: CPU-растеризатор и wgpu — независимые реализации каждого `DisplayCommand`, и расходятся они именно на GPU-специфике. Докстринг `run.py:28-30,38-41` устарел и задачу маскирует: BUG-221 (паритет CPU/femtovg) закрыт 2026-06-20, а пометка «CPU-снимок без исполнения скриптов» помечена ошибочной в коде (`dump_mode.rs:193-196` — скрипты исполняются, отсутствуют только per-frame pumps таймеров/rAF), то есть пометки «ТРЕБУЕТ gdigrab» у TEST-57/129-138 держатся на снятом основании. ГРАНИЦА: это замена дефолта, а не ещё один флаг — у раннера уже есть `--ipc`/`--per-test-process`/`--live` (no-op)/`--paint-bisect`, и четвёртый способ захвата рядом с gdigrab был бы усложнением. Основная цена не в коде: debtor-baseline'ы привязаны к способу захвата, для `--ipc`-пути нужен свой набор, иначе переключение молча подменит эталоны у 19 тестов (135/136 уже дают FAIL при *меньшем* дифе — ратчет требует разжалования). Сносится вместе с gdigrab: магента-калибровка, crop-offset, `hwnd`-перечисление, `_resolve_ffmpeg`, `ctypes.wintypes`, гонки фокуса, допуск `_DEBTOR_TOL = 2.0` (вчетверо выше порога теста 0.5 %). ffmpeg уходит не полностью — кроп Edge-эталона остаётся, а его замена требует либо Pillow (политика зависимостей, ADR-027), либо дописать кроп к самодельному zlib-декодеру PNG в `run.py`. Блокеры-предусловия: BUG-1061 (зависание ffmpeg роняет прогон) и BUG-1062 (сломанный захват рапортуется как регрессия). Отдельным вопросом — offscreen-GPU-захват через уже существующие `Renderer::new_headless`/`render_to_image` как замена gdigrab для тех 19 тестов: снял бы фокус и Windows-привязку, но offscreen не обязан совпадать с surface до байта (формат поверхности, sRGB, MSAA) и требует зафиксированного `WGPU_BACKEND` плюс сверки дельты, а не перегенерации эталонов под новый путь",
        "bugs": [
@@ -7128,7 +7128,7 @@
     },
     {
      "id": "CE-1",
-     "title": "CE-1: Custom Elements Срез 1 влит 2026-09-23: конструктор `HTMLElement` по `new.target` работает для прямого `new MyEl()` — `_lumen_ce_definition_by_ctor` (ctor → {name, registry, pending}, пишет `CustomElementRegistry.define`) плюс per-ctor construction stack (`_lumen_ce_construction_stacks`, пока только сторона pop/empty-branch — push со стороны upgrade/createElement остаётся срезу 2-3); при пустом стеке конструктор сам создаёт native-узел (`_lumen_create_element`) и строит wrapper с `newTarget.prototype` на цепочке (`_lumen_build_element` принял `ifaceOverride`, `_lumen_ce_build_wrapper`). 3 новых теста в `v8_fontface_shadow_custom.rs`, 19/19 CE зелёные, `cargo clippy -p lumen-js` чист. Остаток по объёму (2)-(5) не тронут — `<my-el>` из разметки и `document.createElement('my-el')` всё ещё не конструируют через класс. Следующий шаг — срез 2 (апгрейд существующего элемента: смена прототипа + вызов конструктора через construction stack). — настоящие конструктор, прототип и апгрейд",
+     "title": "CE-1: Custom Elements Срез 1 влит 2026-09-23: конструктор `HTMLElement` по `new.target` работает для прямого `new MyEl()` — `_lumen_ce_definition_by_ctor` (ctor → {name, registry, pending}, пишет `CustomElementRegistry.define`) плюс per-ctor construction stack (`_lumen_ce_construction_stacks`, пока только сторона pop/empty-branch — push со стороны upgrade/createElement остаётся срезу 2-3); при пустом стеке конструктор сам создаёт native-узел (`_lumen_create_element`) и строит wrapper с `newTarget.prototype` на цепочке (`_lumen_build_element` принял `ifaceOverride`, `_lumen_ce_build_wrapper`). 3 новых теста в `v8_fontface_shadow_custom.rs`, 19/19 CE зелёные, `cargo clippy -p lumen-js` чист. Остаток по объёму (2)-(5) не тронут — `<my-el>` из разметки и `document.createElement('my-el')` всё ещё не конструируют через класс. Срез 2 влит 2026-09-23: `_lumen_ce_upgrade_element` (`web_api_shim_mid.js`) больше не просто ставит `__ceUpgraded__` и зовёт `connectedCallback` напрямую — пушит существующий nid на construction stack определения (`_lumen_ce_construction_stacks`) и зовёт `new ctor()`, тот же путь, что срез 1 завёл для голого `new MyEl()`; `HTMLElement`'s конструктор снимает nid со стека и строит wrapper с прототипом класса, заменяя запись в кэше обёрток. `_lumen_ce_maybe_connected` при первом коннекте не-сконструированного элемента маршрутизирует туда же (а не просто выставляет флаг); `_lumen_ce_build_wrapper` сам ставит `__ceUpgraded__=true`, чтобы `appendChild` уже сконструированного через `new` элемента не запускал конструктор повторно. Известное ограничение: апгрейд подменяет кэш — JS-ссылка, полученная ДО апгрейда (напр. из `document.createElement` перед `appendChild`), продолжает указывать на старую обёртку без прототипа класса; актуальный объект нужно перечитывать через `document.querySelector`/аналог. 3 новых теста (апгрейд через `define`/`appendChild`/`CustomElementRegistry.upgrade`), 22/22 CE зелёные. Следующий шаг — срез 3 (`createElement`/`createElementNS`/парсер для уже определённого тега — синхронное конструирование). — настоящие конструктор, прототип и апгрейд",
      "status": "planned",
      "size": "L",
      "note": "Пользовательские элементы (HTML LS §4.13) не работают ни на одном пути создания. Проба 2026-09-23 (dev-release от 2026-09-20, `--dump-layout`): `class MyEl extends HTMLElement { constructor(){ super(); this.ctorRan = 1; } hello(){} }` + `customElements.define('my-el', MyEl)` → и у `<my-el>` из разметки, и у `document.createElement('my-el')` `typeof el.hello === 'undefined'`, `el.ctorRan === undefined`, `el instanceof MyEl === false`; `new MyEl()` бросает `Illegal constructor`. Механизм: `_lumen_ce_upgrade_element` (`crates/js/src/shim/web_api_shim_mid.js:12469`) только ставит флаг `__ceUpgraded__` и зовёт `connectedCallback` через `.call(el)` — прототип класса элементу не назначается, конструктор не вызывается, `HTMLElement` не конструируется по `new.target`; `connected`/`disconnected`/`attributeChanged` вызываются напрямую, мимо очереди CE reactions. Следствие для реального веба: падает любой компонент, который из колбэка зовёт свой метод (`this.render()`) или вешает shadow root в конструкторе, — это вся экосистема web components (Lit, Stencil, FAST, GitHub Catalyst, Salesforce LWC; github.com, youtube.com, msn.com). Объём по срезам: (1) конструктор `HTMLElement` по `new.target` → запись реестра, construction stack; (2) апгрейд существующего элемента — смена прототипа + вызов конструктора с маркером already-constructed; (3) `createElement`/`createElementNS`/парсер для уже определённого тега — синхронное создание; (4) очередь CE reactions (`[CEReactions]`) вместо прямых вызовов колбэков, включая `adoptedCallback`; (5) customized built-ins (`is=`) — отдельным срезом, опционально. Приёмка: проба выше даёт `function,1,function,1,true,new:true`; прогон WPT `custom-elements/` через `run_report.py` до/после. Реклассифицирует BUG-543 (ДОРАБОТКА → CE-1). Назначено P1 2026-09-23 решением пользователя.",
@@ -8892,27 +8892,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1060": {
-   "status": "open",
-   "title": "`query_all_deep_chain_does_not_overflow_the_stack`/`find_first_dom_node_by_selector_deep_chain_does_not_overflow_the_stack` (цепочка 200 000 узлов, LAYOUT-1 сре…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs:2164-2191`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1061": {
-   "status": "open",
-   "title": "Зависший вызов `ffmpeg` роняет весь прогон: `ffmpeg_diff`/`ffmpeg_crop` зовут `subprocess.run(timeout=15)` без `try`, `TimeoutExpired` всплывает в `main` и заве…",
-   "component": "тулинг графтестов (`graphic_tests/run.py:1317-1323`, вызов `:1633`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1062": {
-   "status": "open",
-   "title": "Сломанный gdigrab-захват рапортуется как массовая регрессия рендера, а не как невалидный прогон: при `ERROR` на калибровочном TEST-00 crop-offset не определён,…",
-   "component": "тулинг графтестов (`graphic_tests/run.py` — калибровка TEST-00, `_load_crop_offset`)",
-   "date": null,
-   "debtor": true
-  },
   "BUG-1063": {
    "status": "open",
    "title": "Селекторы с namespace-префиксом `*",
@@ -9148,6 +9127,13 @@
    "status": "open",
    "title": "`fetch()` к URL, редиректящему на не-HTTP(S) схему, для первого теста серии (`redirect-schemes.any.js`, `mailto:`-редирект) детерминированно резолвится `undefin…",
    "component": "js/network (`crates/js/src/shim/web_api_shim_mid_b2.js:980-1237::_lumen_fetch` + `crates/network/src/lib.rs:479-509::require_http_scheme`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1099": {
+   "status": "open",
+   "title": "`new iframe.contentWindow.<Ctor>()` для конструктора вне фиксированного IDL-набора `winFacade` (BUG-979 фолбэк) строит пустышку: фолбэк-обёртка вызывает удалённ…",
+   "component": "js (`crates/js/src/frame_bridge.rs::wrapWinFacadeGlobals` + `crates/js/src/v8_runtime/eval.rs:613-654::peer_global_call`)",
    "date": null,
    "debtor": false
   },
@@ -14484,6 +14470,27 @@
    "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
    "date": "2026-09-22",
    "debtor": false
+  },
+  "BUG-1060": {
+   "status": "fixed",
+   "title": "`query_all_deep_chain_does_not_overflow_the_stack`/`find_first_dom_node_by_selector_deep_chain_does_not_overflow_the_stack` занимали минуты вместо секунд. Найде…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs:2162` — `DEEP_CHAIN_DEPTH`; корень — `crates/engine/dom/src/lib.rs:1436` `Document::append_child`)",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-1061": {
+   "status": "fixed",
+   "title": "Зависший вызов `ffmpeg` ронял весь прогон: `ffmpeg_diff`/`ffmpeg_crop` звали `subprocess.run(timeout=15)` без `try`, `TimeoutExpired` всплывал в `main` и заверш…",
+   "component": "тулинг графтестов (`graphic_tests/run.py` — `ffmpeg_crop`/`ffmpeg_diff`, новая `_run_ffmpeg`)",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-1062": {
+   "status": "fixed",
+   "title": "Сломанный gdigrab-захват рапортовался как массовая регрессия рендера, а не как невалидный прогон: при `ERROR` на калибровочном TEST-00 crop-offset не определялс…",
+   "component": "тулинг графтестов (`graphic_tests/run.py` — калибровка TEST-00, страховка от серии высоких диффов)",
+   "date": "2026-09-23",
+   "debtor": true
   }
  },
  "unlinked": {
@@ -14970,6 +14977,9 @@
   ],
   "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
    "BUG-698"
+  ],
+  "js (`crates/js/src/frame_bridge.rs::wrapWinFacadeGlobals` + `crates/js/src/v8_runtime/eval.rs:613-654::peer_global_call`)": [
+   "BUG-1099"
   ],
   "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)": [
    "BUG-921"
@@ -15486,7 +15496,7 @@
   "layout (`crates/engine/layout/src/lib.rs::content_width`/`content_height`)": [
    "BUG-504"
   ],
-  "layout (`crates/engine/layout/src/selector_query.rs:2164-2191`)": [
+  "layout (`crates/engine/layout/src/selector_query.rs:2162` — `DEEP_CHAIN_DEPTH`; корень — `crates/engine/dom/src/lib.rs:1436` `Document::append_child`)": [
    "BUG-1060"
   ],
   "layout (`crates/engine/layout/src/selector_query.rs:688` `computed_style_to_map` — 88 свойств, обоих нет) + shell (`crates/shell/src/main.rs:22950` `take_cv_events` — вызывающих нет)": [
