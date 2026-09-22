@@ -10921,7 +10921,8 @@ var document = {
     // entry for the nid itself and for every descendant later appended under
     // it, instead of falling back to the global `customElements`.
     createElement:     function(tag, options) {
-        var nid = _lumen_create_element(String(tag).toLowerCase());
+        tag = String(tag).toLowerCase();
+        var nid = _lumen_create_element(tag);
         // QuickJS truncates the Rust u32::MAX sentinel to -1 (signed FFI
         // narrowing); the V8 native returns -1 explicitly as i32 (BUG-457) —
         // either way `nid < 0` catches the overflow on both engines.
@@ -10933,12 +10934,21 @@ var document = {
             __dom_node_warned = true;
             console.warn('DOM tree exceeds 40000 nodes');
         }
+        // CE-1 срез 3: a freshly minted node has no parent to inherit a scope
+        // from, so the registry to check is `options.customElements` if given,
+        // else the global one — same source `_lumen_ce_registry_for_nid` falls
+        // back to once this nid gains a parent.
+        var _ceScope = (options && options.customElements instanceof CustomElementRegistry)
+            ? { registry: options.customElements._registry, pending: options.customElements._pending }
+            : { registry: _lumen_ce_registry, pending: _lumen_ce_pending };
         if (options && options.customElements instanceof CustomElementRegistry) {
-            _lumen_ce_scope_by_nid[nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
+            _lumen_ce_scope_by_nid[nid] = _ceScope;
         }
         // BUG-571: a script element minted here is allowed to run once it is
         // inserted into the document — see `_lumen_resource_track`.
         _lumen_resource_track(nid, tag);
+        var _ceEntry = _ceScope.registry[tag];
+        if (_ceEntry) return _lumen_ce_construct_sync(nid, _ceEntry);
         return _lumen_make_element(nid);
     },
     // DOM LS §4.5: createElementNS(namespace, qualifiedName) creates a native
@@ -10952,16 +10962,28 @@ var document = {
         // literal 4-char string null down to _lumen_create_element_ns, which
         // is neither the SVG URL nor empty and so falls into the HTML
         // fallback (wrong namespace, silently).
-        var nid = _lumen_create_element_ns(ns === null || ns === undefined ? '' : String(ns), local);
+        var _nsStr = ns === null || ns === undefined ? '' : String(ns);
+        var nid = _lumen_create_element_ns(_nsStr, local);
         // See createElement above re: engine-specific overflow encoding.
         if (nid < 0) {
             throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
         }
+        var _ceScope = (options && options.customElements instanceof CustomElementRegistry)
+            ? { registry: options.customElements._registry, pending: options.customElements._pending }
+            : { registry: _lumen_ce_registry, pending: _lumen_ce_pending };
         if (options && options.customElements instanceof CustomElementRegistry) {
-            _lumen_ce_scope_by_nid[nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
+            _lumen_ce_scope_by_nid[nid] = _ceScope;
         }
         // BUG-571: SVG's <script> runs on insertion exactly like the HTML one.
         _lumen_resource_track(nid, local);
+        // CE-1 срез 3: autonomous custom elements are HTML-namespace only
+        // (HTML LS §4.13 "valid custom element name"); createElementNS into
+        // any other namespace (SVG, MathML, a made-up one) never looks the
+        // tag up, matching createElement's own scope resolution above.
+        if (_nsStr === _LUMEN_HTML_NS) {
+            var _ceEntry = _ceScope.registry[local.toLowerCase()];
+            if (_ceEntry) return _lumen_ce_construct_sync(nid, _ceEntry);
+        }
         return _lumen_make_element(nid);
     },
     createTextNode:         function(t) {
@@ -12587,6 +12609,36 @@ function _lumen_ce_upgrade_element(el, entry) {
             _lumen_console_error('CE connectedCallback (upgrade): ' + e);
         }
     }
+}
+
+// CE-1 срез 3 (HTML LS §4.13.5 "create an element", steps 6-8): the sibling
+// of `_lumen_ce_upgrade_element` for a node that has never had a wrapper at
+// all — `document.createElement`/`createElementNS` calling this instead of
+// `_lumen_make_element` directly means a tag already defined at call time
+// gets constructed through the real class immediately, so
+// `el.someMethod()` works right after `createElement`, before the element
+// is ever inserted (the WPT probe this срез targets reads `ctorRan`
+// synchronously). Same construction-stack push/pop `_lumen_ce_upgrade_element`
+// and срез 1's bare `new MyEl()` use; on constructor failure (spec's
+// "failed" custom element state) the plain wrapper is kept, still marked
+// upgraded so a later insertion does not retry the constructor.
+function _lumen_ce_construct_sync(nid, entry) {
+    var ctor = entry.ctor;
+    var stack = _lumen_ce_construction_stacks.get(ctor);
+    if (!stack) {
+        stack = [];
+        _lumen_ce_construction_stacks.set(ctor, stack);
+    }
+    stack.push(nid);
+    try {
+        new ctor();
+    } catch (e) {
+        _lumen_console_error('CE create constructor: ' + e);
+    }
+    stack.pop();
+    var built = _lumen_make_element(nid);
+    built.__ceUpgraded__ = true;
+    return built;
 }
 
 // Upgrades all DOM elements matching `tag` that are scoped to `scope`
