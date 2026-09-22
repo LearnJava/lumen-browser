@@ -576,6 +576,7 @@ pub(crate) fn run_window_mode(
         reader_original_source: None,
         cert_info: None,
         cert_panel: panels::cert_panel::CertPanel::new(),
+        cert_interstitial: panels::cert_interstitial::CertInterstitial::new(),
     };
     // BUG-411: seed the shields fallback from the persisted "Блокировать
     // рекламу" setting and push it at the process-global filter, which

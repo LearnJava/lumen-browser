@@ -45,6 +45,15 @@ pub struct PanelCertData {
     pub san_list: Vec<String>,
     /// Human-readable TLS protocol version (e.g. `"TLS 1.3"`).
     pub tls_version: String,
+    /// Revocation status (A3, stapled OCSP) — e.g. `"good"`, `"no OCSP staple"`.
+    pub revocation_status: String,
+    /// Certificate Transparency status (A4) — e.g. `"2 SCTs (sufficient)"`.
+    pub ct_status: String,
+    /// A6: human-readable reason the connection was rejected, when the page
+    /// currently shown was reached only via "Proceed anyway" on the cert
+    /// interstitial (`cert_interstitial.rs`). `None` for an ordinary,
+    /// trusted connection — the panel's usual green/passive state.
+    pub error: Option<String>,
 }
 
 impl PanelCertData {
@@ -52,14 +61,19 @@ impl PanelCertData {
     pub fn has_data(&self) -> bool {
         !self.subject_cn.is_empty()
     }
+
+    /// Returns `true` when this cert was accepted only via an explicit user
+    /// override (A6) — the panel should render its red/warning header.
+    pub fn has_error(&self) -> bool {
+        self.error.is_some()
+    }
 }
 
-/// Copy the fields this panel already renders out of a real
-/// `lumen_network::CertInfo` (ph3-tls-hardening, live-wiring slice).
-///
-/// `CertInfo::revocation_status`/`ct_status` (A3/A4) have no home here yet —
-/// A6 (invalid-cert UI) is the slice that extends `PanelCertData` with an
-/// error/warning state and those two rows.
+/// Copy the fields this panel renders out of a real `lumen_network::CertInfo`
+/// (ph3-tls-hardening, live-wiring slice + A6). `error` has no `CertInfo`
+/// counterpart — it is stamped separately by the cert-interstitial "Proceed
+/// anyway" flow (`cert_interstitial.rs`), never derived from a successful
+/// handshake's `CertInfo`.
 impl From<lumen_network::CertInfo> for PanelCertData {
     fn from(info: lumen_network::CertInfo) -> Self {
         Self {
@@ -72,6 +86,9 @@ impl From<lumen_network::CertInfo> for PanelCertData {
             fingerprint_sha256: info.fingerprint_sha256,
             san_list: info.san_list,
             tls_version: info.tls_version,
+            revocation_status: info.revocation_status,
+            ct_status: info.ct_status,
+            error: None,
         }
     }
 }
@@ -156,6 +173,18 @@ fn build_rows(cert: &PanelCertData) -> Vec<(&'static str, String)> {
         cert.not_after.clone()
     };
 
+    let revocation = if cert.revocation_status.is_empty() {
+        String::from("\u{2014}")
+    } else {
+        cert.revocation_status.clone()
+    };
+
+    let ct_status = if cert.ct_status.is_empty() {
+        String::from("\u{2014}")
+    } else {
+        cert.ct_status.clone()
+    };
+
     vec![
         ("Subject CN",   cert.subject_cn.clone()),
         ("Subject Org",  if cert.subject_org.is_empty() { String::from("\u{2014}") } else { cert.subject_org.clone() }),
@@ -166,6 +195,8 @@ fn build_rows(cert: &PanelCertData) -> Vec<(&'static str, String)> {
         ("TLS Version",  cert.tls_version.clone()),
         ("SANs",         san_str),
         ("SHA-256",      fingerprint),
+        ("Revocation",   revocation),
+        ("CT Status",    ct_status),
     ]
 }
 
@@ -196,6 +227,9 @@ mod tests {
             fingerprint_sha256: String::from("AA:BB:CC:DD:EE:FF:00:11:22:33"),
             san_list: vec![String::from("example.com"), String::from("www.example.com")],
             tls_version: String::from("TLS 1.3"),
+            revocation_status: String::from("good"),
+            ct_status: String::from("2 SCTs (sufficient)"),
+            error: None,
         }
     }
 
@@ -217,6 +251,21 @@ mod tests {
         assert_eq!(data.fingerprint_sha256, info.fingerprint_sha256);
         assert_eq!(data.san_list, info.san_list);
         assert_eq!(data.tls_version, "TLS 1.3");
+        assert_eq!(data.revocation_status, info.revocation_status);
+        assert_eq!(data.ct_status, info.ct_status);
+        assert!(data.error.is_none());
+    }
+
+    #[test]
+    fn has_error_false_for_ordinary_connection() {
+        assert!(!sample_cert().has_error());
+    }
+
+    #[test]
+    fn has_error_true_when_reason_stamped() {
+        let mut cert = sample_cert();
+        cert.error = Some(String::from("self-signed certificate"));
+        assert!(cert.has_error());
     }
 
     #[test]
@@ -263,10 +312,10 @@ mod tests {
     }
 
     #[test]
-    fn build_rows_has_nine_entries() {
+    fn build_rows_has_eleven_entries() {
         let cert = sample_cert();
         let rows = build_rows(&cert);
-        assert_eq!(rows.len(), 9);
+        assert_eq!(rows.len(), 11);
     }
 
     #[test]

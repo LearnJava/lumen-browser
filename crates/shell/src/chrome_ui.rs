@@ -534,17 +534,27 @@ impl Lumen {
             results: palette_results,
         };
         // CC-10: the design's 6 `.cert-row`s + `.cert-fp` cover a subset of
-        // `PanelCertData`'s 9 fields (no TLS-version slot) — missing/empty
-        // individual fields render as `"—"`, mirroring
+        // `PanelCertData`'s fields (no TLS-version/revocation/CT-status/error
+        // slot) — missing/empty individual fields render as `"—"`, mirroring
         // `cert_panel::build_rows`'s own em-dash fallback.
         let dash = |s: &str| if s.is_empty() { "\u{2014}".to_owned() } else { s.to_owned() };
         let cert = match &self.cert_panel.cert {
             Some(c) if c.has_data() => {
                 let san = if c.san_list.is_empty() { "\u{2014}".to_owned() } else { c.san_list.join(", ") };
                 let issuer = if !c.issuer_org.is_empty() { c.issuer_org.clone() } else { dash(&c.issuer_cn) };
+                // A6: `#certOverlay` has no dedicated warning slot yet (see
+                // `PanelCertData::error`'s doc) — until that CC design-asset
+                // slice lands, at least the title communicates the warning
+                // rather than silently showing a clean-looking green panel
+                // for a cert only accepted via "Proceed anyway".
+                let title = if c.has_error() {
+                    format!("⚠ Сертификат небезопасен — {}", dash(&c.subject_cn))
+                } else {
+                    format!("Сертификат — {}", dash(&c.subject_cn))
+                };
                 lumen_chrome::ChromeCertModel {
                     open: self.cert_panel.visible,
-                    title: format!("Сертификат — {}", dash(&c.subject_cn)),
+                    title,
                     rows: [
                         dash(&c.subject_cn),
                         dash(&c.subject_org),

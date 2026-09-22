@@ -28,6 +28,14 @@
 //!   handshake — not from this verifier.
 //!
 //! [`CertInfo`]: crate::tls::CertInfo
+//!
+//! ph3-tls-hardening A6: a host recorded in [`super::bypass`] ("Proceed
+//! anyway" on the shell's cert interstitial) downgrades what would otherwise
+//! be a hard-fail — both webpki chain rejection and the A3 stapled-OCSP
+//! `revoked` check above — back to a pass. This is deliberately the *only*
+//! seam that can turn a rejected certificate into `Ok`: it requires an
+//! explicit, previous, per-host user decision recorded by the shell, not an
+//! implicit default.
 
 use std::sync::Arc;
 
@@ -37,7 +45,21 @@ use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
+use super::bypass;
 use super::ocsp::{self, OcspVerdict};
+
+/// Render a rustls `ServerName` down to the plain hostname string
+/// [`bypass::is_allowed`] keys on. `ServerName` is `#[non_exhaustive]`
+/// (`rustls-pki-types`) — an unrecognised future variant has no meaningful
+/// hostname to bypass by, so it falls back to an empty string (never
+/// matches an override, i.e. fails closed).
+fn server_name_host(name: &ServerName<'_>) -> String {
+    match name {
+        ServerName::DnsName(d) => d.as_ref().to_owned(),
+        ServerName::IpAddress(ip) => std::net::IpAddr::from(*ip).to_string(),
+        _ => String::new(),
+    }
+}
 
 /// Wraps rustls's standard webpki chain verifier and layers a stapled-OCSP
 /// revocation check on top (A3): a `certStatus: revoked` staple hard-fails
@@ -77,12 +99,23 @@ impl ServerCertVerifier for LumenVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, RustlsError> {
-        let verified = self
-            .inner
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)?;
+        let chain_result =
+            self.inner
+                .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now);
+        let verified = match chain_result {
+            Ok(v) => v,
+            Err(_) if bypass::is_allowed(&server_name_host(server_name)) => {
+                // A6: user already clicked "Proceed anyway" for this host —
+                // accept without re-validating anything else below either.
+                return Ok(ServerCertVerified::assertion());
+            }
+            Err(e) => return Err(e),
+        };
         // A3: layer the stapled-OCSP revocation check on top of webpki's chain trust.
         // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
-        if ocsp::parse_stapled_response(ocsp_response) == OcspVerdict::Revoked {
+        if ocsp::parse_stapled_response(ocsp_response) == OcspVerdict::Revoked
+            && !bypass::is_allowed(&server_name_host(server_name))
+        {
             return Err(RustlsError::InvalidCertificate(CertificateError::Revoked));
         }
         Ok(verified)
@@ -136,5 +169,17 @@ mod tests {
         let verifier = LumenVerifier::new(crate::tls::trusted_root_store(), &provider())
             .expect("valid root store");
         assert!(!verifier.supported_verify_schemes().is_empty());
+    }
+
+    #[test]
+    fn server_name_host_reads_dns_name() {
+        let name = ServerName::try_from("example.com").expect("valid DNS name");
+        assert_eq!(server_name_host(&name), "example.com");
+    }
+
+    #[test]
+    fn server_name_host_reads_ip_address() {
+        let name = ServerName::try_from("127.0.0.1").expect("valid IP address");
+        assert_eq!(server_name_host(&name), "127.0.0.1");
     }
 }

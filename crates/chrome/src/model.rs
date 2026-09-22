@@ -460,10 +460,14 @@ pub struct ChromePaletteResultModel {
 /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`.
 ///
 /// The design's 6 static `.cert-row`s + 1 `.cert-fp` cover a *subset* of
-/// `PanelCertData`'s 9 fields (no TLS version row exists) — this binds only
-/// what the markup has a slot for, same honesty-over-fabrication call CC-9
-/// made for `#statAds`/`#statFp`. All-`None`/absent fields render as `"—"`,
-/// matching `cert_panel::build_rows`'s own em-dash fallback for missing data.
+/// `PanelCertData`'s fields (no TLS version, revocation, CT-status, or
+/// error-reason row exists — ph3-tls-hardening A6 added the latter two,
+/// still unbound here) — this binds only what the markup has a slot for,
+/// same honesty-over-fabrication call CC-9 made for `#statAds`/`#statFp`.
+/// All-`None`/absent fields render as `"—"`, matching
+/// `cert_panel::build_rows`'s own em-dash fallback for missing data. A
+/// red/warning header for `PanelCertData::has_error()` is a follow-up CC
+/// design-asset slice, not part of A6's shell-side wiring.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeCertModel {
     /// `true` shows the overlay — mirrors `CertPanel::visible`.

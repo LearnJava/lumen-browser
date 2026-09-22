@@ -864,6 +864,23 @@ impl Lumen {
             .unwrap_or(ScrollBehavior::Auto)
     }
 
+    /// "Proceed anyway" on the cert interstitial (ph3-tls-hardening A6):
+    /// record a session-scoped TLS-bypass override for the failed
+    /// navigation's host, then retry it. No-op if the interstitial isn't
+    /// currently showing anything (double-click, stale event, ...).
+    ///
+    /// `self.source` still holds the same `PageSource::Url` the failed
+    /// navigation was for — `CertInterstitial::open` never touched it, only
+    /// `load_failed`/`load_error_message` — so `reload()` retries the exact
+    /// URL the interstitial was blocking.
+    pub(crate) fn proceed_cert_interstitial(&mut self) {
+        let Some((_url, host)) = self.cert_interstitial.proceed() else {
+            return;
+        };
+        lumen_network::tls::bypass::allow_host(&host);
+        self.reload();
+    }
+
     /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
     /// `PageSource::Empty` — no-op (грузить нечего). При ошибке — оставляем
     /// предыдущий display_list, печатаем причину в stderr.
@@ -1345,7 +1362,23 @@ impl Lumen {
                 match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), &mut on_chunk) {
                     Ok(r) => r,
                     Err(e) => {
-                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), generation));
+                        // A6: a TLS cert failure routes to the interstitial
+                        // instead of the generic `LoadError` — everything
+                        // else (DNS, connect-refused, read timeout, ...)
+                        // keeps the existing string-message path.
+                        let _ = match e.downcast_ref::<lumen_core::error::Error>() {
+                            Some(lumen_core::error::Error::CertInvalid(cert_err)) => {
+                                let host = lumen_core::url::Url::parse(url)
+                                    .map_or_else(|_| url.clone(), |u| u.host().to_owned());
+                                proxy.send_event(LoadEvent::CertError(
+                                    url.clone(),
+                                    host,
+                                    cert_err.clone(),
+                                    generation,
+                                ))
+                            }
+                            _ => proxy.send_event(LoadEvent::LoadError(e.to_string(), generation)),
+                        };
                         return;
                     }
                 }
@@ -2524,6 +2557,14 @@ pub(crate) enum LoadEvent {
     LoadDone(Box<RawPage>, u64),
     /// Ошибка при загрузке страницы. Последнее поле — generation навигации (U-1).
     LoadError(String, u64),
+    /// ph3-tls-hardening A6: the fetch failed because the TLS handshake's
+    /// certificate did not verify (`lumen_core::error::Error::CertInvalid`,
+    /// downcast out of the `Box<dyn Error>` the streaming/static fetch paths
+    /// return before it collapses to a string). Routes to the cert
+    /// interstitial instead of the generic `LoadError` path. Fields: full
+    /// navigation URL, hostname (the key `tls::bypass::allow_host` needs for
+    /// "Proceed anyway"), the structured reason, and generation (U-1).
+    CertError(String, String, lumen_core::error::CertError, u64),
     /// BUG-171 этап 2: финальный pipeline (parse → JS → fetch подресурсов →
     /// layout) выполнен на фоновом потоке; готовый результат применяется на
     /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Последнее
