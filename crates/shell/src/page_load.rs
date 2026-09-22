@@ -1068,7 +1068,11 @@ impl Lumen {
                     // only diffs against a baseline it set itself, so without
                     // this the first post-reload relayout would compare
                     // against an empty snapshot and score zero every time.
-                    self.prev_layout_shift_rects = rects.clone();
+                    // срез 5: baseline is the shift-specific geometry (no
+                    // own-node transform, no `visibility: hidden` nodes), not
+                    // the gBCR `rects` pushed to JS below — see
+                    // `collect_layout_shift_rects`'s doc-comment.
+                    self.prev_layout_shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
                     let client_rects = collect_client_rects(lb_ref, &doc_guard);
                     let hit_test_tree = Arc::new(lb_ref.clone());
                     let styles = collect_computed_styles(lb_ref, &doc_guard, None);
@@ -1936,10 +1940,15 @@ impl Lumen {
                 },
             );
             let rects = collect_layout_rects(lb_ref, &doc_guard);
+            // GAP-LAYOUTSHIFT срез 5: scored off `collect_layout_shift_rects`,
+            // not the gBCR `rects` above (see that function's doc-comment) —
+            // `prescript_layout_rects` (page_pipeline.rs) is now the same
+            // shift-flavoured geometry, so both sides of this diff agree.
+            let shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
             // GAP-LAYOUTSHIFT срез 4: a synchronous parse-time `<script>` may
             // have already shifted layout before this, this page's very first
             // settled frame — the normal relayout diff never sees that shift,
-            // since `prev_layout_shift_rects` is seeded from `rects` (the
+            // since `prev_layout_shift_rects` is seeded from `shift_rects` (the
             // POST-script geometry) right below, same as before this slice.
             // Diffing against the pre-script snapshot here, once, delivers
             // that shift into the performance buffer with the same
@@ -1948,12 +1957,12 @@ impl Lumen {
             // open (see `bugs/BUG-809-OPEN.md`).
             let buffered_shift = prescript_layout_rects
                 .as_ref()
-                .map(|pre| compute_layout_shift_score(pre, &rects, viewport.width, viewport.height))
+                .map(|pre| compute_layout_shift_score(pre, &shift_rects, viewport.width, viewport.height))
                 .filter(|shift| shift.score > 0.0);
             // Seed the CLS diff baseline from this freshly loaded page's first
             // settled frame — see the reload() site above for why an unseeded
             // baseline silently scores every subsequent shift as zero.
-            self.prev_layout_shift_rects = rects.clone();
+            self.prev_layout_shift_rects = shift_rects;
             let client_rects = collect_client_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None);
@@ -2330,8 +2339,12 @@ impl Lumen {
             // newer) rect snapshot too — cheap, and keeps it from going
             // stale relative to whatever the lazy-image registration below
             // just changed. Done here, before `geom` moves into the closure.
-            if let Some((rects, ..)) = &geom {
-                self.prev_layout_shift_rects = rects.clone();
+            // срез 5: shift-flavoured geometry, not `geom`'s gBCR rects — see
+            // `collect_layout_shift_rects`'s doc-comment.
+            if geom.is_some()
+                && let Some(lb_ref) = self.layout_box.as_ref()
+            {
+                self.prev_layout_shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
             }
             route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 let pairs: Vec<(u32, &str)> =

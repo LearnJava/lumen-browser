@@ -150,6 +150,49 @@ setTimeout(function () {
 }, 300);
 </script>
 """, "cls-source node=shifter"),
+    # GAP-LAYOUTSHIFT срез 5: `translate-change.html` — a CSS `translate` edit
+    # moves the paint output, not the layout box; must not score.
+    "cls-translate": ("""
+<style>#t { position: relative; translate: 20px 0; width: 100px; height: 100px; background: blue; }</style>
+<div id=t></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("t").style.translate = "0 100px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 5: `visibility-hidden.html` — a `visibility: hidden`
+    # element moving must not score, since nothing rendered actually moved.
+    "cls-visibility-hidden": ("""
+<div id=t style="position: absolute; top: 0; width: 400px; height: 400px; visibility: hidden; background: blue"></div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("t").style.top = "200px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
     # Sanity: the stub does dispatch one event of its own (`_gatherMdns`), so a
     # silent result on the two-peer variant is not "RTC events never fire".
     "rtc-icecandidate": ("""

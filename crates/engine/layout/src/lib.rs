@@ -1872,6 +1872,56 @@ pub fn collect_layout_rects(
     out
 }
 
+/// GAP-LAYOUTSHIFT срез 5 (BUG-809): geometry snapshot for
+/// `compute_layout_shift_score`, deliberately *not* [`collect_layout_rects`].
+///
+/// Two approximation gaps that formula's doc-comment flagged as follow-up
+/// work, both traced to reusing `collect_layout_rects`'s gBCR-flavoured
+/// geometry for a spec that wants different inputs:
+///
+/// * **Own-node CSS `transform`/`translate` must not count.** L1 §3.1 scores
+///   *layout* shifts; a composited transform moves the paint output without
+///   touching the border box a reflow would recompute (`translate-change.html`
+///   expects score `0` for a `translate` edit). `collect_layout_rects` applies
+///   [`forward_box_transform`](crate::property_trees::forward_box_transform)
+///   because `getBoundingClientRect()` *should* report the transformed box —
+///   right for that caller, wrong for this one. This walk uses the raw
+///   `b.rect` instead.
+/// * **`visibility: hidden` elements must not count.** L1 §5.2.4 only scores
+///   elements that were actually rendered; a hidden element moving is invisible
+///   by definition (`visibility-hidden.html` expects score `0` for a `top`
+///   edit on a `visibility: hidden` box). Skipped here by omission — an
+///   element hidden in both the previous and current snapshot is absent from
+///   both maps, so [`compute_layout_shift_score`](crate) 's
+///   `prev.get(node)` miss treats it exactly like "entered/left the tree":
+///   not a shift.
+///
+/// Inline fragments (BUG-488's `InlineRun` union) are out of scope here —
+/// neither probe exercises them, and the plain-block walk below is what the
+/// filed approximation gaps need.
+pub fn collect_layout_shift_rects(root: &LayoutBox) -> std::collections::HashMap<u32, [f32; 4]> {
+    let mut out = std::collections::HashMap::new();
+    collect_layout_shift_rects_rec(root, &mut out);
+    out
+}
+
+fn collect_layout_shift_rects_rec(
+    root: &LayoutBox,
+    out: &mut std::collections::HashMap<u32, [f32; 4]>,
+) {
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if !matches!(b.style.visibility, Visibility::Visible) {
+            stack.extend(b.children.iter().rev());
+            continue;
+        }
+        let r = b.rect;
+        out.entry(b.node.index() as u32)
+            .or_insert([r.x, r.y, r.width, r.height]);
+        stack.extend(b.children.iter().rev());
+    }
+}
+
 // LAYOUT-1 срез 3: явный стек вместо рекурсии — `getBoundingClientRect`
 // пересчитывается на каждый relayout (BUG-987). Pre-order без пост-обработки
 // после цикла по детям, LIFO-стек с детьми в обратном порядке сохраняет
