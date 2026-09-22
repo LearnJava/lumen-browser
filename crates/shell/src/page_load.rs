@@ -82,8 +82,23 @@ impl Lumen {
             // Ключ реестра картинок остаётся сырым `url`; апгрейд (срез 43)
             // меняет только адрес запроса.
             let fetch_url: &str = upgraded.as_deref().unwrap_or(&url);
+            // GAP-REFERRER срез 8: element-wins-over-document override, same
+            // as the eager/frame-lazy `<img>` paths (срез 7) — this deferred
+            // path has no `ImageRequest` in scope, so the attribute is read
+            // straight off the live node by `nid` instead of carried in a
+            // struct field.
+            let img_referrer_policy = self
+                .layout_source
+                .as_ref()
+                .and_then(|src| src.document.lock().ok())
+                .and_then(|doc| {
+                    doc.try_get(NodeId::from_index(nid as usize))
+                        .and_then(|node| node.get_attr("referrerpolicy"))
+                        .and_then(lumen_network::ReferrerPolicy::parse)
+                })
+                .unwrap_or(referrer_policy);
             let bytes = match fetch_image_bytes(
-                fetch_url, &eff_base, &self.event_sink, Some(self.active_cookie_jar()), referrer_policy,
+                fetch_url, &eff_base, &self.event_sink, Some(self.active_cookie_jar()), img_referrer_policy,
             ) {
                 Ok(b) => b,
                 Err(e) => {
