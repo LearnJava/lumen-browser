@@ -213,7 +213,7 @@ impl FlushHandles {
         // does the equivalent via `set_interactive_state` on the shell thread —
         // this flush runs on the engine thread, which never gets that call).
         // `:hover`/`:active` stay unset — out of this bug's scope.
-        let focus_node = current_focus.map(|n| lumen_dom::NodeId::from_index(n as usize));
+        let focus_node = current_focus.map(lumen_dom::NodeId::from_raw);
         lumen_layout::set_interactive_state(None, focus_node, None);
         let (mut layout_root, counters) =
             lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer);
@@ -236,7 +236,7 @@ impl FlushHandles {
         for (&nid, s) in &prev_scroll {
             lumen_layout::set_scroll_position(
                 &mut layout_root,
-                lumen_dom::NodeId::from_index(nid as usize),
+                lumen_dom::NodeId::from_raw(nid),
                 s[0],
                 s[1],
             );
@@ -269,7 +269,7 @@ impl FlushHandles {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_scroll_containers_for_js_state(&layout_root)
             .iter()
-            .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+            .map(|c| (c.node.raw(), [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
             .collect();
         self.never_flushed.store(false, Ordering::Relaxed);
         *self

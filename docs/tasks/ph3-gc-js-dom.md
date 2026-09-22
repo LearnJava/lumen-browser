@@ -1,15 +1,42 @@
 # Ph3 — GC integration JS ↔ DOM (cross-boundary cycle collection)
 
-**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5), `p1-ph3-gcjsdom-srez6` (срез 6), `p1-ph3-gcjsdom-srez7` (срез 7) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
+**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5), `p1-ph3-gcjsdom-srez6` (срез 6), `p1-ph3-gcjsdom-srez7` (срез 7), `p1-ph3-gcjsdom-srez8` (срез 8) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
 
 ---
 
 ## Status
 
-**In progress (P1, срез 7, 2026-09-22).** The only item still open is arena
-free-list/compaction. Срез 7 lands the first half of срез 6's own "next
-срез" plan (call-site migration) — the type change itself (packing a
+**In progress (P1, срез 8, 2026-09-22).** The only item still open is arena
+free-list/compaction. Срез 8 finishes the call-site migration срез 7 started
+(the second half of срез 6's plan) — the type change itself (packing a
 generation into `NodeId`) and the free-list still don't exist.
+
+**Срез 8 — the JS↔DOM bridge call sites migrated to `raw()`/`from_raw()`.**
+All 115 occurrences of `NodeId::from_index(x as usize)` / `.index() as u32`
+in the four files срез 7 named as still pending — `crates/js/src/v8_runtime/install/dom_core.rs`
+(83), `crates/js/src/frame_bridge.rs` (23), `crates/js/src/v8_runtime/install/platform.rs`
+(6), `crates/js/src/v8_runtime/style_flush.rs` (3) — now use `NodeId::from_raw(x)`/`.raw()`.
+(`crates/js/src/dom.rs` had zero occurrences; it doesn't touch `NodeId` directly.)
+Purely mechanical: `raw()`/`from_raw()` are still bit-identical to `.index()`/
+`.from_index()` (no generation packed yet), so this is a rename, not a
+behavior change — every call site now has the *name* a future generation-aware
+`NodeId` needs, without yet validating anything `resolve()` would. Two
+`clippy::redundant_closure` hits from the mechanical rewrite
+(`.map(|n| NodeId::from_raw(n))` → `.map(NodeId::from_raw)`) fixed by hand.
+**Deliberately not touched:** `crates/shell/src/**` call sites beyond the 5
+srez 6/7 already migrated (`frame_lazy.rs`, `cursor_moved.rs:423`,
+`automation.rs:439`, `page_load.rs:1638`) — dozens more exist
+(`about_to_wait.rs`, `page_load.rs`, `click.rs`, `scrolling.rs`, …) but were
+outside срез 7's named scope and are same-tick round-trips, not long-lived
+JS-heap references, so they carry the same lower-risk classification срез 6
+gave them; test-only `NodeId::from_index`/`.index()` call sites (constructing
+fixtures directly against a `Document`, not decoding a JS-bridge value) are
+also untouched — they were never JS-bridge boundary sites.
+`cargo clippy -p lumen-dom --all-targets`, `-p lumen-js --features
+v8-backend --all-targets` and `-p lumen-shell --all-targets` clean;
+`cargo test -p lumen-dom` (312 passed), `-p lumen-js --features v8-backend`
+(4129 + 151 passed) and the `lumen-shell` bin's `gc_tick`/`page_pipeline`
+tests (6 + 120 passed) all green.
 
 **Срез 7 — `raw()`/`from_raw()`/`Document::resolve()` introduced, the 5 shell
 boundary sites named by срез 6 migrated.** `NodeId::raw`/`NodeId::from_raw`
