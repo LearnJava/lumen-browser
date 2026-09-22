@@ -162,6 +162,49 @@ fn probe_bare_finalization_registry_fires_under_force_gc() {
     assert_eq!(fired, 1.0, "bare FinalizationRegistry never fired under force_gc_for_testing");
 }
 
+/// GAP-P3GCJSDOM срез 3: the production trigger
+/// ([`V8JsRuntime::run_gc_pass`], called from `crates/shell/src/lumen/
+/// hibernation.rs` on every `BackgroundRecent`/`BackgroundOld` tier
+/// transition) must reclaim a leaked wrapper too, not just the
+/// `#[cfg(test)]`-only [`V8JsRuntime::force_gc_for_testing`]. Before срез 3
+/// this was a documented no-op (`V8PersistentJs::run_gc_pass`,
+/// `crates/shell/src/persistent_js.rs`) — even with срез 1/2's refcounting
+/// wired, a live tab would have leaked every detached-with-dropped-JS-ref
+/// node until V8's own heap pressure happened to collect it. Uses a level-2
+/// (`Aggressive`) pass repeatedly rather than `force_gc_for_testing`'s
+/// `--expose-gc` path, since `low_memory_notification` is a best-effort
+/// request, not a guaranteed synchronous collection.
+#[test]
+fn run_gc_pass_level_2_reclaims_a_leaked_wrapper() {
+    let doc = make_doc();
+    let main = find_element_by_tag(&doc.lock().unwrap(), "div").expect("fixture div");
+    let rt = v8_runtime_with_dom(doc.clone());
+
+    rt.eval(
+        "(function() { \
+             var el = document.getElementById('main'); \
+             el.remove(); \
+         })();",
+    )
+    .unwrap();
+    assert_eq!(doc.lock().unwrap().js_ref_count(main), 1);
+
+    for _ in 0..20 {
+        if doc.lock().unwrap().js_ref_count(main) == 0 {
+            break;
+        }
+        rt.run_gc_pass(2);
+    }
+
+    assert_eq!(
+        doc.lock().unwrap().js_ref_count(main),
+        0,
+        "run_gc_pass(2) never reclaimed the wrapper — the FinalizationRegistry \
+         callback that decrements js_refs would never fire in a real background tab"
+    );
+    assert!(doc.lock().unwrap().dead_node_ids().contains(&main));
+}
+
 /// Sanity check on the fixture: pins down that `document.getElementById`
 /// and `document.querySelector` resolve to the same underlying node the
 /// other tests in this file look up by Rust-side `NodeId` via

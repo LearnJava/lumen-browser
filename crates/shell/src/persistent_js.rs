@@ -1309,8 +1309,12 @@ impl PersistentJs for V8PersistentJs {
     fn set_page_scroll_y(&self, y: f32) -> bool {
         self.rt.set_page_scroll_y(y)
     }
-    fn run_gc_pass(&self, _level: u8) {
-        // V8 manages its own generational GC; no manual tuning hook is wired yet.
+    fn run_gc_pass(&self, level: u8) {
+        // GAP-P3GCJSDOM срез 3: was a no-op — see `V8JsRuntime::run_gc_pass`
+        // for what actually runs now (low_memory_notification + platform
+        // task-queue drain, the latter needed so FinalizationRegistry
+        // callbacks from срез 1/2's wrapper refcounting actually fire).
+        self.rt.run_gc_pass(level);
     }
     fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32) {
         self.eval_js(&format!(

@@ -1220,6 +1220,47 @@ impl V8JsRuntime {
         })
     }
 
+    /// Per-tier GC tuning trigger (10L, `gc_policy::GcLevel`), wired for real
+    /// by GAP-P3GCJSDOM срез 3 — before this, [`crate::PersistentJs::
+    /// run_gc_pass`]'s V8 implementation was a documented no-op even though
+    /// the shell already calls it on every `BackgroundRecent`/`BackgroundOld`
+    /// tier transition (`crates/shell/src/lumen/hibernation.rs`).
+    ///
+    /// `level` mirrors [`crate::gc_policy::GcLevel`] as a raw `u8` (the
+    /// `PersistentJs` trait predates the V8 migration and is shared with
+    /// other call sites that pass a literal): `0` = active tab, no forced
+    /// GC — matches `GcLevel::Soft`'s "never stall a foreground tab"
+    /// contract, so this is a no-op. `1`/`2` = background tab, aging;
+    /// `Isolate::low_memory_notification()` asks V8 to reclaim as much as it
+    /// can right now, `2` asks twice (V8's own recommendation for a more
+    /// thorough compaction than a single call gives).
+    ///
+    /// Either level also drains V8's `Platform` task queue exactly like
+    /// [`Self::force_gc_for_testing`] does, for the same reason: without it,
+    /// a `FinalizationRegistry` cleanup callback made runnable by the GC
+    /// above would sit queued forever, and `Document::release_js_ref`
+    /// (`_lumen_node_wrapper_finalizer`, `web_api_shim_mid.js`) would never
+    /// fire in a live tab — the wrapper-refcount wiring from срез 1/2 would
+    /// only ever have been exercised by tests. This was the first place in
+    /// the whole crate that pumps the platform queue outside `#[cfg(test)]`
+    /// (`tc39_proposals.rs`'s `atomics_wait_async_notify_resolves_ok` doc
+    /// comment notes the same queue sits unpumped everywhere else — the
+    /// gap that let срез 1/2's leak persist in a real tab is not specific to
+    /// DOM wrappers).
+    pub fn run_gc_pass(&self, level: u8) {
+        if level == 0 {
+            return;
+        }
+        let platform = v8::V8::get_current_platform();
+        self.run(|inner| {
+            inner.isolate.low_memory_notification();
+            if level >= 2 {
+                inner.isolate.low_memory_notification();
+            }
+            while v8::Platform::pump_message_loop(&platform, &inner.isolate, false) {}
+        });
+    }
+
     /// Force a full, synchronous V8 GC cycle for test assertions
     /// (GAP-P3GCJSDOM срез 2, docs/tasks/ph3-gc-js-dom.md). Requires
     /// `--expose-gc`, which `named_access::apply_v8_test_gc_flag` sets only

@@ -6,7 +6,7 @@
 
 ## Status
 
-**In progress (P1, срез 2, 2026-09-22).** Phase 2 / v0.5.0 has shipped and the V8
+**In progress (P1, срез 3, 2026-09-22).** Phase 2 / v0.5.0 has shipped and the V8
 migration (`docs/tasks/ph3-v8-migration.md`) has landed — but it did **not** give DOM
 wrappers real V8 identity. There is no `ObjectTemplate`/internal-field/embedder-data
 construction anywhere in `crates/js/src` (grepped) and no `v8::Global` retained
@@ -77,16 +77,34 @@ an attached node is never reported dead regardless of `js_refs`. `--expose-gc` i
 gated on `cfg!(test)` in `named_access::apply_v8_test_gc_flag` — a live page must
 never see a `gc()` global.
 
+**срез 3 (this срез) wires the trigger, and along the way found a second,
+broader gap than the one it set out to fix.** The plan was: replace
+`V8PersistentJs::run_gc_pass`'s no-op (`crates/shell/src/persistent_js.rs:1312`,
+*"V8 manages its own generational GC; no manual tuning hook is wired yet"*) with a
+real `Isolate::low_memory_notification()` call, since `hibernation.rs` already
+invokes `run_gc_pass(1)`/`run_gc_pass(2)` on every `BackgroundRecent`/`BackgroundOld`
+tier transition — no new call site needed, only a real implementation
+(`V8JsRuntime::run_gc_pass`, `crates/js/src/v8_runtime/runtime.rs`).
+
+Discovered while building срез 2's `force_gc_for_testing`: a GC pass alone does not
+make a `FinalizationRegistry` cleanup callback run — V8 posts it as a task on the
+embedder's `Platform` task queue, not a microtask, and **nothing in this codebase
+outside `#[cfg(test)]` had ever pumped that queue** (`tc39_proposals.rs`'s
+`atomics_wait_async_notify_resolves_ok` doc comment independently confirms the same
+thing for `Atomics.waitAsync`). Consequence: srez 1/2's refcount wiring, though
+correct, would have **leaked every detached-with-dropped-JS-ref node in a live tab
+forever** — the `FinalizationRegistry` callback that calls `release_js_ref` had no
+path to ever run outside a test. `V8JsRuntime::run_gc_pass(level)` now also drains
+the platform queue (`Platform::pump_message_loop`) after `low_memory_notification()`,
+closing that gap — verified against a real leaked wrapper, not just absence of a
+panic (`run_gc_pass_level_2_reclaims_a_leaked_wrapper`,
+`crates/js/src/dom/tests/v8_gap_p3gcjsdom_wrapper_refcount.rs`). `level == 0`
+(active/foreground tab) stays a no-op, matching `GcLevel::Soft`'s "never stall a
+foreground tab" contract.
+
 **Deferred to a later срез:** arena free-list/compaction (`dead_node_ids` still only
 *identifies* collectable nodes; `crates/engine/dom/src/lib.rs` `alloc()` stays
-append-only); wiring the cycle pass to `gc_policy::GcLevel`/idle-T2 transitions
-(found orphaned during срез 1 — `GcLevel` has **zero consumers** anywhere in the
-tree, and `V8PersistentJs::run_gc_pass` is a documented no-op,
-`crates/shell/src/persistent_js.rs:1312`: *"V8 manages its own generational GC; no
-manual tuning hook is wired yet."* Forcing an actual V8 GC pass on a T2 transition —
-e.g. via `Isolate::low_memory_notification()` — is what would make the new
-`FinalizationRegistry` fire promptly instead of waiting for V8's own heap pressure;
-this is real, separate scope, not done here).
+append-only) — the only remaining open DoD item.
 
 This is honest, deep engine integration — not a bolt-on. The original difficulty
 this brief was written for — cross-boundary reference cycles — turned out not to
@@ -382,11 +400,15 @@ The split P1=hooks / P4=engine+algorithm matches the roadmap line.
       `detached_node_with_live_js_reference_survives_gc`).
 - [ ] Arena free-list/compaction implemented; `dead_node_ids` results are actually
       reclaimed; arena invariants intact.
-- [ ] Cycle pass triggered via `gc_policy` on idle/T2 without duplicating tier tuning.
-- [x] `cargo clippy -p lumen-dom --all-targets -- -D warnings` and
-      `-p lumen-js --features v8-backend` clean; `cargo test -p lumen-dom` and
-      `-p lumen-js --features v8-backend` pass (two known-flaky, unrelated tests —
-      `web_audio::tests_v8::bug908_…`, `worker::tests_v8::…zero_delay_interval…`,
+- [x] Cycle pass triggered via `gc_policy` on idle/T2 without duplicating tier tuning.
+      (срез 3: `V8JsRuntime::run_gc_pass`, called from the existing
+      `hibernation.rs` tier-transition sites — no new call site added.)
+- [x] `cargo clippy -p lumen-dom --all-targets -- -D warnings`, `-p lumen-js
+      --features v8-backend` and `-p lumen-shell` clean; `cargo test -p lumen-dom`,
+      `-p lumen-js --features v8-backend` and the `lumen-shell` bin's
+      `gc_tick`/`page_pipeline` tests pass (two known-flaky, unrelated
+      `lumen-js` tests — `web_audio::tests_v8::bug908_…`,
+      `worker::tests_v8::…zero_delay_interval…`,
       `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty` — are
       parallel-run global-state flakes that pass in isolation, pre-existing on `main`).
 - [ ] Docs updated: `CAPABILITIES.md`, `subsystems/dom.md`, `subsystems/js.md`,
