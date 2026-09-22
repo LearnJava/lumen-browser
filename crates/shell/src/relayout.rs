@@ -765,10 +765,14 @@ impl Lumen {
     ///
     /// Returns `None` — skip relayout — when there is no `LayoutSource`/renderer
     /// yet or the content region is degenerate (minimized window). Applies the
-    /// live chrome inset (RP-2), `<meta viewport initial-scale>` and the user
-    /// zoom, matching scroll clamping and the content `PushTransform`.
+    /// live chrome inset (RP-2) and the user zoom, matching scroll clamping and
+    /// the content `PushTransform`. GAP-VVPORT срез 3: `<meta viewport
+    /// initial-scale>` no longer scales this — per CSSOM View, `initial-scale`
+    /// sets the ratio between the layout viewport and the *visual* viewport
+    /// (`window.visualViewport`, see `meta_viewport_scale` pushed alongside
+    /// `zoom_factor` in `apply_relayout_result` below), not the layout viewport
+    /// itself. Only real page zoom (Ctrl+=/Ctrl+-/Ctrl+0) reflows the box tree.
     pub(crate) fn relayout_viewport(&self) -> Option<Size> {
-        let src = self.layout_source.as_ref()?;
         let r = self.renderer.as_ref()?;
         let vp_size = r.viewport_size();
         // RP-2: lay out against the live page content region, not the full
@@ -784,9 +788,7 @@ impl Lumen {
         if vp_w <= 0.0 || vp_h <= 0.0 {
             return None;
         }
-        // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
-        let meta_scale = meta_initial_scale(src);
-        let (css_w, css_h) = zoom::effective_viewport(vp_w, vp_h, meta_scale, self.zoom_factor);
+        let (css_w, css_h) = zoom::effective_viewport(vp_w, vp_h, self.zoom_factor);
         Some(Size::new(css_w, css_h))
     }
 
@@ -918,6 +920,11 @@ impl Lumen {
         // near the end of this function.
         #[cfg(feature = "v8")]
         let stylesheet_for_flush = Arc::clone(&src.stylesheet);
+        // GAP-VVPORT срез 3: same reason as `stylesheet_for_flush` above — grab
+        // this now, while `src` is still alive, so it can be pushed to JS
+        // alongside `zoom_factor` further down without re-borrowing
+        // `self.layout_source` past the `&mut self` calls in between.
+        let meta_viewport_scale = meta_initial_scale(src);
         // BUG-341 S7: invalidate the restyle-cascade cache by default — every
         // producer routes through here, but only `try_relayout_raf_incremental`'s
         // restyle sub-path knows how to recompute a cache that actually matches
@@ -1072,6 +1079,10 @@ impl Lumen {
                         timed_step!("update_stylesheet", js.update_stylesheet(stylesheet));
                         timed_step!("update_viewport_size", js.update_viewport_size(vw, vh));
                         timed_step!("update_zoom_factor", js.update_zoom_factor(zoom_factor));
+                        timed_step!(
+                            "update_meta_viewport_scale",
+                            js.update_meta_viewport_scale(meta_viewport_scale)
+                        );
                         timed_step!("deliver_layout_observers", js.deliver_layout_observers());
                         if layout_shift_score > 0.0 {
                             timed_step!(
@@ -1103,6 +1114,7 @@ impl Lumen {
                         js.update_stylesheet(stylesheet);
                         js.update_viewport_size(vw, vh);
                         js.update_zoom_factor(zoom_factor);
+                        js.update_meta_viewport_scale(meta_viewport_scale);
                         js.deliver_layout_observers();
                         if layout_shift_score > 0.0 {
                             js.deliver_layout_shift(layout_shift_score, had_input);

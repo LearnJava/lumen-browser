@@ -166,11 +166,19 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after every resize and on initial load.
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_viewport_size(&self, width: f32, height: f32);
-    /// Update the current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0), backing
-    /// `window.visualViewport.scale` (GAP-VVPORT). Call alongside
-    /// [`Self::update_viewport_size`] — same cadence, same cheap write.
+    /// Update the current page zoom factor (Ctrl+=/Ctrl+-/Ctrl+0). Call
+    /// alongside [`Self::update_viewport_size`] — same cadence, same cheap
+    /// write. No longer backs `window.visualViewport.scale` as of GAP-VVPORT
+    /// срез 3 — see [`Self::update_meta_viewport_scale`].
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_zoom_factor(&self, zoom: f32);
+    /// Update `<meta name=viewport initial-scale>` of the current document
+    /// (GAP-VVPORT срез 3), backing `window.visualViewport.scale`/`width`/
+    /// `height`. Call alongside [`Self::update_zoom_factor`] — both are pushed
+    /// from the same relayout snapshot. `1.0` when the page has no viewport
+    /// meta or omits `initial-scale`.
+    #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
+    fn update_meta_viewport_scale(&self, scale: f32);
     /// CSSOM-7 (BUG-977): push the page's current cascade for the
     /// synchronous same-tick flush (CSSOM-4/BUG-493's `maybe_flush`), which
     /// the interactive shell never fed before this — `FlushHandles::stylesheet`
@@ -1002,6 +1010,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_zoom_factor(&self, zoom: f32) {
         self.rt.update_zoom_factor(zoom);
+    }
+    fn update_meta_viewport_scale(&self, scale: f32) {
+        self.rt.update_meta_viewport_scale(scale);
     }
     fn update_stylesheet(&self, sheet: Arc<lumen_css_parser::Stylesheet>) {
         self.rt.update_stylesheet(sheet);

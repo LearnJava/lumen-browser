@@ -121,22 +121,23 @@ window.scrollBy = function(x, y) {
 };
 
 // ── window.visualViewport (Visual Viewport API) ─────────────────────────────
-// width/height/pageTop are backed by the same natives as the scroll API just
-// above. No pinch-zoom or meta-viewport scale clamping is implemented, so
-// offsetLeft/offsetTop/pageLeft stay 0 — the object exists so pages that
-// merely reference `window.visualViewport` stop throwing
-// ReferenceError/TypeError, regardless of whether the underlying zoom is
-// modeled (BUG-481). `scale` reflects the shell's page zoom (Ctrl+=/Ctrl+-,
-// `_lumen_get_zoom_factor`) — real page zoom, not pinch-zoom or
-// `<meta viewport>` scale clamping, neither of which the engine models.
-// GAP-VVPORT: `resize`/`scroll` now dispatch for real —
+// `scale` is `<meta name=viewport initial-scale>` (`_lumen_get_meta_viewport_scale`,
+// GAP-VVPORT срез 3) — real page zoom (Ctrl+=/Ctrl+-/Ctrl+0,
+// `_lumen_get_zoom_factor`) reflows the *layout* viewport itself
+// (`Lumen::relayout_viewport`), so layout and visual viewport stay equal
+// under it and it does not feed `scale` here, matching how desktop browser
+// zoom leaves `visualViewport.scale` at 1 and only pinch-zoom moves it.
+// width/height shrink by that same `scale`, since the visual viewport is the
+// portion of the layout viewport actually visible. Pinch-zoom panning is not
+// modeled (no touch input), so offsetLeft/offsetTop/pageLeft stay 0 — the
+// visual viewport's top-left always coincides with the layout viewport's.
+// GAP-VVPORT: `resize`/`scroll` dispatch for real —
 // `_lumen_fire_window_resize_event`/`_lumen_fire_window_scroll_event`
-// (`web_api_shim_tail_b.js`) also fire on this object, since layout and
-// visual viewport are the same size/offset here. `onresize`/`onscroll` are
-// plain EventTarget listeners, invoked through the generic `this['on'+type]`
-// branch in `EventTarget.prototype.dispatchEvent` (`event_target_shim.js`) —
-// no separate wiring needed. `onscrollend` stays undelivered: the Visual
-// Viewport API declares no `scrollend`.
+// (`web_api_shim_tail_b.js`) also fire on this object. `onresize`/`onscroll`
+// are plain EventTarget listeners, invoked through the generic
+// `this['on'+type]` branch in `EventTarget.prototype.dispatchEvent`
+// (`event_target_shim.js`) — no separate wiring needed. `onscrollend` stays
+// undelivered: the Visual Viewport API declares no `scrollend`.
 function VisualViewport() {
     EventTarget.call(this);
     this.onresize = null;
@@ -146,13 +147,13 @@ function VisualViewport() {
 VisualViewport.prototype = Object.create(EventTarget.prototype);
 VisualViewport.prototype.constructor = VisualViewport;
 Object.defineProperties(VisualViewport.prototype, {
-    width:      { get: function() { return _lumen_get_viewport_size()[0]; } },
-    height:     { get: function() { return _lumen_get_viewport_size()[1]; } },
+    width:      { get: function() { return _lumen_get_viewport_size()[0] / _lumen_get_meta_viewport_scale(); } },
+    height:     { get: function() { return _lumen_get_viewport_size()[1] / _lumen_get_meta_viewport_scale(); } },
     offsetLeft: { get: function() { return 0; } },
     offsetTop:  { get: function() { return 0; } },
     pageLeft:   { get: function() { return 0; } },
     pageTop:    { get: function() { return _lumen_get_page_scroll_y(); } },
-    scale:      { get: function() { return _lumen_get_zoom_factor(); } }
+    scale:      { get: function() { return _lumen_get_meta_viewport_scale(); } }
 });
 window.visualViewport = new VisualViewport();
 
