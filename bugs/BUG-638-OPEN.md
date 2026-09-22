@@ -74,3 +74,10 @@ an *absolute* unresolvable URL (e.g. a dead host) reproduces the same hang —
 if so this is a general media-fetch deadlock, not specific to relative-URL
 resolution, and the BUG-346/347-family framing above may be a red herring.
 Both should be checked before attempting a fix.
+
+## Триаж 2026-09-23: вероятно устарел — закрыть после одной пробы
+
+Самоблокировка на `__lumen_audio_load` снята BUG-799 (`8a3db3b4bc`, 2026-08-25), относительный
+`src` резолвится от базы документа (GAP-CSPENF срез 51, `crates/js/src/audio_element.rs`).
+Задача P6: одна живая проба `<audio>.src = "rel.mp3"`; если движок не виснет — перенести в
+`BUGS-FIXED.md` как исправленный BUG-799, иначе описать, что осталось.

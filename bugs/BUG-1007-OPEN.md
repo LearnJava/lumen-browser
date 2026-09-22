@@ -112,3 +112,11 @@ Minimal HTML:
 
 `getComputedStyle(document.body).backgroundColor` reads `rgba(0, 0, 0, 0)`
 instead of `rgb(9, 9, 9)`.
+
+## Триаж 2026-09-23: коллизия номера
+
+Под номером BUG-1007 заведены два разных бага в один день (2026-09-05): закрытый
+`bugs/BUG-1007-FIXED.md` (`getClientRects()` по фрагментам, P1, `BUGS-FIXED.md`) и этот
+открытый (перенос фона `<body>` на канву). Задача P6: дать этому следующий свободный номер,
+переименовать файл, поправить строку `BUGS.md` и все ссылки на него, затем
+`python scripts/remap_status_pointers.py --apply` и `python scripts/check_doc_links.py`.
