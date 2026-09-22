@@ -2160,6 +2160,48 @@ activation-after-registration.https.html` — было `ERROR` на TLS, ста�
 продолжение срезов «закрыть ещё категорию» — `mixed-content` (533 файла) и
 `speculation-rules` (409), обе не тронуты этим заходом.
 
+### TEST-3: срез 57 (2026-09-22) — `service-workers`: baseline перегенерирован после фикса BUG-1069
+
+Первый заход на список «Дальше» предыдущего пункта — начат с `service-workers` самой,
+как и рекомендовано (единственная категория, где эффект BUG-1069 измерен на 100% файлов).
+Бинарь пересобран (`dev-release`, 3м34с — с прошлой сборки среза 56 влился GAP-CSSMOD,
+трогавший `crates/js`).
+
+**Baseline.** `--update-expected --all --root service-workers --recursive --processes 7
+--binary target/dev-release/lumen.exe`: **134/328 harness OK** (было 0/328 — срезом 56
+записанная TLS-заглушка), 144/1718 сабтестов. 275 `.ini` перезаписано, 13 удалено (файл
+стал чисто-OK), 3 не изменились.
+
+**Доминирующая причина остальных провалов — уже заведённый
+[BUG-657](../../bugs/BUG-657-OPEN.md)** (`ServiceWorkerRegistration` не заведён глобальным
+классом V8-инсталляции — `reg.pushManager`/`reg.sync`/… не существуют ни на одном
+объекте, возвращённом `register()`). В этом одном прогоне — 42 `ReferenceError:
+ServiceWorkerRegistration is not defined`, самый частый паттерн категории. Не новая
+находка, но впервые измерена в масштабе целой категории, а не отдельных вызовов API.
+
+**Три `--check` подряд не сошлись к нулю и ни разу не повторили друг друга:**
+прогон 1 — 3 регрессии (`installing.https.html` — "ServiceWorker objects returned from
+installing attribute getter... are the same objects" PASS→FAIL, `skip-waiting-without-
+using-registration.https.html` — новый TIMEOUT); прогон 2 — 1 регрессия + 1 unexpected-
+pass, оба на `partitioned-matchAll.tentative.https.html`; прогон 3 — 1 регрессия (`new
+TIMEOUT` на `partitioned.tentative.https.html`) + 3 unexpected-pass (`getregistration.
+https.html`) + 1 status-change. Три непересекающихся набора файлов — диффузный флап без
+общего знаменателя, тот же класс, что [BUG-1022](../../bugs/BUG-1022-OPEN.md) на `fetch`
+(срез 55): в отличие от `webmessaging`/`connection-allowlist` (срезы 35/39), где флап был
+локализован на паре подтестов одного механизма и ушёл сужением `expected: [X, Y]`, здесь
+сужать нечего — каждый прогон ломается в новом месте. Baseline оставлен таким, каким его
+записал `--update-expected`, не откачен и не сужен.
+
+**Не разобрано.** `ReferenceError: Cache is not defined` — 3 файла `cache-storage/*` в
+логе `--update-expected`, не триажено (не проверено, свой это баг или проекция BUG-657 на
+другой глобал). Полный состав ~194 файлов `harness != OK` за пределами BUG-657 не
+расклассифицирован по первопричине — та же оговорка, что в срезах 39/40/55.
+
+Категорий по-прежнему 261 (перегенерация уже учтённой категории, не новая). Дальше — по
+списку предыдущего пункта: `connection-allowlist`, `signed-exchange`, `fedcm`,
+`shared-storage`, `websockets`, `referrer-policy`/`4K*`, `fetch` (все требуют той же
+перегенерации), либо новая категория `mixed-content` (533) / `speculation-rules` (409).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
