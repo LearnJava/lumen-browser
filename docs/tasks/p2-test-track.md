@@ -2202,6 +2202,45 @@ https.html`) + 1 status-change. Три непересекающихся набо
 `shared-storage`, `websockets`, `referrer-policy`/`4K*`, `fetch` (все требуют той же
 перегенерации), либо новая категория `mixed-content` (533) / `speculation-rules` (409).
 
+### TEST-3: срез 58 (2026-09-23) — `connection-allowlist`: baseline перегенерирован после BUG-1069, найден новый BUG-1099
+
+Первый пункт списка «Дальше» среза 57. Бинарь пересобран (`dev-release`, 1м20с).
+
+**Baseline.** `--update-expected --all --root connection-allowlist --recursive --processes 7
+--binary target/dev-release/lumen.exe`: **39/73 harness OK** (было 23/73 в срезе 39 —
+дособрано 16 файлов, ушедших ранее в `ERROR` по BUG-1069), 98/225 подтестов, 23 `.ini`
+перезаписано, 6 удалено (стало чисто), 29 без изменений.
+
+**Четыре `--check` подряд не сошлись сразу — тот же диффузный флап среза 39/55/57
+(`www*.localhost`-таймауты), но на этот раз с общим знаменателем.** Прогон 1 — чисто.
+Прогон 2 — 1 регрессия (`iframe-contentwindow-injection.sub.window.html`: `PASS→FAIL` на
+единственном подтесте). Прогон 3 — та же регрессия повторилась плюс пара
+`navigation-wildcard.sub.window.html` (`www.localhost`: `PASS→TIMEOUT`, `www1.localhost`:
+`TIMEOUT→NOTRUN`, тот же сигнатурный каскад, что в срезе 39). Сужение первым заходом
+(`expected: [PASS, TIMEOUT]`/`[TIMEOUT, NOTRUN]` на `navigation-wildcard`,
+`expected: [PASS, FAIL]` на `iframe-contentwindow-injection`, новый `.ini`) не сошлось за
+один проход: следующий `--check` поймал тот же каскад ещё в двух файлах
+(`navigation-response-origin.sub.window.html`, `websocket.sub.window.html`,
+подтесты `www`/`www1`) — сужены тем же приёмом. После второго захода **три `--check`
+подряд: 0 регрессий, 0 unexpected pass, 0 других отклонений.** Baseline 245 → 245
+(перегенерация, не новая категория).
+
+**Найден [BUG-1099](../../bugs/BUG-1099-OPEN.md).** Два файла (`service-worker-dedicated-
+worker`, `service-worker-shared-worker`, оба `.https.`) падают в `cleanup` с
+`worker.terminate is not a function`/`Cannot read properties of undefined (reading
+'close')`. Корень найден по исходнику, не предположение: оба теста создают воркер через
+`new iframe.contentWindow.Worker(...)`, т.е. конструктор берётся с чужого `contentWindow`
+через BUG-979 Proxy-фолбэк (`wrapWinFacadeGlobals`), а тот вызывает удалённый конструктор
+обычным `Function::call` (`peer_global_call`, `v8_runtime/eval.rs:641`), не `new`/
+`new_instance` — настоящий `Worker`-конструктор пира ничего явно не возвращает, так что по
+правилам ES `new` откатывается на пустой объект с чужим прототипом, теряя `this._id`/
+`.port` целиком. Не специфично для `Worker`/`SharedWorker` — падает любой конструктор вне
+фиксированного IDL-набора `winFacade`, пойманный этим фолбэком.
+
+Категорий по-прежнему 261. Дальше — по списку среза 56/57: `signed-exchange`, `fedcm`,
+`shared-storage`, `websockets`, `referrer-policy`/`4K*`, `fetch`, либо новая категория
+`mixed-content` (533) / `speculation-rules` (409).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
