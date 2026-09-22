@@ -2241,6 +2241,41 @@ worker`, `service-worker-shared-worker`, оба `.https.`) падают в `clea
 `shared-storage`, `websockets`, `referrer-policy`/`4K*`, `fetch`, либо новая категория
 `mixed-content` (533) / `speculation-rules` (409).
 
+### TEST-3: срез 59 (2026-09-23) — `signed-exchange`: baseline перегенерирован после BUG-1069, диффузный флап `not-web-platform.test` заведён в BUG-1022
+
+Следующий пункт списка «Дальше» среза 58. Бинарь `dev-release` из среза 58 (без изменений в
+`crates/` между срезами) переиспользован без пересборки.
+
+**Baseline.** `--update-expected --all --root signed-exchange --recursive --processes 7
+--binary target/dev-release/lumen.exe`: **7/60 harness OK** (было 3/60 в срезе 40), 5/93
+подтестов, 12 `.ini` перезаписано, 2 удалено (стало чисто), 46 без изменений.
+
+**Четыре `--check` подряд НЕ сошлись — растущий, а не убывающий счётчик unexpected-pass
+(1→2→1→5), тот же класс, что [BUG-1022](../../bugs/BUG-1022-OPEN.md).** Прогон 1 — 2
+регрессии (`OK`→`TIMEOUT` на двух `reporting/`-файлах, не входивших в исходный baseline как
+подозрительные) + 1 unexpected pass; сужены (`expected: [OK, TIMEOUT]`). Прогон 2 (на суженном
+baseline) — 0 регрессий, но 2 НОВЫХ unexpected pass на других файлах той же папки; сужены.
+Прогон 3 — 0 регрессий, 1 новый unexpected pass; сужен. Прогон 4 — 0 регрессий, но СРАЗУ 5
+новых unexpected pass (включая `subresource/sxg-subresource-header-integrity-mismatch`, до
+этого не всплывавший ни разу) — счётчик не убывает, а растёт, сходимости нет. Все точечные
+сужения прогонов 1–3 **откачены**; baseline принят таким, каким его записал исходный
+`--update-expected`, дальнейшее сужение не проводилось — тот же выбор, что для `fetch` в срезе
+55. Инстанс задокументирован в [BUG-1022](../../bugs/BUG-1022-OPEN.md) (новая секция).
+
+**Что нашлось.** Все 27 `ERROR` среза 40 (TLS-цепочка BUG-1069) сдвинулись, как и
+предсказывалось: `sxg-prefetch.tentative.https.html` и 8 файлов `reporting/`/`service-workers/`
+теперь `TIMEOUT`/`NOTRUN` вместо `ERROR` — TLS-барьер снят, но тесты всё равно не проходят по
+другой причине (не расследовано отдельно, вероятно тот же `not-web-platform.test`/`*.localhost`
+класс, что для `reporting/`). 29 `TIMEOUT` `reporting/`-файлов среза 40 (домен
+`not-web-platform.test`, диагностирован там же) — тот же диффузный флап, описанный выше, теперь
+подтверждённый растущим счётчиком на четырёх прогонах, а не гипотезой по одному прогону. Новых
+движковых багов не найдено — обработка `application/signed-exchange` этим baseline по-прежнему
+не измерена (до утверждений теста не доходит ни один файл).
+
+Категорий по-прежнему 261. Дальше — по списку среза 56/57/58: `fedcm`, `shared-storage`,
+`websockets`, `referrer-policy`/`4K*`, `fetch`, либо новая категория `mixed-content` (533) /
+`speculation-rules` (409).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
