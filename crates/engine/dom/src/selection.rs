@@ -411,7 +411,12 @@ pub fn range_text(doc: &Document, range: &Range) -> String {
 
     let mut out = String::new();
     for idx in first.container.index()..=last.container.index() {
-        let nid = NodeId::from_index(idx);
+        // `Document::node_id_at`, not `NodeId::from_index`: this must carry
+        // the slot's real generation, or the `nid == first.container`/
+        // `nid == last.container` checks below silently fail once either
+        // endpoint's slot has been freed and reused at least once (срез 9,
+        // GAP-P3GCJSDOM), losing the offset-trim for that endpoint.
+        let nid = doc.node_id_at(idx);
         if let NodeData::Text(s) = &doc.get(nid).data {
             if nid == first.container {
                 let off = utf8_floor(s, first.offset as usize);

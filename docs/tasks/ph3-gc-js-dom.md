@@ -1,15 +1,72 @@
 # Ph3 — GC integration JS ↔ DOM (cross-boundary cycle collection)
 
-**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5), `p1-ph3-gcjsdom-srez6` (срез 6), `p1-ph3-gcjsdom-srez7` (срез 7), `p1-ph3-gcjsdom-srez8` (срез 8) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
+**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5), `p1-ph3-gcjsdom-srez6` (срез 6), `p1-ph3-gcjsdom-srez7` (срез 7), `p1-ph3-gcjsdom-srez8` (срез 8), `p1-ph3-gcjsdom-srez9` (срез 9) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
 
 ---
 
 ## Status
 
-**In progress (P1, срез 8, 2026-09-22).** The only item still open is arena
-free-list/compaction. Срез 8 finishes the call-site migration срез 7 started
-(the second half of срез 6's plan) — the type change itself (packing a
-generation into `NodeId`) and the free-list still don't exist.
+**Done (P1, срез 9, 2026-09-22).** All Definition of Done items are closed.
+
+**Срез 9 closes the last open DoD item — arena free-list/compaction.**
+`NodeId(u32)` now packs `index: u24 | generation: u8` (`crates/engine/dom/src/lib.rs`):
+`.index()`/`NodeId::from_index` mask/produce generation `0` and stay exactly
+what `Document::get`/`try_get`/`contains_id` use (generation-blind — no
+change to any of the ~450 internal call sites срез 6 measured, since none of
+them round-trip a bare index through a non-`NodeId` channel); `.raw()`/
+`NodeId::from_raw`/`Document::resolve(raw)` carry the full packed value, and
+`resolve` — the JS↔DOM bridge's decode point, already the only real consumer
+of `.raw()`/`.from_raw()` since срез 7/8's call-site migration — now rejects
+a generation mismatch instead of just bounds-checking, so a stale raw `u32` a
+script held onto across a slot's free+reuse no longer aliases into whatever
+node now occupies that index.
+
+`Node` gained a `generation: u8` field (`#[serde(default)]`, same `Vec` as
+`nodes` so it can never desync in length — no parallel array to keep in
+sync). `Document::reclaim_dead_nodes` now also frees the arena slot: it
+bumps the freed node's generation and inserts its index into the new
+`Document::free_slots: HashSet<u32>` (a set, not a `Vec` — membership must be
+checkable so `dead_node_ids` can skip an already-free slot; without that
+skip, a slot sitting unreused in the free list would get re-detected as
+"newly dead" on every idle GC tick and have its generation re-bumped with no
+real reuse in between, exhausting its 255-reuse budget for free). `alloc()`
+pops a slot from `free_slots` before ever appending a new one. A slot's
+generation saturates at `u8::MAX` (255 reuses) instead of wrapping —
+`reclaim_dead_nodes` stops re-inserting a saturated slot into `free_slots`,
+so it permanently retires to the pre-срез-9 append-only behavior rather than
+ever risking a wrapped-around alias.
+
+Two internal call sites construct a fresh `NodeId` from a bare loop index —
+`dead_node_ids`'s own `for (i, node) in self.nodes.iter().enumerate()` and
+`build_flat_tree`'s `for i in 0..doc.len()`. `NodeId::from_index(i)` there
+would always produce generation `0`, silently breaking any
+`HashMap<NodeId, _>`/`HashSet<NodeId>` lookup keyed by the *real* id for a
+slot reused at least once (`js_refs`, `shadow_roots`, `template_contents`) —
+a false "not referenced"/"not a shadow host" read. New private
+`Document::node_id_at(index)` reconstructs the slot's live `NodeId` (real
+generation) and both sites now use it; `selection.rs`'s `collect_text` had
+the same pattern (an index range walk building `NodeId::from_index(idx)` to
+compare against `Selection`'s endpoint ids) and is migrated too — otherwise
+the endpoint-offset trim would silently stop applying once either endpoint's
+slot had been reused.
+
+4 new tests pin the srez down: generation diverges across slot reuse while
+`.index()` stays the same, `resolve` rejects the pre-free raw value after
+reuse, an already-free slot is never re-reported by `dead_node_ids` before
+its next reuse, and a slot permanently retires after 255 reuses instead of
+wrapping. `cargo clippy -p lumen-dom --all-targets`, `-p lumen-js
+--features v8-backend --all-targets` and `-p lumen-shell --all-targets`
+clean; `cargo test -p lumen-dom` (316 passed), `-p lumen-js --features
+v8-backend` (4128 + 151 passed, the one pre-existing parallel-run flake
+`frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`
+unrelated to this срез) and the `lumen-shell` bin's `gc_tick` (6 passed) /
+`page_pipeline` (120 passed) tests all green.
+
+---
+
+**Previously (срез 8, now historical):** finishes the call-site migration
+срез 7 started (the second half of срез 6's plan) — the type change itself
+(packing a generation into `NodeId`) and the free-list did not exist yet.
 
 **Срез 8 — the JS↔DOM bridge call sites migrated to `raw()`/`from_raw()`.**
 All 115 occurrences of `NodeId::from_index(x as usize)` / `.index() as u32`
@@ -574,8 +631,10 @@ The split P1=hooks / P4=engine+algorithm matches the roadmap line.
 - [x] No false collection: attached-with-listener and detached-but-JS-reachable nodes
       survive GC (tests green — `attached_node_is_never_reported_dead`,
       `detached_node_with_live_js_reference_survives_gc`).
-- [ ] Arena free-list/compaction implemented; `dead_node_ids` results are actually
-      reclaimed; arena invariants intact.
+- [x] Arena free-list/compaction implemented; `dead_node_ids` results are actually
+      reclaimed; arena invariants intact. (срез 9: generation packed into
+      `NodeId`, `Document::free_slots`/`alloc()` reuse, `resolve` rejects a
+      stale generation.)
 - [x] Cycle pass triggered via `gc_policy` on idle/T2 without duplicating tier tuning.
       (срез 3: `V8JsRuntime::run_gc_pass`, called from the existing
       `hibernation.rs` tier-transition sites — no new call site added.)
