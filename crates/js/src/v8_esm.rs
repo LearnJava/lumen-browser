@@ -373,6 +373,10 @@ enum DeclaredType {
     Js,
     /// `with { type: 'json' }` — source must be valid JSON, default-exported.
     Json,
+    /// `with { type: 'css' }` — source is parsed as a stylesheet and
+    /// default-exported as a constructed `CSSStyleSheet` (HTML LS "create a
+    /// CSS module script").
+    Css,
     /// Any other declared type; per spec, importing it is an error.
     Unsupported(String),
 }
@@ -401,10 +405,10 @@ fn declared_type(
                 .and_then(|d| v8::Local::<v8::Value>::try_from(d).ok())
                 .map(|v| v.to_rust_string_lossy(scope))
                 .unwrap_or_default();
-            return if value == "json" {
-                DeclaredType::Json
-            } else {
-                DeclaredType::Unsupported(value)
+            return match value.as_str() {
+                "json" => DeclaredType::Json,
+                "css" => DeclaredType::Css,
+                _ => DeclaredType::Unsupported(value),
             };
         }
         i += stride;
@@ -417,6 +421,12 @@ fn declared_type(
 /// * `Json` wraps the (validated) JSON payload in a synthetic
 ///   `export default JSON.parse(<literal>)` module — the same shape the
 ///   rquickjs `LumenLoader` synthesises.
+/// * `Css` wraps the source in a synthetic module that builds a constructed
+///   `CSSStyleSheet` via the same `new CSSStyleSheet()`/`.replaceSync()` path
+///   page script uses (CSSOM-5, BUG-897) and default-exports it — HTML LS
+///   "create a CSS module script" §8.1.3.1. CSS has no syntax errors that
+///   reject the whole sheet (invalid rules are just dropped per CSS2 §4.2),
+///   so unlike `Json` this never fails here.
 /// * `Js` runs the shared `import.meta` transformer.
 /// * `Unsupported` is an error, reported to the caller as a message to throw.
 fn module_text(specifier: &str, source: &str, ty: &DeclaredType) -> Result<String, String> {
@@ -431,6 +441,16 @@ fn module_text(specifier: &str, source: &str, ty: &DeclaredType) -> Result<Strin
             let literal = serde_json::to_string(source)
                 .map_err(|e| format!("module '{specifier}': cannot embed JSON ({e})"))?;
             Ok(format!("export default JSON.parse({literal});"))
+        }
+        DeclaredType::Css => {
+            // serde's string escaping produces a valid JS string literal.
+            let literal = serde_json::to_string(source)
+                .map_err(|e| format!("module '{specifier}': cannot embed CSS ({e})"))?;
+            Ok(format!(
+                "const __lumen_css_module_sheet = new CSSStyleSheet();\n\
+                 __lumen_css_module_sheet.replaceSync({literal});\n\
+                 export default __lumen_css_module_sheet;"
+            ))
         }
         DeclaredType::Unsupported(t) => Err(format!(
             "module '{specifier}': unsupported import attribute type '{t}'"
@@ -453,6 +473,7 @@ fn cache_key(specifier: &str, ty: &DeclaredType) -> String {
         // NUL can't appear in a URL or a bare specifier, so the suffix cannot
         // collide with a real specifier.
         DeclaredType::Json => format!("{specifier}\u{0}json"),
+        DeclaredType::Css => format!("{specifier}\u{0}css"),
         _ => specifier.to_owned(),
     }
 }
@@ -1050,8 +1071,37 @@ mod tests {
     fn v8_unsupported_attribute_type_fails_to_load() {
         let rt = rt();
         rt.register_module_source("styles", "body { color: red; }");
-        let result = rt.eval_module("import s from 'styles' with { type: 'css' };");
+        let result = rt.eval_module("import s from 'styles' with { type: 'wasm' };");
         assert!(result.is_err(), "unsupported attribute type must fail the import");
+    }
+
+    /// GAP-CSSMOD (BUG-896): `import sheet from './x.css' with { type: 'css' }`
+    /// (HTML LS "create a CSS module script") builds a constructed
+    /// `CSSStyleSheet` (CSSOM-5, BUG-897) from the source and default-exports
+    /// it. `CSSStyleSheet` only exists once the page shim is installed, unlike
+    /// the bare `rt()` the other module tests use above.
+    #[test]
+    fn v8_css_module_import_returns_constructed_stylesheet() {
+        use lumen_dom::Document;
+        use std::sync::Mutex;
+        let rt = V8JsRuntime::new().unwrap();
+        let doc = Arc::new(Mutex::new(Document::new()));
+        rt.install_dom(
+            doc,
+            "https://example.com/",
+            None, None, None, None, None, None, None, None, None,
+            false,
+        )
+        .unwrap();
+        rt.register_module_source("styles", "body { color: red; } p { color: blue; }");
+        rt.eval_module(
+            "import sheet from 'styles' with { type: 'css' };\n\
+             globalThis.__is_sheet = sheet instanceof CSSStyleSheet;\n\
+             globalThis.__rule_count = sheet.cssRules.length;",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__is_sheet").unwrap(), JsValue::Bool(true));
+        assert_eq!(rt.eval("globalThis.__rule_count").unwrap(), JsValue::Number(2.0));
     }
 
     #[test]
