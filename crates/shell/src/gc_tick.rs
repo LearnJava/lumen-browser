@@ -1,9 +1,12 @@
 //! Idle DOM GC tick — drain dead node IDs every [`GC_INTERVAL`] seconds.
 //!
-//! The DOM arena is append-only in Phase 1 (physical compaction is Phase 3),
-//! but JS-side maps (event listeners, input values) still hold per-node entries
-//! that keep memory alive for detached nodes. `GcTick::poll` identifies those
-//! nodes and returns their IDs so the shell can call `_lumen_gc_collect` in JS.
+//! `GcTick::poll` identifies fully-unreferenced detached subtrees (see
+//! [`lumen_dom::Document::dead_node_ids`]) so the caller can free their
+//! Rust-side heap payload (`Document::reclaim_dead_nodes`, called in
+//! `about_to_wait.rs` right after `poll`) and purge the matching JS-side
+//! per-node maps (event listeners, input values) via `_lumen_gc_collect`. The
+//! arena slot itself stays allocated and its `NodeId` never gets reused —
+//! only the content is freed.
 
 use std::time::{Duration, Instant};
 

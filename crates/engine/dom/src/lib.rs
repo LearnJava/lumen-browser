@@ -1563,18 +1563,28 @@ impl Document {
 
     /// Returns the IDs of all nodes that are safe to collect from the arena.
     ///
-    /// A node is "dead" when it is both detached from the document tree
-    /// (see [`Document::is_detached`]) **and** has no live JS wrappers
-    /// (see [`Document::js_ref_count`]).
+    /// A node is "dead" when it roots (or lies within) a subtree that is both
+    /// detached from the document tree (see [`Document::is_detached`]) **and**
+    /// carries no live JS wrapper anywhere in that subtree (see
+    /// [`Document::js_ref_count`]) — a single referenced descendant pins the
+    /// whole group, since JS can walk back up to any ancestor via
+    /// `parentNode`/`.children` from that one live reference. Checking only the
+    /// detached root's own ref count (срез 1-3's contract) let a referenced
+    /// descendant's ancestor get reported dead out from under it — a false
+    /// collection GAP-P3GCJSDOM срез 4 closes.
     ///
-    /// **Phase 2 contract:** this method identifies collectable nodes but does
-    /// not remove them from the arena. The arena remains append-only until Phase 3
-    /// adds free-list compaction. P3's idle GC tick should call this method
-    /// periodically and drop any external resources associated with the returned
-    /// NodeIds (e.g. image decode handles, layout boxes).
+    /// **Phase 2 contract:** this method identifies collectable nodes;
+    /// [`Document::reclaim_dead_nodes`] frees their heap payload in place. The
+    /// arena stays append-only — slots are not reused and `NodeId`s are never
+    /// reassigned, so full compaction (which needs a generational `NodeId` to
+    /// stay safe) is still deferred to a later срез.
     pub fn dead_node_ids(&self) -> Vec<NodeId> {
         // Build a set of "anchored orphan" nodes: shadow roots and template
         // content fragments have parent==None but must not be collected.
+        // Shadow roots/template content are reached only via `shadow_roots`/
+        // `template_contents`, never via a regular `.children` edge, so the
+        // subtree walk below can never step into one — anchoring only needs
+        // to gate the top-level candidate scan.
         let anchored: HashSet<NodeId> = self
             .shadow_roots
             .values()
@@ -1582,26 +1592,84 @@ impl Document {
             .copied()
             .collect();
 
-        self.nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, node)| {
-                let id = NodeId::from_index(i);
-                if id == self.root {
-                    return None;
+        let mut dead = Vec::new();
+        for (i, node) in self.nodes.iter().enumerate() {
+            let id = NodeId::from_index(i);
+            if id == self.root || node.parent.is_some() || anchored.contains(&id) {
+                continue;
+            }
+            let mut subtree = Vec::new();
+            if self.collect_if_subtree_unreferenced(id, &mut subtree) {
+                dead.extend(subtree);
+            }
+        }
+        dead
+    }
+
+    /// Depth-first walk of the subtree rooted at `id`, appending every member
+    /// to `out`. Returns `false` the moment a live JS ref is found anywhere in
+    /// the subtree — one live reference disqualifies the entire group, so the
+    /// walk stops early and `out` is left partially filled (callers discard it
+    /// on `false`, matching [`Document::dead_node_ids`]'s per-candidate use).
+    fn collect_if_subtree_unreferenced(&self, id: NodeId, out: &mut Vec<NodeId>) -> bool {
+        if self.js_refs.get(&id).copied().unwrap_or(0) > 0 {
+            return false;
+        }
+        out.push(id);
+        for &child in &self.nodes[id.index()].children {
+            if !self.collect_if_subtree_unreferenced(child, out) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Free the heap payload (`Text`/`Comment`/`ProcessingInstruction`/
+    /// `Doctype` strings, `Element` attributes, the node's own `children`
+    /// list) of every node in `ids`, and drop any [`Document::shadow_roots`]/
+    /// [`Document::template_contents`] entry keyed by one of them.
+    ///
+    /// `ids` is expected to be (or be a subset of) a [`Document::dead_node_ids`]
+    /// result — every id in it must already be unreachable from both the live
+    /// DOM tree and JS. Passing an id that is not actually dead silently
+    /// corrupts that node (its content is gone) without touching the arena
+    /// slot or any other node, so callers must not call this speculatively.
+    ///
+    /// The map-entry cascade matters because [`Document::is_detached`] treats
+    /// any node that is a *value* in `shadow_roots`/`template_contents` as
+    /// permanently anchored — without pruning the entry here, a shadow
+    /// root/template-content subtree whose host/template element just died
+    /// would stay "anchored" forever even though nothing can reach its key
+    /// (the dead host/template id) again. Removing the entry lets a later
+    /// [`Document::dead_node_ids`] call see that subtree as an ordinary
+    /// detached candidate.
+    ///
+    /// Does **not** reuse or free the arena slot itself — `NodeId`s stay
+    /// stable for the `Document`'s lifetime (no generational id yet; see
+    /// `docs/tasks/ph3-gc-js-dom.md`).
+    pub fn reclaim_dead_nodes(&mut self, ids: &[NodeId]) {
+        for &id in ids {
+            self.shadow_roots.remove(&id);
+            self.template_contents.remove(&id);
+            let Some(node) = self.nodes.get_mut(id.index()) else {
+                continue;
+            };
+            node.children = Vec::new();
+            match &mut node.data {
+                NodeData::Text(s) | NodeData::Comment(s) => *s = String::new(),
+                NodeData::Element { attrs, .. } => *attrs = Vec::new(),
+                NodeData::ProcessingInstruction { target, data } => {
+                    *target = String::new();
+                    *data = String::new();
                 }
-                if node.parent.is_some() {
-                    return None;
+                NodeData::Doctype { name, public_id, system_id } => {
+                    *name = String::new();
+                    *public_id = String::new();
+                    *system_id = String::new();
                 }
-                if anchored.contains(&id) {
-                    return None;
-                }
-                if self.js_refs.get(&id).copied().unwrap_or(0) > 0 {
-                    return None;
-                }
-                Some(id)
-            })
-            .collect()
+                NodeData::Document | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => {}
+            }
+        }
     }
 
     // ── T3 hibernation snapshot (ADR-008) ─────────────────────────────────────
@@ -5763,6 +5831,102 @@ mod tests {
         // JS finalizer fires
         doc.release_js_ref(div);
         assert!(doc.dead_node_ids().contains(&div), "now collectable");
+    }
+
+    #[test]
+    fn gc_referenced_grandchild_pins_whole_detached_subtree() {
+        // GAP-P3GCJSDOM срез 4: a live JS ref anywhere inside a detached
+        // subtree must block collection of the whole subtree, not just the
+        // referenced node itself — the old per-root-only check would have
+        // reported `container` dead while `child` was still reachable from JS.
+        let mut doc = Document::new();
+        let container = doc.create_element(QualName::html("div"));
+        let child = doc.create_element(QualName::html("span"));
+        doc.append_child(container, child);
+        doc.append_child(doc.root(), container);
+
+        // JS holds only the grandchild, then the whole subtree is detached.
+        doc.acquire_js_ref(child);
+        doc.detach(container);
+
+        let dead = doc.dead_node_ids();
+        assert!(!dead.contains(&container), "container pinned by child's live ref");
+        assert!(!dead.contains(&child), "child itself still referenced");
+
+        doc.release_js_ref(child);
+        let dead = doc.dead_node_ids();
+        assert!(dead.contains(&container));
+        assert!(dead.contains(&child), "whole unreferenced subtree becomes collectable together");
+    }
+
+    #[test]
+    fn gc_fully_unreferenced_detached_subtree_is_dead_together() {
+        let mut doc = Document::new();
+        let container = doc.create_element(QualName::html("div"));
+        let child = doc.create_element(QualName::html("span"));
+        doc.append_child(container, child);
+        doc.append_child(doc.root(), container);
+        doc.detach(container);
+
+        let dead = doc.dead_node_ids();
+        assert!(dead.contains(&container));
+        assert!(dead.contains(&child));
+    }
+
+    #[test]
+    fn gc_reclaim_frees_text_and_attrs_in_place() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.get_mut(div).data = NodeData::Element {
+            name: QualName::html("div"),
+            attrs: vec![Attribute {
+                name: QualName::html("data-x"),
+                value: "a".repeat(64),
+            }],
+        };
+        let text = doc.create_text("b".repeat(64));
+        doc.append_child(div, text);
+
+        let dead = doc.dead_node_ids();
+        assert!(dead.contains(&div));
+        assert!(dead.contains(&text));
+        doc.reclaim_dead_nodes(&dead);
+
+        match &doc.get(div).data {
+            NodeData::Element { attrs, .. } => assert!(attrs.is_empty(), "attrs must be freed"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert!(s.is_empty(), "text content must be freed"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+        assert!(doc.get(div).children.is_empty(), "children list must be freed");
+    }
+
+    #[test]
+    fn gc_reclaim_prunes_shadow_root_anchor_then_frees_it_next_pass() {
+        // A dead host's shadow_roots entry must not keep anchoring its shadow
+        // subtree forever (Document::is_detached treats any shadow_roots
+        // value as permanently alive) — reclaim_dead_nodes must prune the
+        // entry so the next dead_node_ids() pass can see the orphaned
+        // shadow-root subtree as an ordinary detached candidate.
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), host);
+        let shadow = doc.attach_shadow(host, ShadowRootMode::Open);
+
+        assert!(!doc.is_detached(shadow), "anchored by shadow_roots[host] while host is alive");
+        doc.detach(host);
+        assert!(!doc.is_detached(shadow), "still anchored while shadow_roots[host] exists");
+
+        let dead = doc.dead_node_ids();
+        assert!(dead.contains(&host));
+        assert!(!dead.contains(&shadow), "still anchored on the pass that kills its host");
+        doc.reclaim_dead_nodes(&dead);
+
+        assert!(doc.shadow_root_of(host).is_none(), "shadow_roots entry pruned with its dead host");
+        let dead_next = doc.dead_node_ids();
+        assert!(dead_next.contains(&shadow), "orphaned shadow subtree collectable on the next pass");
     }
 
     #[test]

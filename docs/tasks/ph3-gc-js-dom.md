@@ -1,12 +1,56 @@
 # Ph3 — GC integration JS ↔ DOM (cross-boundary cycle collection)
 
-**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`
+**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
 
 ---
 
 ## Status
 
-**In progress (P1, срез 3, 2026-09-22).** Phase 2 / v0.5.0 has shipped and the V8
+**In progress (P1, срез 4, 2026-09-22).**
+
+**срез 4 closes the "only remaining open DoD item" срез 3 deferred** — but not
+via full arena compaction (that still needs a generational `NodeId`, out of
+scope: `NodeId` is `Serialize`/`Deserialize`d into hibernation snapshots and
+IPC payloads, and JS holds it as a bare `u32` `__nid__`; widening it touches
+all three formats at once). Two real, contained gaps instead:
+
+1. **`Document::dead_node_ids` only ever checked the detached root's own
+   `js_ref_count`, never its descendants'.** A detached subtree's children
+   keep `parent == Some(ancestor)` (never `None`), so they were never even
+   *candidates* — meaning a live JS ref held on a grandchild deep in a
+   detached subtree did not stop the subtree's root from being reported dead
+   and swept. This is exactly the "No false collection" DoD requirement,
+   still open for multi-node subtrees. Fixed by walking the whole subtree
+   (`Document::collect_if_subtree_unreferenced`) and requiring zero refs on
+   every member before any of it counts as dead; one live ref anywhere pins
+   the whole group, matching real reachability (JS can walk back up via
+   `parentNode`/`.children` from that one reference).
+2. **Nothing ever freed a dead node's heap payload**, and nothing pruned
+   `Document::shadow_roots`/`template_contents` entries keyed by a dead
+   host/template — meaning a shadow-root or template-content subtree stayed
+   "anchored" (`is_detached` treats any map *value* as permanently alive)
+   forever once its host/template died, since nothing could ever reach the
+   map *key* again to remove it. `Document::reclaim_dead_nodes(ids)` (called
+   from `about_to_wait.rs` right after `GcTick::poll`, before the existing
+   JS-side `_lumen_gc_collect` purge) now clears each dead node's
+   `Text`/`Comment`/`ProcessingInstruction`/`Doctype` strings, `Element`
+   attrs and own `children` list in place, and removes any
+   `shadow_roots`/`template_contents` entry keyed by a dead id — so an
+   orphaned anchored subtree becomes an ordinary detached candidate on the
+   *next* `dead_node_ids()` pass.
+
+The arena slot itself is still never freed or reused; `NodeId`s stay stable
+for the `Document`'s lifetime. This is the deliberate "leak sweep" scope Path
+A already committed to in срез 1 — only the node's *content*, not its index,
+is reclaimed.
+
+**Still open after срез 4:** true slot reuse/compaction (needs a generational
+`NodeId`, a wider change — see above). `crates/engine/dom/src/lib.rs`'s
+`gc_*` test group and `crates/shell/src/gc_tick.rs` cover both new behaviors.
+
+---
+
+**Previously (срез 3, now historical):** Phase 2 / v0.5.0 has shipped and the V8
 migration (`docs/tasks/ph3-v8-migration.md`) has landed — but it did **not** give DOM
 wrappers real V8 identity. There is no `ObjectTemplate`/internal-field/embedder-data
 construction anywhere in `crates/js/src` (grepped) and no `v8::Global` retained
@@ -102,9 +146,9 @@ panic (`run_gc_pass_level_2_reclaims_a_leaked_wrapper`,
 (active/foreground tab) stays a no-op, matching `GcLevel::Soft`'s "never stall a
 foreground tab" contract.
 
-**Deferred to a later срез:** arena free-list/compaction (`dead_node_ids` still only
-*identifies* collectable nodes; `crates/engine/dom/src/lib.rs` `alloc()` stays
-append-only) — the only remaining open DoD item.
+**Deferred to a later срез:** arena free-list/compaction — `alloc()` still stays
+append-only and `NodeId`s are never reused (срез 4 added *content* reclamation,
+see Status above, but not slot reuse; that needs a generational `NodeId`).
 
 This is honest, deep engine integration — not a bolt-on. The original difficulty
 this brief was written for — cross-boundary reference cycles — turned out not to
