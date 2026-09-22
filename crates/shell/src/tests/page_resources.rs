@@ -1087,6 +1087,28 @@ fn collect_link_hrefs_media_gate() {
     assert_eq!(only_hrefs, vec!["screen.css", "all.css", "plain.css", "wide.css"]);
 }
 
+/// RP-9 срез 3: граничные media-строки у `<link>` — comma-separated OR-список
+/// (`print, screen`) и `not`-инверсия (`not print`) должны гейтиться так же
+/// верно, как одиночный `media=print` в тесте выше.
+#[test]
+fn collect_link_hrefs_media_gate_compound_queries() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                <link rel="stylesheet" media="not print" href="not-print.css">
+                <link rel="stylesheet" media="not screen" href="not-screen.css">
+                <link rel="stylesheet" media="print, screen" href="print-or-screen.css">
+                <link rel="stylesheet" media="print, (min-width: 5000px)" href="print-or-huge.css">
+            </head><body></body></html>"#,
+    );
+    let mut hrefs = Vec::new();
+    collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
+    // `not print` матчит экран; `not screen` — нет; `print, screen` матчит (OR
+    // с screen-веткой); `print, (min-width: 5000px)` — обе ветки ложны на
+    // экране 1024px, отсеян.
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _, _)| h.as_str()).collect();
+    assert_eq!(only_hrefs, vec!["not-print.css", "print-or-screen.css"]);
+}
+
 /// GAP-REFERRER срез 6: `referrerpolicy` на `<link>` собирается наряду с
 /// `charset` — переопределяет политику документа только для этого листа.
 #[test]

@@ -88,8 +88,41 @@
 
 ## Definition of done
 
-- [ ] Аудит 3 кандидатов проведён; статус каждой дыры зафиксирован.
-- [ ] `@import ... print` (если дыра) — гейтится тем же `MediaContext`.
-- [ ] Добавлены тесты на граничные media-строки `<link>` и на `@media print` в `<style>`.
-- [ ] Никаких регрессий на print-в-PDF (BUG-270 путь) — `bug270_*` тест зелёный.
-- [ ] Доки обновлены; если закрыта дыра — соответствующий BUG помечен FIXED.
+- [x] Аудит 3 кандидатов проведён; статус каждой дыры зафиксирован.
+- [x] `@import ... print` (если дыра) — гейтится тем же `MediaContext`.
+- [x] Добавлены тесты на граничные media-строки `<link>` и на `@media print` в `<style>`.
+- [x] Никаких регрессий на print-в-PDF (BUG-270 путь) — `bug270_*` тест зелёный.
+- [x] Доки обновлены; если закрыта дыра — соответствующий BUG помечен FIXED.
+
+## Итог (2026-09-22, P1)
+
+Все 3 кандидата на дыры уже были закрыты в коде до старта задачи — дыр не
+найдено, Срез 2 пуст:
+
+1. **Инлайновый `@media print`** — фильтруется на общем пути каскада
+   (`CascadeIndex::build`, `crates/engine/layout/src/style/cascade_index.rs:122`,
+   `sheet.media_rules.iter().map(|m| m.query.matches(media_ctx))`), не только
+   у `<link>` — `media_ctx` строится из того же sticky-флага `print_media_active()`
+   (`style/env.rs`) независимо от источника листа.
+2. **Сложные media-строки `<link>`** (`not print`, `print, screen`,
+   `screen and (min-width: …)`) — `MediaQuery::matches`/`MediaQueryClause::matches`
+   (`crates/engine/css-parser/src/parser/media.rs:589-621`) уже реализуют полный
+   OR/AND/`not`/`only` по Media Queries L4 §3.
+3. **`@import url(...) print;`** — гейтится тем же `MediaContext` в
+   `inline_css_imports` (`crates/shell/src/stylesheets.rs:380`,
+   `if !imp.media.matches(media_ctx) { continue; }`), покрыт тестом
+   `inline_css_imports_media_gate` (уже существовал).
+
+Добавлено покрытие тестами (Срез 3), которого не хватало:
+
+- `media_print_block_is_screen_gated_in_cascade`
+  (`crates/engine/layout/src/style/tests/mod.rs`) — сквозной `compute_style`
+  тест: `@media print{}` не применяется на экране и применяется при
+  `set_print_media(true)`, дополняет `bug270_*` (тот проверял только флаг).
+- `collect_link_hrefs_media_gate_compound_queries`
+  (`crates/shell/src/tests/page_resources.rs`) — `not print`/`not screen`/
+  `print, screen`/`print, (min-width: …)` у `<link>`.
+
+Срез 4 (доки): этот файл обновлён; `ROADMAP.md` RP-9 помечена `done`
+(закрытие делает P1 при мерже, задача не блокирует BUG — BUG-268/270 уже
+`FIXED`, новых BUG не заведено).
