@@ -151,7 +151,9 @@ jobs:
       # replays, not fuzzing. A regression file is named `<target>-<desc>`
       # (fuzz/README.md §Crashes), which is what the target is derived from here.
       # Contents today: fuzz_image-gif-lzw-hang (BUG-787, 78-byte GIF whose LZW
-      # stream ends before the frame is full — used to hang the decoder forever).
+      # stream ends before the frame is full — used to hang the decoder forever)
+      # and fuzz_image-gif-huge-screen (BUG-790, 78-byte GIF whose header declares
+      # a 65281x57098 logical screen — used to ask the allocator for 14.9 GiB).
       - name: Replay committed regressions
         working-directory: fuzz
         run: |
@@ -199,16 +201,15 @@ jobs:
           #
           #   fuzz_css_parser — BUG-788, parse() blows up to hundreds of MiB on
           #                     a kilobyte of malformed CSS
-          #   fuzz_image      — BUG-790, a 78-byte GIF whose header declares a
-          #                     65281x57098 logical screen asks for 14.9 GiB
           #
           # fuzz_image was delisted on 2026-08-20 with the BUG-787 fix (GIF LZW
-          # unpack never returned) and re-listed the same day: the very first
-          # blocking run found BUG-790, a different defect in the same target.
-          # BUG-787 has NOT regressed — its repro sits in regressions/ and is
-          # replayed by the blocking step above, which KNOWN_FAILING does not
-          # cover. Delist again only when BUG-790 is fixed.
-          KNOWN_FAILING: 'fuzz_css_parser fuzz_image'
+          # unpack never returned), re-listed the same day when the very first
+          # blocking run found BUG-790 (a different defect in the same target,
+          # a 65281x57098 logical screen asking for 14.9 GiB), and delisted again
+          # 2026-09-23 with the BUG-790 fix (upper bound on GIF logical screen
+          # area). Both repros sit in regressions/ and are replayed by the
+          # blocking step above, which KNOWN_FAILING does not cover.
+          KNOWN_FAILING: 'fuzz_css_parser'
         run: |
           set -u
           failed=""
