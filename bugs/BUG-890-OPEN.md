@@ -82,3 +82,34 @@ _lumen_ce_pending)` делит хранилище с натив-хуками а�
 не был дождан до конца из-за линковки нескольких v8-бинарников подряд на
 машине с ограниченной памятью (правки не затрагивают Rust-API других
 крейтов, поэтому реверс-зависимости не могут быть задеты).
+
+**Срез 3 (2026-09-22, P6, `p6-gap-cereg-srez3`): GAP-CEREG ЗАКРЫТ.**
+Оставшийся кусок — неявное наследование области видимости через HTML-парсер
+(`innerHTML`/`insertAdjacentHTML` внутри scoped shadow root, без явной опции
+`customElements`). Разрешение области у `_lumen_ce_registry_for_nid` уже было
+динамическим обходом дерева вверх, так что проблема была не в разрешении, а в
+том, что путь через строку разметки вообще не запускал upgrade reaction:
+`_lumen_set_inner_html` (общая обёртка для `Element.innerHTML` и
+`ShadowRoot.innerHTML`) и `insertAdjacentHTML` (через `before`/`prepend`/
+`append`/`after`) не вызывали `_lumen_ce_maybe_connected` ни разу — даже для
+элемента, зарегистрированного в ГЛОБАЛЬНОМ `customElements`. Добавлена
+`_lumen_ce_upgrade_subtree(nid)` (`web_api_shim_mid.js`) — рекурсивный обход
+всего вставленного поддерева, а не только узла верхнего уровня (разметка
+`innerHTML` может завести кастомный элемент на любой глубине за один вызов);
+подключена в `_lumen_set_inner_html` (по прямым детям `nid`, сам `nid` не
+трогаем — он не был (пере)подключён) и в `insertAdjacentHTML` (по каждому
+распарсенному узлу верхнего уровня). Поскольку резолвинг области остаётся
+тем же самым обходом дерева, scoped-реестр shadow root подхватывается
+автоматически, без отдельного кода на этот случай. Тесты:
+`crates/js/src/dom/tests/v8_fontface_shadow_custom.rs` —
+`custom_element_upgraded_via_inner_html`,
+`custom_element_upgraded_via_insert_adjacent_html`,
+`custom_element_scoped_registry_inherited_via_inner_html_in_shadow_root`,
+`custom_element_upgraded_via_inner_html_at_any_depth`. Верифицировано
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+(чисто), `cargo test -p lumen-js --features v8-backend` (4128 ok, два
+случайных флака — `frame_bridge::…`, `credentials::…` — воспроизведены и на
+main без правок, изоляцией подтверждена независимость от изменения) и
+`scripts/scoped-test.sh` (единственный красный тест —
+`lumen-driver::cases::snapshot_cpu::cpu_snapshots_match_references`,
+предсуществующий дрейф, воспроизведён и без правок).
