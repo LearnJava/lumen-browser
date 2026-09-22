@@ -13,6 +13,8 @@
 //! - `Tor`: TLS 1.3 only, X25519-only, no h2 ALPN.
 
 pub mod cert_error;
+pub mod ct;
+pub mod ct_logs;
 pub mod fingerprint;
 pub mod ocsp;
 pub mod verifier;
