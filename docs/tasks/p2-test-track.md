@@ -2312,6 +2312,43 @@ implemented by Lumen's minimal WPT executor` на каждом файле), 4 ф
 `referrer-policy`/`4K*`, `fetch`, либо новая категория `mixed-content` (533) /
 `speculation-rules` (409).
 
+### TEST-3: срез 61 (2026-09-23) — `shared-storage`: baseline перегенерирован после BUG-1069, диффузный флап (worklet/service-worker) — новый экземпляр BUG-1022
+
+Первый пункт списка «Дальше» среза 60. `crates/` изменились между срезами (мердж
+`p3-bug-790`/CE-1 срез 3 в `main` после среза 60), поэтому `dev-release` пересобран заново
+перед прогоном.
+
+**Baseline.** `--update-expected --all --root shared-storage --recursive --processes 7
+--binary target/dev-release/lumen.exe`: **47/90 harness OK** (было 0/90 в срезе 42 — 88
+`ERROR` по BUG-1069 + 2 честных `FAIL`), 24/221 подтестов, 86 `.ini` перезаписано, 0 удалено,
+4 без изменений.
+
+**Три `--check` подряд НЕ сошлись — три частично пересекающихся, но не совпадающих набора
+регрессий, тот же класс, что [BUG-1022](../../bugs/BUG-1022-OPEN.md).** Прогон 1 — 5
+регрессий (все `OK`/`PASS`/`FAIL`→`TIMEOUT`) + 3 unexpected pass + 1 status-change (NOTRUN).
+Прогон 2 — 4 регрессии + 3 unexpected pass + 1 status-change. Прогон 3 — 4 регрессии + 3
+unexpected pass + 1 status-change. Общий знаменатель всех трёх —
+`shared-storage-writable-service-worker-img.tentative.https.sub.html` (регрессирует на одном и
+том же сабтесте, status-change на другом, во всех трёх) и `*-permissions-policy-none`-пара, но
+третий-пятый регрессирующий файл каждый раз другой
+(`cross-origin-create-worklet-credentials-omit`, `shared-storage-permissions-policy-self`,
+`shared-storage-writable-setters`), как и конкретные unexpected-pass файлы (всегда из семейства
+`*-permissions-policy-*`/`cross-origin-create-worklet-credentials-*`). Baseline принят таким,
+каким его записал исходный `--update-expected`, сужение не проводилось — тот же выбор, что для
+`fetch`/`signed-exchange`. Инстанс задокументирован в [BUG-1022](../../bugs/BUG-1022-OPEN.md)
+(новая секция, срез 61).
+
+**Что нашлось.** Доминирующая причина остальных 43/90 НЕ-OK файлов — `SharedStorage API`
+частично не реализовано: `sharedStorage.createWorklet is not a function` (batch/web-locks
+тесты), `FencedFrameConfig is not defined` (select-url тесты) — известный, давно
+задокументированный пробел (Shared Storage — экспериментальный API, не в скоупе текущей
+реализации), отдельный `BUG-NNN` не заводится (по аналогии со срезом 60/`fedcm`). Новых
+движковых багов, не относящихся к диффузному флапу или к нереализованному API, не найдено.
+
+Категорий по-прежнему 261 (регенерация уже учтённой в списке категории). Дальше — по списку
+среза 56/57/58/59/60: `websockets`, `referrer-policy`/`4K*`, `fetch`, либо новая категория
+`mixed-content` (533) / `speculation-rules` (409).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
