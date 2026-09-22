@@ -154,6 +154,34 @@ impl NodeId {
     pub fn from_index(i: usize) -> Self {
         NodeId(i as u32)
     }
+
+    /// The full packed value, for round-tripping `self` through a channel
+    /// that isn't `NodeId` itself — the JS bridge (`__nid__` on a wrapper
+    /// object, a native call argument) and shell `u32`-keyed maps that cross
+    /// a tick boundary or an external protocol (WebDriver/BiDi `node_id`).
+    ///
+    /// Identical to [`Self::index`] today (`NodeId` carries no generation
+    /// bits yet — GAP-P3GCJSDOM срез 6). The distinct name exists so a future
+    /// srez that packs a generation into these bits (see
+    /// `docs/tasks/ph3-gc-js-dom.md`) only has to change this function's body
+    /// and [`Self::from_raw`]'s, not every call site that already picked the
+    /// right one: use `.raw()`/[`Self::from_raw`]/[`Document::resolve`] at
+    /// any boundary the id crosses out of and back into `NodeId`-typed Rust
+    /// code, and keep `.index()`/[`Self::from_index`] for `Vec` indexing
+    /// inside the arena where the value never leaves `NodeId` form.
+    pub fn raw(self) -> u32 {
+        self.0
+    }
+
+    /// Inverse of [`Self::raw`]. Does not validate that `v` still names a
+    /// live node in any particular `Document` — prefer [`Document::resolve`]
+    /// when `v` came from a boundary where a stale/foreign value is
+    /// plausible (script-controlled state); use this only where the caller
+    /// already knows the arena it targets and validates separately (e.g.
+    /// immediately follows with [`Document::try_get`]).
+    pub fn from_raw(v: u32) -> Self {
+        NodeId(v)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1053,6 +1081,23 @@ impl Document {
     /// a browser engine must degrade on a foreign id, never crash on it.
     pub fn try_get(&self, id: NodeId) -> Option<&Node> {
         self.nodes.get(id.index())
+    }
+
+    /// Decode a raw `u32` from [`NodeId::raw`] back into a live [`NodeId`],
+    /// or `None` if it does not name a node in this arena.
+    ///
+    /// The JS↔DOM bridge counterpart of [`Self::try_get`] — call this at any
+    /// boundary that hands Rust a bare `u32` (a V8 native call argument, a
+    /// shell `u32`-keyed map fed from JS) instead of constructing a `NodeId`
+    /// directly via [`NodeId::from_raw`]/[`NodeId::from_index`]. Today this
+    /// is a plain bounds check (same as [`Self::contains_id`]); once a
+    /// generation is packed into `NodeId` (GAP-P3GCJSDOM срез 6 design),
+    /// this becomes the single place that also rejects a stale generation
+    /// for a freed-then-reused slot — callers that already route through
+    /// `resolve` pick that up for free.
+    pub fn resolve(&self, raw: u32) -> Option<NodeId> {
+        let id = NodeId::from_raw(raw);
+        self.contains_id(id).then_some(id)
     }
 
     /// Bounds-checked [`Self::get_mut`]; see [`Self::try_get`].
@@ -2310,6 +2355,44 @@ mod tests {
         let foreign = NodeId::from_index(238);
         assert!(doc.try_get_mut(doc.root()).is_some());
         assert!(doc.try_get_mut(foreign).is_none());
+    }
+
+    // ── GAP-P3GCJSDOM срез 7: raw()/from_raw()/resolve() round-trip ─────────
+
+    #[test]
+    fn raw_round_trips_through_from_raw() {
+        let mut doc = Document::new();
+        let a = doc.create_element(QualName::html("a"));
+        assert_eq!(NodeId::from_raw(a.raw()), a);
+    }
+
+    #[test]
+    fn raw_matches_index_today_no_generation_packed_yet() {
+        // GAP-P3GCJSDOM срез 6/7: `raw()`/`from_raw()` are bit-identical to
+        // `index()`/`from_index()` until a generation is packed into
+        // `NodeId` — this pins the invariant so that future srez's diff is
+        // exactly "these two functions' bodies changed", not a silent
+        // behavior drift caught late.
+        let mut doc = Document::new();
+        let a = doc.create_element(QualName::html("a"));
+        assert_eq!(a.raw() as usize, a.index());
+        assert_eq!(NodeId::from_raw(7), NodeId::from_index(7));
+    }
+
+    #[test]
+    fn resolve_returns_the_node_id_for_a_live_raw_value() {
+        let mut doc = Document::new();
+        let a = doc.create_element(QualName::html("a"));
+        assert_eq!(doc.resolve(a.raw()), Some(a));
+        assert_eq!(doc.resolve(doc.root().raw()), Some(doc.root()));
+    }
+
+    #[test]
+    fn resolve_returns_none_for_a_foreign_raw_value() {
+        let doc = Document::new();
+        // Same shape as `contains_id_false_for_foreign_node_id` above.
+        assert_eq!(doc.resolve(238), None);
+        assert_eq!(doc.resolve(u32::MAX), None);
     }
 
     #[test]

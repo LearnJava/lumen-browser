@@ -420,7 +420,7 @@ impl Lumen {
             let y_css = (position.y as f32) / dpr;
             let delta_x = if allow_w { x_css - start_x } else { 0.0 };
             let delta_y = if allow_h { y_css - start_y } else { 0.0 };
-            let nid_u32 = node_id.index() as u32;
+            let nid_u32 = node_id.raw();
             // ADR-016 M2.2c-2d: resize-eval через `route_eval_js` — снимаем прямое
             // `self.js_ctx`-обращение. Чистый fire-and-forget void без чтения
             // результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`) уходит

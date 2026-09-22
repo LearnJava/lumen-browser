@@ -1,15 +1,55 @@
 # Ph3 — GC integration JS ↔ DOM (cross-boundary cycle collection)
 
-**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5), `p1-ph3-gcjsdom-srez6` (срез 6) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
+**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5), `p1-ph3-gcjsdom-srez6` (срез 6), `p1-ph3-gcjsdom-srez7` (срез 7) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
 
 ---
 
 ## Status
 
-**In progress (P1, срез 6, 2026-09-22).** The only item still open is arena
-free-list/compaction. Срез 6 does not implement it — it replaces the vague
-"needs a generational `NodeId`" pointer from срез 4 with a concrete, measured
-design so the next срез can execute instead of re-investigating.
+**In progress (P1, срез 7, 2026-09-22).** The only item still open is arena
+free-list/compaction. Срез 7 lands the first half of срез 6's own "next
+срез" plan (call-site migration) — the type change itself (packing a
+generation into `NodeId`) and the free-list still don't exist.
+
+**Срез 7 — `raw()`/`from_raw()`/`Document::resolve()` introduced, the 5 shell
+boundary sites named by срез 6 migrated.** `NodeId::raw`/`NodeId::from_raw`
+(`crates/engine/dom/src/lib.rs`) are bit-identical to `.index()`/
+`.from_index()` today (no generation packed yet — same "not done blind"
+reasoning as срез 6) but give every future call site the right *name* to
+have picked: `.raw()`/`.from_raw()`/`Document::resolve()` at a boundary the
+id crosses out of and back into `NodeId`-typed Rust (JS bridge, shell
+`u32`-keyed maps, WebDriver/BiDi), `.index()`/`.from_index()` for `Vec`
+indexing that never leaves `NodeId` form. `Document::resolve(raw: u32) ->
+Option<NodeId>` is today a bounds check identical to `contains_id` — once
+generation lands it becomes the one place that also rejects a stale
+generation, so callers that already route through `resolve` pick that up for
+free without a second migration.
+
+Migrated the 5 sites срез 6 named as `.index() as u32` boxing into a
+`u32`-keyed structure or round-tripping through JS/an external protocol:
+`crates/shell/src/frame_lazy.rs` (two lookups + the `NodeId::from_index`
+decode, same function), `crates/shell/src/app/window_event/cursor_moved.rs:423`
+(resize nid interpolated into a JS eval string), `crates/shell/src/lumen/automation.rs:439`
+(`A11yNode.node_id`, the WebDriver/BiDi wire boundary), `crates/shell/src/page_load.rs:1638`
+(`fire_image_load`/`fire_image_error`/`set_img_bitmap` JS calls). All five
+now use `.raw()`/`NodeId::from_raw` instead of `.index() as u32`/
+`NodeId::from_index(_ as usize)`.
+
+**Deliberately not done here — still the next срез's scope:** the JS-bridge
+call sites themselves. `NodeId::from_index(nid as usize)` still appears
+**dozens of times** in `crates/js/src/v8_runtime/install/dom_core.rs` alone
+(measured: 100+ occurrences in that one file), plus more in `crates/js/src/dom.rs`,
+`crates/js/src/frame_bridge.rs`, `crates/js/src/v8_runtime/install/platform.rs`
+and `crates/js/src/v8_runtime/style_flush.rs`. Migrating those means deciding,
+per call site, what "the id came from a stale/foreign JS reference" should do
+today (already-existing `Document::get`/`try_get`/`foreign_id_panic` BUG-986
+machinery governs that, orthogonal to this task) — a large, mechanical but
+JS/DOM-boundary-sensitive rewrite that deserves its own срез(s) rather than a
+blind batch edit riding on this one's budget. `__nid__` construction on the
+JS-wrapper side (currently `.index()`-shaped, per срез 6's read of
+`_lumen_make_element` etc.) is part of that same follow-up срез, since it has
+to move to `.raw()` in lockstep with the decode side or a value round-tripped
+through JS would silently lose bits once generation packing lands.
 
 **Срез 6 — design only, no code.** Measured the actual blast radius before
 committing to an approach: `NodeId::from_index`/`.index()` appear **462
