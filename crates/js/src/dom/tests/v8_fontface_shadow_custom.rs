@@ -1045,6 +1045,34 @@ fn custom_elements_when_defined_pending_returns_promise() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+#[test]
+fn custom_elements_registry_is_a_public_constructor() {
+    // BUG-890/GAP-CEREG: `new CustomElementRegistry()` must not ReferenceError,
+    // and the global `customElements` must be an instance of it.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                typeof CustomElementRegistry === 'function' &&
+                customElements instanceof CustomElementRegistry &&
+                (new CustomElementRegistry()) instanceof CustomElementRegistry
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_elements_registry_new_instance_is_isolated_from_global() {
+    // A freshly constructed registry has its own storage: defining a name on
+    // it must not leak into (or collide with) the global `customElements`.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                function LocalEl() {}
+                var reg = new CustomElementRegistry();
+                reg.define('local-el', LocalEl);
+                reg.get('local-el') === LocalEl &&
+                customElements.get('local-el') === undefined
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── HTMLTemplateElement.content + DocumentFragment ────────────────────────
 
 #[test]
