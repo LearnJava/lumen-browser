@@ -55,7 +55,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-22",
+ "generated": "2026-09-23",
  "counts": {
   "open": 278,
   "fixed": 764,
@@ -5567,7 +5567,7 @@
     {
      "id": "IFC",
      "title": "IFC: не-текстовые элементы внутри строки",
-     "status": "done",
+     "status": "active",
      "note": "Дорожка «Inline formatting context: не-текстовые элементы внутри строки» (владелец — P1, заведена 2026-08-21 по итогам проб `--dump-layout` на dev-release a7ee9468f). Единственная структурная дыра раскладки, видимая на любом реальном сайте: элемент, который не является текстом, не умеет жить внутри строки — либо выпадает из неё целиком (`<img>`), либо течёт горизонтально, но не выравнивается по базовой линии (`inline-block`, form controls). На вебе это иконка в кнопке, лого рядом с названием, бейдж, аватар в комментарии, звёздочки рейтинга, стрелка в ссылке — каждый такой элемент рвёт строку и раздувает её по вертикали вдвое-втрое. Приоритет по оси «выглядит правильно» первый; по оси «работает вообще» уступает JS-слою (пробы 2026-08-21: lenta/MDN/РБК открываются с падающим JS, habr.com не завершается за 90 с), поэтому в очереди P1 стоит после BUG-716/591/564/778",
      "tasks": [
       {
@@ -5593,6 +5593,13 @@
        "status": "done",
        "size": "M",
        "note": "`<video>`/`<canvas>`/`<audio>`/`<iframe>` как inline-replaced элементы. IFC-2 оставила эти четыре тега в списке «по-прежнему блочные по UA-дефолту» — `default_display` мапит их в `_ => Display::Block`, поэтому иконка-канвас, превью видео или встроенный виджет рядом с текстом рвут абзац на три строки той же формой дефекта, что IFC-2 закрыла для `<img>`. ЗАКРЫТ 2026-09-06 (ветка `p1-ifc3-media-inline`): прямое расширение IFC-2 на новый предикат `is_inline_replaced_media_element` (`predicates.rs`) — `default_display` даёт всем четырём `Inline`, `produces_inline_segments`/`is_inline_content` исключают их как replaced-элементы (сегментом стать не может — BUG-728, у `InlineSegment` нет своей высоты), `is_atomic_inline_level` заводит их в ту же ветку `probe_display_and_flow`, что и `<img>` (float/absolute по-прежнему блокифицирует, §9.7). Отдельная функция, а не задваивание в `is_image_element`, — у картинки уже была своя float-ветка до IFC-3. Компенсация BUG-180 (`child_is_replaced_media` в `lay_out_inner`) убрана для `Video`/`Canvas`/`Iframe` тем же приёмом IFC-2 убрала её для `Image`: зазор под строкой теперь даёт strut `InlineBlockRow`, а до блочной ветки эти боксы доходят только блокифицированные автором, где line box'а нет вовсе. Замеры (`--dump-layout`, синтетическая страница с `<p>Text before <TAG> text after</p>` на каждый тег): `<canvas>`/`<video>`/`<iframe>` — один `InlineBlockRow` с текстом до/после вместо трёх отдельных `Block`, суммарная высота страницы 293.98 → 173.89px; `<img>` (IFC-2) на той же странице не сдвинулся ни на пиксель. Полный графический прогон недоступен на этой сессии — харнесс Windows-only (`gdigrab`/`lumen.exe`), машина Linux; вместо него A/B `--dump-layout` на затронутых `graphic_tests/*.html` (`57-canvas-2d`, `55-video-placeholder`, `146-imagebitmap`, `1000000-final` — везде `<canvas>`/`<video>`/`<iframe>` единственный ребёнок своего `<div>`, без соседнего инлайн-контента, так что новая `InlineBlockRow`-обёртка добавляет strut только ниже видимого содержимого) и CPU snapshot gate (`cargo test -p lumen-driver --features cpu-render cases::snapshot_cpu`): расхождения на `57-canvas-2d` (3600/2949120 байт) и `1000000-final` (2604/2949120 байт) побайтово совпадают со счётом на немодифицированном `main` — предсуществующий шрифтовый дрейф Linux/Windows, ноль новых расхождений. `cargo test -p lumen-layout`/`-p lumen-paint` без падений (3886/3886 и 29/29 соответственно), `cargo check -p lumen-shell --all-targets` чист. `cargo clippy -p lumen-layout` не проходит цепочку раньше `lumen-image` (`chunks_exact`-срабатывания — дрейф тулчейна rustc 1.98.0 против пина 1.97.0, идентично на немодифицированном `main`, вне диффа). 4 теста (`canvas_shares_line_box_with_text`, `audio_shares_line_box_with_text`, `video_shares_line_box_with_text`, `iframe_shares_line_box_with_text`), разбор — [subsystems/layout.md](subsystems/layout.md)."
+      },
+      {
+       "id": "IFC-4",
+       "title": "IFC-4: перенос текста внутри смешанной строки и атомик на своей строке",
+       "status": "planned",
+       "size": "L",
+       "note": "Остаток IFC-1…IFC-3, записанный в CAPABILITIES.md как ⬜ residual. Текстовый ран, который переносится ВНУТРИ смешанной строки (атомарный инлайн + текст), остаётся одним `InlineRun`-боксом со своим прямоугольником, поэтому (а) строки продолжения начинаются с x начала рана, а не с левого края контейнера, и (б) атомик выравнивается по базовой линии ВСЕЙ многострочной группы, то есть уезжает к последней строке. Проба 2026-09-23 (dev-release от 2026-09-20, `--dump-layout`): `<div style=\"width:300px\"><img width=16 height=16> alpha beta … tau</div>` → `InlineBlockRow` 300×60, `Image rect=(0, 39, 16, 16)` вместо первой строки (y≈2), `InlineRun rect=(20.45, 0, 279.55, 60)` — строки 2-3 должны начинаться с x=0. Это форма «иконка + подпись в две строки», «аватар + комментарий», «бейдж + заголовок карточки», «чекбокс + длинная метка» — почти каждая страница. Объём: раскладка смешанной строки по настоящим line box'ам (CSS 2.1 §9.4.2, §10.8): ран режется на фрагменты по строкам, у каждой строки свой line box и своя базовая линия, атомик живёт в той строке, где стоит в потоке. Затрагивает `crates/engine/layout/src/box_tree/inline_build.rs` и раскладку `InlineBlockRow`; paint, hit-test и `getClientRects`/`getBoundingClientRect` должны читать пофрагментные прямоугольники. Двигает пиксели → полный `graphic_tests/run.py`, три золотых набора обновляются тем же коммитом. Назначено P1 2026-09-23 решением пользователя."
       }
      ]
     },
@@ -7082,6 +7089,33 @@
         "BUG-1044"
        ]
       }
+     ]
+    },
+    {
+     "id": "CE-1",
+     "title": "CE-1: Custom Elements — настоящие конструктор, прототип и апгрейд",
+     "status": "planned",
+     "size": "L",
+     "note": "Пользовательские элементы (HTML LS §4.13) не работают ни на одном пути создания. Проба 2026-09-23 (dev-release от 2026-09-20, `--dump-layout`): `class MyEl extends HTMLElement { constructor(){ super(); this.ctorRan = 1; } hello(){} }` + `customElements.define('my-el', MyEl)` → и у `<my-el>` из разметки, и у `document.createElement('my-el')` `typeof el.hello === 'undefined'`, `el.ctorRan === undefined`, `el instanceof MyEl === false`; `new MyEl()` бросает `Illegal constructor`. Механизм: `_lumen_ce_upgrade_element` (`crates/js/src/shim/web_api_shim_mid.js:12469`) только ставит флаг `__ceUpgraded__` и зовёт `connectedCallback` через `.call(el)` — прототип класса элементу не назначается, конструктор не вызывается, `HTMLElement` не конструируется по `new.target`; `connected`/`disconnected`/`attributeChanged` вызываются напрямую, мимо очереди CE reactions. Следствие для реального веба: падает любой компонент, который из колбэка зовёт свой метод (`this.render()`) или вешает shadow root в конструкторе, — это вся экосистема web components (Lit, Stencil, FAST, GitHub Catalyst, Salesforce LWC; github.com, youtube.com, msn.com). Объём по срезам: (1) конструктор `HTMLElement` по `new.target` → запись реестра, construction stack; (2) апгрейд существующего элемента — смена прототипа + вызов конструктора с маркером already-constructed; (3) `createElement`/`createElementNS`/парсер для уже определённого тега — синхронное создание; (4) очередь CE reactions (`[CEReactions]`) вместо прямых вызовов колбэков, включая `adoptedCallback`; (5) customized built-ins (`is=`) — отдельным срезом, опционально. Приёмка: проба выше даёт `function,1,function,1,true,new:true`; прогон WPT `custom-elements/` через `run_report.py` до/после. Реклассифицирует BUG-543 (ДОРАБОТКА → CE-1). Назначено P1 2026-09-23 решением пользователя.",
+     "bugs": [
+      "BUG-543"
+     ]
+    },
+    {
+     "id": "WORKER-1",
+     "title": "WORKER-1: Web API в воркерах — паритет `[Exposed=Worker]`",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток после GAP-WORKERSCOPE (закрыт 2026-09-20: интерфейсные объекты `WorkerGlobalScope`/`DedicatedWorkerGlobalScope` и `MessagePort` через границу). Сами члены `[Exposed=Worker]` в воркерный изолят не доезжают: `worker_exposed_shim()` (`crates/js/src/dom.rs`) собирает только `EVENT_TARGET_SHIM`+`PERFORMANCE_SHIM`+URL+WorkerLocation/Navigator, всё прочее воркер получает поштучно в `crates/js/src/worker.rs`. Итог — восемь отдельных записей BUGS.md об одной дыре: нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream` (BUG-1080), `WebSocket` (BUG-1071), вложенного `Worker` (BUG-1076), `WebAssembly.compileStreaming`/`instantiateStreaming` (BUG-1078), `XMLHttpRequest.overrideMimeType` (BUG-1081), `requestAnimationFrame` у dedicated-воркера (BUG-959), `isSecureContext` (BUG-766), Trusted Types (BUG-1086). Реальный веб выносит в воркеры ровно тяжёлую работу — pdf.js, Monaco/VS Code web, ffmpeg.wasm, Figma-подобные редакторы, декодирование потоков: без `TextDecoder`/streams/Wasm-streaming такой воркер падает на первой строке, и страница молча не работает. Объём: не латать по члену, а сделать источник истины — разметить в шиме блоки по `[Exposed]` (как уже сделано для `EVENT_TARGET_SHIM`/`PERFORMANCE_SHIM`, BUG-401) и собирать воркерный пролог из тех же слайсов, что и оконный, с нативами, зарегистрированными в воркерном изоляте; SharedWorker — тем же путём. Первым шагом сверить на дрейф BUG-649 (`navigator` в воркере — уже есть `WorkerNavigator`) и BUG-1066 (`DOMException` поставлен BUG-1016) и закрыть их, если дрейф. Приёмка: `.any.worker.html`-варианты `encoding/`, `streams/`, `websockets/`, `wasm/jsapi/` в `run_report.py` до/после. Реклассифицирует восемь перечисленных багов (ДОРАБОТКА → WORKER-1). Назначено P1 2026-09-23 решением пользователя.",
+     "bugs": [
+      "BUG-1080",
+      "BUG-1071",
+      "BUG-1076",
+      "BUG-1078",
+      "BUG-1081",
+      "BUG-959",
+      "BUG-766",
+      "BUG-1086"
      ]
     }
    ],
@@ -14771,9 +14805,6 @@
   "js (`crates/js/src/dom.rs:7391` `tee`, `:7374` `getReader` игнорирует аргумент, `:7353` конструктор игнорирует `type:'bytes'`, `TextDecoderStream` там же)": [
    "BUG-824"
   ],
-  "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)": [
-   "BUG-543"
-  ],
   "js (`crates/js/src/dom.rs:8215` `CompressionStream`, `:8232` `DecompressionStream` — `transform` только копит, `enqueue` только во `flush`; `:8197` — комментарий шима, описывающий эту модель)": [
    "BUG-846"
   ],
@@ -15068,9 +15099,6 @@
   "js (`crates/js/src/trusted_types.rs` — `TRUSTED_TYPES_SHIM`, `var factory = { … }`)": [
    "BUG-1087"
   ],
-  "js (`crates/js/src/trusted_types.rs`, `v8_runtime.rs:687`, `crates/js/src/worker.rs`/`shared_worker.rs`/`sw_worker.rs`)": [
-   "BUG-1086"
-  ],
   "js (`crates/js/src/v8_esm.rs::resolve`/`document_base_url` — читает живой `_lumen_document_base_url()`, но не «замороженную» на момент подготовки скрипта базу)": [
    "BUG-910"
   ],
@@ -15164,9 +15192,6 @@
   "js (`crates/js/src/webassembly.rs:342-357` — `compileStreaming`/`instantiateStreaming` вызывают `compile`/`instantiate` без проверок streaming-алгоритма)": [
    "BUG-1079"
   ],
-  "js (`crates/js/src/webassembly.rs:342-375` — стриминговые методы шима; установка `crates/js/src/v8_runtime.rs:1034` только в оконном рантайме, `worker.rs` без `WebAssembly`)": [
-   "BUG-1078"
-  ],
   "js (`crates/js/src/webassembly.rs` — шим `WebAssembly.Memory`, возможно `v8_runtime.rs`)": [
    "BUG-1085"
   ],
@@ -15176,32 +15201,17 @@
   "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)": [
    "BUG-712"
   ],
-  "js (`crates/js/src/worker.rs:1646` — `globalThis.Worker = Worker` внутри IIFE с :1317; в воркерном изоляте конструктора нет)": [
-   "BUG-1076"
-  ],
-  "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
-   "BUG-766"
-  ],
   "js (`crates/js/src/worker.rs::WORKER_SHIM`) / shell (`crates/shell/src/lumen/bfcache.rs::park_current_page`)": [
    "BUG-988"
   ],
   "js (`crates/js/src/worker.rs::atob_native_v8`/`btoa_native_v8`; `crates/js/src/shim/web_api_shim_mid_c.js`)": [
    "BUG-1016"
   ],
-  "js (`crates/js/src/worker.rs` ~1164 — воркерный `XMLHttpRequest`; оконный `crates/js/src/xhr.rs` метод имеет)": [
-   "BUG-1081"
-  ],
   "js (`crates/js/src/worker.rs` — `WORKER_SHIM`, бутстрап globals dedicated-воркера; `SHARED_WORKER_SHIM`/`sw_worker.rs` не проверялись)": [
    "BUG-1066"
   ],
   "js (`crates/js/src/worker.rs` — `run_worker_thread_v8`)": [
    "BUG-937"
-  ],
-  "js (`crates/js/src/worker.rs` — воркерная область собирается из `WORKER_*_SHIM`, шима кодировок/стримов среди них нет; `crates/js/src/shared_worker.rs`)": [
-   "BUG-1080"
-  ],
-  "js (`crates/js/src/worker.rs` — прелюдия воркерного изолята; нативы `_lumen_ws_*` из `crates/js/src/v8_runtime/install/net.rs`)": [
-   "BUG-1071"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
