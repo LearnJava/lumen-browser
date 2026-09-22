@@ -382,7 +382,14 @@ pub(crate) fn view_transition_navigation_opted_in(
 /// view transition: same origin (spec §navigation — cross-origin MPA
 /// transitions are out of scope) and **both** the departing and arriving
 /// document opt in via `@view-transition { navigation: auto; }`.
-#[allow(dead_code)] // wired in срез 4, see the comment above `view_transition_navigation_opted_in`
+///
+/// Exercised directly only by tests: same-origin-ness is decided once, at the
+/// navigation boundary, by [`mpa_view_transition_departure_candidate`]; by the
+/// time срез 4 (`Lumen::maybe_reveal_mpa_view_transition`) re-checks the
+/// incoming side, the outgoing document is gone, so it re-checks only
+/// [`view_transition_navigation_opted_in`] on the incoming stylesheet rather
+/// than calling this two-sided helper.
+#[allow(dead_code)]
 pub(crate) fn mpa_view_transition_allowed(
     from_origin: &lumen_network::Origin,
     from_stylesheet: &lumen_css_parser::Stylesheet,
@@ -398,8 +405,9 @@ pub(crate) fn mpa_view_transition_allowed(
 /// boundary (срез 3): the incoming document hasn't loaded yet, so only the
 /// outgoing document's opt-in and the navigation's same-origin-ness are known.
 /// `Lumen::maybe_capture_mpa_view_transition_snapshot` calls this to decide
-/// whether to snapshot the outgoing frame; срез 4 re-checks the incoming side
-/// via [`mpa_view_transition_allowed`] once its stylesheet exists.
+/// whether to snapshot the outgoing frame; срез 4
+/// (`Lumen::maybe_reveal_mpa_view_transition`) re-checks the incoming side via
+/// [`view_transition_navigation_opted_in`] once its stylesheet exists.
 pub(crate) fn mpa_view_transition_departure_candidate(
     from_origin: &lumen_network::Origin,
     from_stylesheet: &lumen_css_parser::Stylesheet,

@@ -802,4 +802,29 @@ impl Lumen {
         }
         self.pending_mpa_view_transition_snapshot = Some(self.display_list.clone());
     }
+
+    /// CSS View Transitions Module Level 2 §3 — cross-document (MPA) срез 4:
+    /// once the incoming document's layout is ready (`apply_loaded_page`,
+    /// after `self.layout_source`/`self.display_list` already point at the
+    /// new page), consume [`Self::pending_mpa_view_transition_snapshot`] and,
+    /// if the incoming document also opts in via
+    /// `@view-transition { navigation: auto; }`, start the same cross-fade
+    /// driver `document.startViewTransition` uses ([`Self::view_transition`])
+    /// with the departed frame as the "before" snapshot.
+    ///
+    /// No opt-in / no pending snapshot → the snapshot is simply dropped and
+    /// the navigation already rendered without animation (срез 5's fallback
+    /// is this function doing nothing).
+    pub(crate) fn maybe_reveal_mpa_view_transition(&mut self) {
+        let Some(old_dl) = self.pending_mpa_view_transition_snapshot.take() else { return };
+        let Some(ls) = self.layout_source.as_ref() else { return };
+        if !crate::page_pipeline::view_transition_navigation_opted_in(&ls.stylesheet) {
+            return;
+        }
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        self.view_transition = Some(ViewTransitionState { old_dl, start_ms: now_ms, duration_ms: 300.0 });
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+    }
 }
