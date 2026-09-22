@@ -13,6 +13,21 @@ lumen-core = { workspace = true }
 lumen-ipc = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
+# Same wgpu version/backend-feature split already used by lumen-paint
+# (crates/engine/paint/Cargo.toml) — срез A5: lumen-renderer creates its own
+# headless wgpu::Device on GpuInit instead of the shell doing it in-process
+# (Phase A step 1, docs/tasks/ph3-gpu-process-sandbox.md). No `optional`/`dep:`
+# gate here (unlike lumen-paint's backend features) — this crate's only job is
+# GPU rendering, so wgpu is not optional.
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12", "vulkan", "gles", "wgsl", "std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { workspace = true, features = ["vulkan", "wgsl", "std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { workspace = true, features = ["metal", "wgsl", "std"] }
+
 # Политики проекта как машинные проверки — [workspace.lints] в корневом
 # Cargo.toml, протокол docs/lint-policy.md.
 [lints]

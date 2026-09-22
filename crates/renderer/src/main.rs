@@ -1,4 +1,4 @@
-//! `lumen-renderer` — GPU process skeleton (PH3-GPUSANDBOX Phase A, срез A2).
+//! `lumen-renderer` — GPU process skeleton (PH3-GPUSANDBOX Phase A, срез A5).
 //!
 //! Spawned by the shell as a child process, mirroring the
 //! `lumen-network-service` pattern (`crates/network/src/bin/network_service.rs`):
@@ -10,16 +10,17 @@
 //! 2. Accepts one TCP connection (from the shell).
 //! 3. Handles `GpuInit`/`GpuRender`/`GpuResize`/`GpuSurfaceLost` in a loop.
 //!
-//! This srez is IPC plumbing only — there is no `wgpu::Instance`, no device,
-//! no actual frame submission yet. `GpuRender` is acknowledged with
-//! `GpuFrameDone` without touching `display_list`. Wiring a real render
-//! backend (moving `renderer.rs:1582`'s `wgpu::Instance::new()` here) and
-//! spawning this binary from the shell (`RendererProcessHandle`) are later
-//! srezes — see `docs/tasks/ph3-gpu-process-sandbox.md` Phase A steps 1/3-6.
+//! Срез A5 adds a real `wgpu::Device` (see `gpu_device.rs`), created headless
+//! on the first `GpuInit` — no surface yet, so `GpuRender` still acknowledges
+//! without submitting any GPU work. Reconstructing a `raw-window-handle` from
+//! the `GpuSurfaceHandle` the shell sends and wiring an actual present loop is
+//! a later срez — see `docs/tasks/ph3-gpu-process-sandbox.md` Phase A step 5.
 
 use std::io::Write as _;
 
 use lumen_ipc::{IpcRequest, IpcResponse, IpcServer};
+
+mod gpu_device;
 
 fn main() {
     // Bind on random loopback port and tell the shell which port we got.
@@ -40,6 +41,11 @@ fn main() {
         std::process::exit(1);
     });
 
+    // Live GPU handles once `GpuInit` succeeds; `None` until then (or if
+    // device creation failed — the process stays up and reports GpuError
+    // on every subsequent request instead of retrying silently).
+    let mut gpu: Option<gpu_device::GpuDevice> = None;
+
     // Request handling loop.
     loop {
         let req = match conn.recv::<IpcRequest>() {
@@ -52,15 +58,34 @@ fn main() {
 
         let resp = match req {
             IpcRequest::GpuInit { surface: _, width: _, height: _ } => {
-                // Srez A2: no wgpu::Instance/Device yet — just acknowledge.
-                // A future srez creates the device here and validates the
-                // surface handle before replying GpuReady.
-                IpcResponse::GpuReady
+                // Срез A5: real headless wgpu::Device (see gpu_device.rs).
+                // Surface reconstruction from `GpuSurfaceHandle` is not done
+                // yet, so the device cannot present anything — GpuRender
+                // still just acknowledges (see below).
+                match gpu_device::init() {
+                    Some(device) => {
+                        eprintln!(
+                            "lumen-renderer: GPU device ready ({:?})",
+                            device.adapter.get_info().backend
+                        );
+                        gpu = Some(device);
+                        IpcResponse::GpuReady
+                    }
+                    None => IpcResponse::GpuError {
+                        message: "no GPU adapter/device available".to_string(),
+                    },
+                }
             }
             IpcRequest::GpuRender { display_list: _ } => {
-                // Srez A2: no render backend wired up yet — acknowledge
-                // without submitting any GPU work.
-                IpcResponse::GpuFrameDone
+                // Срез A5: device exists but there is no surface to present
+                // to yet, so a real frame still cannot be submitted here —
+                // require GpuInit to have succeeded first so a misordered
+                // shell sees an error instead of a silently faked frame.
+                if gpu.is_some() {
+                    IpcResponse::GpuFrameDone
+                } else {
+                    IpcResponse::GpuError { message: "GpuRender before a successful GpuInit".to_string() }
+                }
             }
             IpcRequest::GpuResize { width: _, height: _ } => IpcResponse::GpuReady,
             IpcRequest::GpuSurfaceLost => IpcResponse::GpuReady,

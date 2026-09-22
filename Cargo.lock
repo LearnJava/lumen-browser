@@ -2659,6 +2659,7 @@ version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-ipc",
+ "wgpu",
  "workspace-hack",
 ]
 
