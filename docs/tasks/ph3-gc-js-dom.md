@@ -6,7 +6,7 @@
 
 ## Status
 
-**In progress (P1, срез 1, 2026-09-22).** Phase 2 / v0.5.0 has shipped and the V8
+**In progress (P1, срез 2, 2026-09-22).** Phase 2 / v0.5.0 has shipped and the V8
 migration (`docs/tasks/ph3-v8-migration.md`) has landed — but it did **not** give DOM
 wrappers real V8 identity. There is no `ObjectTemplate`/internal-field/embedder-data
 construction anywhere in `crates/js/src` (grepped) and no `v8::Global` retained
@@ -54,19 +54,39 @@ JS reference is gone if our own cache still strongly holds it). A
 actually collects a wrapper. `_lumen_wrapper_cache_get`/`_set` are now the only two
 places allowed to touch the map, so all three wrapper factories stay consistent.
 
+**срез 2 (this срез) closes the forced-GC round-trip test that срез 1 deferred.**
+`V8JsRuntime::force_gc_for_testing` (`crates/js/src/v8_runtime/runtime.rs`,
+`#[cfg(test)]`) forces a real V8 GC and drains the callback it schedules; the test
+infra did not exist before this срез and had a non-obvious trap: a single
+`Isolate::request_garbage_collection_for_testing` + `perform_microtask_checkpoint`
+round **never** fires a `FinalizationRegistry` callback in this embedding — the
+cleanup callback is a task V8 posts to the embedder's `Platform` task queue, not a
+microtask, and nothing else in `lumen-js`'s dedicated V8 thread pumps that queue (no
+`setTimeout`/promise loop runs there). Two bare probe tests
+(`probe_bare_weakref_deref_becomes_undefined_under_force_gc`,
+`probe_bare_finalization_registry_fires_under_force_gc`,
+`crates/js/src/dom/tests/v8_gap_p3gcjsdom_wrapper_refcount.rs`) pin this down
+independent of any DOM code, so a future regression in the forcing mechanism itself
+fails loudly instead of masquerading as a `lumen-dom` refcounting bug. Three DOM-level
+tests in the same file exercise the srez-1 wiring against a real wrapper lifecycle:
+detach-with-no-JS-ref reaches `js_ref_count == 0` and lands in `dead_node_ids()`;
+detach-with-a-live-global-ref survives GC (then releases once the ref is nulled) —
+the DoD's "no false collection" requirement, now actually exercised through V8 rather
+than only through the two direct-call unit tests in `crates/engine/dom/src/lib.rs`;
+an attached node is never reported dead regardless of `js_refs`. `--expose-gc` is
+gated on `cfg!(test)` in `named_access::apply_v8_test_gc_flag` — a live page must
+never see a `gc()` global.
+
 **Deferred to a later срез:** arena free-list/compaction (`dead_node_ids` still only
 *identifies* collectable nodes; `crates/engine/dom/src/lib.rs` `alloc()` stays
 append-only); wiring the cycle pass to `gc_policy::GcLevel`/idle-T2 transitions
-(found orphaned during this срез — `GcLevel` has **zero consumers** anywhere in the
+(found orphaned during срез 1 — `GcLevel` has **zero consumers** anywhere in the
 tree, and `V8PersistentJs::run_gc_pass` is a documented no-op,
 `crates/shell/src/persistent_js.rs:1312`: *"V8 manages its own generational GC; no
 manual tuning hook is wired yet."* Forcing an actual V8 GC pass on a T2 transition —
 e.g. via `Isolate::low_memory_notification()` — is what would make the new
 `FinalizationRegistry` fire promptly instead of waiting for V8's own heap pressure;
-this is real, separate scope, not done here). A forced-GC round-trip test
-(create → detach → keep JS ref → force GC → assert `js_ref_count` stays > 0; drop
-ref → force GC → assert it reaches 0) is also left for that срез — it needs V8
-GC-forcing test infra that does not exist in this codebase yet.
+this is real, separate scope, not done here).
 
 This is honest, deep engine integration — not a bolt-on. The original difficulty
 this brief was written for — cross-boundary reference cycles — turned out not to
@@ -350,17 +370,24 @@ The split P1=hooks / P4=engine+algorithm matches the roadmap line.
 
 ## Definition of done
 
-- [ ] Wrapper-identity model decided jointly with `ph3-v8-migration.md`; Path A or B
-      chosen and recorded in this file.
-- [ ] The step-2 leak repro is reclaimed after a GC pass (was leaking before).
-- [ ] `acquire_js_ref`/`release_js_ref` wired to the real wrapper lifecycle and
-      balance to zero in tests (or Path A: `_lumen_listeners` pruned for detached nids).
-- [ ] No false collection: attached-with-listener and detached-but-JS-reachable nodes
-      survive GC (tests green).
+- [x] Wrapper-identity model decided jointly with `ph3-v8-migration.md`; Path A or B
+      chosen and recorded in this file. (Path A, срез 1.)
+- [x] The step-2 leak repro is reclaimed after a GC pass (was leaking before).
+      (срез 2: `detached_node_with_no_js_reference_is_released_after_gc`.)
+- [x] `acquire_js_ref`/`release_js_ref` wired to the real wrapper lifecycle and
+      balance to zero in tests (Path A — no `rquickjs`/wrapper-class finalizer
+      exists to gate on; V8's `FinalizationRegistry` is the real finalizer here).
+- [x] No false collection: attached-with-listener and detached-but-JS-reachable nodes
+      survive GC (tests green — `attached_node_is_never_reported_dead`,
+      `detached_node_with_live_js_reference_survives_gc`).
 - [ ] Arena free-list/compaction implemented; `dead_node_ids` results are actually
       reclaimed; arena invariants intact.
 - [ ] Cycle pass triggered via `gc_policy` on idle/T2 without duplicating tier tuning.
-- [ ] `cargo clippy -p lumen-dom --all-targets -- -D warnings` and
-      `-p lumen-js` clean; `cargo test -p lumen-dom` and `-p lumen-js` pass.
+- [x] `cargo clippy -p lumen-dom --all-targets -- -D warnings` and
+      `-p lumen-js --features v8-backend` clean; `cargo test -p lumen-dom` and
+      `-p lumen-js --features v8-backend` pass (two known-flaky, unrelated tests —
+      `web_audio::tests_v8::bug908_…`, `worker::tests_v8::…zero_delay_interval…`,
+      `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty` — are
+      parallel-run global-state flakes that pass in isolation, pre-existing on `main`).
 - [ ] Docs updated: `CAPABILITIES.md`, `subsystems/dom.md`, `subsystems/js.md`,
       `SYMBOLS.md`; all new pub items doc-commented.

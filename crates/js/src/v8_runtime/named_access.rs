@@ -22,6 +22,7 @@ pub fn ensure_v8_platform() {
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
         apply_v8_profile_flag();
+        apply_v8_test_gc_flag();
         v8::V8::initialize();
     });
 }
@@ -58,6 +59,18 @@ fn apply_v8_profile_flag() {
 fn apply_v8_trace_gc_flag() {
     if std::env::var("LUMEN_V8_TRACE_GC").is_ok() {
         v8::V8::set_flags_from_string("--trace-gc");
+    }
+}
+
+/// Turns on V8's `--expose-gc` for `cargo test` builds only (GAP-P3GCJSDOM
+/// срез 2, docs/tasks/ph3-gc-js-dom.md). `Isolate::request_garbage_collection_
+/// for_testing` (used by [`super::V8JsRuntime::force_gc_for_testing`]) is only
+/// valid once this flag is set; a live page must never get a `gc()` global,
+/// so the flag is gated on `cfg!(test)` rather than an env var a real run
+/// could set by accident.
+fn apply_v8_test_gc_flag() {
+    if cfg!(test) {
+        v8::V8::set_flags_from_string("--expose-gc");
     }
 }
 
