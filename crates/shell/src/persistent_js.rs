@@ -354,8 +354,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Deliver a LayoutShift entry to JS PerformanceObservers (CLS metric).
     ///
     /// Called when layout shift is detected during reflow (shift >5px).
-    /// `value` = fractional shift distance; `had_input` = whether user input occurred recently.
-    fn deliver_layout_shift(&self, value: f64, had_input: bool);
+    /// `value` = fractional shift distance; `sources` = node ids of the
+    /// shifted elements behind the score, largest impact first (§4.2
+    /// attribution, capped at five); `had_input` = whether user input
+    /// occurred recently.
+    fn deliver_layout_shift(&self, value: f64, sources: &[u32], had_input: bool);
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -1127,11 +1130,15 @@ impl PersistentJs for V8PersistentJs {
             "_lumen_deliver_lcp_entry({element_id}, {size}, {start_ms}, {render_time_ms})"
         ));
     }
-    fn deliver_layout_shift(&self, value: f64, had_input: bool) {
+    fn deliver_layout_shift(&self, value: f64, sources: &[u32], had_input: bool) {
         let had_input_js = if had_input { "true" } else { "false" };
+        let sources_js = sources
+            .iter()
+            .map(|nid| nid.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         self.eval_js(&format!(
-            "_lumen_deliver_layout_shift({}, 0, {had_input_js})",
-            value
+            "_lumen_deliver_layout_shift({value}, [{sources_js}], {had_input_js})"
         ));
     }
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
