@@ -84,10 +84,19 @@ snapshot между документами через уже существую�
 юнитом за отсутствием тестового конструктора `Lumen` — логика решения
 покрыта через чистую функцию.
 
-### Срез 4 — S — reveal нового документа через существующий cross-fade
-После готовности layout нового документа: если оба opt-in — запустить тот же cross-fade
-драйвер, что дренит `ViewTransitionEvent::End` в `about_to_wait`, подсунув pending-snapshot
-как «старый кадр». Переиспользовать существующий таймер/интерполяцию (300ms), НЕ писать второй.
+### Срез 4 — S — reveal нового документа через существующий cross-fade — DONE
+`Lumen::maybe_reveal_mpa_view_transition` (`crates/shell/src/lumen/navigation.rs`), вызывается
+из обоих путей загрузки страницы (`apply_loaded_page` — стриминговый, и синхронный fallback в
+`page_load.rs::reload`) сразу после `set_display_list`, когда `self.layout_source` уже
+указывает на новый документ. Берёт `pending_mpa_view_transition_snapshot` (`.take()`),
+проверяет `view_transition_navigation_opted_in` на входящем стилшите и, если он тоже opt-in,
+заводит `Lumen::view_transition = Some(ViewTransitionState{ old_dl, start_ms: now, duration_ms:
+300.0 })` — тот же `ViewTransitionState`, что `about_to_wait` заводит для SPA-пути по
+`ViewTransitionEvent::End`; `redraw_requested.rs` дальше блендит его с новым кадром без
+изменений. Не перепроверяет same-origin повторно: он уже решён на границе навигации
+(`mpa_view_transition_departure_candidate`, срез 3) и исходящий документ к моменту reveal уже
+выгружен, так что второй раз сверить не с чем — см. комментарий на
+`page_pipeline::mpa_view_transition_allowed`.
 
 ### Срез 5 — XS — отмена/фолбэк
 Если новый документ не opt-in / cross-origin / snapshot протух — сбросить pending-snapshot и
@@ -112,8 +121,8 @@ KNOWN_DEBTOR из-за async-тайминга Edge).
 - [x] `@view-transition { navigation: auto/none }` парсится в `Stylesheet` (срез 1, landed).
 - [x] Opt-in helper (`view_transition_navigation_opted_in`/`mpa_view_transition_allowed`, срез 2,
       landed) — same-origin + двусторонний opt-in, пока не подключён к навигации (срезы 3-4).
-- [ ] Same-origin навигация с двусторонним opt-in запускает cross-fade **через существующий
-      SPA-движок** (нового драйвера не заведено).
+- [x] Same-origin навигация с двусторонним opt-in запускает cross-fade **через существующий
+      SPA-движок** (нового драйвера не заведено) — срез 4, landed.
 - [ ] Cross-origin / односторонний opt-in / ошибка snapshot → навигация без анимации.
 - [ ] SPA `startViewTransition` не задет — регрессий нет.
 - [ ] Юнит + graphic/interaction-тест зелёные (или обоснованный KNOWN_DEBTOR); доки обновлены.

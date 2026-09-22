@@ -982,6 +982,9 @@ impl Lumen {
                 // не может: указывал бы на чужой хэндл.
                 self.hovered_frame = None;
                 self.set_display_list(page.display_list);
+                // P3-viewtransnav срез 4: reveal a pending cross-document view
+                // transition now that this document's stylesheet exists.
+                self.maybe_reveal_mpa_view_transition();
                 self.animation_scheduler.clear();
                 self.transition_scheduler = TransitionScheduler::new();
                 self.starting_style_tracker = StartingStyleTracker::new();
@@ -1795,6 +1798,9 @@ impl Lumen {
         // склеивался с фреймами ПРЕДЫДУЩЕЙ (а на первой загрузке — ни с чем,
         // так что фрейм оставался серой заглушкой до первого relayout).
         self.set_display_list(page.display_list);
+        // P3-viewtransnav срез 4: reveal a pending cross-document view
+        // transition now that this document's stylesheet exists.
+        self.maybe_reveal_mpa_view_transition();
         self.sync_text_track_store();
         // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
         self.cv_relevant.clear();
