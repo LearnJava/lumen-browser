@@ -1300,15 +1300,13 @@ fn custom_element_upgrade_via_define_runs_constructor() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
-// The same upgrade, triggered by insertion (element created after define but
-// through a path that does not yet run the constructor — createElement's own
-// synchronous construction is объём (3), a later срез) rather than by
-// `define()` itself, and checks connectedCallback fires exactly once even
-// though upgrade and "already connected" both run in the same call. `el`
-// itself (obtained from `createElement` *before* the upgrading `appendChild`)
-// keeps pointing at the pre-upgrade wrapper — the documented wrapper-identity
-// limitation on `_lumen_ce_upgrade_element` — so the post-upgrade checks read
-// through `document.querySelector` instead, which reflects the live wrapper.
+// The same upgrade, but `createElement` itself already ran the real
+// constructor synchronously (CE-1 срез 3 — the tag is defined *before*
+// `createElement` is called), so `connectedCallback` on `appendChild` fires
+// through the "already-upgraded" branch of `_lumen_ce_maybe_connected`, not
+// through an upgrade. Checked it fires exactly once and that `el` — the
+// object `createElement` itself returned — is already the constructed
+// wrapper, without needing to re-read it via `document.querySelector`.
 #[test]
 fn custom_element_upgrade_via_append_runs_constructor_once() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -1321,10 +1319,119 @@ fn custom_element_upgrade_via_append_runs_constructor_once() {
                 }
                 customElements.define('x-upgrade-append-el', XUpgradeAppendEl);
                 var el = document.createElement('x-upgrade-append-el');
+                var ctorRanBeforeAppend = ctorRan;
                 document.body.appendChild(el);
-                var live = document.querySelector('x-upgrade-append-el');
-                (ctorRan === 1) && (connectedCount === 1) &&
-                    (live instanceof XUpgradeAppendEl)
+                (ctorRanBeforeAppend === 1) && (ctorRan === 1) && (connectedCount === 1) &&
+                    (el instanceof XUpgradeAppendEl)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// CE-1 срез 3 (HTML LS §4.13.5 "create an element", steps 6-8):
+// `document.createElement` for an already-defined tag must run the real
+// constructor immediately, before the element is ever inserted anywhere —
+// a script reading a method/property the constructor set up must see it
+// synchronously, not only after `appendChild`.
+#[test]
+fn custom_element_create_element_already_defined_runs_constructor_sync() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class XCreateSyncEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; this.hello = function() { return 42; }; }
+                }
+                customElements.define('x-create-sync-el', XCreateSyncEl);
+                var el = document.createElement('x-create-sync-el');
+                (ctorRan === 1) && (el instanceof XCreateSyncEl) &&
+                    (typeof el.hello === 'function') && (el.hello() === 42) &&
+                    (el.isConnected === false)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// Same, via `createElementNS` with the HTML namespace — the WHATWG-blessed
+// alternate spelling of the same "create an element" algorithm.
+#[test]
+fn custom_element_create_element_ns_html_namespace_runs_constructor_sync() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class XCreateNsEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; }
+                }
+                customElements.define('x-create-ns-el', XCreateNsEl);
+                var el = document.createElementNS('http://www.w3.org/1999/xhtml', 'x-create-ns-el');
+                (ctorRan === 1) && (el instanceof XCreateNsEl)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// `createElementNS` into a non-HTML namespace must never try to construct a
+// custom element even when a same-named tag is defined — autonomous custom
+// elements are HTML-namespace only (HTML LS §4.13).
+#[test]
+fn custom_element_create_element_ns_non_html_namespace_skips_construction() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class XCreateSvgEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; }
+                }
+                customElements.define('x-create-svg-el', XCreateSvgEl);
+                var el = document.createElementNS('http://www.w3.org/2000/svg', 'x-create-svg-el');
+                (ctorRan === 0) && !(el instanceof XCreateSvgEl)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// `document.createElement` for a tag that is NOT (yet) defined must keep
+// minting a plain element — srez 3 only changes the already-defined path.
+#[test]
+fn custom_element_create_element_not_defined_stays_plain() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var el = document.createElement('x-not-defined-el');
+                (el instanceof HTMLElement) && !(el.__ceUpgraded__)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// A scoped registry (`options.customElements`, GAP-CEREG) must drive
+// `createElement`'s own synchronous construction too, not just the upgrade
+// path descendants take later.
+#[test]
+fn custom_element_create_element_scoped_registry_runs_constructor_sync() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class XScopedCreateEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; }
+                }
+                var registry = new CustomElementRegistry();
+                registry.define('x-scoped-create-el', XScopedCreateEl);
+                var el = document.createElement('x-scoped-create-el', { customElements: registry });
+                var elGlobal = document.createElement('x-scoped-create-el');
+                (ctorRan === 1) && (el instanceof XScopedCreateEl) &&
+                    !(elGlobal instanceof XScopedCreateEl)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// A constructor that throws must not crash `createElement` — the element is
+// left with the ordinary (non-upgraded-looking to script) wrapper, and the
+// upgrade is not retried on a later insertion.
+#[test]
+fn custom_element_create_element_constructor_throws_does_not_retry() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var ctorRan = 0;
+                class XThrowsEl extends HTMLElement {
+                    constructor() { super(); ctorRan++; throw new Error('boom'); }
+                }
+                customElements.define('x-throws-el', XThrowsEl);
+                var el = document.createElement('x-throws-el');
+                document.body.appendChild(el);
+                (ctorRan === 1) && (el.tagName === 'X-THROWS-EL')
             "#).unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
