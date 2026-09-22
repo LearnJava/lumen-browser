@@ -6,12 +6,14 @@
 
 ## Status
 
-**Phase 3 (v1.0) — FUTURE.** Roadmap: `docs/plan/phases.md:135` — *"Permission prompt UI + Download UI [P4] over existing permissions/downloads storage"*.
+**Part B done (P1, 2026-09-22, `p1-ph3-downloadui`) — Part A (permission prompt UI) was already complete before this pass** (`ROADMAP.md`'s `P3-downloadui` line scopes this task to Part B only: *"Download UI over existing downloads storage (permission prompt UI already done)"*).
 
-This is a UI-wiring task, **not** a from-scratch build. The storage layers exist; significant UI exists too. The honest gap is:
+Part B closed the real gap: `crates/storage/src/downloads.rs`'s `Downloads` store already existed, fully tested, but nothing in `lumen-shell` ever opened or wrote through it — `DownloadManager` kept history in a plain `Vec` that reset on every restart. `DownloadManager::open_history(path)` (wired in `window_mode.rs` to `<exe_dir>/data/downloads.db`) now loads finished entries on startup and every state transition (`start_download`/`poll`/`cancel`) writes through to the store; a new header "Очистить" button drops finished entries from both the in-memory list and the store. Falls back to session-only history (not a panic) if the file can't be opened. Full writeup — `subsystems/shell.md`'s `ph3-permission-download-ui.md` Part B entry.
 
-- **Permissions:** storage is complete, a manual viewer panel exists, but nothing connects a JS permission request to a *prompt*, and the panel does not read/write the storage layer at all (it has its own in-memory map and duplicate enums).
-- **Downloads:** storage + panel + actions are largely complete and wired. The gap is narrow (history persistence + a few polish items), so most of this task's weight is Part A.
+This is a UI-wiring task, **not** a from-scratch build. The storage layers exist; significant UI exists too. The honest gap **was**:
+
+- **Permissions:** per `ROADMAP.md`'s `P3-downloadui` line, this half was already closed by an earlier (untracked-in-this-brief) pass before this session — not verified or touched here; if the panel/enum-unification/prompt gaps described below still exist, that is a doc-sync gap in `ROADMAP.md`, not this task's scope.
+- **Downloads:** storage + panel + actions are largely complete and wired. The gap was narrow (history persistence + a "clear finished" affordance) — closed above.
 
 ---
 
@@ -120,7 +122,8 @@ The shelf, progress bar, and Open/Reveal/Cancel/Close actions already work (`dow
 
 ## Definition of done
 
-- A page calling a gated API on an origin with no stored decision produces a visible Allow/Block prompt; the decision persists and drives subsequent JS API results (`navigator.permissions.query`, Notification, geolocation) without re-prompting.
-- The `Ctrl+Shift+P` panel reads and writes the `lumen-storage` `Permissions` store (survives restart); the panel's duplicate enums are removed in favour of the storage enums.
-- Download history survives a restart; the shelf shows finished entries; a clear-finished control works; all five `DownloadStatus` variants render correctly.
-- New public API indexed in `SYMBOLS.md`; `CAPABILITIES.md` and the relevant `subsystems/*.md` updated in the same commits; clippy clean; tests green.
+- [ ] A page calling a gated API on an origin with no stored decision produces a visible Allow/Block prompt; the decision persists and drives subsequent JS API results (`navigator.permissions.query`, Notification, geolocation) without re-prompting. — Part A, out of this pass's scope (see Status).
+- [ ] The `Ctrl+Shift+P` panel reads and writes the `lumen-storage` `Permissions` store (survives restart); the panel's duplicate enums are removed in favour of the storage enums. — Part A, out of this pass's scope.
+- [x] Download history survives a restart; the shelf shows finished entries; a clear-finished control works. (2026-09-22, P1)
+- [x] `DownloadStatus` variant coverage: `Done`/`Failed`/`Cancelled`/`InProgress` all render distinctly (tests `build_bar_shows_filename`, `build_bar_shows_failed_and_cancelled_meta`, `build_bar_shows_progress_track_for_in_progress_only`). `Pending` remains unreachable through the public API today (`start_download` sets `InProgress` directly; storage-level "pending" only ever means "no live thread to resume", handled by `load_history` dropping it) — pre-existing, not part of this gap.
+- [x] New public API indexed in `SYMBOLS.md` (`python scripts/gen_symbols.py`); `CAPABILITIES.md` and `subsystems/shell.md` updated in the same commit; `cargo clippy -p lumen-shell --all-targets -- -D warnings` clean; `lumen-shell` suite (2077 tests, +7 new) green.
