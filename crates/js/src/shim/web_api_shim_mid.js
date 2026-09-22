@@ -7473,9 +7473,19 @@ var _LUMEN_WRAPPER_MEMBERS = {
             }
             return null;
         },
+        // `init.customElements` — see `createElement` above; scopes the whole
+        // shadow tree to that registry. The shadow root has no native parent,
+        // so `_lumen_ce_shadow_host_by_nid` records the host to let
+        // `_lumen_ce_registry_for_nid` keep walking past it when the shadow
+        // root itself has no explicit scope (unscoped shadow content still
+        // inherits the host's registry, exactly like a plain child would).
         attachShadow: function(init) { var nid = this.__nid__;
             var m = (init && init.mode === 'closed') ? 'closed' : 'open';
             var sr_nid = _lumen_attach_shadow(nid, m);
+            _lumen_ce_shadow_host_by_nid[sr_nid] = nid;
+            if (init && init.customElements instanceof CustomElementRegistry) {
+                _lumen_ce_scope_by_nid[sr_nid] = { registry: init.customElements._registry, pending: init.customElements._pending };
+            }
             return _lumen_make_shadow_root(sr_nid, m, nid);
         },
         // BUG-522: a real DOMRect instance, not a plain object literal — gives
@@ -10811,7 +10821,12 @@ var document = {
     clear:          function() {},
     captureEvents:  function() {},
     releaseEvents:  function() {},
-    createElement:     function(tag) {
+    // `options.customElements` (HTML LS §4.13.1 scoped registries, GAP-CEREG
+    // срез 2): when a `CustomElementRegistry` instance is passed, the new
+    // element's nid is scoped to it — `_lumen_ce_registry_for_nid` finds this
+    // entry for the nid itself and for every descendant later appended under
+    // it, instead of falling back to the global `customElements`.
+    createElement:     function(tag, options) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
         // QuickJS truncates the Rust u32::MAX sentinel to -1 (signed FFI
         // narrowing); the V8 native returns -1 explicitly as i32 (BUG-457) —
@@ -10824,6 +10839,9 @@ var document = {
             __dom_node_warned = true;
             console.warn('DOM tree exceeds 40000 nodes');
         }
+        if (options && options.customElements instanceof CustomElementRegistry) {
+            _lumen_ce_scope_by_nid[nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
+        }
         // BUG-571: a script element minted here is allowed to run once it is
         // inserted into the document — see `_lumen_resource_track`.
         _lumen_resource_track(nid, tag);
@@ -10832,7 +10850,8 @@ var document = {
     // DOM LS §4.5: createElementNS(namespace, qualifiedName) creates a native
     // arena node (with __nid__) so layout/paint see it. SVG tag case is preserved
     // (native binding does not lowercase) — `linearGradient`/`clipPath` stay intact.
-    createElementNS:   function(ns, qualifiedName) {
+    // `options.customElements` — see createElement above.
+    createElementNS:   function(ns, qualifiedName, options) {
         var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
         // BUG-328: DOM §4.5 validate-and-extract normalizes a null/undefined
         // namespace to no namespace — String(null) would otherwise send the
@@ -10843,6 +10862,9 @@ var document = {
         // See createElement above re: engine-specific overflow encoding.
         if (nid < 0) {
             throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
+        }
+        if (options && options.customElements instanceof CustomElementRegistry) {
+            _lumen_ce_scope_by_nid[nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
         }
         // BUG-571: SVG's <script> runs on insertion exactly like the HTML one.
         _lumen_resource_track(nid, local);
@@ -11239,10 +11261,15 @@ var document = {
     // DOM LS §4.6: adoptNode — moves node into this document (Phase 0: no-op, returns node).
     adoptNode: function(node) { return node; },
     // DOM LS §4.7: importNode — returns a clone of node for use in this document.
-    importNode: function(node, deep) {
+    // `options.customElements` — see `createElement` above; scopes the clone's
+    // root nid, same as a freshly created element.
+    importNode: function(node, deep, options) {
         if (!node) return null;
         if (node.__nid__ !== undefined) {
             var clone_nid = _lumen_clone_subtree(node.__nid__, deep ? 1 : 0);
+            if (options && options.customElements instanceof CustomElementRegistry) {
+                _lumen_ce_scope_by_nid[clone_nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
+            }
             return _lumen_make_element(clone_nid);
         }
         return null;
@@ -12276,11 +12303,46 @@ var _lumen_ce_registry = {};
 // Maps tag name → array of resolve callbacks for whenDefined().
 var _lumen_ce_pending  = {};
 
-// Calls connectedCallback on `el` if its tag is in the registry.
+// GAP-CEREG срез 2 (BUG-890): a node's "associated custom element registry" —
+// HTML LS §4.13.1 scoped registries. `document.createElement`/`createElementNS`/
+// `importNode` accept a `{customElements: registry}` option and `attachShadow`
+// accepts the same in its init dict; the nid that option was passed for (an
+// element or a shadow root) becomes a scope boundary. Everything below that
+// boundary in the tree inherits it; nothing above does. Most nodes never get
+// an entry here and fall through to the global `_lumen_ce_registry` — the map
+// stays empty for pages that never touch scoped registries.
+var _lumen_ce_scope_by_nid = {};
+// A shadow root's nid has no native parent (it is its own subtree root), so
+// the tree-walk in `_lumen_ce_registry_for_nid` cannot reach the host's scope
+// through `_lumen_get_parent` alone. This records shadow-root nid → host nid
+// so the walk can cross that one boundary explicitly.
+var _lumen_ce_shadow_host_by_nid = {};
+
+// Resolves the {registry, pending} pair a given nid is scoped to: walks up
+// the tree (crossing exactly one shadow-root→host boundary via
+// `_lumen_ce_shadow_host_by_nid`) until it finds an explicit scope, else
+// falls back to the global registry/pending stores.
+function _lumen_ce_registry_for_nid(nid) {
+    var cur = nid;
+    while (cur !== undefined && cur !== null) {
+        var scope = _lumen_ce_scope_by_nid[cur];
+        if (scope) return scope;
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        if (pid === null) {
+            var hostNid = _lumen_ce_shadow_host_by_nid[cur];
+            if (hostNid !== undefined) { cur = hostNid; continue; }
+            break;
+        }
+        cur = pid;
+    }
+    return { registry: _lumen_ce_registry, pending: _lumen_ce_pending };
+}
+
+// Calls connectedCallback on `el` if its tag is in its scope's registry.
 function _lumen_ce_maybe_connected(el) {
     if (!el || el.__nid__ === undefined) return;
     var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
-    var entry = _lumen_ce_registry[tag];
+    var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
     if (!entry) return;
     if (!el.__ceUpgraded__) {
         el.__ceUpgraded__ = true;
@@ -12292,11 +12354,11 @@ function _lumen_ce_maybe_connected(el) {
     }
 }
 
-// Calls disconnectedCallback on `el` if its tag is in the registry.
+// Calls disconnectedCallback on `el` if its tag is in its scope's registry.
 function _lumen_ce_maybe_disconnected(el) {
     if (!el || el.__nid__ === undefined) return;
     var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
-    var entry = _lumen_ce_registry[tag];
+    var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
     if (!entry) return;
     if (typeof entry.ctor.prototype.disconnectedCallback === 'function') {
         try { entry.ctor.prototype.disconnectedCallback.call(el); } catch(e) {
@@ -12305,10 +12367,11 @@ function _lumen_ce_maybe_disconnected(el) {
     }
 }
 
-// Calls attributeChangedCallback on the element at `nid` if applicable.
+// Calls attributeChangedCallback on the element at `nid` if applicable, using
+// the registry that nid is scoped to.
 function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
     var tag   = _lumen_get_tag_name(nid).toLowerCase();
-    var entry = _lumen_ce_registry[tag];
+    var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
     if (entry.observedAttributes.indexOf(attrName) < 0) return;
     if (typeof entry.ctor.prototype.attributeChangedCallback === 'function') {
@@ -12333,26 +12396,27 @@ function _lumen_ce_upgrade_element(el, entry) {
     }
 }
 
-// Upgrades all DOM elements matching `tag` that haven't been upgraded yet.
-function _lumen_ce_upgrade_all(tag) {
+// Upgrades all DOM elements matching `tag` that are scoped to `scope`
+// (a {registry, pending} pair) and haven't been upgraded yet.
+function _lumen_ce_upgrade_all(tag, scope) {
     var nids = _lumen_query_selector_all(tag);
-    var entry = _lumen_ce_registry[tag];
+    var entry = scope.registry[tag];
     if (!entry) return;
     for (var i = 0; i < nids.length; i++) {
+        if (_lumen_ce_registry_for_nid(nids[i]).registry !== scope.registry) continue;
         _lumen_ce_upgrade_element(_lumen_make_element(nids[i]), entry);
     }
 }
 
 // HTML LS §4.13.1: CustomElementRegistry is a public constructor — `new
 // CustomElementRegistry()` builds an independent, unattached registry (BUG-890
-// GAP-CEREG). `window.customElements` is the one instance the tree upgrade
-// path (_lumen_ce_maybe_connected et al.) reads from; those natives still
-// reach into `_lumen_ce_registry`/`_lumen_ce_pending` directly, so this
-// constructor takes them as optional backing stores and the global instance
-// below is wired to share them. A registry created via `new` gets its own
-// private stores and is not bound to any tree — scoping it to a document/
-// shadow root (`createElement`/`importNode`/`attachShadow` with a
-// `customElements` option) is separate follow-up work, not covered here.
+// GAP-CEREG). `window.customElements` is the one instance the default tree
+// upgrade path falls back to; those natives resolve the registry to use via
+// `_lumen_ce_registry_for_nid`, which walks up to whatever scope a node was
+// created under and defaults to the global stores when none was set. A
+// registry created via `new` starts unbound — it only takes effect once a
+// tree location is scoped to it (`createElement`/`createElementNS`/
+// `importNode`/`attachShadow`, all accepting a `customElements` option below).
 function CustomElementRegistry(registryStore, pendingStore) {
     this._registry = registryStore || {};
     this._pending  = pendingStore  || {};
@@ -12364,7 +12428,7 @@ CustomElementRegistry.prototype.define = function(name, ctor, options) {
         ? ctor.observedAttributes.slice()
         : [];
     this._registry[name] = { ctor: ctor, observedAttributes: observed };
-    if (this._registry === _lumen_ce_registry) _lumen_ce_upgrade_all(name);
+    _lumen_ce_upgrade_all(name, { registry: this._registry, pending: this._pending });
     var pending = this._pending[name];
     if (pending) {
         for (var i = 0; i < pending.length; i++) {

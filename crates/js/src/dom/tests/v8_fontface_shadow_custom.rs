@@ -1073,6 +1073,65 @@ fn custom_elements_registry_new_instance_is_isolated_from_global() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+#[test]
+fn custom_element_registry_scoped_via_create_element_connected_callback() {
+    // GAP-CEREG срез 2: an element created with `document.createElement(tag,
+    // {customElements: reg})` must upgrade against `reg`, not the global
+    // `customElements`, even though the tag is never registered globally.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                function ScopedEl() {}
+                ScopedEl.prototype.connectedCallback = function() { log.push('connected'); };
+                var reg = new CustomElementRegistry();
+                reg.define('scoped-el', ScopedEl);
+                var el = document.createElement('scoped-el', { customElements: reg });
+                document.body.appendChild(el);
+                log.length === 1 && log[0] === 'connected'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_element_registry_scoped_element_ignores_global_definition() {
+    // The flip side: a scoped element must NOT upgrade against a same-named
+    // global definition — registries only apply within their own scope.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                function GlobalEl() {}
+                GlobalEl.prototype.connectedCallback = function() { log.push('global'); };
+                customElements.define('dual-scope-el', GlobalEl);
+                var reg = new CustomElementRegistry();
+                var el = document.createElement('dual-scope-el', { customElements: reg });
+                document.body.appendChild(el);
+                log.length === 0
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_element_registry_scoped_shadow_root_inherits_to_children() {
+    // `attachShadow({customElements: reg})` scopes the whole shadow subtree —
+    // a plain child appended inside it (not itself passed the option) must
+    // still resolve to `reg` by walking up to the shadow root.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var log = [];
+                function ShadowEl() {}
+                ShadowEl.prototype.connectedCallback = function() { log.push('shadow-connected'); };
+                var reg = new CustomElementRegistry();
+                reg.define('shadow-scoped-el', ShadowEl);
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var root = host.attachShadow({ mode: 'open', customElements: reg });
+                var child = document.createElement('shadow-scoped-el');
+                root.appendChild(child);
+                log.length === 1 && log[0] === 'shadow-connected'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── HTMLTemplateElement.content + DocumentFragment ────────────────────────
 
 #[test]
