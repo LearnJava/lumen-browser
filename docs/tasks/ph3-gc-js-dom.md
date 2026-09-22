@@ -1,12 +1,14 @@
 # Ph3 — GC integration JS ↔ DOM (cross-boundary cycle collection)
 
-**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
+**Developer:** P1 + P4 · **Branch:** `p1-ph3-gc-js-dom` (срезы 1-3), `p1-ph3-gcjsdom-srez4` (срез 4), `p1-ph3-gcjsdom-srez5` (срез 5) · **Size:** L · **Crates:** `lumen-dom`, `lumen-js`, `lumen-shell`
 
 ---
 
 ## Status
 
-**In progress (P1, срез 4, 2026-09-22).**
+**In progress (P1, срез 5, 2026-09-22).** Срез 5 closes the docs DoD item (see
+below) — the only item still open is arena free-list/compaction, deferred
+pending a generational `NodeId` (see срез 4 notes).
 
 **срез 4 closes the "only remaining open DoD item" срез 3 deferred** — but not
 via full arena compaction (that still needs a generational `NodeId`, out of
@@ -455,5 +457,8 @@ The split P1=hooks / P4=engine+algorithm matches the roadmap line.
       `worker::tests_v8::…zero_delay_interval…`,
       `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty` — are
       parallel-run global-state flakes that pass in isolation, pre-existing on `main`).
-- [ ] Docs updated: `CAPABILITIES.md`, `subsystems/dom.md`, `subsystems/js.md`,
-      `SYMBOLS.md`; all new pub items doc-commented.
+- [x] Docs updated (срез 5): `subsystems/dom.md`, `subsystems/js.md`. `CAPABILITIES.md`
+      line 31/33 was already accurate (✅ refcounting, ⬜ arena compaction) — no edit
+      needed. `SYMBOLS.md` is generated/gitignored (`docs/doc-sync.md`), not a
+      committed target. All new pub items already doc-commented (`reclaim_dead_nodes`,
+      `Document::collect_if_subtree_unreferenced`, etc.).
