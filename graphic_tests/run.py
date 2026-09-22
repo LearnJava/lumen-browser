@@ -1308,20 +1308,39 @@ def capture_lumen(html_relpath: str, out_png: str,
     proc.kill()
     proc.wait(timeout=5)
 
+def _run_ffmpeg(args: list[str], out_png: str, timeout: int = 15) -> None:
+    """Запускает ffmpeg, гарантируя, что зависший процесс деградирует один
+    тест, а не весь прогон (BUG-1061).
+
+    `stdin=DEVNULL` — ffmpeg по умолчанию наследует stdin родителя и читает
+    его в ожидании интерактивных команд (`Press [q] to stop`); на
+    неразрываемом пайпе это чтение блокируется. `out_png` удаляется до
+    вызова: `TimeoutExpired` здесь проглатывается молча, и без удаления
+    вызывающий код увидел бы diff/crop-PNG от **предыдущего** прогона как
+    свежий результат.
+    """
+    if os.path.exists(out_png):
+        os.remove(out_png)
+    try:
+        subprocess.run(args, capture_output=True, timeout=timeout,
+                        stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        pass
+
 def ffmpeg_crop(in_png: str, out_png: str, x: int, y: int) -> None:
-    subprocess.run(
+    _run_ffmpeg(
         [FFMPEG, '-i', in_png,
          '-vf', f'crop={VIEWPORT_W}:{VIEWPORT_H}:{x}:{y}',
          out_png, '-y'],
-        capture_output=True, timeout=15,
+        out_png,
     )
 
 def ffmpeg_diff(edge_png: str, lumen_png: str, out_png: str) -> None:
-    subprocess.run(
+    _run_ffmpeg(
         [FFMPEG, '-i', edge_png, '-i', lumen_png,
          '-filter_complex', 'blend=all_mode=difference',
          out_png, '-y'],
-        capture_output=True, timeout=15,
+        out_png,
     )
 
 # --- Magenta marker detection ---
