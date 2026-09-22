@@ -152,6 +152,8 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Graduation: permanent while startup remains a tracked §4 score-table metric.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
 ] }
