@@ -6,10 +6,11 @@
 //! (анкер `struct Color` до конца `impl CssColor`) без правок тел.
 
 use lumen_core::ColorSpace;
+use serde::{Deserialize, Serialize};
 
 use crate::style::parse::color::{encode_srgb, system_color};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Color {
     pub r: u8,
     pub g: u8,

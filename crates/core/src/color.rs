@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 /// Цветовое пространство изображения и canvas.
 /// Поддерживаемые пространства: sRGB (стандартное), Display P3 (расширенное), Rec2020 (HDR).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ColorSpace {
     /// sRGB (стандартное 8-битное пространство для большинства экранов; ITU-R BT.709).
     #[default]

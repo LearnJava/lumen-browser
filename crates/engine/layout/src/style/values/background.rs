@@ -6,6 +6,8 @@
 //! Перенесено батчем SPLIT-ST17 из `crates/engine/layout/src/style.rs`
 //! (анкер `enum ParsedGradient` до конца `impl ImageRendering`) без правок тел.
 
+use serde::{Deserialize, Serialize};
+
 use crate::style::values::box_model::MixBlendMode;
 use crate::style::values::flexgrid::ObjectPosition;
 use crate::style::values::transform::GradientStop;
@@ -209,7 +211,7 @@ pub enum BackgroundImage {
 }
 
 /// CSS Backgrounds L3 §3.4 — `background-repeat`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BackgroundRepeat {
     #[default]
     Repeat,
@@ -239,7 +241,7 @@ impl BackgroundRepeat {
 /// `Px`/`Percent` are resolved against the positioning area extent along this
 /// axis at paint time; `Auto` derives the extent from the other axis (preserving
 /// the image's intrinsic aspect ratio).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BgSizeAxis {
     /// Derive this axis from the other axis / the image's intrinsic ratio.
     Auto,
@@ -264,7 +266,7 @@ impl BgSizeAxis {
 }
 
 /// CSS Backgrounds L3 §3.5 — `background-size`.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub enum BackgroundSize {
     #[default]
     Auto,
@@ -454,7 +456,7 @@ impl Default for BackgroundLayer {
 /// CSS Images L3 §5.5 — `object-fit`. Применяется к replaced elements
 /// (`<img>`, `<video>`, `<canvas>` и т.д.) и определяет, как «коробка»
 /// заливается содержимым с учётом intrinsic-размеров. Не наследуется.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ObjectFit {
     /// `fill` (default) — растянуть на размер коробки без сохранения
     /// aspect ratio. Картинка может быть искажена.
@@ -495,7 +497,7 @@ impl ObjectFit {
 /// Phase 0: parsing + storage. Реальное переключение GPU sampler filter
 /// (`Linear` для `auto`/`smooth`/`high-quality`, `Nearest` для `pixelated`/
 /// `crisp-edges`) в `lumen-paint` — отдельная задача с согласованием P2.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ImageRendering {
     /// `auto` (default) — UA выбирает алгоритм. Обычно — bilinear.
     #[default]

@@ -6,6 +6,8 @@
 //! Перенесено батчем SPLIT-ST16 из `crates/engine/layout/src/style.rs`
 //! (анкер `enum Display` до конца `impl ColorScheme`) без правок тел.
 
+use serde::{Deserialize, Serialize};
+
 use crate::style::computed::ComputedStyle;
 use crate::style::values::color::Color;
 use crate::style::TextWrapMode;
@@ -478,7 +480,7 @@ impl TextTransform {
 /// нужно, чтобы `text_rendering_eq` правильно разделял inline-фрагменты
 /// — это корректно подготавливает структуру под подключение Italic-fontfile
 /// или affine-skew transform позже.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FontStyle {
     #[default]
     Normal,
@@ -660,7 +662,7 @@ pub enum FontOpticalSizing {
 /// OS/2 (`DrawText::font_stretch` → `FontProvider::pick_face`, CSS Fonts L4
 /// §5.2). `text_rendering_eq` учитывает stretch, чтобы фрагменты с разным
 /// stretch не сливались.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FontStretch(pub u16);
 
 impl FontStretch {
@@ -723,7 +725,7 @@ impl Default for FontStretch {
 /// Phase 0: layout различает свойство, рендерер пока всегда Inter Regular —
 /// real bold-варианта файлов нет. text_rendering_eq учитывает weight, чтобы
 /// bold-фрагменты не сливались с обычными.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FontWeight(pub u16);
 
 impl FontWeight {

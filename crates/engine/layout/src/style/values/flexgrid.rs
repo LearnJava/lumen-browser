@@ -8,6 +8,7 @@
 //! (анкер `enum TextWrapMode` до конца `impl AlignValue`) без правок тел.
 
 use lumen_core::geom::Size;
+use serde::{Deserialize, Serialize};
 
 use crate::style::parse::counters::is_css_ident;
 use crate::style::values::length::{parse_length, parse_length_q, Length};
@@ -518,7 +519,7 @@ impl GridLine {
 /// относительно **свободного места** `box_size - content_size` (может быть
 /// отрицательным, тогда излишек уходит за противоположный край). См.
 /// CSS Images L3 §5.5 «object-position».
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PositionComponent {
     /// Length в px (после resolve em/rem/vw/...).
     Px(f32),
@@ -542,7 +543,7 @@ impl PositionComponent {
 
 /// CSS Images L3 §5.5 — `object-position` (две компоненты, x + y).
 /// Default — `50% 50%` (центр).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ObjectPosition {
     pub x: PositionComponent,
     pub y: PositionComponent,

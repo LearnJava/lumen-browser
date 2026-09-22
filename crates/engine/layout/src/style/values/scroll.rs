@@ -7,6 +7,8 @@
 //! Перенесено батчем SPLIT-ST17 из `crates/engine/layout/src/style.rs`
 //! (анкер `enum ShapeOutside` до конца `impl ScrollBehavior`) без правок тел.
 
+use serde::{Deserialize, Serialize};
+
 /// CSS Shapes L1 §3 — `shape-outside` value. NOT inherited. Initial: `None`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum ShapeOutside {
@@ -62,7 +64,7 @@ pub enum WritingMode {
 
 /// CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`.
 /// Only meaningful in vertical writing modes.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TextOrientation {
     /// `mixed` — rotate CJK upright, rotate others 90° CW.
     #[default]

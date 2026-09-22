@@ -3,6 +3,7 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-19).
 
 use super::*;
+use serde::{Deserialize, Serialize};
 
 /// CSS Images L3 §4.3 — image-rendering filter mode (scaling algorithm).
 /// Determines how textures are sampled when an image is scaled.
@@ -35,7 +36,7 @@ impl FilterMode {
 /// как additive compositing с pre-multiplied alpha.
 /// Хранится в `DisplayCommand::PushBlendMode` как stub-значение, чтобы
 /// расширить enum без правки потребителей.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum BlendMode {
     #[default]
     Normal,
@@ -100,7 +101,7 @@ impl BlendMode {
 /// `Alpha` is the default for raster images (§6.2). `Luminance` converts the mask
 /// layer's RGB colour to relative luminance per ITU-R BT.709, then multiplies by
 /// the alpha channel — identical to SVG `mask-type: luminance` (§6.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum MaskMode {
     /// Use the mask layer's alpha channel directly as the mask value (default).
     #[default]
@@ -114,7 +115,7 @@ pub enum MaskMode {
 /// Each corner stores separate horizontal (x) and vertical (y) radii supporting
 /// elliptical corners (`border-radius: 10px / 20px`). When x == y the corner is circular.
 /// Order matches CSS shorthand resolution: top-left, top-right, bottom-right, bottom-left.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct CornerRadii {
     /// Top-left horizontal (x) radius in CSS px.
     pub tl: f32,
@@ -230,7 +231,7 @@ impl CornerRadii {
 /// (px) относительно border-box элемента. Координаты — в пространстве ДО
 /// transform элемента: команда `PushClipPath` эмитится внутри
 /// `PushTransform`, бэкенд переносит форму активной матрицей канвы.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedClipShape {
     /// `circle(r at cx cy)`: центр и радиус в page px.
     Circle {

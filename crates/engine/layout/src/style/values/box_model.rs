@@ -9,6 +9,8 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::style::values::color::Color;
 use crate::style::values::transform::GradientStop;
 
@@ -189,7 +191,7 @@ pub enum FillRule {
 
 /// SVG §11.4 — `stroke-linecap`. Inherited. Initial: `Butt`.
 /// Shape of the cap at the end of open sub-paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum StrokeLinecap {
     /// Flat cap exactly at the endpoint (default).
     #[default]
@@ -202,7 +204,7 @@ pub enum StrokeLinecap {
 
 /// SVG §11.4 — `stroke-linejoin`. Inherited. Initial: `Miter`.
 /// Shape of join between connected path segments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum StrokeLinejoin {
     /// Pointed join, bounded by `stroke-miterlimit` (default).
     #[default]
@@ -291,7 +293,7 @@ impl SvgPaintOrder {
 }
 
 /// Стиль линии CSS border. None = рамка не отображается (как `display: none`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BorderStyle {
     #[default]
     None,
@@ -314,7 +316,7 @@ impl BorderStyle {
 /// сохраняется, чтобы позже отличить «явный solid от автора» от «default
 /// UA focus ring» — нужно для accessibility (нельзя глушить focus ring
 /// через `outline-style: none` при `:focus-visible` в стиле UA).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutlineStyle {
     #[default]
     None,
