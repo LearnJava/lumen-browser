@@ -70,11 +70,19 @@ snapshot между документами через уже существую�
 `tests/page_pipeline.rs`. **Не кэшируется** на `LoadedPage`/`LayoutSource` — это часть среза 3
 (нужно решить, где именно живёт флаг исходящей страницы на границе навигации).
 
-### Срез 3 — S — snapshot старого документа при навигации
-На границе навигации (перед заменой на новый layout, `parse_and_layout` ~`main.rs:4300+`),
-если исходящая страница opt-in, захватить display-list/кадр старого документа — точно так же,
-как SPA-путь захватывает по `ViewTransitionEvent::Begin`. Сохранить в поле состояния окна
-(«pending MPA snapshot»).
+### Срез 3 — S — snapshot старого документа при навигации — DONE
+На границе навигации — `Lumen::navigate_to_inner`/`navigate_replace`
+(`crates/shell/src/lumen/navigation.rs`), перед `self.source = source` —
+новый метод `maybe_capture_mpa_view_transition_snapshot` проверяет исходящую
+страницу через новую чистую функцию `page_pipeline::mpa_view_transition_departure_candidate`
+(same-origin + `view_transition_navigation_opted_in` исходящего стилшита;
+входящий документ ещё не загружен, его opt-in проверит срез 4) и, если
+кандидат, клонирует `self.display_list` в новое поле состояния окна
+`Lumen::pending_mpa_view_transition_snapshot` — точно так же, как SPA-путь
+захватывает по `ViewTransitionEvent::Begin`. 3 юнит-теста в
+`tests/page_pipeline.rs` (`departure_candidate_*`); Lumen-глю не тестируется
+юнитом за отсутствием тестового конструктора `Lumen` — логика решения
+покрыта через чистую функцию.
 
 ### Срез 4 — S — reveal нового документа через существующий cross-fade
 После готовности layout нового документа: если оба opt-in — запустить тот же cross-fade

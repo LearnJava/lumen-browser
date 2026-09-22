@@ -560,6 +560,7 @@ pub(crate) fn run_window_mode(
         fullscreen_nid: None,
         fullscreen_resize_pending: None,
         view_transition: None,
+        pending_mpa_view_transition_snapshot: None,
         archive: tabs::archive::TabArchive::new(),
         restore_spinner_start_ms: None,
         resize_active: None,

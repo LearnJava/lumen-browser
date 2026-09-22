@@ -1539,3 +1539,32 @@ fn mpa_view_transition_rejects_cross_origin() {
 
     assert!(!mpa_view_transition_allowed(&a, &opted_in, &b, &opted_in));
 }
+
+// ── P3-viewtransnav срез 3: navigation-boundary departure candidate ──────
+
+#[test]
+fn departure_candidate_true_when_outgoing_opted_in_same_origin() {
+    let from = origin_of("https://example.com/a");
+    let to = origin_of("https://example.com/b");
+    let opted_in = lumen_css_parser::parse("@view-transition { navigation: auto; }");
+
+    assert!(mpa_view_transition_departure_candidate(&from, &opted_in, &to));
+}
+
+#[test]
+fn departure_candidate_false_when_outgoing_not_opted_in() {
+    let from = origin_of("https://example.com/a");
+    let to = origin_of("https://example.com/b");
+    let not_opted_in = lumen_css_parser::parse("h1 { color: red; }");
+
+    assert!(!mpa_view_transition_departure_candidate(&from, &not_opted_in, &to));
+}
+
+#[test]
+fn departure_candidate_false_when_cross_origin() {
+    let from = origin_of("https://example.com/a");
+    let to = origin_of("https://other.example/b");
+    let opted_in = lumen_css_parser::parse("@view-transition { navigation: auto; }");
+
+    assert!(!mpa_view_transition_departure_candidate(&from, &opted_in, &to));
+}

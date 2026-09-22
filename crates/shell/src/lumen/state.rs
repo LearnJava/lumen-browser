@@ -1492,6 +1492,21 @@ pub(crate) struct Lumen {
     /// The `old_dl` snapshot fades out over the new display list for `duration_ms`.
     /// `None` when no transition is active.
     pub(crate) view_transition: Option<ViewTransitionState>,
+    /// CSS View Transitions L2 (cross-document/MPA) — срез 3: snapshot of the
+    /// outgoing document's display list, captured at the navigation boundary
+    /// (`navigate_to_inner`/`navigate_replace`, before `self.source` flips to
+    /// the incoming page) when the outgoing document opted in via
+    /// `@view-transition { navigation: auto; }` and the navigation is
+    /// same-origin. `None` when no MPA transition is pending — either the
+    /// outgoing document didn't opt in, the navigation crosses origins, or
+    /// there was no current document (first load).
+    ///
+    /// Consumed once the incoming document's layout is ready: срез 4 checks
+    /// the incoming document's own opt-in and, if it also agrees, starts the
+    /// same cross-fade driver [`Self::view_transition`] uses for same-document
+    /// transitions, with this snapshot as the "before" frame. See
+    /// `docs/tasks/ph3-view-transitions-mpa.md`.
+    pub(crate) pending_mpa_view_transition_snapshot: Option<lumen_paint::DisplayList>,
     /// Tab auto-archive state (7A.5).
     ///
     /// Background tabs idle for more than `ARCHIVE_AFTER_MS` are moved here from
