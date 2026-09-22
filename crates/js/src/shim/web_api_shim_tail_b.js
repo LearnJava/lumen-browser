@@ -5222,14 +5222,21 @@ window.reportError = reportError;
 
 // ── DOM GC collect (idle shell tick) ─────────────────────────────────────────
 // Called by the shell's GcTick every 30 s with an array of node IDs that
-// have been detached from the document and have zero live JS references.
-// Purges JS-side per-node caches so dead nodes don't retain memory through maps:
+// have been detached from the document and have zero live JS references —
+// `Document::js_ref_count` is now a real count (GAP-P3GCJSDOM,
+// `_lumen_wrapper_cache_set`/`_lumen_node_wrapper_finalizer` above), so a
+// node only shows up here once V8 has actually collected every wrapper it
+// ever built for it; a live JS variable pointing at a detached node keeps
+// it out of this list indefinitely. Purges JS-side per-node caches so dead
+// nodes don't retain memory through maps:
 //   - _lumen_listeners        keyed by 'nid:eventtype'
 //   - _lumen_capture_listeners same key shape, capture-phase half (BUG-873)
 //   - _lumen_on_handlers      keyed by 'nid:type' (BUG-360 on<type> IDL attributes)
 //   - _lumen_img_state        keyed by nid (BUG-630 decoded-image state)
 //   - _input_values           keyed by nid
-//   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache)
+//   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache; the
+//     `WeakRef` slot here is already stale by the time this runs — this
+//     just drops the dict entry so the map itself doesn't grow forever)
 // The arena itself is append-only in Phase 1; physical compaction is Phase 3.
 function _lumen_gc_collect(nids) {
     for (var i = 0; i < nids.length; i++) {

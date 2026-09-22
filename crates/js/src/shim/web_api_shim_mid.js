@@ -2882,7 +2882,7 @@ function _lumen_make_rule_style(loc) {
 // first build; a later read that hits the cache keeps the mode recorded at
 // `attachShadow()` time, not whatever the caller happened to pass this time.
 function _lumen_make_shadow_root(nid, mode, host_nid) {
-    var cached = _lumen_element_wrappers[nid];
+    var cached = _lumen_wrapper_cache_get(nid);
     if (cached !== undefined) return cached;
     var sr = Object.create(ShadowRoot.prototype);
     Object.defineProperty(sr, '__nid__',
@@ -2893,8 +2893,7 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         { value: host_nid, enumerable: false, writable: false, configurable: false });
     Object.defineProperty(sr, '__mode__',
         { value: mode, enumerable: false, writable: false, configurable: false });
-    _lumen_element_wrappers[nid] = sr;
-    return sr;
+    return _lumen_wrapper_cache_set(nid, sr);
 }
 
 // ── DocumentFragment wrapper ──────────────────────────────────────────────────
@@ -3901,7 +3900,7 @@ ShadowRoot.prototype.cloneNode = function() {
 // node wrapper. `name`/`publicId`/`systemId` read the native fields on demand.
 function _lumen_make_doctype(nid) {
     if (nid === null || nid === undefined) return null;
-    var cached = _lumen_element_wrappers[nid];
+    var cached = _lumen_wrapper_cache_get(nid);
     if (cached !== undefined) return cached;
     var _field = function(which) {
         var v = _lumen_u2n(_lumen_get_doctype_field(nid, which));
@@ -3971,8 +3970,7 @@ function _lumen_make_doctype(nid) {
         value: function(other) { return _lumen_doctype_equals(obj, other); },
         enumerable: false, configurable: true,
     });
-    _lumen_element_wrappers[nid] = obj;
-    return obj;
+    return _lumen_wrapper_cache_set(nid, obj);
 }
 
 // DOM §4.4 "equal node", DocumentType branch: same name, publicId and systemId.
@@ -5873,7 +5871,56 @@ function _lumen_canvas_dim_attr(nid, attr, def) {
 // Phase-3 compaction), and this whole shim is re-evaluated from scratch on
 // every navigation/bfcache thaw (fresh V8 isolate), so a cached wrapper can
 // never alias onto an unrelated later node.
+//
+// GAP-P3GCJSDOM: entries are `WeakRef`s, not the wrapper objects themselves —
+// a *strong* single-slot cache would permanently root every wrapper it ever
+// built (nothing could ever become unreachable while the cache held it),
+// which made `Document::acquire_js_ref`/`release_js_ref` (docs/tasks/
+// ph3-gc-js-dom.md) impossible to wire for real: there would be no event to
+// hang a decrement on. `_lumen_wrapper_cache_get`/`_set` below are the only
+// two places allowed to touch this map — every wrapper factory
+// (`_lumen_make_element`, `_lumen_make_shadow_root`, `_lumen_make_doctype`)
+// goes through them so the refcount edge to `lumen-dom`'s `js_refs` stays
+// accurate no matter which kind of node it wraps.
 var _lumen_element_wrappers = {};
+
+// Fires once V8 actually collects a wrapper object that nothing but this
+// cache's (weak) slot referenced, and decrements the DOM-side refcount so
+// `Document::dead_node_ids` can finally see the node as collectable. Until
+// this lands, a live JS variable pointing at a detached node was *never*
+// distinguishable from an abandoned one — `_lumen_gc_collect` (idle shell
+// tick, `web_api_shim_tail_b.js`) purged listeners/wrapper for ANY detached
+// node after 30s, live reference or not.
+var _lumen_node_wrapper_finalizer = new FinalizationRegistry(function(nid) {
+    _lumen_dom_release_ref(nid);
+});
+
+// Returns the live wrapper for `nid`, or `undefined` if none was built yet
+// or the previous one has already been collected (in which case the stale
+// slot is dropped so a fresh `_lumen_wrapper_cache_set` doesn't leak the
+// old `WeakRef`).
+function _lumen_wrapper_cache_get(nid) {
+    var ref = _lumen_element_wrappers[nid];
+    if (ref === undefined) return undefined;
+    var obj = ref.deref();
+    if (obj === undefined) {
+        delete _lumen_element_wrappers[nid];
+        return undefined;
+    }
+    return obj;
+}
+
+// Interns `obj` as the wrapper for `nid`: acquires the DOM-side refcount
+// (mirrors the increment onto `Document::js_refs`) and arms the finalizer
+// that will release it once `obj` becomes unreachable. Every wrapper
+// factory must call this exactly once per built object, matching
+// `_lumen_wrapper_cache_get`'s single read path.
+function _lumen_wrapper_cache_set(nid, obj) {
+    _lumen_element_wrappers[nid] = new WeakRef(obj);
+    _lumen_dom_acquire_ref(nid);
+    _lumen_node_wrapper_finalizer.register(obj, nid);
+    return obj;
+}
 
 // ── ParentNode / ElementTraversal helpers (DOM Standard §4.2.6/§4.2.7) ────────
 // BUG-310: element-only tree navigation. `_lumen_get_children` returns EVERY
@@ -6152,11 +6199,10 @@ function _lumen_make_element(nid) {
     // builder (`_lumen_build_element`) so the cache write below is the one
     // and only place a wrapper gets interned, matching what `_lumen_gc_collect`
     // purges.
-    var cached = _lumen_element_wrappers[nid];
+    var cached = _lumen_wrapper_cache_get(nid);
     if (cached !== undefined) return cached;
     var built = _lumen_build_element(nid);
-    _lumen_element_wrappers[nid] = built;
-    return built;
+    return _lumen_wrapper_cache_set(nid, built);
 }
 
 // HTML LS 3.2.6.6 — DOMStringMap (`element.dataset`), BUG-703.
