@@ -144,3 +144,23 @@ RUM-библиотека (web-vitals.js и производные) на Lumen с
 WPT-хелпер `buffered-flag.html` всё равно ждёт запись). `window.LayoutShift`/
 `window.LayoutShiftAttribution` конструкторы по-прежнему не веб-видимы.
 Статус GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 2, P6):** `entry.sources[]`
+теперь непустой. `compute_layout_shift_score` возвращает `LayoutShiftResult
+{ score, sources }` — `sources` ранжирует сдвинувшиеся узлы по их
+собственной клипованной площади (largest first, capped at 5 — §4.2 «at most
+five largest»); это приближение к точному алгоритму спеки (который ранжирует
+по *объединённому* вкладу узла в общий регион), но узел в `sources[0].node`
+теперь реальный элемент, а не пустой массив. `window.LayoutShift`/
+`window.LayoutShiftAttribution` веб-видимы (`window.LayoutShift = LayoutShift`
+в `web_api_shim_tail_mc.js`), и `_lumen_deliver_layout_shift` строит запись
+через настоящий конструктор вместо голого литерала.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, dev-release, Windows,
+2026-09-22): `cls-attribution` печатает `cls-source node=shifter` вместо
+`node=none`.
+
+**Не в этом срезе:** `LayoutShiftAttribution.previousRect`/`currentRect`
+остаются `null` — движок пока не прокидывает пред-/пост-сдвиговую геометрию
+узла через `deliver_layout_shift`, только его идентификатор. `cls-shift-buffered`
+всё ещё виснет (см. срез 1). Статус GAP-LAYOUTSHIFT остаётся `planned`.

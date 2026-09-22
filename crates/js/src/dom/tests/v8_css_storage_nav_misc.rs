@@ -478,7 +478,7 @@ fn perf_observer_layout_shift() {
                 var got = [];
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['layout-shift']});
-                _lumen_deliver_layout_shift(0.15, 0, false);
+                _lumen_deliver_layout_shift(0.15, [], false);
                 got.length === 1 && got[0].entryType === 'layout-shift' && got[0].value === 0.15 && got[0].hadRecentInput === false
                 "#));
 }
@@ -489,7 +489,7 @@ fn perf_observer_buffered() {
     assert!(bool_eval(&rt, r#"
                 var po1 = new PerformanceObserver(function() {});
                 po1.observe({entryTypes: ['layout-shift']});
-                _lumen_deliver_layout_shift(0.1, 0, false);
+                _lumen_deliver_layout_shift(0.1, [], false);
                 var po2 = new PerformanceObserver(function() {});
                 po2.observe({entryTypes: ['layout-shift'], buffered: true});
                 var buffered = po2.takeRecords();
@@ -504,9 +504,9 @@ fn perf_observer_disconnect() {
                 var count = 0;
                 var po = new PerformanceObserver(function() { count++; });
                 po.observe({entryTypes: ['layout-shift']});
-                _lumen_deliver_layout_shift(0.1, 0, false);
+                _lumen_deliver_layout_shift(0.1, [], false);
                 po.disconnect();
-                _lumen_deliver_layout_shift(0.2, 0, false);
+                _lumen_deliver_layout_shift(0.2, [], false);
                 count === 1
                 "#));
 }

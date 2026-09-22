@@ -696,7 +696,7 @@ fn compute_layout_shift_score_is_zero_with_no_prior_snapshot() {
     // First relayout of a page has nothing to diff against.
     let next = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
     assert_eq!(
-        compute_layout_shift_score(&shift_rects(&[]), &next, 800.0, 600.0),
+        compute_layout_shift_score(&shift_rects(&[]), &next, 800.0, 600.0).score,
         0.0
     );
 }
@@ -705,7 +705,10 @@ fn compute_layout_shift_score_is_zero_with_no_prior_snapshot() {
 fn compute_layout_shift_score_is_zero_for_an_unmoved_element() {
     let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
     let next = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
-    assert_eq!(compute_layout_shift_score(&prev, &next, 800.0, 600.0), 0.0);
+    assert_eq!(
+        compute_layout_shift_score(&prev, &next, 800.0, 600.0).score,
+        0.0
+    );
 }
 
 #[test]
@@ -713,7 +716,10 @@ fn compute_layout_shift_score_ignores_subpixel_jitter() {
     // <0.5px movement is layout rounding noise, not a visible shift.
     let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
     let next = shift_rects(&[(1, [0.2, 0.0, 300.0, 200.0])]);
-    assert_eq!(compute_layout_shift_score(&prev, &next, 800.0, 600.0), 0.0);
+    assert_eq!(
+        compute_layout_shift_score(&prev, &next, 800.0, 600.0).score,
+        0.0
+    );
 }
 
 #[test]
@@ -722,8 +728,10 @@ fn compute_layout_shift_score_is_positive_for_simple_block_movement() {
     // down by 160px inside an 800x600 viewport.
     let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
     let next = shift_rects(&[(1, [0.0, 160.0, 300.0, 200.0])]);
-    let score = compute_layout_shift_score(&prev, &next, 800.0, 600.0);
+    let result = compute_layout_shift_score(&prev, &next, 800.0, 600.0);
+    let score = result.score;
     assert!(score > 0.0, "expected a positive score, got {score}");
+    assert_eq!(result.sources, vec![1]);
     // impact_fraction = max(old, new) clipped area / viewport area (this
     // function's approximation of the spec's exact union, see its doc
     // comment) = (300*200) / (800*600) ≈ 0.125
@@ -741,14 +749,20 @@ fn compute_layout_shift_score_ignores_a_node_leaving_or_entering_the_tree() {
     // or disappeared, which is a different (currently unscored) thing.
     let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
     let next = shift_rects(&[(2, [0.0, 160.0, 300.0, 200.0])]);
-    assert_eq!(compute_layout_shift_score(&prev, &next, 800.0, 600.0), 0.0);
+    assert_eq!(
+        compute_layout_shift_score(&prev, &next, 800.0, 600.0).score,
+        0.0
+    );
 }
 
 #[test]
 fn compute_layout_shift_score_is_zero_for_a_degenerate_viewport() {
     let prev = shift_rects(&[(1, [0.0, 0.0, 300.0, 200.0])]);
     let next = shift_rects(&[(1, [0.0, 160.0, 300.0, 200.0])]);
-    assert_eq!(compute_layout_shift_score(&prev, &next, 0.0, 600.0), 0.0);
+    assert_eq!(
+        compute_layout_shift_score(&prev, &next, 0.0, 600.0).score,
+        0.0
+    );
 }
 
 #[test]

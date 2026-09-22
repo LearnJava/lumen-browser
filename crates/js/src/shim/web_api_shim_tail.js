@@ -178,19 +178,47 @@ function _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) {
     _perf_observer_notify([entry]);
 }
 
+// Layout Instability L1 §4.1/§4.2: the record classes behind a `layout-shift`
+// entry. Exposed on `window` so a page's feature-detect (`typeof
+// window.LayoutShift`) sees a real constructor instead of the plain object a
+// bare `{...}` literal would produce — `PerformanceEntry`-shaped fields are
+// own properties for the same reason every other entry type here uses a
+// plain object rather than prototype inheritance (BUG-354's "ctor exists but
+// nothing produces it" trap runs the other way for `LayoutShift`: the ctor
+// now exists AND something produces it).
+function LayoutShiftAttribution(node, previousRect, currentRect) {
+    this.node = node || null;
+    this.previousRect = previousRect;
+    this.currentRect = currentRect;
+}
+function LayoutShift(init) {
+    this.entryType = 'layout-shift';
+    this.name = 'layout-shift';
+    this.startTime = init.startTime;
+    this.duration = 0;
+    this.value = init.value;
+    this.hadRecentInput = init.hadRecentInput;
+    this.lastInputTime = init.lastInputTime || 0;
+    this.sources = init.sources;
+}
+
 // Called by the shell when layout shift detected (CLS).
-// value = fractional shift distance (0.0..1.0+); session_id for grouping.
-// had_input = whether user input occurred recently (affects grouping).
-function _lumen_deliver_layout_shift(value, session_id, had_input) {
-    var entry = {
-        entryType: 'layout-shift',
-        name: 'layout-shift',
+// value = fractional shift distance (0.0..1.0+); source_nids = element ids
+// of the shifted nodes behind the score, largest impact first (up to five,
+// §4.2); had_input = whether user input occurred recently (affects grouping).
+function _lumen_deliver_layout_shift(value, source_nids, had_input) {
+    var sources = (source_nids || []).map(function(nid) {
+        // `previousRect`/`currentRect` need the pre/post-shift geometry per
+        // node, which the engine does not thread through this call yet — the
+        // node identity itself (what `sources.html` actually reads) is real.
+        return new LayoutShiftAttribution(_lumen_make_element(nid), null, null);
+    });
+    var entry = new LayoutShift({
         startTime: performance.now(),
-        duration: 0,
         value: value,
         hadRecentInput: !!had_input,
-        sources: [],
-    };
+        sources: sources,
+    });
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }

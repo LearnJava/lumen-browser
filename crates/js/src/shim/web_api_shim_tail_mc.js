@@ -53,6 +53,8 @@ window.TreeWalker            = _TreeWalker;
 window.NodeIterator          = _NodeIterator;
 window.Performance           = Performance;
 window.PerformanceObserver   = PerformanceObserver;
+window.LayoutShift           = LayoutShift;
+window.LayoutShiftAttribution = LayoutShiftAttribution;
 window.MediaQueryList        = MediaQueryList;
 window.MediaQueryListEvent   = MediaQueryListEvent;
 // CSS Media Queries L4 §4.2 — Window.matchMedia returns a live MediaQueryList.

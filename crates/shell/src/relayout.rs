@@ -1003,12 +1003,14 @@ impl Lumen {
                 // changes against the previous pass's snapshot before `rects`
                 // moves into the JS-push closures below, then advance the
                 // baseline so the *next* relayout diffs against this one.
-                let layout_shift_score = compute_layout_shift_score(
+                let layout_shift = compute_layout_shift_score(
                     &self.prev_layout_shift_rects,
                     &rects,
                     viewport.width,
                     viewport.height,
                 );
+                let layout_shift_score = layout_shift.score;
+                let layout_shift_sources = layout_shift.sources;
                 self.prev_layout_shift_rects = rects.clone();
                 // had_recent_input (Layout Instability L1 §3): a shift within
                 // 500ms of a real mouse/key press does not count against CLS.
@@ -1087,7 +1089,7 @@ impl Lumen {
                         if layout_shift_score > 0.0 {
                             timed_step!(
                                 "deliver_layout_shift",
-                                js.deliver_layout_shift(layout_shift_score, had_input)
+                                js.deliver_layout_shift(layout_shift_score, &layout_shift_sources, had_input)
                             );
                         }
                         timed_step!(
@@ -1117,7 +1119,7 @@ impl Lumen {
                         js.update_meta_viewport_scale(meta_viewport_scale);
                         js.deliver_layout_observers();
                         if layout_shift_score > 0.0 {
-                            js.deliver_layout_shift(layout_shift_score, had_input);
+                            js.deliver_layout_shift(layout_shift_score, &layout_shift_sources, had_input);
                         }
                         // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                         // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
@@ -1794,20 +1796,24 @@ fn clip_area_to_viewport(rect: [f32; 4], vw: f32, vh: f32) -> f32 {
 /// overlapping regions double-counts that overlap (`impact_fraction` is
 /// clamped to 1.0, so it caps rather than diverges). Good enough to turn
 /// "no delivery at all" into a real score for the common one-or-few-elements
-/// shift case (`simple-block-movement.html`, `cls-shift` probe variants);
-/// `entry.sources[]` attribution — the other piece §3.1 needs for an exact
-/// union — is deferred to a later slice (BUG-809's "следующий шаг").
+/// shift case (`simple-block-movement.html`, `cls-shift` probe variants).
+/// `sources` ranks the shifted nodes by their own clipped impact area,
+/// largest first, capped at [`LAYOUT_SHIFT_MAX_SOURCES`] (§4.2's "at most
+/// five largest") — an approximation of the spec's attribution list, not an
+/// exact match, since the spec ranks by the *unioned* region a node
+/// contributes rather than each node's standalone area.
 pub(crate) fn compute_layout_shift_score(
     prev: &std::collections::HashMap<u32, [f32; 4]>,
     next: &std::collections::HashMap<u32, [f32; 4]>,
     viewport_w: f32,
     viewport_h: f32,
-) -> f64 {
+) -> LayoutShiftResult {
     if viewport_w <= 0.0 || viewport_h <= 0.0 {
-        return 0.0;
+        return LayoutShiftResult::default();
     }
     let mut impact_area = 0.0f64;
     let mut max_distance_frac = 0.0f64;
+    let mut shifted: Vec<(u32, f64)> = Vec::new();
     for (node, new_rect) in next {
         let Some(old_rect) = prev.get(node) else { continue };
         let dx = new_rect[0] - old_rect[0];
@@ -1817,17 +1823,35 @@ pub(crate) fn compute_layout_shift_score(
         }
         let old_area = clip_area_to_viewport(*old_rect, viewport_w, viewport_h);
         let new_area = clip_area_to_viewport(*new_rect, viewport_w, viewport_h);
-        impact_area += old_area.max(new_area) as f64;
+        let node_area = old_area.max(new_area) as f64;
+        impact_area += node_area;
+        shifted.push((*node, node_area));
         let dist_frac = dx.abs().max(dy.abs()) as f64 / viewport_w.max(viewport_h) as f64;
         if dist_frac > max_distance_frac {
             max_distance_frac = dist_frac;
         }
     }
     if impact_area <= 0.0 {
-        return 0.0;
+        return LayoutShiftResult::default();
     }
     let impact_fraction = (impact_area / (viewport_w as f64 * viewport_h as f64)).min(1.0);
-    impact_fraction * max_distance_frac
+    shifted.sort_by(|a, b| b.1.total_cmp(&a.1));
+    shifted.truncate(LAYOUT_SHIFT_MAX_SOURCES);
+    LayoutShiftResult {
+        score: impact_fraction * max_distance_frac,
+        sources: shifted.into_iter().map(|(node, _)| node).collect(),
+    }
+}
+
+/// Layout Instability §4.2: "at most five" largest sources per entry.
+const LAYOUT_SHIFT_MAX_SOURCES: usize = 5;
+
+/// Result of [`compute_layout_shift_score`] — a CLS score plus the node ids
+/// behind it, for `entry.sources[]` attribution.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct LayoutShiftResult {
+    pub(crate) score: f64,
+    pub(crate) sources: Vec<u32>,
 }
 
 /// BUG-935 S26: the pure half of [`Lumen::drain_pending_lazy_image_reqs`] —
