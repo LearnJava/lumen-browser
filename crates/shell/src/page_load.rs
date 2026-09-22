@@ -1149,6 +1149,11 @@ impl Lumen {
                 click_log::log_load_err(&self.source.describe(), &err.to_string());
                 health_log::log_load_error(&self.source.describe(), &err.to_string());
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
+                // P3-viewtransnav срез 5: same fallback as the streaming
+                // error arms in `user_event.rs` — this synchronous path
+                // never reaches `maybe_reveal_mpa_view_transition`, so a
+                // captured snapshot must not linger for a later reload.
+                self.pending_mpa_view_transition_snapshot = None;
             }
         }
     }

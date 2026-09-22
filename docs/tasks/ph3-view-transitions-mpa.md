@@ -98,9 +98,21 @@ snapshot между документами через уже существую�
 выгружен, так что второй раз сверить не с чем — см. комментарий на
 `page_pipeline::mpa_view_transition_allowed`.
 
-### Срез 5 — XS — отмена/фолбэк
-Если новый документ не opt-in / cross-origin / snapshot протух — сбросить pending-snapshot и
-навигировать без анимации (fallback). Аналог `ViewTransitionEvent::Cancel`.
+### Срез 5 — XS — отмена/фолбэк — DONE
+Не opt-in / cross-origin уже отсекаются на границе капчи (срез 3, same-origin +
+`mpa_view_transition_departure_candidate`) и на reveal (срез 4, opt-in входящего документа) —
+`maybe_reveal_mpa_view_transition` в обоих случаях просто не заводит `view_transition`,
+навигация остаётся без анимации без отдельного кода. Оставался один незакрытый путь —
+**протухший snapshot**: если `maybe_capture_mpa_view_transition_snapshot` захватил кадр
+исходящего документа, но сама навигация не долетает до `apply_loaded_page`/
+`maybe_reveal_mpa_view_transition` (сетевая ошибка), `pending_mpa_view_transition_snapshot`
+раньше повисал в `Some` до следующего вызова `navigate_to_inner`/`navigate_replace` (тот сбрасывает
+его первой строкой) — окно есть, где последующий **reload** того же упавшего URL (не проходит
+через navigate_to_inner) мог бы всплыть с устаревшим snapshot от давно ушедшей страницы. Сброс
+`pending_mpa_view_transition_snapshot = None` добавлен на все три пути ошибки навигации:
+`LoadEvent::RenderDone` (`Err` рукав, `crates/shell/src/app/user_event.rs`),
+`LoadEvent::LoadError` (там же) и синхронный fallback `reload()`'s `Err` рукав
+(`crates/shell/src/page_load.rs`).
 
 ### Срез 6 — XS — доки/тесты
 `CAPABILITIES.md`, `CSS-SPECS.md` (View Transitions L2), `subsystems/*`. Graphic-тест по
@@ -123,6 +135,6 @@ KNOWN_DEBTOR из-за async-тайминга Edge).
       landed) — same-origin + двусторонний opt-in, пока не подключён к навигации (срезы 3-4).
 - [x] Same-origin навигация с двусторонним opt-in запускает cross-fade **через существующий
       SPA-движок** (нового драйвера не заведено) — срез 4, landed.
-- [ ] Cross-origin / односторонний opt-in / ошибка snapshot → навигация без анимации.
+- [x] Cross-origin / односторонний opt-in / ошибка snapshot → навигация без анимации (срез 5, landed).
 - [ ] SPA `startViewTransition` не задет — регрессий нет.
 - [ ] Юнит + graphic/interaction-тест зелёные (или обоснованный KNOWN_DEBTOR); доки обновлены.
