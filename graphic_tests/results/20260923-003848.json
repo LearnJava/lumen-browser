@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-09-23T01:11:30",
+  "timestamp": "2026-09-23T00:38:48",
   "git": {
-    "commit": "adbc55e56",
+    "commit": "9028698b6",
     "branch": "p6-bug-1008",
-    "subject": "РЈР±СЂР°С‚СЊ РґСѓР±Р»РёСЂСѓСЋС‰РёР№СЃСЏ СѓРєР°Р·Р°С‚РµР»СЊ BUGS.md:277 РёР· STATUS-P2.md"
+    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p6-queue-refill-2: РѕС‡РµСЂРµРґРё P1 (+10 Р·Р°РґР°С‡) Рё P6 (11 РїСѓРЅРєС‚РѕРІ)"
   },
   "crop_offset": [
     0,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 157,
-    "passed": 90,
+    "passed": 93,
     "failed": 21,
-    "errors": 5,
-    "debtors": 41,
+    "errors": 0,
+    "debtors": 43,
     "skipped": 0
   },
   "tests": [
@@ -1070,8 +1070,8 @@
       "label": "CSS 2.1 §17.6 border-spacing: equal and asymmetric gaps between table cells; three tables showing 12px equal, 8px/24px asymmetric, and 0 spacing",
       "html": "69-border-spacing.html",
       "threshold": 0.5,
-      "status": "ERROR",
-      "diff_pct": -1.0,
+      "status": "PASS",
+      "diff_pct": 0.0,
       "diff_region": null
     },
     {
@@ -1080,13 +1080,18 @@
       "label": "CSS Images L3 §5.5 object-fit / object-position: SVG viewBox scaling modes fill/contain/cover/none/scale-down and object-position alignment",
       "html": "70-object-fit.html",
       "threshold": 0.5,
-      "status": "ERROR",
-      "diff_pct": -1.0,
-      "diff_region": null,
+      "status": "DEBTOR",
+      "diff_pct": 1.3921,
+      "diff_region": {
+        "top": 26,
+        "left": 20,
+        "bottom": 718,
+        "right": 192
+      },
       "debtor": {
         "bug": "BUG-176",
         "baseline": 1.63,
-        "verdict": "REMOVE"
+        "verdict": "OK"
       }
     },
     {
@@ -1095,9 +1100,14 @@
       "label": "CSS Transitions L2 §3.4 @starting-style: entry animation support — @starting-style rules parse without crashing; static rendering of two coloured boxes is unaffected",
       "html": "71-starting-style.html",
       "threshold": 0.5,
-      "status": "ERROR",
-      "diff_pct": -1.0,
-      "diff_region": null
+      "status": "PASS",
+      "diff_pct": 0.0027,
+      "diff_region": {
+        "top": 260,
+        "left": 292,
+        "bottom": 459,
+        "right": 491
+      }
     },
     {
       "id": "72",
@@ -1650,13 +1660,18 @@
       "label": "CSS Fonts L5 §4: font-size-adjust — при одинаковом font-size used-размер масштабируется как adjust/aspect шрифта; видимый x-height строк уменьшается сверху вниз",
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
-      "status": "ERROR",
-      "diff_pct": -1.0,
-      "diff_region": null,
+      "status": "DEBTOR",
+      "diff_pct": 2.9473,
+      "diff_region": {
+        "top": 50,
+        "left": 40,
+        "bottom": 521,
+        "right": 485
+      },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 3.0,
-        "verdict": "REMOVE"
+        "verdict": "OK"
       }
     },
     {
@@ -1665,8 +1680,8 @@
       "label": "CSS Color 4 §10: color() предопределённые пространства — srgb-linear, a98-rgb, prophoto-rgb, xyz, xyz-d65, xyz-d50; in-gamut цвета совпадают с эталоном после маппинга в sRGB",
       "html": "96-color-function-spaces.html",
       "threshold": 0.5,
-      "status": "ERROR",
-      "diff_pct": -1.0,
+      "status": "PASS",
+      "diff_pct": 0.0,
       "diff_region": null
     },
     {

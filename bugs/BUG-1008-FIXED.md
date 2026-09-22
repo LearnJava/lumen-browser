@@ -1,6 +1,6 @@
 # BUG-1008 — snapshot_cpu reference PNGs stale again (5th occurrence)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P6)
 **Компонент:** test/snapshot (`crates/driver/tests/cases/snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)
 **Найден:** P3 2026-09-06, гейт `/lumen-task-finish` на [BUG-517](BUG-517-FIXED.md)
 
@@ -95,3 +95,33 @@ regression) — bisecting which merge introduced each page's diff would narrow t
 down faster than a blanket regenerate. Then `SAVE_CPU_SNAPSHOTS=1 cargo test
 -p lumen-driver --test all cases::snapshot_cpu -- --nocapture` to regenerate; verify
 exactly 7 PNGs change on disk, matching this mismatch list.
+
+## Исправлено 2026-09-23 (P6)
+
+Confirmed feature-driven, not a rasterizer regression: `graphic_tests/run.py
+--continue-on-fail --ipc` (Edge/GPU pixel gate) already carries the five overlapping
+numbered pages (`32-list-markers`, `34-forms`, `45-multiple-backgrounds`,
+`51-scrollbar-rendering`, `55-*`) as `KNOWN_DEBTOR` with `verdict: OK` — their
+diff % matches the registered baseline, i.e. the drift this bug tracks is already
+tolerated on the pixel side and isn't new. The line-height model behind it is the
+already-documented, deliberately-deferred FONTLOAD `line-height: normal` decision
+(`13.41` vs the old `14.40` strut height — see FONTLOAD-13's note), not an
+unexplained regression.
+
+Regenerated both stale golden sets:
+- `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --test all cases::snapshot_cpu
+  -- --nocapture` — exactly the 7 PNGs this bug lists changed on disk
+  (`1000000-final`, `32-list-markers`, `34-forms`, `45-multiple-backgrounds`,
+  `51-scrollbar-rendering`, `55-text-rendering`, `57-canvas-2d`).
+- `python graphic_tests/dump_golden.py --update` — exactly the 4 of 12 dumps this
+  bug lists changed (`samples/page.html` layout+display-list,
+  `65-flex-align-content.html` layout+display-list).
+
+Both gates are green after regeneration (`cargo test … cases::snapshot_cpu` ok,
+`dump_golden.py` "Все 12 дампов совпадают с эталоном"). `run.py --continue-on-fail
+--ipc` before and after the regeneration reports "Изменений нет" against the
+committed baseline — the pixel gate (third independent golden set) wasn't touched,
+as expected since no rendering code changed. **Note:** `run.py`'s default gdigrab
+mode gave a bogus 152/157 FAIL when launched without a real foreground window in
+this environment — invalid run, discarded; `--ipc` (headless) is what's reported
+above and is authoritative for this fix.
