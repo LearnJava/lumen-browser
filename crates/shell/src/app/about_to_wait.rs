@@ -1736,8 +1736,16 @@ impl Lumen {
             && let Some(ls) = self.layout_source.as_ref()
         {
             let dead = {
-                let doc = ls.document.lock().unwrap();
-                self.gc_tick.poll(&doc)
+                let mut doc = ls.document.lock().unwrap();
+                let dead = self.gc_tick.poll(&doc);
+                if let Some(dead_nids) = dead.as_ref() {
+                    // GAP-P3GCJSDOM срез 4: reclaim the dead subtrees' heap
+                    // payload (and cascade-prune shadow_roots/template_contents)
+                    // right here, before the JS-side purge below — see
+                    // `Document::reclaim_dead_nodes`.
+                    doc.reclaim_dead_nodes(dead_nids);
+                }
+                dead
             };
             if let Some(dead_nids) = dead {
                 let ids: Vec<u32> = dead_nids
