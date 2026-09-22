@@ -1899,26 +1899,39 @@ pub fn collect_layout_rects(
 /// Inline fragments (BUG-488's `InlineRun` union) are out of scope here —
 /// neither probe exercises them, and the plain-block walk below is what the
 /// filed approximation gaps need.
+///
+/// GAP-LAYOUTSHIFT срез 6 (BUG-809): a third exclusion, `opacity: 0`
+/// (L1 §5.2.4, same "not actually rendered" clause `visibility: hidden`
+/// already used). Unlike `visibility`, CSS `opacity` does not inherit — a
+/// node's own computed value says nothing about whether an *ancestor's*
+/// zero opacity already collapses the whole subtree to transparent paint
+/// output (`opacity-zero.html`: parent `opacity: 0`, child `opacity: 0.5`,
+/// child's own shift still must not count). So this walk threads an
+/// `ancestor_opacity_zero` flag down explicitly instead of trusting each
+/// node's own field, mirroring how the cascade would have propagated
+/// `visibility: hidden` if `opacity` inherited too.
 pub fn collect_layout_shift_rects(root: &LayoutBox) -> std::collections::HashMap<u32, [f32; 4]> {
     let mut out = std::collections::HashMap::new();
-    collect_layout_shift_rects_rec(root, &mut out);
+    collect_layout_shift_rects_rec(root, false, &mut out);
     out
 }
 
 fn collect_layout_shift_rects_rec(
     root: &LayoutBox,
+    ancestor_opacity_zero: bool,
     out: &mut std::collections::HashMap<u32, [f32; 4]>,
 ) {
-    let mut stack: Vec<&LayoutBox> = vec![root];
-    while let Some(b) = stack.pop() {
-        if !matches!(b.style.visibility, Visibility::Visible) {
-            stack.extend(b.children.iter().rev());
+    let mut stack: Vec<(&LayoutBox, bool)> = vec![(root, ancestor_opacity_zero)];
+    while let Some((b, opacity_zero)) = stack.pop() {
+        let opacity_zero = opacity_zero || b.style.opacity <= 0.0;
+        if !matches!(b.style.visibility, Visibility::Visible) || opacity_zero {
+            stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
             continue;
         }
         let r = b.rect;
         out.entry(b.node.index() as u32)
             .or_insert([r.x, r.y, r.width, r.height]);
-        stack.extend(b.children.iter().rev());
+        stack.extend(b.children.iter().rev().map(|c| (c, opacity_zero)));
     }
 }
 

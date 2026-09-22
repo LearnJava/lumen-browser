@@ -193,6 +193,30 @@ requestAnimationFrame(function () {
 });
 </script>
 """, "no-entry=true"),
+    # GAP-LAYOUTSHIFT срез 6: `opacity-zero.html` — a nested element inside an
+    # `opacity: 0` ancestor moving must not score either, even though the
+    # child's own `opacity` (unlike `visibility`) does not inherit the zero.
+    "cls-opacity-zero": ("""
+<div id=t style="position: absolute; top: 0; width: 400px; height: 400px; opacity: 0; background: blue">
+<div id=c style="position: relative; top: 0; width: 200px; height: 200px; opacity: 0.5; background: yellow"></div>
+</div>
+<script>
+var seen = false;
+new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+        seen = true;
+        console.log("PROBE cls-entry value=" + e.value);
+    });
+}).observe({entryTypes: ["layout-shift"]});
+requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+        document.getElementById("c").style.top = "100px";
+        console.log("PROBE shifted");
+        setTimeout(function () { console.log("PROBE no-entry=" + !seen); }, 300);
+    });
+});
+</script>
+""", "no-entry=true"),
     # Sanity: the stub does dispatch one event of its own (`_gatherMdns`), so a
     # silent result on the two-peer variant is not "RTC events never fire".
     "rtc-icecandidate": ("""

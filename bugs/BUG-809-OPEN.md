@@ -259,3 +259,33 @@ collect_js_layout_snapshot`'s pre-script снимок) переведены на
 исчерпан, но не весь класс approximation-gap'ов спеки (например `opacity`,
 `content-visibility`, scroll-driven сдвиги — не измерены в этом срезе).
 Статус GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 6, P6):** третье исключение —
+`opacity: 0` (L1 §5.2.4, тот же "не отрисован" повод, что уже применён к
+`visibility: hidden`). В отличие от `visibility`, CSS `opacity` не
+наследуется — собственное вычисленное значение узла ничего не говорит о том,
+не обнулил ли уже прозрачность родитель (`opacity-zero.html`: у родителя
+`opacity: 0`, у ребёнка `opacity: 0.5`, сдвиг ребёнка всё равно не должен
+засчитываться). `collect_layout_shift_rects_rec`
+(`crates/engine/layout/src/lib.rs`) поэтому явно тащит вниз по обходу флаг
+`ancestor_opacity_zero`, а не полагается на собственное поле узла — так, как
+это бы делал каскад, наследуйся `opacity` тоже. Условие исключения теперь
+`!Visible || opacity_zero`, оба независимы: элемент с `visibility: hidden`
+внутри непрозрачного предка по-прежнему исключается собственным полем, а
+элемент под `opacity: 0` предком исключается пробросом, даже если сам
+`visible` и с ненулевой собственной `opacity`.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, новый вариант
+`cls-opacity-zero` — вложенный узел под `opacity: 0` предком, повторяет
+`opacity-zero.html`, dev-release, Windows, 2026-09-22): печатает
+`no-entry=true` вместо `cls-entry value=…`. `cls-shift`/`cls-translate`/
+`cls-visibility-hidden` (срезы 1-5) не регрессировали. `cargo test -p
+lumen-layout --lib`: 3992 passed. `dump_golden.py`: те же 4/12
+несовпадения, что на main без этой правки (BUG-1008, известный дрейф) —
+display-list-нейтрально.
+
+**Не в этом срезе:** `content-visibility`/scroll-driven approximation-gaps
+остаются неизмеренными — `content-visibility` не реализован в движке вообще
+(`content-visibility-hidden.html`/`content-visibility-auto-*.html` упрутся в
+отсутствующее свойство раньше, чем в формулу CLS), отдельная, более крупная
+задача. Статус GAP-LAYOUTSHIFT остаётся `planned`.
