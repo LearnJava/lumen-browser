@@ -31,7 +31,7 @@
 
 - [BUG-946](BUG-946-OPEN.md) — ни один sink не читает политику (оконная сторона); после появления `trustedTypes` в воркере воркерные тесты упрутся в него.
 - [BUG-1087](BUG-1087-OPEN.md) — форма интерфейсов Trusted Types (WebIDL), отдельный дефект.
-- [BUG-1069](BUG-1069-OPEN.md) — `*.https.html` воркерные варианты (15 service-worker id) упираются в https-origin и от этого бага не зависят.
+- [BUG-1069](BUG-1069-FIXED.md) — `*.https.html` воркерные варианты (15 service-worker id) упираются в https-origin и от этого бага не зависят.
 - `docs/tasks/p2-test-track.md#test-3-срез-51-2026-09-22`.
 
 ## Не проверялось

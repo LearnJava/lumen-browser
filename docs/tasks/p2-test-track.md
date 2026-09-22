@@ -1448,7 +1448,7 @@ baseline (по ~7 мин): **0 регрессий, 0 unexpected pass, 0 друг
   certificate not valid for name "localhost"; … only valid for … web-platform.test / 127.0.0.1`.
   27 из 27 сверено с логом. Тестовый сертификат не покрывает `browser_host = "localhost"` (WPT-RUN-10);
   комментарий `tests/wpt/certs/README.md` («moot — отвергается раньше проверки имени») устарел с BUG-785.
-  Это [BUG-1069](../../bugs/BUG-1069-OPEN.md). По оценке (`.ini` с `https` в имени, файловый
+  Это [BUG-1069](../../bugs/BUG-1069-FIXED.md). По оценке (`.ini` с `https` в имени, файловый
   `expected: ERROR`) затронуто 1992 из 2024 `.ini` во всём `tests/wpt/metadata/` — **не проверено по
   каждому файлу**; сверено только в этой категории.
 - **`TIMEOUT`/`NOTRUN` на подтестах `www*.localhost`:** поддомены не резолвятся на Windows
@@ -1485,7 +1485,7 @@ OPEN (корневая причина плавания среза 30 не лок
 подтестов 29 `FAIL`, 19 `TIMEOUT`). Разбиение по каталогам чистое, причины сверены с логом check4:**
 - **27 `ERROR` — все файлы вне `reporting/`** (в т.ч. 8 `.https.`): страница грузит `.sxg` по
   `https://localhost:18443/…` и получает `TLS handshake: invalid peer certificate: certificate not valid for name
-  "localhost"`. Это [BUG-1069](../../bugs/BUG-1069-OPEN.md), и здесь он бьёт не только по `.https.`-именам:
+  "localhost"`. Это [BUG-1069](../../bugs/BUG-1069-FIXED.md), и здесь он бьёт не только по `.https.`-именам:
   у 19 из 27 в имени `https` нет, поэтому оценка «1992 из 2024» по имени файла занижена. По счёту лог
   сходится (18 загрузок `.sxg` + 4 из `service-workers/` + 6 `.https.`-страниц по две строки = 46 строк
   TLS), но соответствие «файл → строка лога» проверено не по каждому файлу.
@@ -1518,7 +1518,7 @@ OPEN (корневая причина плавания среза 30 не лок
 
 **Причина — одна и сверена с логом.** В логе `--update-expected` 243 строки `ExecutorException` (по три на
 файл), и все 243 — `browsingContext.navigate(https://localhost:18443/fedcm/…)` с `TLS handshake: invalid peer
-certificate: certificate not valid for name "localhost"` — [BUG-1069](../../bugs/BUG-1069-OPEN.md). Уникальных
+certificate: certificate not valid for name "localhost"` — [BUG-1069](../../bugs/BUG-1069-FIXED.md). Уникальных
 навигационных URL 81, по числу файлов; строк без TLS — 0. Соответствие «файл → строка» проверено по счёту и
 по множеству URL, а не пофайловым сопоставлением с `.ini`. Все 81 — `.https.`, так что здесь оценка BUG-1069 по
 имени файла не занижена (в отличие от `signed-exchange`).
@@ -1555,7 +1555,7 @@ Baseline 247 → 248.
 
 **88 `ERROR` — одна причина, сверена с логом.** 264 строки `ExecutorException` (88 × 3 попытки), все — `TLS
 handshake: invalid peer certificate: certificate not valid for name "localhost"`; строк без TLS — 0. Все 88 —
-`.https.` — [BUG-1069](../../bugs/BUG-1069-OPEN.md), в него дописано.
+`.https.` — [BUG-1069](../../bugs/BUG-1069-FIXED.md), в него дописано.
 
 **2 `FAIL` — артефакт хоста, не дефект движка.** `insecure-context.tentative.http.html`
 (`assert_equals(window.sharedStorage, undefined)`) и `shared-storage-writable-insecure-context.tentative.http.sub.html`
@@ -1602,7 +1602,7 @@ BUG-1069, гейта не даёт. `websockets` — единственный к
 
 | Причина | Секций в baseline | Доказательство |
 |---|---|---|
-| `?wpt_flags=h2`, и `https://localhost:18443/…` | 215 (`h2`) + ещё 9 | `navigate(https://localhost:19000/…)` / `…:18443/…` → `TLS handshake … not valid for name "localhost"` — [BUG-1069](../../bugs/BUG-1069-OPEN.md); 430 уникальных URL на `:19000` и 56 на `:18443` в логе |
+| `?wpt_flags=h2`, и `https://localhost:18443/…` | 215 (`h2`) + ещё 9 | `navigate(https://localhost:19000/…)` / `…:18443/…` → `TLS handshake … not valid for name "localhost"` — [BUG-1069](../../bugs/BUG-1069-FIXED.md); 430 уникальных URL на `:19000` и 56 на `:18443` в логе |
 | `WebSocket` нет в воркере: `.any.worker.html?default\|?wss` | 108 | `[worker-0] v8 script error: … Browser does not support WebSocket` (86 строк) / `WebSocket is not defined` (4–5) — новый [BUG-1071](../../bugs/BUG-1071-OPEN.md) |
 
 Оценка «все `ERROR` — сертификат», как у срезов 39–42, здесь неверна: 28 навигаций на `:18443` на 333 `ERROR` — остальное дают `:19000` (h2) и воркеры.
@@ -1646,7 +1646,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 |---|---|---|
 | hex-экранированный `id` в селекторе, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 152 | `eval: JS runtime error: #2 = < < f e  is not a valid selector` — `testdriver-extra.js::get_selector` |
 | `*\|` в селекторе безымянного элемента, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 12 | `:root > *\|body:nth-child(2) is not a valid selector` |
-| сертификат `localhost`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 24 | 72 = 24×3 строки `ExecutorException`, все `TLS handshake … not valid for name "localhost"` |
+| сертификат `localhost`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 24 | 72 = 24×3 строки `ExecutorException`, все `TLS handshake … not valid for name "localhost"` |
 | harness `TIMEOUT` с подтестами | 31 | `Test TIMEOUT, expected OK` — не разбирались |
 | harness `OK` | 23 | — |
 | harness `ERROR` с подтестами | 5 | не разбирались |
@@ -1730,7 +1730,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 
 | Причина | id | Доказательство |
 |---|---|---|
-| https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 25 | 14 `*.any.serviceworker.html` + 11 `*.https.*`; в логе `https://localhost:18443/workers/…` |
+| https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 25 | 14 `*.any.serviceworker.html` + 11 `*.https.*`; в логе `https://localhost:18443/workers/…` |
 | в воркере нет `Worker` — вложенные воркеры, новый [BUG-1076](../../bugs/BUG-1076-OPEN.md) | не менее 8 | `ReferenceError: Worker is not defined` (30 строк лога); одиночный прогон `baseurl/alpha/worker-in-worker.html` — 0/1, соседи 1/1 |
 | harness `ERROR` без https в имени: `modules/{dedicated,shared}-worker-import-{csp,referrer}.html`, `semantics/structured-clone/{dedicated,shared}.html` | 6 | не разбирались |
 | harness `TIMEOUT` | 58 | 18 из них — `SharedWorker`/`.any.sharedworker.html`, 11 — модульные воркеры/`import`; причина по файлам не устанавливалась. Строки лога не привязаны к id при `--processes 4` |
@@ -1767,7 +1767,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 |---|---|---|
 | селектор с namespace-префиксом `*|`: `:root > *|body:nth-child(N) > *|div:nth-child(M) … is not a valid selector`, [BUG-1063](../../bugs/BUG-1063-OPEN.md) | 263 | `testdriver-extra.js::get_selector` для элемента без `id`; `editing/other/*`, `editing/run/*`, `editing/plaintext-only/*` |
 | hex-эскейп `id`: `#\66 \69 \72 \73 \74  is not a valid selector`, [BUG-1065](../../bugs/BUG-1065-OPEN.md) | 13 | `editing/other/empty-elements-insertion.html`, `editing/run/caret-navigation-after-removing-line-break.html` и др. |
-| https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 10 | `edit-context/*.https.html`, `plaintext-only/paste.https.html?…` |
+| https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 10 | `edit-context/*.https.html`, `plaintext-only/paste.https.html?…` |
 | `EditContext is not defined` | 2 | `edit-context/edit-context-bidi-caret-association.tentative.html` — интерфейс не реализован, баг не заводился |
 | `element click intercepted` | 3 | `other/exec-command-with-text-editor.tentative.html?type=…` — не разбирались |
 | `childDocument.getSelection is not a function` | 1 | `other/exec-command-without-editable-element.tentative.html` — не разбирался |
@@ -1846,12 +1846,12 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 
 | Причина | Масштаб | Доказательство |
 |---|---|---|
-| harness-`ERROR` до первого подтеста: TLS-сертификат тестового сервера не покрывает `localhost`, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 5 148 строк `certificate not valid for name "localhost"` в логе baseline; 572 из 574 id | `browsingContext.navigate(https://localhost:18443/webnn/...) failed: … invalid peer certificate` |
+| harness-`ERROR` до первого подтеста: TLS-сертификат тестового сервера не покрывает `localhost`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 5 148 строк `certificate not valid for name "localhost"` в логе baseline; 572 из 574 id | `browsingContext.navigate(https://localhost:18443/webnn/...) failed: … invalid peer certificate` |
 | `document.permissionsPolicy.features` не содержит `webnn` | 1 подтест | `permissions-policy/webnn-supported-by-permissions-policy.html`; WebNN в Lumen не реализован (`navigator.ml` не встречается ни в `crates/js/src/shim/`, ни в `crates/js/src/*.rs`, строки про WebNN нет в `CAPABILITIES.md`) — пробел скоупа, не дефект; баг не заводился |
 
 Новых багов нет: ни один из 572 `ERROR` не дошёл до кода, который исполняет движок.
 
-**Ограничение записанного.** Baseline по 572 id — нижняя планка (`ERROR`): гейт `--check` по `webnn` ловит только новые `TIMEOUT` и порчу двух `OK`-id. Реальный охват появится после [BUG-1069](../../bugs/BUG-1069-OPEN.md) —
+**Ограничение записанного.** Baseline по 572 id — нижняя планка (`ERROR`): гейт `--check` по `webnn` ловит только новые `TIMEOUT` и порчу двух `OK`-id. Реальный охват появится после [BUG-1069](../../bugs/BUG-1069-FIXED.md) —
 тогда baseline `webnn` (и остальной `.https.`-группы: `connection-allowlist`, `workers`, `editing` и др.) придётся перегенерировать.
 
 **Окружение этой сессии.** Как в срезах 47–48: бинарь собран на `stable` (`RUSTC_WRAPPER= RUSTUP_TOOLCHAIN=stable cargo build --profile dev-release --bin lumen`, 1 мин 24 с при тёплом `target/`;
@@ -1882,7 +1882,7 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 | Потоковый `TextDecoder` не срезает BOM, разнесённый по чанкам, [BUG-1083](../../bugs/BUG-1083-OPEN.md) | `streams/decode-ignore-bom` 5/12, `textdecoder-copy` 0/2 | проба `--dump-layout` |
 | `TextDecoderStream` принимает не-`BufferSource`, [BUG-1084](../../bugs/BUG-1084-OPEN.md) | `streams/decode-bad-chunks` 0/5 | проба `--dump-layout` |
 | `WebAssembly.Memory({shared:true})` отдаёт `ArrayBuffer`, [BUG-1085](../../bugs/BUG-1085-OPEN.md) | 55 подтестов (`encodeInto.any.html` 54, `textdecoder-copy.any.html` 1); хелпер `common/sab.js` подключают 12 файлов из 5 категорий | `Error("WebAssembly.Memory does not support shared:true")` |
-| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 16 из 18 `ERROR`: `sharedarraybuffer.https.html` и 15 `*.any.serviceworker.html` (`certificate not valid for name "localhost"`, 48 строк в логе) | service-worker-варианты до кода движка не доходят |
+| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 16 из 18 `ERROR`: `sharedarraybuffer.https.html` и 15 `*.any.serviceworker.html` (`certificate not valid for name "localhost"`, 48 строк в логе) | service-worker-варианты до кода движка не доходят |
 
 Остальные top-level отклонения **не разбирались**: `ERROR` `single-byte-decoder-iframe.window.html`, `streams/decode-utf8.any.html` (5/5 подтестов, но harness `ERROR`); `TIMEOUT`
 `idlharness.any.worker.html`/`.sharedworker.html`, `streams/decode-utf8.any.worker.html`/`.sharedworker.html`, `streams/realms.window.html`, `unsupported-labels.window.html`,
@@ -1919,7 +1919,7 @@ baseline получить не могут; правка `executorlumen.py` по�
 | CSP-репорты и enforcement, [BUG-811](../../bugs/BUG-811-OPEN.md) | `a single violation reported expected 1 but got 0` — 92 сообщения (`trusted-types-reporting-*`, `-report-only`) — по природе CSP, каждый файл отдельно не проверялся | — |
 | В воркерах нет `trustedTypes`, **новый** [BUG-1086](../../bugs/BUG-1086-OPEN.md) | 23 из 28 не-service-worker воркерных id — `TIMEOUT`, ни одного проходящего подтеста | сырой лог `--log-raw`: `[worker-0] v8 script error: Runtime("trustedTypes is not defined")`, `[shared-worker] [ERR] trustedTypes is not defined` |
 | Интерфейсы Trusted Types не WebIDL-формы, **новый** [BUG-1087](../../bugs/BUG-1087-OPEN.md) | `idlharness.window.html` 39/100 (61 `FAIL`) | проба `--dump-layout`: `typeof self.TrustedTypePolicyFactory` → `undefined`, `trustedTypes.constructor.name` → `Object` |
-| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 20 `.https.` id, из них 15 `*ServiceWorker*` (120 строк `certificate not valid for name "localhost"` в логе) | service-worker-варианты до кода движка не доходят |
+| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 20 `.https.` id, из них 15 `*ServiceWorker*` (120 строк `certificate not valid for name "localhost"` в логе) | service-worker-варианты до кода движка не доходят |
 
 Остальные top-level отклонения **не разбирались** и багов на них не заводилось: `ERROR` `HTMLElement-generic.html` (40/72), `block-text-node-insertion-into-*script-element.html`, `inheriting-csp-for-local-schemes.html`,
 `modify-attributes-in-callback.html`, `script-enforcement-001/003/006/007.html`, `trusted-types-reporting-check-report-*-create-policy/-sink-mismatch.html`; `TIMEOUT` `default-policy*.html`,
@@ -1956,7 +1956,7 @@ baseline получить не могут; правка `executorlumen.py` по�
 | Нет `IIRFilterNode`/`createIIRFilter`, [BUG-707](../../bugs/BUG-707-OPEN.md) | 14 `Unhandled rejection … createIIRFilter is not a function`, 43 строки в логе | проба: `typeof IIRFilterNode` → `undefined`. **`ConstantSourceNode` в BUG-707 уже устарел** — `typeof ConstantSourceNode` → `function`, `createConstantSource` есть; `createMediaStreamDestination()` по-прежнему отдаёт `AudioNode` |
 | Нет валидации сеттеров, [BUG-708](../../bugs/BUG-708-OPEN.md) | `convolver-channels` (31), `realtimeanalyser-fft-sizing` (28), `audioparam-exceptional-values` (39), `audioparam-nominal-range` (23) — сопоставлено по заголовку BUG-708, файлы отдельно не проверялись | — |
 | `AudioWorklet` не грузит модули, [BUG-779](../../bugs/BUG-779-OPEN.md) | 38 `ERROR` в `the-audioworklet-interface`, все `.https.` | BUG-1069 маскирует, что там дальше |
-| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-OPEN.md) | 59 из 68 `ERROR` | `certificate not valid for name "localhost"` |
+| harness-`ERROR` на https-origin, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 59 из 68 `ERROR` | `certificate not valid for name "localhost"` |
 
 Остальные отклонения **не разбирались** и багов на них не заводилось: 38 сообщений `expected "running" but got "no state change"` — текст выдаёт хелпер `media-playback-while-not-visible-utils.js` из `media-playback-while-not-visible-permission-policy/` (Permissions Policy
 `media-playback-while-not-visible`; гипотеза — политика не реализована; по файлам не разбиралось); 4 `TIMEOUT` (`suspend`/`close`/`navigation`-состояния `AudioContext`); 9 `ERROR` не `.https.` (`audioparam-*RampToValueAtTime`, `setTargetAtTime`,
@@ -2013,7 +2013,7 @@ baseline получить не могут; правка `executorlumen.py` по�
 | Referrer Policy §8.3 «long referrer»: `Referer` длиннее 4096 байт должен обрезаться до origin — шаг отсутствует в `compute_referrer`, **новый** [BUG-1096](../../bugs/BUG-1096-OPEN.md) | 207 подтестов семьи `4K*` (`same-http`/`same-https` варианты `xhr`/`fetch`) — `assert_in_array: document.referrer value "<непокоцанный URL>" not in array [origin, undefined]` | `crates/network/src/referrer_policy.rs:98-148` — ни одна ветка `match policy` не проверяет `full().len() > 4096` |
 | `lumen-image` не умеет BMP (только PNG/JPEG/GIF/WebP/AVIF/SVG/JXL/HEIC) — общий WPT-хелпер `common/security-features/subresource/image.py` отдаёт `image/bmp`, **новый** [BUG-1097](../../bugs/BUG-1097-OPEN.md) | 156 подтестов `img-tag` только в `4K*`; инфраструктура шире одной категории (`mixed-content`/CSP/`upgrade-insecure-requests`/… — везде, где тест берёт `img-tag`/`picture-tag`), масштаб за пределами этого среза не измерен | `crates/engine/image/src/lib.rs::decode_raw` (120-152) — 8 форматов по сигнатуре, ветки для `BM`-сигнатуры нет, падает в `UnknownFormat` |
 
-**Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `www1.localhost` (own-subdomain cross-origin семья) не резолвится на этой машине — [BUG-1070](../../bugs/BUG-1070-OPEN.md) (`SystemDnsResolver` не реализует RFC 6761 §6.3 для `*.localhost`); живьём в stderr движка `resolve www1.localhost: имя или служба не известны (os error 11001)` на подавляющем большинстве `cross-http`/`cross-https` вариантов по всей категории, не только `4K*`. TLS-сертификат не покрывает SAN `localhost` (только `127.0.0.1`/`web-platform.test`) — [BUG-1069](../../bugs/BUG-1069-OPEN.md); живьём `TLS handshake: invalid peer certificate: certificate not valid for name "localhost"` на `.https.`-подресурсах. Оба — известный, уже локализованный класс, не движковая находка этого среза, но вместе объясняют основную долю FAIL/TIMEOUT/ERROR по категории за пределами BUG-1096/1097.
+**Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `www1.localhost` (own-subdomain cross-origin семья) не резолвится на этой машине — [BUG-1070](../../bugs/BUG-1070-OPEN.md) (`SystemDnsResolver` не реализует RFC 6761 §6.3 для `*.localhost`); живьём в stderr движка `resolve www1.localhost: имя или служба не известны (os error 11001)` на подавляющем большинстве `cross-http`/`cross-https` вариантов по всей категории, не только `4K*`. TLS-сертификат не покрывает SAN `localhost` (только `127.0.0.1`/`web-platform.test`) — [BUG-1069](../../bugs/BUG-1069-FIXED.md); живьём `TLS handshake: invalid peer certificate: certificate not valid for name "localhost"` на `.https.`-подресурсах. Оба — известный, уже локализованный класс, не движковая находка этого среза, но вместе объясняют основную долю FAIL/TIMEOUT/ERROR по категории за пределами BUG-1096/1097.
 
 **Не разобрано.** Кластер `promise_test: Unhandled rejection with value: object "[object Object]"` за пределами `img-tag` — `script-tag` (141 подтест в `4K*`), `sharedworker-classic` (12), `a-tag` (3). `script-tag` использует `common/security-features/subresource/script.py` (не изображение), значит НЕ объясняется BUG-1097; воспроизводится и для same-origin без редиректа, значит не BUG-1070/1069. Механизм не установлен — кандидат `requestViaScript`'s гонка `bindEvents2(window, "message", script, "error", window, "error")` (`common.sub.js:626-635`) против нашей доставки событий `postMessage`/`error`, не проверено.
 
@@ -2060,7 +2060,7 @@ redirects 1]` / `expected: FAIL`), подтверждено scoped `--check --ro
 --recursive` — **0 регрессий** после правки. Заведён [BUG-1098](../../bugs/BUG-1098-OPEN.md).
 
 **Уже заведённые дефекты, подтверждённые этим срезом в новой категории.** `.https.`-подресурсы
-(166 файлов) ловят TLS-цепочку [BUG-1069](../../bugs/BUG-1069-OPEN.md)/
+(166 файлов) ловят TLS-цепочку [BUG-1069](../../bugs/BUG-1069-FIXED.md)/
 [BUG-1070](../../bugs/BUG-1070-OPEN.md) наравне с прошлыми категориями — основная доля
 `ERROR`/`TIMEOUT` за пределами BUG-1098 и флапа BUG-1022 по-прежнему объясняется этой парой,
 отдельно не переизмерялась.
@@ -2095,7 +2095,7 @@ redirects 1]` / `expected: FAIL`), подтверждено scoped `--check --ro
 самостоятельные тесты: ресурсы/хелперы/worker-скрипты). Результат: **0/328 harness OK**,
 291 `.ini`.
 
-**Единственная причина — уже заведённый [BUG-1069](../../bugs/BUG-1069-OPEN.md), не
+**Единственная причина — уже заведённый [BUG-1069](../../bugs/BUG-1069-FIXED.md), не
 новая находка.** Все 328 файлов падают с идентичным сообщением
 `navigate: navigation failed: … certificate not valid for this hostname` на
 `https://localhost:18443/service-workers/…`, ещё до старта тела теста. Service workers
@@ -2126,6 +2126,39 @@ Rust), а даст реальное покрытие сразу по ~2000 `.ini
 только по будущим. Если следующая сессия остаётся в рамках «закрыть ещё категорию» —
 нетронутые крупные кандидаты `mixed-content` (533 файла) и `speculation-rules` (409) —
 оба не пробовались, стоимость прогона не измерена.
+
+### TEST-3: BUG-1069 закрыт (2026-09-22) — сертификат перевыпущен с SAN `localhost`/`*.localhost`
+
+По следу «Дальше» среза 56 взят [BUG-1069](../../bugs/BUG-1069-FIXED.md) — самая
+высокоценная оставшаяся задача (100% одной категории объяснялось им же). Починка
+подтвердила собственное «Ожидание» бага: чисто тулинговая, `tests/wpt/certs/host-cert.pem`/
+`ca-cert.pem` перевыпущены тем же самоподписанным рецептом (`certs/README.md`), SAN
+расширен с `IP:127.0.0.1,DNS:web-platform.test,DNS:127.0.0.1` до `...,DNS:localhost,
+DNS:*.localhost`; `crates/` не тронуты, пересборка не требовалась.
+
+**Проверено смоуком, не предположением.** `run_smoke.py` на том же `dev-release`:
+`/fedcm/fedcm-abort.https.html` — было `ERROR`/`certificate not valid for name "localhost"`,
+стало `TIMEOUT` (FedCM API не реализован — отдельный дефект, не эта проверка), в логе прогона
+нет ни одного упоминания `TLS`/`certificate`. `/service-workers/service-worker/
+activation-after-registration.https.html` — было `ERROR` на TLS, стало unexpected PASS
+(harness `OK`, сам тест зелёный) — полное рукопожатие вплоть до зелёного результата тела
+теста. `*.localhost`-поддомены отдельно не проверялись: их резолвинг на этой машине упирается
+в DNS, не в сертификат ([BUG-1070](../../bugs/BUG-1070-OPEN.md), не в скоупе этого фикса).
+
+**Baseline-регенерация не входит в этот заход, как и предупреждал сам баг.** ~2000 `.ini` во
+всех уже закрытых срезах WPT-RUN-7 с `.https.`-файлами сейчас фиксируют `ERROR` как
+«сегодняшнюю правду движка» — де-факто устарело: после этого коммита `--check` по любой из
+них немедленно даст лавину unexpected-PASS/смену статуса, это ожидаемо и не повод откатывать
+фикс. Регенерация — отдельная многосрезовая работа; начинать логично с `service-workers`
+(срез 56) как единственной категории, где эффект бага измерен на 100% файлов, следующими —
+крупные категории с высокой долей `.https.` из уже пройденных срезов (`connection-allowlist`,
+`signed-exchange`, `fedcm`, `shared-storage`, `websockets`, `referrer-policy`/`4K*`, `fetch`).
+До первой регенерации `--check` по этим категориям осмысленно не гоняется — старый baseline
+заведомо разойдётся по причине, уже известной наперёд.
+
+Дальше: регенерация baseline по категориям выше (начиная с `service-workers`), либо
+продолжение срезов «закрыть ещё категорию» — `mixed-content` (533 файла) и
+`speculation-rules` (409), обе не тронуты этим заходом.
 
 ## TEST-4: WPT reftest-executor (L)
 
