@@ -12343,42 +12343,57 @@ function _lumen_ce_upgrade_all(tag) {
     }
 }
 
-var customElements = {
-    define: function(name, ctor, options) {
-        name = String(name).toLowerCase();
-        if (_lumen_ce_registry[name]) return;
-        var observed = (ctor.observedAttributes && ctor.observedAttributes.length)
-            ? ctor.observedAttributes.slice()
-            : [];
-        _lumen_ce_registry[name] = { ctor: ctor, observedAttributes: observed };
-        _lumen_ce_upgrade_all(name);
-        var pending = _lumen_ce_pending[name];
-        if (pending) {
-            for (var i = 0; i < pending.length; i++) {
-                try { pending[i](ctor); } catch(e) {}
-            }
-            delete _lumen_ce_pending[name];
+// HTML LS §4.13.1: CustomElementRegistry is a public constructor — `new
+// CustomElementRegistry()` builds an independent, unattached registry (BUG-890
+// GAP-CEREG). `window.customElements` is the one instance the tree upgrade
+// path (_lumen_ce_maybe_connected et al.) reads from; those natives still
+// reach into `_lumen_ce_registry`/`_lumen_ce_pending` directly, so this
+// constructor takes them as optional backing stores and the global instance
+// below is wired to share them. A registry created via `new` gets its own
+// private stores and is not bound to any tree — scoping it to a document/
+// shadow root (`createElement`/`importNode`/`attachShadow` with a
+// `customElements` option) is separate follow-up work, not covered here.
+function CustomElementRegistry(registryStore, pendingStore) {
+    this._registry = registryStore || {};
+    this._pending  = pendingStore  || {};
+}
+CustomElementRegistry.prototype.define = function(name, ctor, options) {
+    name = String(name).toLowerCase();
+    if (this._registry[name]) return;
+    var observed = (ctor.observedAttributes && ctor.observedAttributes.length)
+        ? ctor.observedAttributes.slice()
+        : [];
+    this._registry[name] = { ctor: ctor, observedAttributes: observed };
+    if (this._registry === _lumen_ce_registry) _lumen_ce_upgrade_all(name);
+    var pending = this._pending[name];
+    if (pending) {
+        for (var i = 0; i < pending.length; i++) {
+            try { pending[i](ctor); } catch(e) {}
         }
-    },
-    get: function(name) {
-        var entry = _lumen_ce_registry[String(name).toLowerCase()];
-        return entry ? entry.ctor : undefined;
-    },
-    whenDefined: function(name) {
-        name = String(name).toLowerCase();
-        var entry = _lumen_ce_registry[name];
-        if (entry) return Promise.resolve(entry.ctor);
-        return new Promise(function(resolve) {
-            if (!_lumen_ce_pending[name]) _lumen_ce_pending[name] = [];
-            _lumen_ce_pending[name].push(resolve);
-        });
-    },
-    upgrade: function(element) {
-        if (!element || element.__nid__ === undefined) return;
-        var tag   = _lumen_get_tag_name(element.__nid__).toLowerCase();
-        var entry = _lumen_ce_registry[tag];
-        if (entry) _lumen_ce_upgrade_element(element, entry);
-    },
+        delete this._pending[name];
+    }
 };
+CustomElementRegistry.prototype.get = function(name) {
+    var entry = this._registry[String(name).toLowerCase()];
+    return entry ? entry.ctor : undefined;
+};
+CustomElementRegistry.prototype.whenDefined = function(name) {
+    var self = this;
+    name = String(name).toLowerCase();
+    var entry = this._registry[name];
+    if (entry) return Promise.resolve(entry.ctor);
+    return new Promise(function(resolve) {
+        if (!self._pending[name]) self._pending[name] = [];
+        self._pending[name].push(resolve);
+    });
+};
+CustomElementRegistry.prototype.upgrade = function(element) {
+    if (!element || element.__nid__ === undefined) return;
+    var tag   = _lumen_get_tag_name(element.__nid__).toLowerCase();
+    var entry = this._registry[tag];
+    if (entry) _lumen_ce_upgrade_element(element, entry);
+};
+
+var customElements = new CustomElementRegistry(_lumen_ce_registry, _lumen_ce_pending);
 
 // ── location (HTML LS §7.7 + WHATWG URL §8) ──────────────────────────────────

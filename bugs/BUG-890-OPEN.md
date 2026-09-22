@@ -55,3 +55,30 @@ importNode-opts     THREW CustomElementRegistry is not defined
 его экземпляром (тесты `registries/*` пойдут дальше первой строки и станут
 честными FAIL). Сама область видимости (реестр на теневое дерево) — отдельная
 работа: `_lumen_ce_*`-натив знает один глобальный словарь определений.
+
+**Срез 1 (2026-09-22, P6, `p6-gap-cereg`):** сделан ровно этот минимальный шаг
+— `crates/js/src/shim/web_api_shim_mid.js` (`var customElements = {...}` →
+`function CustomElementRegistry(registryStore, pendingStore) {...}` с методами
+на прототипе; `window.customElements = new CustomElementRegistry(_lumen_ce_registry,
+_lumen_ce_pending)` делит хранилище с натив-хуками апгрейда
+(`_lumen_ce_maybe_connected`/`_maybe_disconnected`/`_maybe_attr_changed`,
+которые продолжают читать глобальные `_lumen_ce_registry`/`_lumen_ce_pending`
+напрямую), а `new CustomElementRegistry()` без аргументов получает свои
+приватные `_registry`/`_pending` — изолированные, но НЕ привязанные ни к
+дереву, ни к `_lumen_ce_upgrade_all` (апгрейд при вставке элемента срабатывает
+только для реестра, чьи хранилища совпадают с глобальными — проверка
+`this._registry === _lumen_ce_registry` в `define()`). `ReferenceError` на
+`new-registry`/`createElement-opts`/`importNode-opts` снят; `createElement`/
+`importNode`/`attachShadow` по-прежнему игнорируют опцию `customElements` —
+привязка отдельного реестра к дереву (scoped registries, HTML LS §4.13.1)
+остаётся открытой частью GAP-CEREG, статус не меняется. Тесты:
+`crates/js/src/dom/tests/v8_fontface_shadow_custom.rs` —
+`custom_elements_registry_is_a_public_constructor`,
+`custom_elements_registry_new_instance_is_isolated_from_global`; все 91
+существующих `*_custom.rs`-теста и 9/9 `custom_elements_*`-тестов проходят
+без изменений поведения. Верифицировано `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings` (чисто) и `cargo test -p lumen-js
+--features v8-backend` (2070+91 ok, регрессий нет); полный `scoped-test.sh`
+не был дождан до конца из-за линковки нескольких v8-бинарников подряд на
+машине с ограниченной памятью (правки не затрагивают Rust-API других
+крейтов, поэтому реверс-зависимости не могут быть задеты).
