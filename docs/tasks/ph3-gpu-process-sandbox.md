@@ -93,6 +93,24 @@ crate. Not done: surface/present (step 5, still blocked on the
 `Length::Calc(Box<CalcNode>)` `Serialize` gap for `DisplayCommand`), spawn from
 `main.rs` (step 4), AppContainer (step 7).
 
+Srez A6 (2026-09-22, `p1-gpusandbox-a6-length-calc-serde`) — closes half of
+the `Length::Calc(Box<CalcNode>)` `Serialize` gap noted above: `Length`,
+`LengthOrAuto`, `CalcNode`, `MathFn`, `RoundStrategy`
+(`crates/engine/layout/src/style/values/length.rs`,
+`crates/engine/layout/src/style/calc.rs`) now derive `Serialize`/
+`Deserialize` — `lumen-layout` gained a `serde` dependency (workspace entry
+already used by `lumen-dom`/`lumen-core`/`lumen-storage`). Round-trip tests
+in `calc.rs` cover every `Length` variant, every `CalcNode` shape (arithmetic,
+`min`/`max`/`clamp`, `Func`/`MathFn`/`RoundStrategy`) and a real parsed
+`calc()` expression, through `bincode` specifically (dev-dependency,
+`lumen-ipc`'s actual wire format), not just serde's abstract data model.
+Not done: `DisplayCommand` itself (`crates/engine/paint/src/display_list/
+commands.rs`) still has no `Serialize`/`Deserialize` derive — it also embeds
+colors, gradients, paths, fonts, and images, each of which needs the same
+treatment before the derive can be added; that is the other half of the gap,
+a separate srez. Spawn from `main.rs` (step 4) and `RemoteRenderBackend`
+(step 5) still cannot land until `DisplayCommand` itself serializes.
+
 ---
 
 ## Goal

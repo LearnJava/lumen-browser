@@ -22,7 +22,20 @@ rayon = "1"
 # Bidi_Class property of every code point, which is not hand-rollable.
 unicode-bidi = "0.3"
 unicode-bidi-mirroring = "0.2"
+# Why this dependency (serde): permanent, same workspace entry already used by
+# lumen-dom/lumen-core/lumen-storage. `Length`/`CalcNode` need it so a future
+# `DisplayCommand` derive (lumen-paint) can serialize a display list for the
+# lumen-renderer IPC transport (P3-gpusandbox srez A6) — see
+# docs/tasks/ph3-gpu-process-sandbox.md's `Length::Calc(Box<CalcNode>)` gap.
+serde = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+
+[dev-dependencies]
+# Why this dependency (bincode, dev-only): round-trips the new `Length`/
+# `CalcNode` Serialize/Deserialize derives through the actual wire format
+# `lumen-ipc` uses (`crates/ipc/src/lib.rs`), not just serde's abstract
+# model — permanent, same workspace entry already used by lumen-ipc.
+bincode = { workspace = true }
 
 [features]
 # Opt-in visual profiler (Tracy GUI) — forwards to lumen-core's own `tracy`

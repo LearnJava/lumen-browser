@@ -10,6 +10,8 @@
 // Область исключения — файл. Счётчики по крейтам — docs/lint-policy.md §10.
 #![allow(missing_docs)]
 
+use serde::{Deserialize, Serialize};
+
 use lumen_core::geom::Size;
 
 use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
@@ -19,7 +21,7 @@ use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, ROOT_FONT_SIZE};
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
 /// отдельную семантику (centering). Typed; `%` резолвится при layout с
 /// known containing block. Initial value margin = `Length(Px(0.0))`, не `Auto`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LengthOrAuto {
     Auto,
     Length(Length),
@@ -63,7 +65,7 @@ impl LengthOrAuto {
 /// Не `Copy`, потому что вариант `Calc` хранит `Box<CalcNode>` с поддеревом
 /// выражения. Использования полагались только на `Clone` / match-pattern-ы,
 /// где `v` копируется как `f32`, а не `len` как `Length`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Length {
     Px(f32),
     /// `em` — относительно font-size текущего/родительского элемента
