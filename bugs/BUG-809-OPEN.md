@@ -187,3 +187,37 @@ five largest»); это приближение к точному алгорит�
 клипуются к вьюпорту на JS-стороне (спека не требует — `DOMRectReadOnly` тут
 border box в layout-пространстве, как и `getBoundingClientRect`). Статус
 GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 4, P6):** `cls-shift-buffered`
+починен. Пайплайн парсинга уже считал полный pre-script layout ради
+`getBoundingClientRect()`/`getComputedStyle()` внутри синхронных скриптов
+(BUG-443/FONTLOAD-4/CSSOM-7, `parse_time_snapshot` в
+`page_pipeline.rs::parse_and_layout`) — его геометрия (`JsLayoutSnapshot::rects`,
+тот же `collect_layout_rects`, что и весь остальной CLS-код) просто не
+переживала эту функцию. `prescript_layout_rects` теперь клонируется из
+`parse_time_snapshot` ДО того, как он уезжает по значению в
+`run_scripts_with_dom`, и прокидывается через `ParsedPage`/`LoadedPage`
+(`page_pipeline.rs`) до `apply_loaded_page` (`page_load.rs`). Там, на первом
+осевшем кадре страницы, `compute_layout_shift_score` один раз диффит этот
+pre-script снимок против финальной пост-скриптовой геометрии (`rects`,
+которым уже сеется `prev_layout_shift_rects`); при ненулевом счёте
+`deliver_layout_shift(score, sources, had_input=false)` зовётся из того же
+`route_task_js`-замыкания, что и остальной push геометрии на этой точке —
+`had_input=false` безусловно, потому что загрузка страницы по определению
+предшествует любому пользовательскому вводу. `_lumen_deliver_layout_shift`
+кладёт запись в `_perf_entries` до уведомления наблюдателей, поэтому она
+достаётся `buffered: true` подпиской, даже если та появилась позже.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, dev-release, Windows,
+2026-09-22): `cls-shift-buffered` печатает `cls-buffered-entries=1` вместо
+голого `shifted` — не FAIL, а PASS-форма. `cls-shift`/`cls-attribution`
+(срезы 1-3) не регрессировали — тот же вывод, что и раньше.
+`run_report.py --all --root layout-instability --recursive`: 71/82 harness OK
+(было 53/82 в заметке о вендоринге), 21/113 сабтестов (было 17/82 при
+вендоринге, другой знаменатель из-за `--recursive`) — заметное улучшение, но
+категория не закрыта: остаток — approximation-gaps самой формулы
+`compute_layout_shift_score` (например `translate-change.html`/
+`visibility-hidden.html` ожидают счёт `0` для трансформаций/`visibility`,
+которые не должны считаться сдвигом по L1 §3, а наша функция считает их по
+голым border-box координатам) — отдельная задача, не эта. Статус
+GAP-LAYOUTSHIFT остаётся `planned`.
