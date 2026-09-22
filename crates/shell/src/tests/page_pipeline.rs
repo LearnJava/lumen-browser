@@ -731,7 +731,10 @@ fn compute_layout_shift_score_is_positive_for_simple_block_movement() {
     let result = compute_layout_shift_score(&prev, &next, 800.0, 600.0);
     let score = result.score;
     assert!(score > 0.0, "expected a positive score, got {score}");
-    assert_eq!(result.sources, vec![1]);
+    assert_eq!(result.sources.len(), 1);
+    assert_eq!(result.sources[0].node, 1);
+    assert_eq!(result.sources[0].previous_rect, [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(result.sources[0].current_rect, [0.0, 160.0, 300.0, 200.0]);
     // impact_fraction = max(old, new) clipped area / viewport area (this
     // function's approximation of the spec's exact union, see its doc
     // comment) = (300*200) / (800*600) ≈ 0.125

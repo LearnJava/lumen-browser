@@ -484,6 +484,25 @@ fn perf_observer_layout_shift() {
 }
 
 #[test]
+fn perf_observer_layout_shift_source_carries_previous_and_current_rect() {
+    // GAP-LAYOUTSHIFT срез 3 (BUG-809): `sources[]` entries carry real
+    // pre-/post-shift geometry, not the `null` placeholder srez 2 left.
+    let rt = v8_runtime_with_dom(make_doc());
+    // NodeId 6 = <div id="main"> in make_doc().
+    assert!(bool_eval(&rt, r#"
+                var got = [];
+                var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+                po.observe({entryTypes: ['layout-shift']});
+                _lumen_deliver_layout_shift(0.15, [{nid: 6, prev: [0, 0, 300, 200], curr: [0, 160, 300, 200]}], false);
+                var src = got[0].sources[0];
+                got.length === 1 && got[0].sources.length === 1 && src.node !== null
+                    && src.previousRect instanceof DOMRectReadOnly && src.currentRect instanceof DOMRectReadOnly
+                    && src.previousRect.y === 0 && src.currentRect.y === 160
+                    && src.previousRect.width === 300 && src.currentRect.height === 200
+                "#));
+}
+
+#[test]
 fn perf_observer_buffered() {
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(&rt, r#"

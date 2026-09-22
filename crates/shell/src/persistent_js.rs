@@ -354,11 +354,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Deliver a LayoutShift entry to JS PerformanceObservers (CLS metric).
     ///
     /// Called when layout shift is detected during reflow (shift >5px).
-    /// `value` = fractional shift distance; `sources` = node ids of the
-    /// shifted elements behind the score, largest impact first (§4.2
-    /// attribution, capped at five); `had_input` = whether user input
-    /// occurred recently.
-    fn deliver_layout_shift(&self, value: f64, sources: &[u32], had_input: bool);
+    /// `value` = fractional shift distance; `sources` = the shifted elements
+    /// behind the score plus their pre-/post-shift geometry, largest impact
+    /// first (§4.2 attribution, capped at five); `had_input` = whether user
+    /// input occurred recently.
+    fn deliver_layout_shift(&self, value: f64, sources: &[crate::relayout::LayoutShiftSource], had_input: bool);
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -1130,11 +1130,28 @@ impl PersistentJs for V8PersistentJs {
             "_lumen_deliver_lcp_entry({element_id}, {size}, {start_ms}, {render_time_ms})"
         ));
     }
-    fn deliver_layout_shift(&self, value: f64, sources: &[u32], had_input: bool) {
+    fn deliver_layout_shift(&self, value: f64, sources: &[crate::relayout::LayoutShiftSource], had_input: bool) {
         let had_input_js = if had_input { "true" } else { "false" };
+        // GAP-LAYOUTSHIFT срез 3 (BUG-809): each source carries its
+        // pre-/post-shift border box so the shim can build a real
+        // `LayoutShiftAttribution.previousRect`/`currentRect` instead of the
+        // `null` placeholder srez 2 left behind.
         let sources_js = sources
             .iter()
-            .map(|nid| nid.to_string())
+            .map(|s| {
+                format!(
+                    "{{nid:{},prev:[{},{},{},{}],curr:[{},{},{},{}]}}",
+                    s.node,
+                    s.previous_rect[0],
+                    s.previous_rect[1],
+                    s.previous_rect[2],
+                    s.previous_rect[3],
+                    s.current_rect[0],
+                    s.current_rect[1],
+                    s.current_rect[2],
+                    s.current_rect[3],
+                )
+            })
             .collect::<Vec<_>>()
             .join(",");
         self.eval_js(&format!(
