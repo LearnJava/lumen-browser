@@ -111,6 +111,18 @@ fn main() {
                     message: "lumen-network-service does not manage tabs".to_string(),
                 });
             }
+            // PH3-GPUSANDBOX: GPU renderer channel messages belong to the
+            // (future) lumen-renderer process, not the network service —
+            // reject them the same way Auth/tab-control variants above are
+            // rejected, so the match stays exhaustive.
+            IpcRequest::GpuInit { .. }
+            | IpcRequest::GpuRender { .. }
+            | IpcRequest::GpuResize { .. }
+            | IpcRequest::GpuSurfaceLost => {
+                let _ = conn.send(&IpcResponse::GpuError {
+                    message: "lumen-network-service does not manage GPU rendering".to_string(),
+                });
+            }
         }
     }
 }
