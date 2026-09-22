@@ -1149,6 +1149,40 @@ pub(crate) fn install_tree_mutation(
                 stale.store(true, Ordering::Relaxed);
             }
         );
+        // GAP-P3GCJSDOM: real refcount edge from a live JS wrapper to the
+        // `NodeId` it wraps. `_lumen_make_element` calls `acquire_ref` the
+        // first time it mints a wrapper for a nid, then registers the
+        // wrapper with a `FinalizationRegistry` that calls `release_ref`
+        // once V8 actually collects it — see `_lumen_make_element` in
+        // `web_api_shim_mid.js`. Before this, `js_refs` was never touched
+        // outside tests, so `Document::dead_node_ids` treated every detached
+        // node as collectable regardless of whether a live JS variable still
+        // referenced it (Path A "no false collection" gap in
+        // docs/tasks/ph3-gc-js-dom.md).
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_dom_acquire_ref",
+            move |nid: u32| -> u32 {
+                let mut doc = d.lock().unwrap();
+                let node = NodeId::from_index(nid as usize);
+                if !doc.contains_id(node) {
+                    return 0;
+                }
+                doc.acquire_js_ref(node)
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_dom_release_ref",
+            move |nid: u32| -> u32 {
+                let mut doc = d.lock().unwrap();
+                let node = NodeId::from_index(nid as usize);
+                if !doc.contains_id(node) {
+                    return 0;
+                }
+                doc.release_js_ref(node)
+            }
+        );
     }
     Ok(())
 }

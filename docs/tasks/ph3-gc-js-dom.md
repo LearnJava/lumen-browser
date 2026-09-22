@@ -6,22 +6,71 @@
 
 ## Status
 
-**Phase 3 future item (v1.0).** Not yet started. Recorded here to preserve the
-architecture and pre-computed entry points before Phase 3 begins. Roadmap source:
-`docs/plan/phases.md:134` — *"GC integration JS ↔ DOM [P1+P4] — cycle collector
-между Rust DOM и JS engine. Архитектурная задача при интеграции QuickJS / V8."*
+**In progress (P1, срез 1, 2026-09-22).** Phase 2 / v0.5.0 has shipped and the V8
+migration (`docs/tasks/ph3-v8-migration.md`) has landed — but it did **not** give DOM
+wrappers real V8 identity. There is no `ObjectTemplate`/internal-field/embedder-data
+construction anywhere in `crates/js/src` (grepped) and no `v8::Global` retained
+per-node on the Rust side; `_lumen_make_element` still builds a **plain JS object**
+carrying a bare `__nid__` integer, exactly the pre-migration shape, just executed on
+V8 instead of QuickJS. `el === el` identity and event-listener durability are both
+achieved by JS-side `nid`-keyed dictionaries (`_lumen_element_wrappers`,
+`_lumen_listeners`), not by any Rust-held JS handle.
 
-**This pairs with the V8 migration** (`docs/tasks/ph3-v8-migration.md`). The correct
-ordering is: settle the wrapper/identity model first (V8 migration introduces a real
-`Object` wrapper class with embedder data + GC tracing callbacks), then build the
-cycle collector on top of that model. Doing the cycle collector against the current
-QuickJS bridge would mean designing for a wrapper mechanism that the V8 migration
-then replaces. Do **not** start before Phase 2 closes and v0.5.0 ships, and ideally
-not before `ph3-v8-migration.md` has landed its wrapper-class foundation.
+**Decision: Path A (leak sweep over the value-typed bridge), not Path B.** Since
+Rust never holds a `v8::Global` into a JS object that itself points back at a
+Rust-owned node, there is no possible cross-boundary reference *cycle* for a tracing
+collector to break — the defect class here is a plain **leak**, not a cycle. Path B's
+wrapper-class + GC-trace-callback machinery does not apply until (if ever) DOM
+wrappers gain real V8 identity.
 
-This is honest, deep engine integration — not a bolt-on. The core difficulty is
-reference cycles that span the Rust↔JS boundary, which neither collector can reclaim
-alone (see "The problem").
+**What was already live before this task (found, not built here):** `GcTick::poll`
+(`crates/shell/src/gc_tick.rs`) drains `Document::dead_node_ids()` every 30s and is
+actually called from `crates/shell/src/app/about_to_wait.rs:1740`, which calls
+`_lumen_gc_collect(nids)` in JS (`crates/js/src/shim/web_api_shim_tail_b.js`) to prune
+`_lumen_listeners`/`_lumen_capture_listeners`/`_lumen_on_handlers`/`_input_values`/
+`_lumen_img_state`/`_canvas2d_ctxs`/`_lumen_element_wrappers`/etc. for a dead nid. So
+half of Path A's P4 bullet ("prune `_lumen_listeners` for detached ids, then GC") was
+already done.
+
+**The real gap, and what срез 1 closes:** `Document::acquire_js_ref`/`release_js_ref`
+(`crates/engine/dom/src/lib.rs`) had **zero callers** outside tests — nothing on the
+JS side ever incremented `js_refs`, so `js_ref_count` was always 0 and
+`dead_node_ids()` reduced to plain "detached", full stop. Consequence: a page that
+detaches a node but keeps a live JS variable pointing at it (a normal
+detach-then-reattach pattern) had its listeners silently wiped 30s later even though
+nothing was actually unreachable — a "false collection" that violates the DoD's
+"No false collection" requirement and the DOM spec (removing a node from the tree
+does not remove its listeners).
+
+срез 1 wires real refcounting: `_lumen_dom_acquire_ref`/`_lumen_dom_release_ref`
+natives (`crates/js/src/v8_runtime/install/dom_core.rs`, `install_tree_mutation`)
+call `Document::acquire_js_ref`/`release_js_ref`. The single-slot wrapper cache
+(`_lumen_element_wrappers`, shared by `_lumen_make_element`/`_lumen_make_shadow_root`/
+`_lumen_make_doctype`) now stores `WeakRef`s instead of the wrapper objects
+themselves — a *strong* cache would permanently root every wrapper it ever built,
+so `js_refs` could never see a real decrement (V8 has no way to prove a node's last
+JS reference is gone if our own cache still strongly holds it). A
+`FinalizationRegistry` (`_lumen_node_wrapper_finalizer`) calls `release_ref` once V8
+actually collects a wrapper. `_lumen_wrapper_cache_get`/`_set` are now the only two
+places allowed to touch the map, so all three wrapper factories stay consistent.
+
+**Deferred to a later срез:** arena free-list/compaction (`dead_node_ids` still only
+*identifies* collectable nodes; `crates/engine/dom/src/lib.rs` `alloc()` stays
+append-only); wiring the cycle pass to `gc_policy::GcLevel`/idle-T2 transitions
+(found orphaned during this срез — `GcLevel` has **zero consumers** anywhere in the
+tree, and `V8PersistentJs::run_gc_pass` is a documented no-op,
+`crates/shell/src/persistent_js.rs:1312`: *"V8 manages its own generational GC; no
+manual tuning hook is wired yet."* Forcing an actual V8 GC pass on a T2 transition —
+e.g. via `Isolate::low_memory_notification()` — is what would make the new
+`FinalizationRegistry` fire promptly instead of waiting for V8's own heap pressure;
+this is real, separate scope, not done here). A forced-GC round-trip test
+(create → detach → keep JS ref → force GC → assert `js_ref_count` stays > 0; drop
+ref → force GC → assert it reaches 0) is also left for that срез — it needs V8
+GC-forcing test infra that does not exist in this codebase yet.
+
+This is honest, deep engine integration — not a bolt-on. The original difficulty
+this brief was written for — cross-boundary reference cycles — turned out not to
+apply, but the honest value-typed-bridge leak underneath it was real and unfixed.
 
 ---
 

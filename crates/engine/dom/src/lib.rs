@@ -458,8 +458,10 @@ pub struct Document {
     /// Counts live JS wrapper objects referencing each `NodeId`.
     ///
     /// Incremented by [`Document::acquire_js_ref`] when the JS runtime creates a
-    /// wrapper object for a DOM node; decremented by [`Document::release_js_ref`]
-    /// when the QuickJS finalizer fires (Phase 3: P3 wires the finalizer callback).
+    /// wrapper object for a DOM node (`_lumen_wrapper_cache_set` in
+    /// `web_api_shim_mid.js`); decremented by [`Document::release_js_ref`] when
+    /// V8's `FinalizationRegistry` reports the wrapper collected
+    /// (`_lumen_node_wrapper_finalizer`, same file) — see docs/tasks/ph3-gc-js-dom.md.
     ///
     /// Not serialised — JS objects do not survive tab hibernation. On restore,
     /// the JS heap is rebuilt from scratch and wrappers re-acquire refs.
@@ -1422,11 +1424,12 @@ impl Document {
 
     /// Remove `node` from its current parent. The node itself stays in the arena and can be re-attached.
     ///
-    /// **GC hook (P3 integration):** After detaching a node, call
-    /// [`Document::dead_node_ids`] to check whether the node became collectable
-    /// (detached + zero JS wrappers). P3 wires this into the JS finalizer cycle:
-    /// the QuickJS finalizer decrements the ref count via [`Document::release_js_ref`];
-    /// the shell's idle GC tick drains [`Document::dead_node_ids`] and purges the slots.
+    /// **GC hook:** After detaching a node, call [`Document::dead_node_ids`] to
+    /// check whether the node became collectable (detached + zero JS wrappers).
+    /// V8's `FinalizationRegistry` decrements the ref count via
+    /// [`Document::release_js_ref`] once every JS wrapper for the node is
+    /// actually collected; the shell's idle GC tick (`GcTick::poll`) drains
+    /// [`Document::dead_node_ids`] and purges the JS-side slots.
     pub fn detach(&mut self, node: NodeId) {
         let parent = self.nodes[node.index()].parent.take();
         if let Some(parent) = parent {
@@ -1488,8 +1491,10 @@ impl Document {
     /// node (e.g. the first time JS accesses `document.getElementById(…)`).
     /// Returns the new reference count.
     ///
-    /// **P3 integration point:** invoke from `lumen-js` when allocating a
-    /// QuickJS object whose `_nid` property is set for the first time.
+    /// Wired to the native `_lumen_dom_acquire_ref` binding
+    /// (`crates/js/src/v8_runtime/install/dom_core.rs`), called from
+    /// `_lumen_wrapper_cache_set` the first time the JS shim mints a wrapper
+    /// object for this node.
     pub fn acquire_js_ref(&mut self, node_id: NodeId) -> u32 {
         let count = self.js_refs.entry(node_id).or_insert(0);
         *count += 1;
@@ -1498,16 +1503,19 @@ impl Document {
 
     /// Decrement the JS wrapper reference count for `node_id`.
     ///
-    /// Called by the QuickJS finalizer when the last JS reference to a wrapper
-    /// object is collected. Returns the remaining reference count (0 means no
-    /// live JS wrappers remain).
+    /// Returns the remaining reference count (0 means no live JS wrappers
+    /// remain).
     ///
     /// When the count drops to zero **and** the node is detached from the
     /// document tree, it becomes eligible for collection — visible via
     /// [`Document::dead_node_ids`].
     ///
-    /// **P3 integration point:** invoke from the `rquickjs` class finalizer
-    /// registered for DOM wrapper objects (see `lumen-js::dom`).
+    /// Wired to the native `_lumen_dom_release_ref` binding
+    /// (`crates/js/src/v8_runtime/install/dom_core.rs`), called from V8's
+    /// `FinalizationRegistry` callback (`_lumen_node_wrapper_finalizer` in
+    /// `web_api_shim_mid.js`) once the wrapper object itself is collected —
+    /// not synchronously on the JS side that "let go" of it, since nothing
+    /// short of an actual GC pass can prove no other reference survives.
     pub fn release_js_ref(&mut self, node_id: NodeId) -> u32 {
         let Some(count) = self.js_refs.get_mut(&node_id) else {
             return 0;
