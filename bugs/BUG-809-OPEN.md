@@ -164,3 +164,26 @@ five largest»); это приближение к точному алгорит�
 остаются `null` — движок пока не прокидывает пред-/пост-сдвиговую геометрию
 узла через `deliver_layout_shift`, только его идентификатор. `cls-shift-buffered`
 всё ещё виснет (см. срез 1). Статус GAP-LAYOUTSHIFT остаётся `planned`.
+
+**Обновление 2026-09-22 (GAP-LAYOUTSHIFT срез 3, P6):** `previousRect`/
+`currentRect` теперь реальная геометрия, а не `null`. `LayoutShiftResult::sources`
+(`crates/shell/src/relayout.rs`) — раньше просто `Vec<u32>` — стал
+`Vec<LayoutShiftSource>` (`node` + `previous_rect`/`current_rect`, оба в
+формате `collect_layout_rects` `[x, y, w, h]`, взяты из того же диффа
+`prev`/`next`, что уже считал score). `PersistentJs::deliver_layout_shift`
+сериализует их JS-литералом `{nid, prev:[...], curr:[...]}`; шим
+(`_lumen_deliver_layout_shift`, `web_api_shim_tail.js`) строит из каждой пары
+настоящий `DOMRectReadOnly` (`geometry_shim.js`, уже веб-видим) вместо
+подставленного `null`.
+
+Живой замер (`verify_layout_shift_and_peer_gaps.py`, расширен печатью
+`cls-rects`, dev-release, Windows, 2026-09-22): `cls-attribution` печатает
+`cls-rects prev=8,200 curr=168,200` — дельта `top` (168−8=160) совпадает с
+реальным сдвигом `style.top = "160px"` пробника, `height` (200) не меняется,
+как и должно быть при чисто вертикальном сдвиге.
+
+**Не в этом срезе:** `cls-shift-buffered` всё ещё виснет (см. срез 1) — не
+входная геометрия, а таймінг относительно первого осевшего кадра. Rect'ы не
+клипуются к вьюпорту на JS-стороне (спека не требует — `DOMRectReadOnly` тут
+border box в layout-пространстве, как и `getBoundingClientRect`). Статус
+GAP-LAYOUTSHIFT остаётся `planned`.

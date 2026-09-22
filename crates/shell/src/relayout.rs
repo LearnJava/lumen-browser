@@ -1813,7 +1813,7 @@ pub(crate) fn compute_layout_shift_score(
     }
     let mut impact_area = 0.0f64;
     let mut max_distance_frac = 0.0f64;
-    let mut shifted: Vec<(u32, f64)> = Vec::new();
+    let mut shifted: Vec<(LayoutShiftSource, f64)> = Vec::new();
     for (node, new_rect) in next {
         let Some(old_rect) = prev.get(node) else { continue };
         let dx = new_rect[0] - old_rect[0];
@@ -1825,7 +1825,14 @@ pub(crate) fn compute_layout_shift_score(
         let new_area = clip_area_to_viewport(*new_rect, viewport_w, viewport_h);
         let node_area = old_area.max(new_area) as f64;
         impact_area += node_area;
-        shifted.push((*node, node_area));
+        shifted.push((
+            LayoutShiftSource {
+                node: *node,
+                previous_rect: *old_rect,
+                current_rect: *new_rect,
+            },
+            node_area,
+        ));
         let dist_frac = dx.abs().max(dy.abs()) as f64 / viewport_w.max(viewport_h) as f64;
         if dist_frac > max_distance_frac {
             max_distance_frac = dist_frac;
@@ -1839,7 +1846,7 @@ pub(crate) fn compute_layout_shift_score(
     shifted.truncate(LAYOUT_SHIFT_MAX_SOURCES);
     LayoutShiftResult {
         score: impact_fraction * max_distance_frac,
-        sources: shifted.into_iter().map(|(node, _)| node).collect(),
+        sources: shifted.into_iter().map(|(source, _)| source).collect(),
     }
 }
 
@@ -1851,7 +1858,19 @@ const LAYOUT_SHIFT_MAX_SOURCES: usize = 5;
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct LayoutShiftResult {
     pub(crate) score: f64,
-    pub(crate) sources: Vec<u32>,
+    pub(crate) sources: Vec<LayoutShiftSource>,
+}
+
+/// GAP-LAYOUTSHIFT срез 3 (BUG-809): one `entry.sources[]` attribution
+/// entry — the node plus its pre-/post-shift border-box geometry
+/// (`LayoutShiftAttribution.previousRect`/`currentRect`, L1 §4.2), both in
+/// `collect_layout_rects`'s `[x, y, width, height]` layout-space form (not
+/// yet clipped to the viewport — the JS side builds the `DOMRectReadOnly`).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(crate) struct LayoutShiftSource {
+    pub(crate) node: u32,
+    pub(crate) previous_rect: [f32; 4],
+    pub(crate) current_rect: [f32; 4],
 }
 
 /// BUG-935 S26: the pure half of [`Lumen::drain_pending_lazy_image_reqs`] —

@@ -141,6 +141,8 @@ new PerformanceObserver(function (list) {
     var e = list.getEntries()[0];
     var s = e.sources && e.sources[0];
     console.log("PROBE cls-source node=" + (s ? String(s.node && s.node.id) : "none"));
+    console.log("PROBE cls-rects prev=" + (s && s.previousRect ? s.previousRect.top + "," + s.previousRect.height : "null")
+        + " curr=" + (s && s.currentRect ? s.currentRect.top + "," + s.currentRect.height : "null"));
 }).observe({entryTypes: ["layout-shift"]});
 setTimeout(function () {
     document.getElementById("shifter").style.top = "160px";

@@ -203,21 +203,21 @@ function LayoutShift(init) {
 }
 
 // Called by the shell when layout shift detected (CLS).
-// value = fractional shift distance (0.0..1.0+); source_nids = element ids
-// of the shifted nodes behind the score, largest impact first (up to five,
-// §4.2); had_input = whether user input occurred recently (affects grouping).
-function _lumen_deliver_layout_shift(value, source_nids, had_input) {
-    var sources = (source_nids || []).map(function(nid) {
-        // `previousRect`/`currentRect` need the pre/post-shift geometry per
-        // node, which the engine does not thread through this call yet — the
-        // node identity itself (what `sources.html` actually reads) is real.
-        return new LayoutShiftAttribution(_lumen_make_element(nid), null, null);
+// value = fractional shift distance (0.0..1.0+); sources = the shifted nodes
+// behind the score, largest impact first (up to five, §4.2), each
+// {nid, prev: [x,y,w,h], curr: [x,y,w,h]}; had_input = whether user input
+// occurred recently (affects grouping).
+function _lumen_deliver_layout_shift(value, sources, had_input) {
+    var sources_out = (sources || []).map(function(s) {
+        var prev = s.prev ? new DOMRectReadOnly(s.prev[0], s.prev[1], s.prev[2], s.prev[3]) : null;
+        var curr = s.curr ? new DOMRectReadOnly(s.curr[0], s.curr[1], s.curr[2], s.curr[3]) : null;
+        return new LayoutShiftAttribution(_lumen_make_element(s.nid), prev, curr);
     });
     var entry = new LayoutShift({
         startTime: performance.now(),
         value: value,
         hadRecentInput: !!had_input,
-        sources: sources,
+        sources: sources_out,
     });
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
