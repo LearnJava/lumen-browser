@@ -1,6 +1,6 @@
 # BUG-1096 — `compute_referrer` не обрезает `Referer` длиннее 4096 байт до origin (Referrer Policy §8.3)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P3)
 **Тип:** дефект реализованного кода — `compute_referrer` реализует шаги policy/downgrade §8.3, но пропускает шаг «if `result`'s length is greater than 4096, set `result` to `result`'s origin»
 **Область:** network (`crates/network/src/referrer_policy.rs:98-148`, `compute_referrer`)
 **Владелец:** P1/P3 (`lumen-network`)
@@ -53,3 +53,27 @@ assert_in_array: document.referrer value "http://localhost:18300/referrer-policy
 `tests/wpt/run_report.py --check --all --root referrer-policy/4K --recursive --processes 7` —
 207 подтестов `assert_in_array: document.referrer value` (семьи `4K*`) должны
 перейти в unexpected PASS (сузить `.ini`, `--update-expected` заново).
+
+## Исправлено
+
+`compute_referrer` (`crates/network/src/referrer_policy.rs:98-153`) теперь
+применяет спековый шаг длины ПОСЛЕ `match policy` (как и требует §8.3 —
+шаг общий для всех политик, не внутри ветвления): результат каждой ветки
+собирается в `result: Option<String>`, и на выходе
+
+```rust
+result.map(|r| if r.len() > 4096 { origin_only() } else { r })
+```
+
+заменяет любой `result` длиннее 4096 байт на origin, независимо от того,
+`full()` или уже `origin_only()` его произвёл.
+
+Добавлены 2 юнит-теста: `full_referrer_over_4096_bytes_collapses_to_origin`
+(4096+ байт → origin) и `full_referrer_under_4096_bytes_stays_full` (короткий
+путь остаётся нетронутым). `cargo clippy -p lumen-network --all-targets --
+-D warnings` чист, `cargo test -p lumen-network referrer_policy` 11/11.
+
+Живой WPT-прогон (`tests/wpt/run_report.py --check --root referrer-policy/4K`,
+207 подтестов) в этой сессии не переверифицирован — фикс подтверждён на
+уровне спеки и юнит-теста; `.ini`-сужение и unexpected-PASS проверка
+оставлены следующему прогону WPT-RUN-7.
