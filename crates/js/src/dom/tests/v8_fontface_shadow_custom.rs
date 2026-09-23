@@ -1459,6 +1459,121 @@ fn custom_element_registry_upgrade_method_runs_constructor() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// ── CE-1 срез 4: custom element reactions queue (HTML LS §4.13.3) ─────────
+
+#[test]
+fn custom_element_reactions_nested_ce_reactions_op_runs_before_outer_resumes() {
+    // HTML LS §4.13.3: each [CEReactions]-tagged operation pushes its own
+    // element queue and invokes it when THAT operation returns — including
+    // one called from inside another reaction's callback. So a nested
+    // `appendChild` inside `connectedCallback` fires the nested element's
+    // own connectedCallback synchronously, before the outer callback body
+    // continues; it is not deferred to a microtask or to the end of the
+    // outer operation.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _order = [];
+                class XOuter extends HTMLElement {
+                    connectedCallback() {
+                        _order.push('outer-start');
+                        var inner = document.createElement('x-inner');
+                        document.body.appendChild(inner);
+                        _order.push('outer-end');
+                    }
+                }
+                class XInner extends HTMLElement {
+                    connectedCallback() { _order.push('inner'); }
+                }
+                customElements.define('x-outer', XOuter);
+                customElements.define('x-inner', XInner);
+                document.body.appendChild(document.createElement('x-outer'));
+                _order.join(',') === 'outer-start,inner,outer-end'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_element_reactions_batched_across_fragment_children() {
+    // Appending a DocumentFragment with several already-defined custom
+    // elements must fire every connectedCallback, in tree order, as one
+    // batch of the same appendChild call — not interleaved with anything
+    // else the queue infrastructure does.
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _log = [];
+                class XItem extends HTMLElement {
+                    connectedCallback() { _log.push(this.getAttribute('n')); }
+                }
+                customElements.define('x-item', XItem);
+                var frag = document.createDocumentFragment();
+                for (var i = 0; i < 3; i++) {
+                    var el = document.createElement('x-item');
+                    el.setAttribute('n', String(i));
+                    frag.appendChild(el);
+                }
+                document.body.appendChild(frag);
+                _log.join(',') === '0,1,2'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_element_disconnected_callback_via_reaction_queue() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _disconnected = false;
+                class XLeave extends HTMLElement {
+                    disconnectedCallback() { _disconnected = true; }
+                }
+                customElements.define('x-leave', XLeave);
+                var el = document.createElement('x-leave');
+                document.body.appendChild(el);
+                el.remove();
+                _disconnected === true
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_elements_remove_attribute_fires_attribute_changed_callback() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _log = [];
+                class XAttrRemove extends HTMLElement {
+                    static get observedAttributes() { return ['title']; }
+                    attributeChangedCallback(name, old, next) { _log.push(name + ':' + old + '->' + next); }
+                }
+                customElements.define('x-attr-remove', XAttrRemove);
+                var el = document.createElement('x-attr-remove');
+                document.body.appendChild(el);
+                el.setAttribute('title', 'a');
+                el.removeAttribute('title');
+                el.removeAttribute('title'); // no-op, must not fire again
+                _log.join('|') === 'title:null->a|title:a->null'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn custom_elements_toggle_attribute_fires_attribute_changed_callback() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _log = [];
+                class XAttrToggle extends HTMLElement {
+                    static get observedAttributes() { return ['hidden']; }
+                    attributeChangedCallback(name, old, next) { _log.push(name + ':' + old + '->' + next); }
+                }
+                customElements.define('x-attr-toggle', XAttrToggle);
+                var el = document.createElement('x-attr-toggle');
+                document.body.appendChild(el);
+                el.toggleAttribute('hidden');       // absent -> present
+                el.toggleAttribute('hidden');       // present -> absent
+                el.toggleAttribute('hidden', true);  // force present
+                _log.join('|') === 'hidden:null->|hidden:->null|hidden:null->'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── HTMLTemplateElement.content + DocumentFragment ────────────────────────
 
 #[test]
