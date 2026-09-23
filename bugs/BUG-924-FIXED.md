@@ -1,6 +1,6 @@
 # BUG-924 — `<audio src>` не резолвится относительно базы документа: относительный URL умирает как `MEDIA_ERR_SRC_NOT_SUPPORTED`, запроса нет
 
-**Статус:** OPEN
+**Статус:** FIXED (обнаружено как уже исправленное, P3, 2026-09-23)
 **Заведён:** 2026-08-25 (P1, остаток [BUG-799](BUG-799-FIXED.md))
 **Область:** js (`crates/js/src/audio_element.rs:264-283` — `startLoad(url)` передаёт значение атрибута в `__lumen_audio_load` как есть)
 **Владелец:** P1/P3
@@ -82,3 +82,38 @@ PROBE FINAL plain rs=0 ns=0 err=4 | pipe rs=0 ns=0 err=4
 не грузится никогда. После починки они станут красными по
 [BUG-925](BUG-925-OPEN.md) (`loading=lazy` не реализован), и это движение
 вперёд, а не регресс.
+
+## Фикс
+
+Резолв (и попутно `upgrade-insecure-requests`-переписывание) уже был внесён
+в `startLoad` коммитом `d2e8b27b7` (GAP-CSPENF срез 51, 2026-09-20) —
+изначально ради того, чтобы CSP `media-src` проверялся против абсолютного
+URL, но переменная `_abs` заодно заменила собой `url` и в самом вызове
+`__lumen_audio_load(_handle, _abs)` (было `__lumen_audio_load(_handle, url)`
+до среза 51, см. срез 17: там резолв был только для CSP-проверки, а
+загрузчик всё ещё получал сырой атрибут — сформулировано явным
+комментарием-ограничением, снятым в срезе 51). Заявка на этот баг не была
+отмечена закрытой, потому что фикс был найден по другой причине (CSPENF), не
+по этому багу — задача P3 2026-09-23 обнаружила расхождение доков и
+подтвердила пробой.
+
+## Замер (P3, 2026-09-23)
+
+`tests/wpt/verify_bug924_audio_src_resolve.py` — страница с тремя `<audio>`
+(`http://host/sine440.mp3`, `/sine440.mp3`, `sine440.mp3`) на dev-release
+бинаре:
+
+```
+requests seen by server: ['REQ /index.html', 'REQ /sine440.mp3', 'REQ /sine440.mp3', 'REQ /sine440.mp3']
+PROBE abs:loadeddata     currentSrc=http://127.0.0.1:PORT/sine440.mp3
+PROBE rootrel:loadeddata currentSrc=http://127.0.0.1:PORT/sine440.mp3
+PROBE rel:loadeddata     currentSrc=http://127.0.0.1:PORT/sine440.mp3
+```
+
+Все три формы доходят до `loadeddata`, сервер видит ровно по одному GET на
+каждую, `currentSrc` — абсолютный URL. Побочно измеренное в исходной заявке
+разошлось: `currentSrc` уже не `undefined` (закрыто отдельно, [BUG-940]
+(BUG-940-FIXED.md)), а `duration` всё ещё `Infinity` у полностью
+декодированного файла — другой механизм (`rodio`'s MP3-декодер не считает
+длительность), заведено отдельно как [BUG-1105](BUG-1105-OPEN.md), не
+блокирует закрытие этого бага.
