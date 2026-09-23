@@ -146,3 +146,104 @@ run.py --continue-on-fail` не прогнан — калибровка `TEST-00
   отдельный срез на расширение eligibility-скоупа — то самое "архитектурное
   расширение", описанное в постановке задачи выше, с полным аудитом
   presentational-hint/quirks-путей для обычного HTML.
+
+## Срез 2 (2026-09-23)
+
+Живой прогон, который срез 1 не смог сделать («нет сетевого доступа»),
+оказался возможен в этой сессии — сеть в песочнице есть. Добавлена
+измерительная (`LUMEN_SHARECACHE_STATS=1`, по образцу
+`LUMEN_BUG935_M4_SWAP`) постоянная инструментация `ShareCache`:
+`hit`/`insert`/`miss` (+ диагностический разбор `miss` на `key_none` vs
+`key_some_unshareable`) печатаются в stderr по каждому проходу
+(`crates/engine/layout/src/style/share_cache.rs`, `Drop for ShareCache`).
+Не влияет на поведение при не выставленной переменной (`OnceLock`, читается
+один раз за процесс).
+
+Замер (`LUMEN_SHARECACHE_STATS=1 lumen.exe --trace-nav out.json <url>`,
+dev-release): **`share_insert` остаётся 0** и на github.com
+(`hit=0 insert=0 miss=1780`, из них `key_some_unshareable=391` — узлы,
+получившие ключ, но отклонённые как небезопасные), и на lenta.ru
+(`hit=0 insert=0 miss=1508`, `key_some_unshareable=81`) — срез 1 не даёт
+измеримого выигрыша ни на одном реальном сайте в этой сессии.
+
+## Срез 3 (2026-09-23)
+
+Нашёл и починил ДВА конкретных источника ложного `key_some_unshareable` —
+оба через временную адресную инструментацию (`eprintln!` селектора,
+отклонившего `shareable`, не закоммичена), а не результат гадания.
+
+**Находка 1 — `:root { --custom-prop: … }` глушит расшаривание для ВСЕХ
+391 узлов на github.com.** `RuleIndex::candidates` кладёт любой селектор,
+чей subject не имеет type/class/id (а `:root`'s subject — чистый
+pseudo-class), в bucket `universal`, который возвращается безусловно для
+КАЖДОГО запроса (`rule_index.rs:231`). `selector_is_share_safe` видел этот
+кандидат для каждого SVG-узла и безусловно банил pseudo-class — даже
+несмотря на то, что `:root` физически не может совпасть ни с одним
+`is_svg_presentational_element`-тегом (документный root — всегда
+`<html>`). Фикс: `PseudoClass::Root` в SUBJECT-позиции теперь считается
+безопасным — жёсткое несовпадение, доказуемое без всякого ключа.
+
+**Находка 2 (после фикса 1) — атрибутные селекторы на subject'е.**
+github.com's dark-mode custom properties
+(`[data-color-mode=light][data-light-theme*=light] { … }`) — тот же
+механизм (`universal`-bucket, subject без type/class/id) душил все те же
+391 узла. Но `ShareKey.attrs` УЖЕ пинит ПОЛНЫЙ набор атрибутов subject'а
+(см. module doc `share_cache.rs`) — значит любой атрибутный селектор на
+subject'е детерминирован по ключу, ровно как `Class`/`Id`. Прежнее
+ограничение «`Class`/`Id` и всё» было строже, чем реально требует ключ.
+Фикс: `Attribute(_)` в SUBJECT-позиции тоже безопасен.
+
+**Найденный и исправленный ДО коммита баг в собственном фиксе.** Первая
+версия обоих фиксов различала subject/ancestor по `sel.head` —
+неправильно: `ComplexSelector::head` это ЛЕВЫЙ (самый дальний предок)
+compound, а не subject; `matching.rs::matches_complex` матчит `node`
+против ПОСЛЕДНЕГО элемента `tail` (или `head`, если `tail` пуст) —
+см. `ComplexSelector`'s doc comment (`css-parser/src/parser/selectors.rs:479`)
+и `matches_chain` (`matching.rs:53`). С первой версией фикса атрибутный
+селектор в ПРЕДКОВОЙ позиции (`[data-theme=b] .octicon { … }`) стал бы
+ошибочно считаться безопасным — `ShareKey` не пинит атрибуты предка,
+только subject'а, так что это было бы тихой порчей стиля. Пойман до
+пуша: 391 у github.com не изменилось после первой версии фикса (должно
+было упасть, раз убрали `:root`-блокер), что и привело к перепроверке
+логики head/tail. Функция переписана: subject — это `tail.last()` (или
+`head` при пустом `tail`), только этому compound-у разрешены
+`Root`/`Attribute`; все более ранние compounds остаются на прежнем,
+строгом правиле (`Type`/`Class`/`Id`/`Universal`-only).
+
+**Результат живого перемера после обоих фиксов:** `share_insert`
+**остаётся 0** и на github.com, и на lenta.ru. Причина —
+третий, архитектурно более глубокий источник того же
+`universal`-bucket-эффекта: `.pagination > :first-child` /
+`.pagination > :last-child` / `.btn .octicon:only-child` — субъектные
+pseudo-classes `:first-child`/`:last-child`/`:only-child` ЗАВИСЯТ от
+позиции среди соседей, которую `ShareKey` не кодирует ни на каком уровне
+(тот же класс, что уже документированный запрет `NextSibling`/
+`LaterSibling`) — это ЗАКОННОЕ, не ложное отклонение. Но `universal`-bucket
+делает эти правила кандидатами для ЛЮБОГО узла документа независимо от
+того, действительно ли он потомок `.pagination`/`.btn`, поэтому все 391
+(github) / 79 из 81 (lenta.ru, после фиксов 1-2 упало с 81) SVG-узлов
+документа гарантированно отклоняются хотя бы одним из них. Тесты
+(`share_cache.rs`): `a_root_scoped_custom_property_rule_does_not_disable_sharing`,
+`a_subject_attribute_selector_does_not_disable_sharing`,
+`an_ancestor_position_attribute_selector_still_disables_sharing`
+(регрессия на пойманный баг выше),
+`a_subject_dynamic_pseudo_class_still_disables_sharing_behind_a_combinator` —
+9/9 зелёных, включая три из среза 1.
+
+Гейты: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист;
+`cargo test -p lumen-layout --lib share_cache` 9/9; `scripts/scoped-test.sh`
+чист (один флак `lumen-js::frame_bridge::inaccessible_bridge_mutation_
+does_not_mark_dirty` — общий процесс-глобал `take_frame_dom_dirty`,
+зелёный при изолированном перезапуске, не связан с этой правкой);
+`python graphic_tests/dump_golden.py --build` — 12/12.
+
+**Что НЕ сделано** (следующий срез): `share_insert > 0` на реальных
+сайтах ещё не достигнут. Два пути вперёд: (a) расширить `ShareKey`
+позицией среди соседей (first/last/only-child индекс) — сделает
+`:first-child`-класс pseudo-classes безопасными по тому же принципу, что
+`Attribute` в этом срезе, но это отдельный, не факт что дешёвый кусок
+работы; (b) сузить `RuleIndex::universal` bucket так, чтобы кандидатная
+выборка не возвращала заведомо неприменимые для узла правила (общая
+проблема индекса, не специфичная для `ShareCache`) — архитектурно больше
+это среза. [BUG-935](BUG-935-OPEN.md)'s `LUMEN_BUG935_M4_SWAP` живой A/B
+переизмерять пока рано — блокер не снят.

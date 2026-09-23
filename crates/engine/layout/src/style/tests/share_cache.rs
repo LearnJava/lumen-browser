@@ -174,6 +174,130 @@ fn an_unrelated_shadow_tree_elsewhere_does_not_disable_sharing() {
 }
 
 #[test]
+fn a_root_scoped_custom_property_rule_does_not_disable_sharing() {
+    // BUG-1112 срез 3: live instrumentation on github.com found `:root { … }`
+    // (the common way to declare CSS custom properties) as a *candidate* for
+    // every single node in the document (`RuleIndex`'s `universal` bucket —
+    // `:root`'s subject has no type/class/id to index on), which zeroed
+    // `share_insert` on the whole page even though `:root` can never match a
+    // `<path>`/`<svg>`/… subject (only `<html>` is ever the document root).
+    clear_shadow_sheets();
+    let doc = octicon_group(6);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(":root { --accent: red; } .octicon { fill: rgb(1, 2, 3); }");
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let first = map.style_arc(svgs[0]).expect("arc");
+    for &svg in &svgs[1..] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &arc),
+            "an unrelated :root rule in the sheet must not block sharing for non-root nodes"
+        );
+    }
+}
+
+#[test]
+fn a_subject_attribute_selector_does_not_disable_sharing() {
+    // BUG-1112 срез 3: second live blocker after the `:root` fix above —
+    // github.com's dark-mode custom properties
+    // (`[data-color-mode=light][data-light-theme*=light] { … }`) disqualified
+    // every SVG-presentational node the same way. An attribute selector on
+    // the *subject* is a pure function of `node`'s own attributes, which
+    // `ShareKey.attrs` already pins byte-for-byte — sound to allow, unlike
+    // `Class`/`Id`-only which was the pre-срез-3 restriction.
+    clear_shadow_sheets();
+    let doc = octicon_group(6);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(r#"[aria-hidden="true"] { fill: rgb(1, 2, 3); }"#);
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let first = map.style_arc(svgs[0]).expect("arc");
+    for &svg in &svgs[1..] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &arc),
+            "an attribute selector matched against the subject's own (key-pinned) attributes must not block sharing"
+        );
+        assert_eq!(
+            map.style_for(svg).expect("style").svg_fill,
+            SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 })
+        );
+    }
+}
+
+#[test]
+fn an_ancestor_position_attribute_selector_still_disables_sharing() {
+    // Regression guard for a bug срез 3 introduced and caught before landing:
+    // an early version of the subject/ancestor split assigned `is_subject`
+    // to `ComplexSelector::head`, but `head` is the LEFTMOST (topmost
+    // ancestor) compound — `matching.rs::matches_complex` matches the
+    // *last* `tail` entry (or `head` when `tail` is empty) against `node`.
+    // For a 2+ compound selector that made an ancestor's attribute selector
+    // look "subject-safe", which is unsound: `ShareKey` only pins the
+    // *subject's* attributes, not an ancestor's — two `.octicon`s under
+    // differently-attributed ancestors must NOT share here.
+    let doc = lumen_html_parser::parse(concat!(
+        r#"<div data-theme="a"><svg class="octicon" aria-hidden="true"><path d="M1 1"></path></svg></div>"#,
+        r#"<div data-theme="b"><svg class="octicon" aria-hidden="true"><path d="M1 1"></path></svg></div>"#,
+    ));
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        r#".octicon { fill: rgb(1, 2, 3); } [data-theme="b"] .octicon { fill: rgb(0, 0, 255); }"#,
+    );
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let containers = &doc.get(doc.body().unwrap()).children;
+    let a_svg = doc.get(containers[0]).children[0];
+    let b_svg = doc.get(containers[1]).children[0];
+
+    assert_eq!(map.style_for(a_svg).expect("style").svg_fill, SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }));
+    assert_eq!(
+        map.style_for(b_svg).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 0, g: 0, b: 255, a: 255 }),
+        "ancestor-attribute-dependent rule must still apply per node, not get shared away"
+    );
+}
+
+#[test]
+fn a_subject_dynamic_pseudo_class_still_disables_sharing_behind_a_combinator() {
+    // Companion regression guard: with the head/tail fix, the *last* tail
+    // compound is the subject — confirm a genuinely position-dependent
+    // pseudo-class there (`:first-child`, not in the key at any level) still
+    // disables sharing, same as it must at zero-tail depth.
+    let doc = lumen_html_parser::parse(concat!(
+        r#"<div class="toolbar">"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"</div>"#,
+    ));
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".toolbar > .octicon:first-child { fill: rgb(255, 0, 0); } .octicon { fill: rgb(1, 2, 3); }",
+    );
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    assert_eq!(
+        map.style_for(svgs[0]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 255, g: 0, b: 0, a: 255 }),
+        ":first-child must still win on the actual first child"
+    );
+    assert_eq!(
+        map.style_for(svgs[1]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+        "and must not leak onto its sibling via a wrongly-shared cache entry"
+    );
+}
+
+#[test]
 fn a_shadow_host_sibling_does_not_get_a_plain_siblings_cached_style() {
     // THREAD-4 срез 4, the false-share hazard `build_key`'s doc comment
     // describes: two `<svg class="octicon">` siblings under the same real
