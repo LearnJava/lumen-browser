@@ -1159,9 +1159,19 @@ impl Lumen {
                         timed_step!("update_layout_rects", js.update_layout_rects(rects));
                         timed_step!("update_client_rects", js.update_client_rects(client_rects));
                         timed_step!("update_hit_test_tree", js.update_hit_test_tree(hit_test_tree));
-                        timed_step!("update_computed_styles", js.update_computed_styles(styles));
-                        timed_step!("update_pseudo_computed_styles", js.update_pseudo_computed_styles(pseudo_styles));
-                        timed_step!("update_custom_properties", js.update_custom_properties(customs));
+                        // BUG-935 S44: `None` means the collector was gated
+                        // off this tick — skip the push entirely rather than
+                        // replace a possibly-fresher cache with an empty map
+                        // (see `PrecollectedJsData::styles` doc comment).
+                        if let Some(styles) = styles {
+                            timed_step!("update_computed_styles", js.update_computed_styles(styles));
+                        }
+                        if let Some(pseudo_styles) = pseudo_styles {
+                            timed_step!("update_pseudo_computed_styles", js.update_pseudo_computed_styles(pseudo_styles));
+                        }
+                        if let Some(customs) = customs {
+                            timed_step!("update_custom_properties", js.update_custom_properties(customs));
+                        }
                         timed_step!("update_stylesheet", js.update_stylesheet(stylesheet));
                         timed_step!("update_viewport_size", js.update_viewport_size(vw, vh));
                         timed_step!("update_zoom_factor", js.update_zoom_factor(zoom_factor));
@@ -1195,9 +1205,17 @@ impl Lumen {
                         js.update_layout_rects(rects);
                         js.update_client_rects(client_rects);
                         js.update_hit_test_tree(hit_test_tree);
-                        js.update_computed_styles(styles);
-                        js.update_pseudo_computed_styles(pseudo_styles);
-                        js.update_custom_properties(customs);
+                        // BUG-935 S44: see the sibling `defer_js_push` branch
+                        // above — skip rather than overwrite with an empty map.
+                        if let Some(styles) = styles {
+                            js.update_computed_styles(styles);
+                        }
+                        if let Some(pseudo_styles) = pseudo_styles {
+                            js.update_pseudo_computed_styles(pseudo_styles);
+                        }
+                        if let Some(customs) = customs {
+                            js.update_custom_properties(customs);
+                        }
                         js.update_stylesheet(stylesheet);
                         js.update_viewport_size(vw, vh);
                         js.update_zoom_factor(zoom_factor);
@@ -2099,11 +2117,18 @@ pub(crate) struct PrecollectedJsData {
     pub(crate) had_input: bool,
     pub(crate) client_rects: std::collections::HashMap<u32, Vec<[f32; 4]>>,
     pub(crate) hit_test_tree: Arc<lumen_layout::LayoutBox>,
-    pub(crate) styles: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    /// BUG-935 S44: `None` when the matching `*_needed` flag gated this
+    /// collector off THIS tick — the caller must then skip the matching
+    /// `update_*` push entirely rather than pass an empty map. `update_*`
+    /// replaces the JS runtime's cache wholesale (no merge), so pushing an
+    /// empty map on a tick where the flag simply hadn't been set yet would
+    /// wipe out a valid snapshot a same-tick CSSOM-4 flush (`style_flush.rs`)
+    /// had already populated via a different, non-gated write path.
+    pub(crate) styles: Option<std::collections::HashMap<u32, std::collections::HashMap<String, String>>>,
     pub(crate) pseudo_styles:
-        std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+        Option<std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>>,
     pub(crate) customs:
-        std::collections::HashMap<u32, Arc<std::collections::HashMap<String, String>>>,
+        Option<std::collections::HashMap<u32, Arc<std::collections::HashMap<String, String>>>>,
     pub(crate) scroll_states: std::collections::HashMap<u32, [f32; 4]>,
     /// The layout-shift baseline this commit installs into
     /// [`Lumen::prev_layout_shift_rects`] — only when this data is actually
@@ -2164,29 +2189,29 @@ fn collect_js_data(
     let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
     let hit_test_tree = step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
     let styles = if computed_styles_needed {
-        step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None))
+        Some(step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None)))
     } else {
-        std::collections::HashMap::new()
+        None
     };
     let pseudo_styles = if pseudo_styles_needed {
-        step!(
+        Some(step!(
             "collect_pseudo_computed_styles",
             collect_pseudo_computed_styles(lb_ref)
-        )
+        ))
     } else {
-        std::collections::HashMap::new()
+        None
     };
     // Drop the document lock before the remaining collectors, which read
     // only `lb_ref`/`viewport` — matches the lock-hold window of the inline
     // path this replaced (BUG-935 S37's original block dropped it here too).
     drop(doc_guard);
     let customs = if custom_props_needed {
-        step!(
+        Some(step!(
             "collect_custom_properties",
             collect_custom_properties(lb_ref, viewport)
-        )
+        ))
     } else {
-        std::collections::HashMap::new()
+        None
     };
     let scroll_states: std::collections::HashMap<u32, [f32; 4]> = step!(
         "collect_scroll_containers",
