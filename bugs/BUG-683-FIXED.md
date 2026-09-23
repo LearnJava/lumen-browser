@@ -1,7 +1,7 @@
 # BUG-683 — github.com stagnalone tab retains ~890 MB of unaccounted Rust-side memory
 
-**Статус:** OPEN
-**Компонент:** layout/dom (не локализовано — нужна перепись структур)
+**Статус:** FIXED 2026-09-23 (P1, срез 8)
+**Компонент:** layout (`crates/engine/layout/src/style/cascade.rs` — сброс `inherits: false` в `compute_style`)
 **Найден:** P3, срез 3 [BUG-306](BUG-306-OPEN.md), 2026-08-06
 
 ## Симптом
@@ -427,3 +427,57 @@ CSS-каскад. Разница в масштабе (headless-прогон — 
   поле ввода во время relayout кадр встанет так же. Не тронуто.
 - Память (исходный вопрос карточки, раздел «Диагностика») — не
   исследована.
+
+## Срез 8 (P1, 2026-09-23): причина памяти — `inherits: false` `@property` копировал карту custom properties на каждом узле; снято, FIXED
+
+Разбор шагов живого прогона (`LUMEN_FRAME_LOG=1`) показал `collect_custom_properties`
+2.25 с и `update_custom_properties` 3.57 с на ~1470 элементов. Временная проба
+в `collect_custom_properties` (headless `--dump-layout https://github.com`,
+не закоммичена):
+
+```
+nodes=1471 distinct_maps=1449 entries=2882822 str_bytes=111703104 max_map=2002
+```
+
+Copy-on-write `CustomProps` (BUG-341 S9) не работал ни на одном узле: почти
+у каждого узла — своя копия карты из ~2000 переменных Primer. Вторая проба
+по точкам записи: прямые декларации `--*` — лишь 25.6 тыс. вставок на
+документ, зато ветка `retain` в `compute_style` (`cascade.rs`, сброс
+унаследованных значений зарегистрированных свойств с `inherits: false`)
+сработала 2236 раз — на ключе `--dialog-scrollgutter` из
+`@property --dialog-scrollgutter { inherits: false; initial-value: … }`.
+Механизм: корень получает initial-value, каждый потомок наследует ключ,
+`retain` копирует всю карту ради его удаления, а
+`apply_property_initial_values` тут же кладёт то же значение обратно.
+
+Фикс: `retain` не удаляет ключ, если унаследованное значение уже равно его
+валидному `initial-value` — результат тот же, копии нет.
+
+| замер | до | после |
+|---|---|---|
+| различных карт / узлов (headless) | 1449 / 1471 | 234 / 1471 |
+| записей во всех картах | 2 882 822 | 464 579 |
+| строк в разрешённых картах | 112 МБ | 18 МБ |
+| `collect_custom_properties` | 2.3-3.4 с | 0.38-0.52 с |
+| пик private, headless `--dump-layout` (2 прогона) | 2516 МБ | 818 МБ |
+| пик private, живое окно `--maximized`, 200 с | 3382 МБ | 1345 МБ |
+
+Живое снижение (−2.0 ГБ) перекрывает 890 МБ `rust_alloc` из заголовка
+карточки — вопрос «почему Rust-куча github.com непропорционально велика»
+закрыт. Оставшиеся 234 копии — узлы с собственными декларациями `--*`,
+законная цена плоской COW-карты.
+
+Нейтральность: `--dump-layout` github.com до/после — 5434 строки, 0 отличий;
+A/B `--dump-display-list --viewport 1024x720` по 180 страницам
+`graphic_tests/*.html` + `samples/*.html` — 0 отличий (включая
+`samples/css-custom-property.html` с `inherits: false`). Тесты
+`style::tests::restyle::custom_props_non_inherited_registered_{at_initial_value_stays_shared,resets_to_initial_in_child}`
+проверяют разделение по идентичности и сброс к initial.
+
+**Не относится к памяти и вынесено:**
+- блокирующий `document.lock()` в `typeable_field` (`text_input.rs`) при
+  фокусе в поле — [BUG-1108](BUG-1108-OPEN.md);
+- `first non-empty frame` 125 с и задачи `page_load.rs:2349` (72 с) /
+  `deliver_layout_observers` (35 с) — класс [BUG-935](BUG-935-OPEN.md);
+- повтор relayout каждые 11-16 с (срез 7) в этом прогоне (300 с) не
+  воспроизвёлся — один relayout за прогон.

@@ -630,15 +630,32 @@ pub(crate) fn compute_style_shareable(
     // so first check whether any key would actually be dropped. Pages that
     // register no `inherits: false` property (or declare none of the ones they
     // do register) keep sharing the parent's allocation.
+    //
+    // BUG-683 срез 8: a key whose inherited value already *is* its valid
+    // initial-value is not dropped — `apply_property_initial_values` below
+    // would put the identical string straight back, so dropping it only buys
+    // a full copy of the map. Once the root has the initial value, every
+    // descendant inherits it, so without this one `@property … { inherits:
+    // false; initial-value: … }` (Primer's `--dialog-scrollgutter` on
+    // github.com) copied the ~2000-entry map on every single node.
+    let resets_inherited = |key: &str, value: &str| {
+        registry.get(key).is_some_and(|p| {
+            !p.inherits
+                && !p.initial_value.as_deref().is_some_and(|iv| {
+                    iv == value && validate_against_syntax(iv, &p.syntax)
+                })
+        })
+    };
     if !registry.is_empty()
         && style
             .custom_props
-            .keys()
-            .any(|key| registry.get(key.as_str()).is_some_and(|p| !p.inherits))
+            .iter()
+            .any(|(key, value)| resets_inherited(key, value))
     {
-        style.custom_props.make_mut().retain(|key, _| {
-            registry.get(key.as_str()).is_none_or(|p| p.inherits)
-        });
+        style
+            .custom_props
+            .make_mut()
+            .retain(|key, value| !resets_inherited(key, value));
     }
 
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
