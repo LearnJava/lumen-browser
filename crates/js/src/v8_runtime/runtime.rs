@@ -176,6 +176,16 @@ pub struct V8JsRuntime {
     /// `_lumen_get_computed_style_entries` (the `computedStyleMap()` iteration
     /// source, which merges custom properties into its answer).
     pub(super) custom_props_needed: Arc<AtomicBool>,
+    /// BUG-935 S44: sibling of [`Self::pseudo_styles_needed`] for
+    /// [`Self::computed_styles`] itself. S42's consumer audit found one
+    /// non-`getComputedStyle`-family reader — `_lumen_request_scroll`
+    /// (overflow-clip check, BUG-975) — so that native also sets this flag
+    /// alongside `_lumen_get_computed_style`/`_lumen_get_computed_style_entries`;
+    /// with that reader covered, the same skip-while-unread gate S43 applied
+    /// to the other two caches is safe here too.
+    pub(super) computed_styles_needed: Arc<AtomicBool>,
+    /// BUG-935 S44: mirrors [`super::style_flush::FlushHandles::computed_styles_collected`].
+    pub(super) computed_styles_collected: Arc<AtomicBool>,
     /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
     /// via [`Self::update_stylesheet`] so a same-tick `getComputedStyle`/
     /// geometry read can force a synchronous flush (see
@@ -409,6 +419,8 @@ impl V8JsRuntime {
             adopted_stylesheets: Arc::new(Mutex::new(HashMap::new())),
             pseudo_styles_needed: Arc::new(AtomicBool::new(false)),
             custom_props_needed: Arc::new(AtomicBool::new(false)),
+            computed_styles_needed: Arc::new(AtomicBool::new(false)),
+            computed_styles_collected: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             cssom_deltas: Arc::new(Mutex::new(Vec::new())),
@@ -699,6 +711,11 @@ impl V8JsRuntime {
     /// BUG-935 S43: shared, lock-free handle to [`Self::custom_props_needed`].
     pub fn custom_props_needed_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.custom_props_needed)
+    }
+
+    /// BUG-935 S44: shared, lock-free handle to [`Self::computed_styles_needed`].
+    pub fn computed_styles_needed_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.computed_styles_needed)
     }
 
     /// Replace the layout bounding-rect table with a fresh snapshot.

@@ -3191,16 +3191,99 @@ custom_prop` — 50/50, включая
 полностью исчезают у страниц, которые их не читают), а не заметный на
 таймере этого конкретного стенда.
 
-**Не сделано:** вариант (i) (тот же гейт для `computed_styles`, самого
-дорогого из трёх) остаётся нереализованным — S42 показал его небезопасным
-без отдельного, более широкого сигнала через `_lumen_request_scroll`.
-Основной корневой симптом бага (M4-роутинг мёртв) по-прежнему не тронут.
-**Следующий срез должен** взяться либо за вариант (i) (завести сигнал
-«кэш `computed_styles` кому-то нужен», взводимый и на
-`getComputedStyle`-семействе, и на `_lumen_request_scroll`, для чего
-`install_scroll_state`'s замыканию понадобится доступ к этому флагу —
-сегодня у него нет даже `flush`), либо за сам M4-роутинг, как и предлагали
-S39/S41/S42.
+**Не сделано (до среза 44):** вариант (i) (тот же гейт для `computed_styles`,
+самого дорогого из трёх) остаётся нереализованным — S42 показал его
+небезопасным без отдельного, более широкого сигнала через
+`_lumen_request_scroll`. Основной корневой симптом бага (M4-роутинг мёртв)
+по-прежнему не тронут.
+
+**Срез 44 (P3, 2026-09-23) — вариант (i) реализован: `computed_styles_needed`,
+на обоих потребителях, плюс закрыта скрытая гонка с другими
+`maybe_flush`-триггерами**
+
+Новый `Arc<AtomicBool>` `V8JsRuntime::computed_styles_needed`/
+`FlushHandles::computed_styles_needed` (тот же паттерн, что S43's
+`pseudo_styles_needed`/`custom_props_needed`), взводимый в трёх местах
+(`install/platform.rs`): `_lumen_get_computed_style` (обычный
+`getComputedStyle`), `_lumen_get_computed_style_entries`
+(`computedStyleMap()`, заодно взводит и `custom_props_needed` — он уже
+мержит custom properties) и `_lumen_request_scroll`
+(`install_scroll_state`, S42's единственный небезопасный
+читатель — оверфлоу-clip проверка BUG-975). `install_scroll_state` уже
+получал `flush: FlushHandles` целиком, так что доступ к новому полю не
+потребовал смены сигнатуры — только клон `flush.computed_styles_needed`
+рядом с уже существующим `cs_for_request` (S42 ошибочно предполагал, что
+понадобится новый параметр). Гейт применён в `FlushHandles::maybe_flush`
+(синхронный CSSOM-4 путь) и в `collect_js_data`/`make_relayout_job`
+(`crates/shell/src/relayout.rs`, S41's асинхронный движковый путь) —
+третий параметр `computed_styles_needed: bool`, тем же приёмом, что
+S43's `pseudo_styles_needed`/`custom_props_needed`, включая новое поле
+`Lumen::computed_styles_needed_flag`, заполняемое в `set_js_ctx`.
+
+**Регрессия, найденная и закрытая в этом же срезе:** первая версия гейта
+(симметричная S43 — гейтовать сбор внутри `maybe_flush` голым `if
+computed_styles_needed.load(...)`) ломала `v8_bug560_sync_focus`'s два
+теста (`get_computed_style_sees_same_tick_focus_call`/`..._focus_within`,
+BUG-560's собственная регрессионная защита): `.focus()` в этих тестах
+вызывает `_lumen_get_bounding_rect` (scroll-into-view) ДО того, как
+`getComputedStyle` успевает взвести `computed_styles_needed`, а тот
+native тоже зовёт `flush.maybe_flush()` — эта более ранняя вызов
+потребляет единственный «настоящий флаш» (гасит `never_flushed`/
+`flush_stale`) с флагом ещё `false`, так что второй, настоящий вызов
+`getComputedStyle` находит все прочие условия `maybe_flush`'s
+early-return уже погашенными и выходит без сбора, несмотря на то что
+флаг к этому моменту уже `true`. **Это не гипотетическая гонка** —
+поймано именно существующим регрессионным тестом на BUG-560, не новым.
+Тот же класс, вероятно, дремлет и в S43's `pseudo_styles_needed`/
+`custom_props_needed` (никакой существующий тест не бьёт по этой
+конкретной интерференции для них), но чинить это ретроактивно — вне
+рамок этого среза.
+
+Фикс — не откат гейта, а его обобщение по образцу уже существующего
+`never_flushed`, но per-cache: новое поле `computed_styles_collected`
+(тот же вид `Arc<AtomicBool>`, зеркалящий `computed_styles_needed` по
+всей цепочке `runtime.rs`/`style_flush.rs`/`v8_runtime.rs`). Условие
+раннего выхода `maybe_flush` получило пятый bypass —
+`computed_styles_pending = computed_styles_needed && !computed_styles_collected`
+— которое не даёт функции выйти раньше времени, пока флаг взведён, а
+реальный сбор для него ещё не проехал; `computed_styles_collected`
+взводится сразу после самого сбора, тем же местом, что и запись в кэш.
+Это устраняет зависимость от того, КАКОЙ native первым позвал
+`maybe_flush` внутри одного скриптового тика.
+
+**Тесты:** `cargo build --profile dev-release -p lumen-shell --bin lumen
+--features v8` и `-p lumen-js --features v8-backend` зелёные. `cargo
+clippy --all-targets` на обоих чист. `cargo test -p lumen-js
+--features v8-backend` — 4169/4173 (4 фейла — `v8_webworker`×3 +
+`frame_bridge::inaccessible_bridge_mutation_does_not_mark_dirty` —
+подтверждённая параллель-тредовая нестабильность, не связанная с этим
+срезом: все четыре зелёные при `--test-threads=1`); прицельно
+`v8_bug560_sync_focus`/`computedstyle`/`scroll`/`pseudo`/`custom_prop` —
+204/204 включая обе регрессионные пробы BUG-560. `cargo test -p
+lumen-shell --bin lumen --features v8 -- relayout` — 13/13.
+
+Прямая проверка эффекта: тот же офлайн-стенд S29
+(`scripts/bug935_raf_relayout_census.py` на
+`bug935_raf_dom_stand.html`, 20 scroll-тиков + 3с settle, 62
+относлейаута/811 `apply-step`-строк) — `grep -c
+"collect_computed_styles\|collect_pseudo_computed_styles\|collect_custom_properties"`
+на полученном `LUMEN_FRAME_LOG`-логе даёт `0`: все три коллектора
+пропущены на каждом коммите фикстуры, которая не делает ни одного
+`getComputedStyle`-подобного чтения — структурный эффект, тот же вид,
+что S43 показал для двух других (не строгий A/B по времени на этой
+фикстуре — S37 уже установил, что именно `collect_computed_styles`
+доминанта, так что ожидаемый выигрыш здесь больше, чем у S43, но не
+измерен таймером на пустой фикстуре).
+
+**Не сделано:** основной корневой симптом бага (M4-роутинг мёртв)
+по-прежнему не тронут — это был последний из трёх коллекторов S37
+насчитал, но сам маршрут `try_relayout_raf_incremental` остаётся
+недостижимым на дефолтной сборке. **Следующий срез должен** взяться за
+сам M4-роутинг (S39/S41/S42/S43 все указывали сюда), либо, если кто-то
+хочет закрыть найденный в этом срезе латентный класс гонки, применить
+тот же `*_collected`-bypass к `pseudo_styles_needed`/`custom_props_needed`
+(сегодня не подтверждённый регрессионным тестом, но структурно тот же
+дефект).
 
 ## Воспроизведение
 

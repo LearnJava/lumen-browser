@@ -1071,6 +1071,11 @@ impl Lumen {
                             .as_ref()
                             .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
                             .unwrap_or(true);
+                        let computed_styles_needed = self
+                            .computed_styles_needed_flag
+                            .as_ref()
+                            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                            .unwrap_or(true);
                         Some(apply_step!(
                             "js_geometry_collect",
                             collect_js_data(
@@ -1082,6 +1087,7 @@ impl Lumen {
                                 now_s,
                                 pseudo_styles_needed,
                                 custom_props_needed,
+                                computed_styles_needed,
                             )
                         ))
                     })(),
@@ -1344,6 +1350,12 @@ impl Lumen {
             .as_ref()
             .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(true);
+        #[cfg(feature = "v8")]
+        let computed_styles_needed = self
+            .computed_styles_needed_flag
+            .as_ref()
+            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(true);
         let job = move || {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
@@ -1382,6 +1394,7 @@ impl Lumen {
                         now_s,
                         pseudo_styles_needed,
                         custom_props_needed,
+                        computed_styles_needed,
                     )
                 })
             } else {
@@ -1559,6 +1572,7 @@ impl Lumen {
         // clears them (blank/JS-less tab).
         self.pseudo_styles_needed_flag = handle.as_ref().and_then(|h| h.pseudo_styles_needed_flag());
         self.custom_props_needed_flag = handle.as_ref().and_then(|h| h.custom_props_needed_flag());
+        self.computed_styles_needed_flag = handle.as_ref().and_then(|h| h.computed_styles_needed_flag());
         match self.engine_thread.as_ref() {
             // Flag on: the handle lives engine-side; deposit it into
             // `EngineJsState.js` and leave the UI field empty.
@@ -2116,12 +2130,14 @@ fn collect_js_data(
     prev_layout_shift_rects: &std::collections::HashMap<u32, [f32; 4]>,
     last_input_epoch_s: f32,
     now_s: f32,
-    // BUG-935 S43: skip the two collectors below while the page has never
-    // read the corresponding cache — S42's consumer audit found both safe to
-    // gate this way (unlike `computed_styles`, whose `_lumen_request_scroll`
-    // reader reads it outside the `getComputedStyle`-family signal).
+    // BUG-935 S43/S44: skip the collectors below while the page has never
+    // read the corresponding cache. S42 found `_lumen_request_scroll` reading
+    // `computed_styles` outside the `getComputedStyle`-family signal; S44
+    // made that native set `computed_styles_needed` too, so the same gate is
+    // now safe for all three caches.
     pseudo_styles_needed: bool,
     custom_props_needed: bool,
+    computed_styles_needed: bool,
 ) -> PrecollectedJsData {
     let step_log = lumen_paint::frame_log_enabled();
     macro_rules! step {
@@ -2147,7 +2163,11 @@ fn collect_js_data(
     let had_input = now_s - last_input_epoch_s < 0.5;
     let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
     let hit_test_tree = step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
-    let styles = step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None));
+    let styles = if computed_styles_needed {
+        step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None))
+    } else {
+        std::collections::HashMap::new()
+    };
     let pseudo_styles = if pseudo_styles_needed {
         step!(
             "collect_pseudo_computed_styles",

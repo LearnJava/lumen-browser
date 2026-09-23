@@ -115,6 +115,18 @@ pub(crate) struct FlushHandles {
     /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed`] for
     /// [`Self::custom_properties`].
     pub(crate) custom_props_needed: Arc<AtomicBool>,
+    /// BUG-935 S44: sibling of [`Self::pseudo_styles_needed`] for
+    /// [`Self::computed_styles`] itself — S37's measured dominant cost.
+    /// Unlike the other two, this cache also has a non-`getComputedStyle`-family
+    /// reader (`_lumen_request_scroll`'s overflow-clip check, BUG-975), which
+    /// sets this same flag, so gating the collector on it here cannot serve a
+    /// stale answer to that reader either.
+    pub(crate) computed_styles_needed: Arc<AtomicBool>,
+    /// BUG-935 S44: backs [`Self::maybe_flush`]'s `computed_styles_pending`
+    /// bypass — `true` once a collect has actually run while
+    /// [`Self::computed_styles_needed`] was set, mirroring
+    /// [`Self::never_flushed`] but scoped to this one cache.
+    pub(crate) computed_styles_collected: Arc<AtomicBool>,
 }
 
 /// Recorded CSSOM writes awaiting replay onto the cascade sheet, each paired
@@ -165,10 +177,23 @@ impl FlushHandles {
         // no longer holds) but consumed only here — so a same-tick flush no
         // longer eats the scheduler's "DOM mutated" signal before its own
         // `take_dom_dirty`/`take_dom_dirty_lockfree` gets to see it.
+        // BUG-935 S44: a same-tick sequence can call a DIFFERENT
+        // `maybe_flush`-triggering native (e.g. `.focus()`'s scroll-into-view
+        // via `_lumen_get_bounding_rect`) BEFORE the native that first sets
+        // `computed_styles_needed`, consuming this early-return gate's single
+        // "real flush" pass while the flag was still `false` — the later
+        // `getComputedStyle` call would then find every other condition
+        // already settled and skip its own recompute despite needing one
+        // (caught by `v8_bug560_sync_focus`'s focus+getComputedStyle tests).
+        // Mirrors `never_flushed`, but scoped to this one cache: `true` until
+        // the first collect that actually ran while the flag was set.
+        let computed_styles_pending = self.computed_styles_needed.load(Ordering::Relaxed)
+            && !self.computed_styles_collected.load(Ordering::Relaxed);
         if !self.never_flushed.load(Ordering::Relaxed)
             && !self.flush_stale.load(Ordering::Relaxed)
             && !focus_changed
             && !self.cssom_dirty.load(Ordering::Relaxed)
+            && !computed_styles_pending
         {
             return;
         }
@@ -261,11 +286,19 @@ impl FlushHandles {
             .client_rects
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_client_rects(&layout_root, &doc_guard);
-        *self
-            .computed_styles
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters));
+        // BUG-935 S44: skip while the page has never read `computed_styles`
+        // (via `getComputedStyle`/`computedStyleMap()`/`_lumen_request_scroll`)
+        // — same rationale as the two collectors below. The setting native
+        // calls `maybe_flush` right after, so a page's very first read still
+        // forces a real collect here rather than serving a stale/empty map.
+        if self.computed_styles_needed.load(Ordering::Relaxed) {
+            *self
+                .computed_styles
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters));
+            self.computed_styles_collected.store(true, Ordering::Relaxed);
+        }
         // BUG-935 S43: skip while the page has never read the corresponding
         // cache — see the fields' doc comments. Each of the two natives that
         // can set the flag calls `maybe_flush` right after, so a page's very
