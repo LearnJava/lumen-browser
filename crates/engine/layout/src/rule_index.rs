@@ -170,33 +170,46 @@ impl RuleIndex {
     /// A candidate is any rule whose subject-key is compatible with the node's
     /// `tag`, `id`, and `class` list. The full `matches_complex` check is
     /// still required for each candidate — this is only a pre-filter.
+    ///
+    /// THREAD-4 срез 6: this is called once per node PER `@layer`/`@media`
+    /// block (`compute_style` builds one `RuleIndex` per block, BUG-284) —
+    /// on github.com that is ~3800 calls/node (3702 layers + ~110 media +
+    /// the main sheet). A `BTreeSet` used to collect the merge: correct, but
+    /// each insert is its own heap-allocated B-tree node, so a call whose
+    /// buckets are empty or singleton (the overwhelming majority — most
+    /// `@layer` blocks hold 1-2 rules) still paid a `BTreeSet` allocation.
+    /// `extend_from_slice` into one `Vec`, sorted+deduped once at the end,
+    /// keeps the same result with at most one allocation per call instead of
+    /// one per element.
     pub fn candidates(
         &self,
         tag: &str,
         id: Option<&str>,
         classes: &[&str],
     ) -> Vec<RuleIdx> {
-        // Merge from all relevant buckets into a BTreeSet for dedup+sort.
-        let mut set = std::collections::BTreeSet::new();
-        // type bucket
+        let mut out: Vec<RuleIdx> = Vec::new();
         if let Some(v) = self.by_type.get(tag) {
-            set.extend(v.iter().copied());
+            out.extend_from_slice(v);
         }
-        // id bucket
         if let Some(id_str) = id
             && let Some(v) = self.by_id.get(id_str)
         {
-            set.extend(v.iter().copied());
+            out.extend_from_slice(v);
         }
-        // class buckets (one per class token)
         for &cls in classes {
             if let Some(v) = self.by_class.get(cls) {
-                set.extend(v.iter().copied());
+                out.extend_from_slice(v);
             }
         }
-        // universal (always-check)
-        set.extend(self.universal.iter().copied());
-        set.into_iter().collect()
+        out.extend_from_slice(&self.universal);
+        // A duplicate is only possible when more than one bucket contributed
+        // (each bucket is already deduped internally by `build_from_rules`) —
+        // skip sort+dedup entirely for the common single-bucket-or-empty case.
+        if out.len() > 1 {
+            out.sort_unstable();
+            out.dedup();
+        }
+        out
     }
 }
 
