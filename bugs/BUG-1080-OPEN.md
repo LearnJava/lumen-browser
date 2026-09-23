@@ -32,7 +32,7 @@
 
 ## Связанное
 
-- [BUG-1066](BUG-1066-OPEN.md) (`DOMException`), [BUG-1071](BUG-1071-OPEN.md) (`WebSocket`), [BUG-1076](BUG-1076-OPEN.md) (`Worker`), [BUG-1078](BUG-1078-OPEN.md) (`WebAssembly.*Streaming`) — тот же класс:
+- [BUG-1066](BUG-1066-FIXED.md) (`DOMException`), [BUG-1071](BUG-1071-OPEN.md) (`WebSocket`), [BUG-1076](BUG-1076-OPEN.md) (`Worker`), [BUG-1078](BUG-1078-OPEN.md) (`WebAssembly.*Streaming`) — тот же класс:
   интерфейс есть в окне и отсутствует в воркерной области.
 - `docs/tasks/p2-test-track.md#test-3-срез-50-2026-09-22`.
 
@@ -40,3 +40,15 @@
 
 - Полный набор отсутствующих в воркере интерфейсов (`WritableStream`, `TransformStream`, `CompressionStream`…) — по логу известны только пять перечисленных.
 - Service-worker-варианты: в baseline они `ERROR` на https-origin ([BUG-1069](BUG-1069-FIXED.md)), до кода не доходят.
+
+## Прогресс
+
+- **2026-09-23, WORKER-1 срез 1:** `TextEncoder`/`TextDecoder` вырезаны из
+  `web_api_shim_mid_b2.js` в `shim/text_encoding_shim.js` (дословный срез) и входят в
+  `dom::worker_exposed_shim()`; нативы `_lumen_text_encoding_for_label`/`_lumen_text_decode`
+  регистрирует `dom::install_worker_exposed_v8` — все три вида воркеров. Остаток бага:
+  `ReadableStream`, `TextDecoderStream`/`TextEncoderStream`.
+  WPT `encoding` (без `legacy-mb-*`, `run_report.py --update-expected`): ≈3 000 записей
+  `expected: FAIL` у `.any.worker.html`/`.any.sharedworker.html` сняты, 7 `.ini` стали
+  чистыми. Service-worker-варианты перешли ERROR→TIMEOUT — это дрейф baseline, на бинаре
+  main они ведут себя так же (проверено `run_smoke.py`).

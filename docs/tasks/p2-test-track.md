@@ -1339,7 +1339,7 @@ known-intermittent не понадобилось. Baseline 242 → 243.
 
 Непройденные — 280 подтестов `FAIL`, 3 файла `ERROR`, 2 `TIMEOUT`, 1 `NOTRUN`:
 
-- **[BUG-1066](../../bugs/BUG-1066-OPEN.md)** — `DOMException` не определён в глобальной
+- **[BUG-1066](../../bugs/BUG-1066-FIXED.md)** — `DOMException` не определён в глобальной
   области dedicated `Worker`: пять `DOMException-*.any.worker.html`
   (`constants`/`constructor-behavior`/`custom-bindings`/`is-error`/`stack-accessor`) падают
   целиком с `ReferenceError: DOMException is not defined`, их `.any.html`-варианты проходят.

@@ -394,6 +394,20 @@ pub(crate) const HEADERS_SHIM: &str = include_str!("shim/headers_shim.js");
 /// Continuation of [`WEB_API_SHIM_MID_B`] after [`HEADERS_SHIM`] (BUG-748 split).
 const WEB_API_SHIM_MID_B2: &str = include_str!("shim/web_api_shim_mid_b2.js");
 
+/// `TextEncoder`/`TextDecoder` (WHATWG Encoding §8–9) — `[Exposed=*]`, cut out
+/// of [`WEB_API_SHIM_MID_B2`] (WORKER-1 срез 1) so every worker flavour gets
+/// the same classes through [`worker_exposed_shim`] instead of none at all
+/// (BUG-1080: a worker died on the first `new TextDecoder()`). A verbatim
+/// slice; the block depends only on the `_lumen_text_encoding_for_label`/
+/// `_lumen_text_decode` natives, which the worker scope registers as well
+/// ([`install_worker_exposed_v8`]).
+pub(crate) const TEXT_ENCODING_SHIM: &str = include_str!("shim/text_encoding_shim.js");
+
+/// Continuation of [`WEB_API_SHIM_MID_B2`] after [`TEXT_ENCODING_SHIM`].
+/// Exists only for that split; the splice order is pinned by
+/// `web_api_shim_splices_its_parts_in_source_order`.
+const WEB_API_SHIM_MID_B3: &str = include_str!("shim/web_api_shim_mid_b3.js");
+
 /// Geometry Interfaces Module (BUG-522/GAP-GEOM) — `DOMPointReadOnly`/
 /// `DOMPoint`, `DOMRectReadOnly`/`DOMRect`, `DOMRectList`,
 /// `DOMMatrixReadOnly`/`DOMMatrix`, `WebKitCSSMatrix`, `DOMQuad`. Must come
@@ -504,11 +518,12 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
-/// `WorkerGlobalScope`: [`EVENT_TARGET_SHIM`] followed by [`PERFORMANCE_SHIM`].
+/// `WorkerGlobalScope`: [`EVENT_TARGET_SHIM`] followed by [`PERFORMANCE_SHIM`],
+/// the URL pair and [`TEXT_ENCODING_SHIM`].
 ///
 /// Evaluated as one script (like in the page) so `Performance`'s prototype
 /// chain finds `EventTarget`. The trailing `undefined` keeps the completion
@@ -524,8 +539,37 @@ pub(crate) fn web_api_shim() -> String {
 pub(crate) fn worker_exposed_shim() -> String {
     format!(
         "{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\
-         {WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
+         {TEXT_ENCODING_SHIM}{WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
     )
+}
+
+/// Installs [`worker_exposed_shim`] into a worker runtime together with the
+/// natives its slices call — the worker-side counterpart of the page's
+/// `install_dom`, for exactly the `[Exposed=Worker]` part. Keeping the natives
+/// next to the shim is what stops a slice from reaching a worker without its
+/// backing function (WORKER-1: `TextDecoder.decode` calls `_lumen_text_decode`,
+/// which only the page runtime used to register).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_worker_exposed_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn4};
+    // `DOMException` is `[Exposed=*]` and the slices below throw it; the
+    // polyfill is guarded, so a scope that already has one keeps it
+    // (BUG-1066: shared and service workers had none at all).
+    lumen_core::ext::JsRuntime::eval(rt, crate::v8_runtime::DOM_EXCEPTION_POLYFILL)?;
+    rt.register_native(
+        "_lumen_text_encoding_for_label",
+        into_v8_fn1(|label: String| -> Option<String> { crate::v8_runtime::text_encoding_for_label(&label) }),
+    )?;
+    rt.register_native(
+        "_lumen_text_decode",
+        into_v8_fn4(
+            |canonical: String, bytes: Vec<u8>, ignore_bom: bool, fatal: bool| -> Option<String> {
+                crate::v8_runtime::text_decode(&canonical, &bytes, ignore_bom, fatal)
+            },
+        ),
+    )?;
+    lumen_core::ext::JsRuntime::eval(rt, &worker_exposed_shim())?;
+    Ok(())
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────

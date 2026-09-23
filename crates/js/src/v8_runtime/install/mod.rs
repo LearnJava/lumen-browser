@@ -19,7 +19,7 @@
 
 mod constructed_stylesheets;
 mod dom_core;
-mod net;
+pub(super) mod net;
 mod platform;
 mod storage;
 mod stylesheets;

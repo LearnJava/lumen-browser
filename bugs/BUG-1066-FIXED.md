@@ -1,6 +1,6 @@
 # BUG-1066 — в глобальной области dedicated `Worker` не определён `DOMException`: `new DOMException(…)` и `DOMException.NAME_ERR` бросают `ReferenceError`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P1, WORKER-1 срез 1)
 **Тип:** дефект реализованного кода — глобальный объект воркера собирается отдельным `rt` (`WORKER_SHIM`, `crates/js/src/worker.rs`) и не получает `DOMException`, определённый шимом главного потока.
 **Заведён:** 2026-09-19 (WPT-RUN-7 срез 37, `webidl`; найден при разборе baseline `webidl/ecmascript-binding/es-exceptions/`)
 **Область:** `crates/js/src/worker.rs` (`WORKER_SHIM` — бутстрап globals воркера; `SHARED_WORKER_SHIM` и `sw_worker.rs` не проверялись).
@@ -45,3 +45,12 @@ FAIL Cannot construct without new - assert_throws_js: function "() => DOMExcepti
 `expected: FAIL` в `tests/wpt/metadata/webidl/ecmascript-binding/es-exceptions/DOMException-*.any.js.ini`
 для `*.any.worker.html` — сегодняшняя правда движка. Починка даст unexpected-pass; baseline
 регенерируется (`--update-expected` + три `--check`) в том же коммите или сразу следом.
+
+## Исправление (2026-09-23, WORKER-1 срез 1)
+
+Частичный дрейф: BUG-1016 уже вычислял `DOM_EXCEPTION_POLYFILL` в dedicated-воркере — но
+только в нём (внутри `install_worker_globals_v8`, ради `atob`), так что shared- и
+service-воркеры оставались без `DOMException`. Вычисление перенесено в
+`dom::install_worker_exposed_v8`, который зовут все три вида воркеров через
+`worker::install_worker_scope_globals_v8`; полифил под охраной `typeof`, повтор безвреден.
+Тест: `dom::tests::v8_worker1_exposed::worker_scope_has_dom_exception`.

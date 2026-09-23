@@ -86,6 +86,7 @@ mod thread;
 
 pub use named_access::ensure_v8_platform;
 pub(crate) use command::DOM_EXCEPTION_POLYFILL;
+pub(crate) use install::net::{text_decode, text_encoding_for_label};
 use command::{V8Command, V8Inner, V8_CMD_QUEUE_BOUND};
 use named_access::set_named_access_document;
 use style_flush::FlushHandles;
