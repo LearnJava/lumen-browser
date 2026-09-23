@@ -2386,6 +2386,68 @@ bfcache-тесты (`back-forward-cache-*`, `unload-a-document/*`), тот же 
 среза 56/57/58/59/60/61: `referrer-policy`/`4K*`, `fetch`, либо новая категория
 `mixed-content` (533) / `speculation-rules` (409).
 
+### TEST-3: срез 63 (2026-09-23) — `fetch`: baseline перегенерирован после BUG-1069, 4 baseline-ошибки исправлены вручную, остаток — диффузный флап (BUG-1022)
+
+Второй пункт списка «Дальше» среза 62 (второй из двух последних явно названных в записи «BUG-1069
+закрыт» — `referrer-policy`/`4K*`, всё ещё не тронут, дорогой DNS-таймаут-доминированный прогон,
+см. срез 54). `dev-release` пересобран заново (HEAD совпадал с `origin/main`, но бинарь в слоте
+был не гарантированно свежим).
+
+**Baseline.** `--update-expected --all --root fetch --recursive --processes 7
+--binary target/dev-release/lumen.exe`: **488/906 harness OK** (было 387/906 в срезе 55, до
+BUG-1069), 2 333/8 711 подтестов, 298 `.ini` перезаписано, 7 удалено (стало чисто), 131 без
+изменений.
+
+**Три `--check` подряд дали три разных счётчика** — 76/4/58, 102/4/71, 60/2/68
+(регрессии/unexpected-pass/other) — и пересекающиеся, но не совпадающие наборы файлов
+(35 уникальных файлов суммарно по трём прогонам, попарное пересечение 11–16 из 25–30).
+Разобраны по пересечению всех трёх прогонов одновременно:
+
+**4 файла регрессировали identично во всех трёх прогонах** (не диффузно — детерминированно,
+тот же результат раз за разом, но ОТЛИЧНЫЙ от того, что записал `--update-expected`):
+`fetch/api/request/request-cache-only-if-cached.any.sharedworker.html` (`ERROR`→`TIMEOUT`),
+`fetch/corb/img-mime-types-coverage.tentative.sub.html` (без `expected` → `TIMEOUT`),
+`fetch/orb/tentative/status.sub.any.worker.html` (без `.ini` вовсе → `TIMEOUT` + 2 сабтеста),
+`fetch/metadata/style.https.sub.html` (top-level уже `TIMEOUT`, но 4 сабтеста без записи →
+`TIMEOUT`/`NOTRUN`). Вывод: `--update-expected` — однократный прогон, и для этих четырёх файлов
+он поймал нетипичный (быстрый/удачный) результат, не тот, что происходит стабильно. Это не
+сужение (`[X, Y]`), а исправление ошибочного baseline — тот же приём, что `redirect-schemes.
+any.html`/BUG-1098 в срезе 55. Все четыре `.ini` отредактированы вручную под значение, которое
+трижды подряд воспроизвёл `--check`; каждое подтверждено отдельным scoped `--check` (`--root
+fetch/api/request`, `fetch/corb`, `fetch/orb/tentative`, `fetch/metadata` без `--recursive` —
+последнее нарочно: `--recursive` увело бы прогон в `generated/`, 500+ файлов той же
+диффузной категории ниже) — **0 регрессий** на каждом (только 1 unexpected pass в `fetch/corb`,
+не гейтящий).
+
+**Остальные ~31 уникальных файла — диффузный флап без общего знаменателя**, тот же почерк, что
+`html/semantics`/`shared-storage`/`signed-exchange` выше: кластеры `fetch/metadata/generated/*`
+(13 файлов — `element-frame`/`element-iframe`/`element-input-image`/`element-script`/
+`svg-image`/`fetch-via-serviceworker`/… — Fetch Metadata Request Headers на iframe/worker/
+serviceworker), `fetch/metadata/*` верхнего уровня (9 файлов — `sharedworker`/
+`serviceworker-accessors`/`fetch-preflight`/…), `fetch/orb/tentative/*` (4, включая
+`nosniff.sub.any.html`, пойманный отдельным verify-прогоном `fetch/orb/tentative` — 14
+регрессий на нём одном, не всплывавших ни в одном из основных трёх `--check`), `fetch/corb/*`
+(1 — `script-resource-with-json-parser-breaker`), `fetch/security/dangling-markup/*` (2),
+`fetch/stale-while-revalidate/*` (1). Все — service-worker/worklet/iframe-конструкции с
+несколькими параллельными подключениями и фиксированным таймаутом, тот же механизм, что уже
+задокументирован. Baseline оставлен таким, каким его записал исходный `--update-expected`, не
+откачен, не сужен — новый экземпляр добавлен в [BUG-1022](../../bugs/BUG-1022-OPEN.md).
+
+**Проверено: `redirect-schemes.any.html`/[BUG-1098](../../bugs/BUG-1098-OPEN.md) (срез 55)
+держится** — файл не всплыл ни в одном из трёх `--check`, ручная правка среза 55 пережила
+регенерацию baseline.
+
+**Окружение этой сессии.** `dev-release`, HEAD = `origin/main` (`edbd4f43d`), Windows 10 19045,
+`tests/wpt/.venv/Scripts/python.exe`, `MSYS2_ARG_CONV_EXCL='*'`/`MSYS_NO_PATHCONV=1`,
+`--processes 7`.
+
+Категорий по-прежнему 261. Явный список регенерации после BUG-1069 (срез «BUG-1069 закрыт») этим
+срезом исчерпан, кроме одного пункта: `referrer-policy`/`4K*` — единственный оставшийся, дорогой
+(DNS-таймаут-доминированный прогон, см. срез 54 «Ограничение записанного»). Дальше:
+`referrer-policy`/`4K*` полный `--check` (требует сессии с бюджетом на многочасовой фоновый
+прогон), либо новая категория — `mixed-content` (533 файла) или `speculation-rules` (409), ни
+одна не пробовалась.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ

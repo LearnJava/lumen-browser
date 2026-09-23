@@ -186,3 +186,21 @@ create-worklet-credentials TIMEOUT↔OK). Тот же почерк, что `fetc
 исход гонки меняется от прогона к прогону без изменений на стороне движка. Baseline принят
 таким, каким его записал исходный `--update-expected`, дальнейшее сужение не проводилось (тот
 же выбор, что для `fetch`/`signed-exchange`).
+
+## Ещё один экземпляр того же класса (2026-09-23, WPT-RUN-7 срез 63)
+
+`fetch`, перегенерирован повторно после [BUG-1069](BUG-1069-FIXED.md) (первая регенерация была
+в срезе 55, ДО фикса). Три `--check` подряд на том же бинаре и baseline: 76/102/60 регрессий,
+35 уникальных файлов суммарно, попарное пересечение 11–16 из 25–30 — без общего знаменателя.
+Кластеры: `fetch/metadata/generated/*` (13 файлов — Fetch Metadata Request Headers на iframe/
+worker/serviceworker), `fetch/metadata/*` верхнего уровня (9), `fetch/orb/tentative/*` (4, в т.ч.
+`nosniff.sub.any.html`, пойманный только отдельным verify-прогоном — 14 регрессий на нём одном,
+ни разу не всплывших в основных трёх `--check`), `fetch/corb/*` (1), `fetch/security/
+dangling-markup/*` (2), `fetch/stale-while-revalidate/*` (1). Все — service-worker/worklet/
+iframe-конструкции с несколькими параллельными подключениями и фиксированным таймаутом, тот же
+механизм, что `shared-storage`/`signed-exchange` выше. Baseline не откачен, не сужен. Отдельно
+(НЕ этот класс — детерминированная, не диффузная ошибка baseline) 4 файла регрессировали
+identично во всех трёх прогонах и были исправлены вручную под воспроизводимое значение:
+`request-cache-only-if-cached.any.sharedworker.html`, `img-mime-types-coverage.tentative.
+sub.html` (`fetch/corb`), `status.sub.any.worker.html` (`fetch/orb/tentative`), `style.https.
+sub.html` — детали в `docs/tasks/p2-test-track.md#test-3-срез-63-2026-09-23`.
