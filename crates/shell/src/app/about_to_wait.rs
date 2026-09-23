@@ -162,6 +162,7 @@ impl Lumen {
             fjs.tick_timers();
             fjs.pump_websockets();
             fjs.pump_sse();
+            fjs.pump_media();
             fjs.pump_workers();
             fjs.pump_broadcast_channels();
             fjs.pump_shared_workers();
@@ -261,6 +262,7 @@ impl Lumen {
                 j.tick_timers();
                 j.pump_websockets();
                 j.pump_sse();
+                j.pump_media();
                 j.pump_workers();
                 j.pump_broadcast_channels();
                 j.pump_shared_workers();
@@ -1427,6 +1429,7 @@ impl Lumen {
                 js.tick_timers();
                 js.pump_websockets();
                 js.pump_sse();
+                js.pump_media();
                 js.pump_workers();
                 js.pump_broadcast_channels();
                 js.pump_shared_workers();
