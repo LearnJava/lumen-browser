@@ -103,6 +103,18 @@ pub(crate) struct FlushHandles {
     /// pre-mutation snapshot to a same-tick `getComputedStyle()` — exactly
     /// the half `.style`/`insertRule` was missing before this slice.
     pub(crate) cssom_dirty: Arc<AtomicBool>,
+    /// BUG-935 S43: mirrors [`super::runtime::V8JsRuntime::pseudo_styles_needed`] —
+    /// `true` once the page has read `getComputedStyle(el, pseudoElt)`/
+    /// `computedStyleMap()`'s pseudo-element path. Gates the matching
+    /// collector in [`Self::maybe_flush`] the same way the async
+    /// `collect_js_data` (`crates/shell/src/relayout.rs`) gates its own copy
+    /// of the same collector — S42's consumer audit found no reader of
+    /// `pseudo_computed_styles` outside the `maybe_flush`-gated natives, so
+    /// this cannot serve a stale answer.
+    pub(crate) pseudo_styles_needed: Arc<AtomicBool>,
+    /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed`] for
+    /// [`Self::custom_properties`].
+    pub(crate) custom_props_needed: Arc<AtomicBool>,
 }
 
 /// Recorded CSSOM writes awaiting replay onto the cascade sheet, each paired
@@ -254,16 +266,25 @@ impl FlushHandles {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) =
             lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters));
-        *self
-            .pseudo_computed_styles
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            lumen_layout::collect_pseudo_computed_styles(&layout_root);
-        *self
-            .custom_properties
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            lumen_layout::collect_custom_properties(&layout_root, viewport);
+        // BUG-935 S43: skip while the page has never read the corresponding
+        // cache — see the fields' doc comments. Each of the two natives that
+        // can set the flag calls `maybe_flush` right after, so a page's very
+        // first read still forces a real collect here rather than serving a
+        // stale/empty map.
+        if self.pseudo_styles_needed.load(Ordering::Relaxed) {
+            *self
+                .pseudo_computed_styles
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_pseudo_computed_styles(&layout_root);
+        }
+        if self.custom_props_needed.load(Ordering::Relaxed) {
+            *self
+                .custom_properties
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_custom_properties(&layout_root, viewport);
+        }
         *self
             .scroll_states
             .lock()

@@ -159,6 +159,23 @@ pub struct V8JsRuntime {
     /// for the document, a shadow root's own node id for its own list — see
     /// `install::constructed_stylesheets`'s module doc comment).
     pub(super) adopted_stylesheets: AdoptedStylesheets,
+    /// BUG-935 S43: `true` once the page has called any of
+    /// `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s pseudo-element
+    /// path — set by the two `_lumen_get_computed_style_pseudo*` natives, read
+    /// by the embedder before it bothers collecting
+    /// [`Self::pseudo_computed_styles`] at all (`lumen_layout::
+    /// collect_pseudo_computed_styles`, S37's measured second-largest
+    /// `apply_relayout_result` cost). S42's consumer audit found no
+    /// non-`maybe_flush`-gated reader of this cache (unlike `computed_styles`,
+    /// whose `_lumen_request_scroll` reader made the same gate unsafe there),
+    /// so skipping the collector while this stays `false` cannot serve a
+    /// stale/empty answer to anything.
+    pub(super) pseudo_styles_needed: Arc<AtomicBool>,
+    /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed`] for
+    /// [`Self::custom_properties`], set by `_lumen_get_custom_property` and
+    /// `_lumen_get_computed_style_entries` (the `computedStyleMap()` iteration
+    /// source, which merges custom properties into its answer).
+    pub(super) custom_props_needed: Arc<AtomicBool>,
     /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
     /// via [`Self::update_stylesheet`] so a same-tick `getComputedStyle`/
     /// geometry read can force a synchronous flush (see
@@ -390,6 +407,8 @@ impl V8JsRuntime {
             stylesheet_nodes: Arc::new(Mutex::new(Vec::new())),
             constructed_stylesheets: Arc::new(Mutex::new(Vec::new())),
             adopted_stylesheets: Arc::new(Mutex::new(HashMap::new())),
+            pseudo_styles_needed: Arc::new(AtomicBool::new(false)),
+            custom_props_needed: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             cssom_deltas: Arc::new(Mutex::new(Vec::new())),
@@ -670,6 +689,16 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::dom_dirty_flag`].
     pub fn dom_dirty_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.dom_dirty)
+    }
+
+    /// BUG-935 S43: shared, lock-free handle to [`Self::pseudo_styles_needed`].
+    pub fn pseudo_styles_needed_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.pseudo_styles_needed)
+    }
+
+    /// BUG-935 S43: shared, lock-free handle to [`Self::custom_props_needed`].
+    pub fn custom_props_needed_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.custom_props_needed)
     }
 
     /// Replace the layout bounding-rect table with a fresh snapshot.

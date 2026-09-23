@@ -139,6 +139,22 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
     }
+    /// BUG-935 S43: shared, lock-free handle to a flag set `true` once the
+    /// page has read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
+    /// pseudo-element path — lets the embedder skip
+    /// `lumen_layout::collect_pseudo_computed_styles` (S37's measured cost)
+    /// on every relayout of a page that never reads it. `None` for runtimes
+    /// that do not expose it (default) — the embedder then always collects,
+    /// same as before this slice.
+    fn pseudo_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
+    /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed_flag`] for
+    /// `lumen_layout::collect_custom_properties`, set by
+    /// `_lumen_get_custom_property`/`_lumen_get_computed_style_entries`.
+    fn custom_props_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
     /// Push a fresh snapshot of layout bounding rects into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -1009,6 +1025,12 @@ impl PersistentJs for V8PersistentJs {
     }
     fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.dom_dirty_flag())
+    }
+    fn pseudo_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.pseudo_styles_needed_flag())
+    }
+    fn custom_props_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.custom_props_needed_flag())
     }
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         self.rt.update_layout_rects(rects);

@@ -3126,6 +3126,82 @@ scripts/perf-fixtures/bug935_raf_dom_stand.html` = 0), так что эта ве
 `_lumen_request_scroll` вообще); либо взяться за сам M4-роутинг, как и
 предлагали S39/S41.
 
+**Срез 43 (P3, 2026-09-23) — вариант (ii) реализован: гейт
+`pseudo_computed_styles`/`custom_properties` на «страница хоть раз
+прочитала»**
+
+Два новых `Arc<AtomicBool>` (`V8JsRuntime::pseudo_styles_needed`/
+`custom_props_needed`, `crates/js/src/v8_runtime/runtime.rs`), взводимые
+в четырёх нативах, которые S42 нашёл единственными читателями двух кэшей
+(`_lumen_get_computed_style_pseudo`/`_lumen_get_computed_style_pseudo_entries`
+для `pseudo_computed_styles`; `_lumen_get_custom_property`/
+`_lumen_get_computed_style_entries` для `custom_properties` —
+`install/platform.rs`). Гейт применён в обоих потребителях, которые сами
+зовут `collect_pseudo_computed_styles`/`collect_custom_properties`:
+
+- `FlushHandles::maybe_flush` (`style_flush.rs`, CSSOM-4 same-tick путь) —
+  два новых поля `pseudo_styles_needed`/`custom_props_needed` (клоны тех
+  же `Arc`), `if`-обёртка вокруг каждого из двух коллекторов. Порядок
+  внутри нативов («взвести флаг, потом позвать `maybe_flush`») гарантирует,
+  что самый первый читающий вызов страницы видит уже взведённый флаг и
+  форсирует реальный сбор — то же соглашение, что `never_flushed` уже
+  использует для `computed_styles`.
+- `collect_js_data` (`crates/shell/src/relayout.rs`, S41's асинхронный
+  engine-thread путь) — два новых параметра `pseudo_styles_needed: bool`/
+  `custom_props_needed: bool`; `false` возвращает пустую `HashMap` вместо
+  вызова коллектора. Значения читаются на UI-потоке ДО того, как замыкание
+  уезжает на движковый поток (`make_relayout_job`) — тот же приём, что уже
+  применён к `js_present`/`prev_layout_shift_rects` в S41, потому что сам
+  движковый поток не имеет доступа к `Lumen`/JS-рантайму (ADR-016).
+  Синхронный путь `Lumen::relayout` читает флаги напрямую перед вызовом.
+  Оба флага кэшируются в новых полях `Lumen::pseudo_styles_needed_flag`/
+  `custom_props_needed_flag` (`Option<Arc<AtomicBool>>`, `None` →
+  `unwrap_or(true)` — деградация в «собирать всегда», как было до среза),
+  заполняемых в `set_js_ctx` **в обоих режимах** движкового потока (в
+  отличие от `raf_pending_flag`/`dom_dirty_flag`, которые кэшируются
+  только когда поток включён — при выключенном потоке `make_relayout_job`
+  всё равно строится на UI-потоке и ему нужен готовый снимок, а не живой
+  хэндл для чтения).
+
+**Тесты:** `cargo build --profile dev-release -p lumen-shell --bin lumen
+--features v8` зелёный (~4 мин). `cargo clippy -p lumen-shell --all-targets
+--features v8 -- -D warnings` чист (потребовал `#[allow(clippy::
+too_many_arguments)]` на обе тронутые функции — 8-9 параметров). Точечные
+тесты: `cargo test --profile dev-release -p lumen-shell --bin lumen
+--features v8 -- relayout` — 13/13; `cargo test --profile dev-release -p
+lumen-js --features v8-backend -- computedstyle computed_style pseudo
+custom_prop` — 50/50, включая
+`get_computed_style_pseudo_element_reads_pseudo_map`/
+`custom_property_comes_from_its_own_snapshot` и весь `v8_cssom_stylesheets`
+модуль — все читающие тесты остаются зелёными, подтверждая, что
+«взвести-потом-flush» не теряет первый реальный запрос.
+
+Прямая проверка эффекта: S29's офлайн-стенд
+(`scripts/perf-fixtures/bug935_raf_dom_stand.html`, ни одного
+`getComputedStyle`-вызова) через
+`scripts/bug935_raf_relayout_census.py` — `apply-step`-лог (`LUMEN_FRAME_LOG`)
+до среза содержал `collect_pseudo_computed_styles`/`collect_custom_properties`
+на каждом из 24 относлейаутов; после среза оба шага отсутствуют в логе
+целиком (`grep -c` = 0 на 25 `collect_computed_styles`-строк того же
+прогона) — гейт применяется на каждом реальном коммите этого прогона, ни
+разу не сработав ложно (readback-тесты выше подтверждают корректность
+первого чтения на других фикстурах). Не строгий A/B по времени — S37 уже
+установил, что `collect_computed_styles` (не тронутый этим срезом) —
+доминанта, а не эти двое, так что ожидаемый выигрыш структурный (два шага
+полностью исчезают у страниц, которые их не читают), а не заметный на
+таймере этого конкретного стенда.
+
+**Не сделано:** вариант (i) (тот же гейт для `computed_styles`, самого
+дорогого из трёх) остаётся нереализованным — S42 показал его небезопасным
+без отдельного, более широкого сигнала через `_lumen_request_scroll`.
+Основной корневой симптом бага (M4-роутинг мёртв) по-прежнему не тронут.
+**Следующий срез должен** взяться либо за вариант (i) (завести сигнал
+«кэш `computed_styles` кому-то нужен», взводимый и на
+`getComputedStyle`-семействе, и на `_lumen_request_scroll`, для чего
+`install_scroll_state`'s замыканию понадобится доступ к этому флагу —
+сегодня у него нет даже `flush`), либо за сам M4-роутинг, как и предлагали
+S39/S41/S42.
+
 ## Воспроизведение
 
 ```

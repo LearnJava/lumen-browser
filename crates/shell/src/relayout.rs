@@ -1061,6 +1061,16 @@ impl Lumen {
                         let lb_ref = self.layout_box.as_ref()?;
                         let doc_guard =
                             self.layout_source.as_ref()?.document.lock().ok()?;
+                        let pseudo_styles_needed = self
+                            .pseudo_styles_needed_flag
+                            .as_ref()
+                            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                            .unwrap_or(true);
+                        let custom_props_needed = self
+                            .custom_props_needed_flag
+                            .as_ref()
+                            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                            .unwrap_or(true);
                         Some(apply_step!(
                             "js_geometry_collect",
                             collect_js_data(
@@ -1070,6 +1080,8 @@ impl Lumen {
                                 &self.prev_layout_shift_rects,
                                 self.last_input_epoch_s,
                                 now_s,
+                                pseudo_styles_needed,
+                                custom_props_needed,
                             )
                         ))
                     })(),
@@ -1316,6 +1328,22 @@ impl Lumen {
         let last_input_epoch_s = self.last_input_epoch_s;
         #[cfg(feature = "v8")]
         let epoch = self.epoch;
+        // BUG-935 S43: snapshot the two "cache actually needed" flags on this
+        // (UI) thread, same rationale as `js_present`/`prev_layout_shift_rects`
+        // above — the closure below runs on the engine thread and must not
+        // touch `self`.
+        #[cfg(feature = "v8")]
+        let pseudo_styles_needed = self
+            .pseudo_styles_needed_flag
+            .as_ref()
+            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(true);
+        #[cfg(feature = "v8")]
+        let custom_props_needed = self
+            .custom_props_needed_flag
+            .as_ref()
+            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(true);
         let job = move || {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
@@ -1352,6 +1380,8 @@ impl Lumen {
                         &prev_layout_shift_rects,
                         last_input_epoch_s,
                         now_s,
+                        pseudo_styles_needed,
+                        custom_props_needed,
                     )
                 })
             } else {
@@ -1519,6 +1549,16 @@ impl Lumen {
         // page's stylesheets, scripts and images.
         resource_timing::resume();
         self.js_present = handle.is_some();
+        // BUG-935 S43: lock-free clones of the "has JS ever read
+        // pseudo-styles/custom-properties" flags, cached in both engine-thread
+        // modes (unlike `raf_pending_flag`/`dom_dirty_flag` below, which the
+        // no-engine-thread branch skips because it can read `self.js_ctx`
+        // directly) — `make_relayout_job` builds its engine-thread closure on
+        // this (UI) thread regardless of mode, so it always needs a
+        // ready-to-move snapshot rather than a live handle to query from. `None`
+        // clears them (blank/JS-less tab).
+        self.pseudo_styles_needed_flag = handle.as_ref().and_then(|h| h.pseudo_styles_needed_flag());
+        self.custom_props_needed_flag = handle.as_ref().and_then(|h| h.custom_props_needed_flag());
         match self.engine_thread.as_ref() {
             // Flag on: the handle lives engine-side; deposit it into
             // `EngineJsState.js` and leave the UI field empty.
@@ -2068,6 +2108,7 @@ pub(crate) struct PrecollectedJsData {
 /// baseline snapshot — no `Lumen` field, so it needs neither `&self` nor the
 /// renderer/frame state.
 #[cfg(feature = "v8")]
+#[allow(clippy::too_many_arguments)]
 fn collect_js_data(
     lb_ref: &lumen_layout::LayoutBox,
     doc_guard: std::sync::MutexGuard<'_, Document>,
@@ -2075,6 +2116,12 @@ fn collect_js_data(
     prev_layout_shift_rects: &std::collections::HashMap<u32, [f32; 4]>,
     last_input_epoch_s: f32,
     now_s: f32,
+    // BUG-935 S43: skip the two collectors below while the page has never
+    // read the corresponding cache — S42's consumer audit found both safe to
+    // gate this way (unlike `computed_styles`, whose `_lumen_request_scroll`
+    // reader reads it outside the `getComputedStyle`-family signal).
+    pseudo_styles_needed: bool,
+    custom_props_needed: bool,
 ) -> PrecollectedJsData {
     let step_log = lumen_paint::frame_log_enabled();
     macro_rules! step {
@@ -2101,18 +2148,26 @@ fn collect_js_data(
     let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
     let hit_test_tree = step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
     let styles = step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None));
-    let pseudo_styles = step!(
-        "collect_pseudo_computed_styles",
-        collect_pseudo_computed_styles(lb_ref)
-    );
+    let pseudo_styles = if pseudo_styles_needed {
+        step!(
+            "collect_pseudo_computed_styles",
+            collect_pseudo_computed_styles(lb_ref)
+        )
+    } else {
+        std::collections::HashMap::new()
+    };
     // Drop the document lock before the remaining collectors, which read
     // only `lb_ref`/`viewport` — matches the lock-hold window of the inline
     // path this replaced (BUG-935 S37's original block dropped it here too).
     drop(doc_guard);
-    let customs = step!(
-        "collect_custom_properties",
-        collect_custom_properties(lb_ref, viewport)
-    );
+    let customs = if custom_props_needed {
+        step!(
+            "collect_custom_properties",
+            collect_custom_properties(lb_ref, viewport)
+        )
+    } else {
+        std::collections::HashMap::new()
+    };
     let scroll_states: std::collections::HashMap<u32, [f32; 4]> = step!(
         "collect_scroll_containers",
         collect_scroll_containers_for_js_state(lb_ref)
