@@ -311,6 +311,50 @@ pub fn find_ancestor_form(doc: &Document, mut node: NodeId) -> Option<NodeId> {
     None
 }
 
+/// Applies a click on `<input type=radio>` per HTML LS §4.10.5.1.14 «radio
+/// button state (type=radio)»: clears the checkedness of every other radio
+/// button in `clicked`'s group, then checks `clicked` itself.
+///
+/// The group is every `<input type=radio>` with the same (non-empty,
+/// case-sensitive) `name`, scoped to the nearest `<form>` ancestor of
+/// `clicked` — or the whole document if it has none. A radio without a
+/// `name`, or one with no other same-named group member, forms a group of
+/// one: it is unconditionally checked and never unchecked by a re-click —
+/// unlike a checkbox, a radio button's checkedness cannot be cleared by
+/// clicking it again (only `form.reset()` or checking a group sibling does).
+pub fn set_radio_checked(doc: &mut Document, clicked: NodeId) {
+    let name = doc.get(clicked).get_attr("name").unwrap_or("").to_owned();
+    if !name.is_empty() {
+        let scope = find_ancestor_form(doc, clicked).unwrap_or_else(|| doc.root());
+        let mut group = Vec::new();
+        collect_radio_group(doc, scope, &name, &mut group);
+        for id in group {
+            if id != clicked && doc.control_checked(id) {
+                doc.set_control_checked(id, false);
+            }
+        }
+    }
+    doc.set_control_checked(clicked, true);
+}
+
+/// Собрать все `<input type=radio>` внутри `scope` (включая сам `scope`) с
+/// атрибутом `name`, точно равным `name`.
+fn collect_radio_group(doc: &Document, scope: NodeId, name: &str, out: &mut Vec<NodeId>) {
+    let node = doc.get(scope);
+    if node
+        .element_name()
+        .map(|q| q.local.eq_ignore_ascii_case("input"))
+        .unwrap_or(false)
+        && matches!(node.input_type(), Some(InputType::Radio))
+        && node.get_attr("name") == Some(name)
+    {
+        out.push(scope);
+    }
+    for &child in &node.children.clone() {
+        collect_radio_group(doc, child, name, out);
+    }
+}
+
 /// Собрать имена и значения submittable-контролов формы из DOM-атрибутов.
 ///
 /// Обходит потомков `form_id` depth-first и возвращает `(name, value)` для

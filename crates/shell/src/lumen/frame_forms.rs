@@ -40,12 +40,14 @@ impl Lumen {
         let handled = !matches!(action, forms::FormClickAction::Nothing);
 
         let changed = match action {
-            // Радиокнопка проходит тем же путём, что флажок, — ровно как у
-            // страницы: снятия отметки с соседей по группе шелл не делает ни
-            // там, ни здесь, и заводить это расхождение во фрейме нельзя.
-            forms::FormClickAction::ToggleCheckbox(id)
-            | forms::FormClickAction::ToggleRadio { clicked: id, .. } => {
+            forms::FormClickAction::ToggleCheckbox(id) => {
                 self.with_frame_doc(idx, |doc| forms::toggle_checkbox(doc, id))
+            }
+            // Ровно как у страницы: снимает отметку с соседей по группе
+            // (BUG-927) — расходиться поведением клика по радиокнопке между
+            // страницей и фреймом нельзя.
+            forms::FormClickAction::ToggleRadio { clicked: id, .. } => {
+                self.with_frame_doc(idx, |doc| forms::toggle_radio(doc, id))
             }
             forms::FormClickAction::ToggleDetails(id) => self.frame_toggle_details(idx, id),
             forms::FormClickAction::SlideRange(id) => self.frame_slide_range(idx, id, at.x),
