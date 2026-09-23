@@ -18,6 +18,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use lumen_dom::{Attribute, Document, Namespace, NodeData, NodeId, QualName};
 
+mod update_bar;
+pub use update_bar::{ChromeUpdateAction, ChromeUpdateModel};
+
 /// Snapshot of shell state [`bind_model`] reflects into the chrome document.
 ///
 /// Built fresh by the shell on every [`bind_model`] call (see
@@ -108,6 +111,8 @@ pub struct ChromeModel {
     pub right_sidebar: ChromeRightSidebarModel,
     /// `#demoBar` floating control panel snapshot (CC-18).
     pub control_panel: ChromeControlPanelModel,
+    /// `#updateBar` + settings "Обновления" snapshot (UPD-9).
+    pub update: ChromeUpdateModel,
 }
 
 /// `#demoBar` floating control panel snapshot (CC-18) — the panel itself
@@ -808,6 +813,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_bookmarks(doc, &model.bookmarks);
     bind_settings(doc, &model.settings);
     bind_right_sidebar(doc, &model.right_sidebar);
+    update_bar::bind_update(doc, &model.update);
 }
 
 /// Like [`bind_model`], but also reports what the call actually changed, split

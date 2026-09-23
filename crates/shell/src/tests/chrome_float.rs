@@ -209,3 +209,59 @@ fn cc18_press_on_a_panel_control_resolves_its_own_action_not_the_drag_handle() {
         "кнопка внутри шапки перехватывает нажатие у перетаскивания"
     );
 }
+
+/// UPD-9: `#updateBar` идёт тем же путём, что `#demoBar`: он лежит внутри
+/// `chrome_page_host_rect`, поэтому без отцепления 4-полосный клип выбросил
+/// бы его целиком. Тест держит три вещи: закрытый бар не даёт бокса (нечего
+/// отцеплять), открытый стоит в правом верхнем углу по CSS эталона и
+/// рисуется, а нажатие на «Скачать» разрешается в `DownloadUpdate`.
+#[test]
+fn upd9_update_bar_detaches_paints_and_routes_its_button() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let bar = doc.find_by_id(lumen_chrome::ids::UPDATE_BAR).expect("has #updateBar");
+
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &lumen_chrome::ChromeModel::default());
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    assert!(
+        take_floating_panel(&mut layout, bar, lumen_chrome::ids::UPDATE_BAR).is_none(),
+        "closed #updateBar is display:none — no box to detach"
+    );
+
+    let model = lumen_chrome::ChromeModel {
+        update: lumen_chrome::ChromeUpdateModel {
+            bar_open: true,
+            title: "Доступна версия 9.9.9".to_owned(),
+            meta: "Установлена 0.5.0 · 2.0 MB".to_owned(),
+            action: lumen_chrome::ChromeUpdateAction::Download,
+            ..lumen_chrome::ChromeUpdateModel::default()
+        },
+        ..lumen_chrome::ChromeModel::default()
+    };
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let (rect, detached) = take_floating_panel(&mut layout, bar, lumen_chrome::ids::UPDATE_BAR)
+        .expect("open #updateBar must be detachable");
+    assert!((rect.width - 340.0).abs() < 0.5, "width {rect:?}");
+    assert!((rect.right() - (1920.0 - 18.0)).abs() < 0.5, "right edge {rect:?}");
+    assert!((rect.y - 92.0).abs() < 0.5, "top {rect:?}");
+    assert!(rect.height > 40.0, "title row + action row, got {rect:?}");
+    assert!(fills_rect(&paint_ordered(&detached.removed), rect), "bar background must paint");
+
+    let btn = doc.find_by_id(lumen_chrome::ids::UPD_DOWNLOAD_BTN).expect("has #updDownloadBtn");
+    let btn_rect = lumen_layout::find_box_by_node(&detached.removed, btn).expect("visible button has a box").rect;
+    let hit = hit_test(
+        Point::new(btn_rect.x + btn_rect.width / 2.0, btn_rect.y + btn_rect.height / 2.0),
+        &detached.removed,
+    )
+    .expect("press on the button hits the bar");
+    assert_eq!(action_at(&doc, &hit), Some(lumen_chrome::ChromeAction::DownloadUpdate));
+    let restart = doc.find_by_id(lumen_chrome::ids::UPD_RESTART_BTN).expect("has #updRestartBtn");
+    assert!(
+        lumen_layout::find_box_by_node(&detached.removed, restart).is_none(),
+        "restart button is hidden until the archive is staged"
+    );
+}

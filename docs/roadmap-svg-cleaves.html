@@ -58,11 +58,11 @@
  "generated": "2026-09-23",
  "counts": {
   "open": 256,
-  "fixed": 794,
+  "fixed": 798,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1050,
+ "total_bugs": 1054,
  "phases": [
   {
    "id": "P0",
@@ -2022,9 +2022,9 @@
       {
        "id": "UPD-9",
        "title": "UPD-9: UI обновления",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Инфобар «Доступна vX.Y.Z» (по образцу download-панели) + show_os_notification; после загрузки кнопка «Перезапустить и обновить»; ручная проверка из настроек"
+       "note": "Инфобар «Доступна vX.Y.Z» (по образцу download-панели) + show_os_notification; после загрузки кнопка «Перезапустить и обновить»; ручная проверка из настроек. **Ревизия 2026-09-23 (P1):** `crates/shell/src/update_ui.rs` — `UpdateUi`, машина состояний Idle → Available → Downloading → Ready (+Failed с повтором «Скачать»), без `Lumen` и тестируемая напрямую (11 тестов): фоновая проверка на своём потоке (`update::check_for_update` с троттлингом 24 ч и opt-out при старте; ручная — новый `update::check_for_update_now` без троттлинга, сетевая ошибка возвращается `Err`, а не «последняя версия»), `UpdateDownloadManager` UPD-6, `apply_staged_update` UPD-8. Инфобар `#updateBar` добавлен в эталон `docs/design/lumen-v3_3.html` (+`gen_chrome_assets.py`: 5 действий `dismiss-update`/`download-update`/`restart-to-update`/`check-for-updates`/`toggle-auto-update`), привязка — `crates/chrome/src/model/update_bar.rs` (`ChromeUpdateModel`). Бар — `position:fixed` плавающая панель по механизму `#demoBar` (BUG-1059): он лежит внутри `chrome_page_host_rect`, и 4-полосный клип хрома выбросил бы его; тест `upd9_update_bar_detaches_paints_and_routes_its_button` на реальном chrome-документе проверяет отцепление, отрисовку и попадание клика в `DownloadUpdate`. Настройки → «Основные» → блок «Обновления»: тумблер автопроверки (`UpdateState::auto_check_updates`) + «Проверить сейчас» со строкой статуса. OS-уведомление — только при автоматической находке. «Перезапустить и обновить» сохраняет сессию как `CloseRequested`, выходит из event loop, а новый бинарь запускается после возврата `run_app` (`update::spawn_new_instance`), чтобы старый процесс штатно освободил хранилища. `cleanup_after_apply` подключён в `cli_args.rs` рядом с бэкапом UPD-5. Проверка не запускается в `--deterministic` и `no_persistent_state` (автоматизация, Tor). Живьём предложение обновления не проверено: `TRUSTED_KEYS` пуст до UPD-10, поэтому любой манифест сейчас `Untrusted`."
       },
       {
        "id": "UPD-10",
@@ -7866,13 +7866,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-683": {
-   "status": "open",
-   "title": "Открытие ОДНОЙ вкладки github.com в живой сессии стоит ~890 МБ Rust-кучи сверх шести уже открытых лёгких вкладок (`rust_alloc` 189.5→1079.0 МБ по counting-alloc…",
-   "component": "layout/dom (не локализовано — нужна перепись структур)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-684": {
    "status": "open",
    "title": "`ReadableStream`/`WritableStream`/`TransformStream` are plain ES5 `function X(...) { this._foo = ...; }` constructors with no `new.target` guard, so calling any…",
@@ -8965,10 +8958,17 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1106": {
+  "BUG-1110": {
    "status": "open",
-   "title": "`dump_golden.py` красный (8/12) на свежепересобранном чистом `main`. Найден P6 2026-09-23 попутно при закрытии [BUG-1101](bugs/BUG-1101-FIXED.md)",
-   "component": "не локализовано (кандидат — `crates/engine/layout/src/style/cascade.rs`/`share_cache.rs`, трек `THREAD-4`, не подтверждено)",
+   "title": "Флак `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`: в параллельном прогоне `lumen-js --lib` видит чужой dirty-флаг (вероятно, переиспо…",
+   "component": "js (`crates/js/src/frame_bridge.rs` — глобальный `frame_dom_dirty()` с ключом-адресом `Arc<Document>`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1111": {
+   "status": "open",
+   "title": "Флак: под нагрузкой полного `scoped-test.sh` падают 20 worker-тестов `lumen-js` (ответ воркера `Null`), изолированно 179/179 зелёные. Тесты ждут старта изолята…",
+   "component": "js (тесты `crates/js/src/dom/tests/v8_webworker.rs`, `crates/js/src/worker.rs::tests_v8` — фиксированный `sleep` вместо опроса с дедлайном)",
    "date": null,
    "debtor": false
   },
@@ -14522,6 +14522,34 @@
    "component": "network (`crates/network/src/referrer_policy.rs::compute_referrer`, `referrer_policy.rs:98-148`)",
    "date": "2026-09-23",
    "debtor": false
+  },
+  "BUG-683": {
+   "status": "fixed",
+   "title": "Открытие ОДНОЙ вкладки github.com в живой сессии стоит ~890 МБ Rust-кучи сверх шести уже открытых лёгких вкладок (`rust_alloc` 189.5→1079.0 МБ по counting-alloc…",
+   "component": "layout (`crates/engine/layout/src/style/cascade.rs` — сброс `inherits: false` в `compute_style`)",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-1106": {
+   "status": "fixed",
+   "title": "`dump_golden.py` красный 8/12 на чистом `main`. Корень — не `ShareCache`: [BUG-1103](bugs/BUG-1103-FIXED.md) перестал переносить фон `<body>` на стиль `<html>`…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_cpu_with_fonts` — CPU-очистка канвы) + эталоны `graphic_tests/dump-golden/`",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-1108": {
+   "status": "fixed",
+   "title": "При сфокусированном поле ввода кадр блокирующе ждёт мьютекс документа на всё время off-thread relayout (на github.com 11-16 с) — окно не перерисовывается. Тот ж…",
+   "component": "shell (`crates/shell/src/lumen/text_input.rs::typeable_field` — блокирующий `document.lock()` на пути кадра через `focused_input_caret`)",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-1109": {
+   "status": "fixed",
+   "title": "При открытом списке `<select>` кадр блокирующе ждёт мьютекс документа на всё время off-thread relayout (на github.com 11-16 с) и паникует на отравленном локе (`…",
+   "component": "shell (`crates/shell/src/app/window_event/redraw_requested.rs` — сбор открытого `<select>`-дропдауна, `src.document.lock().unwrap()`)",
+   "date": "2026-09-23",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15009,6 +15037,9 @@
   "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)": [
    "BUG-921"
   ],
+  "js (`crates/js/src/frame_bridge.rs` — глобальный `frame_dom_dirty()` с ключом-адресом `Arc<Document>`)": [
+   "BUG-1110"
+  ],
   "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)": [
    "BUG-761"
   ],
@@ -15328,6 +15359,9 @@
   "js (оболочка `TextDecoder` в шиме `crates/js/src/shim/web_api_shim_*.js`, не натив `_lumen_text_decode`)": [
    "BUG-1083"
   ],
+  "js (тесты `crates/js/src/dom/tests/v8_webworker.rs`, `crates/js/src/worker.rs::tests_v8` — фиксированный `sleep` вместо опроса с дедлайном)": [
+   "BUG-1111"
+  ],
   "js (шим `TextDecoderStream`, `crates/js/src/shim/web_api_shim_*.js`)": [
    "BUG-1084"
   ],
@@ -15565,6 +15599,9 @@
   "layout (`crates/engine/layout/src/style/cascade.rs` — главный каскадный цикл)": [
    "BUG-1010"
   ],
+  "layout (`crates/engine/layout/src/style/cascade.rs` — сброс `inherits: false` в `compute_style`)": [
+   "BUG-683"
+  ],
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
    "BUG-445"
   ],
@@ -15589,9 +15626,6 @@
   "layout+paint": [
    "BUG-005",
    "BUG-023"
-  ],
-  "layout/dom (не локализовано — нужна перепись структур)": [
-   "BUG-683"
   ],
   "layout/js (`_lumen_get_scroll_state` fallback, `web_api_shim_mid.js`)": [
    "BUG-960"
@@ -15773,6 +15807,9 @@
   "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
    "BUG-784"
   ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_cpu_with_fonts` — CPU-очистка канвы) + эталоны `graphic_tests/dump-golden/`": [
+   "BUG-1106"
+  ],
   "paint (`crates/engine/paint/src/display_list/walk.rs`)": [
    "BUG-1037"
   ],
@@ -15892,6 +15929,9 @@
   "shell (`crates/shell/src/app/mod.rs::window_event`, ветка `WindowEvent::Resized`)": [
    "BUG-996"
   ],
+  "shell (`crates/shell/src/app/window_event/redraw_requested.rs` — сбор открытого `<select>`-дропдауна, `src.document.lock().unwrap()`)": [
+   "BUG-1109"
+  ],
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
   ],
@@ -15915,6 +15955,9 @@
   ],
   "shell (`crates/shell/src/lumen/navigation.rs::navigate_to`/`navigate_to_forced`, `crates/shell/src/app/about_to_wait.rs`), js (`crates/js/src/navigation_api.rs`)": [
    "BUG-1031"
+  ],
+  "shell (`crates/shell/src/lumen/text_input.rs::typeable_field` — блокирующий `document.lock()` на пути кадра через `focused_input_caret`)": [
+   "BUG-1108"
   ],
   "shell (`crates/shell/src/lumen/text_input.rs::typeable_field`, `navigation.rs`)": [
    "BUG-995"
@@ -16091,9 +16134,6 @@
   ],
   "не локализован до конкретного фикса (механизм сужен — см. срез 22; сами файлы флака — `svg-embedded-sizing/svg-in-iframe-{auto,fixed,percentage}.html`)": [
    "BUG-1011"
-  ],
-  "не локализовано (кандидат — `crates/engine/layout/src/style/cascade.rs`/`share_cache.rs`, трек `THREAD-4`, не подтверждено)": [
-   "BUG-1106"
   ],
   "не локализовано (подозрение — layout, расчёт ширины skip-link на developer.mozilla.org); паинт-стадия — CPU-путь растеризации": [
    "BUG-1102"

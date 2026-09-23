@@ -172,6 +172,13 @@ ONCLICK_EXACT_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
     # keys off the current domain rather than the global setting.
     "toggleSiteShields(this)": ("toggle-site-shields", {}),
     "toggleFingerprintMode(this)": ("toggle-fingerprint-mode", {}),
+    # UPD-9: the self-update infobar (`#updateBar`) and the settings-page
+    # "Обновления" block — each backed by the shell's `UpdateUi` state.
+    "dismissUpdate()": ("dismiss-update", {}),
+    "downloadUpdate()": ("download-update", {}),
+    "restartToUpdate()": ("restart-to-update", {}),
+    "toggleAutoUpdate(this)": ("toggle-auto-update", {}),
+    "checkForUpdates()": ("check-for-updates", {}),
     # BUG-422: `#view-history`/`#view-bookmarks` had no per-entry actions at
     # all. Each of these is backed by real state (`History`/`Bookmarks` stores,
     # `BookmarkPanel::selected_folder`, the OS clipboard) — see
@@ -436,6 +443,7 @@ ARIA_LABEL_RULES: list[tuple[str, dict[str, str], str]] = [
     ("copy-history-entry", {}, "Копировать ссылку"),
     ("delete-history-entry", {}, "Удалить из истории"),
     ("delete-bookmark", {}, "Удалить закладку"),
+    ("dismiss-update", {}, "Скрыть уведомление об обновлении"),
 ]
 
 _BUTTON_RE = re.compile(r"<button([^>]*)>((?:(?!</button>).)*?)</button>", re.DOTALL)

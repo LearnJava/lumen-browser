@@ -460,6 +460,13 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   S22 walk without its salvage step) and painting them through their own unclipped display list
   (`Lumen::chrome_floating_dl`), appended to `overlay_buf` right after the strip-clipped segment.
   `ROADMAP.md` CC-18 has the full revision note.
+- **UPD-9 `#updateBar` + settings "Обновления" block (2026-09-23):** the reference gained a
+  `position:fixed` `#updateBar` under `<body>` (detached as a floating panel by the shell, like
+  `#demoBar`) and a General-section block with `#updAutoToggle`/`#updCheckStatus`; five new
+  `data-action`s. Bound by `src/model/update_bar.rs` — a child module of `model` so it reuses the
+  tracked primitives (`set_text`/`set_class_token`) and stays inside `bind_model_tracked`'s
+  mutation report; `ChromeModel::update: ChromeUpdateModel`. The static `.on`/`.hidden` classes the
+  reference ships with are overwritten on every bind, so the asset's demo state never leaks.
 
 ## Deferred
 

@@ -541,6 +541,27 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .dl-actions button{ font-size:10.5px; padding:4px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); display:flex; align-items:center; gap:4px; }
 .dl-actions button:hover{ background:var(--surface-2); }
 
+/* ---------- Update bar (UPD-9) ---------- */
+.update-bar{
+  position:fixed; right:18px; top:92px; width:340px; background:var(--surface-0); color:var(--text-primary);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 10px 30px rgba(0,0,0,.18);
+  display:none; flex-direction:column; gap:10px; padding:12px; z-index:640;
+}
+.update-bar.open{ display:flex; }
+.upd-row{ display:flex; align-items:center; gap:10px; }
+.upd-icon{ width:28px; height:28px; border-radius:6px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex:none; }
+.upd-text{ flex:1; min-width:0; }
+.upd-title{ font-size:12.5px; font-weight:600; }
+.upd-meta{ font-size:10.5px; color:var(--text-secondary); margin-top:2px; }
+.upd-close{ width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); flex:none; }
+.upd-close:hover{ background:var(--surface-2); }
+.upd-actions{ display:flex; gap:6px; justify-content:flex-end; }
+.upd-actions button{ font-size:11px; padding:5px 10px; border-radius:var(--radius-sm); border:1px solid var(--accent); background:var(--accent); color:#fff; }
+.upd-actions button:hover{ opacity:.9; }
+.upd-actions button.hidden{ display:none; }
+.set-row button.upd-check{ font-size:11.5px; padding:4px 10px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-primary); flex:none; }
+.set-row button.upd-check:hover{ background:var(--surface-2); }
+
 /* ---------- Tab archive panel ---------- */
 .archive-panel{
   position:absolute; right:350px; bottom:14px; width:320px; max-height:400px; background:var(--surface-0);
@@ -852,6 +873,19 @@ body.qa-cvd .content-area{ filter:grayscale(1) contrast(.9); }
   <p style="margin-top:0"><b>О прототипе.</b> HTML/CSS/JS-прокладка для демонстрации дизайн-системы Lumen: реальный продукт рисует интерфейс через <code>wgpu</code>/<code>femtovg</code> без нативных виджетов; здесь используются обычные DOM-элементы с теми же токенами (цвета, радиусы, типографика, состояния).</p>
   <p><b>Окно — на весь экран</b> (edge-to-edge, как реальное maximized-окно), контент вкладки заполняет всё пространство. Слева — сайдбар: профиль → пространства → вкладки этого пространства (переключите пространство — список вкладок и цвет активного маркера меняются).</p>
   <p style="margin-bottom:0">Переключите профиль — рамка окна и аватар меняют цвет; в «Госте» интерфейс монохромный, в «Анонимном» — окно получает красную обводку. Нажмите «Свернуть панель», чтобы увидеть Lumen по-настоящему на весь экран.</p>
+</div>
+
+<!-- ================= UPDATE BAR (UPD-9) ================= -->
+<div class="update-bar" id="updateBar">
+  <div class="upd-row">
+    <div class="upd-icon"><svg class="icon"><use href="#i-download"/></svg></div>
+    <div class="upd-text"><div class="upd-title" id="updTitle">Доступна новая версия Lumen</div><div class="upd-meta" id="updMeta">Обновление готово к загрузке</div></div>
+    <button class="upd-close" onclick="dismissUpdate()"><svg class="icon"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="upd-actions">
+    <button id="updDownloadBtn" onclick="downloadUpdate()">Скачать</button>
+    <button class="hidden" id="updRestartBtn" onclick="restartToUpdate()">Перезапустить и обновить</button>
+  </div>
 </div>
 
 <!-- ================= STAGE ================= -->
@@ -1244,6 +1278,10 @@ body.qa-cvd .content-area{ filter:grayscale(1) contrast(.9); }
                   </div>
                   <div class="set-block"><h3>Поиск по умолчанию</h3>
                     <div class="set-row"><div class="st-text"><div class="st-title">Поисковый движок</div><div class="st-desc">Используется в омнибоксе</div></div><a class="link" href="javascript:void(0)">DuckDuckGo ▾</a></div>
+                  </div>
+                  <div class="set-block"><h3>Обновления</h3><div class="desc">Проверка не чаще раза в сутки, без cookies и идентификаторов.</div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Проверять обновления автоматически</div><div class="st-desc">Раз в сутки при запуске</div></div><div class="toggle on" id="updAutoToggle" onclick="toggleAutoUpdate(this)"><div class="thumb"></div></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Версия Lumen</div><div class="st-desc" id="updCheckStatus">Обновления не проверялись</div></div><button class="upd-check" onclick="checkForUpdates()">Проверить сейчас</button></div>
                   </div>
                 </div>
 
@@ -1897,6 +1935,23 @@ function toggleSwitch(el){
    generated chrome asset can give each a real data-action (BUG-421) — same
    visual behaviour as the generic toggleSwitch above. */
 function toggleShields(el){ toggleSwitch(el); }
+/* Update bar + settings update controls (UPD-9): demo-only stand-ins for
+   the shell's real check/download/apply flow. */
+function dismissUpdate(){ document.getElementById('updateBar').classList.remove('open'); }
+function downloadUpdate(){
+  document.getElementById('updMeta').textContent = 'Загрузка…';
+  document.getElementById('updDownloadBtn').classList.add('hidden');
+  setTimeout(function(){
+    document.getElementById('updMeta').textContent = 'Загружено и проверено';
+    document.getElementById('updRestartBtn').classList.remove('hidden');
+  }, 1200);
+}
+function restartToUpdate(){ alert('Демо: браузер перезапустится с новой версией'); }
+function toggleAutoUpdate(el){ toggleSwitch(el); }
+function checkForUpdates(){
+  document.getElementById('updCheckStatus').textContent = 'Проверка…';
+  setTimeout(function(){ document.getElementById('updateBar').classList.add('open'); document.getElementById('updCheckStatus').textContent = 'Доступна новая версия'; }, 800);
+}
 /* Per-site shields toggle inside #permPopover (BUG-411): same visual
    behaviour, its own data-action so the shell can key it to the current
    domain rather than to the global setting. */

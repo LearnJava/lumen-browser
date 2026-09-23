@@ -434,6 +434,7 @@ pub(crate) fn run_window_mode(
         downloads: download::DownloadManager::open_history(
             adblock::browser_data_dir().join("downloads.db"),
         ),
+        update_ui: update_ui::UpdateUi::new(),
         tab_strip: tabs::strip::TabStrip::new(),
         container_store: tabs::containers::ContainerStore::new(),
         bg_tabs: HashMap::new(),
@@ -640,9 +641,24 @@ pub(crate) fn run_window_mode(
     if should_restore_session(&app.source, automation_mode) {
         app.restore_session();
     }
+    // UPD-9: throttled (≤1/24 h) background update check. Not in
+    // deterministic runs (graphic tests must not grow an infobar) nor in
+    // `no_persistent_state` sessions (automation, Tor — never touch the
+    // network or `data/update/` on the user's behalf there).
+    if !app.deterministic.enabled && !config::global().no_persistent_state {
+        app.update_ui.start_check(false);
+    }
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
         return ExitCode::FAILURE;
+    }
+    // UPD-9: «Перезапустить и обновить» already swapped the binaries and
+    // saved the session; start the new one only after this process has let
+    // go of everything it holds (stores, network service).
+    let restart = app.update_ui.restart_requested();
+    drop(app);
+    if restart && let Err(e) = update::spawn_new_instance() {
+        eprintln!("update: restart failed: {e}");
     }
     ExitCode::SUCCESS
 }
