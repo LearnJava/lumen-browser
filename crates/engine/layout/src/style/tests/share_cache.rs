@@ -12,7 +12,8 @@
 //! бы стиль другого.
 
 use super::*;
-use lumen_dom::NodeId;
+use lumen_dom::{NodeId, ShadowRootMode};
+use std::collections::HashMap;
 
 const VP: Size = Size { width: 800.0, height: 600.0 };
 
@@ -90,4 +91,87 @@ fn a_combinator_rule_disables_sharing_for_the_nodes_it_could_reach() {
     let blue_fill = map.style_for(blue_svg).expect("style").svg_fill.clone();
     assert_eq!(plain_fill, SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }));
     assert_eq!(blue_fill, SvgPaint::Color(Color { r: 0, g: 0, b: 255, a: 255 }), "ancestor-dependent rule must still apply per node");
+}
+
+#[test]
+fn an_unrelated_shadow_tree_elsewhere_does_not_disable_sharing() {
+    // THREAD-4 срез 4: срез 3 нашёл, что github.com's один web-component
+    // (`SHADOW_SHEETS` непусто) гасил кэш ДОКУМЕНТО-ШИРОКО — ни одна из
+    // ~1775 иконок ни разу не попадала в кэш, хотя ни одна не имеет
+    // отношения к тому shadow-дереву. Этот тест воспроизводит ровно это:
+    // repeated icons live entirely outside the shadow host (not the host,
+    // not slotted into it, not inside its tree) and must still share.
+    clear_shadow_sheets();
+    let icon = r#"<svg class="octicon" aria-hidden="true"><path d="M1 1 2 2"></path></svg>"#;
+    let doc = lumen_html_parser::parse(&format!(
+        r#"<div id="host"></div><div class="toolbar">{}</div>"#,
+        icon.repeat(6),
+    ));
+    let body = doc.body().expect("body");
+    let host = doc.get(body).children[0];
+    let toolbar = doc.get(body).children[1];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    assert_eq!(svgs.len(), 6);
+
+    // `host` has no children, so nothing is slotted into it — the shadow
+    // tree touches only `host` itself, never the toolbar's icons.
+    let mut sheets: HashMap<NodeId, Stylesheet> = HashMap::new();
+    sheets.insert(host, lumen_css_parser::parse(":host { color: red; }"));
+    set_shadow_sheets(sheets);
+
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(".octicon { fill: rgb(1, 2, 3); }");
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+    clear_shadow_sheets();
+
+    let first = map.style_arc(svgs[0]).expect("arc");
+    for &svg in &svgs[1..] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &arc),
+            "icons unrelated to the shadow host must still share despite SHADOW_SHEETS being non-empty"
+        );
+        assert_eq!(map.style_for(svg).expect("style").svg_fill, SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }));
+    }
+}
+
+#[test]
+fn a_shadow_host_sibling_does_not_get_a_plain_siblings_cached_style() {
+    // THREAD-4 срез 4, the false-share hazard `build_key`'s doc comment
+    // describes: two `<svg class="octicon">` siblings under the same real
+    // parent (so identical `tag`+`attrs`+`inherited_ptr` — the exact key
+    // `ShareCache` looks up on), but the *second* one has its own shadow
+    // root attached and a `:host` rule inside it. If the cache handed back
+    // the first icon's plain-document style for the second, the `:host`
+    // rule would silently never apply.
+    clear_shadow_sheets();
+    let mut doc = lumen_html_parser::parse(concat!(
+        r#"<div class="toolbar">"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"</div>"#,
+    ));
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    assert_eq!(svgs.len(), 2);
+    let shadow_host = svgs[1];
+    doc.attach_shadow(shadow_host, ShadowRootMode::Open);
+
+    let mut sheets: HashMap<NodeId, Stylesheet> = HashMap::new();
+    sheets.insert(shadow_host, lumen_css_parser::parse(":host { fill: rgb(255, 0, 0); }"));
+    set_shadow_sheets(sheets);
+
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(".octicon { fill: rgb(1, 2, 3); }");
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+    clear_shadow_sheets();
+
+    let plain_fill = map.style_for(svgs[0]).expect("style").svg_fill.clone();
+    let host_fill = map.style_for(svgs[1]).expect("style").svg_fill.clone();
+    assert_eq!(plain_fill, SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }));
+    assert_eq!(
+        host_fill,
+        SvgPaint::Color(Color { r: 255, g: 0, b: 0, a: 255 }),
+        ":host rule must apply to the shadow-host sibling, not the plain sibling's cached style"
+    );
 }

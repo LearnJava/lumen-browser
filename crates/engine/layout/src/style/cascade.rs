@@ -1027,10 +1027,6 @@ pub(crate) fn compute_style_shareable(
     // live for the rest of this function, so the `&Declaration` references pushed
     // into `matched` outlive the (closure-scoped) thread-local borrow.
     let any_shadow = SHADOW_SHEETS.with(|c| !c.borrow().is_empty());
-    // `:host`/`::slotted` scoping below is keyed on `SHADOW_HOST_SCOPE`
-    // thread-local state, not on anything the structural key captures —
-    // disqualify sharing document-wide rather than reason per-node about it.
-    shareable &= !any_shadow;
     let own_shadow: Option<Stylesheet> = if any_shadow && doc.is_shadow_host(node) {
         SHADOW_SHEETS.with(|c| c.borrow().get(&node).cloned())
     } else {
@@ -1106,6 +1102,14 @@ pub(crate) fn compute_style_shareable(
     } else {
         None
     };
+    // THREAD-4 срез 4: shadow disqualification is contextual, not
+    // document-wide. `own_shadow`/`host_shadow`/`interior_shadow` above
+    // already answer the only question that matters for `node` itself — is
+    // it a shadow host, a slotted light child, or inside a shadow tree? A
+    // node that is none of the three never touches `SHADOW_HOST_SCOPE` or a
+    // shadow stylesheet during its own cascade above, so an unrelated
+    // shadow tree elsewhere in the document cannot change its result.
+    shareable &= own_shadow.is_none() && host_shadow.is_none() && interior_shadow.is_none();
     if let Some(ref shadow) = interior_shadow {
         let base = next_rule_idx
             + own_shadow.as_ref().map_or(0, |s| s.rules.len())
