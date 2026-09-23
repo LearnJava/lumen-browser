@@ -35,6 +35,6 @@
 2058	crates/shell/src/chrome_ui.rs
 2039	crates/engine/layout/src/style/tests/values.rs
 2036	crates/shell/src/tests/bug341_census.rs
-2010	crates/shell/src/app/window_event/redraw_requested.rs
+2044	crates/shell/src/app/window_event/redraw_requested.rs
 2009	crates/engine/paint/src/display_list/tests/anim_and_chrome.rs
 2002	crates/js/src/canvas2d.rs
