@@ -46,8 +46,13 @@
 //! [`crate::style::cascade::selector_is_share_safe`]'s doc comment for the
 //! induction). That is why `Descendant`/`Child` combinators are allowed to
 //! mark a result shareable — only sibling combinators and anything the key
-//! does not pin at the *subject* node itself (pseudo-classes, non-`class`/
-//! `id` attribute selectors, Shadow DOM, `@scope`) still disqualify it; see
+//! does not pin, at either the *subject* node itself (attribute selectors
+//! and `:first-child`/`:last-child`/`:only-child` are the two exceptions,
+//! BUG-1112 срезы 3-4 — `attrs`/`is_first_child`/`is_last_child` pin them
+//! directly, no induction needed) or an ancestor (nothing there is pinned,
+//! so any pseudo-class/non-`class`/`id` attribute selector on a `tail`
+//! compound still disqualifies), plus Shadow DOM and `@scope`, still
+//! disqualify it; see
 //! [`crate::style::cascade::compute_style_shareable`]'s doc comment for the
 //! exact conditions, including why this slice is scoped to SVG
 //! presentational elements only.
@@ -73,6 +78,67 @@ struct ShareKey {
     /// `&ComputedStyle as *const _ as usize` — allocation identity of the
     /// `inherited` parameter, not its content (see module doc).
     inherited_ptr: usize,
+    /// BUG-1112 срез 4: whether `node` is its parent's first/last
+    /// element-child (same predicates `matching/forms.rs`'s
+    /// `:first-child`/`:last-child` matcher uses) — but only when
+    /// [`sheet_has_position_dependent_subject`] found the current stylesheet
+    /// actually contains a `:first-child`/`:last-child`/`:only-child` subject
+    /// selector anywhere; `false`/`false` otherwise, unconditionally, on
+    /// every node. That gate matters: this field is a direct per-node fact
+    /// (no `inherited_ptr`-style induction needed to prove two colliding
+    /// keys agree on it), so it soundly lets such a subject pseudo-class
+    /// stop disqualifying sharing (see `cascade::selector_is_share_safe`) —
+    /// but adding it to the key *unconditionally* costs real sharing on
+    /// every OTHER document, splitting siblings that used to collide (most
+    /// repeated groups have exactly one true first-child and one true
+    /// last-child) even when no rule in the sheet cares about position at
+    /// all. Gating on a one-time-per-pass sheet scan keeps that cost paid
+    /// only where it buys something: measured on github.com/lenta.ru,
+    /// `repeated_svg_icons_share_the_cascade_without_changing_the_result`
+    /// (a plain `.octicon { fill }`-only sheet, no position selectors) is
+    /// the regression this gate exists to prevent — first version of this
+    /// срез broke it by omitting the gate entirely.
+    is_first_child: bool,
+    /// See [`Self::is_first_child`].
+    is_last_child: bool,
+}
+
+/// BUG-1112 срез 4: `true` when `sheet` (or any of its `@layer`/`@media`/
+/// `@supports` blocks — the same set `cascade.rs`'s `shareable &=
+/// rule.selectors.iter().all(selector_is_share_safe)` loop walks) contains a
+/// selector whose *subject* compound carries `:first-child`/`:last-child`/
+/// `:only-child`. Scans every rule's every selector once per `ShareCache`
+/// lifetime (one pass), not per node — see [`ShareCache::compute`]'s caller.
+///
+/// Deliberately coarse: does not check whether the selector could ever reach
+/// an SVG-presentational element, only whether the pseudo-class exists
+/// anywhere in the subject position. A `false` positive here only costs a
+/// little extra key granularity (still sound, just less sharing than
+/// optimal); a `false` negative would be unsound (a real position rule could
+/// then reach a node whose key was never disambiguated).
+fn sheet_has_position_dependent_subject(sheet: &Stylesheet) -> bool {
+    fn subject(c: &lumen_css_parser::ComplexSelector) -> &lumen_css_parser::CompoundSelector {
+        c.tail.last().map(|(_, comp)| comp).unwrap_or(&c.head)
+    }
+    fn subject_has_position_pseudo(c: &lumen_css_parser::ComplexSelector) -> bool {
+        subject(c).parts.iter().any(|p| {
+            matches!(
+                p,
+                lumen_css_parser::SimpleSelector::PseudoClass(
+                    lumen_css_parser::PseudoClass::FirstChild
+                        | lumen_css_parser::PseudoClass::LastChild
+                        | lumen_css_parser::PseudoClass::OnlyChild
+                )
+            )
+        })
+    }
+    fn rules_have_it(rules: &[lumen_css_parser::Rule]) -> bool {
+        rules.iter().any(|r| r.selectors.iter().any(subject_has_position_pseudo))
+    }
+    rules_have_it(&sheet.rules)
+        || sheet.layers.iter().any(|l| rules_have_it(&l.rules))
+        || sheet.media_rules.iter().any(|m| rules_have_it(&m.rules))
+        || sheet.supports_rules.iter().any(|s| rules_have_it(&s.rules))
 }
 
 /// Builds the structural key for `node`, or `None` when `node` is not an
@@ -91,7 +157,12 @@ struct ShareKey {
 /// having an attached shadow root, a `None` here is the only thing that
 /// stops the plain sibling's cached document-scope style from being handed
 /// back for the shadow-host sibling's `:host`-scoped one.
-fn build_key(doc: &Document, node: NodeId, inherited: &ComputedStyle) -> Option<ShareKey> {
+fn build_key(
+    doc: &Document,
+    node: NodeId,
+    inherited: &ComputedStyle,
+    track_position: bool,
+) -> Option<ShareKey> {
     let NodeData::Element { name, attrs } = &doc.get(node).data else {
         return None;
     };
@@ -109,10 +180,24 @@ fn build_key(doc: &Document, node: NodeId, inherited: &ComputedStyle) -> Option<
         .map(|a| (Box::from(a.name.local.as_ref()), Box::from(a.value.as_str())))
         .collect();
     pairs.sort();
+    // BUG-1112 срез 4: real values only when the sheet actually has a rule
+    // that needs them — see `ShareKey::is_first_child`'s doc comment for why
+    // `false`/`false` unconditionally otherwise, not a per-node computation
+    // that is merely unused.
+    let (is_first_child, is_last_child) = if track_position {
+        (
+            super::matching::forms::is_first_element_child(doc, node),
+            super::matching::forms::is_last_element_child(doc, node),
+        )
+    } else {
+        (false, false)
+    };
     Some(ShareKey {
         tag: Box::from(name.local.as_ref()),
         attrs: pairs,
         inherited_ptr: inherited as *const ComputedStyle as usize,
+        is_first_child,
+        is_last_child,
     })
 }
 
@@ -129,6 +214,13 @@ pub(crate) struct ShareCache {
     /// reported the result unsafe to cache.
     key_none: usize,
     key_some_unshareable: usize,
+    /// BUG-1112 срез 4: [`sheet_has_position_dependent_subject`]'s result for
+    /// this pass's `sheet`, computed once on the first [`Self::compute`] call
+    /// and reused after — every call in one `ShareCache` lifetime receives
+    /// the same `sheet` (see `counters::precompute_counters`'s single
+    /// `sheet: &Stylesheet` parameter threaded through the whole walk), so
+    /// scanning it again per node would be pure waste.
+    track_position: Option<bool>,
 }
 
 impl ShareCache {
@@ -158,7 +250,9 @@ impl ShareCache {
         viewport: Size,
         dark_mode: bool,
     ) -> Arc<ComputedStyle> {
-        let key = build_key(doc, node, inherited);
+        let track_position =
+            *self.track_position.get_or_insert_with(|| sheet_has_position_dependent_subject(sheet));
+        let key = build_key(doc, node, inherited, track_position);
         if let Some(hit) = key.as_ref().and_then(|k| self.entries.get(k)) {
             if Self::stats_enabled() {
                 self.hits += 1;

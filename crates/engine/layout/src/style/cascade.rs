@@ -1646,12 +1646,20 @@ pub(crate) fn compute_style_shareable(
 /// share the same structural key, with a match result that depends on
 /// nothing the key does not capture.
 ///
-/// Every compound (subject and any ancestor compounds in `tail`) must be
+/// Every ancestor compound (any entry in `tail` before the last) must be
 /// built only from `Type`/`Class`/`Id`/`Universal` parts — no pseudo-class
-/// (including harmless-looking `:first-child`/`:hover`) and no attribute
-/// selector beyond `class`/`id`, all of which [`build_key`](super::share_cache)
-/// pins exactly for the *subject* node, but which are unverified for an
-/// ancestor a combinator reaches into.
+/// and no attribute selector, none of which [`build_key`](super::share_cache)
+/// pins for an ancestor a combinator reaches into. The *subject* compound
+/// (the last `tail` entry, or `head` when `tail` is empty) allows a few more
+/// parts that `build_key` pins directly for the node itself, and are
+/// therefore just as sound as `Type`/`Class`/`Id`: `Root` and `Attribute`
+/// (BUG-1112 срез 3, via `attrs`), `FirstChild`/`LastChild`/`OnlyChild`
+/// (BUG-1112 срез 4, via `is_first_child`/`is_last_child`), and
+/// `Where`/`Is`/`Not` (BUG-1112 срез 4, recursively — safe exactly when
+/// every selector in their argument list is) — see `compound_is_share_safe`
+/// below for exactly which, and `complex_is_share_safe`'s doc comment for
+/// how "subject vs ancestor" generalises to "describes the key node vs not"
+/// once recursion can cross into a `:where(..)` argument.
 ///
 /// `Descendant`/`Child` combinators ARE allowed (BUG-1112, reversing THREAD-4
 /// срез 2's blanket ban): [`super::share_cache`]'s `inherited_ptr` field is
@@ -1671,69 +1679,153 @@ pub(crate) fn compute_style_shareable(
 /// stay banned: sibling position is not part of this key at any level, so
 /// nothing here proves two colliding nodes even have comparable siblings.
 fn selector_is_share_safe(sel: &lumen_css_parser::ComplexSelector) -> bool {
-    /// `is_subject` — the head compound (the node itself) vs a `tail`
-    /// ancestor compound. See the `PseudoClass::Root` arm below for why the
-    /// distinction matters.
-    fn compound_is_share_safe(compound: &lumen_css_parser::CompoundSelector, is_subject: bool) -> bool {
-        compound.parts.iter().all(|part| match part {
-            lumen_css_parser::SimpleSelector::Type(_)
-            | lumen_css_parser::SimpleSelector::Class(_)
-            | lumen_css_parser::SimpleSelector::Id(_)
-            | lumen_css_parser::SimpleSelector::Universal => true,
-            // BUG-1112 срез 3: `:root` matches only the document's root
-            // element (always `<html>`), which is never
-            // `is_svg_presentational_element` — the caller
-            // (`compute_style_shareable`) already gates this whole check on
-            // that being true for `node`. So as the *subject* compound,
-            // `:root` is a hard, unconditional non-match for every node this
-            // function is ever asked about — as safe as a `Type` mismatch,
-            // for any key. Live instrumentation on github.com (BUG-1112 срез
-            // 2) found this exact pattern (`:root { --custom-prop: … }`, the
-            // common way to declare CSS custom properties) disqualifying
-            // every single SVG-presentational node in the document, because
-            // the candidate index hands `:root` back for every query (it has
-            // no type/class/id to bucket on) — `share_insert` stayed 0 on
-            // every real site measured. NOT extended to the ancestor
-            // (`tail`) position: there, `:root` composed with `Child` would
-            // additionally need "is this node's parent literally the root"
-            // reasoning the `inherited_ptr` induction does not cover (it
-            // only proves identity of the *SVG-presentational* segment of
-            // the ancestor chain, not that the chain terminates at `<html>`
-            // at any particular depth) — see the module doc's induction.
-            lumen_css_parser::SimpleSelector::PseudoClass(lumen_css_parser::PseudoClass::Root) => is_subject,
-            // BUG-1112 срез 3: an attribute selector on the *subject*
-            // compound is a pure function of `node`'s own attribute set —
-            // exactly what `ShareKey.attrs` already pins byte-for-byte (see
-            // `share_cache.rs`'s module doc: "full attribute set, not just
-            // class/id"). Two nodes with an equal key therefore have
-            // identical attributes, so `matches_complex` on any operator
-            // (`=`, `*=`, `^=`, …) against those attributes is guaranteed to
-            // agree between them — same soundness argument as `Class`/`Id`
-            // above, just not restricted to those two attribute names. The
-            // original restriction to `Class`/`Id` only was more
-            // conservative than the key actually requires. Still not
-            // extended to `tail` (ancestor) compounds: the key has no field
-            // for an ancestor's attributes, only the subject's. Second
-            // blocker live instrumentation found after the `:root` fix
-            // above: github.com's dark-mode custom properties
-            // (`[data-color-mode=light][data-light-theme*=light] { … }`)
-            // disqualified every SVG-presentational node the same way.
-            lumen_css_parser::SimpleSelector::Attribute(_) => is_subject,
-            _ => false,
-        })
-    }
+    complex_is_share_safe(sel, true)
+}
+
+/// `describes_key_node` — does a match of `sel` at this recursion depth speak
+/// about the actual node [`ShareKey`](super::share_cache) was built for
+/// (`true`), or about some ancestor/relative `sel`'s own subject reaches into
+/// (`false`)? The top-level call from [`selector_is_share_safe`] starts
+/// `true`: the outer selector's own subject IS the key's node. Recursing into
+/// a `:where(..)`/`:is(..)`/`:not(..)` argument list (BUG-1112 срез 4) keeps
+/// that same flag — those pseudo-classes match the SAME element the compound
+/// they live in belongs to, so if the compound holding them describes the key
+/// node, so does every inner selector's own subject; if the compound is
+/// itself an ancestor's, so is theirs.
+fn complex_is_share_safe(sel: &lumen_css_parser::ComplexSelector, describes_key_node: bool) -> bool {
     // `ComplexSelector::head` is the LEFTMOST (topmost-ancestor) compound and
     // `tail`'s entries run rightward — `matching.rs::matches_complex` matches
     // its `compounds[last]` (the last `tail` entry, or `head` when `tail` is
     // empty) against `node` itself, so that is the one and only compound
-    // `is_subject` must be `true` for; `head` and every earlier `tail` entry
-    // are ancestors.
+    // whose own `describes_key_node` can stay whatever the caller passed in;
+    // every earlier compound is an ancestor of it, `describes_key_node=false`
+    // regardless of the caller's flag.
     let last_tail_idx = sel.tail.len().checked_sub(1);
-    compound_is_share_safe(&sel.head, last_tail_idx.is_none())
+    compound_is_share_safe(&sel.head, last_tail_idx.is_none() && describes_key_node)
         && sel.tail.iter().enumerate().all(|(i, (comb, compound))| {
             matches!(
                 comb,
                 lumen_css_parser::Combinator::Descendant | lumen_css_parser::Combinator::Child
-            ) && compound_is_share_safe(compound, last_tail_idx == Some(i))
+            ) && compound_is_share_safe(compound, last_tail_idx == Some(i) && describes_key_node)
         })
+}
+
+fn compound_is_share_safe(compound: &lumen_css_parser::CompoundSelector, describes_key_node: bool) -> bool {
+    compound.parts.iter().all(|part| match part {
+        lumen_css_parser::SimpleSelector::Type(_)
+        | lumen_css_parser::SimpleSelector::Class(_)
+        | lumen_css_parser::SimpleSelector::Id(_)
+        | lumen_css_parser::SimpleSelector::Universal => true,
+        // BUG-1112 срез 3: `:root` matches only the document's root
+        // element (always `<html>`), which is never
+        // `is_svg_presentational_element` — the caller
+        // (`compute_style_shareable`) already gates this whole check on
+        // that being true for `node`. So when this compound describes the
+        // key node, `:root` is a hard, unconditional non-match for every
+        // node this function is ever asked about — as safe as a `Type`
+        // mismatch, for any key. Live instrumentation on github.com
+        // (BUG-1112 срез 2) found this exact pattern (`:root { --accent: … }`,
+        // the common way to declare CSS custom properties) disqualifying
+        // every single SVG-presentational node in the document, because
+        // the candidate index hands `:root` back for every query (it has
+        // no type/class/id to bucket on) — `share_insert` stayed 0 on
+        // every real site measured. NOT extended to the ancestor case
+        // (`describes_key_node=false`): there, `:root` composed with
+        // `Child` would additionally need "is this node's parent literally
+        // the root" reasoning the `inherited_ptr` induction does not cover
+        // (it only proves identity of the *SVG-presentational* segment of
+        // the ancestor chain, not that the chain terminates at `<html>` at
+        // any particular depth) — see the module doc's induction.
+        lumen_css_parser::SimpleSelector::PseudoClass(lumen_css_parser::PseudoClass::Root) => {
+            describes_key_node
+        }
+        // BUG-1112 срез 3: an attribute selector, when it describes the key
+        // node, is a pure function of `node`'s own attribute set — exactly
+        // what `ShareKey.attrs` already pins byte-for-byte (see
+        // `share_cache.rs`'s module doc: "full attribute set, not just
+        // class/id"). Two nodes with an equal key therefore have identical
+        // attributes, so `matches_complex` on any operator (`=`, `*=`,
+        // `^=`, …) against those attributes is guaranteed to agree between
+        // them — same soundness argument as `Class`/`Id` above, just not
+        // restricted to those two attribute names. Still not extended to
+        // the ancestor case: the key has no field for an ancestor's
+        // attributes, only the key node's own. Second blocker live
+        // instrumentation found after the `:root` fix above: github.com's
+        // dark-mode custom properties
+        // (`[data-color-mode=light][data-light-theme*=light] { … }`)
+        // disqualified every SVG-presentational node the same way.
+        lumen_css_parser::SimpleSelector::Attribute(_) => describes_key_node,
+        // BUG-1112 срез 4: `:first-child`/`:last-child`/`:only-child`, when
+        // they describe the key node, are a pure function of `node`'s own
+        // sibling position, which `ShareKey.is_first_child`/`is_last_child`
+        // (`share_cache.rs::build_key`) pins directly whenever any rule in
+        // the sheet needs them — same soundness shape as `Attribute` above
+        // (a per-node fact in the key, no ancestor-identity induction
+        // needed). Live instrumentation (BUG-1112 срез 3) found
+        // `.pagination > :first-child`/`:last-child` and
+        // `.btn .octicon:only-child` disqualifying every SVG-presentational
+        // node in the document via `RuleIndex`'s `universal` bucket (no
+        // type/class/id to index these pseudo-classes on, so they are a
+        // "candidate" for every node regardless of whether it is ever a
+        // descendant of `.pagination`/`.btn`). Still not extended to the
+        // ancestor case: the key has no field for an ancestor's sibling
+        // position, only the key node's own.
+        lumen_css_parser::SimpleSelector::PseudoClass(
+            lumen_css_parser::PseudoClass::FirstChild
+            | lumen_css_parser::PseudoClass::LastChild
+            | lumen_css_parser::PseudoClass::OnlyChild,
+        ) => describes_key_node,
+        // BUG-1112 срез 4: `:where(..)`/`:is(..)`/`:not(..)` each match the
+        // SAME element the compound they live in belongs to — CSS Selectors
+        // L4 §5.4/§17 define all three purely in terms of whether the
+        // *argument* selectors match that element (negated, for `:not`;
+        // "any of", for `:is`/`:where"; the specificity/polarity difference
+        // between them is irrelevant here, only agreement between two
+        // colliding-key nodes is). So each is share-safe exactly when every
+        // selector in its argument list is, recursed with the SAME
+        // `describes_key_node` this compound was given — not
+        // unconditionally `true`, because the compound itself may be an
+        // ancestor's (see `complex_is_share_safe`'s doc comment). Live
+        // instrumentation found this the dominant remaining blocker on
+        // github.com: Primer (GitHub's design system) compiles nearly every
+        // component class to a `:where(.prc-X-Y-Z)` wrapper for
+        // zero-specificity overridability, e.g.
+        // `:where(.prc-Link-Link-9ZwDx):where([data-muted=true]):hover` —
+        // each `:where()` here wraps exactly one `Class`/`Attribute`
+        // selector, already proven safe above; only the trailing `:hover`
+        // (correctly, a dynamic state, not a structural fact) keeps such
+        // rules unsafe as a whole.
+        lumen_css_parser::SimpleSelector::PseudoClass(
+            lumen_css_parser::PseudoClass::Where(list)
+            | lumen_css_parser::PseudoClass::Is(list)
+            | lumen_css_parser::PseudoClass::Not(list),
+        ) => list.iter().all(|inner| complex_is_share_safe(inner, describes_key_node)),
+        // BUG-1112 срез 4: a `PseudoElement` (`::before`, `::placeholder`,
+        // `::-webkit-*`, `::slotted(..)`, …) makes `matches_simple`
+        // (`matching.rs:223`) return `false` unconditionally, for ANY node,
+        // in the normal element-cascade path this crate's `matches_complex`
+        // walks — [`ShareCache::compute`] only ever calls
+        // `compute_style_shareable` for real DOM elements (`build_key`
+        // requires `NodeData::Element`), never for a synthesized
+        // `::before`/`::after` target (`compute_pseudo_element_style` is a
+        // separate function this cache never touches), so that hard
+        // non-match is not conditional on anything a key could fail to
+        // capture — both colliding nodes get `false`, always. Safe
+        // regardless of `describes_key_node`, unlike every other exception
+        // above. `::slotted(..)` specifically is matched through a
+        // dedicated function (`matches_slotted_complex`) entirely outside
+        // this crate's normal `rule.selectors`/`matches_complex` walk, but
+        // that path only ever runs when `host_shadow.is_some()` — which
+        // `compute_style_shareable` already zeroes `shareable` for
+        // unconditionally (`own_shadow.is_none() && host_shadow.is_none()
+        // && interior_shadow.is_none()`), so there is no interaction to
+        // reason about. Live instrumentation (github.com) found this the
+        // last blocker after срез 4's `:where`/`:is`/`:not` fix: bare
+        // `::placeholder`/`::-webkit-calendar-picker-indicator`/… selectors
+        // (no type/class/id — `RuleIndex`'s `universal` bucket) were
+        // disqualifying every one of the 391 SVG-presentational candidates
+        // in the document.
+        lumen_css_parser::SimpleSelector::PseudoElement(_) => true,
+        _ => false,
+    })
 }

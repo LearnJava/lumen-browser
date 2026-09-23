@@ -1183,7 +1183,11 @@ pub(in crate::style) fn previous_element_sibling(doc: &Document, node: NodeId) -
         .find(|&id| is_element(doc, id))
 }
 
-fn is_first_element_child(doc: &Document, node: NodeId) -> bool {
+/// `pub(in crate::style)`, not private — BUG-1112 срез 4:
+/// [`crate::style::share_cache::build_key`] reuses this exact predicate to
+/// pin sibling position in `ShareKey`, so `:first-child` can be proven safe
+/// for sharing instead of unconditionally disqualifying it.
+pub(in crate::style) fn is_first_element_child(doc: &Document, node: NodeId) -> bool {
     let Some(parent) = doc.get(node).parent else {
         return false;
     };
@@ -1195,7 +1199,8 @@ fn is_first_element_child(doc: &Document, node: NodeId) -> bool {
         == Some(node)
 }
 
-fn is_last_element_child(doc: &Document, node: NodeId) -> bool {
+/// `pub(in crate::style)` for the same reason as [`is_first_element_child`].
+pub(in crate::style) fn is_last_element_child(doc: &Document, node: NodeId) -> bool {
     let Some(parent) = doc.get(node).parent else {
         return false;
     };

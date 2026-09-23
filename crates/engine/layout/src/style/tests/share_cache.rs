@@ -298,6 +298,94 @@ fn a_subject_dynamic_pseudo_class_still_disables_sharing_behind_a_combinator() {
 }
 
 #[test]
+fn a_subject_first_child_pseudo_class_does_not_disable_sharing_when_irrelevant() {
+    // BUG-1112 срез 4: live instrumentation (срез 3) found
+    // `.pagination > :first-child`/`.btn .octicon:only-child`-shaped rules
+    // disqualifying every SVG-presentational node in the document, because
+    // `:first-child`'s subject has no type/class/id — `RuleIndex` buckets it
+    // as `universal`, a "candidate" for every node regardless of whether it
+    // is ever a descendant of `.pagination`/`.btn`. None of the icons here
+    // are descendants of `.pagination` at all, so the rule never actually
+    // applies to them — but срез 3's fix (`Attribute`/`Root` safe on subject)
+    // did not yet cover this shape; this test is the case срез 4 lands.
+    //
+    // Once any rule in the sheet has a `:first-child`/`:last-child`/
+    // `:only-child` subject anywhere, `ShareKey` starts tracking real sibling
+    // position for every node (`sheet_has_position_dependent_subject`'s
+    // sheet-wide, not per-selector, gate — see its doc comment for why: a
+    // per-node reachability check would cost as much as just running
+    // `matches_complex`). So among 6 siblings, only the true first and true
+    // last get their own singleton key; the middle 4 still collide and
+    // share — that partial win (4/6, not 6/6) is what this test checks, not
+    // uniform sharing across every position.
+    clear_shadow_sheets();
+    let doc = octicon_group(6);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".pagination > :first-child { color: red; } .octicon { fill: rgb(1, 2, 3); }",
+    );
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    // Middle siblings (neither first nor last) share one allocation despite
+    // the position-dependent rule in the sheet — it never reaches them, and
+    // their `is_first_child`/`is_last_child` key fields are both `false`.
+    let middle = map.style_arc(svgs[1]).expect("arc");
+    for &svg in &svgs[2..5] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&middle, &arc),
+            "middle siblings, never reachable by the :first-child rule, must still share"
+        );
+    }
+    for &svg in &svgs {
+        assert_eq!(
+            map.style_for(svg).expect("style").svg_fill,
+            SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+            "every icon's own style must stay correct regardless of sharing"
+        );
+    }
+}
+
+#[test]
+fn a_subject_first_child_pseudo_class_still_applies_correctly_when_relevant() {
+    // Companion positive check: when the rule DOES reach real siblings (one
+    // is genuinely first-child, the other is not), sharing must still give
+    // each its own correct answer, not the other's — same shape as the
+    // pre-existing `a_subject_dynamic_pseudo_class_still_disables_sharing_
+    // behind_a_combinator` test, but now exercising the newly-allowed
+    // sharing path instead of the disabled one: the two icons here have
+    // different `is_first_child`/`is_last_child` key fields, so they were
+    // never going to collide on the key in the first place.
+    let doc = lumen_html_parser::parse(concat!(
+        r#"<div class="toolbar">"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"</div>"#,
+    ));
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".toolbar > :first-child { fill: rgb(255, 0, 0); } .octicon { fill: rgb(1, 2, 3); }",
+    );
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    assert_eq!(
+        map.style_for(svgs[0]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 255, g: 0, b: 0, a: 255 }),
+        ":first-child must still win on the actual first child"
+    );
+    assert_eq!(
+        map.style_for(svgs[1]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+        "and must not leak onto its sibling now that :first-child is share-safe"
+    );
+}
+
+#[test]
 fn a_shadow_host_sibling_does_not_get_a_plain_siblings_cached_style() {
     // THREAD-4 срез 4, the false-share hazard `build_key`'s doc comment
     // describes: two `<svg class="octicon">` siblings under the same real
