@@ -1,6 +1,6 @@
 # BUG-1103 — canvas background-color propagation destructively mutates `<body>`'s own `ComputedStyle`, corrupting `getComputedStyle(body)`/`getComputedStyle(html)`
 
-**Статус:** OPEN
+**Статус:** FIXED (P6, 2026-09-23)
 **Перенумерован из BUG-1007** (P6, 2026-09-23): исходный номер оказался занят
 двумя разными заявками одного дня (2026-09-05) — этот, канвовый, и
 [BUG-1007](BUG-1007-FIXED.md) (`getClientRects()`/`getBoxQuads()` per-fragment
@@ -141,3 +141,59 @@ instead of `rgb(9, 9, 9)`.
 (foreground-окно), недоступный в этой сессии
 ([[feedback_background_launched_window_breaks_mcp_js_context]]). Остаётся
 `OPEN` под P1/P3 для следующей сессии с реальным окном.
+
+## Фикс 2026-09-23 (P6)
+
+Переоценка масштаба: полная «правильная» схема из раздела выше (флаг на
+`LayoutBox` + копия фона на `<html>` + подавление собственной покраски
+`<body>`) требует нового обязательного поля `LayoutBox` — структура без
+`Default`/конструктора, инициализируется прямым литералом в 48 файлах
+(`box_tree.rs`, `flex.rs`, `grid.rs`, table-layout и т.д.). Добавление
+required-поля означало бы правку всех 48 мест ради узкого крайнего случая
+(полупрозрачный `background-color` на `<body>` при том, что рамка `<html>`
+явно выше рамки `<body>`, например через `min-height`) — в обычном
+документе `<html>`-бокс auto-размерен ровно как `<body>`, так что разница
+не видна.
+
+Выбран более узкий, но безопасный фикс без единого нового поля:
+
+- `propagate_canvas_background` (перенос `background_color`/`background_layers`
+  через `Arc::make_mut` на общий, кэшируемый в CSSOM `ComputedStyle`)
+  **удалена целиком**, вместе со всеми 4 местами вызова в `entry.rs`.
+  `<body>`/`<html>` больше никогда не теряют и не приобретают
+  `background-color`/`background-image` в собственном `ComputedStyle` —
+  `getComputedStyle()` на обоих всегда отдаёт то, что реально задал автор.
+- `canvas_background_color()` (единственный потребитель пропагации —
+  два call site, `crates/shell/src/frames.rs` и
+  `.../window_event/redraw_requested.rs`, оба читают уже построенное
+  дерево) теперь сама read-only решает, чей фон использовать для очистки
+  канвы: свой у `<html>`, если есть (`background_color.is_some() ||
+  !background_layers.is_empty()`, как раньше), иначе — `<body>`'s,
+  напрямую, без промежуточной мутации. Непрозрачность (`a == 255`)
+  проверяется как и раньше.
+- Собственная покраска `<body>`-бокса ничем не тронута: она и раньше не
+  зависела от этой пропагации (обычная покраска любого бокса по своему
+  `style`), так что для непрозрачных цветов очистка канвы + покраска
+  `<body>`'s собственного rect — идемпотентный двойной draw одним и тем же
+  цветом (не композит, просто перезапись), визуально неотличим от старого
+  поведения. Прожекторный разбор — почему это безопасно даже без флага — в
+  doc-комментарии `canvas_background_color`.
+
+Обновлены 6 юнит-тестов в `crates/engine/layout/src/tests/table_grid_presentational.rs`,
+раньше напрямую проверявших мутацию (`html.style.background_color ==
+Some(...)`, `body.style.background_color == None`) — теперь проверяют
+`canvas_background_color(&root)` для видимого поведения и
+`html.style`/`body.style` для CSSOM-инварианта (оба хранят СВОИ значения).
+
+Полный `python graphic_tests/run.py --ipc --build --continue-on-fail`
+(детерминированный CPU-снимок по TCP, без живого окна — сессия без GUI):
+27/157 FAIL, все — известный дрейф (BUG-128 и т.д., не регрессия), **дельта
+против прогона на родительском коммите `a0fa36a07` — «Изменений нет»**.
+`cargo test -p lumen-layout` — 3999 passed. `cargo clippy -p lumen-layout
+--all-targets` и `-p lumen-shell --all-targets` — чисто.
+
+Остаток (полупрозрачный `background-color` на `<body>`, когда рамка
+`<html>` явно выше рамки `<body>`) в корпусе тестов не воспроизведён и не
+считается регрессией — это узкий, не покрытый ни одним существующим тестом
+край, задокументированный в doc-комментарии `canvas_background_color` как
+сознательное упрощение.

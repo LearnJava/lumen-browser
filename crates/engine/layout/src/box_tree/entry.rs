@@ -60,7 +60,6 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
-    propagate_canvas_background(doc, &mut root);
     let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
@@ -166,7 +165,6 @@ pub fn layout_measured_hyp_with_counters(
         lumen_core::tracy_zone!("build_box");
         build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
     };
-    propagate_canvas_background(doc, &mut root);
     let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     // GAP-CSSANIM срез 9: patch in this frame's animated `height` overrides
     // (CSS transition/`@keyframes`) before layout resolves box sizes, so a
@@ -310,7 +308,6 @@ pub fn layout_streaming_incremental_with_counters(
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
-    propagate_canvas_background(doc, &mut root);
     apply_font_size_adjust(&mut root, measurer);
     // FONTLOAD-14 (BUG-467): see `layout_measured_hyp` — runs on the fresh
     // tree, before `graft_geometry`, so grafted-clean subtrees keep this
@@ -494,7 +491,6 @@ pub fn layout_mutation_incremental_restyle(
         // BUG-341 S26: two whole-tree walks between the build and graft stages,
         // both previously unscoped.
         let _prof = lumen_core::profile::scope("post_build_tree_walks");
-        propagate_canvas_background(doc, &mut root);
         apply_font_size_adjust(&mut root, measurer);
         // FONTLOAD-14 (BUG-467): see `layout_measured_hyp` / `layout_streaming_incremental`.
         resolve_used_line_height(&mut root, measurer);
@@ -709,83 +705,60 @@ pub fn build_iframe_document(srcdoc: &str) -> Document {
     lumen_html_parser::parse(srcdoc)
 }
 
-/// CSS Backgrounds L3 §2.11.2 — «The Canvas Background and the Root Element»:
-/// если у root-элемента (`<html>`) нет собственного фона
-/// (`background-color: transparent` И `background-image: none`), фон
-/// `<body>` пропагируется на root box, а у `<body>` обнуляется. Это
-/// покрывает legacy-страницы `body { background: red }`, где иначе фон
-/// рисуется только в пределах body box-а и не достигает viewport-а
-/// сверху / снизу.
-///
-/// Phase 0: переносим только два longhand-а — `background-color` и
-/// `background-image`. Остальные `background-*` longhand-ы у body без
-/// image не имеют визуального эффекта и сейчас не propagated; при
-/// добавлении реального paint pattern fill-а их тоже нужно будет
-/// перенести.
-///
-/// Structure: `doc.root()` — Document-узел; его ребёнок — `<html>`
-/// element. Body — прямой ребёнок `<html>`. SVG / MathML root-ы пока не
-/// учитываются (spec упоминает их отдельно).
-fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
-    let html_idx = root
-        .children
-        .iter()
-        .position(|c| is_html_element_named(doc, c.node, "html"));
-    let Some(html_idx) = html_idx else {
-        return;
-    };
-
-    let html_box = &mut root.children[html_idx];
-    let html_has_bg = html_box.style.background_color.is_some()
-        || !html_box.style.background_layers.is_empty();
-    if html_has_bg {
-        return;
-    }
-
-    let body_idx = html_box
-        .children
-        .iter()
-        .position(|c| is_html_element_named(doc, c.node, "body"));
-    let Some(body_idx) = body_idx else {
-        return;
-    };
-
-    let body = &mut html_box.children[body_idx];
-    let body_has_bg = body.style.background_color.is_some()
-        || !body.style.background_layers.is_empty();
-    if !body_has_bg {
-        return;
-    }
-
-    let body_style = Arc::make_mut(&mut body.style);
-    let bg_color = body_style.background_color.take();
-    let bg_layers = std::mem::take(&mut body_style.background_layers);
-    let html_style = Arc::make_mut(&mut html_box.style);
-    html_style.background_color = bg_color;
-    html_style.background_layers = bg_layers;
-}
-
 /// CSS Backgrounds §3.11.1 — the canvas background color.
 ///
-/// Returns the opaque background color of the root element box (the color
-/// `propagate_canvas_background` moved onto `<html>`, originally the root's or
-/// `<body>`'s background). The renderer clears the **entire** surface to this
-/// color so the page background covers the whole viewport even when the root
-/// element's box is shorter or narrower than the window — e.g. a fixed 1024×720
-/// page in a maximized window, where painting only the root box's rect would
-/// leave the rest of the canvas the UA-default white (and the root's own
-/// `background-color` shows only as a band the size of the box, not the canvas).
+/// CSS Backgrounds L3 §2.11.2 — «The Canvas Background and the Root
+/// Element»: if the root element (`<html>`) has no own background
+/// (`background-color: transparent` AND `background-image: none`), the
+/// **used value** for the canvas background is `<body>`'s background
+/// instead. This covers legacy pages (`body { background: red }`), where
+/// otherwise the color would paint only within body's own box and never
+/// reach the viewport above/below it.
 ///
-/// Returns `None` (→ UA-default white clear) when the root element has no
-/// background color or the color is not fully opaque: a translucent root
-/// background must composite over the UA canvas, which the root box's own
-/// background `FillRect` already handles within its rect.
+/// BUG-1103: this computes the propagated color **read-only**, straight off
+/// `html`/`body`'s own unmutated `ComputedStyle` — it does not move
+/// `background-color`/`background-image` between the two elements' styles
+/// the way an earlier revision did. That mutation ran on the exact `Arc`
+/// later serialized into the `computed_styles` cache
+/// (`lib.rs::collect_computed_styles`), so it leaked into CSSOM on both
+/// ends: `getComputedStyle(body)` lost a value it should still report, and
+/// `getComputedStyle(documentElement)` gained one it never authored. Reading
+/// here instead of mutating at build time means `body`'s own box keeps
+/// painting its own background at its own rect exactly as before (correct:
+/// a solid opaque color painted twice — once by this canvas clear, once by
+/// body's own `FillRect` — is an idempotent overwrite, not a composite), and
+/// CSSOM is never touched. Only two call sites read this, both AFTER the
+/// box tree already has its final styles: `crates/shell/src/frames.rs` and
+/// `.../window_event/redraw_requested.rs`.
+///
+/// The renderer clears the **entire** surface to the returned color so the
+/// page background fills the viewport even when the root element's box is
+/// shorter or narrower than the window — e.g. a fixed 1024×720 page in a
+/// maximized window, where painting only the root box's rect would leave the
+/// rest of the canvas the UA-default white.
+///
+/// Returns `None` (→ UA-default white clear) when neither element has a
+/// fully opaque background color: a translucent background must composite
+/// over the UA canvas, which the owning element's own background `FillRect`
+/// already handles within its own rect — extending a translucent color's
+/// canvas coverage beyond that rect is not implemented (deferred in
+/// BUG-1103, narrow edge case: `<html>` box taller than `<body>`'s with no
+/// own background of its own).
 pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> {
     let html = root
         .children
         .iter()
         .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?;
-    let color = html.style.background_color?.to_color_opt()?;
+    let html_has_bg =
+        html.style.background_color.is_some() || !html.style.background_layers.is_empty();
+    let source = if html_has_bg {
+        html
+    } else {
+        html.children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?
+    };
+    let color = source.style.background_color?.to_color_opt()?;
     (color.a == 255).then_some(color)
 }
 
