@@ -280,6 +280,7 @@ mod tests {
                 segments: vec![],
                 lines,
                 first_line_style: None,
+                row_continuation_width: None,
             },
             children: vec![],
             col_span: 1,

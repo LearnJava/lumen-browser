@@ -308,6 +308,16 @@ pub enum BoxKind {
         /// CSS Pseudo-elements L4 §5.3: computed ::first-line style. Set during build_box(),
         /// applied in lay_out() after wrap_inline_run() to first-line frags.
         first_line_style: Option<Box<crate::style::ComputedStyle>>,
+        /// IFC-4: set by the enclosing `InlineBlockRow` right before layout when
+        /// this run does not start its own row — a preceding atomic inline
+        /// (e.g. `<img>`) already occupies part of line 0. Holds the row's real
+        /// available width, so `wrap_inline_run` re-wraps everything after line 0
+        /// at the container's full width (CSS 2.1 §9.4.2: each line gets its own
+        /// line box) instead of inheriting line 0's atomic-narrowed one. `None`
+        /// when the run starts its own row — every line already has the right
+        /// width. Always `None` again once layout of this box is done; the
+        /// `InlineBlockRow` loop reads the field, not any later pass.
+        row_continuation_width: Option<f32>,
     },
     /// Анонимный контейнер для горизонтального потока `display: inline-block`
     /// элементов. Сами дочерние боксы хранятся в `LayoutBox.children`. При
