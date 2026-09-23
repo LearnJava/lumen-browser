@@ -247,3 +247,103 @@ does_not_mark_dirty` — общий процесс-глобал `take_frame_dom_
 проблема индекса, не специфичная для `ShareCache`) — архитектурно больше
 это среза. [BUG-935](BUG-935-OPEN.md)'s `LUMEN_BUG935_M4_SWAP` живой A/B
 переизмерять пока рано — блокер не снят.
+
+## Срез 4 (2026-09-24)
+
+Путь (a) реализован — но не в исходной форме. Первая версия (добавить
+`is_first_child`/`is_last_child` в `ShareKey` БЕЗУСЛОВНО, для каждого узла)
+провалила `repeated_svg_icons_share_the_cascade_without_changing_the_result`
+(тест среза 2, стиль-лист без единого position-селектора) — регрессия
+поймана до пуша: 6 повторных иконок под одним родителем в норме различаются
+только позицией среди 6 сиблингов (ровно один first, ровно один last), так
+что безусловное добавление этих двух полей в ключ разбивает ЛЮБОЙ повтор
+одинаковых сиблингов на минимум 3 группы вместо одной — то есть режет
+именно ту выгоду (391 повторяющихся иконок → 1 аллокация), ради которой
+`ShareCache` вообще существует, на КАЖДОМ сайте, даже там, где ни одно
+правило вообще не читает position pseudo-classes.
+
+Исправлено гейтом: новая `sheet_has_position_dependent_subject`
+(`share_cache.rs`) один раз за проход сканирует `sheet.rules` +
+`layers`/`media_rules`/`supports_rules` на предмет `:first-child`/
+`:last-child`/`:only-child` в SUBJECT-позиции ЛЮБОГО селектора; `ShareKey`
+получает реальные `is_first_child`/`is_last_child` только когда флаг
+`true`, иначе оба поля константно `false` для всех узлов (не влияет на
+партиционирование ключа вообще). Результат сохраняет и старый тест
+(флаг `false` на его стиль-листе — 0 стоимости), и новый (флаг `true` —
+4 из 6 сиблингов делят один ключ, ровно first/last — нет).
+
+`selector_is_share_safe` переписана как `complex_is_share_safe`/
+`compound_is_share_safe` с явным параметром `describes_key_node` вместо
+булева `is_subject`, чтобы корректно рекурсировать в
+`:where(..)`/`:is(..)`/`:not(..)` — живая инструментация на github.com
+(временный `LUMEN_BUG1112_DEBUG=1`, не закоммичен) нашла это доминирующим
+оставшимся блокером ПОСЛЕ фикса position pseudo-classes: Primer (дизайн-
+система GitHub) компилирует практически каждый компонентный класс в обёртку
+`:where(.prc-X-Y-Z)` для нулевой specificity (`:where(.prc-Link-Link-9ZwDx)
+:where([data-muted=true]):hover` и т.п.) — раньше `PseudoClass::Where`
+безусловно попадал в `_ => false`. Поскольку `:where`/`:is`/`:not`
+матчат ТОТ ЖЕ узел, что и compound, в котором лежат (CSS Selectors L4
+§5.4/§17), они share-safe ровно когда safe каждый селектор их
+списка-аргумента — рекурсия с ТЕМ ЖЕ `describes_key_node`, не всегда
+`true` (иначе `:where(:first-child)` в ANCESTOR-позиции ложно считался бы
+safe).
+
+Второй найденный блокер, после фикса `:where`/`:is`/`:not`: голый
+`PseudoElement` (`::placeholder`, `::-webkit-calendar-picker-indicator` и
+т.п.) без type/class/id в subject — `RuleIndex`'s `universal`-bucket отдаёт
+его кандидатом для ЛЮБОГО узла. `matches_simple` (`matching.rs:223`)
+безусловно возвращает `false` для ЛЮБОГО `PseudoElement` (кроме `Slotted`,
+матчащегося отдельной функцией `matches_slotted_complex`, которая вызывается
+только когда `host_shadow.is_some()` — уже гасит `shareable` независимо)
+в обычном пути `matches_complex`, которым идёт весь `sheet.rules`/
+`layers`/`media`/`supports`. Значит компаунд с `PseudoElement` НИКОГДА не
+матчит ни один настоящий DOM-узел этим путём — жёсткий, безусловный
+non-match, как несовпадение по `Type`, не завязанный на что-либо, чего не
+ловит ключ. Добавлено: `PseudoElement(_) => true` безусловно (без гейта на
+`describes_key_node` — safe и в subject, и в ancestor позиции).
+
+**Результат живого перемера (github.com/lenta.ru) после всех трёх фиксов
+среза 4: `share_insert` ОСТАЁТСЯ 0.** `key_some_unshareable` тоже не
+изменилось (391 / 79) — все три фикса убрали классы блокеров, которые
+покрывали ВЕСЬ candidate-набор через `universal`-bucket (или через
+`:where`/`:is`/`:not`-обёртку над таким же универсальным правилом), но
+`key_some_unshareable` не падал ни разу, потому что на его месте
+обнаружился ЧЕТВЁРТЫЙ, архитектурно иной источник того же эффекта — уже не
+в `universal`-bucket. `RuleIndex::by_class["octicon"]` (не только
+`universal`) сам по себе отдаёт как кандидатов ~20 разных `.btn:hover
+.octicon`/`.select-menu-item:focus .octicon`/`[aria-selected=true]
+.octicon`-подобных правил для ЛЮБОГО узла с классом `octicon`, независимо
+от того, является ли этот конкретный узел действительно потомком
+`.btn`/`.select-menu-item`/… — потому что `candidates()` бакетирует по
+СОБСТВЕННОМУ классу узла, а не по факту совпадения предка. Эти правила
+корректно (не баг) остаются unsafe — они честно зависят от `:hover`/
+`:disabled`/`:focus`/ancestor `aria-selected`, чего ключ не пинит и не
+может пинить дёшево. Но поскольку КАЖДЫЙ `.octicon`-узел документа получает
+ВСЕ ~20 таких правил кандидатами (не только те, что реально до него
+дотягиваются), почти наверняка хотя бы одно из них остаётся unsafe для
+каждого узла — воспроизводимо на обоих измеренных сайтах, число
+`key_some_unshareable` не сдвинулось ни на единицу ни на github.com, ни на
+lenta.ru после этого среза.
+
+Это ровно путь (b) из постановки задачи выше ("сузить `RuleIndex::universal`
+bucket"), только обнаружилось, что проблема шире — она не ограничена
+`universal`-bucket, она есть у ЛЮБОГО бакета (`by_class`/`by_type`/`by_id`/
+`by_attr`), потому что бакетирование в принципе идёт только по собственным
+атрибутам узла, без учёта предков. Точечный фикс тут невозможен: нужна
+либо (b1) дешёвая проверка реальной досягаемости кандидата (пройти по
+предкам узла до тех пор, пока либо не найдётся совпадение, либо не
+кончится SVG-presentational-сегмент — то есть частичный `matches_complex`
+без последнего compound), либо (b2) смена архитектуры кэша так, чтобы
+`shareable` считался не "ни одного unsafe-кандидата вообще", а per-rule, с
+кэшированием per-rule результата "не дотягивается до этого узла" отдельно
+от per-node ключа. Обе — не мелкая правка, следующий срез должен выбрать
+между ними или найти третий путь.
+
+Гейты: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист;
+`cargo test -p lumen-layout --lib style::tests` — 1344/1344; `scripts/
+scoped-test.sh` (затронутые + обратные зависимости, включая `lumen-driver`,
+`lumen-js`) — зелёный, без единого провала; `python graphic_tests/
+dump_golden.py --build` — 12/12. Новые тесты (`share_cache.rs`):
+`a_subject_first_child_pseudo_class_does_not_disable_sharing_when_irrelevant`,
+`a_subject_first_child_pseudo_class_still_applies_correctly_when_relevant`
+— 11/11 в файле.
