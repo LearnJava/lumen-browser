@@ -8685,6 +8685,21 @@ var _LUMEN_WRAPPER_PI_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAP
 var _LUMEN_WRAPPER_ON_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_ON_MEMBERS);
 var _lumen_wrapper_protos = new Map();
 
+// BUG-1101: `firstChild`/`nextSibling` above live one link BELOW `iface` on a
+// hidden per-interface proto (see `_lumen_wrapper_proto_for`), never on
+// `Node.prototype` itself, even though DOM §4.4 places both there. Ordinary
+// `el.firstChild` reads still resolve fine through the chain, but code that
+// grabs the *native* accessor directly off `Node.prototype` — Svelte 5's
+// hydration runtime does exactly this (`Object.getOwnPropertyDescriptor(
+// Node.prototype, 'firstChild').get`), a common anti-monkey-patch pattern —
+// found `undefined` and crashed on `.get` (`crates.io`, blank page). Reusing
+// the same descriptor objects here keeps both copies backed by the identical
+// getter, so this changes nothing about what either accessor returns.
+Object.defineProperties(Node.prototype, {
+    firstChild:  _LUMEN_WRAPPER_DESCRIPTORS.firstChild,
+    nextSibling: _LUMEN_WRAPPER_DESCRIPTORS.nextSibling,
+});
+
 // A wrapper's [[Prototype]]: an interface-specific object carrying every shared
 // member, whose own prototype is the interface prototype (BUG-322's chain, so
 // `instanceof Element`/`HTMLDivElement`/`Text`/`CharacterData` still resolve).
