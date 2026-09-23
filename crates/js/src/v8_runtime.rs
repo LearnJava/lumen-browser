@@ -299,7 +299,9 @@ impl V8JsRuntime {
                 cssom_deltas: Arc::clone(&self.cssom_deltas),
                 cssom_dirty: Arc::clone(&self.cssom_dirty),
                 pseudo_styles_needed: Arc::clone(&self.pseudo_styles_needed),
+                pseudo_styles_collected: Arc::clone(&self.pseudo_styles_collected),
                 custom_props_needed: Arc::clone(&self.custom_props_needed),
+                custom_props_collected: Arc::clone(&self.custom_props_collected),
                 computed_styles_needed: Arc::clone(&self.computed_styles_needed),
                 computed_styles_collected: Arc::clone(&self.computed_styles_collected),
             };
