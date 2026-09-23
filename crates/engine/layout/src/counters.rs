@@ -34,7 +34,7 @@ use std::sync::Arc;
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
 use crate::style::{
-    compute_pseudo_element_style, compute_style, Content, ComputedStyle, ContentItem, ListStyleType,
+    compute_pseudo_element_style, Content, ComputedStyle, ContentItem, ListStyleType, ShareCache,
 };
 use lumen_css_parser::Stylesheet;
 use lumen_core::Size;
@@ -431,6 +431,8 @@ pub struct CounterMap {
     /// see that function's doc comment for why content dirtiness (not style
     /// equality alone) is the correctness precondition.
     clean_subtrees: HashSet<NodeId>,
+    /// THREAD-4 срез 2 — intra-pass structural memo, reset every pass (`style::share_cache`).
+    share_cache: ShareCache,
 }
 
 impl CounterMap {
@@ -1348,10 +1350,8 @@ fn walk(
     let style: Arc<ComputedStyle> = match reused {
         Some(style) => style,
         None => {
-            let style = Arc::new(compute_style(doc, id, sheet, inherited, viewport, dark_mode));
-            // BUG-284: cache so `build_box`'s own `compute_style(id, ...)` call
-            // (same doc/sheet/viewport/dark_mode, same `inherited` chain) can
-            // reuse this result instead of recomputing an identical cascade.
+            // BUG-284/THREAD-4 срез 2 (`style::share_cache`); result also feeds `build_box`.
+            let style = map.share_cache.compute(doc, id, sheet, inherited, viewport, dark_mode);
             // BUG-341 S24: keep whatever this displaced — the graft still needs
             // to see the style `prev`'s box was built from (`replaced_styles`).
             if let Some(displaced) = map.styles.write(id, Arc::clone(&style)) {
