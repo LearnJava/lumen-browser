@@ -26,6 +26,19 @@ fn defer_js_push_override() -> Option<bool> {
     })
 }
 
+/// BUG-935 S46: measurement-only override for the M4-routing order in
+/// [`Lumen::relayout_raf_dirty`] — S12/S14/S18/S27 each tried the same swap
+/// (incremental-first) via a literal edit + full rebuild between runs, and
+/// each lost the comparison to noise introduced by the rebuild+link gap
+/// itself (see [`defer_js_push_override`]'s doc for the same lesson). This
+/// mirrors that fix: an env var read once per process, no rebuild needed to
+/// flip it. `None` (unset, the default) leaves the shipped order (full
+/// off-thread first) unchanged for anyone who has not set the var.
+fn m4_swap_override() -> bool {
+    static OVERRIDE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| std::env::var("LUMEN_BUG935_M4_SWAP").ok().as_deref() == Some("1"))
+}
+
 impl Lumen {
     /// Заменяет display list страницы, бампая его версию (BUG-405 срез 39).
     ///
@@ -537,6 +550,20 @@ impl Lumen {
     /// pattern-matching two independently-timed `eprintln!` lines after the
     /// fact.
     pub(crate) fn relayout_raf_dirty(&mut self) {
+        if m4_swap_override() {
+            let outer_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+            let handled = self.try_relayout_raf_incremental();
+            if let Some(t0) = outer_t0 {
+                eprintln!(
+                    "[engine] relayout_raf_dirty outer_ms={:.2} (try_relayout_raf_incremental call, handled={handled})",
+                    t0.elapsed().as_secs_f32() * 1000.0,
+                );
+            }
+            if !handled && !self.submit_relayout_job() {
+                self.relayout();
+            }
+            return;
+        }
         if self.submit_relayout_job() {
             return;
         }
