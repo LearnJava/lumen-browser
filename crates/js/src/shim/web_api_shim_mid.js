@@ -10759,6 +10759,86 @@ function _lumen_doc_insertion_nid(node, who) {
     return nid;
 }
 
+// BUG-1107: DOM LS §4.7 importNode(node, deep) must return a clone of `node`
+// for ANY Node argument, but a node returned by `new DOMParser().parseFromString(...)`
+// (or `DOMImplementation.createDocument`/`createHTMLDocument`) is a VNode/
+// VElement/VText/VComment from `dom_parser.rs` — a plain-JS tree with no
+// `__nid__`, so it never has arena backing to clone. Before this fix
+// `importNode` silently answered `null` for every such node (see the
+// `__nid__ !== undefined` branch below), which is exactly the shape of a
+// common real-world pattern — inline an SVG icon sprite via
+// `document.importNode(new DOMParser().parseFromString(svg, "image/svg+xml").documentElement, true)`
+// — and turns into `Cannot read properties of null (reading 'childNodes')`
+// one property access later, in page code that never touches `__nid__`
+// itself (found live on dzen.ru, BUG-791 срез 5).
+//
+// This walks the virtual (VNode-shaped) subtree and rebuilds it as a real
+// arena subtree via the same primitives `document.createElement`/
+// `createTextNode`/`createComment`/`createDocumentFragment` use, duck-typing
+// on `nodeType` (VElement/VText/VComment/VDocumentFragment all expose it)
+// rather than `instanceof`, since the `dom_parser.rs` classes are private to
+// that shim's own IIFE. Returns a raw nid (or `null` for an unmaterializable
+// node kind), not a wrapper — callers wrap it themselves.
+function _lumen_materialize_virtual_subtree(node, deep) {
+    var ELEMENT_NODE = 1, TEXT_NODE = 3, COMMENT_NODE = 8, DOCUMENT_FRAGMENT_NODE = 11;
+    switch (node.nodeType) {
+        case ELEMENT_NODE: {
+            // The virtual tree never resolves namespaces from in-scope `xmlns`
+            // declarations (documented gap in dom_parser.rs), so this can only
+            // approximate: an `image/svg+xml` source document is overwhelmingly
+            // an inline SVG icon/sprite, so every element in it is created in
+            // the SVG namespace; everything else falls back to the ordinary
+            // HTML-namespace `createElement`, matching what the virtual tree
+            // itself assumes (`VElement.tagName` is upper-cased there too,
+            // except in XML mode where it is already the verbatim tag name).
+            var ownerDoc = node.ownerDocument;
+            var isSvgSource = ownerDoc && ownerDoc.contentType === 'image/svg+xml';
+            var tag = node.localName || node.tagName;
+            var nid = isSvgSource
+                ? _lumen_create_element_ns('http://www.w3.org/2000/svg', String(tag))
+                : _lumen_create_element(String(tag).toLowerCase());
+            if (nid < 0) { return null; }
+            var names = node.getAttributeNames ? node.getAttributeNames() : [];
+            for (var i = 0; i < names.length; i++) {
+                _lumen_set_attr(nid, names[i], node.getAttribute(names[i]));
+            }
+            if (deep) {
+                var kids = node.childNodes || [];
+                for (var k = 0; k < kids.length; k++) {
+                    var childNid = _lumen_materialize_virtual_subtree(kids[k], true);
+                    if (childNid !== null) { _lumen_append_child(nid, childNid); }
+                }
+            }
+            return nid;
+        }
+        case TEXT_NODE: {
+            var tnid = _lumen_create_text_node(node.nodeValue || '');
+            return tnid < 0 ? null : tnid;
+        }
+        case COMMENT_NODE: {
+            var cnid = _lumen_create_comment(node.nodeValue || '');
+            return cnid < 0 ? null : cnid;
+        }
+        case DOCUMENT_FRAGMENT_NODE: {
+            // A fragment has no separate "shallow" form to speak of (DOM LS
+            // §4.7 step 6 always clones a fragment's children) — `deep` only
+            // gates element/subtree copying above.
+            var fnid = _lumen_create_fragment();
+            var fkids = node.childNodes || [];
+            for (var j = 0; j < fkids.length; j++) {
+                var fChildNid = _lumen_materialize_virtual_subtree(fkids[j], true);
+                if (fChildNid !== null) { _lumen_append_child(fnid, fChildNid); }
+            }
+            return fnid;
+        }
+        default:
+            // DocumentType, ProcessingInstruction, Document/XMLDocument itself
+            // — not importable as a single node per DOM LS §4.7 step 2 either
+            // (a Document rejects with NotSupportedError there); left as a gap.
+            return null;
+    }
+}
+
 var document = {
     // DOM LS §4.5: `Document.nodeType` is always `Node.DOCUMENT_NODE` (9). react-dom's
     // root-creation path (BUG-281) checks this before mounting.
@@ -11531,6 +11611,16 @@ var document = {
                 _lumen_ce_scope_by_nid[clone_nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
             }
             return _lumen_make_element(clone_nid);
+        }
+        // BUG-1107: `node` came from DOMParser()/DOMImplementation — a virtual
+        // (non-arena) tree, see `_lumen_materialize_virtual_subtree` above.
+        if (node.nodeType !== undefined) {
+            var vNid = _lumen_materialize_virtual_subtree(node, !!deep);
+            if (vNid === null) { return null; }
+            if (options && options.customElements instanceof CustomElementRegistry) {
+                _lumen_ce_scope_by_nid[vNid] = { registry: options.customElements._registry, pending: options.customElements._pending };
+            }
+            return node.nodeType === 11 ? _lumen_make_document_fragment(vNid) : _lumen_make_element(vNid);
         }
         return null;
     },
