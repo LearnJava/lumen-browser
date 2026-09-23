@@ -85,3 +85,64 @@ Primer (github.com) и подавляющее большинство реаль�
 `LUMEN_PROFILE_TREE=1 LUMEN_PROFILE_DETAIL=1 cargo run --profile
 dev-release -p lumen-shell -- --trace-nav https://github.com` — `share_insert`
 остаётся 0 на любом реальном сайте со стилизацией через комбинаторы.
+
+## Срез 1 (2026-09-23)
+
+Реализована узкая, но полная (не частичная) версия предложенного фикса —
+без новой структуры данных. Ключевое наблюдение: `ShareKey.inherited_ptr`
+(адрес живой `ComputedStyle`-аллокации родителя) уже даёт нужную гарантию
+индукцией, без явного хранения цепочки предков — `counters::walk` вручает
+ОДНУ и ту же `Arc`-аллокацию всем детям узла (`crates/engine/layout/src/
+counters.rs:1412`), поэтому совпадение `inherited_ptr` у двух узлов
+возможно только в двух случаях: (a) это буквально дети одного и того же
+живого родителя, либо (b) их родители сами совпали по ключу ShareCache
+(что требует их взаимной `is_svg_presentational_element`-пригодности и
+рекурсивно того же самого условия на уровень выше). Оба случая означают,
+что весь "пригодный" (SVG-presentational) отрезок цепочки предков у двух
+узлов совпадает попарно по tag+attrs вплоть до буквально общего DOM-узла —
+что делает `Type`/`Class`/`Id`/`Universal`-селектор на любом предковом
+compound безопасным при ЛЮБОЙ глубине `Descendant`/`Child`. `+`/`~`
+(sibling) остаются под запретом — позиция среди соседей в ключе не
+закодирована никак.
+
+Изменено: `selector_is_share_safe` (`cascade.rs`) теперь проверяет КАЖДЫЙ
+compound селектора (не только `head`) на simple-parts-only, и разрешает
+`Combinator::Descendant`/`Combinator::Child` в `tail` (было: `tail` только
+пустой). Doc-комментарии `compute_style_shareable`/`selector_is_share_safe`/
+модуля `share_cache.rs` переписаны под новое рассуждение. Новый тест
+`a_descendant_selector_still_shares_when_the_key_proves_ancestor_identity`
+(`style/tests/share_cache.rs`) прямо демонстрирует выигрыш: `.octicon path`
+(descendant-комбинатор) теперь шарит `Arc` между повторными иконками, где
+раньше `selector_is_share_safe` глушил это безусловно. Существующий
+`a_combinator_rule_disables_sharing_for_the_nodes_it_could_reach` остаётся
+зелёным без изменения поведения — там `.blue`/`.plain` сами не
+`is_svg_presentational_element`, поэтому их `inherited_ptr` в принципе
+никогда не совпадает, комбинатор тут ни при чём — комментарий теста
+обновлён, чтобы это не выглядело противоречием.
+
+Гейты: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист;
+`scripts/scoped-test.sh crates/engine/layout/src/style/cascade.rs` — 0
+failed по всем засеваемым крейтам; `python graphic_tests/dump_golden.py
+--build` — 12/12 дампов (layout + display-list) совпадают с эталоном,
+подтверждает нулевой дифф на пяти представительных страницах (включая
+table/grid/flex/transform-zindex). Полный пиксельный `graphic_tests/
+run.py --continue-on-fail` не прогнан — калибровка `TEST-00` падает в
+этой песочнице («захват экрана сломан» — среда не даёт живому окну
+реальный фокус, симптом уже описан в `docs/CLAUDE.md`'s «gdigrab из фона»
+и не специфичен для этого среза).
+
+**Что НЕ сделано** (следующий срез):
+- Эта версия НЕ расширяет `is_svg_presentational_element`-скоуп на
+  обычные HTML-узлы — реальный выигрыш на живых сайтах (`share_insert`
+  для `.octicon path`-подобных правил) ограничен тем, что уже происходит
+  ВНУТРИ уже-пригодного SVG-поддерева. Живой прогон (см. «Воспроизведение»
+  выше) на `github.com`/`lenta.ru` не выполнен в этой сессии — в песочнице
+  нет сетевого доступа (тот же блокер, что и в BUG-935 срез 46-47).
+  Нужно повторить инструментацию THREAD-4 среза 5 и подтвердить
+  `share_insert > 0` на реальной странице, прежде чем переизмерять
+  [BUG-935](BUG-935-OPEN.md)'s `LUMEN_BUG935_M4_SWAP` на `lenta.ru`.
+- Если живой прогон покажет, что основная масса повторов лежит НЕ внутри
+  SVG-иконок (а, например, в повторяющихся карточках списка), потребуется
+  отдельный срез на расширение eligibility-скоупа — то самое "архитектурное
+  расширение", описанное в постановке задачи выше, с полным аудитом
+  presentational-hint/quirks-путей для обычного HTML.

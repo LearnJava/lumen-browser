@@ -68,11 +68,49 @@ fn repeated_svg_icons_share_the_cascade_without_changing_the_result() {
 }
 
 #[test]
+fn a_descendant_selector_still_shares_when_the_key_proves_ancestor_identity() {
+    // BUG-1112: `.octicon path` has a `Descendant` combinator, which THREAD-4
+    // срез 2 banned outright. It is safe here because both `<path>`s are
+    // literal children of a repeated `<svg class="octicon">` — their key's
+    // `inherited_ptr` already collides (same toolbar parent, so both `<svg>`s
+    // receive the identical `inherited` allocation and, once the first `<svg>`
+    // itself gets cached, so do their `<path>` children), which by
+    // `selector_is_share_safe`'s doc comment proves the ancestor chain (here:
+    // the `.octicon` parent) is identical for both, so reusing one's cascade
+    // result for the other is exactly as correct as recomputing it.
+    clear_shadow_sheets();
+    let doc = octicon_group(6);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(".octicon path { stroke: rgb(9, 9, 9); }");
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let first_path = map.style_arc(doc.get(svgs[0]).children[0]).expect("arc");
+    for &svg in &svgs[1..] {
+        let path = doc.get(svg).children[0];
+        let arc = map.style_arc(path).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first_path, &arc),
+            "a descendant-combinator rule must not block sharing once the key already proves ancestor identity"
+        );
+        assert_eq!(
+            map.style_for(path).expect("style").svg_stroke,
+            SvgPaint::Color(Color { r: 9, g: 9, b: 9, a: 255 })
+        );
+    }
+}
+
+#[test]
 fn a_combinator_rule_disables_sharing_for_the_nodes_it_could_reach() {
     // Two icons, identical tag/attrs, under differently-classed ancestors —
-    // `.blue .octicon` can only be decided by walking each one's own DOM
-    // ancestors, which the structural key does not model. If sharing fired
-    // here anyway, one icon would silently render the other's fill.
+    // `.blue`/`.plain` are plain `<div>`s, never eligible for the share key
+    // (`is_svg_presentational_element` is false for `div`), so their own
+    // style is always a fresh, per-instance allocation and the two icons'
+    // `inherited_ptr` never collides — `.blue .octicon` never gets a chance
+    // to reuse anything, matching CSS whether or not the combinator itself
+    // is allowed (BUG-1112). If sharing fired here anyway, one icon would
+    // silently render the other's fill.
     let doc = lumen_html_parser::parse(concat!(
         r#"<div class="plain"><svg class="octicon" aria-hidden="true"><path d="M1 1"></path></svg></div>"#,
         r#"<div class="blue"><svg class="octicon" aria-hidden="true"><path d="M1 1"></path></svg></div>"#,
