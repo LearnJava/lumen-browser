@@ -993,6 +993,10 @@ class LiveBrowser:
         log = self.log_path.open("wb")
         env = os.environ.copy()
         env["LUMEN_HEALTH_LOG"] = "1"
+        # Всегда без блокировщика (решение пользователя 2026-09-23): он меняет набор
+        # загружаемых ресурсов, и сравнение с Chrome и между прогонами теряет смысл.
+        # Дефолт настройки уже «выкл»; переменная страхует от включённой вручную.
+        env["LUMEN_NO_ADBLOCK"] = "1"
         env["LUMEN_STARTUP_LOG"] = "1"  # [startup]-разбивка старта процесса — дешёво, только stderr
         env.update(EXTRA_ENV)
         t_spawn = time.monotonic()
