@@ -138,32 +138,73 @@ Object.defineProperty(Performance.prototype, 'timeOrigin', {
 Performance.prototype.now = function() {
     return (typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms;
 };
+// User Timing L3 §4.2/§4.3 `[Default] object toJSON()` — shared by
+// PerformanceMark and PerformanceMeasure, the only two entry types this shim
+// gives an own `detail` attribute to.
+function _perf_user_timing_to_json() {
+    return { name: this.name, entryType: this.entryType, startTime: this.startTime,
+              duration: this.duration, detail: this.detail };
+}
+// A mark name (string, resolved against the most recent same-named mark) or a
+// timestamp (number, used as-is) — the shared conversion both the named-args
+// and dictionary forms of `measure()` apply to `start`/`end` (User Timing L3
+// §4.3 "convert a mark to a timestamp").
+function _perf_mark_to_timestamp(value) {
+    if (typeof value === 'string') {
+        var m = _perf_entries_by_name(value, 'mark');
+        return m.length > 0 ? m[m.length - 1].startTime : 0;
+    }
+    return Number(value);
+}
 // User Timing L3 §4.2 — performance.mark(name, options?)
 Performance.prototype.mark = function(name, opts) {
     var start = (opts && typeof opts.startTime === 'number') ? opts.startTime : this.now();
-    var entry = { entryType: 'mark', name: String(name), startTime: start, duration: 0 };
+    var detail = (opts && 'detail' in opts) ? opts.detail : null;
+    var entry = { entryType: 'mark', name: String(name), startTime: start, duration: 0, detail: detail };
+    entry.toJSON = _perf_user_timing_to_json;
     _perf_entries.push(entry);
     // Guarded: PerformanceObserver is part of the page shim only, so in a
     // worker scope this function does not exist (see PERFORMANCE_SHIM docs).
     if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);
     return entry;
 };
-// User Timing L3 §4.3 — performance.measure(name, start?, end?)
-Performance.prototype.measure = function(name, startMark, endMark) {
-    var start = 0, end = this.now();
-    if (typeof startMark === 'string') {
-        var sm = _perf_entries_by_name(startMark, 'mark');
-        if (sm.length > 0) start = sm[sm.length - 1].startTime;
-    } else if (typeof startMark === 'number') {
-        start = startMark;
+// User Timing L3 §4.3 — performance.measure(name, startOrMeasureOptions?, endMark?).
+// `startOrMeasureOptions` is either a mark name/timestamp (named-args form) or
+// a `PerformanceMeasureOptions` dictionary (`{start, end, duration, detail}`,
+// dictionary form) — the two forms are mutually exclusive, so the dictionary
+// case takes `endMark` off the table entirely rather than merging with it.
+Performance.prototype.measure = function(name, startOrMeasureOptions, endMark) {
+    var start, end, detail = null;
+    if (startOrMeasureOptions !== null && typeof startOrMeasureOptions === 'object') {
+        var opts = startOrMeasureOptions;
+        var hasStart = opts.start !== undefined;
+        var hasEnd = opts.end !== undefined;
+        var hasDuration = opts.duration !== undefined;
+        if ('detail' in opts) detail = opts.detail;
+        if (hasStart) start = _perf_mark_to_timestamp(opts.start);
+        if (hasEnd) end = _perf_mark_to_timestamp(opts.end);
+        if (hasDuration) {
+            if (!hasStart) start = end - Number(opts.duration);
+            if (!hasEnd) end = (hasStart ? start : 0) + Number(opts.duration);
+        }
+        if (!hasStart && !hasDuration) start = 0;
+        if (!hasEnd && !hasDuration) end = this.now();
+    } else {
+        start = 0;
+        end = this.now();
+        if (typeof startOrMeasureOptions === 'string') {
+            start = _perf_mark_to_timestamp(startOrMeasureOptions);
+        } else if (typeof startOrMeasureOptions === 'number') {
+            start = startOrMeasureOptions;
+        }
+        if (typeof endMark === 'string') {
+            end = _perf_mark_to_timestamp(endMark);
+        } else if (typeof endMark === 'number') {
+            end = endMark;
+        }
     }
-    if (typeof endMark === 'string') {
-        var em = _perf_entries_by_name(endMark, 'mark');
-        if (em.length > 0) end = em[em.length - 1].startTime;
-    } else if (typeof endMark === 'number') {
-        end = endMark;
-    }
-    var entry = { entryType: 'measure', name: String(name), startTime: start, duration: end - start };
+    var entry = { entryType: 'measure', name: String(name), startTime: start, duration: end - start, detail: detail };
+    entry.toJSON = _perf_user_timing_to_json;
     _perf_entries.push(entry);
     if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);
     return entry;
