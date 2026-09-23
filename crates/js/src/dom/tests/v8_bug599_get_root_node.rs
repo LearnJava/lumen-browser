@@ -76,3 +76,66 @@ fn detached_subtree_roots_at_its_own_top() {
     assert!(is_true(&rt, "_top.getRootNode().isSameNode(_top)"));
 }
 
+/// BUG-1045 — DOM §4.4 shadow-inclusive root: `getRootNode()` on a node
+/// *inside* an open shadow tree must stop at the `ShadowRoot`, not fall
+/// through to `document` (the plain parent-walk never crosses the boundary —
+/// `Document::attach_shadow` never sets the root's `Node::parent`).
+#[test]
+fn node_inside_open_shadow_tree_roots_at_shadow_root() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var _host = document.createElement('div'); \
+         document.body.appendChild(_host); \
+         var _sr = _host.attachShadow({ mode: 'open' }); \
+         var _inner = document.createElement('span'); \
+         _sr.appendChild(_inner);",
+    )
+    .unwrap();
+    assert!(is_true(&rt, "typeof _sr.getRootNode === 'function'"));
+    assert!(is_true(&rt, "_inner.getRootNode() === _sr"));
+    assert!(is_true(&rt, "_inner.getRootNode().host === _host"));
+    assert!(is_true(&rt, "_inner.getRootNode() !== document"));
+    // The `ShadowRoot` itself is its own shadow-inclusive root too.
+    assert!(is_true(&rt, "_sr.getRootNode() === _sr"));
+}
+
+/// BUG-1045 — `getRootNode({ composed: true })` keeps climbing through the
+/// shadow host up to the document (DOM §4.4's "retarget"-style ascent), the
+/// exact call the vendored `testdriver-extra.js` selector builder relies on
+/// (`current.getRootNode().host`) once repeated across nested shadow trees.
+#[test]
+fn composed_true_climbs_through_host_to_document() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var _host = document.createElement('div'); \
+         document.body.appendChild(_host); \
+         var _sr = _host.attachShadow({ mode: 'open' }); \
+         var _inner = document.createElement('span'); \
+         _sr.appendChild(_inner);",
+    )
+    .unwrap();
+    assert!(is_true(&rt, "_inner.getRootNode({ composed: true }) === document"));
+    assert!(is_true(&rt, "_sr.getRootNode({ composed: true }) === document"));
+}
+
+/// BUG-1045 — a closed shadow root is hidden from `Element.shadowRoot`
+/// (encapsulation), but `getRootNode()` called on a node the script already
+/// holds a reference to (returned by `attachShadow()`/`appendChild()`) must
+/// still report the real `ShadowRoot` with `mode === 'closed'` — encapsulation
+/// hides *discovery* of the root, not the identity of a root already in hand.
+#[test]
+fn closed_shadow_root_still_resolves_with_real_mode() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var _host = document.createElement('div'); \
+         document.body.appendChild(_host); \
+         var _sr = _host.attachShadow({ mode: 'closed' }); \
+         var _inner = document.createElement('span'); \
+         _sr.appendChild(_inner);",
+    )
+    .unwrap();
+    assert!(is_true(&rt, "_host.shadowRoot === null"));
+    assert!(is_true(&rt, "_inner.getRootNode() === _sr"));
+    assert!(is_true(&rt, "_inner.getRootNode().mode === 'closed'"));
+}
+
