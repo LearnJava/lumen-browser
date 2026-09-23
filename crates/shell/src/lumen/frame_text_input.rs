@@ -35,30 +35,9 @@ impl Lumen {
     ) -> Option<(TypeableField, String)> {
         let handle = self.frames.get(idx)?;
         let doc = handle.doc.lock().ok()?;
-        // BUG-995: mirror of `text_input::typeable_field` — `nid` is
-        // `self.focused_frame`'s second field, which can outlive the
-        // frame document it was focused in.
-        let node = doc.try_get(nid)?;
-        if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
-            return None;
-        }
-        if node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("textarea")) {
-            return Some((TypeableField::Textarea, doc.control_value(nid).into_owned()));
-        }
-        let is_typeable_input = matches!(
-            node.input_type(),
-            Some(lumen_dom::InputType::Text)
-                | Some(lumen_dom::InputType::Password)
-                | Some(lumen_dom::InputType::Email)
-                | Some(lumen_dom::InputType::Tel)
-                | Some(lumen_dom::InputType::Url)
-                | Some(lumen_dom::InputType::Number)
-                | Some(lumen_dom::InputType::Search)
-        );
-        if !is_typeable_input {
-            return None;
-        }
-        Some((TypeableField::Input, doc.control_value(nid).into_owned()))
+        // BUG-995: `nid` can outlive the frame document it was focused in —
+        // `typeable_field_in` reads it with `try_get`.
+        super::text_input::typeable_field_in(&doc, nid)
     }
 
     /// Read (and lazily initialize) the char-index text cursor for the

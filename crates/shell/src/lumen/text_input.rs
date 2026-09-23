@@ -95,31 +95,7 @@ impl Lumen {
     /// it is only the default the field started from.
     pub(crate) fn typeable_field(&self, nid: lumen_dom::NodeId) -> Option<(TypeableField, String)> {
         let doc = self.layout_source.as_ref()?.document.lock().ok()?;
-        // BUG-995: `nid` is `self.focused_node`, which can outlive the
-        // document it was focused in (navigation doesn't clear it) — a
-        // bare `doc.get` would panic on a NodeId from an arena that no
-        // longer exists.
-        let node = doc.try_get(nid)?;
-        if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
-            return None;
-        }
-        if node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("textarea")) {
-            return Some((TypeableField::Textarea, doc.control_value(nid).into_owned()));
-        }
-        let is_typeable_input = matches!(
-            node.input_type(),
-            Some(lumen_dom::InputType::Text)
-                | Some(lumen_dom::InputType::Password)
-                | Some(lumen_dom::InputType::Email)
-                | Some(lumen_dom::InputType::Tel)
-                | Some(lumen_dom::InputType::Url)
-                | Some(lumen_dom::InputType::Number)
-                | Some(lumen_dom::InputType::Search)
-        );
-        if !is_typeable_input {
-            return None;
-        }
-        Some((TypeableField::Input, doc.control_value(nid).into_owned()))
+        typeable_field_in(&doc, nid)
     }
 
     /// Read (and lazily initialize) the char-index text cursor for `nid`'s
@@ -145,9 +121,14 @@ impl Lumen {
     /// Untouched-but-focused reads as end-of-value, mirroring `field_cursor`'s
     /// own default so a field never touched by Left/Right/Home/End still
     /// shows its caret at the end, exactly where typing would land.
+    ///
+    /// BUG-1108: this and the three sibling `focused_*` paint queries read
+    /// [`Lumen::focused_field_snapshot`], never the document — the redraw
+    /// path refreshes it with a `try_lock` first, so a frame taken during an
+    /// off-thread relayout paints the last known value instead of blocking.
     pub(crate) fn focused_input_caret(&self) -> Option<(lumen_dom::NodeId, usize)> {
         let nid = self.focused_node?;
-        let (kind, current) = self.typeable_field(nid)?;
+        let (kind, current) = self.focused_field_snapshot.field(nid)?;
         if kind != TypeableField::Input {
             // FRAME-7: a `<textarea>` caret needs multi-line InlineRun
             // line/glyph geometry, not the single-line box math this
@@ -169,7 +150,7 @@ impl Lumen {
     /// so a caller must already know which one it wants.
     pub(crate) fn focused_textarea_caret(&self) -> Option<(lumen_dom::NodeId, usize, String)> {
         let nid = self.focused_node?;
-        let (kind, current) = self.typeable_field(nid)?;
+        let (kind, current) = self.focused_field_snapshot.field(nid)?;
         if kind != TypeableField::Textarea {
             return None;
         }
@@ -275,7 +256,7 @@ impl Lumen {
     /// value out from under a stale selection).
     pub(crate) fn focused_input_selection(&self) -> Option<(lumen_dom::NodeId, usize, usize)> {
         let nid = self.focused_node?;
-        let (kind, current) = self.typeable_field(nid)?;
+        let (kind, current) = self.focused_field_snapshot.field(nid)?;
         if kind != TypeableField::Input {
             return None;
         }
@@ -296,7 +277,7 @@ impl Lumen {
     /// [`Self::focused_input_caret`] (different paint mechanisms).
     pub(crate) fn focused_textarea_selection(&self) -> Option<(lumen_dom::NodeId, usize, usize, String)> {
         let nid = self.focused_node?;
-        let (kind, current) = self.typeable_field(nid)?;
+        let (kind, current) = self.focused_field_snapshot.field(nid)?;
         if kind != TypeableField::Textarea {
             return None;
         }
@@ -495,4 +476,38 @@ impl Lumen {
         }
     }
 
+}
+
+/// [`Lumen::typeable_field`] against an already-locked `doc` — shared with
+/// the redraw path's non-blocking snapshot (BUG-1108), which must read the
+/// same classification without ever waiting for the lock itself.
+pub(crate) fn typeable_field_in(
+    doc: &lumen_dom::Document,
+    nid: lumen_dom::NodeId,
+) -> Option<(TypeableField, String)> {
+    // BUG-995: `nid` is `self.focused_node`, which can outlive the
+    // document it was focused in (navigation doesn't clear it) — a
+    // bare `doc.get` would panic on a NodeId from an arena that no
+    // longer exists.
+    let node = doc.try_get(nid)?;
+    if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
+        return None;
+    }
+    if node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("textarea")) {
+        return Some((TypeableField::Textarea, doc.control_value(nid).into_owned()));
+    }
+    let is_typeable_input = matches!(
+        node.input_type(),
+        Some(lumen_dom::InputType::Text)
+            | Some(lumen_dom::InputType::Password)
+            | Some(lumen_dom::InputType::Email)
+            | Some(lumen_dom::InputType::Tel)
+            | Some(lumen_dom::InputType::Url)
+            | Some(lumen_dom::InputType::Number)
+            | Some(lumen_dom::InputType::Search)
+    );
+    if !is_typeable_input {
+        return None;
+    }
+    Some((TypeableField::Input, doc.control_value(nid).into_owned()))
 }

@@ -858,13 +858,11 @@ impl Lumen {
         // диапазоны анимируемых сегментов — скролл-композитор кэширует полосу
         // по статике, сегменты рисует поверх. Позднейшие append-ы в anim_dl
         // (cue, squiggles) идут в конец списка и диапазоны не сдвигают.
-        // FRAME-7: the focused `<input>`'s caret rides the same per-NodeId
-        // override map as CSS-animation offload — computed up front (before
-        // `frame`/`lb` are borrowed) since it needs `&self`, not the
-        // `anim_frame`/`layout_box` fields specifically.
+        // FRAME-7: the focused `<input>`'s caret and selection ride the same
+        // per-NodeId override map as CSS-animation offload. BUG-1108: all
+        // focused-field paint reads the `try_lock` snapshot refreshed here.
+        self.refresh_focused_field_snapshot();
         let caret_override = self.focused_input_caret();
-        // FRAME-7 remainder 2: the focused `<input>`'s selection range, same
-        // override channel as the caret above.
         let selection_override = self.focused_input_selection();
         let mut anim_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         let mut anim_dl: Option<lumen_paint::DisplayList> =
@@ -1323,7 +1321,7 @@ impl Lumen {
         // считаются верными.
         if let (Some(nid), Some(dicts)) = (self.focused_node, SPELL_DICTS.get())
             && !dicts.is_empty()
-            && let Some((target_nid, placeholder, _kind)) = self.spell_target(nid)
+            && let Some((target_nid, placeholder, _kind)) = self.focused_field_snapshot.spell(nid)
             && let Some(node_lb) = self
                 .layout_box
                 .as_ref()

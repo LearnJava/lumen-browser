@@ -476,7 +476,7 @@ A/B `--dump-display-list --viewport 1024x720` по 180 страницам
 
 **Не относится к памяти и вынесено:**
 - блокирующий `document.lock()` в `typeable_field` (`text_input.rs`) при
-  фокусе в поле — [BUG-1108](BUG-1108-OPEN.md);
+  фокусе в поле — [BUG-1108](BUG-1108-FIXED.md);
 - `first non-empty frame` 125 с и задачи `page_load.rs:2349` (72 с) /
   `deliver_layout_observers` (35 с) — класс [BUG-935](BUG-935-OPEN.md);
 - повтор relayout каждые 11-16 с (срез 7) в этом прогоне (300 с) не
