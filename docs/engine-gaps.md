@@ -37,7 +37,6 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 ## Media
 
 - **Only an animated GIF decodes as a media resource**, so `canPlayType` answers `""` for mp4/webm/ogg and resource selection ends in `MEDIA_ERR_SRC_NOT_SUPPORTED` **without issuing a request at all** — the server never sees the file (`GAP-MEDIADECODE`, measured 2026-09-01). A probe that waits for `loadstart`/`loadedmetadata`/`canplay`/`play` can only hang; only the `error` half arrives.
-- **An `<audio>` `src` is not resolved against the document base**, so a relative URL dies as `MEDIA_ERR_SRC_NOT_SUPPORTED` with no request on the server ([BUG-924](../bugs/BUG-924-OPEN.md)). `<audio>` and `<video>` are two different models — `<audio>` still dispatches synchronously — so run a media probe against both.
 - **`<video src="">`/`<audio src="">` never fire `loadstart`** — `<video>` still fires `error`; `<audio>` fires neither event at all ([BUG-955](../bugs/BUG-955-OPEN.md)). A probe arming `loadstart` before its assertions hangs on an empty-string `src`, not just on a missing one.
 
 ## DOM / CSSOM surface that is simply absent

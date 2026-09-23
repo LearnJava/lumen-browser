@@ -42,7 +42,7 @@ replay-test [1] audio.currentSrc after setting src attribute "" ::
 
 Ровно то, что уже написано в `video_bindings.rs`: завести `_currentSrc` в
 `patchAudioElement`, обновлять из того же места, где считается абсолютный URL
-(`startLoad`, см. [BUG-924](BUG-924-OPEN.md) — там же живёт нерезолвленный
+(`startLoad`, см. [BUG-924](BUG-924-FIXED.md) — там же живёт нерезолвленный
 относительный путь), опубликовать геттером с начальным `''`.
 
 Общая форма, из-за которой это и разъехалось, уже записана в `CLAUDE.md`:
