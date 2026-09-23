@@ -20,6 +20,7 @@ mod docking;
 mod file_picker;
 mod find_bar;
 mod focus_tab;
+mod focused_field_snapshot;
 mod form_submit;
 mod frame_dynamic;
 mod frame_form_submit;
@@ -56,6 +57,7 @@ mod viewport;
 mod viewport_sync;
 
 pub(crate) use state::Lumen;
+pub(crate) use focused_field_snapshot::FocusedFieldSnapshot;
 /// BUG-1044: the automation hit check is a free function (no `Lumen` needed to
 /// decide it), so it is re-exported here for `crate::tests` the same way the
 /// struct above is — the fixtures for it are real layout trees, not a window.

@@ -730,6 +730,10 @@ pub(crate) struct Lumen {
     /// the engine thread holds it for a whole off-thread relayout, seconds
     /// on github.com — and falls back to this list while it is contended.
     pub(crate) modal_dialog_cache: (usize, Vec<NodeId>),
+    /// BUG-1108: the focused control's value/kind and spell target as last
+    /// read by the redraw path — the same `try_lock`-and-fall-back scheme as
+    /// [`Self::modal_dialog_cache`], for the caret/selection/squiggle paint.
+    pub(crate) focused_field_snapshot: super::FocusedFieldSnapshot,
     /// Persistent `localStorage` partitions keyed by origin (scheme+host+port).
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.

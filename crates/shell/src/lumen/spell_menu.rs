@@ -24,29 +24,8 @@ impl Lumen {
         &self,
         nid: lumen_dom::NodeId,
     ) -> Option<(lumen_dom::NodeId, String, page_context_menu::SpellTargetKind)> {
-        use page_context_menu::SpellTargetKind;
-        let ls = self.layout_source.as_ref()?;
-        let doc = ls.document.lock().ok()?;
-        let node = doc.get(nid);
-        if let Some(name) = node.element_name() {
-            let is_textarea = name.local.eq_ignore_ascii_case("textarea");
-            let is_text_input = name.local.eq_ignore_ascii_case("input")
-                && matches!(
-                    node.get_attr("type")
-                        .unwrap_or("text")
-                        .to_ascii_lowercase()
-                        .as_str(),
-                    "text" | "search" | "email" | "url"
-                );
-            if is_textarea || is_text_input {
-                let placeholder = node.get_attr("placeholder").unwrap_or_default().to_owned();
-                let kind = if is_textarea { SpellTargetKind::Textarea } else { SpellTargetKind::Input };
-                return Some((nid, placeholder, kind));
-            }
-        }
-        // contenteditable: check the DOM directly for an editing host.
-        lumen_dom::find_editing_host(&doc, nid)
-            .map(|host| (host, String::new(), SpellTargetKind::ContentEditable))
+        let doc = self.layout_source.as_ref()?.document.lock().ok()?;
+        spell_target_in(&doc, nid)
     }
 
     /// P3-spell срез 3: слова, которые не считаются ошибочными помимо словарей —
@@ -274,4 +253,36 @@ impl Lumen {
             }
         }
     }
+}
+
+/// [`Lumen::spell_target`] against an already-locked `doc` — shared with the
+/// redraw path's non-blocking snapshot (BUG-1108), which paints the squiggles
+/// and must not wait for the lock itself.
+pub(crate) fn spell_target_in(
+    doc: &lumen_dom::Document,
+    nid: lumen_dom::NodeId,
+) -> Option<(lumen_dom::NodeId, String, page_context_menu::SpellTargetKind)> {
+    use page_context_menu::SpellTargetKind;
+    // BUG-995: `nid` is `focused_node`, which can outlive its document —
+    // `try_get`, not `get`, so a stale id reads as "no target", not a panic.
+    let node = doc.try_get(nid)?;
+    if let Some(name) = node.element_name() {
+        let is_textarea = name.local.eq_ignore_ascii_case("textarea");
+        let is_text_input = name.local.eq_ignore_ascii_case("input")
+            && matches!(
+                node.get_attr("type")
+                    .unwrap_or("text")
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "text" | "search" | "email" | "url"
+            );
+        if is_textarea || is_text_input {
+            let placeholder = node.get_attr("placeholder").unwrap_or_default().to_owned();
+            let kind = if is_textarea { SpellTargetKind::Textarea } else { SpellTargetKind::Input };
+            return Some((nid, placeholder, kind));
+        }
+    }
+    // contenteditable: check the DOM directly for an editing host.
+    lumen_dom::find_editing_host(doc, nid)
+        .map(|host| (host, String::new(), SpellTargetKind::ContentEditable))
 }
