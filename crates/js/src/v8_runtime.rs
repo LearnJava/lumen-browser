@@ -277,6 +277,7 @@ impl V8JsRuntime {
             let adopted_stylesheets = Arc::clone(&self.adopted_stylesheets);
             let pseudo_styles_needed = Arc::clone(&self.pseudo_styles_needed);
             let custom_props_needed = Arc::clone(&self.custom_props_needed);
+            let computed_styles_needed = Arc::clone(&self.computed_styles_needed);
             // CSSOM-4/BUG-493: bundled handles a same-tick accessor native
             // needs to force a synchronous style+layout flush before reading
             // `computed_styles`/`layout_rects`/`custom_properties`.
@@ -299,6 +300,8 @@ impl V8JsRuntime {
                 cssom_dirty: Arc::clone(&self.cssom_dirty),
                 pseudo_styles_needed: Arc::clone(&self.pseudo_styles_needed),
                 custom_props_needed: Arc::clone(&self.custom_props_needed),
+                computed_styles_needed: Arc::clone(&self.computed_styles_needed),
+                computed_styles_collected: Arc::clone(&self.computed_styles_collected),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
@@ -491,6 +494,7 @@ impl V8JsRuntime {
                 flush_handles.clone(),
                 Arc::clone(&pseudo_styles_needed),
                 Arc::clone(&custom_props_needed),
+                Arc::clone(&computed_styles_needed),
             )?;
 
             install::install_stylesheets(

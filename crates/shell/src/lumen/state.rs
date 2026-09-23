@@ -831,6 +831,10 @@ pub(crate) struct Lumen {
     /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed_flag`] for
     /// `_lumen_get_custom_property`/`_lumen_get_computed_style_entries`.
     pub(crate) custom_props_needed_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// BUG-935 S44: sibling of [`Self::pseudo_styles_needed_flag`] for
+    /// `collect_computed_styles` itself — set by `_lumen_get_computed_style`/
+    /// `_lumen_get_computed_style_entries`/`_lumen_request_scroll`.
+    pub(crate) computed_styles_needed_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// ADR-016 M2.3: `true` while a `run_animation_frame` batch dispatched to the
     /// engine thread is still executing. Set by the UI thread before firing the
     /// (fire-and-forget) rAF `task`, cleared by that task on completion. Guards

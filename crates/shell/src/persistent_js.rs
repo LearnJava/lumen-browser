@@ -155,6 +155,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn custom_props_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
     }
+    /// BUG-935 S44: sibling of [`Self::pseudo_styles_needed_flag`] for
+    /// `lumen_layout::collect_computed_styles` itself, set by
+    /// `_lumen_get_computed_style`/`_lumen_get_computed_style_entries`/
+    /// `_lumen_request_scroll` (the one non-`getComputedStyle`-family reader,
+    /// S42's consumer audit).
+    fn computed_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
     /// Push a fresh snapshot of layout bounding rects into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -1031,6 +1039,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn custom_props_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         Some(self.rt.custom_props_needed_flag())
+    }
+    fn computed_styles_needed_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.computed_styles_needed_flag())
     }
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         self.rt.update_layout_rects(rects);

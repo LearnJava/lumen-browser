@@ -631,6 +631,12 @@ pub(crate) fn install_scroll_state(
     // (BUG-975) needs its own handle on the same cache plus `computed_styles`.
     let ss_for_request = Arc::clone(&flush.scroll_states);
     let cs_for_request = Arc::clone(&flush.computed_styles);
+    // BUG-935 S44: this closure is the one non-`getComputedStyle`-family
+    // reader of `computed_styles` (S42's audit) — it must set the same
+    // "needed" flag the collector in `FlushHandles::maybe_flush` gates on,
+    // or a page that only ever scrolls an `overflow: clip` container (never
+    // calling `getComputedStyle`) would see the cache permanently empty.
+    let cs_needed_for_request = Arc::clone(&flush.computed_styles_needed);
     {
         let ss = Arc::clone(&flush.scroll_states);
         reg!(scope, ctx, store, "_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
@@ -673,6 +679,7 @@ pub(crate) fn install_scroll_state(
     {
         let ps = Arc::clone(&pending_scrolls);
         reg!(scope, ctx, store, "_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
+            cs_needed_for_request.store(true, Ordering::Relaxed);
             ps.lock().unwrap().push((nid, x as f32, y as f32));
             let mut states = ss_for_request.lock().unwrap();
             let styles = cs_for_request.lock().unwrap();
@@ -846,6 +853,7 @@ pub(crate) fn install_computed_styles(
     flush: FlushHandles,
     pseudo_styles_needed: Arc<AtomicBool>,
     custom_props_needed: Arc<AtomicBool>,
+    computed_styles_needed: Arc<AtomicBool>,
 ) -> JsResult<()> {
     // ── Computed styles (window.getComputedStyle) ────────────────────────────────
     // Returns the resolved CSS value for `prop` on node `nid`, or "" if unknown.
@@ -855,7 +863,9 @@ pub(crate) fn install_computed_styles(
     {
         let cs = Arc::clone(&computed_styles);
         let flush = flush.clone();
+        let needed = Arc::clone(&computed_styles_needed);
         reg!(scope, ctx, store, "_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
+            needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
             cs.lock()
                 .unwrap()
@@ -1255,10 +1265,13 @@ pub(crate) fn install_crypto_and_typed_om(
         // stored per node).
         let cs = Arc::clone(&computed_styles);
         let cp = Arc::clone(&custom_properties);
+        let computed_styles_needed_for_entries = Arc::clone(&flush.computed_styles_needed);
         reg!(scope, ctx, store, "_lumen_get_computed_style_entries", move |nid: u32| -> String {
-            // BUG-935 S43: `computedStyleMap()` merges custom properties into
-            // its answer (below), so this counts as a read of that cache too.
+            // BUG-935 S43/S44: `computedStyleMap()` merges custom properties
+            // into its answer (below) and is itself a `computed_styles` read,
+            // so both "needed" flags must be set here.
             custom_props_needed.store(true, Ordering::Relaxed);
+            computed_styles_needed_for_entries.store(true, Ordering::Relaxed);
             // CSSOM-4/BUG-493: same same-tick staleness as `getComputedStyle`
             // itself — `computedStyleMap()` reads the identical snapshot.
             flush.maybe_flush();
