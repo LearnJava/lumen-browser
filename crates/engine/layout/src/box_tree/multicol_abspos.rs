@@ -239,7 +239,19 @@ pub(crate) fn build_multicol_init(
 ///   for the row axis), and no such rule exists yet, so the block rule would
 ///   under-measure a multi-column grid into one column's width. Stretching is
 ///   the safer failure mode until that rule lands.
+///
+/// `BoxKind::FormControl` is excluded *except* `Button`/`Select`, whose used
+/// width already comes from their rendered content (BUG-926,
+/// [`form_control_fit_content_width`]) rather than a fixed replaced-element
+/// intrinsic size — an absolutely positioned icon `<button>` with only
+/// `right` set has no `left`/`width`, so without this it stretched to the
+/// full containing block instead of shrinking to its SVG icon (BUG-1047).
+/// The remaining kinds (checkbox, radio, text entry, range, …) keep the old
+/// replaced-element behaviour: they have no rendered label to measure.
 fn abs_box_shrinks_to_fit(b: &LayoutBox) -> bool {
+    if let BoxKind::FormControl { kind } = &b.kind {
+        return matches!(kind, FormControlKind::Button | FormControlKind::Select { .. });
+    }
     !matches!(
         b.kind,
         BoxKind::Skip
@@ -247,7 +259,6 @@ fn abs_box_shrinks_to_fit(b: &LayoutBox) -> bool {
             | BoxKind::Video { .. }
             | BoxKind::Canvas { .. }
             | BoxKind::Iframe { .. }
-            | BoxKind::FormControl { .. }
             | BoxKind::Table
     ) && !matches!(b.style.display, Display::Grid | Display::InlineGrid)
 }
@@ -327,8 +338,16 @@ pub(crate) fn lay_out_abs_children(
             let child = &parent.children[idx];
             let free =
                 (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0) - c_ml - c_mr).max(0.0);
-            let max_c = max_content_outer_width(child, measurer, viewport);
-            let min_c = min_content_outer_width(child, measurer, viewport);
+            // A form control's content (button label/icon) does not wrap, so its
+            // max-content and min-content coincide — same shortcut `intrinsic.rs`
+            // uses at the call sites of `form_control_fit_content_width`.
+            let (max_c, min_c) = match form_control_fit_content_width(child, measurer, viewport) {
+                Some(fc) => (fc, fc),
+                None => (
+                    max_content_outer_width(child, measurer, viewport),
+                    min_content_outer_width(child, measurer, viewport),
+                ),
+            };
             max_c.min(min_c.max(free)) + c_ml + c_mr
         } else {
             cb.width

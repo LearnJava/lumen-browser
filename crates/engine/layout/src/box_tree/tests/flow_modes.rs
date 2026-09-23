@@ -412,6 +412,36 @@ fn bug745_shrink_to_fit_never_below_min_content() {
 }
 
 #[test]
+fn bug1047_abs_button_auto_width_shrinks_to_fit() {
+    // BUG-1047: an absolutely positioned `<button>` (BoxKind::FormControl) with
+    // `width: auto` and only `right` set (no `left`) must shrink-to-fit its
+    // rendered content (BUG-926, form_control_fit_content_width), not stretch
+    // to the containing block's full width — the "icon inside an input" UI
+    // pattern (e.g. a password-visibility toggle) otherwise covers the whole
+    // field and intercepts clicks meant for the sibling `<input>`.
+    let html = r#"<div id="cb"><button id="btn"><span id="icon"></span></button></div>"#;
+    let css = "body { margin: 0 } #cb { position: relative; width: 400px; height: 200px; } \
+               #btn { position: absolute; right: 12px; top: 8px; } \
+               #icon { display: inline-block; width: 20px; height: 20px; }";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+    let btn = super::find_by_id_all(&root, &doc, "btn").expect("btn not found");
+    assert!(
+        btn.rect.width < 400.0,
+        "button must shrink-to-fit, not stretch to the containing block (400), got {}",
+        btn.rect.width
+    );
+    // UA stylesheet gives `<button>` its own border/padding, so the shrunk
+    // width is the icon plus that frame, not the bare icon width.
+    assert!(
+        (20.0..30.0).contains(&btn.rect.width),
+        "button width must track its icon content (~20 + UA frame), got {}",
+        btn.rect.width
+    );
+}
+
+#[test]
 fn bug745_explicit_width_and_both_insets_unaffected() {
     // Both "anchored" branches keep their pre-BUG-745 behaviour: an explicit
     // width wins over shrink-to-fit, and both insets given resolve the width
