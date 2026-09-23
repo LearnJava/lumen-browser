@@ -1,4 +1,4 @@
-FillRect (0.00, 0.00, 1024.00, 721.00) #ff00ffff
+FillRect (0.00, 1.00, 1024.00, 720.00) #ff00ffff
 FillRect (1.00, 1.00, 1022.00, 718.00) #f5f5f5ff
 PushClipRect (1.00, 1.00, 1022.00, 718.00)
 FillRect (1.00, 1.00, 490.56, 150.00) #ffffffff

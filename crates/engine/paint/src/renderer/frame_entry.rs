@@ -308,9 +308,17 @@ impl Renderer {
     /// [`Self::set_font_provider`]. `None` reproduces
     /// [`Self::render_to_image_cpu`] exactly.
     ///
+    /// `canvas_background` is the CPU twin of [`Self::set_canvas_background`]:
+    /// the surface clears to it before the display list is drawn (`None` → UA
+    /// white). Pass `lumen_layout::canvas_background_color` of the page's
+    /// layout root — since BUG-1103 that is the only place `<body>`'s
+    /// propagated background reaches paint (BUG-1106: without it the headless
+    /// path left body's margins and everything below the content white).
+    ///
     /// # Errors
     /// Returns `Err` if image creation fails or if display command processing fails.
     #[cfg(feature = "cpu-render")]
+    #[allow(clippy::too_many_arguments)] // mirrors rasterize_cpu_with_fonts 1:1
     pub fn render_to_image_cpu_with_fonts(
         width: u32,
         height: u32,
@@ -319,9 +327,10 @@ impl Renderer {
         scroll_x: f32,
         scroll_y: f32,
         font_provider: Option<&dyn lumen_core::FontProvider>,
+        canvas_background: Option<lumen_layout::Color>,
     ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
         crate::cpu_raster::rasterize_cpu_with_fonts(
-            width, height, commands, images, scroll_x, scroll_y, font_provider,
+            width, height, commands, images, scroll_x, scroll_y, font_provider, canvas_background,
         )
     }
 

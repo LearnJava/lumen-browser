@@ -1,9 +1,9 @@
 Block rect=(0.00, 0.00, 1024.00, 721.00)
   Skip rect=(0.00, 0.00, 0.00, 0.00)
-  Block rect=(0.00, 0.00, 1024.00, 721.00) bg=#ff00ffff
+  Block rect=(0.00, 0.00, 1024.00, 721.00)
     Skip rect=(0.00, 0.00, 0.00, 0.00) display=none
     Skip rect=(0.00, 0.00, 0.00, 0.00)
-    Block rect=(0.00, 1.00, 1024.00, 720.00) w=1024.00 h=720.00
+    Block rect=(0.00, 1.00, 1024.00, 720.00) bg=#ff00ffff w=1024.00 h=720.00
       Skip rect=(0.00, 1.00, 0.00, 0.00)
       Block rect=(1.00, 1.00, 1022.00, 718.00) bg=#f5f5f5ff display=flex w=1022.00 h=718.00 overflow=hidden/hidden m=(1.00, 1.00, 1.00, 1.00)
         Block rect=(1.00, 1.00, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)

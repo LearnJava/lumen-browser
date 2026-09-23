@@ -1,4 +1,4 @@
-FillRect (0.00, 0.00, 1024.00, 415.19) #fafafaff
+FillRect (8.00, 8.00, 1008.00, 399.19) #fafafaff
 FillRect (28.00, 49.44, 968.00, 59.44) #ff8800ff
 DrawText (40.00, 63.16, 944.00, 35.44) "Привет, мир!" 32.00 #ffffffff family=["serif"] w=700 var=["opsz"=32]
 FillRect (28.00, 120.88, 968.00, 33.72) #e0e0e0ff

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use lumen_core::ext::{FontProvider, MemoryPressureLevel};
 use lumen_core::geom::Size;
 use lumen_image::Image;
+use lumen_layout::Color;
 
 use crate::backend::{RenderBackend, RenderError};
 use crate::DisplayCommand;
@@ -35,6 +36,9 @@ pub struct CpuBackend {
     height: u32,
     /// RGBA8-пиксели последнего вызова [`render`][RenderBackend::render].
     last_pixels: Option<Vec<u8>>,
+    /// Цвет очистки поверхности из [`set_canvas_background`][RenderBackend::set_canvas_background]
+    /// (`None` — UA-белый), как у wgpu-бэкенда (BUG-1106).
+    canvas_bg: Option<Color>,
 }
 
 impl CpuBackend {
@@ -42,7 +46,7 @@ impl CpuBackend {
     ///
     /// `width` и `height` — физические пиксели (без HiDPI scale).
     pub fn new(width: u32, height: u32) -> Self {
-        Self { width, height, last_pixels: None }
+        Self { width, height, last_pixels: None, canvas_bg: None }
     }
 
     /// Возвращает Image из последнего рендера, если он был выполнен.
@@ -71,8 +75,10 @@ impl RenderBackend for CpuBackend {
         commands.extend_from_slice(overlay);
 
         let image =
-            crate::cpu_raster::rasterize_cpu(self.width, self.height, &commands, &[], scroll_x, scroll_y)
-                .map_err(|e| RenderError::Other(e.to_string()))?;
+            crate::cpu_raster::rasterize_cpu_with_fonts(
+                self.width, self.height, &commands, &[], scroll_x, scroll_y, None, self.canvas_bg,
+            )
+            .map_err(|e| RenderError::Other(e.to_string()))?;
 
         self.last_pixels = Some(image.to_rgba8());
         Ok(())
@@ -96,6 +102,10 @@ impl RenderBackend for CpuBackend {
     }
 
     fn clear_images(&mut self) {}
+
+    fn set_canvas_background(&mut self, color: Option<Color>) {
+        self.canvas_bg = color;
+    }
 
     fn set_font_provider(&mut self, _provider: Option<Arc<dyn FontProvider>>) {
         // CPU-бэкенд использует только bundled Inter — внешний провайдер игнорируется.
@@ -124,7 +134,6 @@ impl RenderBackend for CpuBackend {
 mod tests {
     use super::*;
     use lumen_core::geom::Rect;
-    use lumen_layout::Color;
 
     fn red() -> Color {
         Color { r: 255, g: 0, b: 0, a: 255 }
@@ -162,6 +171,23 @@ mod tests {
         assert!(px[1] < 50, "G канал должен быть низким: {}", px[1]);
         assert!(px[2] < 50, "B канал должен быть низким: {}", px[2]);
         assert_eq!(px[3], 255, "A должен быть 255");
+    }
+
+    /// BUG-1106: пропагированный фон `<body>` приходит только через
+    /// `set_canvas_background` (с BUG-1103 его нет в display list), поэтому
+    /// очистка обязана заливать им всю поверхность, в том числе там, где
+    /// нет ни одной команды, — иначе поля body остаются белыми.
+    #[test]
+    fn cpu_backend_clears_to_canvas_background() {
+        let mut b = CpuBackend::new(8, 8);
+        b.set_canvas_background(Some(red()));
+        b.render(&[], &[], 0.0, 0.0).expect("render OK");
+        let px = b.screenshot_rgba().expect("пиксели есть после render");
+        assert_eq!(&px[..4], &[255, 0, 0, 255], "угол залит цветом канвы");
+        b.set_canvas_background(None);
+        b.render(&[], &[], 0.0, 0.0).expect("render OK");
+        let px = b.screenshot_rgba().expect("пиксели есть после render");
+        assert_eq!(&px[..4], &[255, 255, 255, 255], "None — UA-белый");
     }
 
     #[test]
