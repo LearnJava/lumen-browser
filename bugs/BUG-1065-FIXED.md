@@ -1,6 +1,6 @@
 # BUG-1065 — CSS-эскейпы в селекторах (`#\61 bc`, `#a\62 c`, `#a\bc`) отвергаются как невалидные, из-за чего умирает `test_driver.click`/`send_keys` даже на элементе с `id`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P3)
 **Тип:** дефект реализованного кода — `querySelector`/`querySelectorAll`/`matches`/`closest` бросают `SyntaxError` на корректном селекторе с экранированным идентификатором (CSS Syntax L3 §4.3.7 «consume an escaped code point», CSSOM §«escape»).
 **Заведён:** 2026-09-19 (WPT-RUN-7 срез 36, `shadow-dom`; найден при проверке утверждения для [BUG-1063](BUG-1063-OPEN.md))
 **Область:** `lumen_css_parser::is_valid_selector_list` — её вердикт использует `_lumen_selector_is_valid` (`crates/js/src/v8_runtime/install/dom_core.rs:317`), после чего шим `_lumen_sel` (`crates/js/src/shim/web_api_shim_head.js:104`) бросает `SyntaxError`. Где именно в разборе теряется `\` — токенизатор или разбор compound-селектора — проба не различает.
@@ -85,3 +85,51 @@ for (...) selector += '\\' + id.charCodeAt(i).toString(16) + ' ';
 `<div class="w-1/2">`, `<div class="md:flex">` — оба правила не применились (блоки 1008×0).
 Это каждый класс Tailwind с экранированием (`md:`/`hover:`/`w-1/2`/`[…]`-arbitrary values) —
 адаптивная вёрстка любого Tailwind-сайта. Поэтому баг стоит вторым в `STATUS-P3.md`.
+
+## Исправлено (2026-09-23, P3)
+
+`parse_ident` (`crates/engine/css-parser/src/parser.rs`) не знал про CSS-эскейпы вовсе — это
+общая точка входа, которую используют и `SimpleSelector::Id`/`Class`/`Type` (`parser/selectors.rs`),
+и общий разбор идентификаторов остального парсера, так что оба пути из симптома (селекторный
+API через `_lumen_selector_is_valid`/`is_valid_selector_list`, и разбор таблицы стилей при
+каскаде) чинятся одним изменением, без отдельной правки в каждом месте.
+
+Добавлены (CSS Syntax L3 §4.3.7/§4.3.8):
+- `Parser::at_escape_start` — `\`, не являющийся последним символом и не сопровождаемый
+  переводом строки, начинает escape;
+- `Parser::consume_escaped_code_point` — 1–6 hex-цифр (жадно) + один необязательный пробельный
+  терминатор (`\r\n` считается одним), код 0/суррогат/вне диапазона Unicode заменяется на
+  U+FFFD; если первый символ после `\` не hex-цифра — identity-эскейп (сам символ буквально);
+  `\` в конце ввода — U+FFFD;
+- `Parser::peek_at(n)` — лукахед на n кодпоинтов вперёд, нужен для проверки «после `\` — не
+  перевод строки».
+
+`parse_ident` теперь и на первом символе, и в цикле продолжения идентификатора обрабатывает
+`\` через эти хелперы вместо `is_ident_start`/`is_ident_continue`. В `selectors.rs` матч
+type-селектора (`c if is_ident_start(c) => …`) дополнен веткой `|| c == '\\'`, чтобы
+экранированное имя тега тоже доходило до `parse_ident` (раньше отсекалось на уровне диспетчера
+до вызова).
+
+Матчинг элементов (`layout/src/style/matching.rs`, `SimpleSelector::Class`/`Id`) сравнивает уже
+раскрытую (не экранированную) строку с атрибутом `class`/`id` — раскрытие эскейпа в
+`parse_ident` даёт ровно то литеральное значение, поэтому дополнительных изменений в layout не
+требуется.
+
+Живая проверка (`--dump-layout`, dev-release): `<style>.w-1\/2{width:123px}.md\:flex{width:77px}</style>`
++ `<div class="w-1/2">`/`<div class="md:flex">` — оба правила применяются (было 1008×0, стало
+123×10/77×10); `document.querySelector("#\\61 bc")`/`("#a\\62 c")` на `<div id="abc">` находят
+элемент (было `SyntaxError`) — проверено через побочный эффект на layout (ширина маркер-узла,
+установленная по результату `querySelector`), а не через `console.log`.
+
+Юнит-тесты (`crates/engine/css-parser/src/parser/tests/selectors.rs`): hex-эскейп с пробелом-
+терминатором, hex-эскейп в середине идентификатора, жадный захват `\62c` как одного 3-значного
+hex-кода (а не `\62`+`c`), цепочка эскейпов, identity-эскейп, class-эскейпы в стиле Tailwind
+(`.w-1\/2`, `.md\:flex`), `is_valid_selector_list` на всём наборе. `cargo test -p lumen-css-parser`
+520/520, `cargo clippy -p lumen-css-parser --all-targets -- -D warnings` чист.
+
+Не в скоупе (осталось не проверено): эскейпы в атрибутных/псевдоклассовых значениях за пределами
+`parse_ident` (сами селекторы `[attr=value]`/`:lang(...)` используют тот же `parse_ident`/
+`parse_attr_value`, но отдельно не пробовались), `CSS.escape()`. Косвенная приёмка вместе с
+[BUG-1063](BUG-1063-OPEN.md) (WPT `shadow-dom`/`pointerevents`/`editing` — обе ветки
+`testdriver-extra.js::get_selector`) не переизмерялась в этом срезе; baseline `tests/wpt/metadata/**`
+для затронутых категорий предстоит перегенерировать отдельным прогоном.

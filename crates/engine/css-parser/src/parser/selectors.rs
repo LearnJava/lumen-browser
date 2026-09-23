@@ -1163,7 +1163,7 @@ impl<'a> Parser<'a> {
             }
             '[' => self.parse_attr_selector(),
             ':' => self.parse_pseudo(),
-            c if is_ident_start(c) => Some(SimpleSelector::Type(self.parse_ident()?)),
+            c if is_ident_start(c) || c == '\\' => Some(SimpleSelector::Type(self.parse_ident()?)),
             _ => None,
         }
     }

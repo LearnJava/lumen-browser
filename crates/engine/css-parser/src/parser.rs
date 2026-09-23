@@ -1110,6 +1110,12 @@ impl<'a> Parser<'a> {
         &self.input[self.pos..]
     }
 
+    /// Lookahead beyond the current position, `n` code points ahead
+    /// (`n == 0` is equivalent to [`Self::peek`]).
+    fn peek_at(&self, n: usize) -> Option<char> {
+        self.input[self.pos..].chars().nth(n)
+    }
+
     fn skip_ws_and_comments(&mut self) {
         loop {
             while let Some(c) = self.peek() {
@@ -1763,19 +1769,78 @@ impl<'a> Parser<'a> {
 
     fn parse_ident(&mut self) -> Option<String> {
         let first = self.peek()?;
-        if !is_ident_start(first) {
+        if !is_ident_start(first) && !self.at_escape_start() {
             return None;
         }
         let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if is_ident_continue(c) {
-                self.consume();
-                s.push(c);
-            } else {
-                break;
+        loop {
+            match self.peek() {
+                Some('\\') if self.at_escape_start() => {
+                    self.consume();
+                    if let Some(c) = self.consume_escaped_code_point() {
+                        s.push(c);
+                    }
+                }
+                Some(c) if is_ident_continue(c) => {
+                    self.consume();
+                    s.push(c);
+                }
+                _ => break,
             }
         }
         Some(s)
+    }
+
+    /// CSS Syntax L3 §4.3.8 "check if two code points are a valid escape":
+    /// a `\` starts an escape unless it is immediately followed by a
+    /// newline (or nothing).
+    fn at_escape_start(&self) -> bool {
+        self.peek() == Some('\\') && !matches!(self.peek_at(1), None | Some('\n'))
+    }
+
+    /// CSS Syntax L3 §4.3.7 "consume an escaped code point". Caller has
+    /// already consumed the leading `\`.
+    fn consume_escaped_code_point(&mut self) -> Option<char> {
+        match self.peek() {
+            Some(c) if c.is_ascii_hexdigit() => {
+                let mut hex = String::new();
+                while hex.len() < 6 {
+                    match self.peek() {
+                        Some(h) if h.is_ascii_hexdigit() => {
+                            hex.push(h);
+                            self.consume();
+                        }
+                        _ => break,
+                    }
+                }
+                // A single trailing whitespace code point terminates the
+                // escape without becoming part of the ident itself.
+                match self.peek() {
+                    Some('\r') => {
+                        self.consume();
+                        if self.peek() == Some('\n') {
+                            self.consume();
+                        }
+                    }
+                    Some('\t' | '\n' | '\x0C' | ' ') => {
+                        self.consume();
+                    }
+                    _ => {}
+                }
+                let code = u32::from_str_radix(&hex, 16).unwrap_or(0);
+                if code == 0 || char::from_u32(code).is_none() || (0xD800..=0xDFFF).contains(&code)
+                {
+                    Some('\u{FFFD}')
+                } else {
+                    char::from_u32(code)
+                }
+            }
+            Some(c) => {
+                self.consume();
+                Some(c)
+            }
+            None => Some('\u{FFFD}'),
+        }
     }
 
 }

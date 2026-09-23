@@ -296,6 +296,69 @@ use super::*;
         assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Id("bar".into()))]);
     }
 
+    // BUG-1065 — CSS Syntax L3 §4.3.7 "consume an escaped code point":
+    // hex escapes (1-6 hex digits + optional whitespace terminator) and
+    // identity escapes (`\` + any other non-newline code point) inside
+    // identifiers.
+    #[test]
+    fn id_selector_hex_escape_with_whitespace_terminator() {
+        let s = parse("#\\61 bc { color: red; }");
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Id("abc".into()))]);
+    }
+
+    #[test]
+    fn id_selector_hex_escape_mid_ident() {
+        let s = parse("#a\\62 c { color: red; }");
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Id("abc".into()))]);
+    }
+
+    #[test]
+    fn id_selector_hex_escape_greedily_consumes_trailing_hex_digits() {
+        // `\62c` is three hex digits (6, 2, c), not `\62` + literal `c`.
+        let s = parse("#a\\62c { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors,
+            vec![one(SimpleSelector::Id(format!("a{}", char::from_u32(0x62c).unwrap())))]
+        );
+    }
+
+    #[test]
+    fn id_selector_hex_escape_chain() {
+        let s = parse("#\\61 \\62 \\63  { color: red; }");
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Id("abc".into()))]);
+    }
+
+    #[test]
+    fn id_selector_identity_escape() {
+        // `\!` — `!` is not a hex digit, so it is an identity escape.
+        let s = parse("#a\\!bc { color: red; }");
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Id("a!bc".into()))]);
+    }
+
+    #[test]
+    fn class_selector_with_tailwind_style_escapes() {
+        let s = parse(".w-1\\/2 { width: 123px; }");
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Class("w-1/2".into()))]);
+        let s = parse(".md\\:flex { width: 77px; }");
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Class("md:flex".into()))]);
+    }
+
+    #[test]
+    fn valid_selector_list_accepts_css_escapes() {
+        for sel in [
+            "#\\61 bc",
+            "#a\\62 c",
+            "#a\\62c",
+            "#\\61 \\62 \\63 ",
+            "#\\31 x",
+            "#a\\!bc",
+            ".w-1\\/2",
+            ".md\\:flex",
+        ] {
+            assert!(is_valid_selector_list(sel), "expected valid: {sel:?}");
+        }
+    }
+
     #[test]
     fn universal_selector() {
         let s = parse("* { box-sizing: border-box; }");
