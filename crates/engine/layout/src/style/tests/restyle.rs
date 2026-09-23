@@ -449,6 +449,50 @@ use super::*;
     }
 
     #[test]
+    fn custom_props_non_inherited_registered_at_initial_value_stays_shared() {
+        // BUG-683 срез 8: an `inherits: false` registered property already at
+        // its initial value in the parent must not force a copy of the whole
+        // map on the child — dropping and re-adding it changes nothing.
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --sg { syntax: '<length>'; inherits: false; initial-value: 0px; } \
+             div { --gap: 8px; }",
+        );
+        let vp = Size::new(800.0, 600.0);
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, vp, false);
+
+        assert_eq!(p_style.custom_props.get("--sg").map(String::as_str), Some("0px"));
+        assert!(
+            div_style.custom_props.ptr_eq(&p_style.custom_props),
+            "an inherited value equal to the initial one must not fork the map"
+        );
+    }
+
+    #[test]
+    fn custom_props_non_inherited_registered_resets_to_initial_in_child() {
+        // The non-shared arm: a parent that declares a non-initial value still
+        // must not leak it into the child.
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --sg { syntax: '<length>'; inherits: false; initial-value: 0px; } \
+             div { --sg: 5px; }",
+        );
+        let vp = Size::new(800.0, 600.0);
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, vp, false);
+
+        assert_eq!(div_style.custom_props.get("--sg").map(String::as_str), Some("5px"));
+        assert_eq!(p_style.custom_props.get("--sg").map(String::as_str), Some("0px"));
+    }
+
+    #[test]
     fn custom_props_empty_map_is_a_shared_singleton() {
         // Documents that declare no custom property at all must not allocate
         // one map per node — every empty `CustomProps` is the same allocation,
