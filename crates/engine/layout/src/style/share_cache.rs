@@ -37,14 +37,20 @@
 //! repeated children automatically see the same `inherited` pointer too and
 //! become eligible in turn.
 //!
-//! None of this says anything about *selector matching* against ancestors or
-//! siblings — `matches_complex` walks the live DOM tree directly, not
-//! `inherited`. That hazard is handled separately, by
-//! [`crate::style::cascade::compute_style_shareable`] refusing to mark a
-//! result shareable at all when any candidate rule's selector could depend on
-//! DOM context the key does not capture (see that function's doc comment for
-//! the exact conditions, including why this slice is scoped to SVG
-//! presentational elements only).
+//! `matches_complex` walks the live DOM tree directly, not `inherited`, so it
+//! never consults this cache's key at all — but the key's `inherited_ptr`
+//! field turns out to prove something about *selector matching* against
+//! ancestors too (BUG-1112): the same "identity, not equality" propagation
+//! that makes CSS inheritance safe to skip also means two colliding keys can
+//! only arise from a genuinely shared ancestor lineage (see
+//! [`crate::style::cascade::selector_is_share_safe`]'s doc comment for the
+//! induction). That is why `Descendant`/`Child` combinators are allowed to
+//! mark a result shareable — only sibling combinators and anything the key
+//! does not pin at the *subject* node itself (pseudo-classes, non-`class`/
+//! `id` attribute selectors, Shadow DOM, `@scope`) still disqualify it; see
+//! [`crate::style::cascade::compute_style_shareable`]'s doc comment for the
+//! exact conditions, including why this slice is scoped to SVG
+//! presentational elements only.
 
 use std::collections::HashMap;
 use std::sync::Arc;

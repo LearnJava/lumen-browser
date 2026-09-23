@@ -197,16 +197,19 @@ pub fn compute_style(
 ///
 /// `shareable` starts `true` and is only ever narrowed to `false`: any
 /// stylesheet feature whose match result can depend on something the
-/// structural key does not capture (this node's *ancestors* or *siblings*,
-/// not just itself) disqualifies the whole call. Concretely: `@scope`
-/// (position-in-tree), any Shadow DOM in the document (`:host`/`::slotted`
-/// scoping is keyed on thread-local host state, not on the key), and any
-/// candidate rule whose selector has a combinator (descendant/child/sibling
-/// — matches against ancestors/siblings the key is blind to) or a
-/// pseudo-class/attribute-selector part (`:nth-child`, `:hover`, `[data-x]`,
-/// …-  structural or dynamic-state dependence the key does not model). Kept
-/// to SVG presentational elements (`is_svg_presentational_element`) for this
-/// slice: the HTML-side presentational-hint/quirks passes below
+/// structural key does not capture disqualifies the whole call. Concretely:
+/// `@scope` (position-in-tree), any Shadow DOM in the document (`:host`/
+/// `::slotted` scoping is keyed on thread-local host state, not on the key),
+/// and any candidate rule whose selector has a sibling combinator
+/// (`+`/`~` — matches against siblings, which nothing in the key captures at
+/// any level) or a pseudo-class/attribute-selector part (`:nth-child`,
+/// `:hover`, `[data-x]`, …- structural or dynamic-state dependence the key
+/// does not model). `Descendant`/`Child` combinators do *not* disqualify —
+/// see [`selector_is_share_safe`]'s doc comment (BUG-1112) for why the
+/// `inherited_ptr` half of the key already proves ancestor-chain identity
+/// whenever it collides. Kept to SVG presentational elements
+/// (`is_svg_presentational_element`) for this slice: the HTML-side
+/// presentational-hint/quirks passes below
 /// (`apply_bgcolor_presentational_hint`, table/form/quirks helpers) are not
 /// audited for ancestor independence, whereas `apply_svg_presentational_hints`
 /// is a pure function of the node's own attributes plus `inherited`/`viewport`
@@ -1638,17 +1641,38 @@ pub(crate) fn compute_style_shareable(
     (style, shareable)
 }
 
-/// THREAD-4 срез 2 — a rule selector this crate's `RuleIndex` bucketing could
-/// hand back as a candidate for two *different* nodes that share the same
-/// structural key, with a match result that depends on nothing the key does
-/// not capture: a single compound (no combinator — no ancestor/sibling
-/// dependence) built only from `Type`/`Class`/`Id`/`Universal` parts (no
-/// pseudo-class — including harmless-looking `:first-child`/`:hover` — and no
-/// attribute selector beyond `class`/`id`, both of which the key already
-/// pins exactly).
+/// THREAD-4 срез 2, BUG-1112: a rule selector this crate's `RuleIndex`
+/// bucketing could hand back as a candidate for two *different* nodes that
+/// share the same structural key, with a match result that depends on
+/// nothing the key does not capture.
+///
+/// Every compound (subject and any ancestor compounds in `tail`) must be
+/// built only from `Type`/`Class`/`Id`/`Universal` parts — no pseudo-class
+/// (including harmless-looking `:first-child`/`:hover`) and no attribute
+/// selector beyond `class`/`id`, all of which [`build_key`](super::share_cache)
+/// pins exactly for the *subject* node, but which are unverified for an
+/// ancestor a combinator reaches into.
+///
+/// `Descendant`/`Child` combinators ARE allowed (BUG-1112, reversing THREAD-4
+/// срез 2's blanket ban): [`super::share_cache`]'s `inherited_ptr` field is
+/// the address of the *live* `ComputedStyle` allocation the cascade handed
+/// down as this node's `inherited` parameter, and `counters::walk` hands
+/// every child of a node the very same allocation (one `Arc` built once,
+/// read many times, never rebuilt per child). So whenever two nodes' keys
+/// collide on `inherited_ptr`, that pointer equality is not a coincidence
+/// of content — it is only reachable by literally being two children of the
+/// same live parent, or (by induction) two nodes whose own parents already
+/// collided on this cache for the same reason. Either base case forces the
+/// *entire* eligible ancestor chain above both nodes to be pairwise
+/// tag+attrs-identical (down to `is_svg_presentational_element` for every
+/// level involved), all the way to a genuinely shared DOM ancestor — which
+/// makes any `Type`/`Class`/`Id`/`Universal`-only ancestor compound match
+/// identically for both nodes, at any depth. `NextSibling`/`LaterSibling`
+/// stay banned: sibling position is not part of this key at any level, so
+/// nothing here proves two colliding nodes even have comparable siblings.
 fn selector_is_share_safe(sel: &lumen_css_parser::ComplexSelector) -> bool {
-    sel.tail.is_empty()
-        && sel.head.parts.iter().all(|part| {
+    fn compound_is_share_safe(compound: &lumen_css_parser::CompoundSelector) -> bool {
+        compound.parts.iter().all(|part| {
             matches!(
                 part,
                 lumen_css_parser::SimpleSelector::Type(_)
@@ -1656,5 +1680,13 @@ fn selector_is_share_safe(sel: &lumen_css_parser::ComplexSelector) -> bool {
                     | lumen_css_parser::SimpleSelector::Id(_)
                     | lumen_css_parser::SimpleSelector::Universal
             )
+        })
+    }
+    compound_is_share_safe(&sel.head)
+        && sel.tail.iter().all(|(comb, compound)| {
+            matches!(
+                comb,
+                lumen_css_parser::Combinator::Descendant | lumen_css_parser::Combinator::Child
+            ) && compound_is_share_safe(compound)
         })
 }
