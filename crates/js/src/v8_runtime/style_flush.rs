@@ -112,9 +112,17 @@ pub(crate) struct FlushHandles {
     /// `pseudo_computed_styles` outside the `maybe_flush`-gated natives, so
     /// this cannot serve a stale answer.
     pub(crate) pseudo_styles_needed: Arc<AtomicBool>,
+    /// BUG-935 S45: backs [`Self::maybe_flush`]'s `pseudo_styles_pending`
+    /// bypass, mirroring [`Self::computed_styles_collected`] (S44) for this
+    /// cache — closes the same latent same-tick-ordering race S44 found and
+    /// fixed for `computed_styles`, flagged there as dormant for this field.
+    pub(crate) pseudo_styles_collected: Arc<AtomicBool>,
     /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed`] for
     /// [`Self::custom_properties`].
     pub(crate) custom_props_needed: Arc<AtomicBool>,
+    /// BUG-935 S45: sibling of [`Self::pseudo_styles_collected`] for
+    /// [`Self::custom_props_needed`].
+    pub(crate) custom_props_collected: Arc<AtomicBool>,
     /// BUG-935 S44: sibling of [`Self::pseudo_styles_needed`] for
     /// [`Self::computed_styles`] itself — S37's measured dominant cost.
     /// Unlike the other two, this cache also has a non-`getComputedStyle`-family
@@ -189,11 +197,23 @@ impl FlushHandles {
         // the first collect that actually ran while the flag was set.
         let computed_styles_pending = self.computed_styles_needed.load(Ordering::Relaxed)
             && !self.computed_styles_collected.load(Ordering::Relaxed);
+        // BUG-935 S45: same bypass as `computed_styles_pending` above, applied
+        // to the two S43 caches — S44 flagged this class as dormant for them
+        // (no existing regression test hits the exact interference), but it
+        // is the same defect shape: a different same-tick native can consume
+        // this early-return gate's single "real flush" pass before the
+        // native that first sets `pseudo_styles_needed`/`custom_props_needed`.
+        let pseudo_styles_pending = self.pseudo_styles_needed.load(Ordering::Relaxed)
+            && !self.pseudo_styles_collected.load(Ordering::Relaxed);
+        let custom_props_pending = self.custom_props_needed.load(Ordering::Relaxed)
+            && !self.custom_props_collected.load(Ordering::Relaxed);
         if !self.never_flushed.load(Ordering::Relaxed)
             && !self.flush_stale.load(Ordering::Relaxed)
             && !focus_changed
             && !self.cssom_dirty.load(Ordering::Relaxed)
             && !computed_styles_pending
+            && !pseudo_styles_pending
+            && !custom_props_pending
         {
             return;
         }
@@ -310,6 +330,7 @@ impl FlushHandles {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) =
                 lumen_layout::collect_pseudo_computed_styles(&layout_root);
+            self.pseudo_styles_collected.store(true, Ordering::Relaxed);
         }
         if self.custom_props_needed.load(Ordering::Relaxed) {
             *self
@@ -317,6 +338,7 @@ impl FlushHandles {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) =
                 lumen_layout::collect_custom_properties(&layout_root, viewport);
+            self.custom_props_collected.store(true, Ordering::Relaxed);
         }
         *self
             .scroll_states

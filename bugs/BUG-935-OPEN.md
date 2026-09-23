@@ -3338,6 +3338,41 @@ lumen-shell -- relayout 13/13, что и в первой части этого �
 не учтён как гейт этого среза по причине, изложенной выше — задокументирован,
 не проигнорирован молча.
 
+**Срез 45 (P3, 2026-09-23) — тот же `*_collected`-байпас применён к
+`pseudo_styles_needed`/`custom_props_needed`**
+
+S44 закрыл латентную гонку («другой same-tick native съедает
+единственный проход `maybe_flush`'s early-return раньше, чем взведён
+нужный `*_needed`-флаг») только для `computed_styles`, пометив тот же
+класс дефекта как «дремлющий, не пойман тестом» для двух S43-кэшей.
+Этот срез обобщает фикс на оба: новые `Arc<AtomicBool>`
+`pseudo_styles_collected`/`custom_props_collected` (тот же паттерн, что
+`computed_styles_collected` — поля `V8JsRuntime`/`FlushHandles`,
+зеркальные друг другу, склонированы в единственном сайте конструкции
+`FlushHandles` в `crates/js/src/v8_runtime.rs`). `maybe_flush`'s условие
+раннего выхода получило два новых bypass'а —
+`pseudo_styles_pending`/`custom_props_pending`, той же формы
+`needed && !collected` — а сами коллекторы взводят `*_collected` сразу
+после успешного сбора, рядом с записью в кэш.
+
+Регрессионного теста на эту конкретную интерференцию (как у S44's
+`v8_bug560_sync_focus`) для `pseudo`/`custom_prop` кэшей нет — правка
+превентивная, по структурной аналогии, а не по пойманному провалу.
+
+**Тесты:** `cargo build --profile dev-release -p lumen-js --features
+v8-backend` и `-p lumen-shell --bin lumen --features v8` зелёные.
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` и то же для `lumen-shell --features v8` чисты. `cargo test -p
+lumen-js --features v8-backend -- v8_bug560_sync_focus computedstyle
+scroll pseudo custom_prop` — 182/182 (тот же набор, что S44 гонял,
+включая обе регрессионные пробы BUG-560). `cargo test -p lumen-shell
+--bin lumen --features v8 -- relayout` — 13/13.
+
+**Не сделано:** основной корневой симптом бага (M4-роутинг мёртв)
+по-прежнему не тронут — остаётся единственным нерешённым пунктом,
+на который указывали S39/S41/S42/S43/S44. Следующий срез должен
+взяться за сам M4-роутинг.
+
 ## Воспроизведение
 
 ```

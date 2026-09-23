@@ -171,11 +171,15 @@ pub struct V8JsRuntime {
     /// so skipping the collector while this stays `false` cannot serve a
     /// stale/empty answer to anything.
     pub(super) pseudo_styles_needed: Arc<AtomicBool>,
+    /// BUG-935 S45: mirrors [`super::style_flush::FlushHandles::pseudo_styles_collected`].
+    pub(super) pseudo_styles_collected: Arc<AtomicBool>,
     /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed`] for
     /// [`Self::custom_properties`], set by `_lumen_get_custom_property` and
     /// `_lumen_get_computed_style_entries` (the `computedStyleMap()` iteration
     /// source, which merges custom properties into its answer).
     pub(super) custom_props_needed: Arc<AtomicBool>,
+    /// BUG-935 S45: mirrors [`super::style_flush::FlushHandles::custom_props_collected`].
+    pub(super) custom_props_collected: Arc<AtomicBool>,
     /// BUG-935 S44: sibling of [`Self::pseudo_styles_needed`] for
     /// [`Self::computed_styles`] itself. S42's consumer audit found one
     /// non-`getComputedStyle`-family reader — `_lumen_request_scroll`
@@ -418,7 +422,9 @@ impl V8JsRuntime {
             constructed_stylesheets: Arc::new(Mutex::new(Vec::new())),
             adopted_stylesheets: Arc::new(Mutex::new(HashMap::new())),
             pseudo_styles_needed: Arc::new(AtomicBool::new(false)),
+            pseudo_styles_collected: Arc::new(AtomicBool::new(false)),
             custom_props_needed: Arc::new(AtomicBool::new(false)),
+            custom_props_collected: Arc::new(AtomicBool::new(false)),
             computed_styles_needed: Arc::new(AtomicBool::new(false)),
             computed_styles_collected: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
