@@ -1,6 +1,12 @@
-# BUG-1007 — canvas background-color propagation destructively mutates `<body>`'s own `ComputedStyle`, corrupting `getComputedStyle(body)`/`getComputedStyle(html)`
+# BUG-1103 — canvas background-color propagation destructively mutates `<body>`'s own `ComputedStyle`, corrupting `getComputedStyle(body)`/`getComputedStyle(html)`
 
 **Статус:** OPEN
+**Перенумерован из BUG-1007** (P6, 2026-09-23): исходный номер оказался занят
+двумя разными заявками одного дня (2026-09-05) — этот, канвовый, и
+[BUG-1007](BUG-1007-FIXED.md) (`getClientRects()`/`getBoxQuads()` per-fragment
+rects, FIXED тем же днём). Тот баг остаётся под 1007 — глубже прошит в код и
+тесты (комментарии `v8_elem_geometry_scroll.rs`, коммит-история GAP-GEOM);
+этот, ещё OPEN и слабее связанный, получил свободный номер.
 **Заведён:** 2026-09-05 (P3, побочно при ревизии [BUG-514](BUG-514-OPEN.md))
 **Компонент:** layout (`crates/engine/layout/src/box_tree/entry.rs::propagate_canvas_background`,
 `canvas_background_color`)
@@ -120,3 +126,18 @@ instead of `rgb(9, 9, 9)`.
 открытый (перенос фона `<body>` на канву). Задача P6: дать этому следующий свободный номер,
 переименовать файл, поправить строку `BUGS.md` и все ссылки на него, затем
 `python scripts/remap_status_pointers.py --apply` и `python scripts/check_doc_links.py`.
+
+**Сделано (P6, 2026-09-23):** переименован в BUG-1103 (файл, строка `BUGS.md`,
+обе ссылки из `bugs/BUG-514-OPEN.md`). `remap_status_pointers.py --apply` дал
+ложный «ПРОТУХ» на `STATUS-P6.md:BUGS.md:249` — его якорь `BUG-1007` совпал
+текстом с несвязанным `BUG-1007` из `BUGS-FIXED.md` (тот самый коллизионный
+номер), указатель НЕ снят, баг остаётся открытым по той же строке.
+`check_doc_links.py` чист (442 проверенных ссылки). Сам дефект (описан выше,
+раздел «Почему это не point-fixed») не тронут в этом срезе: фикс требует
+менять background-путь в `crates/engine/paint` минимум в 6 файлах
+(`walk.rs`, `table.rs`, `inline_frag.rs`, `text_run.rs`,
+`svg_text_decoration.rs`, `background_mask.rs`) — движущий пиксели путь,
+которому по `CLAUDE.md` нужен полный `graphic_tests/run.py --continue-on-fail`
+(foreground-окно), недоступный в этой сессии
+([[feedback_background_launched_window_breaks_mcp_js_context]]). Остаётся
+`OPEN` под P1/P3 для следующей сессии с реальным окном.

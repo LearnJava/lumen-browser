@@ -101,7 +101,7 @@ attributed files, `expected: FAIL` per subtest.
    что видит CSSOM), поэтому `getComputedStyle(body).backgroundColor`
    отвечает `transparent` для ЛЮБОГО `body { background-color: ... }`,
    вне зависимости от `env()`/`@supports`. Заведено отдельно —
-   [BUG-1007](BUG-1007-OPEN.md) (не point-fixed здесь: наивное «не
+   [BUG-1103](BUG-1103-OPEN.md) (не point-fixed здесь: наивное «не
    перемещать, а копировать» ломает полупрозрачные цвета двойным
    композитингом — canvas-clear + собственная перерисовка `body`;
    корректный фикс требует отдельного paint-only маркера на `LayoutBox`,
@@ -119,5 +119,5 @@ attributed files, `expected: FAIL` per subtest.
 
 Точечного P3-фикса для `env()` самого по себе не требовалось — он уже
 реализован. Остаток (19 сабтестов) не блокируется этой заявкой: 18 —
-BUG-493/CSSOM-4 (P1-трек), 2 — BUG-1007 (отдельная заявка, нужен
+BUG-493/CSSOM-4 (P1-трек), 2 — BUG-1103 (отдельная заявка, нужен
 `LayoutBox`-level маркер, вне точечного фикса).
