@@ -11,8 +11,11 @@
 //!
 //! The JS shim calls `__lumen_audio_load(handle, url_string)` which triggers
 //! background loading in the shell.  JS polls `__lumen_audio_ready_state(handle)`
-//! every 50 ms until the audio is decoded (readyState ≥ 4 = HAVE_ENOUGH_DATA),
-//! then fires the loadedmetadata / loadeddata / canplay / canplaythrough sequence.
+//! on the shared `globalThis._lumen_media_pumps` registry (BUG-1033 — driven by
+//! the host's per-tick pump, same fixed page-wide order as `WebSocket`/`EventSource`,
+//! not an independent `setInterval` racing the decoder thread's real response
+//! time) until the audio is decoded (readyState ≥ 4 = HAVE_ENOUGH_DATA), then
+//! fires the loadedmetadata / loadeddata / canplay / canplaythrough sequence.
 //!
 //! # Registered native bindings
 //!
@@ -233,8 +236,28 @@ pub(crate) fn install_audio_element_bindings_v8(
 const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
   'use strict';
 
+  // BUG-1033: shared synchronous pump registry for media load/error polling.
+  // Replaces independent per-element `setInterval` timers, whose completion
+  // order raced the real wall-clock response time of the background decoder
+  // thread instead of following a deterministic, page-wide order. Every
+  // registered entry runs once per host-driven event-loop tick (the same
+  // tick that already drives `_lumen_pump_websockets`/`_lumen_pump_sse`), in
+  // the fixed order elements registered — never independently of each other.
+  // `video_element.js` shares this same registry (defined once, whichever
+  // shim loads first).
+  if (!globalThis._lumen_media_pumps) {
+    globalThis._lumen_media_pumps = [];
+    globalThis._lumen_pump_media = function() {
+      var arr = globalThis._lumen_media_pumps;
+      for (var i = arr.length - 1; i >= 0; i--) {
+        var keep;
+        try { keep = arr[i](); } catch (e) { keep = false; }
+        if (keep === false) { arr.splice(i, 1); }
+      }
+    };
+  }
+
   var HAS_PROVIDER = (typeof __lumen_audio_alloc === 'function');
-  var POLL_MS      = 50;   // readyState poll interval
   var TUPDATE_MS   = 250;  // timeupdate interval
 
   function fireEvent(el, name) {
@@ -261,7 +284,7 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
     var _autoplay= !!(el.hasAttribute && el.hasAttribute('autoplay'));
     var _rate    = 1.0;
     var _loadStarted  = false;
-    var _loadTimer    = null;
+    var _loadGen      = 0;
     var _tupdateTimer = null;
 
     // ── loading ──────────────────────────────────────────────────────────────
@@ -269,9 +292,10 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
     function startLoad(url) {
       if (!HAS_PROVIDER || !url) return;
       // A load already in flight must not keep polling for the url it was
-      // started with: its interval would outlive this one and go on firing
-      // events for a resource nobody is waiting for any more.
-      if (_loadTimer !== null) { clearInterval(_loadTimer); _loadTimer = null; }
+      // started with: bumping the generation makes the previous pump entry's
+      // `_myLoadGen !== _loadGen` check drop it on its next turn instead of
+      // going on firing events for a resource nobody is waiting for any more.
+      _loadGen++;
       _loadStarted = true;
       // HTML §4.8.11.5 fires each of these ONCE per load.  The readyState the
       // provider reports is a level, not an edge, so every tick above a
@@ -322,29 +346,33 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       fireEvent(el, 'loadstart');
       fireEvent(el, 'progress');
 
-      // BUG-1033: factor the poll body into a named function so the first
-      // check runs immediately (setTimeout 0) instead of waiting a full
-      // POLL_MS tick.  This makes error detection for unsupported media
-      // effectively synchronous — the error flag is usually set by the
-      // time the microtask drains, well before the next POLL_MS tick.
+      // BUG-1033: registered on the shared media pump instead of an
+      // independent `setInterval` — every media element on the page is
+      // polled in the same fixed order on the same host-driven tick, so the
+      // relative order of `error`/`canplaythrough` across elements (and thus
+      // the resulting `unhandledrejection` timing) no longer depends on the
+      // real wall-clock response time of each element's background decoder.
       function pollLoad() {
         if (__lumen_audio_has_error(_handle)) {
-          clearInterval(_loadTimer); _loadTimer = null;
           fireOnce('error');
-          return;
+          return false;
         }
         var rs = __lumen_audio_ready_state(_handle);
         if (rs >= 1) { fireOnce('durationchange'); fireOnce('loadedmetadata'); }
         if (rs >= 2) { fireOnce('loadeddata'); }
         if (rs >= 3) { fireOnce('canplay'); }
         if (rs >= 4) {
-          clearInterval(_loadTimer); _loadTimer = null;
           fireOnce('canplaythrough');
           if (_autoplay) el.play();
+          return false;
         }
+        return true;
       }
-      _loadTimer = setInterval(pollLoad, POLL_MS);
-      setTimeout(pollLoad, 0);
+      var _myLoadGen = _loadGen;
+      globalThis._lumen_media_pumps.push(function() {
+        if (_myLoadGen !== _loadGen) return false;
+        return pollLoad();
+      });
     }
 
     // ── timeupdate loop ──────────────────────────────────────────────────────
@@ -561,28 +589,31 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
 
       var rs = __lumen_audio_ready_state(_handle);
       if (rs < 4) {
-        // Wait for load to complete.
+        // Wait for load to complete. BUG-1033: driven by the shared media
+        // pump (same fixed per-tick order as `pollLoad` above) instead of an
+        // independent `setInterval`; the 10s ceiling is now wall-clock based
+        // (`Date.now()`) so it keeps its real-world meaning regardless of how
+        // often the host actually ticks the pump.
         return new Promise(function(resolve, reject) {
-          var attempts = 0;
-          var t = setInterval(function() {
-            if (++attempts > 200) {
-              clearInterval(t);
-              reject(new DOMException('Playback timed out', 'NotSupportedError'));
-              return;
-            }
+          var deadline = Date.now() + 10000;
+          globalThis._lumen_media_pumps.push(function() {
             if (__lumen_audio_has_error(_handle)) {
-              clearInterval(t);
               reject(new DOMException('Media load failed', 'NotSupportedError'));
-              return;
+              return false;
             }
             if (__lumen_audio_ready_state(_handle) >= 4) {
-              clearInterval(t);
               __lumen_audio_play(_handle);
               fireEvent(el, 'play'); fireEvent(el, 'playing');
               startTupdate();
               resolve();
+              return false;
             }
-          }, POLL_MS);
+            if (Date.now() > deadline) {
+              reject(new DOMException('Playback timed out', 'NotSupportedError'));
+              return false;
+            }
+            return true;
+          });
         });
       }
 
@@ -934,6 +965,7 @@ var __lumen_audio_free        = function() {};
 function pump(n) {
   for (var i = 0; i < n; i++) {
     for (var j = 0; j < _ticks.length; j++) { if (_ticks[j]) _ticks[j](); }
+    if (typeof _lumen_pump_media === 'function') _lumen_pump_media();
   }
 }
 function countEvents(name) {
@@ -1038,9 +1070,10 @@ el.play().catch(function(e) { _rejName = e.name; });"#,
         );
     }
 
-    /// BUG-1033: `startLoad()` runs its first poll tick via `setTimeout(0)`,
-    /// so an error that is already set fires the `error` event on the first
-    /// timer drain instead of waiting a full `POLL_MS`.
+    /// BUG-1033: `startLoad()` registers its poll on the shared media pump
+    /// (`globalThis._lumen_media_pumps`), so an error that is already set
+    /// fires the `error` event on the very first pump tick — deterministic
+    /// per-page-tick delivery, not a race against a `POLL_MS` interval.
     #[test]
     fn load_fires_error_on_first_tick_via_settimeout_zero() {
         let rt = V8JsRuntime::new().unwrap();

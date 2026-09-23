@@ -1,6 +1,6 @@
 # BUG-1033 — poll-based media-error detection делает `unhandledrejection` для `<audio>`/`<video>` недетерминированным
 
-**Статус:** OPEN (частичный митигейт 2026-09-07 — гонка СНИЖЕНА, не устранена)
+**Статус:** FIXED 2026-09-23 — см. §Архитектурный фикс ниже
 **Найден:** P3 2026-09-07, побочно при локализации [BUG-1022](BUG-1022-OPEN.md) (`html/semantics` — три
 `--check` подряд дают три разных набора регрессий)
 **Компонент:** js (`crates/js/src/audio_element.rs:236-301,495-531` — poll-based `play()`/`load()`
@@ -115,3 +115,42 @@ run 3: Test OK      run 6: Test OK      run 11: Test ERROR
 decoder-потока, а не в едином детерминированном порядке. Полноценный фикс по-прежнему требует
 архитектурной переделки (§Почему не фиксится точечно), которую этот срез не сделал —
 **статус возвращён в OPEN**, запись перенесена обратно из `BUGS-FIXED.md`.
+
+## Архитектурный фикс 2026-09-23 (P3) — вариант (б) из §Почему не фиксится точечно
+
+Реализован путь (б): все per-element media-poll таймеры страницы сведены к единому
+детерминированному порядку обработки, по образцу уже существующего паттерна
+`_ws_instances`/`_lumen_pump_websockets` (`crates/js/src/shim/web_api_shim_mid_b2.js:1249-1342`),
+которым уже пользуются `WebSocket`/`EventSource`/`Worker`/`BroadcastChannel`/`SharedWorker`.
+
+- `crates/js/src/audio_element.rs` и `crates/js/src/shim/video_element.js` теперь пушат
+  замыкание-«pump» (возвращает `true` пока пендинг, `false` когда готово/ошибка) в общий
+  `globalThis._lumen_media_pumps`, вместо независимого `setInterval(fn, 50)` на каждый
+  элемент. Затронуты: `audio_element.rs`'s `pollLoad` (в `startLoad()`) и `play()`'s
+  wait-for-load ветка (10-секундный таймаут теперь на `Date.now()`, а не на счётчике тиков —
+  семантика таймаута не зависит от частоты вызова pump); `video_element.js`'s `startGifLoad`
+  и `startFfmpegLoad` (обе используют уже существующий `gen !== _generation` guard вместо
+  `clearInterval` для самоинвалидации устаревшей записи).
+- `globalThis._lumen_pump_media()` синхронно проходит по реестру в порядке регистрации
+  (document order) на каждом естественном тике event loop — том же самом, что уже гоняет
+  `_lumen_pump_websockets`/`_lumen_pump_sse`.
+- Новый метод `PersistentJs::pump_media()` (`crates/shell/src/persistent_js.rs`) добавлен в
+  тот же батч, что `pump_websockets()`/`pump_sse()`/`pump_workers()`, во всех трёх местах
+  `crates/shell/src/app/about_to_wait.rs`, где этот батч уже вызывается.
+- Результат: вместо гонки «в каком тике конкретного `setInterval` элемента N долетит отказ
+  относительно реального времени ответа фонового decoder-потока», все 10 медиа-элементов
+  страницы теперь разрешаются в ОДНОМ фиксированном порядке на одном и том же тике —
+  `unhandledrejection`-таймstamp больше не зависит от wall-clock таймингов независимых
+  потоков декодера.
+
+**Живая проверка** (`run_smoke.py`, пересобранный `dev-release`, worktree `p3-work`):
+10 изолированных повторов `autoplay.html` подряд — **10/10 `Test OK`**, идентичные
+`Subtests passed 4/10, Unexpected 6` на каждом прогоне (было плавающее ERROR/OK на baseline,
+5/9 ERROR даже после частичного митигейта 2026-09-07). Гонка устранена полностью; оставшиеся
+6 unexpected-сабтестов — реальные пробелы движка (не предмет этого бага, флак был именно в
+harness-статусе OK/ERROR).
+
+`cargo test -p lumen-js --lib audio_element --features v8-backend` — 24/24;
+`cargo test -p lumen-js --lib video_bindings --features v8-backend` — 45/45;
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` и
+`cargo clippy -p lumen-shell --all-targets -- -D warnings` — чисто.

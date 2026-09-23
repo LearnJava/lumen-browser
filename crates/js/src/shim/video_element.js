@@ -1,8 +1,25 @@
 (function() {
   'use strict';
 
+  // BUG-1033: shared synchronous pump registry — see the identical bootstrap
+  // in `audio_element.rs`'s shim (defined once, whichever of the two shims
+  // loads first). GIF/FFmpeg load polling below registers on this instead of
+  // an independent `setInterval`, so a page's `<audio>`/`<video>` elements
+  // all resolve their load/error state in one fixed, deterministic order per
+  // tick rather than racing each other's decoder thread's real response time.
+  if (!globalThis._lumen_media_pumps) {
+    globalThis._lumen_media_pumps = [];
+    globalThis._lumen_pump_media = function() {
+      var arr = globalThis._lumen_media_pumps;
+      for (var i = arr.length - 1; i >= 0; i--) {
+        var keep;
+        try { keep = arr[i](); } catch (e) { keep = false; }
+        if (keep === false) { arr.splice(i, 1); }
+      }
+    };
+  }
+
   var HAS_STORE = (typeof __lumen_video_load === 'function');
-  var POLL_MS   = 50;    // readyState poll when waiting for GIF decode
   var TUPDATE_MS = 250;  // timeupdate interval during playback
 
   // BUG-775 — per-`<track>` state and the per-media-element TextTrack list the
@@ -734,7 +751,6 @@
     // Bumped by every media load algorithm run; a selection or fetch whose
     // generation is stale silently drops itself instead of racing the new one.
     var _generation   = 0;
-    var _loadTimer    = null;
     var _tupdateTimer = null;
     var _gifBacked = false;    // true once a GIF is successfully loaded
     var _ffmpegBacked = false; // true once an FFmpeg container is successfully loaded (срез 6)
@@ -747,7 +763,10 @@
     function hasAttr(name) { return !!(el.hasAttribute && el.hasAttribute(name)); }
     function queueEvent(name) { queueTask(function () { fireEvent(el, name); }); }
     function stopTimers() {
-      if (_loadTimer !== null) { clearInterval(_loadTimer); _loadTimer = null; }
+      // The load poll itself needs no explicit stop: it lives on the shared
+      // `_lumen_media_pumps` registry and self-removes once `gen !==
+      // _generation` (bumped by `mediaLoadAlgorithm` right below), same as
+      // every other stale-generation guard in this file.
       if (_tupdateTimer !== null) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
     }
     function isPaused() {
@@ -918,13 +937,13 @@
     function startGifLoad(gen, src) {
       if (!HAS_STORE || !nid) return false;
       if (!isGifSrc(src)) return false;
-      if (typeof setInterval !== 'function') return false;
       __lumen_video_load(nid, src);
-      // Poll until the shell has decoded the GIF.
-      _loadTimer = setInterval(function() {
-        if (gen !== _generation) { clearInterval(_loadTimer); _loadTimer = null; return; }
-        if (!__lumen_video_ready(nid)) return;
-        clearInterval(_loadTimer); _loadTimer = null;
+      // BUG-1033: poll on the shared media pump (same fixed per-tick order
+      // as `audio_element.rs`'s `pollLoad`) until the shell has decoded the
+      // GIF, instead of an independent `setInterval`.
+      globalThis._lumen_media_pumps.push(function() {
+        if (gen !== _generation) return false;
+        if (!__lumen_video_ready(nid)) return true;
         _gifBacked = true;
         _readyState = HAVE_METADATA;
         fireEvent(el, 'durationchange');
@@ -937,7 +956,8 @@
         _networkState = NETWORK_IDLE;
         fireEvent(el, 'canplaythrough');
         if (hasAttr('autoplay')) el.play();
-      }, POLL_MS);
+        return false;
+      });
       return true;
     }
 
@@ -952,24 +972,22 @@
     function startFfmpegLoad(gen, src) {
       if (!HAS_FFMPEG_LOAD || !nid) return false;
       if (!isFfmpegSrc(src)) return false;
-      if (typeof setInterval !== 'function') return false;
       __lumen_video_ffmpeg_load(nid, src);
-      _loadTimer = setInterval(function() {
-        if (gen !== _generation) { clearInterval(_loadTimer); _loadTimer = null; return; }
+      // BUG-1033: same shared-pump model as `startGifLoad` above.
+      globalThis._lumen_media_pumps.push(function() {
+        if (gen !== _generation) return false;
         // GAP-MEDIADECODE срез 9: a corrupted/undecodable container never
         // reaches `playback`, so `__lumen_video_ready` alone would poll
         // forever — check failure first so such a source reports a real
         // `error` event instead of hanging silently in NETWORK_LOADING.
         if (typeof __lumen_video_failed === 'function' && __lumen_video_failed(nid)) {
-          clearInterval(_loadTimer); _loadTimer = null;
           _error = makeMediaError(MEDIA_ERR_DECODE, 'unable to decode media resource');
           _readyState = HAVE_NOTHING;
           _networkState = NETWORK_NO_SOURCE;
           fireEvent(el, 'error');
-          return;
+          return false;
         }
-        if (!__lumen_video_ready(nid)) return;
-        clearInterval(_loadTimer); _loadTimer = null;
+        if (!__lumen_video_ready(nid)) return true;
         _ffmpegBacked = true;
         _readyState = HAVE_METADATA;
         fireEvent(el, 'durationchange');
@@ -982,7 +1000,8 @@
         _networkState = NETWORK_IDLE;
         fireEvent(el, 'canplaythrough');
         if (hasAttr('autoplay')) el.play();
-      }, POLL_MS);
+        return false;
+      });
       return true;
     }
 

@@ -472,6 +472,17 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// when a shared worker replies (WHATWG HTML §10.2).
     #[allow(dead_code)]
     fn pump_shared_workers(&self);
+    /// Drive queued `<audio>`/`<video>` load/error polling forward by one step.
+    ///
+    /// BUG-1033: must be called on every event-loop tick alongside
+    /// `pump_websockets`/`pump_sse` so that every media element on the page
+    /// resolves its load/error state in one fixed, deterministic order —
+    /// instead of each element's own independent `setInterval` racing the
+    /// real wall-clock response time of the background decoder thread.
+    /// Calls `_lumen_pump_media()` (`crates/js/src/audio_element.rs`,
+    /// `crates/js/src/shim/video_element.js`).
+    #[allow(dead_code)]
+    fn pump_media(&self);
     /// BUG-480 срез 4: разобрать ящик кросс-фреймовых postMessage
     /// (`crates/js/src/frame_bridge.rs`) и доставить адресованные этому
     /// контексту сообщения как MessageEvent в window.onmessage /
@@ -1197,6 +1208,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn pump_sse(&self) {
         self.eval_js("if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();");
+    }
+    fn pump_media(&self) {
+        self.eval_js("if(typeof _lumen_pump_media==='function')_lumen_pump_media();");
     }
     fn pump_workers(&self) {
         self.rt.pump_workers();
