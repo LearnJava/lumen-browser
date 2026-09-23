@@ -2349,6 +2349,43 @@ unexpected pass + 1 status-change. Общий знаменатель всех т
 среза 56/57/58/59/60: `websockets`, `referrer-policy`/`4K*`, `fetch`, либо новая категория
 `mixed-content` (533) / `speculation-rules` (409).
 
+### TEST-3: срез 62 (2026-09-23) — `websockets`: baseline перегенерирован после BUG-1069, один флап (`events/020.html`) пересужен, три `--check` подряд сошлись
+
+Первый пункт списка «Дальше» среза 61. `dev-release` пересобран заново перед прогоном (главная
+ветка ушла вперёд после мержа BUG-899 срезом раньше).
+
+**Baseline.** `--update-expected --all --root websockets --recursive --processes 7
+--binary target/dev-release/lumen.exe`: **585/786 harness OK** (было ~420/786 в срезе 43, до
+BUG-1069 — 333 harness-`ERROR` там объяснялись сертификатом/`h2`), 582/2305 подтестов, 139 `.ini`
+перезаписано, 14 удалено (стало чисто), 32 без изменений.
+
+**Три `--check` подряд НЕ сошлись сразу** — первый прогон нашёл 1 регрессию
+(`interfaces/WebSocket/events/020.html?wss`: harness `OK`→`TIMEOUT` + сабтест `PASS`→`TIMEOUT`),
+второй — ту же регрессию плюс `unexpected pass` на парном варианте (`?default`: `TIMEOUT`→`OK`),
+третий — снова только исходную регрессию. Тот же файл уже фигурировал в срезе 43 как часть
+семейства из пяти файлов с плавающим `OK`/`TIMEOUT` (синхронный `new WebSocket('ws://example.invalid/')`
+в `test()`, блокирующий поток на DNS — [BUG-856](../../bugs/BUG-856-FIXED.md)/GAP-WSASYNC), но
+`--update-expected` записывает только одно значение за один прогон, поэтому регенерация baseline
+после BUG-1069 стёрла узкое сужение среза 43 у этого файла (остальные четыре файла семейства в
+этот раз ни разу не расплылись — не переузки). Пересужено вручную по тому же приёму: оба варианта
+(`?default` и `?wss`) `events/020.html` получили `expected: [OK, TIMEOUT]` (сабтест —
+`[PASS, TIMEOUT]`). После правки три `--check` подряд сошлись сразу — **0 регрессий, 0
+unexpected pass, 0 других отклонений** на каждом из трёх (harness OK колеблется 584–585/786 —
+ожидаемо, тот же флап теперь укладывается в разрешённое множество).
+
+**Что нашлось.** Остаток НЕ-OK — две уже известные причины, не новая находка: 214+129+7 строк
+`Browser does not support WebSocket`/`WebSocket is not defined` в `.any.worker.html`-вариантах —
+[BUG-1071](../../bugs/BUG-1071-OPEN.md) (WebSocket отсутствует в глобальной области воркера,
+заведён в срезе 43); 116 строк `ReferenceError: WebSocketStream is not defined` —
+`websockets/stream/tentative/*`, тентативный API, не реализован, отдельный `BUG-NNN` не заводится
+(по аналогии с Shared Storage в срезе 61). 48 `Timed out waiting for testharnessreport` —
+bfcache-тесты (`back-forward-cache-*`, `unload-a-document/*`), тот же класс, что в срезе 43.
+Новых движковых багов нет.
+
+Категорий по-прежнему 261 (регенерация уже учтённой категории). Дальше — по списку
+среза 56/57/58/59/60/61: `referrer-policy`/`4K*`, `fetch`, либо новая категория
+`mixed-content` (533) / `speculation-rules` (409).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
