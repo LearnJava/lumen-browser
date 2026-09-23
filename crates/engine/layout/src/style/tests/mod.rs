@@ -70,6 +70,7 @@
     mod node_fanout_tests;
     mod rule_index_regression;
     mod shadow_dom_selectors;
+    mod share_cache;
     mod state_fanout_tests;
     mod text_size_adjust_tests;
 
