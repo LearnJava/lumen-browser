@@ -346,13 +346,17 @@ impl Lumen {
             let width = (self.viewport_width_css().max(1.0)) as u32;
             let height = (self.viewport_height_css().max(1.0)) as u32;
             let images = self.image_cache.snapshot();
-            let image = Renderer::render_to_image_cpu(
+            // BUG-1106: same canvas clear the live frame gets via `set_canvas_background`.
+            let canvas_bg = self.layout_box.as_ref().and_then(lumen_layout::canvas_background_color);
+            let image = Renderer::render_to_image_cpu_with_fonts(
                 width,
                 height,
                 &self.display_list,
                 &images,
                 self.scroll_x,
                 self.scroll_y,
+                None,
+                canvas_bg,
             )
             .map_err(|e| format!("render_to_image_cpu: {e}"))?;
             lumen_image::encode_png_rgba8(&image).map_err(|e| format!("PNG encoding: {e}"))

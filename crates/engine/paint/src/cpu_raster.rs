@@ -204,14 +204,14 @@ pub(crate) fn rasterize_cpu(
     scroll_x: f32,
     scroll_y: f32,
 ) -> Result<Image, Box<dyn std::error::Error>> {
-    rasterize_cpu_with_fonts(width, height, commands, images, scroll_x, scroll_y, None)
+    rasterize_cpu_with_fonts(width, height, commands, images, scroll_x, scroll_y, None, None)
 }
 
-/// Same as [`rasterize_cpu`], but `DrawText` resolves real `@font-face` bytes
-/// and CSS Fonts L4 §14 override descriptors through `font_provider` when
-/// given (FONTLOAD-18) — see [`crate::cpu_font_resolve::resolve_face`]. `None`
-/// reproduces [`rasterize_cpu`]'s bundled-Inter-only behaviour exactly.
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+/// Same as [`rasterize_cpu`], but `DrawText` resolves `@font-face` bytes and CSS Fonts L4 §14
+/// overrides through `font_provider` (FONTLOAD-18, [`crate::cpu_font_resolve::resolve_face`]),
+/// and the surface clears to `canvas_background` (`lumen_layout::canvas_background_color` —
+/// the only carrier of `<body>`'s propagated background since BUG-1103; `None` → UA white).
+#[allow(clippy::expect_used, clippy::too_many_arguments)]  // expect_used унаследовано, docs/lint-policy.md §10
 pub(crate) fn rasterize_cpu_with_fonts(
     width: u32,
     height: u32,
@@ -220,9 +220,9 @@ pub(crate) fn rasterize_cpu_with_fonts(
     _scroll_x: f32,
     _scroll_y: f32,
     font_provider: Option<&dyn FontProvider>,
+    canvas_background: Option<Color>,
 ) -> Result<Image, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
-
     // Decoded `<img>` pixels keyed by `src`, supplied by the shell's headless
     // render pass (`render_source_to_png`). Lets `DrawImage`/`LazyImageSlot`
     // paint the real picture instead of a grey placeholder (BUG-221, TEST-18).
@@ -233,8 +233,8 @@ pub(crate) fn rasterize_cpu_with_fonts(
     let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
 
-    // Fill background with white.
-    base.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+    let clear = canvas_background.unwrap_or(Color::WHITE);
+    base.fill(tiny_skia::Color::from_rgba8(clear.r, clear.g, clear.b, clear.a));
 
     // Off-screen layer stack for group effects: group opacity (`PushOpacity` /
     // `PopOpacity`, emitted for `opacity < 1`) and 2D transforms (`PushTransform`
@@ -4038,7 +4038,7 @@ mod tests {
         let without_provider = rasterize_cpu(128, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
         let with_empty_provider = rasterize_cpu_with_fonts(
             128, 48, &cmds, &[], 0.0, 0.0,
-            Some(&registry as &dyn FontProvider),
+            Some(&registry as &dyn FontProvider), None,
         )
         .expect("rasterize");
         assert_eq!(
@@ -4099,7 +4099,7 @@ mod tests {
         let unadjusted = rasterize_cpu(300, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
         let adjusted = rasterize_cpu_with_fonts(
             300, 80, &cmds, &[], 0.0, 0.0,
-            Some(&registry as &dyn FontProvider),
+            Some(&registry as &dyn FontProvider), None,
         )
         .expect("rasterize");
         assert!(
@@ -4216,7 +4216,7 @@ mod tests {
         }];
         let img = rasterize_cpu_with_fonts(
             300, 80, &cmds, &[], 0.0, 0.0,
-            Some(&registry as &dyn FontProvider),
+            Some(&registry as &dyn FontProvider), None,
         )
         .expect("rasterize");
         let mut has_ink = false;

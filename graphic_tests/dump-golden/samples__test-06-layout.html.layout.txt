@@ -1,9 +1,9 @@
 Block rect=(0.00, 0.00, 1024.00, 720.00)
   Skip rect=(0.00, 0.00, 0.00, 0.00)
-  Block rect=(0.00, 0.00, 1024.00, 720.00) bg=#f0f4f8ff box-sizing=border-box
+  Block rect=(0.00, 0.00, 1024.00, 720.00) box-sizing=border-box
     Skip rect=(0.00, 0.00, 0.00, 0.00) display=none box-sizing=border-box
     Skip rect=(0.00, 0.00, 0.00, 0.00)
-    Block rect=(0.00, 0.00, 1024.00, 720.00) w=1024.00 h=720.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+    Block rect=(0.00, 0.00, 1024.00, 720.00) bg=#f0f4f8ff w=1024.00 h=720.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
       Skip rect=(0.00, 0.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
       Block rect=(0.00, 0.00, 1024.00, 36.00) bg=#1e3a5fff h=36.00 box-sizing=border-box color=#e2e8f0ff fs=12.00 lh=3.00 font-weight=700 letter-spacing=1.00 p=(0.00, 16.00, 0.00, 16.00) bw=(0.00,0.00,3.00,0.00) bs=(none,none,solid,none) bc=(currentColor,currentColor,#e94560ff,currentColor)
         InlineRun rect=(16.00, 0.00, 992.00, 36.00) color=#e2e8f0ff fs=12.00 lh=3.00 font-weight=700 letter-spacing=1.00

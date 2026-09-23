@@ -846,8 +846,7 @@ impl InProcessSession {
         let tree = StackingTree::build(&state.layout_root);
         let order = PaintOrder::from_tree(&tree);
         let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0;
-        let width = self.viewport.width as u32;
-        let height = self.viewport.height as u32;
+        let (width, height) = (self.viewport.width as u32, self.viewport.height as u32);
         // The rasterizer resolves `DrawImage`/`DrawBackgroundImage` against this
         // set alone: an unregistered key paints the grey placeholder (`<img>`) or
         // nothing at all (background). It carries the page's decoded subresources
@@ -855,7 +854,8 @@ impl InProcessSession {
         // have drawn since the last screenshot — `eval`/`click` can redraw a
         // canvas after navigation (BUG-429).
         let images = self.renderer_image_set();
-        lumen_paint::Renderer::render_to_image_cpu(width, height, &display_list, &images, 0.0, 0.0)
+        let canvas_bg = lumen_layout::canvas_background_color(&state.layout_root); // BUG-1106
+        lumen_paint::Renderer::render_to_image_cpu_with_fonts(width, height, &display_list, &images, 0.0, 0.0, None, canvas_bg)
             .map_err(|e| Error::Other(format!("CPU rasterization: {e}")))
     }
 

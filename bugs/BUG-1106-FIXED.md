@@ -1,6 +1,6 @@
 # BUG-1106 — `dump_golden.py` красный на свежепересобранном `main` (8/12), несмотря на «зелёный» BUG-1008 в тот же день
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P1)
 **Тип:** дефект гейта (пиксель-нейтральность не гарантирована) или регрессия каскада/`ShareCache`.
 **Заведён:** 2026-09-23 (P6, попутно при закрытии BUG-1101).
 **Область:** не локализовано (кандидат — `crates/engine/layout/src/style/cascade.rs`/`share_cache.rs`, трек `THREAD-4`, но не подтверждено — см. ниже).
@@ -69,3 +69,40 @@ Block[2]`) — похоже на утечку/подмену кэширован�
 даёт 12/12» — быстрее, чем гадать по стату коммитов. Если бисекция упрётся
 в `THREAD-4`, вероятно нужен полный ревёрт/переразбор того среза, а не
 точечный.
+
+## Решение (P1, 2026-09-23, ветка `p1-bug1106-dump-golden`)
+
+**Корень — не `ShareCache` и не утечка стиля между узлами.** Дрейф внёс
+`b3d109c94` ([BUG-1103](BUG-1103-FIXED.md)): пропагация фона `<body>` на
+канву (CSS Backgrounds L3 §2.11.2) перестала мутировать `ComputedStyle` —
+раньше фон *переезжал* со стиля `body` на стиль `html`, теперь оба сохраняют
+свои авторские значения, а цвет канвы read-only вычисляет
+`lumen_layout::canvas_background_color`. Отсюда весь «однородный паттерн»:
+`bg` у `Block[0]/Block[1]` (html) исчез, у `Block[0]/Block[1]/Block[2]`
+(body) появился; в display list `FillRect` бокса html
+`(0,0,1024,415.19)` сменился `FillRect` бокса body `(8,8,1008,399.19)`.
+BUG-1103 гейтил себя `run.py --ipc`, а `dump_golden.py` не гонял — эталоны
+остались от старой семантики. Бисекция по `THREAD-4` не могла сработать:
+тот срез ни при чём.
+
+**Под дрейфом эталонов нашёлся реальный дефект CPU-пути.** Цвет канвы
+после BUG-1103 живёт только в `canvas_background_color`, а его читал лишь
+wgpu-кадр (`set_canvas_background`). CPU-растеризатор
+(`cpu_raster.rs::rasterize_cpu_with_fonts`) всегда чистил поверхность в
+белый, так что `--screenshot`, IPC `Screenshot` (`render_source_to_png`),
+automation `render_current_page_to_png` и driver `screenshot_cpu_rgba`
+потеряли пропагацию: у `<body style="background:red">` поля 8px и всё ниже
+контента выходили белыми. Проба `--screenshot --viewport 200x100`:
+пиксель (2,2) — `(255,255,255)` до фикса, `(255,0,0)` после.
+
+**Фикс:** `rasterize_cpu_with_fonts` / `Renderer::render_to_image_cpu_with_fonts`
+получили параметр `canvas_background: Option<Color>` (`None` — UA-белый), все
+три шелл/driver-вызова передают `canvas_background_color` своего layout-корня;
+`CpuBackend` реализует `set_canvas_background`, как wgpu-бэкенд (юнит-тест
+`cpu_backend_clears_to_canvas_background`). Эталоны `dump_golden.py`
+перегенерированы под семантику BUG-1103 (8 файлов, в диффе только перенос
+`bg` html→body и смена `FillRect` html→body).
+
+**Гейты:** `dump_golden.py` — 12/12; `snapshot_cpu` — ok; `cargo test -p
+lumen-paint` — ok; `run.py --ipc --continue-on-fail` — дельта против
+предыдущего прогона «Изменений нет» (те же 20 FAIL, что до правки).

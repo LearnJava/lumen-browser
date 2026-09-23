@@ -254,6 +254,8 @@ pub(crate) fn render_source_to_png(
         let image = Renderer::render_to_image_cpu_with_fonts(
             width, height, &dl, &images, 0.0, 0.0,
             Some(parsed.font_registry.as_ref() as &dyn lumen_core::FontProvider),
+            // BUG-1106: the canvas clear the live window gets via `set_canvas_background`.
+            lumen_layout::canvas_background_color(&parsed.layout),
         )?;
         let png = lumen_image::encode_png_rgba8(&image)?;
         (png, width, height)
