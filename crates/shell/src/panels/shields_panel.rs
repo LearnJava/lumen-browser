@@ -131,7 +131,9 @@ impl ShieldsPanel {
     pub fn new(log: Arc<Mutex<BlockedLog>>) -> Self {
         Self {
             visible: false,
-            default_enabled: true,
+            // Matches `BrowserSettings`' default (off); the shell pushes the
+            // persisted setting in right after construction.
+            default_enabled: false,
             site_overrides: HashMap::new(),
             current_domain: None,
             blocked_total: 0,

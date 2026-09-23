@@ -99,7 +99,7 @@ Anti-detection покрывает **шесть слоёв**, потому что
 
 #### Слой 6 — Профили (расширение существующих трёх)
 
-- **Standard** (default) — Слои 1+2+3 + слой 4 на низкой интенсивности + total cookie protection + adblock + strip URL params. Сайты работают.
+- **Standard** (default) — Слои 1+2+3 + слой 4 на низкой интенсивности + total cookie protection + strip URL params. Сайты работают. Adblock (EasyList) в профиль по умолчанию **не входит** (решение пользователя 2026-09-23): он меняет набор загружаемых ресурсов и ломает сравнение с обычным браузером — включается пользователем в настройках («Блокировать рекламу»).
 - **Strict** — Слои 1+2+3 + слой 4 на высокой интенсивности + WebRTC mDNS-only + Client Hints отключены + JS-блокировка на сомнительных доменах.
 - **Tor-mode** — Strict + Tor circuit + Tor Browser JA3/UA/screen/font pinning + zero persistent state.
 - **Per-context override** — `BrowserSession::set_fingerprint_profile(profile)` для automation-юзеров с конкретной identity (ADR-006 task 8F.3 уже включает `freeze_fingerprint`).
