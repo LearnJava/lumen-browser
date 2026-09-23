@@ -1,6 +1,6 @@
 # BUG-638: `<audio>.src = <relative URL>` permanently deadlocks the JS engine/automation channel
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P6, повторная проба подтвердила BUG-799)
 **Компонент:** js (`crates/js/src/audio_element.rs` — `AUDIO_ELEMENT_SHIM` src setter → `__lumen_audio_load`), shell (`crates/shell/src/platform/audio_player.rs::AudioPlaybackProviderImpl::load` / `fetch_audio_bytes`)
 **Найден:** P2, WPT-VENDOR-mimesniff, 2026-08-05, проба `--mcp-live-port`
 
@@ -81,3 +81,31 @@ Both should be checked before attempting a fix.
 `src` резолвится от базы документа (GAP-CSPENF срез 51, `crates/js/src/audio_element.rs`).
 Задача P6: одна живая проба `<audio>.src = "rel.mp3"`; если движок не виснет — перенести в
 `BUGS-FIXED.md` как исправленный BUG-799, иначе описать, что осталось.
+
+## Закрыт (P6, 2026-09-23)
+
+Живое окно/MCP в этой сессии недоступно (см. соседние срезы BUG-683/BUG-791
+того же дня — фоновый запуск без видимого окна не мирует JS-хэндл,
+`feedback_background_launched_window_breaks_mcp_js_context`), поэтому проба
+сделана headless-эквивалентом того же пути: `document.createElement('audio')`
+→ `appendChild` → `el.src = 'resources/mp3-raw.mp3'` (тот же относительный
+URL, что в оригинальном репро) в `<script>` статической страницы,
+`lumen.exe --dump-layout <page>`. `--dump-layout` выполняет инлайновые
+скрипты страницы синхронно (подтверждено: `<audio>` появляется в дереве
+только если скрипт отработал), так что зависание в самом нативном вызове
+`__lumen_audio_load` (не в последующей навигации/дренаже событий, которые
+headless действительно пропускает) должно было проявиться тем же образом —
+зависшим процессом, не завершившимся дампом.
+
+Результат: `--dump-layout` завершается за 0.24 с (было — вечное зависание
+процесса), в выводе `Audio … src="resources/mp3-raw.mp3"` — атрибут
+присвоен, дальнейший вывод дампа получен целиком, деградации нет. Код
+подтверждает причину: `startLoad()` (`audio_element.rs:269-321`) теперь
+резолвит `url` через `_url_resolve`/`_lumen_document_base_url` **до**
+`__lumen_audio_load`, а не передаёт сырую относительную строку — ровно тот
+фикс, что описан в [BUG-799](BUG-799-FIXED.md).
+
+Не перепроверено в этом срезе (не требовалось триажем, но осталось открытым
+по «Масштабу» исходной заявки): `<video>` с тем же относительным `src` и
+абсолютный недостижимый URL — если кто-то заново увидит зависание на одном
+из этих путей, это отдельный баг, не рецидив этого.
