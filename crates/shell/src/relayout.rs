@@ -416,6 +416,14 @@ impl Lumen {
             );
             (dl, lb, counters.into_styles(), false)
         };
+        // BUG-935 S39: cheap read of the BUG-341 cascade-reuse tally
+        // (`walk`'s `note_cascade`, already compiled in unconditionally) right
+        // after whichever branch above ran — S38's premise ("the cascade skip
+        // path hands back the same `Arc<ComputedStyle>` for untouched nodes")
+        // was never directly measured, only inferred from a serialize-cache
+        // hit rate. `LUMEN_FRAME_LOG`-gated, same zero-cost-when-off pattern as
+        // every other `incr_t0`-conditioned line here.
+        let cascade_stats = incr_t0.is_some().then(lumen_layout::counters::take_cascade_stats);
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
@@ -437,8 +445,10 @@ impl Lumen {
         if let Some(t0) = incr_t0 {
             let incr_ms = t0.elapsed().as_secs_f32() * 1000.0;
             let fmt_ms = |ms: Option<f32>| ms.map(|v| format!("{v:.2}")).unwrap_or_else(|| "n/a".to_string());
+            let (cascade_reused, cascade_recomputed) =
+                cascade_stats.map(|s| (s.reused, s.recomputed)).unwrap_or_default();
             eprintln!(
-                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={}",
+                "[engine] relayout {incr_ms:.2}ms (incremental, on-thread) dl={} styled={} restyle={} lock_wait_ms={} dirty_roots_ms={} apply_ms={} cascade_reused={cascade_reused} cascade_recomputed={cascade_recomputed}",
                 self.display_list.len(),
                 self.prev_styles.len(),
                 used_restyle as u8,
