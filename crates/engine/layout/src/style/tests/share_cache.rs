@@ -263,6 +263,55 @@ fn an_ancestor_position_attribute_selector_still_disables_sharing() {
         SvgPaint::Color(Color { r: 0, g: 0, b: 255, a: 255 }),
         "ancestor-attribute-dependent rule must still apply per node, not get shared away"
     );
+    // Still holds after BUG-1112 срез 5 (ancestor `Attribute` allowed): this
+    // scenario was never actually exercising that induction in the first
+    // place — `a_svg`/`b_svg` sit under two DIFFERENT `<div>` instances, so
+    // their `inherited_ptr` never collided regardless of `selector_is_share_
+    // safe`'s verdict on `[data-theme="b"] .octicon` (a plain `<div>` is
+    // never `is_svg_presentational_element`, so its own style is always a
+    // fresh per-instance allocation — same reasoning as
+    // `a_combinator_rule_disables_sharing_for_the_nodes_it_could_reach`
+    // above). See
+    // `an_ancestor_position_attribute_selector_now_shares_under_a_literal_
+    // common_parent` below for the positive case срез 5 actually unlocks.
+}
+
+#[test]
+fn an_ancestor_position_attribute_selector_now_shares_under_a_literal_common_parent() {
+    // BUG-1112 срез 5: an ancestor `Attribute` selector is now share-safe —
+    // this is the case it makes reachable. All six icons are literal
+    // children of the SAME live `<div data-theme="b">`, so their
+    // `inherited_ptr` collides (`case a` of the induction, the simplest
+    // one: not even a chained cache-hit ancestor is needed) and
+    // `[data-theme="b"] .octicon` reads the SAME `data-theme` value for
+    // every one of them — before срез 5 this pattern zeroed `shareable` for
+    // every icon under such a wrapper, even though the wrapper is
+    // per-instance shared, not per-icon.
+    clear_shadow_sheets();
+    let icon = r#"<svg class="octicon" aria-hidden="true"><path d="M1 1 2 2"></path></svg>"#;
+    let doc = lumen_html_parser::parse(&format!(r#"<div data-theme="b">{}</div>"#, icon.repeat(6)));
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        r#".octicon { fill: rgb(1, 2, 3); } [data-theme="b"] .octicon { fill: rgb(0, 0, 255); }"#,
+    );
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    assert_eq!(svgs.len(), 6);
+
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let first = map.style_arc(svgs[0]).expect("arc");
+    for &svg in &svgs[1..] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &arc),
+            "an ancestor attribute selector must not block sharing once the key already proves ancestor identity"
+        );
+        assert_eq!(
+            map.style_for(svg).expect("style").svg_fill,
+            SvgPaint::Color(Color { r: 0, g: 0, b: 255, a: 255 })
+        );
+    }
 }
 
 #[test]

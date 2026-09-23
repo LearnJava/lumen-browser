@@ -1647,19 +1647,23 @@ pub(crate) fn compute_style_shareable(
 /// nothing the key does not capture.
 ///
 /// Every ancestor compound (any entry in `tail` before the last) must be
-/// built only from `Type`/`Class`/`Id`/`Universal` parts — no pseudo-class
-/// and no attribute selector, none of which [`build_key`](super::share_cache)
-/// pins for an ancestor a combinator reaches into. The *subject* compound
-/// (the last `tail` entry, or `head` when `tail` is empty) allows a few more
-/// parts that `build_key` pins directly for the node itself, and are
-/// therefore just as sound as `Type`/`Class`/`Id`: `Root` and `Attribute`
-/// (BUG-1112 срез 3, via `attrs`), `FirstChild`/`LastChild`/`OnlyChild`
-/// (BUG-1112 срез 4, via `is_first_child`/`is_last_child`), and
-/// `Where`/`Is`/`Not` (BUG-1112 срез 4, recursively — safe exactly when
-/// every selector in their argument list is) — see `compound_is_share_safe`
-/// below for exactly which, and `complex_is_share_safe`'s doc comment for
-/// how "subject vs ancestor" generalises to "describes the key node vs not"
-/// once recursion can cross into a `:where(..)` argument.
+/// built only from `Type`/`Class`/`Id`/`Universal`/`Attribute` parts (the
+/// last joined this list in BUG-1112 срез 5 — see `compound_is_share_safe`'s
+/// `Attribute` arm for why an ancestor's attributes are pinned just as hard
+/// as `Type`/`Class`/`Id` by the `inherited_ptr` induction below) — no
+/// pseudo-class, none of which [`build_key`](super::share_cache) pins for an
+/// ancestor a combinator reaches into (dynamic state like `:hover`, or
+/// sibling-position facts the key has no field for at any depth but the key
+/// node's own). The *subject* compound (the last `tail` entry, or `head`
+/// when `tail` is empty) allows a few more parts that `build_key` pins
+/// directly for the node itself: `Root` (BUG-1112 срез 3),
+/// `FirstChild`/`LastChild`/`OnlyChild` (BUG-1112 срез 4, via
+/// `is_first_child`/`is_last_child`), and `Where`/`Is`/`Not` (BUG-1112 срез 4,
+/// recursively — safe exactly when every selector in their argument list is)
+/// — see `compound_is_share_safe` below for exactly which, and
+/// `complex_is_share_safe`'s doc comment for how "subject vs ancestor"
+/// generalises to "describes the key node vs not" once recursion can cross
+/// into a `:where(..)` argument.
 ///
 /// `Descendant`/`Child` combinators ARE allowed (BUG-1112, reversing THREAD-4
 /// срез 2's blanket ban): [`super::share_cache`]'s `inherited_ptr` field is
@@ -1747,14 +1751,39 @@ fn compound_is_share_safe(compound: &lumen_css_parser::CompoundSelector, describ
         // attributes, so `matches_complex` on any operator (`=`, `*=`,
         // `^=`, …) against those attributes is guaranteed to agree between
         // them — same soundness argument as `Class`/`Id` above, just not
-        // restricted to those two attribute names. Still not extended to
-        // the ancestor case: the key has no field for an ancestor's
-        // attributes, only the key node's own. Second blocker live
+        // restricted to those two attribute names. Second blocker live
         // instrumentation found after the `:root` fix above: github.com's
         // dark-mode custom properties
         // (`[data-color-mode=light][data-light-theme*=light] { … }`)
         // disqualified every SVG-presentational node the same way.
-        lumen_css_parser::SimpleSelector::Attribute(_) => describes_key_node,
+        //
+        // BUG-1112 срез 5: extended to the ancestor case too — unconditional
+        // `true`, not gated on `describes_key_node`. This is not a new
+        // soundness argument, it is the SAME `inherited_ptr` induction
+        // already trusted for `Type`/`Class`/`Id`/`Universal` at ancestor
+        // position (`complex_is_share_safe`'s doc comment above): two nodes
+        // whose keys collide have, by that induction, a pairwise
+        // **tag+attrs-identical** eligible ancestor chain up to a genuinely
+        // shared DOM ancestor — "attrs" there already means the FULL
+        // attribute set at every level involved, not just the key node's
+        // own, because each ancestor in the chain was itself either (a) the
+        // literal same live parent (trivially identical attributes) or (b)
+        // a node whose OWN key matched a previous occurrence, which pins
+        // *that* node's full `attrs` field the same way srez 3 already
+        // established for the subject. An ancestor attribute selector can
+        // therefore never discriminate between two colliding-key nodes: if
+        // it did, the ancestor's own `attrs` would differ, which would have
+        // broken the `inherited_ptr` collision the two nodes rely on in the
+        // first place (`build_key` only shares `inherited_ptr` down the
+        // literal live `Arc` a node handed its own children, and a
+        // cache-hit ancestor's returned style is only reachable through an
+        // equal-key, equal-`attrs` earlier node). Regression guard —
+        // `an_ancestor_position_attribute_selector_still_disables_sharing`
+        // in `style/tests/share_cache.rs` — is retargeted this срез into
+        // `an_ancestor_position_attribute_selector_now_allows_sharing_when_
+        // the_key_proves_ancestor_identity`, which demonstrates the
+        // positive case this induction actually establishes.
+        lumen_css_parser::SimpleSelector::Attribute(_) => true,
         // BUG-1112 срез 4: `:first-child`/`:last-child`/`:only-child`, when
         // they describe the key node, are a pure function of `node`'s own
         // sibling position, which `ShareKey.is_first_child`/`is_last_child`

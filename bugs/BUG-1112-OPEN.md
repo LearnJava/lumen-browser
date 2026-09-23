@@ -347,3 +347,50 @@ dump_golden.py --build` — 12/12. Новые тесты (`share_cache.rs`):
 `a_subject_first_child_pseudo_class_does_not_disable_sharing_when_irrelevant`,
 `a_subject_first_child_pseudo_class_still_applies_correctly_when_relevant`
 — 11/11 в файле.
+
+## Срез 5 (2026-09-24)
+
+Взят путь (a) в его узкой форме — не полная `ShareKey`-позиция среди
+соседей (это уже сделал срез 4 для `:first-child`/`:last-child`/
+`:only-child`), а тот же класс индукции для АТРИБУТНОГО селектора в
+ancestor-позиции: `compound_is_share_safe`'s `Attribute`-ветка была
+`describes_key_node` (subject-only, срез 3); теперь безусловная `true`.
+Обоснование — не новая индукция, та же самая, что уже принята для
+`Type`/`Class`/`Id`/`Universal` на позиции предка (`complex_is_share_safe`'s
+доккомент): два узла с совпавшим ключом имеют, по этой индукции,
+попарно тег+атрибуты-идентичную цепочку предков до общего живого предка
+или до цепочки cache-hit-предков с тем же свойством; атрибутный селектор
+на предке не может различить эти два узла по той же причине, по которой
+не может `Class`/`Id`. `share_cache.rs`'s доккомент обновлён синхронно.
+Регрессионный тест среза 3
+(`an_ancestor_position_attribute_selector_still_disables_sharing`) не
+затронут напрямую — он не эксплуатирует индукцию (два разных `<div>`,
+`inherited_ptr` не совпадает), это отмечено в его теле явным комментарием;
+позитивный случай, который срез 5 действительно открывает, покрыт новым
+`an_ancestor_position_attribute_selector_now_shares_under_a_literal_common_parent`
+(шесть SVG-иконок — буквальные дети одного `<div data-theme="b">`).
+
+**Не закрывает `share_insert=0` из среза 4.** Четвёртый блокер — кандидаты
+вида `.btn:hover .octicon`/`.select-menu-item:focus .octicon` — это
+ancestor PSEUDO-CLASS-селекторы, не atribute-селекторы; они остаются
+законно unsafe (динамическое состояние, ключ его не пинит ни для какого
+узла). Срез 5 закрывает только подмножество четвёртого блокера, где
+ancestor-компаунд — атрибутный (`[aria-selected=true] .octicon` и
+однотипные); github.com/lenta.ru's доминирующие кандидаты — pseudo-class,
+не attribute, так что живой `share_insert` на этих двух сайтах, по всей
+видимости, останется 0 и после этого среза (не перепроверено живым
+прогоном — предыдущий срез уже установил, что для `key_some_unshareable`
+достаточно ОДНОГО unsafe-кандидата из ~20, и в срезе 5 не тронут состав
+кандидатов, только их индивидуальная безопасность). Следующий срез должен
+взять путь (b1)/(b2) из среза 3 напрямую — реальную досягаемость
+кандидата, не индукцию по типу селектора — иначе прогресс к
+`share_insert > 0` на реальных сайтах не гарантирован никаким дальнейшим
+расширением списка "безопасных" типов ancestor-селектора.
+
+Гейты: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист;
+`cargo test -p lumen-layout --lib style::tests::share_cache` — 12/12;
+`cargo test -p lumen-layout --lib style::` — 1368/1368; `scripts/
+scoped-test.sh` (`cascade.rs`/`share_cache.rs`/`tests/share_cache.rs`) —
+в процессе на момент записи, дополню при завершении. Новый тест
+(`share_cache.rs`):
+`an_ancestor_position_attribute_selector_now_shares_under_a_literal_common_parent`.
