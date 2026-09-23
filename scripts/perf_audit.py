@@ -70,6 +70,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+try:  # расширенные метрики ОС (OsMonitor); без psutil прогон идёт как раньше
+    import psutil
+except ImportError:  # pragma: no cover — опциональная зависимость инструмента
+    psutil = None
+
 # Windows-консоль по умолчанию cp1251 — не переваривает Δ/⚠ в сводке
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -79,6 +84,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = REPO_ROOT / "docs" / "perf" / "corpus.txt"
 OUT_ROOT = REPO_ROOT / ".tmp" / "perf-audit"
 # Паттерны строк stderr, которые считаем сигналом проблемы (без учёта регистра)
+# Доп. переменные окружения для каждого спавна lumen (--env KEY=VAL)
+EXTRA_ENV: dict[str, str] = {}
 ERROR_RE = re.compile(r"error|panic|failed|не распознан|unsupported", re.IGNORECASE)
 # Строки верхнего уровня дерева LUMEN_PROFILE_TREE=1 (без начального отступа)
 PROFILE_LINE_RE = re.compile(r"^\S.*\d+(?:\.\d+)?\s*ms", re.MULTILINE)
@@ -617,29 +624,387 @@ class RamMonitor(threading.Thread):
                     self._cpu_end = cpu
 
 
+def _gui_resources(pid: int) -> tuple[int | None, int | None]:
+    """GDI- и USER-объекты процесса (GetGuiResources) — утечки GUI-ресурсов psutil не видит."""
+    if sys.platform != "win32":
+        return None, None
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32")
+    u32 = ctypes.WinDLL("user32")
+    h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None, None
+    try:
+        return int(u32.GetGuiResources(h, 0)), int(u32.GetGuiResources(h, 1))
+    finally:
+        k32.CloseHandle(h)
+
+
+class OsMonitor(threading.Thread):
+    """Расширенные метрики процесса со стороны ОС (psutil, шаг 1 с), на сайт.
+
+    Дополняет RamMonitor/HungMonitor тем, что изнутри браузера не видно:
+    потоки, хэндлы, GDI/USER, private bytes/pagefile, дисковый и прочий I/O,
+    page faults, TCP-соединения по состояниям, user/kernel CPU, пиковая
+    загрузка ядер и «секунды на полном ядре» (busy_s — признак спина,
+    BUG-988/1034), дочерние процессы. Плюс фон системы (загрузка CPU всей
+    машины, свободная RAM) — чтобы шум станка было видно рядом с цифрой сайта.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(daemon=True)
+        self._lock = threading.Lock()
+        self._proc = None
+        self._stop = False
+        self._reset()
+        if psutil is not None:
+            psutil.cpu_percent(None)  # прайминг системного счётчика
+            self.start()
+
+    def _reset(self) -> None:
+        self._first: dict | None = None
+        self._last: dict | None = None
+        self._prev: dict | None = None
+        self._max: dict = {}
+        self._cpu_pcts: list[float] = []
+        self._busy_s = 0.0
+        self._sys_cpu: list[float] = []
+        self._sys_free_min: float | None = None
+        self._tcp_states_at_max: dict = {}
+        self._samples = 0
+
+    def watch(self, pid: int) -> None:
+        with self._lock:
+            try:
+                self._proc = psutil.Process(pid) if psutil is not None else None
+            except Exception:  # noqa: BLE001 — процесс мог уже умереть
+                self._proc = None
+
+    def begin_site(self) -> None:
+        with self._lock:
+            self._reset()
+            snap = self._snap()
+            self._first = self._last = self._prev = snap
+
+    def _snap(self) -> dict | None:
+        p = self._proc
+        if p is None:
+            return None
+        try:
+            with p.oneshot():
+                ct = p.cpu_times()
+                mi = p.memory_info()
+                s = {
+                    "t": time.monotonic(),
+                    "cpu_user": ct.user, "cpu_kernel": ct.system,
+                    "threads": p.num_threads(),
+                    "handles": p.num_handles() if hasattr(p, "num_handles") else None,
+                    "private_mb": getattr(mi, "private", getattr(mi, "vms", 0)) / 1048576,
+                    "ws_mb": mi.rss / 1048576,
+                    "pagefile_peak_mb": getattr(mi, "peak_pagefile", 0) / 1048576,
+                    "page_faults": getattr(mi, "num_page_faults", 0),
+                }
+                try:
+                    io = p.io_counters()
+                    s.update(io_read=io.read_bytes, io_write=io.write_bytes, io_other=io.other_bytes,
+                             io_read_ops=io.read_count, io_write_ops=io.write_count, io_other_ops=io.other_count)
+                except (psutil.AccessDenied, AttributeError):
+                    pass
+                try:
+                    s["children"] = len(p.children(recursive=True))
+                except psutil.Error:
+                    pass
+            try:
+                conns = p.net_connections(kind="inet") if hasattr(p, "net_connections") else p.connections(kind="inet")
+                states: dict[str, int] = {}
+                for c in conns:
+                    states[c.status] = states.get(c.status, 0) + 1
+                s["tcp"] = len(conns)
+                s["tcp_states"] = states
+            except psutil.Error:
+                pass
+            s["gdi"], s["user"] = _gui_resources(p.pid)
+            return s
+        except psutil.Error:
+            return None
+
+    def site_stats(self) -> dict:
+        with self._lock:
+            f, last = self._first, self._last
+            d: dict = {"os_samples": self._samples}
+            if not f or not last:
+                return d
+            for k in ("threads", "handles", "gdi", "user", "private_mb", "ws_mb", "tcp", "children"):
+                if k in self._max:
+                    v = self._max[k]
+                    d[f"os_{k}_max"] = round(v, 1) if isinstance(v, float) else v
+            d["os_threads_end"] = last.get("threads")
+            d["os_handles_end"] = last.get("handles")
+            d["os_private_mb_end"] = round(last.get("private_mb", 0), 1)
+            d["os_pagefile_peak_mb"] = round(last.get("pagefile_peak_mb", 0), 1)
+            d["os_cpu_user_s"] = round(last["cpu_user"] - f["cpu_user"], 2)
+            d["os_cpu_kernel_s"] = round(last["cpu_kernel"] - f["cpu_kernel"], 2)
+            d["os_page_faults"] = last.get("page_faults", 0) - f.get("page_faults", 0)
+            for k, name in (("io_read", "os_io_read_mb"), ("io_write", "os_io_write_mb"), ("io_other", "os_io_other_mb")):
+                if k in last and k in f:
+                    d[name] = round((last[k] - f[k]) / 1048576, 2)
+            for k in ("io_read_ops", "io_write_ops", "io_other_ops"):
+                if k in last and k in f:
+                    d[f"os_{k}"] = last[k] - f[k]
+            if self._cpu_pcts:
+                pcts = sorted(self._cpu_pcts)
+                d["os_cpu_pct_max"] = round(pcts[-1], 1)
+                d["os_cpu_pct_avg"] = round(sum(pcts) / len(pcts), 1)
+                d["os_cpu_pct_p50"] = round(pcts[len(pcts) // 2], 1)
+            d["os_busy_s"] = round(self._busy_s, 1)
+            d["os_tcp_states_at_max"] = self._tcp_states_at_max
+            if self._sys_cpu:
+                d["sys_cpu_pct_avg"] = round(sum(self._sys_cpu) / len(self._sys_cpu), 1)
+                d["sys_cpu_pct_max"] = round(max(self._sys_cpu), 1)
+            if self._sys_free_min is not None:
+                d["sys_free_mb_min"] = round(self._sys_free_min)
+            return d
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        while not self._stop:
+            time.sleep(1.0)
+            with self._lock:
+                if self._proc is None:
+                    continue
+                snap = self._snap()
+                if snap is None:
+                    continue
+                self._samples += 1
+                if self._first is None:
+                    self._first = self._prev = snap
+                prev = self._prev or snap
+                dt = snap["t"] - prev["t"]
+                if dt > 0:
+                    pct = ((snap["cpu_user"] + snap["cpu_kernel"]) - (prev["cpu_user"] + prev["cpu_kernel"])) / dt * 100.0
+                    self._cpu_pcts.append(pct)
+                    if pct >= 90.0:
+                        self._busy_s += dt
+                for k in ("threads", "handles", "gdi", "user", "private_mb", "ws_mb", "tcp", "children"):
+                    v = snap.get(k)
+                    if v is not None and v >= self._max.get(k, -1):
+                        self._max[k] = v
+                        if k == "tcp":
+                            self._tcp_states_at_max = snap.get("tcp_states", {})
+                self._prev = self._last = snap
+                try:
+                    self._sys_cpu.append(psutil.cpu_percent(None))
+                    free = psutil.virtual_memory().available / 1048576
+                    self._sys_free_min = free if self._sys_free_min is None else min(self._sys_free_min, free)
+                except psutil.Error:
+                    pass
+
+
+# Телеметрия страницы изнутри (MCP eval): размер DOM, ресурсы, картинки,
+# Performance API. Каждое поле в своём try — нереализованный API движка даёт
+# запись в `errors`, а не пустой результат (это тоже данные о покрытии).
+PAGE_PROBE_JS = r"""(() => {
+  const o = {errors: {}};
+  const t = (k, f) => { try { o[k] = f(); } catch (e) { o.errors[k] = String(e && e.message || e).slice(0, 120); } };
+  const q = s => document.querySelectorAll(s).length;
+  t('title', () => document.title.slice(0, 120));
+  t('location', () => location.href.slice(0, 200));
+  t('ready_state', () => document.readyState);
+  t('compat_mode', () => document.compatMode);
+  t('charset', () => document.characterSet);
+  t('lang', () => document.documentElement.lang);
+  t('nodes', () => q('*'));
+  t('text_len', () => (document.body ? document.body.textContent.length : -1));
+  t('scroll_h', () => document.documentElement.scrollHeight);
+  t('scroll_w', () => document.documentElement.scrollWidth);
+  t('viewport', () => [innerWidth, innerHeight, devicePixelRatio]);
+  t('scripts', () => q('script'));
+  t('scripts_ext', () => q('script[src]'));
+  t('scripts_module', () => q('script[type=module]'));
+  t('stylesheets', () => document.styleSheets.length);
+  t('style_tags', () => q('style'));
+  t('iframes', () => q('iframe'));
+  t('links', () => q('a[href]'));
+  t('forms', () => q('form'));
+  t('inputs', () => q('input,textarea,select,button'));
+  t('videos', () => q('video'));
+  t('canvases', () => q('canvas'));
+  t('svgs', () => q('svg'));
+  t('custom_elements', () => Array.from(document.querySelectorAll('*')).filter(e => e.localName.includes('-')).length);
+  t('shadow_hosts', () => Array.from(document.querySelectorAll('*')).filter(e => e.shadowRoot).length);
+  t('imgs', () => document.images.length);
+  t('imgs_broken', () => Array.from(document.images).filter(i => i.complete && i.naturalWidth === 0 && (i.currentSrc || i.src)).length);
+  t('imgs_pending', () => Array.from(document.images).filter(i => !i.complete).length);
+  t('imgs_lazy', () => q('img[loading=lazy]'));
+  t('fonts_status', () => document.fonts ? document.fonts.status : null);
+  t('fonts_n', () => document.fonts ? document.fonts.size : null);
+  t('perf_resources', () => performance.getEntriesByType('resource').length);
+  t('perf_transfer_kb', () => Math.round(performance.getEntriesByType('resource').reduce((a, e) => a + (e.transferSize || 0), 0) / 1024));
+  t('nav_timing', () => { const n = performance.getEntriesByType('navigation')[0]; return n ? {ttfb: n.responseStart, dcl: n.domContentLoadedEventEnd, load: n.loadEventEnd, type: n.type, transfer: n.transferSize} : null; });
+  t('paint_timing', () => performance.getEntriesByType('paint').map(p => [p.name, Math.round(p.startTime)]));
+  t('js_heap_mb', () => performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e5) / 10 : null);
+  t('now_ms', () => Math.round(performance.now()));
+  t('cookie_len', () => document.cookie.length);
+  t('local_storage_keys', () => localStorage.length);
+  t('sw_supported', () => 'serviceWorker' in navigator);
+  return JSON.stringify(o);
+})()"""
+
+
+def page_probe(br: "LiveBrowser") -> dict:
+    """Телеметрия страницы через MCP eval; результат — dict или {'error': ...}."""
+    try:
+        r = br.mcp.tool("eval", {"code": PAGE_PROBE_JS})
+    except (RuntimeError, OSError, socket.timeout, json.JSONDecodeError) as e:
+        return {"error": str(e)[:200]}
+    val = r.get("result")
+    for _ in range(3):  # eval возвращает JSON-сериализацию значения; строку JSON — дважды
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except json.JSONDecodeError:
+                break
+        else:
+            break
+    return val if isinstance(val, dict) else {"error": f"неожиданный ответ eval: {str(val)[:120]}"}
+
+
+def network_summary(br: "LiveBrowser") -> dict:
+    """Сводка resource://network: число запросов, байты, гистограмма статусов, топ хостов."""
+    try:
+        contents = br.mcp.resource("resource://network")
+        entries = json.loads(contents[0].get("text", "[]")) if contents else []
+    except (RuntimeError, OSError, socket.timeout, json.JSONDecodeError) as e:
+        return {"net_log_error": str(e)[:200]}
+    statuses: dict[str, int] = {}
+    hosts: dict[str, int] = {}
+    kinds: dict[str, int] = {}
+    total = 0
+    for e in entries:
+        st = int(e.get("status") or 0)
+        bucket = "0" if st == 0 else f"{st // 100}xx"
+        statuses[bucket] = statuses.get(bucket, 0) + 1
+        total += int(e.get("size_bytes") or 0)
+        u = str(e.get("url", ""))
+        host = u.split("/")[2] if u.count("/") >= 2 else u[:40]
+        hosts[host] = hosts.get(host, 0) + 1
+        ext = u.split("?")[0].rsplit(".", 1)[-1].lower() if "." in u.split("?")[0].rsplit("/", 1)[-1] else "-"
+        kinds[ext[:6]] = kinds.get(ext[:6], 0) + 1
+    top_hosts = dict(sorted(hosts.items(), key=lambda kv: -kv[1])[:8])
+    top_kinds = dict(sorted(kinds.items(), key=lambda kv: -kv[1])[:10])
+    failed = [e.get("url", "")[:160] for e in entries if int(e.get("status") or 0) in (0,) or int(e.get("status") or 0) >= 400][:30]
+    return {"net_requests": len(entries), "net_bytes_mb": round(total / 1048576, 2), "net_status_hist": statuses,
+            "net_hosts": len(hosts), "net_top_hosts": top_hosts, "net_kinds": top_kinds, "net_failed_urls": failed}
+
+
+def explain_page_summary(br: "LiveBrowser") -> dict:
+    """x-explain-page (DEVX-11): боксы/команды/инварианты — ключи с префиксом ex_."""
+    try:
+        r = br.mcp.tool("x-explain-page", {})
+    except (RuntimeError, OSError, socket.timeout, json.JSONDecodeError) as e:
+        return {"ex_error": str(e)[:200]}
+    out: dict = {}
+    for k, v in r.items():
+        if isinstance(v, (int, float)) or v is None:
+            out[f"ex_{k}"] = v
+        elif isinstance(v, dict):
+            flat = {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float))}
+            out[f"ex_{k}"] = flat
+    return out
+
+
+def frame_analysis(png_bytes: bytes) -> dict:
+    """Содержательность кадра: доля доминирующего цвета, число цветов, «пустой кадр».
+
+    Независимый от health-log/повтора-хэша признак белого экрана (BUG-993):
+    кадр, в котором 98 %+ пикселей одного цвета, почти наверняка пуст.
+    """
+    try:
+        import io
+        from PIL import Image
+    except ImportError:
+        return {}
+    try:
+        im = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+        w, h = im.size
+        th = im.resize((160, max(1, int(160 * h / max(w, 1)))))
+        colors = th.getcolors(maxcolors=160 * 400) or []
+        n = th.size[0] * th.size[1]
+        dom_count, dom = max(colors, key=lambda c: c[0]) if colors else (0, (0, 0, 0))
+        top_half = th.crop((0, 0, th.size[0], th.size[1] // 2)).getcolors(maxcolors=160 * 400) or []
+        top_dom = max(c[0] for c in top_half) / max(1, th.size[0] * (th.size[1] // 2)) if top_half else 0
+        return {"frame_colors": len(colors), "frame_dominant_frac": round(dom_count / max(n, 1), 4),
+                "frame_dominant_rgb": list(dom), "frame_top_dominant_frac": round(top_dom, 4),
+                "frame_blank": dom_count / max(n, 1) >= 0.98}
+    except Exception as e:  # noqa: BLE001 — битый PNG тоже результат
+        return {"frame_error": str(e)[:120]}
+
+
+_KV_RE = re.compile(r"([A-Za-z_][\w./-]*)=([^\s]+)")
+
+
+def stderr_telemetry(chunk: str) -> dict:
+    """Счётчики из stderr сайта: сеть, паники, блокировки, стартап, wgpu-адаптер."""
+    lines = chunk.splitlines()
+    d: dict = {
+        "se_lines": len(lines),
+        "se_net_ok": sum(1 for ln in lines if "←" in ln),
+        "se_net_fail": sum(1 for ln in lines if "✗" in ln),
+        "se_panics": sum(1 for ln in lines if "panicked at" in ln),
+        "se_blocked": sum(1 for ln in lines if "blocked:" in ln),
+        "se_warnings": sum(1 for ln in lines if re.search(r"\bwarn(ing)?\b", ln, re.IGNORECASE)),
+        "se_stack_overflow": sum(1 for ln in lines if "stack overflow" in ln.lower()),
+    }
+    startup = [ln.strip() for ln in lines if ln.startswith("[startup]")]
+    if startup:
+        d["se_startup"] = startup[:8]
+    adapter = next((ln.strip() for ln in lines if "[wgpu] adapter" in ln), None)
+    if adapter:
+        d["se_wgpu_adapter"] = adapter[:160]
+    panics = [ln.strip()[:200] for ln in lines if "panicked at" in ln]
+    if panics:
+        d["se_panic_lines"] = list(dict.fromkeys(panics))[:5]
+    for label in ("FRAME_SUMMARY", "ENGINE_SUMMARY", "MEM_REPORT"):
+        last = next((ln for ln in reversed(lines) if ln.startswith(label)), None)
+        if last:
+            d[f"se_{label.lower()}"] = dict(_KV_RE.findall(last))
+    return d
+
+
 class LiveBrowser:
     """Одно GUI-окно lumen на весь прогон + перезапуск при смерти."""
 
-    def __init__(self, exe: Path, out_dir: Path, timeout: float) -> None:
+    def __init__(self, exe: Path, out_dir: Path, timeout: float, tag: str = "") -> None:
         self.exe, self.out_dir, self.timeout = exe, out_dir, timeout
+        # compat спавнит процесс на сайт — без тега все сайты писали бы в один live.stderr.0.log
+        self.tag = f"{tag}." if tag else ""
         self.restarts = 0
         self.hung = HungMonitor()
         self.ram = RamMonitor()
+        self.os = OsMonitor()
+        self.spawn_s: float | None = None
         self._spawn()
 
     def _spawn(self) -> None:
         port = _free_port()
-        self.log_path = self.out_dir / f"live.stderr.{self.restarts}.log"
+        self.log_path = self.out_dir / f"live.stderr.{self.tag}{self.restarts}.log"
         log = self.log_path.open("wb")
         env = os.environ.copy()
         env["LUMEN_HEALTH_LOG"] = "1"
+        env["LUMEN_STARTUP_LOG"] = "1"  # [startup]-разбивка старта процесса — дешёво, только stderr
+        env.update(EXTRA_ENV)
+        t_spawn = time.monotonic()
         self.proc = subprocess.Popen(
             [str(self.exe), "--mcp-live-port", str(port), "--maximized", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=log, cwd=str(REPO_ROOT), env=env,
         )
         self.mcp = Mcp(port, self.timeout, self.log_path)
+        self.spawn_s = round(time.monotonic() - t_spawn, 2)  # старт процесса → MCP готов
         self.hung.watch_pid(self.proc.pid)
         self.ram.watch(self.proc)
+        self.os.watch(self.proc.pid)
         # BUG-991: the engine names its journal after its own pid and only ever
         # appends to it, so each restart gets a fresh file instead of the next
         # process truncating the previous one's records away — track that path
@@ -687,6 +1052,7 @@ class LiveBrowser:
     def close(self) -> None:
         self.hung.stop()
         self.ram.stop()
+        self.os.stop()
         try:
             self.proc.terminate()
             self.proc.wait(timeout=5)
@@ -716,6 +1082,9 @@ def audit_site_live(
     net_failure = False
     br.hung.begin_site()
     br.ram.begin_site()
+    br.os.begin_site()
+    rec["spawn_s"] = br.spawn_s
+    rec["started_at"] = datetime.now().isoformat(timespec="seconds")
     t0 = time.monotonic()
     try:
         # Новая вкладка на сайт (MCP-инструмент new_tab: open_new_tab +
@@ -739,6 +1108,8 @@ def audit_site_live(
             # (как для пользователя): перезапускаем окно, это находка.
             rec["status"] = "HUNG"
             rec.update(br.hung.site_stats())
+            rec.update(br.os.site_stats())
+            rec.update(stderr_telemetry(br.stderr_since(log_pos)))
             br.restart()
             rec["restarted"] = True
             rec["stderr_errors"] = []
@@ -752,6 +1123,9 @@ def audit_site_live(
     except (OSError, json.JSONDecodeError, socket.timeout) as e:  # окно умерло/зависло
         rec["status"] = "DEAD"
         rec["error"] = str(e)[:200]
+        rec["exit_code"] = br.proc.poll()
+        rec.update(br.os.site_stats())
+        rec.update(stderr_telemetry(br.stderr_since(log_pos)))
         br.restart()
         rec["restarted"] = True
         return rec
@@ -778,6 +1152,7 @@ def audit_site_live(
             png_bytes = base64.b64decode(contents[0]["data"])
             png.write_bytes(png_bytes)
             rec["png_size"] = png_size(png)
+            rec.update(frame_analysis(png_bytes))
             if png_hash_counts is not None:
                 h = hashlib.md5(png_bytes).hexdigest()  # noqa: S324 — дедуп кадров, не крипто
                 png_hash_counts[h] = png_hash_counts.get(h, 0) + 1
@@ -794,6 +1169,18 @@ def audit_site_live(
         rec["console_errors"] = js_errs
         rec["console_network_errors"] = net_errs
         rec["console_error_sigs"] = count_sigs(js_errs)
+        levels: dict[str, int] = {}
+        for e in entries:
+            lv = str(e.get("level", "?"))
+            levels[lv] = levels.get(lv, 0) + 1
+        rec["console_levels"] = levels
+        rec["console_warnings"] = [e.get("message", "")[:300] for e in entries if e.get("level") == "Warn"][:20]
+        t_probe = time.monotonic()
+        rec["page"] = page_probe(br)
+        rec["page_probe_s"] = round(time.monotonic() - t_probe, 2)
+        rec.update(network_summary(br))
+        # x-explain-page не вызывается: в живом окне LiveWindowSession отдаёт нули (заглушка SDC-2)
+        rec["total_s"] = round(time.monotonic() - t0, 2)
     except (OSError, RuntimeError, json.JSONDecodeError, socket.timeout) as e:
         rec.setdefault("error", str(e)[:200])
         if br.proc.poll() is not None or isinstance(e, OSError):
@@ -806,6 +1193,9 @@ def audit_site_live(
     rec["stderr_errors"], rec["stderr_error_sigs"], _ = br.stderr_errors_since(log_pos)
     rec.update(br.ram.site_stats())
     rec.update(br.hung.site_stats())
+    rec.update(br.os.site_stats())
+    rec.update(stderr_telemetry(chunk))
+    rec["alive_after"] = br.proc.poll() is None
     # Накопительные итоги процесса — явными именами, не как «на сайт» (BUG-992)
     proc_total = _win_proc_stats(br.proc)
     if proc_total:
@@ -841,8 +1231,8 @@ def summary_md_live(results: list[dict], exe: Path, commit: str, restarts: int) 
         f"- Бинарь: `{exe}` (GUI, один процесс, дефолтный рендер-бэкенд)",
         f"- Коммит движка: `{commit}`",
         "",
-        "| slug | статус | готовность, с | RAM тек, МБ | RAM пик, МБ | CPU сайт, с | не отвечает, с | JS-ошибки | первая ошибка |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| slug | статус | готовность, с | RAM тек, МБ | RAM пик, МБ | CPU сайт, с | CPU пик % | на ядре, с | потоки | хэндлы | GDI | не отвечает, с | DOM узлов | запросов | сеть МБ | пустой кадр | паник | JS-ошибки | первая ошибка |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         all_errs = (r.get("console_errors") or []) + (r.get("stderr_errors") or [])
@@ -853,7 +1243,11 @@ def summary_md_live(results: list[dict], exe: Path, commit: str, restarts: int) 
         lines.append(
             f"| {r['slug']} | {r['status']}{restarted} | {r.get('ready_s', '—')} "
             f"| {r.get('cur_mb', '—')} | {r.get('peak_mb', '—')} | {r.get('cpu_s', '—')} "
-            f"| {r.get('hung_total_s', '')} | {len(all_errs) or ''} | {err} |"
+            f"| {r.get('os_cpu_pct_max', '')} | {r.get('os_busy_s', '') or ''} | {r.get('os_threads_max', '')} "
+            f"| {r.get('os_handles_max', '')} | {r.get('os_gdi_max', '')} "
+            f"| {r.get('hung_total_s', '')} | {(r.get('page') or {}).get('nodes', '')} | {r.get('net_requests', '')} "
+            f"| {r.get('net_bytes_mb', '')} | {'да' if r.get('frame_blank') else ''} | {r.get('se_panics') or ''} "
+            f"| {len(all_errs) or ''} | {err} |"
         )
     lines += [
         "",
@@ -944,9 +1338,11 @@ def iter_compat(exe: Path, sites: list, out_dir: Path, timeout: int, dwell: floa
     png_hash_counts: dict[str, int] = {}
     total_restarts = 0
     for slug, url in sites:
-        br = LiveBrowser(exe, out_dir, timeout)
+        br = LiveBrowser(exe, out_dir, timeout, tag=slug)
         try:
-            yield audit_site_live(br, slug, url, out_dir, timeout, dwell, scroll_ticks, png_hash_counts)
+            rec = audit_site_live(br, slug, url, out_dir, timeout, dwell, scroll_ticks, png_hash_counts)
+            rec["stderr_log"] = br.log_path.name
+            yield rec
         finally:
             total_restarts += br.restarts
             br.close()
@@ -1073,7 +1469,11 @@ def main() -> None:
     ap.add_argument("--session-tabs", type=int, default=20, help="--mode session: сколько сайтов открыть вкладками (default 20)")
     ap.add_argument("--dwell", type=float, default=3.0, help="live: секунд показывать каждый сайт (default 3)")
     ap.add_argument("--scroll-ticks", type=int, default=4, help="live: щелчков скролла вниз/вверх (default 4)")
+    ap.add_argument("--env", action="append", default=[], help="KEY=VAL в окружение lumen (повторяемый), напр. LUMEN_MEM_REPORT=1")
     args = ap.parse_args()
+    for kv in args.env:
+        k, _, v = kv.partition("=")
+        EXTRA_ENV[k] = v
 
     exe = find_exe(args.exe)
     sites = load_corpus(Path(args.corpus), args.only)
