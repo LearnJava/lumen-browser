@@ -1135,3 +1135,65 @@ fn elem_ref_null_entry_leaves_table_slot_unset() {
     let r = run(&m, "call", &[Value::I32(2)]);
     assert!(r.is_err(), "call_indirect through a ref.null slot must trap");
 }
+
+// ── BUG-898: forged untrusted counts must not drive an allocation ─────────
+
+#[test]
+fn code_section_forged_local_count_is_rejected_not_materialized() {
+    // The exact 32-byte module from BUG-898: a code section body declaring
+    // 2 local-decl groups, the first with a bogus 0xFFFFFFFF-ish local count
+    // (LEB `ff ff ff ff 0f`, still truncated by the module's actual length).
+    // Before the fix this drove ~4e9 `Vec::push` calls; it must now be a
+    // clean decode error, not a multi-second hang.
+    let m: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // magic + version
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type section: () -> ()
+        0x03, 0x02, 0x01, 0x00, // function section
+        0x0A, 0x0C, 0x01, 0x0A, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x7F, 0x00, 0x0B,
+    ];
+    assert!(parse_module(m).is_err());
+}
+
+#[test]
+fn code_section_local_count_over_function_cap_is_rejected() {
+    // A single local-decl group whose count is legitimately encodable
+    // (fits in the remaining body bytes only because body_size lies), but
+    // still exceeds the 50 000-per-function implementation limit alone
+    // must not be accepted even when the remaining-bytes guard would let
+    // a small count through in a bigger module.
+    let body: Vec<u8> = {
+        let mut b = Vec::new();
+        leb_u(&mut b, 1); // 1 local-decl group
+        leb_u(&mut b, 60_000); // group count: over the 50_000 cap
+        b.push(0x7F); // i32
+        b.push(0x0B); // end
+        b
+    };
+    let m = module(vec![
+        section(1, vec![0x01, 0x60, 0x00, 0x00]),
+        section(3, vec![0x01, 0x00]),
+        code_section(vec![body]),
+    ]);
+    assert!(parse_module(&m).is_err());
+}
+
+#[test]
+fn br_table_forged_target_count_is_rejected_not_preallocated() {
+    // br_table (0x0E) reads its target count into `Vec::with_capacity`
+    // before consuming any target bytes; a forged huge count must be
+    // rejected before that allocation happens.
+    let body: Vec<u8> = {
+        let mut b = Vec::new();
+        leb_u(&mut b, 0); // no locals
+        b.push(0x0E); // br_table
+        leb_u(&mut b, u32::MAX as u64); // forged target count
+        b.push(0x0B); // end (never reached — must error before)
+        b
+    };
+    let m = module(vec![
+        section(1, vec![0x01, 0x60, 0x00, 0x00]),
+        section(3, vec![0x01, 0x00]),
+        code_section(vec![body]),
+    ]);
+    assert!(parse_module(&m).is_err());
+}

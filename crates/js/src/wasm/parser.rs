@@ -278,6 +278,17 @@ impl<'a> Reader<'a> {
         self.data.len() - self.pos
     }
 
+    /// Rejects a count read from untrusted input before it is used to size
+    /// an allocation: a count can't exceed the bytes left to encode it, and
+    /// without this check `Vec::with_capacity(n)` on a forged 0xFFFFFFFF
+    /// aborts the process (allocator OOM) instead of returning `Err` (BUG-898).
+    fn check_count(&self, n: u32) -> DecodeResult<()> {
+        if n as u64 > self.remaining() as u64 {
+            return Err("declared count exceeds remaining module bytes".into());
+        }
+        Ok(())
+    }
+
     fn byte(&mut self) -> DecodeResult<u8> {
         let b = *self.data.get(self.pos).ok_or("unexpected end of input")?;
         self.pos += 1;
@@ -441,11 +452,13 @@ fn parse_type_section(r: &mut Reader, m: &mut Module) -> DecodeResult<()> {
             return Err(format!("expected func type 0x60, got 0x{form:02X}"));
         }
         let np = r.u32()?;
+        r.check_count(np)?;
         let mut params = Vec::with_capacity(np as usize);
         for _ in 0..np {
             params.push(r.val_type()?);
         }
         let nr = r.u32()?;
+        r.check_count(nr)?;
         let mut results = Vec::with_capacity(nr as usize);
         for _ in 0..nr {
             results.push(r.val_type()?);
@@ -558,6 +571,7 @@ fn parse_export_section(r: &mut Reader, m: &mut Module) -> DecodeResult<()> {
 /// (bare func-index list or expr list) uniformly.
 fn read_func_index_exprs(r: &mut Reader) -> DecodeResult<Vec<Vec<Instr>>> {
     let n = r.u32()?;
+    r.check_count(n)?;
     let mut out = Vec::with_capacity(n as usize);
     for _ in 0..n {
         out.push(vec![Instr::RefFunc(r.u32()?)]);
@@ -568,6 +582,7 @@ fn read_func_index_exprs(r: &mut Reader) -> DecodeResult<Vec<Vec<Instr>>> {
 /// Reads `vec(expr)` — the expr-encoded element list used by flags 4-7.
 fn read_elem_exprs(r: &mut Reader) -> DecodeResult<Vec<Vec<Instr>>> {
     let n = r.u32()?;
+    r.check_count(n)?;
     let mut out = Vec::with_capacity(n as usize);
     for _ in 0..n {
         out.push(decode_expr(r)?);
@@ -673,6 +688,12 @@ fn parse_data_section(r: &mut Reader, m: &mut Module) -> DecodeResult<()> {
     Ok(())
 }
 
+/// Implementation-defined cap on locals per function, matching the JS API
+/// limit (50 000) that engines enforce since the core spec leaves it open.
+/// Without this, a declared local count is trusted verbatim and a
+/// few-byte module can force multi-gigabyte allocation (BUG-898).
+const MAX_FUNCTION_LOCALS: u64 = 50_000;
+
 fn parse_code_section(r: &mut Reader, m: &mut Module) -> DecodeResult<()> {
     let count = r.u32()?;
     for _ in 0..count {
@@ -681,9 +702,15 @@ fn parse_code_section(r: &mut Reader, m: &mut Module) -> DecodeResult<()> {
         // locals
         let num_local_decls = r.u32()?;
         let mut locals = Vec::new();
+        let mut total_locals: u64 = 0;
         for _ in 0..num_local_decls {
             let n = r.u32()?;
             let ty = r.val_type()?;
+            r.check_count(n)?;
+            total_locals += n as u64;
+            if total_locals > MAX_FUNCTION_LOCALS {
+                return Err("too many locals declared for a function".into());
+            }
             for _ in 0..n {
                 locals.push(ty);
             }
@@ -784,6 +811,7 @@ fn decode_expr(r: &mut Reader) -> DecodeResult<Vec<Instr>> {
             0x0D => out.push(Instr::BrIf(r.u32()?)),
             0x0E => {
                 let n = r.u32()?;
+                r.check_count(n)?;
                 let mut targets = Vec::with_capacity(n as usize);
                 for _ in 0..n {
                     targets.push(r.u32()?);
