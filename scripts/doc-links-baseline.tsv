@@ -322,7 +322,6 @@ docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/otlayout.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/shape.rs	missing	
 docs/decisions/TEMPLATE.md	ADR-NNN-title.md	missing	
-docs/engine-gaps.md	../bugs/BUG-1065-OPEN.md	stale-status-suffix	bugs/BUG-1065-FIXED.md
 docs/engine-gaps.md	../bugs/BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 docs/plan/tech-stack.md	crates/core/src/ext.rs	missing	
 docs/roadmap-trees.md	roadmap-svg-columns.html	missing	
