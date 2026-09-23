@@ -87,6 +87,13 @@ pub(crate) fn html_and_body(root: &LayoutBox) -> (&LayoutBox, &LayoutBox) {
     (html, body)
 }
 
+/// BUG-1103: propagation is a **used-value** effect on the canvas clear
+/// color only, computed read-only by [`canvas_background_color`] — it must
+/// not mutate either element's `ComputedStyle` (that mutation is exactly
+/// what corrupted `getComputedStyle(body)`/`getComputedStyle(documentElement)`
+/// before the fix). Each of these tests therefore asserts BOTH ends: the
+/// canvas color a paint pass would clear to, and that `html`/`body` still
+/// report their own authored values unchanged, as CSSOM requires.
 #[test]
 fn body_bg_propagates_to_html_when_html_has_none() {
     let root = lay_full(
@@ -95,13 +102,15 @@ fn body_bg_propagates_to_html_when_html_has_none() {
     );
     let (html, body) = html_and_body(&root);
     assert_eq!(
-        html.style.background_color,
-        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
-        "html должен получить фон body"
+        canvas_background_color(&root),
+        Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+        "канва должна очищаться в фон body"
     );
+    assert_eq!(html.style.background_color, None, "html своего фона не приобретает");
     assert_eq!(
-        body.style.background_color, None,
-        "у body фон обнуляется после propagation"
+        body.style.background_color,
+        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
+        "body сохраняет собственный computed-style фон"
     );
 }
 
@@ -112,6 +121,11 @@ fn html_with_own_bg_blocks_propagation() {
         "html { background-color: blue; } body { background-color: red; }",
     );
     let (html, body) = html_and_body(&root);
+    assert_eq!(
+        canvas_background_color(&root),
+        Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+        "канва берёт фон html — propagation не сработала"
+    );
     assert_eq!(
         html.style.background_color,
         Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })),
@@ -131,19 +145,20 @@ fn body_bg_image_propagates_when_html_has_none() {
         "body { background-image: url(\"bg.png\"); }",
     );
     let (html, body) = html_and_body(&root);
+    assert!(html.style.background_layers.is_empty(), "html своих слоёв не приобретает");
     assert!(
-        html.style.background_layers.first().is_some_and(|l| {
+        body.style.background_layers.first().is_some_and(|l| {
             matches!(&l.image, BackgroundImage::Url(s) if s == "bg.png")
         }),
-        "html получает background-image"
+        "body сохраняет собственный background-image"
     );
-    assert!(body.style.background_layers.is_empty(), "у body background_layers обнуляется");
 }
 
 #[test]
 fn html_image_blocks_propagation_even_if_color_empty() {
-    // У html есть background-image (color=None) — propagation НЕ должна
-    // сработать, у body свой фон остаётся.
+    // У html есть background-image (color=None) — propagation в
+    // `canvas_background_color` НЕ должна сработать, у body свой фон
+    // остаётся собственным computed-style значением.
     let root = lay_full(
         "<html><body><p>x</p></body></html>",
         "html { background-image: url(\"h.png\"); } body { background-color: red; }",
@@ -155,6 +170,9 @@ fn html_image_blocks_propagation_even_if_color_empty() {
         body.style.background_color,
         Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }))
     );
+    // html блокирует опору канвы на body своим (пусть и не цветовым) фоном:
+    // непрозрачного цвета у html нет, поэтому `None` (UA-дефолт), а не body.
+    assert_eq!(canvas_background_color(&root), None);
 }
 
 #[test]
@@ -183,17 +201,23 @@ fn fragment_without_html_skips_propagation() {
 // ── HTML presentational hints: bgcolor / text (HTML5 §15) ──────────────
 
 /// `<body bgcolor="red">` — presentational hint задаёт background-color.
-/// После canvas-propagation фон переходит на html-box.
+/// Канва очищается в этот цвет (BUG-1103: без переноса в `html`'s
+/// `ComputedStyle` — `body` остаётся собственником своего значения).
 #[test]
 fn body_bgcolor_attr_sets_background() {
     let root = lay_full("<html><body bgcolor=\"red\"><p>x</p></body></html>", "");
     let (html, body) = html_and_body(&root);
     assert_eq!(
-        html.style.background_color,
-        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
-        "html должен получить фон из bgcolor после propagation"
+        canvas_background_color(&root),
+        Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+        "канва должна получить фон из bgcolor"
     );
-    assert_eq!(body.style.background_color, None, "body фон обнуляется после propagation");
+    assert_eq!(html.style.background_color, None, "html своего фона не приобретает");
+    assert_eq!(
+        body.style.background_color,
+        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
+        "body сохраняет собственный computed-style фон из bgcolor"
+    );
 }
 
 /// `<body bgcolor="ff0000">` — hashless hex принимается по HTML5 §2.4.6
@@ -201,10 +225,9 @@ fn body_bgcolor_attr_sets_background() {
 #[test]
 fn body_bgcolor_hashless_hex_accepted() {
     let root = lay_full("<html><body bgcolor=\"ff0000\"><p>x</p></body></html>", "");
-    let (html, _body) = html_and_body(&root);
     assert_eq!(
-        html.style.background_color,
-        Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
+        canvas_background_color(&root),
+        Some(Color { r: 255, g: 0, b: 0, a: 255 }),
         "hashless hex bgcolor должен распознаваться"
     );
 }
@@ -726,9 +749,9 @@ fn author_css_overrides_bgcolor_hint() {
         "<html><body bgcolor=\"red\"><p>x</p></body></html>",
         "body { background-color: blue; }",
     );
-    let (html, _body) = html_and_body(&root);
+    let (_html, body) = html_and_body(&root);
     assert_eq!(
-        html.style.background_color,
+        body.style.background_color,
         Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })),
         "author CSS background-color должен побеждать bgcolor атрибут"
     );
@@ -748,10 +771,9 @@ fn body_bgcolor_transparent_is_ignored() {
 #[test]
 fn body_bgcolor_named_color() {
     let root = lay_full("<html><body bgcolor=\"olive\"><p>x</p></body></html>", "");
-    let (html, _body) = html_and_body(&root);
     assert_eq!(
-        html.style.background_color,
-        Some(CssColor::Rgba(Color { r: 128, g: 128, b: 0, a: 255 })),
+        canvas_background_color(&root),
+        Some(Color { r: 128, g: 128, b: 0, a: 255 }),
         "named color 'olive' должен правильно конвертироваться"
     );
 }

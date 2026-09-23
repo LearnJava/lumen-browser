@@ -101,11 +101,10 @@ attributed files, `expected: FAIL` per subtest.
    что видит CSSOM), поэтому `getComputedStyle(body).backgroundColor`
    отвечает `transparent` для ЛЮБОГО `body { background-color: ... }`,
    вне зависимости от `env()`/`@supports`. Заведено отдельно —
-   [BUG-1103](BUG-1103-OPEN.md) (не point-fixed здесь: наивное «не
-   перемещать, а копировать» ломает полупрозрачные цвета двойным
-   композитингом — canvas-clear + собственная перерисовка `body`;
-   корректный фикс требует отдельного paint-only маркера на `LayoutBox`,
-   не на `ComputedStyle`, вне объёма этой заявки).
+   [BUG-1103](BUG-1103-FIXED.md), исправлен P6 2026-09-23: мутация
+   `ComputedStyle` убрана целиком, `canvas_background_color()` читает
+   пропагируемый цвет read-only, `getComputedStyle(body)` больше не
+   искажается.
 3. **`supports-script.tentative.html` (1 сабтест)** — не CSSOM-маскировка:
    реальный, узкий, ФИКСНУТЫЙ здесь дефект. `CSS.supports("background",
    "env()")` (пустые скобки, без обязательного `<custom-ident>`) отвечал
