@@ -2922,6 +2922,17 @@ function _lumen_get_root_node(nid, options) {
     return cur === _lumen_root_nid ? document : _lumen_make_element(cur);
 }
 
+// Same shadow-boundary climb as `_lumen_get_root_node` above (composed: false —
+// a shadow root is its own tree's root), but returns the raw nid instead of a
+// wrapper: cheap tree-scope identity check for `Selection.setBaseAndExtent`
+// (BUG-966), which only needs to compare two roots, not read either one.
+function _lumen_selection_tree_root_nid(nid) {
+    var cur = nid;
+    var pid;
+    while ((pid = _lumen_u2n(_lumen_get_parent(cur))) !== null) { cur = pid; }
+    return cur;
+}
+
 // ── DocumentFragment wrapper ──────────────────────────────────────────────────
 // Wraps a DocumentFragment NodeId. Unlike ShadowRoot, a DocumentFragment is
 // consumed when appended: all children are moved to the target parent (DOM LS
@@ -10580,7 +10591,16 @@ var _lumen_selection = (function() {
         },
         setBaseAndExtent: function(aN, aO, fN, fO) {
             if (!aN || aN.__nid__ === undefined || !fN || fN.__nid__ === undefined) return;
-            _lumen_set_selection(aN.__nid__, aO >>> 0, fN.__nid__, fO >>> 0);
+            var aNid = aN.__nid__, aOff = aO >>> 0;
+            var fNid = fN.__nid__, fOff = fO >>> 0;
+            // Selection API §4.3: anchor and focus must share a tree scope —
+            // if they don't (e.g. one is inside a shadow tree the other
+            // isn't), collapse the boundary point onto the anchor's, per
+            // real-browser behaviour (BUG-966, Mozilla bug 1887963).
+            if (_lumen_selection_tree_root_nid(aNid) !== _lumen_selection_tree_root_nid(fNid)) {
+                fNid = aNid; fOff = aOff;
+            }
+            _lumen_set_selection(aNid, aOff, fNid, fOff);
         },
         containsNode:    function() { return false; },
         getComposedRanges: function() { return []; },

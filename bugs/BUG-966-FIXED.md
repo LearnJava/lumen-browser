@@ -1,6 +1,6 @@
 # BUG-966: `Selection.setBaseAndExtent()` doesn't apply the cross-tree-scope boundary adjustment when anchor and focus are in different node trees
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P3)
 **Дата:** 2026-09-03
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js::setBaseAndExtent` /
 `crates/js/src/v8_runtime/install/dom_core.rs::_lumen_set_selection`)
@@ -82,3 +82,25 @@ that's out of tree to the other one's position, per Selection API §4.3.
 
 Attributed via `_exact_id_marker("/selection/selection-nested-video.html")`
 in `tests/wpt/timeout_audit.py` (marker `selection-cross-tree-scope-focus`).
+
+## Исправлено (2026-09-23, P3)
+
+Добавлена проверка tree-scope прямо в `setBaseAndExtent`
+(`web_api_shim_mid.js`). Новый хелпер `_lumen_selection_tree_root_nid`
+повторяет climb-к-корню из `_lumen_get_root_node` (та же граница по shadow
+root), но возвращает голый `nid` — этого достаточно, чтобы сравнить, лежат
+ли `anchorNode` и `focusNode` в одном дереве. При расхождении `focusNode`
+схлопывается на позицию `anchorNode`, как того требует Selection API §4.3
+(поведение реальных браузеров, см. Mozilla bug 1887963 в исходном тексте
+теста).
+
+Живым пробоем (`--mcp-port`, headless `InProcessSession`) воспроизведён
+ровно сценарий `selection-nested-video.html`: `anchorNode === b`,
+`focusNode` теперь тоже `=== b` (было `#shadow-root`).
+
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` чист. `scripts/scoped-test.sh` зелёный кроме
+`cases::snapshot_cpu::cpu_snapshots_match_references` — падает на тех же
+28 файлах дословно и на немодифицированном `main` (пре-существующий дрейф,
+тот же, что зафиксирован при закрытии [BUG-928](BUG-928-FIXED.md)), не
+связан с этой правкой (изменение — чистая JS-строка, не затрагивает paint).
