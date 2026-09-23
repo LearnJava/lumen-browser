@@ -394,7 +394,7 @@ pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> 
     // shim so `platform`/`language`/`languages` come from the same
     // `NavigatorProfile` the page's own antidetect layer uses.
     rt.eval(&crate::navigator_bindings::worker_navigator_id_shim())?;
-    rt.eval(&crate::dom::worker_exposed_shim())?;
+    crate::dom::install_worker_exposed_v8(rt)?;
     rt.eval(WORKER_ERROR_EVENT_SHIM)?;
     rt.eval(WORKER_MESSAGE_EVENT_SHIM)?;
     // BUG-868 GAP-WORKERSCOPE срез 2: a worker scope has no `structuredClone`
@@ -2446,11 +2446,8 @@ fn install_worker_globals_v8(
 
     rt.register_native_scoped("_lumen_atob_impl", Box::new(atob_native_v8))?;
     rt.register_native_scoped("_lumen_btoa_impl", Box::new(btoa_native_v8))?;
-    // BUG-1016: `DOMException` isn't otherwise installed in a worker scope
-    // (see BUG-868/GAP-WORKERSCOPE note above on `structuredClone`) — needed
-    // here so the wrapper below can throw the spec `InvalidCharacterError`
-    // instead of a plain `TypeError`.
-    rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL)?;
+    // BUG-1016: the wrapper throws `DOMException`, which every worker flavour
+    // gets from `dom::install_worker_exposed_v8` below (BUG-1066) — at call time.
     rt.eval(WORKER_ATOB_BTOA_SHIM)?;
 
     // Before the dedicated-worker shim: it is what gives the scope `performance`

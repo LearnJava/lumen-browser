@@ -1,6 +1,6 @@
 # BUG-649: Worker global scope has no `navigator` at all — every `navigator.*` API is unreachable from inside a Worker
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P1, WORKER-1 срез 1)
 **Компонент:** js (`crates/js/src/worker.rs:227-352` — `worker_global_shim`; `crates/js/src/worker.rs:719-752` — `install_worker_globals_v8`)
 **Найден:** P2, WPT-VENDOR-permissions, 2026-08-05
 
@@ -92,3 +92,12 @@ w.onmessage = e => console.log('typeof navigator in worker:', e.data);
 невендоренных общих ресурсах (`idlharness.any.html` — 404 на
 `/resources/idlharness.js` и `/resources/WebIDLParser.js`, не относится
 к самой категории).
+
+## Исправление (2026-09-23, WORKER-1 срез 1)
+
+Дрейф: дефект снят раньше, задачей BUG-776 (2026-08-24) — `WorkerNavigator` и синглтон
+`navigator` ставятся в каждую воркерную область общим `WORKER_LOCATION_NAVIGATOR_SHIM`
+(`worker::install_worker_scope_globals_v8` → `dom::install_worker_exposed_v8`). Запись
+осталась открытой по недосмотру. Закреплено тестом
+`dom::tests::v8_worker1_exposed::worker_scope_has_navigator`. Сам `navigator.permissions`
+в воркере — отдельный вопрос паритета членов, остаток WORKER-1.

@@ -1476,26 +1476,41 @@ pub(crate) fn install_text_decoder(
     {
         reg!(scope, ctx, store, 
             "_lumen_text_encoding_for_label",
-            move |label: String| -> Option<String> {
-                lumen_encoding::Encoding::from_label(&label).map(|enc| enc.name().to_string())
-            }
+            move |label: String| -> Option<String> { text_encoding_for_label(&label) }
         );
 
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_text_decode",
             move |canonical: String, bytes: Vec<u8>, ignore_bom: bool, fatal: bool| -> Option<String> {
-                let encoding = lumen_encoding::Encoding::from_label(&canonical)
-                    .unwrap_or(lumen_encoding::Encoding::Utf8);
-                let out = lumen_encoding::decode_to_string_opts(encoding, &bytes, ignore_bom);
-                if fatal && out.contains('\u{FFFD}') {
-                    None
-                } else {
-                    Some(out)
-                }
+                text_decode(&canonical, &bytes, ignore_bom, fatal)
             }
         );
     }
     Ok(())
+}
+
+/// Body of the `_lumen_text_encoding_for_label` native: the canonical
+/// (lowercase) encoding name for `label`, or `None` for an unknown or
+/// unimplemented one. Shared with the worker scope
+/// ([`crate::dom::install_worker_exposed_v8`], WORKER-1) so both scopes answer
+/// from the same label table.
+pub(crate) fn text_encoding_for_label(label: &str) -> Option<String> {
+    lumen_encoding::Encoding::from_label(label).map(|enc| enc.name().to_string())
+}
+
+/// Body of the `_lumen_text_decode` native: decodes `bytes` as `canonical`,
+/// returning `None` only in `fatal` mode when the input was malformed (the
+/// decoder reports every error as U+FFFD, so its presence is an exact
+/// signal). Shared with the worker scope like [`text_encoding_for_label`].
+pub(crate) fn text_decode(canonical: &str, bytes: &[u8], ignore_bom: bool, fatal: bool) -> Option<String> {
+    let encoding = lumen_encoding::Encoding::from_label(canonical)
+        .unwrap_or(lumen_encoding::Encoding::Utf8);
+    let out = lumen_encoding::decode_to_string_opts(encoding, bytes, ignore_bom);
+    if fatal && out.contains('\u{FFFD}') {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// Server-Sent Events (HTML LS §9.2).

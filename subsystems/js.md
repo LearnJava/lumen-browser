@@ -403,6 +403,17 @@ the time — read dates.
   19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
   [BUG-446](../bugs/BUG-446-FIXED.md), engine-independent (rquickjs had it too).
+- **`[Exposed=Worker]` members come from one place: `dom::install_worker_exposed_v8`
+  (WORKER-1, 2026-09-23).** It evaluates `worker_exposed_shim()` — verbatim slices of the page
+  program (`EVENT_TARGET_SHIM`, `PERFORMANCE_SHIM`, the URL pair, `TEXT_ENCODING_SHIM`) plus
+  `WORKER_LOCATION_NAVIGATOR_SHIM` — **and registers the natives those slices call** plus
+  `DOMException`. All three worker flavours reach it through
+  `worker::install_worker_scope_globals_v8`. The trap it closes: a slice shipped without its
+  natives defines the class and dies on the first method call (`TextDecoder.decode` →
+  `_lumen_text_decode`, which only the page's `install_text_decoder` registered). Moving a
+  further `[Exposed=*]` block to workers = cut it into its own `shim/*.js` (splice order is
+  pinned by `web_api_shim_splices_its_parts_in_source_order`), add it to
+  `worker_exposed_shim()`, register its natives here — never a second copy in `worker.rs`.
 - **Module workers + `WorkerOptions` ([P1], 2026-08-24,
   [BUG-777](../bugs/BUG-777-FIXED.md)).** Four things worth carrying. (1) *The options parser is
   its own shim.* `worker::WORKER_OPTIONS_SHIM` is evaluated by **both** `install_worker_bindings_v8`

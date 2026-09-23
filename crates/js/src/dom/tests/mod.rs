@@ -28,6 +28,9 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         "function _lumen_u2n",
         "function EventTarget()",
         "function UIEvent(",
+        // Encoding — своя часть с WORKER-1 срез 1 (её исполняет и воркер).
+        "function TextEncoder()",
+        "function TextDecoder(",
         "function Performance()",
         "function PerformanceObserver(",
         // IndexedDB — своя часть с 2026-08-17 (её же исполняет область
@@ -103,6 +106,9 @@ fn make_doc() -> Arc<Mutex<Document>> {
 
 #[cfg(feature = "v8-backend")]
 mod v8_trusted_types;
+
+#[cfg(feature = "v8-backend")]
+mod v8_worker1_exposed;
 
 #[cfg(feature = "v8-backend")]
 mod v8_fullscreen_locks;
