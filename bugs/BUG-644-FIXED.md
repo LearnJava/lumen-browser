@@ -1,7 +1,7 @@
 # BUG-644: CSS Grid `align-items: stretch` resizes the item's outer box but never re-lays-out its children
 
-**Статус:** OPEN
-**Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_grid`, Step 5 final positioning pass)
+**Статус:** FIXED 2026-09-23 (P3)
+**Компонент:** layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`, LAYOUT-2-срез-4 переписал `box_tree.rs::lay_out_grid` в трамплин — та же логика теперь здесь)
 **Найден:** P3, BUG-277 срез 18, 2026-08-05
 
 ## Симптом
@@ -78,3 +78,48 @@ flexbox-кросс-оси (`box_tree.rs:10675`), но с инвалидацие�
 переиспользования пробного поддерева (`BUG-341 S33`) — не тривиальный
 однострочный фикс, вне скоупа BUG-277 (там речь о wgpu/executor и
 track-sizing, не про рекурсивный relayout содержимого item'а).
+
+## Исправлено
+
+`post_final_item` (`crates/engine/layout/src/box_tree/grid_trampoline.rs`) —
+код с тех пор переехал из монолитного `lay_out_grid` в трамплин
+(LAYOUT-2-срез-4), но тот же баг остался в его align-items-ветке
+один-в-один. Правка ровно по описанному выше scope: `align-items:
+stretch`-ветка теперь запоминает выросшую высоту (`stretch_h`) и после
+того, как `item.rect.x` получит своё финальное значение из
+justify-items-ветки ниже, вызывает `lay_out_with_used_size` с этой
+высотой как `UsedSizeOverride` (`box_sizing: BorderBox`, тот же приём,
+что `flex_trampoline`'s `relayout_column_flex` использует для
+кросс-стретча column-flex айтема) — item пересчитывает своё содержимое
+против итоговой, а не пробной, высоты.
+
+Один нюанс, не описанный в исходной заявке: если растягиваемый item сам
+является column/row subgrid, его треки резолвятся через
+thread-local `SubgridContextGuard`, который `step_final_item`
+устанавливает только на время исходного размещения — к моменту, когда
+`post_final_item` решает перекладывать айтем, этот guard уже снят.
+Первая версия правки не восстанавливала его для релейаута, из-за чего
+`grid_subgrid_column_layout` начал падать (`a.w=0` — subgrid без своего
+guard резолвит колонки в пустоту). Исправлено: там же, где принято
+решение растягивать, guard пересобирается из тех же
+`col_widths[c0..c1]`/`row_heights[r0..r1]`, что и в
+`step_final_item`, и держится на время relayout-вызова.
+
+Проверено: `cargo test -p lumen-layout --profile dev-release` 4000/4000
+(было 150/151 без правки subgrid-гарда — `grid_subgrid_column_layout`
+регрессировал и был пойман этим же прогоном), `cargo clippy -p
+lumen-layout --all-targets -- -D warnings` чист. `--dump-layout` на
+`62-scroll-snap.html`: ячейка `Block rect=(339.00, 247.67, 337.00,
+112.33)`, текстовый ребёнок теперь `rect=(487.51, 290.43, 39.98,
+26.81)` — `247.67 + (112.33-26.81)/2 = 290.43`, точное совпадение.
+`python graphic_tests/run.py --ipc --continue-on-fail`: TEST-62
+остаётся в `KNOWN_DEBTORS` (baseline не трогал, оставил P2/следующей
+сессии с живым gdigrab-доступом пересчитать точный процент), но
+crop-диф (`62-scroll-snap-diff.png`) визуально показывает только
+контуры сглаживания шрифта на «NW/NE/SW/SE» — прямоугольники и позиции
+текста у Lumen и Edge теперь совпадают пиксель-в-пиксель, остаток —
+font-AA-класс (тот же, что у соседних `'67'`/`'128'`-дебторов), не
+исходный layout-баг. Полный `graphic_tests/run.py` (gdigrab/live-окно)
+не прогнан — TEST-00 калибровка недоступна в этой среде (нет
+фокусируемого рабочего стола, тот же класс ограничения, что и в
+[BUG-1047](BUG-1047-FIXED.md)), не связано с правкой.
