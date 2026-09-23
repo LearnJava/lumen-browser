@@ -46,13 +46,16 @@
 //! [`crate::style::cascade::selector_is_share_safe`]'s doc comment for the
 //! induction). That is why `Descendant`/`Child` combinators are allowed to
 //! mark a result shareable — only sibling combinators and anything the key
-//! does not pin, at either the *subject* node itself (attribute selectors
-//! and `:first-child`/`:last-child`/`:only-child` are the two exceptions,
-//! BUG-1112 срезы 3-4 — `attrs`/`is_first_child`/`is_last_child` pin them
-//! directly, no induction needed) or an ancestor (nothing there is pinned,
-//! so any pseudo-class/non-`class`/`id` attribute selector on a `tail`
-//! compound still disqualifies), plus Shadow DOM and `@scope`, still
-//! disqualify it; see
+//! does not pin anywhere in the induced chain, at either the *subject* node
+//! itself (attribute selectors, BUG-1112 срез 3, and
+//! `:first-child`/`:last-child`/`:only-child`, срез 4, are pinned directly
+//! by `attrs`/`is_first_child`/`is_last_child` — no induction needed) or an
+//! ancestor (an attribute selector is pinned too, BUG-1112 срез 5, by the
+//! SAME induction that already covers `Type`/`Class`/`Id` there — see the
+//! cascade doc comment; a pseudo-class is not, whether dynamic state like
+//! `:hover` the key cannot see at all, or sibling-position facts the key
+//! only pins for the node it was built for, never an ancestor's), plus
+//! Shadow DOM and `@scope`, still disqualify it; see
 //! [`crate::style::cascade::compute_style_shareable`]'s doc comment for the
 //! exact conditions, including why this slice is scoped to SVG
 //! presentational elements only.
