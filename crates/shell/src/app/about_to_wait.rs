@@ -1206,6 +1206,7 @@ impl Lumen {
 
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
+        self.poll_update_ui();
 
         // _lumen_network_download(url, filename): start downloads requested by
         // page scripts / <a download>. Relative URLs are resolved against the

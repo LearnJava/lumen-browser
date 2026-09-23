@@ -666,6 +666,11 @@ pub(crate) fn run_cli() -> ExitCode {
     // copy or leave a marker file behind.
     if !startup_profile.no_persistent_state {
         crate::update::backup_before_migration_if_updated();
+        // UPD-8/9: drop `.old` binaries and `data/update/pending/` left by an
+        // applied self-update (best-effort, a no-op when there is none).
+        if let Some(dir) = crate::update::exe_dir() {
+            crate::update::cleanup_after_apply(&dir);
+        }
     }
     config::init_global(startup_profile);
     drop(cfg_phase);

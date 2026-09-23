@@ -264,7 +264,7 @@ impl Lumen {
         // silently discarded. Painted separately, unclipped, via
         // `chrome_floating_dl` (`RedrawRequested`).
         let mut floating_detached = Vec::new();
-        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL] {
+        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR] {
             if let Some(node) = doc.find_by_id(id)
                 && let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id)
             {
@@ -707,6 +707,7 @@ impl Lumen {
             bookmarks,
             settings,
             right_sidebar,
+            update: self.update_ui.chrome_model(),
         }
     }
 
@@ -1009,6 +1010,11 @@ impl Lumen {
                 self.downloads.toggle_visible();
                 self.relayout_chrome_host();
             }
+            ChromeAction::DismissUpdate
+            | ChromeAction::DownloadUpdate
+            | ChromeAction::RestartToUpdate
+            | ChromeAction::CheckForUpdates
+            | ChromeAction::ToggleAutoUpdate => self.dispatch_update_action(action, event_loop),
             // BUG-408: shared by `#archiveToggleBtn`, `.nt-restore`, and
             // `#archivePanel`'s own close button (all three carry this same
             // action, mirroring how `toggle-downloads` closes its own panel).

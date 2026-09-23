@@ -437,26 +437,50 @@ fn apply_check_result_with_keys(
 /// run on its own background thread the same way.
 #[must_use]
 pub fn check_for_update(client: &HttpClient, state: UpdateState) -> (UpdateState, CheckOutcome) {
-    let now = now_unix();
-    if !state.auto_check_updates || !is_check_due(state.last_checked_at, now) {
+    if !state.auto_check_updates || !is_check_due(state.last_checked_at, now_unix()) {
         return (state, CheckOutcome::UpToDate);
     }
-    let Ok(url) = Url::parse(MANIFEST_URL) else {
-        return (state, CheckOutcome::UpToDate);
-    };
-    match client.fetch_conditional(&url, state.etag.as_deref(), state.last_modified.as_deref()) {
-        Ok(result) => {
-            let (state, outcome) = apply_check_result(state, result, now);
-            if let CheckOutcome::Untrusted(e) = &outcome {
-                eprintln!("update: manifest failed signature verification: {e:?}");
-            }
-            (state, outcome)
-        }
-        Err(e) => {
-            eprintln!("update: check failed: {e}");
-            (state, CheckOutcome::UpToDate)
-        }
+    let fallback = state.clone();
+    check_for_update_now(client, state).unwrap_or_else(|e| {
+        eprintln!("update: check failed: {e}");
+        (fallback, CheckOutcome::UpToDate)
+    })
+}
+
+/// Unthrottled check behind [`check_for_update`] — the settings page's manual
+/// «Проверить сейчас» (UPD-9) calls this directly, bypassing both the 24 h
+/// throttle and the auto-check opt-out (an explicit click is consent).
+///
+/// Unlike [`check_for_update`], a network error is returned as `Err` rather
+/// than folded into [`CheckOutcome::UpToDate`]: a manual check must not
+/// report "up to date" when it never reached the server.
+pub fn check_for_update_now(
+    client: &HttpClient,
+    state: UpdateState,
+) -> Result<(UpdateState, CheckOutcome), String> {
+    let url = Url::parse(MANIFEST_URL).map_err(|e| e.to_string())?;
+    let result = client
+        .fetch_conditional(&url, state.etag.as_deref(), state.last_modified.as_deref())
+        .map_err(|e| e.to_string())?;
+    let (state, outcome) = apply_check_result(state, result, now_unix());
+    if let CheckOutcome::Untrusted(e) = &outcome {
+        eprintln!("update: manifest failed signature verification: {e:?}");
     }
+    Ok((state, outcome))
+}
+
+/// `HttpClient` every self-update request goes through — the user's proxy/TLS
+/// config via `config::global().apply_http`, plus the three content decoders
+/// (GitHub serves release assets compressed on some mirrors).
+#[must_use]
+pub fn update_http_client() -> HttpClient {
+    use lumen_network::{BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder};
+    crate::config::global().apply_http(
+        HttpClient::new()
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
+            .with_content_decoder(Arc::new(GzipContentDecoder::new()))
+            .with_content_decoder(Arc::new(DeflateContentDecoder::new())),
+    )
 }
 
 // ── Backup + first-run detect (UPD-5) ───────────────────────────────────────
@@ -826,13 +850,7 @@ impl UpdateDownloadManager {
         self.status = UpdateDownloadStatus::InProgress;
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            use lumen_network::{BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder};
-            let client = crate::config::global().apply_http(
-                HttpClient::new()
-                    .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
-                    .with_content_decoder(Arc::new(GzipContentDecoder::new()))
-                    .with_content_decoder(Arc::new(DeflateContentDecoder::new())),
-            );
+            let client = update_http_client();
             let outcome = download_update_asset(&client, &version, &asset, &pending_dir_for(&version));
             let _ = tx.send(outcome);
         });
@@ -1025,16 +1043,24 @@ pub fn cleanup_after_apply(exe_dir: &Path) {
 
 /// Spawns a fresh instance of the current executable and exits this process
 /// — the "restart" step after [`apply_staged_update`] has replaced the
-/// binaries on disk. UPD-9 wires the UI trigger that calls this; the
-/// mechanism itself has no caller yet.
+/// binaries on disk. The shell's UI path uses [`spawn_new_instance`] instead
+/// (it restarts only after the event loop returns).
 ///
 /// Never returns on success (the process exits before the call site sees a
 /// value) — only a spawn failure (e.g. the just-copied binary is somehow not
 /// executable) is observable by a caller.
 pub fn restart_process() -> Result<(), std::io::Error> {
-    let exe = std::env::current_exe()?;
-    std::process::Command::new(exe).spawn()?;
+    spawn_new_instance()?;
     std::process::exit(0);
+}
+
+/// Spawns a fresh instance of the current executable without exiting this
+/// one — the half of [`restart_process`] the shell uses after its event loop
+/// has already returned (UPD-9), so the old process still unwinds normally
+/// (stores dropped, session saved) instead of `exit(0)` skipping destructors.
+pub fn spawn_new_instance() -> Result<(), std::io::Error> {
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe).spawn().map(drop)
 }
 
 #[cfg(test)]

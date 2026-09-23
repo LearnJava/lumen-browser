@@ -1115,6 +1115,8 @@ pub(crate) struct Lumen {
     /// Download manager: background download threads, progress channel, and
     /// panel visibility state. Panel toggled via Ctrl+Shift+J.
     pub(crate) downloads: download::DownloadManager,
+    /// UPD-9: self-update infobar/settings state (`update_ui.rs`).
+    pub(crate) update_ui: update_ui::UpdateUi,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.

@@ -15,7 +15,7 @@
 4324	crates/js/src/worker.rs
 4112	crates/bidi-server/src/protocol.rs
 3942	crates/js/src/frame_bridge.rs
-3634	crates/chrome/src/model.rs
+3640	crates/chrome/src/model.rs
 3353	crates/engine/layout/src/selector_query.rs
 3111	crates/js/src/offscreen_canvas.rs
 3009	crates/shell/src/forms.rs
@@ -32,7 +32,7 @@
 2133	crates/engine/paint/src/lib.rs
 2080	crates/shell/src/tests/chrome_incremental.rs
 2066	crates/shell/src/tests/scripts_and_frames.rs
-2058	crates/shell/src/chrome_ui.rs
+2064	crates/shell/src/chrome_ui.rs
 2039	crates/engine/layout/src/style/tests/values.rs
 2036	crates/shell/src/tests/bug341_census.rs
 2044	crates/shell/src/app/window_event/redraw_requested.rs
