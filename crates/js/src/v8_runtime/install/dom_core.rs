@@ -1253,6 +1253,25 @@ pub(crate) fn install_shadow_dom(
             matches!(doc.try_get(id).map(|n| &n.data), Some(NodeData::ShadowRoot { .. }))
         });
     }
+    // Returns "open"/"closed" for a shadow-root node, None otherwise. Unlike
+    // `_lumen_get_shadow_root` (host -> root, hides closed roots for the
+    // `Element.shadowRoot` encapsulation contract), this takes the root's own
+    // nid directly — a caller that already holds that nid got it by being
+    // inside the tree, so there is nothing left to encapsulate (BUG-1045:
+    // `getRootNode()` called from within a closed shadow tree must still
+    // report the real mode on the `ShadowRoot` it returns).
+    {
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store, "_lumen_get_shadow_root_mode", move |nid: u32| -> Option<String> {
+            let doc = d.lock().unwrap();
+            let id = NodeId::from_raw(nid);
+            match doc.try_get(id).map(|n| &n.data) {
+                Some(NodeData::ShadowRoot { mode: ShadowRootMode::Open }) => Some("open".to_string()),
+                Some(NodeData::ShadowRoot { mode: ShadowRootMode::Closed }) => Some("closed".to_string()),
+                _ => None,
+            }
+        });
+    }
     // Returns true when `nid` is a DocumentFragment node.
     {
         let d = Arc::clone(&doc);

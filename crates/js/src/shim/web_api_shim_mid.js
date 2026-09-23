@@ -2896,6 +2896,32 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
     return _lumen_wrapper_cache_set(nid, sr);
 }
 
+// DOM §4.4 Node.getRootNode(): shared shadow-boundary climb. `_lumen_get_parent`
+// never crosses a `ShadowRoot` (it has no parent by construction — BUG-878's
+// note on `Document::attach_shadow`), so hitting a null parent only means "top
+// of THIS tree" — check `_lumen_is_shadow_root` before concluding the answer is
+// `document`. `composed: true` (BUG-1045) keeps climbing from the shadow
+// root's host instead of stopping on it. Shared by the plain node wrapper
+// (`_LUMEN_WRAPPER_MEMBERS.getRootNode`) and `ShadowRoot.prototype.getRootNode`
+// below — a `ShadowRoot`'s own `__nid__` needs the identical walk once it is
+// itself the starting node.
+function _lumen_get_root_node(nid, options) {
+    var composed = !!(options && options.composed);
+    var cur = nid;
+    while (true) {
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        if (pid !== null) { cur = pid; continue; }
+        if (_lumen_is_shadow_root(cur)) {
+            var host_nid = _lumen_u2n(_lumen_get_shadow_root_host(cur));
+            if (composed && host_nid !== null) { cur = host_nid; continue; }
+            var mode = _lumen_get_shadow_root_mode(cur) || 'open';
+            return _lumen_make_shadow_root(cur, mode, host_nid);
+        }
+        break;
+    }
+    return cur === _lumen_root_nid ? document : _lumen_make_element(cur);
+}
+
 // ── DocumentFragment wrapper ──────────────────────────────────────────────────
 // Wraps a DocumentFragment NodeId. Unlike ShadowRoot, a DocumentFragment is
 // consumed when appended: all children are moved to the target parent (DOM LS
@@ -3926,6 +3952,14 @@ ShadowRoot.prototype.cloneNode = function() {
     throw new DOMException(
         "Failed to execute 'cloneNode' on 'ShadowRoot': ShadowRoot nodes are not clonable.",
         'NotSupportedError');
+};
+// DOM §4.4 Node.getRootNode() (BUG-1045): a ShadowRoot is its own
+// shadow-inclusive root, so the default answer is `this`; `composed: true`
+// climbs through `host` to the document. `DocumentFragment.prototype` carries
+// no override (a fragment truly has no parent), so without this the inherited
+// walk never existed at all — see `_lumen_get_root_node`.
+ShadowRoot.prototype.getRootNode = function(options) {
+    return _lumen_get_root_node(this.__nid__, options);
 };
 
 // BUG-321: a DocumentType wrapper (`nodeType` 10) whose [[Prototype]] is
@@ -8460,17 +8494,10 @@ _lumen_canvas_define_dim('height', 1, 150);
         if (this.nodeName !== other.nodeName) return false;
         return _lumen_get_outer_html(nid) === _lumen_get_outer_html(onid);
     };
-    // DOM §4.4 Node.getRootNode() — корень дерева (документ или корень
-    // отсоединённого поддерева).
-    _LUMEN_WRAPPER_MEMBERS.getRootNode = function() { var nid = this.__nid__;
-        var cur = nid;
-        while (true) {
-            var pid = _lumen_u2n(_lumen_get_parent(cur));
-            if (pid === null) break;
-            cur = pid;
-        }
-        if (cur === _lumen_root_nid) return document;
-        return _lumen_make_element(cur);
+    // DOM §4.4 Node.getRootNode() — корень дерева (документ, shadow-inclusive
+    // ShadowRoot или корень отсоединённого поддерева); см. `_lumen_get_root_node`.
+    _LUMEN_WRAPPER_MEMBERS.getRootNode = function(options) {
+        return _lumen_get_root_node(this.__nid__, options);
     };
     // DOM §4.4 Node.normalize() — склеить соседние текстовые узлы и выбросить
     // пустые, рекурсивно по поддереву.
