@@ -104,5 +104,5 @@ lumen-js --all-targets --features v8-backend` чист; workspace-clippy цел�
 * [BUG-669](BUG-669-OPEN.md) — `wakelock-insecure-context.any.html` формально
   PASS, но по неверной причине (`WakeLock` не выставлен вовсе): после гейта
   причина станет верной, тест — по-прежнему зелёным.
-* [BUG-682](BUG-682-OPEN.md), [BUG-709](BUG-709-FIXED.md) — категории, чей
+* [BUG-682](BUG-682-FIXED.md), [BUG-709](BUG-709-FIXED.md) — категории, чей
   сигнал сейчас частично съеден отсутствием гейта.
