@@ -1,6 +1,6 @@
 # BUG-1047: `position:absolute` + `width:auto` + только `right` (без `left`) растягивается на всю ширину containing block вместо shrink-to-fit
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P3)
 **Найден:** P6, живой сайт (`bankruptcy-platform`, внешний Keycloak-стенд), 2026-09-11
 
 ## Симптом
@@ -91,3 +91,65 @@ form), поле `#password`. Или минимальный кейс — люба
 BUG-982 (`innerHTML` теперь верно сохраняет whitespace-only фрагмент),
 пересборка `dev-release` полностью убрала симптом. Отдельного бага не
 заводится — ложная тревога от устаревшего бинарника, а не факт неполадки.
+
+## Корень
+
+Найден: `crates/engine/layout/src/box_tree/multicol_abspos.rs::abs_box_shrinks_to_fit`
+— функция, введённая BUG-745 для ровно этого класса задач (абсолютный
+не-replaced бокс с одной заданной инсетой должен shrink-to-fit, а не
+растягиваться на containing block), исключала из shrink-to-fit **весь**
+`BoxKind::FormControl` целиком, включая `<button>`/`<select>`. Комментарий
+при её исключении был верным на момент BUG-745: тогда form control
+считался чистым replaced-элементом без собственного контента, измеримого
+через `max_content_outer_width`/`min_content_outer_width` (те не видят
+контент формы — он не лежит в `b.children` в общем виде).
+
+BUG-926 (позже) добавил `intrinsic.rs::form_control_fit_content_width` —
+именно для `Button`/`Select` их used-width теперь считается по
+отрендеренному содержимому (`<button>` рендерит дочерние боксы — иконку/
+текст — как обычный shrink-to-fit по поддереву). Но `abs_box_shrinks_to_fit`
+не обновили вслед за этим: она по-прежнему трактовала `<button>` как
+«нет измеримого контента» и падала в ветку `else { cb.width }` —
+буквально ширина containing block, что и давало симптом.
+
+## Фикс
+
+`abs_box_shrinks_to_fit` теперь допускает в shrink-to-fit `FormControlKind::Button`
+и `FormControlKind::Select` (остальные виды form control — checkbox,
+radio, текстовые поля, range и т.п. — остаются на старом
+replaced-элементном пути: у них нет отрендеренного лейбла для измерения).
+
+В ветке резолва ширины (`lay_out_abs_children`) `max_content`/`min_content`
+для абс-позиционированного child теперь сначала пробуют
+`form_control_fit_content_width`: если она вернула `Some`, оба предела
+(`max_c`/`min_c`) берутся из неё (контент кнопки не переносится по
+строкам, поэтому max-content == min-content), иначе — прежний путь через
+`max_content_outer_width`/`min_content_outer_width`.
+
+## Проверка
+
+Новый юнит-тест `box_tree::tests::flow_modes::bug1047_abs_button_auto_width_shrinks_to_fit`
+— абс-позиционированный `<button>` с `right` (без `left`) внутри 400px
+containing block и SVG-подобной 20px иконкой внутри: ширина кнопки теперь
+~22px (иконка + UA border/padding кнопки) вместо 400px.
+
+`cargo test -p lumen-layout --lib` — 4000 passed, 0 failed.
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` и
+`cargo clippy --workspace --all-targets -- -D warnings` — чисто.
+`LUMEN_PROFILE=dev-release python graphic_tests/dump_golden.py` — все 12
+дампов совпадают с эталоном (display-list neutrality на существующем
+корпусе; ни один golden-файл не использует этот UI-паттерн — специально
+покрыто новым юнит-тестом выше). Полный `graphic_tests/run.py` не удалось
+прогнать в этой среде — TEST-00 калибровка (`gdigrab`-захват magenta-маркера)
+падает независимо от содержимого правки (нет реального фокусируемого
+рабочего стола в этой сессии), см. `docs/graphic-tests.md` о требовании
+живого фокусированного окна.
+
+`bash scripts/scoped-test.sh` — 4150 passed, 3 failed
+(`dom::tests::v8_webworker::worker_add_event_listener_fires_on_pump`,
+`worker_data_url_base64_script`, `worker_top_level_exception_fires_parent_onerror`);
+все три проверены изолированно (`cargo test -p lumen-js -p lumen-shell
+-p lumen-driver --lib v8_webworker -- --test-threads=1`) — 51/51 passed,
+т.е. падения scoped-test — гонка при параллельном запуске воркеров, не
+регрессия этой правки (модуль `web_api_shim_head.js`/`worker.rs` этим
+коммитом не тронут).
