@@ -1,7 +1,7 @@
 # BUG-682 — Storage Access API methods (`requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess`) exist only on the live global `document`, not on documents built by `_lumen_build_detached_document`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:4423-4433` — defined only inside the live `var document = {...}` literal at `dom.rs:4182+`; `_lumen_build_detached_document`, `dom.rs:1795-1868`, the shared builder behind `DOMParser.parseFromString`/`DOMImplementation.createHTMLDocument`/`createDocument`/`createXMLDocument`, defines none of them)
+**Статус:** FIXED 2026-09-23 (P6)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_build_detached_document`; `crates/js/src/dom_parser.rs::VDocument.prototype`)
 **Найден:** P2, WPT-VENDOR-storage-access-api, 2026-08-06
 
 ## Симптом
@@ -88,3 +88,40 @@ Fix scope: либо добавить те же четыре метода в
 фикс») устранить сам архитектурный раскол — общий `Document.prototype`/фабрика,
 которую оба пути используют. Не реализовано в этой сессии (P2-wpt вендорит и
 обследует, фиксы — дорожка P3).
+
+## Исправлено
+
+При реализации выяснилось, что заявка называла неверный код-путь для
+`DOMParser.parseFromString`: он не проходит через `_lumen_build_detached_document`
+вовсе, а строит документ через отдельный литерал `VDocument`
+(`crates/js/src/dom_parser.rs`) — самостоятельный, третий по счёту, virtual-DOM
+движок, никак не связанный ни с живым `document`, ни с
+`_lumen_build_detached_document`. Проверено фактическим запуском теста: до
+правки `typeof new DOMParser().parseFromString(...).requestStorageAccess`
+падал с `is not a function`, хотя `document.implementation.createDocument()`
+(который действительно строится через `_lumen_build_detached_document`) уже
+проходил.
+
+Все четыре метода добавлены в оба литерала —
+`_lumen_build_detached_document` (`web_api_shim_mid.js`) и `VDocument.prototype`
+(`dom_parser.rs`). В отличие от live-документа (Phase 0 «always granted»,
+`requestStorageAccess()` резолвится), detached-документ не имеет browsing
+context и никогда не fully active — per spec (и по самим WPT-тестам,
+`hasStorageAccess-insecure.sub.window.js` / `requestStorageAccess-non-fully-
+active.sub.https.window.js`) методы отклоняют промис с `InvalidStateError`,
+а не резолвят. Это не зеркалирование Phase 0-заглушки, а отдельное,
+спек-корректное поведение для detached-случая.
+
+8 новых тестов в `crates/js/src/dom/tests/v8_css_storage_nav_misc.rs`
+(наличие методов + `InvalidStateError` для `DOMParser`- и
+`createDocument`-документов), `cargo test -p lumen-js --lib --features
+v8-backend storage_access` 8/8. Полный `cargo test -p lumen-js --lib
+--features v8-backend` дал 9 несвязанных падений (`worker::*`,
+`dom::tests::v8_webworker::*`) под параллельным прогоном — все 9 повторно
+прогнаны `--test-threads=1` и прошли, это гонка ресурсов тестов, не
+регрессия от этой правки (правка не трогает `worker.rs`). Финальный гейт
+`/lumen-task-finish`: `cargo clippy --workspace --all-targets -- -D warnings`
+чист, `scripts/scoped-test.sh` — 2 несвязанных провала (`lumen-driver`
+`cpu_snapshots_match_references`, предсуществующий дрейф CPU-эталонов;
+`lumen-js` `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`,
+одиночно перепрогнан и прошёл — та же гонка ресурсов).
