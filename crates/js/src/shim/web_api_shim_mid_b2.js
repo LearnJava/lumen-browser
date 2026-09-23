@@ -1652,7 +1652,19 @@ function _lumen_mo_in_subtree(ancestorNid, nid) {
     return false;
 }
 
-function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
+// Siblings of `nid` within `parentNid`'s current child list (DOM §4.3.3
+// `previousSibling`/`nextSibling`). Call it at the point in the mutation
+// primitive where the tree reflects the moment the spec means — after
+// insertion (the node's new neighbors) but before removal (the node's old
+// ones), since `_lumen_get_children` only sees whatever the tree holds now.
+function _lumen_mo_siblings(parentNid, nid) {
+    var sibs = _lumen_get_children(parentNid);
+    var idx = sibs.indexOf(nid);
+    if (idx < 0) return [null, null];
+    return [idx > 0 ? sibs[idx - 1] : null, idx + 1 < sibs.length ? sibs[idx + 1] : null];
+}
+
+function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds, prevSibNid, nextSibNid) {
     var hasObs = false;
     for (var oi = 0; oi < _mo_observers.length; oi++) {
         var obs = _mo_observers[oi];
@@ -1688,8 +1700,8 @@ function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
                 // is `===` the same object scripts see via `firstChild` etc.
                 addedNodes: (addedNodeIds || []).map(_lumen_make_element),
                 removedNodes: (removedNodeIds || []).map(_lumen_make_element),
-                nextSibling: null,
-                previousSibling: null,
+                nextSibling: (nextSibNid !== undefined && nextSibNid !== null) ? _lumen_make_element(nextSibNid) : null,
+                previousSibling: (prevSibNid !== undefined && prevSibNid !== null) ? _lumen_make_element(prevSibNid) : null,
             };
             // BUG-317: records are MutationRecord instances (DOM §4.3.3).
             Object.setPrototypeOf(rec, MutationRecord.prototype);
@@ -1761,6 +1773,19 @@ _lumen_set_attr = function(nid, name, value) {
     }
 };
 
+// BUG-855: `removeAttribute`/`removeAttributeNS` (`web_api_shim_mid.js`) both
+// call `_lumen_remove_attr` directly, past the attribute wrapper above — the
+// only intercepted attribute path was *setting* one, so a scripted removal
+// queued no `attributes` record at all.
+var _orig_remove_attr = _lumen_remove_attr;
+_lumen_remove_attr = function(nid, name) {
+    var old = (_mo_observers.length > 0) ? _lumen_get_attr(nid, name) : undefined;
+    _orig_remove_attr(nid, name);
+    if (_mo_observers.length > 0) {
+        _mo_notify(nid, 'attributes', String(name), old !== undefined ? old : null, null, null);
+    }
+};
+
 // Wrap _lumen_set_inner_html to intercept childList mutations. BUG-368 fixed
 // the setter to actually parse+replace children (was a no-op text stub before),
 // so this wrapper now reports the real before/after child lists, mirroring
@@ -1779,18 +1804,65 @@ var _orig_append_child = _lumen_append_child;
 _lumen_append_child = function(parent, child) {
     _orig_append_child(parent, child);
     if (_mo_observers.length > 0) {
-        _mo_notify(parent, 'childList', null, null, [child], []);
+        var sib = _lumen_mo_siblings(parent, child);
+        _mo_notify(parent, 'childList', null, null, [child], [], sib[0], sib[1]);
     }
 };
 
 // Wrap _lumen_remove_child to intercept childList mutations
 var _orig_remove_child = _lumen_remove_child;
 _lumen_remove_child = function(parent, child) {
+    // Neighbors must be read BEFORE removal — once the native call runs,
+    // `child` is gone from `parent`'s child list and `_lumen_mo_siblings`
+    // can no longer find it.
+    var sib = (_mo_observers.length > 0) ? _lumen_mo_siblings(parent, child) : null;
     _orig_remove_child(parent, child);
     if (_mo_observers.length > 0) {
-        _mo_notify(parent, 'childList', null, null, [], [child]);
+        _mo_notify(parent, 'childList', null, null, [], [child], sib[0], sib[1]);
     }
 };
+
+// BUG-855: `insertBefore` never queued a record at all — only `appendChild`
+// and `removeChild` were intercepted, so every reference-relative insertion
+// (the common form: `parent.insertBefore(node, someChild)`) was silent.
+var _orig_insert_before = _lumen_insert_before;
+_lumen_insert_before = function(parent, child, reference) {
+    _orig_insert_before(parent, child, reference);
+    if (_mo_observers.length > 0) {
+        var sib = _lumen_mo_siblings(parent, child);
+        _mo_notify(parent, 'childList', null, null, [child], [], sib[0], sib[1]);
+    }
+};
+
+// BUG-855: `Node.replaceChild` (`web_api_shim_mid.js`) is implemented as
+// insert-then-remove over the two natives above, so once both queue their
+// own record a single `replaceChild` call fired two — insertion queued as
+// the child's OWN addition, not as the replacement DOM §4.2.4 "replace"
+// describes (one record, both `addedNodes` and `removedNodes`). Re-wrapped
+// here, past the two natives, so it builds that one record directly instead.
+//
+// `_LUMEN_WRAPPER_MEMBERS` is only the *source* object: `web_api_shim_mid.js`
+// already froze a member-by-member snapshot into `_LUMEN_WRAPPER_DESCRIPTORS`
+// (`Object.getOwnPropertyDescriptors`, mid.js:8658) before this file runs, and
+// every per-interface wrapper prototype is built from that snapshot, lazily,
+// via `Object.defineProperties`. Reassigning `_LUMEN_WRAPPER_MEMBERS.replaceChild`
+// alone edits a dictionary nothing reads again — the snapshot's own `.value`
+// has to be patched too, or every node keeps calling the two-record original.
+function _lumen_mo_replace_child(newChild, oldChild) { var nid = this.__nid__;
+    if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
+        throw new TypeError('replaceChild: both arguments must be nodes');
+    }
+    var sib = (_mo_observers.length > 0) ? _lumen_mo_siblings(nid, oldChild.__nid__) : null;
+    _orig_insert_before(nid, newChild.__nid__, oldChild.__nid__);
+    _orig_remove_child(nid, oldChild.__nid__);
+    _lumen_fire_slotchange(nid);
+    if (_mo_observers.length > 0) {
+        _mo_notify(nid, 'childList', null, null, [newChild.__nid__], [oldChild.__nid__], sib[0], sib[1]);
+    }
+    return oldChild;
+}
+_LUMEN_WRAPPER_MEMBERS.replaceChild = _lumen_mo_replace_child;
+_LUMEN_WRAPPER_DESCRIPTORS.replaceChild.value = _lumen_mo_replace_child;
 
 // Wrap _lumen_set_text_content to intercept mutations. DOM §4.9.1: setting
 // textContent on an ELEMENT replaces all its children with (at most) one text
@@ -1813,30 +1885,41 @@ _lumen_set_text_content = function(nid, text) {
 };
 
 function MutationObserver(callback) {
+    // DOM §4.3.1: the constructor's sole argument is a mandatory callback.
+    if (typeof callback !== 'function') {
+        throw new TypeError('Failed to construct \'MutationObserver\': parameter 1 is not of type \'Function\'.');
+    }
     this._cb = callback;
     this._observations = [];
     this._records = [];
     _mo_observers.push(this);
 }
 MutationObserver.prototype.observe = function(target, options) {
-    if (!target || target.__nid__ === undefined) return;
-    // DOM §4.3.1: observe() re-activates the observer. `disconnect()` removes it
-    // from `_mo_observers`, so re-observing after a disconnect must re-register it
-    // (only the constructor pushed before — BUG-318, WPT MutationObserver-disconnect).
-    if (_mo_observers.indexOf(this) < 0) _mo_observers.push(this);
     var opts = options || {};
     var config = {
         target: target,
         opts: {
             childList:               !!opts.childList,
             attributes:              !!(opts.attributes || opts.attributeFilter || opts.attributeOldValue),
-            characterData:           !!opts.characterData,
+            // characterDataOldValue implies characterData, same as attributeOldValue implies attributes above.
+            characterData:           !!(opts.characterData || opts.characterDataOldValue),
             subtree:                 !!opts.subtree,
             attributeOldValue:       !!opts.attributeOldValue,
             characterDataOldValue:   !!opts.characterDataOldValue,
             attributeFilter:         opts.attributeFilter ? opts.attributeFilter.slice() : null,
         },
     };
+    // DOM §4.3.1 step 3: at least one of childList/attributes/characterData
+    // (after the OldValue/Filter implications just above) must be requested,
+    // or observe() is asking to watch nothing.
+    if (!config.opts.childList && !config.opts.attributes && !config.opts.characterData) {
+        throw new TypeError('The options object must set at least one of \'childList\', \'attributes\', or \'characterData\' to true.');
+    }
+    if (!target || target.__nid__ === undefined) return;
+    // DOM §4.3.1: observe() re-activates the observer. `disconnect()` removes it
+    // from `_mo_observers`, so re-observing after a disconnect must re-register it
+    // (only the constructor pushed before — BUG-318, WPT MutationObserver-disconnect).
+    if (_mo_observers.indexOf(this) < 0) _mo_observers.push(this);
     for (var i = 0; i < this._observations.length; i++) {
         if (this._observations[i].target === target) {
             this._observations[i] = config;
