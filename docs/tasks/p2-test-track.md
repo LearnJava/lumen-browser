@@ -1876,7 +1876,7 @@ V8-архив из `.tmp/rusty_v8.lib.gz` через `RUSTY_V8_ARCHIVE=<абсо
 
 | Причина | Масштаб | Доказательство |
 |---|---|---|
-| В воркерной области нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream`/`TextEncoderStream`, [BUG-1080](../../bugs/BUG-1080-OPEN.md) | 51 воркерный id, ≈15 000 сообщений (главная масса подтестов, не прошедших в категории) | `api-basics.any.worker.html` 0/6 при `.any.html` 6/6 |
+| В воркерной области нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream`/`TextEncoderStream`, [BUG-1080](../../bugs/BUG-1080-FIXED.md) | 51 воркерный id, ≈15 000 сообщений (главная масса подтестов, не прошедших в категории) | `api-basics.any.worker.html` 0/6 при `.any.html` 6/6 |
 | Воркерный `XMLHttpRequest` без `overrideMimeType`, [BUG-1081](../../bugs/BUG-1081-OPEN.md) | 26 сообщений | `replacement-encodings`/`unsupported-encodings` `.any.worker.html` |
 | Одиночный суррогат кодируется в WTF-8, [BUG-1082](../../bugs/BUG-1082-OPEN.md) | `api-surrogates-utf8` 1/6, `textencoder-utf16-surrogates` 2/7, `streams/encode-utf8` 3/19 | проба `--dump-layout` |
 | Потоковый `TextDecoder` не срезает BOM, разнесённый по чанкам, [BUG-1083](../../bugs/BUG-1083-OPEN.md) | `streams/decode-ignore-bom` 5/12, `textdecoder-copy` 0/2 | проба `--dump-layout` |

@@ -1,6 +1,6 @@
 # BUG-1080 — в глобальной области dedicated/shared воркера нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream`/`TextEncoderStream`: `ReferenceError: TextDecoder is not defined`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P1, WORKER-1 срез 2)
 **Тип:** пробел реализации — интерфейсы есть в оконной прелюдии и отсутствуют в воркерной области; какой из двух классов (точечный дефект или доработка вроде [GAP-WORKERSCOPE](../ROADMAP.md)) — решает триаж P3 по правилу [docs/probe-method.md §8](../docs/probe-method.md).
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 50, `encoding`)
 **Область:** воркерный рантайм — `crates/js/src/worker.rs` (воркерная глобальная область собирается из отдельных шимов: `WORKER_TIMERS_SHIM`, `WORKER_NET_SHIM`, `WORKER_ATOB_BTOA_SHIM`, …; шима кодировок/стримов среди них нет), `crates/js/src/shared_worker.rs`
@@ -52,3 +52,12 @@
   `expected: FAIL` у `.any.worker.html`/`.any.sharedworker.html` сняты, 7 `.ini` стали
   чистыми. Service-worker-варианты перешли ERROR→TIMEOUT — это дрейф baseline, на бинаре
   main они ведут себя так же (проверено `run_smoke.py`).
+- **2026-09-24, WORKER-1 срез 2 — закрыт:** блок Streams (`ReadableStream`/`WritableStream`/
+  `TransformStream`, стратегии, `TextDecoderStream`/`TextEncoderStream`, `CompressionStream`/
+  `DecompressionStream`) дословно вырезан из хвоста `web_api_shim_mid_b.js` в
+  `shim/streams_shim.js` и входит в `worker_exposed_shim()`; нативы `_lumen_cs_*` регистрирует
+  `install_worker_exposed_v8`. Страничный шим побайтно прежний. Приёмка вскрыла дефект цикла
+  задач воркера (таймер, заведённый из `.then()`, не попадал в расчёт ожидания — воркер засыпал
+  навсегда), исправлен в `crates/js/src/worker.rs`. WPT `streams/`+`compression/`: ≈1 340
+  воркерных подтестов FAIL→PASS, baseline перегенерирован; оконные изменения в
+  `streams/transferable/*.html` — чужой дрейф (A/B с бинарём main одинаков), в baseline не взяты.
