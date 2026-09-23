@@ -480,6 +480,13 @@ impl Lumen {
         // overlay-строители, остаток до `marks[4]` — хвост
         // (split-view, инспектор, canvas-bg).
         let mut bmarks = [0.0_f64; 3];
+        // BUG-683 срез 7: точки внутри статьи `panels` — [конец form-
+        // overlay-ев, конец `<dialog>`-блока (единственный безусловный
+        // `document.lock()` кадра), конец compositor-offload ребилда].
+        // Срез 6 приписал 18-21 с `panels` на github.com ребилду без
+        // замера внутри статьи; эти точки разделяют ожидание мьютекса
+        // документа и собственно построение списка.
+        let mut pmarks = [0.0_f64; 3];
         // Сколько команд хром стоит шеллу: (длина снимка chrome_dl,
         // непустых полос, итог после раскладки). Хром копируется в
         // КАЖДУЮ полосу целиком, поэтому итог кратен длине снимка — и
@@ -805,28 +812,43 @@ impl Lumen {
             }
         }
 
+        if let Some(t0) = frame_log_t0 {
+            pmarks[0] = t0.elapsed().as_secs_f64() * 1e3;
+        }
+
         // <dialog> modal overlay (L-2) — ::backdrop + centered dialog above page.
-        if let Some(lb) = &self.layout_box {
-            let doc =
-                self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
-            if let Some(doc) = doc {
-                let modal_nids = forms::collect_modal_dialogs(&doc);
-                if !modal_nids.is_empty() {
-                    let vp_h = self.viewport_height_css();
-                    for &dlg_nid in &modal_nids {
-                        if let Some(dlg_lb) = forms::find_layout_box(lb, dlg_nid) {
-                            let mut dlg_overlay = forms::build_dialog_overlay(
-                                dlg_lb,
-                                self.scroll_y,
-                                vp_w,
-                                vp_h,
-                            );
-                            dlg_overlay.append(&mut overlay_buf);
-                            overlay_buf = dlg_overlay;
-                        }
+        // BUG-683 срез 7: `try_lock`, not `lock` — the engine thread holds the
+        // document for a whole off-thread relayout, and a blocking lock here
+        // froze every frame for its full length (13-20 s on github.com).
+        // While contended, the previous frame's list for the same document
+        // stands in; the relayout's own commit repaints once it is released.
+        if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+            let key = Arc::as_ptr(&src.document) as usize;
+            if let Ok(doc) = src.document.try_lock() {
+                self.modal_dialog_cache = (key, forms::collect_modal_dialogs(&doc));
+            } else if self.modal_dialog_cache.0 != key {
+                self.modal_dialog_cache = (key, Vec::new());
+            }
+            let modal_nids = &self.modal_dialog_cache.1;
+            if !modal_nids.is_empty() {
+                let vp_h = self.viewport_height_css();
+                for &dlg_nid in modal_nids {
+                    if let Some(dlg_lb) = forms::find_layout_box(lb, dlg_nid) {
+                        let mut dlg_overlay = forms::build_dialog_overlay(
+                            dlg_lb,
+                            self.scroll_y,
+                            vp_w,
+                            vp_h,
+                        );
+                        dlg_overlay.append(&mut overlay_buf);
+                        overlay_buf = dlg_overlay;
                     }
                 }
             }
+        }
+
+        if let Some(t0) = frame_log_t0 {
+            pmarks[1] = t0.elapsed().as_secs_f64() * 1e3;
         }
 
         // Compositor offload: если есть активные анимации с opacity/transform/
@@ -883,6 +905,10 @@ impl Lumen {
             } else {
                 None
             };
+
+        if let Some(t0) = frame_log_t0 {
+            pmarks[2] = t0.elapsed().as_secs_f64() * 1e3;
+        }
 
         let scroll_y = self.scroll_y;
         let scroll_x = self.scroll_x;
@@ -1904,6 +1930,14 @@ impl Lumen {
                 chrome_mix.2,
                 overlay_len,
                 compose_outcome_label(),
+            );
+            // BUG-683 срез 7: подстатьи `panels` (сумма четырёх = `panels`).
+            eprintln!(
+                "[frame]   panels: forms {:.2} dialog {:.2} anim {:.2} rest {:.2}",
+                pmarks[0] - bmarks[1],
+                pmarks[1] - pmarks[0],
+                pmarks[2] - pmarks[1],
+                bmarks[2] - pmarks[2],
             );
             // Разбивка статьи `paint`. Печатается ПОСЛЕ таймера кадра,
             // поэтому в измеряемое окно не попадает — в отличие от
