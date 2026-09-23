@@ -705,7 +705,7 @@ impl Lumen {
                 _group_name: _,
             } => {
                 if let Some(src) = self.layout_source.as_mut() {
-                    forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
+                    forms::toggle_radio(&mut src.document.lock().unwrap(), clicked);
                 }
                 // ADR-016 M2.2c-3: async-safe form mutation — see ToggleCheckbox.
                 self.relayout_form();

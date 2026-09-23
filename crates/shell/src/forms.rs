@@ -16,7 +16,7 @@ use lumen_core::form::{encode_form_multipart, encode_form_urlencoded, FormEntry,
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{
     check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
-    invalid_controls_in_form, Attribute, Document, InputType,
+    invalid_controls_in_form, set_radio_checked, Attribute, Document, InputType,
     NodeData, NodeId, QualName,
 };
 use lumen_layout::{
@@ -263,6 +263,17 @@ pub fn toggle_details_open(doc: &mut Document, id: NodeId) {
 pub fn toggle_checkbox(doc: &mut Document, id: NodeId) {
     let checked = doc.control_checked(id);
     doc.set_control_checked(id, !checked);
+}
+
+/// Apply a native click on an `<input type=radio>` in the live DOM.
+///
+/// Unlike a checkbox, a radio button's click behaviour is not a toggle
+/// (HTML LS §4.10.5.1.14): it checks `clicked` and unchecks every other
+/// radio button in its group (same `name`, nearest form owner). See
+/// [`lumen_dom::set_radio_checked`] for the group-resolution rules. After
+/// calling this, relayout is needed to update `:checked`/`:indeterminate`.
+pub fn toggle_radio(doc: &mut Document, id: NodeId) {
+    set_radio_checked(doc, id);
 }
 
 /// Set the current value of an `<input>` in the live DOM — typing, a picker

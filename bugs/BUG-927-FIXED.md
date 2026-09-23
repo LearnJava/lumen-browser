@@ -1,6 +1,6 @@
 # BUG-927 — нативный клик по радиокнопке не снимает отметку с соседа по группе
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P3)
 **Найден:** P3, попутно к BUG-480 срез 18, 2026-08-29
 **Область:** shell (`crates/shell/src/forms.rs::classify_click` →
 `crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio`)
@@ -62,6 +62,45 @@ forms::FormClickAction::ToggleRadio { clicked, _group_name: _ } => {
 ## Чего это НЕ касается
 
 `:checked` в каскаде и `:indeterminate` для группы без единой отметки
-реализованы верно (`crates/engine/layout/src/style.rs:10213` обходит группу
-как надо) — дефект только в записи состояния по клику, не в его чтении.
-Скриптовое `el.checked = true` идёт другим путём и здесь не измерялось.
+реализованы верно (`crates/engine/layout/src/style/matching/forms.rs::matches_indeterminate`
+обходит группу как надо) — дефект только в записи состояния по клику, не в
+его чтении. Скриптовое `el.checked = true` идёт другим путём и здесь не
+измерялось.
+
+## Исправлено
+
+Новая общая функция [`lumen_dom::set_radio_checked`](../crates/engine/dom/src/forms.rs)
+(крейт `lumen-dom`, а не `shell` — читателей два, страница и фрейм, класть в
+`click.rs` было бы повторением ошибки, которую этот же баг описывает) реализует
+§4.10.5.1.14: снимает `checked` со всех остальных `<input type=radio>` той же
+(непустой, регистрозависимой) группы в области ближайшего `<form>`-предка
+(`find_ancestor_form`, тот же владелец, что уже использует `matches_indeterminate`;
+вне формы — весь документ), затем ставит `checked` на кликнутый элемент.
+Радио без `name` или без другого члена группы — группа из одного элемента:
+безусловно ставится в checked, повторный клик её не снимает (в отличие от
+флажка, у радиокнопки снять отметку можно только `form.reset()` или отметкой
+соседа).
+
+`crates/shell/src/forms.rs::toggle_checkbox` (переворот) остался только для
+флажка; новая `toggle_radio` — тонкая обёртка над `set_radio_checked`. Оба
+вызывающих места (`crates/shell/src/lumen/click.rs` — страница,
+`crates/shell/src/lumen/frame_forms.rs` — фрейм) переведены на неё, поэтому
+поведение страницы и фрейма не расходится, как требовал раздел «Что нужно».
+
+Три новых юнит-теста в `crates/engine/dom/src/lib.rs`
+(`set_radio_checked_clears_other_group_member`,
+`set_radio_checked_on_already_checked_stays_checked`,
+`set_radio_checked_without_name_only_affects_itself`) напрямую бьют по
+механизму из раздела «Симптом»: снятие отметки с соседа, отсутствие
+разотметки при повторном клике, группа из одного безымянного элемента.
+`cargo test -p lumen-dom --profile dev-release radio` — 3/3 OK,
+`cargo clippy -p lumen-dom -p lumen-shell --all-targets -- -D warnings` чист.
+
+Живой прогон `tests/wpt/verify_frame_forms.py` в этой сессии остался
+красным, но по независимой причине: КОНТРОЛЬНЫЙ флажок родителя (`pcb`),
+которого этот фикс не касается, тоже не переключается ни разу за три клика —
+то есть клики не долетают до элементов управления вообще, разойдясь с живым
+окном на уровне координат/фокуса в этой песочнице (см. известное ограничение
+`feedback_background_launched_window_breaks_mcp_js_context`), а не с логикой
+радиогруппы. Живая переверификация этим срезом не достигнута; корректность
+подтверждена только юнит-тестами на уровне DOM.

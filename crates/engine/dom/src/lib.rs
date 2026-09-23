@@ -33,8 +33,8 @@ pub use vtt::{TrackInfo, VideoTracks, VttCue, VttCueSettings, collect_video_trac
 mod forms;
 pub use forms::{
     check_form_gate, check_validity_form, collect_dom_form_fields, element_validity,
-    find_ancestor_form, invalid_controls_in_form, submit_form, FormInfo, FormSubmitEvent,
-    InputMode, InputType, ValidityState,
+    find_ancestor_form, invalid_controls_in_form, set_radio_checked, submit_form, FormInfo,
+    FormSubmitEvent, InputMode, InputType, ValidityState,
 };
 #[cfg(test)]
 use forms::collect_forms;
@@ -3910,6 +3910,69 @@ mod tests {
 
         doc.clear_control_checked(cb);
         assert!(!doc.control_checked(cb));
+    }
+
+    /// Build `<form><input type=radio name=g id=r1 checked><input
+    /// type=radio name=g id=r2></form>` — BUG-927's minimal repro shape.
+    fn make_radio_group_doc() -> (Document, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let r1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(r1).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "radio".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "g".into() });
+            attrs.push(Attribute { name: QualName::html("checked"), value: String::new() });
+        }
+        let r2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(r2).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "radio".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "g".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, r1);
+        doc.append_child(form, r2);
+        (doc, r1, r2)
+    }
+
+    #[test]
+    fn set_radio_checked_clears_other_group_member() {
+        let (mut doc, r1, r2) = make_radio_group_doc();
+        assert!(doc.control_checked(r1));
+        assert!(!doc.control_checked(r2));
+
+        set_radio_checked(&mut doc, r2);
+
+        assert!(!doc.control_checked(r1));
+        assert!(doc.control_checked(r2));
+    }
+
+    /// Re-clicking an already-checked radio must not uncheck it — unlike a
+    /// checkbox, a radio button's checkedness cannot be cleared by its own
+    /// click (only `form.reset()` or checking a group sibling can).
+    #[test]
+    fn set_radio_checked_on_already_checked_stays_checked() {
+        let (mut doc, r1, _r2) = make_radio_group_doc();
+        assert!(doc.control_checked(r1));
+
+        set_radio_checked(&mut doc, r1);
+
+        assert!(doc.control_checked(r1));
+    }
+
+    /// A `name`-less radio forms a group of one: it just gets checked, no
+    /// group member to hunt for.
+    #[test]
+    fn set_radio_checked_without_name_only_affects_itself() {
+        let mut doc = Document::new();
+        let r = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(r).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "radio".into() });
+        }
+        doc.append_child(doc.root(), r);
+
+        set_radio_checked(&mut doc, r);
+
+        assert!(doc.control_checked(r));
     }
 
     #[test]
