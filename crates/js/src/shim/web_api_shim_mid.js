@@ -3884,15 +3884,21 @@ ShadowRoot.prototype.getElementById = function(id) {
 };
 ShadowRoot.prototype.appendChild = function(c) {
     if (c && c.__nid__ !== undefined) {
-        _lumen_append_child(this.__nid__, c.__nid__);
-        _lumen_ce_maybe_connected(c);
+        _lumen_ce_push_element_queue();
+        try {
+            _lumen_append_child(this.__nid__, c.__nid__);
+            _lumen_ce_maybe_connected(c);
+        } finally { _lumen_ce_pop_current_element_queue(); }
     }
     return c;
 };
 ShadowRoot.prototype.removeChild = function(c) {
     if (c && c.__nid__ !== undefined) {
-        _lumen_remove_child(this.__nid__, c.__nid__);
-        _lumen_ce_maybe_disconnected(c);
+        _lumen_ce_push_element_queue();
+        try {
+            _lumen_remove_child(this.__nid__, c.__nid__);
+            _lumen_ce_maybe_disconnected(c);
+        } finally { _lumen_ce_pop_current_element_queue(); }
     }
     return c;
 };
@@ -7045,25 +7051,33 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         getAttribute:    function(n)    { var nid = this.__nid__; return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
         setAttribute:    function(n, v) { var nid = this.__nid__;
-            var attrName = String(n);
-            var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
-            var newVal   = String(v);
-            _lumen_set_attr(nid, attrName, newVal);
-            // BUG-360: (re)compile `on<type>` content attributes into a handler
-            // as soon as they are set programmatically, not just at parse time.
-            if (_lumen_is_on_attr_name(attrName)) {
-                _lumen_compile_and_set_on_handler(nid, attrName, newVal);
-            }
-            _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal);
-            _lumen_embed_object_maybe_attr_changed(nid, attrName);
+            _lumen_ce_push_element_queue();
+            try {
+                var attrName = String(n);
+                var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                var newVal   = String(v);
+                _lumen_set_attr(nid, attrName, newVal);
+                // BUG-360: (re)compile `on<type>` content attributes into a handler
+                // as soon as they are set programmatically, not just at parse time.
+                if (_lumen_is_on_attr_name(attrName)) {
+                    _lumen_compile_and_set_on_handler(nid, attrName, newVal);
+                }
+                _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal);
+                _lumen_embed_object_maybe_attr_changed(nid, attrName);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         removeAttribute: function(n)    { var nid = this.__nid__;
-            var attrName = String(n);
-            _lumen_remove_attr(nid, attrName);
-            if (_lumen_is_on_attr_name(attrName)) {
-                _lumen_set_on_handler(nid, attrName, null);
-            }
-            if (attrName === 'src' || attrName === 'data') delete _lumen_embed_object_last_url[nid];
+            _lumen_ce_push_element_queue();
+            try {
+                var attrName = String(n);
+                var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                _lumen_remove_attr(nid, attrName);
+                if (_lumen_is_on_attr_name(attrName)) {
+                    _lumen_set_on_handler(nid, attrName, null);
+                }
+                if (attrName === 'src' || attrName === 'data') delete _lumen_embed_object_last_url[nid];
+                if (oldVal !== null) _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         hasAttribute:    function(n)    { var nid = this.__nid__; return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
@@ -7083,33 +7097,59 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return attrName === null ? null : _lumen_u2n(_lumen_get_attr(nid, attrName));
         },
         setAttributeNS:    function(ns, n, v) { var nid = this.__nid__;
-            var qualifiedName = String(n);
-            var oldVal = _lumen_u2n(_lumen_get_attr(nid, qualifiedName));
-            _lumen_set_attr_ns(nid, _lumen_ns_arg(ns), qualifiedName, String(v));
-            _lumen_ce_maybe_attr_changed(nid, qualifiedName, oldVal, String(v));
-            _lumen_embed_object_maybe_attr_changed(nid, qualifiedName);
+            _lumen_ce_push_element_queue();
+            try {
+                var qualifiedName = String(n);
+                var oldVal = _lumen_u2n(_lumen_get_attr(nid, qualifiedName));
+                _lumen_set_attr_ns(nid, _lumen_ns_arg(ns), qualifiedName, String(v));
+                _lumen_ce_maybe_attr_changed(nid, qualifiedName, oldVal, String(v));
+                _lumen_embed_object_maybe_attr_changed(nid, qualifiedName);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         removeAttributeNS: function(ns, n)    { var nid = this.__nid__;
-            var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
-            if (attrName !== null) { _lumen_remove_attr(nid, attrName); }
+            _lumen_ce_push_element_queue();
+            try {
+                var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
+                if (attrName !== null) {
+                    var oldVal = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                    _lumen_remove_attr(nid, attrName);
+                    if (oldVal !== null) _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
+                }
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         hasAttributeNS:    function(ns, n)    { var nid = this.__nid__;
             return _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)) !== null;
         },
         // DOM LS §4.9.3: toggleAttribute(qualifiedName, force?)
         toggleAttribute: function(n, force) { var nid = this.__nid__;
-            var attrName = String(n);
-            var has = _lumen_get_attr(nid, attrName) !== undefined;
-            if (force === undefined) {
-                if (has) { _lumen_remove_attr(nid, attrName); return false; }
-                _lumen_set_attr(nid, attrName, ''); return true;
-            }
-            if (force) {
-                if (!has) _lumen_set_attr(nid, attrName, '');
-                return true;
-            }
-            if (has) _lumen_remove_attr(nid, attrName);
-            return false;
+            _lumen_ce_push_element_queue();
+            try {
+                var attrName = String(n);
+                var oldVal = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                var has = oldVal !== null;
+                if (force === undefined) {
+                    if (has) {
+                        _lumen_remove_attr(nid, attrName);
+                        _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
+                        return false;
+                    }
+                    _lumen_set_attr(nid, attrName, '');
+                    _lumen_ce_maybe_attr_changed(nid, attrName, null, '');
+                    return true;
+                }
+                if (force) {
+                    if (!has) {
+                        _lumen_set_attr(nid, attrName, '');
+                        _lumen_ce_maybe_attr_changed(nid, attrName, null, '');
+                    }
+                    return true;
+                }
+                if (has) {
+                    _lumen_remove_attr(nid, attrName);
+                    _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
+                }
+                return false;
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // Reflected `open` boolean attribute — shared by <details> (HTML5 §4.11.1)
         // and <dialog> (HTML5 §4.11.7).
@@ -7270,25 +7310,31 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 throw _lumen_character_data_insertion_error();
             }
             if (!c || c.__nid__ === undefined) return c;
-            if (c.__isDocumentFragment__) {
-                // DOM LS §4.2.4: fragment append moves all children, not the fragment itself.
-                var kids = _lumen_get_children(c.__nid__).slice();
-                for (var _fi = 0; _fi < kids.length; _fi++) {
-                    _lumen_append_child(nid, kids[_fi]);
-                    _lumen_ce_maybe_connected(_lumen_make_element(kids[_fi]));
+            _lumen_ce_push_element_queue();
+            try {
+                if (c.__isDocumentFragment__) {
+                    // DOM LS §4.2.4: fragment append moves all children, not the fragment itself.
+                    var kids = _lumen_get_children(c.__nid__).slice();
+                    for (var _fi = 0; _fi < kids.length; _fi++) {
+                        _lumen_append_child(nid, kids[_fi]);
+                        _lumen_ce_maybe_connected(_lumen_make_element(kids[_fi]));
+                    }
+                } else {
+                    _lumen_append_child(nid, c.__nid__);
+                    _lumen_ce_maybe_connected(c);
                 }
-            } else {
-                _lumen_append_child(nid, c.__nid__);
-                _lumen_ce_maybe_connected(c);
-            }
-            _lumen_fire_slotchange(nid);
+                _lumen_fire_slotchange(nid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
             return c;
         },
         removeChild:     function(c) { var nid = this.__nid__;
             if (c && c.__nid__ !== undefined) {
-                _lumen_remove_child(nid, c.__nid__);
-                _lumen_ce_maybe_disconnected(c);
-                _lumen_fire_slotchange(nid);
+                _lumen_ce_push_element_queue();
+                try {
+                    _lumen_remove_child(nid, c.__nid__);
+                    _lumen_ce_maybe_disconnected(c);
+                    _lumen_fire_slotchange(nid);
+                } finally { _lumen_ce_pop_current_element_queue(); }
             }
             return c;
         },
@@ -7310,9 +7356,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
             }
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid !== null) {
-                _lumen_remove_child(pid, nid);
-                _lumen_ce_maybe_disconnected(this);
-                _lumen_fire_slotchange(pid);
+                _lumen_ce_push_element_queue();
+                try {
+                    _lumen_remove_child(pid, nid);
+                    _lumen_ce_maybe_disconnected(this);
+                    _lumen_fire_slotchange(pid);
+                } finally { _lumen_ce_pop_current_element_queue(); }
             }
         },
         // Inserts nodes immediately before this element.
@@ -7354,23 +7403,26 @@ var _LUMEN_WRAPPER_MEMBERS = {
         replaceWith: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid === null) return;
-            var ch = _lumen_get_children(pid);
-            var idx = ch.indexOf(nid);
-            var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
-            _lumen_remove_child(pid, nid);
-            _lumen_ce_maybe_disconnected(this);
-            for (var _ri = 0; _ri < arguments.length; _ri++) {
-                var _rn = arguments[_ri];
-                if (typeof _rn === 'string') {
-                    var _rtn = _lumen_create_text_node(_rn);
-                    if (nextSib !== null) { _lumen_insert_before(pid, _rtn, nextSib); }
-                    else { _lumen_append_child(pid, _rtn); }
-                } else if (_rn && _rn.__nid__ !== undefined) {
-                    if (nextSib !== null) { _lumen_insert_before(pid, _rn.__nid__, nextSib); }
-                    else { _lumen_append_child(pid, _rn.__nid__); }
+            _lumen_ce_push_element_queue();
+            try {
+                var ch = _lumen_get_children(pid);
+                var idx = ch.indexOf(nid);
+                var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
+                _lumen_remove_child(pid, nid);
+                _lumen_ce_maybe_disconnected(this);
+                for (var _ri = 0; _ri < arguments.length; _ri++) {
+                    var _rn = arguments[_ri];
+                    if (typeof _rn === 'string') {
+                        var _rtn = _lumen_create_text_node(_rn);
+                        if (nextSib !== null) { _lumen_insert_before(pid, _rtn, nextSib); }
+                        else { _lumen_append_child(pid, _rtn); }
+                    } else if (_rn && _rn.__nid__ !== undefined) {
+                        if (nextSib !== null) { _lumen_insert_before(pid, _rn.__nid__, nextSib); }
+                        else { _lumen_append_child(pid, _rn.__nid__); }
+                    }
                 }
-            }
-            _lumen_fire_slotchange(pid);
+                _lumen_fire_slotchange(pid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // ── ParentNode extensions (DOM LS §4.2.5) ───────────────────────────────
         // Inserts nodes before the first child of this element.
@@ -7456,9 +7508,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // above never ran upgrade reactions (they predate custom elements
             // entirely), so this parsed fragment needs its own walk — same
             // subtree upgrade `innerHTML` now runs, see `_lumen_set_inner_html`.
-            for (var _iahu = 0; _iahu < newIds.length; _iahu++) {
-                _lumen_ce_upgrade_subtree(newIds[_iahu]);
-            }
+            _lumen_ce_push_element_queue();
+            try {
+                for (var _iahu = 0; _iahu < newIds.length; _iahu++) {
+                    _lumen_ce_upgrade_subtree(newIds[_iahu]);
+                }
+            } finally { _lumen_ce_pop_current_element_queue(); }
         },
         // Replaces all children of this element.
         replaceChildren: function() { var nid = this.__nid__;
@@ -7921,17 +7976,20 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (!refNode || refNode.__nid__ === undefined) {
                 return this.appendChild(newNode);
             }
-            if (newNode.__isDocumentFragment__) {
-                var kids = _lumen_get_children(newNode.__nid__).slice();
-                for (var _ib = 0; _ib < kids.length; _ib++) {
-                    _lumen_insert_before(nid, kids[_ib], refNode.__nid__);
-                    _lumen_ce_maybe_connected(_lumen_make_element(kids[_ib]));
+            _lumen_ce_push_element_queue();
+            try {
+                if (newNode.__isDocumentFragment__) {
+                    var kids = _lumen_get_children(newNode.__nid__).slice();
+                    for (var _ib = 0; _ib < kids.length; _ib++) {
+                        _lumen_insert_before(nid, kids[_ib], refNode.__nid__);
+                        _lumen_ce_maybe_connected(_lumen_make_element(kids[_ib]));
+                    }
+                } else {
+                    _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
+                    _lumen_ce_maybe_connected(newNode);
                 }
-            } else {
-                _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
-                _lumen_ce_maybe_connected(newNode);
-            }
-            _lumen_fire_slotchange(nid);
+                _lumen_fire_slotchange(nid);
+            } finally { _lumen_ce_pop_current_element_queue(); }
             return newNode;
         },
         // HTMLSlotElement (DOM LS §4.2.2.2): applicable only on <slot> elements.
@@ -12419,9 +12477,12 @@ _lumen_set_inner_html = function(nid, html) {
     // find out. `nid` itself is skipped: it already existed and was not
     // (re)connected, only its children are new.
     var _cesih_kids = _lumen_get_children(nid);
-    for (var _cesih_i = 0; _cesih_i < _cesih_kids.length; _cesih_i++) {
-        _lumen_ce_upgrade_subtree(_cesih_kids[_cesih_i]);
-    }
+    _lumen_ce_push_element_queue();
+    try {
+        for (var _cesih_i = 0; _cesih_i < _cesih_kids.length; _cesih_i++) {
+            _lumen_ce_upgrade_subtree(_cesih_kids[_cesih_i]);
+        }
+    } finally { _lumen_ce_pop_current_element_queue(); }
 };
 
 // ── Custom Elements registry ──────────────────────────────────────────────────
@@ -12447,6 +12508,85 @@ var _lumen_ce_construction_stacks = new WeakMap(); // ctor -> array
 // `super()` twice (or an upgrade algorithm bug) throws InvalidStateError
 // instead of silently building a second wrapper over the same nid.
 var _LUMEN_CE_ALREADY_CONSTRUCTED = {};
+
+// CE-1 срез 4 (HTML LS §4.13.3, "custom element reactions"): callback
+// reactions (connected/disconnected/attributeChanged, and eventually
+// adopted) no longer fire synchronously at the point of mutation — they are
+// enqueued on the mutated element's own reaction queue, then invoked from an
+// "element queue" (an ordered list of elements with pending reactions).
+// `_lumen_ce_reactions_stack` is the "custom element reactions stack": a
+// [CEReactions]-tagged operation (appendChild, setAttribute, …) pushes a
+// fresh element queue before it runs and pops+invokes it after, so every
+// reaction that operation caused fires once, in enqueue order, after the
+// whole operation is done — not reentrantly in the middle of it. When no
+// such operation is on the stack (a reaction enqueued from outside any
+// [CEReactions] entry point), `_lumen_ce_backup_element_queue` is used
+// instead and processed immediately, matching the spec's "backup element
+// queue" behavior.
+var _lumen_ce_reactions_stack = [];        // array of element queues (each: array of nid)
+var _lumen_ce_backup_element_queue = [];   // nid[]
+var _lumen_ce_processing_backup_queue = false;
+// nid -> array of pending reaction closures for that element, appended to by
+// `_lumen_ce_enqueue_reaction` and drained by `_lumen_ce_invoke_element_queue`.
+var _lumen_ce_reaction_queue_by_nid = {};
+
+function _lumen_ce_current_element_queue() {
+    var stack = _lumen_ce_reactions_stack;
+    if (stack.length > 0) return stack[stack.length - 1];
+    return _lumen_ce_backup_element_queue;
+}
+
+// Appends `run` to `nid`'s reaction queue and records `nid` on the current
+// element queue (once — a second reaction for the same element does not add
+// a second entry, since invoking drains the whole per-element queue anyway).
+// If no [CEReactions] operation is on the stack right now, the backup queue
+// is processed immediately, so a reaction fired from plain script (outside
+// any wrapped DOM method, e.g. an internal call) still runs synchronously —
+// same as before this срез, just routed through the queue for ordering.
+function _lumen_ce_enqueue_reaction(nid, run) {
+    var q = _lumen_ce_reaction_queue_by_nid[nid];
+    if (!q) { q = []; _lumen_ce_reaction_queue_by_nid[nid] = q; }
+    q.push(run);
+    var elementQueue = _lumen_ce_current_element_queue();
+    if (elementQueue.indexOf(nid) < 0) elementQueue.push(nid);
+    if (_lumen_ce_reactions_stack.length === 0 && !_lumen_ce_processing_backup_queue) {
+        _lumen_ce_processing_backup_queue = true;
+        try {
+            _lumen_ce_invoke_element_queue(_lumen_ce_backup_element_queue);
+        } finally {
+            _lumen_ce_processing_backup_queue = false;
+        }
+    }
+}
+
+// Invokes every pending reaction for every element in `elementQueue`, in
+// order. The `for` re-reads `.length` each pass, so a reaction that itself
+// enqueues more work on this same (currently-current) queue — e.g. a
+// connectedCallback that inserts another custom element — gets processed
+// within this same call instead of recursing into a nested invocation.
+function _lumen_ce_invoke_element_queue(elementQueue) {
+    for (var i = 0; i < elementQueue.length; i++) {
+        var nid = elementQueue[i];
+        var q = _lumen_ce_reaction_queue_by_nid[nid];
+        if (!q) continue;
+        while (q.length > 0) {
+            var reaction = q.shift();
+            try { reaction(); } catch (e) { _lumen_console_error('CE reaction: ' + e); }
+        }
+    }
+    elementQueue.length = 0;
+}
+
+// Push/pop pair a [CEReactions]-tagged DOM method wraps its body in (via
+// try/finally) so every reaction that method's mutation caused is batched
+// into one element queue and invoked once the method returns.
+function _lumen_ce_push_element_queue() {
+    _lumen_ce_reactions_stack.push([]);
+}
+function _lumen_ce_pop_current_element_queue() {
+    var q = _lumen_ce_reactions_stack.pop();
+    _lumen_ce_invoke_element_queue(q);
+}
 
 // Builds the wrapper for a custom element being constructed via `new
 // ctor()`, interning it exactly like `_lumen_make_element` does for every
@@ -12500,13 +12640,16 @@ function _lumen_ce_registry_for_nid(nid) {
     return { registry: _lumen_ce_registry, pending: _lumen_ce_pending };
 }
 
-// Calls connectedCallback on `el` if its tag is in its scope's registry.
-// `el` may still be pre-upgrade (created by `document.createElement`/the
-// parser before its tag was defined, or before объём (3) wires those paths
-// through the constructor) — insertion is one of the moments HTML LS
-// §4.13.5 requires an "undefined"-state custom element to be upgraded, so
-// that case is routed through the real-constructor path below instead of
-// just flipping the flag.
+// Enqueues connectedCallback on `el` if its tag is in its scope's registry
+// (CE-1 срез 4: through the reaction queue, not a direct call — see
+// `_lumen_ce_enqueue_reaction`). `el` may still be pre-upgrade (created by
+// `document.createElement`/the parser before its tag was defined, or before
+// объём (3) wires those paths through the constructor) — insertion is one
+// of the moments HTML LS §4.13.5 requires an "undefined"-state custom
+// element to be upgraded, so that case is routed through the real-
+// constructor path below instead of just flipping the flag. Construction
+// itself stays synchronous (срез 2/3's design: `el.method()` must work
+// right after upgrade/createElement) — only the *callback* is queued.
 function _lumen_ce_maybe_connected(el) {
     if (!el || el.__nid__ === undefined) return;
     var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
@@ -12517,9 +12660,11 @@ function _lumen_ce_maybe_connected(el) {
         return;
     }
     if (typeof entry.ctor.prototype.connectedCallback === 'function') {
-        try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
-            _lumen_console_error('CE connectedCallback: ' + e);
-        }
+        _lumen_ce_enqueue_reaction(el.__nid__, function() {
+            try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
+                _lumen_console_error('CE connectedCallback: ' + e);
+            }
+        });
     }
 }
 
@@ -12539,34 +12684,39 @@ function _lumen_ce_upgrade_subtree(nid) {
     }
 }
 
-// Calls disconnectedCallback on `el` if its tag is in its scope's registry.
+// Enqueues disconnectedCallback on `el` if its tag is in its scope's
+// registry (CE-1 срез 4).
 function _lumen_ce_maybe_disconnected(el) {
     if (!el || el.__nid__ === undefined) return;
     var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
     var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
     if (!entry) return;
     if (typeof entry.ctor.prototype.disconnectedCallback === 'function') {
-        try { entry.ctor.prototype.disconnectedCallback.call(el); } catch(e) {
-            _lumen_console_error('CE disconnectedCallback: ' + e);
-        }
+        _lumen_ce_enqueue_reaction(el.__nid__, function() {
+            try { entry.ctor.prototype.disconnectedCallback.call(el); } catch(e) {
+                _lumen_console_error('CE disconnectedCallback: ' + e);
+            }
+        });
     }
 }
 
-// Calls attributeChangedCallback on the element at `nid` if applicable, using
-// the registry that nid is scoped to.
+// Enqueues attributeChangedCallback on the element at `nid` if applicable,
+// using the registry that nid is scoped to (CE-1 срез 4).
 function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
     var tag   = _lumen_get_tag_name(nid).toLowerCase();
     var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
     if (entry.observedAttributes.indexOf(attrName) < 0) return;
     if (typeof entry.ctor.prototype.attributeChangedCallback === 'function') {
-        try {
-            entry.ctor.prototype.attributeChangedCallback.call(
-                _lumen_make_element(nid), attrName, oldVal, newVal
-            );
-        } catch(e) {
-            _lumen_console_error('CE attributeChangedCallback: ' + e);
-        }
+        _lumen_ce_enqueue_reaction(nid, function() {
+            try {
+                entry.ctor.prototype.attributeChangedCallback.call(
+                    _lumen_make_element(nid), attrName, oldVal, newVal
+                );
+            } catch(e) {
+                _lumen_console_error('CE attributeChangedCallback: ' + e);
+            }
+        });
     }
 }
 
@@ -12605,9 +12755,11 @@ function _lumen_ce_upgrade_element(el, entry) {
     upgraded.__ceUpgraded__ = true;
     if (_lumen_resource_is_connected(nid)
         && typeof ctor.prototype.connectedCallback === 'function') {
-        try { ctor.prototype.connectedCallback.call(upgraded); } catch(e) {
-            _lumen_console_error('CE connectedCallback (upgrade): ' + e);
-        }
+        _lumen_ce_enqueue_reaction(nid, function() {
+            try { ctor.prototype.connectedCallback.call(upgraded); } catch(e) {
+                _lumen_console_error('CE connectedCallback (upgrade): ' + e);
+            }
+        });
     }
 }
 
