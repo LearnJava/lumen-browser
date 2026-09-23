@@ -120,7 +120,7 @@ pub fn compute_referrer(policy: ReferrerPolicy, referrer_url: &Url, target_url: 
     let full = || format!("{}{}", referrer_origin.serialize(), referrer_url.path_and_query());
     let origin_only = || referrer_origin.serialize();
 
-    match policy {
+    let result = match policy {
         ReferrerPolicy::NoReferrer => unreachable!("handled above"),
         ReferrerPolicy::NoReferrerWhenDowngrade => {
             if is_downgrade { None } else { Some(full()) }
@@ -145,7 +145,11 @@ pub fn compute_referrer(policy: ReferrerPolicy, referrer_url: &Url, target_url: 
             }
         }
         ReferrerPolicy::UnsafeUrl => Some(full()),
-    }
+    };
+
+    // Spec §8.3 step after policy branching: a `result` longer than 4096
+    // bytes collapses to the origin, regardless of which branch produced it.
+    result.map(|r| if r.len() > 4096 { origin_only() } else { r })
 }
 
 #[cfg(test)]
@@ -243,5 +247,29 @@ mod tests {
             &url("https://example.com/api"),
         );
         assert_eq!(r, None);
+    }
+
+    #[test]
+    fn full_referrer_over_4096_bytes_collapses_to_origin() {
+        // Spec §8.3: a `result` longer than 4096 bytes is replaced with the
+        // origin, independent of which policy branch produced `full()`.
+        let long_path = format!("/{}", "a".repeat(4096));
+        let r = compute_referrer(
+            ReferrerPolicy::UnsafeUrl,
+            &url(&format!("https://example.com{long_path}")),
+            &url("https://example.com/api"),
+        );
+        assert_eq!(r.as_deref(), Some("https://example.com"));
+    }
+
+    #[test]
+    fn full_referrer_under_4096_bytes_stays_full() {
+        let short_path = format!("/{}", "a".repeat(10));
+        let r = compute_referrer(
+            ReferrerPolicy::UnsafeUrl,
+            &url(&format!("https://example.com{short_path}")),
+            &url("https://example.com/api"),
+        );
+        assert_eq!(r.as_deref(), Some(format!("https://example.com{short_path}").as_str()));
     }
 }
