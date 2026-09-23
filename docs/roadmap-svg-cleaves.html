@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-23",
  "counts": {
-  "open": 257,
+  "open": 260,
   "fixed": 801,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1058,
+ "total_bugs": 1061,
  "phases": [
   {
    "id": "P0",
@@ -2315,6 +2315,20 @@
        "bugs": [
         "BUG-1115"
        ]
+      },
+      {
+       "id": "PERF-14",
+       "title": "PERF-14: асинхронный fetch() по умолчанию",
+       "status": "planned",
+       "size": "M",
+       "note": "Асинхронный `fetch()` по умолчанию. Сейчас шим (`crates/js/src/shim/web_api_shim_mid_b3.js:219`) идёт в рабочий поток только при живом AbortSignal или `_lumenAsync`; обычный `fetch()` синхронен и держит JS-поток на весь RTT — на стенде `.tmp/seqlab` (700 мс/ответ) всё, что скрипт делает после `fetch()`, сдвигается на 700 мс, а Chrome в это время грузит картинки. Мешают две вещи, из-за которых это доработка, а не точечная правка: часть движковых вызывающих рассчитывает, что ответ уже на руках при создании промиса, и headless-режимы (`--screenshot`/`--trace-nav`) не прокачивают таймеры — асинхронный промис там не разрешится. Задача: асинхронный путь по умолчанию + прокачка событий в headless до `load`. Приёмка: на стенде запросы после `fetch()` не ждут его ответа; WPT `fetch/` без регресса"
+      },
+      {
+       "id": "PERF-15",
+       "title": "PERF-15: память ресурсов сайта для повторных визитов",
+       "status": "planned",
+       "size": "L",
+       "note": "«Память ресурсов сайта»: локально (профиль, в сеть ничего не уходит) помнить URL подресурсов прошлого визита origin-а и на повторной навигации запрашивать их сразу, параллельно с документом. Замер на стенде `.tmp/seqlab` (700 мс/ответ): Chrome 2.8 с; клиент, знающий все URL, — 1.45 с если стартует после документа и 0.70 с если вместе с ним. Chrome так не умеет (помнит только хосты для preconnect), это место, где Lumen может его обогнать. Зависимости: BUG-1116 (иначе подсказки замедляют: 3.8 → 14.5 с), PERF-13 (иначе параллельные запросы открывают по соединению), BUG-1117/1118. Риск — лишний трафик при сменившейся странице: ограничить ресурсами, реально использованными на прошлом визите, и тем, что влезает в первую волну. Приёмка: повторный визит на стенде ≤ 1.6 с, top100 повторный проход — медиана ready_s ниже первого прохода"
       }
      ]
     },
@@ -8963,8 +8977,8 @@
   },
   "BUG-1112": {
    "status": "open",
-   "title": "`ShareCache` формально подключён, но не вставляет ни одной записи на реальных сайтах: `selector_is_share_safe` требует `sel.tail.is_empty()` (ноль комбинаторов)…",
-   "component": "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `crates/engine/layout/src/style/share_cache.rs`)",
+   "title": "`ShareCache` не вставляет ни одной записи на реальных сайтах (`share_insert=0` на github.com/lenta.ru живым прогоном, срез 2). Срез 3 нашёл и починил два ложных…",
+   "component": "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `RuleIndex::universal`, `crates/engine/layout/src/style/share_cache.rs`)",
    "date": null,
    "debtor": false
   },
@@ -8986,6 +9000,27 @@
    "status": "open",
    "title": "HTTP/2-соединение отдаётся одному запросу целиком, параллельные запросы к тому же origin открывают новое TCP+TLS: github.com — 98 соединений за загрузку (97 к о…",
    "component": "network (`crates/network/src/h2/pool.rs` — `acquire`=`remove`, `release`=«new one wins»)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1116": {
+   "status": "open",
+   "title": "`<link rel=preload>` перезапрашивается шимом синхронным `fetch()`, по одному, после загрузки страницы и мимо `PREFETCH_CACHE`/`IMAGE_CACHE`. Стенд (700 мс/ответ…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:12182` — `_lumen_link_hint_fetch`) + shell (`page_pipeline.rs::dispatch_preload_hints` — только лог)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1117": {
+   "status": "open",
+   "title": "`background-image` CSS запрашивается только после layout, который ждёт все `<img>`: фон — всегда последняя волна (стенд: Chrome запрашивает `bg.png` на 2125 мс…",
+   "component": "shell (`crates/shell/src/page_pipeline.rs:1579` — `fetch-bg-images` после `layout_page`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1118": {
+   "status": "open",
+   "title": "Присвоение `img.src` в скрипте не запускает загрузку до следующего relayout: стенд — `new Image().src` и следом `fetch()`, Chrome запрашивает оба одновременно (…",
+   "component": "shell (`crates/shell/src/page_load.rs:1520` `spawn_dynamic_image_loads` — зовётся из relayout после скриптов)",
    "date": null,
    "debtor": false
   },
@@ -15135,6 +15170,9 @@
   "js (`crates/js/src/shim/web_api_shim_head.js`)": [
    "BUG-1104"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js:12182` — `_lumen_link_hint_fetch`) + shell (`page_pipeline.rs::dispatch_preload_hints` — только лог)": [
+   "BUG-1116"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js:7725-7744` — `_LUMEN_WRAPPER_MEMBERS.nextSibling`/`previousSibling`)": [
    "BUG-556"
   ],
@@ -15634,7 +15672,7 @@
   "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/dom/src/lib.rs::enclosing_shadow_host`)": [
    "BUG-1009"
   ],
-  "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `crates/engine/layout/src/style/share_cache.rs`)": [
+  "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `RuleIndex::universal`, `crates/engine/layout/src/style/share_cache.rs`)": [
    "BUG-1112"
   ],
   "layout (`crates/engine/layout/src/style/cascade.rs` — главный каскадный цикл)": [
@@ -16036,8 +16074,14 @@
   "shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, синк `scrollY`; ветка колеса мыши), js (`crates/js/src/v8_runtime.rs::set_page_scroll_y`, `crates/js/src/dom.rs` — `scrollIntoView`)": [
    "BUG-821"
   ],
+  "shell (`crates/shell/src/page_load.rs:1520` `spawn_dynamic_image_loads` — зовётся из relayout после скриптов)": [
+   "BUG-1118"
+  ],
   "shell (`crates/shell/src/page_load.rs::spawn_dynamic_background_image_loads`/`spawn_image_requests`, `crates/shell/src/relayout.rs`)": [
    "BUG-939"
+  ],
+  "shell (`crates/shell/src/page_pipeline.rs:1579` — `fetch-bg-images` после `layout_page`)": [
+   "BUG-1117"
   ],
   "shell (`crates/shell/src/page_pipeline.rs:773-794` — единственный вызов `register_img_bitmaps`; `crates/shell/src/page_load.rs::apply_stream_intrinsic_sizes`/`spawn_image_requests`; `crates/shell/src/app/user_event.rs::on_user_event`), js (`crates/js/src/img_bitmap_store.rs`, `crates/js/src/v8_runtime/runtime.rs`)": [
    "BUG-938"
