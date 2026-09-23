@@ -332,6 +332,7 @@ class MemReader:
     def _run(self) -> None:
         for raw in self._stream:
             self._log.write(raw)
+            self._log.flush()
             parsed = parse_mem_report(raw)
             if parsed is not None:
                 with self._lock:
