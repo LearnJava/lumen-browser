@@ -1,0 +1,716 @@
+{
+ "date": "20260923-022309",
+ "commit": "d530491e1",
+ "exe": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p6-work\\target\\dev-release\\lumen.exe",
+ "mode": "compat",
+ "timeout_s": 240,
+ "results": [
+  {
+   "slug": "example",
+   "url": "https://example.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 2.14,
+   "ready_s": 2.47,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "a866b54797d3195cf34785517f55d274",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [],
+   "stderr_error_sigs": {},
+   "cur_mb": 619.9,
+   "peak_mb": 619.9,
+   "cpu_s": 6.8,
+   "proc_peak_mb_total": 635.0,
+   "proc_cpu_s_total": 7.22,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "OK"
+  },
+  {
+   "slug": "ya",
+   "url": "https://ya.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.69,
+   "ready_s": 2.76,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "2e0045b341435375ac7d2fb57e9916ec",
+   "console_total": 1,
+   "console_errors": [
+    "Uncaught Error: Unable to find RenderContext state html element with id \"render-state\"\n    at a (<anonymous>:1:328)\n    at <anonymous>:1:3972\n    at <anonymous>:1:4620"
+   ],
+   "console_network_errors": [],
+   "console_error_sigs": {
+    "uncaught error: unable to find rendercontext state html element with id \"render-state\" at a (<anonymous>:N:N) at <anonymous>:N:N at <anonymous>:N:N": {
+     "count": 1,
+     "sample": "Uncaught Error: Unable to find RenderContext state html element with id \"render-state\"\n    at a (<anonymous>:1:328)\n    at <anonymous>:1:3972\n    at <anonymous>:1:4620"
+    }
+   },
+   "net_failures": [
+    "✗ https://ya.ru/clck/click (easylist)"
+   ],
+   "http_status": 302,
+   "stderr_errors": [
+    "[JS error] Uncaught Error: Unable to find RenderContext state html element with id \"render-state\"",
+    "script error: JS runtime error: Unable to find RenderContext state html element with id \"render-state\"",
+    "Пропуск картинки https://mc.yandex.ru/watch/723233: network error: blocked: easylist",
+    "Не декодируется https://yabs.yandex.ru/count/WKSejI_zOoVX2Lcq0Cq90AFGG38UaJZrkaW2LPeW6lsErnlkSFrELiVHw-pA3-4I1j1ngkGdLjmkXeQM9k21m1h130vssU4BGGUl2oE0DzlbdMxJkBpJRSesNc-ZLIgLIgM6GngR7JQwrwlhycryPDpIWuEP00xY03Pmcp1HejMmDviOGTHgsFep3TZJR5VGQ9aqsIUDxZEOAMHeBE443e2x342x320h4u1E0OFPHibXLHOZOamIBMo_JAEosS7DM1El1vJUnFMngl0FWqoPfv3r57GFOsPWgpN3U2UmO0pHovE9AqpNXYjR0WSX11ARUipcxd_ZX2bHLq3eHbyutigLIgKoX24pYRPlK_wwBpmw6BA5IO0G_EqMTsaxQKOkKmi-0nBp_NxYywTQnWv8nusW1O5Q3QGmFVrfjRO-bE9kobzdc6lQUWC0~2=WQGejI_zOoVX2Las0RKC0ACMLpPSsH8u226GM1U9gRCsjgRejMw41FH3eqXeA4Q1k19Eu0JCDbpP4ZW88P2OG1MV07VV4zWce4r0wmqJq9jD-BWI4V2M04BhTyeYx92N-iuO-dmkT_PiltFd3NU-ocO7DsDDl1vGUXFNnwh2FmmwZii2mkKosJzrbLZv0SNmgWa1OmUeg2Y-IGLwAHCmLY8oPCo4c8jDwOGI3GRu6XCg6w2Y0t03M8S9aoGRjhwES9_J86usOQ94gs5lDZ62gDMmxK23bcRhCsXzXcoCXHqq6BPjPajVLIZVN05JCEynOX-ZUnWp1IWOSWOOCNu6yvt0WZ54BqychZ1TPfFhVwCdmWFymr_C1RQ1zNxl5tE1ltO9sAFnPxyEPfbUUdqTuJxdpJxiozuiZ4thnmaCPjS8_TStxNavWVsMrdMcfZql9x3NJl2w7x8b98lnIH8aYaS1A890Gn3Z01sjrSuo0HBy01BbbUmavoA874cXtmMCddFo8q0eVtgBhg-8Er8fORvOgDqMKPKzRnyATkA9WfzIzkt46m40~2?timestamp=1790119398243: формат изображения не распознан по сигнатуре"
+   ],
+   "stderr_error_sigs": {
+    "[js error] uncaught error: unable to find rendercontext state html element with id \"render-state\"": {
+     "count": 1,
+     "sample": "[JS error] Uncaught Error: Unable to find RenderContext state html element with id \"render-state\""
+    },
+    "script error: js runtime error: unable to find rendercontext state html element with id \"render-state\"": {
+     "count": 1,
+     "sample": "script error: JS runtime error: Unable to find RenderContext state html element with id \"render-state\""
+    },
+    "пропуск картинки https://mc.yandex.ru/watch/N: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск картинки https://mc.yandex.ru/watch/723233: network error: blocked: easylist"
+    },
+    "не декодируется https://yabs.yandex.ru/count/wkseji_zoovxNlcqNcqNafggNuajzrkawNlpewNlsernlksfrelivhw-paN-NiNjNngkgdljmkxeqmNkNmNhNvssuNbggulNoeNdzlbdmxjkbpjrsesnc-zligligmNgngrNjqwrwlhycrypdpiwuepNxyNpmcpNhejmmdviogthgsfepNtzjrNvgqNaqsiudxzeoamhebeNeNxNxNhNuNeNofphibxlhozoamibmo_jaeossNdmNelNvjunfmnglNfwqopfvNrNgfospwgpnNuNumoNphoveNaqpnxyjrNwsxNaruipcxd_zxNbhlqNehbyutigligkoxNpyrplk_wwbpmwNbaNioNg_eqmtsaxqkokkmi-Nnbp_nxyywtqnwvNnuswNoNqNqgmfvrfjro-beNkobzdcNlquwcN~N=wqgeji_zoovxNlasNrkcNacmlppsshNuNgmNuNgrcsjgrejmwNfhNeqxeaNqNkNeuNjcdbppNzwNpNogNmvNvvNzwceNrNwmqjqNjd-bwiNvNmNbhtyeyxNn-iuo-dmkt_piltfdNnu-ocoNdsddlNvguxfnnwhNfmmwziiNmkkosjzrblzvNsnmgwaNomuegNy-iglwahcmlyNopcoNcNjdwogiNgruNxcgNwNyNtNmNsNaogrjhwesN_jNusoqNgsNldzNgdmmxkNbcrhcsxzxcocxhqqNbpjpajvlizvnNjceynox-zunwpNiwoswoocnuNyvtNwzNbqychzNtpffhvwcdmwfymr_cNrqNznxlNteNltoNsafnpxyepfbuudqtujxdpjxiozuizNthnmacpjsN_tstxnavwvsmrdmcfzqlNxNnjlNwNxNbNlnihNayasNaNgnNzNsjrsuoNhbyNbbbumavoaNcxtmmcddfoNqNevtgbhg-NerNforvogdqmkpkzrnyatkaNwfzizktNmN~N?timestamp=N: формат изображения не распознан по сигнатуре": {
+     "count": 1,
+     "sample": "Не декодируется https://yabs.yandex.ru/count/WKSejI_zOoVX2Lcq0Cq90AFGG38UaJZrkaW2LPeW6lsErnlkSFrELiVHw-pA3-4I1j1ngkGdLjmkXeQM9k21m1h130vssU4BGGUl2oE0DzlbdMxJkBpJRSesNc-ZLIgLIgM6GngR7JQwrwlhycryPDpIWuEP00xY03Pmcp1HejMmDviOGTHgsFep3TZJR5VGQ9aqsIUDxZEOAMHeBE443e2x342x320h4u1E0OFPHibXLHOZOamIBMo_JAEosS7DM1El1vJUnFMngl0FWqoPfv3r57GFOsPWgpN3U2UmO0pHovE9AqpNXYjR0WSX11ARUipcxd_ZX2bHLq3eHbyutigLIgKoX24pYRPlK_wwBpmw6BA5IO0G_EqMTsaxQKOkKmi-0nBp_NxYywTQnWv8nusW1O5Q3QGmFVrfjRO-bE9kobzdc6lQUWC0~2=WQGejI_zOoVX2Las0RKC0ACMLpPSsH8u226GM1U9gRCsjgRejMw41FH3eqXeA4Q1k19Eu0JCDbpP4ZW88P2OG1MV07VV4zWce4r0wmqJq9jD-BWI4V2M04BhTyeYx92N-iuO-dmkT_PiltFd3NU-ocO7DsDDl1vGUXFNnwh2FmmwZii2mkKosJzrbLZv0SNmgWa1OmUeg2Y-IGLwAHCmLY8oPCo4c8jDwOGI3GRu6XCg6w2Y0t03M8S9aoGRjhwES9_J86usOQ94gs5lDZ62gDMmxK23bcRhCsXzXcoCXHqq6BPjPajVLIZVN05JCEynOX-ZUnWp1IWOSWOOCNu6yvt0WZ54BqychZ1TPfFhVwCdmWFymr_C1RQ1zNxl5tE1ltO9sAFnPxyEPfbUUdqTuJxdpJxiozuiZ4thnmaCPjS8_TStxNavWVsMrdMcfZql9x3NJl2w7x8b98lnIH8aYaS1A890Gn3Z01sjrSuo0HBy01BbbUmavoA874cXtmMCddFo8q0eVtgBhg-8Er8fORvOgDqMKPKzRnyATkA9WfzIzkt46m40~2?timestamp=1790119398243: формат изображения не распознан по сигнатуре"
+    }
+   },
+   "cur_mb": 821.8,
+   "peak_mb": 821.8,
+   "cpu_s": 8.78,
+   "proc_peak_mb_total": 822.4,
+   "proc_cpu_s_total": 10.8,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "DEGRADED"
+  },
+  {
+   "slug": "hn",
+   "url": "https://news.ycombinator.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 1.82,
+   "ready_s": 8.15,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "0b25ff20a61dcb8071c27888d2529181",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [],
+   "stderr_error_sigs": {},
+   "cur_mb": 705.1,
+   "peak_mb": 705.1,
+   "cpu_s": 8.88,
+   "proc_peak_mb_total": 714.9,
+   "proc_cpu_s_total": 9.42,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "OK"
+  },
+  {
+   "slug": "w3",
+   "url": "https://www.w3.org/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.64,
+   "error": "tools/call: {'code': -32603, 'message': 'Wait error: navigation failed: network error: HTTP 403'}",
+   "net_failures": [],
+   "http_status": 403,
+   "network_idle": false,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "ba789b379a5f9bf9b4f2a6a3a5b7673a",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "stderr_errors": [
+    "Ошибка загрузки https://www.w3.org/: network error: HTTP 403"
+   ],
+   "stderr_error_sigs": {
+    "ошибка загрузки https://www.wN.org/: network error: http N": {
+     "count": 1,
+     "sample": "Ошибка загрузки https://www.w3.org/: network error: HTTP 403"
+    }
+   },
+   "cur_mb": 464.8,
+   "peak_mb": 495.2,
+   "cpu_s": 0.84,
+   "proc_peak_mb_total": 502.7,
+   "proc_cpu_s_total": 1.2,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "SITE_REFUSED"
+  },
+  {
+   "slug": "rust-lang",
+   "url": "https://www.rust-lang.org/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 1.62,
+   "ready_s": 4.49,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "7faedd55565d5755fa072b2885439878",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "net_failures": [],
+   "http_status": 301,
+   "stderr_errors": [],
+   "stderr_error_sigs": {},
+   "cur_mb": 717.7,
+   "peak_mb": 717.7,
+   "cpu_s": 8.06,
+   "proc_peak_mb_total": 732.4,
+   "proc_cpu_s_total": 8.41,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "OK"
+  },
+  {
+   "slug": "lenta",
+   "url": "https://lenta.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 0.63,
+   "ready_s": 18.76,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "5f9bf15e2119371e4991cebfde566b2c",
+   "console_total": 5,
+   "console_errors": [
+    "Uncaught TypeError: Cannot read properties of undefined (reading 'branding')\n    at 5119 (<anonymous>:2:281600)\n    at n (<anonymous>:2:402778)\n    at 9810 (<anonymous>:2:355488)\n    at n (<anonymous>:2:402778)\n    at <anonymous>:2:406721\n    at n.O (<anonymous>:2:403160)\n    at <anonymous>:2:406734\n    at <anonymous>:2:406740",
+    "Uncaught TypeError: Cannot read properties of undefined (reading 'length')\n    at <anonymous>:4:40\n    at <anonymous>:6:3",
+    "Uncaught TypeError: e.children is not iterable\n    at p (<anonymous>:2:400483)\n    at <anonymous>:2:462569\n    at N.mount (<anonymous>:2:462581)\n    at N.init (<anonymous>:2:463173)\n    at new N (<anonymous>:2:458018)\n    at <anonymous>:1:10408\n    at Array.forEach (<anonymous>)\n    at module (<anonymous>:1:10388)\n    at o (<anonymous>:2:261308)\n    at Array.forEach (<anonymous>)\n    at Document.<anonymous> (<anonymous>:2:261221)\n    at _lumen_invoke_at (eval at <anonymous> (unknown source), <anonymous>:1262:27)\n    at _lumen_propagate (eval at <anonymous> (unknown source), <anonymous>:1290:36)\n    at Document.dispatchEvent (eval at <anonymous> (unknown source), <anonymous>:11558:16)\n    at _lumen_apply_ready_state (eval at <anonymous> (unknown source), <anonymous>:24291:18)\n    at <anonymous>:1:1",
+    "script load failed: https://www.tns-counter.ru/tcounter.js: TypeError: fetch: network error for https://www.tns-counter.ru/tcounter.js",
+    "script load failed: https://top-fwz1.mail.ru/js/code.js: TypeError: fetch: network error for https://top-fwz1.mail.ru/js/code.js"
+   ],
+   "console_network_errors": [],
+   "console_error_sigs": {
+    "uncaught typeerror: cannot read properties of undefined (reading 'branding') at N (<anonymous>:N:N) at n (<anonymous>:N:N) at N (<anonymous>:N:N) at n (<anonymous>:N:N) at <anonymous>:N:N at n.o (<anonymous>:N:N) at <anonymous>:N:N at <anonymous>:N:N": {
+     "count": 1,
+     "sample": "Uncaught TypeError: Cannot read properties of undefined (reading 'branding')\n    at 5119 (<anonymous>:2:281600)\n    at n (<anonymous>:2:402778)\n    at 9810 (<anonymous>:2:355488)\n    at n (<anonymous>:2:402778)\n    at <anonymous>:2:406721\n    at n.O (<anonymous>:2:403160)\n    at <anonymous>:2:406734\n    at <anonymous>:2:406740"
+    },
+    "uncaught typeerror: cannot read properties of undefined (reading 'length') at <anonymous>:N:N at <anonymous>:N:N": {
+     "count": 1,
+     "sample": "Uncaught TypeError: Cannot read properties of undefined (reading 'length')\n    at <anonymous>:4:40\n    at <anonymous>:6:3"
+    },
+    "uncaught typeerror: e.children is not iterable at p (<anonymous>:N:N) at <anonymous>:N:N at n.mount (<anonymous>:N:N) at n.init (<anonymous>:N:N) at new n (<anonymous>:N:N) at <anonymous>:N:N at array.foreach (<anonymous>) at module (<anonymous>:N:N) at o (<anonymous>:N:N) at array.foreach (<anonymous>) at document.<anonymous> (<anonymous>:N:N) at _lumen_invoke_at (eval at <anonymous> (unknown source), <anonymous>:N:N) at _lumen_propagate (eval at <anonymous> (unknown source), <anonymous>:N:N) at document.dispatchevent (eval at <anonymous> (unknown source), <anonymous>:N:N) at _lumen_apply_ready_state (eval at <anonymous> (unknown source), <anonymous>:N:N) at <anonymous>:N:N": {
+     "count": 1,
+     "sample": "Uncaught TypeError: e.children is not iterable\n    at p (<anonymous>:2:400483)\n    at <anonymous>:2:462569\n    at N.mount (<anonymous>:2:462581)\n    at N.init (<anonymous>:2:463173)\n    at new N (<anonymous>:2:458018)\n    at <anonymous>:1:10408\n    at Array.forEach (<anonymous>)\n    at module (<anonymous>:1:10388)\n    at o (<anonymous>:2:261308)\n    at Array.forEach (<anonymous>)\n    at Document.<anonymous> (<anonymous>:2:261221)\n    at _lumen_invoke_at (eval at <anonymous> (unknown source), <anonymous>:1262:27)\n    at _lumen_propagate (eval at <anonymous> (unknown source), <anonymous>:1290:36)\n    at Document.dispatchEvent (eval at <anonymous> (unknown source), <anonymous>:11558:16)\n    at _lumen_apply_ready_state (eval at <anonymous> (unknown source), <anonymous>:24291:18)\n    at <anonymous>:1:1"
+    },
+    "script load failed: https://www.tns-counter.ru/tcounter.js: typeerror: fetch: network error for https://www.tns-counter.ru/tcounter.js": {
+     "count": 1,
+     "sample": "script load failed: https://www.tns-counter.ru/tcounter.js: TypeError: fetch: network error for https://www.tns-counter.ru/tcounter.js"
+    },
+    "script load failed: https://top-fwzN.mail.ru/js/code.js: typeerror: fetch: network error for https://top-fwzN.mail.ru/js/code.js": {
+     "count": 1,
+     "sample": "script load failed: https://top-fwz1.mail.ru/js/code.js: TypeError: fetch: network error for https://top-fwz1.mail.ru/js/code.js"
+    }
+   },
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [
+    "Пропуск скрипта https://ssp.rambler.ru/capirs_async.js: network error: blocked: easylist",
+    "Пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist",
+    "fetch_with_body error: network error: blocked: easylist",
+    "[JS error] Uncaught TypeError: Cannot read properties of undefined (reading 'branding')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'branding')",
+    "[JS error] Uncaught TypeError: Cannot read properties of undefined (reading 'length')",
+    "script error: JS runtime error: Cannot read properties of undefined (reading 'length')",
+    "[JS error] Uncaught TypeError: e.children is not iterable",
+    "Пропуск картинки //mc.yandex.ru/watch/27714477: network error: blocked: easylist",
+    "Пропуск картинки //counter.rambler.ru/top100.cnt?pid=80674: network error: blocked: easylist",
+    "Пропуск картинки //www.tns-counter.ru/V13a****rambler_ru/ru/UTF-8/tmsec=lenta_main/: network error: blocked: easylist",
+    "Пропуск картинки https://top-fwz1.mail.ru/counter?id=3311946;js=na: network error: blocked: easylist",
+    "fetch error: network error: blocked: easylist",
+    "[JS error] script load failed: https://www.tns-counter.ru/tcounter.js: TypeError: fetch: network error for https://www.tns-counter.ru/tcounter.js",
+    "[JS error] script load failed: https://top-fwz1.mail.ru/js/code.js: TypeError: fetch: network error for https://top-fwz1.mail.ru/js/code.js"
+   ],
+   "stderr_error_sigs": {
+    "пропуск скрипта https://ssp.rambler.ru/capirs_async.js: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск скрипта https://ssp.rambler.ru/capirs_async.js: network error: blocked: easylist"
+    },
+    "пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist"
+    },
+    "fetch_with_body error: network error: blocked: easylist": {
+     "count": 4,
+     "sample": "fetch_with_body error: network error: blocked: easylist"
+    },
+    "[js error] uncaught typeerror: cannot read properties of undefined (reading 'branding')": {
+     "count": 1,
+     "sample": "[JS error] Uncaught TypeError: Cannot read properties of undefined (reading 'branding')"
+    },
+    "script error: js runtime error: cannot read properties of undefined (reading 'branding')": {
+     "count": 1,
+     "sample": "script error: JS runtime error: Cannot read properties of undefined (reading 'branding')"
+    },
+    "[js error] uncaught typeerror: cannot read properties of undefined (reading 'length')": {
+     "count": 1,
+     "sample": "[JS error] Uncaught TypeError: Cannot read properties of undefined (reading 'length')"
+    },
+    "script error: js runtime error: cannot read properties of undefined (reading 'length')": {
+     "count": 1,
+     "sample": "script error: JS runtime error: Cannot read properties of undefined (reading 'length')"
+    },
+    "[js error] uncaught typeerror: e.children is not iterable": {
+     "count": 1,
+     "sample": "[JS error] Uncaught TypeError: e.children is not iterable"
+    },
+    "пропуск картинки //mc.yandex.ru/watch/N: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск картинки //mc.yandex.ru/watch/27714477: network error: blocked: easylist"
+    },
+    "пропуск картинки //counter.rambler.ru/topN.cnt?pid=N: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск картинки //counter.rambler.ru/top100.cnt?pid=80674: network error: blocked: easylist"
+    },
+    "пропуск картинки //www.tns-counter.ru/vNa****rambler_ru/ru/utf-N/tmsec=lenta_main/: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск картинки //www.tns-counter.ru/V13a****rambler_ru/ru/UTF-8/tmsec=lenta_main/: network error: blocked: easylist"
+    },
+    "пропуск картинки https://top-fwzN.mail.ru/counter?id=N;js=na: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск картинки https://top-fwz1.mail.ru/counter?id=3311946;js=na: network error: blocked: easylist"
+    },
+    "fetch error: network error: blocked: easylist": {
+     "count": 2,
+     "sample": "fetch error: network error: blocked: easylist"
+    },
+    "[js error] script load failed: https://www.tns-counter.ru/tcounter.js: typeerror: fetch: network error for https://www.tns-counter.ru/tcounter.js": {
+     "count": 1,
+     "sample": "[JS error] script load failed: https://www.tns-counter.ru/tcounter.js: TypeError: fetch: network error for https://www.tns-counter.ru/tcounter.js"
+    },
+    "[js error] script load failed: https://top-fwzN.mail.ru/js/code.js: typeerror: fetch: network error for https://top-fwzN.mail.ru/js/code.js": {
+     "count": 1,
+     "sample": "[JS error] script load failed: https://top-fwz1.mail.ru/js/code.js: TypeError: fetch: network error for https://top-fwz1.mail.ru/js/code.js"
+    }
+   },
+   "cur_mb": 899.8,
+   "peak_mb": 963.5,
+   "cpu_s": 141.09,
+   "hung_total_s": 142.0,
+   "hung_max_streak_s": 67.0,
+   "proc_peak_mb_total": 971.8,
+   "proc_cpu_s_total": 141.73,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "DEGRADED"
+  },
+  {
+   "slug": "github",
+   "url": "https://github.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 2.9,
+   "ready_s": 147.62,
+   "network_idle": false,
+   "error": "tools/call: {'code': -32603, 'message': 'Scroll error: automation command timed out'}",
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [
+    "[JS warn] PerformanceObserver: unsupported entryType event",
+    "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'classList')"
+   ],
+   "stderr_error_sigs": {
+    "[js warn] performanceobserver: unsupported entrytype event": {
+     "count": 1,
+     "sample": "[JS warn] PerformanceObserver: unsupported entryType event"
+    },
+    "[unhandled-rejection] typeerror: cannot read properties of undefined (reading 'classlist')": {
+     "count": 1,
+     "sample": "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'classList')"
+    }
+   },
+   "cur_mb": 4341.7,
+   "peak_mb": 4347.9,
+   "cpu_s": 291.14,
+   "hung_total_s": 250.0,
+   "hung_max_streak_s": 98.0,
+   "proc_peak_mb_total": 4347.9,
+   "proc_cpu_s_total": 291.77,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "DEGRADED",
+   "no_png_reason": "tools/call: {'code': -32603, 'message': 'Scroll error: automation command timed out'}"
+  },
+  {
+   "slug": "stackoverflow",
+   "url": "https://stackoverflow.com/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 10.1,
+   "error": "tools/call: {'code': -32603, 'message': 'Wait error: navigation failed: network error: HTTP 403'}",
+   "net_failures": [],
+   "http_status": 302,
+   "network_idle": false,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "ba789b379a5f9bf9b4f2a6a3a5b7673a",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "stderr_errors": [
+    "Ошибка загрузки https://stackoverflow.com/: network error: HTTP 403"
+   ],
+   "stderr_error_sigs": {
+    "ошибка загрузки https://stackoverflow.com/: network error: http N": {
+     "count": 1,
+     "sample": "Ошибка загрузки https://stackoverflow.com/: network error: HTTP 403"
+    }
+   },
+   "cur_mb": 485.0,
+   "peak_mb": 523.2,
+   "cpu_s": 2.65,
+   "hung_total_s": 7.5,
+   "hung_max_streak_s": 7.5,
+   "proc_peak_mb_total": 530.6,
+   "proc_cpu_s_total": 3.06,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": true,
+   "status": "TIMEOUT"
+  },
+  {
+   "slug": "crates",
+   "url": "https://crates.io/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 3.51,
+   "ready_s": 20.11,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "ba789b379a5f9bf9b4f2a6a3a5b7673a",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [
+    "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'get')"
+   ],
+   "stderr_error_sigs": {
+    "[unhandled-rejection] typeerror: cannot read properties of undefined (reading 'get')": {
+     "count": 1,
+     "sample": "[unhandled-rejection] TypeError: Cannot read properties of undefined (reading 'get')"
+    }
+   },
+   "cur_mb": 520.8,
+   "peak_mb": 521.4,
+   "cpu_s": 4.01,
+   "hung_total_s": 8.5,
+   "hung_max_streak_s": 7.5,
+   "proc_peak_mb_total": 582.5,
+   "proc_cpu_s_total": 4.38,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": true,
+   "status": "BROKEN_RENDER"
+  },
+  {
+   "slug": "docs-rs",
+   "url": "https://docs.rs/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 2.46,
+   "ready_s": 4.4,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "4b19b61d0c00b5776e2cd29ced6dca04",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "net_failures": [],
+   "http_status": 200,
+   "stderr_errors": [],
+   "stderr_error_sigs": {},
+   "cur_mb": 695.0,
+   "peak_mb": 695.0,
+   "cpu_s": 11.73,
+   "proc_peak_mb_total": 707.1,
+   "proc_cpu_s_total": 13.12,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "OK"
+  },
+  {
+   "slug": "ria",
+   "url": "https://ria.ru/",
+   "restarted": true,
+   "own_tab": true,
+   "nav_ack_s": 1.11,
+   "error": "tools/call: {'code': -32603, 'message': 'Wait error: automation command timed out'}",
+   "status": "HUNG",
+   "stderr_errors": []
+  },
+  {
+   "slug": "habr",
+   "url": "https://habr.com/ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 2.39,
+   "ready_s": 71.43,
+   "network_idle": false,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "eb0b266ee8c8daee8fbb0debc7e504a2",
+   "console_total": 3,
+   "console_errors": [
+    "link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2",
+    "link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2",
+    "script load failed: https://mc.yandex.ru/metrika/tag.js: TypeError: fetch: network error for https://mc.yandex.ru/metrika/tag.js"
+   ],
+   "console_network_errors": [],
+   "console_error_sigs": {
+    "link hint fetch failed: file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-demibold.woffN: typeerror: fetch: network error for file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-demibold.woffN": {
+     "count": 1,
+     "sample": "link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2"
+    },
+    "link hint fetch failed: file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-expanded-bold.woffN: typeerror: fetch: network error for file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-expanded-bold.woffN": {
+     "count": 1,
+     "sample": "link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2"
+    },
+    "script load failed: https://mc.yandex.ru/metrika/tag.js: typeerror: fetch: network error for https://mc.yandex.ru/metrika/tag.js": {
+     "count": 1,
+     "sample": "script load failed: https://mc.yandex.ru/metrika/tag.js: TypeError: fetch: network error for https://mc.yandex.ru/metrika/tag.js"
+    }
+   },
+   "net_failures": [],
+   "http_status": 302,
+   "stderr_errors": [
+    "⤷ preload js [medium] https://assets.habr.com/habr-web/release_2.350.0/client/js/errorNhqiaJux.js",
+    "Пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist",
+    "Пропуск скрипта https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=c427193e-c45c-4b31-b9de-0d5bc41115fd: network error: blocked: easylist",
+    "Пропуск скрипта https://rap.skcrtxr.com/pub/pg/e40a4600-273c-4ae8-a7fd-74ad2f469a15/run-rap.js: network error: blocked: easylist",
+    "→ GET https://assets.habr.com/habr-web/release_2.350.0/client/js/errorNhqiaJux.js",
+    "← 200 https://assets.habr.com/habr-web/release_2.350.0/client/js/errorNhqiaJux.js",
+    "fetch_with_body error: network error: blocked: easylist",
+    "Пропуск картинки https://habr.com/mt/e?idsite=7&rec=1: network error: unsupported Content-Encoding 'none' (no decoder registered)",
+    "fetch error: network error: blocked: easylist",
+    "fetch error: network error: file: not a local path: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2",
+    "fetch error: network error: file: not a local path: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2",
+    "повтор после сорванного TLS-рукопожатия: https://assets.habr.com/habr-web/release_2.350.0/client/js/objectNH2PlZIw.js (network error: TLS handshake: unexpected end of file)",
+    "[JS error] link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2",
+    "[JS error] link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2",
+    "[JS error] script load failed: https://mc.yandex.ru/metrika/tag.js: TypeError: fetch: network error for https://mc.yandex.ru/metrika/tag.js"
+   ],
+   "stderr_error_sigs": {
+    "⤷ preload js [medium] https://assets.habr.com/habr-web/release_N.N/client/js/errornhqiajux.js": {
+     "count": 1,
+     "sample": "⤷ preload js [medium] https://assets.habr.com/habr-web/release_2.350.0/client/js/errorNhqiaJux.js"
+    },
+    "пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск скрипта https://yandex.ru/ads/system/context.js: network error: blocked: easylist"
+    },
+    "пропуск скрипта https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=cNe-cNc-NbN-bNde-NdNbcNfd: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск скрипта https://cdn.skcrtxr.com/roxot-wrapper/js/roxot-manager.js?pid=c427193e-c45c-4b31-b9de-0d5bc41115fd: network error: blocked: easylist"
+    },
+    "пропуск скрипта https://rap.skcrtxr.com/pub/pg/eNaN-Nc-NaeN-aNfd-NadNfNaN/run-rap.js: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "Пропуск скрипта https://rap.skcrtxr.com/pub/pg/e40a4600-273c-4ae8-a7fd-74ad2f469a15/run-rap.js: network error: blocked: easylist"
+    },
+    "→ get https://assets.habr.com/habr-web/release_N.N/client/js/errornhqiajux.js": {
+     "count": 2,
+     "sample": "→ GET https://assets.habr.com/habr-web/release_2.350.0/client/js/errorNhqiaJux.js"
+    },
+    "← N https://assets.habr.com/habr-web/release_N.N/client/js/errornhqiajux.js": {
+     "count": 2,
+     "sample": "← 200 https://assets.habr.com/habr-web/release_2.350.0/client/js/errorNhqiaJux.js"
+    },
+    "fetch_with_body error: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "fetch_with_body error: network error: blocked: easylist"
+    },
+    "пропуск картинки https://habr.com/mt/e?idsite=N&rec=N: network error: unsupported content-encoding 'none' (no decoder registered)": {
+     "count": 1,
+     "sample": "Пропуск картинки https://habr.com/mt/e?idsite=7&rec=1: network error: unsupported Content-Encoding 'none' (no decoder registered)"
+    },
+    "fetch error: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "fetch error: network error: blocked: easylist"
+    },
+    "fetch error: network error: file: not a local path: file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-demibold.woffN": {
+     "count": 1,
+     "sample": "fetch error: network error: file: not a local path: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2"
+    },
+    "fetch error: network error: file: not a local path: file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-expanded-bold.woffN": {
+     "count": 1,
+     "sample": "fetch error: network error: file: not a local path: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2"
+    },
+    "повтор после сорванного tls-рукопожатия: https://assets.habr.com/habr-web/release_N.N/client/js/objectnhNplziw.js (network error: tls handshake: unexpected end of file)": {
+     "count": 1,
+     "sample": "повтор после сорванного TLS-рукопожатия: https://assets.habr.com/habr-web/release_2.350.0/client/js/objectNH2PlZIw.js (network error: TLS handshake: unexpected end of file)"
+    },
+    "[js error] link hint fetch failed: file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-demibold.woffN: typeerror: fetch: network error for file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-demibold.woffN": {
+     "count": 1,
+     "sample": "[JS error] link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-demibold.woff2"
+    },
+    "[js error] link hint fetch failed: file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-expanded-bold.woffN: typeerror: fetch: network error for file:///home/web/sites/habr-web/releases/N-N-N-N-N/dist/fonts/vk-sans-display-expanded-bold.woffN": {
+     "count": 1,
+     "sample": "[JS error] link hint fetch failed: file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2: TypeError: fetch: network error for file:///home/web/sites/habr-web/releases/2026-09-21-10-02/dist/fonts/vk-sans-display-expanded-bold.woff2"
+    },
+    "[js error] script load failed: https://mc.yandex.ru/metrika/tag.js: typeerror: fetch: network error for https://mc.yandex.ru/metrika/tag.js": {
+     "count": 1,
+     "sample": "[JS error] script load failed: https://mc.yandex.ru/metrika/tag.js: TypeError: fetch: network error for https://mc.yandex.ru/metrika/tag.js"
+    }
+   },
+   "cur_mb": 1300.1,
+   "peak_mb": 1312.0,
+   "cpu_s": 48.58,
+   "hung_total_s": 63.0,
+   "hung_max_streak_s": 59.0,
+   "proc_peak_mb_total": 1314.8,
+   "proc_cpu_s_total": 49.27,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "DEGRADED"
+  },
+  {
+   "slug": "mdn",
+   "url": "https://developer.mozilla.org/en-US/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 5.76,
+   "ready_s": 48.57,
+   "network_idle": true,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "a4b1aee383f4f6040fd942869033beb5",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "net_failures": [
+    "✗ https://developer.mozilla.org/pong/get (easylist)"
+   ],
+   "http_status": 200,
+   "stderr_errors": [
+    "повтор после сорванного TLS-рукопожатия: https://developer.mozilla.org/static/client/1996.e833c07cb4ee4327.js (network error: TLS handshake: unexpected end of file)",
+    "fetch_with_body error: network error: blocked: easylist",
+    "[unhandled-rejection] TypeError: r.insertBefore is not a function",
+    "[unhandled-rejection] TypeError: (this._$AG , this.getAttributeNames) is not a function or its return value is not iterable"
+   ],
+   "stderr_error_sigs": {
+    "повтор после сорванного tls-рукопожатия: https://developer.mozilla.org/static/client/N.eNcNcbNeeN.js (network error: tls handshake: unexpected end of file)": {
+     "count": 1,
+     "sample": "повтор после сорванного TLS-рукопожатия: https://developer.mozilla.org/static/client/1996.e833c07cb4ee4327.js (network error: TLS handshake: unexpected end of file)"
+    },
+    "fetch_with_body error: network error: blocked: easylist": {
+     "count": 1,
+     "sample": "fetch_with_body error: network error: blocked: easylist"
+    },
+    "[unhandled-rejection] typeerror: r.insertbefore is not a function": {
+     "count": 11,
+     "sample": "[unhandled-rejection] TypeError: r.insertBefore is not a function"
+    },
+    "[unhandled-rejection] typeerror: (this._$ag , this.getattributenames) is not a function or its return value is not iterable": {
+     "count": 13,
+     "sample": "[unhandled-rejection] TypeError: (this._$AG , this.getAttributeNames) is not a function or its return value is not iterable"
+    }
+   },
+   "cur_mb": 635.0,
+   "peak_mb": 635.1,
+   "cpu_s": 8.38,
+   "hung_total_s": 9.0,
+   "hung_max_streak_s": 3.5,
+   "proc_peak_mb_total": 641.9,
+   "proc_cpu_s_total": 8.75,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": false,
+   "status": "OK"
+  },
+  {
+   "slug": "rbc",
+   "url": "https://www.rbc.ru/",
+   "restarted": false,
+   "own_tab": true,
+   "nav_ack_s": 8.35,
+   "error": "tools/call: {'code': -32603, 'message': 'Wait error: navigation failed: network error: resolve www.rbc.ru:443: network error: resolve www.rbc.ru: Этот хост неизвестен. (os error 11001)'}",
+   "net_failures": [
+    "✗ https://www.rbc.ru/ (dns: resolve www.rbc.ru:443: network error: resolve www.rbc.ru: Этот хост неизвестен. (os error 11001))"
+   ],
+   "http_status": null,
+   "network_idle": false,
+   "png_size": [
+    1920,
+    945
+   ],
+   "png_hash": "ba789b379a5f9bf9b4f2a6a3a5b7673a",
+   "console_total": 0,
+   "console_errors": [],
+   "console_network_errors": [],
+   "console_error_sigs": {},
+   "stderr_errors": [
+    "✗ https://www.rbc.ru/ (dns: resolve www.rbc.ru:443: network error: resolve www.rbc.ru: Этот хост неизвестен. (os error 11001))",
+    "Ошибка загрузки https://www.rbc.ru/: network error: resolve www.rbc.ru:443: network error: resolve www.rbc.ru: Этот хост неизвестен. (os error 11001)"
+   ],
+   "stderr_error_sigs": {
+    "✗ https://www.rbc.ru/ (dns: resolve www.rbc.ru:N: network error: resolve www.rbc.ru: этот хост неизвестен. (os error N))": {
+     "count": 1,
+     "sample": "✗ https://www.rbc.ru/ (dns: resolve www.rbc.ru:443: network error: resolve www.rbc.ru: Этот хост неизвестен. (os error 11001))"
+    },
+    "ошибка загрузки https://www.rbc.ru/: network error: resolve www.rbc.ru:N: network error: resolve www.rbc.ru: этот хост неизвестен. (os error N)": {
+     "count": 1,
+     "sample": "Ошибка загрузки https://www.rbc.ru/: network error: resolve www.rbc.ru:443: network error: resolve www.rbc.ru: Этот хост неизвестен. (os error 11001)"
+    }
+   },
+   "cur_mb": 387.7,
+   "peak_mb": 414.2,
+   "cpu_s": 2.43,
+   "hung_total_s": 5.0,
+   "hung_max_streak_s": 5.0,
+   "proc_peak_mb_total": 414.8,
+   "proc_cpu_s_total": 2.53,
+   "broken_render_signal": false,
+   "suspected_duplicate_frame": true,
+   "status": "NET_FAIL"
+  }
+ ]
+}
