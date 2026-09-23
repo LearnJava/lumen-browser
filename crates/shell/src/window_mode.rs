@@ -351,6 +351,7 @@ pub(crate) fn run_window_mode(
         date_picker_year: 0,
         date_picker_month: 0,
         select_dropdown_node: None,
+        modal_dialog_cache: (0, Vec::new()),
         ls_storage: HashMap::new(),
         ss_storage: HashMap::new(),
         idb_dir: lumen_idb_dir(),

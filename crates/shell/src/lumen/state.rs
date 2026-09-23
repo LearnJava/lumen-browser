@@ -723,6 +723,13 @@ pub(crate) struct Lumen {
     /// NodeId of the `<select>` whose dropdown is currently open.
     /// The dropdown overlay is viewport-locked; clicking an option closes it.
     pub(crate) select_dropdown_node: Option<NodeId>,
+    /// BUG-683 срез 7: modal `<dialog>` NodeIds seen by the last frame that
+    /// could read the document, keyed by that document's `Arc` address (a
+    /// navigation/tab switch changes the key, so stale ids never leak into
+    /// another document). The redraw path only `try_lock`s the document —
+    /// the engine thread holds it for a whole off-thread relayout, seconds
+    /// on github.com — and falls back to this list while it is contended.
+    pub(crate) modal_dialog_cache: (usize, Vec<NodeId>),
     /// Persistent `localStorage` partitions keyed by origin (scheme+host+port).
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
