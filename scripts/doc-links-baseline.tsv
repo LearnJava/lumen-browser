@@ -83,6 +83,7 @@ ROADMAP.md	bugs/BUG-605-OPEN.md	stale-status-suffix	bugs/BUG-605-FIXED.md
 ROADMAP.md	bugs/BUG-606-OPEN.md	stale-status-suffix	bugs/BUG-606-FIXED.md
 ROADMAP.md	bugs/BUG-616-OPEN.md	stale-status-suffix	bugs/BUG-616-FIXED.md
 ROADMAP.md	bugs/BUG-617-OPEN.md	stale-status-suffix	bugs/BUG-617-FIXED.md
+ROADMAP.md	bugs/BUG-638-OPEN.md	stale-status-suffix	bugs/BUG-638-FIXED.md
 ROADMAP.md	bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 ROADMAP.md	bugs/BUG-699-OPEN.md	stale-status-suffix	bugs/BUG-699-FIXED.md
 ROADMAP.md	bugs/BUG-712-OPEN.md	stale-status-suffix	bugs/BUG-712-FIXED.md
@@ -398,6 +399,7 @@ docs/wpt-vendor-notes/intersection-observer.md	../../bugs/BUG-482-OPEN.md	stale-
 docs/wpt-vendor-notes/layout-instability.md	../../bugs/BUG-525-OPEN.md	stale-status-suffix	bugs/BUG-525-FIXED.md
 docs/wpt-vendor-notes/long-animation-frame.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 docs/wpt-vendor-notes/long-animation-frame.md	../../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
+docs/wpt-vendor-notes/mimesniff.md	../../bugs/BUG-638-OPEN.md	stale-status-suffix	bugs/BUG-638-FIXED.md
 docs/wpt-vendor-notes/permissions-policy.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
 docs/wpt-vendor-notes/permissions-policy.md	../../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 docs/wpt-vendor-notes/pointerlock.md	../../bugs/BUG-596-OPEN.md	stale-status-suffix	bugs/BUG-596-FIXED.md
