@@ -206,6 +206,15 @@ fn flush_promise_rejections(scope: &mut v8::PinScope) {
                 "[unhandled-rejection] {}",
                 reason.to_rust_string_lossy(tc)
             );
+            if let Ok(obj) = v8::Local::<v8::Object>::try_from(reason)
+                && let Some(key) = v8::String::new(tc, "stack")
+                && let Some(stack) = obj.get(tc, key.into())
+            {
+                eprintln!(
+                    "[unhandled-rejection stack] {}",
+                    stack.to_rust_string_lossy(tc)
+                );
+            }
         }
         NOTIFIED_UNHANDLED.with(|n| n.borrow_mut().push((hash, promise_global)));
     }
