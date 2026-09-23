@@ -275,6 +275,8 @@ impl V8JsRuntime {
             let stylesheet_nodes = Arc::clone(&self.stylesheet_nodes);
             let constructed_stylesheets = Arc::clone(&self.constructed_stylesheets);
             let adopted_stylesheets = Arc::clone(&self.adopted_stylesheets);
+            let pseudo_styles_needed = Arc::clone(&self.pseudo_styles_needed);
+            let custom_props_needed = Arc::clone(&self.custom_props_needed);
             // CSSOM-4/BUG-493: bundled handles a same-tick accessor native
             // needs to force a synchronous style+layout flush before reading
             // `computed_styles`/`layout_rects`/`custom_properties`.
@@ -295,6 +297,8 @@ impl V8JsRuntime {
                 stylesheet_nodes: Arc::clone(&stylesheet_nodes),
                 cssom_deltas: Arc::clone(&self.cssom_deltas),
                 cssom_dirty: Arc::clone(&self.cssom_dirty),
+                pseudo_styles_needed: Arc::clone(&self.pseudo_styles_needed),
+                custom_props_needed: Arc::clone(&self.custom_props_needed),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
@@ -485,6 +489,8 @@ impl V8JsRuntime {
                 Arc::clone(&pseudo_computed_styles),
                 Arc::clone(&custom_properties),
                 flush_handles.clone(),
+                Arc::clone(&pseudo_styles_needed),
+                Arc::clone(&custom_props_needed),
             )?;
 
             install::install_stylesheets(
@@ -551,6 +557,7 @@ impl V8JsRuntime {
                 Arc::clone(&computed_styles),
                 Arc::clone(&custom_properties),
                 flush_handles,
+                Arc::clone(&custom_props_needed),
             )?;
 
             // Inject the page URL + cross-origin-isolation state as JS globals so

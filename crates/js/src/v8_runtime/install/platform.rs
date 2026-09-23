@@ -835,6 +835,7 @@ pub(crate) fn install_pointer_lock(
 
 /// `window.getComputedStyle` and custom-property reads off the cascade snapshot.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn install_computed_styles(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
@@ -843,6 +844,8 @@ pub(crate) fn install_computed_styles(
     pseudo_computed_styles: Arc<Mutex<PseudoComputedStyles>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     flush: FlushHandles,
+    pseudo_styles_needed: Arc<AtomicBool>,
+    custom_props_needed: Arc<AtomicBool>,
 ) -> JsResult<()> {
     // ── Computed styles (window.getComputedStyle) ────────────────────────────────
     // Returns the resolved CSS value for `prop` on node `nid`, or "" if unknown.
@@ -871,7 +874,9 @@ pub(crate) fn install_computed_styles(
     {
         let pcs = Arc::clone(&pseudo_computed_styles);
         let flush = flush.clone();
+        let needed = Arc::clone(&pseudo_styles_needed);
         reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo", move |nid: u32, kind: String, prop: String| -> String {
+            needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
             pcs.lock()
                 .unwrap()
@@ -887,7 +892,9 @@ pub(crate) fn install_computed_styles(
     {
         let pcs = Arc::clone(&pseudo_computed_styles);
         let flush = flush.clone();
+        let needed = Arc::clone(&pseudo_styles_needed);
         reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo_entries", move |nid: u32, kind: String| -> String {
+            needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
             let pairs: Vec<(String, String)> = pcs
                 .lock()
@@ -904,7 +911,9 @@ pub(crate) fn install_computed_styles(
     // own inherited, `Arc`-shared map — see `V8JsRuntime::custom_properties`.
     {
         let cp = Arc::clone(&custom_properties);
+        let needed = Arc::clone(&custom_props_needed);
         reg!(scope, ctx, store, "_lumen_get_custom_property", move |nid: u32, prop: String| -> String {
+            needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
             cp.lock()
                 .unwrap()
@@ -949,6 +958,7 @@ pub(crate) fn install_crypto_and_typed_om(
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     flush: FlushHandles,
+    custom_props_needed: Arc<AtomicBool>,
 ) -> JsResult<()> {
     // ── Web Crypto API ──────────────────────────────────────────────────────
     {
@@ -1246,6 +1256,9 @@ pub(crate) fn install_crypto_and_typed_om(
         let cs = Arc::clone(&computed_styles);
         let cp = Arc::clone(&custom_properties);
         reg!(scope, ctx, store, "_lumen_get_computed_style_entries", move |nid: u32| -> String {
+            // BUG-935 S43: `computedStyleMap()` merges custom properties into
+            // its answer (below), so this counts as a read of that cache too.
+            custom_props_needed.store(true, Ordering::Relaxed);
             // CSSOM-4/BUG-493: same same-tick staleness as `getComputedStyle`
             // itself — `computedStyleMap()` reads the identical snapshot.
             flush.maybe_flush();

@@ -813,6 +813,16 @@ pub(crate) struct Lumen {
     /// trigger an asynchronous relayout after an off-thread rAF turn mutated the
     /// DOM, instead of a synchronous read blocked behind that turn.
     pub(crate) dom_dirty_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// BUG-935 S43: UI-side lock-free clone of the JS runtime's "page has
+    /// read `getComputedStyle(el, pseudoElt)`/`computedStyleMap()`'s
+    /// pseudo-element path" flag. `None` before the first push (or a
+    /// `PersistentJs` impl that doesn't expose it) — every call site treats
+    /// that the same as "needed" (collect unconditionally), matching
+    /// behaviour before this slice. Kept in lockstep by [`Self::set_js_ctx`].
+    pub(crate) pseudo_styles_needed_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// BUG-935 S43: sibling of [`Self::pseudo_styles_needed_flag`] for
+    /// `_lumen_get_custom_property`/`_lumen_get_computed_style_entries`.
+    pub(crate) custom_props_needed_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// ADR-016 M2.3: `true` while a `run_animation_frame` batch dispatched to the
     /// engine thread is still executing. Set by the UI thread before firing the
     /// (fire-and-forget) rAF `task`, cleared by that task on completion. Guards
