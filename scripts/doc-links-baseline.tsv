@@ -245,8 +245,8 @@ bugs/BUG-678-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
 bugs/BUG-678-OPEN.md	BUG-354-OPEN.md	stale-status-suffix	bugs/BUG-354-FIXED.md
 bugs/BUG-678-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-680-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
-bugs/BUG-682-OPEN.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
-bugs/BUG-682-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
+bugs/BUG-682-FIXED.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
+bugs/BUG-682-FIXED.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 bugs/BUG-684-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
 bugs/BUG-686-OPEN.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 bugs/BUG-691-OPEN.md	BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
@@ -271,6 +271,7 @@ bugs/BUG-744-FIXED.md	BUG-743-OPEN.md	stale-status-suffix	bugs/BUG-743-FIXED.md
 bugs/BUG-748-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-752-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-778-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
+bugs/BUG-783-FIXED.md	BUG-789-OPEN.md	stale-status-suffix	bugs/BUG-789-FIXED.md
 bugs/BUG-786-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-786-FIXED.md	BUG-806-OPEN.md	stale-status-suffix	bugs/BUG-806-FIXED.md
 bugs/BUG-787-FIXED.md	BUG-790-OPEN.md	stale-status-suffix	bugs/BUG-790-FIXED.md
@@ -322,6 +323,7 @@ bugs/BUG-994-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-995-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-995-FIXED.md	bugs/BUG-986-FIXED.md	wrong-relative-path	bugs/BUG-986-FIXED.md
 docs/automation.md	../bugs/BUG-1034-OPEN.md	stale-status-suffix	bugs/BUG-1034-FIXED.md
+docs/ci-offload.md	../bugs/BUG-789-OPEN.md	stale-status-suffix	bugs/BUG-789-FIXED.md
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/gpos.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/gsub.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/otlayout.rs	missing	
