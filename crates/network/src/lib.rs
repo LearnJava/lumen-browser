@@ -1545,18 +1545,27 @@ fn is_transient_handshake_error(err: &Error) -> bool {
 /// соединение, и наш write / первый read получил EOF или RST. Такие ошибки
 /// заслуживают однократного retry на свежем соединении.
 ///
+/// Все сайты конвертации `io::Error` в этом крейте используют `Display`
+/// (`format!("read status: {e}")`), не `Debug` — значит, в тексте никогда не
+/// появятся имена `ErrorKind` вроде `ConnectionReset`/`BrokenPipe`, только
+/// текст `strerror`: "Connection reset by peer (os error 104)", "Broken pipe
+/// (os error 32)", "Software caused connection abort (os error 103)". Именно
+/// поэтому проверка сравнивалась по этим кускам текста нижним регистром —
+/// более раннее сравнение с camelCase-именами `ErrorKind` никогда не
+/// матчилось на Unix (BUG-789: на чистом FIN сервер давал EOF, который ловят
+/// явные строки ниже, а на RST/EPIPE — не ловил ничего, отсюда гонка).
+///
 /// На Windows `io::Error::from_raw_os_error` форматируется с локализованным
-/// OS-сообщением вместо Rust `ErrorKind` имени, поэтому "ConnectionReset" /
-/// "ConnectionAborted" не появятся в строке. Проверяем Windows-коды явно:
-/// os error 10053 = WSAECONNABORTED, os error 10054 = WSAECONNRESET.
+/// OS-сообщением вместо английского текста, поэтому дополнительно проверяем
+/// коды явно: os error 10053 = WSAECONNABORTED, os error 10054 = WSAECONNRESET.
 fn is_stale_error(err: &Error) -> bool {
-    let msg = format!("{err:?}");
-    msg.contains("BrokenPipe")
-        || msg.contains("ConnectionReset")
-        || msg.contains("ConnectionAborted")
-        || msg.contains("UnexpectedEof")
-        || msg.contains("EOF before status line")
-        || msg.contains("EOF in headers")
+    let msg = format!("{err:?}").to_ascii_lowercase();
+    msg.contains("broken pipe")
+        || msg.contains("connection reset")
+        || msg.contains("connection abort")
+        || msg.contains("unexpected end of file")
+        || msg.contains("eof before status line")
+        || msg.contains("eof in headers")
         || msg.contains("os error 10053")
         || msg.contains("os error 10054")
 }
@@ -7979,15 +7988,23 @@ mod tests {
     fn is_stale_error_recognises_eof_and_resets() {
         assert!(is_stale_error(&Error::Network("EOF before status line".to_owned())));
         assert!(is_stale_error(&Error::Network("EOF in headers".to_owned())));
+        // Все сайты конвертации используют `Display`, не `Debug` — на Unix это
+        // настоящий текст `strerror`, не camelCase-имя `ErrorKind` (BUG-789:
+        // прежняя версия проверяла "BrokenPipe"/"ConnectionReset" — строки,
+        // которые в `Display`-выводе никогда не появляются).
         assert!(is_stale_error(&Error::Network(
-            "write request: BrokenPipe (os error 32)".to_owned()
+            "write request: Broken pipe (os error 32)".to_owned()
         )));
         assert!(is_stale_error(&Error::Network(
-            "read body: ConnectionReset".to_owned()
+            "read body: Connection reset by peer (os error 104)".to_owned()
+        )));
+        assert!(is_stale_error(&Error::Network(
+            "read status: Software caused connection abort (os error 103)".to_owned()
         )));
         // Windows: WSAECONNABORTED (10053) и WSAECONNRESET (10054) форматируются
-        // с локализованным OS-сообщением — "ConnectionAborted"/"ConnectionReset"
-        // в строке отсутствуют, но код "(os error 10053/10054)" присутствует.
+        // с локализованным OS-сообщением — "connection abort"/"connection reset"
+        // в строке могут отсутствовать (не английский текст), но код
+        // "(os error 10053/10054)" присутствует всегда.
         assert!(is_stale_error(&Error::Network(
             "read status: An established connection was aborted by the software in your host machine. (os error 10053)".to_owned()
         )));

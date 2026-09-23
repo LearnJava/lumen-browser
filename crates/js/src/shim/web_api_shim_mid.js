@@ -4526,6 +4526,30 @@ function _lumen_build_detached_document(proto, contentType) {
         },
         enumerable: true, configurable: true,
     });
+    // Storage Access API (W3C Storage Access API §5). BUG-682: the live
+    // `document` (below) has these four methods but this detached-document
+    // builder never did — `new DOMParser().parseFromString(...)
+    // .requestStorageAccess` was `undefined`. Unlike the live document's Phase
+    // 0 "always granted" stub, a document built here has no browsing context
+    // and so is never fully active (HTML LS 7.??), which per spec means these
+    // reject with InvalidStateError rather than resolve — the WPT tests check
+    // exactly that rejection, so this is not a mirror of the live stub.
+    doc.requestStorageAccess = function() {
+        return Promise.reject(new DOMException(
+            'requestStorageAccess: the document is not fully active', 'InvalidStateError'));
+    };
+    doc.hasStorageAccess = function() {
+        return Promise.reject(new DOMException(
+            'hasStorageAccess: the document is not fully active', 'InvalidStateError'));
+    };
+    doc.requestStorageAccessFor = function(origin) {
+        return Promise.reject(new DOMException(
+            'requestStorageAccessFor: the document is not fully active', 'InvalidStateError'));
+    };
+    doc.hasUnpartitionedCookieAccess = function() {
+        return Promise.reject(new DOMException(
+            'hasUnpartitionedCookieAccess: the document is not fully active', 'InvalidStateError'));
+    };
     return doc;
 }
 

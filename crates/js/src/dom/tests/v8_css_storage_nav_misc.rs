@@ -165,6 +165,78 @@ fn storage_access_has_unpartitioned_cookie_access_exists() {
     assert!(bool_eval(&rt, "typeof document.hasUnpartitionedCookieAccess === 'function'"));
 }
 
+// BUG-682: the four Storage Access API methods lived only on the live
+// `document` literal, so a detached document (`DOMParser.parseFromString`,
+// `DOMImplementation.createDocument`/`createHTMLDocument`) had none of them —
+// `is not a function`. Per spec (and the WPT tests these mirror,
+// hasStorageAccess-insecure.sub.window.js / requestStorageAccess-non-fully-
+// active.sub.https.window.js) a detached document has no browsing context and
+// is never fully active, so the methods must exist AND reject with
+// InvalidStateError rather than resolve.
+#[test]
+fn storage_access_detached_dom_parser_document_has_methods() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "typeof new DOMParser().parseFromString('<html></html>', 'text/html').requestStorageAccess === 'function'"
+    ));
+    assert!(bool_eval(
+        &rt,
+        "typeof new DOMParser().parseFromString('<html></html>', 'text/html').hasStorageAccess === 'function'"
+    ));
+}
+
+#[test]
+fn storage_access_detached_dom_parser_document_request_rejects_invalid_state() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        r#"
+        var rejected = null;
+        new DOMParser().parseFromString('<html></html>', 'text/html')
+            .requestStorageAccess()
+            .then(function() { rejected = false; })
+            .catch(function(e) { rejected = e.name; });
+        "#,
+    )
+    .unwrap();
+    let result = rt.eval("rejected").unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("InvalidStateError".into()));
+}
+
+#[test]
+fn storage_access_detached_dom_parser_document_has_access_rejects_invalid_state() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        r#"
+        var rejected = null;
+        new DOMParser().parseFromString('<html></html>', 'text/html')
+            .hasStorageAccess()
+            .then(function() { rejected = false; })
+            .catch(function(e) { rejected = e.name; });
+        "#,
+    )
+    .unwrap();
+    let result = rt.eval("rejected").unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("InvalidStateError".into()));
+}
+
+#[test]
+fn storage_access_created_document_via_implementation_rejects_invalid_state() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        r#"
+        var rejected = null;
+        document.implementation.createDocument("", null)
+            .hasStorageAccess()
+            .then(function() { rejected = false; })
+            .catch(function(e) { rejected = e.name; });
+        "#,
+    )
+    .unwrap();
+    let result = rt.eval("rejected").unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("InvalidStateError".into()));
+}
+
 // BUG-067/070: WEB_API_SHIM defined `Event` but no global `EventTarget`, so
 // every shim doing `class X extends EventTarget` (WebHID, WebUSB,
 // Bluetooth, WebSerial, WebXR, Navigation API) threw "EventTarget is not defined"

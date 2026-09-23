@@ -355,6 +355,27 @@ VDocument.prototype.getElementById       = function(id) { return _vQuerySelector
 VDocument.prototype.dispatchEvent        = function() { return true; };
 VDocument.prototype.addEventListener     = function() {};
 VDocument.prototype.removeEventListener  = function() {};
+// Storage Access API (W3C Storage Access API §5, BUG-682): a VDocument has no
+// browsing context and is never fully active, so per spec these reject with
+// InvalidStateError rather than resolve — third independent Document literal
+// found missing all four methods (the other two are `_lumen_build_detached_document`
+// and the live global `document`, both fixed alongside this one).
+VDocument.prototype.requestStorageAccess = function() {
+  return Promise.reject(new DOMException(
+    'requestStorageAccess: the document is not fully active', 'InvalidStateError'));
+};
+VDocument.prototype.hasStorageAccess = function() {
+  return Promise.reject(new DOMException(
+    'hasStorageAccess: the document is not fully active', 'InvalidStateError'));
+};
+VDocument.prototype.requestStorageAccessFor = function() {
+  return Promise.reject(new DOMException(
+    'requestStorageAccessFor: the document is not fully active', 'InvalidStateError'));
+};
+VDocument.prototype.hasUnpartitionedCookieAccess = function() {
+  return Promise.reject(new DOMException(
+    'hasUnpartitionedCookieAccess: the document is not fully active', 'InvalidStateError'));
+};
 
 // ── Shared tree-mutation helpers ─────────────────────────────────────────────
 function _vAppendChild(child) {

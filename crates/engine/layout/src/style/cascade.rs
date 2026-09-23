@@ -17,6 +17,7 @@ use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
 use crate::font_palette::resolve_font_palette_overrides;
 use crate::scroll_timeline::ScrollAxis;
+use crate::style::presentational::is_svg_presentational_element;
 use crate::style::{
     apply_align_presentational_hint, apply_background_image_presentational_hint,
     apply_bgcolor_presentational_hint, apply_bordercolor_presentational_hint,
@@ -186,12 +187,48 @@ pub fn compute_style(
     viewport: Size,
     dark_mode: bool,
 ) -> ComputedStyle {
+    compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode).0
+}
+
+/// THREAD-4 срез 2 — [`compute_style`] plus whether the result is safe to
+/// memoise in [`crate::style::share_cache::ShareCache`] across *different*
+/// nodes that share the same structural key (tag + full attribute set +
+/// identical `inherited` allocation).
+///
+/// `shareable` starts `true` and is only ever narrowed to `false`: any
+/// stylesheet feature whose match result can depend on something the
+/// structural key does not capture (this node's *ancestors* or *siblings*,
+/// not just itself) disqualifies the whole call. Concretely: `@scope`
+/// (position-in-tree), any Shadow DOM in the document (`:host`/`::slotted`
+/// scoping is keyed on thread-local host state, not on the key), and any
+/// candidate rule whose selector has a combinator (descendant/child/sibling
+/// — matches against ancestors/siblings the key is blind to) or a
+/// pseudo-class/attribute-selector part (`:nth-child`, `:hover`, `[data-x]`,
+/// …-  structural or dynamic-state dependence the key does not model). Kept
+/// to SVG presentational elements (`is_svg_presentational_element`) for this
+/// slice: the HTML-side presentational-hint/quirks passes below
+/// (`apply_bgcolor_presentational_hint`, table/form/quirks helpers) are not
+/// audited for ancestor independence, whereas `apply_svg_presentational_hints`
+/// is a pure function of the node's own attributes plus `inherited`/`viewport`
+/// (already covered by the key) — see срез 1's profiling (`ROADMAP.md`
+/// THREAD-4): the measured cost is exactly repeated SVG icon markup
+/// (GitHub Octicons), so this scope covers the case that motivated the slice
+/// without auditing the rest of the cascade's ancestor-dependence.
+pub(crate) fn compute_style_shareable(
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> (ComputedStyle, bool) {
     // BUG-341 S10: permanent per-phase instrumentation. Same-named sibling
     // scopes are merged by `lumen_core::profile`, so a `LUMEN_PROFILE_TREE=1`
     // run prints one aggregated line per phase with a `×N` call count instead
     // of one line per node. Costs a cached bool check per phase when disabled.
     let _prof = lumen_core::profile::scope_detail("compute_style");
     note_compute_style();
+    let mut shareable = sheet.scope_rules.is_empty();
     let prof_init = lumen_core::profile::scope_detail("cs_init");
     let mut style = ComputedStyle {
         display: default_display(doc, node),
@@ -609,7 +646,7 @@ pub fn compute_style(
         // применяем initial-value: var(--registered) в наследуемом стиле
         // должен резолвиться через initial-value, если декларации нет.
         apply_property_initial_values(&mut style.custom_props, &registry);
-        return style;
+        return (style, false);
     }
     drop(prof_init);
     let prof_ua = lumen_core::profile::scope_detail("cs_ua_hints");
@@ -788,6 +825,7 @@ pub fn compute_style(
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
+    shareable &= is_svg_presentational_element(node_tag);
 
     ensure_cascade_index(sheet, viewport, dark_mode);
     let cands = with_front_cascade_index(|idx| {
@@ -796,6 +834,7 @@ pub fn compute_style(
 
     for &rule_idx in &cands {
         let rule = &sheet.rules[rule_idx];
+        shareable &= rule.selectors.iter().all(selector_is_share_safe);
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
             if matches_complex(complex, doc, node) {
@@ -834,6 +873,7 @@ pub fn compute_style(
         });
         for rule_idx in layer_cands {
             let rule = &layer_rule.rules[rule_idx];
+            shareable &= rule.selectors.iter().all(selector_is_share_safe);
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -881,6 +921,7 @@ pub fn compute_style(
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
+            shareable &= rule.selectors.iter().all(selector_is_share_safe);
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -918,6 +959,7 @@ pub fn compute_style(
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
+            shareable &= rule.selectors.iter().all(selector_is_share_safe);
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -985,6 +1027,10 @@ pub fn compute_style(
     // live for the rest of this function, so the `&Declaration` references pushed
     // into `matched` outlive the (closure-scoped) thread-local borrow.
     let any_shadow = SHADOW_SHEETS.with(|c| !c.borrow().is_empty());
+    // `:host`/`::slotted` scoping below is keyed on `SHADOW_HOST_SCOPE`
+    // thread-local state, not on anything the structural key captures —
+    // disqualify sharing document-wide rather than reason per-node about it.
+    shareable &= !any_shadow;
     let own_shadow: Option<Stylesheet> = if any_shadow && doc.is_shadow_host(node) {
         SHADOW_SHEETS.with(|c| c.borrow().get(&node).cloned())
     } else {
@@ -1562,5 +1608,26 @@ pub fn compute_style(
     let z = style.effective_zoom;
     apply_zoom_to_lengths(&mut style, z);
 
-    style
+    (style, shareable)
+}
+
+/// THREAD-4 срез 2 — a rule selector this crate's `RuleIndex` bucketing could
+/// hand back as a candidate for two *different* nodes that share the same
+/// structural key, with a match result that depends on nothing the key does
+/// not capture: a single compound (no combinator — no ancestor/sibling
+/// dependence) built only from `Type`/`Class`/`Id`/`Universal` parts (no
+/// pseudo-class — including harmless-looking `:first-child`/`:hover` — and no
+/// attribute selector beyond `class`/`id`, both of which the key already
+/// pins exactly).
+fn selector_is_share_safe(sel: &lumen_css_parser::ComplexSelector) -> bool {
+    sel.tail.is_empty()
+        && sel.head.parts.iter().all(|part| {
+            matches!(
+                part,
+                lumen_css_parser::SimpleSelector::Type(_)
+                    | lumen_css_parser::SimpleSelector::Class(_)
+                    | lumen_css_parser::SimpleSelector::Id(_)
+                    | lumen_css_parser::SimpleSelector::Universal
+            )
+        })
 }

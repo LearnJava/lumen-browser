@@ -55,6 +55,7 @@ mod property_syntax;
 mod pseudo;
 mod quirks;
 mod restyle;
+mod share_cache;
 mod shorthand;
 mod substitute;
 mod syntax_string;
@@ -79,6 +80,9 @@ use apply::apply_declaration;
 pub use cascade::{compute_style, take_compute_style_calls};
 #[cfg(test)]
 pub(in crate::style) use cascade::parse_zoom;
+// THREAD-4 срез 2: intra-pass structural memo for `compute_style` — see
+// `share_cache`'s module doc. Sole consumer is `counters::walk`.
+pub(crate) use share_cache::ShareCache;
 // SPLIT-ST18. Кэш индекса каскада и его BUG-341 диагностика уехали в
 // `style::cascade_index`. Восемь имён ниже — публичная поверхность крейта
 // (`pub mod style` в `lib.rs`; `box_tree.rs`/`counters.rs`/
