@@ -1,9 +1,26 @@
 # BUG-543: Custom element constructors never run — neither on upgrade of a pre-existing element nor on `document.createElement()` of an already-defined tag
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P1)
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/dom.rs` — `_lumen_ce_upgrade_element` at line ~7463, `customElements.define`/`document.createElement` element-construction path)
 **Найден:** WPT-RUN-3 срез 29 (`ROADMAP.md`) — массовый прогон `css/css-shadow` (`part/*.html`)
+
+## Закрытие
+
+Переквалифицирован P3 2026-09-23 в ДОРАБОТКА → [CE-1](../ROADMAP.md) — задача
+закрыта 2026-09-23 (P1), полная сводка реализации (срезы 1-4: конструктор
+`HTMLElement` по `new.target`, апгрейд существующего элемента, синхронное
+конструирование в `createElement`/`createElementNS`, очередь CE reactions) —
+в строке `ROADMAP.md`/CE-1 и в этом файле. Приёмочный прогон
+`run_report.py --all --root custom-elements --recursive` до/после (база
+2026-07-26, до CE-1): 95/176 → **161/182** harness OK, 366/3447 →
+**534/4055** subtests passed. Остаток объёма — опциональный срез (5)
+customized built-ins (`is=`): 28 файлов `reactions/customized-builtins/`
+требуют различимых нативных интерфейсов для встроенных тегов (`HTMLButtonElement`
+и т.п.), которых у Lumen сейчас нет — большинство встроенных тегов заведены
+как теговые алиасы generic `HTMLElement` (тот же пробел, что в `GAP-TABLEIDL`);
+реализация `is=` архитектурно требует этого фундамента первой и не делается
+в рамках CE-1 — оставлена отдельным будущим gap'ом, не блокирует закрытие.
 
 ## Механизм
 
