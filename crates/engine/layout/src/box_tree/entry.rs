@@ -848,6 +848,16 @@ pub(crate) fn is_invisible_control(c: char) -> bool {
     c.is_control() && c != '\t' && c != '\n' && c != '\r'
 }
 
+/// CSS Text L3 §3: whitespace the `white-space` property is allowed to collapse
+/// or convert. U+00A0 (NBSP) is Unicode `White_Space=Yes` and so passes
+/// `char::is_whitespace()`, but CSS never collapses it regardless of `white-space`
+/// value — a text node made of nothing but NBSP is not "whitespace-only" content
+/// (BUG-791 срез 7: a flex container's `Дзен на<!-- -->&nbsp;<span>…` lost the
+/// NBSP anonymous item entirely, joining the words with no gap).
+pub(crate) fn is_collapsible_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{0c}')
+}
+
 /// Removes invisible control characters (see [`is_invisible_control`]) from `s`.
 /// Borrows the input unchanged when no such characters are present (common case).
 pub(crate) fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
