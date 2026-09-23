@@ -28,6 +28,9 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         "function _lumen_u2n",
         "function EventTarget()",
         "function UIEvent(",
+        // Streams — своя часть с WORKER-1 срез 2 (её исполняет и воркер).
+        "function ReadableStream(",
+        "function DecompressionStream(",
         // Encoding — своя часть с WORKER-1 срез 1 (её исполняет и воркер).
         "function TextEncoder()",
         "function TextDecoder(",

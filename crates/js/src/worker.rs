@@ -952,35 +952,45 @@ pub(crate) const WORKER_TIMERS_SHIM: &str = r#"(function() {
     return best;
   }
 
-  // Run everything already due, then report how long the thread may sleep:
-  // milliseconds until the next deadline, or -1 when nothing is pending.
-  // Called from Rust once per turn of the worker's task loop.
-  globalThis._lumen_worker_run_tasks = function() {
+  // Run ONE timer that was already due at `limit` (the turn's start time),
+  // with the shim's own microtasks drained around it; true if one ran. One
+  // per call because V8 runs promise reactions only when the outermost
+  // `eval` returns: a Rust call per task is what puts the HTML LS §8.1.7.3
+  // microtask checkpoint between two timers, and what lets a timer armed from
+  // a `.then()` reach `_lumen_worker_next_wait` at all (WORKER-1 срез 2 — a
+  // `WritableStream` whose sink awaits `setTimeout` stalled after one write).
+  // `limit` bounds the turn, so a self-rearming zero-delay timer cannot keep
+  // the thread from ever reading its message channel.
+  globalThis._lumen_worker_run_one_task = function(limit) {
     _drainMicrotasks();
-    for (;;) {
-      var now = Date.now();
-      var i = _nextDue(now);
-      if (i === -1) break;
-      var task = _timers[i];
-      if (task.interval) {
-        // HTML LS §8.6 step 12: a repeating timer re-runs the initialization
-        // steps with the nesting level incremented — which is what puts the
-        // 4 ms floor under a zero-delay interval after a few cycles.
-        task.nesting += 1;
-        task.due = now + _clamp(task.delay, task.nesting);
-        task.seq = _nextId++;
-      } else {
-        _timers.splice(i, 1);
-      }
-      var outer = _nesting;
-      _nesting = task.nesting;
-      try { task.fn.apply(globalThis, task.args); } catch (e) { _report(e); }
-      _nesting = outer;
-      _drainMicrotasks();
-      // A callback may have called close(); the Rust loop checks the flag
-      // right after this returns, so just stop handing out more work.
-      if (globalThis._lumen_worker_closed === true) break;
+    if (globalThis._lumen_worker_closed === true) return false;
+    var i = _nextDue(Math.min(Date.now(), limit));
+    if (i === -1) return false;
+    var task = _timers[i];
+    var now = Date.now();
+    if (task.interval) {
+      // HTML LS §8.6 step 12: a repeating timer re-runs the initialization
+      // steps with the nesting level incremented — which is what puts the
+      // 4 ms floor under a zero-delay interval after a few cycles.
+      task.nesting += 1;
+      task.due = now + _clamp(task.delay, task.nesting);
+      task.seq = _nextId++;
+    } else {
+      _timers.splice(i, 1);
     }
+    var outer = _nesting;
+    _nesting = task.nesting;
+    try { task.fn.apply(globalThis, task.args); } catch (e) { _report(e); }
+    _nesting = outer;
+    _drainMicrotasks();
+    return true;
+  };
+
+  // How long the thread may sleep: milliseconds until the next deadline, or
+  // -1 when nothing is pending. Asked in an `eval` of its own, after the one
+  // that ran the tasks, so the promise reactions those tasks queued have
+  // already run and armed whatever timers they arm.
+  globalThis._lumen_worker_next_wait = function() {
     if (_micro.length) return 0;
     if (!_timers.length) return -1;
     var soonest = Infinity;
@@ -989,6 +999,15 @@ pub(crate) const WORKER_TIMERS_SHIM: &str = r#"(function() {
     }
     var wait = soonest - Date.now();
     return wait > 0 ? wait : 0;
+  };
+
+  // Everything due in one call — for the message-loop eval strings below,
+  // which already run inside a larger eval. The task loop itself goes through
+  // `run_worker_tasks` on the Rust side instead.
+  globalThis._lumen_worker_run_tasks = function() {
+    var limit = Date.now();
+    while (globalThis._lumen_worker_run_one_task(limit)) {}
+    return globalThis._lumen_worker_next_wait();
   };
 
   // The name the message-loop eval strings have called since before the queue
@@ -2286,7 +2305,16 @@ pub(crate) fn run_worker_tasks(rt: &V8JsRuntime) -> Option<std::time::Duration> 
     // A negative answer (the shim's own "nothing pending", and the `-1` the
     // guard falls back to when the shim is absent) and a NaN alike fall
     // through to `None`.
-    match rt.eval("(typeof _lumen_worker_run_tasks==='function')?_lumen_worker_run_tasks():-1") {
+    // One timer per `eval`, see `_lumen_worker_run_one_task`: the turn is
+    // bounded by its own start time, and the wait is asked only after the
+    // last task's promise reactions have run.
+    let turn = match rt.eval("(typeof _lumen_worker_run_one_task==='function')?Date.now():-1") {
+        Ok(lumen_core::JsValue::Number(t)) if t >= 0.0 => t,
+        _ => return None,
+    };
+    let step = format!("_lumen_worker_run_one_task({turn})");
+    while matches!(rt.eval(&step), Ok(lumen_core::JsValue::Bool(true))) {}
+    match rt.eval("_lumen_worker_next_wait()") {
         Ok(lumen_core::JsValue::Number(ms)) if ms >= 0.0 => {
             Some(std::time::Duration::from_millis(ms.min(3_600_000.0) as u64))
         }
@@ -4000,6 +4028,61 @@ mod tests_v8 {
         }
     }
 
+    /// WORKER-1 срез 2: a timer armed from a promise reaction of a timer
+    /// callback must count as pending work. V8 runs those reactions only when
+    /// the outermost `eval` returns, and the loop used to compute its wait
+    /// inside the very eval that ran the timer — so it answered "nothing
+    /// pending" and the worker slept until the next message, forever. The
+    /// shape is exactly a `WritableStream` whose sink awaits `delay(0)`
+    /// (WPT `streams/writable-streams/*.any.worker.html` stalled after one
+    /// write).
+    #[test]
+    fn v8_worker_timer_armed_from_promise_reaction_keeps_the_loop_running() {
+        let (rt, errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var log = [];             function delay(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }             var ws = new WritableStream({ write: function(c) {                 return delay(0).then(function() { log.push('w' + c); }); } });             var w = ws.getWriter(); w.write(1); w.write(2); w.write(3);             w.close().then(function() { log.push('closed'); });",
+        )
+        .unwrap();
+        assert!(
+            pump_until(&rt, "log.indexOf('closed') >= 0", std::time::Duration::from_secs(5)),
+            "log={:?} errors={:?}",
+            rt.eval("log.join(',')"),
+            errors.lock().map(|e| e.clone())
+        );
+        assert_eq!(
+            rt.eval("log.join(',')").unwrap(),
+            lumen_core::JsValue::String("w1,w2,w3,closed".into())
+        );
+    }
+
+    /// HTML LS §8.1.7.3: a microtask checkpoint follows every task, so a
+    /// promise resolved by one timer settles before the next due timer runs.
+    #[test]
+    fn v8_worker_microtask_checkpoint_between_due_timers() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var log = [];             setTimeout(function() { Promise.resolve().then(function() { log.push('micro'); }); log.push('a'); }, 0);             setTimeout(function() { log.push('b'); }, 0);",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(pump_until(&rt, "log.length === 3", std::time::Duration::from_secs(5)));
+        assert_eq!(rt.eval("log.join(',')").unwrap(), lumen_core::JsValue::String("a,micro,b".into()));
+    }
+
+    /// A zero-delay timer that re-arms itself must not pin the thread inside
+    /// one turn: the turn only runs timers due at its start, so the caller
+    /// gets control back (and can read its message channel) in bounded time.
+    #[test]
+    fn v8_worker_self_rearming_timer_does_not_pin_the_turn() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval("var n = 0; (function f() { n++; setTimeout(f, 0); })();").unwrap();
+        let t = std::time::Instant::now();
+        for _ in 0..3 {
+            assert!(run_worker_tasks(&rt).is_some());
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+    }
+
     /// [BUG-815] The headline symptom: a worker nobody writes to never ran a
     /// timer at all, because the only `_lumen_flush_timers` call site was the
     /// message-delivery loop. `workers/WorkerGlobalScope_setTimeout.htm` is
@@ -4178,19 +4261,29 @@ mod tests_v8 {
         );
     }
 
-    /// [BUG-815] The §8.6 nesting clamp is not decoration here — it is the
-    /// only thing keeping `setInterval(fn, 0)` from re-arming itself as
-    /// already-due forever inside one flush. Asserting the *wait* rather than
-    /// a tick count is what proves the loop yields: an unclamped build never
-    /// returns from `run_worker_tasks` at all.
+    /// [BUG-815] The §8.6 nesting clamp: `setInterval(fn, 0)` fires with no
+    /// delay while its nesting level is ≤ 5 and is floored at 4 ms from then
+    /// on. Each turn of the loop runs only the timers due at its start
+    /// (WORKER-1 срез 2), so the five pre-clamp firings take several turns —
+    /// every one of which returns, which is what proves the loop yields.
     #[test]
     fn v8_worker_zero_delay_interval_is_clamped_and_yields() {
         let (rt, _errors) = scope_with_errors("http://example.test/w.js");
         rt.eval("var n = 0; setInterval(function() { n++; }, 0);").unwrap();
-        let wait = run_worker_tasks(&rt).expect("a live interval must bound the wait");
-        assert_eq!(wait, std::time::Duration::from_millis(4), "§8.6 clamp");
-        // The five pre-clamp cycles ran inside that one flush.
+        let mut wait = std::time::Duration::ZERO;
+        for _ in 0..50 {
+            wait = run_worker_tasks(&rt).expect("a live interval must bound the wait");
+            if rt.eval("n >= 5").unwrap() == lumen_core::JsValue::Bool(true) {
+                break;
+            }
+        }
         assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(5.0));
+        // The fifth firing re-armed at nesting 6: 4 ms, less at most the
+        // millisecond the clock may have ticked since.
+        assert!(
+            wait >= std::time::Duration::from_millis(3) && wait <= std::time::Duration::from_millis(4),
+            "§8.6 clamp, got {wait:?}"
+        );
     }
 
     /// [BUG-815] The whole thing through a real worker thread: the page sends
