@@ -13,7 +13,8 @@
 //! dominant cascade cost (observed: ~1.1ms/node, ~1.3s for a ~1100-node page).
 
 use std::collections::HashMap;
-use lumen_css_parser::{CompoundSelector, PseudoClass, Rule, SimpleSelector, Stylesheet};
+use lumen_css_parser::{CompoundSelector, Rule, SimpleSelector, Stylesheet};
+use lumen_dom::Attribute;
 
 /// Opaque index into `Stylesheet.rules`.
 type RuleIdx = usize;
@@ -29,9 +30,14 @@ pub struct RuleIndex {
     by_id: HashMap<String, Vec<RuleIdx>>,
     by_class: HashMap<String, Vec<RuleIdx>>,
     by_type: HashMap<String, Vec<RuleIdx>>,
-    /// Rules whose subject compound has no id/class/type discriminator — must
-    /// be tested against every node (universal, attribute-only, functional
-    /// pseudo-class in subject position, etc.).
+    /// THREAD-4 срез 7: rules whose subject has no id/class/type but does
+    /// carry an attribute selector (`[data-color-mode]`, `[hidden]`), keyed by
+    /// attribute name — `matches_attribute` compares names exactly, so a node
+    /// without that attribute can never match.
+    by_attr: HashMap<String, Vec<RuleIdx>>,
+    /// Rules whose subject compound has no id/class/type/attribute
+    /// discriminator — must be tested against every node (`*`, `:root`, a
+    /// bare `:where(..)`/`:not(..)`, etc.).
     universal: Vec<RuleIdx>,
 }
 
@@ -45,33 +51,19 @@ fn subject(c: &lumen_css_parser::ComplexSelector) -> &CompoundSelector {
     c.tail.last().map(|(_, comp)| comp).unwrap_or(&c.head)
 }
 
-/// True when the pseudo-class requires evaluating inner selector lists, making
-/// it impossible to bucket by structural node properties alone.
-fn pc_is_functional(pc: &PseudoClass) -> bool {
-    matches!(
-        pc,
-        PseudoClass::Not(_)
-            | PseudoClass::Is(_)
-            | PseudoClass::Where(_)
-            | PseudoClass::Has(_)
-            | PseudoClass::NthChild(_, Some(_))
-            | PseudoClass::NthLastChild(_, Some(_))
-    )
-}
-
 /// Returns the strongest indexable key for a subject compound.
 ///
-/// Priority: Id > first Class > Type > Universal.
-/// If the compound contains any functional pseudo-class (one whose matching
-/// depends on inner selector lists), we conservatively return Universal to
-/// avoid missing a match — `matches_complex` will still validate everything.
+/// Priority: Id > first Class > Type > first Attribute > Universal.
+///
+/// A compound matches only when *every* simple selector in it matches
+/// (`matches_compound`), so any one of its id/class/type/attribute parts is a
+/// necessary condition — whatever else the compound holds. THREAD-4 срез 7:
+/// a functional pseudo-class (`:where(..)`, `:not(..)`, `:has(..)`) used to
+/// send the whole compound to [`RuleIndex::universal`]; it constrains the
+/// node further but cannot waive a sibling `.class`. Primer writes almost
+/// every component rule as `.prc-X:where(..)`, and those ~3000 rules were
+/// being matched against every node on github.com.
 fn subject_key(comp: &CompoundSelector) -> SubjectKey<'_> {
-    // Functional pseudo in subject → cannot index by structural key alone.
-    if comp.parts.iter().any(|p| {
-        matches!(p, SimpleSelector::PseudoClass(pc) if pc_is_functional(pc))
-    }) {
-        return SubjectKey::Universal;
-    }
     for p in &comp.parts {
         if let SimpleSelector::Id(s) = p {
             return SubjectKey::Id(s);
@@ -87,6 +79,11 @@ fn subject_key(comp: &CompoundSelector) -> SubjectKey<'_> {
             return SubjectKey::Type(s);
         }
     }
+    for p in &comp.parts {
+        if let SimpleSelector::Attribute(a) = p {
+            return SubjectKey::Attr(&a.name);
+        }
+    }
     SubjectKey::Universal
 }
 
@@ -94,6 +91,7 @@ enum SubjectKey<'a> {
     Id(&'a str),
     Class(&'a str),
     Type(&'a str),
+    Attr(&'a str),
     Universal,
 }
 
@@ -106,6 +104,7 @@ impl RuleIndex {
             by_id: HashMap::new(),
             by_class: HashMap::new(),
             by_type: HashMap::new(),
+            by_attr: HashMap::new(),
             universal: Vec::new(),
         }
     }
@@ -127,8 +126,21 @@ impl RuleIndex {
     /// O(rules × selectors_per_rule). Called at most once per block per
     /// layout pass thanks to the thread-local cache in `compute_style`.
     pub fn build_from_rules(rules: &[Rule]) -> Self {
+        Self::build_from_indexed(rules.iter().enumerate())
+    }
+
+    /// Builds one index over rules drawn from several blocks, each paired with
+    /// the caller-chosen index it is reported under by [`Self::candidates`].
+    ///
+    /// THREAD-4 срез 7: `CascadeIndex` flattens every `@layer` block into one
+    /// index this way (index = running offset across blocks + position within
+    /// the block) instead of one [`RuleIndex`] per block — github.com ships
+    /// 3702 `@layer` blocks, and probing each one's hash buckets on every node
+    /// cost more than matching the handful of candidates they returned.
+    /// Indices must be unique across the iterator.
+    pub fn build_from_indexed<'a>(rules: impl Iterator<Item = (RuleIdx, &'a Rule)>) -> Self {
         let mut idx = Self::empty();
-        for (rule_idx, rule) in rules.iter().enumerate() {
+        for (rule_idx, rule) in rules {
             for sel in &rule.selectors {
                 match subject_key(subject(sel)) {
                     SubjectKey::Id(id) => {
@@ -139,6 +151,9 @@ impl RuleIndex {
                     }
                     SubjectKey::Type(tag) => {
                         idx.by_type.entry(tag.to_owned()).or_default().push(rule_idx);
+                    }
+                    SubjectKey::Attr(name) => {
+                        idx.by_attr.entry(name.to_owned()).or_default().push(rule_idx);
                     }
                     SubjectKey::Universal => {
                         idx.universal.push(rule_idx);
@@ -160,6 +175,10 @@ impl RuleIndex {
             v.sort_unstable();
             v.dedup();
         }
+        for v in idx.by_attr.values_mut() {
+            v.sort_unstable();
+            v.dedup();
+        }
         idx.universal.sort_unstable();
         idx.universal.dedup();
         idx
@@ -168,7 +187,7 @@ impl RuleIndex {
     /// Returns the deduplicated, sorted candidate rule indices for a node.
     ///
     /// A candidate is any rule whose subject-key is compatible with the node's
-    /// `tag`, `id`, and `class` list. The full `matches_complex` check is
+    /// `tag`, `id`, `class` list and attribute names (`attrs`). The full `matches_complex` check is
     /// still required for each candidate — this is only a pre-filter.
     ///
     /// THREAD-4 срез 6: this is called once per node PER `@layer`/`@media`
@@ -186,6 +205,7 @@ impl RuleIndex {
         tag: &str,
         id: Option<&str>,
         classes: &[&str],
+        attrs: &[Attribute],
     ) -> Vec<RuleIdx> {
         let mut out: Vec<RuleIdx> = Vec::new();
         if let Some(v) = self.by_type.get(tag) {
@@ -199,6 +219,13 @@ impl RuleIndex {
         for &cls in classes {
             if let Some(v) = self.by_class.get(cls) {
                 out.extend_from_slice(v);
+            }
+        }
+        if !self.by_attr.is_empty() {
+            for a in attrs {
+                if let Some(v) = self.by_attr.get(a.name.local.as_str()) {
+                    out.extend_from_slice(v);
+                }
             }
         }
         out.extend_from_slice(&self.universal);
@@ -262,7 +289,7 @@ mod tests {
         assert!(!idx.by_class.contains_key("b"), "second class must not create a separate bucket entry");
 
         // Node with class="a" only → is a candidate (will be rejected later by matches_complex)
-        let cands = idx.candidates("span", None, &["a"]);
+        let cands = idx.candidates("span", None, &["a"], &[]);
         assert!(!cands.is_empty(), "should be a candidate when only .a matches");
     }
 
@@ -273,9 +300,9 @@ mod tests {
         assert!(idx.by_class.contains_key("title"), "must bucket under subject .title");
         assert!(!idx.by_class.contains_key("card"), "ancestor class must not create bucket");
 
-        let cands = idx.candidates("span", None, &["title"]);
+        let cands = idx.candidates("span", None, &["title"], &[]);
         assert!(!cands.is_empty());
-        let cands_no_title = idx.candidates("span", None, &["card"]);
+        let cands_no_title = idx.candidates("span", None, &["card"], &[]);
         assert!(cands_no_title.is_empty(), "node without .title is not a candidate");
     }
 
@@ -288,22 +315,41 @@ mod tests {
         assert!(idx.universal.is_empty(), "should NOT be universal");
     }
 
-    /// `div:is(.x)` — functional pseudo IS in the subject → universal bucket.
+    /// `div:is(.x)` / `.prc-Button:where(..)` — a functional pseudo in the
+    /// subject does not waive the compound's other parts (THREAD-4 срез 7):
+    /// the rule is bucketed by its class/type, and a node lacking them is not
+    /// a candidate.
     #[test]
-    fn functional_pseudo_in_subject_goes_to_universal() {
+    fn functional_pseudo_in_subject_keeps_structural_key() {
         let idx = build("div:is(.x) { color: red }");
-        // div has a functional pseudo in subject → conservative universal
-        assert!(!idx.universal.is_empty(), "must be universal due to functional pseudo in subject");
+        assert!(idx.by_type.contains_key("div"));
+        assert!(idx.universal.is_empty());
+        assert!(idx.candidates("span", None, &["x"], &[]).is_empty());
+
+        let idx = build(".btn:where([data-size=small]) { color: red }");
+        assert!(idx.by_class.contains_key("btn"));
+        assert!(idx.by_attr.is_empty(), "class outranks attribute");
+        assert_eq!(idx.candidates("a", None, &["btn"], &[]), vec![0]);
+        assert!(idx.candidates("a", None, &["other"], &[]).is_empty());
+
+        // Only a functional pseudo in the subject — nothing to key on.
+        let idx = build(":where(.a) { color: red }");
+        assert!(!idx.universal.is_empty());
     }
 
-    /// `*` and `[hidden]` → universal bucket.
+    /// `*` → universal bucket; attribute-only `[hidden]` → `by_attr` by name.
     #[test]
-    fn universal_and_attribute_go_to_universal() {
+    fn universal_and_attribute_buckets() {
         let idx_star = build("* { margin: 0 }");
         assert!(!idx_star.universal.is_empty(), "* must be universal");
 
-        let idx_attr = build("[hidden] { display: none }");
-        assert!(!idx_attr.universal.is_empty(), "[attr] must be universal");
+        let idx_attr = build("[hidden] { display: none } [data-mode=dark] { color: red }");
+        assert!(idx_attr.universal.is_empty());
+        assert!(idx_attr.by_attr.contains_key("hidden"));
+        let attr = |n: &str| Attribute { name: lumen_dom::QualName::html(n), value: String::new() };
+        assert_eq!(idx_attr.candidates("div", None, &[], &[attr("hidden")]), vec![0]);
+        assert_eq!(idx_attr.candidates("div", None, &[], &[attr("data-mode"), attr("hidden")]), vec![0, 1]);
+        assert!(idx_attr.candidates("div", None, &[], &[attr("title")]).is_empty());
     }
 
     /// `candidates()` merges type + class + id + universal and deduplicates.
@@ -313,7 +359,7 @@ mod tests {
         let sheet = parse("div, * { color: red }");
         let idx = RuleIndex::build(&sheet);
         // rule 0 should appear from by_type["div"] AND universal; after dedup only once.
-        let cands = idx.candidates("div", None, &[]);
+        let cands = idx.candidates("div", None, &[], &[]);
         let rule0_count = cands.iter().filter(|&&r| r == 0).count();
         assert_eq!(rule0_count, 1, "dedup must not repeat rule_idx");
     }
