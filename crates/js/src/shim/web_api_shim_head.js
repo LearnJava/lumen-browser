@@ -195,6 +195,14 @@ function CustomEvent(type, init) {
 }
 CustomEvent.prototype = Object.create(Event.prototype);
 CustomEvent.prototype.constructor = CustomEvent;
+// DOM §2.2 legacy "initialize a CustomEvent" — same vintage as `initEvent`/
+// `initUIEvent`/`initMouseEvent` above, still called by real sites (BUG-791:
+// dzen.ru's SSO-check bundle uses it, throwing `TypeError: n.initCustomEvent
+// is not a function` when it is missing).
+CustomEvent.prototype.initCustomEvent = function(type, bubbles, cancelable, detail) {
+    this.initEvent(type, bubbles, cancelable);
+    this.detail = detail !== undefined ? detail : null;
+};
 
 // DOM §2.2's fixed legacy interface-name table for `document.createEvent()`
 // (BUG-590), keyed lower-case since the lookup is case-insensitive. Looked up

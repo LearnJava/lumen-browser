@@ -69,6 +69,20 @@ fn legacy_init_event_methods_reinitialize_and_dispatch() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-791: `CustomEvent.prototype.initCustomEvent` was missing entirely,
+/// throwing on real sites that still use the legacy init dance (dzen.ru's
+/// SSO-check bundle).
+#[test]
+fn customevent_init_custom_event_reinitializes_and_sets_detail() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var e = new CustomEvent('a'); \
+                 e.initCustomEvent('b', true, false, {x: 1}); \
+                 e.type === 'b' && e.bubbles && !e.cancelable && e.detail.x === 1"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn mouseevent_page_coords_default_to_client() {
     let rt = v8_runtime_with_dom(make_doc());
