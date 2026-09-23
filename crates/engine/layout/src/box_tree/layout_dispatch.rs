@@ -956,7 +956,8 @@ pub(super) fn dispatch_box(
     }
 
     // InlineRun обрабатывается до основного match.
-    if let BoxKind::InlineRun { segments, lines, first_line_style } = &mut b.kind {
+    if let BoxKind::InlineRun { segments, lines, first_line_style, row_continuation_width } = &mut b.kind {
+        let row_continuation_width = *row_continuation_width;
         if let Some(m) = measurer {
             // white-space: nowrap / text-wrap-mode: nowrap → infinite max_width so
             // the line-breaker never wraps; word-spacing/letter-spacing logic unchanged.
@@ -1061,7 +1062,48 @@ pub(super) fn dispatch_box(
                     raw_lines
                 }
             };
-            align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
+            // IFC-4: this run shares line 0 with a preceding atomic inline in
+            // its row (`row_continuation_width` set by `InlineBlockRow`) —
+            // everything after line 0 is NOT next to that atomic, so re-wrap
+            // it fresh at the row's real width instead of leaving it wrapped
+            // at line 0's narrower one (CSS 2.1 §9.4.2: each line box is
+            // independent). Text-indent is line-0-only either way, so the
+            // continuation pass always starts at 0.0.
+            let split_at_row_width = row_continuation_width
+                .filter(|&w| wrap_width.is_finite() && w > wrap_width && lines.len() > 1);
+            if let Some(cont_width) = split_at_row_width {
+                let line0 = lines[0].clone();
+                let preserves_ws = s.white_space.preserves_whitespace();
+                let (_, rest_segs) = split_segments_at_first_line(segments, &line0, preserves_ws);
+                let raw_rest = wrap_inline_run(
+                    &rest_segs, cont_width, s.font_size, 0.0, viewport,
+                    m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
+                );
+                let rest = match s.text_wrap_style {
+                    TextWrapStyle::Balance => balance_wrap(
+                        &rest_segs, cont_width, raw_rest, s.font_size, 0.0,
+                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
+                    ),
+                    TextWrapStyle::Pretty => pretty_wrap(
+                        &rest_segs, cont_width, raw_rest, s.font_size, 0.0,
+                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
+                    ),
+                    TextWrapStyle::Auto | TextWrapStyle::Stable => raw_rest,
+                };
+                let mut all = Vec::with_capacity(1 + rest.len());
+                all.push(line0);
+                all.extend(rest);
+                *lines = all;
+            }
+            if let Some(cont_width) = split_at_row_width
+                && lines.len() > 1
+            {
+                let (first, rest) = lines.split_at_mut(1);
+                align_lines(first, wrap_width, s.text_align, s.text_align_last, s.direction);
+                align_lines(rest, cont_width, s.text_align, s.text_align_last, s.direction);
+            } else {
+                align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
+            }
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
             let line_h = step_line_height(b.used_line_height, s.line_height_step);
             apply_inline_vertical_align(lines, line_h);
@@ -1359,7 +1401,14 @@ pub(super) fn dispatch_box(
             // кромки margin box до его базовой линии, descent — остаток margin box
             // под ней. Считаются сразу после раскладки ребёнка, потому что фазе 1
             // нужна итоговая высота строки, чтобы сдвинуть cur_y (CSS 2.1 §10.8).
-            let mut metrics: Vec<(f32, f32)> = vec![(0.0, 0.0); b.children.len()];
+            // IFC-4: children are rebuilt into an owned, growable vector because
+            // a run that wraps mid-row (shares line 0 with a preceding atomic
+            // inline, e.g. `<img>`) is split below into one participant per
+            // line — the original fixed-size, index-addressed `b.children`
+            // cannot grow while this loop walks it.
+            let orig_children = std::mem::take(&mut b.children);
+            let mut children: Vec<LayoutBox> = Vec::with_capacity(orig_children.len());
+            let mut metrics: Vec<(f32, f32)> = Vec::with_capacity(orig_children.len());
             // rows: (row_y, above, below, Vec<child_index>)
             let mut rows: Vec<(f32, f32, f32, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
@@ -1412,19 +1461,25 @@ pub(super) fn dispatch_box(
                 (above, below)
             };
 
-            for i in 0..b.children.len() {
+            for mut child in orig_children {
                 // InlineSpace: collapsed whitespace gap — advance cur_x only.
-                if matches!(b.children[i].kind, BoxKind::InlineSpace) {
+                // `metrics` must stay index-aligned with `children` (every later
+                // `idx = children.len()` is used to index straight into `metrics`),
+                // so a box that isn't a row participant still needs a placeholder.
+                if matches!(child.kind, BoxKind::InlineSpace) {
                     let space_w = measurer.map_or(0.0, |m| m.char_width(' ', b.style.font_size));
                     cur_x += space_w;
+                    children.push(child);
+                    metrics.push((0.0, 0.0));
                     continue;
                 }
-                let is_run = matches!(b.children[i].kind, BoxKind::InlineRun { .. });
+                let is_run = matches!(child.kind, BoxKind::InlineRun { .. });
                 // Схлопнутый пробел в начале текста существует только пока текст
                 // не первый на строке: `wrap_inline_run` срезает его как пробел в
                 // начале строки, поэтому зазор после atomic inline даёт этот сдвиг.
-                let lead = if is_run && cur_x > content_x {
-                    inline_run_lead_space(&b.children[i], measurer)
+                let starts_mid_row = cur_x > content_x;
+                let lead = if is_run && starts_mid_row {
+                    inline_run_lead_space(&child, measurer)
                 } else {
                     0.0
                 };
@@ -1437,26 +1492,148 @@ pub(super) fn dispatch_box(
                 } else {
                     content_width
                 };
-                lay_out(&mut b.children[i], place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp, false);
-                if matches!(b.children[i].kind, BoxKind::Skip) {
+                // IFC-4: a run that shares line 0 with preceding row content
+                // must know the row's real width — lines after the first are
+                // NOT next to that preceding content, and re-wrap at the full
+                // width instead of inheriting line 0's atomic-narrowed one
+                // (CSS 2.1 §9.4.2: each line gets its own line box).
+                if is_run && starts_mid_row
+                    && let BoxKind::InlineRun { row_continuation_width, .. } = &mut child.kind
+                {
+                    *row_continuation_width = Some(content_width);
+                }
+                lay_out(&mut child, place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp, false);
+                if matches!(child.kind, BoxKind::Skip) {
+                    children.push(child);
+                    metrics.push((0.0, 0.0));
                     continue;
                 }
-                let c_em = b.children[i].style.font_size;
-                let child_mr = b.children[i].style.margin_right.resolve_or_zero(c_em, content_width, viewport);
-                let child_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                let child_mb = b.children[i].style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
+
+                // IFC-4: split a run that wrapped past line 0 while sharing its
+                // row with preceding content — everything after line 0 forms
+                // its own line box(es), starting fresh at the container's left
+                // edge, instead of being folded into this row's height/baseline
+                // as if it were all one participant next to the atomic.
+                let split_lines: Option<Vec<Vec<InlineFrag>>> = if is_run && starts_mid_row {
+                    if let BoxKind::InlineRun { lines, .. } = &mut child.kind {
+                        if lines.len() > 1 { Some(lines.split_off(1)) } else { None }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(cont_lines) = split_lines {
+                    let n_total = cont_lines.len() + 1;
+                    let line_h = step_line_height(child.used_line_height, child.style.line_height_step);
+                    let line0_h = (child.rect.height - (n_total - 1) as f32 * line_h).max(line_h);
+                    child.rect.height = line0_h;
+                    if let BoxKind::InlineRun { row_continuation_width, .. } = &mut child.kind {
+                        *row_continuation_width = None;
+                    }
+                    let node = child.node;
+                    let origin = child.origin;
+                    let style = child.style.clone();
+                    let used_line_height = child.used_line_height;
+
+                    let idx0 = children.len();
+                    children.push(child);
+                    {
+                        let c = &children[idx0];
+                        let c_em = c.style.font_size;
+                        let child_mt = c.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
+                        let child_mb = c.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
+                        let fh = child_mt + c.rect.height + child_mb;
+                        let asc = match inline_baseline(c, measurer) {
+                            Some(bl) => child_mt + bl,
+                            None => fh,
+                        };
+                        metrics.push((asc, fh - asc));
+                    }
+                    cur_row.push(idx0);
+                    if matches!(inline_v_align(&children[idx0]), VerticalAlign::Baseline) {
+                        row_has_baseline = true;
+                    }
+                    // Close the row that ends at line 0 (the atomic + line 0 of the run).
+                    let (above, below) = line_metrics(&children, &metrics, &cur_row, row_has_baseline);
+                    rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
+                    let new_y = (cur_y + above + below).round();
+                    total_h += new_y - cur_y;
+                    cur_y = new_y;
+                    row_y = cur_y;
+                    row_has_baseline = false;
+
+                    // Every continuation line is a single-participant row at
+                    // the container's full width, anchored at content_x.
+                    let last_i = cont_lines.len() - 1;
+                    for (li, line) in cont_lines.into_iter().enumerate() {
+                        let line_w = line.last().map_or(0.0, |f| f.x + f.width);
+                        let cont_box = LayoutBox {
+                            node,
+                            rect: Rect::new(content_x, cur_y, content_width, line_h),
+                            used_line_height,
+                            style: style.clone(),
+                            kind: BoxKind::InlineRun {
+                                segments: Vec::new(),
+                                lines: vec![line],
+                                first_line_style: None,
+                                row_continuation_width: None,
+                            },
+                            children: Vec::new(),
+                            col_span: 1,
+                            row_span: 1,
+                            svg_group_transform: None,
+                            scroll_x: 0.0,
+                            scroll_y: 0.0,
+                            dirty: Default::default(),
+                            origin,
+                        };
+                        let idx = children.len();
+                        children.push(cont_box);
+                        {
+                            let c = &children[idx];
+                            let fh = c.rect.height;
+                            let asc = inline_baseline(c, measurer).unwrap_or(fh);
+                            metrics.push((asc, fh - asc));
+                        }
+                        cur_row.push(idx);
+                        row_has_baseline = true; // InlineRun всегда участвует по baseline.
+                        if li == last_i {
+                            // Row stays open — a sibling that follows this run
+                            // in DOM order keeps flowing on this last line if
+                            // it fits, instead of being pushed below it.
+                            cur_x = content_x + line_w;
+                        } else {
+                            let (above, below) =
+                                line_metrics(&children, &metrics, &cur_row, row_has_baseline);
+                            rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
+                            let new_y = (cur_y + above + below).round();
+                            total_h += new_y - cur_y;
+                            cur_y = new_y;
+                            row_y = cur_y;
+                            row_has_baseline = false;
+                        }
+                    }
+                    continue;
+                }
+
+                let c_em = child.style.font_size;
+                let child_mr = child.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
+                let child_mt = child.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
+                let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
                 // Продвижение по строке: у текста — по последней строке прогона,
                 // у остальных — по border box (см. `inline_run_advance`).
                 let mut advance = if is_run {
-                    inline_run_advance(&b.children[i], measurer)
+                    inline_run_advance(&child, measurer)
                 } else {
-                    b.children[i].rect.width
+                    child.rect.width
                 };
-                let child_right = b.children[i].rect.x + advance + child_mr;
+                let child_right = child.rect.x + advance + child_mr;
 
                 if !is_run && child_right > content_x + content_width && cur_x > content_x {
                     let (above, below) =
-                        line_metrics(&b.children, &metrics, &cur_row, row_has_baseline);
+                        line_metrics(&children, &metrics, &cur_row, row_has_baseline);
                     rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
                     // Snap to integer CSS pixels (Chrome/Edge DPR=1 behaviour): fractional
                     // IFC strut from font metrics (descent_px) would otherwise drift row
@@ -1469,31 +1646,35 @@ pub(super) fn dispatch_box(
                     row_y = cur_y;
                     cur_x = content_x;
                     row_has_baseline = false;
-                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
-                    advance = b.children[i].rect.width;
+                    lay_out(&mut child, cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
+                    advance = child.rect.width;
                 }
-                cur_row.push(i);
-                if matches!(inline_v_align(&b.children[i]), VerticalAlign::Baseline) {
+                let idx = children.len();
+                let child_x = child.rect.x;
+                children.push(child);
+                cur_row.push(idx);
+                if matches!(inline_v_align(&children[idx]), VerticalAlign::Baseline) {
                     row_has_baseline = true;
                 }
-                let fh = child_mt + b.children[i].rect.height + child_mb;
+                let fh = child_mt + children[idx].rect.height + child_mb;
                 // Нет собственной базовой линии — выравнивание по нижней кромке
                 // margin box (CSS 2.1 §10.8.1).
-                let asc = match inline_baseline(&b.children[i], measurer) {
+                let asc = match inline_baseline(&children[idx], measurer) {
                     Some(bl) => child_mt + bl,
                     None => fh,
                 };
-                metrics[i] = (asc, fh - asc);
-                cur_x = b.children[i].rect.x + advance + child_mr;
+                metrics.push((asc, fh - asc));
+                cur_x = child_x + advance + child_mr;
             }
             let (last_above, last_below) =
-                line_metrics(&b.children, &metrics, &cur_row, row_has_baseline);
+                line_metrics(&children, &metrics, &cur_row, row_has_baseline);
             if !cur_row.is_empty() {
                 rows.push((row_y, last_above, last_below, cur_row));
                 b.rect.height = total_h + last_above + last_below;
             } else {
                 b.rect.height = total_h;
             }
+            b.children = children;
 
             // Фаза 2: vertical-align (CSS 2.1 §10.8.1). Дети сейчас стоят border
             // box'ом на верхней кромке строки; сдвигаем каждого туда, куда его

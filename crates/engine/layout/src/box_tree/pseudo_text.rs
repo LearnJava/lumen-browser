@@ -146,7 +146,7 @@ pub(crate) fn extract_first_letter_float(
             rect: Rect::ZERO,
             used_line_height: inner_style.font_size * inner_style.line_height,
             style: Arc::new(inner_style),
-            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None, row_continuation_width: None },
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -269,7 +269,7 @@ pub(crate) fn extract_initial_letter(
             rect: Rect::ZERO,
             used_line_height: inner_style.font_size * inner_style.line_height,
             style: Arc::new(inner_style),
-            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None, row_continuation_width: None },
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -549,7 +549,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
     let mut i = 0;
     while i < b.children.len() {
         let child = &mut b.children[i];
-        let BoxKind::InlineRun { segments, lines, first_line_style } = &mut child.kind else {
+        let BoxKind::InlineRun { segments, lines, first_line_style, .. } = &mut child.kind else {
             i += 1;
             continue;
         };
@@ -588,6 +588,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
                 segments: rest_segs,
                 lines: rest_lines,
                 first_line_style: None,
+                row_continuation_width: None,
             },
             children: Vec::new(),
             col_span: 1,
@@ -607,6 +608,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             segments: consumed_segs,
             lines: vec![line0],
             first_line_style: None,
+            row_continuation_width: None,
         };
         // BUG-432: tag the box so paint can tell it from an ordinary anonymous
         // inline run and draw the pseudo-element's own background. Every other
