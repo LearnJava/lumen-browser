@@ -120,9 +120,29 @@ fn build_key(doc: &Document, node: NodeId, inherited: &ComputedStyle) -> Option<
 #[derive(Default)]
 pub(crate) struct ShareCache {
     entries: HashMap<ShareKey, Arc<ComputedStyle>>,
+    /// BUG-1112 срез 2 — measurement-only pass counters, see [`Self::stats_enabled`].
+    hits: usize,
+    inserts: usize,
+    misses: usize,
+    /// Diagnostic-only split of `misses`: `build_key` returned `None`
+    /// (not eligible at all) vs `Some` but `compute_style_shareable`
+    /// reported the result unsafe to cache.
+    key_none: usize,
+    key_some_unshareable: usize,
 }
 
 impl ShareCache {
+    /// `LUMEN_SHARECACHE_STATS=1` — BUG-1112 срез 2. Reads the env var once per
+    /// process (`OnceLock`, same pattern as `shell::relayout`'s
+    /// `LUMEN_BUG935_M4_SWAP`): unset changes nothing for anyone who has not
+    /// set it, set prints one `[sharecache]` line per pass to stderr so a live
+    /// run answers "does `share_insert` become nonzero on a real page" without
+    /// a debugger.
+    fn stats_enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("LUMEN_SHARECACHE_STATS").ok().as_deref() == Some("1"))
+    }
+
     /// The cascade result for `node` — the same [`Arc`] allocation a previous
     /// call already produced for an equal key (a refcount bump, per BUG-341
     /// S9's reasoning: no deep copy on a hit), else a fresh
@@ -140,13 +160,43 @@ impl ShareCache {
     ) -> Arc<ComputedStyle> {
         let key = build_key(doc, node, inherited);
         if let Some(hit) = key.as_ref().and_then(|k| self.entries.get(k)) {
+            if Self::stats_enabled() {
+                self.hits += 1;
+            }
             return Arc::clone(hit);
         }
+        let key_was_some = key.is_some();
         let (style, shareable) = compute_style_shareable(doc, node, sheet, inherited, viewport, dark_mode);
         let style = Arc::new(style);
         if shareable && let Some(k) = key {
             self.entries.insert(k, Arc::clone(&style));
+            if Self::stats_enabled() {
+                self.inserts += 1;
+            }
+        } else if Self::stats_enabled() {
+            self.misses += 1;
+            if key_was_some {
+                self.key_some_unshareable += 1;
+            } else {
+                self.key_none += 1;
+            }
         }
         style
+    }
+}
+
+impl Drop for ShareCache {
+    /// BUG-1112 срез 2 — prints this pass's `share_hit`/`share_insert`/
+    /// `share_miss` totals when [`ShareCache::stats_enabled`], mirroring
+    /// THREAD-4 срез 5's ad-hoc (uncommitted) instrumentation so it survives
+    /// as a reusable, opt-in tool instead of being re-derived every time this
+    /// bug needs a live number.
+    fn drop(&mut self) {
+        if Self::stats_enabled() && (self.hits != 0 || self.inserts != 0 || self.misses != 0) {
+            eprintln!(
+                "[sharecache] hit={} insert={} miss={} (key_none={} key_some_unshareable={})",
+                self.hits, self.inserts, self.misses, self.key_none, self.key_some_unshareable
+            );
+        }
     }
 }
