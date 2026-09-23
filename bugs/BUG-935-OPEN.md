@@ -3042,6 +3042,90 @@ S37 (ленивая сериализация/дешёвое промежуточ
 теперь пользуются тем же выигрышем «на движковом потоке», что и остальной
 `js_geometry_collect`.
 
+**Срез 42 (P3, 2026-09-23) — аудит потребителей `computed_styles`/
+`pseudo_computed_styles`/`custom_properties` для direction (b)/(c): найден
+непрозрачный (non-`maybe_flush`) читатель, блокирующий самую очевидную
+реализацию**
+
+S41's «следующий срез должен» перечисляет direction (b) (ленивая
+сериализация — строить `HashMap<String,String>` только для узлов, чьи
+computed styles JS реально прочитал) и (c) (дешёвое промежуточное
+представление, сериализуемое на чтение). Самая простая версия любого из
+двух вариантов — не трогать сам формат, а просто **пропускать** три шага
+`collect_js_data` (`collect_computed_styles`/`collect_pseudo_computed_styles`/
+`collect_custom_properties`, S37's найденная доминанта) целиком, пока
+страница ни разу не прочитала `getComputedStyle`/`computedStyleMap()`/
+`getPropertyValue('--x')` — офлайн-стенд S29, на котором мерились S34-S41,
+вообще ни разу не зовёт `getComputedStyle` (`grep -c getComputedStyle
+scripts/perf-fixtures/bug935_raf_dom_stand.html` = 0), так что эта версия
+обещала обнулить всю стоимость на самом же измерительном стенде.
+
+Этот срез — аудит всех читателей трёх кэшей
+(`crates/js/src/v8_runtime/{runtime.rs,style_flush.rs,install/platform.rs}`)
+**перед** тем, как писать код гейта (тот же порядок, что S37→S39 уже
+применяли к направлению (a) — сначала подтвердить посылку, потом
+реализовывать). Найдено:
+
+- `_lumen_get_computed_style`/`_lumen_get_computed_style_pseudo`/
+  `_lumen_get_computed_style_pseudo_entries`/`_lumen_get_computed_style_entries`
+  (`install/platform.rs`) — все четыре зовут `flush.maybe_flush()` **до**
+  чтения кэша. `FlushHandles::maybe_flush` (`style_flush.rs:139`) сам не
+  зависит от `apply_relayout_result`'s эйджерного пуша: `never_flushed`
+  стартует `true`, так что самый первый вызов `getComputedStyle` на
+  странице форсирует реальный пересчёт (тот же `collect_computed_styles`,
+  вызванный напрямую из `style_flush.rs:256`) независимо от того, добрался
+  ли до этого узла хоть один тик `apply_relayout_result`. Для этих четырёх
+  нативов гейт «не собирать, пока JS ни разу не спросил» безопасен —
+  `maybe_flush` сама восполняет пробел в момент первого реального чтения.
+- **`_lumen_request_scroll`** (`install/platform.rs:675`, JS-сторонний
+  сеттер `element.scrollLeft`/`scrollTop`) — читает `cs_for_request`
+  (тот же `Arc` что `computed_styles`) **напрямую, без `maybe_flush()`**,
+  чтобы проверить `overflow-x`/`overflow-y == "clip"` (BUG-975) и занулить
+  соответствующую ось запроса. Эта проверка не публична как «читает
+  computed style» — снаружи это просто присваивание `scrollLeft`, так что
+  ни один из существующих сигналов «JS вызвал getComputedStyle» её не
+  увидит. Пропусти этот срез гейт «не собирать, пока не читали
+  getComputedStyle» — первое же `element.scrollLeft = x` на
+  `overflow: clip`-контейнере до первого вызова `getComputedStyle` получит
+  ПУСТУЮ карту (`styles.get(&nid)` → `None` → `is_clip` всегда `false`),
+  молча перестанет зануляться и просто применит непроклампленный `x`/`y` —
+  тихая регрессия BUG-975 без единого падающего теста в объёме этого бага
+  (клип-кламп не покрыт BUG-935's собственными тестами, только BUG-975's).
+- `pseudo_computed_styles`/`custom_properties` — прочих не-`maybe_flush`
+  читателей не найдено (`custom_properties` читается только двумя уже
+  перечисленными нативами, `pseudo_computed_styles` только двумя своими);
+  для этой пары направление (b)/(c) в самой простой форме безопасно само
+  по себе.
+
+**Вывод:** самая простая реализация (b)/(c) — общий на все три кэша флаг
+«JS хоть раз прочитал getComputedStyle-семейство» — некорректна из-за
+`_lumen_request_scroll`'s скрытого чтения `computed_styles`. Рабочих
+вариантов остаётся два: (i) завести отдельный, более широкий сигнал
+«кэш `computed_styles` кому-то нужен», взводимый и на
+`getComputedStyle`-семействе, и на первом `_lumen_request_scroll`, что
+означает гейт по-прежнему не поможет странице, которая просто скроллит
+`overflow: clip`-контейнер и никогда не читает стили explicitly (частый
+случай для видео-плееров/каруселей — ровно тот же класс страниц, что и
+исходный симптом бага); или (ii) завести гейт `pseudo_computed_styles`/
+`custom_properties` отдельно от `computed_styles` (у первых пары
+непрозрачных читателей нет), оставив `computed_styles` собираться
+эйджерно как сейчас — меньший, но гарантированно безопасный выигрыш
+(`collect_pseudo_computed_styles`/`collect_custom_properties` — не
+измеренная S37 доминанта, `collect_computed_styles` ей была).
+
+**Сделано в этом срезе:** только этот аудит, `git diff --stat` не
+затрагивает ничего вне `bugs/BUG-935-OPEN.md`. Код не менялся — вариант
+(i)/(ii) выше остаётся нереализованным.
+
+**Следующий срез должен** выбрать между (i) (шире взводимый флаг,
+сохраняет весь выигрыш `collect_computed_styles`, но требует протащить
+второй set-site через `_lumen_request_scroll`, который сегодня не имеет
+доступа ни к какому «этот кэш используется» сигналу — сам `flush`
+недоступен внутри его замыкания без рефактора `install_scroll_state`'s
+сигнатуры) и (ii) (безопаснее, меньше выигрыша, не трогает
+`_lumen_request_scroll` вообще); либо взяться за сам M4-роутинг, как и
+предлагали S39/S41.
+
 ## Воспроизведение
 
 ```
