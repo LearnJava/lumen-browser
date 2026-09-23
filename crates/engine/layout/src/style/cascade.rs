@@ -842,11 +842,15 @@ pub(crate) fn compute_style_shareable(
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
+    let node_attrs: &[lumen_dom::Attribute] = match &node_data.data {
+        lumen_dom::NodeData::Element { attrs, .. } => attrs,
+        _ => &[],
+    };
     shareable &= is_svg_presentational_element(node_tag);
 
     ensure_cascade_index(sheet, viewport, dark_mode);
     let cands = with_front_cascade_index(|idx| {
-        idx.rules.candidates(node_tag, node_id, &node_classes)
+        idx.rules.candidates(node_tag, node_id, &node_classes, node_attrs)
     });
 
     for &rule_idx in &cands {
@@ -877,39 +881,41 @@ pub(crate) fn compute_style_shareable(
     // L5 §6.4.5 inversion: earlier layer !important wins).
     let layer_rule_base = sheet.rules.len()
         + sheet.media_rules.iter().map(|m| m.rules.len()).sum::<usize>();
-    let mut layer_rule_offset = 0usize;
-    for (layer_i, layer_rule) in sheet.layers.iter().enumerate() {
-        let layer_idx = sheet.layer_order.iter()
-            .position(|n| n == &layer_rule.name)
-            .unwrap_or(0) as i32;
-        // BUG-284: candidate pre-filter (was a brute-force scan of every rule
-        // in the layer for every node — dominant cascade cost on stylesheets
-        // that put most rules inside layers/media/supports blocks).
-        let layer_cands = with_front_cascade_index(|idx| {
-            idx.layers[layer_i].candidates(node_tag, node_id, &node_classes)
-        });
-        for rule_idx in layer_cands {
-            let rule = &layer_rule.rules[rule_idx];
-            shareable &= rule.selectors.iter().all(selector_is_share_safe);
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if matches_complex(complex, doc, node) {
-                    let spec = complex.specificity();
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
-                }
-            }
-            if let Some(spec) = best {
-                let global_rule_idx = layer_rule_base + layer_rule_offset + rule_idx;
-                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    let lp = layer_pri(decl.important, layer_idx);
-                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
-                }
+    // THREAD-4 срез 7: one candidate query over all `@layer` blocks (see
+    // `CascadeIndex::layers`); `flat` is the rule's running offset across
+    // blocks, i.e. exactly the old `layer_rule_offset + rule_idx`.
+    let layer_cands = with_front_cascade_index(|idx| {
+        idx.layers
+            .candidates(node_tag, node_id, &node_classes, node_attrs)
+            .into_iter()
+            .filter_map(|flat| {
+                let (block, rule_idx) = *idx.layer_rules.get(flat)?;
+                Some((flat, block, rule_idx, *idx.layer_order_pos.get(block)?))
+            })
+            .collect::<Vec<_>>()
+    });
+    for (flat, block, rule_idx, layer_idx) in layer_cands {
+        let Some(rule) = sheet.layers.get(block).and_then(|l| l.rules.get(rule_idx)) else {
+            continue;
+        };
+        shareable &= rule.selectors.iter().all(selector_is_share_safe);
+        let mut best: Option<Specificity> = None;
+        for complex in &rule.selectors {
+            if matches_complex(complex, doc, node) {
+                let spec = complex.specificity();
+                best = Some(match best {
+                    Some(prev) if prev >= spec => prev,
+                    _ => spec,
+                });
             }
         }
-        layer_rule_offset += layer_rule.rules.len();
+        if let Some(spec) = best {
+            let global_rule_idx = layer_rule_base + flat;
+            for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                let lp = layer_pri(decl.important, layer_idx);
+                matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
+            }
+        }
     }
 
     // CSS Media Queries L4: rules внутри `@media`-блока, чей query
@@ -934,7 +940,7 @@ pub(crate) fn compute_style_shareable(
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
         let media_cands = with_front_cascade_index(|idx| {
-            idx.media[media_i].candidates(node_tag, node_id, &node_classes)
+            idx.media[media_i].candidates(node_tag, node_id, &node_classes, node_attrs)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -972,7 +978,7 @@ pub(crate) fn compute_style_shareable(
             continue;
         }
         let supports_cands = with_front_cascade_index(|idx| {
-            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes, node_attrs)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];

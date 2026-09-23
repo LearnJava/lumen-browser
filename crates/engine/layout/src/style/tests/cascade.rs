@@ -196,6 +196,25 @@ use super::*;
         assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
     }
 
+    #[test]
+    fn at_layer_reopened_blocks_keep_layer_and_source_order() {
+        // THREAD-4 срез 7: all `@layer` blocks share one flattened rule index,
+        // so a candidate's layer and source position come from its flat slot.
+        // `b` is reopened after an `a` block and `a` again after that: the
+        // later `b` rule wins on source order within `b`, and `a`'s later
+        // block still loses on layer order despite coming last.
+        let s = cascade_at(
+            r#"<p class="k j">x</p>"#,
+            "@layer a, b; \
+             @layer b { .k { color: red; } } \
+             @layer a { .j { color: green; } } \
+             @layer b { .j { color: blue; } } \
+             @layer a { .k { color: yellow; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
     // ─── `@mixin` inside `@layer` (BUG-518 срез 3, `mixin-layers.html`) ──────
 
     #[test]
