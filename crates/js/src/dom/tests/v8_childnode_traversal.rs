@@ -590,6 +590,34 @@ fn document_import_node_returns_clone() {
     assert_eq!(id, lumen_core::JsValue::String("IMP".into()));
 }
 
+/// BUG-1107 (BUG-791 срез 5): `document.importNode` on a node from a
+/// `DOMParser().parseFromString(...)` document — a virtual (non-arena) tree
+/// with no `__nid__` — used to silently return `null` instead of a clone,
+/// which broke the common "inline an SVG icon sprite" pattern one property
+/// access later (`Cannot read properties of null (reading 'childNodes')`,
+/// found live on dzen.ru). It must now materialize a real subtree instead.
+#[test]
+fn document_import_node_materializes_dom_parser_svg_node() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _svg = '<svg xmlns="http://www.w3.org/2000/svg">'
+                    + '<symbol id="foo" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"></path></symbol>'
+                    + '</svg>';
+                var _parsed = (new DOMParser()).parseFromString(_svg, "image/svg+xml").documentElement;
+                var _imported = document.importNode(_parsed, true);
+                var _symbol = _imported && _imported.childNodes[0];
+            "#).unwrap();
+    let imported_is_null = rt.eval("_imported === null").unwrap();
+    assert_eq!(imported_is_null, lumen_core::JsValue::Bool(false));
+    let imported_tag = rt.eval("_imported && _imported.tagName").unwrap();
+    assert_eq!(imported_tag, lumen_core::JsValue::String("svg".into()));
+    let symbol_id = rt.eval("_symbol && _symbol.getAttribute('id')").unwrap();
+    assert_eq!(symbol_id, lumen_core::JsValue::String("foo".into()));
+    // The original crash: reading `.childNodes` on what used to be `null`.
+    let symbol_children = rt.eval("_symbol && _symbol.childNodes.length").unwrap();
+    assert_eq!(symbol_children, lumen_core::JsValue::Number(1.0));
+}
+
 #[test]
 fn get_bounding_rect_returns_values_from_runtime() {
     let rt = v8_runtime_with_dom(make_doc());
