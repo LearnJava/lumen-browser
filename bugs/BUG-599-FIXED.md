@@ -124,7 +124,7 @@ is not a function`, and 2 of the 21 top-level TIMEOUTs (`focus-01.html`,
 константы.
 
 **Что этой правкой НЕ закрыто и вынесено в
-[BUG-1045](BUG-1045-OPEN.md):** ветка «корень = shadow-дерево». Пробой на том
+[BUG-1045](BUG-1045-FIXED.md):** ветка «корень = shadow-дерево». Пробой на том
 же рантайме: `typeof sr.getRootNode === 'undefined'`, а узел внутри теневого
 дерева получает `Element`-обёртку с `host === undefined` вместо `ShadowRoot`,
 поэтому переход `current.getRootNode().host` (`testdriver-extra.js:163`)
