@@ -34,7 +34,21 @@ use crate::style::{forced_colors_active, print_media_active, pseudo_element_name
 /// styled nodes and ~3000 rules, most inside `@media`).
 pub(in crate::style) struct CascadeIndex {
     pub(in crate::style) rules: RuleIndex,
-    pub(in crate::style) layers: Vec<RuleIndex>,
+    /// THREAD-4 срез 7: ONE index over the rules of every `@layer` block, not
+    /// one per block. A candidate is the rule's position in the concatenation
+    /// of all `sheet.layers[..].rules` — the same running offset `compute_style`
+    /// already uses for source order — resolved through [`Self::layer_rules`].
+    /// Per-block indices cost one set of hash probes per block per node, and
+    /// github.com (Primer) ships 3702 `@layer` blocks of 1–2 rules each: ~7M
+    /// probes a pass to find a few hundred candidates.
+    pub(in crate::style) layers: RuleIndex,
+    /// Flat `@layer` rule position → `(block index into sheet.layers, rule
+    /// index within that block)`.
+    pub(in crate::style) layer_rules: Vec<(usize, usize)>,
+    /// Per `sheet.layers` block: position of its name in `sheet.layer_order`
+    /// (0 when absent). Node-independent; used to be a linear string search of
+    /// `layer_order` per block per node.
+    pub(in crate::style) layer_order_pos: Vec<i32>,
     pub(in crate::style) media: Vec<RuleIndex>,
     pub(in crate::style) supports: Vec<RuleIndex>,
     /// Perf (docs/tasks/p3-cascade-perf.md Задача 1): whether each
@@ -89,7 +103,9 @@ impl CascadeIndex {
     fn empty() -> Self {
         Self {
             rules: RuleIndex::empty(),
-            layers: Vec::new(),
+            layers: RuleIndex::empty(),
+            layer_rules: Vec::new(),
+            layer_order_pos: Vec::new(),
             media: Vec::new(),
             supports: Vec::new(),
             active_media: Vec::new(),
@@ -109,8 +125,20 @@ impl CascadeIndex {
         let rules_ns = t.elapsed().as_nanos() as u64;
 
         let t = std::time::Instant::now();
-        let layers: Vec<RuleIndex> =
-            sheet.layers.iter().map(|l| RuleIndex::build_from_rules(&l.rules)).collect();
+        let layer_rules: Vec<(usize, usize)> = sheet
+            .layers
+            .iter()
+            .enumerate()
+            .flat_map(|(block, l)| (0..l.rules.len()).map(move |i| (block, i)))
+            .collect();
+        let layers = RuleIndex::build_from_indexed(
+            sheet.layers.iter().flat_map(|l| l.rules.iter()).enumerate(),
+        );
+        let layer_order_pos: Vec<i32> = sheet
+            .layers
+            .iter()
+            .map(|l| sheet.layer_order.iter().position(|n| n == &l.name).unwrap_or(0) as i32)
+            .collect();
         let media: Vec<RuleIndex> =
             sheet.media_rules.iter().map(|m| RuleIndex::build_from_rules(&m.rules)).collect();
         let supports: Vec<RuleIndex> =
@@ -150,6 +178,8 @@ impl CascadeIndex {
         let idx = Self {
             rules,
             layers,
+            layer_rules,
+            layer_order_pos,
             media,
             supports,
             active_media,

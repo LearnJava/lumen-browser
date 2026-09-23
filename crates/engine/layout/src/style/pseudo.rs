@@ -372,9 +372,13 @@ fn compute_pseudo_element_style_inner(
     let node_id = node_data.get_attr("id");
     let class_attr = node_data.get_attr("class").unwrap_or("");
     let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
+    let node_attrs: &[lumen_dom::Attribute] = match &node_data.data {
+        lumen_dom::NodeData::Element { attrs, .. } => attrs,
+        _ => &[],
+    };
     ensure_cascade_index(sheet, viewport, dark_mode);
     let cands = with_front_cascade_index(|idx| {
-        idx.rules.candidates(node_tag, node_id, &node_classes)
+        idx.rules.candidates(node_tag, node_id, &node_classes, node_attrs)
     });
     for rule_idx in cands {
         let rule = &sheet.rules[rule_idx];
@@ -406,7 +410,7 @@ fn compute_pseudo_element_style_inner(
             continue;
         }
         let media_cands = with_front_cascade_index(|idx| {
-            idx.media[media_i].candidates(node_tag, node_id, &node_classes)
+            idx.media[media_i].candidates(node_tag, node_id, &node_classes, node_attrs)
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
@@ -436,7 +440,7 @@ fn compute_pseudo_element_style_inner(
             continue;
         }
         let supports_cands = with_front_cascade_index(|idx| {
-            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes)
+            idx.supports[supports_i].candidates(node_tag, node_id, &node_classes, node_attrs)
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
