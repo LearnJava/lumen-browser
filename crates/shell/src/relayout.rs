@@ -204,7 +204,14 @@ impl Lumen {
         lumen_layout::clear_animated_heights();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        self.apply_relayout_result(new_dl, lb, viewport, defer_js_push_override().unwrap_or(true));
+        self.apply_relayout_result(
+            new_dl,
+            lb,
+            viewport,
+            defer_js_push_override().unwrap_or(true),
+            #[cfg(feature = "v8")]
+            None,
+        );
         if let Some(t0) = engine_t0 {
             let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
             self.engine_stats.record(engine_ms);
@@ -434,7 +441,14 @@ impl Lumen {
         // a third, conditional `document.lock()` of its own for
         // @starting-style, plus tile-grid diff/hash over the whole DL).
         let apply_t0 = incr_t0.is_some().then(std::time::Instant::now);
-        self.apply_relayout_result(new_dl, new_lb, viewport, true);
+        self.apply_relayout_result(
+            new_dl,
+            new_lb,
+            viewport,
+            true,
+            #[cfg(feature = "v8")]
+            None,
+        );
         let apply_ms = apply_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
         // `apply_relayout_result` unconditionally clears the cache — restore it
         // here, after `lb` has already landed in `self.layout_box`. BUG-935 S13:
@@ -839,6 +853,7 @@ impl Lumen {
         lb: lumen_layout::LayoutBox,
         viewport: Size,
         defer_js_push: bool,
+        #[cfg(feature = "v8")] precollected: Option<PrecollectedJsData>,
     ) {
         // BUG-935 S37: per-phase timing across the whole function, gated by the
         // same `LUMEN_FRAME_LOG` flag as `apply_ms` (the caller-side aggregate
@@ -1032,80 +1047,51 @@ impl Lumen {
             // (side-effect-free) geometry collection runs only when a JS context
             // exists, byte-identical with the flag off. All captured data is owned
             // (`HashMap`/`Vec`) → the closure is `Send + 'static`.
-            if self.js_present
-                && let Some(lb_ref) = self.layout_box.as_ref()
-                && let Some(doc_guard) = self
-                    .layout_source
-                    .as_ref()
-                    .and_then(|ls| ls.document.lock().ok())
+            // BUG-935 S41: `precollected` (from `make_relayout_job` on the
+            // engine thread) supersedes computing this inline — S37-S40 found
+            // this collection the dominant cost of `apply_relayout_result`,
+            // already paid on the UI thread today regardless of routing. The
+            // fully synchronous `relayout()` has no engine-thread job to
+            // piggy-back on, so it still falls back to the inline path below,
+            // byte-identical to before this slice.
+            let js_data = if self.js_present {
+                match precollected {
+                    Some(data) => Some(data),
+                    None => (|| {
+                        let lb_ref = self.layout_box.as_ref()?;
+                        let doc_guard =
+                            self.layout_source.as_ref()?.document.lock().ok()?;
+                        Some(apply_step!(
+                            "js_geometry_collect",
+                            collect_js_data(
+                                lb_ref,
+                                doc_guard,
+                                viewport,
+                                &self.prev_layout_shift_rects,
+                                self.last_input_epoch_s,
+                                now_s,
+                            )
+                        ))
+                    })(),
+                }
+            } else {
+                None
+            };
+            if let Some(PrecollectedJsData {
+                rects,
+                layout_shift_score,
+                layout_shift_sources,
+                had_input,
+                client_rects,
+                hit_test_tree,
+                styles,
+                pseudo_styles,
+                customs,
+                scroll_states,
+                next_layout_shift_baseline,
+            }) = js_data
             {
-                // BUG-935 S37: this whole block — every `collect_*` gathering
-                // geometry/styles for the JS push below — runs synchronously on
-                // THIS thread regardless of `defer_js_push` (only the
-                // `js.update_*`/`js.deliver_*` calls that consume it are
-                // deferred). S36 found `apply_ms` (this function's own cost)
-                // dominant and unexplained; this timer isolates whether the
-                // collection itself, not the push, is the dominant cost.
-                let (
-                    rects,
-                    layout_shift_score,
-                    layout_shift_sources,
-                    had_input,
-                    client_rects,
-                    hit_test_tree,
-                    styles,
-                    pseudo_styles,
-                    customs,
-                    scroll_states,
-                ) = apply_step!("js_geometry_collect", {
-                    let rects = apply_step!("collect_layout_rects", collect_layout_rects(lb_ref, &doc_guard));
-                    // GAP-LAYOUTSHIFT срез 5 (BUG-809): scored off
-                    // `collect_layout_shift_rects`, not `rects` above —
-                    // `rects` is gBCR geometry (own-node CSS transform applied,
-                    // hidden nodes included), which double-counts transform-only
-                    // moves and visibility:hidden moves as shifts (see that
-                    // function's doc-comment). Computed before `rects` moves into
-                    // the JS-push closures below, then the baseline advances so
-                    // the *next* relayout diffs against this one.
-                    let (layout_shift_score, layout_shift_sources, had_input) = apply_step!("layout_shift_score", {
-                        let shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
-                        let layout_shift = compute_layout_shift_score(
-                            &self.prev_layout_shift_rects,
-                            &shift_rects,
-                            viewport.width,
-                            viewport.height,
-                        );
-                        self.prev_layout_shift_rects = shift_rects;
-                        // had_recent_input (Layout Instability L1 §3): a shift within
-                        // 500ms of a real mouse/key press does not count against CLS.
-                        let had_input = now_s - self.last_input_epoch_s < 0.5;
-                        (layout_shift.score, layout_shift.sources, had_input)
-                    });
-                    let client_rects = apply_step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
-                    let hit_test_tree = apply_step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
-                    let styles = apply_step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None));
-                    let pseudo_styles = apply_step!("collect_pseudo_computed_styles", collect_pseudo_computed_styles(lb_ref));
-                    drop(doc_guard);
-                    let customs = apply_step!("collect_custom_properties", collect_custom_properties(lb_ref, viewport));
-                    // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
-                    // immediately after relayout return the correct clamped values.
-                    let scroll_states: HashMap<u32, [f32; 4]> = apply_step!("collect_scroll_containers", collect_scroll_containers_for_js_state(lb_ref)
-                        .iter()
-                        .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
-                        .collect());
-                    (
-                        rects,
-                        layout_shift_score,
-                        layout_shift_sources,
-                        had_input,
-                        client_rects,
-                        hit_test_tree,
-                        styles,
-                        pseudo_styles,
-                        customs,
-                        scroll_states,
-                    )
-                });
+                self.prev_layout_shift_rects = next_layout_shift_baseline;
                 let (vw, vh) = (viewport.width, viewport.height);
                 let zoom_factor = self.zoom_factor;
                 let dark_mode = self.dark_mode;
@@ -1318,6 +1304,18 @@ impl Lumen {
         // same thread-local handoff as interactive state/forced-colors above,
         // captured on the UI thread and installed on the engine thread.
         let animated_heights = self.animated_heights_snapshot();
+        // BUG-935 S41: snapshots for the JS-geometry collection this job now
+        // also runs (see `precollected` below) — same rationale as the
+        // interactive-state snapshots above, just for `collect_js_data`'s
+        // inputs instead of layout's.
+        #[cfg(feature = "v8")]
+        let js_present = self.js_present;
+        #[cfg(feature = "v8")]
+        let prev_layout_shift_rects = self.prev_layout_shift_rects.clone();
+        #[cfg(feature = "v8")]
+        let last_input_epoch_s = self.last_input_epoch_s;
+        #[cfg(feature = "v8")]
+        let epoch = self.epoch;
         let job = move || {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
@@ -1332,12 +1330,41 @@ impl Lumen {
             lumen_layout::clear_animated_heights();
             lumen_layout::set_cv_scroll(0.0, 0.0);
             lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+            // `compute_ms` keeps meaning exactly what it did before this
+            // slice — pure style+layout+DL cost — so it stays untouched by
+            // the JS-geometry collection below; that work gets its own
+            // `LUMEN_FRAME_LOG` step timers inside `collect_js_data`.
+            let compute_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            // BUG-935 S41: run `apply_relayout_result`'s JS-geometry
+            // collection here instead of leaving it for the UI thread —
+            // S37-S40 found it the dominant UI-thread cost of every commit,
+            // off-thread routing or not. `None` when there is no JS context
+            // yet or the document lock is unavailable (poisoned); the UI
+            // side then falls back to its own inline collection.
+            #[cfg(feature = "v8")]
+            let precollected = if js_present {
+                document.lock().ok().map(|doc_guard| {
+                    let now_s = epoch.elapsed().as_secs_f32();
+                    collect_js_data(
+                        &layout_box,
+                        doc_guard,
+                        viewport,
+                        &prev_layout_shift_rects,
+                        last_input_epoch_s,
+                        now_s,
+                    )
+                })
+            } else {
+                None
+            };
             EngineCommit {
                 content,
                 layout_box,
                 viewport,
                 generation,
-                compute_ms: t0.elapsed().as_secs_f32() * 1000.0,
+                compute_ms,
+                #[cfg(feature = "v8")]
+                precollected,
             }
         };
         Some((generation, job))
@@ -1391,8 +1418,17 @@ impl Lumen {
         // Authoritative like `relayout()`: mark the just-bumped generation applied so
         // a stale in-flight async commit is dropped by `poll_engine_commit`.
         self.engine_applied_generation = self.engine_job_generation;
+        #[cfg(feature = "v8")]
+        let precollected = commit.precollected;
         let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
-        self.apply_relayout_result(content, layout_box, viewport, false);
+        self.apply_relayout_result(
+            content,
+            layout_box,
+            viewport,
+            false,
+            #[cfg(feature = "v8")]
+            precollected,
+        );
         if lumen_paint::frame_log_enabled() {
             self.engine_stats.record(compute_ms);
             eprintln!(
@@ -1419,6 +1455,8 @@ impl Lumen {
             return; // superseded — drop the stale result.
         }
         self.engine_applied_generation = commit.generation;
+        #[cfg(feature = "v8")]
+        let precollected = commit.precollected;
         let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
         // BUG-935 S27: `defer_js_push=true` — S23/S24 measured this call site
         // (the `poll_engine_commit` off-thread commit path) as the dominant
@@ -1428,7 +1466,17 @@ impl Lumen {
         // (finding B) and S26 added an independent drain for
         // `pending_lazy_image_reqs` so a push that never gets picked up by a
         // *next* `apply_relayout_result` still gets fetched (finding C).
-        self.apply_relayout_result(content, layout_box, viewport, defer_js_push_override().unwrap_or(true));
+        // BUG-935 S41: `precollected` now carries the same `js_geometry_collect`
+        // work `make_relayout_job` already ran on the engine thread — this call
+        // no longer redoes it on the UI thread.
+        self.apply_relayout_result(
+            content,
+            layout_box,
+            viewport,
+            defer_js_push_override().unwrap_or(true),
+            #[cfg(feature = "v8")]
+            precollected,
+        );
         // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
         // synchronous path this excludes the UI-thread apply (observers etc.),
         // and is tagged `(off-thread)` so the summary reflects the work moved off
@@ -1979,6 +2027,112 @@ pub(crate) fn meta_initial_scale(src: &LayoutSource) -> f32 {
         .ok()
         .and_then(|doc| doc.viewport_meta().map(|m| m.initial_scale))
         .unwrap_or(1.0)
+}
+
+/// BUG-935 S41: everything [`Lumen::apply_relayout_result`]'s JS-geometry
+/// block gathers before pushing to JS (S37-S40 found this the dominant cost
+/// of `apply_relayout_result`, 60-105ms/tick, already paid on the UI thread
+/// today via `poll_engine_commit`). Computed once by [`collect_js_data`],
+/// reused by whichever producer supplies it: inline on the UI thread (the
+/// fully synchronous [`Lumen::relayout`], which has no engine-thread job to
+/// piggy-back on) or precomputed on the engine thread inside
+/// [`Lumen::make_relayout_job`]'s closure, carried back in [`EngineCommit`].
+#[cfg(feature = "v8")]
+pub(crate) struct PrecollectedJsData {
+    pub(crate) rects: std::collections::HashMap<u32, [f32; 4]>,
+    pub(crate) layout_shift_score: f64,
+    pub(crate) layout_shift_sources: Vec<LayoutShiftSource>,
+    pub(crate) had_input: bool,
+    pub(crate) client_rects: std::collections::HashMap<u32, Vec<[f32; 4]>>,
+    pub(crate) hit_test_tree: Arc<lumen_layout::LayoutBox>,
+    pub(crate) styles: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    pub(crate) pseudo_styles:
+        std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+    pub(crate) customs:
+        std::collections::HashMap<u32, Arc<std::collections::HashMap<String, String>>>,
+    pub(crate) scroll_states: std::collections::HashMap<u32, [f32; 4]>,
+    /// The layout-shift baseline this commit installs into
+    /// [`Lumen::prev_layout_shift_rects`] — only when this data is actually
+    /// applied. A superseded engine-thread commit is dropped by the caller
+    /// before ever reaching that assignment, so a discarded job's baseline
+    /// never leaks into a later one (same generation-guard `poll_engine_commit`
+    /// already relies on for the rest of the commit).
+    pub(crate) next_layout_shift_baseline: std::collections::HashMap<u32, [f32; 4]>,
+}
+
+/// BUG-935 S41: the pure collection step factored out of
+/// [`Lumen::apply_relayout_result`] so [`Lumen::make_relayout_job`] can run
+/// it on the engine thread instead — S40 found this already the dominant
+/// UI-thread cost of every commit, off-thread or not. Depends only on the
+/// freshly computed layout tree, the (locked) document and a layout-shift
+/// baseline snapshot — no `Lumen` field, so it needs neither `&self` nor the
+/// renderer/frame state.
+#[cfg(feature = "v8")]
+fn collect_js_data(
+    lb_ref: &lumen_layout::LayoutBox,
+    doc_guard: std::sync::MutexGuard<'_, Document>,
+    viewport: Size,
+    prev_layout_shift_rects: &std::collections::HashMap<u32, [f32; 4]>,
+    last_input_epoch_s: f32,
+    now_s: f32,
+) -> PrecollectedJsData {
+    let step_log = lumen_paint::frame_log_enabled();
+    macro_rules! step {
+        ($label:literal, $expr:expr) => {{
+            let t0 = step_log.then(std::time::Instant::now);
+            let result = $expr;
+            if let Some(t0) = t0 {
+                let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                eprintln!("[engine] apply-step {ms:.2}ms ({})", $label);
+            }
+            result
+        }};
+    }
+    let rects = step!("collect_layout_rects", collect_layout_rects(lb_ref, &doc_guard));
+    let shift_rects = step!(
+        "collect_layout_shift_rects",
+        lumen_layout::collect_layout_shift_rects(lb_ref)
+    );
+    let layout_shift = step!(
+        "layout_shift_score",
+        compute_layout_shift_score(prev_layout_shift_rects, &shift_rects, viewport.width, viewport.height)
+    );
+    let had_input = now_s - last_input_epoch_s < 0.5;
+    let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
+    let hit_test_tree = step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
+    let styles = step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None));
+    let pseudo_styles = step!(
+        "collect_pseudo_computed_styles",
+        collect_pseudo_computed_styles(lb_ref)
+    );
+    // Drop the document lock before the remaining collectors, which read
+    // only `lb_ref`/`viewport` — matches the lock-hold window of the inline
+    // path this replaced (BUG-935 S37's original block dropped it here too).
+    drop(doc_guard);
+    let customs = step!(
+        "collect_custom_properties",
+        collect_custom_properties(lb_ref, viewport)
+    );
+    let scroll_states: std::collections::HashMap<u32, [f32; 4]> = step!(
+        "collect_scroll_containers",
+        collect_scroll_containers_for_js_state(lb_ref)
+            .iter()
+            .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+            .collect()
+    );
+    PrecollectedJsData {
+        rects,
+        layout_shift_score: layout_shift.score,
+        layout_shift_sources: layout_shift.sources,
+        had_input,
+        client_rects,
+        hit_test_tree,
+        styles,
+        pseudo_styles,
+        customs,
+        scroll_states,
+        next_layout_shift_baseline: shift_rects,
+    }
 }
 
 #[cfg(test)]

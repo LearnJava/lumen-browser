@@ -31,6 +31,15 @@ pub(crate) struct EngineCommit {
     /// Время off-thread вычисления (style + layout + DL build) в мс — для
     /// `ENGINE_SUMMARY` / `[engine] relayout … (off-thread)`.
     pub(crate) compute_ms: f32,
+    /// BUG-935 S41: `apply_relayout_result`'s JS-geometry-collection block
+    /// (`collect_computed_styles` и Co.), precomputed here on the engine
+    /// thread — S37-S40 found it the dominant cost of every commit, already
+    /// paid on the UI thread today regardless of routing. `None` when the job
+    /// was built without a JS context present (`js_present=false` at
+    /// submission time); `apply_relayout_result` then falls back to its own
+    /// inline collection, matching pre-S41 behaviour.
+    #[cfg(feature = "v8")]
+    pub(crate) precollected: Option<crate::relayout::PrecollectedJsData>,
 }
 
 /// ADR-016 M2.2c-2b: персистентное состояние движкового потока `S` — «место»

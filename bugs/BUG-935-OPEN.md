@@ -2953,6 +2953,95 @@ M4-роутинга. **Следующий срез должен** спроект
 геометрией/стилями, чтобы `poll_engine_commit` на UI-потоке только
 раскладывал уже готовые данные вместо их вычисления.
 
+## Срез 41 (P3, 2026-09-23) — `js_geometry_collect` перенесён на движковый поток внутри `make_relayout_job`, реализовано направление из S40
+
+S40's «следующий срез должен» — перенести `collect_*`-вызовы
+`apply_relayout_result`'s `js_geometry_collect` (S37-S40: 60-105мс/тик,
+доминанта её стоимости, уже платится UI-потоком в дефолтной сборке через
+`poll_engine_commit`) в движковую задачу `make_relayout_job`, расширив
+`EngineCommit` собранными геометрией/стилями — реализовано.
+
+**Устройство:** блок `collect_layout_rects`/`collect_layout_shift_rects`/
+`compute_layout_shift_score`/`collect_client_rects`/`collect_computed_styles`/
+`collect_pseudo_computed_styles`/`collect_custom_properties`/
+`collect_scroll_containers_for_js_state` вынесен из `apply_relayout_result`
+в свободную функцию `collect_js_data` (`crates/shell/src/relayout.rs`),
+возвращающую новый тип `PrecollectedJsData` (тот же кортеж полей, что раньше
+жил анонимным `let (...)`, плюс `next_layout_shift_baseline` — обновлённый
+снимок для `Lumen::prev_layout_shift_rects`, применяемый вызывающей стороной
+только когда коммит реально применяется, не раньше). `apply_relayout_result`
+получил параметр `precollected: Option<PrecollectedJsData>` (под `#[cfg(feature
+= "v8")]`, как и сам блок): `Some` — использует готовые данные напрямую,
+`None` — падает на прежний инлайновый путь (вызывает `collect_js_data` сама,
+байт-идентично поведению до среза). `make_relayout_job`'s движковая задача
+теперь тоже зовёт `collect_js_data` — сразу после `compute_layout`, под тем
+же `document.lock()`, что уже был доступен в задаче, — и кладёт результат в
+новое поле `EngineCommit::precollected`. `compute_ms` тайминг **не изменён**:
+измеряется только до вызова `collect_js_data`, сама коллекция получает
+собственные `apply-step`-таймеры (тот же `LUMEN_FRAME_LOG`-гейт) — семантика
+метрики, которую уже читает census-скрипт и `ENGINE_SUMMARY`, не сдвинулась.
+Оба синхронных вызывающих места (`relayout()`, `try_relayout_raf_incremental`)
+передают `None` — у них нет движковой задачи, чтобы отдать эту работу.
+`readback_relayout_job`/`poll_engine_commit` пробрасывают `commit.precollected`.
+
+**Почему это безопасно относительно `document.lock()`:** `collect_js_data`
+принимает `MutexGuard` **по значению** (не `&Document`) и роняет его сразу
+после `collect_computed_styles`/`collect_pseudo_computed_styles` — тем же
+местом, где прежний инлайновый блок звал `drop(doc_guard)` — так что
+`collect_custom_properties`/`collect_scroll_containers_for_js_state` (им
+`Document` не нужен) не держат лок дольше, чем раньше, независимо от того,
+движковый это поток или UI-поток.
+
+**Замер** (`scripts/bug935_raf_relayout_census.py`, S29's офлайн-стенд,
+`--settle-s 5 --ticks 4`, два прогона на каждую сборку, `dev-release`+`v8`):
+
+| | до (baseline, git stash) | после (этот срез) |
+|---|---|---|
+| scroll RTT avg, прогон 1 | 116.4мс (6/130/234/95) | 26.1мс (59/14/17/15) |
+| scroll RTT avg, прогон 2 | — | 17.5мс (24/14/11/21) |
+
+Не строгий интерливед A/B (S28's урок — рекламный/сетевой шум на живых
+сайтах делает одиночные разы неразличимыми от шума), но офлайн-стенд S29
+детерминирован по составу работы (нет сети), а разница (~90мс на прогон)
+на порядок больше типичного разброса, который S28 находил на этом же
+классе замеров (единицы мс), и совпадает по величине с самим удалённым
+`collect_computed_styles`'s 65-90мс — не шум, ожидаемый эффект. `apply-step`-
+лог подтверждает механизм напрямую: до среза `collect_computed_styles` (66-88мс)
+печатался ВНУТРИ UI-side `poll_engine_commit`, сразу перед `[engine] relayout
+… (off-thread)`; после среза те же шаги печатаются раньше, среди
+движковых `[engine] task` строк, а UI-side `apply_relayout_result` оставляет
+только `frame_sync`/`dl_splice_diff_cache`/`transitions_sync`/`cv_snap_scroll_state`
+(десятки мс, не 90+).
+
+**Тесты:** `cargo build --profile dev-release -p lumen-shell --bin lumen
+--features v8` зелёный (~1.5 мин, инкрементально). `cargo clippy -p
+lumen-shell --all-targets --features v8 -- -D warnings` чист. Точечные тесты
+модуля (`cargo test --profile dev-release -p lumen-shell --bin lumen
+--features v8 -- relayout`) — 13/13 зелёных, включая
+`bug935_s26_pending_lazy_image_drain_tests`/`thread2_defer_query_tests`,
+которые ближе всего к тронутому коду. Полный `scoped-test.sh`/workspace-clippy
+не запускались вручную — по протоколу идут один раз в `/lumen-task-finish`.
+Сборка без фичи `v8` (`--no-default-features --features backend-wgpu`) уже
+сломана на `main` независимо от этого среза (`lumen_js`/`js_string_literal`
+не резолвятся — `csp_enforce.rs`, `window_mode.rs`, `page_load.rs`,
+`persistent_js.rs`, `lumen/state.rs`, `lumen/printing.rs`); `git diff` этого
+среза не задевает ни один из перечисленных файлов, так что поломка
+дособрана до этого среза, не им — не в объёме BUG-935.
+
+**Не сделано:** основной корневой симптом бага (M4-роутинг мёртв под
+движковым потоком, `&&`-короткое замыкание в `relayout_raf_dirty`/
+`_readback`) по-прежнему не тронут — этот срез снижает UI-thread стоимость
+КАЖДОГО коммита (любого роутинга), а не чинит сам роутинг. S38's кэш
+сериализации (направление (a) из S37) не возвращён — S39 показал его
+применимость зависит от cascade-skip пути, который сам зависит от починки
+M4-роутинга; актуальность не изменилась этим срезом. **Следующий срез
+должен** взяться либо за сам M4-роутинг (`&&`→`||`-своп плюс разбор его
+последствий, начатый и отменённый в S27-S39), либо за direction (b)/(c) из
+S37 (ленивая сериализация/дешёвое промежуточное представление
+`collect_computed_styles`), которые применимы независимо от роутинга и
+теперь пользуются тем же выигрышем «на движковом потоке», что и остальной
+`js_geometry_collect`.
+
 ## Воспроизведение
 
 ```
