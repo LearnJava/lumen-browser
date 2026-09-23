@@ -151,7 +151,7 @@ dev-release), обе пробы живы:
   `characterData` по мере добора символов, как у потокового парсера.
 * `nextSibling`/`previousSibling` в записи по-прежнему `null`, а
   `insertBefore`/`replaceChild`/`removeAttribute` по-прежнему не ставят записей
-  вовсе — это [BUG-855](BUG-855-OPEN.md), общий для всех путей.
+  вовсе — это [BUG-855](BUG-855-FIXED.md), общий для всех путей.
 * Соседний по границе [BUG-804](BUG-804-FIXED.md) (парсерный `<script src>` /
   `<link rel=stylesheet>` не шлёт `load`) этим **не** закрыт: там нужен сигнал
   о завершении загрузки, а не о вставке.

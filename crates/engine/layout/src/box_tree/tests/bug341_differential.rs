@@ -108,7 +108,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
         used_line_height: inline_style.font_size * inline_style.line_height,
         style: std::sync::Arc::new(inline_style),
-        kind: super::super::BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+        kind: super::super::BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None, row_continuation_width: None },
         children: vec![],
         col_span: 1,
         row_span: 1,

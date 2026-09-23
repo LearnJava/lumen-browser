@@ -777,6 +777,56 @@ fn ifc2_image_wraps_onto_the_next_line_when_it_does_not_fit() {
 }
 
 #[test]
+fn ifc4_mixed_row_text_wrap_gets_real_line_boxes() {
+    // IFC-4: a text run that wraps while sharing its row with a preceding
+    // atomic inline (`<img>`) used to stay one `InlineRun` box with a single
+    // rect covering every line — continuation lines started at the run's own
+    // (image-narrowed) x instead of the container's left edge, and the image
+    // was baseline-aligned against the WHOLE multi-line group instead of just
+    // its own line (CSS 2.1 §9.4.2/§10.8.1: each line is an independent line
+    // box). `p { width: 100px }`, image 40×10 — line 0 has 100-40-8(space)=52px
+    // left for text, lines after it get the full 100px.
+    let row = ifc_row(
+        r#"<p><img width="40" height="10"> aa bb cc dd ee ff gg</p>"#,
+        "p { width: 100px; }",
+    );
+    let img = row
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, super::super::BoxKind::Image { .. }))
+        .expect("image");
+    let runs: Vec<&super::super::LayoutBox> = row
+        .children
+        .iter()
+        .filter(|c| matches!(c.kind, super::super::BoxKind::InlineRun { .. }))
+        .collect();
+    // "aa bb" fits the 52px next to the image; "cc dd ee ff" fits the full
+    // 100px once re-wrapped; "gg" is the third line — three separate
+    // participants, not one box spanning all three lines.
+    assert_eq!(runs.len(), 3, "each line of the wrapped run is its own box");
+    let line0 = runs[0];
+    let line1 = runs[1];
+    let line2 = runs[2];
+    assert!(line0.rect.x > row.rect.x, "line 0 starts after the image");
+    assert_eq!(line1.rect.x, row.rect.x, "line 1 starts at the container's left edge");
+    assert_eq!(line2.rect.x, row.rect.x, "line 2 starts at the container's left edge");
+    assert!(line1.rect.y > line0.rect.y, "line 1 is below line 0");
+    assert!(line2.rect.y > line1.rect.y, "line 2 is below line 1");
+    assert!(
+        img.rect.y < line1.rect.y,
+        "the image must stay on line 0's row, not sink towards later lines: img.y={} line1.y={}",
+        img.rect.y,
+        line1.rect.y,
+    );
+    assert!(
+        line0.rect.height < row.rect.height / 2.0,
+        "line 0's own row must not be stretched to the wrapped run's full height, got {} of {}",
+        line0.rect.height,
+        row.rect.height,
+    );
+}
+
+#[test]
 fn ifc2_floated_image_stays_out_of_the_inline_row() {
     // CSS 2.1 §9.7 — a float is block-level whatever its `display` says, and
     // only the block branch of `lay_out` implements the wrap-around. Before

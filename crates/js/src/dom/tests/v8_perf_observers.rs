@@ -824,6 +824,141 @@ fn mutation_observer_fires_on_child_list_change() {
 }
 
 #[test]
+fn mutation_observer_fires_on_remove_attribute() {
+    // BUG-855: `removeAttribute` called `_lumen_remove_attr` past the wrapper
+    // that only intercepted attribute *sets*, so a removal queued no record.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _mo_rm_seen = [];
+                var obs = new MutationObserver(function(records) {
+                    records.forEach(function(r) { _mo_rm_seen.push(r.attributeName); });
+                });
+                var el = document.getElementById('main');
+                el.setAttribute('data-x', '1');
+                obs.observe(el, { attributes: true });
+                el.removeAttribute('data-x');
+            "#).unwrap();
+    rt.eval("_lumen_flush_mutation_observers()").unwrap();
+    assert_eq!(rt.eval("_mo_rm_seen.length").unwrap(), lumen_core::JsValue::Number(1.0));
+    assert_eq!(
+        rt.eval("_mo_rm_seen[0]").unwrap(),
+        lumen_core::JsValue::String("data-x".into())
+    );
+}
+
+#[test]
+fn mutation_observer_fires_on_insert_before() {
+    // BUG-855: `insertBefore` was never wrapped for MO notification at all —
+    // only `appendChild`/`removeChild` were, so a reference-relative
+    // insertion (the common form) was silent.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _mo_ib_recs = [];
+                var obs = new MutationObserver(function(records) { _mo_ib_recs = records; });
+                var p = document.createElement('div');
+                var a = document.createElement('span'); a.id = 'a';
+                var b = document.createElement('span'); b.id = 'b';
+                p.appendChild(a);
+                p.appendChild(b);
+                document.body.appendChild(p);
+                obs.observe(p, { childList: true });
+                var c = document.createElement('span'); c.id = 'c';
+                p.insertBefore(c, b);
+            "#).unwrap();
+    rt.eval("_lumen_flush_mutation_observers()").unwrap();
+    assert_eq!(rt.eval("_mo_ib_recs.length").unwrap(), lumen_core::JsValue::Number(1.0));
+    assert_eq!(
+        rt.eval("_mo_ib_recs[0].addedNodes.length").unwrap(),
+        lumen_core::JsValue::Number(1.0)
+    );
+    assert_eq!(
+        rt.eval("_mo_ib_recs[0].addedNodes[0].id").unwrap(),
+        lumen_core::JsValue::String("c".into())
+    );
+    // DOM §4.3.3: previousSibling/nextSibling of the inserted node, not the
+    // hardcoded `null` the record literal used before this fix.
+    assert_eq!(
+        rt.eval("_mo_ib_recs[0].previousSibling && _mo_ib_recs[0].previousSibling.id").unwrap(),
+        lumen_core::JsValue::String("a".into())
+    );
+    assert_eq!(
+        rt.eval("_mo_ib_recs[0].nextSibling && _mo_ib_recs[0].nextSibling.id").unwrap(),
+        lumen_core::JsValue::String("b".into())
+    );
+}
+
+#[test]
+fn mutation_observer_replace_child_fires_one_combined_record() {
+    // BUG-855: `replaceChild` is implemented as insert-then-remove; once both
+    // natives are wrapped for MO, a naive re-wrap fires TWO records instead
+    // of the one combined `+added -removed` record DOM §4.2.4 "replace"
+    // describes (WPT MutationObserver-childList.html, "replacement mutation").
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _mo_rc_recs = [];
+                var obs = new MutationObserver(function(records) { _mo_rc_recs = records; });
+                var p = document.createElement('div');
+                var oldChild = document.createElement('span'); oldChild.id = 'old';
+                p.appendChild(oldChild);
+                document.body.appendChild(p);
+                obs.observe(p, { childList: true });
+                var newChild = document.createElement('i'); newChild.id = 'new';
+                p.replaceChild(newChild, oldChild);
+            "#).unwrap();
+    rt.eval("_lumen_flush_mutation_observers()").unwrap();
+    assert_eq!(rt.eval("_mo_rc_recs.length").unwrap(), lumen_core::JsValue::Number(1.0));
+    assert_eq!(
+        rt.eval("_mo_rc_recs[0].addedNodes.length").unwrap(),
+        lumen_core::JsValue::Number(1.0)
+    );
+    assert_eq!(
+        rt.eval("_mo_rc_recs[0].addedNodes[0].id").unwrap(),
+        lumen_core::JsValue::String("new".into())
+    );
+    assert_eq!(
+        rt.eval("_mo_rc_recs[0].removedNodes.length").unwrap(),
+        lumen_core::JsValue::Number(1.0)
+    );
+    assert_eq!(
+        rt.eval("_mo_rc_recs[0].removedNodes[0].id").unwrap(),
+        lumen_core::JsValue::String("old".into())
+    );
+}
+
+#[test]
+fn mutation_observer_observe_throws_without_any_kind_requested() {
+    // DOM §4.3.1 step 3: `observe()` with none of childList/attributes/
+    // characterData (after the OldValue/Filter implications) is a TypeError.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        rt.eval(
+            "try { new MutationObserver(function(){}).observe(document.body, {}); false } \
+             catch (e) { e instanceof TypeError }"
+        ).unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    // attributeOldValue/characterDataOldValue imply their flag — no throw.
+    assert_eq!(
+        rt.eval(
+            "try { new MutationObserver(function(){}).observe(document.body, \
+             { characterDataOldValue: true }); true } catch (e) { false }"
+        ).unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+}
+
+#[test]
+fn mutation_observer_constructor_throws_without_callback() {
+    // DOM §4.3.1: the callback argument is mandatory.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        rt.eval("try { new MutationObserver(); false } catch (e) { e instanceof TypeError }")
+            .unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+}
+
+#[test]
 fn mutation_observer_disconnect_stops_delivery() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(r#"

@@ -157,7 +157,7 @@ mod tests {
             rect,
             used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
-            kind: BoxKind::InlineRun { segments: vec![], lines, first_line_style: None },
+            kind: BoxKind::InlineRun { segments: vec![], lines, first_line_style: None, row_continuation_width: None },
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),

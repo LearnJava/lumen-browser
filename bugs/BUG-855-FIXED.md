@@ -1,9 +1,9 @@
 # BUG-855 — MutationObserver не видит половину скриптовых мутаций: `removeAttribute`, вставку через `insertBefore`/`replaceChild`, а `previousSibling`/`nextSibling` в записи всегда `null`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-23 (P3)
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 25 — живой замер, маркеры `mo-attributes`, `mo-childlist`, `mo-validation`)
-**Область:** `crates/js/src/dom.rs` — обвязка `_mo_notify` (`dom.rs:9965`): перехвачены только `_lumen_append_child` (`:10058`), `_lumen_remove_child` (`:10067`), `_lumen_set_inner_html` (`:10046`), `_lumen_set_text_content` (`:10082`/`:10088`) и путь *установки* атрибута (`:10037`). Не перехвачены `_lumen_insert_before` (обёртка на `dom.rs:6638` есть, но только для сабресурсов), `replaceChild` и `removeAttribute` (`dom.rs:4250`, зовёт `_lumen_remove_attr` напрямую). Поля `nextSibling`/`previousSibling` записи захардкожены в `null` (`dom.rs:10001`–`10002`)
-**Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
+**Область:** `crates/js/src/shim/web_api_shim_mid_b2.js` — обвязка `_mo_notify`. Заявка указывала на `crates/js/src/dom.rs` (`:9965`, `:10001`–`10002`) — эти строки устарели: подсистема давно переехала в шим-файл (SPLIT-JS3, 2026-08-28), сама диагностика осталась верной.
+**Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи.
 **Родственные:** [BUG-827](BUG-827-FIXED.md) — та же подсистема со стороны **парсера** (узлы, вставленные парсером, не порождают записей вовсе). Этот баг про **скриптовую** половину, которую BUG-827 явно записал как исправную.
 
 ## Симптом
@@ -93,3 +93,46 @@ knowledge-слой).
    `addedNodes` и соседями, `mv-empty-init TypeError`.
 2. WPT: `run_report.py --all --root dom/nodes --recursive` (файлы
    `MutationObserver-*`).
+
+## Исправление
+
+`_lumen_remove_attr` обёрнута тем же паттерном, что и `_lumen_set_attr`
+(читает старое значение до вызова натива, зовёт `_mo_notify` после). Новая
+обёртка над `_lumen_insert_before` добавлена рядом с уже существовавшими
+обёртками `_lumen_append_child`/`_lumen_remove_child` — все три теперь читают
+соседей через общий `_lumen_mo_siblings(parentNid, nid)` (после вставки — для
+`insertBefore`/`appendChild`, до удаления — для `removeChild`, иначе список
+уже не содержит узел).
+
+`Node.replaceChild` — отдельный случай: он реализован поверх insert+remove,
+и после того как оба этих натива стали слать собственную запись, наивный
+повторный вызов той же пары дал бы ДВЕ записи вместо одной комбинированной
+`+added -removed`, которую требует DOM §4.2.4 "replace" (WPT
+`MutationObserver-childList.html`, `n50`: одна запись `removedNodes:[old],
+addedNodes:[new]`). Функция переопределена так, чтобы звать «сырые»
+(домоционные, ещё не обёрнутые в MO) версии натива и слать ровно один
+`_mo_notify`. Ловушка при переопределении: `_LUMEN_WRAPPER_MEMBERS` — только
+исходный словарь методов; `web_api_shim_mid.js` уже успевает снять с него
+`Object.getOwnPropertyDescriptors` в `_LUMEN_WRAPPER_DESCRIPTORS` ДО того, как
+этот файл выполняется, и именно этот снимок (не словарь) расходится по всем
+интерфейс-прототипам через `_lumen_wrapper_proto_for`. Правка одного словаря
+без правки снимка компилируется и не бросает ошибку, но не меняет ни одного
+реального `replaceChild` — обе ссылки обновлены.
+
+`MutationObserver` конструктор и `observe()` получили недостающую валидацию
+(DOM §4.3.1): отсутствующий колбэк и `observe(target, {})` без единого
+включённого вида мутации теперь бросают `TypeError`; `characterDataOldValue`
+без явного `characterData` по-прежнему подразумевает его (как уже было для
+`attributeOldValue`/`attributes`).
+
+Не в скоупе (осталось как было): `replaceChild` на самозамене/внутренней
+перестановке одного и того же узла (WPT `n52`/`n53` того же файла — там
+ожидаются иные, более тонкие комбинации записей) и `previousSibling`/
+`nextSibling` при wholesale-замене через `innerHTML =`/`textContent =` (всё
+ещё `null` — WPT для этих кейсов их и не проверяет).
+
+Проверено: `verify_focus_mutation_animation_gaps.py --variant mo-attributes
+--variant mo-childlist --variant mo-validation` — все три совпали с
+ожиданием построчно. `run_report.py` не удалось прогнать в этой среде
+(`wss`-сервер падает на Python 3.14 — известная непричастная проблема, не
+эта правка). 6 новых юнит-тестов в `crates/js/src/dom/tests/v8_perf_observers.rs`.
