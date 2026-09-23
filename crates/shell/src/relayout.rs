@@ -830,17 +830,38 @@ impl Lumen {
         viewport: Size,
         defer_js_push: bool,
     ) {
+        // BUG-935 S37: per-phase timing across the whole function, gated by the
+        // same `LUMEN_FRAME_LOG` flag as `apply_ms` (the caller-side aggregate
+        // S15/S36 already log). S36 found `apply_ms` alone accounts for 65-93ms
+        // per tick with nothing inside this function broken down further (the
+        // only existing breakdown, S33's `task-step` macro, times the deferred
+        // JS-push closure, not the synchronous prefix that runs before it) — this
+        // macro narrows the search to which phase of THIS function dominates.
+        let step_log = lumen_paint::frame_log_enabled();
+        macro_rules! apply_step {
+            ($label:literal, $expr:expr) => {{
+                let t0 = step_log.then(std::time::Instant::now);
+                let result = $expr;
+                if let Some(t0) = t0 {
+                    let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                    eprintln!("[engine] apply-step {ms:.2}ms ({})", $label);
+                }
+                result
+            }};
+        }
         // BUG-480 срез 13: контентный вьюпорт под-документов следует за
         // размером их host-бокса — значит за каждым relayout (ресайз, зум,
         // любое движение вёрстки над фреймом). Проход сам гейтится на
         // «размер не менялся» и на пустом списке фреймов стоит ноль. ДО
         // заимствования `layout_source`: там берётся `&self` на всю функцию.
-        let frame_state = self.frame_interactive();
-        crate::frames::sync_frame_viewports(&mut self.frames, &lb, frame_state);
-        // FRAME-5 срез 2: fetch+register whatever lazy `<img>` just entered a
-        // frame's own proximity margin — a mere relayout has no page-commit
-        // step to piggy-back on, unlike the initial load (`page_pipeline.rs`).
-        self.register_frame_lazy_images();
+        apply_step!("frame_sync", {
+            let frame_state = self.frame_interactive();
+            crate::frames::sync_frame_viewports(&mut self.frames, &lb, frame_state);
+            // FRAME-5 срез 2: fetch+register whatever lazy `<img>` just entered a
+            // frame's own proximity margin — a mere relayout has no page-commit
+            // step to piggy-back on, unlike the initial load (`page_pipeline.rs`).
+            self.register_frame_lazy_images();
+        });
         let Some(src) = self.layout_source.as_ref() else { return };
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
@@ -848,11 +869,13 @@ impl Lumen {
         // растягивать прокрутку страницы — обе функции складывают плоский
         // список прямоугольников и клипов не видят) и ДО diff/кэша, чтобы обе
         // стороны сравнения были одинаково склеенными.
-        crate::frames::splice_frame_content(&mut new_dl, &self.frames);
-        self.tile_grid.update_from_diff(&self.display_list, &new_dl);
-        // Cache display list directly (avoid &mut self while layout_source is borrowed).
-        let _dl_hash = lumen_paint::hash_commands(&new_dl);
-        self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
+        apply_step!("dl_splice_diff_cache", {
+            crate::frames::splice_frame_content(&mut new_dl, &self.frames);
+            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+            // Cache display list directly (avoid &mut self while layout_source is borrowed).
+            let _dl_hash = lumen_paint::hash_commands(&new_dl);
+            self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
+        });
         // Поля пишутся напрямую (не через `set_display_list`): `layout_source`
         // здесь заимствован, `&mut self` целиком взять нельзя.
         self.display_list = new_dl;
@@ -860,58 +883,64 @@ impl Lumen {
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
         let mut new_styles = HashMap::new();
-        collect_box_styles(&lb, &mut new_styles);
-        for (node, new_style) in &new_styles {
-            if let Some(old_style) = self.prev_styles.get(node) {
-                self.transition_events.extend(
-                    self.transition_scheduler.sync(*node, old_style, new_style, now_s),
-                );
+        apply_step!("transitions_sync", {
+            collect_box_styles(&lb, &mut new_styles);
+            for (node, new_style) in &new_styles {
+                if let Some(old_style) = self.prev_styles.get(node) {
+                    self.transition_events.extend(
+                        self.transition_scheduler.sync(*node, old_style, new_style, now_s),
+                    );
+                }
             }
-        }
+        });
         // GAP-CSSANIM срез 7: a node absent from this pass's layout tree (removed
         // from the DOM, or stopped generating a box via `display: none`) never
         // gets another `sync()` call, so any transition still `active` on it would
         // otherwise leak forever and never fire `transitioncancel` (CSS Transitions
         // L1 §3). `new_styles` already reflects exactly the current tree.
-        self.transition_events.extend(
-            self.transition_scheduler.cancel_missing(&new_styles, now_s),
-        );
+        apply_step!("transitions_cancel_missing", {
+            self.transition_events.extend(
+                self.transition_scheduler.cancel_missing(&new_styles, now_s),
+            );
+        });
         // @starting-style (CSS Transitions L2 §3.4): newly visible nodes (not in
         // prev_styles) use @starting-style rules as the before-change style so that
         // entry transitions start from the declared starting values.
-        if !src.stylesheet.starting_style_rules.is_empty() {
-            let entering: Vec<NodeId> = new_styles
-                .keys()
-                .filter(|n| !self.prev_styles.contains_key(*n))
-                .copied()
-                .collect();
-            if !entering.is_empty() {
-                let mut entry_styles: Vec<(NodeId, ComputedStyle)> = Vec::new();
-                if let Ok(doc) = src.document.lock() {
-                    for node in &entering {
-                        if let Some(decls) =
-                            resolve_starting_style(*node, &doc, &src.stylesheet)
-                        {
-                            entry_styles.push((
+        apply_step!("starting_style", {
+            if !src.stylesheet.starting_style_rules.is_empty() {
+                let entering: Vec<NodeId> = new_styles
+                    .keys()
+                    .filter(|n| !self.prev_styles.contains_key(*n))
+                    .copied()
+                    .collect();
+                if !entering.is_empty() {
+                    let mut entry_styles: Vec<(NodeId, ComputedStyle)> = Vec::new();
+                    if let Ok(doc) = src.document.lock() {
+                        for node in &entering {
+                            if let Some(decls) =
+                                resolve_starting_style(*node, &doc, &src.stylesheet)
+                            {
+                                entry_styles.push((
+                                    *node,
+                                    compute_style_from_declarations(&decls, viewport),
+                                ));
+                            }
+                        }
+                    }
+                    // MutexGuard dropped — apply entry transitions outside the lock.
+                    for (node, starting_style) in &entry_styles {
+                        if let Some(new_style) = new_styles.get(node) {
+                            self.transition_events.extend(self.transition_scheduler.sync(
                                 *node,
-                                compute_style_from_declarations(&decls, viewport),
+                                starting_style,
+                                new_style,
+                                now_s,
                             ));
                         }
                     }
                 }
-                // MutexGuard dropped — apply entry transitions outside the lock.
-                for (node, starting_style) in &entry_styles {
-                    if let Some(new_style) = new_styles.get(node) {
-                        self.transition_events.extend(self.transition_scheduler.sync(
-                            *node,
-                            starting_style,
-                            new_style,
-                            now_s,
-                        ));
-                    }
-                }
             }
-        }
+        });
         self.prev_styles = new_styles;
         // CSSOM-7 (BUG-977): grab the owned `Arc` now, while `src` (an
         // immutable borrow of `self.layout_source`) is still alive — every
@@ -934,25 +963,27 @@ impl Lumen {
         // attempt onto the safe full-cascade-plus-graft fallback for one cycle.
         self.page_prev_cascade_styles = None;
         self.layout_box = Some(lb);
-        self.refresh_cv_state();
-        // Promote nodes with will-change: transform/opacity/filter to GPU layers so
-        // animation ticks can update only the layer matrix, bypassing relayout.
-        // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
-        if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
-            promote_will_change_layers(lb_ref, r.as_mut());
-        }
-        // ADR-016 M0.3: the fresh display list is now laid out at the current
-        // zoom, so any transform-first zoom preview is complete — clear the
-        // debounce and reset the backend to 1:1. Done for every relayout
-        // (resize, DOM mutation, tab switch), not just the debounced zoom one,
-        // so a relayout from another source also lands the pending zoom.
-        self.laid_out_zoom_factor = self.zoom_factor;
-        self.pending_zoom_relayout = None;
-        if let Some(r) = self.renderer.as_mut() {
-            r.set_preview_scale(1.0);
-        }
-        self.update_snap_containers();
-        self.update_scroll_containers();
+        apply_step!("cv_snap_scroll_state", {
+            self.refresh_cv_state();
+            // Promote nodes with will-change: transform/opacity/filter to GPU layers so
+            // animation ticks can update only the layer matrix, bypassing relayout.
+            // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
+            if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
+                promote_will_change_layers(lb_ref, r.as_mut());
+            }
+            // ADR-016 M0.3: the fresh display list is now laid out at the current
+            // zoom, so any transform-first zoom preview is complete — clear the
+            // debounce and reset the backend to 1:1. Done for every relayout
+            // (resize, DOM mutation, tab switch), not just the debounced zoom one,
+            // so a relayout from another source also lands the pending zoom.
+            self.laid_out_zoom_factor = self.zoom_factor;
+            self.pending_zoom_relayout = None;
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_preview_scale(1.0);
+            }
+            self.update_snap_containers();
+            self.update_scroll_containers();
+        });
         // GAP-CSSANIM срез 9 (correction): do NOT clear `animation_scheduler`
         // here either, for the same reason the comment below already gives
         // `transition_scheduler` — a running `@keyframes` animation must
@@ -998,34 +1029,73 @@ impl Lumen {
                     .as_ref()
                     .and_then(|ls| ls.document.lock().ok())
             {
-                let rects = collect_layout_rects(lb_ref, &doc_guard);
-                // GAP-LAYOUTSHIFT срез 5 (BUG-809): scored off
-                // `collect_layout_shift_rects`, not `rects` above —
-                // `rects` is gBCR geometry (own-node CSS transform applied,
-                // hidden nodes included), which double-counts transform-only
-                // moves and visibility:hidden moves as shifts (see that
-                // function's doc-comment). Computed before `rects` moves into
-                // the JS-push closures below, then the baseline advances so
-                // the *next* relayout diffs against this one.
-                let shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
-                let layout_shift = compute_layout_shift_score(
-                    &self.prev_layout_shift_rects,
-                    &shift_rects,
-                    viewport.width,
-                    viewport.height,
-                );
-                let layout_shift_score = layout_shift.score;
-                let layout_shift_sources = layout_shift.sources;
-                self.prev_layout_shift_rects = shift_rects;
-                // had_recent_input (Layout Instability L1 §3): a shift within
-                // 500ms of a real mouse/key press does not count against CLS.
-                let had_input = now_s - self.last_input_epoch_s < 0.5;
-                let client_rects = collect_client_rects(lb_ref, &doc_guard);
-                let hit_test_tree = Arc::new(lb_ref.clone());
-                let styles = collect_computed_styles(lb_ref, &doc_guard, None);
-                let pseudo_styles = collect_pseudo_computed_styles(lb_ref);
-                drop(doc_guard);
-                let customs = collect_custom_properties(lb_ref, viewport);
+                // BUG-935 S37: this whole block — every `collect_*` gathering
+                // geometry/styles for the JS push below — runs synchronously on
+                // THIS thread regardless of `defer_js_push` (only the
+                // `js.update_*`/`js.deliver_*` calls that consume it are
+                // deferred). S36 found `apply_ms` (this function's own cost)
+                // dominant and unexplained; this timer isolates whether the
+                // collection itself, not the push, is the dominant cost.
+                let (
+                    rects,
+                    layout_shift_score,
+                    layout_shift_sources,
+                    had_input,
+                    client_rects,
+                    hit_test_tree,
+                    styles,
+                    pseudo_styles,
+                    customs,
+                    scroll_states,
+                ) = apply_step!("js_geometry_collect", {
+                    let rects = apply_step!("collect_layout_rects", collect_layout_rects(lb_ref, &doc_guard));
+                    // GAP-LAYOUTSHIFT срез 5 (BUG-809): scored off
+                    // `collect_layout_shift_rects`, not `rects` above —
+                    // `rects` is gBCR geometry (own-node CSS transform applied,
+                    // hidden nodes included), which double-counts transform-only
+                    // moves and visibility:hidden moves as shifts (see that
+                    // function's doc-comment). Computed before `rects` moves into
+                    // the JS-push closures below, then the baseline advances so
+                    // the *next* relayout diffs against this one.
+                    let (layout_shift_score, layout_shift_sources, had_input) = apply_step!("layout_shift_score", {
+                        let shift_rects = lumen_layout::collect_layout_shift_rects(lb_ref);
+                        let layout_shift = compute_layout_shift_score(
+                            &self.prev_layout_shift_rects,
+                            &shift_rects,
+                            viewport.width,
+                            viewport.height,
+                        );
+                        self.prev_layout_shift_rects = shift_rects;
+                        // had_recent_input (Layout Instability L1 §3): a shift within
+                        // 500ms of a real mouse/key press does not count against CLS.
+                        let had_input = now_s - self.last_input_epoch_s < 0.5;
+                        (layout_shift.score, layout_shift.sources, had_input)
+                    });
+                    let client_rects = apply_step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
+                    let hit_test_tree = apply_step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
+                    let styles = apply_step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None));
+                    let pseudo_styles = apply_step!("collect_pseudo_computed_styles", collect_pseudo_computed_styles(lb_ref));
+                    drop(doc_guard);
+                    let customs = apply_step!("collect_custom_properties", collect_custom_properties(lb_ref, viewport));
+                    // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
+                    // immediately after relayout return the correct clamped values.
+                    let scroll_states: HashMap<u32, [f32; 4]> = apply_step!("collect_scroll_containers", collect_scroll_containers_for_js_state(lb_ref)
+                        .iter()
+                        .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                        .collect());
+                    (
+                        rects,
+                        layout_shift_score,
+                        layout_shift_sources,
+                        had_input,
+                        client_rects,
+                        hit_test_tree,
+                        styles,
+                        pseudo_styles,
+                        customs,
+                        scroll_states,
+                    )
+                });
                 let (vw, vh) = (viewport.width, viewport.height);
                 let zoom_factor = self.zoom_factor;
                 let dark_mode = self.dark_mode;
@@ -1037,12 +1107,6 @@ impl Lumen {
                 // same-tick flush (CSSOM-4/BUG-493) stops being a permanent
                 // no-op in the interactive shell.
                 let stylesheet = stylesheet_for_flush;
-                // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
-                // immediately after relayout return the correct clamped values.
-                let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb_ref)
-                    .iter()
-                    .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
-                    .collect();
                 // BUG-935 S17: `defer_js_push` splits the two callers that used
                 // to share this one blocking `route_query_js` call.
                 // `try_relayout_raf_incremental` (the only `true` caller) fires
@@ -1064,11 +1128,12 @@ impl Lumen {
                     // entry/exit surrounding them. Only gated by
                     // `LUMEN_FRAME_LOG` (same flag as `engine_t0` above), so
                     // an ordinary run pays nothing.
-                    let step_log = lumen_paint::frame_log_enabled();
+                    let inner_step_log = lumen_paint::frame_log_enabled();
+                    apply_step!("js_push_spawn_nonblocking", {
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         macro_rules! timed_step {
                             ($label:literal, $expr:expr) => {{
-                                let t0 = step_log.then(std::time::Instant::now);
+                                let t0 = inner_step_log.then(std::time::Instant::now);
                                 let result = $expr;
                                 if let Some(t0) = t0 {
                                     let ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -1110,8 +1175,9 @@ impl Lumen {
                             slot.extend(reqs);
                         }
                     });
+                    });
                 } else {
-                    lazy_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                    lazy_reqs = apply_step!("js_push_blocking", route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
                         js.update_client_rects(client_rects);
                         js.update_hit_test_tree(hit_test_tree);
@@ -1138,7 +1204,7 @@ impl Lumen {
                         js.update_scroll_states(scroll_states);
                         reqs
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_default());
                 }
             }
             // BUG-935 S17: pick up whatever a *previous* deferred push (this

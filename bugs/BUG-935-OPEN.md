@@ -2674,6 +2674,142 @@ routing не работает под дефолтной сборкой) по-п�
 однострочная правка, и требует отдельного протокола измерения на этом же
 стенде до входа в код.
 
+## S37 (P3, 2026-09-23) — `apply_relayout_result`'s 65-93ms найден и разобран по фазам: единственный доминирующий вклад — `collect_computed_styles`, полная ре-сериализация вычисленных стилей ВСЕГО дерева layout на каждый тик
+
+Продолжение с того места, где остановился S36 («настоящий следующий шаг —
+решить, можно ли и как вынести саму `apply_relayout_result` ... это
+архитектурная развилка ... требует отдельного протокола измерения на этом
+же стенде до входа в код»). Прежде чем решать архитектурный вопрос,
+измерил, ЧТО внутри `apply_relayout_result` стоит эти 65-93мс — S36 знал
+только итоговое число (`apply_ms`), сама функция была чёрным ящиком:
+единственная существовавшая инструментация (S33's `task-step`) таймит
+ТОЛЬКО отложенный JS-push (`route_task_js`'s замыкание), а не синхронный
+префикс, который выполняется ДО него независимо от `defer_js_push`.
+
+**Метод:** в `apply_relayout_result` (`relayout.rs`) добавлен макрос
+`apply_step!` (тот же паттерн, что S33's `timed_step!` — гейт
+`lumen_paint::frame_log_enabled()`, нулевая стоимость на обычном прогоне)
+и обёрнуты все крупные фазы функции: `frame_sync`, `dl_splice_diff_cache`,
+`transitions_sync`, `transitions_cancel_missing`, `starting_style`,
+`js_geometry_collect` (весь блок `collect_layout_rects`/`collect_client_rects`/
+`collect_computed_styles`/`collect_pseudo_computed_styles`/
+`collect_custom_properties`/`collect_scroll_containers_for_js_state` —
+S37 confirmed this runs synchronously regardless of `defer_js_push`, only
+the `js.update_*`/`js.deliver_*` push that consumes it is deferred),
+`js_push_spawn_nonblocking`/`js_push_blocking` (обёртка вокруг самого
+`route_task_js`/`route_query_js` вызова) и `cv_snap_scroll_state`.
+`js_geometry_collect` затем разобран на под-таймеры по каждому
+`collect_*`-вызову отдельно (второй проход этого же среза).
+
+`||`-своп `relayout_raf_dirty` (S12/S14/S18/S20/S36's приём) временно
+внесён СНОВА ради самого измерения (нужен путь `try_relayout_raf_incremental`
+на UI-потоке, где стоит `apply_ms`), census (`scripts/bug935_raf_relayout_census.py`
+на S29's чистом офлайн-стенде `bug935_raf_dom_stand.html`, `--settle-s 5
+--ticks 10`) прогнан дважды подряд (первый — только с блочным
+`apply_step!` на фазах, второй — с уже добавленным разбором
+`js_geometry_collect`), своп **отменён** после обоих прогонов
+(`git diff --stat` перед коммитом — только сама инструментация).
+
+**Первый прогон (фазовый разбор), 34 записи:**
+
+```
+js_geometry_collect          n=33 avg=95.64ms  total=3156.14ms
+transitions_sync             n=34 avg=12.14ms  total=412.61ms
+dl_splice_diff_cache         n=34 avg=13.58ms  total=461.57ms
+cv_snap_scroll_state         n=34 avg=0.30ms
+starting_style                n=34 avg=0.00ms
+js_push_spawn_nonblocking    n=33 avg=0.01ms
+frame_sync                    n=34 avg=0.00ms
+transitions_cancel_missing    n=34 avg=0.00ms
+```
+
+`js_geometry_collect` — 88% суммарного времени всех фаз этого прогона,
+на порядок дороже второго по стоимости шага (`dl_splice_diff_cache`,
+tile-grid diff + display-list-cache insert + hash). `js_push_spawn_nonblocking`
+подтверждает S17/S35: сам факт постановки `route_task_js`-замыкания в
+очередь стоит копейки (0.01мс) — весь эффект `defer_js_push` — это то, что
+происходит ВНУТРИ отложенного замыкания, а не задержка на постановку в
+очередь, что этот срез и делал предметом дальнейшего разбора не по этой
+оси, а по оси «что стоит дорого ДО push'а».
+
+**Второй прогон (разбор `js_geometry_collect` по `collect_*`), 28 записей:**
+
+```
+js_geometry_collect            n=28 avg=104.06ms total=2913.81ms
+  collect_computed_styles      n=28 avg=92.96ms  total=2602.95ms  (89% js_geometry_collect)
+dl_splice_diff_cache           n=28 avg=15.11ms  total=423.00ms
+transitions_sync               n=28 avg=11.41ms  total=319.53ms
+collect_pseudo_computed_styles n=28 avg=4.65ms
+clone_hit_test_tree            n=28 avg=3.51ms
+collect_client_rects           n=28 avg=1.18ms
+collect_layout_rects           n=28 avg=0.79ms
+layout_shift_score             n=28 avg=0.41ms
+cv_snap_scroll_state           n=28 avg=0.33ms
+collect_custom_properties      n=28 avg=0.10ms
+collect_scroll_containers      n=28 avg=0.08ms
+```
+
+**Корень найден однозначно: `collect_computed_styles`** (`crates/engine/layout/src/lib.rs:1555`)
+— единственный доминирующий вклад, 89-93мс из 92-104мс всей фазы сбора
+геометрии/стилей для JS, что совпадает по порядку величины с S36's
+`apply_ms=65-93ms` (разница — станочный шум между сессиями, стенд тот
+же). Все остальные `collect_*`-функции того же семейства (rects, custom
+properties, scroll-контейнеры) на том же дереве стоят **на два порядка
+меньше** (0.1-4.7мс) — дороговизна не в самом факте прохода по дереву, а
+конкретно в этой функции.
+
+**Почему `collect_computed_styles` так дорога:** `collect_computed_styles_rec`
+проходит КАЖДЫЙ `LayoutBox` дерева (плюс каждый инлайн-сегмент) и на
+каждом зовёт `computed_style_to_map(&b.style)` — сериализует ~55
+CSS-свойств из внутреннего `ComputedStyle` в `HashMap<String, String>`
+(строковое представление, готовое к выдаче в `getComputedStyle()`).
+Стоимость линейна по числу узлов **и** не кэшируется между тиками: даже
+когда cascade-skip путь (`restyle=1`, BUG-341/BUG-935 S13) переиспользует
+САМ `ComputedStyle` для непереехавших узлов и не пересчитывает каскад,
+`collect_computed_styles` всё равно ре-сериализует его в строки заново на
+каждый вызов `apply_relayout_result` — тот же узел с тем же
+`ComputedStyle` платит одну и ту же сериализацию снова и снова, пока
+существует хоть один JS-наблюдатель (`self.js_present`).
+
+**Почему это не тронуто этим срезом:** это тоже не точечная правка — три
+разных направления фикса просматриваются (a) кэш строковой сериализации
+по `(NodeId, версия ComputedStyle)`, инвалидируемый только когда узел
+реально попал в `dirty_roots` (та же граница, что BUG-341's
+restyle-delta уже вычисляет для самого каскада — S37 не проверял,
+насколько просто её переиспользовать здесь); (b) ленивая сериализация —
+строить `HashMap<String,String>` только для узлов, чьи computed styles
+JS реально прочитал в этом тике (нужен способ узнать это ДО прохода,
+которого сейчас нет); (c) более дешёвое промежуточное представление,
+сериализуемое в строку только на чтение из JS (`getComputedStyle`),
+а не заранее на каждый relayout. Каждый вариант — самостоятельный кусок
+работы с собственным риском (инвалидация кэша, обратная совместимость
+API, риск регрессии на нетронутых сценариях), требующий отдельного среза
+и измерения по `docs/perf-method.md`, не довеска к этому.
+
+**Сделано в этом срезе (постоянные правки, `git diff --stat`: только
+`crates/shell/src/relayout.rs`):** инструментация `apply_step!` на все
+фазы `apply_relayout_result`, плюс под-таймеры внутри
+`js_geometry_collect`. Гейт `LUMEN_FRAME_LOG` — нулевая стоимость на
+обычном прогоне, тот же паттерн, что S12/S33's таймеры. `||`-своп
+`relayout_raf_dirty`, использованный только для самого измерения (нужен
+путь `try_relayout_raf_incremental`, где стоимость видна на UI-потоке),
+отменён — код функции идентичен состоянию до этого среза.
+
+**Тесты:** `cargo build --profile dev-release -p lumen-shell --bin lumen
+--features v8` зелёный. `cargo clippy -p lumen-shell --all-targets
+--features v8 -- -D warnings` чист.
+
+**Следующий срез должен:** выбрать один из трёх направлений (a)/(b)/(c)
+выше для `collect_computed_styles` — теперь измеримо самостоятельная
+находка, независимая от M4-роутинга (S36's вопрос «выносить
+`apply_relayout_result` целиком на движковый поток» остаётся открытым
+отдельно, но `collect_computed_styles` дорога одинаково на ЛЮБОМ
+потоке — фикс здесь снижает стоимость `apply_relayout_result` целиком,
+а не только для `try_relayout_raf_incremental`'s UI-thread пути, и
+поэтому не требует решать архитектурную развилку S36 первым). Основной
+исходный симптом бага (M4-роутинг мёртв под движковым потоком) по-прежнему
+открыт и не тронут этим срезом.
+
 ## Воспроизведение
 
 ```
