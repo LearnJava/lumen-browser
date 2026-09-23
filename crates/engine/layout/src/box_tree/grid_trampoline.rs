@@ -160,7 +160,7 @@ pub(super) fn run(
                             parent.b.children[i] = current.b;
                             match parent.pass {
                                 Pass::Probe => post_probe_item(&mut parent, i),
-                                Pass::Final => post_final_item(&mut parent, i, viewport),
+                                Pass::Final => post_final_item(&mut parent, i, viewport, measurer, hp),
                             }
                             parent.k += 1;
                             current = parent;
@@ -478,33 +478,33 @@ fn step_final_item(
             &mut frame.b.children[i], content_x, y, content_width, None, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         ) {
-            DispatchOutcome::Done => { post_final_item(frame, i, viewport); StepOutcome::Advance }
+            DispatchOutcome::Done => { post_final_item(frame, i, viewport, measurer, hp); StepOutcome::Advance }
             DispatchOutcome::NeedsBlockFlowLoop(ci) => {
                 block_flow_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsFlexLoop(ci) => {
                 super::flex_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
             DispatchOutcome::NeedsTableLoop(ci) => {
                 super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsMulticolLoop(ci) => {
                 super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             // LAYOUT-2 срез 8: same shape, for a grid item that is itself a
             // vertical writing-mode container.
             DispatchOutcome::NeedsVerticalLoop(ci) => {
                 super::vertical_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
         };
@@ -543,33 +543,33 @@ fn step_final_item(
         );
         drop(_guard);
         match outcome {
-            DispatchOutcome::Done => { post_final_item(frame, i, viewport); StepOutcome::Advance }
+            DispatchOutcome::Done => { post_final_item(frame, i, viewport, measurer, hp); StepOutcome::Advance }
             DispatchOutcome::NeedsBlockFlowLoop(ci) => {
                 block_flow_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsFlexLoop(ci) => {
                 super::flex_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
             DispatchOutcome::NeedsTableLoop(ci) => {
                 super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsMulticolLoop(ci) => {
                 super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             // LAYOUT-2 срез 8: same shape, for a grid item that is itself a
             // vertical writing-mode container.
             DispatchOutcome::NeedsVerticalLoop(ci) => {
                 super::vertical_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
         }
@@ -580,7 +580,7 @@ fn step_final_item(
         // position needs to catch up to the resolved row offset.
         crate::incremental::translate_subtree(&mut reused, cell_x - probe_x, cell_y - probe_y);
         frame.b.children[i] = reused;
-        post_final_item(frame, i, viewport);
+        post_final_item(frame, i, viewport, measurer, hp);
         StepOutcome::Advance
     } else {
         // No usable probe: an unplaced-at-probe-time item can't reach here
@@ -590,33 +590,33 @@ fn step_final_item(
             &mut frame.b.children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp,
             false, None, AlignValue::Auto, None,
         ) {
-            DispatchOutcome::Done => { post_final_item(frame, i, viewport); StepOutcome::Advance }
+            DispatchOutcome::Done => { post_final_item(frame, i, viewport, measurer, hp); StepOutcome::Advance }
             DispatchOutcome::NeedsBlockFlowLoop(ci) => {
                 block_flow_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsFlexLoop(ci) => {
                 super::flex_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
             DispatchOutcome::NeedsTableLoop(ci) => {
                 super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsMulticolLoop(ci) => {
                 super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
             // LAYOUT-2 срез 8: same shape, for a grid item that is itself a
             // vertical writing-mode container.
             DispatchOutcome::NeedsVerticalLoop(ci) => {
                 super::vertical_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
-                post_final_item(frame, i, viewport);
+                post_final_item(frame, i, viewport, measurer, hp);
                 StepOutcome::Advance
             }
         }
@@ -630,7 +630,13 @@ fn step_final_item(
 /// synchronous paths and `run`'s resume-after-descend path — both leave
 /// `frame.k` pointing at this exact item, so re-deriving cell geometry from
 /// `frame.init.placements[k]` gives the same answer either way.
-fn post_final_item(frame: &mut Frame, i: usize, viewport: Size) {
+fn post_final_item(
+    frame: &mut Frame,
+    i: usize,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+    hp: &dyn HyphenationProvider,
+) {
     let k = frame.k;
     let (cs, ce, rs, re) = frame.init.placements[k];
     if cs == 0 || rs == 0 {
@@ -649,6 +655,7 @@ fn post_final_item(frame: &mut Frame, i: usize, viewport: Size) {
     let cell_w = grid_track_span(&frame.init.col_offsets, &frame.init.col_widths, c0, c1);
     let cell_h = grid_track_span(&frame.init.row_offsets, &frame.init.row_heights, r0, r1);
     let content_width = frame.init.content_width;
+    let pcb = frame.init.children_pcb;
     let s = Arc::clone(&frame.init.s);
 
     let item = &mut frame.b.children[i];
@@ -659,9 +666,12 @@ fn post_final_item(frame: &mut Frame, i: usize, viewport: Size) {
     let m_l = is.margin_left.resolve_or_zero(iem, content_width, viewport);
     let m_r = is.margin_right.resolve_or_zero(iem, content_width, viewport);
 
-    // align-items (cross / block axis within cell).
+    // align-items (cross / block axis within cell). `stretch_h` records a
+    // grown height for the relayout below — deferred until `item.rect.x` has
+    // its final value from the justify-items block further down.
     let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
     let item_outer_h = item.rect.height + m_t + m_b;
+    let mut stretch_h: Option<f32> = None;
     match align {
         AlignValue::End => {
             item.rect.y = cell_y + cell_h - item.rect.height - m_b;
@@ -674,7 +684,9 @@ fn post_final_item(frame: &mut Frame, i: usize, viewport: Size) {
             // `auto`; an explicit `height` is preserved (the item is top-aligned in
             // the cell, leaving free space below — like Edge).
             if is.height.is_none() && item.rect.height < cell_h - m_t - m_b {
-                item.rect.height = (cell_h - m_t - m_b).max(item.rect.height);
+                let h = (cell_h - m_t - m_b).max(item.rect.height);
+                item.rect.height = h;
+                stretch_h = Some(h);
             }
             item.rect.y = cell_y + m_t;
         }
@@ -699,6 +711,45 @@ fn post_final_item(frame: &mut Frame, i: usize, viewport: Size) {
         _ => {
             item.rect.x = cell_x + m_l;
         }
+    }
+
+    // BUG-644: `align-items: stretch` above only widened the outer box by
+    // reassigning `item.rect.height` — the subtree underneath was laid out
+    // (probe or reused-from-probe) against the smaller pre-stretch height, so
+    // a child whose own layout depends on this item's block size (e.g. a
+    // nested flex container's `align-items: center`) still has it resolved
+    // against that stale height. Relay out with the final height as a used-
+    // size override so it re-resolves, mirroring `flex_trampoline`'s
+    // `relayout_column_flex` (`box_tree/flex_trampoline.rs`).
+    if let Some(h) = stretch_h {
+        // If `item` is itself a subgrid, its column/row tracks resolve through
+        // the thread-local `SubgridContextGuard` `step_final_item` set up for
+        // the original placement pass (already dropped by the time this
+        // stretch-driven relayout runs) — re-establish it from the same
+        // `col_widths[c0..c1]`/`row_heights[r0..r1]` slices, or a subgrid item
+        // relaid out here loses its inherited tracks entirely (BUG-644 srez 2
+        // regression: `a.w=0` in `grid_subgrid_column_layout`).
+        let child_col_subgrid = item.style.grid_template_columns.first() == Some(&GridTrackSize::Subgrid);
+        let child_row_subgrid = item.style.grid_template_rows.first() == Some(&GridTrackSize::Subgrid);
+        let _guard = (child_col_subgrid || child_row_subgrid).then(|| {
+            let col_ctx = (child_col_subgrid && c1 > c0)
+                .then(|| SubgridContext::from_parent_tracks(&frame.init.col_widths[c0..c1], frame.init.col_gap));
+            let row_ctx = (child_row_subgrid && r1 > r0)
+                .then(|| SubgridContext::from_parent_tracks(&frame.init.row_heights[r0..r1], frame.init.row_gap));
+            SubgridContextGuard::set(col_ctx, row_ctx)
+        });
+
+        let item = &mut frame.b.children[i];
+        let rx = item.rect.x;
+        let ry = item.rect.y;
+        lay_out_with_used_size(
+            item, rx, ry, cell_w, Some(h), measurer, viewport, pcb, hp, false,
+            UsedSizeOverride {
+                height: Some(h),
+                box_sizing: Some(BoxSizing::BorderBox),
+                ..Default::default()
+            },
+        );
     }
 }
 
