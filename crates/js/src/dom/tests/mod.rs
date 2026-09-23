@@ -286,6 +286,9 @@ mod v8_bug930_canvas_currentcolor;
 mod v8_bug930_canvas_wide_gamut;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug925_img_iframe_loading_enum;
+
+#[cfg(feature = "v8-backend")]
 mod v8_gap_typedom_transform;
 
 #[cfg(feature = "v8-backend")]

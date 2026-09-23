@@ -416,3 +416,46 @@ function _lumen_init_lazy_images(pairs) {
 // _lumen_deliver_intersection_observers() called earlier by deliver_layout_observers().
 // This function is kept for shell API compatibility.
 function _lumen_deliver_lazy_images() {}
+
+// ── Lazy loading for <audio>/<video> (BUG-925, HTML LS §4.8.11) ────────────
+// Unlike images, a media element's resource selection algorithm is driven
+// entirely from JS (`audio_element.rs`/`video_element.js`), so deferring it
+// needs no shell-side candidate list — a real IntersectionObserver on the
+// element itself is enough. `_lumen_media_is_rendered` implements the
+// "being rendered" half of the gate: a media element that is disconnected,
+// `hidden`, `display:none`, or (audio only) has no `controls` attribute
+// must never start loading, not even once it becomes visible.
+function _lumen_media_is_rendered(el, requiresControls) {
+    if (!el.isConnected) return false;
+    if (el.hasAttribute && el.hasAttribute('hidden')) return false;
+    if (requiresControls && !(el.hasAttribute && el.hasAttribute('controls'))) return false;
+    try {
+        var cs = (typeof getComputedStyle === 'function') ? getComputedStyle(el) : null;
+        if (cs && cs.display === 'none') return false;
+    } catch (e) {}
+    return true;
+}
+
+// One IntersectionObserver per pending element, keyed by nid. A second call
+// before the first delivers just swaps the callback (the caller passed a
+// newer URL) instead of stacking a second observer on the same target.
+var _lazy_media_io = {};
+function _lumen_defer_lazy_media_load(el, onVisible) {
+    var nid = el.__nid__;
+    if (nid === undefined) return;
+    var io = _lazy_media_io[nid];
+    if (io) { io._onVisible = onVisible; return; }
+    io = new IntersectionObserver(function(entries) {
+        for (var i = 0; i < entries.length; i++) {
+            if (entries[i].isIntersecting) io._onVisible();
+        }
+    });
+    io._onVisible = onVisible;
+    _lazy_media_io[nid] = io;
+    io.observe(el);
+}
+function _lumen_cancel_lazy_media_load(el) {
+    var nid = el.__nid__;
+    var io = _lazy_media_io[nid];
+    if (io) { io.disconnect(); delete _lazy_media_io[nid]; }
+}

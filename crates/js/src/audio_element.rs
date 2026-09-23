@@ -286,10 +286,46 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
     var _loadStarted  = false;
     var _loadGen      = 0;
     var _tupdateTimer = null;
+    // BUG-925: URL a deferred `loading="lazy"` load is waiting on, or null
+    // when nothing is pending. Guards against a stale IntersectionObserver
+    // callback (superseded by a newer `src`/`load()`) firing `startLoadNow`
+    // out of order.
+    var _pendingLazyUrl = null;
 
     // ── loading ──────────────────────────────────────────────────────────────
 
+    // HTML LS §4.8.11 media lazy-loading: `loading="lazy"` defers resource
+    // selection until the element is both "being rendered" (connected, not
+    // `hidden`/`display:none`, and — `<audio>` only — carries `controls`;
+    // BUG-925) and intersects the viewport. Checked by attribute rather than
+    // the `loading` IDL getter so a bare `setAttribute`/`removeAttribute`
+    // (bypassing the property) is honoured too.
     function startLoad(url) {
+      if (!url) return;
+      var loadingAttr = (el.getAttribute && el.getAttribute('loading')) || '';
+      if (String(loadingAttr).toLowerCase() !== 'lazy') { startLoadNow(url); return; }
+      _pendingLazyUrl = url;
+      _lumen_defer_lazy_media_load(el, function() {
+        if (_pendingLazyUrl !== url) return; // superseded
+        if (!_lumen_media_is_rendered(el, /* requiresControls */ true)) return; // stays pending
+        _pendingLazyUrl = null;
+        startLoadNow(url);
+      });
+    }
+
+    // Force a deferred load to start now, bypassing the IntersectionObserver
+    // wait — HTML LS: switching `loading` away from `lazy` (property,
+    // `setAttribute`, or `removeAttribute`) starts the resource selection
+    // algorithm immediately if one was pending.
+    function _resumeLazyLoadNow() {
+      if (_pendingLazyUrl === null) return;
+      var url = _pendingLazyUrl;
+      _pendingLazyUrl = null;
+      _lumen_cancel_lazy_media_load(el);
+      startLoadNow(url);
+    }
+
+    function startLoadNow(url) {
       if (!HAS_PROVIDER || !url) return;
       // A load already in flight must not keep polling for the url it was
       // started with: bumping the generation makes the previous pump entry's
@@ -507,6 +543,44 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       },
       configurable: true,
     });
+
+    // BUG-925: `loading` (HTML LS §4.8.11) — enumerated reflected attribute,
+    // missing/invalid → 'eager'. Defined as an own accessor (like `src`
+    // above) rather than through the shared `_lumen_install_reflection`
+    // table so the setter can resume a deferred lazy load; routed through
+    // the instance's `setAttribute` override below so a bare
+    // `el.setAttribute('loading', …)` gets the same resume check.
+    Object.defineProperty(el, 'loading', {
+      get: function() {
+        var v = el.getAttribute && el.getAttribute('loading');
+        if (v === null || v === undefined) return 'eager';
+        v = String(v).toLowerCase();
+        return v === 'lazy' ? 'lazy' : 'eager';
+      },
+      set: function(v) { if (el.setAttribute) el.setAttribute('loading', String(v)); },
+      configurable: true,
+    });
+
+    // `setAttribute`/`removeAttribute` are instance-shadowed (not touched
+    // for any other attribute) purely to catch a `loading` change made
+    // directly through the attribute API — `audio.removeAttribute('loading')`
+    // must resume a deferred load exactly like the `loading` setter above.
+    if (el.setAttribute) {
+      var _origSetAttribute = el.setAttribute.bind(el);
+      el.setAttribute = function(name, value) {
+        _origSetAttribute(name, value);
+        if (String(name).toLowerCase() === 'loading' && String(value).toLowerCase() !== 'lazy') {
+          _resumeLazyLoadNow();
+        }
+      };
+    }
+    if (el.removeAttribute) {
+      var _origRemoveAttribute = el.removeAttribute.bind(el);
+      el.removeAttribute = function(name) {
+        _origRemoveAttribute(name);
+        if (String(name).toLowerCase() === 'loading') _resumeLazyLoadNow();
+      };
+    }
 
     Object.defineProperty(el, 'loop', {
       get: function() { return _loop; },
@@ -1087,5 +1161,127 @@ pump(1);
 countEvents('error') === 1"#,
         );
         assert!(ok, "startLoad should fire 'error' on the very first pump tick");
+    }
+
+    /// BUG-925: minimal stand-ins for the IntersectionObserver-backed helpers
+    /// `web_api_shim_tail_mc.js` normally provides (`_lumen_defer_lazy_media_load`
+    /// et al.) — this module's isolated runtime never loads the full
+    /// `WEB_API_SHIM`, only `AUDIO_ELEMENT_SHIM`, which calls them by name at
+    /// runtime. `_lumen_fire_intersect(el)` lets a test simulate the element
+    /// becoming visible without a real layout.
+    fn with_lazy_media_stub(rt: &V8JsRuntime) {
+        rt.eval(
+            r#"
+var _lazy_pending = {};
+var _lazy_nid_seq = 0;
+function getComputedStyle(el) { return { display: el.__display || 'inline' }; }
+function _lumen_media_is_rendered(el, requiresControls) {
+  if (!el.isConnected) return false;
+  if (el.hasAttribute && el.hasAttribute('hidden')) return false;
+  if (requiresControls && !(el.hasAttribute && el.hasAttribute('controls'))) return false;
+  var cs = getComputedStyle(el);
+  if (cs && cs.display === 'none') return false;
+  return true;
+}
+function _lumen_defer_lazy_media_load(el, cb) {
+  if (el.__nid__ === undefined) el.__nid__ = ++_lazy_nid_seq;
+  _lazy_pending[el.__nid__] = cb;
+}
+function _lumen_cancel_lazy_media_load(el) {
+  if (el.__nid__ !== undefined) delete _lazy_pending[el.__nid__];
+}
+function _lumen_fire_intersect(el) {
+  var cb = el.__nid__ !== undefined ? _lazy_pending[el.__nid__] : undefined;
+  if (cb) cb();
+}
+"#,
+        )
+        .unwrap();
+    }
+
+    /// `loading` reflects HTML LS §4.8.11: missing/invalid → `'eager'`, and
+    /// the content attribute keeps whatever raw string was assigned even when
+    /// the IDL getter normalizes it — same enum contract `referrerPolicy` uses.
+    #[test]
+    fn loading_reflects_as_enum_default_eager() {
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+var beforeSet = el.loading === 'eager';
+el.loading = 'lazy';
+var afterLazy = el.loading === 'lazy' && el.getAttribute('loading') === 'lazy';
+el.setAttribute('loading', 'BOGUS');
+var afterBogus = el.loading === 'eager' && el.getAttribute('loading') === 'BOGUS';
+beforeSet && afterLazy && afterBogus"#,
+        );
+        assert!(ok);
+    }
+
+    /// BUG-925: an `<audio>` element with `loading="lazy"` and no `controls`
+    /// attribute must never start loading, even once "visible" — per HTML LS,
+    /// a controls-less `<audio>` is never "being rendered".
+    #[test]
+    fn loading_lazy_without_controls_never_loads() {
+        let rt = with_audio();
+        with_lazy_media_stub(&rt);
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+el.isConnected = true;
+el.loading = 'lazy';
+el.src = 'http://example.test/a.mp3';
+var beforeIntersect = _events.indexOf('loadstart') === -1;
+_lumen_fire_intersect(el);
+var afterIntersect = _events.indexOf('loadstart') === -1;
+beforeIntersect && afterIntersect"#,
+        );
+        assert!(ok, "controls-less lazy audio must never fire loadstart");
+    }
+
+    /// BUG-925: `loading="lazy"` with `controls` defers `loadstart` until the
+    /// element intersects the viewport, then loads normally.
+    #[test]
+    fn loading_lazy_with_controls_defers_until_intersect() {
+        let rt = with_audio();
+        with_lazy_media_stub(&rt);
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+el.isConnected = true;
+el.setAttribute('controls', '');
+el.loading = 'lazy';
+el.src = 'http://example.test/a.mp3';
+var beforeIntersect = _events.indexOf('loadstart') === -1;
+_lumen_fire_intersect(el);
+var afterIntersect = _events.indexOf('loadstart') !== -1;
+beforeIntersect && afterIntersect"#,
+        );
+        assert!(ok, "rendered lazy audio should load once it intersects");
+    }
+
+    /// BUG-925: switching `loading` away from `'lazy'` (here via
+    /// `removeAttribute`, the one path that bypasses the IDL setter) must
+    /// resume a pending deferred load immediately, without waiting for an
+    /// intersection callback.
+    #[test]
+    fn removing_loading_attribute_resumes_pending_load() {
+        let rt = with_audio();
+        with_lazy_media_stub(&rt);
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+el.isConnected = true;
+el.loading = 'lazy';
+el.src = 'http://example.test/a.mp3';
+var beforeRemove = _events.indexOf('loadstart') === -1;
+el.removeAttribute('loading');
+var afterRemove = _events.indexOf('loadstart') !== -1;
+beforeRemove && afterRemove"#,
+        );
+        assert!(
+            ok,
+            "removeAttribute('loading') should resume a deferred load immediately"
+        );
     }
 }
