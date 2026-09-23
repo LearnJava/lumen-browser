@@ -1,3 +1,6 @@
+BUGS.md:290
+BUGS.md:204
+BUGS.md:240
 BUGS.md:164
 BUGS.md:163
 BUGS.md:146
