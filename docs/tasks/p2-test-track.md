@@ -2448,6 +2448,52 @@ serviceworker), `fetch/metadata/*` верхнего уровня (9 файлов
 прогон), либо новая категория — `mixed-content` (533 файла) или `speculation-rules` (409), ни
 одна не пробовалась.
 
+### TEST-3: срез 64 (2026-09-23) — `speculation-rules` (261 → 262): категория целиком объясняется нереализованным API, новых багов нет
+
+Новая категория из списка «Дальше» среза 63, выбрана как меньшая из двух (409 файлов против 533
+у `mixed-content`). `dev-release` пересобран в слоте перед прогоном.
+
+**Baseline.** `--update-expected --all --root speculation-rules --recursive --processes 7
+--binary target/dev-release/lumen.exe` (~9 мин): **7/530 harness OK**, 4/34 подтестов, 194 `.ini`
+записано. Распределение: 519 `ERROR`, 7 `OK`, 4 `TIMEOUT`. Тот же счёт 7/530, что при вендоринге
+(коммит `72bcf50c2`), но причина доминирующего провала сменилась: тогда это был BUG-485
+(`document.head` отсутствовал, с тех пор исправлен), теперь — честный отказ `setup()`.
+
+**Что нашлось.** 517 из 519 `ERROR` — одна строка: `assert_implements: <script
+type="speculationrules"> must be supported`. Хелпер `assertSpeculationRulesIsSupported`
+проверяет `HTMLScriptElement.supports('speculationrules')`, а Lumen возвращает `false`, и это
+правильно: Speculation Rules — Phase 0 (`crates/js/src/speculation_rules.rs`), блок
+`<script type="speculationrules">` не потребляется движком, а `supports()` по спецификации
+возвращает `true` только для поддерживаемых типов. Это не дефект, а нереализованный API. Ещё
+2 `ERROR` — `SpeculationMeasurement feature must be enabled`, тоже тентативный API;
+`TIMEOUT` у `performance-speculations-unused-preload.tentative.html` — нет
+`performance.getSpeculations()`; `header-only-top-level.html` — `RemoteContextHelper.addWindow()`
+(второе окно, известное ограничение исполнителя). Отдельный `BUG-NNN` не заводится, как для
+Shared Storage (срез 61) и `WebSocketStream` (срез 62).
+
+**Одна поправка baseline руками.** `external-speculation-rules-errors.html` и
+`inline-speculation-rules-errors.html` ждут `error`-события на `<script type="speculationrules">`
+с битым JSON / битым `src`. Для неподдерживаемого типа скрипт инертен, событие не приходит, и тест
+честно уходит в `TIMEOUT`. Но на `--processes 7` оба файла получили `TestRunner hit external
+timeout`: исполнитель под нагрузкой не успел забрать результат harness, отчёт вышел без
+подтестов. Поэтому `--update-expected` записал только top-level `TIMEOUT`. Проверочный
+`--check` без `--recursive` на `--processes 1` получил полный результат harness (`TIMEOUT` +
+подтесты `TIMEOUT`/`NOTRUN`) и засчитал это как 4 регрессии. В оба `.ini` добавлены ожидания
+подтестов (первый `TIMEOUT`, остальные `NOTRUN`). Сужение `[X, Y]` не нужно: когда подтесты
+отсутствуют, это не считается отклонением. После правки тот же точечный `--check` дал 0
+регрессий.
+
+**Три `--check` подряд** на полной категории (`--recursive --processes 7`) сошлись сразу:
+**0 регрессий, 0 unexpected pass, 0 других отклонений** на каждом, 7/530 harness OK все три раза.
+Флапов нет.
+
+**Окружение этой сессии.** `dev-release`, HEAD = локальный `main` `270b2415a` (`git pull` не
+прошёл: github.com не резолвился, сеть недоступна), Windows 10 19045,
+`tests/wpt/.venv/Scripts/python.exe`, `MSYS2_ARG_CONV_EXCL='*'`/`MSYS_NO_PATHCONV=1`.
+
+Категорий с baseline: 262. Дальше — `mixed-content` (533 файла, не пробовалась) либо
+`referrer-policy`/`4K*` полный `--check` (требует сессии с бюджетом на многочасовой прогон).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
