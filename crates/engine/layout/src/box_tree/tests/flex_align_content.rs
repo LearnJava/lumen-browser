@@ -1336,3 +1336,31 @@ fn flex_column_aligned_item_keeps_fit_content_width() {
     assert_eq!(a.rect.width, 60.0, "a.width {}", a.rect.width);
     assert_eq!(a.rect.x, 70.0, "a.x {}", a.rect.x);
 }
+
+#[test]
+fn flex_nbsp_only_text_run_is_not_collapsed_away() {
+    // BUG-791 срез 7: a flex container's anonymous-text-item builder treated an
+    // NBSP-only text run the same as a run of regular collapsible whitespace and
+    // dropped it (`build_anon_text_item` → `None`), so `A<!-- -->&nbsp;<span>B`
+    // rendered with zero gap between the flex items — CSS Flexbox §4 only exempts
+    // *collapsible* whitespace (space/tab/newline) from generating an anonymous
+    // item; U+00A0 must still produce one.
+    let css = "body{margin:0} #flex{display:flex;font-size:16px}";
+    let sheet = lumen_css_parser::parse(css);
+
+    let doc = lumen_html_parser::parse(
+        "<div id=\"flex\">A<!-- -->\u{a0}<span id=\"b\">B</span></div>",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let flex = super::find_by_id_all(&root, &doc, "flex").expect("flex");
+
+    // Three flex items are expected: the anonymous "A" item, the anonymous
+    // NBSP item, and the `<span id="b">` item. Before the fix the NBSP text
+    // run was classified as whitespace-only and dropped, leaving only two.
+    assert_eq!(
+        flex.children.len(),
+        3,
+        "expected 3 flex items (A, NBSP, span), got {}: {:#?}",
+        flex.children.len(), flex.children.iter().map(|c| c.node).collect::<Vec<_>>()
+    );
+}

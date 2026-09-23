@@ -309,7 +309,7 @@ pub(crate) fn build_anon_text_item(
     let NodeData::Text(s) = &doc.get(id).data else {
         return None;
     };
-    if s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) {
+    if s.chars().all(|c| is_collapsible_whitespace(c) || is_invisible_control(c)) {
         return None;
     }
     let mut segs = Vec::new();
@@ -924,7 +924,7 @@ pub(crate) fn collect_inline_segments(
                 byte_offset += line.len() as u32;
             }
         }
-        NodeData::Text(s) if !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) => {
+        NodeData::Text(s) if !s.chars().all(|c| is_collapsible_whitespace(c) || is_invisible_control(c)) => {
             // BUG-120: strip invisible controls before transform/measure — Edge
             // renders them zero-advance, they must not contribute glyphs.
             let s = strip_invisible_controls(s);
