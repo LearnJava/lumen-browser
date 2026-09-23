@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-24",
  "counts": {
-  "open": 253,
+  "open": 259,
   "fixed": 802,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1055,
+ "total_bugs": 1061,
  "phases": [
   {
    "id": "P0",
@@ -2323,6 +2323,30 @@
        "status": "done",
        "size": "S",
        "note": "Фиксированная стоимость старта процесса. **ШАГ 1 (инструментация) СДЕЛАН 2026-08-18, ветка `p1-perf-12` — он опроверг постановку задачи.** Построено: `crates/shell/src/startup_trace.rs` (спаны `pre-main`/`config-load`/`arg-parse`/`services-init`, охватывающая полоса `startup (<режим>)`, stderr-раскладка под `LUMEN_STARTUP_LOG=1`), `lumen_core::trace::enable_at`/`record_span` (трейсер с началом отсчёта В ПРОШЛОМ — участок до `main()` иначе не выразим), время создания процесса у ОС через `GetProcessTimes`. Трейсер включается на первой строке `run_cli`, а не в `run_trace_nav` (повторный `enable()` сбросил бы origin). ИЗМЕРЕНО: наш код до диспетча — **0.7 мс** (`config-load` 0.1 / `arg-parse` 0.1 / `services-init` 0.0), `ensure_v8_platform` на этом пути НЕ вызывается вовсе; `pre-main` 26 мс тёплый / 145 мс холодный. Самих «111 мс» у процесса нет — контроль (min из 5, чередование) даёт ПЛОСКИЕ ~82 мс спавна для `hostname.exe` 15 КБ, `where.exe` 43 КБ и `git.exe` 4 МБ против 133 мс у 80-МБ `lumen.exe`: три четверти заявленного числа — константа оболочки и ОС, не наша плата. Собственная надбавка ≈ 51 мс и целиком объясняется размером бинаря (26 мс `pre-main` + ~25 мс exec/teardown вне `main`). Побочно закрыта дыра waterfall: `navigation` 128 мс при 13.8 мс детских спанов, безымянных 114.7 мс между `parse-css` и `layout` — новые спаны `font-faces`/`system-fonts` свели её к 0.9 мс и назвали виновником `system_font_faces()`, то есть PERF-11 (у которой теперь есть точный гейт — спан `system-fonts`). **ШАГ 2 (census размера бинаря) СДЕЛАН 2026-08-21, ветка `p1-perf-12-binsize` — ЗАКРЫТА.** `/MAP`-разбор по крейтам (метод и полная раскладка — `docs/build-speed.md` §4.6): V8 ≈ 50% `.text`+`.rdata` (неустранимо, свой JS-движок), остальное — необходимый код движка и мульти-бэкендный wgpu (BUG-274/275, не трогать). Единственная находка — `hyphenation` со включённой `embed_all` встраивала словари всех 82 языков (3.0 МБ) вместо нужных 11 (497 КБ, `locale_to_language()`); фикс — вендорить нужные `.bincode` + `include_bytes!`/`from_reader` вместо `from_embedded`, дал **−2.42 МБ** (`dev-release`, −3.0%) при побайтово идентичном поведении (`dump_golden.py` 12/12). `panic = \"abort\"` отклонён (сломал бы `catch_unwind` в `crates/js/src/dom.rs`/`v8_compat.rs`). Дальше резать нечего без структурного решения (V8-снапшот — PERF-9; отказ от GPU-бэкенда — уже отклонён). Бриф: docs/tasks/perf-startup-census.md §5"
+      },
+      {
+       "id": "PERF-13",
+       "title": "PERF-13: мультиплексирование HTTP/2 на одном соединении",
+       "status": "planned",
+       "size": "L",
+       "note": "Разделяемое HTTP/2-соединение на origin с конкурентными потоками (RFC 9113 §5). Сейчас `H2Pool::acquire` вынимает соединение из пула на время запроса, и каждый параллельный запрос к тому же origin открывает свежий TCP+TLS: github.com — 98 соединений за загрузку, прогон top100 2026-09-23 — 22.9 соединения на хост против 5.4 у Chrome 153. Каждое лишнее рукопожатие стоит 2-3 RTT, на VPN/мобильной сети — секунды на страницу. Задача: поток-владелец сокета читает кадры и раздаёт ответы по stream id, запросы ставятся к нему в очередь; промежуточный шаг — не выбрасывать открытые соединения на `release` и держать несколько на origin. Приёмка: `conn_count` на github.com ≤ 2 соединений на origin, ready_s медианы top100 без регресса. Движковая часть — P1",
+       "bugs": [
+        "BUG-1115"
+       ]
+      },
+      {
+       "id": "PERF-14",
+       "title": "PERF-14: асинхронный fetch() по умолчанию",
+       "status": "planned",
+       "size": "M",
+       "note": "Асинхронный `fetch()` по умолчанию. Сейчас шим (`crates/js/src/shim/web_api_shim_mid_b3.js:219`) идёт в рабочий поток только при живом AbortSignal или `_lumenAsync`; обычный `fetch()` синхронен и держит JS-поток на весь RTT — на стенде `.tmp/seqlab` (700 мс/ответ) всё, что скрипт делает после `fetch()`, сдвигается на 700 мс, а Chrome в это время грузит картинки. Мешают две вещи, из-за которых это доработка, а не точечная правка: часть движковых вызывающих рассчитывает, что ответ уже на руках при создании промиса, и headless-режимы (`--screenshot`/`--trace-nav`) не прокачивают таймеры — асинхронный промис там не разрешится. Задача: асинхронный путь по умолчанию + прокачка событий в headless до `load`. Приёмка: на стенде запросы после `fetch()` не ждут его ответа; WPT `fetch/` без регресса"
+      },
+      {
+       "id": "PERF-15",
+       "title": "PERF-15: память ресурсов сайта для повторных визитов",
+       "status": "planned",
+       "size": "L",
+       "note": "«Память ресурсов сайта»: локально (профиль, в сеть ничего не уходит) помнить URL подресурсов прошлого визита origin-а и на повторной навигации запрашивать их сразу, параллельно с документом. Замер на стенде `.tmp/seqlab` (700 мс/ответ): Chrome 2.8 с; клиент, знающий все URL, — 1.45 с если стартует после документа и 0.70 с если вместе с ним. Chrome так не умеет (помнит только хосты для preconnect), это место, где Lumen может его обогнать. Зависимости: BUG-1116 (иначе подсказки замедляют: 3.8 → 14.5 с), PERF-13 (иначе параллельные запросы открывают по соединению), BUG-1117/1118. Риск — лишний трафик при сменившейся странице: ограничить ресурсами, реально использованными на прошлом визите, и тем, что влезает в первую волну. Приёмка: повторный визит на стенде ≤ 1.6 с, top100 повторный проход — медиана ready_s ниже первого прохода"
       }
      ]
     },
@@ -8964,8 +8988,50 @@
   },
   "BUG-1112": {
    "status": "open",
-   "title": "`ShareCache` формально подключён, но не вставляет ни одной записи на реальных сайтах: `selector_is_share_safe` требует `sel.tail.is_empty()` (ноль комбинаторов)…",
-   "component": "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `crates/engine/layout/src/style/share_cache.rs`)",
+   "title": "`ShareCache` не вставляет ни одной записи на реальных сайтах (`share_insert=0` на github.com/lenta.ru живым прогоном, срез 2). Срез 3 нашёл и починил два ложных…",
+   "component": "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `RuleIndex::universal`, `crates/engine/layout/src/style/share_cache.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1113": {
+   "status": "open",
+   "title": "Chrome-профиль заголовков выдаёт не-браузер: `DNT: 1` (Chrome по умолчанию его не шлёт — проверено эхо-сервером на Chrome 153) и UA `Chrome/130` при стабильном…",
+   "component": "network (`crates/network/src/http/headers.rs::build_request_headers` — `DNT: 1` в `HttpProfile::Chrome`; `crates/network/src/http/mod.rs:39` — `CHROME_USER_AGENT` = Chrome/130)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1114": {
+   "status": "open",
+   "title": "Навигация с 4xx/5xx выбрасывает тело и показывает «Ошибка загрузки … HTTP NNN» вместо страницы сервера (HTML LS: ответ навигации с любым статусом — документ). П…",
+   "component": "network (`crates/network/src/lib.rs::fetch_with_redirect` — `status => Err(HTTP {status})`) + shell (`app/user_event.rs` `LoadEvent::LoadError`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1115": {
+   "status": "open",
+   "title": "HTTP/2-соединение отдаётся одному запросу целиком, параллельные запросы к тому же origin открывают новое TCP+TLS: github.com — 98 соединений за загрузку (97 к о…",
+   "component": "network (`crates/network/src/h2/pool.rs` — `acquire`=`remove`, `release`=«new one wins»)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1116": {
+   "status": "open",
+   "title": "`<link rel=preload>` перезапрашивается шимом синхронным `fetch()`, по одному, после загрузки страницы и мимо `PREFETCH_CACHE`/`IMAGE_CACHE`. Стенд (700 мс/ответ…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:12182` — `_lumen_link_hint_fetch`) + shell (`page_pipeline.rs::dispatch_preload_hints` — только лог)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1117": {
+   "status": "open",
+   "title": "`background-image` CSS запрашивается только после layout, который ждёт все `<img>`: фон — всегда последняя волна (стенд: Chrome запрашивает `bg.png` на 2125 мс…",
+   "component": "shell (`crates/shell/src/page_pipeline.rs:1579` — `fetch-bg-images` после `layout_page`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1118": {
+   "status": "open",
+   "title": "Присвоение `img.src` в скрипте не запускает загрузку до следующего relayout: стенд — `new Image().src` и следом `fetch()`, Chrome запрашивает оба одновременно (…",
+   "component": "shell (`crates/shell/src/page_load.rs:1520` `spawn_dynamic_image_loads` — зовётся из relayout после скриптов)",
    "date": null,
    "debtor": false
   },
@@ -14573,7 +14639,7 @@
    "status": "fixed",
    "title": "**`TextEncoder`/`TextDecoder` поставлены WORKER-1 срезом 1 (2026-09-23); остаток — стримы.** В глобальной области dedicated/shared воркера нет `TextEncoder`/`Te…",
    "component": "js (`crates/js/src/worker.rs` — воркерная область собирается из `WORKER_*_SHIM`, шима кодировок/стримов среди них нет; `crates/js/src/shared_worker.rs`)",
-   "date": "2026-09-23",
+   "date": "2026-09-24",
    "debtor": false
   }
  },
@@ -15122,6 +15188,9 @@
   "js (`crates/js/src/shim/web_api_shim_head.js`)": [
    "BUG-1104"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js:12182` — `_lumen_link_hint_fetch`) + shell (`page_pipeline.rs::dispatch_preload_hints` — только лог)": [
+   "BUG-1116"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js:7725-7744` — `_LUMEN_WRAPPER_MEMBERS.nextSibling`/`previousSibling`)": [
    "BUG-556"
   ],
@@ -15621,7 +15690,7 @@
   "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/dom/src/lib.rs::enclosing_shadow_host`)": [
    "BUG-1009"
   ],
-  "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `crates/engine/layout/src/style/share_cache.rs`)": [
+  "layout (`crates/engine/layout/src/style/cascade.rs` — `selector_is_share_safe`, `RuleIndex::universal`, `crates/engine/layout/src/style/share_cache.rs`)": [
    "BUG-1112"
   ],
   "layout (`crates/engine/layout/src/style/cascade.rs` — главный каскадный цикл)": [
@@ -15715,6 +15784,9 @@
   "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)": [
    "BUG-805"
   ],
+  "network (`crates/network/src/http/headers.rs::build_request_headers` — `DNT: 1` в `HttpProfile::Chrome`; `crates/network/src/http/mod.rs:39` — `CHROME_USER_AGENT` = Chrome/130)": [
+   "BUG-1113"
+  ],
   "network (`crates/network/src/intercept.rs`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)": [
    "BUG-783"
   ],
@@ -15726,6 +15798,9 @@
   ],
   "network (`crates/network/src/lib.rs::HttpClient::fetch_subresource`)": [
    "BUG-1021"
+  ],
+  "network (`crates/network/src/lib.rs::fetch_with_redirect` — `status => Err(HTTP {status})`) + shell (`app/user_event.rs` `LoadEvent::LoadError`)": [
+   "BUG-1114"
   ],
   "network (`crates/network/src/lib.rs::is_stale_error`)": [
    "BUG-789"
@@ -16017,8 +16092,14 @@
   "shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, синк `scrollY`; ветка колеса мыши), js (`crates/js/src/v8_runtime.rs::set_page_scroll_y`, `crates/js/src/dom.rs` — `scrollIntoView`)": [
    "BUG-821"
   ],
+  "shell (`crates/shell/src/page_load.rs:1520` `spawn_dynamic_image_loads` — зовётся из relayout после скриптов)": [
+   "BUG-1118"
+  ],
   "shell (`crates/shell/src/page_load.rs::spawn_dynamic_background_image_loads`/`spawn_image_requests`, `crates/shell/src/relayout.rs`)": [
    "BUG-939"
+  ],
+  "shell (`crates/shell/src/page_pipeline.rs:1579` — `fetch-bg-images` после `layout_page`)": [
+   "BUG-1117"
   ],
   "shell (`crates/shell/src/page_pipeline.rs:773-794` — единственный вызов `register_img_bitmaps`; `crates/shell/src/page_load.rs::apply_stream_intrinsic_sizes`/`spawn_image_requests`; `crates/shell/src/app/user_event.rs::on_user_event`), js (`crates/js/src/img_bitmap_store.rs`, `crates/js/src/v8_runtime/runtime.rs`)": [
    "BUG-938"

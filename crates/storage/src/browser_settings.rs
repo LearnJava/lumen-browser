@@ -41,7 +41,10 @@ const KEY_PANEL_LAYOUT: &str = "panel_layout";
 
 const DEFAULT_HOMEPAGE: &str = "about:blank";
 const DEFAULT_SEARCH_ENGINE_ID: i64 = 1;
-const DEFAULT_SHIELDS_ENABLED: bool = true;
+// Off by default (user decision 2026-09-23): the ad-blocker changes what a
+// page loads, so with it on Lumen is not comparable with a stock browser —
+// the user opts in through "Блокировать рекламу" in settings.
+const DEFAULT_SHIELDS_ENABLED: bool = false;
 const DEFAULT_FINGERPRINT_MODE: &str = "standard";
 const DEFAULT_DOH_ENABLED: bool = false;
 const DEFAULT_FONT_SIZE: f64 = 16.0;
@@ -332,7 +335,7 @@ mod tests {
         let s = store();
         assert_eq!(s.homepage(), "about:blank");
         assert_eq!(s.search_engine_id(), 1);
-        assert!(s.shields_enabled());
+        assert!(!s.shields_enabled());
         assert_eq!(s.fingerprint_mode(), "standard");
         assert!(!s.doh_enabled());
         assert!((s.font_size() - 16.0).abs() < f64::EPSILON);
