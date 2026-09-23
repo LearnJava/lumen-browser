@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-23",
  "counts": {
-  "open": 266,
-  "fixed": 780,
+  "open": 263,
+  "fixed": 785,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1046,
+ "total_bugs": 1048,
  "phases": [
   {
    "id": "P0",
@@ -4249,7 +4249,7 @@
        "title": "WPT: вендорить + прогнать категорию `storage-access-api`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage-access-api --recursive`, 11:39, 40 файлов, 40 отобранных id) — **3/40 harness OK, 2/9 сабтестов**. Новая находка — [BUG-682](bugs/BUG-682-OPEN.md): `requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess` определены только в литерале живого `document` (`dom.rs:4423-4433`), но не в `_lumen_build_detached_document` (`DOMParser.parseFromString` и т.п.) — второй независимый экземпляр класса [BUG-358](bugs/BUG-358-FIXED.md)/[BUG-359](bugs/BUG-359-FIXED.md) (два несинхронизированных Document-литерала), на этот раз в обратную сторону. Остальной сигнал двух исполнившихся не-`.https.` тестов — реконфирмация: [BUG-399](bugs/BUG-399-FIXED.md) (`window.isSecureContext` захардкожен `true`), [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует). Остальные 37 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage-access-api --recursive`, 11:39, 40 файлов, 40 отобранных id) — **3/40 harness OK, 2/9 сабтестов**. Новая находка — [BUG-682](bugs/BUG-682-FIXED.md): `requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess` определены только в литерале живого `document` (`dom.rs:4423-4433`), но не в `_lumen_build_detached_document` (`DOMParser.parseFromString` и т.п.) — второй независимый экземпляр класса [BUG-358](bugs/BUG-358-FIXED.md)/[BUG-359](bugs/BUG-359-FIXED.md) (два несинхронизированных Document-литерала), на этот раз в обратную сторону. Остальной сигнал двух исполнившихся не-`.https.` тестов — реконфирмация: [BUG-399](bugs/BUG-399-FIXED.md) (`window.isSecureContext` захардкожен `true`), [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует). Остальные 37 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Один новый номер бага",
        "bugs": [
         "BUG-682"
        ]
@@ -4313,7 +4313,7 @@
        "title": "WPT: вендорить + прогнать категорию `top-level-storage-access-api`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root top-level-storage-access-api --recursive`, ~35 с, 3 файла/3 id) — **0/3 harness OK, 1/7 сабтестов**. Весь сигнал — реконфирмация уже открытых багов, новых номеров не заведено: `requestStorageAccessFor()` на документе из `DOMParser.parseFromString` — реконфирмация [BUG-682](bugs/BUG-682-OPEN.md) (Storage Access API методы есть только у живого `document`, не у `_lumen_build_detached_document`); отсутствие проверки user gesture/контекста в Phase 0 шиме («always granted») — тот же корень, что [BUG-399](bugs/BUG-399-FIXED.md); `CreateDetachedFrame().requestStorageAccessFor` падает на `null` — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context); `AssertionError: Got results from <previous test>` на обоих `.https.` id — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md); третий `.https.` id TIMEOUT на документированном TLS-гэпе `UnknownIssuer`"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root top-level-storage-access-api --recursive`, ~35 с, 3 файла/3 id) — **0/3 harness OK, 1/7 сабтестов**. Весь сигнал — реконфирмация уже открытых багов, новых номеров не заведено: `requestStorageAccessFor()` на документе из `DOMParser.parseFromString` — реконфирмация [BUG-682](bugs/BUG-682-FIXED.md) (Storage Access API методы есть только у живого `document`, не у `_lumen_build_detached_document`); отсутствие проверки user gesture/контекста в Phase 0 шиме («always granted») — тот же корень, что [BUG-399](bugs/BUG-399-FIXED.md); `CreateDetachedFrame().requestStorageAccessFor` падает на `null` — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context); `AssertionError: Got results from <previous test>` на обоих `.https.` id — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md); третий `.https.` id TIMEOUT на документированном TLS-гэпе `UnknownIssuer`"
       },
       {
        "id": "WPT-VENDOR-touch-events",
@@ -7041,7 +7041,7 @@
        "title": "THREAD-4: профилирование дорогого layout-прохода github.com",
        "status": "planned",
        "size": "M",
-       "note": "Профилирование layout-прохода github.com — вынесено из THREAD-3 (объём, пункт (2)), качественно другая задача: не зависание, а действительно дорогой конечный layout (THREAD-3 срез 1, срез THREAD-0: layout+paint 70% времени загрузки, 64.3 из 90.8с headless, воспроизводится стабильно, не регрессия параллельной нагрузки). Объём: определить, какой алгоритм/этап layout доминирует на этой странице (сколько узлов, инкрементальность/мемоизация уже используются или нет), найти конкретный кандидат на оптимизацию — не перф-тюнинг вообще, а именно этот сайт как представитель класса «дорогой но конечный layout», в отличие от THREAD-3 (класс «незавершающийся run-scripts спин»). **Срез 1 (2026-09-23, `p1-thread4-layout-profiling`): гипотеза «дорогой алгоритм раскладки» опровергнута переписью.** `LUMEN_PROFILE_TREE=1` на headless `--trace-nav https://github.com` (3 полных прохода за загрузку, интерливинг не требовался — расхождение с гипотезой на порядок): `layout_measured_hyp` 6.5–8.0с/проход, из них `precompute_counters` 5.4–7.1с (83–89%), а сама геометрическая раскладка `lay_out` — 68–87мс (~1%); `build_box` ~0.9–1.0с. Разбивка `precompute_counters` через `LUMEN_PROFILE_DETAIL=1`: 99% — `compute_style` (полный CSS-каскад на каждый узел, вызываемый из `counters::walk`, не сама работа со счётчиками — `quote_pseudos` даёт 3.8мс из 7с), внутри него `cs_match` (подбор и матчинг селекторов) — 82–92% сам по себе. Временная инструментация (не закоммичена, откачена тем же срезом) вскрыла причину: сайт грузит `sheet.rules=6382` верхнеуровневых + `layers=3702` (Primer активно использует `@layer`) + `media=110` правил; индекс `RuleIndex` (BUG-284) уже бакетизирует по id/классу/типу и работает корректно, но из-за большого числа отдельных `@layer`-блоков среднее число кандидатов на матчинг (`matches_complex`) на один узел — **~4155** (только по верхнему уровню — 383–392, остальное из per-layer/media индексов), то есть на ~1775–2000 стилизуемых узлов страница делает порядка 7–8 млн вызовов `matches_complex` за один проход. Индексация тут не баг (см. `docs/perf-method.md` «Прежде чем оптимизировать... перемерь саму заметку») — кандидатов действительно столько, потому что рассеянных по слоям правил с одинаковым subject (`svg`/`path`/`div`/частые классы) реально тысячи. **Найденный кандидат на оптимизацию** — не индексация, а мемоизация каскада: те же временные счётчики показали, что среди ~1775–2000 вызовов `compute_style` за проход различных ключей `(tag, id, отсортированные classes)` только **392** — из-за огромного числа повторяющихся SVG-иконок (GitHub Octicons) с одинаковым набором тегов/классов эффективная кратность повтора структурного ключа ~4.5× внутри одного прохода. Кэш каскада, ключованный на этот кортеж (а не на `NodeId`, как существующий BUG-341 S24 `CascadeStyles`, который живёт МЕЖДУ проходами, а не ВНУТРИ одного), способен исключить основную часть этих 7–8 млн вызовов — при условии, что для узла нет структурно-зависимых селекторов (`:nth-child`/`:first-child`/sibling-комбинаторы/атрибутные селекторы вне class-id/интерактивные `:hover`-подобные псевдоклассы у самого узла или его предков в пути матчинга) — корректность такого кэша требует отдельного среза (аналог style sharing cache в Gecko/WebKit/Servo), не тривиальна и не входит в объём этого среза. Задача остаётся `planned` — дальше нужен срез с самой реализацией memo-кэша и его gate (диффом на `incr == full`, как в BUG-341)."
+       "note": "Профилирование layout-прохода github.com — вынесено из THREAD-3 (объём, пункт (2)), качественно другая задача: не зависание, а действительно дорогой конечный layout (THREAD-3 срез 1, срез THREAD-0: layout+paint 70% времени загрузки, 64.3 из 90.8с headless, воспроизводится стабильно, не регрессия параллельной нагрузки). Объём: определить, какой алгоритм/этап layout доминирует на этой странице (сколько узлов, инкрементальность/мемоизация уже используются или нет), найти конкретный кандидат на оптимизацию — не перф-тюнинг вообще, а именно этот сайт как представитель класса «дорогой но конечный layout», в отличие от THREAD-3 (класс «незавершающийся run-scripts спин»). **Срез 1 (2026-09-23, `p1-thread4-layout-profiling`): гипотеза «дорогой алгоритм раскладки» опровергнута переписью.** `LUMEN_PROFILE_TREE=1` на headless `--trace-nav https://github.com` (3 полных прохода за загрузку, интерливинг не требовался — расхождение с гипотезой на порядок): `layout_measured_hyp` 6.5–8.0с/проход, из них `precompute_counters` 5.4–7.1с (83–89%), а сама геометрическая раскладка `lay_out` — 68–87мс (~1%); `build_box` ~0.9–1.0с. Разбивка `precompute_counters` через `LUMEN_PROFILE_DETAIL=1`: 99% — `compute_style` (полный CSS-каскад на каждый узел, вызываемый из `counters::walk`, не сама работа со счётчиками — `quote_pseudos` даёт 3.8мс из 7с), внутри него `cs_match` (подбор и матчинг селекторов) — 82–92% сам по себе. Временная инструментация (не закоммичена, откачена тем же срезом) вскрыла причину: сайт грузит `sheet.rules=6382` верхнеуровневых + `layers=3702` (Primer активно использует `@layer`) + `media=110` правил; индекс `RuleIndex` (BUG-284) уже бакетизирует по id/классу/типу и работает корректно, но из-за большого числа отдельных `@layer`-блоков среднее число кандидатов на матчинг (`matches_complex`) на один узел — **~4155** (только по верхнему уровню — 383–392, остальное из per-layer/media индексов), то есть на ~1775–2000 стилизуемых узлов страница делает порядка 7–8 млн вызовов `matches_complex` за один проход. Индексация тут не баг (см. `docs/perf-method.md` «Прежде чем оптимизировать... перемерь саму заметку») — кандидатов действительно столько, потому что рассеянных по слоям правил с одинаковым subject (`svg`/`path`/`div`/частые классы) реально тысячи. **Найденный кандидат на оптимизацию** — не индексация, а мемоизация каскада: те же временные счётчики показали, что среди ~1775–2000 вызовов `compute_style` за проход различных ключей `(tag, id, отсортированные classes)` только **392** — из-за огромного числа повторяющихся SVG-иконок (GitHub Octicons) с одинаковым набором тегов/классов эффективная кратность повтора структурного ключа ~4.5× внутри одного прохода. Кэш каскада, ключованный на этот кортеж (а не на `NodeId`, как существующий BUG-341 S24 `CascadeStyles`, который живёт МЕЖДУ проходами, а не ВНУТРИ одного), способен исключить основную часть этих 7–8 млн вызовов — при условии, что для узла нет структурно-зависимых селекторов (`:nth-child`/`:first-child`/sibling-комбинаторы/атрибутные селекторы вне class-id/интерактивные `:hover`-подобные псевдоклассы у самого узла или его предков в пути матчинга) — корректность такого кэша требует отдельного среза (аналог style sharing cache в Gecko/WebKit/Servo), не тривиальна и не входит в объём этого среза. **Срез 2 (2026-09-23, `p1-thread4-cascade-memo`): реализован memo-кэш, узко и безопасно.** `ShareCache` (`crates/engine/layout/src/style/share_cache.rs`) — intra-pass кэш поверх `counters::walk`, ключ `(tag, полный набор атрибутов узла, адрес аллокации inherited-ComputedStyle)`, сброс на каждый `precompute_counters`/incremental-проход. Результат помечается пригодным к шарингу (`compute_style_shareable` в `cascade.rs`) только когда ВСЕ кандидатные правила (по тем же `RuleIndex`-бакетам, что уже собирает каскад) — одиночный compound-селектор без комбинатора и без псевдоклассов/атрибутных селекторов вне class/id, документ не содержит `@scope` и Shadow DOM. Ключ на адрес `inherited` (не на его содержимое) корректно снимает риск для унаследованных свойств: два узла с одинаковым родительским `ComputedStyle`-указателем гарантированно видят одно и то же наследование, а совпадение указателя само каскадом распространяется вниз по повторяющимся поддеревьям. Срез сознательно сужен до SVG presentational-элементов (`is_svg_presentational_element`) — ровно случай, найденный в срезе 1 (иконки-Octicons); остальной каскад (табличные/форменные presentational hints и quirks) не аудирован на независимость от предков и потому не в scope. Тесты (`style/tests/share_cache.rs`): позитивный (6 идентичных `<svg class=\"octicon\">` под одним родителем шарят один `Arc<ComputedStyle>`, итоговые `svg_fill`/`svg_stroke` корректны) и негативный (правило с комбинатором `.blue .octicon` отключает шаринг целиком и не путает стили двух по-разному вложенных иконок). Гейт: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист, `cargo test -p lumen-layout` — 4003+77+1 без регрессий; `scoped-test.sh`: единственный красный (`cases::snapshot_cpu`) — A/B через `git stash` тем же красным на чистом `main`, чужой дрейф (аналог BUG-1008), не от этой правки. Оба файла с исходной длиной за лимитом 2000 строк (`counters.rs`, `cascade.rs`) не выросли чистым приростом строк. **Не измерено живьём** на github.com (`LUMEN_PROFILE_TREE=1`) — не подтверждён реальный выигрыш на целевом сайте, только корректность и синтетический тест на сокращение числа вызовов `compute_style`. Задача остаётся `planned` — дальше: (а) перемерить `precompute_counters`/`compute_style`-долю на живом github.com этим движком, (б) при недостаточном выигрыше — рассмотреть расширение eligibility за пределы SVG (требует аудита presentational-hint/quirks-функций на независимость от предков, см. срез 2 комментарий в `compute_style_shareable`). **Срез 3 (2026-09-23, `p1-thread4-srez3-live-measure`): измерено живьём — выигрыш нулевой, причина не в SVG-скоупе.** Временная (не закоммичена, откачена этим же срезом) инструментация `ShareCache` счётчиками hit/miss и однократный лог `SHADOW_SHEETS.len()` на headless `--screenshot https://github.com` с `LUMEN_PROFILE_TREE=1 LUMEN_PROFILE_DETAIL=1`: три прохода загрузки — `hit_rate=0.0%` (0 попаданий из 1775/1780/1780 вызовов `compute_style` каждый раз), при этом `precompute_counters` по-прежнему 84-89% времени layout-прохода (4.4-4.5с из 5.1-5.3с/проход — числа ниже среза 1, т.к. `--screenshot` не совпадает по методике с `--trace-nav`'s 3 интерливинг-прохода, но доля та же). Причина: между проходом 1 и 2 регистрируется ровно один shadow-хост (`shadow_sheets_count=1` — GitHub использует как минимум один web-component с Shadow DOM), а `cascade.rs:1033` (`shareable &= !any_shadow`) дисквалифицирует шаринг **документо-широко**, для любого узла независимо от его отношения к этому shadow-дереву, как только `SHADOW_SHEETS` не пуст — не только у потомков хоста. Ровно это, а не узость SVG-скоупа среза 2, гасит кэш целиком на реальном сайте: Octicon-иконки, найденные в срезе 1, физически совпадают по структуре, но ни разу не попадают в кэш, потому что весь документ уже помечен небезопасным для шаринга из-за одного несвязанного web-component'а. Задача остаётся `planned` — дальше: сузить `any_shadow`-дисквалификацию с документо-широкой до контекстной (узел небезопасен для шаринга, только если сам является shadow-хостом/slotted-потомком или находится в поддереве такого хоста — требует протаскивания этого факта в `ShareKey`/eligibility-проверку, а не глобального флага; отдельный срез, т.к. корректность нетривиальна: `SHADOW_HOST_SCOPE` — thread-local состояние обхода, не атрибут узла). **Срез 4 (2026-09-23, `p1-thread4-shadow-scope`): дисквалификация сужена с документо-широкой до контекстной, найден и закрыт побочный false-share риск.** `cascade.rs`: `shareable &= !any_shadow` заменено на `shareable &= own_shadow.is_none() && host_shadow.is_none() && interior_shadow.is_none()` — те же три локали (`own_shadow`/`host_shadow`/`interior_shadow`), что уже вычисляет каскад для (a)/(b)/(c)-случаев `:host`/`::slotted`/interior-селекторов, теперь и гейтят `shareable`, вместо глобального `any_shadow`-флага. При ревью вскрылся отдельный баг того же класса, не покрытый срезом 2: `ShareCache::compute` ищет попадание в кэш ТОЛЬКО по `ShareKey` (tag+attrs+inherited-ptr) — этот ключ не кодирует shadow-принадлежность узла, поэтому даже с контекстным `shareable` в каскаде ДВА структурных сиблинга под одним родителем (одинаковый `inherited_ptr`), один из которых сам является shadow-хостом, могли получить один и тот же `Arc<ComputedStyle>` из кэша: первый (plain) кладёт в кэш свой результат, второй (host) находит совпадение по ключу и получает ЧУЖОЙ document-scope стиль, так и не вызвав `compute_style_shareable` с собственным `:host`-правилом. `shareable`-флаг охраняет только ВСТАВКУ, не ПОИСК. Закрыто в `share_cache.rs::build_key` — возвращает `None` (что отключает и вставку, и поиск разом) для узла, который сам shadow-host / slotted light-child / находится внутри shadow-дерева, той же тройкой DOM-проверок (`doc.is_shadow_host`, родитель — shadow-host, `doc.enclosing_shadow_host`), но без обращения к `SHADOW_SHEETS` — дешёвая структурная проверка, не завязанная на `any_shadow`. Тесты (`style/tests/share_cache.rs`, +3): позитивный — 6 одинаковых `<svg class=\"octicon\">` в `<div class=\"toolbar\">` по-прежнему шарят один `Arc`, когда где-то в документе есть НЕСВЯЗАННЫЙ shadow-хост (`SHADOW_SHEETS` непусто, но `host` без детей — ничего в него не слотится); негативный — два сиблинга-иконки под одним родителем, второй с `attach_shadow`+`:host{fill:red}`: первый получает document-scope `fill`, второй — свой `:host`-`fill`, не путаются, несмотря на идентичный `ShareKey` без учёта shadow-статуса. Гейт: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист; `cargo test -p lumen-layout` — 4005+77+1 без регрессий; `python graphic_tests/dump_golden.py` — «Все 12 дампов совпадают с эталоном» (display-list neutral); `scoped-test.sh` — единственный красный тот же `cases::snapshot_cpu`, подтверждён A/B в отдельном idle-слоте на чистом `main` (`aecd79e89`) байт-в-байт тем же списком из ~28 страниц по 1024/2048 differing bytes — новый (не BUG-1008, тот уже FIXED тем же днём с другим списком из 7 страниц) чужой дрейф эталонов, не от этой правки, не тронут. `cascade.rs` 1637 строк, `share_cache.rs` 146 — оба под лимитом 2000. **Не измерено живьём повторно** — задача остаётся `planned`, следующий шаг: перемерить `hit_rate`/`precompute_counters`-долю на живом github.com этим движком тем же временным инструментарием, что и срез 3 (октиконы там не host/slotted/interior, так что контекстная дисквалификация должна их больше не гасить)."
       }
      ]
     },
@@ -7702,13 +7702,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-644": {
-   "status": "open",
-   "title": "CSS Grid `align-items: stretch` (grid-дефолт) растягивает item, присваивая `item.rect.height = cell_h` уже готовому поддереву из пробного прохода, но не перекла…",
-   "component": "layout (`box_tree.rs::lay_out_grid`, Step 5)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-645": {
    "status": "open",
    "title": "`window.PerformancePaintTiming` interface object doesn't exist at all — every `paint-timing` WPT test starts with `assert_implements(window.PerformancePaintTimi…",
@@ -7888,13 +7881,6 @@
    "status": "open",
    "title": "`StorageManager`/`StorageBucketManager`/`StorageBucket` are plain ES5 `function X() {}` constructors with no `new.target` guard, so `new StorageManager()`/`new…",
    "component": "js (`crates/js/src/storage_manager.rs` — `STORAGE_MANAGER_SHIM`; `crates/js/src/storage_buckets.rs` — `STORAGE_BUCKETS_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-682": {
-   "status": "open",
-   "title": "Storage Access API methods (`requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess`) exist only on the live global `d…",
-   "component": "js (`crates/js/src/dom.rs:4423-4433` — live `document` literal at `dom.rs:4182+`; `_lumen_build_detached_document`, `dom.rs:1795-1868`)",
    "date": null,
    "debtor": false
   },
@@ -8119,13 +8105,6 @@
    "status": "open",
    "title": "`lumen_css_parser::parse` аллоцирует **912 МиБ** на 12 КБ битого CSS (в CI убит libFuzzer'ом: «out-of-memory, used 2179Mb, limit 2048Mb»). Перепроверено на Wind…",
    "component": "css-parser (`crates/engine/css-parser` — только `parse`, разбор таблицы стилей)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-789": {
-   "status": "open",
-   "title": "На macOS CI флакует retry-on-stale: сервер отдаёт первый ответ без `Connection: close` и сразу закрывает сокет, клиент должен заметить staleness и переоткрыть с…",
-   "component": "network (`crates/network/src/lib.rs:6674` — тест `tests::stale_pooled_connection_triggers_retry`, вероятно также продакшн retry-on-stale в connection-pool рядом)",
    "date": null,
    "debtor": false
   },
@@ -8399,13 +8378,6 @@
    "status": "open",
    "title": "Два дефекта, попавшие в один тест. (1) `Audio`/`Image`/`Option` — обычные функции, возвращающие `createElement(…)`, а не legacy factory functions: вызов **без `…",
    "component": "js (`crates/js/src/audio_element.rs:585-593` — `globalThis.Audio`; `crates/js/src/dom.rs` — `Image`/`Option`, `_lumen_build_element`/`_lumen_element_prototype_for`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-924": {
-   "status": "open",
-   "title": "`<audio src>` не резолвится относительно базы документа: на странице с `http://127.0.0.1:PORT/` абсолютный URL доходит до `loadeddata` за 54 мс, а `/sine440.mp3…",
-   "component": "js (`crates/js/src/audio_element.rs:264-283` — `startLoad(url)` передаёт значение атрибута в `__lumen_audio_load` как есть)",
    "date": null,
    "debtor": false
   },
@@ -9057,6 +9029,13 @@
    "status": "open",
    "title": "developer.mozilla.org: два skip-link-блока рендерятся по одной букве на строку (вертикальный столбец вместо однострочной ссылки, специфично для этого сайта — `h…",
    "component": "не локализовано (подозрение — layout, расчёт ширины skip-link на developer.mozilla.org); паинт-стадия — CPU-путь растеризации",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1105": {
+   "status": "open",
+   "title": "`<audio>.duration` остаётся `Infinity` у полностью декодированного MP3: `rodio`'s MP3-декодер (`minimp3`) не считает длительность без полного прохода по фреймам…",
+   "component": "shell (`crates/shell/src/platform/audio_player.rs:169-176` — `AudioCmd::Load`, `rodio::Decoder::total_duration()`)",
    "date": null,
    "debtor": false
   },
@@ -14512,6 +14491,41 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid_b2.js` — `_mo_notify` и её обвязка)",
    "date": "2026-09-23",
    "debtor": false
+  },
+  "BUG-1104": {
+   "status": "fixed",
+   "title": "`CustomEvent.prototype.initCustomEvent` (легаси-метод DOM LS §2.2, тот же класс, что и уже реализованные `initEvent`/`initUIEvent`/`initMouseEvent`/`initStorage…",
+   "component": "js (`crates/js/src/shim/web_api_shim_head.js`)",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-644": {
+   "status": "fixed",
+   "title": "CSS Grid `align-items: stretch` растягивала внешний бокс grid item (`item.rect.height = cell_h`) поверх уже готового поддерева из пробного прохода, не переклады…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`)",
+   "date": "2026-09-23",
+   "debtor": true
+  },
+  "BUG-682": {
+   "status": "fixed",
+   "title": "Storage Access API methods (`requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess`) existed only on the live global…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_build_detached_document`; `crates/js/src/dom_parser.rs::VDocument.prototype`)",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-924": {
+   "status": "fixed",
+   "title": "`<audio src>` не резолвился относительно базы документа — `/media/x.mp3` и `x.mp3` умирали как `MEDIA_ERR_SRC_NOT_SUPPORTED`, запрос до сети не доходил вовсе, п…",
+   "component": "js (`crates/js/src/audio_element.rs::startLoad`)",
+   "date": "2026-09-23",
+   "debtor": false
+  },
+  "BUG-789": {
+   "status": "fixed",
+   "title": "Флак `tests::stale_pooled_connection_triggers_retry` на macOS CI: retry-on-stale иногда возвращал `Err` вместо переоткрытия соединения. Найден P5 2026-08-18, вы…",
+   "component": "network (`crates/network/src/lib.rs::is_stale_error`)",
+   "date": "2026-09-23",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14790,11 +14804,11 @@
   "js (`crates/js/src/audio_element.rs:236-301,495-531` — poll-based `play()`/`load()` через `setInterval(fn, 50)`, флаг ошибки читается из фонового потока декодера)": [
    "BUG-1033"
   ],
-  "js (`crates/js/src/audio_element.rs:264-283` — `startLoad(url)` передаёт значение атрибута в `__lumen_audio_load` как есть)": [
-   "BUG-924"
-  ],
   "js (`crates/js/src/audio_element.rs:585-593` — `globalThis.Audio`; `crates/js/src/dom.rs` — `Image`/`Option`, `_lumen_build_element`/`_lumen_element_prototype_for`)": [
    "BUG-923"
+  ],
+  "js (`crates/js/src/audio_element.rs::startLoad`)": [
+   "BUG-924"
   ],
   "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; `crates/js/src/video_bindings.rs` — то же у `<video>`; `crates/js/src/dom.rs:17149`/`:17239` — рефлексия `loading` у `<img>`/`<iframe>` объявлена `'string'` вместо `'enum'`)": [
    "BUG-925"
@@ -15052,6 +15066,9 @@
   ],
   "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)": [
    "BUG-904"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_head.js`)": [
+   "BUG-1104"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js:7725-7744` — `_LUMEN_WRAPPER_MEMBERS.nextSibling`/`previousSibling`)": [
    "BUG-556"
@@ -15432,9 +15449,6 @@
   "layout (`box_tree.rs::lay_out_flex` — строчная ветка; `box_tree.rs::min_content_outer_width_of_contents`)": [
    "BUG-427"
   ],
-  "layout (`box_tree.rs::lay_out_grid`, Step 5)": [
-   "BUG-644"
-  ],
   "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)": [
    "BUG-433"
   ],
@@ -15492,6 +15506,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/flex.rs` — `build_flex_init`)": [
    "BUG-736"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`)": [
+   "BUG-644"
   ],
   "layout (`crates/engine/layout/src/box_tree/intrinsic.rs` — `preferred_inline_block_width`/`max_content_outer_width`/`min_content_outer_width_of_contents`)": [
    "BUG-740"
@@ -15643,11 +15660,11 @@
   "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`": [
    "BUG-756"
   ],
-  "network (`crates/network/src/lib.rs:6674` — тест `tests::stale_pooled_connection_triggers_retry`, вероятно также продакшн retry-on-stale в connection-pool рядом)": [
-   "BUG-789"
-  ],
   "network (`crates/network/src/lib.rs::HttpClient::fetch_subresource`)": [
    "BUG-1021"
+  ],
+  "network (`crates/network/src/lib.rs::is_stale_error`)": [
+   "BUG-789"
   ],
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
@@ -15935,6 +15952,9 @@
   ],
   "shell (`crates/shell/src/page_pipeline.rs::parse_and_layout` — порядок фаз; `crates/shell/src/scripts.rs::run_scripts_with_dom` — публикация снимка)": [
    "BUG-443"
+  ],
+  "shell (`crates/shell/src/platform/audio_player.rs:169-176` — `AudioCmd::Load`, `rodio::Decoder::total_duration()`)": [
+   "BUG-1105"
   ],
   "shell (`crates/shell/src/relayout.rs::pump_raf_engine_thread`) / js (`rusty_v8` isolate creation)": [
    "BUG-976"

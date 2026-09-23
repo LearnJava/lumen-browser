@@ -73,11 +73,29 @@ struct ShareKey {
 /// element the cascade's SVG-only eligibility check
 /// ([`compute_style_shareable`]) could ever mark shareable — skipping the key
 /// build (an attribute-set allocation) on the common case of plain HTML nodes.
+///
+/// Also `None` for a node CSS Scoping L1 §6.1-6.2 treats specially — a
+/// shadow host itself (`:host`), a slotted light child (`::slotted()`), or a
+/// node living inside a shadow tree (its own interior selectors) — even
+/// though `ShareKey` has no field for any of this. THREAD-4 срез 4: this is
+/// not redundant with [`compute_style_shareable`]'s own `shareable` output.
+/// That flag only gates *insertion*; [`ShareCache::compute`]'s cache *lookup*
+/// keys purely on `build_key`'s output, so if two structural siblings under
+/// the same parent (same `tag`+`attrs`+`inherited_ptr`) differed only in one
+/// having an attached shadow root, a `None` here is the only thing that
+/// stops the plain sibling's cached document-scope style from being handed
+/// back for the shadow-host sibling's `:host`-scoped one.
 fn build_key(doc: &Document, node: NodeId, inherited: &ComputedStyle) -> Option<ShareKey> {
     let NodeData::Element { name, attrs } = &doc.get(node).data else {
         return None;
     };
     if !super::presentational::is_svg_presentational_element(name.local.as_ref()) {
+        return None;
+    }
+    if doc.is_shadow_host(node)
+        || doc.get(node).parent.is_some_and(|p| doc.is_shadow_host(p))
+        || doc.enclosing_shadow_host(node).is_some()
+    {
         return None;
     }
     let mut pairs: Vec<(Box<str>, Box<str>)> = attrs
