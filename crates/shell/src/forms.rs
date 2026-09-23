@@ -1294,7 +1294,8 @@ pub fn build_select_dropdown(
 /// Only the properties that do **not** change row geometry are honoured, so the
 /// shared [`hit_select_option`] geometry stays valid for both the native and the
 /// base-select dropdown.
-struct OptionRowStyle {
+#[derive(Debug, Clone)]
+pub struct OptionRowStyle {
     /// Author `color` (falls back to the native option text colour).
     text: Color,
     /// Author `background-color`, if any (row is left transparent otherwise).
@@ -1307,25 +1308,27 @@ struct OptionRowStyle {
     font_style: FontStyle,
 }
 
-/// Resolve the author style of an `<option>` node, inheriting from `parent`
-/// (the `<select>`'s computed style). Returns `None` when the node has no box
-/// (e.g. `display:none`), so the caller can skip the row.
-fn resolve_option_row_style(
+/// Resolve the author style of the visible `options` rows, inheriting from
+/// `parent` (the `<select>`'s computed style). The only part of a base-select
+/// dropdown that reads the document — BUG-1109 caches it under `try_lock`.
+pub fn resolve_option_row_styles(
     doc: &Document,
     sheet: &lumen_css_parser::Stylesheet,
-    option_id: NodeId,
     parent: &ComputedStyle,
+    options: &[SelectOption],
     viewport: Size,
     dark_mode: bool,
-) -> OptionRowStyle {
-    let s = compute_style(doc, option_id, sheet, parent, viewport, dark_mode);
-    OptionRowStyle {
-        text: s.color,
-        background: s.background_color.map(|c| c.resolve(s.color)),
-        font_size: s.font_size,
-        font_weight: s.font_weight,
-        font_style: s.font_style,
-    }
+) -> Vec<OptionRowStyle> {
+    options.iter().take(DROPDOWN_MAX_ROWS_VISIBLE).map(|opt| {
+        let s = compute_style(doc, opt.node_id, sheet, parent, viewport, dark_mode);
+        OptionRowStyle {
+            text: s.color,
+            background: s.background_color.map(|c| c.resolve(s.color)),
+            font_size: s.font_size,
+            font_weight: s.font_weight,
+            font_style: s.font_style,
+        }
+    }).collect()
 }
 
 /// Build the option-list popover for a `<select appearance: base-select>`.
@@ -1338,25 +1341,23 @@ fn resolve_option_row_style(
 /// Row geometry is intentionally identical to the native dropdown so
 /// [`hit_select_option`] stays valid for both paths. Author-driven per-row
 /// heights and full `::picker(select)` container styling are deferred
-/// (see `docs/tasks/ph3-select-base.md`, slice 4 follow-up).
+/// (see `docs/tasks/ph3-select-base.md`, slice 4 follow-up). `row_styles` come
+/// from [`resolve_option_row_styles`]; a row without one is not drawn.
 #[allow(clippy::too_many_arguments)]
 pub fn build_base_select_dropdown(
     anchor: Rect,
-    doc: &Document,
-    sheet: &lumen_css_parser::Stylesheet,
     select_style: &ComputedStyle,
     options: &[SelectOption],
+    row_styles: &[OptionRowStyle],
     scroll_y: f32,
     viewport_w: f32,
     viewport_h: f32,
-    dark_mode: bool,
 ) -> DisplayList {
     let mut out: DisplayList = Vec::new();
     if options.is_empty() {
         return out;
     }
 
-    let viewport = Size::new(viewport_w, viewport_h);
     let rows = options.len().min(DROPDOWN_MAX_ROWS_VISIBLE);
     let w = (anchor.width).max(DROPDOWN_MIN_W).min(viewport_w);
     let h = rows as f32 * DROPDOWN_ROW_H + DROPDOWN_PAD_Y * 2.0;
@@ -1389,10 +1390,9 @@ pub fn build_base_select_dropdown(
         radii: lumen_paint::CornerRadii::default(),
     });
 
-    for (i, opt) in options.iter().take(DROPDOWN_MAX_ROWS_VISIBLE).enumerate() {
+    for (i, (opt, os)) in options.iter().zip(row_styles).take(DROPDOWN_MAX_ROWS_VISIBLE).enumerate() {
         let row_y = vp_y + DROPDOWN_PAD_Y + i as f32 * DROPDOWN_ROW_H;
         let row_rect = Rect::new(vp_x, row_y, w, DROPDOWN_ROW_H);
-        let os = resolve_option_row_style(doc, sheet, opt.node_id, select_style, viewport, dark_mode);
 
         // Row background: author `background-color` wins; else the native blue
         // highlight for the selected row; else transparent.
@@ -2370,9 +2370,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("option { background-color: rgb(10, 20, 30); }");
         let sel_style = ComputedStyle::root();
         let anchor = Rect::new(10.0, 10.0, 100.0, 22.0);
-        let dl = build_base_select_dropdown(
-            anchor, &doc, &sheet, &sel_style, &opts, 0.0, 1024.0, 720.0, false,
-        );
+        let vp = Size::new(1024.0, 720.0);
+        let styles = resolve_option_row_styles(&doc, &sheet, &sel_style, &opts, vp, false);
+        let dl = build_base_select_dropdown(anchor, &sel_style, &opts, &styles, 0.0, 1024.0, 720.0);
         let has_author_bg = dl.iter().any(|cmd| {
             matches!(
                 cmd,

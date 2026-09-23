@@ -45,6 +45,7 @@ mod pointer;
 mod printing;
 mod resize_grip;
 mod scrolling;
+mod select_dropdown_snapshot;
 mod session;
 mod smil;
 mod spell_menu;
@@ -58,6 +59,7 @@ mod viewport_sync;
 
 pub(crate) use state::Lumen;
 pub(crate) use focused_field_snapshot::FocusedFieldSnapshot;
+pub(crate) use select_dropdown_snapshot::SelectDropdownSnapshot;
 /// BUG-1044: the automation hit check is a free function (no `Lumen` needed to
 /// decide it), so it is re-exported here for `crate::tests` the same way the
 /// struct above is — the fixtures for it are real layout trees, not a window.

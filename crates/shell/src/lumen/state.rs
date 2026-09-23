@@ -734,6 +734,10 @@ pub(crate) struct Lumen {
     /// read by the redraw path — the same `try_lock`-and-fall-back scheme as
     /// [`Self::modal_dialog_cache`], for the caret/selection/squiggle paint.
     pub(crate) focused_field_snapshot: super::FocusedFieldSnapshot,
+    /// BUG-1109: options (and base-select row styles) of the open `<select>`
+    /// dropdown — page or frame — as last read by the redraw path, under the
+    /// same `try_lock`-and-fall-back scheme as [`Self::focused_field_snapshot`].
+    pub(crate) select_dropdown_snapshot: super::SelectDropdownSnapshot,
     /// Persistent `localStorage` partitions keyed by origin (scheme+host+port).
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.

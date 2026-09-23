@@ -71,7 +71,7 @@
   `src.document.lock().unwrap()` (`redraw_requested.rs`, сбор
   `collect_select_options`) — тот же фриз при открытом списке во время
   relayout, плюс `unwrap()` на пути кадра. Вынесено в
-  [BUG-1109](BUG-1109-OPEN.md).
+  [BUG-1109](BUG-1109-FIXED.md).
 - Пути кадра для полей внутри `<iframe>` (`focused_frame_*`) по-прежнему
   блокирующе берут `handle.doc` фрейма; off-thread relayout движкового
   потока держит документ страницы, не фрейма, поэтому они под этот
