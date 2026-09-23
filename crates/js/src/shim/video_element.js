@@ -832,12 +832,47 @@
       _networkState = NETWORK_NO_SOURCE;
       queueTask(function () {
         if (gen !== _generation) return;
-        if (hasAttr('src')) { startFetch(gen, attr('src') || '', null); return; }
-        var candidates = sourceChildren();
-        // Step 6 «otherwise»: no src attribute and no <source> child at all.
-        if (candidates.length === 0) { _networkState = NETWORK_EMPTY; return; }
-        nextCandidate(gen, candidates, 0);
+        // BUG-925: `loading="lazy"` (HTML LS §4.8.11) defers everything past
+        // this point until the element is both "being rendered" (connected,
+        // not `hidden`/`display:none` — unlike `<audio>`, `<video>` needs no
+        // `controls` check, it is inherently visual) and intersects the
+        // viewport. `_pendingLazyGen` guards a stale IntersectionObserver
+        // callback (superseded by a newer `load()`/`src=`) against firing
+        // out of order.
+        var loadingAttr = attr('loading') || '';
+        if (String(loadingAttr).toLowerCase() === 'lazy') {
+          _pendingLazyGen = gen;
+          _lumen_defer_lazy_media_load(el, function() {
+            if (gen !== _generation || _pendingLazyGen !== gen) return; // superseded
+            if (!_lumen_media_is_rendered(el, /* requiresControls */ false)) return; // stays pending
+            _pendingLazyGen = null;
+            resourceSelectionNow(gen);
+          });
+          return;
+        }
+        resourceSelectionNow(gen);
       });
+    }
+
+    function resourceSelectionNow(gen) {
+      if (hasAttr('src')) { startFetch(gen, attr('src') || '', null); return; }
+      var candidates = sourceChildren();
+      // Step 6 «otherwise»: no src attribute and no <source> child at all.
+      if (candidates.length === 0) { _networkState = NETWORK_EMPTY; return; }
+      nextCandidate(gen, candidates, 0);
+    }
+
+    // Force a deferred resource selection to run now, bypassing the
+    // IntersectionObserver wait — HTML LS: switching `loading` away from
+    // `lazy` (property, `setAttribute`, or `removeAttribute`) starts it
+    // immediately if one was pending.
+    var _pendingLazyGen = null;
+    function _resumeLazyLoadNow() {
+      if (_pendingLazyGen === null) return;
+      var gen = _pendingLazyGen;
+      _pendingLazyGen = null;
+      _lumen_cancel_lazy_media_load(el);
+      if (gen === _generation) resourceSelectionNow(gen);
     }
 
     function sourceChildren() {
@@ -1052,6 +1087,40 @@
       },
       configurable: true,
     });
+
+    // BUG-925: `loading` (HTML LS §4.8.11) — enumerated reflected attribute,
+    // missing/invalid → 'eager'. Own accessor (like `src` above) rather than
+    // the shared `_lumen_install_reflection` row (installed as a fallback in
+    // `web_api_shim_tail_b.js` for the pre-patch window) so the setter can
+    // resume a deferred lazy load; routed through the instance's
+    // `setAttribute` override below so a bare `el.setAttribute('loading', …)`
+    // gets the same resume check.
+    Object.defineProperty(el, 'loading', {
+      get: function() {
+        var v = attr('loading');
+        if (v === null) return 'eager';
+        v = v.toLowerCase();
+        return v === 'lazy' ? 'lazy' : 'eager';
+      },
+      set: function(v) { if (el.setAttribute) el.setAttribute('loading', String(v)); },
+      configurable: true,
+    });
+    if (el.setAttribute) {
+      var _origSetAttribute = el.setAttribute.bind(el);
+      el.setAttribute = function(name, value) {
+        _origSetAttribute(name, value);
+        if (String(name).toLowerCase() === 'loading' && String(value).toLowerCase() !== 'lazy') {
+          _resumeLazyLoadNow();
+        }
+      };
+    }
+    if (el.removeAttribute) {
+      var _origRemoveAttribute = el.removeAttribute.bind(el);
+      el.removeAttribute = function(name) {
+        _origRemoveAttribute(name);
+        if (String(name).toLowerCase() === 'loading') _resumeLazyLoadNow();
+      };
+    }
 
     Object.defineProperty(el, 'currentSrc',   { get: function() { return _currentSrc; },   configurable: true });
     Object.defineProperty(el, 'networkState', { get: function() { return _networkState; }, configurable: true });

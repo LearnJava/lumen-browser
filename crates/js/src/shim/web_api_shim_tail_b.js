@@ -1394,6 +1394,12 @@ var _LUMEN_REFERRER_POLICY = { def: '', keys: [
 // state, which maps back to 'auto'.
 var _LUMEN_FETCH_PRIORITY = { def: 'auto', keys: ['high', 'low', 'auto'] };
 
+// `loading` (HTML LS §4.8.11 / §2.6.6.9) shares one keyword set across
+// <img>/<iframe> -- unknown/missing values fall back to 'eager' (BUG-925:
+// was reflected as plain 'string', so an invalid value like `getAttribute`
+// read back verbatim through the IDL getter too instead of normalizing).
+var _LUMEN_LOADING = { def: 'eager', keys: ['lazy', 'eager'] };
+
 // Global attributes (HTML LS §3.2.6) — every HTML element has them.
 // `id`, `className`, `slot` and `draggable` stay own properties on the wrapper
 // (they predate this table and carry extra behaviour), so they are not repeated.
@@ -1772,7 +1778,7 @@ _lumen_install_reflection(HTMLImageElement.prototype, [
     ['isMap',          'ismap',          'bool'],
     ['crossOrigin',    'crossorigin',    'string'],
     ['decoding',       'decoding',       'string'],
-    ['loading',        'loading',        'string'],
+    ['loading',        'loading',        'enum',   _LUMEN_LOADING],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
     ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
     ['align',          'align',          'string'],
@@ -2038,7 +2044,7 @@ _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['name',           'name',           'string'],
     ['allow',          'allow',          'string'],
     ['allowFullscreen','allowfullscreen','bool'],
-    ['loading',        'loading',        'string'],
+    ['loading',        'loading',        'enum',   _LUMEN_LOADING],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
     ['fetchPriority',  'fetchpriority',  'enum',   _LUMEN_FETCH_PRIORITY],
     ['align',          'align',          'string'],
@@ -2164,6 +2170,10 @@ _lumen_install_reflection(HTMLSourceElement.prototype, [
         ['controls',     'controls',     'bool'],
         ['defaultMuted', 'muted',        'bool'],
         ['playsInline',  'playsinline',  'bool'],
+        // BUG-925: fallback for a wrapper `audio_element.rs`/`video_element.js`
+        // has not patched yet — both shadow this with an own `loading`
+        // accessor once patched, needed to resume a deferred lazy load.
+        ['loading',      'loading',      'enum',   _LUMEN_LOADING],
     ]);
 });
 _lumen_install_reflection(HTMLVideoElement.prototype, [

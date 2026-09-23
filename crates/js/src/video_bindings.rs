@@ -1116,6 +1116,76 @@ tt.length === 1
                 "controls/loop must reflect the content attribute"
             );
         }
+
+        /// BUG-925: `loading` reflects HTML LS §4.8.11 as an enumerated
+        /// attribute — missing/invalid → `'eager'` — same contract `<img>`'s
+        /// `loading` now uses.
+        #[test]
+        fn loading_reflects_as_enum_default_eager() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(
+                    &rt,
+                    "var v = document.createElement('video');
+                     var beforeSet = v.loading === 'eager';
+                     v.loading = 'lazy';
+                     var afterLazy = v.loading === 'lazy' && v.getAttribute('loading') === 'lazy';
+                     v.setAttribute('loading', 'BOGUS');
+                     var afterBogus = v.loading === 'eager' && v.getAttribute('loading') === 'BOGUS';
+                     beforeSet && afterLazy && afterBogus"
+                ),
+                "loading must normalize invalid values to 'eager' while keeping the raw attribute"
+            );
+        }
+
+        /// BUG-925: `loading="lazy"` defers resource selection — with no real
+        /// layout in this runtime the element never intersects, so
+        /// `loadstart` must never fire (this is the same "stays deferred"
+        /// outcome `audio_element.rs`'s
+        /// `loading_lazy_without_controls_never_loads` covers for `<audio>`,
+        /// here exercising `<video>`'s single `resourceSelection` choke point
+        /// instead of a controls check).
+        #[test]
+        fn loading_lazy_defers_resource_selection() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var v = document.createElement('video');
+                 v.loading = 'lazy';
+                 v.src = 'http://127.0.0.1:1/movie.mp4';",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "v.currentSrc === ''"),
+                "a lazy video with no layout must never reach resource selection"
+            );
+        }
+
+        /// BUG-925: switching `loading` away from `'lazy'` via
+        /// `removeAttribute` — the one path that bypasses the IDL setter —
+        /// must resume a pending deferred load immediately rather than wait
+        /// on an intersection this test's runtime never delivers.
+        #[test]
+        fn removing_loading_attribute_resumes_pending_load() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var v = document.createElement('video');
+                 v.loading = 'lazy';
+                 v.src = 'http://127.0.0.1:1/movie.mp4';",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "v.currentSrc === ''"),
+                "load must stay deferred before the attribute is removed"
+            );
+            rt.eval("v.removeAttribute('loading');").unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "v.currentSrc !== ''"),
+                "removeAttribute('loading') should resume the deferred load"
+            );
+        }
     }
 
     // ── BUG-570: VTTCue/TextTrackCue/TrackEvent global constructors ───────────
