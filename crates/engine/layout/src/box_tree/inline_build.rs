@@ -147,11 +147,12 @@ pub(crate) fn is_inline_content(
             {
                 return false;
             }
-            produces_inline_segments(
-                doc,
-                id,
-                probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
-            )
+            // CSS 2.1 §9.7: a floated or absolutely/fixed positioned element
+            // computes to `display: block` regardless of its declared value —
+            // it must not flatten into a text segment (BUG-928).
+            let (display, out_of_flow) =
+                probe_display_and_flow(doc, sheet, id, inherited, viewport, dark_mode, counters);
+            !out_of_flow && produces_inline_segments(doc, id, display)
         }
         _ => false,
     }
@@ -216,10 +217,13 @@ pub(crate) fn is_atomic_inline_level(
                     | Display::InlineGrid
             );
     }
-    matches!(
-        probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
-        Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
-    )
+    let (display, out_of_flow) =
+        probe_display_and_flow(doc, sheet, id, inherited, viewport, dark_mode, counters);
+    !out_of_flow
+        && matches!(
+            display,
+            Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+        )
 }
 
 /// Обнуляет box-model spacing анонимного контейнера (InlineRun / InlineBlockRow).
