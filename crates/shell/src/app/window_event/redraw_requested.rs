@@ -734,32 +734,25 @@ impl Lumen {
             dp.append(&mut overlay_buf);
             overlay_buf = dp;
         }
-        if let (Some(sel_node), Some(lb)) =
-            (self.select_dropdown_node, &self.layout_box)
+        if let (Some(sel_node), Some(lb), Some(src)) =
+            (self.select_dropdown_node, &self.layout_box, &self.layout_source)
             && let Some(anchor) = forms::find_box_rect(lb, sel_node)
         {
             // `appearance: base-select` renders the picker from author CSS
             // on the `<option>`s; the native (Auto/Compat) path keeps the
             // fixed UA chrome. Row geometry is shared, so `hit_select_option`
             // is valid regardless of which builder produced the overlay.
+            // BUG-1109: the options come from a `try_lock` snapshot — a
+            // blocking lock froze the frame for a whole off-thread relayout.
             let base_select_style = forms::find_layout_box(lb, sel_node)
                 .filter(|b| b.style.appearance == lumen_layout::Appearance::BaseSelect)
                 .map(|b| b.style.clone());
-            if let Some(src) = self.layout_source.as_ref() {
-                let doc = src.document.lock().unwrap();
-                let opts = forms::collect_select_options(&doc, sel_node);
-                let vp_h = self.viewport_height_css();
-                let mut dd = if let Some(sel_style) = &base_select_style {
-                    forms::build_base_select_dropdown(
-                        anchor, &doc, &src.stylesheet, sel_style, &opts,
-                        self.scroll_y, vp_w, vp_h, self.dark_mode,
-                    )
-                } else {
-                    forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h)
-                };
-                dd.append(&mut overlay_buf);
-                overlay_buf = dd;
-            }
+            let vp = lumen_core::geom::Size::new(vp_w, self.viewport_height_css());
+            let snap = &mut self.select_dropdown_snapshot;
+            snap.refresh(&src.document, &src.stylesheet, sel_node, base_select_style.as_deref(), vp, self.dark_mode);
+            let mut dd = snap.build(anchor, base_select_style.as_deref(), self.scroll_y, vp);
+            dd.append(&mut overlay_buf);
+            overlay_buf = dd;
         }
 
         // FRAME-6: same three overlays, anchored to a control inside a
@@ -796,20 +789,12 @@ impl Lumen {
             let base_select_style = forms::find_layout_box(lb, sel_node)
                 .filter(|b| b.style.appearance == lumen_layout::Appearance::BaseSelect)
                 .map(|b| b.style.clone());
-            if let Ok(doc) = handle.doc.lock() {
-                let opts = forms::collect_select_options(&doc, sel_node);
-                let vp_h = self.viewport_height_css();
-                let mut dd = if let Some(sel_style) = &base_select_style {
-                    forms::build_base_select_dropdown(
-                        anchor, &doc, &handle.sheet, sel_style, &opts,
-                        self.scroll_y, vp_w, vp_h, self.dark_mode,
-                    )
-                } else {
-                    forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h)
-                };
-                dd.append(&mut overlay_buf);
-                overlay_buf = dd;
-            }
+            let vp = lumen_core::geom::Size::new(vp_w, self.viewport_height_css());
+            let snap = &mut self.select_dropdown_snapshot;
+            snap.refresh(&handle.doc, &handle.sheet, sel_node, base_select_style.as_deref(), vp, self.dark_mode);
+            let mut dd = snap.build(anchor, base_select_style.as_deref(), self.scroll_y, vp);
+            dd.append(&mut overlay_buf);
+            overlay_buf = dd;
         }
 
         if let Some(t0) = frame_log_t0 {

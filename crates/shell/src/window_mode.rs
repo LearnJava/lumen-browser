@@ -353,6 +353,7 @@ pub(crate) fn run_window_mode(
         select_dropdown_node: None,
         modal_dialog_cache: (0, Vec::new()),
         focused_field_snapshot: lumen::FocusedFieldSnapshot::default(),
+        select_dropdown_snapshot: lumen::SelectDropdownSnapshot::default(),
         ls_storage: HashMap::new(),
         ss_storage: HashMap::new(),
         idb_dir: lumen_idb_dir(),
