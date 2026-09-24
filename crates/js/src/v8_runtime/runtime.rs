@@ -505,6 +505,43 @@ impl V8JsRuntime {
         let _ = self.eval(&script);
     }
 
+    /// PERF-14: settle the page's in-flight `fetch()` requests for a runtime
+    /// that has no event loop behind it — the headless one-shot modes
+    /// (`--screenshot`, `--trace-nav`, `--dump-*`, `--print-to-pdf`, the IPC
+    /// `Screenshot` command).
+    ///
+    /// `fetch()` runs on a worker thread and its promise settles only from
+    /// `_lumen_fetch_pump`, which the live shell drives through
+    /// `_lumen_tick_timers` every tick. A headless run has no tick, so without
+    /// this a `fetch().then(render)` page would be captured before `render`
+    /// ran. Each round pumps once — the settled requests' callbacks run as
+    /// microtasks when that `eval` returns, and may start further requests —
+    /// then re-reads the in-flight count, so a chain of dependent requests is
+    /// followed to its end. Timers are deliberately *not* run: headless has
+    /// never run them, and doing so here would change what every existing
+    /// headless consumer (goldens, WPT-side dumps) observes.
+    ///
+    /// Stops when nothing is in flight or `budget` has elapsed — the bound a
+    /// long-polling page (`function poll() { fetch(u).then(poll) }`) needs,
+    /// which under the old synchronous default spun inside the microtask queue
+    /// forever. Returns the number of requests still in flight.
+    pub fn settle_pending_fetches(&self, budget: std::time::Duration) -> usize {
+        let started = std::time::Instant::now();
+        loop {
+            let _ = self.eval("if (typeof _lumen_fetch_pump === 'function') _lumen_fetch_pump();");
+            let in_flight = match self.eval(
+                "(typeof _lumen_fetch_inflight === 'object') ? _lumen_fetch_inflight.length : 0",
+            ) {
+                Ok(JsValue::Number(n)) if n > 0.0 => n as usize,
+                _ => return 0,
+            };
+            if started.elapsed() >= budget {
+                return in_flight;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
     /// Deliver messages posted by worker threads to their `Worker` JS
     /// instances (Ph3 V8 migration S10). Mirrors
     /// [`crate::QuickJsRuntime::pump_workers`].

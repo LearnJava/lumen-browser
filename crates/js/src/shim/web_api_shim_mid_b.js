@@ -785,6 +785,9 @@ function _lumen_timer_string_handler(code, sink) {
 }
 
 function _lumen_tick_timers() {
+    // PERF-14: settle the `fetch()` requests whose responses have arrived —
+    // every tick, not only when a timer is due (defined in the fetch shim).
+    if (typeof _lumen_fetch_pump === 'function') _lumen_fetch_pump();
     var now = _lumen_now_ms();
     var ready = [];
     var keep = [];

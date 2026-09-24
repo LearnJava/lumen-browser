@@ -14,6 +14,39 @@
 
 use crate::*;
 
+/// PERF-14: `true` for the headless one-shot modes (`--screenshot`,
+/// `--trace-nav`, `--dump-*`, `--print-to-pdf`, the IPC server), set once by
+/// `run_cli` before dispatch. Those runs have no event loop, so nothing would
+/// ever settle a `fetch()` the page's scripts started — `parse_and_layout`
+/// settles them itself right after the scripts when this is set. The live
+/// window leaves it `false`: its tick pumps the same requests without holding
+/// the load pipeline for them.
+pub(crate) static HEADLESS_ONE_SHOT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// How long a headless run waits for the page's `fetch()` requests after its
+/// scripts. A bound, not a target: the loop returns as soon as nothing is in
+/// flight. It exists for long-polling pages, whose request chain never ends —
+/// under the old synchronous default those hung the headless run for good.
+const HEADLESS_FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Settle `js`'s in-flight `fetch()` requests when running headless (see
+/// [`HEADLESS_ONE_SHOT`]). A no-op in the live window.
+pub(crate) fn settle_headless_fetches(js: Option<&Arc<dyn PersistentJs>>) {
+    if !HEADLESS_ONE_SHOT.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Some(js) = js else { return };
+    let _s = lumen_core::trace::span("settle-fetches", "script");
+    let left = js.settle_pending_fetches(HEADLESS_FETCH_BUDGET);
+    if left > 0 {
+        eprintln!(
+            "headless: {left} fetch() still in flight after {} s — capturing without them",
+            HEADLESS_FETCH_BUDGET.as_secs()
+        );
+    }
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn render_bytes(
@@ -1216,6 +1249,10 @@ pub(crate) fn parse_and_layout(
         parse_time_stylesheet,
         dynamic_image_hook,
     );
+    // PERF-14: headless has no event loop to settle the `fetch()` requests
+    // the scripts just started — do it here, before the post-script cascade
+    // and geometry below read what their callbacks did to the DOM.
+    settle_headless_fetches(js_ctx.as_ref());
     drop(run_scripts_span);
 
     // BUG-443: the scripts have had their turn at the DOM, so the cascade and

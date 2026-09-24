@@ -11888,24 +11888,69 @@ function _lumen_script_run_module(url, text) {
 
 // External `<script src>`: HTML LS §4.12.1 sets the 'force async' flag on any
 // script element inserted by script, so the fetch and the execution both belong
-// to a later task — never to the appendChild call itself. That matters twice
-// over here: Lumen's `fetch` is synchronous underneath (an inline fetch would
-// stall the insertion), and the near-universal `el.onload = …` assignment that
-// follows appendChild would otherwise be installed after the event fired.
+// to a later task — never to the appendChild call itself: the near-universal
+// `el.onload = …` assignment that follows appendChild would otherwise be
+// installed after the event fired.
+//
+// PERF-14: `fetch()` no longer blocks, so the requests of several inserted
+// scripts now overlap on the wire — but they still *execute* in insertion
+// order, through `_lumen_script_exec_queue`. That is the order they always had
+// while the transport was synchronous (each fetch finished inside its own
+// timer task), and it is what a loader that injects dependent scripts one
+// after another relies on. The spec allows it too: a default force-async
+// script runs «as soon as possible», and the shim cannot tell those apart
+// from `async = false` ones, which must keep insertion order.
+var _lumen_script_exec_queue = [];
+
+function _lumen_script_exec_drain() {
+    while (_lumen_script_exec_queue.length > 0 && _lumen_script_exec_queue[0].state !== 0) {
+        var job = _lumen_script_exec_queue.shift();
+        job.run();
+    }
+}
+
 function _lumen_script_load_external(nid, src, isModule) {
+    // state: 0 = fetching, 1 = body ready, 2 = failed.
+    var job = { state: 0, run: null };
+    _lumen_script_exec_queue.push(job);
     setTimeout(function() {
-        var url = _url_resolve(String(src), _lumen_document_base_url());
+        var url;
+        try {
+            url = _url_resolve(String(src), _lumen_document_base_url());
+        } catch (e) {
+            // A job left at state 0 would hold every later script in the queue.
+            job.state = 2;
+            job.run = function() {
+                _lumen_console_error('script load failed: ' + src + ': ' + e);
+                _lumen_resource_fire(nid, 'error');
+            };
+            _lumen_script_exec_drain();
+            return;
+        }
         fetch(url, { _lumenInitiatorType: 'script' }).then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             return resp.text();
         }).then(function(text) {
-            if (isModule) return _lumen_script_run_module(url, text);
-            _lumen_script_execute_classic(text, nid);
-        }).then(function() {
-            _lumen_resource_fire(nid, 'load');
+            job.state = 1;
+            job.run = function() {
+                Promise.resolve().then(function() {
+                    if (isModule) return _lumen_script_run_module(url, text);
+                    _lumen_script_execute_classic(text, nid);
+                }).then(function() {
+                    _lumen_resource_fire(nid, 'load');
+                }).catch(function(e) {
+                    _lumen_console_error('script load failed: ' + url + ': ' + e);
+                    _lumen_resource_fire(nid, 'error');
+                });
+            };
+            _lumen_script_exec_drain();
         }).catch(function(e) {
-            _lumen_console_error('script load failed: ' + url + ': ' + e);
-            _lumen_resource_fire(nid, 'error');
+            job.state = 2;
+            job.run = function() {
+                _lumen_console_error('script load failed: ' + url + ': ' + e);
+                _lumen_resource_fire(nid, 'error');
+            };
+            _lumen_script_exec_drain();
         });
     }, 0);
 }

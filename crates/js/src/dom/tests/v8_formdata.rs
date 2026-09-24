@@ -370,6 +370,8 @@ fn fetch_post_formdata_sends_multipart_body() {
         "var fd = new FormData(); fd.append('user', 'bob'); fd.append('age', '30'); \
                  fetch('https://example.com/api', { method: 'POST', body: fd })"
     ).unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let (url, method, ct, body) = &calls[0];
@@ -395,6 +397,8 @@ fn fetch_post_string_body_sends_text_plain() {
     rt.eval(
         "fetch('https://example.com/api', { method: 'POST', body: 'hello world' })"
     ).unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let (_, method, ct, body) = &calls[0];
@@ -410,6 +414,8 @@ fn fetch_post_uint8array_body_sends_octet_stream() {
     rt.eval(
         "fetch('https://example.com/bin', { method: 'PUT', body: new Uint8Array([1, 2, 3]) })"
     ).unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let (_, method, ct, body) = &calls[0];
@@ -427,6 +433,8 @@ fn fetch_post_content_type_override() {
                  fetch('https://example.com/', { method: 'POST', body: fd, \
                    headers: {'Content-Type': 'application/json'} })"
     ).unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let (_, _, ct, _) = &calls[0];

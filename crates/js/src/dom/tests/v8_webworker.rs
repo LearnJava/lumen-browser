@@ -433,6 +433,8 @@ fn dynamic_external_script_executes_and_fires_load() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt
         .eval("globalThis.__b571_ext === 7 && globalThis.__b571_ext_load === true")
         .unwrap();
@@ -454,6 +456,8 @@ fn dynamic_external_script_fires_error_on_http_failure() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b571_ext_err === true").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -481,6 +485,8 @@ fn dynamic_external_script_in_shadow_root_executes_and_fires_load() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt
         .eval("globalThis.__b878_ext === 7 && globalThis.__b878_ext_load === true")
         .unwrap();
@@ -523,6 +529,8 @@ fn dynamic_stylesheet_link_fires_load() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b703_load").unwrap();
     assert_eq!(r, lumen_core::JsValue::Number(2.0));
 }
@@ -543,6 +551,8 @@ fn dynamic_stylesheet_link_fires_error_on_http_failure() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b703_err === true").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -859,9 +869,13 @@ fn detached_stylesheet_link_loads_only_once_connected() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let before = rt.eval("globalThis.__b703_d").unwrap();
     assert_eq!(before, lumen_core::JsValue::Number(0.0));
     rt.eval("document.body.appendChild(d); _lumen_tick_timers();").unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let after = rt.eval("globalThis.__b703_d").unwrap();
     assert_eq!(after, lumen_core::JsValue::Number(1.0));
 }

@@ -79,6 +79,49 @@ function _perf_rt_record_fetch(url, initiator, startMs, status) {
         { status: status, decodedBodySize: len, encodedBodySize: len, contentType: ctype });
 }
 
+// PERF-14: in-flight `fetch()` requests. Each entry is the request's `poll`
+// closure — it returns `true` once the request has settled (promise resolved
+// or rejected) and `false` while the worker thread still has it.
+//
+// One registry instead of the per-request `setTimeout(poll, 1)` chain the async
+// path used before: that chain only advanced when the shell ran timers, and
+// the headless one-shot modes run none — so async could not be the default.
+// `_lumen_fetch_pump` is pumped by both: by `_lumen_tick_timers` on every live
+// tick, and by `V8JsRuntime::settle_pending_fetches` in headless.
+var _lumen_fetch_inflight = [];
+
+// Ask the shell to wake up soon while anything is in flight: the parked event
+// loop would otherwise only notice a finished request on an unrelated wakeup.
+// 2 ms is the cadence the old `setTimeout(poll, 1)` chain settled at.
+function _lumen_fetch_arm_wakeup() {
+    if (_lumen_fetch_inflight.length > 0) _lumen_request_wakeup(_lumen_now_ms() + 2);
+}
+
+function _lumen_fetch_track(poll) {
+    _lumen_fetch_inflight.push(poll);
+    _lumen_fetch_arm_wakeup();
+}
+
+// Settle every request whose response has arrived. Returns how many are still
+// in flight — including ones a settled request's callbacks started, which is
+// how a `fetch().then(() => fetch())` chain keeps the headless settle loop
+// going. The callbacks themselves run as microtasks when the calling `eval`
+// returns, not inside this loop.
+function _lumen_fetch_pump() {
+    if (_lumen_fetch_inflight.length === 0) return 0;
+    var list = _lumen_fetch_inflight;
+    _lumen_fetch_inflight = [];
+    var keep = [];
+    for (var i = 0; i < list.length; i++) {
+        var done = true;
+        try { done = list[i](); } catch (e) { _lumen_report_exception(e); }
+        if (!done) keep.push(list[i]);
+    }
+    _lumen_fetch_inflight = keep.concat(_lumen_fetch_inflight);
+    _lumen_fetch_arm_wakeup();
+    return _lumen_fetch_inflight.length;
+}
+
 function _lumen_fetch(input) {
     var init = arguments[1];
     try {
@@ -203,22 +246,26 @@ function _lumen_fetch(input) {
             }
         }
 
-        // Async path: a live, non-timeout AbortSignal. Run the request on a worker
-        // thread (via the _lumen_fetch_async_* bridges) and resolve/reject through a
-        // setTimeout poll loop, so an AbortController.abort() fired *during* the
-        // request flips the token and cancels the in-flight socket. Timeout signals
-        // keep the synchronous-cancellable path below (already torn down natively).
+        // Async path — the default (PERF-14). The request runs on a worker thread
+        // (the _lumen_fetch_async_* bridges) and the promise settles from
+        // `_lumen_fetch_pump`, so the JS thread is free for the whole round trip:
+        // whatever the script does after `fetch()` — `new Image().src`, the next
+        // `fetch()`, DOM work, the rest of the page's scripts — no longer waits
+        // for the response. A live signal additionally gets in-flight
+        // cancellation: `abort()` flips the token and the socket is torn down.
         //
-        // `_lumenAsync` is the shim's own opt-in to that same worker path for
-        // callers that have no signal to offer but must not park the JS thread
-        // (BUG-1013: `FontFace.load()` blocked the whole load pipeline for as long
-        // as the font host took to answer). It is deliberately keyed on an explicit
-        // init flag rather than flipped on by default: every other `fetch()` caller
-        // in the engine still relies on the response being in hand when the promise
-        // is created, and the headless one-shot modes never pump timers at all, so
-        // an async promise there would simply never settle.
-        var useAsync = !(_timeoutMs > 0)
-            && (!!(fetchSignal && !fetchSignal.aborted) || !!(init && init._lumenAsync));
+        // Who pumps: the live loop through `_lumen_tick_timers` (every tick, for
+        // the page and for every frame), the headless one-shot modes through
+        // `V8JsRuntime::settle_pending_fetches` right after the page's scripts —
+        // before that change of PERF-14 they pumped nothing, which is why the
+        // default used to be synchronous (BUG-1013 had to opt `FontFace.load()`
+        // out by hand with `_lumenAsync`, now a no-op kept for readability).
+        //
+        // Still synchronous: an `AbortSignal.timeout(ms)` signal, whose deadline
+        // is enforced by a native deadline thread on the cancellable bridge — the
+        // headless settle loop does not run timers, so the JS-side timeout could
+        // never fire there.
+        var useAsync = !(_timeoutMs > 0);
         if (useAsync) {
             return new Promise(function(resolve, reject) {
                 var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders);
@@ -230,28 +277,36 @@ function _lumen_fetch(input) {
                 function finish(fn) {
                     if (settled) return;
                     settled = true;
-                    // `_lumenAsync` callers reach this block with no signal at all,
+                    // Most callers reach this block with no signal at all,
                     // so the listener pair below is conditional rather than relying
                     // on a `catch` to swallow a TypeError on `undefined`.
                     if (fetchSignal) {
                         try { fetchSignal.removeEventListener('abort', onAbort); } catch (e) {}
                     }
-                    fn();
+                    // Building the Response runs page-observable code (a
+                    // `ReadableStream` reads its underlying-source dictionary,
+                    // which a page can poison through `Object.prototype`). On
+                    // the synchronous path such a throw landed in `_lumen_fetch`'s
+                    // own `catch` and rejected the promise; here it would reach
+                    // the pump instead and leave the promise pending forever.
+                    try { fn(); } catch (e) { reject(e); }
                 }
                 function onAbort() { _lumen_fetch_async_abort(handle); }
                 if (fetchSignal) {
                     try { fetchSignal.addEventListener('abort', onAbort); } catch (e) {}
                 }
+                // Returns true once the request has settled (the pump then
+                // drops it), false while the worker thread is still on it.
                 function poll() {
-                    if (settled) return;
+                    if (settled) return true;
                     var st = _lumen_fetch_async_poll(handle);
-                    if (st === 0) { setTimeout(poll, 1); return; }
+                    if (st === 0) return false;
                     if (st === 3) {
                         finish(function() {
                             _lumen_fetch_async_free(handle);
                             reject((fetchSignal && fetchSignal.reason !== undefined) ? fetchSignal.reason : new DOMException('The operation was aborted', 'AbortError'));
                         });
-                        return;
+                        return true;
                     }
                     if (st === 4) {
                         finish(function() {
@@ -259,14 +314,14 @@ function _lumen_fetch(input) {
                             _lumen_fetch_async_free(handle);
                             reject(new TypeError('fetch: network error for ' + url));
                         });
-                        return;
+                        return true;
                     }
                     if (st === 2) {
                         finish(function() {
                             _lumen_fetch_async_free(handle);
                             reject(new TypeError('fetch: network error for ' + url));
                         });
-                        return;
+                        return true;
                     }
                     finish(function() {
                         if (!_lumen_fetch_async_commit(handle)) {
@@ -288,8 +343,9 @@ function _lumen_fetch(input) {
                         _perf_rt_record_fetch(url, _rtInitiator, _rtStart, astatus);
                         resolve(_lumen_response_from_fetch_cache(astatus, astatusText, ahdrs, afinalUrl, afinalUrl !== url));
                     });
+                    return true;
                 }
-                setTimeout(poll, 0);
+                _lumen_fetch_track(poll);
             });
         }
 
