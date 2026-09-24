@@ -1,5 +1,189 @@
 use super::*;
 
+/// GAP-RUBYBOX — builds the `BoxKind::Ruby` box for a `<ruby>` element:
+/// partitions its DOM children into base/annotation groups and wraps each
+/// group in its own anonymous `Block` box via [`build_ruby_group_box`], so
+/// `layout_dispatch`'s `Ruby` arm can lay each one out with ordinary
+/// block-flow recursion before handing the resulting (sized) `LayoutBox`es
+/// to [`crate::ruby::RubyBox::from_style`] / [`crate::ruby::lay_out_ruby`].
+///
+/// Grouping (CSS Ruby L1 §3 base/annotation pairing, `ruby-merge: separate`
+/// shape): walks children in DOM order, accumulating a "current base" run
+/// until it meets an `<rt>` (direct, or nested one level inside `<rtc>` —
+/// Phase 0 does not give `<rtc>` its own multi-annotation grouping, see the
+/// doc comment above `is_ruby_text_container_element`); that pairs the
+/// accumulated base with the `<rt>`'s own box. `<rp>` fallback-parenthesis
+/// content is dropped entirely (CSS Ruby L1 §4.3 — only meant for UAs
+/// without ruby support). Trailing base content with no following `<rt>`
+/// is folded into the last paired base group (documented remainder: full
+/// `ruby-merge` semantics would give it its own unannotated column) unless
+/// there was no `<rt>` at all, in which case the whole `<ruby>` degrades to
+/// `lay_out_ruby`'s "no ruby text" branch (`base_count == children.len()`).
+#[allow(clippy::too_many_arguments)]
+fn build_ruby_box(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    style: &Arc<ComputedStyle>,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev_index: Option<&crate::incremental::ReuseIndex>,
+) -> LayoutBox {
+    let dom_children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
+    let mut base_boxes: Vec<LayoutBox> = Vec::new();
+    let mut ruby_text_boxes: Vec<LayoutBox> = Vec::new();
+    let mut cur_base: Vec<NodeId> = Vec::new();
+
+    let pair_with_rt = |cur_base: &mut Vec<NodeId>,
+                            base_boxes: &mut Vec<LayoutBox>,
+                            ruby_text_boxes: &mut Vec<LayoutBox>,
+                            rt_id: NodeId| {
+        let base_box = build_ruby_group_box(
+            doc, sheet, id, cur_base, style, viewport, flat, counters, registry, dark_mode,
+            prev_index,
+        );
+        cur_base.clear();
+        base_boxes.push(base_box);
+        ruby_text_boxes.push(build_box_or_reuse(
+            doc, sheet, rt_id, style, viewport, flat, counters, registry, dark_mode, prev_index,
+        ));
+    };
+
+    for &cid in &dom_children {
+        if is_ruby_parenthesis_element(doc, cid) {
+            continue;
+        }
+        if is_ruby_text_element(doc, cid) {
+            pair_with_rt(&mut cur_base, &mut base_boxes, &mut ruby_text_boxes, cid);
+        } else if is_ruby_text_container_element(doc, cid) {
+            for &rt_id in flat.children_of(doc, cid) {
+                if is_ruby_text_element(doc, rt_id) {
+                    pair_with_rt(&mut cur_base, &mut base_boxes, &mut ruby_text_boxes, rt_id);
+                }
+            }
+        } else if !matches!(doc.get(cid).data, NodeData::Comment(_) | NodeData::Doctype { .. }) {
+            cur_base.push(cid);
+        }
+    }
+
+    if !cur_base.is_empty() {
+        let mut extra = build_ruby_group_box(
+            doc, sheet, id, &cur_base, style, viewport, flat, counters, registry, dark_mode,
+            prev_index,
+        );
+        match base_boxes.last_mut() {
+            Some(last) => last.children.append(&mut extra.children),
+            None => base_boxes.push(extra),
+        }
+    }
+
+    let base_count = base_boxes.len();
+    let mut children = base_boxes;
+    children.extend(ruby_text_boxes);
+
+    LayoutBox {
+        node: id,
+        rect: Rect::ZERO,
+        used_line_height: style.font_size * style.line_height,
+        style: Arc::clone(style),
+        kind: BoxKind::Ruby { base_count },
+        children,
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+        origin: BoxOrigin { node: Some(id), role: BoxRole::Element },
+    }
+}
+
+/// GAP-RUBYBOX — wraps an arbitrary run of `<ruby>`'s DOM children (a base
+/// group, or an `<rt>`'s own children when called on those) in one anonymous
+/// `Block` box, so `layout_dispatch`'s ordinary block-flow recursion can size
+/// it before `lay_out_ruby` reads its `.rect`. A simplified version of the
+/// main per-block children loop in `build_box_inner`: handles inline content
+/// (text + inline elements, flattened into `InlineRun`s) and block-level
+/// element children (built via ordinary recursion), but not float placement,
+/// `::before`/`::after`, or BUG-728 nested-block-in-inline escapes — ruby
+/// base/annotation content using those is rare enough that this project's
+/// close-the-reachable-majority convention accepts the gap (documented in
+/// the ROADMAP closure note).
+#[allow(clippy::too_many_arguments)]
+fn build_ruby_group_box(
+    doc: &Document,
+    sheet: &Stylesheet,
+    owner_id: NodeId,
+    group: &[NodeId],
+    parent_style: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev_index: Option<&crate::incremental::ReuseIndex>,
+) -> LayoutBox {
+    let mut children: Vec<LayoutBox> = Vec::new();
+    let mut pending: Vec<InlineSegment> = Vec::new();
+    let mut pending_escapes: Vec<InlineEscape> = Vec::new();
+    let mut need_first_letter = false;
+    for &cid in group {
+        if matches!(&doc.get(cid).data, NodeData::Comment(_) | NodeData::Doctype { .. }) {
+            continue;
+        }
+        if let NodeData::Text(s) = &doc.get(cid).data
+            && s.chars().all(char::is_whitespace)
+        {
+            continue;
+        }
+        if is_inline_content(doc, sheet, cid, parent_style, viewport, dark_mode, counters) {
+            collect_inline_segments(
+                doc, sheet, cid, parent_style, viewport, &mut pending, &mut pending_escapes, flat,
+                counters, registry, &mut need_first_letter, dark_mode,
+            );
+        } else {
+            if !pending.is_empty() {
+                children.push(anon_inline_run(
+                    owner_id, parent_style, std::mem::take(&mut pending), BoxRole::AnonymousInlineRun,
+                ));
+            }
+            children.push(build_box_or_reuse(
+                doc, sheet, cid, parent_style, viewport, flat, counters, registry, dark_mode,
+                prev_index,
+            ));
+        }
+    }
+    if !pending.is_empty() {
+        children.push(anon_inline_run(owner_id, parent_style, pending, BoxRole::AnonymousInlineRun));
+    }
+    let mut bstyle = anon_style(parent_style);
+    // GAP-RUBYBOX: `display: inline-block` gives this anonymous wrapper
+    // shrink-to-fit auto width (`layout_dispatch`'s pre-match width
+    // computation special-cases `InlineBlock`) instead of stretching to the
+    // full available inline size like a plain `Block` would — `lay_out_ruby`
+    // needs each base/annotation group's REAL content width to center/stack
+    // them correctly (`RubyAlign`), not the container's width.
+    bstyle.display = Display::InlineBlock;
+    LayoutBox {
+        node: owner_id,
+        rect: Rect::ZERO,
+        used_line_height: bstyle.font_size * bstyle.line_height,
+        style: Arc::new(bstyle),
+        kind: BoxKind::Block,
+        children,
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+        origin: BoxOrigin { node: Some(owner_id), role: BoxRole::AnonymousBlock },
+    }
+}
+
 /// True when `node` is a `<select>`/`<selectlist>` host that opts into the
 /// HTML/CSS «Customizable Select» rendering (`appearance: base-select`).
 fn is_base_select_host(doc: &Document, node: NodeId) -> bool {
@@ -593,6 +777,15 @@ fn build_box_inner(
                     view_box: parse_view_box(doc, id),
                     preserve_aspect_ratio: parse_preserve_aspect_ratio(doc, id),
                 }
+            } else if is_ruby_element(doc, id) {
+                // GAP-RUBYBOX: return early — `build_ruby_box` builds base +
+                // annotation sub-boxes and its own children directly, unlike
+                // every other branch here which only decides `kind` before
+                // the shared children-collection code below runs.
+                return build_ruby_box(
+                    doc, sheet, id, &style, viewport, flat, counters, registry, dark_mode,
+                    prev_index,
+                );
             } else {
                 BoxKind::Block
             }

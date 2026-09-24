@@ -401,6 +401,35 @@ pub enum BoxKind {
     /// боксы — ячейки (`display: table-cell`), которые раскладываются
     /// горизонтально слева направо. Высота строки = max высота ячейки.
     TableRow,
+    /// GAP-RUBYBOX — `<ruby>` element: atomic inline-level box (same class as
+    /// `<img>`/`inline-block` — UA `display: inline`, but its own internal
+    /// geometry) whose CHILDREN are already the fully composed output of
+    /// [`crate::ruby::lay_out_ruby`] (base row + annotation row, pre-positioned
+    /// relative to this box's own content origin). `build_box` partitions the
+    /// `<ruby>` element's DOM children into a base group (everything outside
+    /// `<rt>`/`<rtc>`) and one annotation box per `<rt>`, lays each group out
+    /// as its own anonymous block to get real content boxes, then hands them
+    /// to `RubyBox::from_style` + `lay_out_ruby`. `layout_dispatch` re-runs
+    /// only the offset step (shifting the pre-positioned subtree to this
+    /// box's `content_x`/`content_y`) — the internal stacking geometry itself
+    /// is never recomputed by ordinary block/inline layout, which is why
+    /// `ruby-position`/`ruby-align`/`ruby-merge` need no dispatcher of their
+    /// own here. Paint and hit-test walk `children` exactly like `Block`
+    /// (see `walk.rs`/`invariants.rs`'s `Block | FlowRoot | ...` arms).
+    ///
+    /// `children` is `base_count` base-group boxes followed by the same
+    /// number of annotation-group boxes, index-paired
+    /// (`children[i]` pairs with `children[base_count + i]`) — built once at
+    /// box-build time by `build.rs`'s `build_ruby_box`/`build_ruby_group_box`
+    /// and read back by `layout_dispatch`'s `Ruby` arm after each group has
+    /// been laid out normally as a Block. `base_count` may be 0 (ruby text
+    /// with no preceding base — `lay_out_ruby`'s "render ruby text alone"
+    /// branch) or equal `children.len()` (base with no `<rt>` at all).
+    Ruby {
+        /// Number of leading `children` entries that are base-group boxes;
+        /// the rest are the paired annotation-group boxes.
+        base_count: usize,
+    },
     /// Схлопнутый межэлементный пробел в InlineBlockRow.
     /// Не рисуется; участвует только как горизонтальный gap между
     /// inline-block соседями (CSS white-space collapsing §4.1.2).
