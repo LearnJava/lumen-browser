@@ -141,6 +141,17 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_bug380_navigation_staleness.py
   ```
 
+- `tests/wpt/verify_bug1022_crash_restart.py` — **ours** —
+  [BUG-1022](../../bugs/BUG-1022-FIXED.md) regression check: kills a spawned
+  `lumen --bidi-port` while the real `LumenTestharnessExecutor.do_test` is
+  polling, and fails unless that comes back as `CRASH` (the status that makes
+  wptrunner respawn the browser) and `LumenBidiProtocol.is_alive()` turns
+  `False`. Run with:
+
+  ```bash
+  LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_bug1022_crash_restart.py
+  ```
+
 - `tests/wpt/run_smoke.py` — **ours** (S4) — minimal driver that calls
   `wptcommandline`/`wptrunner.run_tests` directly against the smoke test (see
   its own docstring for why this isn't `tools/wpt/wpt`). Passes
@@ -153,7 +164,10 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   still test-isolated, just not process-isolated. That isolation rests on the
   navigation actually loading, which is why the executor also resets the result
   global explicitly ([BUG-380](../../bugs/BUG-380-FIXED.md)). The browser still
-  restarts on an actual crash/hang. Run with:
+  restarts on an actual crash/hang — since [BUG-1022](../../bugs/BUG-1022-FIXED.md):
+  before it, a test that aborted `lumen.exe` came back as `ERROR`, which does not
+  trigger `restart_before_next`, so the next test queued to that worker failed on
+  the dead WebSocket too (`verify_bug1022_crash_restart.py` below). Run with:
 
   ```bash
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/run_smoke.py

@@ -1,7 +1,7 @@
 # BUG-1033 — poll-based media-error detection делает `unhandledrejection` для `<audio>`/`<video>` недетерминированным
 
 **Статус:** FIXED 2026-09-23 — см. §Архитектурный фикс ниже
-**Найден:** P3 2026-09-07, побочно при локализации [BUG-1022](BUG-1022-OPEN.md) (`html/semantics` — три
+**Найден:** P3 2026-09-07, побочно при локализации [BUG-1022](BUG-1022-FIXED.md) (`html/semantics` — три
 `--check` подряд дают три разных набора регрессий)
 **Компонент:** js (`crates/js/src/audio_element.rs:236-301,495-531` — poll-based `play()`/`load()`
 через `setInterval(fn, 50)`, флаг ошибки читается из фонового потока декодера; тот же паттерн
