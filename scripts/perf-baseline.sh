@@ -28,7 +28,11 @@ set -u
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
 common=$(git rev-parse --git-common-dir 2>/dev/null) || die 'Не git-репозиторий.'
-common=$(cd "$common" && pwd) || die "Не читается git-dir: $common"
+# `pwd -W` (Git Bash) даёт C:/... вместо /c/...: MSYS-путь ломает все
+# последующие `git -C` / `git worktree add`, когда MSYS-конверсия выключена
+# (Hermes ставит MSYS_NO_PATHCONV=1), и гарды читают пустой `git status`
+# как «чисто». Вне Windows — обычный `pwd`.
+common=$(cd "$common" && { pwd -W 2>/dev/null || pwd; }) || die "Не читается git-dir: $common"
 ROOT=$(dirname "$common")
 POOL="$ROOT/.claude/worktrees"
 SLOT="$POOL/perf-base"
