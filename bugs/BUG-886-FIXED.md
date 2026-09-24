@@ -1,8 +1,8 @@
 # BUG-886 — обход истории не диспатчит `popstate`, если запись создана `pushState(state, "")` без третьего аргумента; с URL — диспатчит
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 28 — живой замер, варианты `hist-popstate`/`hist-popstate-late`/`hist-pushstate-url`)
-**Область:** shell (`crates/shell/src/main.rs:20618-20646` — ветка same-document в `nav_back`: `popstate` летит только если у записи есть `same_doc_state_json`), js (`crates/js/src/dom.rs:6921` — `pushState`)
+**Область:** js (`crates/js/src/shim/web_api_shim_mid_b.js` — `history.pushState`/`replaceState`), shell (`crates/shell/src/lumen/navigation.rs` — `navigate_back`: `popstate` летит только если у извлечённой записи есть `same_doc_state_json`; `crates/shell/src/app/about_to_wait.rs` — драйн `HistoryUrlUpdate::Push` в `nav_back`)
 **Владелец:** P1/P3. Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
 ## Симптом
@@ -62,11 +62,30 @@ state={"x":1}` показывает состоявшийся переход.
 (здесь `popstate` приходит один раз вместо двух — запись `#3` создана кликом,
 запись, на которую возвращаются, — фрагментная).
 
-## Что дальше
+## Корень и починка (P3, 2026-09-24)
 
-HTML LS §7.4.6: `pushState` без URL сохраняет текущий URL документа, но
-запись создаётся полноценная, и «traverse the history» обязан диспатчить
-`popstate` для любой same-document записи. Смотреть надо, что попадает в
-`same_doc_state_json` записи, которую `pushState` кладёт в `nav_back`, когда
-URL не менялся: ветка same-document в `main.rs:20621` срабатывает только по
-наличию этого поля, иначе уходит в полную перезагрузку документа.
+Код с момента заведения переехал: шим — `web_api_shim_mid_b.js`, ветка
+same-document — `crates/shell/src/lumen/navigation.rs::navigate_back`. Сам
+дефект не в этих файлах, а на шаг раньше: `history.pushState` (шим) звал
+`_lumen_history_push_url` — единственный сигнал, которым shell вообще
+узнаёт о новой same-document записи и кладёт её в `nav_back` (обработчик
+в `crates/shell/src/app/about_to_wait.rs`) — только внутри `if (target !==
+null)`, то есть исключительно когда передан третий аргумент. Без него
+JS-сторонний `HistoryState` (read-cache) обновлялся, а shell — нет: запись
+никогда не появлялась в `nav_back`, поэтому `navigate_back` не находила
+`same_doc_state_json` и не диспатчила `popstate`, хотя `history.state`
+и `history.length` (питающиеся из JS read-cache) выглядели так, будто
+обход состоялся.
+
+По HTML LS §7.4.6 шаг 8 запись создаётся независимо от того, передан ли
+`url` — третий аргумент влияет только на итоговый URL (по умолчанию —
+текущий, документ не перемещается). Фикс: `_lumen_history_push_url`/
+`_lumen_history_replace_url` теперь зовутся безусловно, с
+`_lumen_loc_parts.href` (текущий адрес) как URL, когда `url` опущен или
+`null`; `_lumen_location_update` по-прежнему зовётся только при реальной
+смене URL, чтобы адресная строка не дёргалась зря.
+
+Тест `push_state_no_url_still_enqueues_update_for_shell_nav_stack`
+(`crates/js/src/dom/tests/v8_nav_url_storage.rs`) заменяет прежний
+`push_state_no_url_does_not_enqueue_update`, который фиксировал именно
+этот дефект как ожидаемое поведение.

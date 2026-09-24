@@ -589,11 +589,23 @@ fn replace_state_enqueues_history_url_update_replace() {
 }
 
 #[test]
-fn push_state_no_url_does_not_enqueue_update() {
+fn push_state_no_url_still_enqueues_update_for_shell_nav_stack() {
+    // BUG-886: pushState without a `url` argument still creates a
+    // same-document history entry per HTML LS §7.4.6 — the shell must learn
+    // about it (with the current href as the unchanged URL) or its
+    // `nav_back` stack never gains the entry and a later traversal back to
+    // it delivers no `popstate`.
     let rt = v8_runtime_with_url("https://example.com/");
-    // pushState with null url → no URL update
     rt.eval("history.pushState({x:3}, '')").unwrap();
-    assert!(rt.take_history_url_updates().is_empty());
+    let updates = rt.take_history_url_updates();
+    assert_eq!(updates.len(), 1, "one push update expected even without url");
+    match &updates[0] {
+        HistoryUrlUpdate::Push { url, new_state_json } => {
+            assert_eq!(url, "https://example.com/");
+            assert_eq!(new_state_json, r#"{"x":3}"#);
+        }
+        other => panic!("expected Push, got {other:?}"),
+    }
 }
 
 #[test]
