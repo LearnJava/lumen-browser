@@ -31,8 +31,8 @@ use crate::style::{
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
     TextDecorationLine, TextDecorationStyle,
-    TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn,
-    VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace,
+    TextEmphasisStyle, TextOrientation, TextOverflow, TextShadow, TextTransform, TimingFunction,
+    TransformFn, UnicodeBidi, VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
     ComputedStyle,
 };
@@ -1382,6 +1382,36 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextAlign::Right => "right",
         TextAlign::Center => "center",
     }.into());
+    // CSS Writing Modes L4 §2.1/§2.2/§3.1/§5.1 — computed value "as
+    // specified" for all four. The fields were cascaded and consumed by
+    // layout/bidi all along, but never serialised here, so
+    // `getComputedStyle(el).writingMode`/`.direction` read back `""`
+    // (BUG-506 residual: `css/css-logical/animation-001.html`'s
+    // "…is not animatable" subtests, and `css-writing-modes/parsing/*-computed`).
+    m.insert("writing-mode".into(), match style.writing_mode {
+        WritingMode::HorizontalTb => "horizontal-tb",
+        WritingMode::VerticalRl => "vertical-rl",
+        WritingMode::VerticalLr => "vertical-lr",
+        WritingMode::SidewaysRl => "sideways-rl",
+        WritingMode::SidewaysLr => "sideways-lr",
+    }.into());
+    m.insert("direction".into(), match style.direction {
+        Direction::Ltr => "ltr",
+        Direction::Rtl => "rtl",
+    }.into());
+    m.insert("unicode-bidi".into(), match style.unicode_bidi {
+        UnicodeBidi::Normal => "normal",
+        UnicodeBidi::Embed => "embed",
+        UnicodeBidi::Isolate => "isolate",
+        UnicodeBidi::BidiOverride => "bidi-override",
+        UnicodeBidi::IsolateOverride => "isolate-override",
+        UnicodeBidi::Plaintext => "plaintext",
+    }.into());
+    m.insert("text-orientation".into(), match style.text_orientation {
+        TextOrientation::Mixed => "mixed",
+        TextOrientation::Upright => "upright",
+        TextOrientation::Sideways => "sideways",
+    }.into());
     m.insert("text-transform".into(), match style.text_transform {
         TextTransform::None => "none",
         TextTransform::Uppercase => "uppercase",
@@ -2096,6 +2126,30 @@ mod tests {
     fn find_miss_returns_none() {
         let (doc, tree) = layout_tree("<div>text</div>", "");
         assert!(find_box_by_selector(&tree, &doc, "#nonexistent").is_none());
+    }
+
+    /// BUG-506 residual: `writing-mode`/`direction`/`unicode-bidi`/
+    /// `text-orientation` were cascaded but never serialised, so
+    /// `getComputedStyle()` read them back as `""`.
+    #[test]
+    fn writing_mode_family_is_serialised() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="d">x</div><div id="v">y</div>"#,
+            "#v { writing-mode: vertical-rl; direction: rtl; unicode-bidi: isolate-override; \
+             text-orientation: upright }",
+        );
+        let get = |sel: &str, prop: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get(prop).cloned()
+        };
+        assert_eq!(get("#d", "writing-mode").as_deref(), Some("horizontal-tb"));
+        assert_eq!(get("#d", "direction").as_deref(), Some("ltr"));
+        assert_eq!(get("#d", "unicode-bidi").as_deref(), Some("normal"));
+        assert_eq!(get("#d", "text-orientation").as_deref(), Some("mixed"));
+        assert_eq!(get("#v", "writing-mode").as_deref(), Some("vertical-rl"));
+        assert_eq!(get("#v", "direction").as_deref(), Some("rtl"));
+        assert_eq!(get("#v", "unicode-bidi").as_deref(), Some("isolate-override"));
+        assert_eq!(get("#v", "text-orientation").as_deref(), Some("upright"));
     }
 
     #[test]

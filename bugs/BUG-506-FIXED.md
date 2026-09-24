@@ -1,6 +1,6 @@
 # BUG-506: `<script src="../other-category/support/helper.js">` (cross-directory relative external script) never executes before dependent inline code under the wptrunner-driven pipeline
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Дата:** 2026-08-02
 **Компонент:** unclear — likely shell script-loading order (`crates/shell/src/main.rs`) or a
 wptrunner/BiDi-navigation-specific timing gap; not root-caused to a single file/line this slice
@@ -182,3 +182,62 @@ is every real Lumen WPT run, not a `--mcp-port` one).
 
 Probe script kept as `tests/wpt/verify_bug506_cross_dir_script.py` for
 re-verification once CSSOM-4/BUG-493's shell coverage lands.
+
+## Закрытие P3 2026-09-24: блокер снят CSSOM-7, найден и исправлен последний собственный дефект
+
+Перемер тем же `verify_bug506_cross_dir_script.py` на свежем `dev-release`
+(все 5 файлов, вариант A — настоящий `LumenTestharnessExecutor`):
+
+- Исходный симптом (`addDiv is not defined`) по-прежнему не воспроизводится,
+  `typeof addDiv === "function"` в обоих вариантах.
+- Блокер, на который баг был переатрибутирован 2026-09-04 (same-tick
+  `getComputedStyle()` в живом `--bidi-port`-окне), закрыт CSSOM-7
+  (`44baf2b10`): шелл теперь пушит каскадный лист, `maybe_flush` не no-op.
+  В `animation-001.html` 5 подтестов, которые под ним стояли, уже зелёные на
+  `main` (blockSize через object/array notation, physical-wins-over-logical ×3).
+- **Найден отдельный точечный дефект:** `computed_style_to_map`
+  (`crates/engine/layout/src/selector_query.rs`) вообще не сериализовал
+  `writing-mode`, `direction`, `unicode-bidi`, `text-orientation`. Поля в
+  `ComputedStyle` каскадились и использовались layout/bidi, но
+  `getComputedStyle(el).writingMode`/`.direction` возвращали `""`. Отсюда
+  падали `writing-mode is not animatable` / `direction is not animatable`
+  (ожидают `horizontal-tb`/`ltr`), а заодно все
+  `css/css-writing-modes/parsing/*-computed.html`.
+
+### Правка
+
+Четыре ключа добавлены в `computed_style_to_map`, значения — «as specified»
+(CSS Writing Modes L4 §2.1/§2.2/§3.1/§5.1). Юнит-тест
+`selector_query::tests::writing_mode_family_is_serialised` проверяет значение
+по умолчанию и нестандартное значение каждого свойства.
+
+### Замер (wptrunner, `run_report.py --check`, до/после на одной машине)
+
+| Каталог | `main` | ветка |
+|---|---|---|
+| `css/css-writing-modes/parsing` | 2 unexpected PASS | **16** unexpected PASS, 0 регрессий |
+| `css/css-logical` | 183 unexpected PASS | **185** (+2 `…is not animatable`); множество REGRESSION побитово то же |
+
+14 новых PASS в writing-modes: `writing-mode-computed` 3/3,
+`direction-computed` 2/2, `unicode-bidi-computed` 6/6,
+`text-orientation-computed` 3/3 (2 `direction-invalid` — уже на `main`).
+`.ini` для этих 5 файлов удалены (все перечисленные подтесты теперь PASS).
+Из `css-logical/animation-001.html.ini` сняты 7 устаревших записей FAIL.
+Шапки остальных `.ini` переписаны под текущие причины.
+
+### Что осталось — вне этого бага
+
+- `animation-002/003/004` (32 подтеста): `HTMLStyleElement.sheet === null`
+  сразу после `appendChild` — остаток [BUG-493](BUG-493-OPEN.md) (передан P6
+  2026-09-24, ломает styled-components на реальных сайтах).
+- `animation-001` (17 подтестов) и `logical-shorthand-…tentative`: логические
+  свойства в keyframes Web Animations не учитывают `writing-mode`/`direction`
+  элемента (задокументированный LTR-only объём CSS Logical L1 в
+  `CSS-SPECS.md`), плюс приоритет shorthand/longhand внутри одного keyframe;
+  точечно не локализовано.
+- `run_report.py --check --root css/css-logical` на чистом `main` даёт 534
+  REGRESSION. Это устаревший baseline, а не регресс движка: `.ini` для
+  `logical-box-*`/`inheritance`/`*-interpolation` ждут харнесс-`TIMEOUT`
+  (тогда неперечисленные подтесты не считались), а харнесс теперь
+  завершается `OK`, и каждый непройденный подтест читается как «expected
+  PASS regressed». Нужен `--update-expected` по каталогу; здесь не делался.
