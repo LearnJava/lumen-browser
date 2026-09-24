@@ -502,6 +502,7 @@ const _: Duration = FETCH_TIMEOUT;
 /// V8 port of [`spawn_sw_worker`].
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // BUG-768 added determinism, same shape as worker.rs's spawn_worker_v8
 pub(crate) fn spawn_sw_worker_v8(
     origin: String,
     scope: String,
@@ -509,19 +510,21 @@ pub(crate) fn spawn_sw_worker_v8(
     cache_backend: Arc<dyn CacheBackend>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) -> SwWorkerHandle {
     let (tx, rx) = std::sync::mpsc::channel::<SwWorkerMessage>();
     let thread_name = format!("lumen-sw-v8-{origin}{scope}");
     let handle = std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            run_sw_thread_v8(origin, scope, script, rx, cache_backend, fetch_provider, idb_backend)
+            run_sw_thread_v8(origin, scope, script, rx, cache_backend, fetch_provider, idb_backend, determinism)
         })
         .expect("failed to spawn SW thread (v8)");
     SwWorkerHandle { tx, _thread: handle }
 }
 
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::too_many_arguments)]  // BUG-768 added determinism
 fn run_sw_thread_v8(
     origin: String,
     scope: String,
@@ -530,6 +533,7 @@ fn run_sw_thread_v8(
     cache_backend: Arc<dyn CacheBackend>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -547,6 +551,7 @@ fn run_sw_thread_v8(
             Arc::clone(&cache_backend),
             fetch_provider,
             idb_backend,
+            determinism,
         )
     {
         eprintln!("[sw {origin}{scope}] v8 globals failed: {e:?}");
@@ -639,6 +644,7 @@ fn dispatch_push_subscription_change_v8(
 /// so the plain `into_v8_fnN` path is sufficient; no scoped native needed)
 /// and evaluates the same globals shim JS used by the QuickJS SW thread.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::too_many_arguments)]  // BUG-768 added determinism, same shape as worker.rs's twin
 fn install_sw_globals_v8(
     rt: &V8JsRuntime,
     origin: &str,
@@ -646,6 +652,7 @@ fn install_sw_globals_v8(
     cache_backend: Arc<dyn CacheBackend>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) -> JsResult<()> {
     // Сеть области воркера: `importScripts` и `fetch` внутри него. Ответ едет
     // одной JSON-строкой, тело — base64: сетевой ответ не обязан быть текстом,
@@ -756,7 +763,7 @@ fn install_sw_globals_v8(
 
     // `ServiceWorkerGlobalScope` is a `WorkerGlobalScope` too, so it gets the
     // same `EventTarget`/`performance` surface as the dedicated worker (BUG-401).
-    crate::worker::install_worker_scope_globals_v8(rt)?;
+    crate::worker::install_worker_scope_globals_v8(rt, determinism)?;
 
     // IndexedDB — тот же блок шима, что у страницы (`[Exposed=(Window,Worker)]`),
     // и та же база: воркер, который пишет свою очередь в `indexedDB`, иначе
@@ -866,7 +873,7 @@ mod tests_v8 {
     #[test]
     fn sw_global_scope_has_performance() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None).unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None).unwrap();
         for expr in [
             "typeof performance.now === 'function'",
             "performance instanceof Performance",
@@ -887,7 +894,7 @@ mod tests_v8 {
     #[test]
     fn sw_global_scope_has_full_location_and_url_classes() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://cdn.example.com:8443", "/invest/", MockCache::new(), None, None)
+        install_sw_globals_v8(&rt, "https://cdn.example.com:8443", "/invest/", MockCache::new(), None, None, None)
             .unwrap();
         for expr in [
             "typeof URLSearchParams === 'function'",
@@ -979,7 +986,7 @@ mod tests_v8 {
     fn sw_rt(origin: &str, scope: &str, net: &Arc<SwNet>) -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::clone(net) as _;
-        install_sw_globals_v8(&rt, origin, scope, MockCache::new(), Some(provider), None).unwrap();
+        install_sw_globals_v8(&rt, origin, scope, MockCache::new(), Some(provider), None, None).unwrap();
         rt
     }
 
@@ -1054,7 +1061,7 @@ mod tests_v8 {
     fn sw_import_scripts_blocked_by_worker_src_never_reaches_fetch() {
         let rt = V8JsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedSwNet);
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), Some(provider), None).unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), Some(provider), None, None).unwrap();
 
         let err = rt.eval("importScripts('https://blocked.example/lib.js')");
         assert!(err.is_err(), "a worker-src-blocked importScripts() must throw");
@@ -1124,7 +1131,7 @@ mod tests_v8 {
     #[test]
     fn sw_headers_support_full_fetch_api() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
             .unwrap();
         rt.eval(
             "var h = new Headers();
@@ -1159,7 +1166,7 @@ mod tests_v8 {
     #[test]
     fn sw_fire_push_dispatches_push_event_with_data() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
             .unwrap();
         rt.eval(
             "self.addEventListener('push', function(event) {
@@ -1191,7 +1198,7 @@ mod tests_v8 {
     #[test]
     fn sw_fire_push_without_handler_is_a_no_op() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
             .unwrap();
         assert!(rt.eval(&format!("_sw_fire_push('{}');", base64_encode(b"x"))).is_ok());
     }
@@ -1201,7 +1208,7 @@ mod tests_v8 {
     #[test]
     fn sw_fire_push_subscription_change_dispatches_event() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
             .unwrap();
         rt.eval(
             "self.addEventListener('pushsubscriptionchange', function(event) {
@@ -1252,6 +1259,7 @@ self.addEventListener('fetch', function(event) {
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
+            None,
         );
 
         handle
@@ -1281,7 +1289,7 @@ self.addEventListener('fetch', function(event) {
     #[test]
     fn sw_global_scope_has_indexed_db() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
             .unwrap();
         for expr in [
             "typeof indexedDB === 'object'",
@@ -1300,7 +1308,7 @@ self.addEventListener('fetch', function(event) {
     #[test]
     fn sw_indexed_db_round_trip() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
             .unwrap();
         rt.eval(
             "var req = indexedDB.open('sw-db', 1);
@@ -1329,7 +1337,7 @@ self.addEventListener('fetch', function(event) {
     #[test]
     fn sw_without_provider_rejects_instead_of_crashing() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None).unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None).unwrap();
         assert_eq!(
             rt.eval("typeof _lumen_sw_net_fetch").unwrap(),
             lumen_core::JsValue::String("function".into())
@@ -1401,6 +1409,7 @@ self.addEventListener('fetch', function(event) {
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -1433,6 +1442,7 @@ self.addEventListener('fetch', function(event) {
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
             None,
             None,
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -1458,6 +1468,7 @@ self.addEventListener('fetch', function(event) {
             "/".to_string(),
             "// no fetch handler".to_string(),
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
             None,
             None,
         );

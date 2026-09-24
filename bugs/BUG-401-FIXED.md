@@ -108,11 +108,12 @@ timeOrigins differ when worker is created after a delay»: у воркера,
 
 ### Что сознательно не сделано
 
-`_lumen_now_ms` воркера — стенные часы и **не** подчиняется
-`--deterministic`. Заморозить только его было бы подделкой: патч
-детерминизма выполняется в контексте страницы, поэтому `Date.now()` и
-`Math.random()` внутри любого воркера и без того живые, и остаются
-такими. Пробел заведён целиком — [BUG-768](BUG-768-OPEN.md).
+`_lumen_now_ms` воркера на момент этого фикса — стенные часы и **не**
+подчинялся `--deterministic`. Заморозить только его было бы подделкой:
+патч детерминизма выполнялся только в контексте страницы, поэтому
+`Date.now()` и `Math.random()` внутри любого воркера были живыми без
+внешнего признака. Пробел заведён целиком и с тех пор закрыт —
+[BUG-768](BUG-768-FIXED.md).
 
 `PerformanceObserver` в воркер не добавлен (`[Exposed=(Window,Worker)]`,
 но это отдельная поверхность со своей доставкой записей), `Event` в
@@ -149,9 +150,9 @@ timeOrigins differ when worker is created after a delay»: у воркера,
 
 ## Связанные
 
-* [BUG-768](BUG-768-OPEN.md) — заведён этим фиксом: `--deterministic`
-  не доезжает ни до одной worker-области (все три источника —
-  `Math.random`, `Date.now`, `_lumen_now_ms`).
+* [BUG-768](BUG-768-FIXED.md) — заведён этим фиксом: `--deterministic`
+  не доезжал ни до одной worker-области (все три источника —
+  `Math.random`, `Date.now`, `_lumen_now_ms`); закрыт P3 2026-09-24.
 * [BUG-766](BUG-766-OPEN.md) — `isSecureContext` отсутствует в
   `WorkerGlobalScope`: тот же класс пробела, и после этого фикса у него
   есть готовое место — `worker::install_worker_scope_globals_v8`.

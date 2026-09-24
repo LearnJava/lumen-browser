@@ -614,6 +614,7 @@ fn connect_shared_worker_v8(
     errors: crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) -> u32 {
     let port_id = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut map = hub_v8().lock().unwrap();
@@ -621,9 +622,10 @@ fn connect_shared_worker_v8(
     let spawn = |key: String, script: String, script_url: String| -> SharedWorkerThread {
         let (tx, rx) = mpsc::channel::<SwInMsg>();
         let (fp, wp) = (fetch_provider.clone(), ws_provider.clone());
+        let det = determinism.clone();
         let thread = thread::Builder::new()
             .name(format!("lumen-shared-worker-v8-{key}"))
-            .spawn(move || run_shared_worker_thread_v8(script, script_url, is_module, rx, fp, wp))
+            .spawn(move || run_shared_worker_thread_v8(script, script_url, is_module, rx, fp, wp, det))
             .expect("failed to spawn SharedWorker thread (v8)");
         SharedWorkerThread { tx, _thread: thread }
     };
@@ -680,6 +682,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
     errors: &crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) -> JsResult<()> {
     // GAP-CSPENF срез 13: same one-slot `(blocked_uri, original_policy)` side
     // channel as `worker.rs::install_worker_bindings_v8`'s `last_csp_block` —
@@ -704,6 +707,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
         let out = Arc::clone(outbox);
         let errs = Arc::clone(errors);
         let fp = fetch_provider.clone();
+        let det = determinism.clone();
         rt.register_native(
             "_lumen_sw_connect",
             into_v8_fn4(
@@ -717,6 +721,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
                         Arc::clone(&errs),
                         fp.clone(),
                         ws_provider.clone(),
+                        det.clone(),
                     )
                 },
             ),
@@ -822,6 +827,7 @@ fn run_shared_worker_thread_v8(
     rx: Receiver<SwInMsg>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -853,6 +859,7 @@ fn run_shared_worker_thread_v8(
         &script_url,
         is_module,
         Arc::clone(&close_flag),
+        determinism,
     ) {
         eprintln!("[shared-worker] v8 globals install failed: {e:?}");
         return;
@@ -1036,6 +1043,7 @@ fn install_shared_worker_globals_v8(
     script_url: &str,
     is_module: bool,
     close_flag: crate::worker::WorkerCloseFlag,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) -> JsResult<()> {
     rt.register_native(
         "_lumen_sw_port_reply",
@@ -1102,7 +1110,7 @@ fn install_shared_worker_globals_v8(
 
     // `SharedWorkerGlobalScope` is a `WorkerGlobalScope` too, so it gets the
     // same `EventTarget`/`performance` surface as the dedicated worker (BUG-401).
-    crate::worker::install_worker_scope_globals_v8(rt)?;
+    crate::worker::install_worker_scope_globals_v8(rt, determinism)?;
 
     // BUG-778: read by both `SHARED_WORKER_GLOBAL_SHIM`'s `importScripts` and
     // `WORKER_NET_SHIM`'s `fetch`/`XMLHttpRequest` — set before either evaluates.
@@ -1177,7 +1185,7 @@ mod tests_v8 {
     fn shared_worker_global_scope_has_performance() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false)), None).unwrap();
         for expr in [
             "typeof performance.now === 'function'",
             "performance instanceof Performance",
@@ -1205,6 +1213,7 @@ mod tests_v8 {
             "http://example.test/sw.js",
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         )
         .unwrap();
         assert!(crate::worker::run_worker_tasks(&rt).is_none());
@@ -1241,6 +1250,7 @@ mod tests_v8 {
             "http://example.test/sw.js",
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         )
         .unwrap();
 
@@ -1288,6 +1298,7 @@ mod tests_v8 {
             "http://example.test/worker.js",
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         )
         .unwrap();
         let helper = "'use strict'; function importedHelper() { return 40; } let importedLexical = 2;";
@@ -1330,7 +1341,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, None, None).unwrap();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, None, None, None).unwrap();
         (rt, outbox, errors)
     }
 
@@ -1563,7 +1574,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, Some(fp), None).unwrap();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, Some(fp), None, None).unwrap();
         (rt, outbox)
     }
 
@@ -1600,7 +1611,7 @@ mod tests_v8 {
     fn v8_shared_worker_global_scope_has_fetch_xhr_close() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
+        install_shared_worker_globals_v8(&rt, ports, None, "", false, Arc::new(AtomicBool::new(false)), None).unwrap();
         for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
             assert_eq!(rt.eval(expr).unwrap(), JsValue::String("function".into()), "{expr}");
         }
@@ -1670,6 +1681,7 @@ mod tests_v8 {
         let net = SwTestNet::new(&[("https://example.test/resources/testharness.js", "globalThis._sms1 = 40;")]);
         install_shared_worker_globals_v8(
             &rt, ports, Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)),
+            None,
         )
         .unwrap();
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
@@ -1690,6 +1702,7 @@ mod tests_v8 {
             "https://example.test/a/sw.js?x=1",
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         )
         .unwrap();
 
@@ -1761,6 +1774,7 @@ mod tests_v8 {
             "https://example.test/sw.js",
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         )
         .unwrap();
 
@@ -1821,6 +1835,7 @@ mod tests_v8 {
             false,
             Arc::clone(&outbox),
             Arc::clone(&errors),
+            None,
             None,
             None,
         );

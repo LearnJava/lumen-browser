@@ -553,7 +553,7 @@ mod tests {
         .unwrap();
 
         let worker = V8JsRuntime::new().unwrap();
-        crate::worker::install_worker_scope_globals_v8(&worker).unwrap();
+        crate::worker::install_worker_scope_globals_v8(&worker, None).unwrap();
 
         for name in ["appCodeName", "appName", "appVersion", "product", "userAgent", "onLine"] {
             let expr = format!("String(navigator.{name})");

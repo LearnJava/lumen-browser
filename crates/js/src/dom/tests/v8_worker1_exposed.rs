@@ -8,7 +8,7 @@ use super::*;
 /// and service workers all go through it).
 fn worker_scope() -> crate::v8_runtime::V8JsRuntime {
     let rt = crate::v8_runtime::V8JsRuntime::new().unwrap();
-    crate::worker::install_worker_scope_globals_v8(&rt).unwrap();
+    crate::worker::install_worker_scope_globals_v8(&rt, None).unwrap();
     rt
 }
 
@@ -203,4 +203,95 @@ fn abort_file_api_and_form_data_slices_are_shared_by_page_and_worker() {
         assert!(web_api_shim().contains(slice));
         assert!(worker_exposed_shim().contains(slice));
     }
+}
+
+// ── BUG-768: `--deterministic` inside a worker scope ────────────────────────
+
+/// A worker scope installed with a [`crate::worker::WorkerDeterminism`] config,
+/// mirroring how `install_dom` packages it for a real worker thread.
+fn deterministic_worker_scope(
+    seed32: u32,
+    monotonic: bool,
+    clock_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> crate::v8_runtime::V8JsRuntime {
+    let rt = crate::v8_runtime::V8JsRuntime::new().unwrap();
+    crate::worker::install_worker_scope_globals_v8(
+        &rt,
+        Some(crate::worker::WorkerDeterminism { seed32, monotonic, clock_ms }),
+    )
+    .unwrap();
+    rt
+}
+
+/// Without `--deterministic` a worker keeps live wall-clock/real randomness —
+/// the pre-fix behaviour for every worker that isn't running in deterministic
+/// mode must not regress.
+#[test]
+fn worker_scope_without_determinism_keeps_real_clock() {
+    let rt = worker_scope();
+    let v = rt.eval("Date.now()").unwrap();
+    match v {
+        lumen_core::JsValue::Number(n) => assert!(n > 0.0, "Date.now() must be wall-clock: got {n}"),
+        other => panic!("Date.now() must return a number, got {other:?}"),
+    }
+}
+
+/// Two independently-installed worker scopes given the same seed produce the
+/// same `Math.random()` sequence, and `Date.now()` is frozen at 0 — the same
+/// contract `deterministic_math_random_reproducible`/
+/// `deterministic_performance_now_returns_zero` check for the page context
+/// (`dom/tests/v8_window_anim_compress.rs`).
+#[test]
+fn worker_scope_deterministic_math_random_is_reproducible_and_date_now_frozen() {
+    let clock_a = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let clock_b = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let rt_a = deterministic_worker_scope(42, false, clock_a);
+    let rt_b = deterministic_worker_scope(42, false, clock_b);
+    let seq_a: Vec<_> = (0..5).map(|_| rt_a.eval("Math.random()").unwrap()).collect();
+    let seq_b: Vec<_> = (0..5).map(|_| rt_b.eval("Math.random()").unwrap()).collect();
+    assert_eq!(seq_a, seq_b, "same seed => same worker-scope random sequence");
+    assert_eq!(
+        rt_a.eval("Date.now()").unwrap(),
+        lumen_core::JsValue::Number(0.0),
+        "Date.now() must be frozen at 0 in deterministic mode without --monotonic-clock"
+    );
+}
+
+/// A different seed must not collapse to the same sequence — same shape as
+/// the page-context `deterministic_math_random_different_seeds` check.
+#[test]
+fn worker_scope_deterministic_different_seeds_differ() {
+    let rt_a = deterministic_worker_scope(1, false, std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)));
+    let rt_b = deterministic_worker_scope(2, false, std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)));
+    assert_ne!(rt_a.eval("Math.random()").unwrap(), rt_b.eval("Math.random()").unwrap());
+}
+
+/// DEVX-16 `--monotonic-clock`: `Date.now()`/`_lumen_now_ms()` advance a
+/// counter instead of staying frozen, and — the point of sharing `clock_ms`
+/// rather than giving the worker a private one — a tick taken by the worker
+/// and one taken through the same `Arc<AtomicU64>` elsewhere (standing in for
+/// the page here) observe each other's advances.
+#[test]
+fn worker_scope_monotonic_clock_shares_the_page_counter() {
+    fn as_num(v: lumen_core::JsValue) -> f64 {
+        match v {
+            lumen_core::JsValue::Number(n) => n,
+            other => panic!("Date.now() must return a number, got {other:?}"),
+        }
+    }
+    let clock_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let rt = deterministic_worker_scope(1, true, std::sync::Arc::clone(&clock_ms));
+    // `_lumen_now_ms` returns-then-increments (like `install_performance_now`'s
+    // page twin), so this very read already advances the shared counter by 1
+    // on top of whatever the `Performance` shim install consumed — the delta
+    // below accounts for that one tick alongside the 41 added manually.
+    let baseline = as_num(rt.eval("Date.now()").unwrap());
+    // Simulate the page advancing the shared counter between two worker reads.
+    clock_ms.fetch_add(41, std::sync::atomic::Ordering::Relaxed);
+    let second = as_num(rt.eval("Date.now()").unwrap());
+    assert_eq!(
+        second - baseline,
+        42.0,
+        "worker's Date.now() must observe advances made through the shared clock_ms"
+    );
 }

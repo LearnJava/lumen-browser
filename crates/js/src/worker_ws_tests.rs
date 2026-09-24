@@ -96,7 +96,7 @@ fn v8_dedicated_worker_websocket_round_trip() {
         .to_string();
     let id = spawn_worker_v8(
         &reg, &queue, &errors, &nid, &store, script, String::new(), false, None,
-        &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), Some(provider),
+        &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), Some(provider), None,
     );
     let seen = wait_for_reply(&queue, "close:");
     terminate_worker(&reg, id);
@@ -124,7 +124,7 @@ fn v8_dedicated_worker_websocket_opened_from_a_timer() {
     let id = spawn_worker_v8(
         &reg, &queue, &errors, &Arc::new(Mutex::new(0u32)), &Arc::new(Mutex::new(HashMap::new())),
         script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())),
-        &Arc::new(Mutex::new(0u32)), Some(provider),
+        &Arc::new(Mutex::new(0u32)), Some(provider), None,
     );
     let seen = wait_for_reply(&queue, "msg:hello");
     terminate_worker(&reg, id);
@@ -140,7 +140,7 @@ fn v8_worker_websocket_without_provider_fails_like_the_page() {
     let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
     install_worker_globals_v8(
         &rt, 0, queue, errors, Arc::new(Mutex::new(HashMap::new())), None, "", false,
-        Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+        Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None,
     )
     .unwrap();
     rt.eval(
@@ -161,7 +161,7 @@ fn v8_worker_websocket_without_provider_fails_like_the_page() {
 #[test]
 fn v8_worker_scope_has_event_and_custom_event() {
     let rt = V8JsRuntime::new().unwrap();
-    install_worker_scope_globals_v8(&rt).unwrap();
+    install_worker_scope_globals_v8(&rt, None).unwrap();
     let r = rt
         .eval(
             "var t = new EventTarget(), got = null;\

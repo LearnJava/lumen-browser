@@ -770,6 +770,7 @@ mod tests {
             cache as Arc<dyn lumen_core::ext::CacheBackend>,
             None,
             None,
+            None,
         );
         let mut map = std::collections::HashMap::new();
         map.insert((origin.to_string(), scope.to_string()), handle);
