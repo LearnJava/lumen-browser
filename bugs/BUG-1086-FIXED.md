@@ -1,10 +1,10 @@
 # BUG-1086 — в воркерах нет Trusted Types: `trustedTypes is not defined` в Dedicated/Shared Worker
 
-**Статус:** OPEN
-**Тип:** пробел реализации — шим Trusted Types ставится только в оконный рантайм; воркерные глобалы его не получают.
+**Статус:** FIXED 2026-09-24 (P1, WORKER-1 срез 9, закрытие)
+**Тип:** пробел реализации — шим Trusted Types ставился только в оконный рантайм; воркерные глобалы его не получали.
 **Заведён:** 2026-09-22 (P2, WPT-RUN-7 срез 51, `trusted-types`)
-**Область:** js — `crates/js/src/trusted_types.rs` (`TRUSTED_TYPES_SHIM`), `crates/js/src/v8_runtime.rs:687` (единственное место, где шим исполняется), `crates/js/src/worker.rs` (`rt.eval(...)` на строках ~396–439 — набор воркерных шимов), `shared_worker.rs`, `sw_worker.rs`
-**Владелец:** P3.
+**Область:** js — `crates/js/src/trusted_types.rs` (`TRUSTED_TYPES_SHIM`), `crates/js/src/v8_runtime.rs:687` (страничный вызов, не тронут), `crates/js/src/worker.rs::install_worker_scope_globals_v8` (общая точка для всех трёх видов воркера)
+**Владелец:** P1.
 
 ## Симптом
 
@@ -38,3 +38,26 @@
 
 - Что будет с `new Worker(TrustedScriptURL)` после появления шима (конструктор воркера принимает `TrustedScriptURL`; enforcement — часть BUG-946/BUG-811).
 - Часть из 23 `TIMEOUT` может иметь и вторую причину (например, CSP-заголовки, BUG-811): проверялись только `DedicatedWorker-*` и `SharedWorker-*` — по сырому логу.
+
+## Исправление (2026-09-24, P1, WORKER-1 срез 9)
+
+`TRUSTED_TYPES_SHIM` — самодостаточная IIFE: собственный `SECRET`/`VALUES`-closure,
+единственное касание page-only состояния — `if (typeof window !== 'undefined') { window.… = … }`,
+защищённое `typeof`-гвардом. Она уже вызывалась только из страничного
+`v8_runtime.rs::install_dom`; добавлен один `rt.eval(crate::trusted_types::TRUSTED_TYPES_SHIM)`
+в конец общей `crate::worker::install_worker_scope_globals_v8` (`worker.rs`) — той же точки,
+через которую срезы 1-8 WORKER-1 уже подключали Streams/WebAssembly-streaming/RAF ко всем
+трём видам воркера разом (dedicated/shared/service — все три зовут эту функцию).
+
+Новый тест `v8_worker_globals_have_trusted_types` (`worker.rs`): проверяет `typeof
+self.trustedTypes === 'object'` и полный цикл `createPolicy`→`createHTML`→`isHTML`/`toString()`
+внутри dedicated worker scope.
+
+Гейт: `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` чист;
+`cargo test -p lumen-js --features v8-backend --lib` — 4231/4231 зелёные (предсуществующий
+флак BUG-1110 не воспроизвёлся в этом прогоне); `cargo clippy --workspace --all-targets --
+-D warnings` чист. Живой WPT-прогон (`trusted-types/*.any.worker.html`) не выполнен — вне
+объёма этого закрытия.
+
+Закрывает WORKER-1 целиком (ROADMAP.md): все восемь перечисленных там BUGS (1080, 1071,
+1076, 1078, 1081, 959, 766, 1086) теперь FIXED.
