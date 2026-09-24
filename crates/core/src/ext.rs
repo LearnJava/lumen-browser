@@ -3510,6 +3510,32 @@ pub trait PushBackend: Send + Sync {
     fn push_take_pending(&self, origin: &str, scope: &str) -> Option<Vec<u8>>;
 }
 
+/// BUG-1118: fires synchronously, on the JS runtime's own thread, the moment
+/// script sets a plain `<img src=…>` content attribute (HTML LS §4.8.4.3
+/// "update the image data" — the load must queue in parallel right away, not
+/// wait for the next relayout).
+///
+/// `lumen-js` has no dependency on `lumen-shell`'s network/image-decode code,
+/// so it cannot fetch the image itself — this trait is the same
+/// injected-backend pattern as [`SwBackend`]/[`CacheBackend`]: the shell
+/// implements it once per navigation (base URL, CSP policy, cookie jar,
+/// generation and dedup set all captured at construction) and hands an
+/// `Arc<dyn ImageLoadHook>` to `V8JsRuntime::with_image_load_hook`.
+///
+/// Scope (срез 1): only the plain `src` attribute on `<img>`, only for the
+/// runtime built for the top-level document's own parser/inline scripts
+/// (`run_scripts_with_dom`'s primary call site). `srcset`/`<picture>`
+/// selection, subtree insertion (`appendChild` of an already-`src`-bearing
+/// `<img>`), iframes and bfcache-thaw runtimes are not wired — those keep
+/// relying on the post-relayout sweep ([`Self::queue_image_load`]'s caller
+/// doc comment has no bearing on them), same as before this trait existed.
+pub trait ImageLoadHook: Send + Sync {
+    /// `raw_src` is the attribute value as written by script, not yet
+    /// resolved against the document base URL — the implementation resolves
+    /// it itself, the same way the post-relayout sweep does.
+    fn queue_image_load(&self, raw_src: &str);
+}
+
 // ============================================================================
 // ADR-006: Automation API — first-class engine surface
 // ============================================================================

@@ -258,6 +258,7 @@ impl V8JsRuntime {
             let dom_dirty = Arc::clone(&self.dom_dirty);
             let flush_stale = Arc::clone(&self.flush_stale);
             let dom_touched = Arc::clone(&self.dom_touched);
+            let image_load_hook = self.image_load_hook.clone();
             let raf_pending = Arc::clone(&self.raf_pending);
             let layout_rects = Arc::clone(&self.layout_rects);
             let client_rects = Arc::clone(&self.client_rects);
@@ -356,6 +357,7 @@ impl V8JsRuntime {
                 Arc::clone(&dom_dirty),
                 Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
+                image_load_hook.clone(),
             )?;
 
             install::install_tree_navigation(scope, ctx, store, Arc::clone(&doc))?;

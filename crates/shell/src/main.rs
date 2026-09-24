@@ -115,6 +115,7 @@ mod frame_lazy;
 mod frame_log;
 mod forms;
 mod frames;
+mod dynamic_image_hook;
 mod gc_tick;
 mod hints;
 mod image_cache;
