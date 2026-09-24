@@ -109,7 +109,7 @@ Every one of the category's 9 test files touches this shim in some way;
 6/9 harness completed (the other 3 are the documented `.https.`/TIMEOUT
 gaps), and of those 6 only 15/425 subtests pass — nearly the entire
 category. This is the same class of finding as
-[BUG-693](BUG-693-OPEN.md) (`_lumen_parse_url` — a hand-rolled string
+[BUG-693](BUG-693-FIXED.md) (`_lumen_parse_url` — a hand-rolled string
 splitter standing in for a WHATWG state machine): a Phase 0 placeholder
 that implements the *shape* of the API (constructible, has `test`/`exec`)
 but none of its parsing/compilation semantics. Unlike BUG-693, there is no

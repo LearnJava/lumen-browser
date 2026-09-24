@@ -7,7 +7,7 @@
 
 ## Симптом
 
-Same run as [BUG-693](BUG-693-OPEN.md) (`tests/wpt/url/`, `run_report.py
+Same run as [BUG-693](BUG-693-FIXED.md) (`tests/wpt/url/`, `run_report.py
 --all --root url --recursive`, 44 id, 39/44 harness OK). The `URLSearchParams`-
 focused files show a second, independent defect class from the URL parser
 itself:
@@ -92,7 +92,7 @@ Add `URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entr
 arrays); make `_p` non-enumerable (`Object.defineProperty` in the
 constructor, mirroring whatever fix lands for `Headers._map` under
 BUG-369 — same pattern, worth fixing together); add the second parameter
-to `delete`/`has`. Independent of [BUG-693](BUG-693-OPEN.md) (the URL
+to `delete`/`has`. Independent of [BUG-693](BUG-693-FIXED.md) (the URL
 *parsing* engine) — this bug is scoped to the `URLSearchParams` object's
 own WebIDL shape and does not require the parser fix to land first.
 

@@ -814,6 +814,29 @@ pub(crate) fn install_fullscreen(
     Ok(())
 }
 
+/// `_lumen_url_parse(href, base?)` — LIB-11 (BUG-693): native URL parser
+/// binding onto `lumen_core::url::Url` (see `crate::js_url` for the shared
+/// mapping/resolution logic and rationale). Registered here, inside the
+/// same closure that runs before `URL_PARSE_SHIM`/`URL_SHIM` are evaluated,
+/// because `install_v8!`-style post-closure installs run too late — the
+/// shim calls `_lumen_url_parse` unconditionally at eval time.
+pub(crate) fn install_url_parse(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<OwnedNativeFn>,
+) -> JsResult<()> {
+    reg!(
+        scope,
+        ctx,
+        store,
+        "_lumen_url_parse",
+        move |href: String, base: Option<String>| -> Option<JsValue> {
+            crate::js_url::url_parse_native(href, base)
+        }
+    );
+    Ok(())
+}
+
 /// Pointer Lock API stubs (W3C Pointer Lock L2 §2-4).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_pointer_lock(

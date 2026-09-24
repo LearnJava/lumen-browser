@@ -134,6 +134,61 @@ impl Url {
         }
     }
 
+    /// Percent-encoded username (URL Standard §4.3 userinfo percent-encode
+    /// set) — empty string when the URL has no credentials.
+    pub fn username(&self) -> &str {
+        self.inner.username()
+    }
+
+    /// Percent-encoded password — `None` when the URL has no password
+    /// component at all (as distinct from an empty one, e.g. `http://u:@h/`).
+    pub fn password(&self) -> Option<&str> {
+        self.inner.password()
+    }
+
+    /// URL Standard §4.4 "has an opaque path" inverted — `true` when the URL
+    /// carries a `//`-introduced authority (host/port/userinfo), matching
+    /// what `HTMLHyperlinkElementUtils`/`URL`'s JS surface needs to decide
+    /// whether `host`/`hostname`/`port` are meaningful at all (LIB-11,
+    /// BUG-693; see `crates/js/src/js_url.rs`).
+    pub fn has_authority(&self) -> bool {
+        self.inner.host().is_some()
+    }
+
+    /// ASCII/IDNA-normalized host (Punycode, lowercase) — what the URL
+    /// Standard defines `URL.host`/`URL.hostname` to serialize as. Distinct
+    /// from [`Url::host`] (raw Unicode substring, display-only — see the
+    /// module doc): this is the JS-visible/network-visible form. Empty
+    /// string when the URL has no host (opaque-path URL like `mailto:`).
+    pub fn host_ascii_normalized(&self) -> &str {
+        self.inner.host_str().unwrap_or("")
+    }
+
+    /// `scheme://host[:port]` — empty string for a URL with no authority
+    /// (URL Standard §6.1 "origin", opaque origin case), matching what
+    /// `URL.origin`/`location.origin` return for e.g. `data:`/`mailto:`.
+    pub fn origin(&self) -> String {
+        if !self.has_authority() {
+            return String::new();
+        }
+        match self.port() {
+            Some(p) => format!(
+                "{}://{}:{p}",
+                self.inner.scheme(),
+                self.host_ascii_normalized()
+            ),
+            None => format!("{}://{}", self.inner.scheme(), self.host_ascii_normalized()),
+        }
+    }
+
+    /// Full serialization per the WHATWG URL Standard (`inner.as_str()`,
+    /// ASCII/IDNA host) — as opposed to [`Url::as_str`]/[`Display`], which
+    /// splice the raw Unicode host back in for the address bar (module doc).
+    /// This is what `URL.href`/`location.href` must return.
+    pub fn href_whatwg(&self) -> &str {
+        self.inner.as_str()
+    }
+
     /// Разрешить относительный или абсолютный `reference` относительно
     /// `self`, через WHATWG "basic URL parser with base" (`inner.join`).
     /// Host — своя raw-экстракция из `reference`, если тот несёт собственный
@@ -589,6 +644,32 @@ mod tests {
         assert_eq!(u.host(), "path");
         assert_eq!(u.path(), "/");
         assert_eq!(u.as_str(), "http://path/");
+    }
+
+    // ── LIB-11: fields exposed for the JS-visible `URL`/`<a>` surface ──────
+
+    #[test]
+    fn username_password_and_origin() {
+        let u = Url::parse("https://user:pass@example.com:8080/x").unwrap();
+        assert_eq!(u.username(), "user");
+        assert_eq!(u.password(), Some("pass"));
+        assert!(u.has_authority());
+        assert_eq!(u.host_ascii_normalized(), "example.com");
+        assert_eq!(u.origin(), "https://example.com:8080");
+    }
+
+    #[test]
+    fn origin_is_empty_for_opaque_path_urls() {
+        let u = Url::parse("mailto:a@b.com").unwrap();
+        assert!(!u.has_authority());
+        assert_eq!(u.origin(), "");
+        assert_eq!(u.host_ascii_normalized(), "");
+    }
+
+    #[test]
+    fn href_whatwg_is_ascii_normalized_unlike_display() {
+        let u = Url::parse("https://ПРИМЕР.рф/").unwrap();
+        assert!(u.href_whatwg().contains("xn--"));
     }
 
     #[test]

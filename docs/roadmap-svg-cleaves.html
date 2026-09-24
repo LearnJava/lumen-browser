@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-24",
  "counts": {
-  "open": 276,
-  "fixed": 816,
+  "open": 270,
+  "fixed": 822,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4383,7 +4383,7 @@
        "title": "WPT: вендорить + прогнать категорию `url`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root url --recursive`, ~2:19, 50 файлов + внекатегорийный `common/subset-tests-by-key.js`, 44 отобранных id) — **39/44 harness OK, 1742/7451 сабтестов**, крупнейший провальный кластер бэклога на сегодня. Заведено два номера: [BUG-693](bugs/BUG-693-OPEN.md) — весь JS-видимый URL-парсер (`_lumen_parse_url`/`_url_resolve`, `dom.rs`) оказался рукописным строковым сплиттером вместо алгоритма WHATWG URL Standard: нет IDNA/punycode, не режется пробел/таб/перевод строки, userinfo отбрасывается, `_url_resolve` считает любую строку `scheme:...` уже абсолютной (не резолвит `http:foo.com` относительно базы), сеттеры не валидируют — `url-constructor.any.html` 223/899, `a-element*` 5/1313, `url-setters*` 116/1102, `IdnaTestV2.any.html` 987/2671, `toascii.window.html` 193/784. [BUG-694](bugs/BUG-694-FIXED.md) — `URLSearchParams` не итерируем (нет `Symbol.iterator`), `entries()`/`keys()`/`values()` отдают `Array` вместо итератора, копирующий конструктор `new URLSearchParams(existingParams)` протекает через перечислимое внутреннее поле `_p` (`_p=a%2Cb` вместо `a=b`) — `urlencoded-parser.any.html` 0/105. Два новых номера бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root url --recursive`, ~2:19, 50 файлов + внекатегорийный `common/subset-tests-by-key.js`, 44 отобранных id) — **39/44 harness OK, 1742/7451 сабтестов**, крупнейший провальный кластер бэклога на сегодня. Заведено два номера: [BUG-693](bugs/BUG-693-FIXED.md) — весь JS-видимый URL-парсер (`_lumen_parse_url`/`_url_resolve`, `dom.rs`) оказался рукописным строковым сплиттером вместо алгоритма WHATWG URL Standard: нет IDNA/punycode, не режется пробел/таб/перевод строки, userinfo отбрасывается, `_url_resolve` считает любую строку `scheme:...` уже абсолютной (не резолвит `http:foo.com` относительно базы), сеттеры не валидируют — `url-constructor.any.html` 223/899, `a-element*` 5/1313, `url-setters*` 116/1102, `IdnaTestV2.any.html` 987/2671, `toascii.window.html` 193/784. [BUG-694](bugs/BUG-694-FIXED.md) — `URLSearchParams` не итерируем (нет `Symbol.iterator`), `entries()`/`keys()`/`values()` отдают `Array` вместо итератора, копирующий конструктор `new URLSearchParams(existingParams)` протекает через перечислимое внутреннее поле `_p` (`_p=a%2Cb` вместо `a=b`) — `urlencoded-parser.any.html` 0/105. Два новых номера бага",
        "bugs": [
         "BUG-693",
         "BUG-694"
@@ -6455,7 +6455,7 @@
     {
      "id": "LIB",
      "title": "LIB: Готовое вместо своего (ADR-027)",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка «Готовое вместо своего» (ADR-027, владелец — P1, назначено 2026-08-31): заменить три подсистемы, где решение принимает спека, а свой код остался заглушкой — шейпинг (GSUB 1 и 4 из 8, GPOS 1 и 2 из 9, диакритика не прикрепляется), SVG (ноль градиентов, масок, фильтров в пути отрисовки), URL (~370 строк без автомата WHATWG). Порядок: замер → шрифты → SVG → URL → ре-триаж багов → сверка доков.",
      "tasks": [
       {
@@ -6519,7 +6519,7 @@
        "title": "LIB-7: ре-триаж багов после замен (частично: url+svg+text-level-semantics)",
        "status": "done",
        "size": "M",
-       "note": "ЗАКРЫТ (частично, срезы «url после LIB-6» + «svg после LIB-5/LIB-9» + «html/semantics/text-level-semantics после LIB-3»; css/css-fonts и css/css-text не прогнаны — вынесены в LIB-10) 2026-09-01 (ветка `p1-lib7-retriage`), чистая ре-триаж-задача без изменений в `crates/`. **url** (`run_report.py --all --root url --recursive`, 3:43, 44 id): 40/44 harness OK, 2447/7511 сабтестов, против базы 2026-08-09 (39/44, 1742/7451) — заметный рост, но **не от LIB-6**: LIB-6 заменил только `crates/core/src/url.rs` (Rust-навигация/сеть), а JS-видимый `URL`/`URLSearchParams`/`<a>` целиком идёт через отдельный рукописный парсер в JS-шиме (`crates/js/src/shim/url_parse_shim.js`'s `_lumen_parse_url`, вызывается из `dom.rs`), который `crates/core::url::Url` не использует и не вызывает — подтверждено прямым чтением. Рост цифр — эффект несвязанных правок за 5 недель между базой и этим срезом, не расследован (вне охвата этой задачи). [BUG-693](bugs/BUG-693-OPEN.md)/[BUG-694](bugs/BUG-694-FIXED.md)/[BUG-695](bugs/BUG-695-OPEN.md) LIB-6 не касается, остаются OPEN без правок текста. **svg** (`--root svg --recursive --processes=4`, 9:52, ранее 861 id / 472 harness-тестируемых → в этом прогоне 693 harness-тестируемых, знаменатель разъехался с базой 2026-08-06 необъяснимо — не расследовано, вероятно пересборка общего `MANIFEST.json` другими сессиями между датами): 503/693 harness OK, 463/2215 сабтестов против базы 421/472, 397/2068 — на глобальном уровне почти без изменений, доминирующий блокер как и был [BUG-685](bugs/BUG-685-OPEN.md) (HTML-парсер не отдаёт foreign content, поэтому разметочный `<svg>` не долетает до `SVG*Element`-DOM) — LIB-5/LIB-9 в этот путь не заходят, не влияют. **Важное методологическое уточнение**: reftest-исполнитель в этом харнессе — настоящее пиксельное сравнение (TEST-4/TEST-5 закрыты 2026-08-19, подтверждено сэмплом WPT-RUN-5 9 PASS/44 FAIL на 53 id), а не заглушка — `FAIL`/`PASS` с `0/0` сабтестов у reftest-файлов это норма формата (у reftest нет сабтестов), не признак нерабочего сравнения. На срезе reftest-файлов, попадающих в буквальный скоуп LIB-5/LIB-9 (заливки/маски): `mask-percentage.html`, `href-gradient-element.html`, `inline-svg-resize-viewport-dependent-mask.html` — PASS (согласуется со сданным скоупом); `symbol-in-mask.html` и `display-none-mask.html` — FAIL, вне списка «НЕ закрыто» LIB-9, не root-caused в рамках этой задачи, флаг для следующего, кто возьмётся за SVG-маски. **html/semantics/text-level-semantics** (`--root html/semantics/text-level-semantics --recursive --processes=4`, 0:58): изолированной базы ДО LIB-3 не существовало (подкаталог прогонялся только в составе слитого 14-каталожного среза `WPT-VENDOR-html-semantics-misc`, 2026-08-04, без разбивки по подкаталогам) — этот прогон сам стал первой изолированной цифрой: 13/34 harness OK, 22/27 сабтестов. Доминирующий кластер отказов — reftest на `<bdi>`/`<bdo>` (bidi-переупорядочивание) — подтверждено НЕ относящимся к LIB-3: LIB-3 заменил только OpenType-шейпер (`gsub`/`gpos`, лигатуры/сложные скрипты), bidi-алгоритм (UAX #9) реализован отдельно в `layout/bidi.rs` и уже ✅ по `CSS-SPECS.md`; отказы `<bdi>`/`<bdo>` похожи на пробел в HTML-элементных дефолтах (auto-направление/override), не в самом алгоритме — вне скоупа LIB-3, не расследовано дальше. **Не закрыто**: css/css-fonts (831 файл) и css/css-text (2809 файлов) никогда не имели отдельного прогона даже ДО LIB-2/LIB-3 (только нерепрезентативный урезанный пробный прогон всего `css/`-зонтика) — сравнивать не с чем, нужен отдельный первый прогон → LIB-10."
+       "note": "ЗАКРЫТ (частично, срезы «url после LIB-6» + «svg после LIB-5/LIB-9» + «html/semantics/text-level-semantics после LIB-3»; css/css-fonts и css/css-text не прогнаны — вынесены в LIB-10) 2026-09-01 (ветка `p1-lib7-retriage`), чистая ре-триаж-задача без изменений в `crates/`. **url** (`run_report.py --all --root url --recursive`, 3:43, 44 id): 40/44 harness OK, 2447/7511 сабтестов, против базы 2026-08-09 (39/44, 1742/7451) — заметный рост, но **не от LIB-6**: LIB-6 заменил только `crates/core/src/url.rs` (Rust-навигация/сеть), а JS-видимый `URL`/`URLSearchParams`/`<a>` целиком идёт через отдельный рукописный парсер в JS-шиме (`crates/js/src/shim/url_parse_shim.js`'s `_lumen_parse_url`, вызывается из `dom.rs`), который `crates/core::url::Url` не использует и не вызывает — подтверждено прямым чтением. Рост цифр — эффект несвязанных правок за 5 недель между базой и этим срезом, не расследован (вне охвата этой задачи). [BUG-693](bugs/BUG-693-FIXED.md)/[BUG-694](bugs/BUG-694-FIXED.md)/[BUG-695](bugs/BUG-695-OPEN.md) LIB-6 не касается, остаются OPEN без правок текста. **svg** (`--root svg --recursive --processes=4`, 9:52, ранее 861 id / 472 harness-тестируемых → в этом прогоне 693 harness-тестируемых, знаменатель разъехался с базой 2026-08-06 необъяснимо — не расследовано, вероятно пересборка общего `MANIFEST.json` другими сессиями между датами): 503/693 harness OK, 463/2215 сабтестов против базы 421/472, 397/2068 — на глобальном уровне почти без изменений, доминирующий блокер как и был [BUG-685](bugs/BUG-685-OPEN.md) (HTML-парсер не отдаёт foreign content, поэтому разметочный `<svg>` не долетает до `SVG*Element`-DOM) — LIB-5/LIB-9 в этот путь не заходят, не влияют. **Важное методологическое уточнение**: reftest-исполнитель в этом харнессе — настоящее пиксельное сравнение (TEST-4/TEST-5 закрыты 2026-08-19, подтверждено сэмплом WPT-RUN-5 9 PASS/44 FAIL на 53 id), а не заглушка — `FAIL`/`PASS` с `0/0` сабтестов у reftest-файлов это норма формата (у reftest нет сабтестов), не признак нерабочего сравнения. На срезе reftest-файлов, попадающих в буквальный скоуп LIB-5/LIB-9 (заливки/маски): `mask-percentage.html`, `href-gradient-element.html`, `inline-svg-resize-viewport-dependent-mask.html` — PASS (согласуется со сданным скоупом); `symbol-in-mask.html` и `display-none-mask.html` — FAIL, вне списка «НЕ закрыто» LIB-9, не root-caused в рамках этой задачи, флаг для следующего, кто возьмётся за SVG-маски. **html/semantics/text-level-semantics** (`--root html/semantics/text-level-semantics --recursive --processes=4`, 0:58): изолированной базы ДО LIB-3 не существовало (подкаталог прогонялся только в составе слитого 14-каталожного среза `WPT-VENDOR-html-semantics-misc`, 2026-08-04, без разбивки по подкаталогам) — этот прогон сам стал первой изолированной цифрой: 13/34 harness OK, 22/27 сабтестов. Доминирующий кластер отказов — reftest на `<bdi>`/`<bdo>` (bidi-переупорядочивание) — подтверждено НЕ относящимся к LIB-3: LIB-3 заменил только OpenType-шейпер (`gsub`/`gpos`, лигатуры/сложные скрипты), bidi-алгоритм (UAX #9) реализован отдельно в `layout/bidi.rs` и уже ✅ по `CSS-SPECS.md`; отказы `<bdi>`/`<bdo>` похожи на пробел в HTML-элементных дефолтах (auto-направление/override), не в самом алгоритме — вне скоупа LIB-3, не расследовано дальше. **Не закрыто**: css/css-fonts (831 файл) и css/css-text (2809 файлов) никогда не имели отдельного прогона даже ДО LIB-2/LIB-3 (только нерепрезентативный урезанный пробный прогон всего `css/`-зонтика) — сравнивать не с чем, нужен отдельный первый прогон → LIB-10."
       },
       {
        "id": "LIB-10",
@@ -6538,9 +6538,9 @@
       {
        "id": "LIB-11",
        "title": "LIB-11: JS-сторона URL через крейт `url`",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Остаток LIB-6/LIB-7: LIB-6 перевёл на крейт `url` только Rust-сторону (`crates/core/src/url.rs` — навигация и сеть), а вся JS-видимая URL-машинерия — `URL`, `location`, `HTMLHyperlinkElementUtils` у `<a>`/`<area>`, `new Request(url)`, `history.pushState(url)` — по-прежнему идёт через самописный `_lumen_parse_url`/`_url_resolve` (`crates/js/src/shim/url_parse_shim.js`), разрезатель строк без автомата WHATWG URL (это отмечено и в строке LIB-7). Две реализации одного стандарта расходятся: страница считает URL одним, а оболочка переходит по другому. Ломаются IPv6-хосты, percent-encoding по наборам кодирования, IDN/punycode, `..` в пути, special-схемы, `file:`, а на этом стоят SPA-роутеры, `new URL(rel, base)` в сборщиках и аналитика. Объём: нативная привязка к `url::Url` (parse, setters по §6.1, сериализация) и перевод на неё `URL`/`URLSearchParams`-связки, `location` и `<a>`-утилит; воркерный `WorkerLocation` — тем же нативом. Самописный парсер удаляется, а не остаётся запасным путём. Приёмка: `run_report.py --root url --recursive` до/после (база LIB-7: 40/44 harness, 2447/7511 сабтестов). Реклассифицирует BUG-693 (ДОРАБОТКА → LIB-11). Назначено P1 2026-09-23 решением пользователя.",
+       "note": "Остаток LIB-6/LIB-7: LIB-6 перевёл на крейт `url` только Rust-сторону (`crates/core/src/url.rs` — навигация и сеть), а вся JS-видимая URL-машинерия — `URL`, `location`, `HTMLHyperlinkElementUtils` у `<a>`/`<area>`, `new Request(url)`, `history.pushState(url)` — по-прежнему шла через самописный `_lumen_parse_url`/`_url_resolve` (`crates/js/src/shim/url_parse_shim.js`), разрезатель строк без автомата WHATWG URL (это отмечено и в строке LIB-7). Две реализации одного стандарта расходились: страница считала URL одним, а оболочка переходила по другому. **Закрыто (2026-09-24, P1):** нативная привязка `_lumen_url_parse(href, base?)` (`crates/js/src/js_url.rs`) к `lumen_core::url::Url` — тому же типу, что уже используется навигацией/сетью. `crates/core/src/url.rs` получил нужные JS-поверхности аксессоры (`username()`, `password()`, `origin()` — на ASCII/IDNA-нормализованном host, `host_ascii_normalized()`, `href_whatwg()`, `fragment()`, `as_str()`). `_lumen_parse_url`/`_url_resolve` (`url_parse_shim.js`/`url_shim.js`) теперь тонкие адаптеры над нативом — самописный разрезатель строк удалён, а не оставлен запасным путём; воркерный `WorkerLocation` использует тот же натив через `install_worker_exposed_v8`. Native регистрируется до вычисления любого шима (`install::install_url_parse` в замыкании конструирования рантайма). Гейт: `cargo test -p lumen-core --lib url::` 42/42, `cargo test -p lumen-js --features v8-backend --lib js_url::` 6/6, `cargo test -p lumen-js --features v8-backend --lib v8_nav_url_storage` 135/135, полный `cargo test -p lumen-js --features v8-backend --lib` 4237/4237, `cargo test -p lumen-driver --test all` 204/204; `cargo clippy -p lumen-core`/`-p lumen-js --features v8-backend --all-targets -- -D warnings` чисто; `scripts/scoped-test.sh` зелёный. Живой WPT-прогон (`run_report.py --root url --recursive`) не выполнен в рамках этой задачи — следующий шаг. Реклассифицирует BUG-693 (ДОРАБОТКА → LIB-11), закрыт как FIXED. Назначено P1 2026-09-23 решением пользователя.",
        "bugs": [
         "BUG-693"
        ]
@@ -7145,9 +7145,9 @@
     {
      "id": "WORKER-1",
      "title": "WORKER-1: Web API в воркерах — паритет `[Exposed=Worker]`",
-     "status": "active",
+     "status": "done",
      "size": "L",
-     "note": "Остаток после GAP-WORKERSCOPE (закрыт 2026-09-20: интерфейсные объекты `WorkerGlobalScope`/`DedicatedWorkerGlobalScope` и `MessagePort` через границу). Сами члены `[Exposed=Worker]` в воркерный изолят не доезжают: `worker_exposed_shim()` (`crates/js/src/dom.rs`) собирает только `EVENT_TARGET_SHIM`+`PERFORMANCE_SHIM`+URL+WorkerLocation/Navigator, всё прочее воркер получает поштучно в `crates/js/src/worker.rs`. Итог — восемь отдельных записей BUGS.md об одной дыре: нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream` (BUG-1080), `WebSocket` (BUG-1071), вложенного `Worker` (BUG-1076), `WebAssembly.compileStreaming`/`instantiateStreaming` (BUG-1078), `XMLHttpRequest.overrideMimeType` (BUG-1081), `requestAnimationFrame` у dedicated-воркера (BUG-959), `isSecureContext` (BUG-766), Trusted Types (BUG-1086). Реальный веб выносит в воркеры ровно тяжёлую работу — pdf.js, Monaco/VS Code web, ffmpeg.wasm, Figma-подобные редакторы, декодирование потоков: без `TextDecoder`/streams/Wasm-streaming такой воркер падает на первой строке, и страница молча не работает. Объём: не латать по члену, а сделать источник истины — разметить в шиме блоки по `[Exposed]` (как уже сделано для `EVENT_TARGET_SHIM`/`PERFORMANCE_SHIM`, BUG-401) и собирать воркерный пролог из тех же слайсов, что и оконный, с нативами, зарегистрированными в воркерном изоляте; SharedWorker — тем же путём. Первым шагом сверить на дрейф BUG-649 (`navigator` в воркере — уже есть `WorkerNavigator`) и BUG-1066 (`DOMException` поставлен BUG-1016) и закрыть их, если дрейф. Приёмка: `.any.worker.html`-варианты `encoding/`, `streams/`, `websockets/`, `wasm/jsapi/` в `run_report.py` до/после. Реклассифицирует восемь перечисленных багов (ДОРАБОТКА → WORKER-1). Назначено P1 2026-09-23 решением пользователя. **Срез 1 (2026-09-23):** источник истины заведён — `dom::install_worker_exposed_v8` ставит `worker_exposed_shim()` вместе с нативами его слайсов; `TextEncoder`/`TextDecoder` вырезаны в `shim/text_encoding_shim.js` и едут в воркер дословно, `DOMException` — во все три вида воркеров; BUG-649 (дрейф) и BUG-1066 закрыты. WPT: `encoding` (без `legacy-mb-*`) — ≈3 000 воркерных подтестов FAIL→PASS, `webidl/ecmascript-binding/es-exceptions` — 67; baseline перегенерирован. **Срез 2 (2026-09-24):** блок Streams (`ReadableStream`/`WritableStream`/`TransformStream`, стратегии, `TextDecoderStream`/`TextEncoderStream`, `CompressionStream`/`DecompressionStream`) вырезан из хвоста `web_api_shim_mid_b.js` в `shim/streams_shim.js` и едет в воркер тем же путём, нативы `_lumen_cs_*` регистрирует `install_worker_exposed_v8` — BUG-1080 закрыт. Попутно исправлен цикл задач воркера: реакции промисов, заведённые таймером, теперь проходят checkpoint до расчёта ожидания (раньше таймер из `.then()` терялся и воркер засыпал навсегда). WPT `streams/`+`compression/`: ≈1 340 воркерных подтестов FAIL→PASS; 67 dedicated/shared-файлов OK→TIMEOUT — тесты теперь доходят до ещё не реализованного, а не падают на первой строке; baseline перегенерирован. **Срез 3 (2026-09-24):** `Event`/`CustomEvent` (`shim/event_shim.js`) и `WebSocket`+`CloseEvent` (`shim/websocket_shim.js`) вырезаны дословными срезами страничного шима и едут в воркер; нативы `_lumen_ws_*` строит одна `websocket_natives`, dedicated/shared-воркеры перепривязывают их к провайдеру страницы, сервис-воркер без провайдера получает `error`+`close(1006)`; цикл задач воркера поллит сокеты (сон ≤10 мс, пока сокет жив) — BUG-1071 закрыт. WPT `websockets/`: воркерные секции 91 ERROR→OK, 44 ERROR→TIMEOUT, 18 OK→TIMEOUT (h2 — тесты доходят до сокета; 4 секции `stream/tentative` не разбирались), 390 подтестов FAIL/NOTRUN→PASS, новых FAIL нет; baseline перегенерирован. **Срез 4 (2026-09-24):** `AbortController`/`AbortSignal` (`shim/abort_shim.js`), `Blob`/`File`/`FileReader` (`shim/file_api_shim.js`) и `FormData` (`shim/form_data_shim.js`) вырезаны дословными срезами страничного шима и едут во все три вида воркеров — это база для следующего среза: страничный блок Body/`Response`/`Request` опирается на все три, а у воркера до сих пор свой урезанный `fetch`/`Response`/`XMLHttpRequest` (`WORKER_NET_SHIM`: `new Response(arrayBuffer)` там с пустым телом), поэтому BUG-1078 (Wasm streaming) и BUG-1081 (`overrideMimeType`) закрываются только после переноса fetch-поверхности. Единственная правка текста среза — ошибку слушателя `abort` Abort-срез отдаёт через `_lumen_et_report` (в воркере страничного `_lumen_report_exception` нет). WPT: `dom/abort` воркерные варианты 0/21 + 1 ERROR → 33/35 (как оконные), baseline заведён; `FileAPI` воркерные варианты 5 → 305 подтестов (`Blob-slice` 0/28 → 138/150, `Blob-constructor` 0/73 → 43/73, `File-constructor` ERROR → 35/49, `filereader_result`/`url-format` ERROR → OK), baseline перегенерирован без `BlobURL/`. `isSecureContext` (BUG-766) требует флага владельца (owner set[0]) через `spawn_worker_v8` — отложен до среза, который освободит место в `worker.rs` (>2000 строк, расти нельзя). **Срез 5 (2026-09-24):** fetch-поверхность воркера построена на страничных классах. Блок Body/`Response`/`Request` вынесен из страничного шима в `shim/fetch_body_shim.js` (переименование `web_api_shim_mid_b2.js`, текст байт-в-байт) и вместе с `HEADERS_SHIM` едет во все три вида воркеров; новый модуль `crates/js/src/worker_net.rs` регистрирует нативы страничной формы (`_lumen_worker_net_fetch` кладёт тело в слот «последнего тела», `_lumen_stream_*`/`_lumen_fetch_body_*` читают его) — фабрика `_lumen_response_from_fetch_cache` работает без изменений, а `worker.rs` похудел на 350 строк (самописный `WORKER_NET_SHIM` удалён). Воркерный `XMLHttpRequest` (`shim/worker_net_shim.js`) — `overrideMimeType`, `responseType`, `upload`-события, асинхронный запрос в задаче `setTimeout(0)`; BUG-1081 закрыт. Service worker оставляет свои `Request`/`Response` (контракт `respondWith`). WPT (`--update-expected`): `fetch/api/{basic,body,headers,request,response}` — снято ≈690 ожиданий FAIL/TIMEOUT у воркерных вариантов, `xhr` — ≈40, `encoding/{replacement,unsupported}-encodings.any.worker.html` — все подтесты PASS. Новые `TIMEOUT` (`xhr/getresponseheader`, `xhr/event-readystatechange-loaded`, `fetch/api/basic/http-response-code` в воркере; раньше падали до сети) — не шим: каждое новое соединение к `localhost` стоит ≈2 с, заведён BUG-1149 (нет Happy Eyeballs). **Срез 6 (2026-09-24, `p1-worker1-srez6-bug1078`):** BUG-1078 закрыт — `install_webassembly_bindings_v8` вызывается из общей `install_worker_scope_globals_v8` (dedicated/shared/service воркеры разом, тот же паттерн, что и срезы 1-5), т.к. воркерный изолят видел встроенный `WebAssembly` V8 без стриминговых методов (появляются только при колбэке эмбеддера). Шим `compileStreaming`/`instantiateStreaming` читает `resp.arrayBuffer()` только на вызове, порядок относительно `worker_net`'s `Response` не важен. Новый тест `v8_worker_globals_have_wasm_streaming`. Гейт: `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` чист; `cargo test -p lumen-js --features v8-backend --lib` зелёный (единственный красный — предсуществующий флак `frame_bridge::inaccessible_bridge_mutation_does_not_mark_dirty`, BUG-1110, не связан); `cargo clippy --workspace --all-targets -- -D warnings` чист; `scripts/scoped-test.sh` — тот же единственный флак. Живой WPT-прогон (`wasm/webapi/*.any.worker.html`) не выполнен — следующий шаг.",
+     "note": "Остаток после GAP-WORKERSCOPE (закрыт 2026-09-20: интерфейсные объекты `WorkerGlobalScope`/`DedicatedWorkerGlobalScope` и `MessagePort` через границу). Сами члены `[Exposed=Worker]` в воркерный изолят не доезжают: `worker_exposed_shim()` (`crates/js/src/dom.rs`) собирает только `EVENT_TARGET_SHIM`+`PERFORMANCE_SHIM`+URL+WorkerLocation/Navigator, всё прочее воркер получает поштучно в `crates/js/src/worker.rs`. Итог — восемь отдельных записей BUGS.md об одной дыре: нет `TextEncoder`/`TextDecoder`/`ReadableStream`/`TextDecoderStream` (BUG-1080), `WebSocket` (BUG-1071), вложенного `Worker` (BUG-1076), `WebAssembly.compileStreaming`/`instantiateStreaming` (BUG-1078), `XMLHttpRequest.overrideMimeType` (BUG-1081), `requestAnimationFrame` у dedicated-воркера (BUG-959), `isSecureContext` (BUG-766), Trusted Types (BUG-1086). Реальный веб выносит в воркеры ровно тяжёлую работу — pdf.js, Monaco/VS Code web, ffmpeg.wasm, Figma-подобные редакторы, декодирование потоков: без `TextDecoder`/streams/Wasm-streaming такой воркер падает на первой строке, и страница молча не работает. Объём: не латать по члену, а сделать источник истины — разметить в шиме блоки по `[Exposed]` (как уже сделано для `EVENT_TARGET_SHIM`/`PERFORMANCE_SHIM`, BUG-401) и собирать воркерный пролог из тех же слайсов, что и оконный, с нативами, зарегистрированными в воркерном изоляте; SharedWorker — тем же путём. Первым шагом сверить на дрейф BUG-649 (`navigator` в воркере — уже есть `WorkerNavigator`) и BUG-1066 (`DOMException` поставлен BUG-1016) и закрыть их, если дрейф. Приёмка: `.any.worker.html`-варианты `encoding/`, `streams/`, `websockets/`, `wasm/jsapi/` в `run_report.py` до/после. Реклассифицирует восемь перечисленных багов (ДОРАБОТКА → WORKER-1). Назначено P1 2026-09-23 решением пользователя. **Срез 1 (2026-09-23):** источник истины заведён — `dom::install_worker_exposed_v8` ставит `worker_exposed_shim()` вместе с нативами его слайсов; `TextEncoder`/`TextDecoder` вырезаны в `shim/text_encoding_shim.js` и едут в воркер дословно, `DOMException` — во все три вида воркеров; BUG-649 (дрейф) и BUG-1066 закрыты. WPT: `encoding` (без `legacy-mb-*`) — ≈3 000 воркерных подтестов FAIL→PASS, `webidl/ecmascript-binding/es-exceptions` — 67; baseline перегенерирован. **Срез 2 (2026-09-24):** блок Streams (`ReadableStream`/`WritableStream`/`TransformStream`, стратегии, `TextDecoderStream`/`TextEncoderStream`, `CompressionStream`/`DecompressionStream`) вырезан из хвоста `web_api_shim_mid_b.js` в `shim/streams_shim.js` и едет в воркер тем же путём, нативы `_lumen_cs_*` регистрирует `install_worker_exposed_v8` — BUG-1080 закрыт. Попутно исправлен цикл задач воркера: реакции промисов, заведённые таймером, теперь проходят checkpoint до расчёта ожидания (раньше таймер из `.then()` терялся и воркер засыпал навсегда). WPT `streams/`+`compression/`: ≈1 340 воркерных подтестов FAIL→PASS; 67 dedicated/shared-файлов OK→TIMEOUT — тесты теперь доходят до ещё не реализованного, а не падают на первой строке; baseline перегенерирован. **Срез 3 (2026-09-24):** `Event`/`CustomEvent` (`shim/event_shim.js`) и `WebSocket`+`CloseEvent` (`shim/websocket_shim.js`) вырезаны дословными срезами страничного шима и едут в воркер; нативы `_lumen_ws_*` строит одна `websocket_natives`, dedicated/shared-воркеры перепривязывают их к провайдеру страницы, сервис-воркер без провайдера получает `error`+`close(1006)`; цикл задач воркера поллит сокеты (сон ≤10 мс, пока сокет жив) — BUG-1071 закрыт. WPT `websockets/`: воркерные секции 91 ERROR→OK, 44 ERROR→TIMEOUT, 18 OK→TIMEOUT (h2 — тесты доходят до сокета; 4 секции `stream/tentative` не разбирались), 390 подтестов FAIL/NOTRUN→PASS, новых FAIL нет; baseline перегенерирован. **Срез 4 (2026-09-24):** `AbortController`/`AbortSignal` (`shim/abort_shim.js`), `Blob`/`File`/`FileReader` (`shim/file_api_shim.js`) и `FormData` (`shim/form_data_shim.js`) вырезаны дословными срезами страничного шима и едут во все три вида воркеров — это база для следующего среза: страничный блок Body/`Response`/`Request` опирается на все три, а у воркера до сих пор свой урезанный `fetch`/`Response`/`XMLHttpRequest` (`WORKER_NET_SHIM`: `new Response(arrayBuffer)` там с пустым телом), поэтому BUG-1078 (Wasm streaming) и BUG-1081 (`overrideMimeType`) закрываются только после переноса fetch-поверхности. Единственная правка текста среза — ошибку слушателя `abort` Abort-срез отдаёт через `_lumen_et_report` (в воркере страничного `_lumen_report_exception` нет). WPT: `dom/abort` воркерные варианты 0/21 + 1 ERROR → 33/35 (как оконные), baseline заведён; `FileAPI` воркерные варианты 5 → 305 подтестов (`Blob-slice` 0/28 → 138/150, `Blob-constructor` 0/73 → 43/73, `File-constructor` ERROR → 35/49, `filereader_result`/`url-format` ERROR → OK), baseline перегенерирован без `BlobURL/`. `isSecureContext` (BUG-766) требует флага владельца (owner set[0]) через `spawn_worker_v8` — отложен до среза, который освободит место в `worker.rs` (>2000 строк, расти нельзя). **Срез 5 (2026-09-24):** fetch-поверхность воркера построена на страничных классах. Блок Body/`Response`/`Request` вынесен из страничного шима в `shim/fetch_body_shim.js` (переименование `web_api_shim_mid_b2.js`, текст байт-в-байт) и вместе с `HEADERS_SHIM` едет во все три вида воркеров; новый модуль `crates/js/src/worker_net.rs` регистрирует нативы страничной формы (`_lumen_worker_net_fetch` кладёт тело в слот «последнего тела», `_lumen_stream_*`/`_lumen_fetch_body_*` читают его) — фабрика `_lumen_response_from_fetch_cache` работает без изменений, а `worker.rs` похудел на 350 строк (самописный `WORKER_NET_SHIM` удалён). Воркерный `XMLHttpRequest` (`shim/worker_net_shim.js`) — `overrideMimeType`, `responseType`, `upload`-события, асинхронный запрос в задаче `setTimeout(0)`; BUG-1081 закрыт. Service worker оставляет свои `Request`/`Response` (контракт `respondWith`). WPT (`--update-expected`): `fetch/api/{basic,body,headers,request,response}` — снято ≈690 ожиданий FAIL/TIMEOUT у воркерных вариантов, `xhr` — ≈40, `encoding/{replacement,unsupported}-encodings.any.worker.html` — все подтесты PASS. Новые `TIMEOUT` (`xhr/getresponseheader`, `xhr/event-readystatechange-loaded`, `fetch/api/basic/http-response-code` в воркере; раньше падали до сети) — не шим: каждое новое соединение к `localhost` стоит ≈2 с, заведён BUG-1149 (нет Happy Eyeballs). **Срез 6 (2026-09-24, `p1-worker1-srez6-bug1078`):** BUG-1078 закрыт — `install_webassembly_bindings_v8` вызывается из общей `install_worker_scope_globals_v8` (dedicated/shared/service воркеры разом, тот же паттерн, что и срезы 1-5), т.к. воркерный изолят видел встроенный `WebAssembly` V8 без стриминговых методов (появляются только при колбэке эмбеддера). Шим `compileStreaming`/`instantiateStreaming` читает `resp.arrayBuffer()` только на вызове, порядок относительно `worker_net`'s `Response` не важен. Новый тест `v8_worker_globals_have_wasm_streaming`. Гейт: `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` чист; `cargo test -p lumen-js --features v8-backend --lib` зелёный (единственный красный — предсуществующий флак `frame_bridge::inaccessible_bridge_mutation_does_not_mark_dirty`, BUG-1110, не связан); `cargo clippy --workspace --all-targets -- -D warnings` чист; `scripts/scoped-test.sh` — тот же единственный флак. Живой WPT-прогон (`wasm/webapi/*.any.worker.html`) не выполнен — следующий шаг. **Срез 7 (2026-09-24):** BUG-766 закрыт — `isSecureContext` заведён во все три вида воркера. Новая `_lumen_worker_secure_context_for(url)` (`shim/worker_location_navigator_shim.js`, рядом с `_lumen_make_worker_location`) — самостоятельная копия страничного трастворти-правила Secure Contexts §3.1/§3.2 (page-only `web_api_shim_mid_b.js` не разделяем с воркером, тот же приём, что `WORKER_ERROR_EVENT_SHIM`/`WORKER_MESSAGE_EVENT_SHIM`); каждый из трёх глобал-шимов (`worker.rs`, `shared_worker.rs`, `sw_worker.rs`) зовёт её тем же URL, из которого уже строит `location`, сразу после его установки, и ставит неперезаписываемым `isSecureContext`. 5 новых тестов. Гейт: `cargo test -p lumen-js --features v8-backend --lib` — 4226 passed (единственный красный — предсуществующий флак BUG-1110, не связан); `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` и `cargo clippy --workspace --all-targets -- -D warnings` чисты. **Срез 8 (2026-09-24):** BUG-959 закрыт — новый `WORKER_RAF_SHIM` (`shim/worker_raf_shim.js`) даёт `requestAnimationFrame`/`cancelAnimationFrame` на `DedicatedWorkerGlobalScope` (HTML LS §8.12 `AnimationFrameProvider` — только `Window`/`DedicatedWorkerGlobalScope` по спеке, поэтому шим ставится только из `install_worker_globals_v8`, не из `shared_worker.rs`/`sw_worker.rs`). Без растрового кадра воркера колбэк планируется через тот же `setTimeout`, что и таймеры воркера (`WORKER_TIMERS_SHIM`), шаг ~16мс (≈60fps) — существующий насос `_lumen_worker_run_tasks` гоняет его тем же путём, что `setTimeout`/`setInterval`/`queueMicrotask`, отдельный Rust-механизм не потребовался. 3 новых теста (`v8_worker_globals_have_raf`, `v8_worker_raf_callback_runs_via_timer_queue`, `v8_worker_raf_cancel_prevents_callback`). Гейт: `cargo test -p lumen-js --features v8-backend --lib` — 4230/4230 зелёные; `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` и `cargo clippy --workspace --all-targets -- -D warnings` чисты. Живой WPT-прогон (`workers/worker-request-animation-frame.html`) не выполнен — следующий шаг. **Срез 9 (2026-09-24, закрытие): BUG-1086 закрыт — восьмёрка BUGS закрыта целиком, задача завершена.** `TRUSTED_TYPES_SHIM` (`crate::trusted_types`) — самодостаточный (собственный `SECRET`/`VALUES`-closure, единственное касание `window` — за `typeof` guard) и уже вызывался только из страничного `v8_runtime.rs::install_dom`; добавлен один `rt.eval(...)` в конец общего `install_worker_scope_globals_v8` (`worker.rs`) — тем же путём, что срезы 1-8 подключали Streams/WebAssembly/RAF ко всем трём видам воркера разом. Новый тест `v8_worker_globals_have_trusted_types` (`self.trustedTypes` существует, `createPolicy`/`createHTML`/`isHTML` работают конец-в-конец). Гейт: `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` чист; `cargo test -p lumen-js --features v8-backend --lib` — 4231/4231 зелёные (флак BUG-1110 не воспроизвёлся в этом прогоне); `cargo clippy --workspace --all-targets -- -D warnings` чист. Живой WPT-прогон (`trusted-types/*.any.worker.html`) не выполнен — следующий шаг вне объёма этой задачи. Задача WORKER-1 закрыта: все восемь перечисленных BUGS (1080, 1071, 1076, 1078, 1081, 959, 766, 1086) теперь FIXED.",
      "bugs": [
       "BUG-1080",
       "BUG-1071",
@@ -7939,13 +7939,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-693": {
-   "status": "open",
-   "title": "The entire JS-visible URL parsing/serialization surface is a ~35-line ad-hoc string-splitter, not the WHATWG URL Standard state machine: no input sanitization (…",
-   "component": "js (`crates/js/src/dom.rs:4633` — `_lumen_parse_url`; `dom.rs:8074` — `_url_resolve`; feeds `URL`/`location`/every `<a>`/`<area>` IDL accessor via `_lumen_reflect_url`/`_lumen_hyperlink_url_get`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-695": {
    "status": "open",
    "title": "`URLPattern` is a hand-rolled mini pattern-matcher (its own doc comment: \"Pure JavaScript implementation\"), not a port of the WHATWG URLPattern Standard algorit…",
@@ -8037,13 +8030,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-766": {
-   "status": "open",
-   "title": "`isSecureContext` отсутствует в `WorkerGlobalScope` вовсе (`'isSecureContext' in self === false`), хотя HTML LS объявляет его в миксине `WindowOrWorkerGlobalSco…",
-   "component": "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-769": {
    "status": "open",
    "title": "`--network-service` (PH1-4, в ROADMAP помечен `done`) порождает подпроцесс `lumen-network-service` и печатает «сетевой сервис запущен», но `RemoteNetworkTranspo…",
@@ -8055,20 +8041,6 @@
    "status": "open",
    "title": "**TEST-18 (картинки) ушёл с 2.31 % на 6.34 %** — порог теста 0.5 %, запись должника BUG-219 рассчитана на 2.11 %. Эталон `graphic_tests/results/latest.json` сня…",
    "component": "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-FIXED.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-791": {
-   "status": "open",
-   "title": "Остаток заявки [BUG-427](bugs/BUG-427-FIXED.md). Срез 6 (2026-09-23): главный симптом («до главной Дзена движок не доезжает живьём») снят фиксом [BUG-1107](bugs…",
-   "component": "не локализован (кандидаты: shell/network — куки и JS-редирект SSO; layout — inline-бокс сайдбара)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-793": {
-   "status": "open",
-   "title": "At-правило без блока, закрытое `;` (`@media;`), съедает **весь остаток таблицы стилей**, а не только само битое правило: prelude собирается сканированием до пер…",
-   "component": "css-parser (`crates/engine/css-parser/src/parser.rs:3282` — `parse_media_rule` и однотипные `parse_supports_rule`/`parse_keyframes_rule`/`parse_container_rule`/`parse_scope_rule`)",
    "date": null,
    "debtor": false
   },
@@ -8429,13 +8401,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-959": {
-   "status": "open",
-   "title": "`requestAnimationFrame`/`cancelAnimationFrame` отсутствуют целиком на `DedicatedWorkerGlobalScope` (`grep requestAnimationFrame crates/js/src/worker.rs` — 0 сов…",
-   "component": "js (`crates/js/src/worker.rs`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-960": {
    "status": "open",
    "title": "Остаток [BUG-475](bugs/BUG-475-FIXED.md): `scrollWidth`/`scrollHeight` для элемента, который не является designated scroll container (`overflow: scroll`/`auto`)…",
@@ -8755,13 +8720,6 @@
    "status": "open",
    "title": "`new WebAssembly.Memory({shared:true, …}).buffer` — обычный `ArrayBuffer`, а не `SharedArrayBuffer`; `shared:true` без `maximum` не бросает `TypeError`. Хелпер…",
    "component": "js (`crates/js/src/webassembly.rs` — шим `WebAssembly.Memory`, возможно `v8_runtime.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1086": {
-   "status": "open",
-   "title": "В воркерах нет Trusted Types: `TRUSTED_TYPES_SHIM` исполняется только в оконном рантайме, а `worker.rs` собирает свой набор шимов без него — `trustedTypes is no…",
-   "component": "js (`crates/js/src/trusted_types.rs`, `v8_runtime.rs:687`, `crates/js/src/worker.rs`/`shared_worker.rs`/`sw_worker.rs`)",
    "date": null,
    "debtor": false
   },
@@ -12454,6 +12412,13 @@
    "date": "2026-08-24",
    "debtor": false
   },
+  "BUG-793": {
+   "status": "fixed",
+   "title": "At-правило без блока, закрытое `;` (`@media;`), съедало весь остаток таблицы стилей: прелюдия сканировалась только до первого `{`, поэтому им оказывался блок СЛ…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/at_rules.rs` — `parse_media_rule`/`parse_supports_rule`/`parse_keyframes_rule`/`parse_container_prelude`/`parse_scope_rule`, плюс однотипные ветки `parse_nested_at_rule` в `crates/engine/css-parser/src/parser.rs`)",
+   "date": "2026-09-24",
+   "debtor": false
+  },
   "BUG-794": {
    "status": "fixed",
    "title": "`element.focus()`, вызванный синхронно изнутри обработчика `window` `load` (`addEventListener('load', …)`/`onload`), **никогда не возвращает управление** — ни р…",
@@ -12921,6 +12886,13 @@
    "title": "`window.getComputedStyle()` возвращает `Proxy` без `has`-ловушки — `property in getComputedStyle(el)` даёт `false` для ЛЮБОГО свойства (даже реализованных), хот…",
    "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js`)",
    "date": "2026-09-02",
+   "debtor": false
+  },
+  "BUG-959": {
+   "status": "fixed",
+   "title": "`requestAnimationFrame`/`cancelAnimationFrame` отсутствовали целиком на `DedicatedWorkerGlobalScope` — вызов бросал `ReferenceError` синхронно внутри `self.onme…",
+   "component": "js (`crates/js/src/shim/worker_raf_shim.js`, новый файл; `worker.rs` — `install_worker_globals_v8`)",
+   "date": "2026-09-24",
    "debtor": false
   },
   "BUG-961": {
@@ -14838,6 +14810,34 @@
    "status": "fixed",
    "title": "В воркерах не было `WebAssembly.compileStreaming`/`instantiateStreaming`: воркерный изолят видел встроенный `WebAssembly` V8 без стриминговых методов (они устан…",
    "component": "js (`crates/js/src/worker.rs::install_worker_scope_globals_v8` — теперь вызывает `crate::webassembly::install_webassembly_bindings_v8`)",
+   "date": "2026-09-24",
+   "debtor": false
+  },
+  "BUG-766": {
+   "status": "fixed",
+   "title": "`isSecureContext` отсутствовал в `WorkerGlobalScope` целиком (`'isSecureContext' in self === false`) во всех трёх видах воркера, хотя HTML LS объявляет его в ми…",
+   "component": "js (`crates/js/src/shim/worker_location_navigator_shim.js` — новая `_lumen_worker_secure_context_for`; `worker.rs`/`shared_worker.rs`/`sw_worker.rs` — их глобал-шимы теперь ставят `globalThis.isSecureContext`)",
+   "date": "2026-09-24",
+   "debtor": false
+  },
+  "BUG-791": {
+   "status": "fixed",
+   "title": "Остаток заявки [BUG-427](bugs/BUG-427-FIXED.md). Срез 6 (2026-09-23): главный симптом («до главной Дзена движок не доезжает живьём») снят фиксом [BUG-1107](bugs…",
+   "component": "не локализован (кандидаты: shell/network — куки и JS-редирект SSO; layout — inline-бокс сайдбара)",
+   "date": "2026-09-24",
+   "debtor": false
+  },
+  "BUG-1086": {
+   "status": "fixed",
+   "title": "В воркерах не было Trusted Types: `trustedTypes is not defined` в Dedicated/Shared Worker, `TRUSTED_TYPES_SHIM` исполнялся только оконным рантаймом (`v8_runtime…",
+   "component": "js (`crates/js/src/worker.rs::install_worker_scope_globals_v8` — теперь вызывает `rt.eval(crate::trusted_types::TRUSTED_TYPES_SHIM)`)",
+   "date": "2026-09-24",
+   "debtor": false
+  },
+  "BUG-693": {
+   "status": "fixed",
+   "title": "Вся JS-видимая поверхность URL-парсинга/сериализации (`_lumen_parse_url`/`_url_resolve`, питающие `URL`/`location`/каждый `<a>`/`<area>` IDL-аксессор) была ~35-…",
+   "component": "js (`crates/js/src/js_url.rs` — новая native `_lumen_url_parse`; `crates/js/src/shim/url_parse_shim.js`/`url_shim.js` теперь адаптеры над ней; `crates/core/src/url.rs` — новые аксессоры)",
    "date": "2026-09-24",
    "debtor": false
   }

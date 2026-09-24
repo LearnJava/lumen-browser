@@ -107,14 +107,23 @@ fn type_defaults_are_per_interface() {
 }
 
 /// A `url`-kind attribute reflects as an absolute URL resolved against the
-/// document base URL, not as the raw attribute text (HTML LS §2.6.1).
+/// document base URL, not as the raw attribute text (HTML LS §2.6.1) — except
+/// when that resolution is itself impossible, which is exactly the case here:
+/// `navigate_html`'s document URL is `about:blank`, and `about:` is not a
+/// special scheme, so `about:blank` has an *opaque path* and cannot be used
+/// as a base URL at all (WHATWG URL Standard §4.3 basic URL parser, "if
+/// base's opaque-path is true ... return failure" applies to non-`#`
+/// references). Per the HTML "reflect a URL" getter steps, a base URL that
+/// fails to resolve makes the accessor fall back to the *unresolved*
+/// attribute value — so `a.href` here is `sub/page.html` verbatim, not an
+/// absolute URL.
 #[test]
 fn url_attributes_reflect_absolute() {
     let mut s = session();
     let href = ev(&mut s, "document.getElementById('a').href");
-    assert!(
-        href.ends_with("sub/page.html") && href.len() > "sub/page.html".len(),
-        "a.href should be resolved against the document base URL, got {href:?}"
+    assert_eq!(
+        href, "sub/page.html",
+        "about:blank cannot be a base URL, so a.href falls back to the raw attribute"
     );
     // An absent URL attribute reflects as '' — never as the document URL.
     assert_eq!(ev(&mut s, "document.createElement('a').href"), "");

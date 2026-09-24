@@ -37,6 +37,7 @@ pub mod document_pip;
 pub mod documentpip_bindings;
 pub mod eye_dropper;
 pub mod dom;
+pub(crate) mod js_url;
 pub mod filesystem_access;
 pub mod geolocation;
 pub mod heap_snapshot;
