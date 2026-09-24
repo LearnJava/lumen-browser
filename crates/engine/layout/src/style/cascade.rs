@@ -858,7 +858,7 @@ pub(crate) fn compute_style_shareable(
 
     for &rule_idx in &cands {
         let rule = &sheet.rules[rule_idx];
-        shareable &= rule.selectors.iter().all(selector_is_share_safe);
+        shareable &= rule.selectors.iter().all(|sel| selector_is_share_safe(sel, doc, node));
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
             if matches_complex(complex, doc, node) {
@@ -901,7 +901,7 @@ pub(crate) fn compute_style_shareable(
         let Some(rule) = sheet.layers.get(block).and_then(|l| l.rules.get(rule_idx)) else {
             continue;
         };
-        shareable &= rule.selectors.iter().all(selector_is_share_safe);
+        shareable &= rule.selectors.iter().all(|sel| selector_is_share_safe(sel, doc, node));
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
             if matches_complex(complex, doc, node) {
@@ -947,7 +947,7 @@ pub(crate) fn compute_style_shareable(
         });
         for rule_idx in media_cands {
             let rule = &media.rules[rule_idx];
-            shareable &= rule.selectors.iter().all(selector_is_share_safe);
+            shareable &= rule.selectors.iter().all(|sel| selector_is_share_safe(sel, doc, node));
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -985,7 +985,7 @@ pub(crate) fn compute_style_shareable(
         });
         for rule_idx in supports_cands {
             let rule = &supports.rules[rule_idx];
-            shareable &= rule.selectors.iter().all(selector_is_share_safe);
+            shareable &= rule.selectors.iter().all(|sel| selector_is_share_safe(sel, doc, node));
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if matches_complex(complex, doc, node) {
@@ -1682,8 +1682,163 @@ pub(crate) fn compute_style_shareable(
 /// identically for both nodes, at any depth. `NextSibling`/`LaterSibling`
 /// stay banned: sibling position is not part of this key at any level, so
 /// nothing here proves two colliding nodes even have comparable siblings.
-fn selector_is_share_safe(sel: &lumen_css_parser::ComplexSelector) -> bool {
-    complex_is_share_safe(sel, true)
+///
+/// BUG-1112 срез 6: when the abstract check above fails, `sel` may still be
+/// harmless for THIS specific `node` — the abstract check has no notion of
+/// the real document, so a candidate like `.btn:hover .octicon` is flagged
+/// unsafe for every `.octicon` node the `RuleIndex` bucket hands back, even
+/// one that is not, and can never become, a descendant of any `.btn` at all.
+/// [`ancestor_prefix_could_rescue`] answers exactly that: is the ancestor
+/// part of `sel` even reachable from `node`'s real ancestors? If not, `sel`
+/// can never contribute a declaration to `node`'s cascade output regardless
+/// of dynamic state, so it cannot threaten sharing either.
+fn selector_is_share_safe(sel: &lumen_css_parser::ComplexSelector, doc: &Document, node: NodeId) -> bool {
+    complex_is_share_safe(sel, true) || ancestor_prefix_could_rescue(sel, doc, node)
+}
+
+/// BUG-1112 срез 6 — see [`selector_is_share_safe`]'s doc comment for why
+/// this rescue is sound.
+///
+/// The subject compound and the combinator kinds are NOT rescuable here —
+/// `complex_is_share_safe`'s reasons to reject those are unrelated to real
+/// document position: a dynamic subject part (`node:hover { .. }`) is a
+/// per-node fact about `node` itself, always "reachable" (it always
+/// describes `node`), and a sibling combinator (`+`/`~`) is banned because
+/// [`super::share_cache::ShareKey`] has no field for sibling position at
+/// ANY depth, which this rescue does not attempt to add. Only an ANCESTOR
+/// compound's otherwise-unpinned part (dynamic pseudo-class, or a sibling-
+/// position pseudo-class the key only pins for the node it was built for)
+/// is eligible: this walks `node`'s real ancestors, testing whether the
+/// `Descendant`/`Child` chain the selector describes could ever land on one
+/// of them.
+///
+/// The walk uses [`compound_reachable`], not `matches_compound`: an
+/// ancestor compound that is itself `is_svg_presentational_element`-eligible
+/// is tested *permissively* (any part [`compound_is_share_safe`] does not
+/// already trust the key to pin is treated as "maybe true", never as a hard
+/// `false`) because [`selector_is_share_safe`]'s own induction only proves
+/// two colliding nodes' eligible ancestors pairwise `tag`+`attrs`-identical,
+/// not state-identical — a dynamic fact there (another `.btn`'s `:hover`)
+/// can genuinely differ between two different physical instances that still
+/// share this cache key. The FIRST non-eligible ancestor breaks that
+/// induction (a non-eligible node is never inserted into `ShareCache`, so
+/// two different nodes' `ShareKey.inherited_ptr` can only collide there by
+/// being the literal same live node — see `share_cache.rs`'s module doc);
+/// from that point on [`compound_reachable`] switches to real, exact
+/// matching, which is sound precisely because a real DOM-tree ancestor at
+/// or above that point is, by construction, the same physical node for
+/// every colliding instance.
+fn ancestor_prefix_could_rescue(
+    sel: &lumen_css_parser::ComplexSelector,
+    doc: &Document,
+    node: NodeId,
+) -> bool {
+    let mut compounds: Vec<&lumen_css_parser::CompoundSelector> =
+        Vec::with_capacity(1 + sel.tail.len());
+    let mut combinators: Vec<lumen_css_parser::Combinator> = Vec::with_capacity(sel.tail.len());
+    compounds.push(&sel.head);
+    for (comb, comp) in &sel.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+    let n = compounds.len();
+    if n == 1 {
+        // No ancestor compound at all — nothing for this rescue to reach
+        // into; the top-level `complex_is_share_safe(sel, true)` call
+        // already covers a bare subject compound.
+        return false;
+    }
+    if !compound_is_share_safe(compounds[n - 1], true) {
+        // The subject itself is the problem — not rescuable, see doc comment.
+        return false;
+    }
+    if combinators
+        .iter()
+        .any(|c| !matches!(c, lumen_css_parser::Combinator::Descendant | lumen_css_parser::Combinator::Child))
+    {
+        // A sibling combinator anywhere — not rescuable, see doc comment.
+        return false;
+    }
+    // Rescued exactly when the ancestor part is NOT reachable — a reachable
+    // one is a genuine threat and must stay unsafe.
+    !ancestor_chain_reachable(&compounds[..n - 1], &combinators, doc, node)
+}
+
+/// Walks `node`'s real ancestors looking for a chain satisfying `compounds`
+/// (outermost first, same order as [`matches_complex`]'s internal array,
+/// with the subject already stripped) joined by `combinators` (same length,
+/// `combinators[last]` connects `compounds[last]` to `node`). Mirrors
+/// `matches_chain`'s `Descendant`/`Child` backtracking exactly, but tests
+/// each candidate ancestor with [`compound_reachable`] instead of
+/// `matches_compound` — see [`ancestor_prefix_could_rescue`]'s doc comment.
+fn ancestor_chain_reachable(
+    compounds: &[&lumen_css_parser::CompoundSelector],
+    combinators: &[lumen_css_parser::Combinator],
+    doc: &Document,
+    node: NodeId,
+) -> bool {
+    let n = compounds.len();
+    if n == 0 {
+        return true;
+    }
+    match combinators[n - 1] {
+        lumen_css_parser::Combinator::Descendant => {
+            let mut cur = doc.get(node).parent;
+            while let Some(p) = cur {
+                if matches!(doc.get(p).data, NodeData::Element { .. })
+                    && compound_reachable(compounds[n - 1], doc, p)
+                    && ancestor_chain_reachable(&compounds[..n - 1], &combinators[..n - 1], doc, p)
+                {
+                    return true;
+                }
+                cur = doc.get(p).parent;
+            }
+            false
+        }
+        lumen_css_parser::Combinator::Child => {
+            let Some(parent) = doc.get(node).parent else { return false };
+            if !matches!(doc.get(parent).data, NodeData::Element { .. }) {
+                return false;
+            }
+            compound_reachable(compounds[n - 1], doc, parent)
+                && ancestor_chain_reachable(&compounds[..n - 1], &combinators[..n - 1], doc, parent)
+        }
+        // Guarded by `ancestor_prefix_could_rescue` — never reached.
+        _ => false,
+    }
+}
+
+/// Tests `compound` against real ancestor `node` for [`ancestor_chain_reachable`].
+///
+/// When `node` is itself `is_svg_presentational_element`-eligible, any part
+/// [`compound_is_share_safe`] does not already trust `ShareKey` to pin is
+/// treated as `true` (permissive — "could match", not "does match"); every
+/// other part (`Type`/`Class`/`Id`/`Universal`/`Attribute`) is tested for
+/// real, since those ARE pinned identically for any node this pass' key
+/// induction reaches. Once `node` is not eligible, every part is tested for
+/// real — see [`ancestor_prefix_could_rescue`]'s doc comment for why that is
+/// sound at and above the first non-eligible ancestor.
+fn compound_reachable(compound: &lumen_css_parser::CompoundSelector, doc: &Document, node: NodeId) -> bool {
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return false;
+    };
+    let eligible = is_svg_presentational_element(name.local.as_ref());
+    compound.parts.iter().all(|part| {
+        if eligible
+            && !matches!(
+                part,
+                lumen_css_parser::SimpleSelector::Type(_)
+                    | lumen_css_parser::SimpleSelector::Class(_)
+                    | lumen_css_parser::SimpleSelector::Id(_)
+                    | lumen_css_parser::SimpleSelector::Universal
+                    | lumen_css_parser::SimpleSelector::Attribute(_)
+            )
+        {
+            true
+        } else {
+            crate::style::matches_simple(part, doc, node, &name.local, attrs)
+        }
+    })
 }
 
 /// `describes_key_node` — does a match of `sel` at this recursion depth speak
