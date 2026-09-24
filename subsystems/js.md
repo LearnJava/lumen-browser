@@ -406,7 +406,7 @@ the time — read dates.
 - **`[Exposed=Worker]` members come from one place: `dom::install_worker_exposed_v8`
   (WORKER-1, 2026-09-23).** It evaluates `worker_exposed_shim()` — verbatim slices of the page
   program (`EVENT_SHIM`, `EVENT_TARGET_SHIM`, `PERFORMANCE_SHIM`, the URL pair, `TEXT_ENCODING_SHIM`,
-  `STREAMS_SHIM`, `WEBSOCKET_SHIM`) plus
+  `ABORT_SHIM`, `STREAMS_SHIM`, `FORM_DATA_SHIM`, `FILE_API_SHIM`, `WEBSOCKET_SHIM`) plus
   `WORKER_LOCATION_NAVIGATOR_SHIM` — **and registers the natives those slices call** plus
   `DOMException`. All three worker flavours reach it through
   `worker::install_worker_scope_globals_v8`. The trap it closes: a slice shipped without its
@@ -416,7 +416,11 @@ the time — read dates.
   pinned by `web_api_shim_splices_its_parts_in_source_order`), add it to
   `worker_exposed_shim()`, register its natives here — never a second copy in `worker.rs`.
   A slice may only name what a worker scope has: page-only helpers go through a `typeof`
-  guard or `_lumen_et_report` (the `WebSocket` slice, WORKER-1 срез 3). A native that needs a
+  guard or `_lumen_et_report` (the `WebSocket` slice, WORKER-1 срез 3; `ABORT_SHIM`'s listener
+  errors, срез 4). The worker still has its **own** `fetch`/`Headers`/`Response`/`XMLHttpRequest`
+  (`worker::WORKER_NET_SHIM`, a minimal synchronous copy — `new Response(arrayBuffer)` has an empty
+  body there); the page's Body/`Response`/`Request` block needs `Blob`/`FormData`/`AbortSignal`,
+  which is why those went first (срез 4). A native that needs a
   per-page provider is registered provider-less here and rebound by the flavour's thread
   before the script runs (`dom::bind_worker_websocket_v8`, called by the dedicated and shared
   runners; a service worker keeps the provider-less `error`+`close(1006)` behaviour). Its
