@@ -1,11 +1,23 @@
 # BUG-970: cross-frame Element facade has no `.attributes` (`NamedNodeMap`)
 at all — reading it throws `TypeError`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Дата:** 2026-09-03
 **Компонент:** js (`crates/js/src/frame_bridge.rs::frameElem`)
 **Найден:** P2, WPT-RUN-6 срез 55, живой пробой (побочная находка, не
 объясняет ни один TIMEOUT сама по себе)
+
+## Фикс
+
+`frameElem` получил `get attributes()`, возвращающий живой `NamedNodeMap`-подобный `Proxy`
+(`frameNamedNodeMap`/`frameAttr` в `crates/js/src/frame_bridge.rs`) поверх нового нативного моста
+`_lumen_f_attr_names(bid, nid)` (по образцу `_lumen_get_attr_names` главного документа, BUG-732).
+Поддержаны `length`/индексный и именованный доступ/`item()`/`getNamedItem()`/`setNamedItem()`/
+`removeNamedItem()`/итерация; `removeNamedItem` снимает снимок значения ДО удаления атрибута —
+иначе живой геттер `Attr`-подобного узла читал бы уже удалённое значение. Тест
+`frame_facade_attributes_named_node_map`. Второй член того же фасада (`.style`/`classList`/
+`dataset`, найден отдельно w3schools 2026-09-24) вынесен в [BUG-1147](BUG-1147-OPEN.md) — не
+затронут этим фиксом.
 
 ## Механизм
 
@@ -70,12 +82,3 @@ stays in the `unclassified` residual without a marker, same as slice 53's
 along the way, filed on its own merits per `docs/probe-method.md` §3, not
 forced onto the TIMEOUT it was found while investigating).
 
-
-## Второй отсутствующий член: `.style` (w3schools, 2026-09-24)
-
-Тот же фасад `frameElem` не определяет `.style` (и `classList`, `dataset`):
-`iframe.contentDocument.documentElement.style` и `body.style` — `undefined`. w3schools (FastCMP,
-`fast-cmp-en-tcfeuv2.js:1:174891`): `Cannot set properties of undefined (setting 'cssText')` —
-диалог согласия на cookie не строится. Репро `.tmp/compat/g6/site/iframedoc.html` (iframe без `src`):
-Lumen `typeof style 'undefined'` → TypeError; Chrome `CSSStyleDeclaration`, `cssText` применён,
-конструктор `HTMLHtmlElement`. Передан P6 по решению пользователя.
