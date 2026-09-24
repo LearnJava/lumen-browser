@@ -4,7 +4,7 @@
 //! `latest.json` is the signed manifest a release publishes at the stable URL
 //! `.../releases/latest/download/latest.json` (chosen over the GitHub API to
 //! avoid its 60 req/h/IP rate limit — see the brief). [`apply_check_result`]
-//! rejects a manifest that fails [`verify_manifest`] before it ever reaches
+//! rejects a manifest that fails [`lumen_update_manifest::verify_manifest`] before it ever reaches
 //! a caller — [`CheckOutcome::Available`] is only ever a signed, trusted
 //! manifest. Everything downstream of that (download, apply, UI) is still
 //! separate slices.
@@ -27,106 +27,12 @@ use lumen_core::url::Url;
 use lumen_network::{ConditionalFetch, HttpClient};
 use serde::{Deserialize, Serialize};
 
-/// The `latest.json` manifest published alongside every GitHub Release.
-///
-/// `signature` is an ed25519 signature over [`UpdateManifest::signing_body`]
-/// (every field except `signature` itself), checked by [`verify_manifest`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UpdateManifest {
-    /// Release version, `x.y.z` — parsed via [`Version::parse`].
-    pub version: String,
-    /// Per-platform release assets (the two binaries, at minimum).
-    pub assets: Vec<UpdateAsset>,
-    /// Identifies which trusted public key `signature` was produced with,
-    /// so an old client can still verify a manifest signed after a key
-    /// rotation as long as it still trusts that `key_id`.
-    pub key_id: String,
-    /// Base64-encoded ed25519 signature over the manifest body.
-    pub signature: String,
-}
-
-/// One downloadable asset listed in an [`UpdateManifest`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UpdateAsset {
-    /// Asset file name as published on the release (e.g. `lumen-windows.zip`).
-    pub name: String,
-    /// Hex-encoded SHA-256 of the asset body, checked by [`UpdateAsset::verify_body`]
-    /// after download.
-    pub sha256: String,
-    /// Asset size in bytes.
-    pub size: u64,
-}
-
-impl UpdateAsset {
-    /// Whether `body`'s SHA-256 matches [`Self::sha256`] (case-insensitive
-    /// hex). The manifest's signature already protects `sha256` from
-    /// tampering in transit; this is the second half — checking a downloaded
-    /// body actually hashes to what the (now-trusted) manifest claims,
-    /// against corruption or a compromised/wrong download source. Consumed
-    /// by the background download slice (UPD-6), not called anywhere yet.
-    #[must_use]
-    pub fn verify_body(&self, body: &[u8]) -> bool {
-        lumen_core::hash::sha256_hex(body).eq_ignore_ascii_case(&self.sha256)
-    }
-}
-
-impl UpdateManifest {
-    /// Parse [`Self::version`] into a comparable [`Version`].
-    ///
-    /// `None` means the manifest's version field is malformed — the manifest
-    /// is network input, untrusted until UPD-3 verifies its signature, so a
-    /// bad field is treated as "no update available" by callers rather than
-    /// panicking or guessing at a partial version.
-    #[must_use]
-    pub fn parsed_version(&self) -> Option<Version> {
-        Version::parse(&self.version)
-    }
-
-    /// Whether this manifest advertises a version strictly newer than
-    /// `current`. Equal and older versions are rejected — the update path is
-    /// forward-only by design (downgrade protection, `docs/tasks/ph3-self-update.md` §3).
-    #[must_use]
-    pub fn is_newer_than(&self, current: Version) -> bool {
-        self.parsed_version().is_some_and(|v| v > current)
-    }
-}
-
-/// A parsed `x.y.z` version triple (major.minor.patch).
-///
-/// No pre-release/build metadata and no `semver` crate — this project's own
-/// releases are plain `x.y.z` (`CARGO_PKG_VERSION`), so a ~20-line comparator
-/// covers the whole need (`docs/tasks/ph3-self-update.md` §3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Version {
-    /// Major component (`x` in `x.y.z`).
-    pub major: u32,
-    /// Minor component (`y` in `x.y.z`).
-    pub minor: u32,
-    /// Patch component (`z` in `x.y.z`).
-    pub patch: u32,
-}
-
-impl Version {
-    /// Parse a `x.y.z` string. `None` on any deviation — missing/extra
-    /// component, non-numeric component, or an empty string.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        let mut parts = s.split('.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = parts.next()?.parse().ok()?;
-        let patch = parts.next()?.parse().ok()?;
-        if parts.next().is_some() {
-            return None;
-        }
-        Some(Self { major, minor, patch })
-    }
-}
-
-impl std::fmt::Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
-}
+// The manifest wire format, `Version` and ed25519 verification live in
+// `lumen-update-manifest` (UPD-10) so the release signer shares them.
+use lumen_update_manifest::verify_manifest_with_keys;
+pub use lumen_update_manifest::{
+    ManifestVerifyError, TRUSTED_KEYS, UpdateAsset, UpdateManifest, Version,
+};
 
 /// The version of the running binary — the update checker's baseline for
 /// comparison against a manifest's [`UpdateManifest::version`].
@@ -141,116 +47,6 @@ pub fn current_version() -> Version {
         minor: 0,
         patch: 0,
     })
-}
-
-// ── Signature verification (UPD-3) ──────────────────────────────────────────
-
-/// Public keys this build trusts to sign an [`UpdateManifest`], keyed by
-/// [`UpdateManifest::key_id`] so a future key rotation *adds* an entry
-/// instead of replacing one — an old client that only knows the retired key
-/// still verifies a manifest signed under it, and once the new key is added
-/// here any manifest signed under either verifies (`docs/tasks/ph3-self-update.md`
-/// §1, §Risks).
-///
-/// Empty until UPD-10 mints the production keypair and wires CI to sign
-/// releases with it. Empty is the correct default for a channel nothing has
-/// signed yet — [`verify_manifest`] rejects every manifest via
-/// [`ManifestVerifyError::UnknownKeyId`] rather than trusting anything.
-pub const TRUSTED_KEYS: &[(&str, [u8; 32])] = &[];
-
-/// Why [`verify_manifest`] rejected a manifest. Distinct from
-/// [`CheckOutcome::Malformed`] (bad JSON) — every variant here means the
-/// bytes parsed fine but the manifest is not attributable to a key this
-/// build trusts, which [`apply_check_result`] treats as a signal to ignore
-/// the response, not merely "no update".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManifestVerifyError {
-    /// `key_id` names no key in [`TRUSTED_KEYS`] — never issued, or retired
-    /// past this build's rotation window.
-    UnknownKeyId,
-    /// `signature` is not valid base64, or does not decode to exactly the 64
-    /// bytes an ed25519 signature is.
-    MalformedSignature,
-    /// The signature does not verify against [`UpdateManifest::signing_body`]
-    /// under the named key — tampering, corruption in transit, or a
-    /// wrong/compromised key.
-    SignatureMismatch,
-}
-
-impl UpdateManifest {
-    /// The exact bytes [`Self::signature`] is an ed25519 signature over.
-    ///
-    /// A dedicated type ([`SignedFields`]) rather than re-serializing `Self`
-    /// with `signature` blanked out, so a future field added to the wire
-    /// type does not silently start being covered by the signature (or not)
-    /// without a matching, deliberate change here.
-    fn signing_body(&self) -> Vec<u8> {
-        /// Mirrors [`UpdateManifest`] minus `signature` — see
-        /// [`UpdateManifest::signing_body`].
-        #[derive(Serialize)]
-        struct SignedFields<'a> {
-            version: &'a str,
-            assets: &'a [UpdateAsset],
-            key_id: &'a str,
-        }
-        // `serde_json::to_vec` on a plain struct (no `HashMap`) is
-        // deterministic field-order output, which is all a signer and this
-        // verifier sharing this same function need — no general
-        // canonical-JSON scheme required. `unwrap_or_default` never actually
-        // triggers (the fields are all directly serializable), but an empty
-        // body is a safe failure mode: it can never match a real signature.
-        serde_json::to_vec(&SignedFields {
-            version: &self.version,
-            assets: &self.assets,
-            key_id: &self.key_id,
-        })
-        .unwrap_or_default()
-    }
-}
-
-/// Verify `manifest`'s signature against `trusted_keys`.
-///
-/// Split from [`verify_manifest`] (which always uses [`TRUSTED_KEYS`]) so
-/// tests can exercise the actual verification logic — signature decoding,
-/// key lookup, ed25519 check — against a throwaway keypair instead of
-/// needing the real production key embedded here.
-fn verify_manifest_with_keys(
-    manifest: &UpdateManifest,
-    trusted_keys: &[(&str, [u8; 32])],
-) -> Result<(), ManifestVerifyError> {
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-
-    let key_bytes = trusted_keys
-        .iter()
-        .find(|(id, _)| *id == manifest.key_id)
-        .map(|(_, bytes)| *bytes)
-        .ok_or(ManifestVerifyError::UnknownKeyId)?;
-    // A key embedded in `trusted_keys` is a build-time invariant, not
-    // untrusted input reachable independently of `UnknownKeyId` above — the
-    // only way this fails is a malformed entry in the trusted-keys list
-    // itself, which is a programming error, not something a signature check
-    // should distinguish for a caller.
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_bytes) else {
-        return Err(ManifestVerifyError::UnknownKeyId);
-    };
-
-    let sig_bytes = lumen_core::hash::base64_decode(&manifest.signature)
-        .ok_or(ManifestVerifyError::MalformedSignature)?;
-    let sig_bytes: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| ManifestVerifyError::MalformedSignature)?;
-    let signature = Signature::from_bytes(&sig_bytes);
-
-    verifying_key
-        .verify(&manifest.signing_body(), &signature)
-        .map_err(|_| ManifestVerifyError::SignatureMismatch)
-}
-
-/// Verify `manifest`'s signature against [`TRUSTED_KEYS`] — the production
-/// entry point, always called by [`apply_check_result`] before a manifest is
-/// ever exposed as [`CheckOutcome::Available`].
-pub fn verify_manifest(manifest: &UpdateManifest) -> Result<(), ManifestVerifyError> {
-    verify_manifest_with_keys(manifest, TRUSTED_KEYS)
 }
 
 // ── Checker (UPD-2) ─────────────────────────────────────────────────────────
@@ -367,7 +163,7 @@ pub enum CheckOutcome {
     /// field does not parse.
     Malformed,
     /// The manifest parsed and claimed a newer version, but failed
-    /// [`verify_manifest`] — unknown `key_id`, malformed signature, or a
+    /// [`lumen_update_manifest::verify_manifest`] — unknown `key_id`, malformed signature, or a
     /// signature that does not match. Never exposes the unverified manifest;
     /// treated the same as "no update" by callers, distinctly logged by
     /// [`check_for_update`] so a live attack/corruption attempt is visible.
@@ -377,7 +173,7 @@ pub enum CheckOutcome {
 /// Apply one conditional-GET outcome to `state` and decide the [`CheckOutcome`],
 /// verifying against [`TRUSTED_KEYS`]. Thin wrapper over
 /// [`apply_check_result_with_keys`] — see that function for the actual logic;
-/// this split exists for the same reason [`verify_manifest`] is split from
+/// this split exists for the same reason `verify_manifest` is split from
 /// [`verify_manifest_with_keys`], so tests can supply a throwaway keypair.
 #[must_use]
 pub fn apply_check_result(
@@ -693,31 +489,30 @@ pub fn pending_dir_for(version: &str) -> PathBuf {
     pending_root_dir().join(version)
 }
 
-/// Substring identifying this platform's asset among an
-/// [`UpdateManifest::assets`] list — matches the `matrix.artifact-name`
-/// baked into every asset filename by `release.yml` (e.g.
-/// `lumen-windows-x86_64-v0.5.0.zip`). `None` on a target `release.yml` does
-/// not build for — there is no asset to select.
+/// This build's `matrix.artifact-name` in `release.yml` — the prefix of
+/// every archive name it publishes (e.g. `lumen-windows-x86_64-v0.5.0.zip`).
+/// OS *and* architecture: macOS ships both `aarch64` and `x86_64` archives
+/// in one manifest, so an OS-only match would hand an Intel Mac the arm
+/// build. `None` on a target `release.yml` does not build for — there is no
+/// asset to select.
 fn platform_asset_tag() -> Option<&'static str> {
-    if cfg!(target_os = "windows") {
-        Some("windows")
-    } else if cfg!(target_os = "macos") {
-        Some("macos")
-    } else if cfg!(target_os = "linux") {
-        Some("linux")
-    } else {
-        None
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Some("lumen-windows-x86_64"),
+        ("macos", "aarch64") => Some("lumen-macos-aarch64"),
+        ("macos", "x86_64") => Some("lumen-macos-x86_64"),
+        ("linux", "x86_64") => Some("lumen-linux-x86_64"),
+        _ => None,
     }
 }
 
-/// Pick this platform's asset out of a manifest's [`UpdateManifest::assets`],
-/// by [`platform_asset_tag`] substring match. The first match wins — today's
-/// `release.yml` publishes exactly one asset per platform, so ambiguity is
-/// not a real case.
+/// Pick this platform's asset out of a manifest's [`UpdateManifest::assets`]:
+/// the one named `<platform_asset_tag>-v<version>.<ext>`, as `release.yml`
+/// packages it. Matched on `<tag>-` so no artifact name can be mistaken for
+/// a longer one sharing its prefix.
 #[must_use]
 pub fn select_platform_asset(assets: &[UpdateAsset]) -> Option<&UpdateAsset> {
-    let tag = platform_asset_tag()?;
-    assets.iter().find(|a| a.name.contains(tag))
+    let prefix = format!("{}-", platform_asset_tag()?);
+    assets.iter().find(|a| a.name.starts_with(&prefix))
 }
 
 /// Direct-download URL for `asset_name` published under release tag
@@ -737,7 +532,7 @@ enum UpdateDownloadOutcome {
     Staged { path: PathBuf },
     /// The downloaded body's SHA-256 did not match [`UpdateAsset::sha256`].
     /// The manifest carrying that hash was already signature-verified by
-    /// [`verify_manifest`] — this catches corruption or a compromised mirror
+    /// [`lumen_update_manifest::verify_manifest`] — this catches corruption or a compromised mirror
     /// on top of that, so it is never staged to disk.
     HashMismatch,
     /// Network error or I/O failure while fetching or writing.
@@ -1068,43 +863,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_valid_version() {
-        assert_eq!(
-            Version::parse("1.2.3"),
-            Some(Version { major: 1, minor: 2, patch: 3 })
-        );
-        assert_eq!(
-            Version::parse("0.5.0"),
-            Some(Version { major: 0, minor: 5, patch: 0 })
-        );
-    }
-
-    #[test]
-    fn rejects_malformed_versions() {
-        assert_eq!(Version::parse(""), None);
-        assert_eq!(Version::parse("1.2"), None, "too few components");
-        assert_eq!(Version::parse("1.2.3.4"), None, "too many components");
-        assert_eq!(Version::parse("1.2.x"), None, "non-numeric component");
-        assert_eq!(Version::parse("v1.2.3"), None, "leading v prefix not accepted");
-        assert_eq!(Version::parse("1..3"), None, "empty component");
-    }
-
-    #[test]
-    fn orders_by_major_then_minor_then_patch() {
-        let v = |s: &str| Version::parse(s).unwrap();
-        assert!(v("2.0.0") > v("1.9.9"));
-        assert!(v("1.3.0") > v("1.2.9"));
-        assert!(v("1.2.4") > v("1.2.3"));
-        assert_eq!(v("1.2.3"), v("1.2.3"));
-    }
-
-    #[test]
-    fn display_round_trips() {
-        let v = Version::parse("10.20.30").unwrap();
-        assert_eq!(v.to_string(), "10.20.30");
-    }
-
-    #[test]
     fn current_version_matches_cargo_pkg_version() {
         assert_eq!(current_version().to_string(), env!("CARGO_PKG_VERSION"));
     }
@@ -1117,54 +875,9 @@ mod tests {
                 sha256: "a".repeat(64),
                 size: 12_345,
             }],
-            key_id: "prod-1".to_string(),
+            key_id: "unsigned-placeholder".to_string(),
             signature: "sig".to_string(),
         }
-    }
-
-    #[test]
-    fn deserializes_manifest_json() {
-        let json = r#"{
-            "version": "1.2.3",
-            "assets": [
-                {"name": "lumen-windows.zip", "sha256": "deadbeef", "size": 42}
-            ],
-            "key_id": "prod-1",
-            "signature": "c2ln"
-        }"#;
-        let manifest: UpdateManifest = serde_json::from_str(json).unwrap();
-        assert_eq!(manifest.version, "1.2.3");
-        assert_eq!(manifest.assets.len(), 1);
-        assert_eq!(manifest.assets[0].name, "lumen-windows.zip");
-        assert_eq!(manifest.assets[0].sha256, "deadbeef");
-        assert_eq!(manifest.assets[0].size, 42);
-        assert_eq!(manifest.key_id, "prod-1");
-        assert_eq!(manifest.signature, "c2ln");
-    }
-
-    #[test]
-    fn is_newer_than_rejects_downgrade_and_equal() {
-        let manifest = sample_manifest("1.0.0");
-        assert!(!manifest.is_newer_than(Version::parse("1.0.0").unwrap()), "equal is not newer");
-        assert!(!manifest.is_newer_than(Version::parse("1.1.0").unwrap()), "downgrade is not newer");
-    }
-
-    #[test]
-    fn is_newer_than_accepts_upgrade() {
-        let manifest = sample_manifest("2.0.0");
-        assert!(manifest.is_newer_than(Version::parse("1.9.9").unwrap()));
-    }
-
-    #[test]
-    fn is_newer_than_rejects_malformed_manifest_version() {
-        let manifest = sample_manifest("not-a-version");
-        assert!(!manifest.is_newer_than(Version::parse("0.0.0").unwrap()));
-    }
-
-    #[test]
-    fn parsed_version_none_for_malformed() {
-        assert_eq!(sample_manifest("garbage").parsed_version(), None);
-        assert_eq!(sample_manifest("1.2.3").parsed_version(), Version::parse("1.2.3"));
     }
 
     // ── Checker (UPD-2) ─────────────────────────────────────────────────────
@@ -1198,132 +911,12 @@ mod tests {
         ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
     }
 
-    /// `sample_manifest(version)` with `key_id` set to `key_id` and `signature`
-    /// a real ed25519 signature over its own [`UpdateManifest::signing_body`]
-    /// under `signing_key`.
+    /// `sample_manifest(version)` signed under `key_id` by the same
+    /// [`lumen_update_manifest::sign_manifest`] the release signer uses.
     fn signed_manifest(version: &str, key_id: &str, signing_key: &ed25519_dalek::SigningKey) -> UpdateManifest {
-        use ed25519_dalek::Signer;
         let mut manifest = sample_manifest(version);
-        manifest.key_id = key_id.to_string();
-        let sig = signing_key.sign(&manifest.signing_body());
-        manifest.signature = lumen_core::hash::base64_encode(&sig.to_bytes());
+        lumen_update_manifest::sign_manifest(&mut manifest, key_id, signing_key);
         manifest
-    }
-
-    #[test]
-    fn verify_manifest_accepts_valid_signature() {
-        let signing_key = test_signing_key();
-        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
-        let manifest = signed_manifest("1.2.3", "test-1", &signing_key);
-        assert_eq!(verify_manifest_with_keys(&manifest, &trusted), Ok(()));
-    }
-
-    #[test]
-    fn verify_manifest_rejects_unknown_key_id() {
-        let signing_key = test_signing_key();
-        let manifest = signed_manifest("1.2.3", "test-1", &signing_key);
-        // `trusted` only knows a different `key_id` — same key material, wrong name.
-        let trusted = [("other-key", signing_key.verifying_key().to_bytes())];
-        assert_eq!(
-            verify_manifest_with_keys(&manifest, &trusted),
-            Err(ManifestVerifyError::UnknownKeyId)
-        );
-    }
-
-    #[test]
-    fn verify_manifest_rejects_tampered_body() {
-        let signing_key = test_signing_key();
-        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
-        let mut manifest = signed_manifest("1.2.3", "test-1", &signing_key);
-        // Signature was computed over "1.2.3" — flip the version after signing,
-        // simulating a manifest tampered (or corrupted) in transit.
-        manifest.version = "999.0.0".to_string();
-        assert_eq!(
-            verify_manifest_with_keys(&manifest, &trusted),
-            Err(ManifestVerifyError::SignatureMismatch)
-        );
-    }
-
-    #[test]
-    fn verify_manifest_rejects_signature_from_wrong_key() {
-        let signing_key = test_signing_key();
-        let other_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
-        // Trusted list has the *other* key under the same `key_id` the manifest
-        // claims — models a compromised/mismatched key, not just an unknown id.
-        let trusted = [("test-1", other_key.verifying_key().to_bytes())];
-        let manifest = signed_manifest("1.2.3", "test-1", &signing_key);
-        assert_eq!(
-            verify_manifest_with_keys(&manifest, &trusted),
-            Err(ManifestVerifyError::SignatureMismatch)
-        );
-    }
-
-    #[test]
-    fn verify_manifest_rejects_malformed_signature_encoding() {
-        let signing_key = test_signing_key();
-        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
-        let mut manifest = signed_manifest("1.2.3", "test-1", &signing_key);
-        manifest.signature = "not valid base64!!".to_string();
-        assert_eq!(
-            verify_manifest_with_keys(&manifest, &trusted),
-            Err(ManifestVerifyError::MalformedSignature)
-        );
-    }
-
-    #[test]
-    fn verify_manifest_rejects_signature_of_wrong_length() {
-        let signing_key = test_signing_key();
-        let trusted = [("test-1", signing_key.verifying_key().to_bytes())];
-        let mut manifest = signed_manifest("1.2.3", "test-1", &signing_key);
-        // Valid base64, but decodes to fewer than the 64 bytes an ed25519
-        // signature is — not the "invalid character" case above.
-        manifest.signature = lumen_core::hash::base64_encode(b"too short");
-        assert_eq!(
-            verify_manifest_with_keys(&manifest, &trusted),
-            Err(ManifestVerifyError::MalformedSignature)
-        );
-    }
-
-    #[test]
-    fn signing_body_excludes_signature_field() {
-        // Two manifests differing only in `signature` must sign identically —
-        // otherwise a signer could never produce a signature that verifies
-        // (it would need to already know its own signature).
-        let mut a = sample_manifest("1.2.3");
-        let mut b = a.clone();
-        a.signature = "aaaa".to_string();
-        b.signature = "bbbb".to_string();
-        assert_eq!(a.signing_body(), b.signing_body());
-    }
-
-    #[test]
-    fn verify_body_accepts_matching_hash() {
-        let asset = UpdateAsset {
-            name: "lumen-windows.zip".to_string(),
-            sha256: lumen_core::hash::sha256_hex(b"the zip body"),
-            size: 12,
-        };
-        assert!(asset.verify_body(b"the zip body"));
-    }
-
-    #[test]
-    fn verify_body_rejects_mismatched_hash() {
-        let asset = UpdateAsset {
-            name: "lumen-windows.zip".to_string(),
-            sha256: lumen_core::hash::sha256_hex(b"the zip body"),
-            size: 12,
-        };
-        assert!(!asset.verify_body(b"a swapped, malicious body"));
-    }
-
-    #[test]
-    fn verify_body_hash_comparison_is_case_insensitive() {
-        let asset = UpdateAsset {
-            name: "lumen-windows.zip".to_string(),
-            sha256: lumen_core::hash::sha256_hex(b"the zip body").to_uppercase(),
-            size: 12,
-        };
-        assert!(asset.verify_body(b"the zip body"));
     }
 
     #[test]
@@ -1366,7 +959,7 @@ mod tests {
         // `manifest_body`/`sample_manifest` carry a placeholder `key_id`/
         // `signature` that trusts nothing — a newer version alone must never
         // reach `Available` without a verified signature, even against the
-        // real production `TRUSTED_KEYS` (empty until UPD-10).
+        // real production `TRUSTED_KEYS` (which never lists this placeholder `key_id`).
         let state = UpdateState::default();
         let result = ConditionalFetch::Modified {
             body: manifest_body("999.0.0"),
@@ -1659,11 +1252,29 @@ mod tests {
     fn select_platform_asset_matches_current_platform() {
         let tag = platform_asset_tag().expect("test runs on a platform release.yml builds for");
         let assets = vec![
-            test_asset(&format!("lumen-{tag}-x86_64-v1.0.0.zip"), b"a"),
             test_asset("lumen-completely-unrelated-v1.0.0.zip", b"b"),
+            test_asset(&format!("{tag}-v1.0.0.zip"), b"a"),
         ];
         let picked = select_platform_asset(&assets).expect("must find the platform's own asset");
-        assert!(picked.name.contains(tag));
+        assert_eq!(picked.name, format!("{tag}-v1.0.0.zip"));
+    }
+
+    #[test]
+    fn select_platform_asset_distinguishes_architectures_of_one_os() {
+        // release.yml publishes two macOS archives in one manifest; the
+        // other-arch sibling of this build's asset must never be picked.
+        let tag = platform_asset_tag().expect("test runs on a platform release.yml builds for");
+        let other_arch = if tag.ends_with("x86_64") {
+            tag.replace("x86_64", "aarch64")
+        } else {
+            tag.replace("aarch64", "x86_64")
+        };
+        let assets = vec![
+            test_asset(&format!("{other_arch}-v1.0.0.tar.gz"), b"a"),
+            test_asset(&format!("{tag}-v1.0.0.tar.gz"), b"b"),
+        ];
+        let picked = select_platform_asset(&assets).expect("must find the platform's own asset");
+        assert_eq!(picked.name, format!("{tag}-v1.0.0.tar.gz"));
     }
 
     #[test]

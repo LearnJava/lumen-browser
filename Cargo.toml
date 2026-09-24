@@ -13,6 +13,7 @@ members = [
     "crates/network",
     "crates/renderer",
     "crates/storage",
+    "crates/update-manifest",
     "crates/knowledge",
     "crates/bench",
     "crates/ipc",
@@ -81,6 +82,7 @@ lumen-network = { path = "crates/network" }
 lumen-driver = { path = "crates/driver" }
 lumen-mcp = { path = "crates/mcp" }
 lumen-storage = { path = "crates/storage" }
+lumen-update-manifest = { path = "crates/update-manifest" }
 lumen-knowledge = { path = "crates/knowledge" }
 lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
