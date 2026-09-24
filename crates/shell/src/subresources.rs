@@ -394,7 +394,7 @@ pub(crate) fn fetch_and_decode_images(
         /// Многокадровый GIF: первый кадр + полная анимация.
         Animated {
             first: Arc<lumen_image::Image>,
-            gif: lumen_image::AnimatedGif,
+            gif: Box<lumen_image::AnimatedGif>,
             intrinsic: Option<(u32, u32)>,
             /// GAP-CANVASORIGIN — see [`ImgOutcome::Static::cross_origin`].
             cross_origin: bool,
@@ -504,7 +504,7 @@ pub(crate) fn fetch_and_decode_images(
             }
             Some(image_cache::DecodedImage::Animated { first, gif }) => {
                 let intrinsic = wants_intrinsic.then_some((first.width, first.height));
-                ImgOutcome::Animated { first, gif: (*gif).clone(), intrinsic, cross_origin }
+                ImgOutcome::Animated { first, gif: Box::new((*gif).clone()), intrinsic, cross_origin }
             }
         }
     });
@@ -537,7 +537,7 @@ pub(crate) fn fetch_and_decode_images(
                     cross_origin_urls.push(req.url.clone());
                 }
                 out.push((req.url.clone(), first));
-                anim_gifs.push((req.url, gif));
+                anim_gifs.push((req.url, *gif));
             }
         }
     }

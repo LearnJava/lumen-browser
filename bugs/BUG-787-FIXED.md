@@ -134,7 +134,7 @@ LZW-поток кончился (или начался с end-кода, как �
   deinterlace (`interlace_row_order`, GIF spec §20.c.ii). Поведение
   побайтно повторяет конвертер `gif` (`reader/converter.rs:139-160`), включая
   «индекс, которого нет в палитре, → пиксель не трогаем» и игнор
-  `frame.left`/`frame.top` ([BUG-763](BUG-763-OPEN.md) — отдельный баг, здесь
+  `frame.left`/`frame.top` ([BUG-763](BUG-763-FIXED.md) — отдельный баг, здесь
   не чинится).
 - Оборванный поток (`written < width × height`) даёт
   `GifError::DecodeError("LZW-поток кадра оборван: N из M пикселей")`.
