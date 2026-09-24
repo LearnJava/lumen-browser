@@ -44,3 +44,15 @@ HTML LS §4.8.4.3 «update the image data»: присвоение `src`/вста
 восстановление вкладки после гибернации (`tab_lifecycle/hibernate.rs`) — там рантайм строится
 без хука. Гейт: `scoped-test.sh` зелёный (2098/2098 `lumen-shell`, полный `lumen-js`), `dump_golden.py
 --build` 12/12 без дрейфа. Живой прогон стенда `.tmp/seqlab/` не переснят в этом срезе.
+
+**Срез 2 (2026-09-24, P6):** `<img src>`, вставленный уже готовым (без отдельного
+`setAttribute`/`.src =` после присоединения к дереву), теперь тоже запускает загрузку сразу —
+`_lumen_set_inner_html` (парсинг `innerHTML`/`insertAdjacentHTML` прямо из разметки) и
+`_lumen_append_child`/`_lumen_insert_before` (`cloneNode(true)` уже-с-`src`-элемента,
+готовый фрагмент из `_lumen_parse_html_fragment`) обходят вставленное поддерево
+(`queue_pending_img_loads` в `dom_core.rs`) и зовут тот же `ImageLoadHook`, что и срез 1 —
+общий дедуп `DynamicImgFetchHook` гасит повторную постановку, когда оба пути (например
+`innerHTML`, затем `insertBefore` того же узла в другое место) видят один `<img>`. Юнит-тесты
+`v8_bug1118_srez2_*` (`crates/js/src/dom/tests/`) зелёные, `cargo clippy --workspace --all-targets`
+зелёный. Не покрыто по-прежнему: `srcset`/`<picture>`, iframe-документы, гибернация — везде хук
+остаётся `None`.

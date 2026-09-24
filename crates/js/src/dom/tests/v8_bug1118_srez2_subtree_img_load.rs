@@ -77,7 +77,15 @@ fn insert_before_of_img_subtree_queues_immediately() {
     )
     .unwrap();
     let queued = hook.queued.lock().unwrap().clone();
-    assert_eq!(queued, vec!["/nested.png".to_string()]);
+    // `wrap.innerHTML` queues `/nested.png` once (its own `_lumen_set_inner_html`
+    // hook point, `wrap` is detached at that moment) and `insertBefore` walks
+    // the subtree again and queues it a second time — same
+    // fires-twice-relies-on-the-real-dedup-set shape as
+    // `append_child_of_cloned_img_queues_immediately` above.
+    assert_eq!(
+        queued,
+        vec!["/nested.png".to_string(), "/nested.png".to_string()]
+    );
 }
 
 /// An `<img>` with no `src` attribute must not queue a load at all.
