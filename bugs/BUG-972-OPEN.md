@@ -53,3 +53,22 @@ conditions for ДОРАБОТКА (absent wholesale, family-sized).
 
 Classified via `_exact_id_marker` in `timeout_audit.py`
 (`scroll-to-text-fragment-missing`).
+
+## Прогресс (STTF-1)
+
+Срез 1 (2026-09-06): URL fragment-directive парсинг (`crates/shell/src/text_fragment.rs::parse_fragment`).
+Срез 2 (2026-09-12): текстовый поиск по отрендерённому DOM
+(`text_fragment::find_directive_match`), скролл к первому совпадению.
+Срез 3 (2026-09-24, `p1-sttf3-nested-scroll-text-target`): текстовое
+совпадение теперь получает то же вложенное-скролл-обхождение (BUG-338),
+что и id-путь — `page_load.rs::navigate_fragment` зовёт
+`scroll_nested_ancestors_into_view(m.node, m.bounding_rect())` для найденного
+`DirectiveMatch`, и повторно ищет совпадение ПОСЛЕ reveal-driven relayout
+(`_lumen_ancestor_revealing_algorithm`), чтобы не скроллить по устаревшему
+прямоугольнику, если reveal сдвинул геометрию (открытие `<details>`,
+снятие `hidden=until-found`). Остаток: `::target-text` подсветка
+(CSS Pseudo-Elements L4 §4.10) не применяется к найденному диапазону —
+`crates/engine/css-parser/src/parser/selectors.rs`'s `PseudoElementKind`
+не имеет варианта `TargetText`, и paint не знает про активный
+scroll-to-text диапазон отдельно от `::selection`. Остаётся отдельным
+срезом.
