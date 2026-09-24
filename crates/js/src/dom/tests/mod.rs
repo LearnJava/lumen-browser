@@ -30,14 +30,26 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         "function Event(",
         "function EventTarget()",
         "function UIEvent(",
+        // Abort — своя часть с WORKER-1 срез 4 (её исполняет и воркер).
+        "function AbortSignal()",
+        "AbortSignal.any = ",
         // Streams — своя часть с WORKER-1 срез 2 (её исполняет и воркер).
         "function ReadableStream(",
         "function DecompressionStream(",
+        // FormData — своя часть с WORKER-1 срез 4 (её исполняет и воркер).
+        "function FormData(formEl)",
+        "FormData.prototype._toMultipart",
         // Encoding — своя часть с WORKER-1 срез 1 (её исполняет и воркер).
         "function TextEncoder()",
         "function TextDecoder(",
         // WebSocket — своя часть с WORKER-1 срез 3 (её исполняет и воркер).
         "function WebSocket(",
+        // Blob/File/FileReader — своя часть с WORKER-1 срез 4, между `btoa`
+        // и `URL.createObjectURL` (та осталась странице).
+        "function btoa(",
+        "function Blob(",
+        "function FileReader()",
+        "URL.createObjectURL = ",
         "function Performance()",
         "function PerformanceObserver(",
         // IndexedDB — своя часть с 2026-08-17 (её же исполняет область

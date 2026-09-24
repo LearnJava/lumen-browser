@@ -124,3 +124,83 @@ fn streams_slice_is_shared_by_page_and_worker() {
     assert!(web_api_shim().contains(STREAMS_SHIM));
     assert!(worker_exposed_shim().contains(STREAMS_SHIM));
 }
+
+/// WORKER-1 срез 4: `AbortController`/`AbortSignal` exist in a worker and
+/// behave like the page's — `abort()` fires the listener with an
+/// `AbortError` reason, `AbortSignal.any` follows its source, and a throwing
+/// listener neither escapes `abort()` nor stops the next one (the page-only
+/// `_lumen_report_exception` is absent here; the slice must not reach for it).
+#[test]
+fn worker_scope_has_abort_controller() {
+    let rt = worker_scope();
+    let out = rt
+        .eval(
+            r#"var r = [typeof AbortController, typeof AbortSignal];
+               var c = new AbortController();
+               var any = AbortSignal.any([c.signal]);
+               c.signal.addEventListener('abort', function() { throw new Error('boom'); });
+               c.signal.addEventListener('abort', function(e) { r.push(e.type); });
+               c.abort();
+               r.push(c.signal.aborted, c.signal.reason.name, any.aborted);
+               try { c.signal.throwIfAborted(); r.push('none'); } catch (e) { r.push(e.name); }
+               r.push(AbortSignal.abort('why').reason);
+               r.join(',')"#,
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        lumen_core::JsValue::String("function,function,abort,true,AbortError,true,AbortError,why".into())
+    );
+}
+
+/// WORKER-1 срез 4: `Blob`/`File` exist in a worker, carry their bytes and
+/// type, slice, and read back through `text()`/`arrayBuffer()`/`stream()` —
+/// the last one proving the slice meets the worker's Streams.
+#[test]
+fn worker_scope_has_blob_and_file() {
+    let rt = worker_scope();
+    rt.eval(
+        r#"globalThis.__out = 'pending';
+           var b = new Blob(['Привет', new Uint8Array([0x21])], { type: 'Text/Plain' });
+           var f = new File([b], 'a.txt', { lastModified: 7 });
+           var head = [typeof FileReader, b.size, b.type, f.name, f.lastModified, f.size,
+                       f instanceof Blob, b.slice(0, 2).size].join(',');
+           var reader = b.stream().getReader();
+           Promise.all([b.slice(12).text(), f.arrayBuffer(), reader.read()]).then(function(v) {
+               globalThis.__out = head + '|' + v[0] + '|' + v[1].byteLength + '|' + v[2].value.length;
+           }, function(e) { globalThis.__out = 'error: ' + e; });"#,
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__out").unwrap(),
+        lumen_core::JsValue::String("function,13,text/plain,a.txt,7,13,true,2|!|13|13".into())
+    );
+}
+
+/// WORKER-1 срез 4: `FormData` exists in a worker; built without a form it
+/// keeps its entries in order and serializes to multipart through the
+/// worker's `TextEncoder`.
+#[test]
+fn worker_scope_has_form_data() {
+    let rt = worker_scope();
+    let out = rt
+        .eval(
+            r#"var fd = new FormData();
+               fd.append('a', '1'); fd.append('b', '2'); fd.append('a', '3'); fd.set('b', '4');
+               var body = new TextDecoder().decode(fd._toMultipart('X'));
+               [fd.getAll('a').join('+'), fd.get('b'), Array.from(fd.keys()).join(''),
+                body.indexOf('name="b"') > 0, body.slice(-5)].join(',')"#,
+        )
+        .unwrap();
+    assert_eq!(out, lumen_core::JsValue::String("1+3,4,aba,true,X--\r\n".into()));
+}
+
+/// The worker runs the page's own Abort/File API/FormData classes: each slice
+/// is spliced into both programs.
+#[test]
+fn abort_file_api_and_form_data_slices_are_shared_by_page_and_worker() {
+    for slice in [ABORT_SHIM, FILE_API_SHIM, FORM_DATA_SHIM] {
+        assert!(web_api_shim().contains(slice));
+        assert!(worker_exposed_shim().contains(slice));
+    }
+}
