@@ -1,6 +1,6 @@
 # BUG-1114 — навигация с не-2xx ответом выбрасывает тело: страницы-челленджи и страницы ошибок сайта не рендерятся
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Заведён:** 2026-09-23 (P2, прогон top100-foreign против видимого Chrome 153,
 [журнал](../docs/perf/journal.md) §2026-09-23 top100 split).
 **Область:** network (`crates/network/src/lib.rs::fetch_with_redirect` — ветка
@@ -56,3 +56,40 @@ ok=false`, тело 335 байт. Тот же `lib.rs:2964` (`status => Err(HTTP
 `fetch_request_impl` → `fetch_with_redirect` (`lib.rs:5352`). Там же duolingo: переход на
 `/errors/not-supported.html` (из-за отсутствующего `IntersectionObserverEntry`) даёт 404 и страницу
 ошибки Lumen вместо тела.
+
+## Исправлено P3 2026-09-24
+
+Один общий корень у навигации и `fetch()` — оба заходили в `fetch_with_redirect` и
+падали на одном и том же catch-all (`status => return Err(...)`, включая 401 без
+auth-retry). Единая правка на уровне этой функции: новый параметр
+`http_error_is_response: bool`, протянутый через все hop-ы редиректа рядом с
+`is_top_level` (та же схема пробрасывания). Когда он `true`, финальный
+не-2xx/3xx/304 статус декодирует `Content-Encoding` и возвращает `Ok((Response, Url))`
+— тем же путём, что и 2xx-ветка — вместо `Err`; новый хелпер
+`resolve_http_error_status` делит эту логику между 401-веткой (все четыре точки
+отказа: нет `WWW-Authenticate`, нет подходящей challenge-схемы, провайдер не нашёл
+creds, не собрался `Authorization`-заголовок) и генеральным catch-all.
+
+Флаг **не** стал глобальным поведением — у части caller-ов есть документированный
+контракт «4xx/5xx ⇒ `Err`», который ломать нельзя: `fetch_range`/`fetch_multi_range`
+(416 и любой другой не-2xx — ошибка диапазона, не тело), `fetch_conditional`
+(ad-block листы — 4xx означает «не удалось обновить», а не «вот новый список»),
+движковые subresource-загрузки (`fetch_subresource_inner`/`fetch_cors`) и
+`NetworkTransport::fetch` (обновление приложения, загрузки — 404 должен остаться
+ошибкой, а не сохранённым на диск телом страницы-ошибки). Флаг включён точечно
+только там, где HTML LS/Fetch реально требуют видеть тело: `fetch_page` и
+`fetch_page_streaming` (навигация, оба call-сайта — кэш-revalidate и обычный) и
+`fetch_request_impl` (`fetch()`).
+
+Shell-у ничего чинить не потребовалось: `LoadEvent::LoadError` (`page_load.rs`) и
+так срабатывает только на `Err` из `load_bytes`/`load_bytes_streaming`, а не на
+код статуса — с телом вместо `Err` навигация просто идёт по обычному пути
+`HtmlChunk`/`LoadDone`, и «показать страницу ошибки» остаётся решением сервера
+(через тело) там, где оно есть, либо пустым документом там, где сервер вернул
+`Content-Length: 0`.
+
+Тесты (`crates/network/src/lib.rs`): `fetch_page_returns_body_for_403_instead_of_err`
+(эхо-сервер 403 + HTML-тело → `fetch_page` возвращает `Ok` с этим телом, не `Err`),
+`js_fetch_sync_resolves_ok_false_for_404_instead_of_rejecting` (то же для
+`fetch_sync`). Полный `cargo test -p lumen-network --lib` — 2434/2434,
+`cargo clippy -p lumen-network --all-targets -- -D warnings` чист.
