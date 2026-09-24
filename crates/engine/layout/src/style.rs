@@ -56,6 +56,7 @@ mod pseudo;
 mod quirks;
 mod restyle;
 mod share_cache;
+mod share_safety;
 mod shorthand;
 mod substitute;
 mod syntax_string;

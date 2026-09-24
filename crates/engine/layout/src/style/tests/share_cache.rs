@@ -557,3 +557,51 @@ fn a_reachable_ancestor_hover_pseudo_class_still_disables_sharing() {
         "un-hovered wrapper's icon must NOT leak the other one's :hover fill via a shared cache entry"
     );
 }
+
+#[test]
+fn agreeing_reachable_ancestor_hover_pseudo_class_state_now_shares() {
+    // BUG-1112 срез 8: the case срез 6/7 identified as the remaining live
+    // blocker (github.com/lenta.ru's dominant `.btn:hover .octicon`-shaped
+    // rules) — a REACHABLE ancestor with a dynamic pseudo-class no longer
+    // disables sharing outright. It only disables sharing BETWEEN nodes whose
+    // real, current match result for that selector actually differs (see
+    // `a_reachable_ancestor_hover_pseudo_class_still_disables_sharing` right
+    // above). When none of several structurally identical `.wrap` ancestors
+    // is hovered, every icon's `dynamic_ancestor_sig` bit for `.wrap:hover
+    // .octicon` is the same `false`, so they must still share — exactly the
+    // real-site case (nobody is hovering every icon at once) srez 7's live
+    // measurement showed src 6's reachability-only rescue could not reach.
+    clear_shadow_sheets();
+    let doc = lumen_html_parser::parse(concat!(
+        "<svg>",
+        r#"<g class="wrap"><path class="octicon" d="M1 1"></path></g>"#,
+        r#"<g class="wrap"><path class="octicon" d="M1 1"></path></g>"#,
+        r#"<g class="wrap"><path class="octicon" d="M1 1"></path></g>"#,
+        "</svg>",
+    ));
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".octicon { fill: rgb(1, 2, 3); } .wrap:hover .octicon { fill: rgb(0, 0, 255); }",
+    );
+    let svg = doc.get(doc.body().unwrap()).children[0];
+    let wraps: Vec<NodeId> = doc.get(svg).children.clone();
+    assert_eq!(wraps.len(), 3);
+    let icons: Vec<NodeId> = wraps.iter().map(|&w| doc.get(w).children[0]).collect();
+
+    // No `set_interactive_state` call — nobody is hovering any `.wrap`.
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let first = map.style_arc(icons[0]).expect("arc");
+    for &icon in &icons[1..] {
+        let arc = map.style_arc(icon).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &arc),
+            "three un-hovered `.wrap` icons agree on the real `.wrap:hover .octicon` match result \
+             (all false) and must share despite the rule's ancestor pseudo-class"
+        );
+        assert_eq!(
+            map.style_for(icon).expect("style").svg_fill,
+            SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 })
+        );
+    }
+}
