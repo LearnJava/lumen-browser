@@ -1413,6 +1413,22 @@ pub(crate) fn install_frame_bridge_v8(
     {
         let reg = Arc::clone(&registry);
         rt.register_native(
+            "_lumen_f_attr_names",
+            into_v8_fn2(move |bid: u32, nid: u32| -> Vec<String> {
+                with_accessible_doc(&reg, bid, |d| {
+                    match &d.get(lumen_dom::NodeId::from_raw(nid)).data {
+                        lumen_dom::NodeData::Element { attrs, .. } => {
+                            attrs.iter().map(|a| a.name.local.to_string()).collect()
+                        }
+                        _ => Vec::new(),
+                    }
+                }, Vec::new())
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
             "_lumen_f_tag",
             into_v8_fn2(move |bid: u32, nid: u32| -> String {
                 with_accessible_doc(&reg, bid, |d| {
@@ -1788,6 +1804,103 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return _url_resolve(String(v), frameBase(bid)) || String(v);
   }
 
+  // BUG-970: `element.attributes` (DOM §4.9.1 NamedNodeMap) over a
+  // cross-frame facade node. Mirrors `_lumen_make_named_node_map` in
+  // WEB_API_SHIM (BUG-732) but reads/writes through the `_lumen_f_*` bridge
+  // natives instead of the local-document ones, and its `Attr`-like entries
+  // are plain objects rather than instances of the shim's global `Attr` —
+  // the bridge has no cross-frame identity for attribute nodes, only for
+  // elements. Live: re-reads `_lumen_f_attr_names` on every access, so it
+  // tracks the child's own `setAttribute`/`removeAttribute` without being
+  // rebuilt, same as the main document's map.
+  function frameAttr(bid, nid, name) {
+    function value() { var v = _lumen_f_attr(bid, nid, name); return v !== null && v !== undefined ? v : ''; }
+    function setValue(v) { _lumen_f_set_attr(bid, nid, name, String(v)); }
+    return {
+      name: name,
+      nodeName: name,
+      localName: name,
+      prefix: null,
+      namespaceURI: null,
+      nodeType: 2,
+      specified: true,
+      get value()        { return value(); },
+      set value(v)       { setValue(v); },
+      get nodeValue()     { return value(); },
+      set nodeValue(v)    { setValue(v); },
+      get textContent()   { return value(); },
+      set textContent(v)  { setValue(v); },
+      get ownerElement() { return frameElem(bid, nid); },
+    };
+  }
+
+  function frameNamedNodeMap(bid, nid) {
+    function names() { return _lumen_f_attr_names(bid, nid); }
+    var methods = {
+      item: function(i) { var list = names(); i = i >>> 0; return i < list.length ? frameAttr(bid, nid, list[i]) : null; },
+      getNamedItem: function(n) {
+        var name = String(n);
+        return _lumen_f_has_attr(bid, nid, name) ? frameAttr(bid, nid, name) : null;
+      },
+      getNamedItemNS: function(ns, n) { return methods.getNamedItem(n); },
+      setNamedItem: function(attr) {
+        if (!attr || typeof attr.name !== 'string') {
+          throw new TypeError('setNamedItem: argument is not an Attr');
+        }
+        var prev = methods.getNamedItem(attr.name);
+        _lumen_f_set_attr(bid, nid, attr.name, String(attr.value));
+        return prev;
+      },
+      setNamedItemNS: function(attr) { return methods.setNamedItem(attr); },
+      // The returned node must keep reporting the removed value — `frameAttr`
+      // is a live view keyed on `name` still being present, so it would read
+      // back '' the instant the attribute is gone. Snapshot the value first.
+      removeNamedItem: function(n) {
+        var name = String(n);
+        if (!_lumen_f_has_attr(bid, nid, name)) {
+          throw (typeof DOMException === 'function')
+            ? new DOMException('No attribute named ' + name, 'NotFoundError')
+            : new Error('No attribute named ' + name);
+        }
+        var value = _lumen_f_attr(bid, nid, name);
+        _lumen_f_remove_attr(bid, nid, name);
+        return {
+          name: name, nodeName: name, localName: name, prefix: null,
+          namespaceURI: null, nodeType: 2, specified: true,
+          value: value, nodeValue: value, textContent: value,
+          ownerElement: null,
+        };
+      },
+      removeNamedItemNS: function(ns, n) { return methods.removeNamedItem(n); },
+    };
+    return new Proxy({}, {
+      get: function(target, prop) {
+        if (prop === 'length') return names().length;
+        if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) {
+          return methods[prop];
+        }
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) return methods.item(Number(prop));
+        if (typeof prop === 'string') return methods.getNamedItem(prop) || undefined;
+        if (prop === Symbol.iterator) {
+          return function() {
+            var list = names();
+            var i = 0;
+            return { next: function() {
+              return i < list.length ? { value: frameAttr(bid, nid, list[i++]), done: false } : { value: undefined, done: true };
+            } };
+          };
+        }
+        return undefined;
+      },
+      has: function(target, prop) {
+        if (prop === 'length' || prop === Symbol.iterator) return true;
+        if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) return true;
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) return Number(prop) < names().length;
+        return typeof prop === 'string' && _lumen_f_has_attr(bid, nid, prop);
+      },
+    });
+  }
+
   function frameElem(bid, nid) {
     if (nid === null || nid === undefined || nid < 0) return null;
     var cache = elems[bid];
@@ -1819,6 +1932,10 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       set href(v)      { _lumen_f_set_attr(bid, nid, 'href', String(v)); },
       getAttribute: function(n) { return _lumen_f_attr(bid, nid, String(n)); },
       hasAttribute: function(n) { return _lumen_f_has_attr(bid, nid, String(n)); },
+      // BUG-970: DOM §4.9.1 `NamedNodeMap` over this node's attributes — not
+      // cached (unlike the main document's `attributes`, BUG-732), the map
+      // itself is a live Proxy so a fresh one is cheap and always current.
+      get attributes() { return frameNamedNodeMap(bid, nid); },
       get children() { return _lumen_f_children(bid, nid).map(function(c) { return frameElem(bid, c); }); },
       get childElementCount() { return _lumen_f_children(bid, nid).length; },
       get firstElementChild() { return frameElem(bid, _lumen_f_children(bid, nid)[0]); },
@@ -3937,6 +4054,50 @@ mod tests {
             Some(JsValue::String(
                 "resolved:resolved:about:srcdoc|/dir/|a.html".to_owned()
             ))
+        );
+    }
+
+    /// BUG-970: `frameElem.attributes` was missing entirely — reading it threw
+    /// `TypeError: Cannot read properties of undefined`. Covers length, named
+    /// and indexed access, iteration and the mutating methods, all live over
+    /// the real child document (not a snapshot taken at `.attributes` read time).
+    #[test]
+    fn frame_facade_attributes_named_node_map() {
+        with_shared_frame(
+            "<html><body><p id=\"x\" data-from=\"parent\">hi</p></body></html>",
+            true,
+            |rt, _doc| {
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     var p = d.getElementById('x'); \
+                     var attrs = p.attributes; \
+                     attrs.length === 2 && \
+                     attrs.getNamedItem('id').value === 'x' && \
+                     attrs.getNamedItem('data-from').value === 'parent' && \
+                     attrs.getNamedItem('missing') === null && \
+                     attrs['id'].value === 'x' && \
+                     attrs[0].name !== undefined && attrs[1].name !== undefined"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var names = Array.from(d.getElementById('x').attributes).map(function(a) { return a.name; }).sort(); \
+                     names.length === 2 && names[0] === 'data-from' && names[1] === 'id'"
+                ));
+                // Live: a mutation after the read is visible through the same getter.
+                assert!(eval_bool(
+                    rt,
+                    "var p2 = d.getElementById('x'); \
+                     p2.setAttribute('new-one', 'v'); \
+                     p2.attributes.length === 3 && p2.attributes.getNamedItem('new-one').value === 'v'"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var p3 = d.getElementById('x'); \
+                     var removed = p3.attributes.removeNamedItem('new-one'); \
+                     removed.value === 'v' && p3.attributes.length === 2 && !p3.hasAttribute('new-one')"
+                ));
+            },
         );
     }
 }
