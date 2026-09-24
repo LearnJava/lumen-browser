@@ -918,6 +918,14 @@ fn worker_global_shim(worker_id: u32) -> String {
 #[cfg(feature = "v8-backend")]
 pub(crate) const WORKER_TIMERS_SHIM: &str = include_str!("shim/worker_timers_shim.js");
 
+/// `requestAnimationFrame`/`cancelAnimationFrame` (BUG-959, HTML LS §8.12
+/// `AnimationFrameProvider`) — `DedicatedWorkerGlobalScope` only, per spec;
+/// evaluated by [`install_worker_globals_v8`] alone, never by the shared- or
+/// service-worker install paths. Must run after [`WORKER_TIMERS_SHIM`]: it
+/// schedules through `setTimeout`/`clearTimeout`.
+#[cfg(feature = "v8-backend")]
+const WORKER_RAF_SHIM: &str = include_str!("shim/worker_raf_shim.js");
+
 // ─── WorkerOptions (shared by Worker and SharedWorker) ───────────────────────
 
 /// IIFE defining `_lumen_parse_worker_options` / `_lumen_parse_shared_worker_options`
@@ -2130,6 +2138,7 @@ fn install_worker_globals_v8(
 
     rt.eval(&worker_global_shim(worker_id))?;
     rt.eval(WORKER_TIMERS_SHIM)?;   // BUG-815
+    rt.eval(WORKER_RAF_SHIM)?;      // BUG-959, DedicatedWorkerGlobalScope only
     crate::worker_net::install_worker_net_v8(rt, net_provider)?;
     Ok(())
 }
@@ -3184,6 +3193,60 @@ mod tests_v8 {
         ] {
             assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
         }
+    }
+
+    /// BUG-959: `requestAnimationFrame`/`cancelAnimationFrame` must exist on
+    /// `DedicatedWorkerGlobalScope` (HTML LS §8.12 `AnimationFrameProvider`)
+    /// — before this fix a worker calling `requestAnimationFrame` threw
+    /// `ReferenceError: requestAnimationFrame is not defined` synchronously,
+    /// which silently killed the whole task (nothing reports a worker's own
+    /// synchronous throw back to the parent).
+    #[test]
+    fn v8_worker_globals_have_raf() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
+        for expr in ["typeof requestAnimationFrame", "typeof cancelAnimationFrame"] {
+            assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
+        }
+    }
+
+    /// The callback fires with a `DOMHighResTimeStamp` once the underlying
+    /// `setTimeout` it is scheduled through (`WORKER_RAF_SHIM`) is drained by
+    /// the worker's own task loop — same queue `setTimeout` uses, so no
+    /// separate pump is needed on the Rust side.
+    #[test]
+    fn v8_worker_raf_callback_runs_via_timer_queue() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
+        rt.eval("var _raf_ts = -1; requestAnimationFrame(function(t) { _raf_ts = t; });").unwrap();
+        assert_eq!(rt.eval("_raf_ts").unwrap(), lumen_core::JsValue::Number(-1.0), "callback must not run synchronously");
+        // The shim schedules through `setTimeout(fn, 16)` (real wall clock —
+        // this runtime has no `--deterministic` config), so the task is not
+        // yet due immediately after `requestAnimationFrame` returns.
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        rt.eval("_lumen_worker_run_tasks()").unwrap();
+        let ts = rt.eval("_raf_ts").unwrap();
+        match ts {
+            lumen_core::JsValue::Number(n) => assert!(n >= 0.0, "expected a DOMHighResTimeStamp, got {n}"),
+            other => panic!("expected Number, got {other:?}"),
+        }
+    }
+
+    /// `cancelAnimationFrame` must stop the scheduled callback from ever
+    /// running, same contract as the page-side `cancelAnimationFrame`.
+    #[test]
+    fn v8_worker_raf_cancel_prevents_callback() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
+        rt.eval("var _raf_ran = false; var id = requestAnimationFrame(function() { _raf_ran = true; }); cancelAnimationFrame(id);").unwrap();
+        rt.eval("_lumen_worker_run_tasks()").unwrap();
+        assert_eq!(rt.eval("_raf_ran").unwrap(), lumen_core::JsValue::Bool(false));
     }
 
     /// End-to-end `fetch()` inside a worker thread, real network bridge via
