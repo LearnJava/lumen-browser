@@ -3,12 +3,12 @@
 Six parallel developers (6 Claude Code sessions, each in its own `git worktree`). P1–P5 each own a
 distinct domain and pick their own next task; P6 is the user-driven urgent lane and owns no domain.
 
-Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `ipc` `network` `storage` `knowledge` `bench`
+Crates — the full list with per-crate state is [`SUBSYSTEMS.md`](../SUBSYSTEMS.md).
 
 | Developer | Domain | Crates |
 |---|---|---|
 | **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell), taken top-down off `STATUS-P1.md`. Finished tracks: DS (design system v3.3, DS-1…DS-19, `docs/design/lumen-v3_3.html`). Engine-root bugs that only the chrome exposes (BUG-333/433/431/343/288) were moved here from P3 on 2026-07-29 so one role owns the whole «engine roots → chrome visuals → chrome interaction» chain. BUG-341 (incremental restyle) is paused by user decision 2026-07-28 — resume only on explicit request. | All crates (coordinated with P2/P4) |
-| **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT integration via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX dev-tooling track (`docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve 2026-06-18…2026-07-13 (tasks of that period inherited by P1, `STATUS-P1.md`). **Owns the CI track since 2026-08-19** (`docs/ci-offload.md`, ROADMAP.md `CI-5`/`CI-6`/`PERF-7`), handed over by P5 whose role forbids the behaviour changes the tail needs. | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4), `.github/workflows/*` |
+| **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT integration via `wptrunner` + WebDriver BiDi, [`wpt-status.md`](wpt-status.md)) and the DEVX dev-tooling track (`docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve 2026-06-18…2026-07-13 (tasks of that period inherited by P1, `STATUS-P1.md`). **Owns the CI track since 2026-08-19** (`docs/ci-offload.md`, ROADMAP.md `CI-5`/`CI-6`/`PERF-7`), handed over by P5 whose role forbids the behaviour changes the tail needs. | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4), `.github/workflows/*` |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions. **Skip a row marked `OPEN (ДОРАБОТКА → <task>)`** — that record describes functionality that was never implemented, not a defect in implemented code, and is owned by the named `ROADMAP.md` task instead (2026-08-28; see BUGS.md's own legend for why the file is not renamed). | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
 | **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree cleanup) |
@@ -37,11 +37,11 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 **P3 workflow:**
 1. Run `python graphic_tests/run.py --continue-on-fail` → identify failing tests
 2. Pick highest-deviation OPEN item from `BUGS.md`
-3. Locate code via `SYMBOLS.md` + targeted grep (do not read whole files)
+3. Locate code by targeted grep (or a locally generated `SYMBOLS.md` — `python scripts/gen_symbols.py`); do not read whole files
 4. Fix + add regression test + **move** the row from `BUGS.md` to `BUGS-FIXED.md` with status
    `FIXED <date>`, rename `bugs/BUG-NNN-OPEN.md` → `-FIXED.md`, then
    `python scripts/remap_status_pointers.py --apply`
-5. `cargo clippy -p <crate> --all-targets -- -D warnings` → `cargo test -p <crate>` → commit
+5. `cargo clippy -p <crate> --all-targets -- -D warnings` → targeted `cargo test -p <crate>` → commit → merge `--no-ff` + push ([`git-workflow.md`](git-workflow.md) §Merge and push after every commit)
 
 P3 branch prefix: `p3-bug-<id>`, e.g. `p3-bug023-opacity`.
 
@@ -58,7 +58,7 @@ P3 branch prefix: `p3-bug-<id>`, e.g. `p3-bug023-opacity`.
 - Wiring stored values to paint/display-list — P4
 - CSS at-rules: `@media`, `@keyframes`, `@container`, `@layer`, `@supports` — P4
 
-**P1/P2 write algorithm stubs for P4 to wire.** When a new layout or render primitive is needed:
+**Feature roles write algorithm stubs for P4 to wire.** When a new layout or render primitive is needed:
 
 1. P1/P2 implements the algorithm / GPU primitive
 2. Expose a clean Rust interface (function or trait)
@@ -73,7 +73,7 @@ P4 writes:  ComputedStyle.float field + apply_declaration("float") + calls lay_o
 
 Example split for `filter`:
 ```
-P2 writes:  fn apply_filter_pass(cmd: FilterCommand)  // CSS: filter, backdrop-filter
+P1 writes:  fn apply_filter_pass(cmd: FilterCommand)  // CSS: filter, backdrop-filter
 P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits FilterCommand
 ```
 
@@ -83,7 +83,7 @@ P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits Fil
 
 ## Code health: P5 only
 
-**P5 is the periodic-maintenance role.** It does NOT write features (P1/P2), does NOT fix visual/geometry bugs (P3), does NOT implement CSS (P4). P5 keeps the codebase healthy across the noise generated by four parallel sessions.
+**P5 is the periodic-maintenance role.** It does NOT write features (P1/P2), does NOT fix visual/geometry bugs (P3), does NOT implement CSS (P4). P5 keeps the codebase healthy across the noise generated by the other parallel sessions.
 
 P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo refactoring that changes API or behaviour.
 
@@ -131,12 +131,17 @@ role the user drives directly; every other role picks its own next task off its 
 
 ## Collaboration rules
 
-- **Crate ownership.** P1 stays out of `lumen-paint` without P2 agreement; P3 stays out of layout without P1 agreement. Reduces conflicts, doesn't block review.
-- **`lumen-core` is shared.** P3 usually owns `lumen-core::ext` traits, but P1/P2 can add their own traits (e.g. `FontProvider`, `AccessibilityProvider`) without waiting. Coordinate via commit message.
-- **`lumen-shell` is P3's.** Only P3 integrates into the shell. P1/P2 describe integration points in commit body; P3 picks them up as separate tasks.
-- **Interface-first.** Cross-team tasks start with the owner publishing **types/traits** (with `todo!()` stubs) in a dedicated commit. Consumers implement against the stub; the real impl is a drop-in replacement.
-- **Add extension points yourself.** Don't block on "P3 hasn't added the trait yet" — add it yourself, P3 reviews post-factum.
-- **P1/P2/P3 → P4 handoff.** When a new algorithm needs a CSS property, add `// CSS: <property>` comment at the call site and add a `crates/...:line` pointer line for it in `STATUS-P4.md`. Do not wait for P4 — ship the algorithm, P4 wires CSS independently.
+- **Domain fences are by kind of work, not by crate.** Bugs → P3, CSS properties → P4, health sweeps →
+  P5, tooling/WPT/CI → P2; features (P1) may touch any crate, including `lumen-shell` and `lumen-paint`.
+  Two sessions editing one crate coordinate through small, frequently merged commits, not through
+  crate ownership.
+- **Interface-first.** Cross-role work starts with the owner publishing **types/traits** in a
+  dedicated commit. Consumers build against it; the real implementation is a drop-in replacement.
+- **Add extension points yourself** (`lumen-core` traits such as `FontProvider`) rather than waiting
+  for another role; explain them in the commit body.
+- **Handoff to P4.** When a new algorithm needs a CSS property, add a `// CSS: <property>` comment at
+  the call site and a `crates/...:line` pointer line in `STATUS-P4.md`. Ship the algorithm; P4 wires
+  the CSS independently.
 
 ---
 
@@ -184,7 +189,7 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
 - **Reindex on any row shift (mandatory), and do it with the script:**
   `python scripts/remap_status_pointers.py --apply`. It reads the source file as of `HEAD`, recovers
   the anchor each pointer stood on, finds that anchor in your working copy, and rewrites the numbers
-  (all five STATUS files at once; sources you did not touch are skipped). Run it **once, before the
+  (all `STATUS-P*.md` files at once; sources you did not touch are skipped). Run it **once, before the
   commit** — it assumes the pointers were correct at `--base`, so a second run over already-fixed
   numbers would resolve them against the wrong anchors. It refuses to guess for a pointer whose bug
   moved to the archive: that one is stale and its line must simply be deleted (protocol step 4).

@@ -20,15 +20,15 @@ allowed-tools: Read Grep Glob Bash(cargo check *) Bash(cargo test *) Bash(cargo 
 
 ## Контекст проекта
 
-!`export PATH="/c/Users/konstantin/.cargo/bin:$PATH" && echo "OK"`
+!`export PATH="$HOME/.cargo/bin:$PATH" && echo "OK"`
 
 Ключевые файлы:
 - `crates/engine/layout/src/style.rs` — `ComputedStyle` (struct ~418), `compute_style` (~639), `apply_declaration` (~2361)
 - `crates/engine/css-parser/src/parser.rs` — CSS парсер (если нужны новые типы)
-- `crates/engine/layout/tests/snapshot_tests.rs` — snapshot-тесты
+- `crates/engine/layout/tests/cases/snapshot_tests.rs` — snapshot-тесты
 
 Текущее число тестов:
-!`export PATH="/c/Users/konstantin/.cargo/bin:$PATH" && cargo test --workspace --quiet 2>/dev/null | tail -3`
+!`export PATH="$HOME/.cargo/bin:$PATH" && cargo test --workspace --quiet 2>/dev/null | tail -3`
 
 ## Шаг 1 — Прочитай спецификацию
 
@@ -101,7 +101,7 @@ my_property: inherited.my_property,
 есть fn `serialize_layout_tree`) — регенерируй baseline:
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 UPDATE_SNAPSHOTS=1 cargo test -p lumen-layout --test snapshot_tests
 ```
 
@@ -110,7 +110,7 @@ UPDATE_SNAPSHOTS=1 cargo test -p lumen-layout --test snapshot_tests
 ## Шаг 7 — Clippy + полные тесты
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
@@ -140,7 +140,7 @@ git commit -m "$(cat <<'EOF'
 
 <Короткое зачем: какой сценарий открывает, ссылка на §X спеки.>
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Co-Authored-By: Claude <модель, которая реально писала коммит> <noreply@anthropic.com>
 EOF
 )"
 ```

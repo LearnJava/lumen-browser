@@ -108,7 +108,10 @@ def collect() -> list[tuple[str, str, str, str]]:
     for rel in docs:
         path = REPO_ROOT / rel
         try:
-            text = path.read_text(encoding="utf-8", errors="replace", newline="")
+            # open(newline="") instead of read_text(newline=): the latter is
+            # Python 3.13+, and `python` on dev machines is still 3.11.
+            with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+                text = fh.read()
         except OSError:
             continue
         for match in LINK_RE.finditer(text):

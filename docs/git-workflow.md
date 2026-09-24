@@ -21,7 +21,7 @@ Branch names: short kebab-case. **Developer sessions (P1–P6) must prefix the b
 ## Commits
 
 - **One logical step = one commit.** Don't batch unrelated changes.
-- **Before commit:** at minimum `cargo check` must pass. Prefer full tests + clippy.
+- **Before commit:** `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests of the touched crate ([`commands.md`](commands.md) §Gate discipline).
 - **Commit message in Russian.** Short subject (under 80 chars), blank line, body explains *why* (not *what* — that's in the diff).
 - **Trailer always at the end**, naming the model that actually authored the commit — not a pinned
   string. Four different values were in circulation by 2026-09-03 (this file said `Opus 4.7 (1M
@@ -30,7 +30,7 @@ Branch names: short kebab-case. **Developer sessions (P1–P6) must prefix the b
   ```
   Co-Authored-By: Claude <model> <noreply@anthropic.com>
   ```
-- **Stage specific files** (`git add path1 path2`), not `git add -A` / `.` — prevents accidental inclusion of secrets or archives.
+- **Stage specific files** (`git add path1 path2`), not `git add -A` / `.` — prevents accidental inclusion of secrets, archives, or another session's uncommitted files.
 
 ---
 
@@ -82,7 +82,7 @@ Multiple Claude Code sessions may work simultaneously. Full workflow for task li
 cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"
 ```
 
-One slot per developer — `.claude/worktrees/p1-work` … `p5-work` (plus `perf-base` for A/B baselines). The slot is created once (~3 min: 62 291 files) and then reused: only the branch changes, `target/` stays warm. A fresh worktree per task costs the `add` **plus** a cold build of 9–15 min, because `git worktree remove` deletes the warm `target/` with the directory (`docs/build-speed.md` §7, scenario S3). Measured on the session of 2026-07-27: 15.5 min for the first `cargo test -p lumen-shell --no-run` in a fresh worktree, and another 22 min for a second fresh worktree built only to get a baseline binary of `main`.
+One slot per developer — `.claude/worktrees/p1-work` … `p6-work` (plus `perf-base` for A/B baselines). The slot is created once (~3 min, ~62 000 files) and then reused: only the branch changes, `target/` stays warm. A fresh worktree per task costs the `add` **plus** a cold build of 9–15 min, because `git worktree remove` deletes the warm `target/` with the directory (`docs/build-speed.md` §7, scenario S3). Measured on the session of 2026-07-27: 15.5 min for the first `cargo test -p lumen-shell --no-run` in a fresh worktree, and another 22 min for a second fresh worktree built only to get a baseline binary of `main`.
 
 This is **not** a shared `CARGO_TARGET_DIR` (rejected — `docs/build-speed.md` §6): each slot keeps its own `target/`, so the target lock never serializes parallel sessions.
 
@@ -98,9 +98,15 @@ Ad-hoc worktrees are still allowed for one-off needs (merge helpers, experiments
 
 **End of every session that created a worktree:** `bash scripts/worktree-pool.sh gc` — reports empty directories git does not know, ad-hoc worktrees (merged/dirty/unmerged) and pool slots still holding a merged branch. `gc --fix` removes only the safe part (`git worktree prune` + empty unregistered directories); anything with content or unmerged commits is listed, never deleted. Exit code 1 means findings remain.
 
+### Traps
+
+- **Two sessions in one working tree** — checking out different branches makes git stash one session's work, and `stash pop` recovery is fragile. That is why worktrees are mandatory.
+- **An interrupted `git worktree add` leaves an index in which the whole repository is staged as deleted**, and the leftover `index.lock` makes a later `reset --hard` exit 0 without repairing anything — a commit made in that state deletes the tree. Run `git status --short` in a fresh worktree before the first `git add`, and `git diff --cached --stat` before every commit made in one.
+- **`.ignore` (repo root) keeps ripgrep out of `.claude/worktrees/`** — full checkouts of other roles' branches, most of the `.rs` files reachable from the root. Git does not read it; do not delete it.
+
 ### Safety rules in worktrees
 
-Never `git checkout <foreign-branch>` with uncommitted changes — commit (`git commit -am "wip: ..."`) first. If accidentally on a wrong branch: check `git stash list` before `git restore .`, then `git stash pop` and switch back. Before any long pause — commit a wip: protects against crashes. Squash wip commits with `git rebase -i HEAD~N` before merge (only while branch hasn't been pulled).
+Never `git checkout <foreign-branch>` with uncommitted changes — commit (`git commit -am "wip: ..."`) first. If accidentally on a wrong branch: check `git stash list` before `git restore .`, then `git stash pop` and switch back. Before any long pause — commit a wip: protects against crashes. Do not squash them: `git rebase` is denied in `.claude/settings.json`, and the `--no-ff` merge already groups the branch's commits.
 
 ### Never leave a worktree on `main` with uncommitted/staged changes
 
@@ -146,16 +152,35 @@ is NOT replaced by CI" below.
 ### When the root checkout blocks the merge
 
 `main` is checked out in the repo root, and the root routinely carries another session's
-uncommitted files (`.gitignore`, `STATUS-P2.md`, screenshots). `git merge` there fails as soon as
-the merge touches one of those paths, and the files are not yours to stash or commit. Merge in a
-throwaway worktree taken from the remote instead:
+uncommitted files. `git merge` there fails as soon as the merge touches one of those paths, and
+the files are not yours to stash or commit. **Merge from your own pool slot instead** — it is already
+checked out, so nothing has to be populated:
 
 ```bash
-git worktree add .claude/worktrees/merge-tmp -b merge-tmp-<task> origin/main
-cd .claude/worktrees/merge-tmp
+# inside .claude/worktrees/p<N>-work, with the task branch committed
+git fetch origin
+git checkout --detach origin/main
 git merge --no-ff p<N>-task-name -m "Влить ветку p<N>-task-name: описание"
 git push origin HEAD:main
-cd - && git worktree remove .claude/worktrees/merge-tmp && git branch -D merge-tmp-<task>
+git checkout p<N>-task-name          # or leave the slot detached if the task is finished
+```
+
+Always merge onto **`origin/main`**, never onto the local `main`: the root's `main` routinely lags
+the remote, and a merge on a stale base either fails the push or silently drops the sessions that
+pushed in between.
+
+If you have no slot (one-off helper), a throwaway worktree works too, under `.claude/worktrees/` and
+populated sparsely — a full checkout of ~62 000 files routinely outlives a tool timeout and leaves the
+index described in `CLAUDE.md` §Known gotchas:
+
+```bash
+git worktree add --no-checkout --detach .claude/worktrees/merge-tmp origin/main
+git -C .claude/worktrees/merge-tmp sparse-checkout set --no-cone '/*' '!/tests/wpt'
+git -C .claude/worktrees/merge-tmp checkout
+git -C .claude/worktrees/merge-tmp status --short          # must be empty
+git -C .claude/worktrees/merge-tmp merge --no-ff p<N>-task-name -m "Влить ветку p<N>-task-name: описание"
+git -C .claude/worktrees/merge-tmp push origin HEAD:main
+git worktree remove .claude/worktrees/merge-tmp
 ```
 
 Consequence to expect: the **local** `main` now trails `origin/main`. That also makes

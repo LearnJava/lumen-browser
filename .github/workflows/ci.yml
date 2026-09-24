@@ -447,6 +447,13 @@ jobs:
       - name: No new monoliths, no silent growth
         run: python scripts/check_file_sizes.py
 
+      # CLAUDE.md is loaded into every agent session: cap its size and keep
+      # machine-specific absolute paths out of the files agents execute from.
+      - name: CLAUDE.md size cap, no machine paths (docs/INDEX.md)
+        run: |
+          python scripts/check_claude_md.py --self-test
+          python scripts/check_claude_md.py
+
   cross:
     # Cold path: push-to-main and nightly only (see the header comment). Keeps the
     # macOS/Windows coverage that the old 3-OS matrix gave — including the unit

@@ -117,12 +117,12 @@ workspace = true
 ## Шаг 5 — Проверь сборку
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 cargo check -p lumen-<name>
 cargo clippy -p lumen-<name> -- -D warnings
 ```
 
-!`export PATH="/c/Users/konstantin/.cargo/bin:$PATH" && echo "cargo ready"`
+!`export PATH="$HOME/.cargo/bin:$PATH" && echo "cargo ready"`
 
 Новый крейт должен компилироваться чисто без warnings.
 
@@ -162,7 +162,7 @@ git commit -m "$(cat <<'EOF'
 <Объяснение роли крейта в архитектуре, какие trait-ы планируются,
 почему отдельный крейт, а не часть существующего.>
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Co-Authored-By: Claude <модель, которая реально писала коммит> <noreply@anthropic.com>
 EOF
 )"
 ```

@@ -18,4 +18,4 @@
 
 ---
 
-> **Навигация:** CLAUDE.md · STATUS-P1/P2/P3/P4/P5.md · BUGS.md · CSS-SPECS.md · docs/decisions/
+> **Навигация:** CLAUDE.md · STATUS-P1…P6.md · docs/INDEX.md · BUGS.md · CSS-SPECS.md · docs/decisions/

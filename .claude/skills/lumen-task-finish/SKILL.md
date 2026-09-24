@@ -36,7 +36,7 @@ $ARGUMENTS — имя ветки/задачи (например `font-fallback`)
 ## Шаг 1 — Финальный clippy
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 mkdir -p .tmp
 cargo clippy --workspace --all-targets -- -D warnings > .tmp/gate-clippy.log 2>&1
 tail -5 .tmp/gate-clippy.log            # детали ошибок: grep -E "^error" .tmp/gate-clippy.log
@@ -62,7 +62,7 @@ tail -5 .tmp/gate-clippy.log            # детали ошибок: grep -E "^e
 `test --workspace` — это ~110 отдельных линковок тест-бинарей (~30 мин).
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 bash scripts/scoped-test.sh > .tmp/gate-test.log 2>&1   # база = main; иная: scoped-test.sh <ref>
 tail -20 .tmp/gate-test.log             # упавшие тесты: grep -B2 "FAILED\|panicked" .tmp/gate-test.log
 ```
@@ -110,69 +110,58 @@ tail -20 .tmp/gate-test.log             # упавшие тесты: grep -B2 "F
 
 ## Шаг 4 — Коммит документации
 
-Если документы не были обновлены в коммите с кодом — отдельный коммит:
+Если документы не были обновлены в коммите с кодом — отдельный коммит. Файлы
+перечисляй явно: корень и слоты часто держат чужие незакоммиченные правки, и
+`git add -A` их захватит (`docs/git-workflow.md` §Commits).
 
 ```bash
-git add -A && git commit -m "Обновить статус задачи <имя>
+git add STATUS-P<N>.md CAPABILITIES.md <остальные изменённые пути>
+git diff --cached --stat        # проверь, что в индексе только твоё
+git commit -m "Обновить статус задачи <имя>
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude <модель, которая реально писала коммит> <noreply@anthropic.com>"
 ```
 
-## Шаг 5 — Merge в main
+## Шаг 5 — Merge в main и push
 
 **CI не ждём** (решение пользователя 2026-08-19, [docs/ci-offload.md](../../../docs/ci-offload.md) §8):
-локальный гейт — единственная предмерджевая проверка, ожидание прогона стоило
-бы ~30 мин на каждый коммит. За красным CI на `main` следим после пуша и чиним
-отдельно.
+локальный гейт — единственная предмерджевая проверка. За красным CI на `main`
+следим после пуша и чиним отдельно.
 
-**Важно:** корень часто держит чужие незакоммиченные файлы и блокирует merge.
-
-```bash
-git worktree list
-```
+Сливать **всегда поверх `origin/main`**, не локального `main` — он в корне
+почти всегда отстаёт. Корень к тому же держит чужие незакоммиченные файлы,
+поэтому merge делается **в своём слоте** (протокол и запасной вариант с
+временным worktree — `docs/git-workflow.md` §When the root checkout blocks the merge):
 
 ```bash
-# Вариант А — через главный чекаут (если он на main и не конфликтует):
-git -C /d/RustProjects/lumen-browser merge --no-ff $ARGUMENTS \
-    -m "Влить ветку $ARGUMENTS: <однострочное описание>"
-
-# Вариант Б — если корень блокирует merge: временный worktree.
-# Путь ТОЛЬКО внутри папки браузера (/tmp и ../lumen-* запрещены рабочей границей).
-# ВНИМАНИЕ: чекаут этого репозитория — ~59 000 файлов, обычный `worktree add`
-# не укладывается в таймаут инструмента. Бери sparse без tests/wpt, иначе
-# получишь недокачанное дерево и индекс, в котором ВЕСЬ репозиторий помечен
-# удалённым (коммит в таком состоянии сносит дерево):
-git worktree add --no-checkout --detach .claude/worktrees/merge-$ARGUMENTS main
-git -C .claude/worktrees/merge-$ARGUMENTS sparse-checkout set --no-cone '/*' '!/tests/wpt'
-git -C .claude/worktrees/merge-$ARGUMENTS checkout
-git -C .claude/worktrees/merge-$ARGUMENTS status --short          # ОБЯЗАТЕЛЬНО: должно быть пусто
-git -C .claude/worktrees/merge-$ARGUMENTS merge --no-ff $ARGUMENTS \
-    -m "Влить ветку $ARGUMENTS: <однострочное описание>"
-git -C .claude/worktrees/merge-$ARGUMENTS push origin HEAD:main
-git worktree remove .claude/worktrees/merge-$ARGUMENTS   # не забывать: осиротевшие
-                                                          # merge-* каталоги копятся
+git fetch origin
+git checkout --detach origin/main
+git merge --no-ff $ARGUMENTS -m "Влить ветку $ARGUMENTS: <однострочное описание>"
+git push origin HEAD:main
 ```
+
+Если push отклонён (кто-то успел запушить) — `git fetch origin`, повтори
+`checkout --detach origin/main` + merge; не делай `pull` поверх своего merge-коммита.
 
 `--no-ff` обязателен — сохраняет видимую структуру в `git log --graph`.
 
-## Шаг 6 — Push
+## Шаг 6 — Проверь, что main на remote содержит ветку
 
 ```bash
-git push origin main
+git fetch origin && git branch -r --contains $ARGUMENTS | grep -q 'origin/main' && echo merged
 ```
-
-Если merge шёл вариантом Б — локальный `main` отстаёт от `origin/main`, и это же
-заставит `worktree-pool.sh release` отказать. Освобождать слот тогда через
-`git checkout --detach origin/main` внутри слота.
 
 ## Шаг 7 — Освободи слот и удали ветку
 
 Порядок важен: пока слот держит ветку, `git branch -d` отказывает
 («cannot delete branch ... used by worktree at ...»).
 
+Слот после шага 5 уже стоит на detached `origin/main`, так что ветку он не держит.
+Локальный `main` отстаёт, поэтому `worktree-pool.sh release` и `git branch -d`
+сочтут ветку невлитой — удаляй через `-D` после проверки шага 6:
+
 ```bash
-bash scripts/worktree-pool.sh release p<N>-work   # detached HEAD, прогретый target/ остаётся
-git branch -d $ARGUMENTS
+git branch -D $ARGUMENTS
 ```
 
 Слот **не удаляем** — в нём прогретый `target/`, ради которого пул и сделан.

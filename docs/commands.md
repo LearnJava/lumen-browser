@@ -35,8 +35,8 @@ cargo run --example preview -p lumen-font
 cargo run -p lumen-bench --release
 
 # Per-frame paint profiling in the live window (diagnostics, zero cost when off).
-#   LUMEN_FRAME_LOG=1 — per-frame summary to stderr: `[frame] paint …` (femtovg:
-#                       content/overlay/flush/swap timings + command counts) and
+#   LUMEN_FRAME_LOG=1 — per-frame summary to stderr: `[frame] paint …` (active backend —
+#                       wgpu by default: content/overlay/flush/swap timings + command counts) and
 #                       `[frame] total …` (shell: whole RedrawRequested pass).
 #   LUMEN_FRAME_LOG=2 — additionally `[frame] top: …` — top-8 DisplayCommand
 #                       variants by time per frame (finds the expensive command type).
@@ -128,7 +128,7 @@ grep "OPEN" BUGS.md
 grep "BUG-042" BUGS.md
 
 # Find symbol by name:
-grep "LayoutBox" SYMBOLS.md
+grep "LayoutBox" SYMBOLS.md     # generate first: python scripts/gen_symbols.py
 ```
 
 **SYMBOLS.md — symbol index.** Auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line`. `grep "SymbolName" SYMBOLS.md` → `Read file offset=<line> limit=30`. **Generated and gitignored** (2026-08-31) — if the file is absent or stale in your worktree, run `python scripts/gen_symbols.py` (~2 s). Nothing to commit.
@@ -138,8 +138,6 @@ grep "LayoutBox" SYMBOLS.md
 ## Cargo output rules
 
 Scope by *when*, not by role. **During work — always `-p <crate>`, never `--workspace`.** Two cases run the full pass, and only these two: the final gate inside `/lumen-task-finish` (step 1, see "Gate discipline" above — it doubles as the cross-crate build check that lets the test step stay scoped) and P5's periodic health sweep, where the full pass is the role's purpose.
-
-Do not read this as "never `--workspace`" — that phrasing predated the finish skill and contradicted the gate discipline rule 53 lines above it.
 
 - **Success** — one line: `cargo check OK`, `Clippy clean`, `All tests passed (23/23)`.
 - **Build/clippy failure** — show each full `error[...]` block (message + file:line + code + help lines), skip all `warning[...]` blocks entirely.
@@ -162,8 +160,7 @@ Behaviour that differs by OS:
 
 | | Windows (Git Bash) | Linux |
 |---|---|---|
-| `cargo` PATH | needs `export PATH="/c/Users/konstantin/.cargo/bin:$PATH"` | available by default |
-| worktree paths | `D:/RustProjects/lumen-browser/.claude/worktrees/…` | `/path/to/lumen-browser/.claude/worktrees/…` |
+| `cargo` PATH | may need `export PATH="$HOME/.cargo/bin:$PATH"` (see below) | available by default |
 | screenshot tool | `ffmpeg` gdigrab (see `utils/`) | not available; skip graphic tests |
 | child process tracking | full (orchestrator) | limited — no auto window open, use tmux |
 
@@ -171,10 +168,10 @@ Behaviour that differs by OS:
 
 ## PATH note (Windows + Git Bash)
 
-`cargo` is at `C:\Users\konstantin\.cargo\bin`. Git Bash on this machine does **not** pick it up automatically. Add before any `cargo` command:
+If `which cargo` finds nothing in Git Bash (some machines do not put `~/.cargo/bin` on its PATH), add it before any `cargo` command:
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
 Not needed in cmd / PowerShell — PATH is correct there.
