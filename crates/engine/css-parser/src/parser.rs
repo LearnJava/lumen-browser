@@ -1611,10 +1611,17 @@ impl<'a> Parser<'a> {
         if name.eq_ignore_ascii_case("media") {
             let query_start = self.pos;
             while let Some(c) = self.peek() {
-                if c == '{' {
+                if c == '{' || c == ';' {
                     break;
                 }
                 self.consume();
+            }
+            // BUG-793: nested `@media;` has no block — consume the `;`
+            // instead of leaving the parser stranded right before it (see
+            // the top-level `parse_media_rule` fix for the failure mode).
+            if self.peek() == Some(';') {
+                self.consume();
+                return vec![];
             }
             if self.peek() != Some('{') {
                 return vec![];
@@ -1638,8 +1645,15 @@ impl<'a> Parser<'a> {
                     depth -= 1;
                 } else if c == '{' && depth == 0 {
                     break;
+                } else if c == ';' && depth == 0 {
+                    // BUG-793: nested `@supports;` has no block.
+                    break;
                 }
                 self.consume();
+            }
+            if self.peek() == Some(';') {
+                self.consume();
+                return vec![];
             }
             if self.peek() != Some('{') {
                 return vec![];
@@ -1715,6 +1729,11 @@ impl<'a> Parser<'a> {
             // `@scope`; тело — рекурсивный declaration-block с `parent_sels`.
             let (root, limit) = self.parse_scope_prelude();
             self.skip_ws_and_comments();
+            // BUG-793: nested `@scope;` has no block — consume the `;`.
+            if self.peek() == Some(';') {
+                self.consume();
+                return vec![];
+            }
             if self.peek() != Some('{') {
                 return vec![];
             }

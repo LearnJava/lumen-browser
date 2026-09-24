@@ -1282,13 +1282,21 @@ impl<'a> Parser<'a> {
     /// чтобы стабильно продолжить парсинг stylesheet.
     pub(crate) fn parse_media_rule(&mut self) -> Option<MediaRule> {
         self.skip_ws_and_comments();
-        // Собираем query-string до `{`.
+        // Собираем query-string до `{`. CSS Syntax L3 §5.4.2: `;` на верхнем
+        // уровне прелюдии (вне скобок/строк) завершает at-правило без блока —
+        // BUG-793: без этой остановки скан проглатывал `;` как часть
+        // prelude и уходил искать `{` дальше, забирая тело следующего
+        // правила себе.
         let query_start = self.pos;
         while let Some(c) = self.peek() {
-            if c == '{' {
+            if c == '{' || c == ';' {
                 break;
             }
             self.consume();
+        }
+        if self.peek() == Some(';') {
+            self.consume();
+            return None;
         }
         if self.peek() != Some('{') {
             return None;
@@ -1339,8 +1347,17 @@ impl<'a> Parser<'a> {
                 depth -= 1;
             } else if c == '{' && depth == 0 {
                 break;
+            } else if c == ';' && depth == 0 {
+                // BUG-793: top-level `;` (outside parens) closes the at-rule
+                // without a block per CSS Syntax L3 §5.4.2 — stop here
+                // instead of scanning past it into the next rule's block.
+                break;
             }
             self.consume();
+        }
+        if self.peek() == Some(';') {
+            self.consume();
+            return None;
         }
         if self.peek() != Some('{') {
             return None;
@@ -1381,7 +1398,15 @@ impl<'a> Parser<'a> {
     /// разворачивается в две записи). `name` — CSS-ident.
     pub(crate) fn parse_keyframes_rule(&mut self) -> Option<KeyframesRule> {
         self.skip_ws_and_comments();
-        let name = self.parse_ident()?;
+        // BUG-793: a missing name (`@keyframes;`) must still consume the
+        // rule up to its terminator (`;` or a `{…}` block it has no business
+        // owning) — `parse_ident()` alone leaves `pos` untouched on failure,
+        // which used to strand the parser right before the `;`, corrupting
+        // the top-level recovery for everything after it.
+        let Some(name) = self.parse_ident() else {
+            self.skip_until_block_end();
+            return None;
+        };
         self.skip_ws_and_comments();
         if self.peek() != Some('{') {
             self.skip_until_block_end();
@@ -1580,6 +1605,14 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_scope_rule(&mut self) -> Option<ScopeRule> {
         let (root, limit) = self.parse_scope_prelude();
         self.skip_ws_and_comments();
+        // BUG-793: `@scope;` has no block — consume the terminating `;`
+        // (CSS Syntax L3 §5.4.2) instead of leaving `pos` right before it,
+        // which used to make the caller's prelude-scan for the *next*
+        // at-rule swallow this `;` as its own content.
+        if self.peek() == Some(';') {
+            self.consume();
+            return None;
+        }
         if self.peek() != Some('{') {
             return None;
         }
@@ -1641,8 +1674,17 @@ impl<'a> Parser<'a> {
                 depth -= 1;
             } else if c == '{' && depth == 0 {
                 break;
+            } else if c == ';' && depth == 0 {
+                // BUG-793: `@container;`/`@container name;` has no block —
+                // stop at the top-level `;` (CSS Syntax L3 §5.4.2) instead
+                // of scanning past it into the next rule's `{…}`.
+                break;
             }
             self.consume();
+        }
+        if self.peek() == Some(';') {
+            self.consume();
+            return None;
         }
         if self.peek() != Some('{') {
             return None;

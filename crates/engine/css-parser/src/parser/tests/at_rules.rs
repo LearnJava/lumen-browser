@@ -2183,3 +2183,82 @@ use super::*;
         assert_eq!(decls[1].value, "'hi; there'");
     }
 
+    // ──────────────── BUG-793: at-rule без блока, закрытое `;` ────────────────
+    // CSS Syntax L3 §5.4.2: `<semicolon-token>` завершает at-правило без
+    // блока и разбор продолжается со следующего правила — `@media;` и
+    // однотипные не должны съедать хвост таблицы стилей.
+
+    #[test]
+    fn media_without_block_does_not_eat_tail() {
+        let s = parse("#a{width:100px} @media; #b{width:200px} #c{width:300px}");
+        assert!(s.media_rules.is_empty());
+        assert_eq!(s.rules.len(), 3);
+        assert_eq!(s.rules[0].declarations[0].value, "100px");
+        assert_eq!(s.rules[1].declarations[0].value, "200px");
+        assert_eq!(s.rules[2].declarations[0].value, "300px");
+    }
+
+    #[test]
+    fn supports_without_block_does_not_eat_tail() {
+        let s = parse("#a{width:100px} @supports; #b{width:200px} #c{width:300px}");
+        assert!(s.supports_rules.is_empty());
+        assert_eq!(s.rules.len(), 3);
+        assert_eq!(s.rules[1].declarations[0].value, "200px");
+        assert_eq!(s.rules[2].declarations[0].value, "300px");
+    }
+
+    #[test]
+    fn keyframes_without_block_does_not_eat_tail() {
+        let s = parse("#a{width:100px} @keyframes; #b{width:200px} #c{width:300px}");
+        assert!(s.keyframes.is_empty());
+        assert_eq!(s.rules.len(), 3);
+        assert_eq!(s.rules[1].declarations[0].value, "200px");
+        assert_eq!(s.rules[2].declarations[0].value, "300px");
+    }
+
+    #[test]
+    fn keyframes_named_without_block_does_not_eat_tail() {
+        // `@keyframes foo;` — name present, still no block.
+        let s = parse("#a{width:100px} @keyframes foo; #b{width:200px} #c{width:300px}");
+        assert!(s.keyframes.is_empty());
+        assert_eq!(s.rules.len(), 3);
+        assert_eq!(s.rules[1].declarations[0].value, "200px");
+        assert_eq!(s.rules[2].declarations[0].value, "300px");
+    }
+
+    #[test]
+    fn container_without_block_does_not_eat_tail() {
+        let s = parse("#a{width:100px} @container; #b{width:200px} #c{width:300px}");
+        assert!(s.container_rules.is_empty());
+        assert_eq!(s.rules.len(), 3);
+        assert_eq!(s.rules[1].declarations[0].value, "200px");
+        assert_eq!(s.rules[2].declarations[0].value, "300px");
+    }
+
+    #[test]
+    fn scope_without_block_does_not_eat_tail() {
+        let s = parse("#a{width:100px} @scope; #b{width:200px} #c{width:300px}");
+        assert!(s.scope_rules.is_empty());
+        assert_eq!(s.rules.len(), 3);
+        assert_eq!(s.rules[1].declarations[0].value, "200px");
+        assert_eq!(s.rules[2].declarations[0].value, "300px");
+    }
+
+    #[test]
+    fn supports_with_semicolon_inside_parens_not_treated_as_terminator() {
+        // `;` внутри скобок не образует точку с запятой верхнего уровня —
+        // оговорка к фиксу BUG-793.
+        let s = parse("@supports (margin: 0; padding: 0) { #b{width:200px} }");
+        assert_eq!(s.supports_rules.len(), 1);
+        assert_eq!(s.supports_rules[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn nested_media_without_block_does_not_eat_tail() {
+        // CSS Nesting L1 §5: same terminator rule applies to a nested at-rule
+        // inside a qualified rule's own body.
+        let s = parse(".p{ @media; } #b{width:200px}");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[1].declarations[0].value, "200px");
+    }
+
