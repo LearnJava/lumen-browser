@@ -1,7 +1,7 @@
 //! UA-таблица стилей и её правки под элементы: дефолтный `display` (HTML
 //! rendering §15.3), UA-хинты шрифта/цвета/выключки для конкретных тегов,
 //! стили формы (`<input>`/`<button>`/`<select>`/…), `<hr>`/`<body>`/заголовки,
-//! `<dialog>`, `<td>`/`<th>` padding, `[inert]`.
+//! `<dialog>`, `<td>`/`<th>` padding, `[inert]`, `[hidden]`.
 //!
 //! Перенесено батчем SPLIT-ST11 из `crates/engine/layout/src/style.rs`
 //! (анкер `fn default_display`) без правок тел: изменены только видимость
@@ -11,8 +11,8 @@
 use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::{
-    BorderStyle, Color, ComputedStyle, CssColor, Display, FontStyle, FontWeight, Length,
-    LengthOrAuto, PointerEvents, VerticalAlign, WhiteSpace,
+    BorderStyle, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
+    FontWeight, Length, LengthOrAuto, PointerEvents, VerticalAlign, WhiteSpace,
 };
 
 // ──────────────── default display / declarations ────────────────
@@ -498,6 +498,30 @@ pub(in crate::style) fn apply_ua_table_cell_padding(doc: &Document, node: NodeId
     style.padding_right = Length::Px(pad);
     style.padding_bottom = Length::Px(pad);
     style.padding_left = Length::Px(pad);
+}
+/// UA stylesheet (HTML LS §3.2.6.2 / Rendering §hiddenCSS): the `hidden`
+/// attribute's presentational effect.
+///
+/// `hidden` (absent value or any value other than an ASCII case-insensitive
+/// `until-found`) means `display: none` — the element and its subtree are
+/// removed from rendering entirely. `hidden="until-found"` means
+/// `content-visibility: hidden` instead: the element keeps its box (still
+/// participates in layout/hit-testing per `content-visibility`'s own rules)
+/// but its rendering is skipped, and — unlike plain `display: none` —
+/// the subtree stays reachable for `beforematch` reveal steps (fragment
+/// navigation / find-in-page / `Element.focus()` — GAP-BEFOREMATCH tracks
+/// the reveal algorithm itself, not this presentational rule).
+///
+/// Applied during the pre-cascade UA phase, so author `display`/
+/// `content-visibility` declarations override it (UA origin has the lowest
+/// cascade priority) — exactly like `apply_ua_dialog_display` above.
+pub(in crate::style) fn apply_ua_hidden(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let Some(v) = doc.get(node).get_attr("hidden") else { return };
+    if v.eq_ignore_ascii_case("until-found") {
+        style.content_visibility = ContentVisibility::Hidden;
+    } else {
+        style.display = Display::None;
+    }
 }
 /// UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.
 ///
