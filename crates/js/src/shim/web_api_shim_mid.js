@@ -12271,10 +12271,14 @@ function _lumen_link_hint_type_supported(dest, type) {
 // hit twice. Still a `setTimeout(0)` task hop for the same reason as the
 // <script>/stylesheet paths above: `link.onload = …` almost always follows
 // the appendChild.
-function _lumen_link_hint_fetch(nid, href, onBody) {
+//
+// `dest` — the preload's `as` destination ('' when there is none: prefetch,
+// icon, embed/object). The bytes may end up serving the real `<script src>`/
+// `@font-face`/`<img>`, so Rust gates the request as that destination.
+function _lumen_link_hint_fetch(nid, href, onBody, dest) {
     setTimeout(function() {
         var url = _url_resolve(String(href), _lumen_document_base_url());
-        var ok = _lumen_link_prefetch_sync(url);
+        var ok = _lumen_link_prefetch_sync(url, dest || '');
         if (!ok) {
             _lumen_console_error('link hint fetch failed: ' + url);
             _lumen_resource_fire(nid, 'error');
@@ -12320,7 +12324,7 @@ function _lumen_link_preload(nid, href) {
     if (_LUMEN_LINK_AS_DESTINATIONS[dest] !== 1) return;
     if (!_lumen_link_hint_media_matches(nid)) return;
     if (!_lumen_link_hint_type_supported(dest, _lumen_u2n(_lumen_get_attr(nid, 'type')))) return;
-    _lumen_link_hint_fetch(nid, href, null);
+    _lumen_link_hint_fetch(nid, href, null, dest);
 }
 
 // `rel=modulepreload`, §4.6.7 «fetch a modulepreload module script graph».
@@ -12349,7 +12353,7 @@ function _lumen_link_modulepreload(nid, href) {
         var base = String(ct).split(';')[0].trim().toLowerCase();
         if (!_lumen_is_classic_script_type(base)) return;
         try { _lumen_esm_register(url, text); } catch (e) {}
-    });
+    }, 'script');
 }
 
 // Act on one element's hint, once. `toks` — the already lower-cased `rel`

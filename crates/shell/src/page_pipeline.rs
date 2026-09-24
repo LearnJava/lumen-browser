@@ -244,10 +244,12 @@ pub(crate) fn dispatch_preload_hints(
 /// `modulepreload`/`prefetch`-хинт, прогревая `PREFETCH_CACHE` тем же путём
 /// (`fetch_subresource_with_content_type` + `RequestDestination::Prefetch`),
 /// каким его читает `HttpClient::fetch_preload_cached`. Остальные виды
-/// хинтов (stylesheet/script/image/font/preconnect) сюда не попадают — у
+/// хинтов (stylesheet/script/image/preconnect сканера) сюда не попадают — у
 /// stylesheet/script уже есть свой ранний прогрев (`feed_preload_and_emit`),
-/// у image/font/preconnect нет потребителя через `PREFETCH_CACHE` вовсе (вне
-/// границ этого бага, см. остаток в BUG-1116).
+/// `<img>` сканера и preconnect в байтовом кэше не нужны. `as=image`/`as=font`
+/// греются здесь же: их настоящий потребитель
+/// (`subresources.rs::fetch_subresource_bytes` — `<img>`, CSS-фон,
+/// `@font-face`) сначала смотрит в этот кэш и берёт уже пришедшие байты.
 ///
 /// Потоки стартуют параллельно, а не по одному — именно это убирает
 /// сериализацию `14 хинтов × 700 мс`, замеренную на стенде: сеть, а не
@@ -265,10 +267,15 @@ pub(crate) fn warm_preload_cache(
     use lumen_network::RequestDestination;
 
     for hint in hints {
-        let raw_url = match hint {
-            PreloadHint::Preload { url, .. }
-            | PreloadHint::ModulePreload { url }
-            | PreloadHint::Prefetch { url } => url,
+        let (raw_url, destination) = match hint {
+            PreloadHint::Preload { url, as_kind, .. } => {
+                let Some(dest) = as_kind.as_deref().and_then(RequestDestination::for_preload_as) else {
+                    continue;
+                };
+                (url, dest)
+            }
+            PreloadHint::ModulePreload { url } => (url, RequestDestination::Script),
+            PreloadHint::Prefetch { url } => (url, RequestDestination::Prefetch),
             _ => continue,
         };
         let resolved = base.resolve_str(raw_url);
@@ -277,14 +284,17 @@ pub(crate) fn warm_preload_cache(
         let sink = Arc::clone(sink);
         let base = base.clone();
         let cookie_jar = cookie_jar.clone();
-        std::thread::spawn(move || {
-            let _ = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
-                let client = base.http_client_for_subresource(sink, cookie_jar);
-                client
-                    .fetch_subresource_with_content_type(&parsed, RequestDestination::Prefetch)
-                    .map(|(body, content_type)| crate::prefetch::CachedResource { body, content_type })
-                    .map_err(|e| e.to_string())
-            });
+        // `warm` reserves the slot right here, before the thread starts: an
+        // `<img>`/`@font-face` consumer only *looks up* this cache
+        // (`subresources.rs::fetch_subresource_bytes`), so a slot created
+        // later, inside the thread, could lose that race and both would go to
+        // the network.
+        crate::prefetch::PREFETCH_CACHE.warm(generation, &resolved, move || {
+            let client = base.http_client_for_subresource(sink, cookie_jar);
+            client
+                .fetch_subresource_with_content_type(&parsed, destination)
+                .map(|(body, content_type)| crate::prefetch::CachedResource { body, content_type })
+                .map_err(|e| e.to_string())
         });
     }
 }

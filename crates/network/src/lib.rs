@@ -4731,12 +4731,17 @@ impl JsFetchProvider for HttpClient {
     /// the HTTP status code — a non-2xx response is still `Ok`, only a
     /// transport-level failure is `Err`. `status`/`ok` are hardcoded to
     /// `200`/`true` on the `Ok` path to match.
-    fn fetch_preload_cached(&self, url: &str) -> Result<JsFetchResult> {
+    fn fetch_preload_cached(&self, url: &str, as_kind: &str) -> Result<JsFetchResult> {
         let Some(cache) = self.subresource_cache.clone() else {
             return self.fetch_sync(url, "GET");
         };
         let parsed = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
-        let destination = RequestDestination::Prefetch;
+        // The cached bytes may reach a real `<script src>`/`@font-face`
+        // consumer, so the request is gated as that consumer's destination —
+        // the same one `page_pipeline::warm_preload_cache` uses for a hint
+        // the streaming scanner saw first.
+        let destination =
+            RequestDestination::for_preload_as(as_kind).unwrap_or(RequestDestination::Prefetch);
         let generation = cache.generation();
         let url_owned = url.to_owned();
         let fetch = Box::new(move || {
@@ -4756,6 +4761,19 @@ impl JsFetchProvider for HttpClient {
             }),
             Err(e) => Err(Error::Network(e)),
         }
+    }
+
+    /// BUG-1116: only a successful warm-up counts — a failed one is not
+    /// trusted, the caller retries over the network and reports its own error.
+    fn fetch_preloaded(&self, url: &str) -> Option<JsFetchResult> {
+        let (body, content_type) = self.subresource_cache.as_ref()?.lookup(url)?.ok()?;
+        Some(JsFetchResult {
+            status: 200,
+            status_text: "OK".to_owned(),
+            headers: content_type.into_iter().map(|ct| ("content-type".to_owned(), ct)).collect(),
+            body,
+            url: url.to_owned(),
+        })
     }
 
     /// Synchronous GET/HEAD fetch that honours an `AbortToken` in-flight.

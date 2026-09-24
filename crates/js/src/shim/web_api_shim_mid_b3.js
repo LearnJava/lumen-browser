@@ -268,7 +268,14 @@ function _lumen_fetch(input) {
         var useAsync = !(_timeoutMs > 0);
         if (useAsync) {
             return new Promise(function(resolve, reject) {
-                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders);
+                // BUG-1116: an element loading itself (`<script src>`, `<link
+                // rel=stylesheet>`, `@import` — the `_lumenInitiatorType`
+                // callers) may take bytes a `<link rel=preload>` hint has
+                // already fetched this navigation instead of a second GET. A
+                // plain page `fetch()` never does: its request mode/credentials
+                // can differ from the hint's.
+                var usePreloaded = _rtInitiator !== 'fetch' && method === 'GET' && !hasBody;
+                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders, usePreloaded);
                 if (!handle) {
                     reject(new TypeError('fetch: network error for ' + url));
                     return;

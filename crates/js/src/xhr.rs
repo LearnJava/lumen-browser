@@ -442,7 +442,7 @@ XMLHttpRequest.prototype.send = function(body) {
     // discarded every event synchronously inside this call. This mirrors the
     // `fetch()` async path (`web_api_shim_mid_b2.js`, `_lumen_fetch_async_*`
     // bridges + a setTimeout poll loop) instead of blocking here.
-    var handle = _lumen_fetch_async_start(self._url, self._method, contentType, bodyBytes, hasBody, xhrHeaders);
+    var handle = _lumen_fetch_async_start(self._url, self._method, contentType, bodyBytes, hasBody, xhrHeaders, false);
     if (!handle) {
         fail('error');
         return;

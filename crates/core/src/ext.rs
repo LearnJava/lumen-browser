@@ -2050,7 +2050,17 @@ pub trait SubresourceCache: Send + Sync {
         url: &str,
         fetch: SubresourceFetch<'a>,
     ) -> std::result::Result<(Vec<u8>, Option<String>), String>;
+
+    /// Read-only probe: the bytes of `url` if something in the current
+    /// navigation already put it into the cache — waiting for a fetch still
+    /// in flight — or `None` when nothing did. Never fetches and never
+    /// reserves a slot, so a miss costs the caller nothing.
+    fn lookup(&self, url: &str) -> Option<SubresourceOutcome>;
 }
+
+/// A cached subresource: body bytes plus the response's `Content-Type`, or
+/// the error message of the fetch that failed.
+pub type SubresourceOutcome = std::result::Result<(Vec<u8>, Option<String>), String>;
 
 /// One-shot subresource fetch closure passed to [`SubresourceCache::get_or_fetch`]:
 /// body bytes plus the response's `Content-Type` header, or an error message.
@@ -2138,8 +2148,27 @@ pub trait JsFetchProvider: Send + Sync {
     /// unchanged. `HttpClient` overrides this to consult the
     /// [`SubresourceCache`] installed via `with_subresource_cache`, when one
     /// is present.
-    fn fetch_preload_cached(&self, url: &str) -> Result<JsFetchResult> {
+    ///
+    /// `as_kind` is the hint's `as` keyword (`""` for `rel=prefetch`/`icon`,
+    /// `"script"` for `modulepreload`): the bytes may later be served to a
+    /// real `<script src>`/`@font-face`/`<img>` consumer, so the request must
+    /// carry that consumer's destination, not a generic prefetch (BUG-1116).
+    fn fetch_preload_cached(&self, url: &str, as_kind: &str) -> Result<JsFetchResult> {
+        let _ = as_kind;
         self.fetch_sync(url, "GET")
+    }
+
+    /// The bytes a `<link rel=preload|modulepreload>` hint already fetched
+    /// for `url` in this navigation (waiting for that fetch if it is still in
+    /// flight), or `None` — then the caller goes to the network itself.
+    ///
+    /// For consumers that fetch outside the shell's subresource pipeline —
+    /// the ES-module loader (`lumen-js::v8_esm`) reads a `modulepreload`ed
+    /// module through this instead of a second GET (BUG-1116). The default
+    /// never has anything preloaded.
+    fn fetch_preloaded(&self, url: &str) -> Option<JsFetchResult> {
+        let _ = url;
+        None
     }
 
     /// Cooperative-cancellation variant of fetch_sync mirroring AbortSignal.

@@ -630,6 +630,17 @@ fn fetch_subresource_bytes(
         ResolvedResource::Url(url) => {
             use lumen_core::url::Url;
 
+            // BUG-1116: a `<link rel=preload as=image|font>` hint already
+            // warmed this URL into `PREFETCH_CACHE`
+            // (`page_pipeline::warm_preload_cache`) — take those bytes (or
+            // wait for that in-flight fetch) instead of a second request. Only
+            // a read: image/font bodies are held decoded elsewhere, so they
+            // are not put into the byte cache when no hint asked for them. A
+            // failed warm-up is not trusted — this consumer retries itself.
+            if let Some(Ok(resource)) = crate::prefetch::PREFETCH_CACHE.lookup_current(&url) {
+                return Ok(resource.body.clone());
+            }
+
             // Images/fonts are loaded in no-cors mode: cross-origin allowed, but
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
