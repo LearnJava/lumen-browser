@@ -1,6 +1,6 @@
 # BUG-618: `HTMLElement.prototype.inert` getter/setter is shadowed by a stale Phase-0 stub — ignores the `inert` content attribute entirely
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/inert.rs::install_inert_api_v8`, `INERT_SHIM` — installed at `crates/js/src/v8_runtime.rs:4307`, after `WEB_API_SHIM`'s own reflection table entry at `crates/js/src/dom.rs:10729`)
 **Найден:** P2, WPT-VENDOR-inert, 2026-08-04
 
@@ -92,3 +92,33 @@ parse (rather than only ever setting it) will observe the same wrong
 generic reflection table) and wire its Phase-1 `_lumen_set_inert` intent
 into the generic bool-reflection setter instead, or simply drop the
 `install_v8!(inert::install_inert_api_v8)` call once confirmed redundant.
+
+## Исправление (2026-09-25, P3)
+
+Выбран второй вариант из «Масштаба»: `crates/js/src/inert.rs` удалён целиком вместе с
+`pub mod inert;` и `install_v8!(inert::install_inert_api_v8)` в `v8_runtime.rs`.
+
+* Остаётся одно определение `inert` — строка `['inert', 'inert', 'bool']` таблицы рефлексии
+  в `crates/js/src/shim/web_api_shim_tail_b.js` (`_lumen_install_reflection(HTMLElement.prototype, …)`).
+  Её геттер — `_lumen_has_attr`, сеттер — `_lumen_set_attr(n, 'inert', '')` /
+  `_lumen_remove_attr`, то есть ровно то, что «Phase 1» шима собиралась сделать через
+  `_lumen_set_inert`.
+* Хук `globalThis._lumen_set_inert` исчез вместе с шимом: shell его так и не подключил,
+  в дереве не было ни одного вызова вне `inert.rs`, а запись атрибута через общий
+  сеттер и так доходит до DOM и каскада (правило `[inert]` в UA, `inert::is_inert` в
+  layout — `crates/engine/layout/src/inert.rs`, это другой, живой модуль).
+* Фокусируемость не менялась — она уже читала атрибут (`_lumen_is_focusable`).
+
+Регрессия — `crates/js/src/dom/tests/v8_bug618_inert_reflection.rs`: атрибут из разметки
+читается как `true`; `setAttribute`/`removeAttribute` видны через свойство; запись
+свойства (`1`/`0`) ставит/снимает атрибут `inert=""`; на экземпляре не остаётся ни
+`_inert`, ни собственного `inert`. До удаления модуля падали все 4, после — зелёные
+(вместе с соседними `v8_bug619`/`hidden`, 25 тестов).
+
+Живой WPT (`run_report.py --all --root inert --check`, dev-release из ветки против
+dev-release `main` от 2026-09-24): `inert/inert-node-is-unfocusable.html` теперь OK 6/6,
+включая «Can get inert via property», «Elements inside of inert subtrees return false when
+getting 'inert'» и «Setting inert via property correctly modifies inert state»; unexpected
+pass по категории 18 → 27. Набор `REGRESSION` в обоих бинарях побитово одинаков (31 строка
+устаревшего baseline `tests/wpt/metadata/inert/`, к этому фиксу не относится), поэтому
+`.ini` не перезаписывался — это отдельная задача пересъёма baseline категории.

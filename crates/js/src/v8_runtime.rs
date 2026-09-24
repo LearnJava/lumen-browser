@@ -953,7 +953,6 @@ impl V8JsRuntime {
             eprintln!("v8: frame_bridge_globals::install_frame_bridge_globals_v8 failed: {e}");
         }
         install_v8!(iframe_element::install_iframe_element_bindings_v8);
-        install_v8!(inert::install_inert_api_v8);
         install_v8!(intl_bindings::install_intl_bindings_v8);
         install_v8!(launch_handler::install_launch_handler_api_v8);
         install_v8!(local_font_access::install_local_font_access_api_v8);

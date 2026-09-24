@@ -317,6 +317,9 @@ mod v8_bug685_default_namespace_resolver;
 mod v8_bug619_inert_shadow_host;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug618_inert_reflection;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug877_895_shadow_root_wrapper;
 
 #[cfg(feature = "v8-backend")]
