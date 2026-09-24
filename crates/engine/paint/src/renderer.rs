@@ -5947,8 +5947,10 @@ use band_compose::{band_blit_quads, band_geometry, ring_advance_plan, RingStrip}
 mod frame_entry;
 
 mod construct;
-#[cfg(test)]
-use construct::renderer_instance_descriptor;
+// BUG-1073 срез 3: проба бэкенда открывает устройство тем же инстансом и
+// с теми же лимитами, что рендер, — рендер берёт его у пробы, а не
+// открывает второе.
+pub(crate) use construct::{renderer_instance_descriptor, window_device_limits};
 
 mod diagnostics;
 // Реэкспортированы `pub`, а не приватным `use`, потому что `lib.rs` делает
