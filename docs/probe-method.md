@@ -269,7 +269,7 @@ try/catch конструктора `Promise` (который ловит синх
    точечной правкой в одном месте.
 
 Второе условие и есть рабочее. `document.forms`/`scripts`/`links` отсутствуют целиком, но это
-«по строке на коллекцию по образцу `images`» ([BUG-892](../bugs/BUG-892-OPEN.md)) — баг.
+«по строке на коллекцию по образцу `images`» ([BUG-892](../bugs/BUG-892-FIXED.md)) — баг.
 `document.styleSheets` отсутствует так же, но за ним нет ни `StyleSheetList`, ни
 `CSSStyleSheet`, ни `CSSRuleList` ([BUG-746](../bugs/BUG-746-OPEN.md)) — доработка. Первое
 условие у них общее, различает второе.
