@@ -274,8 +274,24 @@ function _lumen_fetch(input) {
                 // already fetched this navigation instead of a second GET. A
                 // plain page `fetch()` never does: its request mode/credentials
                 // can differ from the hint's.
-                var usePreloaded = _rtInitiator !== 'fetch' && method === 'GET' && !hasBody;
-                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders, usePreloaded);
+                //
+                // BUG-1021: the request's Fetch mode and destination ride in
+                // one `mode|destination` string (the native side reads the
+                // preload decision off it too: a non-empty destination is an
+                // element load). An element names its own — `<link
+                // rel=stylesheet>`/`@import` are `no-cors`/`style`, a classic
+                // `<script src>` `no-cors`/`script`, a module script
+                // `cors`/`script` — a page `fetch()` forwards `init.mode`
+                // (empty = Fetch's default `cors`) with the empty destination.
+                var _fetchLoad;
+                if (_rtInitiator === 'css' || _rtInitiator === 'link') {
+                    _fetchLoad = 'no-cors|style';
+                } else if (_rtInitiator === 'script') {
+                    _fetchLoad = (init && init._lumenModule) ? 'cors|script' : 'no-cors|script';
+                } else {
+                    _fetchLoad = ((init && typeof init.mode === 'string') ? init.mode : '') + '|';
+                }
+                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders, _fetchLoad);
                 if (!handle) {
                     reject(new TypeError('fetch: network error for ' + url));
                     return;

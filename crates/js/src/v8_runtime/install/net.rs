@@ -418,6 +418,8 @@ pub(crate) fn install_fetch(
                 method: &method,
                 headers: &headers,
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             }) {
                 Ok(resp) => {
@@ -585,6 +587,8 @@ pub(crate) fn install_fetch(
                             content_type: &content_type,
                             bytes: &body,
                         }),
+                        mode: "",
+                        destination: "",
                         token: None,
                     }) {
                         Ok(resp) => {
@@ -678,6 +682,8 @@ pub(crate) fn install_fetch(
                 method: &method,
                 headers: &headers,
                 body: None,
+                mode: "",
+                destination: "",
                 token: Some(&token),
             }) {
                 Ok(resp) => {
@@ -725,6 +731,8 @@ pub(crate) fn install_fetch(
                         content_type: &content_type,
                         bytes: &body,
                     }),
+                    mode: "",
+                    destination: "",
                     token: Some(&token),
                 }) {
                     Ok(resp) => {
@@ -784,16 +792,21 @@ pub(crate) fn install_fetch(
                 Arc::new(Mutex::new(HashMap::new()));
             let async_next: Arc<AtomicU32> = Arc::new(AtomicU32::new(1));
 
-            // _lumen_fetch_async_start(url, method, content_type, body, has_body, headers, use_preloaded) → handle u32 (0 = no provider)
+            // _lumen_fetch_async_start(url, method, content_type, body, has_body, headers, load) → handle u32 (0 = no provider)
             //
-            // `use_preloaded` (BUG-1116): an element's own load (`<script src>`,
-            // `<link rel=stylesheet>`) first asks for the bytes a `<link
-            // rel=preload>` hint already fetched — `fetch_preloaded` — and goes to
-            // the network only when there are none.
+            // `load` (BUG-1021) is `"<mode>|<destination>"` — the request's Fetch
+            // mode and destination (`JsFetchRequest::mode`/`destination`); the
+            // shim packs both into one argument because the binding is already at
+            // the `reg!` arity limit. A non-empty destination marks an element's
+            // own load (`<script src>`, `<link rel=stylesheet>`, `@import`), which
+            // (BUG-1116) first asks for the bytes a `<link rel=preload>` hint
+            // already fetched — `fetch_preloaded` — and goes to the network only
+            // when there are none. A page `fetch()` has an empty destination and
+            // never does.
             let am_start = Arc::clone(&async_map);
             reg!(scope, ctx, store, 
                 "_lumen_fetch_async_start",
-                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool, headers: Vec<String>, use_preloaded: bool| -> u32 {
+                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool, headers: Vec<String>, load: String| -> u32 {
                     let provider = match fp_async.as_ref() {
                         Some(p) => Arc::clone(p),
                         None => return 0,
@@ -806,6 +819,9 @@ pub(crate) fn install_fetch(
                         .insert(id, AsyncFetchState { token: token.clone(), outcome: None });
                     let map = Arc::clone(&am_start);
                     let headers = pairs_from_flat(headers);
+                    let (mode, destination) = load.split_once('|').unwrap_or(("", ""));
+                    let (mode, destination) = (mode.to_owned(), destination.to_owned());
+                    let use_preloaded = !destination.is_empty() && method == "GET" && !has_body;
                     std::thread::spawn(move || {
                         let preloaded = if use_preloaded { provider.fetch_preloaded(&url) } else { None };
                         let res = match preloaded {
@@ -818,6 +834,8 @@ pub(crate) fn install_fetch(
                                     content_type: &content_type,
                                     bytes: &body,
                                 }),
+                                mode: &mode,
+                                destination: &destination,
                                 token: Some(&token),
                             }),
                         };

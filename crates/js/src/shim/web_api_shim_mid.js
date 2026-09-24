@@ -11953,7 +11953,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             _lumen_script_exec_drain();
             return;
         }
-        fetch(url, { _lumenInitiatorType: 'script' }).then(function(resp) {
+        fetch(url, { _lumenInitiatorType: 'script', _lumenModule: !!isModule }).then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             return resp.text();
         }).then(function(text) {

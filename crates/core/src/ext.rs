@@ -2018,6 +2018,16 @@ pub struct JsFetchRequest<'a> {
     /// Cancellation token mirroring `AbortSignal`; `None` when the call site
     /// has no signal (a plain synchronous fetch).
     pub token: Option<&'a AbortToken>,
+    /// Fetch §3.1.4 request mode (`RequestInit.mode`): `"no-cors"`,
+    /// `"same-origin"`, `"cors"`. `""` means Fetch's default, `cors` — what a
+    /// plain `fetch()`/XHR gets. An element loading itself through the shim
+    /// (`@import`, `<link rel=stylesheet>`, `<script src>`) passes `"no-cors"`
+    /// (BUG-1021). Drives `Sec-Fetch-Mode` and the CORS `Origin` header.
+    pub mode: &'a str,
+    /// Fetch request destination (`"style"`, `"script"`, …) for such an
+    /// element load; `""` for a plain `fetch()`/XHR (serialised as `empty`
+    /// in `Sec-Fetch-Dest`).
+    pub destination: &'a str,
 }
 
 /// Process-global, per-navigation cache of subresource bytes (BUG-1116).

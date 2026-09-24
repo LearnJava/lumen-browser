@@ -220,7 +220,7 @@ pub fn check_corp_allowed(
 /// Conservative implementation: extracts the last two dot-delimited labels of each
 /// host and compares. Scheme and port are not considered (same-site is scheme-agnostic
 /// per the HTML spec § same site).
-fn is_same_site(a: &Origin, b: &Origin) -> bool {
+pub(crate) fn is_same_site(a: &Origin, b: &Origin) -> bool {
     registrable_domain(a.host()) == registrable_domain(b.host())
 }
 
