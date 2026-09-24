@@ -11988,17 +11988,21 @@ function _lumen_script_prepare(nid) {
     var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
     var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
     var isImportmap = type !== null && String(type).trim().toLowerCase() === 'importmap';
-    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
-    src = (src === null) ? '' : String(src).trim();
-    // Step 5: no src and no source text — return without touching the flag,
-    // so a later retype with a non-empty src/body still gets to run.
+    // Step 5 reads "no src *attribute*", not "src is the empty string" — a
+    // `src=""` (BUG-838) still counts as present and must not gate the flag
+    // the same way an absent attribute does.
+    var srcAttr = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    var hasSrcAttr = srcAttr !== null;
+    var src = hasSrcAttr ? String(srcAttr).trim() : '';
+    // Step 5: no src attribute and no source text — return without touching
+    // the flag, so a later retype with a non-empty src/body still gets to run.
     var text = null;
     var hasBody = false;
-    if (src === '') {
+    if (!hasSrcAttr) {
         text = _lumen_u2n(_lumen_get_text_content(nid));
         hasBody = text !== null && String(text).trim() !== '';
     }
-    if (src === '' && !hasBody) return;
+    if (!hasSrcAttr && !hasBody) return;
     // Step 10: only classic/module/importmap continue past type resolution
     // to step 12; any other type (application/json, speculationrules, a
     // template language, an unrecognised value, …) is a data block that
