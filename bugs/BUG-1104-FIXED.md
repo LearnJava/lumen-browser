@@ -1,7 +1,7 @@
 # BUG-1104 — `CustomEvent.prototype.initCustomEvent` (legacy DOM init method) missing entirely
 
 **Статус:** FIXED (P6, 2026-09-23), в срезе того же дня, что и заведение
-**Заведён:** P6, 2026-09-23, попутно при живой пробе [BUG-791](BUG-791-OPEN.md) (dzen.ru SSO)
+**Заведён:** P6, 2026-09-23, попутно при живой пробе [BUG-791](BUG-791-FIXED.md) (dzen.ru SSO)
 **Компонент:** js (`crates/js/src/shim/web_api_shim_head.js`)
 
 ## Симптом
@@ -37,6 +37,6 @@ initCustomEvent(type, bubbles, cancelable, detail)` (DOM LS §2.2, тот же
 A/B на живом `dzen.ru` (тот же `--mcp-live-port`, два прогона с разницей
 только в этом фиксе): ошибка `initCustomEvent is not a function` исчезла
 из `resource://console` после фикса. Итог SSO-хендшейка (`sso_failed=blocked`
-в итоговом URL) не изменился — остаток относится к [BUG-791](BUG-791-OPEN.md)
+в итоговом URL) не изменился — остаток относится к [BUG-791](BUG-791-FIXED.md)
 (другая цепочка ошибок, `Cannot read properties of null (reading
 'childNodes')`, не эта), фикс не претендует на его закрытие.
