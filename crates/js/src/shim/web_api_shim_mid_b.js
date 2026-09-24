@@ -1023,8 +1023,14 @@ var history = {
         _lumen_history_push(new_state_json, target === null ? '' : target);
         if (target !== null) {
             _lumen_location_update(target);
-            _lumen_history_push_url(target, new_state_json);
         }
+        // A same-document entry is added regardless of whether `url` was
+        // given (HTML LS §7.4.6 step 8) — the shell must learn about it
+        // either way, or its nav_back stack never gains the entry and a
+        // later traverse back to it delivers no `popstate` (BUG-886). When
+        // `url` is omitted the document URL is unchanged, so fall back to
+        // the current href.
+        _lumen_history_push_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
     },
     replaceState: function(state, title, url) {
         var target = (url === undefined || url === null) ? null : _lumen_history_state_url(url);
@@ -1032,8 +1038,8 @@ var history = {
         _lumen_history_replace(new_state_json, target === null ? '' : target);
         if (target !== null) {
             _lumen_location_update(target);
-            _lumen_history_replace_url(target, new_state_json);
         }
+        _lumen_history_replace_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
     },
     back:    function() { history.go(-1); },
     forward: function() { history.go(1); },
