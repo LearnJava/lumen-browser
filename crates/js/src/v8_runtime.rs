@@ -372,6 +372,7 @@ impl V8JsRuntime {
                 Arc::clone(&dom_dirty),
                 Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
+                image_load_hook.clone(),
             )?;
 
             install::install_service_worker(
@@ -527,6 +528,7 @@ impl V8JsRuntime {
                 Arc::clone(&dom_dirty),
                 Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
+                image_load_hook.clone(),
             )?;
 
             install::install_selection(

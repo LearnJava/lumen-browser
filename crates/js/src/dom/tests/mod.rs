@@ -241,6 +241,9 @@ mod v8_bug599_get_root_node;
 mod v8_bug630_image_load_events;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1118_srez2_subtree_img_load;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug552_document_metadata;
 
 #[cfg(feature = "v8-backend")]
