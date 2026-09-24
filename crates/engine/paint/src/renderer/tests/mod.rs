@@ -156,3 +156,71 @@ fn atlas_key_is_deterministic() {
 
 mod clip_blend_vertex;
 mod sticky_colr_font;
+
+/// BUG-406: инстанс рендера не должен нести `VALIDATION_INDIRECT_CALL` —
+/// с ним каждый `create_pipeline_layout` на DX12 создаёт три
+/// `ID3D12CommandSignature` и стоит ~250 мс. Проверяется только при
+/// незаданном `WGPU_VALIDATION_INDIRECT_CALL` (переменная — намеренный
+/// рычаг возврата флага).
+#[test]
+fn renderer_instance_has_no_indirect_call_validation() {
+    if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_some() {
+        return;
+    }
+    let desc = renderer_instance_descriptor(wgpu::Backends::all());
+    assert!(
+        !desc.flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL),
+        "VALIDATION_INDIRECT_CALL вернулся во флаги инстанса рендера: {:?}",
+        desc.flags,
+    );
+}
+
+/// BUG-406: снятие `VALIDATION_INDIRECT_CALL` с инстанса рендера корректно,
+/// пока рендер не делает indirect-вызовов — без валидации wgpu не
+/// проверяет indirect-буферы и не подставляет `first_vertex`/
+/// `first_instance` в builtins. Скан исходников рендера: появится
+/// `draw_indirect`/`draw_indexed_indirect`/`dispatch_workgroups_indirect`/
+/// `multi_draw_*` — флаг придётся вернуть (или доказать, что буферы
+/// собираются самим рендером и валидны).
+#[test]
+fn renderer_uses_no_indirect_calls() {
+    fn scan(dir: &std::path::Path, hits: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                // Сам этот тест перечисляет искомые имена строками.
+                if path.file_name().is_some_and(|n| n == "tests") {
+                    continue;
+                }
+                scan(&path, hits);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).expect("read source");
+                for (n, line) in text.lines().enumerate() {
+                    let code = line.split("//").next().unwrap_or("");
+                    if ["draw_indirect(", "draw_indexed_indirect(", "_indirect_count(",
+                        "dispatch_workgroups_indirect("]
+                        .iter()
+                        .any(|pat| code.contains(pat))
+                    {
+                        hits.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut hits = Vec::new();
+    scan(&src.join("renderer"), &mut hits);
+    for file in ["renderer.rs", "layer_cache.rs", "texture_pool.rs", "backdrop_cache.rs",
+        "scroll_cache.rs", "atlas.rs"]
+    {
+        let path = src.join(file);
+        if path.exists() {
+            let text = std::fs::read_to_string(&path).expect("read source");
+            if text.contains("_indirect(") {
+                hits.push(path.display().to_string());
+            }
+        }
+    }
+    assert!(hits.is_empty(), "indirect-вызовы в рендере: {hits:?}");
+}

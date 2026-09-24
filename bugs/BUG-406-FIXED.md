@@ -1,6 +1,6 @@
 # BUG-406 — DX12: компиляция 16 wgpu-пайплайнов при старте стоит 3–7 с против 0.28 с на Vulkan (то же железо)
 
-**Статус:** OPEN (основной срез влит 2026-07-29: ленивая компиляция, 16 → 5 пайплайнов при старте)
+**Статус:** FIXED 2026-09-24 (P3) — настоящая причина разрыва DX12 ↔ Vulkan: `InstanceFlags::VALIDATION_INDIRECT_CALL`, см. последний срез
 **Компонент:** paint (`Renderer::init_pipelines`, `crates/engine/paint/src/renderer.rs`) —
 16 вызовов `device.create_render_pipeline` при создании бэкенда
 **Найден:** 2026-07-28 (P3), инструментальный замер стадий cold-start по заявке пользователя
@@ -407,3 +407,83 @@ samples/page.html`, снять три метки, убить процесс).
 недоступно. Указатель `STATUS-P3.md` на эту строку снят по протоколу ревизии DEBTOR
 (тот же, что применялся к BUG-282/306/330): свежая проверка не нашла дрейфа и не
 открыла новый путь, следующий шаг наступит только вместе с обновлением `wgpu`.
+
+
+## Срез 2026-09-24 (P3) — настоящая причина: не FXC и не драйвер, а `VALIDATION_INDIRECT_CALL`
+
+### Census
+
+Прежние срезы приписывали ~0.25–1.5 с «на пайплайн» асинхронной компиляции шейдеров в
+драйвере Intel/DX12. Проверено по шагам (временная инструментация, в коммит не входит):
+
+1. **Компилятор шейдеров ни при чём.** A/B `WGPU_DX12_COMPILER=fxc` против `dxc`
+   (`dxcompiler.dll` 1.8.2502 из Windows SDK) в форс-режиме
+   `LUMEN_SERIAL_PIPELINES=1 LUMEN_EAGER_PIPELINES=1 LUMEN_WAIT_HOT_PIPELINES=1`, 4 раунда
+   интерливингом: `init_pipelines` FXC 5.9–9.2 с, DXC 6.5–8.5 с — в пределах разброса.
+2. **Время теряется не в `create_render_pipeline`.** Каждый ленивый `build_*_pipeline`
+   целиком стоил 210–320 мс, а сам `create_render_pipeline` внутри — 1–130 мс;
+   `device.poll` после него — 0 мс, `drop` шейдера/layout — 0 мс.
+3. **Время съедает `create_pipeline_layout`**: 207–338 мс на КАЖДЫЙ вызов, в том числе на
+   повторный с тем же единственным BGL (то есть не холодный кэш), при 0 мс на
+   `create_buffer` рядом.
+4. Причина в wgpu 26: `InstanceFlags::from_build_config()` включает
+   `VALIDATION_INDIRECT_CALL` **и в release**; при нём `wgpu-core`
+   (`device/resource.rs`, `create_pipeline_layout`) добавляет каждому layout
+   `PipelineLayoutFlags::INDIRECT_BUILTIN_UPDATE`, а DX12-бэкенд
+   (`wgpu-hal/src/dx12/device.rs`) на такой layout создаёт три
+   `ID3D12CommandSignature` (draw / draw_indexed / dispatch). На Intel Iris Plus это и
+   стоит ~250 мс на layout. Vulkan эквивалента не делает — отсюда «разрыв API».
+   `WGPU_VALIDATION_INDIRECT_CALL=0` в том же форс-режиме: `init_pipelines` 5.9 с → 0.74 с,
+   `circle layout` 250 мс → 0 мс.
+
+Вывод среза 2026-07-29 «драйвер компилирует фоном, стоимость догоняет вызывающий поток»
+был неверной атрибуцией: параллельность помогала потому, что три `CreateCommandSignature`
+на разных потоках тоже перекрываются. Сам тезис «self-time вызова не равен цене секции»
+остаётся верным — но цену съедал соседний вызов, а не отложенная работа драйвера.
+
+### Что сделано
+
+`construct.rs::renderer_instance_descriptor(backends)` — единый дескриптор инстанса для
+оконного и headless-конструктора рендера: `from_build_config()` минус
+`VALIDATION_INDIRECT_CALL`, затем `.with_env()`. Флаг нужен только indirect-вызовам
+(валидация indirect-буферов и подстановка `first_vertex`/`first_instance`), а рендер страницы
+их не делает вовсе. `WGPU_VALIDATION_INDIRECT_CALL=1` возвращает флаг — это и откат, и
+A/B-рычаг. Инстанс WebGPU для JS (`webgpu_compute.rs`) и `backend_probe.rs` намеренно не
+тронуты: у первого indirect-диспетчи приходят от страницы, второй не строит layout'ов.
+
+Тесты (`renderer/tests/mod.rs`):
+- `renderer_instance_has_no_indirect_call_validation` — флаг снят;
+- `renderer_uses_no_indirect_calls` — скан исходников рендера на `draw_indirect(` /
+  `draw_indexed_indirect(` / `dispatch_workgroups_indirect(` / `*_indirect_count(`: снятие
+  флага корректно, пока их нет. Намеренная ошибка проверена: вставленный в `construct.rs`
+  `p.draw_indirect(b, 0)` роняет тест с указанием файла и строки.
+
+### Приёмка
+
+`samples/page.html`, dev-release, Intel Iris Plus, Windows 10, интерливинг
+«`WGPU_VALIDATION_INDIRECT_CALL=1`» (старое поведение) / по умолчанию в одном бинарнике:
+
+| | старое | новое |
+|---|---|---|
+| DX12, путь по умолчанию: ожидание горячих пайплайнов в первом кадре (5 раундов) | 331–433 мс | **17–49 мс** |
+| DX12, путь по умолчанию: `backend ready` (min) | 433 мс | 392 мс |
+| DX12, форс eager+serial+wait: `init_pipelines`, все 21 пайплайн (3 раунда) | 4910–5123 мс | **666–776 мс** |
+| Vulkan, путь по умолчанию: `backend ready` / first frame | 291–470 / 366–544 мс | 277–293 / 357–382 мс |
+
+**Пиксельная нейтральность — чем проверено:** `cargo test -p lumen-paint --features backend-wgpu
+--lib -- --include-ignored` на DX12 в обоих плечах (`WGPU_VALIDATION_INDIRECT_CALL=1` и по
+умолчанию) — 1260/1260 оба, включая GPU-рендер-тесты с проверкой пикселей; интеграционные
+`tests/all.rs` 64/64; `dump_golden.py` 12/12. Живой `graphic_tests/run.py` в этой сессии не
+получен: калибровка TEST-00 дважды упала «magenta marker not found» (gdigrab без фокуса окна в
+неинтерактивной сессии — известный класс отказа окружения, не код). Флаг по построению не
+касается ни дескрипторов пайплайнов, ни данных кадра — только создания root signature/command
+signature на уровне layout.
+
+Разрыв DX12 ↔ Vulkan на горячем пути закрыт (ожидание пайплайнов 17–49 мс на DX12 — тот
+же порядок, что компиляция на Vulkan). Пиксельно нейтрально по построению: дескрипторы
+пайплайнов не менялись, indirect-вызовов нет, флаг влияет только на создание layout'ов.
+
+**Все пункты шапки закрыты:** компиляция при старте (ленивость + параллельность + неожидающий
+конструктор, срезы 1–3), липкий кэш пробы (BUG-405 срез 14), `PipelineCache` больше не нужен
+(его отсутствие на DX12 ничего не стоит, когда сами компиляции дешёвые). Остаток блокировки
+окна — проба бэкенда и adapter/device, это BUG-274.

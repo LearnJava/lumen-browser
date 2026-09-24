@@ -7,6 +7,31 @@
 
 use super::*;
 
+/// Дескриптор wgpu-инстанса рендера страницы — оконного и headless.
+///
+/// BUG-406: wgpu 26 включает `InstanceFlags::VALIDATION_INDIRECT_CALL` по
+/// умолчанию даже в release (`InstanceFlags::from_build_config`). С ним
+/// wgpu-core ставит каждому `create_pipeline_layout` флаг
+/// `INDIRECT_BUILTIN_UPDATE`, и DX12-бэкенд на каждый layout создаёт три
+/// `ID3D12CommandSignature` (draw/draw_indexed/dispatch). На Intel Iris Plus
+/// это стоило ~250 мс на layout — ~4.3 с из ~5 с сборки всех 21 пайплайна;
+/// сами `create_render_pipeline` — 1–130 мс.
+/// Это и был «разрыв DX12 ↔ Vulkan», который срезы 2026-07-29…08-19
+/// приписывали FXC/драйверу.
+///
+/// Флаг нужен только indirect-вызовам (`draw_indirect`/`dispatch_*_indirect`),
+/// а рендер страницы их не использует вовсе — инвариант держит тест
+/// `renderer_uses_no_indirect_calls`. Поэтому флаг снимается ДО `with_env()`:
+/// `WGPU_VALIDATION_INDIRECT_CALL=1` по-прежнему возвращает его (A/B-рычаг),
+/// а остальные `WGPU_*`-переменные работают как раньше. Инстанс WebGPU для
+/// JS (`webgpu_compute.rs`) не тронут — там indirect-диспетчи приходят от
+/// страницы, и валидация нужна.
+pub(crate) fn renderer_instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
+    let mut flags = wgpu::InstanceFlags::from_build_config();
+    flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    wgpu::InstanceDescriptor { backends, flags, ..Default::default() }.with_env()
+}
+
 impl Renderer {
     pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
@@ -74,9 +99,7 @@ impl Renderer {
         let t_adapter0 = std::time::Instant::now();
         let mut picked = None;
         for backends in backend_prefs {
-            let instance = wgpu::Instance::new(
-                &wgpu::InstanceDescriptor { backends, ..Default::default() }.with_env(),
-            );
+            let instance = wgpu::Instance::new(&renderer_instance_descriptor(backends));
             let Ok(surface) = instance.create_surface(window.clone()) else {
                 continue;
             };
@@ -246,9 +269,7 @@ impl Renderer {
         // No surface needed — request adapter without compatible_surface constraint.
         let mut picked = None;
         for &backends in backend_prefs {
-            let instance = wgpu::Instance::new(
-                &wgpu::InstanceDescriptor { backends, ..Default::default() }.with_env(),
-            );
+            let instance = wgpu::Instance::new(&renderer_instance_descriptor(backends));
             match instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::LowPower,
