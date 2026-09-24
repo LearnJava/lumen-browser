@@ -1853,6 +1853,20 @@ fn is_ident_continue(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit()
 }
 
+/// Hard cap on selectors a single [`expand_nesting`] call can produce.
+///
+/// CSS Nesting L1 doesn't bound cartesian growth (`parents.len() *
+/// nested.len()`), and the expanded list becomes the `parents` of the next
+/// nesting level — so on malformed input where recovery keeps entering
+/// [`Parser::parse_implicit_nested_rule`] instead of terminating, the
+/// selector count compounds multiplicatively *per level of nesting depth*
+/// instead of growing additively with input size. A 676-byte fuzzer
+/// minimization reached 50 MiB / ×74 000 blowup this way (BUG-788). Real
+/// stylesheets never come close to four figures of selectors from nesting
+/// alone, so truncating here only ever discards pathological expansion, not
+/// legitimate rules.
+const MAX_EXPANDED_SELECTORS: usize = 1024;
+
 /// CSS Nesting L1 §3 — expand `& (combinator) nested` into concrete selectors.
 ///
 /// `combinator = None`  → compound join (e.g. `&.foo` → `parent.foo`)
@@ -1863,8 +1877,11 @@ fn expand_nesting(
     nested: &[ComplexSelector],
 ) -> Vec<ComplexSelector> {
     let mut result = Vec::new();
-    for parent in parents {
+    'outer: for parent in parents {
         for n in nested {
+            if result.len() >= MAX_EXPANDED_SELECTORS {
+                break 'outer;
+            }
             let expanded = match combinator {
                 None => {
                     // `&.foo` → merge parent head with nested head, keep tails.
