@@ -54,3 +54,12 @@ R.referrerInDoc = 'referrer' in document;
 §3.1.3 «document.cookie»: запись идёт через тот же алгоритм, что `Set-Cookie`, `HttpOnly` из скрипта
 не читается и не пишется. Критерий: репро выше даёт в Lumen те же 7 cookie, что в Chrome, и
 cookie, выставленная скриптом, уходит в заголовке `Cookie` следующего запроса.
+
+## Реальные сайты: imdb, espn, amazon (2026-09-25, P6, после BUG-892)
+
+После починки `document.scripts` ([BUG-892](BUG-892-FIXED.md)) челлендж AWS WAF на imdb
+проходит `inputs` → `verify` (200), но токен `aws-waf-token` пишется через `document.cookie`
+(`aws-waf-token=…;path=/;domain=.imdb.com;expires=…;secure;SameSite=Lax`) и теряется: на живой
+странице imdb все шесть проб-записей, включая голое `'t1=a'`, читаются обратно как `''`. Сайт
+отдаёт 202 с челленджем снова, после четырёх попыток — «Max challenge attempts exceeded»
+(14 узлов). espn и amazon стоят на том же челлендже.

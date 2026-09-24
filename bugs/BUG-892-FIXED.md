@@ -1,9 +1,9 @@
 # BUG-892 — `document.forms`/`scripts`/`links` отсутствуют (`document.images` — есть): коллекции документа сделаны по одной, а не таблицей
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P6)
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 29 — живой замер, вариант `collections`)
 **Область:** js (`crates/js/src/dom.rs:6125` — единственный геттер `get images()` в литерале `document`; `forms`/`scripts`/`links`/`embeds`/`plugins`/`anchors` не объявлены)
-**Владелец:** P1/P3. Заведён P2 в ходе WPT-задачи, здесь не чинится.
+**Владелец:** P6 (передан решением пользователя 2026-09-24). Заведён P2 в ходе WPT-задачи.
 
 ## Симптом
 
@@ -65,3 +65,37 @@ getElementsByTagName = 1       children = 6        form-elements = 1
   1051 узел против 1210.
 
 Передан P6 по решению пользователя; по числу затронутых сайтов — первый в очереди.
+
+## Исправление (P6, 2026-09-25)
+
+`crates/js/src/shim/web_api_shim_mid.js`: все коллекции HTML LS §3.1.5 заведены через одну
+фабрику `_lumen_document_collection(key, selector)` — тот же живой Proxy
+`_lumen_make_nid_collection`, что был у `images`, плюс кэш по ключу:
+
+| геттер | селектор |
+|---|---|
+| `images` | `img` |
+| `forms` | `form` |
+| `scripts` | `script` |
+| `links` | `a[href], area[href]` |
+| `embeds`, `plugins` | `embed` (один ключ кэша → `plugins === embeds`) |
+| `anchors` | `a[name]` |
+| `applets` | пусто |
+
+Кэш нужен ради `[SameObject]`: до фикса и `document.images !== document.images` (каждое
+чтение строило новый Proxy). Живость не страдает — Proxy перечитывает дерево на каждом доступе.
+
+Тесты — `crates/js/src/dom/tests/v8_bug892_document_collections.rs`: тип и `[SameObject]` всех
+восьми, живость захваченной до вставки коллекции, `document.forms.fm1`/`namedItem`, `anchors`
+без `href`-only ссылок, порядок дерева у `links` и цикл Webflow из разбора discord.
+
+### Живая проверка (2026-09-25, dev-release, `--maximized`, `LUMEN_NO_ADBLOCK=1`)
+
+- `.tmp/compat/g1/doc_scripts.html`: `scripts`/`forms`/`links`/`images` — `object`, цикл
+  `document.scripts[i].src` — `ok` (как в Chrome; до фикса — `TypeError`).
+- **discord** — 1226 узлов (до фикса 1051, Chrome 1210), ошибки `reading 'length'` нет.
+- **imdb** — `[unhandled-rejection] TypeError … 'length'` исчез, челлендж AWS WAF проходит
+  `inputs` → `verify` (200) в каждом раунде, но всё ещё упирается в «Max challenge attempts
+  exceeded»: `aws-waf-token` кладётся через `document.cookie`, а тот не сохраняет ни одну запись
+  (даже `'t1=a'`) — это [BUG-1119](BUG-1119-OPEN.md). espn/amazon — тот же челлендж, та же
+  следующая стена.

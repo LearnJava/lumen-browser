@@ -46,7 +46,7 @@ DOM §4.2.10: `HTMLCollection` обязан иметь `length`, `item(index)` �
 `children`, `childNodes` — на документе, элементе, `ShadowRoot`,
 `DocumentFragment` и detached-документе (`DOMParser`/`createHTMLDocument`).
 `document.images`/`forms`/`scripts`/`links` не трогались — это отдельный,
-уже заведённый [BUG-892](BUG-892-OPEN.md) (`undefined`, а не «нет интерфейса»).
+уже заведённый [BUG-892](BUG-892-FIXED.md) (`undefined`, а не «нет интерфейса»).
 
 ## Диагноз и фикс (P3, 2026-09-05)
 

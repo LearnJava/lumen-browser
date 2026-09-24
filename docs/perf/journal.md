@@ -320,7 +320,7 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 
 | Причина | Сайты |
 |---|---|
-| нет `document.scripts`/`links` ([BUG-892](../../bugs/BUG-892-OPEN.md)) | imdb, espn, amazon (челлендж AWS WAF), discord |
+| нет `document.scripts`/`links` ([BUG-892](../../bugs/BUG-892-FIXED.md)) | imdb, espn, amazon (челлендж AWS WAF), discord |
 | `document.referrer` — `undefined` ([BUG-1121](../../bugs/BUG-1121-OPEN.md)) | imgur, fandom, yahoo, yahoo-jp |
 | `defer` исполняется в порядке документа ([BUG-1120](../../bugs/BUG-1120-OPEN.md)) | khanacademy, coursera |
 | члены DOM не на прототипах интерфейсов ([BUG-1122](../../bugs/BUG-1122-OPEN.md)), `EventTarget` вне цепочки ([BUG-1123](../../bugs/BUG-1123-OPEN.md)), нет `CDATASection` (BUG-863) | youtube |

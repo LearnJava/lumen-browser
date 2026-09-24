@@ -23,6 +23,13 @@ the time — read dates.
 
 ## Done
 
+- **The document's named collections come from one cached factory ([BUG-892](../bugs/BUG-892-FIXED.md),
+  P6, 2026-09-25).** `images`/`forms`/`scripts`/`links`/`embeds`/`plugins`/`anchors`/`applets` are
+  getters on the `document` literal calling `_lumen_document_collection(key, selector)`, which
+  builds a live `_lumen_make_nid_collection` Proxy once per key and caches it in
+  `__lumen_document_collections` — that is what makes each `[SameObject]` and `plugins === embeds`
+  (same key). A new collection is one getter line; do not bypass the cache, or identity breaks.
+  `links` is `a[href], area[href]` — the selector engine returns tree order, not selector order.
 - **`document.all` carries the real `[[IsHTMLDDA]]` slot ([BUG-1057](../bugs/BUG-1057-FIXED.md),
   GAP-DOCALLDDA, P1, 2026-09-19).** `typeof document.all === 'undefined'`, falsy, `== null`/`==
   undefined`, yet `!== null` and a live collection under the hood (`length`, indices, `item()`,

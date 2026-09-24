@@ -10716,6 +10716,24 @@ var _lumen_document_implementation = null;
 // wrapper costs no staleness: the collection it wraps is a live Proxy that
 // re-queries the document on every read.
 var __lumen_document_all = null;
+// BUG-892: cache for the named document collections (`images`, `forms`,
+// `scripts`, `links`, `embeds`/`plugins`, `anchors`, `applets`). Every one of
+// them is `[SameObject]` in HTML LS §3.1.5, so `document.forms ===
+// document.forms` must hold (and `plugins === embeds`); the cached Proxy
+// re-queries the tree on every read, so caching it costs no liveness.
+var __lumen_document_collections = Object.create(null);
+function _lumen_document_collection(key, selector) {
+    var coll = __lumen_document_collections[key];
+    if (coll === undefined) {
+        coll = _lumen_make_nid_collection(
+            selector === null
+                ? function() { return []; }
+                : function() { return _lumen_query_selector_all(selector); },
+            HTMLCollection.prototype);
+        __lumen_document_collections[key] = coll;
+    }
+    return coll;
+}
 
 // HTML LS §4.8.3: the `HTMLImageElement` interface and its legacy factory
 // function `Image(width?, height?)`. BUG-305: both were entirely absent, so
@@ -11116,17 +11134,23 @@ var document = {
     // static array `getElementsByTagName` above settles for: unlike a one-off
     // query, this one is read repeatedly by long-lived code (image
     // preloaders/lazy-loaders) that expects later-inserted images to show up.
-    get images() {
-        return _lumen_make_nid_collection(
-            function() { return _lumen_query_selector_all('img'); },
-            HTMLCollection.prototype);
-    },
+    get images() { return _lumen_document_collection('images', 'img'); },
+    // HTML LS §3.1.5 (BUG-892): the rest of the document's live collections.
+    // They used to be `undefined`, so `document.scripts.length` threw inside
+    // the AWS WAF challenge (imdb, espn, amazon never got past it) and
+    // `document.links.length` inside Webflow (discord); `document.forms.fm1`
+    // is the first line of several WPT form tests. `plugins` is spec'd to
+    // return the very object `embeds` does, hence the shared cache key.
+    get forms()   { return _lumen_document_collection('forms', 'form'); },
+    get scripts() { return _lumen_document_collection('scripts', 'script'); },
+    get links()   { return _lumen_document_collection('links', 'a[href], area[href]'); },
+    get embeds()  { return _lumen_document_collection('embeds', 'embed'); },
+    get plugins() { return _lumen_document_collection('embeds', 'embed'); },
+    get anchors() { return _lumen_document_collection('anchors', 'a[name]'); },
     // HTML LS §obsolete (BUG-606): `document.applets` -- a legacy Java-applet
     // collection that a spec-compliant implementation (no applet support)
     // must still expose, always empty, as a live HTMLCollection.
-    get applets() {
-        return _lumen_make_nid_collection(function() { return []; }, HTMLCollection.prototype);
-    },
+    get applets() { return _lumen_document_collection('applets', null); },
     // HTML LS §obsolete (GAP-DOCALLDDA, BUG-1057): `document.all` -- a live
     // collection of every element in tree order, wrapped in the native
     // `[[IsHTMLDDA]]` object so `typeof document.all === 'undefined'`,
