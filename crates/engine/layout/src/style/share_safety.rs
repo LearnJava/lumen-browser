@@ -323,11 +323,34 @@ fn complex_is_share_safe(sel: &lumen_css_parser::ComplexSelector, describes_key_
     let last_tail_idx = sel.tail.len().checked_sub(1);
     compound_is_share_safe(&sel.head, last_tail_idx.is_none() && describes_key_node)
         && sel.tail.iter().enumerate().all(|(i, (comb, compound))| {
-            matches!(
+            let is_subject = last_tail_idx == Some(i) && describes_key_node;
+            let prev = if i == 0 { &sel.head } else { &sel.tail[i - 1].1 };
+            let combinator_ok = matches!(
                 comb,
                 lumen_css_parser::Combinator::Descendant | lumen_css_parser::Combinator::Child
-            ) && compound_is_share_safe(compound, last_tail_idx == Some(i) && describes_key_node)
+            ) || (is_subject
+                && matches!(comb, lumen_css_parser::Combinator::NextSibling)
+                && compound_is_bare_universal(prev));
+            combinator_ok && compound_is_share_safe(compound, is_subject)
         })
+}
+
+/// BUG-1112 срез 11: `A + B`'s real match, when `A` is a bare `*` (no
+/// `Type`/`Class`/`Id`/`Attribute`/pseudo constraining it at all), reduces to
+/// "does `B` have ANY immediately preceding element sibling" — which is
+/// exactly the negation of [`super::matching::forms::is_first_element_child`],
+/// already pinned per-node in [`super::share_cache::ShareKey::is_first_child`]
+/// for the SUBJECT (`describes_key_node`) whenever
+/// [`super::share_cache::sheet_has_position_dependent_subject`] gates it on.
+/// So a `NextSibling` combinator immediately before the subject compound is
+/// share-safe too, but ONLY there (not at ancestor position — the key has no
+/// per-ancestor sibling field, same reasoning `selector_is_share_safe`'s doc
+/// comment gives for banning `NextSibling`/`LaterSibling` everywhere else) and
+/// ONLY when the compound to its left is this exact bare shape — anything
+/// else (`:not(label) + *`, `h1 + *`, `.foo + *`) needs the SIBLING's own
+/// tag/attrs, which no field captures, and stays unsafe.
+pub(crate) fn compound_is_bare_universal(compound: &lumen_css_parser::CompoundSelector) -> bool {
+    matches!(compound.parts.as_slice(), [lumen_css_parser::SimpleSelector::Universal])
 }
 
 fn compound_is_share_safe(compound: &lumen_css_parser::CompoundSelector, describes_key_node: bool) -> bool {

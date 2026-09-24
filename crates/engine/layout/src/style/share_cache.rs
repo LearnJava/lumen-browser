@@ -72,7 +72,7 @@ use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
 
 use super::cascade::compute_style_shareable;
-use super::share_safety::{dynamic_fingerprint, sheet_has_fingerprintable_selector};
+use super::share_safety::{compound_is_bare_universal, dynamic_fingerprint, sheet_has_fingerprintable_selector};
 use super::ComputedStyle;
 
 /// One node's cascade-relevant identity, see the module doc for why it is a
@@ -126,12 +126,15 @@ struct ShareKey {
     dynamic_fingerprint_sig: Vec<bool>,
 }
 
-/// BUG-1112 срез 4: `true` when `sheet` (or any of its `@layer`/`@media`/
+/// BUG-1112 срез 4 (`:first-child`/`:last-child`/`:only-child`), срез 11
+/// (`* + subject` — see `share_safety::compound_is_bare_universal`'s doc
+/// comment): `true` when `sheet` (or any of its `@layer`/`@media`/
 /// `@supports` blocks — the same set `cascade.rs`'s `shareable &=
 /// rule.selectors.iter().all(selector_is_share_safe)` loop walks) contains a
-/// selector whose *subject* compound carries `:first-child`/`:last-child`/
-/// `:only-child`. Scans every rule's every selector once per `ShareCache`
-/// lifetime (one pass), not per node — see [`ShareCache::compute`]'s caller.
+/// selector whose *subject* compound needs the real `is_first_child`/
+/// `is_last_child` value to be judged share-safe. Scans every rule's every
+/// selector once per `ShareCache` lifetime (one pass), not per node — see
+/// [`ShareCache::compute`]'s caller.
 ///
 /// Deliberately coarse: does not check whether the selector could ever reach
 /// an SVG-presentational element, only whether the pseudo-class exists
@@ -155,8 +158,22 @@ fn sheet_has_position_dependent_subject(sheet: &Stylesheet) -> bool {
             )
         })
     }
+    // BUG-1112 срез 11: `* + subject` needs the same `is_first_child` field —
+    // see `share_safety::compound_is_bare_universal`'s doc comment.
+    fn subject_preceded_by_bare_universal_sibling(c: &lumen_css_parser::ComplexSelector) -> bool {
+        let Some((comb, _)) = c.tail.last() else { return false };
+        if !matches!(comb, lumen_css_parser::Combinator::NextSibling) {
+            return false;
+        }
+        let prev = if c.tail.len() >= 2 { &c.tail[c.tail.len() - 2].1 } else { &c.head };
+        compound_is_bare_universal(prev)
+    }
     fn rules_have_it(rules: &[lumen_css_parser::Rule]) -> bool {
-        rules.iter().any(|r| r.selectors.iter().any(subject_has_position_pseudo))
+        rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| subject_has_position_pseudo(s) || subject_preceded_by_bare_universal_sibling(s))
+        })
     }
     rules_have_it(&sheet.rules)
         || sheet.layers.iter().any(|l| rules_have_it(&l.rules))
