@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    parse_inline_style, Declaration, MixinRule, PropertyRule, Specificity, Stylesheet,
+    parse_inline_style, Declaration, FunctionRule, MixinRule, PropertyRule, Specificity, Stylesheet,
     MIXIN_APPLY_MARKER,
 };
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
@@ -31,7 +31,7 @@ use crate::style::{
     apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert, apply_ua_table_cell_padding,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
-    expand_custom_functions, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
+    expand_custom_functions_scoped, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
     matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
     resolve_overscroll_behavior_logical_properties, resolve_system_colors_in_style,
     strip_ua_appearance_box_styling, ua_font_family,
@@ -105,6 +105,23 @@ pub(in crate::style) fn parse_zoom(value: &str) -> Option<f32> {
 /// every other unit resolves later against a basis (`font_size`, the containing
 /// block, the viewport) that is itself already zoomed, so scaling here too
 /// would apply the factor twice.
+/// CSS Scoping L1 §3.5 (BUG-519): the tree-scoped `@function` lookup chain
+/// for a declaration that came from `sheet`, the stylesheet of the shadow
+/// tree hosted by `owner_host`. Innermost first: `sheet`'s own functions,
+/// then the functions of each shadow tree that encloses `owner_host`, out to
+/// (but excluding) the document — the caller appends the document's own
+/// `function_rules` last. `None` when no tree in the chain declares any
+/// function, so the caller keeps the plain document-only lookup.
+fn shadow_function_chain(doc: &Document, sheet: &Stylesheet, owner_host: NodeId) -> Option<Vec<Vec<FunctionRule>>> {
+    let mut chain = vec![sheet.function_rules.clone()];
+    let mut cur = doc.enclosing_shadow_host(owner_host);
+    while let Some(host) = cur {
+        chain.push(SHADOW_SHEETS.with(|c| c.borrow().get(&host).map(|s| s.function_rules.clone()).unwrap_or_default()));
+        cur = doc.enclosing_shadow_host(host);
+    }
+    chain.iter().any(|f| !f.is_empty()).then_some(chain)
+}
+
 fn zoom_length(len: &mut Length, z: f32) {
     if let Length::Px(v) = len {
         *v *= z;
@@ -1412,6 +1429,23 @@ pub(crate) fn compute_style_shareable(
         strip_ua_appearance_box_styling(doc, node, &mut style);
     }
 
+    // CSS Scoping L1 §3.5 (BUG-519): `@function` names are tree-scoped. A
+    // declaration from a shadow tree's stylesheet resolves `--fn()` against
+    // that tree's own `@function`s first, then each enclosing tree's, then
+    // the document's (`sheet.function_rules`, appended at the use site). One
+    // chain per shadow sheet that contributed to `matched`, keyed by the
+    // host that owns the sheet; built only when some tree in it actually
+    // declares a function, so pages without shadow `@function`s pay nothing.
+    let own_fn_chain = own_shadow.as_ref().and_then(|s| shadow_function_chain(doc, s, node));
+    let host_fn_chain = host_shadow
+        .as_ref()
+        .zip(doc.get(node).parent)
+        .and_then(|(s, host)| shadow_function_chain(doc, s, host));
+    let interior_fn_chain = interior_shadow
+        .as_ref()
+        .zip(doc.enclosing_shadow_host(node))
+        .and_then(|(s, host)| shadow_function_chain(doc, s, host));
+
     for (_, _, _, _, _, _, decl, shadow_origin) in &matched {
         // CSS Cascade L5 §6.4.6 / §revert-rule-keyword: a `revert-layer`/
         // `revert-rule` declaration that survived the pre-pass was overridden
@@ -1511,7 +1545,26 @@ pub(crate) fn compute_style_shareable(
         // non-empty — pages without `@function` pay nothing extra here, and
         // `apply_declaration`'s own `var()` pass below is then a no-op.
         let func_buf;
-        let effective_decl: &Declaration = if !sheet.function_rules.is_empty()
+        let fn_chain = shadow_origin.and_then(|origin| {
+            [(&own_shadow, &own_fn_chain), (&host_shadow, &host_fn_chain), (&interior_shadow, &interior_fn_chain)]
+                .into_iter()
+                .find(|(s, _)| s.as_ref().is_some_and(|s| std::ptr::eq(s, origin)))
+                .and_then(|(_, chain)| chain.as_ref())
+        });
+        let doc_fn_scope = [sheet.function_rules.as_slice()];
+        let chain_fn_scopes: Vec<&[FunctionRule]>;
+        let fn_scopes: &[&[FunctionRule]] = match fn_chain {
+            Some(chain) => {
+                chain_fn_scopes = chain
+                    .iter()
+                    .map(Vec::as_slice)
+                    .chain(std::iter::once(sheet.function_rules.as_slice()))
+                    .collect();
+                &chain_fn_scopes
+            }
+            None => &doc_fn_scope,
+        };
+        let effective_decl: &Declaration = if fn_scopes.iter().any(|s| !s.is_empty())
             && effective_decl.value.contains("--")
         {
             let pre = if effective_decl.value.contains("var(") {
@@ -1522,7 +1575,7 @@ pub(crate) fn compute_style_shareable(
             } else {
                 effective_decl.value.clone()
             };
-            match expand_custom_functions(&pre, &sheet.function_rules, &style.custom_props, 0, em_basis, viewport) {
+            match expand_custom_functions_scoped(&pre, fn_scopes, &style.custom_props, 0, em_basis, viewport) {
                 Some(v) => {
                     custom_prop_expanded = true;
                     func_buf = Declaration {

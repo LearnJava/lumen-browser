@@ -1,6 +1,6 @@
 # BUG-519: `@function` bodies using `if()`/`attr(type())`/local vars/nested `@layer`/`@container`/shadow scoping hang instead of failing
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Дата:** 2026-08-03
 **Компонент:** css-parser/layout, exact trigger not isolated (see Механизм)
 **Найден:** WPT-RUN-3 срез 22 (`ROADMAP.md`) — массовый прогон `css/css-mixins`
@@ -159,3 +159,48 @@ positively disproven in this environment (no live wptrunner), and even after
 these fixes the 9 files are expected to fail (not hang) until BUG-1010 is
 also fixed. Re-triage (`.ini` update from `TIMEOUT`/`FAIL` to whatever a live
 run actually shows) needs a working `tests/wpt/run_smoke.py` first.
+
+## Закрытие P3 2026-09-24
+
+Живой wptrunner в этом окружении работает (`tests/wpt/.venv`, `run_smoke.py`
+с бинарём `dev-release`) — прежнее «сломан Python 3.14» больше не
+воспроизводится. Прогон всех 9 файлов на `main` до правки: **ни одного
+TIMEOUT**, каждый файл `TEST_END` через ~4 с, `Test OK`. Зависание снято
+фиксами среза 2026-09-06 и [BUG-1010](BUG-1010-FIXED.md); 7 из 9 файлов уже
+проходили полностью (22/22, 7/7, 7/7, 7/7, 20/20, 5/5, 4/4).
+
+Оставшиеся падения — один собственный дефект: **имена `@function` не были
+tree-scoped** (CSS Scoping L1 §3.5, CSS Mixins L1 §2.4). Каскад звал
+`expand_custom_functions` всегда с `sheet.function_rules` документа, даже для
+декларации из `<style>` shadow-дерева — функции самого дерева были невидимы
+(`function-shadow.html`: `--a()` давал документные `42px` вместо своих
+`10px`, `--b()`/`--c()` оставались нераскрытыми).
+
+Фикс:
+
+* `expand_custom_functions_scoped` (`style/substitute.rs`) — принимает
+  цепочку областей, внутреннее дерево первым. Вызов связывается с первой
+  областью, где имя определено; тело функции резолвит свои вложенные вызовы
+  начиная с области **своего определения** (`scopes[i..]`), а аргументы — в
+  области вызывающего. Поэтому внешняя функция не видит одноимённую
+  внутреннюю, а «одинаковое имя в разных деревьях» не считается циклом.
+  Прежняя `expand_custom_functions` — обёртка с одной областью.
+* `shadow_function_chain` (`style/cascade.rs`) — для каждого shadow-листа,
+  давшего декларацию (`own_shadow`/`host_shadow`/`interior_shadow`), строит
+  цепочку `function_rules` по `enclosing_shadow_host`; каскад выбирает
+  цепочку по `shadow_origin` декларации. Строится только если в цепочке есть
+  хоть одна функция — страницы без shadow-`@function` не платят ничего.
+
+Замер после правки (`run_smoke.py`, 13 файлов каталога):
+`function-shadow.html` 2/11 → **11/11**; `function-shadow-cache.html` 1/1
+(был `expected: FAIL`); `function-shadow-container.html` 2/3. Остаток —
+`::slotted() can see inner named containers`: `@container` внутри тела
+`@function` не вычисляется вовсе (отложенный объём строки `@function` в
+CSS-SPECS.md, не этот баг) — зафиксирован в `.ini` как `expected: FAIL`.
+Остальные 6 проверенных файлов без изменений, неожиданных результатов нет.
+`.ini` восьми зелёных файлов из списка и `function-shadow-cache.html.ini`
+удалены.
+
+5 регресс-тестов в `crates/engine/layout/src/style/tests/shadow_dom_selectors.rs`
+(транскрипция `function-shadow.html`); `cargo test -p lumen-layout --lib`
+4053/4053, `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист.
