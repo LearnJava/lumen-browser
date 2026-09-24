@@ -5947,6 +5947,8 @@ use band_compose::{band_blit_quads, band_geometry, ring_advance_plan, RingStrip}
 mod frame_entry;
 
 mod construct;
+#[cfg(test)]
+use construct::renderer_instance_descriptor;
 
 mod diagnostics;
 // Реэкспортированы `pub`, а не приватным `use`, потому что `lib.rs` делает
