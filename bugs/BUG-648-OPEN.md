@@ -135,3 +135,12 @@ performance.mark('m1');
 o.disconnect();
 // spec: callback must NOT have run by here. Lumen: it already threw.
 ```
+
+
+## Реальный сайт (2026-09-24): cnbc
+
+Синхронная доставка buffered-записей из `observe()` ломает шаблон web-vitals, где колбэк отчёта
+присваивается после `observe()`: cnbc — `Uncaught TypeError: n is not a function`, стек через
+`PerformanceObserver._cb` → `_perf_deliver_to_observer`. Репро `.tmp/compat/g6/site/perfobs.html`:
+Lumen `['cb:1','after-observe']` + `report is not a function`, Chrome `['after-observe','cb:1',
+'report:1']`. Передан P6 по решению пользователя.

@@ -48,3 +48,20 @@ getElementsByTagName = 1       children = 6        form-elements = 1
 Одна строка на коллекцию по образцу `get images()` — тот же
 `_lumen_make_nid_collection` с другим селектором (`form`, `script`,
 `a[href], area[href]`), плюс `namedItem`, который `HTMLCollection` уже умеет.
+
+
+## Реальные сайты (2026-09-24, разбор совместимости без блокировщика)
+
+Четыре сайта из top100 падают именно здесь:
+
+- **imdb, espn, amazon** — сайт отдаёт 202 с челленджем AWS WAF; `challenge.js` `_0x4f1b75` перебирает
+  `document.scripts[i]` → `[unhandled-rejection] TypeError: Cannot read properties of undefined
+  (reading 'length')`. После четырёх попыток — «Max challenge attempts exceeded»: imdb 14 узлов против
+  1939, espn 13 против 6253. С подставленным `document.scripts` (геттер на
+  `getElementsByTagName('script')`) живой Lumen проходит `AwsWafIntegration.getToken()` без ошибок.
+  Репро — `.tmp/compat/g1/doc_scripts.html`, полный челлендж — `.tmp/compat/g1/awswaf.html` и
+  `awswaf.html?shim=1` в worktree аудита.
+- **discord** — Webflow-чанк `for(var a=document.links,l=0;l<a.length;…)` → `reading 'length'`,
+  1051 узел против 1210.
+
+Передан P6 по решению пользователя; по числу затронутых сайтов — первый в очереди.

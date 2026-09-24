@@ -69,3 +69,13 @@ stays in the `unclassified` residual without a marker, same as slice 53's
 `elements-at-point.html`/`scrollbars-2.html` precedent (a real defect found
 along the way, filed on its own merits per `docs/probe-method.md` §3, not
 forced onto the TIMEOUT it was found while investigating).
+
+
+## Второй отсутствующий член: `.style` (w3schools, 2026-09-24)
+
+Тот же фасад `frameElem` не определяет `.style` (и `classList`, `dataset`):
+`iframe.contentDocument.documentElement.style` и `body.style` — `undefined`. w3schools (FastCMP,
+`fast-cmp-en-tcfeuv2.js:1:174891`): `Cannot set properties of undefined (setting 'cssText')` —
+диалог согласия на cookie не строится. Репро `.tmp/compat/g6/site/iframedoc.html` (iframe без `src`):
+Lumen `typeof style 'undefined'` → TypeError; Chrome `CSSStyleDeclaration`, `cssText` применён,
+конструктор `HTMLHtmlElement`. Передан P6 по решению пользователя.
