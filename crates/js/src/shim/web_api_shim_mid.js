@@ -11969,24 +11969,54 @@ function _lumen_script_empty_src_scan() {
     }
 }
 
-// HTML LS §4.12.1 steps 11-32, minus the parser-only branches.
+// HTML LS §4.12.1 "already started" flag (step 1 / step 12 below). Tracked
+// independently of `_lumen_resource_pending`, which is a one-shot "has the
+// insertion hook run once" map that suits link/track/source/style/embed/
+// object (each really can only start once) but not a script: a dynamically
+// created `<script>` can cycle through remove/retype/reinsert several times
+// before the algorithm below is ever allowed to set the flag — e.g. a
+// `type="importmap"` script left empty, then retyped `text/javascript` and
+// given a body, must still run on its next insertion (BUG-882). The map
+// entry is deleted by `_lumen_resource_try_prepare` only once this is set.
+var _lumen_script_started = {};
+
+// HTML LS §4.12.1 steps 1-32, minus the parser-only branches (every caller
+// here is the "script becomes connected" hook, never the initial parse).
 function _lumen_script_prepare(nid) {
+    // Step 1.
+    if (_lumen_script_started[nid] === 1) return;
     var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
     var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
-    // A non-JS type (importmap, application/json, speculationrules, a template
-    // language, …) is a data block: it is never a script and never runs.
-    if (!isModule && !_lumen_is_classic_script_type(type)) return;
+    var isImportmap = type !== null && String(type).trim().toLowerCase() === 'importmap';
+    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    src = (src === null) ? '' : String(src).trim();
+    // Step 5: no src and no source text — return without touching the flag,
+    // so a later retype with a non-empty src/body still gets to run.
+    var text = null;
+    var hasBody = false;
+    if (src === '') {
+        text = _lumen_u2n(_lumen_get_text_content(nid));
+        hasBody = text !== null && String(text).trim() !== '';
+    }
+    if (src === '' && !hasBody) return;
+    // Step 10: only classic/module/importmap continue past type resolution
+    // to step 12; any other type (application/json, speculationrules, a
+    // template language, an unrecognised value, …) is a data block that
+    // never runs and never starts either — it stays retryable.
+    var isClassic = _lumen_is_classic_script_type(type);
+    if (!isModule && !isImportmap && !isClassic) return;
+    // Step 12.
+    _lumen_script_started[nid] = 1;
+    // Import maps are data, consumed elsewhere (not by this function); the
+    // flag above is all BUG-882's test cares about here.
+    if (isImportmap) return;
     if (_lumen_script_has_empty_src(nid, isModule, type)) {
         _lumen_script_fire_empty_src_error(nid);
         return;
     }
-    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
-    src = (src === null) ? '' : String(src).trim();
     if (src !== '') { _lumen_script_load_external(nid, src, isModule); return; }
     // `src` wins over the inline body; with no `src` the body is the source.
-    var body = _lumen_u2n(_lumen_get_text_content(nid));
-    if (body === null || String(body).trim() === '') return;
-    body = String(body);
+    var body = String(text);
     if (!isModule) {
         // An inline classic script executes synchronously, inside the insertion
         // — `assert_equals(window.ran, true)` on the line after appendChild is
@@ -12606,6 +12636,19 @@ function _lumen_resource_try_prepare(nid) {
     if (kind !== 'script' && kind !== 'link' && kind !== 'style'
         && kind !== 'embed' && kind !== 'object') return;
     if (!_lumen_resource_is_connected(nid)) return;
+    // BUG-882: a script's own «already started» flag (`_lumen_script_prepare`)
+    // decides whether it is really done — unlike the other kinds here, a
+    // script that connects with an empty/non-executing body must stay
+    // retryable for a later retype + reinsertion, so the pending entry is
+    // only dropped once that flag is actually set.
+    if (kind === 'script') {
+        _lumen_script_prepare(nid);
+        if (_lumen_script_started[nid] === 1) {
+            delete _lumen_resource_pending[nid];
+            _lumen_resource_pending_count--;
+        }
+        return;
+    }
     delete _lumen_resource_pending[nid];
     _lumen_resource_pending_count--;
     // BUG-804: `<style>` has no resource to fetch — becoming connected IS the
@@ -12618,7 +12661,6 @@ function _lumen_resource_try_prepare(nid) {
     if (kind === 'link') { _lumen_link_prepare(nid); return; }
     // BUG-798: <embed>/<object> minted by createElement and then inserted.
     if (kind === 'embed' || kind === 'object') { _lumen_embed_object_prepare(nid, kind); return; }
-    _lumen_script_prepare(nid);
 }
 
 // Insertion hook. Fast path when no dynamically created script is outstanding
