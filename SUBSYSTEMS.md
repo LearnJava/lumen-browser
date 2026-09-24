@@ -31,6 +31,7 @@ above both. When a row and its file disagree, the file wins and the row is the t
 | lumen-network | ✅ HTTP/1.1 + HTTP/2 + HTTP/3 (QUIC) + TLS + WebSocket + SSE + DoH/DoT + cache + CORS/auth + IPC transport | [subsystems/network.md](subsystems/network.md) |
 | lumen-driver | ✅ BrowserSession trait + InProcessSession headless | [subsystems/driver.md](subsystems/driver.md) |
 | lumen-shell | 🟡 window + render + event loop | [subsystems/shell.md](subsystems/shell.md) |
+| lumen-update-manifest | ✅ signed `latest.json` format + ed25519 verify + `sign_release` CLI (UPD-10) | [subsystems/update-manifest.md](subsystems/update-manifest.md) |
 | lumen-devtools | ✅ WebSocket + minimal CDP | [subsystems/devtools.md](subsystems/devtools.md) |
 | lumen-bench | ✅ pipeline benchmark | [subsystems/bench.md](subsystems/bench.md) |
 | lumen-canvas | ✅ Canvas 2D CPU rasterizer (`CanvasRenderingContext2D` + Path2D + ImageData) | [subsystems/canvas.md](subsystems/canvas.md) |

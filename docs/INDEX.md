@@ -55,6 +55,7 @@ must not restate it — a restated rule drifts, and the two copies then contradi
 | Testing an external site with Lumen | [`testing-your-site-with-lumen.md`](testing-your-site-with-lumen.md) |
 | Fuzzing (Linux/WSL/CI only) | [`fuzz/README.md`](../fuzz/README.md) |
 | Build speed · CI | [`build-speed.md`](build-speed.md) · [`ci-offload.md`](ci-offload.md) |
+| Release signing, self-update key custody | [`release-signing.md`](release-signing.md) |
 | Health-sweep history (P5) | [`HEALTH-LOG.md`](HEALTH-LOG.md) |
 
 ## Project skills (`.claude/skills/`)

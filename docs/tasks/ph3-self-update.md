@@ -122,7 +122,7 @@ Mechanisms:
 | UPD-7 | Mini-ZIP reader | Central directory, stored/deflate via `flate2`, destination whitelist (reject `data/`, `..`, absolute). Test against a real `release.yml` artifact | M |
 | UPD-8 | Apply | Rename trick for both exes (atomic staging, rollback on error), process restart, `.old` + `pending/` cleanup at startup | M |
 | UPD-9 | UI | "Update available vX.Y.Z" infobar (download-panel style) + `show_os_notification()`; "Restart to update" button after staging; manual check action | M |
-| UPD-10 | CI: release signing | Keypair generation (private key → GitHub Actions secret), signing tool `scripts/sign_release` on `ed25519-dalek`, `release.yml` step: build `latest.json`, sign, upload as asset | M |
+| UPD-10 | CI: release signing | **Done 2026-09-24** as crate `lumen-update-manifest` + bin `sign_release` (procedure — [`release-signing.md`](../release-signing.md)). Keypair generation (private key → GitHub Actions secret), signing tool on `ed25519-dalek`, `release.yml` step: build `latest.json`, sign, upload as asset | M |
 | UPD-11 | Docs | ADR (channel + signing + data policy + privacy), `CAPABILITIES.md`, `subsystems/shell.md`, `subsystems/storage.md`, `docs/plan/privacy.md`, README | S |
 
 Order: 1→2→3 give end-to-end "new version available" (notification can ship

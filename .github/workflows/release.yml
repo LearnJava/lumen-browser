@@ -156,6 +156,38 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
 
+      # UPD-10: signed self-update manifest. The signer is its own tiny crate
+      # (lumen-update-manifest) so this job builds it in seconds without the
+      # browser's system dependencies, yet signs through the very function the
+      # browser verifies with. Procedure and key custody — docs/release-signing.md.
+      - uses: actions/checkout@v4
+        with:
+          path: src
+
+      - name: Install Rust (pinned, see rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
+
+      - name: Sign update manifest (latest.json)
+        # Pre-release tags get no manifest: the client comparator has no
+        # pre-release ordering and releases/latest never points at one.
+        if: ${{ !contains(steps.version.outputs.version, '-') }}
+        shell: bash
+        env:
+          LUMEN_RELEASE_SIGNING_KEY: ${{ secrets.LUMEN_RELEASE_SIGNING_KEY }}
+        run: |
+          if [[ -z "$LUMEN_RELEASE_SIGNING_KEY" ]]; then
+            # Until the production key is minted the release still ships, just
+            # without self-update; clients see no manifest and offer nothing.
+            echo "::warning::LUMEN_RELEASE_SIGNING_KEY is not set — releasing without latest.json"
+            exit 0
+          fi
+          SIGN="cargo run --release --quiet --manifest-path src/Cargo.toml -p lumen-update-manifest --bin sign_release --"
+          # A key that TRUSTED_KEYS does not list fails here, not in the field.
+          $SIGN manifest --tag "${{ steps.version.outputs.version }}" --out latest.json lumen-*/*
+          $SIGN verify latest.json lumen-*/*
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -168,3 +200,4 @@ jobs:
             lumen-macos-aarch64/*
             lumen-macos-x86_64/*
             lumen-windows-x86_64/*
+            latest.json

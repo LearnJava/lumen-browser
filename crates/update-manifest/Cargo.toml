@@ -1,0 +1,29 @@
+[package]
+name = "lumen-update-manifest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: signed self-update manifest (latest.json) — the one format shared by the browser's verifier and the release signer"
+
+# Split out of lumen-shell (UPD-10) so `release.yml` can build the signer
+# (`src/bin/sign_release.rs`) in seconds instead of compiling V8/wgpu, while
+# the signer and the verifier still share one `signing_body` — two copies of
+# the serialisation would drift and silently fail every signature.
+
+[dependencies]
+lumen-core.workspace = true
+serde.workspace = true
+serde_json = "1.0"
+# Exception #3 (§5): crypto — same dalek crate lumen-shell/lumen-network
+# already depend on (UPD-3); moved here with the manifest verifier, and
+# signing is the same crate's `Signer` half. Своя реализация Ed25519 — security antipattern.
+ed25519-dalek = "2"
+# Permanent: OS CSPRNG for `sign_release keygen` only — already in the tree
+# (lumen-core::auth, lumen-js, lumen-network).
+getrandom = "0.2"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[lints]
+workspace = true
