@@ -204,12 +204,71 @@ fn lzw_decode_into(min_code_size: u8, data: &[u8], out: &mut [u8]) -> Result<usi
     Ok(out_pos)
 }
 
+/// Прямоугольник кадра на логическом экране, обрезанный по его границам (BUG-763: кадр может
+/// выходить за экран — обрезаем, а не паникуем на индексации).
+#[derive(Debug, Clone, Copy)]
+struct ScreenRect {
+    left: usize,
+    top: usize,
+    /// Ширина/высота пересечения кадра с экраном — может быть меньше `frame.width/height`,
+    /// если кадр частично или полностью выходит за границы экрана.
+    width: usize,
+    height: usize,
+}
+
+impl ScreenRect {
+    fn clamped(screen_w: usize, screen_h: usize, left: u16, top: u16, w: u16, h: u16) -> Self {
+        let left = (left as usize).min(screen_w);
+        let top = (top as usize).min(screen_h);
+        let width = (w as usize).min(screen_w.saturating_sub(left));
+        let height = (h as usize).min(screen_h.saturating_sub(top));
+        Self { left, top, width, height }
+    }
+}
+
+/// Заливает прямоугольник холста прозрачным чёрным (`DisposalMethod::Background`).
+fn clear_rect(canvas: &mut [u8], screen_w: usize, rect: ScreenRect) {
+    for row in 0..rect.height {
+        let start = ((rect.top + row) * screen_w + rect.left) * RGBA_CHANNELS;
+        if let Some(slice) = canvas.get_mut(start..start + rect.width * RGBA_CHANNELS) {
+            slice.fill(0);
+        }
+    }
+}
+
+/// Композитит раскодированный кадр (`frame_w × frame_h`, без обрезки) поверх холста в
+/// `rect` (уже обрезанном по границам экрана). Пиксели с `alpha == 0` (прозрачный индекс или
+/// индекс вне палитры) холст не трогают — так GIF выражает «показать то, что уже нарисовано».
+fn composite_onto_canvas(
+    canvas: &mut [u8],
+    screen_w: usize,
+    rect: ScreenRect,
+    frame_w: usize,
+    frame_pixels: &[u8],
+) {
+    for row in 0..rect.height {
+        let src_start = row * frame_w * RGBA_CHANNELS;
+        let dst_start = ((rect.top + row) * screen_w + rect.left) * RGBA_CHANNELS;
+        let (Some(src), Some(dst)) = (
+            frame_pixels.get(src_start..src_start + rect.width * RGBA_CHANNELS),
+            canvas.get_mut(dst_start..dst_start + rect.width * RGBA_CHANNELS),
+        ) else {
+            continue;
+        };
+        for (s, d) in src.chunks_exact(RGBA_CHANNELS).zip(dst.chunks_exact_mut(RGBA_CHANNELS)) {
+            if s[3] != 0 {
+                d.copy_from_slice(s);
+            }
+        }
+    }
+}
+
 /// Раскладывает один кадр в RGBA8: распаковывает LZW, применяет палитру кадра (или глобальную)
 /// и transparent-index, при `frame.interlaced` расставляет строки по местам.
 ///
-/// Пишет в префикс `out` длиной `frame.width × frame.height × 4` — как это делал
-/// `gif::FrameDecoder`, чей конвертер тоже игнорировал `frame.left`/`frame.top`. Пиксель,
-/// чьего индекса нет в палитре, не трогается (в `out` он останется нулём = прозрачным
+/// Пишет в `out` длиной `frame.width × frame.height × 4` — координаты `frame.left`/`frame.top`
+/// на экране этой функции не касаются, их применяет вызывающий ([`composite_onto_canvas`]).
+/// Пиксель, чьего индекса нет в палитре, не трогается (в `out` он останется нулём = прозрачным
 /// чёрным) — тоже поведение `gif`.
 ///
 /// # Errors
@@ -301,11 +360,24 @@ struct GifCursor {
     /// Кэш последнего выданного кадра `(индекс, пиксели)` — обслуживает повторный запрос
     /// того же кадра без пересоздания декодера.
     last: Option<(usize, Image)>,
+    /// Экранный холст (BUG-763): каждый прочитанный кадр композитится в него по
+    /// `frame.left/top`, поверх того, что оставила disposal-операция предыдущего кадра.
+    /// Живёт вместе с курсором — переиграть весь путь заново нужно только при сбросе
+    /// декодера (backward seek), см. [`AnimatedGif::frame_image`].
+    canvas: Vec<u8>,
+    /// Disposal-операция последнего скомпонованного кадра и его обрезанный по экрану
+    /// прямоугольник — применяется к холсту перед отрисовкой следующего кадра, не сразу
+    /// (кадр должен успеть побыть видимым).
+    pending_disposal: Option<(gif::DisposalMethod, ScreenRect)>,
+    /// Снимок холста, снятый непосредственно перед отрисовкой кадра, чей `dispose ==
+    /// Previous`, — восстанавливается вместо холста, когда этот кадр уходит со сцены.
+    previous_snapshot: Option<Vec<u8>>,
 }
 
 impl GifCursor {
-    /// Создаёт новый forward-декодер с позиции нулевого кадра.
-    fn new(encoded: &Arc<[u8]>) -> Result<Self, GifError> {
+    /// Создаёт новый forward-декодер с позиции нулевого кадра и чистым (прозрачным) холстом
+    /// размера экрана `screen_w × screen_h`.
+    fn new(encoded: &Arc<[u8]>, screen_w: usize, screen_h: usize) -> Result<Self, GifError> {
         let reader = container_options()
             .read_info(Cursor::new(Arc::clone(encoded)))
             .map_err(|e| GifError::DecodeError(e.to_string()))?;
@@ -318,6 +390,9 @@ impl GifCursor {
             global_palette,
             next_idx: 0,
             last: None,
+            canvas: vec![0u8; screen_w * screen_h * RGBA_CHANNELS],
+            pending_disposal: None,
+            previous_snapshot: None,
         })
     }
 }
@@ -428,7 +503,8 @@ impl AnimatedGif {
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn frame_image(&self, idx: usize) -> Result<Image, GifError> {
         let idx = idx.min(self.delays_cs.len().saturating_sub(1));
-        let frame_bytes = (self.width as usize) * (self.height as usize) * 4;
+        let screen_w = self.width as usize;
+        let screen_h = self.height as usize;
 
         let mut guard = self
             .cursor
@@ -442,7 +518,7 @@ impl AnimatedGif {
             None => false,
         };
         if !can_reuse {
-            *guard = Some(GifCursor::new(&self.encoded)?);
+            *guard = Some(GifCursor::new(&self.encoded, screen_w, screen_h)?);
         }
         let cursor = guard.as_mut().expect("cursor set above");
 
@@ -454,8 +530,8 @@ impl AnimatedGif {
         }
 
         // Read forward until frame `idx` has been consumed; intermediate frames must be
-        // decoded too (disposal makes each frame depend on its predecessors).
-        let mut buffer = Vec::new();
+        // decoded too (each frame is composited onto the running screen canvas on top of
+        // whatever the previous frame's disposal left there — BUG-763).
         while cursor.next_idx <= idx {
             // Disjoint field borrows: `frame` borrows `cursor.reader`, the palette is
             // `cursor.global_palette`.
@@ -467,12 +543,40 @@ impl AnimatedGif {
             else {
                 break;
             };
-            buffer = vec![0u8; frame_bytes];
-            decode_frame_rgba(frame, global_palette, &mut buffer)?;
+
+            // Apply the previous frame's disposal now — it stayed visible until this point.
+            if let Some((method, rect)) = cursor.pending_disposal.take() {
+                match method {
+                    gif::DisposalMethod::Background => clear_rect(&mut cursor.canvas, screen_w, rect),
+                    gif::DisposalMethod::Previous => {
+                        if let Some(prev) = cursor.previous_snapshot.take() {
+                            cursor.canvas = prev;
+                        }
+                    }
+                    gif::DisposalMethod::Any | gif::DisposalMethod::Keep => {}
+                }
+            }
+
+            let rect = ScreenRect::clamped(screen_w, screen_h, frame.left, frame.top, frame.width, frame.height);
+
+            // This frame wants to be restored on its own disposal — snapshot the canvas as it
+            // is right before drawing, not after (that's what "previous" means).
+            cursor.previous_snapshot =
+                (frame.dispose == gif::DisposalMethod::Previous).then(|| cursor.canvas.clone());
+
+            if rect.width > 0 && rect.height > 0 {
+                let frame_w = frame.width as usize;
+                let frame_h = frame.height as usize;
+                let mut frame_pixels = vec![0u8; frame_w * frame_h * RGBA_CHANNELS];
+                decode_frame_rgba(frame, global_palette, &mut frame_pixels)?;
+                composite_onto_canvas(&mut cursor.canvas, screen_w, rect, frame_w, &frame_pixels);
+            }
+
+            cursor.pending_disposal = Some((frame.dispose, rect));
             cursor.next_idx += 1;
         }
 
-        if buffer.len() != frame_bytes {
+        if cursor.next_idx <= idx {
             return Err(GifError::DecodeError(format!("кадр {idx} недостижим")));
         }
 
@@ -480,7 +584,7 @@ impl AnimatedGif {
             width: self.width,
             height: self.height,
             format: PixelFormat::Rgba8,
-            data: buffer,
+            data: cursor.canvas.clone(),
             icc_profile: None,
         };
         cursor.last = Some((idx, image.clone()));
@@ -1036,4 +1140,106 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<AnimatedGif>();
     }
+
+    // ── BUG-763: кадр меньше экрана — компоновка на холст (left/top/disposal) ─
+
+    /// Кодирует GIF с явным `left/top/dispose` на кадре — `gif::Frame::from_indexed_pixels`
+    /// не выставляет их (нули), выставляем руками.
+    fn patch_frame(w: u16, h: u16, left: u16, top: u16, pixels: Vec<u8>, dispose: gif::DisposalMethod) -> gif::Frame<'static> {
+        let mut frame = gif::Frame::from_indexed_pixels(w, h, pixels, None);
+        frame.left = left;
+        frame.top = top;
+        frame.dispose = dispose;
+        frame
+    }
+
+    #[test]
+    fn patch_frame_composites_onto_screen_at_left_top() {
+        // Экран 4×1, палитра [красный, синий]. Кадр 0 — сплошной красный на весь экран.
+        // Кадр 1 — синяя заплатка 2×1 при left=2, disposal=Keep (по умолчанию).
+        let palette: Vec<u8> = vec![255, 0, 0, 0, 0, 255];
+        let mut out = Vec::new();
+        {
+            let mut enc = gif::Encoder::new(&mut out, 4, 1, &palette).expect("encoder");
+            let f0 = patch_frame(4, 1, 0, 0, vec![0u8; 4], gif::DisposalMethod::Keep);
+            enc.write_frame(&f0).expect("frame0");
+            let f1 = patch_frame(2, 1, 2, 0, vec![1u8; 2], gif::DisposalMethod::Keep);
+            enc.write_frame(&f1).expect("frame1");
+        }
+
+        let gif = decode_gif_animated(&out).expect("decode");
+        assert_eq!((gif.width, gif.height), (4, 1));
+
+        let f0 = gif.frame_image(0).expect("кадр 0");
+        assert_eq!(f0.data, [255, 0, 0, 255].repeat(4), "кадр 0 — сплошной красный экран");
+
+        // Ожидание (Chromium/Pillow): заплатка легла в (2,0), фон под ней — прежний кадр.
+        let f1 = gif.frame_image(1).expect("кадр 1");
+        let expected: Vec<u8> = [[255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 255, 255]]
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(f1.data, expected, "заплатка должна лечь в left=2, а не в (0,0)");
+    }
+
+    #[test]
+    fn disposal_background_clears_patch_rect_not_whole_screen() {
+        // Экран 4×1: кадр 0 — сплошной красный, dispose=Background. Кадр 1 — синяя заплатка
+        // 2×1 при left=1. После показа кадра 1 в кадре 2 (пустая заплатка 1×1 в углу) должна
+        // остаться очищенной только область кадра 0 (весь экран, т.к. кадр 0 = весь экран).
+        let palette: Vec<u8> = vec![255, 0, 0, 0, 0, 255, 0, 255, 0];
+        let mut out = Vec::new();
+        {
+            let mut enc = gif::Encoder::new(&mut out, 4, 1, &palette).expect("encoder");
+            let f0 = patch_frame(4, 1, 0, 0, vec![0u8; 4], gif::DisposalMethod::Background);
+            enc.write_frame(&f0).expect("frame0");
+            // Заплатка поверх очищенного экрана, dispose=Keep — должна остаться на кадре 2.
+            let f1 = patch_frame(1, 1, 1, 0, vec![2u8], gif::DisposalMethod::Keep);
+            enc.write_frame(&f1).expect("frame1");
+        }
+
+        let gif = decode_gif_animated(&out).expect("decode");
+        let f1 = gif.frame_image(1).expect("кадр 1");
+        // Кадр 0 (весь экран, disposal Background) очищен перед кадром 1 → фон прозрачный,
+        // заплатка (зелёная) видна только в столбце 1.
+        let expected: Vec<u8> = [[0, 0, 0, 0], [0, 255, 0, 255], [0, 0, 0, 0], [0, 0, 0, 0]]
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(f1.data, expected, "Background-disposal кадра 0 должна очистить его прямоугольник перед кадром 1");
+    }
+
+    #[test]
+    fn disposal_previous_restores_canvas_before_patch() {
+        // Экран 2×1, палитра [красный, синий, зелёный]. Кадр 0 — сплошной красный (база,
+        // dispose=Keep). Кадр 1 — синяя заплатка 1×1 в (0,0), dispose=Previous: после показа
+        // холст обязан вернуться к тому, каким он был ПЕРЕД кадром 1 (снова красный), а не
+        // остаться синим и не очиститься в прозрачный (это Background, не Previous). Кадр 2 —
+        // зелёная заплатка 1×1 в (1,0), dispose=Keep, не трогает левую половину: она должна
+        // читаться как результат disposal кадра 1, то есть красная.
+        let palette: Vec<u8> = vec![255, 0, 0, 0, 0, 255, 0, 255, 0];
+        let mut out = Vec::new();
+        {
+            let mut enc = gif::Encoder::new(&mut out, 2, 1, &palette).expect("encoder");
+            let f0 = patch_frame(2, 1, 0, 0, vec![0u8; 2], gif::DisposalMethod::Keep);
+            enc.write_frame(&f0).expect("frame0");
+            let f1 = patch_frame(1, 1, 0, 0, vec![1u8], gif::DisposalMethod::Previous);
+            enc.write_frame(&f1).expect("frame1");
+            let f2 = patch_frame(1, 1, 1, 0, vec![2u8], gif::DisposalMethod::Keep);
+            enc.write_frame(&f2).expect("frame2");
+        }
+
+        let gif = decode_gif_animated(&out).expect("decode");
+        let f1 = gif.frame_image(1).expect("кадр 1");
+        assert_eq!(f1.data, [[0, 0, 255, 255], [255, 0, 0, 255]].concat(), "кадр 1 сам виден целиком");
+
+        let f2 = gif.frame_image(2).expect("кадр 2");
+        assert_eq!(
+            f2.data,
+            [[255, 0, 0, 255], [0, 255, 0, 255]].concat(),
+            "Previous-disposal кадра 1 обязана вернуть левую половину к состоянию до него (красный), \
+             а не оставить синий или очистить в прозрачный"
+        );
+    }
 }
+

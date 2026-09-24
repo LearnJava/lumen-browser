@@ -27,6 +27,7 @@ BUGS-FIXED.md	bugs/BUG-715-OPEN.md	stale-status-suffix	bugs/BUG-715-FIXED.md
 BUGS-FIXED.md	bugs/BUG-740-OPEN.md	stale-status-suffix	bugs/BUG-740-FIXED.md
 BUGS-FIXED.md	bugs/BUG-758-OPEN.md	stale-status-suffix	bugs/BUG-758-FIXED.md
 BUGS-FIXED.md	bugs/BUG-762-OPEN.md	stale-status-suffix	bugs/BUG-762-FIXED.md
+BUGS-FIXED.md	bugs/BUG-763-OPEN.md	missing	
 BUGS-FIXED.md	bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
 BUGS-FIXED.md	bugs/BUG-876-OPEN.md	stale-status-suffix	bugs/BUG-876-FIXED.md
 BUGS-FIXED.md	bugs/BUG-877-OPEN.md	stale-status-suffix	bugs/BUG-877-FIXED.md
@@ -161,6 +162,7 @@ bugs/BUG-384-FIXED.md	BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
 bugs/BUG-385-FIXED.md	BUG-751-OPEN.md	stale-status-suffix	bugs/BUG-751-FIXED.md
 bugs/BUG-390-FIXED.md	BUG-758-OPEN.md	stale-status-suffix	bugs/BUG-758-FIXED.md
 bugs/BUG-395-FIXED.md	BUG-762-OPEN.md	stale-status-suffix	bugs/BUG-762-FIXED.md
+bugs/BUG-396-FIXED.md	BUG-763-OPEN.md	missing	
 bugs/BUG-405-FIXED.md	bugs/BUG-934-FIXED.md	wrong-relative-path	bugs/BUG-934-FIXED.md
 bugs/BUG-406-OPEN.md	BUG-274-OPEN.md	stale-status-suffix	bugs/BUG-274-FIXED.md
 bugs/BUG-412-FIXED.md	BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
@@ -283,7 +285,9 @@ bugs/BUG-778-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
 bugs/BUG-783-FIXED.md	BUG-789-OPEN.md	stale-status-suffix	bugs/BUG-789-FIXED.md
 bugs/BUG-786-FIXED.md	BUG-1008-OPEN.md	stale-status-suffix	bugs/BUG-1008-FIXED.md
 bugs/BUG-786-FIXED.md	BUG-806-OPEN.md	stale-status-suffix	bugs/BUG-806-FIXED.md
+bugs/BUG-787-FIXED.md	BUG-763-OPEN.md	missing	
 bugs/BUG-787-FIXED.md	BUG-790-OPEN.md	stale-status-suffix	bugs/BUG-790-FIXED.md
+bugs/BUG-790-FIXED.md	BUG-763-OPEN.md	missing	
 bugs/BUG-797-FIXED.md	BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 bugs/BUG-797-FIXED.md	docs/perf-method.md	wrong-relative-path	docs/perf-method.md
 bugs/BUG-799-FIXED.md	BUG-925-OPEN.md	stale-status-suffix	bugs/BUG-925-FIXED.md
@@ -405,6 +409,7 @@ docs/wpt-vendor-notes/css.md	../../bugs/BUG-502-OPEN.md	stale-status-suffix	bugs
 docs/wpt-vendor-notes/css.md	../../bugs/BUG-504-OPEN.md	stale-status-suffix	bugs/BUG-504-FIXED.md
 docs/wpt-vendor-notes/dom.md	../../bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
 docs/wpt-vendor-notes/geolocation.md	../../bugs/BUG-762-OPEN.md	stale-status-suffix	bugs/BUG-762-FIXED.md
+docs/wpt-vendor-notes/gif.md	../../bugs/BUG-763-OPEN.md	missing	
 docs/wpt-vendor-notes/html-longdesc.md	../../bugs/BUG-602-OPEN.md	stale-status-suffix	bugs/BUG-602-FIXED.md
 docs/wpt-vendor-notes/html-longdesc.md	../../bugs/BUG-612-OPEN.md	stale-status-suffix	bugs/BUG-612-FIXED.md
 docs/wpt-vendor-notes/idle-detection.md	../../bugs/BUG-615-OPEN.md	stale-status-suffix	bugs/BUG-615-FIXED.md
@@ -457,6 +462,7 @@ docs/wpt-vendor-notes/webrtc.md	../bugs/BUG-1058-FIXED.md	wrong-relative-path	bu
 docs/wpt-vendor-notes/window-management.md	../../bugs/BUG-667-OPEN.md	stale-status-suffix	bugs/BUG-667-FIXED.md
 docs/wpt/pass-rate.md	../../bugs/BUG-786-OPEN.md	stale-status-suffix	bugs/BUG-786-FIXED.md
 subsystems/html-parser.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
+subsystems/image.md	../bugs/BUG-763-OPEN.md	missing	
 subsystems/js.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
 subsystems/js.md	../bugs/BUG-752-OPEN.md	stale-status-suffix	bugs/BUG-752-FIXED.md
 subsystems/js.md	../bugs/BUG-970-OPEN.md	stale-status-suffix	bugs/BUG-970-FIXED.md
