@@ -151,6 +151,9 @@ pub(crate) fn restore_js_context(
         Vec::new(),
         // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above.
         None,
+        // BUG-1118: restore path not wired to the immediate-`<img src>` hook
+        // either — same scope note as the iframe call site in `frames.rs`.
+        None,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

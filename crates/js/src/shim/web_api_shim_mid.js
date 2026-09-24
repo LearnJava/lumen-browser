@@ -12101,10 +12101,14 @@ function _lumen_link_prepare(nid) {
 //
 // The fetch lives here rather than in the shell for the same reason the
 // stylesheet path above does: `load`/`error` belong to the element, and the
-// shell has no per-node completion signal to forward. It costs the early start
-// the preload scanner exists for — the request now begins once the DOM is
-// parsed, not while the HTML is still streaming — which is the residual left on
-// the bug.
+// shell has no per-node completion signal to forward. BUG-1116 recovered the
+// early start the preload scanner exists for without moving the fetch itself:
+// `_lumen_link_hint_fetch` below calls `_lumen_link_prefetch_sync`, which
+// reads the shell's process-global `PREFETCH_CACHE` — the same cache the
+// streaming scanner (`page_load.rs::warm_preload_cache`) already started
+// filling for this exact hint while the HTML was still arriving, so by the
+// time this DOM-ready pass runs, the byte transfer is usually already done or
+// in flight; only a cache miss still pays a fresh round trip here.
 
 // The `as` attribute is enumerated over the Fetch destinations. A value outside
 // this table leaves it in *no* state, which for `rel=preload` means exactly
@@ -12179,24 +12183,50 @@ function _lumen_link_hint_type_supported(dest, type) {
 // `load` event; anything it throws turns the hint into an `error`, which is the
 // right shape for modulepreload (a body that cannot enter the module map is a
 // failed preload).
+//
+// BUG-1116: goes through `_lumen_link_prefetch_sync` (native, shares Rust's
+// process-global `PREFETCH_CACHE`) instead of the page's own `fetch()` — a
+// real consumer of the same URL elsewhere on the page (`<script src>`,
+// `<link rel=stylesheet>`, or the engine's own early streaming warm-up of
+// this same hint) reads the SAME cached bytes instead of the network being
+// hit twice. Still a `setTimeout(0)` task hop for the same reason as the
+// <script>/stylesheet paths above: `link.onload = …` almost always follows
+// the appendChild.
 function _lumen_link_hint_fetch(nid, href, onBody) {
-    // Task hop for the same reason as the <script>/stylesheet paths above: the
-    // `link.onload = …` assignment almost always follows the appendChild.
     setTimeout(function() {
         var url = _url_resolve(String(href), _lumen_document_base_url());
-        fetch(url, { _lumenInitiatorType: 'link' }).then(function(resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            // Drain the body even when nothing reads it: an unread response
-            // holds its fetch slot (BUG-721).
-            return resp.text().then(function(text) {
-                if (onBody) onBody(url, resp, text);
-            });
-        }).then(function() {
+        var ok = _lumen_link_prefetch_sync(url);
+        if (!ok) {
+            _lumen_console_error('link hint fetch failed: ' + url);
+            _lumen_resource_fire(nid, 'error');
+            return;
+        }
+        try {
+            var status = _lumen_fetch_get_status();
+            if (status < 200 || status >= 300) throw new Error('HTTP ' + status);
+            var statusText = _lumen_fetch_get_status_text();
+            var rawHeaders = _lumen_fetch_get_headers();
+            var finalUrl = _lumen_fetch_get_url() || url;
+            var hdrs = [];
+            for (var i = 0; i + 1 < rawHeaders.length; i += 2) { hdrs.push([rawHeaders[i], rawHeaders[i + 1]]); }
+            var resp = _lumen_response_from_fetch_cache(status, statusText, hdrs, finalUrl, finalUrl !== url);
+            if (onBody) {
+                // Drain the body even when nothing reads it: an unread
+                // response holds its fetch slot (BUG-721).
+                resp.text().then(function(text) {
+                    onBody(url, resp, text);
+                    _lumen_resource_fire(nid, 'load');
+                }).catch(function(e) {
+                    _lumen_console_error('link hint body failed: ' + url + ': ' + e);
+                    _lumen_resource_fire(nid, 'error');
+                });
+                return;
+            }
             _lumen_resource_fire(nid, 'load');
-        }).catch(function(e) {
+        } catch (e) {
             _lumen_console_error('link hint fetch failed: ' + url + ': ' + e);
             _lumen_resource_fire(nid, 'error');
-        });
+        }
     }, 0);
 }
 

@@ -183,6 +183,32 @@ impl PrefetchCache {
 /// UI-thread page pipeline. Reset per navigation via [`PrefetchCache::reset`].
 pub static PREFETCH_CACHE: LazyLock<PrefetchCache> = LazyLock::new(PrefetchCache::new);
 
+/// BUG-1116: the `lumen_core::ext::SubresourceCache` glue that hands
+/// `lumen-network::HttpClient::fetch_preload_cached` access to
+/// [`PREFETCH_CACHE`] without `lumen-network` depending on `lumen-shell`
+/// directly. A zero-sized marker — the cache itself is the process-global
+/// [`PREFETCH_CACHE`], so there is nothing to store per instance.
+pub(crate) struct SharedPrefetchCache;
+
+impl lumen_core::ext::SubresourceCache for SharedPrefetchCache {
+    fn generation(&self) -> u64 {
+        PREFETCH_CACHE.current_generation()
+    }
+
+    fn get_or_fetch<'a>(
+        &self,
+        generation: u64,
+        url: &str,
+        fetch: lumen_core::ext::SubresourceFetch<'a>,
+    ) -> Result<(Vec<u8>, Option<String>), String> {
+        PREFETCH_CACHE
+            .fetch(generation, url, move || {
+                fetch().map(|(body, content_type)| CachedResource { body, content_type })
+            })
+            .map(|resource| (resource.body.clone(), resource.content_type.clone()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

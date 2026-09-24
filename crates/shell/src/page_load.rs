@@ -922,7 +922,7 @@ impl Lumen {
             // fetched the page's stylesheets, scripts and images, so a clear
             // there would throw away exactly the rows the page is owed.
             resource_timing::clear();
-            self.stream_images_requested.clear();
+            self.stream_images_requested = Arc::new(Mutex::new(std::collections::HashSet::new()));
             self.stream_image_sizes.clear();
             self.stream_image_pixels.clear();
             self.stream_image_sizes_dirty = false;
@@ -1721,7 +1721,12 @@ impl Lumen {
             if req.is_lazy {
                 continue;
             }
-            if !self.stream_images_requested.insert(req.url.clone()) {
+            if !self
+                .stream_images_requested
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(req.url.clone())
+            {
                 continue;
             }
             // GAP-CSPENF срез 4: the fetch must never start at all — unlike
@@ -2434,6 +2439,13 @@ fn feed_preload_and_emit(
         return;
     }
     let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
+    // BUG-1116: `preload`/`modulepreload`/`prefetch` hints warm the same
+    // process-global cache as the stylesheet/script warm-up right below —
+    // started here, as early as the streaming scanner sees them, so the
+    // element's own fetch (`HttpClient::fetch_preload_cached`, driven by the
+    // JS shim once the DOM is ready) and a real consumer elsewhere on the
+    // page share one network round trip instead of each doing its own.
+    crate::page_pipeline::warm_preload_cache(&early, base, sink, cookie_jar.cloned());
     // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
     // HTML is still streaming. Linked stylesheets AND external classic scripts are
     // warmed into the process-global prefetch cache using the SAME subresource

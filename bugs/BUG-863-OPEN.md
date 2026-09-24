@@ -49,3 +49,14 @@ DOM §4.5 требует `createCDATASection(data)` у любого `Document` (
 Пока не исправлено, `dom/ranges` в отчёте нечитаем: 24 ERROR маскируют реальное
 состояние `Range` (по 3 сабтестам, которые всё же успели пройти, видно, что
 базовый `Range` живой).
+
+
+## Реальный сайт (2026-09-24): youtube
+
+Сайты ломает не фабрика, а **глобальный интерфейс**: полифилл ShadyDOM (`webcomponents-sd.js:102`)
+делает `["Text","Comment","CDATASection","ProcessingInstruction"].forEach(a =>
+Object.create(window[a].prototype))` → `Cannot read properties of undefined (reading 'prototype')`.
+На youtube полифилл включается из-за членов не на прототипах интерфейсов (отдельный баг), и это его
+первое падение. Репро `.tmp/compat/g1/yt_cdata.html`: Lumen `CDATASection=undefined`, Chrome
+`function`, `createCDATASection` на HTML-документе — `NotSupportedError`, на XML — узел с
+`nodeType 4`. Передан P6 по решению пользователя.

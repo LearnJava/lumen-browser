@@ -251,6 +251,13 @@ impl Lumen {
                 let proxy = self.load_proxy.clone();
                 let mut preload_dispatched = std::mem::take(&mut self.preload_dispatched);
                 let target = self.target_color_space();
+                // BUG-1118: see `DynamicImageHookCtx`'s doc comment — this is
+                // the one call site with a live `Lumen` to build it from.
+                let dynamic_image_hook_ctx = Some(crate::dynamic_image_hook::DynamicImageHookCtx {
+                    generation,
+                    dedup: Arc::clone(&self.stream_images_requested),
+                    proxy: proxy.clone(),
+                });
                 // BUG-1027: поток гоняет весь финальный pipeline, включая
                 // сборку дерева боксов — рекурсию по глубине DOM ценой ~10.4 КБ
                 // стека на уровень. На штатных 2 МиБ `std::thread::spawn` он
@@ -291,6 +298,7 @@ impl Lumen {
                         raw.sync_xhr_document_policy,
                         raw.sync_xhr_permissions_policy,
                         raw.referrer_policy_header.as_deref(),
+                        dynamic_image_hook_ctx,
                     )
                     .map_err(|e| e.to_string())
                     // ph3-tls-hardening, live-wiring slice: `render_bytes` doesn't

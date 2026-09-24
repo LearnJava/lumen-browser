@@ -1774,3 +1774,15 @@ shell 1610+2 ok (без изменений — новый путь не имее
 внутри ребёнка, выделение и позиция курсора, session history фреймов,
 `target` формы СТРАНИЦЫ, оверлеи форм внутри фрейма, плюс всё из очередей
 срезов 14–19.
+
+
+## Реальные сайты (2026-09-24)
+
+- **samsung** — первый `Uncaught TypeError: Cannot read properties of null (reading 'document')`
+  (`contentWindow === null` у вставленного скриптом iframe, в том числе `about:blank`), дальше каскад
+  `Unexpected end of JSON input`, `reading '$q'`; `<body>` пустой (67 узлов против 3865).
+  Репро `.tmp/compat/g2/iframejs.html`.
+- **w3schools** — FastCMP в `load` iframe без `src` пишет
+  `iframe.contentDocument.documentElement.style.cssText`; синхронно после `appendChild`
+  `contentDocument === null` (Chrome — документ `about:blank`), а у фасада `frameElem` нет `.style`
+  (см. BUG-970). Диалог согласия не строится. Репро `.tmp/compat/g6/site/iframedoc.html`.

@@ -2209,6 +2209,10 @@ pub(crate) fn spawn_frame(
         // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above —
         // no layout to offer yet, so nothing to flush against either.
         None,
+        // BUG-1118: iframe scripts not wired to the immediate-`<img src>`
+        // hook yet — see `ImageLoadHook`'s doc comment for scope; sub-
+        // documents keep relying on the post-relayout sweep only.
+        None,
     );
     // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
     // отклоняем с логом, не заваливая страницу.

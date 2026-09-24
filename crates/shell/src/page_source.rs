@@ -421,7 +421,7 @@ impl PageSource {
         // `app/user_event.rs` where both are threaded from `self`.
         let push_backend: Option<Arc<dyn lumen_core::ext::PushBackend>> = None;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, push_backend, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref())?;
+            render_bytes(&raw.bytes, raw.content_type.as_deref(), &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, push_backend, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), None)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }

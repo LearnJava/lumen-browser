@@ -305,6 +305,12 @@ pub struct V8JsRuntime {
     pub(super) activation_consumed: Arc<AtomicBool>,
     /// Live SW execution threads keyed by `(origin, scope)`.
     pub(super) sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    /// BUG-1118: shell-provided hook that starts an `<img src=…>` fetch the
+    /// instant script sets the attribute, instead of waiting for the next
+    /// relayout — see [`lumen_core::ext::ImageLoadHook`]'s doc comment for
+    /// scope. `None` (tests, workers, iframes, bfcache thaw) falls back to
+    /// the pre-existing relayout-driven sweep only.
+    pub(super) image_load_hook: Option<Arc<dyn lumen_core::ext::ImageLoadHook>>,
     /// `sessionStorage` partition of the browsing context this runtime serves
     /// (BUG-836). Session storage is scoped to the *tab*, not the document, so
     /// the owner of the tab hands the same `Arc` to every document's runtime
@@ -455,6 +461,7 @@ impl V8JsRuntime {
             activation_ever: Arc::new(AtomicBool::new(false)),
             activation_consumed: Arc::new(AtomicBool::new(false)),
             sw_worker_store: None,
+            image_load_hook: None,
             ss_store: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
@@ -669,6 +676,14 @@ impl V8JsRuntime {
     /// [`Self::with_sw_worker_store`]).
     pub fn with_session_storage(mut self, store: Arc<Mutex<lumen_core::WebStorage>>) -> Self {
         self.ss_store = Some(store);
+        self
+    }
+
+    /// Attach the BUG-1118 immediate-`<img src>` fetch hook (see
+    /// [`lumen_core::ext::ImageLoadHook`]). Must be called before
+    /// `install_dom` to take effect (mirrors [`Self::with_sw_worker_store`]).
+    pub fn with_image_load_hook(mut self, hook: Arc<dyn lumen_core::ext::ImageLoadHook>) -> Self {
+        self.image_load_hook = Some(hook);
         self
     }
 

@@ -103,3 +103,15 @@ document-write/script_00{1,3}`, `content-security-policy/nonce-hiding/*` 2,
 (`content-security-policy/nonce-hiding/svgscript-nonces-hidden.html` и
 `…-hidden-meta.sub.html`, оба с зависшим подтестом `Document-written script
 executes.`, и `html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document.open-03.html`).
+
+
+## Реальный сайт (2026-09-24): tumblr
+
+tumblr подключает **все** бандлы (runtime, vendor, main, …) из инлайн-скрипта в `<head>` через
+`document.write('<script src=… defer>')`. В Lumen к `assets.tumblr.com/pop/js/*` не уходит ни одного
+запроса: SPA не гидрируется, остаётся SSR-оболочка — 230 узлов против 5788 в Chrome, без
+блокировщика. Репро `.tmp/compat/g5/docwrite.html` (+`ext.js`): Lumen `ext=0, inline=0,
+log ['after:0']`, Chrome `1, 1, ['after:1']`. `write` вставляет разметку через
+`body.insertAdjacentHTML` (скрипты инертны), а в `<head>` при `body === null` — no-op
+(`web_api_shim_mid.js:11440-11448`). GAP-DOCWRITE закрыт без этой части; передан P6 по решению
+пользователя.

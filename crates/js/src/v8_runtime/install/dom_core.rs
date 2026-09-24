@@ -444,6 +444,7 @@ pub(crate) fn install_node_lookup(
 
 /// Node and element property reads and writes (attributes, text, classes).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // BUG-1118 added the 8th; mirrors the rest of this file's install_* fns
 pub(crate) fn install_node_properties(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
@@ -452,6 +453,7 @@ pub(crate) fn install_node_properties(
     dom_dirty: Arc<AtomicBool>,
     flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
+    image_load_hook: Option<Arc<dyn lumen_core::ext::ImageLoadHook>>,
 ) -> JsResult<()> {
     // ── node properties ──────────────────────────────────────────────────────
     {
@@ -619,7 +621,8 @@ pub(crate) fn install_node_properties(
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
+        let img_hook = image_load_hook.clone();
+        reg!(scope, ctx, store,
             "_lumen_set_attr",
             move |node_id: u32, name: String, value: String| {
                 let mut doc = d.lock().unwrap();
@@ -634,8 +637,24 @@ pub(crate) fn install_node_properties(
                 // mirrors `lumen_chrome::model::set_attr`'s change-detection
                 // (bind_model writes idempotently every cycle regardless of
                 // whether the value changed).
-                if old.as_deref() != Some(value.as_str()) {
+                let changed = old.as_deref() != Some(value.as_str());
+                if changed {
                     record_dom_touch(&touched, nid);
+                }
+                // BUG-1118: HTML LS §4.8.4.3 "update the image data" — a
+                // script assigning `<img>.src`/`setAttribute('src', …)` must
+                // queue the fetch right now, in parallel, not wait for the
+                // next relayout (which may not run until the current script,
+                // possibly itself blocked in a synchronous network call,
+                // returns). See `ImageLoadHook`'s doc comment for the exact
+                // scope of what this covers.
+                if changed
+                    && name.eq_ignore_ascii_case("src")
+                    && !value.trim().is_empty()
+                    && let Some(hook) = &img_hook
+                    && doc.get(nid).element_name().is_some_and(|n| n.local == "img")
+                {
+                    hook.queue_image_load(&value);
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);

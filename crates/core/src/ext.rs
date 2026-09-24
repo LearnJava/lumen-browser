@@ -2020,6 +2020,43 @@ pub struct JsFetchRequest<'a> {
     pub token: Option<&'a AbortToken>,
 }
 
+/// Process-global, per-navigation cache of subresource bytes (BUG-1116).
+///
+/// The real implementation is `lumen-shell`'s `PREFETCH_CACHE` — a single
+/// slot per resolved URL, shared by every consumer that fetches that URL
+/// during the same navigation (streaming preload warm-up, the cascade's
+/// linked stylesheets, external `<script src>`, and — via
+/// [`JsFetchProvider::fetch_preload_cached`] — a `<link rel=preload|
+/// modulepreload|prefetch>` hint's own fetch). `lumen-network::HttpClient`
+/// depends only on this trait from `lumen-core`, avoiding a direct
+/// `lumen-network → lumen-shell` edge (layering: shell sits above network).
+pub trait SubresourceCache: Send + Sync {
+    /// The navigation generation this cache is currently scoped to — passed
+    /// back into [`Self::get_or_fetch`] so a caller that read it and then
+    /// blocked on a slow fetch still writes into the generation it read,
+    /// even if a newer navigation reset the cache meanwhile.
+    fn generation(&self) -> u64;
+
+    /// Fetch `url` through the cache for navigation `generation`: a hit
+    /// returns the previously cached bytes without running `fetch`; a miss
+    /// runs `fetch`, shares the result with any other caller currently
+    /// blocked on the same `(generation, url)`, and caches it (success or
+    /// failure) for later callers. When `generation` no longer matches the
+    /// cache's current generation, the call bypasses the cache and just runs
+    /// `fetch` directly.
+    fn get_or_fetch<'a>(
+        &self,
+        generation: u64,
+        url: &str,
+        fetch: SubresourceFetch<'a>,
+    ) -> std::result::Result<(Vec<u8>, Option<String>), String>;
+}
+
+/// One-shot subresource fetch closure passed to [`SubresourceCache::get_or_fetch`]:
+/// body bytes plus the response's `Content-Type` header, or an error message.
+pub type SubresourceFetch<'a> =
+    Box<dyn FnOnce() -> std::result::Result<(Vec<u8>, Option<String>), String> + Send + 'a>;
+
 /// Synchronous HTTP fetch bridge for the JS runtime.
 ///
 /// The implementation lives in `lumen-network::HttpClient`, which keeps the
@@ -2088,6 +2125,21 @@ pub trait JsFetchProvider: Send + Sync {
     ) -> Result<JsFetchResult> {
         let _ = (content_type, body);
         self.fetch_sync(url, method)
+    }
+
+    /// GET a resource for a `<link rel=preload|modulepreload|prefetch>` hint
+    /// (BUG-1116), sharing bytes with whatever the page's own cascade/script
+    /// pipeline fetches for the same URL instead of always hitting the
+    /// network a second time.
+    ///
+    /// The default implementation just delegates to [`fetch_sync`](Self::fetch_sync)
+    /// (no sharing) — every implementor except `lumen-network::HttpClient`
+    /// (test doubles, worker fetch providers) keeps today's behaviour
+    /// unchanged. `HttpClient` overrides this to consult the
+    /// [`SubresourceCache`] installed via `with_subresource_cache`, when one
+    /// is present.
+    fn fetch_preload_cached(&self, url: &str) -> Result<JsFetchResult> {
+        self.fetch_sync(url, "GET")
     }
 
     /// Cooperative-cancellation variant of fetch_sync mirroring AbortSignal.
@@ -3456,6 +3508,32 @@ pub trait PushBackend: Send + Sync {
     /// `(origin, scope)` by [`Self::push_deliver`], removing it from the
     /// pending queue. `None` if there is no subscription or no pending message.
     fn push_take_pending(&self, origin: &str, scope: &str) -> Option<Vec<u8>>;
+}
+
+/// BUG-1118: fires synchronously, on the JS runtime's own thread, the moment
+/// script sets a plain `<img src=…>` content attribute (HTML LS §4.8.4.3
+/// "update the image data" — the load must queue in parallel right away, not
+/// wait for the next relayout).
+///
+/// `lumen-js` has no dependency on `lumen-shell`'s network/image-decode code,
+/// so it cannot fetch the image itself — this trait is the same
+/// injected-backend pattern as [`SwBackend`]/[`CacheBackend`]: the shell
+/// implements it once per navigation (base URL, CSP policy, cookie jar,
+/// generation and dedup set all captured at construction) and hands an
+/// `Arc<dyn ImageLoadHook>` to `V8JsRuntime::with_image_load_hook`.
+///
+/// Scope (срез 1): only the plain `src` attribute on `<img>`, only for the
+/// runtime built for the top-level document's own parser/inline scripts
+/// (`run_scripts_with_dom`'s primary call site). `srcset`/`<picture>`
+/// selection, subtree insertion (`appendChild` of an already-`src`-bearing
+/// `<img>`), iframes and bfcache-thaw runtimes are not wired — those keep
+/// relying on the post-relayout sweep ([`Self::queue_image_load`]'s caller
+/// doc comment has no bearing on them), same as before this trait existed.
+pub trait ImageLoadHook: Send + Sync {
+    /// `raw_src` is the attribute value as written by script, not yet
+    /// resolved against the document base URL — the implementation resolves
+    /// it itself, the same way the post-relayout sweep does.
+    fn queue_image_load(&self, raw_src: &str);
 }
 
 // ============================================================================

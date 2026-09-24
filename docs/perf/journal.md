@@ -301,6 +301,56 @@ docs-rs -72% (раньше 403/500-класс), mdn +594% ⚠ (см. наход�
 
 ---
 
+## 2026-09-24 — разбор совместимости 48 сайтов top100 — Windows 10, dev-release, без блокировщика
+
+Продолжение прогона 2026-09-23 выше: 48 сайтов, у которых отрисовка Lumen расходится с Chrome,
+разобраны до конкретного API. Шесть параллельных агентов по 8 сайтов. На каждый сайт — видимое окно
+`--maximized` против видимого Chrome 153, по одному окну за раз; инструмент —
+`.tmp/compat/probe.py` в worktree аудита. Каждая находка сведена к маленькой локальной странице,
+снятой в обоих браузерах.
+
+**Всё перемерено без блокировщика** (`LUMEN_NO_ADBLOCK=1`, решение пользователя 2026-09-23).
+Прогон 2026-09-23 шёл с включённым EasyList, и часть поломок была только его: spotify, whatsapp,
+duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` печатается при каждом старте и
+о включённом блокировщике не говорит. Признак — `blocked: easylist`.
+
+**Итог.** Заведено 28 багов, [BUG-1119](../../bugs/BUG-1119-OPEN.md)…[BUG-1146](../../bugs/BUG-1146-OPEN.md).
+В 8 открытых дописаны сайты: BUG-892, 493, 568, 648, 863, 480, 970, 1114. Все отданы P6, очередь —
+`STATUS-P6.md`, по числу сломанных сайтов.
+
+| Причина | Сайты |
+|---|---|
+| нет `document.scripts`/`links` ([BUG-892](../../bugs/BUG-892-OPEN.md)) | imdb, espn, amazon (челлендж AWS WAF), discord |
+| `document.referrer` — `undefined` ([BUG-1121](../../bugs/BUG-1121-OPEN.md)) | imgur, fandom, yahoo, yahoo-jp |
+| `defer` исполняется в порядке документа ([BUG-1120](../../bugs/BUG-1120-OPEN.md)) | khanacademy, coursera |
+| члены DOM не на прототипах интерфейсов ([BUG-1122](../../bugs/BUG-1122-OPEN.md)), `EventTarget` вне цепочки ([BUG-1123](../../bugs/BUG-1123-OPEN.md)), нет `CDATASection` (BUG-863) | youtube |
+| `document.cookie` не сохраняется ([BUG-1119](../../bugs/BUG-1119-OPEN.md)) | msft-login |
+| CSP nonce не пускает внешний скрипт ([BUG-1124](../../bugs/BUG-1124-OPEN.md)) | dropbox, gemini (гипотеза) |
+| `<style>.sheet === null` сразу после вставки ([BUG-493](../../bugs/BUG-493-OPEN.md)) | twitch, quora, bbc |
+| `document.write` не исполняет `<script>` ([BUG-568](../../bugs/BUG-568-OPEN.md)) | tumblr |
+| `ShadowRoot` без `insertBefore` ([BUG-1130](../../bugs/BUG-1130-OPEN.md)) | archive |
+| `classList` не итерируем ([BUG-1125](../../bugs/BUG-1125-OPEN.md)) | wordpress, mozilla |
+| `blob:` URL не загружается ([BUG-1126](../../bugs/BUG-1126-OPEN.md)) | zoom, bing |
+| `url()` во внешнем CSS от базы документа ([BUG-1127](../../bugs/BUG-1127-OPEN.md)) | apple, tumblr |
+| `load` динамического скрипта после всей очереди ([BUG-1128](../../bugs/BUG-1128-OPEN.md)) | aliexpress (SystemJS) |
+| `load` окна не ждёт вставленный скрипт ([BUG-1129](../../bugs/BUG-1129-OPEN.md)) | wordpress |
+| прочие одиночные: `IntersectionObserverEntry`, `innerHTML` у `<script>`, `atob`, SVG с комментарием, `import.meta.resolve`, `getAttributeNames`, `History`, `HTMLDocument`, `postMessage` target, `srcset` с запятой, порядок XHR `progress`, `javaEnabled`, `BarProp`, `innerText` (BUG-1131…1144) | duolingo, bing, airbnb, tradingview, huggingface, samsung, whatsapp, yahoo-jp, webmd, amazon, apple, weibo |
+| iframe `contentWindow`/`contentDocument` (BUG-480, BUG-970) | samsung, w3schools |
+| `PerformanceObserver` buffered синхронно (BUG-648) | cnbc |
+| 4xx/5xx заменяется страницей ошибки, `fetch` реджектит (BUG-1114) | reddit (403 и в Chrome), duolingo, fandom |
+
+Служебные находки: [BUG-1145](../../bugs/BUG-1145-OPEN.md) (MCP `eval` отдаёт таймаут движкового
+потока как «JS context not available»; мешал снять DOM на cnbc, gemini, udemy, imgur, github) и
+[BUG-1146](../../bugs/BUG-1146-OPEN.md) (блокировщик игнорирует `$domain=`, виден только при
+включённом блокировщике).
+
+**Без движкового корня.** canva и character-ai почти на уровне Chrome. microsoft отдаёт Akamai
+бот-стену (curl с UA Chrome получает её же). yahoo — сниффинг UA, BUG-1113. github — занятость
+движкового потока, BUG-306. Не локализованы: soundcloud (`app.start()` без исключения), tiktok
+(`RangeError: Maximum call stack size exceeded`), pinterest, walmart, naver (−150 узлов), udemy.
+Сетевые гипотезы без репро: обрыв H2 без `close_notify` без повтора подресурса (espn, webmd) и
+TLS-рукопожатие с `login.sina.com.cn` (weibo).
+
 ## Исторический контекст (до журнала)
 
 **2026-07-02 — ручной аудит 14 сайтов** (headless `--screenshot`, dev-release,
