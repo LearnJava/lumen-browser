@@ -88,8 +88,6 @@ the time — read dates.
   (`serde_json::to_string`), and the call is built by `popstate_eval_source` so both argument
   encodings can be asserted without a live runtime. Accepting either shape on the shim side was
   rejected: a string state (`pushState("hi")`) is indistinguishable from JSON text that way.
-  `pushState(state, "")` with no URL argument still fires no `popstate`
-  ([BUG-886](../bugs/BUG-886-OPEN.md)) — that entry never reaches the shell's stack.
 
 - **The node wrapper's interface lives on a shared prototype, not on every node
   ([BUG-849](../bugs/BUG-849-FIXED.md), P1, 2026-08-23).** `_lumen_build_element` used
