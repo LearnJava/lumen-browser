@@ -72,6 +72,7 @@ mod cors;
 mod dns;
 mod doh;
 mod dot;
+mod fetch_metadata;
 pub mod filter;
 pub mod h2;
 pub mod h3;
@@ -3991,8 +3992,9 @@ impl HttpClient {
         // (`<img>`/`<script src>`/`<link>`/cascade `@import`/`@font-face`/…) —
         // srez 1 wired only `fetch()`/`XMLHttpRequest`/`sendBeacon`. Subresource
         // requests are always GET (no `method` param on this path), so unlike
-        // `fetch_request_impl` there is no `Origin` to append (Fetch §"append a
-        // request's Origin header" only triggers for non-GET/HEAD).
+        // `fetch_request_impl` there is no *method*-driven `Origin` to append
+        // (Fetch §"append a request's Origin header" only triggers for
+        // non-GET/HEAD); a `cors`-mode request adds its own below (BUG-1021).
         let referer_header = self
             .document_context
             .as_ref()
@@ -4001,6 +4003,19 @@ impl HttpClient {
             })
             .map(|referer| format!("Referer: {referer}\r\n"))
             .unwrap_or_default();
+        // BUG-1021: request mode per destination (`@font-face` is `cors`,
+        // images/`@import` are `no-cors`) — `Sec-Fetch-*` replaces the
+        // profile's navigation defaults, and a cross-origin `cors` request
+        // carries `Origin`. Rides in the same extra-header string as
+        // `Referer`, so the conditional-GET branch below gets it too.
+        let mode_headers = fetch_metadata::subresource_request_headers(
+            self.fingerprint_profile,
+            self.document_context.as_ref().map(|(doc_url, _)| doc_url),
+            url,
+            destination,
+            fetch_metadata::RequestMode::for_destination(destination),
+        );
+        let referer_header = format!("{referer_header}{mode_headers}");
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         // BUG-839: Resource Timing needs the two ends of the request. Wall
@@ -4683,6 +4698,8 @@ impl JsFetchProvider for HttpClient {
                 method,
                 headers: &[],
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             },
             false,
@@ -4695,6 +4712,8 @@ impl JsFetchProvider for HttpClient {
             method,
             headers: &[],
             body: None,
+            mode: "",
+            destination: "",
             token: None,
         })
     }
@@ -4711,6 +4730,8 @@ impl JsFetchProvider for HttpClient {
             method,
             headers: &[],
             body: Some(JsFetchBody { content_type, bytes: body }),
+            mode: "",
+            destination: "",
             token: None,
         })
     }
@@ -4791,6 +4812,8 @@ impl JsFetchProvider for HttpClient {
             method,
             headers: &[],
             body: None,
+            mode: "",
+            destination: "",
             token: Some(token),
         })
     }
@@ -4815,6 +4838,8 @@ impl JsFetchProvider for HttpClient {
             method,
             headers: &[],
             body: Some(JsFetchBody { content_type, bytes: body }),
+            mode: "",
+            destination: "",
             token: Some(token),
         })
     }
@@ -5559,6 +5584,23 @@ impl HttpClient {
                 author_headers.push_str("\r\n");
             }
         }
+        // BUG-1021: the request's own mode instead of the profile's
+        // navigation block — a plain `fetch()`/XHR is `cors`/`empty`, an
+        // element loading itself through the shim (`@import`) names its own
+        // `no-cors` mode and destination. A cross-origin `cors` GET/HEAD gets
+        // `Origin` too; non-GET/HEAD already has it from the branch above.
+        let doc_url = self.document_context.as_ref().map(|(u, _)| u);
+        let mode = fetch_metadata::RequestMode::from_fetch_mode(req.mode);
+        if method_upper == "GET" || method_upper == "HEAD" {
+            author_headers.push_str(&fetch_metadata::cors_origin_header(doc_url, &url, mode));
+        }
+        author_headers.push_str(&fetch_metadata::fetch_metadata_headers(
+            self.fingerprint_profile,
+            doc_url,
+            &url,
+            fetch_metadata::dest_token(req.destination),
+            mode,
+        ));
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
         let (resp, final_url) = fetch_with_redirect(
@@ -6915,6 +6957,8 @@ mod tests {
             method: "GET",
             headers: &[],
             body: None,
+            mode: "",
+            destination: "",
             token: None,
         });
         match result {
@@ -6952,6 +6996,8 @@ mod tests {
             method: "GET",
             headers: &[],
             body: None,
+            mode: "",
+            destination: "",
             token: None,
         });
         assert!(!matches!(result, Err(Error::CspConnectSrcBlocked { .. })));
@@ -6977,6 +7023,8 @@ mod tests {
             method: "GET",
             headers: &[],
             body: None,
+            mode: "",
+            destination: "",
             token: None,
         });
         match result {
@@ -10597,6 +10645,8 @@ world\r\n\
                 method: "GET",
                 headers: &headers,
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10625,6 +10675,8 @@ world\r\n\
                 method: "GET",
                 headers: &headers,
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10661,6 +10713,8 @@ world\r\n\
                 method: "GET",
                 headers: &headers,
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10691,6 +10745,8 @@ world\r\n\
                 method: "POST",
                 headers: &[],
                 body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -10720,6 +10776,8 @@ world\r\n\
                 method: "GET",
                 headers: &[],
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10752,6 +10810,8 @@ world\r\n\
                 method: "POST",
                 headers: &[],
                 body: Some(JsFetchBody { content_type: "text/plain", bytes: b"x" }),
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -10783,6 +10843,8 @@ world\r\n\
                 method: "GET",
                 headers: &[],
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("GET must succeed");
@@ -10817,6 +10879,83 @@ world\r\n\
             req.contains(&format!("Referer: http://127.0.0.1:{port}/page.html?x=1\r\n")),
             "{req}"
         );
+    }
+
+    /// BUG-1021: a subresource fetch carries its own request mode on the
+    /// wire instead of the profile's navigation block — `@font-face` goes
+    /// out as `cors`, an image as `no-cors`, and a cross-origin `cors`
+    /// request gets `Origin`. Exactly one of each `Sec-Fetch-*` header.
+    #[test]
+    fn subresource_fetch_sends_request_mode_per_destination() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(3, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "bytes")
+        });
+        let same_doc = Url::parse(&format!("http://127.0.0.1:{port}/page.html")).unwrap();
+        let client = HttpClient::new()
+            .with_document_context(same_doc, referrer_policy::ReferrerPolicy::default_policy());
+        let font = Url::parse(&format!("http://127.0.0.1:{port}/f.woff")).unwrap();
+        let img = Url::parse(&format!("http://127.0.0.1:{port}/a.png")).unwrap();
+        client.fetch_subresource(&font, RequestDestination::Font).unwrap();
+        client.fetch_subresource(&img, RequestDestination::Image).unwrap();
+        // Cross-origin document (other port) — the font now needs `Origin`.
+        let cross_doc = Url::parse("http://127.0.0.1:1/page.html").unwrap();
+        HttpClient::new()
+            .with_document_context(cross_doc, referrer_policy::ReferrerPolicy::default_policy())
+            .fetch_subresource(&font, RequestDestination::Font)
+            .unwrap();
+        server.join().unwrap();
+
+        let reqs = captured.lock().unwrap().clone();
+        let count = |req: &str, needle: &str| req.matches(needle).count();
+        assert!(reqs[0].contains("Sec-Fetch-Mode: cors\r\n"), "{}", reqs[0]);
+        assert!(reqs[0].contains("Sec-Fetch-Dest: font\r\n"), "{}", reqs[0]);
+        assert!(reqs[0].contains("Sec-Fetch-Site: same-origin\r\n"), "{}", reqs[0]);
+        assert!(!reqs[0].contains("Origin: "), "{}", reqs[0]);
+        assert_eq!(count(&reqs[0], "Sec-Fetch-Mode:"), 1, "{}", reqs[0]);
+        assert_eq!(count(&reqs[0], "Sec-Fetch-Site:"), 1, "{}", reqs[0]);
+        assert!(reqs[1].contains("Sec-Fetch-Mode: no-cors\r\n"), "{}", reqs[1]);
+        assert!(reqs[1].contains("Sec-Fetch-Dest: image\r\n"), "{}", reqs[1]);
+        assert!(reqs[2].contains("Origin: http://127.0.0.1:1\r\n"), "{}", reqs[2]);
+        assert!(reqs[2].contains("Sec-Fetch-Site: same-site\r\n"), "{}", reqs[2]);
+    }
+
+    /// BUG-1021: the page `fetch()`/XHR path carries the mode the shim
+    /// names — a plain `fetch()` is `cors`/`empty` (and cross-origin GET gets
+    /// `Origin`), an `@import` loaded through the shim is `no-cors`/`style`.
+    #[test]
+    fn fetch_request_sends_mode_and_destination() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(2, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let document_url = Url::parse("http://127.0.0.1:1/page.html").unwrap();
+        let client = HttpClient::new()
+            .with_document_context(document_url, referrer_policy::ReferrerPolicy::default_policy());
+        let target = format!("http://127.0.0.1:{port}/a.css");
+        for (mode, destination) in [("", ""), ("no-cors", "style")] {
+            client
+                .fetch_request(&JsFetchRequest {
+                    url: &target,
+                    method: "GET",
+                    headers: &[],
+                    body: None,
+                    token: None,
+                    mode,
+                    destination,
+                })
+                .expect("GET must succeed");
+        }
+        server.join().unwrap();
+
+        let reqs = captured.lock().unwrap().clone();
+        assert!(reqs[0].contains("Sec-Fetch-Mode: cors\r\n"), "{}", reqs[0]);
+        assert!(reqs[0].contains("Sec-Fetch-Dest: empty\r\n"), "{}", reqs[0]);
+        assert!(reqs[0].contains("Origin: http://127.0.0.1:1\r\n"), "{}", reqs[0]);
+        assert!(reqs[1].contains("Sec-Fetch-Mode: no-cors\r\n"), "{}", reqs[1]);
+        assert!(reqs[1].contains("Sec-Fetch-Dest: style\r\n"), "{}", reqs[1]);
+        assert!(!reqs[1].contains("Origin: "), "{}", reqs[1]);
+        assert_eq!(reqs[1].matches("Sec-Fetch-Mode:").count(), 1, "{}", reqs[1]);
     }
 
     /// GAP-REFERRER срез 2 gate: without `with_document_context`, a
@@ -10858,6 +10997,8 @@ world\r\n\
                     content_type: "application/json",
                     bytes: br#"{"a":1}"#,
                 }),
+                mode: "",
+                destination: "",
                 token: None,
             })
             .expect("POST must succeed");
@@ -12603,6 +12744,8 @@ mod proxy_tests {
                 method: "GET",
                 headers: &[],
                 body: None,
+                mode: "",
+                destination: "",
                 token: None,
             })
             .unwrap();

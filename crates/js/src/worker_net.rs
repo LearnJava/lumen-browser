@@ -70,6 +70,8 @@ fn net_fetch(
         method,
         headers: &headers,
         body: body.map(|bytes| lumen_core::ext::JsFetchBody { content_type, bytes }),
+        mode: "",
+        destination: "",
         token: None,
     };
     let resp = match provider.fetch_request(&req) {

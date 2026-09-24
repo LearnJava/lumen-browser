@@ -1,7 +1,7 @@
 # BUG-1021: `fetch_subresource` has no per-destination CORS request mode — every
 subresource fetch is effectively `no-cors`, undistinguished from a real `cors` fetch
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Дата:** 2026-09-07
 **Компонент:** network (`crates/network/src/lib.rs::HttpClient::fetch_subresource`/
 `fetch_subresource_inner`) — no `Sec-Fetch-Mode`/`Origin` header logic anywhere in
@@ -98,3 +98,42 @@ No new `.ini` filed by this bug — `fetch-resources.sub.html.ini` continues to
 attribute all four subtests to BUG-520 until a live run re-triages them; that
 attribution is now known to be partly stale (see above) but is left alone
 rather than guessed at.
+
+## Исправление (P3, 2026-09-25)
+
+Живой прогон `run_smoke.py` (прежде недоступный — окружение починено) показал
+не отсутствие заголовков, а хуже: каждый подресурс уходил с **навигационным**
+блоком профиля — `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`,
+`Sec-Fetch-Site: none`. Подтест background-image падал с
+`expected "no-cors" but got "navigate"`.
+
+- Новый модуль `crates/network/src/fetch_metadata.rs`: `RequestMode`
+  (`navigate`/`same-origin`/`no-cors`/`cors`), таблица «destination → mode»
+  (`@font-face` → `cors`, картинки/CSS/`@import`/классический скрипт/медиа →
+  `no-cors`, воркер → `same-origin`, `fetch()`/XHR → `init.mode`, по умолчанию
+  `cors`), сборка `Sec-Fetch-Site/-Mode/-Dest` и `Origin` для cross-origin
+  `cors`-запроса.
+- `fetch_subresource_inner` кладёт эти строки в `extra_headers` — одноимённый
+  заголовок вытесняет дефолт профиля (BUG-749 на H1, `build_h2_headers` на H2),
+  поэтому второго `Sec-Fetch-Mode` не появляется.
+- Путь `fetch()`/XHR (`fetch_request_impl`) получил `JsFetchRequest::mode`/
+  `destination`: `@import`, `<link rel=stylesheet>` и `<script src>`, которые
+  шим грузит через собственный `fetch()`, передают `no-cors` и свой
+  destination, страничный `fetch()` — `init.mode`.
+- `Sec-Fetch-*` шлются только профилями, у которых они есть в навигационном
+  блоке (Chrome/Strict/Edge/Tor); `Origin` — протокольный, шлётся всегда.
+
+Живой прогон `css/fetching/fetch-resources.sub.html`: background-image
+**PASS** (было FAIL `navigate`), `@import` **PASS** в изоляции (в полном файле
+остаётся NOTRUN — его блокирует TIMEOUT соседних подтестов). Оставшиеся два
+подтеста висят не на режиме запроса: запрос не уходит вовсе.
+
+- `shape-outside: url()` — картинка-форма не загружается вообще (CSS Shapes
+  image shapes не реализованы; строка `shape-outside` в CSS-SPECS.md).
+- `@font-face` во вставленном скриптом `<style>` не загружается —
+  [BUG-1154](BUG-1154-OPEN.md).
+
+Юнит-тесты: `fetch_metadata::tests::*` (6),
+`subresource_fetch_sends_request_mode_per_destination`,
+`fetch_request_sends_mode_and_destination` — проверяют заголовки на проводе
+через mock-сервер, включая «ровно один `Sec-Fetch-Mode`».

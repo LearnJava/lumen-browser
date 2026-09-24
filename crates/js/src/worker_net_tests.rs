@@ -38,7 +38,7 @@ impl Net {
 
 impl lumen_core::ext::JsFetchProvider for Net {
     fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
-        self.fetch_request(&lumen_core::ext::JsFetchRequest { url, method, headers: &[], body: None, token: None })
+        self.fetch_request(&lumen_core::ext::JsFetchRequest { url, method, headers: &[], body: None, mode: "", destination: "", token: None })
     }
 
     fn fetch_request(
