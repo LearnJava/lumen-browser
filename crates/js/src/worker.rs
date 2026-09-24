@@ -488,6 +488,15 @@ pub(crate) fn install_worker_scope_globals_v8(
     // later, by `install_worker_globals_v8`/`sw_worker`) is not yet defined
     // at this point.
     crate::webassembly::install_webassembly_bindings_v8(rt)?;
+    // BUG-1086: Trusted Types (`self.trustedTypes`/`TrustedHTML`/`TrustedScript`/
+    // `TrustedScriptURL`/`TrustedTypePolicy`) is `[Exposed=(Window,Worker)]`
+    // (TT L2 §2.2), but `TRUSTED_TYPES_SHIM` was only ever evaluated by the
+    // page runtime (`v8_runtime.rs::install_dom`) — every worker flavour saw
+    // a bare `trustedTypes is not defined`. The shim is self-contained (its
+    // own `SECRET`/`VALUES` closure, only touches `window` behind a
+    // `typeof` guard), so it evaluates unchanged here, shared across
+    // dedicated/shared/service workers like the rest of this function.
+    rt.eval(crate::trusted_types::TRUSTED_TYPES_SHIM)?;
     Ok(())
 }
 
@@ -2339,6 +2348,29 @@ mod tests_v8 {
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
         let encoded = rt.eval("btoa('hello')").unwrap();
         assert_eq!(encoded, lumen_core::JsValue::String("aGVsbG8=".into()));
+    }
+
+    /// BUG-1086: Trusted Types (`self.trustedTypes`) is `[Exposed=(Window,Worker)]`
+    /// (TT L2 §2.2) — must be reachable from a dedicated worker scope, not
+    /// just the page runtime.
+    #[test]
+    fn v8_worker_globals_have_trusted_types() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
+
+        assert_eq!(
+            rt.eval("typeof self.trustedTypes === 'object'").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        let policy_ok = rt
+            .eval(
+                "var p = trustedTypes.createPolicy('p', { createHTML: function (s) { return s.toUpperCase(); } }); \
+                 var h = p.createHTML('ok'); trustedTypes.isHTML(h) && h.toString() === 'OK';",
+            )
+            .unwrap();
+        assert_eq!(policy_ok, lumen_core::JsValue::Bool(true));
     }
 
     /// BUG-766: `DedicatedWorkerGlobalScope.isSecureContext` must exist and
