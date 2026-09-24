@@ -804,17 +804,35 @@ impl Lumen {
             let mut doc = src.document.lock().unwrap();
             doc.set_target(id_part.as_deref());
         }
-        // Re-layout so :target cascade is applied.
-        self.relayout();
-        if fragment.is_empty() {
-            self.scroll_to(0.0);
-            return;
-        }
         let node_id = id_part.as_deref().and_then(|id| {
             self.layout_source
                 .as_ref()
                 .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), id))
         });
+        // GAP-BEFOREMATCH срез 2: HTML LS §6.1 "ancestor revealing algorithm"
+        // — run BEFORE the layout below so `beforematch` handlers (which may
+        // themselves mutate the DOM, per `beforematch-element-removal-*.html`)
+        // settle and the subsequent relayout/rect lookup already see their
+        // effect, not a stale pre-reveal tree. `eval_js` here is a void call
+        // by the same `route_eval_js` contract every other fire-and-forget
+        // dispatch above this line already uses — the shell never reads a
+        // return value from it.
+        if let Some(nid) = node_id
+            && self.js_present
+        {
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                format!("_lumen_ancestor_revealing_algorithm({})", nid.index()),
+            );
+        }
+        // Re-layout so :target cascade AND any hidden/open flips the reveal
+        // algorithm just made take effect before the rect lookup below.
+        self.relayout();
+        if fragment.is_empty() {
+            self.scroll_to(0.0);
+            return;
+        }
         let target_rect = node_id.and_then(|nid| {
             self.layout_box.as_ref().and_then(|lb| forms::find_box_rect(lb, nid))
         });
@@ -833,18 +851,40 @@ impl Lumen {
         // target (if it resolved) takes priority over the text directive;
         // nested-scrolling-ancestor support for a text match is not covered
         // yet (only the page-level scroll below), unlike the id path above.
-        let text_match_y = if target_y.is_none() {
+        //
+        // Known remaining gap (GAP-BEFOREMATCH): a text directive can only
+        // match text that layout actually produced fragments for, and a
+        // `hidden=until-found` subtree gets an empty 0×0 box at BUILD time
+        // (`content_visibility.rs` Phase 1 — CSS Containment L3 §4), before
+        // this search ever runs. Reaching text INSIDE such a subtree (per
+        // HTML LS §6.9.2 "skipped contents [...] accessible") needs layout to
+        // keep the geometry of a `content-visibility: hidden` subtree around
+        // for search — a separate, layout-side slice; not attempted here.
+        // A node that DOES resolve below (any ordinary match, or a match
+        // whose only obstacle is a closed `<details>`, not `hidden`) still
+        // gets the full reveal treatment via the same call as the id path.
+        let text_match = if target_y.is_none() {
             self.layout_box.as_ref().and_then(|lb| {
                 let frags = lumen_layout::collect_visible_text(lb);
                 parsed_fragment
                     .directives
                     .iter()
                     .find_map(|d| text_fragment::find_directive_match(&frags, d))
-                    .map(|m| m.bounding_rect().y)
             })
         } else {
             None
         };
+        if let Some(m) = &text_match
+            && self.js_present
+        {
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                format!("_lumen_ancestor_revealing_algorithm({})", m.node.index()),
+            );
+            self.relayout();
+        }
+        let text_match_y = text_match.map(|m| m.bounding_rect().y);
         if let Some(y) = target_y.or(text_match_y) {
             // CSS Scroll Behavior L1 §3: respect scroll-behavior on the scrolling box.
             // The page viewport's scroll-behavior comes from the root (<html>) element.
