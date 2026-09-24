@@ -245,10 +245,38 @@ const FUNCTION_CALL_MAX_DEPTH: u32 = 16;
 /// Deferred (CSS Functions and Mixins L1, not yet implemented): `returns`
 /// type-checking, conditional group rules inside the function body
 /// (`@media`, `@container`), named/keyword arguments.
+///
+/// Single-scope form: every call resolves against `functions` alone. A
+/// declaration written inside a shadow tree needs the tree-scoped lookup of
+/// [`expand_custom_functions_scoped`] instead.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::style) fn expand_custom_functions(
     value: &str,
     functions: &[FunctionRule],
+    custom: &HashMap<String, String>,
+    depth: u32,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<String> {
+    expand_custom_functions_scoped(value, &[functions], custom, depth, em_basis, viewport)
+}
+
+/// [`expand_custom_functions`] with CSS Scoping L1 §3.5 tree-scoped name
+/// lookup (BUG-519). `scopes` is the chain of `@function` sets visible to
+/// the calling declaration, innermost tree first and the document last: a
+/// shadow tree sees its own functions, then those of every enclosing tree.
+///
+/// A call binds to the first scope that defines the name, and that
+/// function's *body* then resolves its own nested calls starting from the
+/// scope it was defined in (`scopes[i..]`) — so a function defined in an
+/// outer tree can never see a same-named function of an inner one
+/// (`function-shadow.html` "Outer functions can't see inner functions",
+/// "Function with same name in different scopes"). Arguments are evaluated
+/// in the caller's scope (the full chain), matching `var()` in arguments.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::style) fn expand_custom_functions_scoped(
+    value: &str,
+    scopes: &[&[FunctionRule]],
     custom: &HashMap<String, String>,
     depth: u32,
     em_basis: f32,
@@ -263,7 +291,11 @@ pub(in crate::style) fn expand_custom_functions(
     let name = &value[start..name_end];
     let after_open = &value[name_end + 1..]; // skip '('
     let (args_str, after_close) = parse_balanced_to_close(after_open)?;
-    let func = functions.iter().find(|f| f.name == name)?;
+    let (def_scope, func) = scopes
+        .iter()
+        .enumerate()
+        .find_map(|(i, s)| s.iter().find(|f| f.name == name).map(|f| (i, f)))?;
+    let body_scopes = &scopes[def_scope..];
     let args = split_call_args(args_str);
 
     let mut local: HashMap<String, String> = custom.clone();
@@ -272,8 +304,9 @@ pub(in crate::style) fn expand_custom_functions(
             Some(a) => a.trim().to_string(),
             None => param.default.clone()?,
         };
-        let expanded_arg = expand_vars(&raw_arg, custom, depth + 1, em_basis, viewport)
-            .and_then(|v| expand_custom_functions(&v, functions, custom, depth + 1, em_basis, viewport))?;
+        let expanded_arg = expand_vars(&raw_arg, custom, depth + 1, em_basis, viewport).and_then(|v| {
+            expand_custom_functions_scoped(&v, scopes, custom, depth + 1, em_basis, viewport)
+        })?;
         local.insert(param.name.clone(), expanded_arg);
     }
 
@@ -284,16 +317,18 @@ pub(in crate::style) fn expand_custom_functions(
             continue;
         }
         if let Some(local_name) = decl.property.strip_prefix("--") {
-            let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport)
-                .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1, em_basis, viewport))?;
+            let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport).and_then(|v| {
+                expand_custom_functions_scoped(&v, body_scopes, &local, depth + 1, em_basis, viewport)
+            })?;
             local.insert(format!("--{local_name}"), v);
         }
     }
-    let resolved = expand_vars(result_raw?, &local, depth + 1, em_basis, viewport)
-        .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1, em_basis, viewport))?;
+    let resolved = expand_vars(result_raw?, &local, depth + 1, em_basis, viewport).and_then(|v| {
+        expand_custom_functions_scoped(&v, body_scopes, &local, depth + 1, em_basis, viewport)
+    })?;
 
     let combined = format!("{}{}{}", &value[..start], resolved, after_close);
-    expand_custom_functions(&combined, functions, custom, depth + 1, em_basis, viewport)
+    expand_custom_functions_scoped(&combined, scopes, custom, depth + 1, em_basis, viewport)
 }
 
 /// Finds the first `--<ident>(` call-site (CSS Functions and Mixins L1

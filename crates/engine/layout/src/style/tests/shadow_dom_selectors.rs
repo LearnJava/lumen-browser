@@ -304,3 +304,95 @@
         assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
             "@apply outside a shadow tree must not see a mixin declared only inside it");
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // BUG-519 — `@function` names are tree-scoped (CSS Scoping L1 §3.5):
+    // a declaration from a shadow tree's `<style>` resolves `--fn()` in that
+    // tree first, then in each enclosing tree, then in the document; a
+    // function body resolves its own calls from the tree it was defined in.
+    // Transcribes `css/css-mixins/functions/function-shadow.html`.
+    // ─────────────────────────────────────────────────────────────────────
+
+    fn custom(s: &ComputedStyle, name: &str) -> Option<String> {
+        s.custom_props.get(name).map(|v| v.trim().to_string())
+    }
+
+    #[test]
+    fn function_inside_shadow_shadows_document_function() {
+        // "@function works inside shadow" — was 42px (document's --a()).
+        let (doc, host, e1) = make_shadow_host_with_interior_child();
+        install_shadow_sheet(host, "@function --a() { result: 10px; } #e1 { --actual: --a(); }");
+        let sheet = lumen_css_parser::parse("@function --a() { result: 42px; }");
+        let s = compute_style(&doc, e1, &sheet, &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(custom(&s, "--actual").as_deref(), Some("10px"));
+    }
+
+    #[test]
+    fn document_function_visible_inside_shadow() {
+        // "Looking up document-global function" — must keep working.
+        let (doc, host, e1) = make_shadow_host_with_interior_child();
+        install_shadow_sheet(host, "#e1 { --actual: --a(); }");
+        let sheet = lumen_css_parser::parse("@function --a() { result: 42px; }");
+        let s = compute_style(&doc, e1, &sheet, &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(custom(&s, "--actual").as_deref(), Some("42px"));
+    }
+
+    #[test]
+    fn function_from_outer_shadow_visible_in_nested_shadow() {
+        // "@function defined in outer shadow is visible" + "Combining
+        // functions from various scopes".
+        let (doc, outer_host, inner_host, inner_e) = make_nested_shadow_hosts();
+        let mut map: HashMap<NodeId, Stylesheet> = HashMap::new();
+        map.insert(outer_host, lumen_css_parser::parse("@function --b() { result: B; }"));
+        map.insert(
+            inner_host,
+            lumen_css_parser::parse("@function --c() { result: C; } #inner-e { --actual: --a() --b() --c(); }"),
+        );
+        set_shadow_sheets(map);
+        let sheet = lumen_css_parser::parse("@function --a() { result: 42px; }");
+        let s = compute_style(&doc, inner_e, &sheet, &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(custom(&s, "--actual").as_deref(), Some("42px B C"));
+    }
+
+    #[test]
+    fn outer_function_body_does_not_see_inner_same_named_function() {
+        // "Outer functions can't see inner functions": --b() is defined in
+        // the outer tree, so its `--c()` call must bind to the OUTER --c().
+        let (doc, outer_host, inner_host, inner_e) = make_nested_shadow_hosts();
+        let mut map: HashMap<NodeId, Stylesheet> = HashMap::new();
+        map.insert(
+            outer_host,
+            lumen_css_parser::parse("@function --b() { result: --c(); } @function --c() { result: 20px; }"),
+        );
+        map.insert(
+            inner_host,
+            lumen_css_parser::parse("@function --c() { result: C; } #inner-e { --actual: --b() --c(); }"),
+        );
+        set_shadow_sheets(map);
+        let s = compute_style(&doc, inner_e, &Stylesheet::default(), &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(custom(&s, "--actual").as_deref(), Some("20px C"));
+    }
+
+    #[test]
+    fn same_named_function_in_different_scopes_is_not_a_cycle() {
+        // "Function with same name in different scopes": inner --a() calls
+        // outer --b(), which calls outer --a() — no cycle, result 24px.
+        let (doc, outer_host, inner_host, inner_e) = make_nested_shadow_hosts();
+        let mut map: HashMap<NodeId, Stylesheet> = HashMap::new();
+        map.insert(
+            outer_host,
+            lumen_css_parser::parse("@function --a() { result: 24px; } @function --b() { result: --a(); }"),
+        );
+        map.insert(
+            inner_host,
+            lumen_css_parser::parse("@function --a() { result: --b(); } #inner-e { --actual: --a(); }"),
+        );
+        set_shadow_sheets(map);
+        let s = compute_style(&doc, inner_e, &Stylesheet::default(), &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(custom(&s, "--actual").as_deref(), Some("24px"));
+    }

@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-09-21 (P3)
 **Компонент:** layout (`crates/engine/layout/src/style/substitute.rs::expand_vars_and_env`, consumed by `crates/engine/layout/src/lib.rs::collect_custom_properties_rec` — the channel `getComputedStyle().getPropertyValue('--x')` actually reads, per [BUG-499](BUG-499-FIXED.md)'s fix)
-**Найден:** P3 2026-09-06, investigating [BUG-519](BUG-519-OPEN.md)
+**Найден:** P3 2026-09-06, investigating [BUG-519](BUG-519-FIXED.md)
 
 ## Симптом
 
