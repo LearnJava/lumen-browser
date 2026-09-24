@@ -1,15 +1,17 @@
 # BUG-1032: HTML Tabular Data — element-specific IDL полностью отсутствует (`HTMLTableElement`/`HTMLTableSectionElement`/`HTMLTableRowElement`)
 
-**Статус:** OPEN (ДОРАБОТКА → GAP-TABLEIDL)
-**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача
-`GAP-TABLEIDL` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт (`docs/probe-method.md` §8:
-функциональности нет вовсе, объём — целая семья интерфейсов, не точечная правка).
+**Статус:** FIXED (обнаружено уже закрытым) 2026-09-25 (P1, `GAP-TABLEIDL`)
+**Тип:** заявка описывала нереализованную функциональность и была верно переклассифицирована в
+задачу `GAP-TABLEIDL` в [ROADMAP.md](../ROADMAP.md), но сама реализация внесена коммитом
+`d5fbda1b4d` (2026-09-15, «BUG-581: полный HTML LS §4.9.11 API для
+`<table>`/`<tr>`/`<thead>`/`<tbody>`/`<tfoot>`») — независимо и до того, как заявка BUG-1032
+(найдена 2026-09-07) была превращена в этот `GAP`. Сам `GAP-TABLEIDL` никогда не сверялся с
+кодом после слияния BUG-581 и оставался помечен `planned` три с половиной недели.
 **Найден:** P3 2026-09-07, побочно при локализации [BUG-1022](BUG-1022-FIXED.md)
 (`html/semantics` — три `--check` подряд дают три разных набора регрессий)
-**Компонент:** js (`crates/js/src/shim/*.js` — `HTMLTableElement`/`HTMLTableRowElement`/
-`HTMLTableSectionElement` заведены только как теговые алиасы generic `HTMLElement`,
-`grep -rn "insertRow\|insertCell\|createTHead\|createCaption" crates/js/src/shim/*.js` — ноль
-совпадений кроме одного постороннего `'rows'` у другого элемента)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js`/`web_api_shim_tail_b.js` —
+`HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` полный HTML §4.9.11 API;
+`crates/js/tests/cases/bug581_table_api.rs` — 17 тестов, все зелёные)
 
 ## Механизм
 
@@ -82,3 +84,23 @@ createCaption|createTBody"`), не считая `tables.html`/DOM-обходов
 
 BUG-1022 остаётся `OPEN` — эта находка закрывает один из двух общих
 знаменателей, не саму загадку роста счётчика регрессий.
+
+## Закрытие 2026-09-25 (P1)
+
+Живой прогон юнит-тестов на `main` (`cargo test -p lumen-js --features v8-backend
+bug581_table_api`) дал 17/17 зелёных — реализация присутствует полностью:
+`rows`/`tBodies`/`cells` (live-`HTMLCollection` на `_lumen_make_nid_collection`),
+`caption`/`tHead`/`tFoot` (геттеры/сеттеры с `TypeError`/`HierarchyRequestError`),
+`createCaption`/`createTHead`/`createTFoot`/`createTBody`/`delete*`,
+`insertRow`/`deleteRow` (на `HTMLTableElement` и `HTMLTableSectionElement`),
+`insertCell`/`deleteCell`/`cellIndex`, `rowIndex`/`sectionRowIndex`. Внесено
+коммитом `d5fbda1b4d` («BUG-581: полный HTML LS §4.9.11 API…», 2026-09-15) —
+раньше, чем эта заявка была переклассифицирована в `GAP-TABLEIDL`. `git log`
+подтверждает: `GAP-TABLEIDL` создан по замеру, снятому ДО коммита `d5fbda1b4d`,
+и статус документации никогда не сверялся с кодом заново. Изменений кода в
+этой сессии нет — только исправление статуса `BUGS.md`/`ROADMAP.md`/этого файла.
+Остаток вне скоупа (не проверен заново, унаследован из BUG-581): namespace-
+схлопывание [BUG-830](BUG-830-OPEN.md), prefix-упрощение [BUG-367](BUG-367-FIXED.md),
+кросс-realm `instanceof` через `<iframe>`, `DOMParser`+`importNode`,
+`colSpan`/`rowSpan` reflection — ни одна из этих причин не относится к самому
+API-поверхности `GAP-TABLEIDL`.

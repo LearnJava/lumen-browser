@@ -78,7 +78,8 @@ tests/wpt/.venv/bin/python tests/wpt/run_report.py \
 **Часть 1 — `insertRow-method-02.html`:** 10/10 повторов дали идентичный результат — НЕ флак.
 Корень: `HTMLTableElement`/`HTMLTableSectionElement`/`HTMLTableRowElement` не реализуют вовсе
 ни одного специфичного для интерфейса IDL-члена (`insertRow`/`rows`/`cells`/`insertCell`/
-`tHead`/`tBodies`/…). Заведён [BUG-1032](BUG-1032-OPEN.md) (ДОРАБОТКА → `GAP-TABLEIDL`).
+`tHead`/`tBodies`/…). Заведён [BUG-1032](BUG-1032-FIXED.md) (ДОРАБОТКА → `GAP-TABLEIDL`,
+закрыт 2026-09-25).
 
 **Часть 2 — `autoplay.html`:** В ИЗОЛЯЦИИ (без контекста полной категории) сам по себе флак —
 10 повторов дали 9× `Test ERROR, expected OK` / 1× `Test OK`, при идентичном наборе 10/10
