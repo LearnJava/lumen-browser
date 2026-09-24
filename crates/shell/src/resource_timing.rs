@@ -219,6 +219,7 @@ mod tests {
             tab_id: TabId(0),
             url: url.to_string(),
             initiator: "img",
+            destination: "image",
             start_ms: 1_700_000_000_000.0,
             duration_ms: 12.5,
             status: 200,

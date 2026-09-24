@@ -29,6 +29,7 @@
 //!   superseded navigation) bypasses the cache and never pollutes the current page.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 
 /// One resource fetched through the cache: body bytes plus the response's
@@ -55,11 +56,42 @@ type FetchResult = Result<Arc<CachedResource>, String>;
 struct Slot {
     state: Mutex<Option<FetchResult>>,
     cv: Condvar,
+    /// PERF-15: set once a consumer other than the filler read this slot
+    /// ([`PrefetchCache::fetch`] as a waiter, [`PrefetchCache::lookup_current`]).
+    /// The site memory keeps a replayed resource only if the page really took it.
+    used: AtomicBool,
 }
 
 impl Slot {
     fn new() -> Self {
-        Self { state: Mutex::new(None), cv: Condvar::new() }
+        Self { state: Mutex::new(None), cv: Condvar::new(), used: AtomicBool::new(false) }
+    }
+}
+
+/// PERF-15: a slot reserved by [`PrefetchCache::reserve`] that its owner
+/// promises to fill later, possibly on another thread.
+///
+/// Consumers that look the URL up in the meantime wait on it, so a reservation
+/// that is never filled would hang them: dropping an unfilled one publishes an
+/// error instead, and the consumer then fetches the resource itself.
+pub(crate) struct Reservation {
+    slot: Option<Arc<Slot>>,
+}
+
+impl Reservation {
+    /// Publish the fetch result and wake every waiter.
+    pub(crate) fn fill(mut self, result: Result<CachedResource, String>) {
+        if let Some(slot) = self.slot.take() {
+            let _ = PrefetchCache::fill(&slot, result.map(Arc::new));
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot.take() {
+            let _ = PrefetchCache::fill(&slot, Err("prefetch reservation abandoned".to_owned()));
+        }
     }
 }
 
@@ -144,8 +176,38 @@ impl PrefetchCache {
             // Run the (potentially slow, network-bound) fetch WITHOUT holding any
             // lock, then publish the result and wake waiters.
             Claim::Filler(slot) => Self::fill(&slot, fetch().map(Arc::new)),
-            Claim::Waiter(slot) => Self::wait(&slot),
+            Claim::Waiter(slot) => {
+                slot.used.store(true, Ordering::Relaxed);
+                Self::wait(&slot)
+            }
         }
+    }
+
+    /// PERF-15: reserve `url`'s slot for `generation` without fetching yet.
+    ///
+    /// `None` when the URL already has a slot this navigation or `generation`
+    /// is superseded — nothing to do then. The caller fills the returned
+    /// [`Reservation`] whenever its fetch completes; until then every consumer
+    /// of the URL waits on it instead of sending its own request.
+    pub(crate) fn reserve(&self, generation: u64, url: &str) -> Option<Reservation> {
+        match self.claim(generation, url) {
+            Claim::Filler(slot) => Some(Reservation { slot: Some(slot) }),
+            Claim::Stale | Claim::Waiter(_) => None,
+        }
+    }
+
+    /// PERF-15: whether a consumer of navigation `generation` read `url`'s
+    /// slot and got bytes from it. `false` for a superseded generation, a URL
+    /// nobody reserved, a slot only its filler touched, or a failed fetch.
+    #[allow(clippy::unwrap_used)]  // тот же приём, что у соседних методов
+    pub(crate) fn was_used(&self, generation: u64, url: &str) -> bool {
+        let inner = self.inner.lock().unwrap();
+        if inner.generation != generation {
+            return false;
+        }
+        inner.slots.get(url).is_some_and(|slot| {
+            slot.used.load(Ordering::Relaxed) && matches!(*slot.state.lock().unwrap(), Some(Ok(_)))
+        })
     }
 
     /// BUG-1116: start filling `url`'s slot in the background, reserving the
@@ -164,10 +226,8 @@ impl PrefetchCache {
         url: &str,
         fetch: impl FnOnce() -> Result<CachedResource, String> + Send + 'static,
     ) {
-        if let Claim::Filler(slot) = self.claim(generation, url) {
-            std::thread::spawn(move || {
-                let _ = Self::fill(&slot, fetch().map(Arc::new));
-            });
+        if let Some(reservation) = self.reserve(generation, url) {
+            std::thread::spawn(move || reservation.fill(fetch()));
         }
     }
 
@@ -185,6 +245,7 @@ impl PrefetchCache {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn lookup_current(&self, url: &str) -> Option<FetchResult> {
         let slot = Arc::clone(self.inner.lock().unwrap().slots.get(url)?);
+        slot.used.store(true, Ordering::Relaxed);
         Some(Self::wait(&slot))
     }
 
@@ -468,5 +529,36 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(&cache.lookup_current("http://x/a.js").unwrap().unwrap().body, b"first");
+    }
+
+    #[test]
+    fn reservation_is_waited_on_and_marks_use() {
+        // PERF-15: a reserved slot makes consumers wait for its later fill,
+        // and only a consumer's read — not the fill — counts as a use.
+        let cache: &'static PrefetchCache = Box::leak(Box::new(PrefetchCache::new()));
+        cache.reset(3);
+        let reservation = cache.reserve(3, "http://x/app.js").expect("fresh URL");
+        assert!(cache.reserve(3, "http://x/app.js").is_none(), "second reserve of one URL");
+        assert!(cache.reserve(2, "http://x/other.js").is_none(), "superseded generation");
+        let reader = std::thread::spawn(move || cache.fetch(3, "http://x/app.js", || Ok(resource(b"net"))));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!cache.was_used(3, "http://x/app.js"), "unfilled slot is not a use yet");
+        reservation.fill(Ok(resource(b"replayed")));
+        assert_eq!(&reader.join().unwrap().unwrap().body, b"replayed");
+        assert!(cache.was_used(3, "http://x/app.js"));
+        assert!(!cache.was_used(4, "http://x/app.js"), "other generation");
+    }
+
+    #[test]
+    fn unused_or_failed_reservation_is_not_a_use() {
+        let cache = PrefetchCache::new();
+        cache.reset(1);
+        cache.reserve(1, "http://x/unused.png").unwrap().fill(Ok(resource(b"png")));
+        assert!(!cache.was_used(1, "http://x/unused.png"));
+        // Dropped without a fill: waiters get an error instead of hanging,
+        // and an error read is not a use either.
+        drop(cache.reserve(1, "http://x/dropped.css").unwrap());
+        assert!(cache.lookup_current("http://x/dropped.css").unwrap().is_err());
+        assert!(!cache.was_used(1, "http://x/dropped.css"));
     }
 }

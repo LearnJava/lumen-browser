@@ -1191,6 +1191,9 @@ impl Lumen {
             // panel's cached rows — `refresh_history` then re-reads it.
             ChromeAction::ClearHistory => {
                 let _ = self.history_store.clear();
+                // PERF-15: the site memory is keyed by visited page URLs —
+                // history in all but name.
+                crate::site_memory::forget_all();
                 self.refresh_history();
                 self.relayout_chrome_host();
             }

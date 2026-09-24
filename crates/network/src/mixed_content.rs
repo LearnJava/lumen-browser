@@ -88,6 +88,26 @@ impl RequestDestination {
             _ => return None,
         })
     }
+
+    /// The request's destination as the Fetch Standard §3.2.7 spells it —
+    /// the value of `Sec-Fetch-Dest`. `""` for [`Self::Connect`]/
+    /// [`Self::Other`] (Fetch's empty destination serialises as `empty` only
+    /// in the header). [`Self::Prefetch`] has no destination of its own in
+    /// Fetch either; it is spelled `prefetch` here so that a consumer can
+    /// tell it from a stylesheet (PERF-15).
+    pub fn as_fetch_dest(self) -> &'static str {
+        match self {
+            Self::Script => "script",
+            Self::Style => "style",
+            Self::Document => "document",
+            Self::Font => "font",
+            Self::Image => "image",
+            Self::Media => "video",
+            Self::Prefetch => "prefetch",
+            Self::Worker => "worker",
+            Self::Connect | Self::Other => "",
+        }
+    }
 }
 
 /// Mixed-content уровень для запроса в secure-контексте.
@@ -374,6 +394,19 @@ mod tests {
             ),
             MixedContentLevel::Blockable
         );
+    }
+
+    #[test]
+    fn fetch_dest_round_trips_the_consumer_keywords() {
+        // PERF-15: the site memory stores `as_fetch_dest` and replays with the
+        // destination it maps back to — the four it replays must round-trip
+        // through the `as` keyword of the same name.
+        for dest in ["script", "style", "image", "font"] {
+            let d = RequestDestination::for_preload_as(dest).unwrap();
+            assert_eq!(d.as_fetch_dest(), dest);
+        }
+        assert_eq!(RequestDestination::Prefetch.as_fetch_dest(), "prefetch");
+        assert_eq!(RequestDestination::Connect.as_fetch_dest(), "");
     }
 
     #[test]

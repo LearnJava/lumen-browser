@@ -28,6 +28,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // PERF-15: a visit shorter than the recording window is saved too.
+        crate::site_memory::finish_visit();
         // M0.1 (ADR-016): финальная сессионная сводка времён кадров. Печатается
         // только если frame-log что-то накопил (`LUMEN_FRAME_LOG>=1`).
         if let Some(summary) = self.frame_stats.summary() {
