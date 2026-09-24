@@ -13,9 +13,11 @@
 //! [`TextDirective`] inside the page's already-rendered visible text
 //! ([`lumen_layout::collect_visible_text`]), the same substrate the
 //! regex find-in-page mode (`crate::find::find_matches_regex`) searches.
-//! The reveal algorithm — `hidden="until-found"`, `beforematch`, opening the
-//! nearest `<details>`, `::target-text` highlighting — remains a later
-//! slice (see `bugs/BUG-972-OPEN.md`).
+//! The reveal algorithm (`hidden="until-found"`, `beforematch`, opening the
+//! nearest `<details>`) shipped as [GAP-BEFOREMATCH](../../ROADMAP.md);
+//! `::target-text` highlighting — including honouring a page's own
+//! `::target-text { background-color: ... }` rule — shipped in STTF-1
+//! срезы 4-5 (`Lumen::navigate_fragment`, `find::build_page_with_target_text_highlight`).
 
 use lumen_layout::TextFragment;
 

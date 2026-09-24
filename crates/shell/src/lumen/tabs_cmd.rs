@@ -36,6 +36,7 @@ impl Lumen {
         self.layout_box = None;
         self.find = find::FindState::default();
         self.target_text_highlight = None;
+        self.target_text_highlight_color = None;
         self.address_bar = address_bar::AddressBarState::default();
         self.hint = hints::HintState::default();
         self.scroll_y = 0.0;

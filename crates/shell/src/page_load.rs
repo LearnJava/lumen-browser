@@ -905,6 +905,31 @@ impl Lumen {
         // paint-time rect list). `None` when no text directive resolved —
         // e.g. a plain `#id` fragment or no `:~:text=` in the URL at all.
         self.target_text_highlight = text_match.as_ref().map(|m| m.rects.clone());
+        // STTF-1 срез 5: resolve the page's `::target-text` rule (if any)
+        // against the match's own node — same `compute_pseudo_element_style`
+        // path `::selection` already uses, restricted to the `background-color`
+        // the paint-time `FillRect` overlay can express (CSS Pseudo-Elements
+        // L4 §5.7 restricts `::target-text` to the same property subset as
+        // `::selection`: `color`/`background-color`/`text-decoration-*`/
+        // `text-shadow` — the overlay, like `::selection`'s, only reads
+        // `background-color`). `None` (no matching rule, or its
+        // `background-color` is `currentcolor`/unset) leaves
+        // `TARGET_TEXT_HIGHLIGHT_DEFAULT` as the redraw-time fallback.
+        self.target_text_highlight_color = text_match.as_ref().and_then(|m| {
+            let src = self.layout_source.as_ref()?;
+            let doc = src.document.lock().unwrap();
+            let viewport = self.relayout_viewport()?;
+            let parent = lumen_layout::ComputedStyle::root();
+            let style = lumen_layout::compute_target_text_style(
+                &doc,
+                m.node,
+                &src.stylesheet,
+                &parent,
+                viewport,
+                self.dark_mode,
+            )?;
+            style.background_color.map(|c| c.resolve(style.color))
+        });
         let text_match_y = text_match.map(|m| m.bounding_rect().y);
         if let Some(y) = target_y.or(text_match_y) {
             // CSS Scroll Behavior L1 §3: respect scroll-behavior on the scrolling box.
