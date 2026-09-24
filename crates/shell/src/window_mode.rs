@@ -320,7 +320,7 @@ pub(crate) fn run_window_mode(
         stream_sheet: lumen_css_parser::Stylesheet::default(),
         stream_layout_seeded: false,
         preload_dispatched: std::collections::HashSet::new(),
-        stream_images_requested: std::collections::HashSet::new(),
+        stream_images_requested: Arc::new(Mutex::new(std::collections::HashSet::new())),
         stream_image_sizes: HashMap::new(),
         stream_image_pixels: HashMap::new(),
         stream_image_sizes_dirty: false,

@@ -64,8 +64,11 @@ pub(crate) fn render_bytes(
     // onto the parsed document next to `csp_header` — see
     // `page_source::referrer_policy_header`.
     referrer_policy_header: Option<&str>,
+    // BUG-1118: see `parse_and_layout`'s doc comment on the same parameter —
+    // forwarded straight through.
+    dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, dynamic_image_hook_ctx)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -893,6 +896,15 @@ pub(crate) fn parse_and_layout(
     // GAP-REFERRER срез 3: see `render_bytes`'s doc comment on this same
     // parameter — stamped onto the document right next to `csp_header`.
     referrer_policy_header: Option<&str>,
+    // BUG-1118: bundles this navigation's `Lumen::load_generation`, its
+    // shared `Lumen::stream_images_requested` dedup set and `Lumen::load_proxy`
+    // — everything the immediate `<img src>` fetch hook built below
+    // (`run_scripts_with_dom`'s top-level-document call only) needs to stamp
+    // decodes the same way `Lumen::spawn_image_requests` does and post the
+    // result back to the shell's event loop. `None` for headless/test callers
+    // with no live `Lumen` (`dump_mode.rs`, `page_source::load`) — the hook is
+    // simply not built for them, same as before this feature existed.
+    dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -1160,6 +1172,24 @@ pub(crate) fn parse_and_layout(
         target,
         page_base: base.clone(),
     };
+    // BUG-1118: built from the still-owned `doc` (about to move into
+    // `run_scripts_with_dom` below), same one-shot CSP/referrer-policy read
+    // `spawn_image_requests` does on its `Arc<Mutex<Document>>` later.
+    let dynamic_image_hook: Option<Arc<dyn lumen_core::ext::ImageLoadHook>> =
+        dynamic_image_hook_ctx.map(|ctx| {
+            let root = doc.root();
+            let csp_gate = crate::csp_enforce::document_csp_policy(&doc, root);
+            let referrer_policy = crate::resource_base::document_referrer_policy(&doc);
+            Arc::new(crate::dynamic_image_hook::DynamicImgFetchHook {
+                base: base.clone(),
+                csp_gate,
+                sink: Arc::clone(sink),
+                cookie_jar: cookie_jar.clone(),
+                target,
+                referrer_policy,
+                ctx,
+            }) as Arc<dyn lumen_core::ext::ImageLoadHook>
+        });
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -1184,6 +1214,7 @@ pub(crate) fn parse_and_layout(
         parse_time_snapshot,
         cascade.stylesheet_nodes.clone(),
         parse_time_stylesheet,
+        dynamic_image_hook,
     );
     drop(run_scripts_span);
 

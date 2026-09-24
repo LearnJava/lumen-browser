@@ -566,8 +566,16 @@ pub(crate) struct Lumen {
     /// PH1-2c: ключи `src` картинок, уже отправленных в background-потоки
     /// декодирования во время текущего streaming-load. Дедуп между
     /// промежуточными кадрами `paint_partial_dom`, чтобы каждый `<img>`
-    /// загружался один раз. Очищается в начале каждой навигации.
-    pub(crate) stream_images_requested: std::collections::HashSet<String>,
+    /// загружался один раз. Очищается (пересозданием `Arc`) в начале каждой
+    /// навигации.
+    ///
+    /// BUG-1118: `Arc<Mutex<_>>`, а не голый `HashSet` — тот же набор
+    /// передаётся [`crate::dynamic_image_hook::DynamicImgFetchHook`] (см. его
+    /// докомментарий), который вставляет в него ключи с JS-потока рантайма, до
+    /// того как `spawn_image_requests`/`spawn_stream_image_loads` на shell-
+    /// потоке успеют дойти до того же `<img>` — без общего множества оба пути
+    /// задвоили бы запрос на одну и ту же картинку.
+    pub(crate) stream_images_requested: Arc<Mutex<std::collections::HashSet<String>>>,
     /// BUG-735: intrinsic-размеры `src` → `(width, height)` всех картинок,
     /// декодированных streaming/динамическим путём в текущей навигации.
     /// Карта живёт до конца навигации (а не дренируется за проход), потому что

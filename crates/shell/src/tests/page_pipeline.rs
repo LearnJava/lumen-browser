@@ -1230,6 +1230,7 @@ fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
         None,
         None,
         None,
+        None,
     )
     .expect("pipeline must not fail on a well-formed page")
 }

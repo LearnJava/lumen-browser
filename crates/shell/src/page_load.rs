@@ -922,7 +922,7 @@ impl Lumen {
             // fetched the page's stylesheets, scripts and images, so a clear
             // there would throw away exactly the rows the page is owed.
             resource_timing::clear();
-            self.stream_images_requested.clear();
+            self.stream_images_requested = Arc::new(Mutex::new(std::collections::HashSet::new()));
             self.stream_image_sizes.clear();
             self.stream_image_pixels.clear();
             self.stream_image_sizes_dirty = false;
@@ -1721,7 +1721,12 @@ impl Lumen {
             if req.is_lazy {
                 continue;
             }
-            if !self.stream_images_requested.insert(req.url.clone()) {
+            if !self
+                .stream_images_requested
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(req.url.clone())
+            {
                 continue;
             }
             // GAP-CSPENF срез 4: the fetch must never start at all — unlike
