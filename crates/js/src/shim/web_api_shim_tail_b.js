@@ -512,10 +512,10 @@ if (typeof _lumen_idb_load === 'function') {
 // OffscreenCanvas/ImageBitmap have no native detach here — both are thin JS
 // wrappers around an integer `__canvas_id__` handle (`offscreen_canvas.rs`),
 // so the handle is moved to a new wrapper and the original's copy is cleared;
-// no native call is needed or exists for this. ImageBitmap has no
-// constructor/prototype of its own (a plain `{width, height, __canvas_id__,
-// close()}` shape returned by `createImageBitmap`/`transferToImageBitmap`),
-// so it is recognised structurally rather than via `instanceof`.
+// no native call is needed or exists for this. ImageBitmap is a real class
+// (BUG-933) whose `__canvas_id__` is a prototype getter over a private slot,
+// so its move is delegated to `_lumen_image_bitmap_transfer`, which the
+// OffscreenCanvas module installs next to the class.
 function _lumen_transfer_one(orig) {
     if (orig instanceof ArrayBuffer) {
         if (typeof orig.transfer !== 'function') {
@@ -545,15 +545,9 @@ function _lumen_transfer_one(orig) {
         orig._2d_context = null;
         return movedCanvas;
     }
-    if (orig !== null && typeof orig === 'object' &&
-        typeof orig.__canvas_id__ === 'number' && typeof orig.close === 'function') {
-        var movedBitmap = {
-            width: orig.width, height: orig.height,
-            __canvas_id__: orig.__canvas_id__, close: orig.close
-        };
-        orig.__canvas_id__ = undefined;
-        orig.close = function() {};
-        return movedBitmap;
+    if (typeof _lumen_image_bitmap_transfer === 'function') {
+        var movedBitmap = _lumen_image_bitmap_transfer(orig);
+        if (movedBitmap !== null) return movedBitmap;
     }
     throw new DOMException(
         'structuredClone: value in transfer list is not transferable', 'DataCloneError');

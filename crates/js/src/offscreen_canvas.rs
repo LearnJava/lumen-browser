@@ -1225,6 +1225,81 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
         return ImageBitmapRenderingContext;
       })();
 
+  // BUG-933: `ImageBitmap` (HTML LS §8.10) — a real interface instead of the
+  // `{width, height, __canvas_id__, close}` literal both `transferToImageBitmap`
+  // and `createImageBitmap` used to mint. State lives in one non-enumerable
+  // own slot `__bitmap__ = {cid, width, height, detached}`; `width`/`height`
+  // read 0 once detached (spec getter steps). `__canvas_id__` stays readable
+  // as an ENUMERABLE PROTOTYPE getter because four call sites duck-type
+  // canvas-like objects by it: this module's `drawImage`/`createPattern`/
+  // `createImageBitmap`, `transferFromImageBitmap` (here and in
+  // `web_api_shim_mid.js`), `worker.rs`'s postMessage transfer serializer and
+  // `web_api_shim_tail_b.js`'s `_lumen_transfer_one`. `close()` detaches but
+  // keeps the cid, so `transferFromImageBitmap(closedBitmap)` still reaches the
+  // native detach check and throws InvalidStateError, not TypeError. A second
+  // `close()` is a no-op (no double release of the native canvas).
+  function ImageBitmap() { throw new TypeError('Illegal constructor'); }
+  _offscreen_idl_tag(ImageBitmap, 'ImageBitmap');
+  function _offscreen_bitmap_slot(v, member) {
+    if (!v || v.__bitmap__ === undefined) {
+      throw new TypeError("Failed to read the '" + member +
+        "' property from 'ImageBitmap': receiver is not an ImageBitmap");
+    }
+    return v.__bitmap__;
+  }
+  ['width', 'height'].forEach(function(name) {
+    Object.defineProperty(ImageBitmap.prototype, name, {
+      get: function() {
+        var s = _offscreen_bitmap_slot(this, name);
+        return s.detached ? 0 : s[name];
+      },
+      enumerable: true, configurable: true,
+    });
+  });
+  Object.defineProperty(ImageBitmap.prototype, '__canvas_id__', {
+    get: function() {
+      return (this && this.__bitmap__ !== undefined) ? this.__bitmap__.cid : undefined;
+    },
+    enumerable: true, configurable: true,
+  });
+  Object.defineProperty(ImageBitmap.prototype, 'close', {
+    value: function close() {
+      var s = _offscreen_bitmap_slot(this, 'close');
+      if (s.detached) return;
+      s.detached = true;
+      if (typeof s.cid === 'number') _lumen_offscreen_canvas_bitmap_close(s.cid);
+    },
+    writable: true, enumerable: true, configurable: true,
+  });
+  globalThis.ImageBitmap = ImageBitmap;
+
+  function _offscreen_make_image_bitmap(cid, w, h) {
+    var bm = Object.create(ImageBitmap.prototype);
+    _offscreen_slot(bm, '__bitmap__', { cid: cid, width: w, height: h, detached: false });
+    return bm;
+  }
+  // Transfer steps for an ImageBitmap (HTML LS §8.10 [Transferable]): the
+  // native canvas handle moves to a fresh ImageBitmap and the source becomes
+  // detached (width/height 0, `__canvas_id__` undefined, `close()` a no-op).
+  // Used by `structuredClone(..., {transfer})` in `web_api_shim_tail_b.js` —
+  // it cannot mint the class itself, the prototype slot shape lives here.
+  // Returns null for anything that is not an ImageBitmap.
+  Object.defineProperty(globalThis, '_lumen_image_bitmap_transfer', {
+    value: function(orig) {
+      if (!(orig instanceof ImageBitmap) || orig.__bitmap__ === undefined) return null;
+      var s = orig.__bitmap__;
+      if (s.detached || typeof s.cid !== 'number') {
+        throw new DOMException(
+          'structuredClone: the ImageBitmap is detached', 'DataCloneError');
+      }
+      var moved = _offscreen_make_image_bitmap(s.cid, s.width, s.height);
+      s.detached = true;
+      s.cid = undefined;
+      return moved;
+    },
+    writable: false, enumerable: false, configurable: false,
+  });
+
   function _offscreen_make_gradient(gid) {
     var g = Object.create(CanvasGradient.prototype);
     _offscreen_slot(g, '__gid__', gid);
@@ -1826,18 +1901,12 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
 
     transferToImageBitmap() {
       // Neuters this OffscreenCanvas's backing store and re-homes its pixels
-      // under a fresh bitmap ID (HTML LS §4.12.14). Unified shape: {__canvas_id__}.
+      // under a fresh bitmap ID (HTML LS §4.12.14), wrapped in an ImageBitmap.
       var cid = _lumen_offscreen_canvas_transfer_to_image_bitmap(this.__canvas_id__);
       if (!cid) {
         throw new Error('transferToImageBitmap: canvas already transferred or invalid');
       }
-      var width = this.width, height = this.height;
-      return {
-        width: width,
-        height: height,
-        __canvas_id__: cid,
-        close: function() { _lumen_offscreen_canvas_bitmap_close(cid); }
-      };
+      return _offscreen_make_image_bitmap(cid, this.width, this.height);
     }
 
     convertToBlob(options) {
@@ -1968,7 +2037,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
 
   // createImageBitmap(source[, sx, sy, sw, sh])
   // Supports: ImageData, OffscreenCanvas, HTMLCanvasElement, Blob, HTMLImageElement (HTML LS §4.12.5.4).
-  // All sources resolve to the same bitmap shape: {width, height, __canvas_id__, close()}.
+  // All sources resolve to an `ImageBitmap` (`_offscreen_make_image_bitmap`).
   if (!globalThis.createImageBitmap) {
     globalThis.createImageBitmap = function(source, sx, sy, sw, sh) {
       return new Promise(function(resolve, reject) {
@@ -1986,7 +2055,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
             return;
           }
           if (!cropGiven) {
-            resolve({ width: w, height: h, __canvas_id__: cid, close: function() { _lumen_offscreen_canvas_bitmap_close(cid); } });
+            resolve(_offscreen_make_image_bitmap(cid, w, h));
             return;
           }
           var csx = Math.max(0, Math.min(w, sx | 0));
@@ -2006,7 +2075,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
             reject(new Error('createImageBitmap: crop failed'));
             return;
           }
-          resolve({ width: csw, height: csh, __canvas_id__: newCid, close: function() { _lumen_offscreen_canvas_bitmap_close(newCid); } });
+          resolve(_offscreen_make_image_bitmap(newCid, csw, csh));
         }
 
         // ImageData: has .data (Uint8ClampedArray), .width, .height
@@ -2465,6 +2534,92 @@ mod tests_v8 {
                 bitmap.width === 10 && bitmap.height === 10 &&
                 typeof bitmap.__canvas_id__ === 'number' &&
                 typeof bitmap.close === 'function'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_image_bitmap_is_real_class_instance() {
+        // BUG-933: `transferToImageBitmap()` used to return a
+        // `{width, height, __canvas_id__, close}` literal — `constructor.name`
+        // was 'Object' and `instanceof ImageBitmap` threw a ReferenceError.
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(12, 7);
+                let bm = canvas.transferToImageBitmap();
+                let illegal = false;
+                try { new ImageBitmap(); } catch (e) { illegal = e instanceof TypeError; }
+                typeof ImageBitmap === 'function' &&
+                bm instanceof ImageBitmap &&
+                bm.constructor === ImageBitmap &&
+                bm.constructor.name === 'ImageBitmap' &&
+                Object.prototype.toString.call(bm) === '[object ImageBitmap]' &&
+                Object.getPrototypeOf(bm) === ImageBitmap.prototype &&
+                !Object.prototype.hasOwnProperty.call(bm, 'close') &&
+                !Object.prototype.hasOwnProperty.call(bm, 'width') &&
+                Object.keys(bm).length === 0 &&
+                bm.width === 12 && bm.height === 7 &&
+                typeof bm.__canvas_id__ === 'number' && bm.__canvas_id__ > 0 &&
+                illegal
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_image_bitmap_close_detaches_once() {
+        // BUG-933: close() zeroes width/height (HTML LS §8.10 getter steps),
+        // a second close() is a no-op, and a closed bitmap still reaches the
+        // native detach check in transferFromImageBitmap (InvalidStateError,
+        // not the TypeError reserved for "not an ImageBitmap at all").
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let src = new OffscreenCanvas(4, 4);
+                let bm = src.transferToImageBitmap();
+                bm.close();
+                bm.close();
+                let dst = new OffscreenCanvas(4, 4);
+                let brctx = dst.getContext('bitmaprenderer');
+                let name = '';
+                try { brctx.transferFromImageBitmap(bm); } catch (e) { name = e.name; }
+                let brand = '';
+                try { ImageBitmap.prototype.close.call({}); } catch (e) { brand = e.name; }
+                bm.width === 0 && bm.height === 0 &&
+                name === 'InvalidStateError' && brand === 'TypeError'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_create_image_bitmap_resolves_image_bitmap() {
+        // BUG-933: both createImageBitmap resolve paths (plain and cropped)
+        // mint the class, not a literal.
+        let rt = with_offscreen();
+        rt.eval(
+            r#"
+                var _b933_plain = null, _b933_crop = null, _b933_err = '';
+                let c = new OffscreenCanvas(8, 6);
+                createImageBitmap(c).then(function(b) { _b933_plain = b; },
+                                          function(e) { _b933_err += e; });
+                createImageBitmap(c, 1, 1, 3, 2).then(function(b) { _b933_crop = b; },
+                                                      function(e) { _b933_err += e; });
+            "#,
+        )
+        .unwrap();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                _b933_err === '' &&
+                _b933_plain instanceof ImageBitmap &&
+                _b933_plain.width === 8 && _b933_plain.height === 6 &&
+                _b933_crop instanceof ImageBitmap &&
+                _b933_crop.width === 3 && _b933_crop.height === 2
             "#,
         );
         assert!(ok);

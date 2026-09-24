@@ -1,6 +1,6 @@
 # BUG-933 — `ImageBitmap` (offscreen canvas side) is still a duck-typed literal, not a class
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Компонент:** js (`crates/js/src/offscreen_canvas.rs` — `transferToImageBitmap`/`createImageBitmap`)
 **Найден:** 2026-08-31 (P3), при закрытии [BUG-932](BUG-932-FIXED.md)
 
@@ -71,3 +71,48 @@ Not separately measured — no dedicated WPT/probe run isolating this from
 BUG-932's or BUG-456's slices. Functional behavior (pixels, `close()`
 freeing the native canvas) is correct on every measured path; the defect is
 purely in the object model, same as BUG-932 was.
+
+## Починка (2026-09-24, P3)
+
+`offscreen_canvas.rs`: `function ImageBitmap() { throw new TypeError('Illegal
+constructor'); }` + `Symbol.toStringTag`, глобал `ImageBitmap`. Состояние —
+одна неперечислимая собственная ячейка `__bitmap__ = {cid, width, height,
+detached}`; единственная точка создания — `_offscreen_make_image_bitmap(cid, w,
+h)`, её зовут `transferToImageBitmap()` и оба `resolve` в `createImageBitmap`
+(без кропа и с кропом).
+
+На прототипе:
+
+* `width`/`height` — перечислимые геттеры с brand-check (чужой receiver →
+  `TypeError`), после `close()` читают 0 (HTML LS §8.10, шаги геттеров);
+* `close()` — идемпотентный: второй вызов не освобождает нативный канвас
+  повторно;
+* `__canvas_id__` — перечислимый геттер над ячейкой, для обратной
+  совместимости с дак-тайпингом. `close()` id не стирает, поэтому
+  `transferFromImageBitmap(закрытый)` по-прежнему доходит до нативной
+  проверки и бросает `InvalidStateError`, а не `TypeError`.
+
+### Четыре потребителя `__canvas_id__` — проверены
+
+* `offscreen_canvas.rs` (`drawImage`/`createPattern`/`createImageBitmap`/
+  `transferFromImageBitmap`) и `web_api_shim_mid.js` (`transferFromImageBitmap`
+  элементного контекста) — прямое чтение свойства, геттер отдаёт `number`.
+* `worker.rs::_serializeObj`/`_lumenSerializeWithTransfers` — тоже прямое
+  чтение `obj.__canvas_id__` (не `JSON.stringify` самого битмапа: объект
+  заменяется сентинелом с пикселями до сериализации), геттер прозрачен.
+* `web_api_shim_tail_b.js::_lumen_transfer_one` — **единственный, который бы
+  сломался**: он собирал перемещённый битмап литералом и «обнулял» исходник
+  присваиванием `orig.__canvas_id__ = undefined` (у геттера нет сеттера — присваивание
+  либо молча игнорируется, либо бросает в strict-режиме; исходник не
+  отсоединялся бы в любом случае). Теперь он
+  делегирует в `_lumen_image_bitmap_transfer(orig)` (неперечислимый,
+  незаписываемый глобал, ставится рядом с классом): новый `ImageBitmap` с тем же
+  cid, исходник `detached` + cid снят; повторный перенос → `DataCloneError`.
+
+### Тесты
+
+`offscreen_canvas::tests_v8`: `js_image_bitmap_is_real_class_instance`,
+`js_image_bitmap_close_detaches_once`, `js_create_image_bitmap_resolves_image_bitmap`;
+`dom::tests::v8_url_abort_clone_blob::structured_clone_transfer_moves_image_bitmap`.
+Существующие `transferFromImageBitmap`/`createImageBitmap`/BUG-454 тесты зелёные
+без правок.
