@@ -1,6 +1,6 @@
 # BUG-959 — `requestAnimationFrame`/`cancelAnimationFrame` missing entirely on `DedicatedWorkerGlobalScope`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3, WORKER-1 срез 8)
 **Тип:** дефект реализованного кода — воркер получает собственный набор шимов (`WORKER_TIMERS_SHIM`, `WORKER_NET_SHIM`, `WORKER_OPTIONS_SHIM`, `WORKER_SHIM`, …), и ни один не определяет `requestAnimationFrame`/`cancelAnimationFrame`, хотя страничный `WEB_API_SHIM_MID` их реализует (`crates/js/src/shim/web_api_shim_mid_b.js:786`).
 **Заведён:** 2026-09-02 (WPT-RUN-6, срез 37, живая проба через `--mcp-live-port` + собственный http-сервер с корректно подставленным `testharnessreport.js`)
 **Область:** js (`crates/js/src/worker.rs`)
@@ -95,3 +95,33 @@ runTests)` идиому — не проверен живой пробой отд
 привязать к моменту, когда главный документ реально красит следующий
 кадр — как уже сделано для `statechange` в `web_audio.rs`, см. CLAUDE.md
 «Queue a callback the shim makes on the page's behalf as a task»).
+
+## Срез 8 (2026-09-24, WORKER-1, `p1-worker1-srez8-bug959`): закрыт
+
+Новый `WORKER_RAF_SHIM` (`crates/js/src/shim/worker_raf_shim.js`) —
+`requestAnimationFrame`/`cancelAnimationFrame` для
+`DedicatedWorkerGlobalScope` (HTML LS §8.12 `AnimationFrameProvider` —
+только `Window` и `DedicatedWorkerGlobalScope`, не `SharedWorker`/
+`ServiceWorker`; `install_worker_globals_v8` вызывает его один, срез не
+трогает `shared_worker.rs`/`sw_worker.rs`). Направление починки
+скорректировано: без реального растрового кадра воркера (нет ни
+`OffscreenCanvas`-driven paint loop, ни хука в кадр главного документа)
+колбэк планируется через тот же `setTimeout`, что и таймеры воркера
+(`WORKER_TIMERS_SHIM`, вычисляется до этого шима), с шагом ~16 мс
+(≈60fps) — тот же приём, которым `_lumen_worker_run_tasks` уже гоняет
+`setTimeout`/`setInterval`/`queueMicrotask`, так что отдельного насоса
+на Rust-стороне не требуется: колбэк просто попадает в общую очередь
+задач воркера и получает `performance.now()` в момент срабатывания.
+
+3 новых теста (`v8_worker_globals_have_raf`,
+`v8_worker_raf_callback_runs_via_timer_queue` — не срабатывает
+синхронно, срабатывает после `_lumen_worker_run_tasks()` с реальным
+`DOMHighResTimeStamp`, `v8_worker_raf_cancel_prevents_callback`). Гейт:
+`cargo test -p lumen-js --features v8-backend --lib` — 4230/4230 зелёные
+(флак BUG-1110 в этом прогоне тоже зелёный); `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` и `cargo clippy
+--workspace --all-targets -- -D warnings` чисты. Живой WPT-прогон
+(`workers/worker-request-animation-frame.html`) не выполнен — следующий
+шаг (метод «через `wptserve`, не голый `http.server`», см. секцию «Метод»
+выше — прямая живая проба без него ложно воспроизводит посторонний баг
+формат-токенов `testharnessreport.js`).
