@@ -98,6 +98,7 @@ fn produces_inline_segments(doc: &Document, id: NodeId, display: Display) -> boo
     if is_image_element(doc, id)
         || is_inline_replaced_media_element(doc, id)
         || is_form_control_element(doc, id)
+        || is_ruby_element(doc, id)
     {
         return false;
     }
@@ -117,7 +118,8 @@ fn produces_inline_segments_nested(doc: &Document, id: NodeId, display: Display)
         // есть бокс у него остаётся — и высота, ради которой всё это.
         return !is_image_element(doc, id)
             && !is_inline_replaced_media_element(doc, id)
-            && !is_form_control_element(doc, id);
+            && !is_form_control_element(doc, id)
+            && !is_ruby_element(doc, id);
     }
     produces_inline_segments(doc, id, display)
 }
@@ -144,6 +146,7 @@ pub(crate) fn is_inline_content(
             if is_image_element(doc, id)
                 || is_inline_replaced_media_element(doc, id)
                 || is_form_control_element(doc, id)
+                || is_ruby_element(doc, id)
             {
                 return false;
             }
@@ -205,7 +208,7 @@ pub(crate) fn is_atomic_inline_level(
     if !matches!(&doc.get(id).data, NodeData::Element { .. }) {
         return false;
     }
-    if is_image_element(doc, id) || is_inline_replaced_media_element(doc, id) {
+    if is_image_element(doc, id) || is_inline_replaced_media_element(doc, id) || is_ruby_element(doc, id) {
         let (display, out_of_flow) =
             probe_display_and_flow(doc, sheet, id, inherited, viewport, dark_mode, counters);
         return !out_of_flow

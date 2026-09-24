@@ -1710,6 +1710,34 @@ pub(super) fn dispatch_box(
                 shift_y_box(&mut b.children[idx], dy.round());
             }
         }
+        // GAP-RUBYBOX: base/annotation sub-boxes were already laid out (as
+        // ordinary Blocks, by the recursive descent below) with rects
+        // relative to (0,0) — see `build.rs`'s `build_ruby_box`. Compose
+        // them via `RubyBox::from_style`/`lay_out_ruby` (the pipeline caller
+        // this task adds), then translate the whole composed subtree onto
+        // this box's real content origin and adopt its size as our own, so
+        // this box behaves as one atomic inline-level unit in its parent's
+        // `InlineBlockRow`/flex/grid context.
+        BoxKind::Ruby { base_count } => {
+            let base_count = *base_count;
+            let mut groups = std::mem::take(&mut b.children);
+            for group in &mut groups {
+                lay_out(
+                    group, 0.0, 0.0, content_width, None, measurer, viewport,
+                    children_pcb, hp, false,
+                );
+            }
+            let ruby_text_boxes = groups.split_off(base_count);
+            let base_boxes = groups;
+            let ruby = crate::ruby::RubyBox::from_style(&s, base_boxes, ruby_text_boxes);
+            let mut composed = crate::ruby::lay_out_ruby(&ruby);
+            crate::incremental::translate_subtree(&mut composed, content_x, content_y);
+            b.rect.width = composed.rect.width + padding_left + padding_right
+                + s.border_left_width + s.border_right_width;
+            b.rect.height = composed.rect.height + padding_top + padding_bottom
+                + s.border_top_width + s.border_bottom_width;
+            b.children = vec![composed];
+        }
         BoxKind::TableRow => {
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
             // col_widths=None → per-row auto-distribution (standalone <tr> outside <table>).

@@ -29,7 +29,7 @@ pub(crate) fn emit_box_self(
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
-        | BoxKind::Table | BoxKind::TableRowGroup => {
+        | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::Ruby { .. } => {
             if !is_paint_visible(b) {
                 return;
             }
@@ -914,7 +914,7 @@ fn dispatch<'a>(
     match &b.kind {
         BoxKind::Skip | BoxKind::Contents => {}
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
-        | BoxKind::Table | BoxKind::TableRowGroup => {
+        | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::Ruby { .. } => {
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
             // `mask_groups` > 1 — вложенные группы `mask-composite: intersect`

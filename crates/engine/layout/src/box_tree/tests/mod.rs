@@ -463,3 +463,4 @@ mod grid_trampoline;
 mod table_trampoline;
 mod multicol_trampoline;
 mod vertical_trampoline;
+mod ruby_pipeline;
