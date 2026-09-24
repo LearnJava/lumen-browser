@@ -1,6 +1,6 @@
 # BUG-693 — The JS-visible URL machinery (`_lumen_parse_url`/`_url_resolve`, `URL`/`location`/`HTMLHyperlinkElementUtils`) is a hand-rolled string-splitter, not the WHATWG URL Standard state machine
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P1, LIB-11)
 **Компонент:** js (`crates/js/src/dom.rs:4633` — `_lumen_parse_url`; `dom.rs:8074` — `_url_resolve`; both feed `URL`/`location`/`URLSearchParams.href`-linkage and, via `_lumen_reflect_url`/`_lumen_hyperlink_url_get`/`_lumen_install_hyperlink_utils`, every `<a>`/`<area>` IDL accessor)
 **Найден:** P2, WPT-VENDOR-url, 2026-08-09
 
@@ -99,7 +99,7 @@ the WHATWG URL Standard's parsing algorithm:
 
 This function is entirely separate from the real, RFC 3986/WHATWG-adjacent
 `Url` type used for actual navigation (`crates/network`, the one that got
-its dot-segment fix under [BUG-346](BUG-346-OPEN.md)) — the JS-visible
+its dot-segment fix under [BUG-346](BUG-346-FIXED.md)) — the JS-visible
 `URL`/`location`/`<a>` surface has its own, much cruder reimplementation
 that never shares logic with the network layer's parser.
 
@@ -126,3 +126,49 @@ spec-adjacent `Url` type with dot-segment resolution, the lowest-risk path
 is likely exposing *that* type to the JS layer (native binding) instead of
 maintaining a second, parallel JS-only parser — but that is an architecture
 decision for whoever picks this up, not decided here.
+
+## Исправлено
+
+`_lumen_parse_url`/`_url_resolve` now delegate to a new native
+`_lumen_url_parse(href, base?)` binding (`crates/js/src/js_url.rs`) built on
+`lumen_core::url::Url` — the same `url`-crate-backed, spec-adjacent type the
+network layer already uses for real navigation, wrapped rather than
+reimplemented (per the "Дальше" note above). This gives every caller
+(`URL`, `location`, `<a>`/`<area>` `HTMLHyperlinkElementUtils`, worker
+`WorkerLocation`) IDNA/punycode, the special-scheme table, userinfo parsing,
+percent-encoding and WHATWG-conformant relative resolution (including the
+"same special scheme continues relative resolution against base" rule) in
+one place. `crates/core/src/url.rs` gained the accessors the JS-visible
+surface needs (`username()`, `password()`, `origin()` — fixed to serialize
+the ASCII/IDNA-normalized host, not the raw display form —
+`host_ascii_normalized()`, `href_whatwg()`, `fragment()`, `as_str()`).
+`_url_resolve` in `url_shim.js` is now a thin string-in/string-out adapter
+over the native (its hand-rolled dot-segment/protocol-relative/IDNA logic is
+gone); `_lumen_parse_url` in `url_parse_shim.js` likewise delegates instead
+of re-splitting the string itself. The native is registered early — via
+`install::install_url_parse` inside the page runtime's construction closure,
+and via a matching `rt.register_native` call in `install_worker_exposed_v8`
+for workers — specifically *before* any shim JS evaluates, since the shims
+call it unconditionally at load time.
+
+Setters (`.protocol =`, etc.) and `URLSearchParams` iteration are unchanged
+by this fix — those are [BUG-375](BUG-375-FIXED.md) and
+[BUG-694](BUG-694-FIXED.md) respectively, filed and fixed separately.
+`URLPattern`'s own from-scratch matcher ([BUG-695](BUG-695-OPEN.md)) does
+not consume this parser and remains open.
+
+Verified: `cargo test -p lumen-core --lib url::` (42/42),
+`cargo test -p lumen-js --features v8-backend --lib js_url::` (6/6),
+`cargo test -p lumen-js --features v8-backend --lib v8_nav_url_storage`
+(135/135 — was the regression surface for the registration-order bug this
+fix hit and resolved), full `cargo test -p lumen-js --features v8-backend
+--lib` (4237/4237) and `cargo test -p lumen-driver --test all` (204/204,
+including `idl_reflection::url_attributes_reflect_absolute`, adjusted for
+the correct `about:blank`-has-an-opaque-path behavior). `cargo clippy -p
+lumen-core`/`-p lumen-js --features v8-backend --all-targets -- -D
+warnings` чисто. `scripts/scoped-test.sh` (full dependent-crate graph)
+green. Two pre-existing test assertions in
+`crates/js/src/dom/tests/v8_window_anim_compress.rs` were adjusted for the
+spec-correct trailing-`/` origin normalization (`https://example.com` →
+`https://example.com/`) that the native parser now produces and the old
+hand-rolled one did not.

@@ -661,6 +661,10 @@ pub(crate) fn install_worker_exposed_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
     for (name, native) in crate::v8_runtime::websocket_natives(None) {
         rt.register_native(name, native)?;
     }
+    // LIB-11 (BUG-693): the same native `_lumen_url_parse` the page registers
+    // (`js_url::install_url_parse_v8`) — `URL_PARSE_SHIM`/`URL_SHIM` above call
+    // it unconditionally, and a worker has no page install pass to fall back on.
+    crate::js_url::install_url_parse_v8(rt)?;
     lumen_core::ext::JsRuntime::eval(rt, &worker_exposed_shim())?;
     Ok(())
 }

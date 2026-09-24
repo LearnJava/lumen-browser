@@ -159,7 +159,7 @@ FLEDGEUTIL.createTrackerURL = https://a.example/fledge/tentative/resources/reque
 ## Остаток (не этот баг)
 
 Парсер URL остаётся ручным строкосплиттером без IDNA/punycode и без нормализации
-табов/переводов строки — это [BUG-693](BUG-693-OPEN.md), отдельная заявка.
+табов/переводов строки — это [BUG-693](BUG-693-FIXED.md), отдельная заявка.
 `URLSearchParams` по-прежнему не итерируем и ломает copy-конструктор —
 [BUG-694](BUG-694-FIXED.md).
 

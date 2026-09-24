@@ -156,36 +156,26 @@ Object.defineProperty(URLSearchParams.prototype, 'size', {
 });
 
 // ── URL (WHATWG URL §6.1) ─────────────────────────────────────────────────────
-// Supports absolute URLs and resolution against a base URL.
-// Full IDNA/percent-encoding spec requires platform support; this is a
-// high-fidelity subset sufficient for the most common JS URL patterns.
+// LIB-11 (BUG-693): resolution itself (dot-segments, protocol-relative,
+// special-scheme handling, IDNA, percent-encoding) is now the native
+// `_lumen_url_parse(href, base)` binding onto `lumen_core::url::Url::resolve`
+// (the `url` crate's WHATWG "basic URL parser with base" algorithm,
+// `crates/js/src/js_url.rs`) — this function is now just the string-in/
+// string-out adapter every caller in this codebase already expects
+// (`_url_resolve(href, base)` -> absolute href string), not a second parser.
 function _url_resolve(href, base) {
     href = String(href || '');
-    // Already absolute?
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return href;
-    if (!base) return href;
-    // Empty relative reference resolves to the base itself (RFC 3986 §4.2 same-document reference).
-    if (href === '') return String(base);
-    var bp = _lumen_parse_url(String(base));
-    // Protocol-relative
-    if (href.slice(0, 2) === '//') return bp.protocol + href;
-    // Root-relative
-    if (href[0] === '/') return bp.protocol + '//' + bp.host + href;
-    // Fragment-only or query-only
-    if (href[0] === '#') return bp.protocol + '//' + bp.host + bp.pathname + bp.search + href;
-    if (href[0] === '?') return bp.protocol + '//' + bp.host + bp.pathname + href;
-    // Relative path
-    var dir = bp.pathname.slice(0, bp.pathname.lastIndexOf('/') + 1);
-    var raw = dir + href;
-    // Normalize dot segments (RFC 3986 §5.2.4)
-    var parts = raw.split('/');
-    var out = [];
-    for (var i = 0; i < parts.length; i++) {
-        if (parts[i] === '.') continue;
-        if (parts[i] === '..') { if (out.length > 1) out.pop(); }
-        else out.push(parts[i]);
-    }
-    return bp.protocol + '//' + bp.host + out.join('/');
+    // Empty relative reference resolves to the base itself (RFC 3986 §4.2 /
+    // WHATWG URL Standard same-document reference) — short-circuited here
+    // rather than relying on the native for the case where there is no base
+    // at all to resolve against.
+    if (href === '') return String(base || '');
+    var p = _lumen_url_parse(href, base !== undefined && base !== null ? String(base) : undefined);
+    // Parse failure (malformed href, or a base that itself doesn't parse):
+    // fall back to the input unchanged, same as the old parser's behaviour
+    // for an unparseable base (`if (!base) return href;`) and for an href
+    // that already looked absolute (regex short-circuit, no base needed).
+    return p ? p.href : href;
 }
 // Implementation slots of a URL object. They are defined non-enumerable so a
 // page walking the object (`for…in`, `Object.keys`) sees only the WebIDL

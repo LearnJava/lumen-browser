@@ -579,6 +579,10 @@ impl V8JsRuntime {
 
             install::install_microtask_drain(scope, ctx, store)?;
 
+            // LIB-11 (BUG-693): must run before URL_PARSE_SHIM/URL_SHIM
+            // below are evaluated — they call `_lumen_url_parse` unconditionally.
+            install::install_url_parse(scope, ctx, store)?;
+
             install::install_crypto_and_typed_om(
                 scope,
                 ctx,

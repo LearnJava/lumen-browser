@@ -303,7 +303,7 @@ fn window_open_queues_popup_request() {
         .unwrap();
     let reqs = rt.take_window_open_requests();
     assert_eq!(reqs.len(), 1);
-    assert_eq!(reqs[0].url, "https://example.com");
+    assert_eq!(reqs[0].url, "https://example.com/");
     assert_eq!(reqs[0].target, "_blank");
     assert_eq!(reqs[0].width, 800);
     assert_eq!(reqs[0].height, 600);
@@ -343,8 +343,8 @@ fn window_open_multiple_calls_queue_all() {
     rt.eval("window.open('https://a.com'); window.open('https://b.com', '_self')").unwrap();
     let reqs = rt.take_window_open_requests();
     assert_eq!(reqs.len(), 2);
-    assert_eq!(reqs[0].url, "https://a.com");
-    assert_eq!(reqs[1].url, "https://b.com");
+    assert_eq!(reqs[0].url, "https://a.com/");
+    assert_eq!(reqs[1].url, "https://b.com/");
 }
 
 #[test]
