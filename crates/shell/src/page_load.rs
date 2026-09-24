@@ -848,9 +848,7 @@ impl Lumen {
         // STTF-1 срез 2: no id matched (or none present) but the URL carries
         // `:~:text=` directives — search the rendered text for the first one
         // that resolves and scroll to it. Per the spec, the id-fragment
-        // target (if it resolved) takes priority over the text directive;
-        // nested-scrolling-ancestor support for a text match is not covered
-        // yet (only the page-level scroll below), unlike the id path above.
+        // target (if it resolved) takes priority over the text directive.
         //
         // Known remaining gap (GAP-BEFOREMATCH): a text directive can only
         // match text that layout actually produced fragments for, and a
@@ -863,7 +861,7 @@ impl Lumen {
         // A node that DOES resolve below (any ordinary match, or a match
         // whose only obstacle is a closed `<details>`, not `hidden`) still
         // gets the full reveal treatment via the same call as the id path.
-        let text_match = if target_y.is_none() {
+        let mut text_match = if target_y.is_none() {
             self.layout_box.as_ref().and_then(|lb| {
                 let frags = lumen_layout::collect_visible_text(lb);
                 parsed_fragment
@@ -883,6 +881,24 @@ impl Lumen {
                 format!("_lumen_ancestor_revealing_algorithm({})", m.node.index()),
             );
             self.relayout();
+            // STTF-1 срез 3: re-run the search after the reveal-driven relayout
+            // above — a `hidden=until-found` ancestor regaining its box, or a
+            // `<details>` opening, can move the match's geometry, so the
+            // pre-reveal rect captured before this relayout can be stale.
+            text_match = self.layout_box.as_ref().and_then(|lb| {
+                let frags = lumen_layout::collect_visible_text(lb);
+                parsed_fragment
+                    .directives
+                    .iter()
+                    .find_map(|d| text_fragment::find_directive_match(&frags, d))
+            });
+        }
+        // STTF-1 срез 3: bring a text-directive match into view within any
+        // nested scrolling ancestors too — same BUG-338 treatment the
+        // id-fragment path above already gets, using the (possibly
+        // reveal-refreshed) match's own node and bounding rect.
+        if let Some(m) = &text_match {
+            self.scroll_nested_ancestors_into_view(m.node, m.bounding_rect());
         }
         let text_match_y = text_match.map(|m| m.bounding_rect().y);
         if let Some(y) = target_y.or(text_match_y) {
