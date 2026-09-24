@@ -1,6 +1,6 @@
 # BUG-762 — `PositionOptions` игнорируются целиком: `timeout`/`maximumAge` не приводят к ошибке `TIMEOUT`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Компонент:** js (`crates/js/src/geolocation.rs` — `GEO_SHIM`,
 `getCurrentPosition`/`watchPosition`)
 **Найден:** P3, при закрытии [BUG-395](BUG-395-FIXED.md) (2026-08-11),
@@ -67,3 +67,44 @@ happy-path/denied-path вызов колбэка, ни таймеров, ни к
   по умолчанию (`FakeCoords = None`) шим отвечает `PERMISSION_DENIED`
   раньше любых опций — порядок шагов спеки при фиксе надо сверять, а не
   дописывать проверку опций «сверху».
+
+## Фикс 2026-09-24
+
+Разбор словаря вынесен в `_parseOptions(options)`: `timeout`/`maximumAge`
+конвертируются как WebIDL `[Clamp] unsigned long` (`_clampToUint32`:
+`NaN`/отрицательное → 0, свыше `2^32-1` → `2^32-1`), дефолт `timeout` —
+`0xFFFFFFFF` (спека), `maximumAge` — 0. `enableHighAccuracy` читать не
+стали заводить отдельным полем — он и так никогда не типизируется (WPT
+`PositionOptions.https.html`: мусорные значения не должны бросать), а
+функционального эффекта у него нет ни в спеке (это подсказка), ни у нас
+(единственный источник координат — `FakeCoords`, менять точность нечем).
+
+Порядок шагов в `getCurrentPosition`/`watchPosition` теперь: проверка
+разрешения (как раньше) → если есть `maximumAge > 0` и не устаревший
+кэш — отдать кэш → если `timeout === 0` — `error(new
+GeolocationPositionError(3, …))` → иначе обычный успех, с записью
+результата в кэш (`_lastPosition`/`_lastPositionTime`) для следующего
+`maximumAge`-хита. Порядок важен: кэш проверяется раньше `timeout`,
+иначе `{timeout: 0, maximumAge: <большое>}` после недавнего успешного
+вызова ошибочно давал бы `TIMEOUT` вместо переиспользования свежей
+позиции.
+
+Реального таймера на `setTimeout` для ненулевого `timeout` заводить не
+стали (в отличие от предложенного в «Как чинить» плана) — у движка
+единственный путь получения координат синхронный (`FakeCoords` есть
+или нет), никакого «зависания» дольше `timeout` мс никогда не
+происходит, поэтому такой таймер был бы неисполнимым мёртвым кодом.
+Если появится реальный источник позиции с ненулевой задержкой —
+таймер надо будет добавить тогда же.
+
+`watchPosition` повторяет ту же логику на каждом тике цикла: `timeout
+=== 0` шлёт `TIMEOUT` и на следующем тике повторяет то же самое, пока
+не будет вызван `clearWatch` (соответствует поведению
+`watchposition-timeout.https.window.js`, который допускает многократный
+`TIMEOUT`, но не более одного случайного успеха между ними).
+
+Тесты (`crates/js/src/geolocation.rs`, модульные, зеркалят вендоренные
+`PositionOptions.https.html`): `zero_timeout_gives_timeout_error`,
+`watch_zero_timeout_gives_timeout_error`, `negative_timeout_clamps_to_zero`,
+`cached_position_within_max_age_skips_timeout`, `no_options_still_succeeds`
+(регрессия без опций).

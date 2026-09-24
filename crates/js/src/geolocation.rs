@@ -20,6 +20,15 @@
 //! non-object `options` all throw `TypeError` synchronously.  `clearWatch`
 //! takes no callbacks and, per spec, never throws.
 //!
+//! BUG-762: `options.timeout`/`options.maximumAge` are read and clamped as
+//! WebIDL `[Clamp] unsigned long` (NaN/negative → 0), so `{timeout: 0}`
+//! fires the error callback with `GeolocationPositionError.TIMEOUT` (3)
+//! instead of resolving instantly, and a successful position is cached so a
+//! later call within `maximumAge` ms reuses it. `enableHighAccuracy` is
+//! parsed but has no effect (single synthetic `FakeCoords` source, nothing
+//! to trade accuracy for) — like all dictionary members it is never
+//! type-checked, matching the vendored `PositionOptions.https.html`.
+//!
 //! BUG-765: fake coordinates are only ever handed to the success callback on
 //! a secure context (`window.isSecureContext`, computed once by
 //! `WEB_API_SHIM`) — an insecure origin always gets `PERMISSION_DENIED`
@@ -113,6 +122,42 @@ const GEO_SHIM: &str = r#"(function() {
     return new GeolocationPositionError(1, 'User denied Geolocation');
   }
 
+  function timeoutExpired() {
+    return new GeolocationPositionError(3, 'Timeout expired');
+  }
+
+  var _lastPosition = null;
+  var _lastPositionTime = 0;
+
+  function _now() {
+    return typeof Date !== 'undefined' ? Date.now() : 0;
+  }
+
+  // WebIDL `[Clamp] unsigned long`: NaN and negative values clamp to 0,
+  // values above 2^32-1 clamp to 2^32-1 (spec's `timeout` default).
+  function _clampToUint32(v) {
+    var n = Number(v);
+    if (isNaN(n) || n < 0) return 0;
+    if (n > 4294967295) return 4294967295;
+    return Math.floor(n);
+  }
+
+  // `PositionOptions` dictionary: `timeout` defaults to 2^32-1 (effectively
+  // "no timeout" for our synchronous acquisition), `maximumAge` defaults to 0
+  // (never reuse a cached position). Members are never type-checked (WPT
+  // `PositionOptions.https.html`: passing garbage `enableHighAccuracy` must
+  // not throw); only `timeout`/`maximumAge` are read, per BUG-762.
+  function _parseOptions(options) {
+    var timeout = 4294967295;
+    var maximumAge = 0;
+    if (options !== null && options !== undefined
+        && (typeof options === 'object' || typeof options === 'function')) {
+      if (options.timeout !== undefined) timeout = _clampToUint32(options.timeout);
+      if (options.maximumAge !== undefined) maximumAge = _clampToUint32(options.maximumAge);
+    }
+    return { timeout: timeout, maximumAge: maximumAge };
+  }
+
   // BUG-765: Geolocation is not itself `[SecureContext]` — real browsers keep
   // `navigator.geolocation` present on an insecure origin — but per spec text
   // (and the vendored `non-secure-contexts.http.html`) both entry points
@@ -160,22 +205,47 @@ const GEO_SHIM: &str = r#"(function() {
   var _geo = {
     getCurrentPosition: function(success, error) {
       _checkArgs('getCurrentPosition', arguments);
-      if (_coords && _lumen_geo_is_secure()) {
-        var pos = makePosition(_coords);
-        _defer(function() { success(pos); });
-      } else {
-        var err = permDenied();
-        _defer(function() { if (typeof error === 'function') error(err); });
+      var opts = _parseOptions(arguments.length > 2 ? arguments[2] : undefined);
+      if (!(_coords && _lumen_geo_is_secure())) {
+        var denied = permDenied();
+        _defer(function() { if (typeof error === 'function') error(denied); });
+        return;
       }
+      if (opts.maximumAge > 0 && _lastPosition !== null
+          && (_now() - _lastPositionTime) <= opts.maximumAge) {
+        var cached = _lastPosition;
+        _defer(function() { success(cached); });
+        return;
+      }
+      if (opts.timeout === 0) {
+        var expired = timeoutExpired();
+        _defer(function() { if (typeof error === 'function') error(expired); });
+        return;
+      }
+      var pos = makePosition(_coords);
+      _lastPosition = pos;
+      _lastPositionTime = _now();
+      _defer(function() { success(pos); });
     },
 
     watchPosition: function(success, error) {
       _checkArgs('watchPosition', arguments);
+      var opts = _parseOptions(arguments.length > 2 ? arguments[2] : undefined);
       var id = _nextId++;
       if (_coords && _lumen_geo_is_secure()) {
         var fire = function() {
           if (!_watches.hasOwnProperty(id)) return;
-          success(makePosition(_coords));
+          if (opts.maximumAge > 0 && _lastPosition !== null
+              && (_now() - _lastPositionTime) <= opts.maximumAge) {
+            success(_lastPosition);
+          } else if (opts.timeout === 0) {
+            if (typeof error === 'function') error(timeoutExpired());
+          } else {
+            var pos = makePosition(_coords);
+            _lastPosition = pos;
+            _lastPositionTime = _now();
+            success(pos);
+          }
           _watches[id] = _defer(fire);
         };
         _watches[id] = true;
@@ -583,6 +653,143 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(consecutive, JsValue::Number(1.0), "throwing call must not burn a watch id");
+        });
+    }
+
+    /// Vendored `PositionOptions.https.html`: `{timeout: 0, maximumAge: 0}`
+    /// must raise `TIMEOUT`, not resolve with a position, when a fake
+    /// position is otherwise available.
+    #[test]
+    fn zero_timeout_gives_timeout_error() {
+        let coords = FakeCoords { latitude: 1.0, longitude: 2.0, accuracy: 3.0 };
+        with_geo(Some(coords), |rt| {
+            let code = rt
+                .eval(
+                    "(function() { \
+                       var code = -1; \
+                       navigator.geolocation.getCurrentPosition( \
+                         function() { code = 0; }, \
+                         function(e) { code = e.code; }, \
+                         { timeout: 0, maximumAge: 0 } \
+                       ); \
+                       return code; \
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(code, JsValue::Number(3.0), "must call error with TIMEOUT=3");
+        });
+    }
+
+    /// Same as above for `watchPosition`. With this test's synchronous
+    /// `setTimeout` stub, `_defer(fire)` re-enters `fire` immediately on
+    /// every tick, so an unguarded watch recurses forever (`id` is not even
+    /// assigned yet on the first tick to call `clearWatch(id)` from inside
+    /// the callback). A one-shot `setTimeout` override lets exactly one
+    /// tick run before the watch loop reschedules itself.
+    #[test]
+    fn watch_zero_timeout_gives_timeout_error() {
+        let coords = FakeCoords { latitude: 1.0, longitude: 2.0, accuracy: 3.0 };
+        with_geo(Some(coords), |rt| {
+            let code = rt
+                .eval(
+                    "(function() { \
+                       var code = -1; \
+                       var fired = false; \
+                       var origSetTimeout = setTimeout; \
+                       setTimeout = function(fn, t) { \
+                         if (fired) return 0; \
+                         fired = true; \
+                         return origSetTimeout(fn, t); \
+                       }; \
+                       navigator.geolocation.watchPosition( \
+                         function() { code = 0; }, \
+                         function(e) { code = e.code; }, \
+                         { timeout: 0, maximumAge: 0 } \
+                       ); \
+                       setTimeout = origSetTimeout; \
+                       return code; \
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(code, JsValue::Number(3.0), "must call error with TIMEOUT=3");
+        });
+    }
+
+    /// Vendored `PositionOptions.https.html`: a negative `timeout` clamps to
+    /// 0 (WebIDL `[Clamp] unsigned long`), so it must also raise `TIMEOUT`.
+    #[test]
+    fn negative_timeout_clamps_to_zero() {
+        let coords = FakeCoords { latitude: 1.0, longitude: 2.0, accuracy: 3.0 };
+        with_geo(Some(coords), |rt| {
+            let code = rt
+                .eval(
+                    "(function() { \
+                       var code = -1; \
+                       navigator.geolocation.getCurrentPosition( \
+                         function() { code = 0; }, \
+                         function(e) { code = e.code; }, \
+                         { timeout: -100, maximumAge: -100 } \
+                       ); \
+                       return code; \
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(code, JsValue::Number(3.0), "negative timeout must clamp to 0 and raise TIMEOUT");
+        });
+    }
+
+    /// Without `timeout`/`maximumAge`, the default `timeout` (2^32-1) must
+    /// not spuriously trigger `TIMEOUT` — the pre-existing success path must
+    /// keep working (regression guard for the options-parsing change).
+    #[test]
+    fn no_options_still_succeeds() {
+        let coords = FakeCoords { latitude: 9.0, longitude: 8.0, accuracy: 7.0 };
+        with_geo(Some(coords), |rt| {
+            let lat = rt
+                .eval(
+                    "(function() { \
+                       var lat = -1; \
+                       navigator.geolocation.getCurrentPosition( \
+                         function(pos) { lat = pos.coords.latitude; }, \
+                         function() { lat = -1; } \
+                       ); \
+                       return lat; \
+                     })()",
+                )
+                .unwrap();
+            match lat {
+                JsValue::Number(n) => assert!((n - 9.0).abs() < 1e-6),
+                other => panic!("expected number, got {other:?}"),
+            }
+        });
+    }
+
+    /// A cached position within `maximumAge` is reused instead of raising
+    /// `TIMEOUT` even when `timeout: 0` — the cache check runs first, as in
+    /// the spec's acquisition algorithm.
+    #[test]
+    fn cached_position_within_max_age_skips_timeout() {
+        let coords = FakeCoords { latitude: 5.0, longitude: 6.0, accuracy: 1.0 };
+        with_geo(Some(coords), |rt| {
+            let lat = rt
+                .eval(
+                    "(function() { \
+                       var g = navigator.geolocation; \
+                       var lat = -1; \
+                       g.getCurrentPosition(function() {}, function() {}); \
+                       g.getCurrentPosition( \
+                         function(pos) { lat = pos.coords.latitude; }, \
+                         function() { lat = -1; }, \
+                         { timeout: 0, maximumAge: 60000 } \
+                       ); \
+                       return lat; \
+                     })()",
+                )
+                .unwrap();
+            match lat {
+                JsValue::Number(n) => assert!((n - 5.0).abs() < 1e-6, "must reuse cached position, not TIMEOUT"),
+                other => panic!("expected number, got {other:?}"),
+            }
         });
     }
 
