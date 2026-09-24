@@ -1815,7 +1815,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 
 | Причина | Масштаб | Доказательство |
 |---|---|---|
-| в воркерной области нет `WebAssembly.compileStreaming`/`instantiateStreaming`, [BUG-1078](../../bugs/BUG-1078-OPEN.md) | 212 + 152 сообщений `is not a function` в логе | `instantiateStreaming-bad-imports.any.worker.html` 0/106, `invalid-args.any.worker.html` 0/44; в окне те же методы есть (проба `--dump-layout`) |
+| в воркерной области нет `WebAssembly.compileStreaming`/`instantiateStreaming`, [BUG-1078](../../bugs/BUG-1078-FIXED.md) (FIXED, WORKER-1 срез 6) | 212 + 152 сообщений `is not a function` в логе | `instantiateStreaming-bad-imports.any.worker.html` 0/106, `invalid-args.any.worker.html` 0/44; в окне те же методы есть (проба `--dump-layout`) |
 | оконный стриминг не по спецификации, [BUG-1079](../../bugs/BUG-1079-OPEN.md) | `instantiateStreaming-bad-imports.any.html` 9/106, `invalid-args.any.html` 4/44, `instantiateStreaming.any.html` 0/25 | промис резолвится вместо отклонения на неверный `imports`; `CompileError` вместо `TypeError`; расширяемый `exports` |
 | `WebAssembly.Global.prototype.type` отсутствует | 24 сообщения | `jsapi/global/type.tentative.any.js` — предложение type reflection, `tentative`; отдельно не заводилось (упомянуто в BUG-1079) |
 | harness `TIMEOUT` (50) / `ERROR` (39) | 89 id | причины не разбирались, кроме перечисленного |
