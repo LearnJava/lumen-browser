@@ -771,6 +771,159 @@ fn env_inside_var_fallback() {
     assert_eq!(first_p_style(&root).padding_top, Length::Px(8.0));
 }
 
+#[test]
+fn env_unknown_name_without_fallback_computes_to_unset() {
+    // BUG-514: правильный env() с неизвестным именем и без fallback — invalid
+    // at computed-value time: свойство становится `unset` (background-color не
+    // наследуется → transparent), а не держит предыдущую декларацию `green`.
+    let root = lay(
+        "<p>x</p>",
+        "p { background-color: green; background-color: env(unknown); }",
+    );
+    assert_eq!(first_p_style(&root).background_color, None);
+}
+
+#[test]
+fn env_iacvt_on_inherited_property_takes_parent_value() {
+    // `unset` для наследуемого свойства = inherit: цвет родителя, не `blue`.
+    let root = lay(
+        "<p>x</p>",
+        "body { color: rgb(255, 0, 0); } p { color: rgb(0, 0, 255); color: env(unknown); }",
+    );
+    assert_eq!(first_p_style(&root).color, root.style.color);
+    assert_eq!(
+        root.style.color,
+        Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255
+        }
+    );
+}
+
+#[test]
+fn malformed_env_drops_declaration_keeps_previous() {
+    // Кривой env() — ошибка разбора: декларации нет, `green` остаётся.
+    for bad in [
+        "env(10px)",
+        "env(env(test))",
+        "env(test, {)",
+        "env(test 0.1, blue)",
+        "env()",
+    ] {
+        let css = format!("p {{ background-color: green; background-color: {bad}; }}");
+        let root = lay("<p>x</p>", &css);
+        assert_eq!(
+            first_p_style(&root).background_color,
+            Some(CssColor::Rgba(Color {
+                r: 0,
+                g: 128,
+                b: 0,
+                a: 255
+            })),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn env_function_name_is_case_insensitive() {
+    let root = lay(
+        "<p>x</p>",
+        "p { background-color: green; background-color: ENV(test, blue); }",
+    );
+    assert_eq!(
+        first_p_style(&root).background_color,
+        Some(CssColor::Rgba(Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 255
+        }))
+    );
+}
+
+#[test]
+fn var_parse_errors_drop_declaration_keeps_previous() {
+    // Parse-time ошибки в значении с var() — декларации нет (не IACVT/unset):
+    // повторный `!important`, кривая голова var(), bad-string.
+    for bad in [
+        "var(--a) !important !important",
+        "var(--a ())",
+        "var(--a(),)",
+        "var(--a, \"\n",
+    ] {
+        let css = format!("p {{ --a: red; background-color: green; background-color: {bad}; }}");
+        let root = lay("<p>x</p>", &css);
+        assert_eq!(
+            first_p_style(&root).background_color,
+            Some(CssColor::Rgba(Color {
+                r: 0,
+                g: 128,
+                b: 0,
+                a: 255
+            })),
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn var_unknown_without_fallback_computes_to_unset() {
+    let root = lay(
+        "<p>x</p>",
+        "p { background-color: green; background-color: var(--missing); }",
+    );
+    assert_eq!(first_p_style(&root).background_color, None);
+}
+
+#[test]
+fn env_calls_well_formed_grammar() {
+    use crate::style::env_calls_well_formed as ok;
+    for good in [
+        "red",
+        "env(test)",
+        "env( test )",
+        "env(-test)",
+        "env(--test)",
+        "env(test, 10px)",
+        "env(test,)",
+        "env(test, {})",
+        "env(test /**/, blue)",
+        "env(test 0)",
+        "env(test 0 1 2 3 4, green)",
+        "env(test, env(another, blue))",
+        "calc(env(a, 1px) + 2px)",
+        "xenv(10px)",
+        "\"env(10px)\"",
+        "var(--x)",
+        "var(--x,)",
+        "var( --x , env(test, 1px))",
+    ] {
+        assert!(ok(good), "{good} must be accepted");
+    }
+    for bad in [
+        "env()",
+        "env(10px)",
+        "env(env(test))",
+        "env(test, {)",
+        "env(test1 test2, green)",
+        "env(test 0.1, green)",
+        "env(test -1, green)",
+        "env(safe-area-inset-top ())",
+        "env(safe-area-inset-top(),)",
+        "env(test, env(10px))",
+        "env(test",
+        "var(--x ())",
+        "var(--x(),)",
+        "var(x)",
+        "var(--a, env(10px))",
+    ] {
+        assert!(!ok(bad), "{bad} must be rejected");
+    }
+}
+
 // ──────── CSS Scroll Snap L1 ────────
 
 #[test]

@@ -434,7 +434,7 @@ pub(crate) fn install_match_media(
 /// is mandatory). Case-insensitive to match `ENV(` per CSS Syntax's function
 /// token rules. Plain substring scan, not a real parse: good enough to reject
 /// the one malformed shape `CSS.supports()` is spec-required to reject
-/// ([BUG-514](../../../../../../bugs/BUG-514-OPEN.md)) without pulling in
+/// ([BUG-514](../../../../../../bugs/BUG-514-FIXED.md)) without pulling in
 /// `lumen_layout::style::substitute`'s `pub(crate)` balanced-paren scanner.
 fn value_has_empty_env_call(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
@@ -504,6 +504,18 @@ pub(crate) fn install_css_supports_and_lazy_images(
             }
             lumen_css_parser::parse_supports_condition(&format!("({condition})"))
                 .evaluate(lumen_css_parser::SUPPORTED_PROPERTIES)
+        }
+    );
+
+    // `env()`/`var()` grammar check for inline-`style` values (BUG-514): a value with
+    // `var()`/`env()` bypasses the per-property canonicalizers (its grammar is
+    // checked only after substitution), but a malformed `env()` call itself
+    // (`env(10px)`, `var(--x ())`) is a parse-time error. Same validator the
+    // cascade uses, so the two cannot disagree.
+    reg!(scope, ctx, store,
+        "_lumen_css_env_well_formed",
+        |value: String| -> bool {
+            lumen_layout::style::env_calls_well_formed(&value)
         }
     );
 

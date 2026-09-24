@@ -39,7 +39,7 @@ pub(crate) fn expand_vars_and_env(
     } else {
         value.to_string()
     };
-    if after_var.contains("env(") {
+    if contains_env_call(&after_var) {
         expand_env_vars(&after_var, &empty_env_registry(), 0)
     } else {
         Some(after_var)
@@ -609,6 +609,9 @@ fn expand_env_vars(
 }
 
 /// Аналог `find_var_open` для `env(`. Учитывает строковые литералы.
+///
+/// Имя функции в CSS Syntax регистронезависимо (`ENV(test)` — тот же вызов,
+/// BUG-514), а совпадение внутри чужого идентификатора (`xenv(`) — не вызов.
 fn find_env_open(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -624,11 +627,192 @@ fn find_env_open(s: &str) -> Option<usize> {
                 in_string = Some(b);
                 i += 1;
             }
-            (None, b'e') if &bytes[i..i + 4] == b"env(" => return Some(i),
+            (None, b'e' | b'E')
+                if bytes[i..i + 4].eq_ignore_ascii_case(b"env(")
+                    && (i == 0 || !is_ident_byte(bytes[i - 1])) =>
+            {
+                return Some(i);
+            }
             _ => i += 1,
         }
     }
     None
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b >= 0x80
+}
+
+/// `true`, если в значении есть вызов `env(` (без учёта регистра, вне строк).
+pub(crate) fn contains_env_call(value: &str) -> bool {
+    find_env_open(value).is_some()
+}
+
+/// CSS Environment Variables L1 §3: проверка грамматики каждого `env()` в
+/// значении — `env( <custom-ident> <integer [0,∞]>* , <declaration-value>? )`.
+///
+/// Это проверка **времени разбора**: декларация с кривым `env()` невалидна
+/// целиком и выбрасывается (предыдущая декларация того же свойства остаётся),
+/// тогда как правильный `env()` с неизвестным именем и без fallback — это
+/// invalid at computed-value time, и свойство становится `unset`
+/// ([`apply_declaration`](crate::style::apply_declaration)). Смешивать эти два
+/// исхода нельзя — на этом и держался BUG-514.
+///
+/// Заодно проверяется баланс `()`/`[]`/`{}` всего значения
+/// (`<declaration-value>` не может содержать непарную скобку: `env(x, {)`).
+/// Значение без `env(` всегда `true`.
+pub fn env_calls_well_formed(value: &str) -> bool {
+    let cleaned = strip_css_comments(value);
+    let has_env = find_env_open(&cleaned).is_some();
+    let has_var = find_var_open(&cleaned).is_some();
+    if !has_env && !has_var {
+        return true;
+    }
+    if !brackets_balanced(&cleaned) {
+        return false;
+    }
+    calls_well_formed(&cleaned, find_env_open, env_head_is_valid)
+        && calls_well_formed(&cleaned, find_var_open, var_head_is_valid)
+}
+
+/// Все вызовы, найденные `find_open` (`env(` / `var(`, 4 байта), имеют
+/// валидную голову; fallback проверяется рекурсивно (в нём могут быть и
+/// `env()`, и `var()`).
+fn calls_well_formed(
+    value: &str,
+    find_open: fn(&str) -> Option<usize>,
+    head_ok: fn(&str) -> bool,
+) -> bool {
+    let mut rest = value;
+    while let Some(start) = find_open(rest) {
+        let Some((args, after)) = parse_balanced_to_close(&rest[start + 4..]) else {
+            return false;
+        };
+        let (head, fallback) = split_var_args(args);
+        if !head_ok(head) {
+            return false;
+        }
+        if let Some(fb) = fallback
+            && !(calls_well_formed(fb, find_env_open, env_head_is_valid)
+                && calls_well_formed(fb, find_var_open, var_head_is_valid))
+        {
+            return false;
+        }
+        rest = after;
+    }
+    true
+}
+
+/// `var( <custom-property-name> , ... )`: голова — ровно один `--ident`
+/// (`var(--x ())`, `var(--x(),)` невалидны, `css-variables/var-parsing.html`).
+fn var_head_is_valid(head: &str) -> bool {
+    let name = head.trim_matches(|c: char| c.is_ascii_whitespace());
+    name.len() > 2 && name.starts_with("--") && name.bytes().all(is_ident_byte)
+}
+
+/// Parse-time проверка значения с `var()`/`env()` (CSS Syntax §5.4.4
+/// «consume a declaration» + CSS Variables L1 §3): такие значения
+/// принимаются почти любыми, но три случая — ошибка разбора, и декларация
+/// выбрасывается целиком (остаётся предыдущая), а не становится invalid at
+/// computed-value time (`unset`):
+/// * bad-string / bad-url — перевод строки внутри строкового литерала;
+/// * несогласованная закрывающая скобка (незакрытые к концу — допустимы);
+/// * `!` на верхнем уровне — остаток повторного `!important`
+///   (`var(--a) !important !important`, `css-variables/variable-reference-30`).
+pub fn substitution_value_well_formed(value: &str) -> bool {
+    let cleaned = strip_css_comments(value);
+    let mut stack: Vec<u8> = Vec::new();
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+    for b in cleaned.bytes() {
+        if let Some(q) = in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_string = None;
+            } else if matches!(b, b'\n' | b'\r' | 0x0c) {
+                return false;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_string = Some(b),
+            b'(' => stack.push(b')'),
+            b'[' => stack.push(b']'),
+            b'{' => stack.push(b'}'),
+            b')' | b']' | b'}' if stack.pop() != Some(b) => return false,
+            b'!' if stack.is_empty() => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+/// `<custom-ident> <integer [0,∞]>*` — имя и необязательные индексы.
+fn env_head_is_valid(head: &str) -> bool {
+    let mut parts = head.split_ascii_whitespace();
+    let Some(name) = parts.next() else {
+        return false;
+    };
+    is_css_ident(name) && parts.all(|p| {
+        let digits = p.strip_prefix('+').unwrap_or(p);
+        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// Упрощённый ident-token CSS Syntax §4.3.9 (без escape-последовательностей):
+/// не начинается с цифры, после ведущих `-` идёт буква/`_`/не-ASCII (или
+/// второй `-`), дальше только ident-символы. `(` в имени — это уже функция
+/// (`env(env(test))` невалиден).
+fn is_css_ident(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let start_ok = match bytes {
+        [b'-', b'-', ..] => true,
+        [b'-', c, ..] => c.is_ascii_alphabetic() || *c == b'_' || *c >= 0x80,
+        [c, ..] => c.is_ascii_alphabetic() || *c == b'_' || *c >= 0x80,
+        [] => false,
+    };
+    start_ok && bytes.iter().all(|&b| is_ident_byte(b))
+}
+
+fn brackets_balanced(s: &str) -> bool {
+    let mut stack: Vec<u8> = Vec::new();
+    let mut in_string: Option<u8> = None;
+    for b in s.bytes() {
+        match (in_string, b) {
+            (Some(q), c) if c == q => in_string = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => in_string = Some(b),
+            (None, b'(') => stack.push(b')'),
+            (None, b'[') => stack.push(b']'),
+            (None, b'{') => stack.push(b'}'),
+            (None, b')' | b']' | b'}') if stack.pop() != Some(b) => return false,
+            _ => {}
+        }
+    }
+    stack.is_empty()
+}
+
+/// Комментарий CSS — пробельный разделитель токенов (CSS Syntax §4.3.2), так
+/// что `env(test /**/, blue)` равносилен `env(test , blue)`.
+fn strip_css_comments(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains("/*") {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find("/*") {
+        out.push_str(&rest[..open]);
+        out.push(' ');
+        match rest[open + 2..].find("*/") {
+            Some(close) => rest = &rest[open + 2 + close + 2..],
+            None => return std::borrow::Cow::Owned(out),
+        }
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
 }
 
 /// UA env-registry. Phase 0: пустой; вызовы `env(name, fallback)`

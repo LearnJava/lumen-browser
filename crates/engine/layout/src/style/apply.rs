@@ -24,7 +24,12 @@ mod text;
 use lumen_core::geom::Size;
 use lumen_css_parser::Declaration;
 
-use crate::style::{expand_vars_and_env, parse_css_wide_keyword, ComputedStyle, FontWeight};
+use crate::style::substitute::{
+    contains_env_call, env_calls_well_formed, substitution_value_well_formed,
+};
+use crate::style::{
+    expand_vars_and_env, parse_css_wide_keyword, ComputedStyle, CssWideKeyword, FontWeight,
+};
 
 use css_wide::apply_css_wide_keyword;
 
@@ -60,12 +65,42 @@ pub(in crate::style) fn apply_declaration(
     // считается отсутствующей (CSS Variables L1 §3.3 «invalid at computed
     // value time»). `expanded` живёт до конца функции, чтобы `val` остался
     // валидным `&str`.
+    //
+    // BUG-514: здесь различаются два исхода, которые раньше сливались в один
+    // `return`. Кривой `env()` (`env(10px)`, `env(x, {)`) — ошибка разбора:
+    // декларации как будто не было, предыдущая декларация того же свойства
+    // остаётся. Правильный `env()`/`var()`, который не раскрылся (или дал
+    // значение, которое свойство не принимает), — invalid at computed-value
+    // time: свойство вычисляется как `unset` (CSS Variables L1 §3.3,
+    // CSS Environment Variables L1 §3), а не наследует чужое значение.
     let expanded;
-    let val: &str = if decl.value.contains("var(") || decl.value.contains("env(") {
+    let has_env = contains_env_call(&decl.value);
+    let val: &str = if decl.value.contains("var(") || has_env {
+        // Ошибка разбора (кривой `env()`/`var()`, bad-string, лишний `!`) —
+        // декларации как будто не было.
+        if !substitution_value_well_formed(&decl.value) || !env_calls_well_formed(&decl.value) {
+            return;
+        }
         // CSS Environment Variables L1: env() раскрывается ПОСЛЕ var(),
         // потому что custom property может содержать `env(...)` — порядок
         // зафиксирован в `expand_vars_and_env`, общей с pre-pass-ом font-size.
-        match expand_vars_and_env(&decl.value, &style.custom_props, em_basis, viewport) {
+        let result = expand_vars_and_env(&decl.value, &style.custom_props, em_basis, viewport);
+        // `revert-layer`/`revert-rule`, пришедшие из fallback-а, каскад здесь
+        // не разрешает (он делает это до apply по литеральному значению);
+        // исторически декларация пропускалась, оставляя значение предыдущего
+        // слоя, что совпадает с ожидаемым результатом
+        // (`css-variables/revert-layer-in-fallback.html`). Сохраняем это.
+        if let Some(v) = &result {
+            let t = v.trim();
+            if t.eq_ignore_ascii_case("revert-layer") || t.eq_ignore_ascii_case("revert-rule") {
+                return;
+            }
+        }
+        // IACVT = `unset`: сбрасываем свойство до property-parse. Если
+        // подстановка не удалась или парсер свойства отверг результат, сброс
+        // и останется итогом; удачное значение ниже просто перезапишет его.
+        apply_css_wide_keyword(style, prop, CssWideKeyword::Unset, inherited, ua_baseline);
+        match result {
             Some(v) => {
                 expanded = v;
                 expanded.as_str()

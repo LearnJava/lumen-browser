@@ -2533,6 +2533,21 @@ function _lumen_css_canonical_line_clamp(strVal) {
 // `_lumen_expand_trbl_shorthand` and gets the same fan-out too.
 var _LUMEN_CSS_WIDE_KEYWORDS = ['initial', 'inherit', 'unset', 'revert', 'revert-layer', 'revert-rule'];
 
+// BUG-514: a value containing `var()`/`env()` is a pending-substitution value
+// (CSS Variables L1 §3, CSS Environment Variables L1 §3) — its grammar can only
+// be checked after substitution, at computed-value time, so the per-property
+// canonicalizers below must never see it (they rejected every such value, e.g.
+// `el.style.width = 'env(safe-area-inset-top)'` or `cssText = 'background-color:
+// env(test)'` silently vanished). Parse time checks only the `env()` call's own
+// grammar (`env(10px)`, `env(x, {)` are invalid), via the same Rust validator
+// the cascade uses. Returns the trimmed value, `null` when invalid, or
+// `undefined` when `strVal` has no substitution function at all.
+var _LUMEN_SUBSTITUTION_FN_RE = /(^|[^\w-])(var|env)\(/i;
+function _lumen_pending_substitution_value(strVal) {
+    if (!_LUMEN_SUBSTITUTION_FN_RE.test(strVal)) return undefined;
+    return _lumen_css_env_well_formed(strVal) ? strVal.trim() : null;
+}
+
 // CSS Viewport L1 §5 (BUG-532): `zoom = normal | <number [0,∞]> |
 // <percentage [0,∞]>` — no `auto`/`reset`/`document` keyword (those are a
 // separate, non-standard WebKit vocabulary `lumen-layout`'s cascade parser
@@ -2566,6 +2581,8 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return lowerVal;
     }
+    var pending = _lumen_pending_substitution_value(strVal);
+    if (pending !== undefined) return pending;
     if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_color(strVal);
     }
@@ -2712,6 +2729,15 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     if (strVal === '') {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property.
         delete obj[key];
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
+    // BUG-514: `var()`/`env()` values bypass every per-property grammar below
+    // (shorthand expansion included) — see `_lumen_pending_substitution_value`.
+    var pendingVal = _lumen_pending_substitution_value(strVal);
+    if (pendingVal === null) return; // malformed env(): declaration dropped
+    if (pendingVal !== undefined) {
+        obj[key] = pendingVal;
         _lumen_style_set_parsed(nid, obj);
         return;
     }
