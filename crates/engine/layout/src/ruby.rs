@@ -199,8 +199,16 @@ fn compose_column(
 ) -> LayoutBox {
     let mut base_row = stack_boxes_horizontal(bases);
     let mut ruby_row = stack_boxes_horizontal(annotations);
-    base_row.rect.x = 0.0;
-    ruby_row.rect.x = 0.0;
+    // Reset both rows to x=0 as whole subtrees — `stack_boxes_horizontal`'s
+    // input boxes may carry any absolute x from wherever they were laid out
+    // (`build_ruby_group_box` always starts them at 0, but this function has
+    // no way to assume that of a future caller), and every descendant inside
+    // each row (e.g. an `InlineRun` several levels down) must move with it —
+    // GAP-RUBYBOX found this the hard way: a plain `rect.x = 0.0` here left
+    // nested text at its stale absolute position while the container row
+    // reported x=0, corrupting paint for anything but a single flat child.
+    shift_subtree_to_x(&mut base_row, 0.0);
+    shift_subtree_to_x(&mut ruby_row, 0.0);
 
     let col_width = base_row.rect.width.max(ruby_row.rect.width);
     align_row(&mut base_row, bases.len(), col_width, align);
@@ -215,18 +223,26 @@ fn compose_column(
 
     match position {
         RubyPosition::Over => {
-            base_row.rect.y += ruby_height;
+            crate::incremental::translate_subtree(&mut base_row, 0.0, ruby_height);
             column.children.push(ruby_row);
             column.children.push(base_row);
         }
         RubyPosition::Under => {
-            ruby_row.rect.y += base_height;
+            crate::incremental::translate_subtree(&mut ruby_row, 0.0, base_height);
             column.children.push(base_row);
             column.children.push(ruby_row);
         }
     }
 
     column
+}
+
+/// Moves `b`'s whole subtree so `b.rect.x` becomes exactly `target_x`,
+/// preserving every descendant's offset from it (see `compose_column`'s doc
+/// comment for why a bare `rect.x = target_x` assignment is wrong here).
+fn shift_subtree_to_x(b: &mut LayoutBox, target_x: f32) {
+    let dx = target_x - b.rect.x;
+    crate::incremental::translate_subtree(b, dx, 0.0);
 }
 
 /// Apply `ruby-align` to a row of `n_boxes` boxes inside a column of
@@ -238,14 +254,14 @@ fn align_row(row: &mut LayoutBox, n_boxes: usize, container_width: f32, align: R
     }
     match align {
         RubyAlign::Start => {}
-        RubyAlign::Center => row.rect.x += slack / 2.0,
+        RubyAlign::Center => crate::incremental::translate_subtree(row, slack / 2.0, 0.0),
         RubyAlign::SpaceBetween => {
             // Distribution needs the anonymous row wrapper (n_boxes > 1);
             // a single box stays flush at the start edge.
             if n_boxes > 1 {
                 let gap = slack / (n_boxes - 1) as f32;
                 for (i, child) in row.children.iter_mut().enumerate() {
-                    child.rect.x += gap * i as f32;
+                    crate::incremental::translate_subtree(child, gap * i as f32, 0.0);
                 }
                 row.rect.width = container_width;
             }
@@ -254,12 +270,12 @@ fn align_row(row: &mut LayoutBox, n_boxes: usize, container_width: f32, align: R
             if n_boxes > 1 {
                 let gap = slack / n_boxes as f32;
                 for (i, child) in row.children.iter_mut().enumerate() {
-                    child.rect.x += gap * (i as f32 + 0.5);
+                    crate::incremental::translate_subtree(child, gap * (i as f32 + 0.5), 0.0);
                 }
                 row.rect.width = container_width;
             } else {
                 // Single box: centered.
-                row.rect.x += slack / 2.0;
+                crate::incremental::translate_subtree(row, slack / 2.0, 0.0);
             }
         }
     }
@@ -290,10 +306,20 @@ fn stack_boxes_horizontal(boxes: &[LayoutBox]) -> LayoutBox {
 
     for (i, box_) in boxes.iter().enumerate() {
         let mut b = box_.clone();
-        b.rect.x = cursor_x;
+        let mut new_x = cursor_x;
         if i > 0 {
-            b.rect.x += 2.0; // Inter-character spacing.
+            new_x += 2.0; // Inter-character spacing.
         }
+        // Move the WHOLE subtree, not just this box's own rect — `b` may be
+        // a composed multi-level column (the `pair` branch in `lay_out_ruby`
+        // stacks per-base `compose_column` results side by side), and every
+        // descendant's x is relative to `b`'s own stale position. A bare
+        // `b.rect.x = new_x` here left every column after the first painting
+        // its base/annotation content at the FIRST column's x (GAP-RUBYBOX
+        // multi-pair `ruby-merge: separate` regression, found via
+        // `--dump-layout` on `<ruby>b1<rt>a1</rt>b2<rt>a2</rt></ruby>`).
+        let dx = new_x - b.rect.x;
+        crate::incremental::translate_subtree(&mut b, dx, 0.0);
         cursor_x = b.rect.x + b.rect.width;
         stacked.children.push(b);
     }

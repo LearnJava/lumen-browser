@@ -104,7 +104,9 @@ mod predicates;
 // the `_inline` pair) are the ones that apply there.
 pub(crate) use predicates::{
     is_audio_element, is_canvas_element, is_iframe_element, is_image_element,
-    is_inline_replaced_media_element, is_picture_element, is_video_element, scrollbar_gutter_block,
+    is_inline_replaced_media_element, is_picture_element, is_ruby_element,
+    is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
+    is_video_element, scrollbar_gutter_block,
     scrollbar_gutter_block_start, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };
 

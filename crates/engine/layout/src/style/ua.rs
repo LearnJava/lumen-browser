@@ -42,6 +42,17 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // than plain "no ruby support". Treating them as inline restores the
         // spec-required fallback (base + annotation flow as sequential inline
         // text) until the full ruby box model is wired (tracked separately).
+        // GAP-RUBYBOX: `<ruby>` gets a dedicated box-tree wiring — the
+        // box-builder (`is_ruby_element`) special-cases the ELEMENT into
+        // `BoxKind::Ruby` regardless of this UA `display`, the same pattern
+        // `<img>` uses (UA `inline`, but `BoxKind::Image`) — so this entry
+        // only decides the fallback CSS `display` an author sees/overrides,
+        // not the box kind. `<rb>`/`<rt>`/`<rp>`/`<rtc>` stay on the BUG-614
+        // fallback below: they are recognised by tag inside `build_ruby_box`
+        // (base vs annotation grouping) without needing their own `Display`
+        // value — falling through to the `_ => Display::Block` catch-all
+        // would still split them onto separate lines outside a `<ruby>`
+        // (malformed markup / no ruby ancestor), so the inline fallback stays.
         | "ruby" | "rb" | "rt" | "rp" | "rtc" => Display::Inline,
         // HTML rendering §15.3.1 — `<img>` is inline-level replaced content, so
         // it shares the line box with the text around it (icon in a button, logo

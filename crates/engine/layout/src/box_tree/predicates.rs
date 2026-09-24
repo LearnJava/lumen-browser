@@ -213,6 +213,54 @@ pub(crate) fn is_picture_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// HTML-имя `<ruby>` для распознавания GAP-RUBYBOX box-tree интеграции.
+/// `<rb>`/`<rt>`/`<rp>`/`<rtc>` остаются простым UA `Display::Inline`
+/// (BUG-614 fallback, `style/ua.rs`) — только сам `<ruby>` элемент получает
+/// собственный `BoxKind::Ruby`, что решает, какие дети идут в base-группу, а
+/// какие — в annotation-группу (см. `build.rs`'s `is_ruby_text_element`).
+pub(crate) fn is_ruby_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "ruby"
+    )
+}
+
+/// HTML-имя `<rt>` — ruby-text annotation child of `<ruby>` (GAP-RUBYBOX).
+/// `<rtc>` groups multiple `<rt>` under one ruby-text container; Phase 0
+/// scope treats each `<rt>` inside an `<rtc>` the same as a bare `<rt>` (the
+/// `<rtc>` wrapper itself contributes no extra grouping — see `build.rs`'s
+/// doc comment on `collect_ruby_groups` for the documented remainder).
+pub(crate) fn is_ruby_text_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "rt"
+    )
+}
+
+/// HTML-имя `<rp>` — ruby fallback parenthesis (CSS Ruby L1 §4.3). Rendered
+/// only by UAs without ruby support; since GAP-RUBYBOX gives `<ruby>` real
+/// geometry, `<rp>` content is excluded from both the base and annotation
+/// groups so it doesn't visually duplicate the parenthesis-free layout.
+pub(crate) fn is_ruby_parenthesis_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "rp"
+    )
+}
+
+/// HTML-имя `<rtc>` — ruby-text container grouping several `<rt>` (CSS Ruby
+/// L1 §4.2). GAP-RUBYBOX Phase 0 does not give `<rtc>` its own grouping
+/// semantics — each `<rt>` inside it is flattened into the same per-index
+/// pairing a bare `<rt>` gets (`build.rs`'s `collect_ruby_groups`); this
+/// predicate only lets the box-builder recognise the wrapper and recurse
+/// into it instead of treating it as base content.
+pub(crate) fn is_ruby_text_container_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "rtc"
+    )
+}
+
 /// `<video>`/`<canvas>`/`<audio>`/`<iframe>` — replaced media/embedded-document
 /// элементы, которым IFC-3 даёт тот же inline-level статус, что IFC-2 дала
 /// `<img>` (UA-дефолт `display: inline` — [`default_display`]). Отдельная

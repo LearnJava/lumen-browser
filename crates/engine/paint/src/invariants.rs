@@ -204,6 +204,7 @@ fn box_has_visible_self_paint(b: &LayoutBox) -> bool {
             | BoxKind::TableRow
             | BoxKind::Table
             | BoxKind::TableRowGroup
+            | BoxKind::Ruby { .. }
     ) {
         return false;
     }
