@@ -669,7 +669,12 @@ the time — read dates.
   done here). OffscreenCanvas/ImageBitmap have no native detach: both are thin JS
   wrappers around an integer `__canvas_id__` handle (`offscreen_canvas.rs`), so
   `_lumen_transfer_one` moves the handle to a fresh wrapper object and clears the
-  original's copy — no Rust change needed or made. Transferables are resolved into
+  original's copy — no Rust change needed or made. Since BUG-933 (2026-09-24)
+  `ImageBitmap` is a real class whose `__canvas_id__` is a prototype getter over
+  a private `__bitmap__` slot, so the bitmap branch delegates to
+  `_lumen_image_bitmap_transfer` (installed by `offscreen_canvas.rs` next to the
+  class) instead of rebuilding a literal — an assignment to the getter would not
+  detach the source. Transferables are resolved into
   `structuredClone`'s `memory` map *before* the value graph is walked, so the
   existing `memory.has(v)` identity check picks up the moved-to object wherever
   the original is referenced. Not in scope: MessagePort as a Transferable, and the

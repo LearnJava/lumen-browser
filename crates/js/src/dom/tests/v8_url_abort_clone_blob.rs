@@ -372,6 +372,29 @@ fn structured_clone_transfer_duplicate_throws_data_clone_error() {
 }
 
 #[test]
+fn structured_clone_transfer_moves_image_bitmap() {
+    // BUG-933: ImageBitmap is a class now; `_lumen_transfer_one` used to
+    // rebuild it as a `{width, height, __canvas_id__, close}` literal. The
+    // moved-to clone must stay an ImageBitmap and the source must detach.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var bm = new OffscreenCanvas(5, 3).transferToImageBitmap();
+                     var cid = bm.__canvas_id__;
+                     var c = structuredClone({ b: bm }, { transfer: [bm] });
+                     var again = '';
+                     try { structuredClone(bm, { transfer: [bm] }); }
+                     catch (e) { again = e.name; }
+                     c.b instanceof ImageBitmap && c.b !== bm &&
+                     c.b.width === 5 && c.b.height === 3 && c.b.__canvas_id__ === cid &&
+                     bm.width === 0 && bm.__canvas_id__ === undefined &&
+                     again === 'DataCloneError'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn structured_clone_transfer_rejects_non_transferable() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
