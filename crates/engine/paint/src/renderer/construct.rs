@@ -32,6 +32,22 @@ pub(crate) fn renderer_instance_descriptor(backends: wgpu::Backends) -> wgpu::In
     wgpu::InstanceDescriptor { backends, flags, ..Default::default() }.with_env()
 }
 
+/// Лимиты устройства оконного рендера для адаптера со стороной текстуры
+/// `adapter_max_dim`.
+///
+/// BUG-405 срез 23: всё, кроме стороны текстуры, остаётся на
+/// `downlevel_defaults()` (переносимость), а сторона поднимается до тира
+/// адаптера — от неё зависит, работает ли скролл-композитор: полоса высотой
+/// 2.5 вьюпорта не влезала в 2048 уже на окне клиентской высотой ~819
+/// device px. Общая для рендера и пробы бэкенда (BUG-1073 срез 3): рендер
+/// берёт открытое пробой устройство, и лимиты у него должны быть те же.
+pub(crate) fn window_device_limits(adapter_max_dim: u32) -> wgpu::Limits {
+    let mut limits = wgpu::Limits::downlevel_defaults();
+    limits.max_texture_dimension_2d =
+        requested_max_texture_dim(adapter_max_dim, !texture_limit_raise_disabled());
+    limits
+}
+
 /// Оконный wgpu-бэкенд, открытый [`Renderer::open_window_backend`]:
 /// поверхность уже сконфигурирована.
 struct OpenedWindowBackend {
@@ -79,6 +95,7 @@ impl Renderer {
         // preference chain below (also used when the probe is disabled or this
         // isn't Windows). `WGPU_BACKEND` env-var still overrides both.
         let probed = crate::backend_probe::pick_backend(&window).await;
+        let probed_backends = probed.as_ref().map(|p| p.backends);
         // Windows order is Vulkan-first (2026-07-28, user decision): pipeline
         // compilation on this Intel Iris Plus costs ~0.28 s on Vulkan against
         // 3–7 s on DX12 for the exact same 16 pipelines (measured under
@@ -101,9 +118,9 @@ impl Renderer {
         } else {
             &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
         };
-        let backend_prefs: Vec<wgpu::Backends> = probed
+        let backend_prefs: Vec<wgpu::Backends> = probed_backends
             .into_iter()
-            .chain(static_prefs.iter().copied().filter(|b| Some(*b) != probed))
+            .chain(static_prefs.iter().copied().filter(|b| Some(*b) != probed_backends))
             .collect();
         // BUG-274 cold-start census: bracket adapter/device acquisition and
         // pipeline compilation separately from the probe (already logged by
@@ -118,7 +135,22 @@ impl Renderer {
         // следующему бэкенду, а не к падению процесса.
         let mut picked = None;
         let mut last_err = String::from("no GPU adapter under any candidate backend (Vulkan/DX12/GL)");
-        for backends in backend_prefs {
+        // BUG-1073 срез 3: победитель пробы уже открыл surface → adapter →
+        // device (1–2.2 с под нагрузкой — драйвер), второе открытие того же
+        // бэкенда повторяло бы их целиком. Переконфигурируется только
+        // поверхность — формат, present mode и usage рендера.
+        if let Some(gpu) = probed.and_then(|p| p.gpu) {
+            let backend = gpu.adapter.get_info().backend;
+            match Self::adopt_probed_backend(gpu, width, height, target_color_space).await {
+                Ok(opened) => picked = Some(opened),
+                Err(e) => {
+                    eprintln!("[wgpu] {backend:?} от пробы: {e} — открываю заново");
+                    last_err = e;
+                }
+            }
+        }
+        let fallback_prefs = if picked.is_none() { backend_prefs } else { Vec::new() };
+        for backends in fallback_prefs {
             match Self::open_window_backend(&window, backends, width, height, target_color_space).await {
                 Ok(opened) => {
                     picked = Some(opened);
@@ -211,26 +243,53 @@ impl Renderer {
             })
             .await
             .map_err(|e| format!("request_adapter: {e}"))?;
-        // BUG-405 срез 23: всё, кроме стороны текстуры, остаётся на
-        // `downlevel_defaults()` (переносимость), а сторона поднимается до
-        // тира адаптера — от неё зависит, работает ли скролл-композитор:
-        // полоса высотой 2.5 вьюпорта не влезала в 2048 уже на окне
-        // клиентской высотой ~819 device px.
-        let mut limits = wgpu::Limits::downlevel_defaults();
         let adapter_max_dim = adapter.limits().max_texture_dimension_2d;
-        limits.max_texture_dimension_2d =
-            requested_max_texture_dim(adapter_max_dim, !texture_limit_raise_disabled());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("lumen-device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: limits,
+                required_limits: window_device_limits(adapter_max_dim),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
             })
             .await
             .map_err(|e| format!("request_device: {e}"))?;
+        Self::configure_window_surface(surface, adapter, device, queue, width, height, target_color_space, None)
+            .await
+    }
 
+    /// Берёт устройство, открытое пробой бэкенда (BUG-1073 срез 3), и
+    /// конфигурирует его поверхность под рендер. Лимиты устройства те же,
+    /// что у [`Self::open_window_backend`] ([`window_device_limits`]).
+    async fn adopt_probed_backend(
+        gpu: crate::backend_probe::ProbedGpu,
+        width: u32,
+        height: u32,
+        target_color_space: ColorSpace,
+    ) -> Result<OpenedWindowBackend, String> {
+        let crate::backend_probe::ProbedGpu { surface, adapter, device, queue, config } = gpu;
+        Self::configure_window_surface(
+            surface, adapter, device, queue, width, height, target_color_space, Some(&config),
+        )
+        .await
+    }
+
+    /// Выбирает формат/present mode/usage поверхности окна и конфигурирует
+    /// её (`configure_checked`: `Invalid surface` — `Err`, не паника).
+    /// `configured` — с чем поверхность уже сконфигурирована (пробой): при
+    /// совпадении повторный `configure` пропускается.
+    #[allow(clippy::too_many_arguments)]
+    async fn configure_window_surface(
+        surface: wgpu::Surface<'static>,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        width: u32,
+        height: u32,
+        target_color_space: ColorSpace,
+        configured: Option<&wgpu::SurfaceConfiguration>,
+    ) -> Result<OpenedWindowBackend, String> {
+        let adapter_max_dim = adapter.limits().max_texture_dimension_2d;
         let caps = surface.get_capabilities(&adapter);
         // Пустые caps — поверхность с этим адаптером несовместима:
         // `formats[0]`/`alpha_modes[0]` паниковали бы вместо отказа.
@@ -274,7 +333,9 @@ impl Renderer {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        crate::backend_probe::configure_checked(&surface, &device, &config).await?;
+        if configured != Some(&config) {
+            crate::backend_probe::configure_checked(&surface, &device, &config).await?;
+        }
         Ok(OpenedWindowBackend { surface, adapter, device, queue, config, caps, adapter_max_dim })
     }
 
