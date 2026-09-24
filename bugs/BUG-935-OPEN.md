@@ -1,6 +1,6 @@
 # BUG-935 — M4 incremental restyle for the rAF-dirty pump is dead code under the default (engine-thread-on) build; a page with an active rAF+DOM-mutation loop pays a full off-thread cascade recompute on every tick
 
-**Статус:** OPEN
+**Статус:** OPEN (DEBTOR)
 **Компонент:** shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`, `relayout_raf_dirty_readback`, `submit_relayout_job`, `try_relayout_raf_incremental`)
 **Найден:** 2026-09-01 (P3), при ревизии BUG-286 (DEBTOR, `content-visibility:auto` scroll stopor) — свежий живой замер на ria.ru показал не одну паузу ~580мс, а 33 полных off-thread relayout'а (по 850–2600мс каждый) за ~15–20с сессии, все при неизменном `dl=1690 styled=1744` (без роста DOM)
 
@@ -3518,3 +3518,32 @@ rAF+DOM-мутацией (видео-плеер, карусель, «живая 
 Синтетическая версия без сети (S29): `scripts/perf-fixtures/bug935_raf_dom_stand.html`
 через `file://`-URL, тем же `scripts/bug935_raf_relayout_census.py <file://путь>` —
 не требует внешнего сайта, детерминирована по составу работы.
+
+## Срез 49 (P3, 2026-09-24) — переклассификация в DEBTOR
+
+Блокер, заведённый срезом 48 ([BUG-1112](bugs/BUG-1112-OPEN.md) —
+`cascade_reused=0` на github.com/lenta.ru из-за архитектурного предела
+`ShareKey`), закрыт своей сессией как `OPEN (DEBTOR)`: 11 срезов
+расширения `ShareKey` дёшево доказуемыми фактами не сдвинули
+`share_insert` с нуля на этих двух сайтах, и сессия оставила BUG-935
+явный нерешённый вопрос — держать `LUMEN_BUG935_M4_SWAP` измерительным
+флагом бессрочно или искать независимый от ShareCache путь A/B.
+
+Решение пользователя (2026-09-24): держать `LUMEN_BUG935_M4_SWAP`
+измерительным флагом бессрочно. M4-инкрементальный путь остаётся
+реализованным и корректным (срезы 4-46 сняли все известные блокеры
+неверного порядка, `defer_js_push`, `dom_dirty`-гонку и три
+`*_needed`-гейта), но включать его по умолчанию нельзя, пока не починен
+ShareCache — а тот теперь принят архитектурным пределом для
+github.com/lenta.ru, а не активной задачей P3. Основной симптом (полный
+off-thread relayout на каждый rAF-тик при активном rAF+DOM-цикле)
+по-прежнему воспроизводится в дефолтной сборке.
+
+**Статус:** `OPEN (DEBTOR)` — P3 не берёт эту запись без новой гипотезы,
+не зависящей от починки ShareCache (BUG-1112, `OPEN (DEBTOR)`). Флаг
+`LUMEN_BUG935_M4_SWAP` остаётся в коде как измерительный инструмент,
+выключен по умолчанию; удалять его не следует — это единственный
+воспроизводимый способ проверить M4-путь при появлении новой гипотезы.
+
+Без изменений кода в этом срезе — только реклассификация статуса и
+запись решения.
