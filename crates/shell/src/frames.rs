@@ -2214,6 +2214,8 @@ pub(crate) fn spawn_frame(
         // documents keep relying on the post-relayout sweep only.
         None,
     );
+    // PERF-14: same headless settle the page gets after its own scripts.
+    crate::page_pipeline::settle_headless_fetches(child_js.as_ref());
     // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
     // отклоняем с логом, не заваливая страницу.
     if let Some(nav) = child_nav {

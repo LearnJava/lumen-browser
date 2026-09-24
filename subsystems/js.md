@@ -2436,18 +2436,20 @@ runtime or the shim. Read them before a JS/Web-API change.
   testing whether the *new* URL fetches correctly, it is testing whether Lumen fetches it at all, which it
   currently does not, no matter how many times `.src` is set or what it was set to before.
 
-- **DOM shim: `fetch()` is SYNCHRONOUS unless the call site opts out** ([BUG-1013](../bugs/BUG-1013-FIXED.md),
-  2026-09-06). `_lumen_fetch` (`web_api_shim_mid_b.js`) picks its transport from the *caller's* init: a
-  live non-timeout `AbortSignal`, or the shim-internal `_lumenAsync: true`, routes to the worker-thread
-  bridge (`_lumen_fetch_async_*`); anything else parks the JS thread inside `_lumen_fetch_sync`, which has
-  no timeout of its own. That default is not a detail a new call site can ignore — scripts run inside the
-  load pipeline's `run-scripts` phase (`crates/shell/src/page_pipeline.rs`), i.e. *before* layout and
-  paint, so one blocking `fetch()` holds the first frame for the whole round trip. `FontFace.load()` did
-  exactly this and cost google.com 139 s of white screen. The flip side is why `_lumenAsync` is opt-in
-  rather than the default: the headless one-shot modes (`--screenshot`/`--trace-nav`/`--dump-*`) pump
-  neither timers nor microtasks, so a promise that settles off the poll loop never settles there at all.
-  Choose per call site: needs the bytes in hand within this script pass → sync; feeds a promise the page
-  awaits → `_lumenAsync`.
+- **DOM shim: `fetch()` is asynchronous by default** (PERF-14, 2026-09-24; before it the default was
+  synchronous and only a live `AbortSignal` or the shim-internal `_lumenAsync` opted out — BUG-1013).
+  `_lumen_fetch` (`web_api_shim_mid_b3.js`) sends every request through the worker-thread bridge
+  (`_lumen_fetch_async_*`) and registers its `poll` closure in `_lumen_fetch_inflight`;
+  `_lumen_fetch_pump` settles the finished ones. Who pumps: the live loop via `_lumen_tick_timers`
+  (every tick; `_lumen_request_wakeup(now+2)` keeps the loop awake while anything is in flight), and the
+  headless one-shot modes (`--screenshot`/`--trace-nav`/`--dump-*`/`--print-to-pdf`/IPC) via
+  `V8JsRuntime::settle_pending_fetches`, called by `page_pipeline::settle_headless_fetches` right after
+  the page's (and each frame's) scripts, gated on `HEADLESS_ONE_SHOT`, bounded by 10 s — the bound a
+  long-polling page needs. That settle loop runs no timers, on purpose: headless never ran them.
+  The one synchronous leftover is an `AbortSignal.timeout(ms)` signal (its deadline is a native thread on
+  the cancellable bridge). `_lumenAsync` is now a no-op. Script-inserted `<script src>` still *execute*
+  in insertion order (`_lumen_script_exec_queue`, `web_api_shim_mid.js`) though their fetches overlap —
+  the order they had while the transport was synchronous.
 - **Push API (`push_api.rs`) srez 1 — persisted natives, 2026-09-21.** `install_push_api_v8` now
   takes `Option<Arc<dyn lumen_core::ext::PushBackend>>` and registers `_lumen_push_subscribe`/
   `_lumen_push_get`/`_lumen_push_unsubscribe` via `register_native`/`into_v8_fn2`/`into_v8_fn6`

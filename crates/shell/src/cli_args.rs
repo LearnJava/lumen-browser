@@ -866,6 +866,12 @@ pub(crate) fn run_cli() -> ExitCode {
 
     drop(svc_phase);
     startup.dispatch(cli.mode_name());
+    // PERF-14: every mode but the window is a one-shot run without an event
+    // loop — `parse_and_layout` settles the page's `fetch()` requests itself.
+    crate::page_pipeline::HEADLESS_ONE_SHOT.store(
+        !matches!(cli, CliMode::OpenWindow(_)),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 
     match cli {
         CliMode::Dump { source, kind } => {

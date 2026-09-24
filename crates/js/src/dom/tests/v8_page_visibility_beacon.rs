@@ -981,16 +981,18 @@ fn send_beacon_connect_src_block_fires_security_policy_violation_event() {
 
 #[test]
 fn fetch_keepalive_with_provider_fires_request() {
-    // keepalive=true in Phase 0 behaves like a normal fetch (synchronous path),
-    // so the provider is called and the response is resolved.
+    // keepalive=true in Phase 0 behaves like a normal fetch, so the provider
+    // is called and the response is resolved.
     let capture = CaptureFetch::new();
     let rt = v8_runtime_with_fetch(Arc::clone(&capture));
-    // Keepalive POST with body — should fire the request synchronously.
+    // Keepalive POST with body — must fire the request.
     let r = rt.eval(
         "var p = fetch('https://example.com/analytics', \
                    { method: 'POST', body: 'ping', keepalive: true }); \
                  p instanceof Promise"
     ).unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     assert_eq!(r, lumen_core::JsValue::Bool(true));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1, "keepalive fetch must fire the network request");
@@ -1019,6 +1021,8 @@ fn fetch_priority_high_and_low_accepted() {
         "fetch('https://example.com/h', { priority: 'high' }); \
                  fetch('https://example.com/l', { priority: 'low' })"
     ).unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 2, "both priority fetch calls must fire");
 }
@@ -1031,6 +1035,8 @@ fn fetch_priority_invalid_normalizes_to_auto() {
     let rt = v8_runtime_with_fetch(Arc::clone(&capture));
     // 'urgent' is not a valid priority value; silently treated as 'auto'.
     rt.eval("fetch('https://example.com/', { priority: 'urgent' })").unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1, "invalid priority must not prevent request from firing");
 }

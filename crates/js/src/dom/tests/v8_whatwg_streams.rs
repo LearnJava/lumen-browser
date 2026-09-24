@@ -236,9 +236,8 @@ fn v8_runtime_with_csp_blocked_fetch() -> V8JsRuntime {
     rt
 }
 
-/// `fetch()`'s default (no `AbortSignal`) path is synchronous under the hood,
-/// so the `securitypolicyviolation` dispatch and the promise rejection both
-/// land within the same `eval` call — no microtask pump needed.
+/// `fetch()` runs on a worker thread by default (PERF-14), so the
+/// `securitypolicyviolation` dispatch lands once the request is settled.
 #[test]
 fn fetch_connect_src_block_fires_security_policy_violation_event() {
     let rt = v8_runtime_with_csp_blocked_fetch();
@@ -250,6 +249,8 @@ fn fetch_connect_src_block_fires_security_policy_violation_event() {
          fetch('https://blocked.example/x').catch(function() {});",
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     assert_eq!(
         rt.eval("seen").unwrap(),
         lumen_core::JsValue::String(
@@ -1139,6 +1140,8 @@ fn fetch_cache_response_reads_own_stream_queue_not_global_slot() {
                  b.then(function(r) { return r.text(); }).then(function(t) { second = t; });",
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("first + '|' + second").unwrap();
     assert_eq!(r, lumen_core::JsValue::String("body-one|body-two".into()));
 }
@@ -1162,6 +1165,8 @@ fn fetch_response_body_getreader_yields_correct_bytes() {
                      return resp.body.getReader().read(); \
                  }).then(function(r) { out = r; });"
     ).unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval(
         "out !== null && !out.done && out.value instanceof Uint8Array \
                  && out.value[0] === 111 && out.value[1] === 107"  // 'ok' = [111, 107]
@@ -1177,6 +1182,8 @@ fn fetch_resolves_relative_url_against_document_base() {
     let capture = CaptureFetch::new();
     let rt = v8_runtime_with_fetch(Arc::clone(&capture));
     rt.eval("fetch('resources/x.js');").unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "https://example.com/resources/x.js");
@@ -1187,6 +1194,8 @@ fn fetch_resolves_root_relative_url_against_document_origin() {
     let capture = CaptureFetch::new();
     let rt = v8_runtime_with_fetch(Arc::clone(&capture));
     rt.eval("fetch('/common/blank.html');").unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let calls = capture.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "https://example.com/common/blank.html");
@@ -1230,6 +1239,8 @@ fn fetch_response_url_and_redirected_reflect_the_final_url_after_redirect() {
          });",
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     assert_eq!(
         rt.eval("globalThis.__url").unwrap(),
         lumen_core::JsValue::String("https://example.com/final.txt".into())
@@ -1248,6 +1259,8 @@ fn fetch_response_redirected_is_false_when_no_redirect_happened() {
          });",
     )
     .unwrap();
+    // PERF-14: fetch() runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     assert_eq!(
         rt.eval("globalThis.__url").unwrap(),
         lumen_core::JsValue::String("https://example.com/x.txt".into())

@@ -65,6 +65,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called each `about_to_wait`. Timer callbacks run synchronously inside
     /// the JS context and may themselves schedule further timers or navigation.
     fn tick_timers(&self);
+    /// PERF-14: settle in-flight `fetch()` requests for a runtime with no
+    /// event loop behind it (headless one-shot modes) — see
+    /// `lumen_js::v8_runtime::V8JsRuntime::settle_pending_fetches`. Returns
+    /// how many were still in flight when `budget` ran out. Default: nothing
+    /// to settle.
+    fn settle_pending_fetches(&self, _budget: std::time::Duration) -> usize {
+        0
+    }
     /// Take the next timer wakeup deadline as Unix epoch ms, clearing the stored
     /// value.  Returns `None` if no timers are pending after the last tick.
     fn take_timer_wakeup(&self) -> Option<f64>;
@@ -986,6 +994,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn tick_timers(&self) {
         self.eval_js("_lumen_tick_timers()");
+    }
+    fn settle_pending_fetches(&self, budget: std::time::Duration) -> usize {
+        self.rt.settle_pending_fetches(budget)
     }
     fn deliver_long_animation_frame(&self, duration_ms: f64) {
         // `renderStart`/`styleAndLayoutStart` collapse to the frame's own
