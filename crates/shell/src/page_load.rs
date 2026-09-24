@@ -2434,6 +2434,13 @@ fn feed_preload_and_emit(
         return;
     }
     let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
+    // BUG-1116: `preload`/`modulepreload`/`prefetch` hints warm the same
+    // process-global cache as the stylesheet/script warm-up right below —
+    // started here, as early as the streaming scanner sees them, so the
+    // element's own fetch (`HttpClient::fetch_preload_cached`, driven by the
+    // JS shim once the DOM is ready) and a real consumer elsewhere on the
+    // page share one network round trip instead of each doing its own.
+    crate::page_pipeline::warm_preload_cache(&early, base, sink, cookie_jar.cloned());
     // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
     // HTML is still streaming. Linked stylesheets AND external classic scripts are
     // warmed into the process-global prefetch cache using the SAME subresource

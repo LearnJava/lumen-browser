@@ -124,9 +124,18 @@ pub(crate) fn render_bytes(
 /// передаёт `&mut HashSet::new()` для одноразового вызова или persistent-сет
 /// для дедупа между streaming-сканом и финальным pipeline.
 /// Sink логирует хинт в stderr. Сам fetch по хинту делает JS-шим на элементе
-/// `<link>` (BUG-826) — там же, где живут его события `load`/`error`; здесь
-/// сетевого запроса по-прежнему нет, поэтому строка лога говорит «хинт найден»,
-/// а не «ресурс запрошен».
+/// `<link>` (BUG-826) — там же, где живут его события `load`/`error`; отдельно
+/// от этой функции, для `preload`/`modulepreload`/`prefetch`, вызывающая
+/// сторона (когда у неё есть `cookie_jar` документа) запускает
+/// [`warm_preload_cache`], которая прогревает `PREFETCH_CACHE` — тот же кэш,
+/// через который шим теперь читает байты (`HttpClient::fetch_preload_cached`)
+/// и через который уже проходят реальные `<script src>`/`<link
+/// rel=stylesheet>`, так что хинт и настоящий потребитель одного URL делят
+/// один сетевой запрос вместо двух (BUG-1116). Не вызывается отсюда
+/// напрямую — `emit_early_hints` (RFC 8297) не имеет `cookie_jar` документа
+/// на этой стадии загрузки, и прогрев без него рисковал бы положить в общий
+/// кэш байты без кук, которые потом отдались бы кукозависимому реальному
+/// запросу того же URL.
 pub(crate) fn dispatch_preload_hints(
     hints: &[lumen_html_parser::PreloadHint],
     base: &ResourceBase,
@@ -192,6 +201,55 @@ pub(crate) fn dispatch_preload_hints(
                 FetchPriority::from_attr(fp.as_deref()).unwrap_or_else(|| FetchPriority::for_kind(&kind));
             sink.emit(&Event::SubresourceHintFound { url, kind, priority });
         }
+    }
+}
+
+/// BUG-1116: спавнит по одному фоновому потоку на каждый `preload`/
+/// `modulepreload`/`prefetch`-хинт, прогревая `PREFETCH_CACHE` тем же путём
+/// (`fetch_subresource_with_content_type` + `RequestDestination::Prefetch`),
+/// каким его читает `HttpClient::fetch_preload_cached`. Остальные виды
+/// хинтов (stylesheet/script/image/font/preconnect) сюда не попадают — у
+/// stylesheet/script уже есть свой ранний прогрев (`feed_preload_and_emit`),
+/// у image/font/preconnect нет потребителя через `PREFETCH_CACHE` вовсе (вне
+/// границ этого бага, см. остаток в BUG-1116).
+///
+/// Потоки стартуют параллельно, а не по одному — именно это убирает
+/// сериализацию `14 хинтов × 700 мс`, замеренную на стенде: сеть, а не
+/// JS-поток, теперь ограничивает время. `PREFETCH_CACHE.fetch` сам дедуплицирует
+/// повторный вызов с тем же URL (в т.ч. вызов из ранней `feed_preload_and_emit`
+/// для этой же навигации) — конкурирующий вызов просто блокируется на слоте
+/// первого, а не шлёт второй запрос.
+pub(crate) fn warm_preload_cache(
+    hints: &[lumen_html_parser::PreloadHint],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) {
+    use lumen_html_parser::PreloadHint;
+    use lumen_network::RequestDestination;
+
+    for hint in hints {
+        let raw_url = match hint {
+            PreloadHint::Preload { url, .. }
+            | PreloadHint::ModulePreload { url }
+            | PreloadHint::Prefetch { url } => url,
+            _ => continue,
+        };
+        let resolved = base.resolve_str(raw_url);
+        let Ok(parsed) = lumen_core::url::Url::parse(&resolved) else { continue };
+        let generation = crate::prefetch::PREFETCH_CACHE.current_generation();
+        let sink = Arc::clone(sink);
+        let base = base.clone();
+        let cookie_jar = cookie_jar.clone();
+        std::thread::spawn(move || {
+            let _ = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
+                let client = base.http_client_for_subresource(sink, cookie_jar);
+                client
+                    .fetch_subresource_with_content_type(&parsed, RequestDestination::Prefetch)
+                    .map(|(body, content_type)| crate::prefetch::CachedResource { body, content_type })
+                    .map_err(|e| e.to_string())
+            });
+        });
     }
 }
 
@@ -848,6 +906,7 @@ pub(crate) fn parse_and_layout(
     // (body-images, lazy-loaded resources и т.п.).
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
     dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
+    warm_preload_cache(&preload_hints, base, sink, cookie_jar.clone());
 
     let mut doc = {
         let _s = lumen_core::trace::span("parse-html", "parse");
@@ -930,6 +989,10 @@ pub(crate) fn parse_and_layout(
             // disposition regardless of whether either header was present —
             // `with_sync_xhr_policy(None, None)` is the same as never calling it.
             client = client.with_sync_xhr_policy(sync_xhr_document_policy, sync_xhr_permissions_policy);
+            // BUG-1116: shares `<link rel=preload|modulepreload|prefetch>`'s own
+            // fetch with whatever else the page loads at the same URL this
+            // navigation, instead of always hitting the network a second time.
+            client = client.with_subresource_cache(Arc::new(crate::prefetch::SharedPrefetchCache));
             // GAP-REFERRER: `Referer`/`Origin` on `fetch()`/`XMLHttpRequest`/
             // `sendBeacon` — `with_document_context` is attached by
             // `http_client_for_subresource_with_policy` above, using this

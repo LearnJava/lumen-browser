@@ -3165,6 +3165,16 @@ pub struct HttpClient {
     /// that owns the document (`crates/shell/src/page_pipeline.rs`), the same
     /// provenance as `connect_src_policy` above.
     document_context: Option<(Url, ReferrerPolicy)>,
+    /// BUG-1116: the shell's process-global preload/prefetch cache, consulted
+    /// only by [`Self::fetch_preload_cached`] (the `<link rel=preload|
+    /// modulepreload|prefetch>` hint's own fetch) — never by the general
+    /// `fetch()`/`XMLHttpRequest` path, which must always hit the network for
+    /// a fresh response. Set once via [`Self::with_subresource_cache`] by the
+    /// caller that owns the document (`crates/shell/src/page_pipeline.rs`),
+    /// same provenance as `document_context`. `None` for `HttpClient`s not
+    /// scoped to a document (WebSocket dialers, most tests, worker fetch) —
+    /// the hint fetch then falls back to a plain uncached GET.
+    subresource_cache: Option<Arc<dyn lumen_core::ext::SubresourceCache>>,
 }
 
 impl HttpClient {
@@ -3200,6 +3210,7 @@ impl HttpClient {
             media_src_policy: None,
             sync_xhr_policy: (None, None),
             document_context: None,
+            subresource_cache: None,
         }
     }
 
@@ -3299,6 +3310,16 @@ impl HttpClient {
         permissions_policy: Option<lumen_core::ext::PolicyDisposition>,
     ) -> Self {
         self.sync_xhr_policy = (document_policy, permissions_policy);
+        self
+    }
+
+    /// Attach the shell's preload/prefetch cache — BUG-1116. Only
+    /// [`Self::fetch_preload_cached`] reads this; every other fetch path
+    /// (`fetch()`, `XMLHttpRequest`, subresource loaders that build their own
+    /// `HttpClient`) is unaffected.
+    #[must_use]
+    pub fn with_subresource_cache(mut self, cache: Arc<dyn lumen_core::ext::SubresourceCache>) -> Self {
+        self.subresource_cache = Some(cache);
         self
     }
 
@@ -4647,6 +4668,50 @@ impl JsFetchProvider for HttpClient {
             body: Some(JsFetchBody { content_type, bytes: body }),
             token: None,
         })
+    }
+
+    /// BUG-1116: `<link rel=preload|modulepreload|prefetch>`'s own fetch,
+    /// routed through [`Self::subresource_cache`] when one is attached. A hit
+    /// shares bytes with whatever else fetched the same URL this navigation
+    /// (real `<script src>`/`<link rel=stylesheet>`, or the engine's own
+    /// early streaming warm-up of this same hint — see
+    /// `crates/shell/src/page_load.rs::feed_preload_and_emit`); a miss falls
+    /// through to the same `fetch_subresource_with_content_type` a real
+    /// consumer would have used, so the cache never serves the wrong bytes.
+    /// No `subresource_cache` attached → plain uncached GET, same as before
+    /// this bug's fix.
+    ///
+    /// Like every other subresource loader in this engine
+    /// (`fetch_subresource_with_content_type`'s callers in
+    /// `crates/shell/src/scripts.rs`/`stylesheets.rs`), this does not surface
+    /// the HTTP status code — a non-2xx response is still `Ok`, only a
+    /// transport-level failure is `Err`. `status`/`ok` are hardcoded to
+    /// `200`/`true` on the `Ok` path to match.
+    fn fetch_preload_cached(&self, url: &str) -> Result<JsFetchResult> {
+        let Some(cache) = self.subresource_cache.clone() else {
+            return self.fetch_sync(url, "GET");
+        };
+        let parsed = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let destination = RequestDestination::Prefetch;
+        let generation = cache.generation();
+        let url_owned = url.to_owned();
+        let fetch = Box::new(move || {
+            self.fetch_subresource_with_content_type(&parsed, destination)
+                .map_err(|e| e.to_string())
+        });
+        match cache.get_or_fetch(generation, &url_owned, fetch) {
+            Ok((body, content_type)) => Ok(JsFetchResult {
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: content_type
+                    .into_iter()
+                    .map(|ct| ("content-type".to_owned(), ct))
+                    .collect(),
+                body,
+                url: url_owned,
+            }),
+            Err(e) => Err(Error::Network(e)),
+        }
     }
 
     /// Synchronous GET/HEAD fetch that honours an `AbortToken` in-flight.

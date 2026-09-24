@@ -402,6 +402,8 @@ pub(crate) fn install_fetch(
         let c_cancel_body = Arc::clone(&cache);
         let fp_async = fetch_provider.clone();
         let c_async = Arc::clone(&cache);
+        let fp_preload = fetch_provider.clone();
+        let c_preload = Arc::clone(&cache);
         let fp_policy = fetch_provider.clone();
         let lcb_sync = Arc::clone(&last_csp_block);
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
@@ -436,6 +438,40 @@ pub(crate) fn install_fetch(
                 }
                 Err(e) => {
                     eprintln!("fetch error: {e}");
+                    false
+                }
+            }
+        });
+
+        // _lumen_link_prefetch_sync(url) → bool. BUG-1116: the same shape as
+        // `_lumen_fetch_sync` above and sharing its `FetchCache` slot/accessors
+        // (`_lumen_fetch_get_status`/`_get_body`/`_get_headers`/`_get_url`) —
+        // JS calls these one at a time (blocking), so reuse is safe — but
+        // routed through `JsFetchProvider::fetch_preload_cached` instead of
+        // `fetch_sync`, so a `<link rel=preload|modulepreload|prefetch>`
+        // hint's own fetch (`_lumen_link_hint_fetch` in the shim) shares bytes
+        // with whatever else on the page fetches the same URL this
+        // navigation, rather than always hitting the network again.
+        reg!(scope, ctx, store, "_lumen_link_prefetch_sync", move |url: String| -> bool {
+            let Some(ref provider) = fp_preload else { return false };
+            match provider.fetch_preload_cached(&url) {
+                Ok(resp) => {
+                    let mut flat = Vec::with_capacity(resp.headers.len() * 2);
+                    for (k, v) in resp.headers {
+                        flat.push(k);
+                        flat.push(v);
+                    }
+                    *c_preload.lock().unwrap() = Some(FetchCache {
+                        status: resp.status,
+                        status_text: resp.status_text,
+                        headers: flat,
+                        body: resp.body,
+                        url: resp.url,
+                    });
+                    true
+                }
+                Err(e) => {
+                    eprintln!("link prefetch error: {e}");
                     false
                 }
             }
