@@ -91,6 +91,89 @@ pub fn collect_background_image_requests(root: &LayoutBox, dpr: f32) -> Vec<Stri
     out
 }
 
+/// BUG-1117: те же URL-ы, что [`collect_background_image_requests`], но без
+/// layout — только по каскаду документа.
+///
+/// Фон на размеры боксов не влияет, поэтому ждать layout (а он ждёт
+/// intrinsic-размеров всех `<img>`) его загрузке незачем: shell запускает эту
+/// выборку до загрузки `<img>`, и фон едет в одной волне с ними. Это только
+/// подсказка для раннего старта: авторитетный список по-прежнему собирает
+/// [`collect_background_image_requests`] после layout, и всё, что здесь не
+/// учтено, догрузится там (а учтённое возьмётся из общего кэша декодов).
+///
+/// Учитывает то, что даёт бокс: `background-image` элементов вне поддеревьев
+/// `display: none` (а также закрытых `popover` и SVG `<defs>` — их layout тоже
+/// пропускает), `list-style-image` у `display: list-item` и фон/`content:
+/// url()` псевдоэлементов `::before`/`::after`, если таблица стилей их вообще
+/// адресует. Порядок — документный, дубликаты отфильтрованы. `dpr` — то же, что
+/// у [`collect_background_image_requests`]: ключ обязан совпасть с ключом
+/// эмиттера.
+///
+/// Каскад — полный проход (`precompute_counters`), поэтому shell зовёт функцию,
+/// только когда готового дерева боксов под рукой нет.
+#[must_use]
+pub fn collect_cascade_background_image_requests(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    dpr: f32,
+) -> Vec<String> {
+    let flat = build_flat_tree(doc);
+    crate::style::set_shadow_sheets(super::entry::build_shadow_sheets(doc));
+    let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+    let pseudos: Vec<&str> = ["before", "after"]
+        .into_iter()
+        .filter(|p| crate::style::sheet_targets_pseudo(sheet, viewport, dark_mode, p))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut stack: Vec<NodeId> = vec![doc.root()];
+    while let Some(id) = stack.pop() {
+        if let Some(style) = counters.style_for(id) {
+            if style.display == Display::None || is_closed_popover(doc, id) || is_svg_defs(doc, id) {
+                continue;
+            }
+            // `display: contents` — бокса нет, собственный фон не рисуется,
+            // но потомки рисуются как обычно.
+            let own_box = style.display != Display::Contents;
+            for layer in style.background_layers.iter().filter(|_| own_box) {
+                push_bg_image_urls(&layer.image, dpr, &mut out);
+            }
+            if style.display == Display::ListItem
+                && let Some(src) = &style.list_style_image
+                && !src.is_empty()
+                && !out.contains(src)
+            {
+                out.push(src.clone());
+            }
+            for pseudo in &pseudos {
+                let Some(ps) =
+                    compute_pseudo_element_style(doc, id, pseudo, sheet, style, viewport, dark_mode)
+                else {
+                    continue;
+                };
+                let Content::Items(items) = &ps.content else { continue };
+                if ps.display == Display::None {
+                    continue;
+                }
+                for layer in &ps.background_layers {
+                    push_bg_image_urls(&layer.image, dpr, &mut out);
+                }
+                for item in items {
+                    if let ContentItem::Url(src) = item
+                        && !src.is_empty()
+                        && !out.contains(src)
+                    {
+                        out.push(src.clone());
+                    }
+                }
+            }
+        }
+        stack.extend(flat.children_of(doc, id).iter().rev());
+    }
+    out
+}
+
 /// Кладёт в `out` URL-ы, под которыми эмиттер будет искать картинки слоя.
 ///
 /// `image-set()` хранится в слое дословно, а в display list попадает уже

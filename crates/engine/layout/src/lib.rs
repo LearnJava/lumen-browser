@@ -82,7 +82,8 @@ pub use animation::{
 };
 pub use box_tree::{
     apply_container_styles, apply_intrinsic_size, build_iframe_document, canvas_background_color,
-    collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
+    collect_background_image_requests, collect_cascade_background_image_requests, collect_image_requests,
+    is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters, layout_mutation_incremental,
     layout_mutation_incremental_with_counters, layout_streaming_incremental,
     lay_out_incremental, select_widget_arrow_width, select_widget_font_size, BoxKind, BoxOrigin,
