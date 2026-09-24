@@ -84,19 +84,43 @@ fn worker_scope_has_navigator() {
     );
 }
 
+/// BUG-1080 (streams half): the Streams classes and the two families built
+/// on them exist in a worker and actually move data — `TextDecoderStream`
+/// decodes through a `pipeThrough`, a `ReadableStream` read settles.
 #[test]
-fn zz_timing_probe() {
-    use lumen_core::JsRuntime;
-    for _ in 0..3 {
-        let t = std::time::Instant::now();
-        let rt = crate::v8_runtime::V8JsRuntime::new().unwrap();
-        let t1 = t.elapsed();
-        rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
-        let t2 = t.elapsed();
-        rt.eval(TEXT_ENCODING_SHIM).unwrap();
-        let t3 = t.elapsed();
-        crate::worker::install_worker_scope_globals_v8(&rt).unwrap();
-        let t4 = t.elapsed();
-        eprintln!("PROBE new={t1:?} domexc={t2:?} textenc={t3:?} scope={t4:?}");
-    }
+fn worker_scope_has_streams() {
+    let rt = worker_scope();
+    rt.eval(
+        "globalThis.__out = [typeof ReadableStream, typeof WritableStream, typeof TransformStream,             typeof TextDecoderStream, typeof TextEncoderStream, typeof CompressionStream,             typeof DecompressionStream, typeof ByteLengthQueuingStrategy,             typeof CountQueuingStrategy].join(',');         var rs = new ReadableStream({ start: function(c) {             c.enqueue(new Uint8Array([0xD0, 0x9F])); c.enqueue(new Uint8Array([0xD1, 0x80])); c.close(); } });         var reader = rs.pipeThrough(new TextDecoderStream()).getReader();         var text = '';         function pump() { return reader.read().then(function(r) {             if (r.done) { globalThis.__out += '|' + text; return; }             text += r.value; return pump(); }); }         pump();",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__out").unwrap(),
+        lumen_core::JsValue::String(
+            "function,function,function,function,function,function,function,function,function|Пр".into()
+        )
+    );
+}
+
+/// `CompressionStream` needs the `_lumen_cs_*` codec natives; a gzip round
+/// trip inside the worker proves they are registered there, not only in the
+/// page runtime.
+#[test]
+fn worker_compression_stream_round_trips() {
+    let rt = worker_scope();
+    rt.eval(
+        "globalThis.__out = 'pending';         var src = new TextEncoder().encode('lumen lumen lumen');         var rs = new ReadableStream({ start: function(c) { c.enqueue(src); c.close(); } });         var reader = rs.pipeThrough(new CompressionStream('gzip'))             .pipeThrough(new DecompressionStream('gzip'))             .pipeThrough(new TextDecoderStream()).getReader();         var text = '';         function pump() { return reader.read().then(function(r) {             if (r.done) { globalThis.__out = text; return; }             text += r.value; return pump(); }); }         pump().catch(function(e) { globalThis.__out = 'error: ' + e; });",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__out").unwrap(),
+        lumen_core::JsValue::String("lumen lumen lumen".into())
+    );
+}
+
+/// The worker runs the page's own Streams, not a look-alike.
+#[test]
+fn streams_slice_is_shared_by_page_and_worker() {
+    assert!(web_api_shim().contains(STREAMS_SHIM));
+    assert!(worker_exposed_shim().contains(STREAMS_SHIM));
 }

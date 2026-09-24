@@ -384,6 +384,16 @@ pub(crate) const URL_PARSE_SHIM: &str = include_str!("shim/url_parse_shim.js");
 
 const WEB_API_SHIM_MID_B: &str = include_str!("shim/web_api_shim_mid_b.js");
 
+/// WHATWG Streams (`ReadableStream`/`WritableStream`/`TransformStream`, the
+/// queuing strategies) plus the two families built on them —
+/// `TextDecoderStream`/`TextEncoderStream` and `CompressionStream`/
+/// `DecompressionStream`. All `[Exposed=*]`; cut out of the tail of
+/// [`WEB_API_SHIM_MID_B`] (WORKER-1 срез 2) so workers run the same classes
+/// through [`worker_exposed_shim`] (BUG-1080: pdf.js-style workers died on the
+/// first `new ReadableStream()`). A verbatim slice; its only natives are the
+/// `_lumen_cs_*` codecs, which [`install_worker_exposed_v8`] registers too.
+pub(crate) const STREAMS_SHIM: &str = include_str!("shim/streams_shim.js");
+
 /// `Headers` (Fetch Standard §2.2, BUG-369) — split out of [`WEB_API_SHIM_MID_B`]
 /// (BUG-748) so the service-worker global scope ([`crate::sw_worker`]) can eval
 /// the same class instead of carrying its own second, poorer mini-shim. A
@@ -518,7 +528,7 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{STREAMS_SHIM}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
@@ -539,7 +549,7 @@ pub(crate) fn web_api_shim() -> String {
 pub(crate) fn worker_exposed_shim() -> String {
     format!(
         "{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\
-         {TEXT_ENCODING_SHIM}{WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
+         {TEXT_ENCODING_SHIM}{STREAMS_SHIM}{WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
     )
 }
 
@@ -551,7 +561,7 @@ pub(crate) fn worker_exposed_shim() -> String {
 /// which only the page runtime used to register).
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_worker_exposed_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn1, into_v8_fn4};
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn4};
     // `DOMException` is `[Exposed=*]` and the slices below throw it; the
     // polyfill is guarded, so a scope that already has one keeps it
     // (BUG-1066: shared and service workers had none at all).
@@ -567,6 +577,27 @@ pub(crate) fn install_worker_exposed_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
                 crate::v8_runtime::text_decode(&canonical, &bytes, ignore_bom, fatal)
             },
         ),
+    )?;
+    // Compression Streams codecs — the same bodies the page registers in
+    // `v8_runtime::install::platform`; the codec table is thread-local, so a
+    // worker thread gets its own.
+    rt.register_native(
+        "_lumen_cs_new",
+        into_v8_fn2(|format: String, decompress: bool| -> f64 {
+            f64::from(crate::compression::cs_new(&format, decompress))
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_cs_push",
+        into_v8_fn2(|handle: f64, data: Vec<u8>| -> Vec<u8> { crate::compression::cs_push(handle as u32, &data) }),
+    )?;
+    rt.register_native(
+        "_lumen_cs_finish",
+        into_v8_fn1(|handle: f64| -> Vec<u8> { crate::compression::cs_finish(handle as u32) }),
+    )?;
+    rt.register_native(
+        "_lumen_cs_free",
+        into_v8_fn1(|handle: f64| crate::compression::cs_free(handle as u32)),
     )?;
     lumen_core::ext::JsRuntime::eval(rt, &worker_exposed_shim())?;
     Ok(())
