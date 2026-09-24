@@ -282,6 +282,9 @@ use crate::scroll_timeline::ScrollAxis;
 // `expand_vars_and_env` — `pub(crate)`, её зовёт `lib.rs`; остальные видны только
 // внутри `style` и его потомков, поэтому и реэкспорт сужен до `crate::style`.
 pub(crate) use substitute::expand_vars_and_env;
+// `env_calls_well_formed` — публичная: ею же inline-`style` CSSOM (`crates/js`)
+// решает, принять ли значение с `env()` (BUG-514).
+pub use substitute::env_calls_well_formed;
 pub(in crate::style) use substitute::{expand_attr_val, expand_custom_functions, expand_mixin_apply, expand_vars};
 pub(in crate::style) use values::length::{parse_length_q, parse_sizing_length};
 use parse::font_size::{FontSizeBasis, apply_font_size};

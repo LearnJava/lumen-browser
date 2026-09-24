@@ -7,7 +7,7 @@
 rects, FIXED тем же днём). Тот баг остаётся под 1007 — глубже прошит в код и
 тесты (комментарии `v8_elem_geometry_scroll.rs`, коммит-история GAP-GEOM);
 этот, ещё OPEN и слабее связанный, получил свободный номер.
-**Заведён:** 2026-09-05 (P3, побочно при ревизии [BUG-514](BUG-514-OPEN.md))
+**Заведён:** 2026-09-05 (P3, побочно при ревизии [BUG-514](BUG-514-FIXED.md))
 **Компонент:** layout (`crates/engine/layout/src/box_tree/entry.rs::propagate_canvas_background`,
 `canvas_background_color`)
 
@@ -64,7 +64,7 @@ statically-parsed `<body>` that was never touched by script, and `color`/
 
 ## Масштаб
 
-Found via 2 of [BUG-514](BUG-514-OPEN.md)'s five `css/css-env` files
+Found via 2 of [BUG-514](BUG-514-FIXED.md)'s five `css/css-env` files
 (`at-supports.tentative.html`, `fallback-nested-var.tentative.html` — both
 assert on `getComputedStyle(document.body)`'s `background-color`, unrelated to
 `env()` itself; the `env()` value happens to be what's assigned, but the
@@ -106,7 +106,7 @@ deferred rather than rushed.
 
 ```
 python .tmp/probe_bug514_env.py   # ad-hoc probe written for this investigation,
-                                   # not committed — see BUG-514-OPEN.md's revision
+                                   # not committed — see BUG-514-FIXED.md's revision
                                    # note for the exact minimal HTML/JS
 ```
 
@@ -128,7 +128,7 @@ instead of `rgb(9, 9, 9)`.
 `python scripts/remap_status_pointers.py --apply` и `python scripts/check_doc_links.py`.
 
 **Сделано (P6, 2026-09-23):** переименован в BUG-1103 (файл, строка `BUGS.md`,
-обе ссылки из `bugs/BUG-514-OPEN.md`). `remap_status_pointers.py --apply` дал
+обе ссылки из `bugs/BUG-514-FIXED.md`). `remap_status_pointers.py --apply` дал
 ложный «ПРОТУХ» на `STATUS-P6.md:BUGS.md:249` — его якорь `BUG-1007` совпал
 текстом с несвязанным `BUG-1007` из `BUGS-FIXED.md` (тот самый коллизионный
 номер), указатель НЕ снят, баг остаётся открытым по той же строке.

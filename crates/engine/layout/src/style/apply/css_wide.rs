@@ -30,13 +30,30 @@ pub(in crate::style) fn apply_css_wide_keyword(
     inherited: &ComputedStyle,
     ua_baseline: &ComputedStyle,
 ) {
-    use CssWideKeyword::{Inherit, Revert, Unset};
     // Initial-значения как у root документа — кроме `Revert`, где ролью
-    // «non-inherited fallback» играет UA-снэпшот. ComputedStyle::root()
-    // выделяет несколько Vec/HashMap, но эта функция вызывается только при
-    // обнаружении CSS-wide-keyword в декларации — редкий путь, накладные
-    // расходы незаметны на типичной странице.
-    let init = if kw == Revert { ua_baseline.clone() } else { ComputedStyle::root() };
+    // «non-inherited fallback» играет UA-снэпшот. Корневой стиль собирается
+    // один раз на поток: с BUG-514 эта функция зовётся на каждую декларацию с
+    // `var()`/`env()` (сброс в `unset` перед подстановкой), а на реальных
+    // страницах таких деклараций тысячи — пересобирать `ComputedStyle::root()`
+    // (несколько Vec/HashMap) на каждую было бы заметно.
+    thread_local! {
+        static ROOT_STYLE: ComputedStyle = ComputedStyle::root();
+    }
+    ROOT_STYLE.with(|root| {
+        let init: &ComputedStyle = if kw == CssWideKeyword::Revert { ua_baseline } else { root };
+        apply_css_wide_keyword_with(style, prop, kw, inherited, ua_baseline, init);
+    });
+}
+
+fn apply_css_wide_keyword_with(
+    style: &mut ComputedStyle,
+    prop: &str,
+    kw: CssWideKeyword,
+    inherited: &ComputedStyle,
+    ua_baseline: &ComputedStyle,
+    init: &ComputedStyle,
+) {
+    use CssWideKeyword::{Inherit, Revert, Unset};
     // Для `Revert` «родительское» значение тоже берётся из UA-снэпшота —
     // это покрывает и inherited-свойства, которые UA-хинты трогают
     // (font-style/font-weight/color/white-space/line-height и т.д.).
@@ -348,17 +365,17 @@ pub(in crate::style) fn apply_css_wide_keyword(
             };
         }
         "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.contain_intrinsic_width = src.contain_intrinsic_width.clone();
             style.contain_intrinsic_width_auto = src.contain_intrinsic_width_auto;
         }
         "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.contain_intrinsic_height = src.contain_intrinsic_height.clone();
             style.contain_intrinsic_height_auto = src.contain_intrinsic_height_auto;
         }
         "contain-intrinsic-size" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.contain_intrinsic_width = src.contain_intrinsic_width.clone();
             style.contain_intrinsic_width_auto = src.contain_intrinsic_width_auto;
             style.contain_intrinsic_height = src.contain_intrinsic_height.clone();
@@ -483,7 +500,7 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "margin-bottom" => style.margin_bottom = if inh_only_inherit { inherited.margin_bottom.clone() } else { init.margin_bottom.clone() },
         "margin-left" => style.margin_left = if inh_only_inherit { inherited.margin_left.clone() } else { init.margin_left.clone() },
         "margin" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.margin_top = src.margin_top.clone();
             style.margin_right = src.margin_right.clone();
             style.margin_bottom = src.margin_bottom.clone();
@@ -495,12 +512,12 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "margin-block-start"  => style.margin_block_start = if inh_only_inherit { inherited.margin_block_start.clone() } else { init.margin_block_start.clone() },
         "margin-block-end"    => style.margin_block_end = if inh_only_inherit { inherited.margin_block_end.clone() } else { init.margin_block_end.clone() },
         "margin-inline" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.margin_inline_start = src.margin_inline_start.clone();
             style.margin_inline_end = src.margin_inline_end.clone();
         }
         "margin-block" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.margin_block_start = src.margin_block_start.clone();
             style.margin_block_end = src.margin_block_end.clone();
         }
@@ -509,7 +526,7 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "padding-bottom" => style.padding_bottom = if inh_only_inherit { inherited.padding_bottom.clone() } else { init.padding_bottom.clone() },
         "padding-left" => style.padding_left = if inh_only_inherit { inherited.padding_left.clone() } else { init.padding_left.clone() },
         "padding" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.padding_top = src.padding_top.clone();
             style.padding_right = src.padding_right.clone();
             style.padding_bottom = src.padding_bottom.clone();
@@ -521,12 +538,12 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "padding-block-start"  => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
         "padding-block-end"    => style.padding_bottom = if inh_only_inherit { inherited.padding_bottom.clone() } else { init.padding_bottom.clone() },
         "padding-inline" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.padding_left = src.padding_left.clone();
             style.padding_right = src.padding_right.clone();
         }
         "padding-block" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.padding_top = src.padding_top.clone();
             style.padding_bottom = src.padding_bottom.clone();
         }
@@ -552,7 +569,7 @@ pub(in crate::style) fn apply_css_wide_keyword(
                 if inh_only_inherit { inherited.block_step_round } else { init.block_step_round };
         }
         "block-step" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.block_step_size = src.block_step_size;
             style.block_step_insert = src.block_step_insert;
             style.block_step_align = src.block_step_align;
@@ -841,7 +858,7 @@ pub(in crate::style) fn apply_css_wide_keyword(
             style.border_bottom_left_radius_y = if inh_only_inherit { inherited.border_bottom_left_radius_y.clone() } else { init.border_bottom_left_radius_y.clone() };
         }
         "border-radius" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.border_top_left_radius       = src.border_top_left_radius.clone();
             style.border_top_right_radius      = src.border_top_right_radius.clone();
             style.border_bottom_right_radius   = src.border_bottom_right_radius.clone();
@@ -950,12 +967,12 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "inset-block-start"  => style.inset_block_start = if inh_only_inherit { inherited.inset_block_start.clone() } else { init.inset_block_start.clone() },
         "inset-block-end"    => style.inset_block_end = if inh_only_inherit { inherited.inset_block_end.clone() } else { init.inset_block_end.clone() },
         "inset-inline" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.inset_inline_start = src.inset_inline_start.clone();
             style.inset_inline_end = src.inset_inline_end.clone();
         }
         "inset-block" => {
-            let src = if inh_only_inherit { inherited } else { &init };
+            let src = if inh_only_inherit { inherited } else { init };
             style.inset_block_start = src.inset_block_start.clone();
             style.inset_block_end = src.inset_block_end.clone();
         }
