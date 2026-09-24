@@ -147,6 +147,10 @@ pub enum Event {
         url: String,
         /// `initiatorType` записи: `img` / `link` / `script` / `css` / `other`.
         initiator: &'static str,
+        /// Fetch destination запроса (`script` / `style` / `image` / `font` /
+        /// `document` / `empty` …, Fetch §3.2.7). `initiator` его не
+        /// восстанавливает: `link` — это и стиль, и prefetch (PERF-15).
+        destination: &'static str,
         /// Начало загрузки, unix-epoch мс.
         start_ms: f64,
         /// Длительность загрузки, мс.

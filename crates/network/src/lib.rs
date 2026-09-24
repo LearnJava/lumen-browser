@@ -4180,6 +4180,7 @@ impl HttpClient {
             tab_id: self.tab_id,
             url: url.to_string(),
             initiator: resource_timing_initiator(destination),
+            destination: destination.as_fetch_dest(),
             start_ms,
             duration_ms,
             status,

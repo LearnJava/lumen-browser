@@ -825,15 +825,17 @@ pub(crate) fn run_cli() -> ExitCode {
     let network_log = Arc::new(std::sync::Mutex::new(
         devtools::network_panel::NetworkLog::default(),
     ));
-    // Sink chain: StdoutEventSink → NetworkLogSink → ResourceTimingSink →
-    // ShieldCountSink. Each wrapper forwards to its inner sink, so all four
-    // observe every event — the Resource Timing capture (BUG-839) is a tap, not
-    // a filter.
+    // Sink chain: StdoutEventSink → NetworkLogSink → SiteMemorySink →
+    // ResourceTimingSink → ShieldCountSink. Each wrapper forwards to its inner
+    // sink, so all five observe every event — the Resource Timing capture
+    // (BUG-839) and the site memory recorder (PERF-15) are taps, not filters.
     let event_sink: Arc<dyn EventSink> = Arc::new(panels::shields_panel::ShieldCountSink {
         inner: Arc::new(resource_timing::ResourceTimingSink {
-            inner: Arc::new(devtools::network_panel::NetworkLogSink {
-                inner: Arc::new(StdoutEventSink),
-                log: Arc::clone(&network_log),
+            inner: Arc::new(site_memory::SiteMemorySink {
+                inner: Arc::new(devtools::network_panel::NetworkLogSink {
+                    inner: Arc::new(StdoutEventSink),
+                    log: Arc::clone(&network_log),
+                }),
             }),
         }),
         log: Arc::clone(&blocked_log),

@@ -1349,6 +1349,10 @@ impl Lumen {
         if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
+        // PERF-15: close the outgoing page's recording while its
+        // `PREFETCH_CACHE` slots still exist — the commit asks them which
+        // replayed resources the page really read.
+        crate::site_memory::finish_visit();
         // BUG-171: scope the subresource prefetch cache to this navigation. Runs on
         // the UI thread before the streaming thread is spawned, so producer warm-ups
         // and the UI-thread consumer all observe `generation`.
@@ -1361,6 +1365,22 @@ impl Lumen {
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
         let cookie_jar = self.active_cookie_jar();
+        // PERF-15: what this page used on its previous visit starts now,
+        // together with the document request, each into its own reserved
+        // `PREFETCH_CACHE` slot. A POST navigation is not a repeat visit.
+        if let PageSource::Url { url, body: None, .. } = &source {
+            let remembered = crate::site_memory::begin_visit(url, generation);
+            if !remembered.is_empty() {
+                eprintln!("site-memory: {} ресурсов прошлого визита запрошены заранее", remembered.len());
+            }
+            crate::site_memory::replay(
+                remembered,
+                generation,
+                &ResourceBase::Url(url.clone()),
+                &sink,
+                &cookie_jar,
+            );
+        }
         // BUG-268: media-контекст экрана — для гейта speculative-фетча
         // `<link rel=stylesheet media=...>`, чтобы print-only лист не грел
         // кэш и не слал CssLoaded (progressive-кадры не красятся print-стилями).
