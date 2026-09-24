@@ -207,6 +207,30 @@ pub fn deterministic_seed_from_url(url: &str) -> u64 {
     if h == 0 { 1 } else { h }
 }
 
+/// Deterministic-mode (8F) script patching `Math.random`/`Date.now`: seeded
+/// xorshift32 PRNG plus either a frozen clock or one routed through
+/// `_lumen_now_ms()` (DEVX-16 `--monotonic-clock`).
+///
+/// Shared by the page (`v8_runtime::V8JsRuntime::install_dom`) and every
+/// worker flavour ([BUG-768](../../bugs/BUG-768-OPEN.md)) so the same
+/// "seed => sequence" contract holds regardless of which context runs it —
+/// a worker-local copy would silently drift from the page's the first time
+/// either script changes.
+pub(crate) fn deterministic_patch_script(seed32: u32, monotonic_clock: bool) -> String {
+    let seed32 = if seed32 == 0 { 1 } else { seed32 };
+    let date_now_body = if monotonic_clock {
+        "return _lumen_now_ms();"
+    } else {
+        "return 0;"
+    };
+    format!(
+        "(function(){{var s={seed32};\
+         Math.random=function(){{s^=s<<13;s^=s>>>17;s^=s<<5;return (s>>>0)/4294967296;}};\
+         Date.now=function(){{{date_now_body}}};\
+         }})()"
+    )
+}
+
 /// Build a JSON array of `{ id, json }` objects from the drained worker message list.
 ///
 /// Each element is `{"id":<worker_id>,"json":<raw_json_value>}` so that

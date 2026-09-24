@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -45,6 +45,25 @@ pub enum WorkerInMsg {
     PortPost(u32, String),
     /// Terminate the worker event loop cleanly.
     Terminate,
+}
+
+/// Deterministic-mode (8F/DEVX-16) config threaded from the page's
+/// [`V8JsRuntime`] into a worker thread of any flavour (dedicated, shared,
+/// service — [BUG-768](../../bugs/BUG-768-OPEN.md)), so `Math.random`/
+/// `Date.now`/`_lumen_now_ms` inside the worker scope honour `--deterministic`
+/// the same way the page context does instead of staying live wall-clock
+/// randomness that makes a run non-reproducible.
+///
+/// `clock_ms` is the page's own `Arc<AtomicU64>` — shared, not a private
+/// per-worker counter — so a `--monotonic-clock` timestamp read in a worker
+/// and one read on the page are directly comparable across a `postMessage`
+/// round trip rather than drifting apart on separate clocks.
+#[cfg(feature = "v8-backend")]
+#[derive(Clone)]
+pub(crate) struct WorkerDeterminism {
+    pub(crate) seed32: u32,
+    pub(crate) monotonic: bool,
+    pub(crate) clock_ms: Arc<AtomicU64>,
 }
 
 // ─── public registry types ────────────────────────────────────────────────────
@@ -359,15 +378,20 @@ pub(crate) fn worker_base_url(script_url: &str) -> &str {
 /// would silently drift from the page one (BUG-401 was filed right after BUG-400
 /// had rebuilt the page copy as a real `EventTarget` subclass).
 ///
-/// `_lumen_now_ms` is registered per worker runtime and reports wall-clock
-/// milliseconds since the Unix epoch, the same contract as the main-context
-/// native of that name. It deliberately does **not** honour `--deterministic`:
-/// the deterministic clock/RNG patch is evaluated in the page context only, so
-/// `Date.now()` and `Math.random()` are already live inside every worker —
-/// freezing `performance.now()` alone would fake a determinism the scope does
-/// not have ([BUG-768](bugs/BUG-768-OPEN.md)).
+/// `_lumen_now_ms` is registered per worker runtime and, outside deterministic
+/// mode, reports wall-clock milliseconds since the Unix epoch — the same
+/// contract as the main-context native of that name. With `--deterministic`
+/// (`determinism` set), it and `Math.random`/`Date.now` are patched the same
+/// way the page context patches them ([BUG-768](bugs/BUG-768-OPEN.md)) —
+/// freezing `performance.now()` alone while leaving `Date.now()`/
+/// `Math.random()` live would fake a determinism the scope does not have,
+/// which is why BUG-401 originally left all three as wall clock/real
+/// randomness rather than patch just this native in isolation.
 #[cfg(feature = "v8-backend")]
-pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> {
+pub(crate) fn install_worker_scope_globals_v8(
+    rt: &V8JsRuntime,
+    determinism: Option<WorkerDeterminism>,
+) -> JsResult<()> {
     rt.register_native_scoped(
         "_lumen_import_script",
         Box::new(|scope: &mut v8::PinScope, args: &v8::FunctionCallbackArguments, _rv: &mut v8::ReturnValue| {
@@ -380,15 +404,29 @@ pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> 
             let _ = script.run(scope);
         }),
     )?;
-    rt.register_native(
-        "_lumen_now_ms",
-        into_v8_fn0(move || -> f64 {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64() * 1000.0)
-                .unwrap_or(0.0)
-        }),
-    )?;
+    {
+        let clock_ms = determinism.as_ref().map(|d| (Arc::clone(&d.clock_ms), d.monotonic));
+        rt.register_native(
+            "_lumen_now_ms",
+            into_v8_fn0(move || -> f64 {
+                match &clock_ms {
+                    Some((clock, true)) => clock.fetch_add(1, Ordering::Relaxed) as f64,
+                    Some((_, false)) => 0.0,
+                    None => std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64() * 1000.0)
+                        .unwrap_or(0.0),
+                }
+            }),
+        )?;
+    }
+    // BUG-768: must run after the `_lumen_now_ms` native above — the
+    // monotonic-clock branch of the patch script below calls it — and mirrors
+    // exactly the script the page context runs after `WEB_API_SHIM`
+    // (`v8_runtime.rs`'s `install_dom`), via the same shared builder.
+    if let Some(d) = &determinism {
+        rt.eval(&crate::deterministic_patch_script(d.seed32, d.monotonic))?;
+    }
     // BUG-776: the `NavigatorID` values `WORKER_LOCATION_NAVIGATOR_SHIM` (part
     // of `worker_exposed_shim`) reads — built here rather than baked into that
     // shim so `platform`/`language`/`languages` come from the same
@@ -1597,6 +1635,7 @@ pub(crate) fn install_worker_bindings_v8(
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     port_queue: &WorkerPortMessageQueue,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    determinism: Option<WorkerDeterminism>,
 ) -> JsResult<()> {
     // GAP-CSPENF срез 13: single-slot side channel carrying
     // `(blocked_uri, original_policy)` from `_lumen_worker_fetch_script`'s
@@ -1639,12 +1678,13 @@ pub(crate) fn install_worker_bindings_v8(
         let fp = fetch_provider.clone();
         let pq = Arc::clone(port_queue);
         let pnid = Arc::clone(&port_next_id);
+        let det = determinism.clone();
         rt.register_native(
             "_lumen_create_worker",
             into_v8_fn3(move |script: String, script_url: String, is_module: bool| -> u32 {
                 spawn_worker_v8(
                     &reg, &q, &errs, &nid, &bs, script, script_url, is_module, fp.clone(),
-                    &pq, &pnid, ws_provider.clone(),
+                    &pq, &pnid, ws_provider.clone(), det.clone(),
                 )
             }),
         )?;
@@ -1913,6 +1953,7 @@ fn spawn_worker_v8(
     port_queue: &WorkerPortMessageQueue,
     port_next_id: &Arc<Mutex<u32>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    determinism: Option<WorkerDeterminism>,
 ) -> u32 {
     let id = {
         let mut n = next_id.lock().unwrap();
@@ -1933,7 +1974,7 @@ fn spawn_worker_v8(
         .spawn(move || {
             run_worker_thread_v8(
                 id, script, script_url, is_module, rx, reply, err_reply, store, fetch_provider,
-                port_reply, port_nid, ws_provider,
+                port_reply, port_nid, ws_provider, determinism,
             )
         })
         .expect("failed to spawn Web Worker thread (v8)");
@@ -1972,6 +2013,7 @@ fn run_worker_thread_v8(
     port_reply: WorkerPortMessageQueue,
     port_next_id: Arc<Mutex<u32>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    determinism: Option<WorkerDeterminism>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -2003,6 +2045,7 @@ fn run_worker_thread_v8(
         Arc::clone(&close_flag),
         Arc::clone(&port_reply),
         Arc::clone(&port_next_id),
+        determinism,
     ) {
         eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
         return;
@@ -2219,6 +2262,7 @@ fn install_worker_globals_v8(
     close_flag: WorkerCloseFlag,
     port_reply: WorkerPortMessageQueue,
     port_next_id: Arc<Mutex<u32>>,
+    determinism: Option<WorkerDeterminism>,
 ) -> JsResult<()> {
     rt.register_native(
         "_lumen_worker_post_reply",
@@ -2348,7 +2392,7 @@ fn install_worker_globals_v8(
     // Before the dedicated-worker shim: it is what gives the scope `performance`
     // (BUG-401) and `EventTarget`, and the `performance` time origin is taken at
     // this point — the creation of this global scope, per HR Time L3 §4.2.
-    install_worker_scope_globals_v8(rt)?;
+    install_worker_scope_globals_v8(rt, determinism)?;
 
     // BUG-778: read by both `worker_global_shim`'s `importScripts` and
     // `WORKER_NET_SHIM`'s `fetch`/`XMLHttpRequest` to resolve a relative
@@ -2558,7 +2602,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None, None).unwrap();
         let result = rt.eval("typeof Worker === 'function'").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
@@ -2568,7 +2612,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
 
         let decoded = rt.eval("atob('aGVsbG8=')").unwrap();
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
@@ -2585,7 +2629,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
 
         let atob_name = rt
             .eval("(function() { try { atob('not valid base64!'); return 'no throw'; } catch (e) { return (e instanceof DOMException) + ':' + e.name; } })()")
@@ -2610,7 +2654,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
         let result = rt
             .eval(
                 "var et = new EventTarget(); \
@@ -2632,7 +2676,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
 
         let ok = rt
             .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof DOMException && e.name === 'InvalidCharacterError';}})()")
@@ -2660,6 +2704,7 @@ mod tests_v8 {
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(Vec::new())),
             Arc::new(Mutex::new(0u32)),
+            None,
         )
         .unwrap();
         (rt, errors)
@@ -2843,7 +2888,7 @@ mod tests_v8 {
             false,
             None,
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)), None,
+            &Arc::new(Mutex::new(0u32)), None, None,
         );
 
         post_to_worker(&reg, worker_id, "\"boom\"".to_string());
@@ -2896,7 +2941,7 @@ mod tests_v8 {
             false,
             None,
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)), None,
+            &Arc::new(Mutex::new(0u32)), None, None,
         );
         std::thread::sleep(Duration::from_millis(400));
 
@@ -2920,7 +2965,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
 
         for expr in [
             "typeof performance === 'object'",
@@ -2962,7 +3007,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
         let after = epoch_ms();
 
         let origin = match rt.eval("performance.timeOrigin").unwrap() {
@@ -2992,7 +3037,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
 
         assert_eq!(
             rt.eval("typeof _perf_observer_notify").unwrap(),
@@ -3029,7 +3074,7 @@ mod tests_v8 {
                         postMessage(performance.now() >= t0 && performance.timeOrigin > 0);\
                       };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3052,7 +3097,7 @@ mod tests_v8 {
 
         // Worker echoes its received message doubled.
         let script = "onmessage = function(e) { postMessage(e.data * 2); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "21".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3081,7 +3126,7 @@ mod tests_v8 {
         let script = "postMessage(typeof OffscreenCanvas + ',' + \
                        typeof _lumen_offscreen_canvas_from_image_data);"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         std::thread::sleep(Duration::from_millis(300));
 
@@ -3110,7 +3155,7 @@ mod tests_v8 {
             "');onmessage = function(e) { postMessage(add(e.data, 8)); };",
         )
         .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "34".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3142,7 +3187,7 @@ mod tests_v8 {
              onmessage = function(e) { postMessage(mul(e.data, 3)); };"
                 .to_string();
 
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
         post_to_worker(&reg, worker_id, "7".to_string());
         std::thread::sleep(Duration::from_millis(300));
 
@@ -3164,7 +3209,7 @@ mod tests_v8 {
 
         // Worker posts a reply to every message.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         // Terminate immediately before any postMessage.
         terminate_worker(&reg, worker_id);
@@ -3188,7 +3233,7 @@ mod tests_v8 {
         );
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
 
         rt.eval(
             "importScripts(\
@@ -3208,7 +3253,7 @@ mod tests_v8 {
         let store = make_store();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
 
         let result = rt.eval("importScripts('https://external.example/lib.js')");
         assert!(result.is_err(), "importScripts with http URL should throw");
@@ -3221,7 +3266,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None, None).unwrap();
 
         let result = rt
             .eval(r#"_lumenSerializeWithTransfers({x: 1, y: "hello"}, [])"#)
@@ -3239,7 +3284,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None, None).unwrap();
         crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt, "https://example.test").unwrap();
 
         let result = rt
@@ -3317,7 +3362,7 @@ mod tests_v8 {
         // First message replies then closes; a second message must produce
         // no further reply.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); self.close(); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "1".to_string());
         std::thread::sleep(Duration::from_millis(200));
@@ -3338,7 +3383,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
         for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
             assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
         }
@@ -3362,7 +3407,7 @@ mod tests_v8 {
               .then(function(t) { postMessage(t); });\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3394,7 +3439,7 @@ mod tests_v8 {
             x.send();\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3420,6 +3465,7 @@ mod tests_v8 {
         install_worker_globals_v8(
             &rt, 0, Arc::clone(&queue), Arc::clone(&errors), store,
             Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
         ).unwrap();
 
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
@@ -3462,6 +3508,7 @@ mod tests_v8 {
             &rt, 0, Arc::clone(&queue), Arc::clone(&errors), store,
             Some(Arc::new(CspBlockedImportNet)), "https://example.test/worker.js", false,
             Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
         ).unwrap();
 
         let err = rt.eval("importScripts('https://blocked.example/lib.js')");
@@ -3502,6 +3549,7 @@ mod tests_v8 {
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
             make_store(), None, "https://example.test:8443/a/w.js?q=1#h?c", false,
             Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
         ).unwrap();
 
         for (expr, want) in [
@@ -3540,6 +3588,7 @@ mod tests_v8 {
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
             make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
         ).unwrap();
 
         let thrown = rt
@@ -3566,6 +3615,7 @@ mod tests_v8 {
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
             make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
         ).unwrap();
 
         assert_eq!(
@@ -3610,6 +3660,7 @@ mod tests_v8 {
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
             make_store(), None, "data:text/javascript,1", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
         ).unwrap();
 
         assert_eq!(
@@ -3742,7 +3793,7 @@ mod tests_v8 {
             true,
             Some(net),
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)), None,
+            &Arc::new(Mutex::new(0u32)), None, None,
         );
 
         post_to_worker(&reg, worker_id, "0".to_string());
@@ -3784,7 +3835,7 @@ mod tests_v8 {
             false,
             None,
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)), None,
+            &Arc::new(Mutex::new(0u32)), None, None,
         );
         std::thread::sleep(Duration::from_millis(300));
 
@@ -3817,6 +3868,7 @@ mod tests_v8 {
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(Vec::new())),
             Arc::new(Mutex::new(0u32)),
+            None,
         )
         .unwrap();
 
@@ -3849,6 +3901,7 @@ mod tests_v8 {
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(Vec::new())),
             Arc::new(Mutex::new(0u32)),
+            None,
         )
         .unwrap();
 
@@ -4175,7 +4228,7 @@ mod tests_v8 {
                       setInterval(function() { n++; postMessage('interval:' + n); }, 20);"
             .to_string();
         let worker_id =
-            spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
+            spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None, None);
 
         let mut got: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -4227,6 +4280,7 @@ mod tests_v8 {
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
             make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)),
+            None,
         ).unwrap();
         for expr in [
             "typeof MessageChannel",

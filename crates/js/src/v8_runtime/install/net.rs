@@ -21,6 +21,7 @@ pub(crate) fn install_service_worker(
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     fp_sw_net: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_sw: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    determinism: Option<crate::worker::WorkerDeterminism>,
 ) -> JsResult<()> {
     // ── Service Worker / Cache Storage ───────────────────────────────────────
     {
@@ -126,6 +127,7 @@ pub(crate) fn install_service_worker(
             // подключающий библиотеку, умирает на первой строке.
             let fp_sw = fp_sw_net.clone();
             let idb_sw = idb_sw.clone();
+            let det_sw = determinism.clone();
             reg!(scope, ctx, store, "_lumen_sw_activate_script", move |origin: String, scope: String, text: String| {
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
                     let handle = crate::sw_worker::spawn_sw_worker_v8(
@@ -135,6 +137,7 @@ pub(crate) fn install_service_worker(
                         Arc::clone(cache),
                         fp_sw.clone(),
                         idb_sw.clone(),
+                        det_sw.clone(),
                     );
                     store.lock().unwrap().insert((origin, scope), handle);
                 }

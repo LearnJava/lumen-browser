@@ -229,6 +229,24 @@ impl V8JsRuntime {
         // База IndexedDB воркера — та же, что у страницы: воркер, ведущий свою
         // очередь в `indexedDB`, обязан видеть те же данные.
         let idb_sw = idb_backend.clone();
+        // BUG-768: deterministic-mode config for every worker flavour (dedicated,
+        // shared, service), packaged once here — before `deterministic_clock_ms`
+        // moves into the `self.run` closure below — and cloned into both the SW
+        // install call inside that closure and the dedicated/shared-worker
+        // installs after it returns. `clock_ms` is the page's own `Arc<AtomicU64>`,
+        // not a fresh per-worker one: the two share a single counter, so a
+        // `--monotonic-clock` timestamp taken in a worker and one taken on the
+        // page (e.g. across a `postMessage` round trip) are directly comparable
+        // instead of drifting apart on separate clocks.
+        let worker_determinism = deterministic_seed.map(|seed| {
+            let seed32 = u32::try_from(seed & 0xffff_ffff).unwrap_or(1);
+            crate::worker::WorkerDeterminism {
+                seed32,
+                monotonic: monotonic_clock,
+                clock_ms: Arc::clone(&deterministic_clock_ms),
+            }
+        });
+        let worker_determinism_inner = worker_determinism.clone();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -387,6 +405,7 @@ impl V8JsRuntime {
                 sw_worker_store.clone(),
                 fp_sw_net.clone(),
                 idb_sw.clone(),
+                worker_determinism_inner.clone(),
             )?;
 
             install::install_history(
@@ -735,22 +754,11 @@ impl V8JsRuntime {
             // see CLAUDE.md — no new functionality is added there).
             if let Some(seed) = deterministic_seed {
                 let seed32 = u32::try_from(seed & 0xffff_ffff).unwrap_or(1);
-                let seed32 = if seed32 == 0 { 1 } else { seed32 };
                 // DEVX-16: `--monotonic-clock` routes Date.now() through the same
                 // `_lumen_now_ms()` native binding performance.now() uses, so both
                 // advance in lockstep off one shared counter instead of Date.now()
                 // staying frozen at 0.
-                let date_now_body = if monotonic_clock {
-                    "return _lumen_now_ms();"
-                } else {
-                    "return 0;"
-                };
-                let js = format!(
-                    "(function(){{var s={seed32};\
-                     Math.random=function(){{s^=s<<13;s^=s>>>17;s^=s<<5;return (s>>>0)/4294967296;}};\
-                     Date.now=function(){{{date_now_body}}};\
-                     }})()"
-                );
+                let js = crate::deterministic_patch_script(seed32, monotonic_clock);
                 v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, &js)
                     .ok_or_else(|| JsError::Runtime("OOM: deterministic seed script".into()))?;
@@ -1074,6 +1082,7 @@ impl V8JsRuntime {
             fp_worker,
             &self.worker_port_messages,
             ws_worker.clone(),
+            worker_determinism.clone(),
         ) {
             eprintln!("v8: worker::install_worker_bindings_v8 failed: {e}");
         }
@@ -1083,6 +1092,7 @@ impl V8JsRuntime {
             &self.shared_worker_errors,
             fp_shared_worker,
             ws_worker,
+            worker_determinism,
         ) {
             eprintln!("v8: shared_worker::install_shared_worker_bindings_v8 failed: {e}");
         }
