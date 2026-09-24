@@ -567,7 +567,7 @@ fn agreeing_reachable_ancestor_hover_pseudo_class_state_now_shares() {
     // real, current match result for that selector actually differs (see
     // `a_reachable_ancestor_hover_pseudo_class_still_disables_sharing` right
     // above). When none of several structurally identical `.wrap` ancestors
-    // is hovered, every icon's `dynamic_ancestor_sig` bit for `.wrap:hover
+    // is hovered, every icon's `dynamic_fingerprint_sig` bit for `.wrap:hover
     // .octicon` is the same `false`, so they must still share — exactly the
     // real-site case (nobody is hovering every icon at once) srez 7's live
     // measurement showed src 6's reachability-only rescue could not reach.
@@ -601,6 +601,83 @@ fn agreeing_reachable_ancestor_hover_pseudo_class_state_now_shares() {
         );
         assert_eq!(
             map.style_for(icon).expect("style").svg_fill,
+            SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 })
+        );
+    }
+}
+
+#[test]
+fn a_subject_hover_pseudo_class_still_disables_sharing_when_state_disagrees() {
+    // BUG-1112 срез 10: the mirror of
+    // `a_reachable_ancestor_hover_pseudo_class_still_disables_sharing`, but
+    // with the dynamic pseudo-class on the SUBJECT compound itself
+    // (`.octicon:hover`) instead of an ancestor — the depth-0 shape срез 9
+    // found dominant on github.com/lenta.ru (`:where(...):hover` where
+    // `:hover` sits on the same compound as the class, not behind a
+    // combinator). Hovering only the first icon must not leak the `:hover`
+    // fill onto the second, structurally identical icon via a wrongly-shared
+    // cache entry.
+    clear_shadow_sheets();
+    let doc = octicon_group(2);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".octicon { fill: rgb(1, 2, 3); } .octicon:hover { fill: rgb(0, 0, 255); }",
+    );
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    assert_eq!(svgs.len(), 2);
+
+    crate::set_interactive_state(Some(svgs[0]), None, None);
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+    crate::clear_interactive_state();
+
+    assert_eq!(
+        map.style_for(svgs[0]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 0, g: 0, b: 255, a: 255 }),
+        "hovered icon must get the :hover fill"
+    );
+    assert_eq!(
+        map.style_for(svgs[1]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+        "un-hovered icon must NOT leak the other one's :hover fill via a shared cache entry"
+    );
+}
+
+#[test]
+fn agreeing_subject_hover_pseudo_class_state_now_shares() {
+    // BUG-1112 срез 10: the mirror of
+    // `agreeing_reachable_ancestor_hover_pseudo_class_state_now_shares` — when
+    // none of several structurally identical icons is hovered, every icon's
+    // `dynamic_fingerprint_sig` bit for `.octicon:hover` is the same `false`,
+    // so they must still share. This is the exact live blocker срез 9 found:
+    // github.com/lenta.ru's dominant pattern has `:hover` on the SUBJECT
+    // compound (`:where(.prc-Link-Link-9ZwDx):where([data-muted=true]):hover`
+    // — no ancestor at all, `sel.tail` empty), which срез 8's ancestor-only
+    // fingerprint could not reach (`ancestor_prefix_is_fingerprintable`
+    // returns `false` when there is no ancestor compound to fingerprint).
+    clear_shadow_sheets();
+    let doc = octicon_group(3);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".octicon { fill: rgb(1, 2, 3); } .octicon:hover { fill: rgb(0, 0, 255); }",
+    );
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    assert_eq!(svgs.len(), 3);
+
+    // No `set_interactive_state` call — nobody is hovering any icon.
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let first = map.style_arc(svgs[0]).expect("arc");
+    for &svg in &svgs[1..] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &arc),
+            "three un-hovered icons agree on the real `.octicon:hover` match result \
+             (all false) and must share despite the rule's subject pseudo-class"
+        );
+        assert_eq!(
+            map.style_for(svg).expect("style").svg_fill,
             SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 })
         );
     }

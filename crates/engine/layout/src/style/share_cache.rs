@@ -52,11 +52,13 @@
 //! by `attrs`/`is_first_child`/`is_last_child` — no induction needed) or an
 //! ancestor (an attribute selector is pinned too, BUG-1112 срез 5, by the
 //! SAME induction that already covers `Type`/`Class`/`Id` there — see the
-//! cascade doc comment; an ancestor pseudo-class the induction cannot prove
-//! state-identical, like `:hover`, is instead pinned directly by
-//! [`ShareKey::dynamic_ancestor_sig`] — BUG-1112 срез 8 — the real, current
-//! match result of that one selector against `node`, folded into the key the
-//! same way `is_first_child` is), plus Shadow DOM and `@scope`, still
+//! cascade doc comment; a dynamic pseudo-class the induction cannot prove
+//! state-identical, like `:hover`, whether it sits on an ancestor compound or
+//! on the SUBJECT compound itself (BUG-1112 срез 10 — `node:hover`, a fact
+//! about the key node, not an ancestor), is instead pinned directly by
+//! [`ShareKey::dynamic_fingerprint_sig`] — BUG-1112 срез 8/10 — the real,
+//! current match result of that one selector against `node`, folded into the
+//! key the same way `is_first_child` is), plus Shadow DOM and `@scope`, still
 //! disqualify it (a sibling combinator has no field here at any depth); see
 //! [`crate::style::cascade::compute_style_shareable`]'s doc comment for the
 //! exact conditions, including why this slice is scoped to SVG
@@ -70,7 +72,7 @@ use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
 
 use super::cascade::compute_style_shareable;
-use super::share_safety::{dynamic_ancestor_fingerprint, sheet_has_fingerprintable_ancestor_selector};
+use super::share_safety::{dynamic_fingerprint, sheet_has_fingerprintable_selector};
 use super::ComputedStyle;
 
 /// One node's cascade-relevant identity, see the module doc for why it is a
@@ -107,19 +109,21 @@ struct ShareKey {
     is_first_child: bool,
     /// See [`Self::is_first_child`].
     is_last_child: bool,
-    /// BUG-1112 срез 8: [`dynamic_ancestor_fingerprint`]'s output for this
-    /// node — one bit per candidate selector `cascade::selector_is_share_safe`
-    /// treats as `ancestor_prefix_is_fingerprintable` (an ancestor pseudo-class
-    /// like `:hover`/`:focus` the key otherwise cannot pin), or empty when
-    /// [`sheet_has_fingerprintable_ancestor_selector`] found the sheet has none
-    /// at all — same gating shape as [`Self::is_first_child`], and for the
-    /// same reason: computing this unconditionally would cost a
-    /// `RuleIndex::candidates` walk on every eligible node even on sheets
-    /// that never need it. Two colliding nodes only share when this vector is
-    /// also equal, i.e. when their real, current match result for every such
-    /// selector agrees — see `cascade::selector_is_share_safe`'s doc comment
-    /// for why that is exactly the condition sharing needs.
-    dynamic_ancestor_sig: Vec<bool>,
+    /// BUG-1112 срез 8 (ancestor), срез 10 (subject): [`dynamic_fingerprint`]'s
+    /// output for this node — one bit per candidate selector
+    /// `share_safety::selector_is_share_safe` treats as `is_fingerprintable`
+    /// (a dynamic pseudo-class like `:hover`/`:focus` the key otherwise
+    /// cannot pin, on an ancestor compound OR on the subject compound
+    /// itself), or empty when [`sheet_has_fingerprintable_selector`] found
+    /// the sheet has none at all — same gating shape as
+    /// [`Self::is_first_child`], and for the same reason: computing this
+    /// unconditionally would cost a `RuleIndex::candidates` walk on every
+    /// eligible node even on sheets that never need it. Two colliding nodes
+    /// only share when this vector is also equal, i.e. when their real,
+    /// current match result for every such selector agrees — see
+    /// `share_safety::selector_is_share_safe`'s doc comment for why that is
+    /// exactly the condition sharing needs.
+    dynamic_fingerprint_sig: Vec<bool>,
 }
 
 /// BUG-1112 срез 4: `true` when `sheet` (or any of its `@layer`/`@media`/
@@ -216,16 +220,16 @@ fn build_key(
     } else {
         (false, false)
     };
-    // BUG-1112 срез 8 — see `ShareKey::dynamic_ancestor_sig`'s doc comment.
-    let dynamic_ancestor_sig =
-        if track_fingerprint { dynamic_ancestor_fingerprint(doc, node, sheet, viewport, dark_mode) } else { Vec::new() };
+    // BUG-1112 срез 8/10 — see `ShareKey::dynamic_fingerprint_sig`'s doc comment.
+    let dynamic_fingerprint_sig =
+        if track_fingerprint { dynamic_fingerprint(doc, node, sheet, viewport, dark_mode) } else { Vec::new() };
     Some(ShareKey {
         tag: Box::from(name.local.as_ref()),
         attrs: pairs,
         inherited_ptr: inherited as *const ComputedStyle as usize,
         is_first_child,
         is_last_child,
-        dynamic_ancestor_sig,
+        dynamic_fingerprint_sig,
     })
 }
 
@@ -249,7 +253,7 @@ pub(crate) struct ShareCache {
     /// `sheet: &Stylesheet` parameter threaded through the whole walk), so
     /// scanning it again per node would be pure waste.
     track_position: Option<bool>,
-    /// BUG-1112 срез 8: [`sheet_has_fingerprintable_ancestor_selector`]'s
+    /// BUG-1112 срез 8/10: [`sheet_has_fingerprintable_selector`]'s
     /// result for this pass's `sheet`, cached the same way as
     /// [`Self::track_position`] and for the same reason.
     track_fingerprint: Option<bool>,
@@ -286,7 +290,7 @@ impl ShareCache {
             *self.track_position.get_or_insert_with(|| sheet_has_position_dependent_subject(sheet));
         let track_fingerprint = *self
             .track_fingerprint
-            .get_or_insert_with(|| sheet_has_fingerprintable_ancestor_selector(sheet));
+            .get_or_insert_with(|| sheet_has_fingerprintable_selector(sheet));
         let key = build_key(doc, node, sheet, inherited, viewport, dark_mode, track_position, track_fingerprint);
         if let Some(hit) = key.as_ref().and_then(|k| self.entries.get(k)) {
             if Self::stats_enabled() {
