@@ -1,7 +1,7 @@
 # BUG-1107 — `document.importNode()` silently returns `null` for a node from `DOMParser().parseFromString(...)`
 
 **Статус:** FIXED (P3, 2026-09-23), в срезе того же дня, что и заведение
-**Заведён:** P3, 2026-09-23, попутно при локализации [BUG-791](BUG-791-OPEN.md) (dzen.ru главная)
+**Заведён:** P3, 2026-09-23, попутно при локализации [BUG-791](BUG-791-FIXED.md) (dzen.ru главная)
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js`)
 
 ## Симптом
@@ -132,7 +132,7 @@ warnings` — чисто. `cargo test -p lumen-js --features v8-backend` — 151
 
 ## Связанные
 
-* [BUG-791](BUG-791-OPEN.md) — заявка, в рамках которой найден; остаток
+* [BUG-791](BUG-791-FIXED.md) — заявка, в рамках которой найден; остаток
   заявки не закрыт этим фиксом (см. срез 5 там) — нужно проверить живьём,
   восстанавливает ли этот фикс полную ленту Дзена или падение было не
   единственной причиной пустого `SECOND_CHUNK_APP_CONTAINER_MicroRoot`.
