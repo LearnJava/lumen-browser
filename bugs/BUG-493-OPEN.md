@@ -393,7 +393,7 @@ actually tracks it.
 
 ## Residual found working BUG-506 (P3, 2026-09-04)
 
-[BUG-506](BUG-506-OPEN.md)'s originally-filed symptom (a cross-directory
+[BUG-506](BUG-506-FIXED.md)'s originally-filed symptom (a cross-directory
 external `<script src>` never executing before dependent inline code) no
 longer reproduces, but re-measuring its 5 `css/css-logical` files against
 the real wptrunner pipeline (`--bidi-port`, the ONLY mode any real

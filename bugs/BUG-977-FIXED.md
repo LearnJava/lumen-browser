@@ -120,7 +120,7 @@ python tests/wpt/verify_bug504_vertical_rl_clip.py --binary <АБСОЛЮТНЫ�
 только `_lumen_request_scroll`'s `is_clip`-проверку — общая
 `getComputedStyle()`/`HTMLStyleElement.sheet` под живым окном ловят его
 тоже, без единого upstream'а `overflow`/`clip`. Живой прогон 5 файлов
-`css/css-logical` из [BUG-506](BUG-506-OPEN.md) (реальный wptrunner-
+`css/css-logical` из [BUG-506](BUG-506-FIXED.md) (реальный wptrunner-
 пайплайн, `LumenTestharnessExecutor` через `--bidi-port`) показывает:
 `addDiv(t)`-вставленный `<div>`, прочитанный тем же ходом через
 `getComputedStyle`, отдаёт `""` для любого свойства (не только
@@ -189,6 +189,6 @@ Thread-locals (`:hover`/`:focus`/`:active`, forced-colors, dark-mode)
 - `graphic_tests/run.py` не прогонялся — правка не трогает layout/paint/
   display-list, только JS-видимый кэш computed-style/scroll.
 
-**Остаточное:** [BUG-506](BUG-506-OPEN.md)'s residual (getComputedStyle/
+**Остаточное:** [BUG-506](BUG-506-FIXED.md)'s residual (getComputedStyle/
 `HTMLStyleElement.sheet` под `--bidi-port`, та же причина) должен гаситься
 этим же фиксом, но отдельно в этом срезе не перепроверялся.
