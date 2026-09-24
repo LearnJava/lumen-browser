@@ -19,6 +19,16 @@
 //! Кандидат принимается, если презентация совпала с пробным цветом; при
 //! недоступном захвате (не Windows / GDI-сбой) — если совпал readback.
 //!
+//! **Захват ненадёжен под нагрузкой (BUG-1073).** При одновременном старте
+//! нескольких окон или параллельной сборке DWM не успевает скомпоновать
+//! кадр, и захват видит белое у рабочего бэкенда. Поэтому: при `texture=ok`
+//! захват ждётся дольше ([`CAPTURE_TRIES_TEXTURE_OK`]); если отклонены все
+//! кандидаты, берётся кандидат с `texture=ok` ([`fallback_choice`]), а не
+//! статическая цепочка; бюджет [`PROBE_BUDGET_MS`] обрывает пробу, когда
+//! отклонённого кандидата поручает кэш. `Surface::configure` и в пробе, и в
+//! рендере идёт через error scope ([`configure_checked`]): `Invalid surface`
+//! — отказ кандидата, а не паника процесса.
+//!
 //! Управление:
 //! - `WGPU_BACKEND=...` — проба пропускается, env-выбор главнее;
 //! - `LUMEN_NO_BACKEND_PROBE=1` — проба выключена, работает статическая
@@ -75,6 +85,24 @@ const TOLERANCE: i32 = 45;
 const READBACK_W: u32 = 64;
 /// Высота региона readback.
 const READBACK_H: u32 = 16;
+
+/// Пауза между попытками захвата презентации: DWM компонует кадр асинхронно.
+const CAPTURE_STEP_MS: u64 = 120;
+/// Попыток захвата, когда readback не подтвердил пробный цвет.
+const CAPTURE_TRIES: u32 = 3;
+/// Попыток захвата, когда readback пробный цвет подтвердил (`texture=ok`),
+/// а захват ещё нет — BUG-1073: под нагрузкой DWM компонует кадр дольше
+/// 360 мс, и рабочий бэкенд отклонялся как `present=WHITE`. ~1.2 с суммарно;
+/// на машине с настоящим BUG-275 это разовая доплата (дальше выручает кэш).
+const CAPTURE_TRIES_TEXTURE_OK: u32 = 10;
+
+/// Бюджет пробы (BUG-1073): окно всё время пробы стоит пробным цветом
+/// (зафиксировано 13–36 с на трёх отклонённых кандидатах подряд). Когда он
+/// исчерпан, а отклонённый кандидат поручен кэшем ([`vouched_by_cache`]),
+/// остальные не пробуются. Без поручительства бюджет не действует: на машине
+/// с BUG-275 `present=WHITE texture=ok` у Vulkan — настоящий отказ, и
+/// пропустить DX12 значило бы оставить белое окно.
+const PROBE_BUDGET_MS: u128 = 4_000;
 
 /// Результат одного сигнала пробы.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -145,6 +173,94 @@ struct CandidateReport {
     texture: Signal,
     /// Сигнал захвата презентации.
     present: Signal,
+    /// Разбивка времени кандидата по фазам (BUG-1073).
+    phases: PhaseTimes,
+}
+
+/// Время фаз пробы одного кандидата, мс. Без разбивки 24-секундный DX12
+/// (BUG-1073) не локализовать: ожидание захвата — лишь 3×120 мс из них.
+#[derive(Clone, Copy, Default, Debug)]
+struct PhaseTimes {
+    /// `create_surface` + `request_adapter`.
+    adapter: u128,
+    /// `request_device` + `configure`.
+    device: u128,
+    /// Два пробных кадра: `get_current_texture` → submit → present → readback.
+    frames: u128,
+    /// Ожидание и захват презентации.
+    capture: u128,
+}
+
+impl PhaseTimes {
+    /// Метка для `[probe]`-строки.
+    fn label(self) -> String {
+        format!(
+            "adapter {} / device {} / frames {} / capture {}",
+            self.adapter, self.device, self.frames, self.capture
+        )
+    }
+}
+
+/// Кандидат принят пробой: презентация совпала с пробным цветом, либо
+/// захват недоступен, а readback совпал.
+fn is_accepted(present: Signal, texture: Signal) -> bool {
+    matches!(
+        (present, texture),
+        (Signal::Match, _) | (Signal::Unavailable, Signal::Match)
+    )
+}
+
+/// Отклонённый пробой кандидат.
+#[derive(Clone, Debug)]
+struct Rejected {
+    backends: wgpu::Backends,
+    name: &'static str,
+    /// Сигнал readback; `Unavailable`, если кандидат не открылся вовсе.
+    texture: Signal,
+    /// Адаптер и драйвер — `None`, если кандидат не открылся.
+    adapter: Option<(String, String)>,
+}
+
+/// Отклонённый кандидат, которого «поручает» кэш (BUG-1073): readback
+/// подтвердил пробный цвет, и этот же кандидат на том же адаптере, драйвере
+/// и версии уже проходил полную пробу. Значит, GPU рисует верно, а не
+/// сошёлся только захват презентации (окно накрыто, DWM под нагрузкой).
+/// Чистая функция — тестируется без wgpu-контекста.
+fn vouched_by_cache<'a>(rejected: &'a [Rejected], cache: Option<&ProbeCache>) -> Option<&'a Rejected> {
+    let cache = cache.filter(|c| c.app == env!("CARGO_PKG_VERSION"))?;
+    let winner = backend_by_name(&cache.winner)?;
+    rejected.iter().find(|r| {
+        r.backends == winner
+            && r.texture == Signal::Match
+            && r.adapter.as_ref().is_some_and(|(a, d)| *a == cache.adapter && *d == cache.driver)
+    })
+}
+
+/// Выбор, когда отклонены все кандидаты: поручённый кэшем, иначе первый в
+/// порядке пробы с `texture=ok`. Если захват не сошёлся ни у одного
+/// кандидата, включая тот, что на этой машине заведомо работает, сломан
+/// именно захват, а readback — единственный честный сигнал (BUG-1073,
+/// Intel UHD: `WHITE` у всех трёх при `texture=ok` у Vulkan и DX12).
+/// `None` — такого нет, работает статическая цепочка.
+fn fallback_choice<'a>(rejected: &'a [Rejected], cache: Option<&ProbeCache>) -> Option<&'a Rejected> {
+    vouched_by_cache(rejected, cache).or_else(|| rejected.iter().find(|r| r.texture == Signal::Match))
+}
+
+/// `Surface::configure` без паники: ошибка валидации (`Invalid surface` —
+/// драйвер не отдал swapchain этому окну, BUG-1073) ловится error scope'ом и
+/// возвращается как `Err`, а не уходит в необработанный обработчик wgpu,
+/// который паникует. Вызывающий переходит к следующему бэкенду.
+pub(crate) async fn configure_checked(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> Result<(), String> {
+    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    surface.configure(device, config);
+    match device.pop_error_scope().await {
+        None => Ok(()),
+        Some(e) => Err(format!("configure: {e}")),
+    }
 }
 
 /// `true`, если проба выключена (`LUMEN_NO_BACKEND_PROBE=1`) или бэкенд
@@ -308,18 +424,43 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
     let order = reorder_by_cache(candidates, cached_backend);
 
     let mut winner: Option<(wgpu::Backends, &str, CandidateReport)> = None;
-    for (backends, name) in order {
+    let mut rejected: Vec<Rejected> = Vec::new();
+    let mut remaining = order.into_iter();
+    for (backends, name) in remaining.by_ref() {
         match probe_one(window, backends, name).await {
-            Some(rep) => {
+            Ok(rep) => {
                 winner = Some((backends, name, rep));
                 break;
             }
-            None => continue,
+            Err((texture, adapter)) => rejected.push(Rejected { backends, name, texture, adapter }),
+        }
+        if started.elapsed().as_millis() >= PROBE_BUDGET_MS
+            && vouched_by_cache(&rejected, cache.as_ref()).is_some()
+        {
+            break;
         }
     }
     let Some((backends, name, rep)) = winner else {
+        let skipped: Vec<&str> = remaining.map(|(_, n)| n).collect();
+        let why = if skipped.is_empty() {
+            "все кандидаты отклонены".to_string()
+        } else {
+            format!("бюджет {PROBE_BUDGET_MS} мс исчерпан, не пробовались: {}", skipped.join(", "))
+        };
+        // BUG-1073: readback подтвердил пробный цвет — GPU рисует верно, не
+        // сошёлся только захват презентации. Такой кандидат лучше
+        // статической цепочки; кэш не переписывается — следующий запуск
+        // пробует заново.
+        if let Some(r) = fallback_choice(&rejected, cache.as_ref()) {
+            eprintln!(
+                "[probe] {why} за {} мс — беру {}: texture=ok, не сошёлся только захват",
+                started.elapsed().as_millis(),
+                r.name
+            );
+            return Some(r.backends);
+        }
         eprintln!(
-            "[probe] все кандидаты отклонены за {} мс — статическая цепочка",
+            "[probe] {why} за {} мс — статическая цепочка",
             started.elapsed().as_millis()
         );
         return None;
@@ -341,7 +482,10 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
              перепроверяю кандидатов впереди {name}"
         );
         for (b, n) in candidates_before(candidates, backends) {
-            if let Some(better) = probe_one(window, b, n).await {
+            if started.elapsed().as_millis() >= PROBE_BUDGET_MS {
+                break;
+            }
+            if let Ok(better) = probe_one(window, b, n).await {
                 backends = b;
                 name = n;
                 rep = better;
@@ -360,32 +504,32 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
     Some(backends)
 }
 
-/// Пробует одного кандидата и печатает его отчёт. `Some` — принят.
+/// Пробует одного кандидата и печатает его отчёт. `Ok` — принят; `Err` —
+/// отклонён: сигнал readback и (адаптер, драйвер), если кандидат открылся
+/// (для [`fallback_choice`]).
 async fn probe_one(
     window: &Arc<Window>,
     backends: wgpu::Backends,
     name: &str,
-) -> Option<CandidateReport> {
+) -> Result<CandidateReport, (Signal, Option<(String, String)>)> {
     let t0 = Instant::now();
     match probe_candidate(window, backends).await {
         Ok(rep) => {
-            let accepted = matches!(
-                (rep.present, rep.texture),
-                (Signal::Match, _) | (Signal::Unavailable, Signal::Match)
-            );
+            let accepted = is_accepted(rep.present, rep.texture);
             eprintln!(
-                "[probe] {name}: present={} texture={} adapter=\"{}\" ({} мс) — {}",
+                "[probe] {name}: present={} texture={} adapter=\"{}\" ({} мс: {}) — {}",
                 rep.present.label(),
                 rep.texture.label(),
                 rep.adapter,
                 t0.elapsed().as_millis(),
+                rep.phases.label(),
                 if accepted { "ПРИНЯТ" } else { "отклонён" },
             );
-            accepted.then_some(rep)
+            if accepted { Ok(rep) } else { Err((rep.texture, Some((rep.adapter, rep.driver)))) }
         }
         Err(e) => {
-            eprintln!("[probe] {name}: недоступен ({e})");
-            None
+            eprintln!("[probe] {name}: недоступен ({e}, {} мс)", t0.elapsed().as_millis());
+            Err((Signal::Unavailable, None))
         }
     }
 }
@@ -396,6 +540,8 @@ async fn probe_candidate(
     window: &Arc<Window>,
     backends: wgpu::Backends,
 ) -> Result<CandidateReport, String> {
+    let mut phases = PhaseTimes::default();
+    let t_phase = Instant::now();
     // Явный выбор бэкенда — без `.with_env()`: probe_disabled() уже
     // гарантировал, что WGPU_BACKEND не задан.
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -413,6 +559,8 @@ async fn probe_candidate(
         })
         .await
         .map_err(|e| format!("request_adapter: {e}"))?;
+    phases.adapter = t_phase.elapsed().as_millis();
+    let t_phase = Instant::now();
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("lumen-probe-device"),
@@ -425,12 +573,18 @@ async fn probe_candidate(
         .map_err(|e| format!("request_device: {e}"))?;
 
     let caps = surface.get_capabilities(&adapter);
+    // Пустые caps — поверхность с этим адаптером несовместима; индексировать
+    // `formats[0]`/`alpha_modes[0]` нельзя (паника вместо отказа кандидата).
+    let (Some(&first_format), Some(&alpha_mode)) = (caps.formats.first(), caps.alpha_modes.first())
+    else {
+        return Err("surface: адаптер не отдал ни одного формата".into());
+    };
     let format = caps
         .formats
         .iter()
         .find(|f| !f.is_srgb())
         .copied()
-        .unwrap_or(caps.formats[0]);
+        .unwrap_or(first_format);
     let can_copy = caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
     let size = window.inner_size();
     let (width, height) = (size.width.max(1), size.height.max(1));
@@ -444,11 +598,13 @@ async fn probe_candidate(
         width,
         height,
         present_mode: wgpu::PresentMode::Fifo,
-        alpha_mode: caps.alpha_modes[0],
+        alpha_mode,
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
     };
-    surface.configure(&device, &config);
+    configure_checked(&surface, &device, &config).await?;
+    phases.device = t_phase.elapsed().as_millis();
+    let t_phase = Instant::now();
 
     // Порядок байтов текселя для readback-классификации.
     let byte_order: Option<[usize; 3]> = match format {
@@ -530,11 +686,17 @@ async fn probe_candidate(
         }
     }
 
+    phases.frames = t_phase.elapsed().as_millis();
+    let t_phase = Instant::now();
+
     // DWM компонует презентованный кадр асинхронно — даём ему время и
-    // перепроверяем захват до 3 раз, принимая первый Match.
+    // перепроверяем захват, принимая первый Match. Если readback пробный
+    // цвет подтвердил, ждём дольше (BUG-1073): отказ по одному захвату при
+    // рабочем GPU отклонял исправный бэкенд.
+    let tries = if texture == Signal::Match { CAPTURE_TRIES_TEXTURE_OK } else { CAPTURE_TRIES };
     let mut present = Signal::Unavailable;
-    for _ in 0..3 {
-        std::thread::sleep(std::time::Duration::from_millis(120));
+    for _ in 0..tries {
+        std::thread::sleep(std::time::Duration::from_millis(CAPTURE_STEP_MS));
         match capture_present(window, format.is_srgb()) {
             Some(sig) => {
                 present = sig;
@@ -549,12 +711,15 @@ async fn probe_candidate(
         }
     }
 
+    phases.capture = t_phase.elapsed().as_millis();
+
     let info = adapter.get_info();
     Ok(CandidateReport {
         adapter: info.name,
         driver: format!("{} {}", info.driver, info.driver_info),
         texture,
         present,
+        phases,
     })
 }
 
@@ -944,6 +1109,96 @@ mod tests {
         assert_eq!(cache.driver, "Intel Corporation 31.0.101.2114");
         assert_eq!(cache.app, "0.5.0");
         assert_eq!(parse_cache(&serialize_cache(&cache)), Some(cache));
+    }
+
+    fn rejected(backends: wgpu::Backends, name: &'static str, texture: Signal) -> Rejected {
+        Rejected {
+            backends,
+            name,
+            texture,
+            adapter: Some(("Intel(R) UHD Graphics".into(), "Intel Corporation x".into())),
+        }
+    }
+
+    fn cache_for(winner: &str) -> ProbeCache {
+        ProbeCache {
+            winner: winner.into(),
+            adapter: "Intel(R) UHD Graphics".into(),
+            driver: "Intel Corporation x".into(),
+            app: env!("CARGO_PKG_VERSION").into(),
+        }
+    }
+
+    /// BUG-1073: все кандидаты отклонены по захвату, но readback рабочий —
+    /// берём первый с `texture=ok`, а не статическую цепочку.
+    #[test]
+    fn fallback_choice_takes_first_texture_ok() {
+        let all = [
+            rejected(wgpu::Backends::GL, "GL", Signal::Unavailable),
+            rejected(wgpu::Backends::VULKAN, "Vulkan", Signal::Match),
+            rejected(wgpu::Backends::DX12, "DX12", Signal::Match),
+        ];
+        assert_eq!(fallback_choice(&all, None).map(|r| r.name), Some("Vulkan"));
+    }
+
+    /// Кэш поручился за DX12 — берём его, хотя Vulkan раньше в порядке.
+    #[test]
+    fn fallback_choice_prefers_vouched() {
+        let all = [
+            rejected(wgpu::Backends::VULKAN, "Vulkan", Signal::Match),
+            rejected(wgpu::Backends::GL, "GL", Signal::Unavailable),
+            rejected(wgpu::Backends::DX12, "DX12", Signal::Match),
+        ];
+        let cache = cache_for("DX12");
+        assert_eq!(fallback_choice(&all, Some(&cache)).map(|r| r.name), Some("DX12"));
+    }
+
+    /// Без подтверждённого readback выбор не делается — статическая цепочка.
+    #[test]
+    fn fallback_choice_none_without_texture_ok() {
+        let all = [
+            rejected(wgpu::Backends::VULKAN, "Vulkan", Signal::White),
+            rejected(wgpu::Backends::GL, "GL", Signal::Unavailable),
+            rejected(wgpu::Backends::DX12, "DX12", Signal::Other([0, 0, 0])),
+        ];
+        assert!(fallback_choice(&all, Some(&cache_for("Vulkan"))).is_none());
+        assert!(fallback_choice(&[], None).is_none());
+    }
+
+    /// Бюджет обрывает пробу только при поручительстве кэша: тот же
+    /// кандидат, адаптер, драйвер и версия, readback подтверждён. Машина с
+    /// BUG-275 (кэш — DX12) после отклонённого Vulkan пробует дальше.
+    #[test]
+    fn vouched_by_cache_requires_full_match() {
+        let vk = [rejected(wgpu::Backends::VULKAN, "Vulkan", Signal::Match)];
+        assert!(vouched_by_cache(&vk, Some(&cache_for("Vulkan"))).is_some());
+        assert!(vouched_by_cache(&vk, None).is_none());
+        assert!(vouched_by_cache(&vk, Some(&cache_for("DX12"))).is_none());
+        let mut other_driver = cache_for("Vulkan");
+        other_driver.driver = "Intel Corporation y".into();
+        assert!(vouched_by_cache(&vk, Some(&other_driver)).is_none());
+        let mut old_app = cache_for("Vulkan");
+        old_app.app = "0.0.1".into();
+        assert!(vouched_by_cache(&vk, Some(&old_app)).is_none());
+        let white = [rejected(wgpu::Backends::VULKAN, "Vulkan", Signal::White)];
+        assert!(vouched_by_cache(&white, Some(&cache_for("Vulkan"))).is_none());
+        let unopened = [Rejected {
+            backends: wgpu::Backends::VULKAN,
+            name: "Vulkan",
+            texture: Signal::Match,
+            adapter: None,
+        }];
+        assert!(vouched_by_cache(&unopened, Some(&cache_for("Vulkan"))).is_none());
+    }
+
+    /// Правило приёма не изменилось: `present=WHITE` при `texture=ok`
+    /// кандидата не принимает (это случай BUG-275) — он лишь резерв.
+    #[test]
+    fn acceptance_rule() {
+        assert!(is_accepted(Signal::Match, Signal::Unavailable));
+        assert!(is_accepted(Signal::Unavailable, Signal::Match));
+        assert!(!is_accepted(Signal::White, Signal::Match));
+        assert!(!is_accepted(Signal::Unavailable, Signal::Unavailable));
     }
 
     #[test]
