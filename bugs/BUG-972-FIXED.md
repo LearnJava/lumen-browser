@@ -1,6 +1,6 @@
 # BUG-972: Scroll To Text Fragment (`:~:text=`) is not implemented at all
 
-**Статус:** OPEN (ДОРАБОТКА → [STTF-1](../ROADMAP.md))
+**Статус:** FIXED 2026-09-24 (P1, STTF-1 срезы 1-5, финал `p1-sttf5-target-text-color`)
 **Тип:** нереализованная функциональность, не дефект реализованного кода —
 ведётся как задача `STTF-1` в [ROADMAP.md](../ROADMAP.md), P3 как баг не
 берёт ([docs/probe-method.md §8](../docs/probe-method.md)).
@@ -72,3 +72,20 @@ Classified via `_exact_id_marker` in `timeout_audit.py`
 не имеет варианта `TargetText`, и paint не знает про активный
 scroll-to-text диапазон отдельно от `::selection`. Остаётся отдельным
 срезом.
+
+Срез 4 (2026-09-24, `p1-sttf4-target-text`): `::target-text` (CSS
+Pseudo-Elements L4 §5.7) заведён по образцу `::selection` —
+`PseudoElementKind::TargetText`, `compute_target_text_style`
+(`layout/src/style/pseudo.rs`), подсветка на экране через
+`find::build_page_with_target_text_highlight` overlay с цветом-константой
+по умолчанию — само вычисленное CSS-правило страницы ещё не читалось
+паинтом.
+
+Срез 5 (2026-09-24, `p1-sttf5-target-text-color`): путь
+`compute_target_text_style` → цвет в `redraw_requested.rs` проведён —
+`Lumen::navigate_fragment` резолвит `::target-text`-правило страницы
+против узла найденного матча и кладёт `background-color`
+(`CssColor::resolve`, currentcolor учитывается) в
+`Lumen::target_text_highlight_color`; редро использует его вместо
+`TARGET_TEXT_HIGHLIGHT_DEFAULT`, когда страница задаёт непрозрачный фон.
+Задача STTF-1 закрыта целиком.

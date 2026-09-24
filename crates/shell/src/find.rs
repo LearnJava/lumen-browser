@@ -690,6 +690,23 @@ mod tests {
         assert_eq!(out, base);
     }
 
+    #[test]
+    fn target_text_highlight_honours_custom_color() {
+        // STTF-1 срез 5: a page `::target-text { background-color: ... }`
+        // resolves to a colour other than the UA default — the overlay
+        // builder is colour-agnostic (the resolution itself happens in
+        // `Lumen::navigate_fragment`), so this just pins that a non-default
+        // `Color` argument flows through into the emitted `FillRect`.
+        let base = vec![draw_text("hello world", 0.0, 0.0, 100.0, 20.0)];
+        let rects = vec![Rect::new(0.0, 0.0, 30.0, 20.0)];
+        let custom = Color { r: 0, g: 128, b: 0, a: 255 };
+        let out = build_page_with_target_text_highlight(&base, &rects, custom);
+        match &out[0] {
+            DisplayCommand::FillRect { color, .. } => assert_eq!(*color, custom),
+            other => panic!("expected FillRect first, got {other:?}"),
+        }
+    }
+
     // ── scroll_to_match ────────────────────────────────────────────────────────
 
     #[test]

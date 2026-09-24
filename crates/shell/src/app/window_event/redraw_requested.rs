@@ -550,7 +550,8 @@ impl Lumen {
                 let page = find::build_page_with_target_text_highlight(
                     &self.display_list,
                     rects,
-                    find::TARGET_TEXT_HIGHLIGHT_DEFAULT,
+                    self.target_text_highlight_color
+                        .unwrap_or(find::TARGET_TEXT_HIGHLIGHT_DEFAULT),
                 );
                 (Some(page), Vec::new())
             } else {
