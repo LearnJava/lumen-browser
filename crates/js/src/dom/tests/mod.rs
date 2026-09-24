@@ -36,6 +36,10 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         // Streams — своя часть с WORKER-1 срез 2 (её исполняет и воркер).
         "function ReadableStream(",
         "function DecompressionStream(",
+        // Headers + Body/Response/Request — общие с воркером с WORKER-1 срез 5.
+        "var Headers = (function()",
+        "Response = function Response()",
+        "Request = function Request(input)",
         // FormData — своя часть с WORKER-1 срез 4 (её исполняет и воркер).
         "function FormData(formEl)",
         "FormData.prototype._toMultipart",
@@ -85,6 +89,9 @@ fn worker_exposed_shim_is_a_verbatim_slice_of_the_page_shim() {
     assert!(page.contains(WEBSOCKET_SHIM));
     assert!(worker.contains(WEBSOCKET_SHIM));
     assert!(worker.contains(PERFORMANCE_SHIM));
+    // WORKER-1 срез 5: Headers и Body/Response/Request — тот же текст.
+    assert!(page.contains(&format!("{HEADERS_SHIM}{FETCH_BODY_SHIM}")));
+    assert!(worker.contains(&format!("{HEADERS_SHIM}{FETCH_BODY_SHIM}")));
     // Интерфейсы `[Exposed=Worker]` в странице появиться не должны: это
     // единственная часть воркерного шима, которой в странице нет (BUG-776).
     assert!(worker.contains(WORKER_LOCATION_NAVIGATOR_SHIM));

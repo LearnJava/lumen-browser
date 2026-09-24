@@ -845,8 +845,8 @@ fn worker_global_shim(worker_id: u32) -> String {
   // its own IIFE right after this one), which is what actually drives them
   // (BUG-815).
 
-  // Exposed so the shared net shim (WORKER_NET_SHIM, evaluated as a
-  // separate IIFE right after this one) can route a throwing fetch/XHR
+  // Exposed so the shared net shim (`worker_net::WORKER_NET_SHIM`, evaluated
+  // after this one) can route a throwing fetch/XHR
   // listener through the same reporting path (BUG-591 shape, BUG-778 scope).
   globalThis._lumen_worker_exception_reporter = _lumen_report_worker_exception;
 
@@ -894,249 +894,6 @@ fn worker_global_shim(worker_id: u32) -> String {
 /// incremented, so the third cycle onward is 4 ms apart.
 #[cfg(feature = "v8-backend")]
 pub(crate) const WORKER_TIMERS_SHIM: &str = include_str!("shim/worker_timers_shim.js");
-
-/// Shared `fetch()`/`XMLHttpRequest`/`Headers`/`Response` surface for a
-/// `WorkerGlobalScope` (BUG-778): minimal but spec-shaped, synchronous over
-/// the same `_lumen_worker_net_fetch` bridge both dedicated
-/// ([`install_worker_globals_v8`]) and shared
-/// (`shared_worker.rs::install_shared_worker_globals_v8`) worker scopes
-/// register. Evaluated as its own IIFE right after the flavour-specific
-/// globals shim, so it only depends on globals that shim already defined:
-/// `_lumen_worker_net_fetch` (native), `_lumen_worker_base_url` (native-set
-/// global, used for relative-URL resolution), and — if present —
-/// `globalThis._lumen_worker_exception_reporter` for routing a throwing
-/// listener the same way BUG-591 does elsewhere.
-///
-/// Base64 codecs are self-contained (`_lumenB64ToBin`/`_lumenUtf8ToBin`/
-/// `_lumenBinToB64`) rather than relying on `atob`/`btoa`: the dedicated
-/// worker scope has them (`install_worker_globals_v8`'s scoped natives), but
-/// the shared-worker scope does not — see the module doc.
-#[cfg(feature = "v8-backend")]
-pub(crate) const WORKER_NET_SHIM: &str = r#"(function() {
-  function _lumenReportException(e) {
-    var r = globalThis._lumen_worker_exception_reporter;
-    if (typeof r === 'function') { try { r(e); } catch (_e) {} }
-  }
-
-  function _lumenB64ToBin(s) {
-    var CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    var out = '', buf = 0, bits = 0;
-    for (var i = 0; i < s.length; i++) {
-      var v = CHARS.indexOf(s.charAt(i));
-      if (v < 0) continue;
-      buf = (buf << 6) | v; bits += 6;
-      if (bits >= 8) { bits -= 8; out += String.fromCharCode((buf >> bits) & 0xFF); }
-    }
-    return out;
-  }
-  function _lumenBinToUtf8(b) {
-    var out = '', i = 0;
-    while (i < b.length) {
-      var c = b.charCodeAt(i++) & 0xFF, cp;
-      if (c < 0x80) cp = c;
-      else if (c < 0xE0) cp = ((c & 0x1F) << 6) | (b.charCodeAt(i++) & 0x3F);
-      else if (c < 0xF0) cp = ((c & 0x0F) << 12) | ((b.charCodeAt(i++) & 0x3F) << 6)
-                            | (b.charCodeAt(i++) & 0x3F);
-      else cp = ((c & 0x07) << 18) | ((b.charCodeAt(i++) & 0x3F) << 12)
-              | ((b.charCodeAt(i++) & 0x3F) << 6) | (b.charCodeAt(i++) & 0x3F);
-      out += String.fromCodePoint(cp);
-    }
-    return out;
-  }
-  function _lumenUtf8ToBin(str) {
-    var out = '';
-    for (var i = 0; i < str.length; i++) {
-      var cp = str.codePointAt(i);
-      if (cp > 0xFFFF) i++;
-      if (cp < 0x80) { out += String.fromCharCode(cp); }
-      else if (cp < 0x800) {
-        out += String.fromCharCode(0xC0 | (cp >> 6), 0x80 | (cp & 0x3F));
-      } else if (cp < 0x10000) {
-        out += String.fromCharCode(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
-      } else {
-        out += String.fromCharCode(
-          0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
-          0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
-      }
-    }
-    return out;
-  }
-  function _lumenBinToB64(bin) {
-    var CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    var out = '';
-    for (var i = 0; i < bin.length; i += 3) {
-      var b0 = bin.charCodeAt(i) & 0xFF;
-      var b1 = i + 1 < bin.length ? bin.charCodeAt(i + 1) & 0xFF : 0;
-      var b2 = i + 2 < bin.length ? bin.charCodeAt(i + 2) & 0xFF : 0;
-      var n = (b0 << 16) | (b1 << 8) | b2;
-      out += CHARS.charAt((n >> 18) & 0x3F);
-      out += CHARS.charAt((n >> 12) & 0x3F);
-      out += (i + 1 < bin.length) ? CHARS.charAt((n >> 6) & 0x3F) : '=';
-      out += (i + 2 < bin.length) ? CHARS.charAt(n & 0x3F) : '=';
-    }
-    return out;
-  }
-
-  function _lumenResolve(url) {
-    if (url.indexOf('://') !== -1) return url;
-    var base = (typeof _lumen_worker_base_url === 'string' && _lumen_worker_base_url)
-      ? _lumen_worker_base_url
-      : (typeof location !== 'undefined' ? location.href : '');
-    if (!base) return url;
-    try { return new URL(url, base).href; } catch (e) { return url; }
-  }
-
-  // Minimal Headers (Fetch §3).
-  function Headers(init) {
-    this._h = {};
-    if (init) {
-      if (init instanceof Headers) { for (var k in init._h) this._h[k] = init._h[k]; }
-      else { for (var k2 in init) this._h[String(k2).toLowerCase()] = String(init[k2]); }
-    }
-  }
-  Headers.prototype.get = function(n) { var v = this._h[String(n).toLowerCase()]; return v === undefined ? null : v; };
-  Headers.prototype.set = function(n, v) { this._h[String(n).toLowerCase()] = String(v); };
-  Headers.prototype.has = function(n) { return String(n).toLowerCase() in this._h; };
-  Headers.prototype.append = function(n, v) {
-    var k = String(n).toLowerCase();
-    this._h[k] = (k in this._h) ? this._h[k] + ', ' + String(v) : String(v);
-  };
-  Headers.prototype['delete'] = function(n) { delete this._h[String(n).toLowerCase()]; };
-  Headers.prototype.forEach = function(fn, thisArg) {
-    for (var k in this._h) fn.call(thisArg, this._h[k], k, this);
-  };
-  globalThis.Headers = Headers;
-
-  // Minimal Response (Fetch §5.7) — body arrives as a "binary string"
-  // (one char = one byte) already decoded from the wire's base64 transport.
-  function Response(bodyBin, init) {
-    this._bin = bodyBin || '';
-    init = init || {};
-    this.status = init.status || 200;
-    this.statusText = init.statusText || '';
-    this.ok = this.status >= 200 && this.status < 300;
-    this.headers = (init.headers instanceof Headers) ? init.headers : new Headers(init.headers);
-    this.url = init.url || '';
-    this.bodyUsed = false;
-  }
-  Response.prototype.text = function() {
-    this.bodyUsed = true;
-    return Promise.resolve(_lumenBinToUtf8(this._bin));
-  };
-  Response.prototype.json = function() {
-    return this.text().then(function(t) { return JSON.parse(t); });
-  };
-  Response.prototype.arrayBuffer = function() {
-    this.bodyUsed = true;
-    var b = this._bin;
-    var buf = new ArrayBuffer(b.length);
-    var view = new Uint8Array(buf);
-    for (var i = 0; i < b.length; i++) view[i] = b.charCodeAt(i) & 0xFF;
-    return Promise.resolve(buf);
-  };
-  globalThis.Response = Response;
-
-  // fetch(resource[, init]) — WHATWG Fetch, synchronous network via the
-  // `_lumen_worker_net_fetch` bridge (BUG-778: previously undefined inside
-  // any worker, so a worker script could only receive/post messages).
-  globalThis.fetch = function(resource, init) {
-    var url = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
-    init = init || {};
-    var method = String(init.method || (resource && resource.method) || 'GET').toUpperCase();
-    var abs = _lumenResolve(url);
-    var reqHeaders = new Headers(init.headers);
-    var flat = [];
-    reqHeaders.forEach(function(v, k) { flat.push(k); flat.push(v); });
-    var bodyB64 = (init.body !== undefined && init.body !== null)
-      ? _lumenBinToB64(_lumenUtf8ToBin(String(init.body))) : null;
-    var raw;
-    try { raw = _lumen_worker_net_fetch(abs, method, flat, bodyB64); }
-    catch (e) { return Promise.reject(new TypeError('fetch: ' + e)); }
-    if (!raw) return Promise.reject(new TypeError('fetch: network error for ' + abs));
-    var res = JSON.parse(raw);
-    return Promise.resolve(new Response(_lumenB64ToBin(res.body), {
-      status: res.status, statusText: res.statusText, headers: res.headers, url: abs,
-    }));
-  };
-
-  // XMLHttpRequest — minimal synchronous port over the same bridge
-  // (BUG-778). `send()` performs the request immediately and fires all
-  // readystatechange/load/error transitions on the same turn: a worker
-  // thread here has no real async event loop to defer them onto.
-  function XMLHttpRequest() {
-    this.readyState = 0;
-    this.status = 0;
-    this.statusText = '';
-    this.response = '';
-    this.responseText = '';
-    this._listeners = {};
-    this._method = 'GET';
-    this._url = '';
-    this._headers = [];
-  }
-  XMLHttpRequest.UNSENT = 0;
-  XMLHttpRequest.OPENED = 1;
-  XMLHttpRequest.HEADERS_RECEIVED = 2;
-  XMLHttpRequest.LOADING = 3;
-  XMLHttpRequest.DONE = 4;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    this._method = String(method || 'GET').toUpperCase();
-    this._url = String(url || '');
-    this.readyState = 1;
-  };
-  XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-    this._headers.push(String(name)); this._headers.push(String(value));
-  };
-  XMLHttpRequest.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    (this._listeners[type] || (this._listeners[type] = [])).push(fn);
-  };
-  XMLHttpRequest.prototype.removeEventListener = function(type, fn) {
-    var l = this._listeners[type];
-    if (!l) return;
-    var i = l.indexOf(fn);
-    if (i !== -1) l.splice(i, 1);
-  };
-  XMLHttpRequest.prototype._fire = function(type) {
-    var ev = { type: type, target: this };
-    var onProp = this['on' + type];
-    if (typeof onProp === 'function') { try { onProp.call(this, ev); } catch (e) { _lumenReportException(e); } }
-    var l = this._listeners[type] || [];
-    for (var i = 0; i < l.length; i++) { try { l[i].call(this, ev); } catch (e) { _lumenReportException(e); } }
-  };
-  XMLHttpRequest.prototype.send = function(body) {
-    var abs = _lumenResolve(this._url);
-    var bodyB64 = (body !== undefined && body !== null)
-      ? _lumenBinToB64(_lumenUtf8ToBin(String(body))) : null;
-    var raw;
-    try { raw = _lumen_worker_net_fetch(abs, this._method, this._headers.slice(), bodyB64); }
-    catch (e) { raw = null; }
-    if (!raw) {
-      this.readyState = 4;
-      this._fire('readystatechange');
-      this._fire('error');
-      this._fire('loadend');
-      return;
-    }
-    var res = JSON.parse(raw);
-    this.status = res.status;
-    this.statusText = res.statusText;
-    this.responseText = _lumenBinToUtf8(_lumenB64ToBin(res.body));
-    this.response = this.responseText;
-    this.readyState = 2;
-    this._fire('readystatechange');
-    this.readyState = 3;
-    this._fire('readystatechange');
-    this.readyState = 4;
-    this._fire('readystatechange');
-    this._fire('load');
-    this._fire('loadend');
-  };
-  XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ''; };
-  XMLHttpRequest.prototype.getResponseHeader = function() { return null; };
-  globalThis.XMLHttpRequest = XMLHttpRequest;
-})();
-"#;
 
 // ─── WorkerOptions (shared by Worker and SharedWorker) ───────────────────────
 
@@ -1874,63 +1631,6 @@ pub(crate) fn fetch_worker_script(
     Some((String::from_utf8_lossy(&resp.body).into_owned(), resp.url))
 }
 
-/// Perform one synchronous network request for a worker's `fetch()`/
-/// `XMLHttpRequest` (BUG-778), returning
-/// `{"status":…,"statusText":…,"headers":{…},"body":"<base64>"}` on success,
-/// `None` on any network error or when `provider` is absent.
-///
-/// Shared by dedicated ([`install_worker_globals_v8`]) and shared
-/// (`shared_worker.rs::install_shared_worker_globals_v8`) worker scopes —
-/// mirrors `sw_worker.rs`'s `_lumen_sw_net_fetch`, but through the plain
-/// `fetch_request`/`fetch_sync` path rather than `fetch_bypassing_sw`: a
-/// dedicated/shared worker has no `FetchInterceptor` routing requests back
-/// to itself the way a service worker's own scope does, so there is nothing
-/// to bypass.
-#[cfg(feature = "v8-backend")]
-pub(crate) fn worker_net_fetch_json(
-    provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
-    url: &str,
-    method: &str,
-    headers_flat: &[String],
-    body_b64: Option<&str>,
-) -> Option<String> {
-    let provider = provider?;
-    let headers: Vec<(String, String)> = headers_flat
-        .chunks_exact(2)
-        .map(|pair| (pair[0].clone(), pair[1].clone()))
-        .collect();
-    let body_bytes = body_b64.and_then(b64_decode);
-    let req = lumen_core::ext::JsFetchRequest {
-        url,
-        method,
-        headers: &headers,
-        body: body_bytes.as_ref().map(|bytes| lumen_core::ext::JsFetchBody {
-            content_type: "text/plain;charset=UTF-8",
-            bytes,
-        }),
-        token: None,
-    };
-    let resp = match provider.fetch_request(&req) {
-        Ok(resp) => resp,
-        Err(e) => {
-            eprintln!("[worker] fetch: {url}: {e}");
-            return None;
-        }
-    };
-    let headers: serde_json::Map<String, serde_json::Value> = resp
-        .headers
-        .into_iter()
-        .map(|(k, v)| (k, serde_json::Value::String(v)))
-        .collect();
-    serde_json::to_string(&serde_json::json!({
-        "status": resp.status,
-        "statusText": resp.status_text,
-        "headers": headers,
-        "body": b64_encode(&resp.body),
-    }))
-    .ok()
-}
-
 /// Spawn a new worker thread backed by its own [`V8JsRuntime`] that evaluates
 /// `script` and waits for messages.
 ///
@@ -2235,12 +1935,13 @@ const WORKER_SOCKET_POLL: std::time::Duration = std::time::Duration::from_millis
 /// Install the Worker global environment into a V8 runtime. Registers the
 /// natives `_lumen_worker_post_reply`, `_lumen_worker_console_log`,
 /// `_lumen_import_scripts_resolve`, `_lumen_worker_self_close`,
-/// `_lumen_worker_net_fetch` (BUG-778), `atob`, `btoa`, sets the
+/// `atob`, `btoa`, sets the
 /// `_lumen_worker_base_url` (BUG-778) and `_lumen_worker_location_url`
 /// (BUG-776) globals — both derived from `script_url`, the worker's own
 /// resolved script URL — plus `_lumen_worker_is_module` (BUG-777, gates
 /// `importScripts`) and evaluates [`worker_global_shim`] followed by
-/// [`WORKER_TIMERS_SHIM`] and [`WORKER_NET_SHIM`].
+/// [`WORKER_TIMERS_SHIM`] and the network surface of
+/// [`crate::worker_net::install_worker_net_v8`] (BUG-778).
 ///
 /// `atob`/`btoa` go through [`crate::v8_compat::V8NativeFnScoped`] (raw scope
 /// access) rather than the plain `into_v8_fnN` path, because they must throw
@@ -2336,21 +2037,9 @@ fn install_worker_globals_v8(
         )?;
     }
 
-    // _lumen_worker_net_fetch(url, method, headers_flat, body_b64) → String | undefined
-    // BUG-778: backs `fetch()`/`XMLHttpRequest` inside the worker scope
-    // (WORKER_NET_SHIM) over the same synchronous `JsFetchProvider` bridge
-    // the classic-script fetch already uses — see [`worker_net_fetch_json`].
-    {
-        let fp = fetch_provider.clone();
-        rt.register_native(
-            "_lumen_worker_net_fetch",
-            into_v8_fn4(
-                move |url: String, method: String, headers_flat: Vec<String>, body_b64: Option<String>| -> Option<String> {
-                    worker_net_fetch_json(fp.as_deref(), &url, &method, &headers_flat, body_b64.as_deref())
-                },
-            ),
-        )?;
-    }
+    // BUG-778: `fetch()`/`XMLHttpRequest` over the same synchronous
+    // `JsFetchProvider` bridge — `crate::worker_net`, installed last below.
+    let net_provider = fetch_provider.clone();
 
     // GAP-CSPENF срез 28: `importScripts()` reuses the same `worker-src`/
     // `default-src` gate the classic worker script fetch above already has
@@ -2395,7 +2084,7 @@ fn install_worker_globals_v8(
     install_worker_scope_globals_v8(rt, determinism)?;
 
     // BUG-778: read by both `worker_global_shim`'s `importScripts` and
-    // `WORKER_NET_SHIM`'s `fetch`/`XMLHttpRequest` to resolve a relative
+    // `worker_net`'s `fetch`/`XMLHttpRequest` to resolve a relative
     // target — set before either is evaluated so it is never read as `undefined`.
     rt.set_global(
         "_lumen_worker_base_url",
@@ -2418,7 +2107,7 @@ fn install_worker_globals_v8(
 
     rt.eval(&worker_global_shim(worker_id))?;
     rt.eval(WORKER_TIMERS_SHIM)?;   // BUG-815
-    rt.eval(WORKER_NET_SHIM)?;
+    crate::worker_net::install_worker_net_v8(rt, net_provider)?;
     Ok(())
 }
 
@@ -3314,7 +3003,7 @@ mod tests_v8 {
 
     /// Minimal `JsFetchProvider` double: answers by exact URL, 404 otherwise.
     /// Mirrors `sw_worker.rs::tests_v8::SwNet` but only needs `fetch_sync` —
-    /// `worker_net_fetch_json` calls `fetch_request`, whose default impl
+    /// `worker_net::net_fetch` calls `fetch_request`, whose default impl
     /// dispatches a body-less, token-less request to `fetch_sync`.
     struct TestNet {
         bodies: HashMap<String, String>,

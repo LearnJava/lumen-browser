@@ -37,8 +37,8 @@ const FETCH_TIMEOUT: Duration = Duration::from_millis(5_000);
 /// Provides `self`, `location`, `registration`, `skipWaiting`, `clients`,
 /// `addEventListener`/
 /// `removeEventListener`, minimal `Request`/`Response` classes (`Headers` is
-/// [`crate::dom::HEADERS_SHIM`], evaluated separately just before this shim —
-/// see [`install_sw_globals_v8`]), the `caches`
+/// [`crate::dom::HEADERS_SHIM`], part of `worker_exposed_shim` evaluated
+/// before this shim — see [`install_sw_globals_v8`]), the `caches`
 /// API (backed by the Rust `CacheBackend` via `_lumen_sw_cache_*` natives),
 /// a cache-first `fetch` stub, `_sw_fire_event`/`_sw_fire_fetch` dispatch
 /// hooks called by the Rust message loop, `console`, and
@@ -122,7 +122,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   }}
 
   // `Headers` (BUG-748): the real class (`crate::dom::HEADERS_SHIM`, shared
-  // with the page and BUG-369), evaluated by `install_sw_globals_v8` just
+  // with the page and BUG-369, part of `worker_exposed_shim`), evaluated
   // before this shim — not a second, independent mini-class. That second
   // class used to store headers on a plain object, so `Set-Cookie` duplicates
   // collapsed into one and `for..of`/`.append()`/`.forEach()` were missing.
@@ -840,9 +840,9 @@ fn install_sw_globals_v8(
     // хосту молча выбирает не ту ветку.
     let origin_js = origin.trim_end_matches('/').replace('\'', "\\'");
     let origin_str = format!("'{origin_js}'");
-    // `Headers` (BUG-748): the real class shared with the page scope, ahead of
-    // the shim below whose `Request`/`Response` construct it via `new Headers`.
-    rt.eval(crate::dom::HEADERS_SHIM)?;
+    // `Headers` (BUG-748) — the real class shared with the page scope — already
+    // came from `install_worker_scope_globals_v8` above (WORKER-1 срез 5); the
+    // shim below constructs it via `new Headers`.
     rt.eval(&sw_globals_shim(&scope_str, &origin_str))?;
     // `MessageChannel`/`MessagePort` already came from
     // `install_worker_scope_globals_v8` above (GAP-WORKERSCOPE); nothing left

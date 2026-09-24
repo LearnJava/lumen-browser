@@ -68,6 +68,8 @@ pub mod webhid;
 pub mod webtransport;
 pub mod webusb;
 pub mod worker;
+#[cfg(feature = "v8-backend")]
+pub(crate) mod worker_net;
 pub mod url_pattern;
 pub mod navigation_api;
 pub mod typed_om_api;

@@ -334,8 +334,8 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // after this one) — deadline-ordered and driven by this thread's own wait
   // rather than only by an incoming port message (BUG-815).
 
-  // Exposed so the shared net shim (`crate::worker::WORKER_NET_SHIM`,
-  // evaluated as a separate IIFE right after this one) routes a throwing
+  // Exposed so the shared net shim (`crate::worker_net::WORKER_NET_SHIM`,
+  // evaluated as a separate IIFE after this one) routes a throwing
   // fetch/XHR listener through the same reporting path (BUG-591 shape,
   // BUG-778 scope).
   globalThis._lumen_worker_exception_reporter = _lumen_sw_report_exception;
@@ -1012,15 +1012,15 @@ fn broadcast_shared_worker_error(
 ///
 /// Registers `_lumen_sw_port_reply` / `_lumen_sw_console_log` (both plain
 /// String/u32 natives — no scoped mechanism needed, unlike `worker.rs`'s
-/// throwing `atob`/`btoa`), `_lumen_worker_self_close`/`_lumen_worker_net_fetch`/
-/// `_lumen_import_scripts_resolve` (BUG-778 — the same three natives the
-/// dedicated worker registers, reusing [`crate::worker::worker_net_fetch_json`]/
-/// [`crate::worker::resolve_import_url`] rather than a second implementation),
+/// throwing `atob`/`btoa`), `_lumen_worker_self_close`/
+/// `_lumen_import_scripts_resolve` (BUG-778 — the same natives the
+/// dedicated worker registers, reusing [`crate::worker::resolve_import_url`] rather than a second implementation),
 /// sets the `_lumen_worker_base_url` (BUG-778) and `_lumen_worker_location_url`
 /// (BUG-776) globals, both derived from `script_url`, plus
 /// `_lumen_worker_is_module` (BUG-777, gates `importScripts`), and evaluates
 /// [`SHARED_WORKER_GLOBAL_SHIM`] followed by
-/// [`crate::worker::WORKER_TIMERS_SHIM`] and [`crate::worker::WORKER_NET_SHIM`].
+/// [`crate::worker::WORKER_TIMERS_SHIM`] and the network surface of
+/// [`crate::worker_net::install_worker_net_v8`].
 ///
 /// No native here reaches `error_ports` (BUG-905): a runtime exception now
 /// stops at the scope's own `onerror`/`'error'` listeners (logged to the
@@ -1072,19 +1072,8 @@ fn install_shared_worker_globals_v8(
         )?;
     }
 
-    // _lumen_worker_net_fetch(url, method, headers_flat, body_b64) → String | undefined
-    // BUG-778: backs `fetch()`/`XMLHttpRequest` (`crate::worker::WORKER_NET_SHIM`).
-    {
-        let fp = fetch_provider.clone();
-        rt.register_native(
-            "_lumen_worker_net_fetch",
-            into_v8_fn4(
-                move |url: String, method: String, headers_flat: Vec<String>, body_b64: Option<String>| -> Option<String> {
-                    crate::worker::worker_net_fetch_json(fp.as_deref(), &url, &method, &headers_flat, body_b64.as_deref())
-                },
-            ),
-        )?;
-    }
+    // BUG-778: `fetch()`/`XMLHttpRequest` — `crate::worker_net`, installed last below.
+    let net_provider = fetch_provider.clone();
 
     // _lumen_import_scripts_resolve(url) → String | undefined — BUG-778, see
     // this function's own doc comment on the `blob:lumen/` limitation.
@@ -1133,7 +1122,7 @@ fn install_shared_worker_globals_v8(
 
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
     rt.eval(crate::worker::WORKER_TIMERS_SHIM)?;   // BUG-815
-    rt.eval(crate::worker::WORKER_NET_SHIM)?;
+    crate::worker_net::install_worker_net_v8(rt, net_provider)?;
     Ok(())
 }
 
