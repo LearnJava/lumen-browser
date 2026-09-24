@@ -2,11 +2,11 @@
 
 **Статус:** OPEN
 **Тип:** дефект реализованного кода — синхронный путь `fetch()` (`_lumen_fetch` в
-`crates/js/src/shim/web_api_shim_mid_b2.js`) либо `require_http_scheme`/
+`crates/js/src/shim/web_api_shim_mid_b3.js`) либо `require_http_scheme`/
 redirect-loop в `crates/network` не пробрасывают ошибку схемы в Promise для
 первого вызова серии, когда один из последующих редиректов в файле ведёт на
 `data:`
-**Область:** JS shim (`crates/js/src/shim/web_api_shim_mid_b2.js:980-1237`,
+**Область:** JS shim (`crates/js/src/shim/web_api_shim_mid_b3.js:82-339`,
 `_lumen_fetch`, синхронная ветка `_lumen_fetch_sync`/`_lumen_response_from_fetch_cache`)
 и/или network (`crates/network/src/lib.rs`, redirect-loop вокруг
 `require_http_scheme`, `crates/network/src/lib.rs:479-509`)

@@ -328,14 +328,12 @@ bugs/BUG-992-FIXED.md	BUG-993-OPEN.md	stale-status-suffix	bugs/BUG-993-FIXED.md
 bugs/BUG-994-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-995-FIXED.md	BUG-997-OPEN.md	stale-status-suffix	bugs/BUG-997-FIXED.md
 bugs/BUG-995-FIXED.md	bugs/BUG-986-FIXED.md	wrong-relative-path	bugs/BUG-986-FIXED.md
-docs/automation.md	../bugs/BUG-1034-OPEN.md	stale-status-suffix	bugs/BUG-1034-FIXED.md
 docs/ci-offload.md	../bugs/BUG-789-OPEN.md	stale-status-suffix	bugs/BUG-789-FIXED.md
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/gpos.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/gsub.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/otlayout.rs	missing	
 docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/shape.rs	missing	
 docs/decisions/TEMPLATE.md	ADR-NNN-title.md	missing	
-docs/engine-gaps.md	../bugs/BUG-883-OPEN.md	stale-status-suffix	bugs/BUG-883-FIXED.md
 docs/plan/tech-stack.md	crates/core/src/ext.rs	missing	
 docs/roadmap-trees.md	roadmap-svg-columns.html	missing	
 docs/roadmap-trees.md	roadmap-svg-gitgraph.html	missing	

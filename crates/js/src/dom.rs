@@ -416,17 +416,25 @@ pub(crate) const STREAMS_SHIM: &str = include_str!("shim/streams_shim.js");
 /// sat in the original file, so nothing before or after it changes meaning.
 pub(crate) const HEADERS_SHIM: &str = include_str!("shim/headers_shim.js");
 
-/// Continuation of [`WEB_API_SHIM_MID_B`] after [`HEADERS_SHIM`] (BUG-748 split).
-const WEB_API_SHIM_MID_B2: &str = include_str!("shim/web_api_shim_mid_b2.js");
+/// Body mixin + `Response` + `Request` (Fetch Standard §2.3–2.6, BUG-370) —
+/// `[Exposed=(Window,Worker)]`. Was the whole of the page-shim piece after
+/// [`HEADERS_SHIM`]; renamed into its own part (WORKER-1 срез 5) so every
+/// worker scope builds the page's classes through [`worker_exposed_shim`]
+/// instead of the old worker mini-`Response` (whose `new Response(buffer)`
+/// had an empty body). Byte-for-byte the former file, so the page program is
+/// unchanged. Its call-time natives — `_lumen_stream_*`, `_lumen_fetch_body_*`,
+/// `_lumen_document_base_url` — come in a worker from
+/// [`crate::worker_net::install_worker_net_v8`].
+pub(crate) const FETCH_BODY_SHIM: &str = include_str!("shim/fetch_body_shim.js");
 
-/// `FormData` (XHR §4.3) — `[Exposed=(Window,Worker)]`, cut out of the tail of
-/// [`WEB_API_SHIM_MID_B2`] (WORKER-1 срез 4). A verbatim slice: the `<form>`
+/// `FormData` (XHR §4.3) — `[Exposed=(Window,Worker)]`, cut out of the page-shim
+/// piece after [`FETCH_BODY_SHIM`] (WORKER-1 срез 4). A verbatim slice: the `<form>`
 /// branch of the constructor is guarded on `tagName`, so a worker simply never
 /// takes it, and serialization needs only [`TEXT_ENCODING_SHIM`].
 pub(crate) const FORM_DATA_SHIM: &str = include_str!("shim/form_data_shim.js");
 
 /// `TextEncoder`/`TextDecoder` (WHATWG Encoding §8–9) — `[Exposed=*]`, cut out
-/// of [`WEB_API_SHIM_MID_B2`] (WORKER-1 срез 1) so every worker flavour gets
+/// of the page-shim piece after [`FETCH_BODY_SHIM`] (WORKER-1 срез 1) so every worker flavour gets
 /// the same classes through [`worker_exposed_shim`] instead of none at all
 /// (BUG-1080: a worker died on the first `new TextDecoder()`). A verbatim
 /// slice; the block depends only on the `_lumen_text_encoding_for_label`/
@@ -434,7 +442,7 @@ pub(crate) const FORM_DATA_SHIM: &str = include_str!("shim/form_data_shim.js");
 /// ([`install_worker_exposed_v8`]).
 pub(crate) const TEXT_ENCODING_SHIM: &str = include_str!("shim/text_encoding_shim.js");
 
-/// Continuation of [`WEB_API_SHIM_MID_B2`] after [`TEXT_ENCODING_SHIM`].
+/// Page-shim source after [`TEXT_ENCODING_SHIM`] (up to [`WEBSOCKET_SHIM`]).
 /// Exists only for that split; the splice order is pinned by
 /// `web_api_shim_splices_its_parts_in_source_order`.
 const WEB_API_SHIM_MID_B3: &str = include_str!("shim/web_api_shim_mid_b3.js");
@@ -571,14 +579,14 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
 /// `WorkerGlobalScope`: [`EVENT_SHIM`], [`EVENT_TARGET_SHIM`],
 /// [`PERFORMANCE_SHIM`], the URL pair, [`TEXT_ENCODING_SHIM`],
-/// [`ABORT_SHIM`], [`STREAMS_SHIM`], [`FORM_DATA_SHIM`], [`FILE_API_SHIM`] and
-/// [`WEBSOCKET_SHIM`].
+/// [`ABORT_SHIM`], [`STREAMS_SHIM`], [`HEADERS_SHIM`], [`FETCH_BODY_SHIM`],
+/// [`FORM_DATA_SHIM`], [`FILE_API_SHIM`] and [`WEBSOCKET_SHIM`].
 ///
 /// Evaluated as one script (like in the page) so `Performance`'s prototype
 /// chain finds `EventTarget`. The trailing `undefined` keeps the completion
@@ -594,7 +602,7 @@ pub(crate) fn web_api_shim() -> String {
 pub(crate) fn worker_exposed_shim() -> String {
     format!(
         "{EVENT_SHIM}{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\
-         {TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
+         {TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
          {WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
     )
 }
