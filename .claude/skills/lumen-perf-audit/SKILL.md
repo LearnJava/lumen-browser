@@ -23,7 +23,7 @@ allowed-tools: Bash Read Write Edit Grep Glob
 
 **Перед любым cargo** (Windows + Git Bash):
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
 ## Шаг 0. Ветка

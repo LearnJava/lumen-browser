@@ -8,8 +8,9 @@ rule through a different mechanism.
 ## Hard gates (block merge if violated)
 
 - `cargo clippy -p <crate> --all-targets -- -D warnings` must be clean for every touched crate.
-- No `panic!` / `.unwrap()` in production code paths. Tests are exempt. `panic!` is machine-checked
-  (`clippy::panic = "deny"`); `.unwrap()`/`.expect()` are not yet, so keep reviewing those by eye.
+- No `panic!` / `.unwrap()` / `.expect()` in production code paths. Tests are exempt. All three are
+  machine-checked (`clippy::panic`, `unwrap_used`, `expect_used` = `deny` in `[workspace.lints]`); review
+  the grandfathered `#[allow]`s instead — each needs a row in `docs/lint-policy.md` §10.
 - A new `#[allow(clippy::…)]` must come with a reason comment **and** a row in `docs/lint-policy.md` §10.
   An allow with neither is a silent rollback of a rule the project decided to enforce — flag it.
 - Every `unsafe` block must carry a `// SAFETY:` comment explaining the invariant that makes it sound.

@@ -236,7 +236,7 @@ disallowed-types = [
 Ровно как в [build-speed.md](build-speed.md) §2: не «на глаз», а числом.
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 
 # 1. Сколько срабатываний даст правило ДО включения (P5 — единственная роль,
 #    которой гоняет --workspace отдельной задачей; см. docs/commands.md

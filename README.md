@@ -62,7 +62,7 @@ JS-код ──► V8 ──► DOM / CSSOM / fetch / Canvas / Storage / Worker
 - **Paint/рендер** — два независимых бэкенда: GPU через `wgpu` (Vulkan/DX12/GL — живое окно) и детерминированный CPU-растеризатор (для тестов и headless-скриншотов). Градиенты, тени, фильтры, backdrop-filter, `clip-path`, 3D-трансформации, маски, стэкинг-контексты, wide-gamut (DisplayP3/Rec2020) вывод.
 - **Шрифты и текст** — собственный TrueType/OpenType-парсер, шейпинг, перенос строк по Unicode UAX #14/#29, hyphenation (11 локалей), bidi по UAX #9, COLR/CPAL цветные глифы, вертикальные режимы письма (`writing-mode`).
 - **JavaScript и Web API** — **V8**, единственный JS-движок в проекте (миграция с QuickJS завершена в августе 2026, `rquickjs` полностью удалён из workspace). DOM API, fetch/XHR/WebSocket/EventSource, Web Workers/Shared Workers, Service Workers + Cache Storage, IndexedDB, Web Storage, Web Animations, WebAuthn/passkeys, SubtleCrypto, Canvas 2D, software WebGL 1.0. Покрытие Web Platform Tests неполное — часть API размечена частично (🟡) в `CAPABILITIES.md`.
-- **Сеть** — HTTP/1.1, HTTP/2, HTTPS (rustls), брoтли/gzip/deflate, куки, CORS, HSTS, DNS-over-HTTPS/TLS, SOCKS5-прокси, блокировка рекламы на уровне фильтров (EasyList-совместимые правила). HTTP/3 (QUIC) — в разработке.
+- **Сеть** — HTTP/1.1, HTTP/2, HTTPS (rustls), брoтли/gzip/deflate, куки, CORS, HSTS, DNS-over-HTTPS/TLS, SOCKS5-прокси, блокировка рекламы на уровне фильтров (EasyList-совместимые правила, по умолчанию выключена). HTTP/3 (QUIC) — в разработке.
 - **Хранилища** — всё на SQLite: история, закладки, заметки, read-later, куки, IndexedDB, Service Worker store, загрузки, разрешения по сайтам, workspaces, вкладочные сессии. Профильное хранилище шифруется (AES-256-GCM + PBKDF2).
 - **Интерфейс браузера** — вкладки (вертикальные/горизонтальные, группы), адресная строка с подсказками, командная палитра, настройки, менеджер закладок/истории/загрузок, панель приватности (shields), сертификатный вьюер, DevTools (консоль, DOM-инспектор, сеть), Picture-in-Picture, печать в PDF.
 - **Автоматизация** — WebDriver BiDi сервер (реальная навигация/eval/скриншоты/ввод против живого окна), MCP-сервер (тот же набор как инструменты для AI-агента), нативный `BrowserSession` API, CDP-подмножество (`--devtools-port`), headless-режимы с детерминированным CPU-рендером — используется в собственном тестовом стенде и Web Platform Tests runner'е.
@@ -78,11 +78,11 @@ JS-код ──► V8 ──► DOM / CSSOM / fetch / Canvas / Storage / Worker
 
 ## Требования
 
-- **Rust 1.97.0**, пин зафиксирован в [`rust-toolchain.toml`](rust-toolchain.toml) (`rustup` подхватит версию автоматически при первой сборке в каталоге репозитория).
+- **Rust ≥ 1.95** (`rust-version` в `Cargo.toml`). CI и чекаут по умолчанию собираются на 1.97.0 из [`rust-toolchain.toml`](rust-toolchain.toml) — `rustup` подхватит её сам; более новая (например 1.98) тоже работает: `rustup override set <версия>` в каталоге репозитория. Подробности — [`docs/conventions.md`](docs/conventions.md).
 - **Windows:** Visual Studio Build Tools 2022+ (MSVC-линкер `link.exe`).
 - **Linux:** GCC/Clang, X11/Wayland dev-пакеты (для `winit`).
 - **macOS:** Xcode Command Line Tools.
-- **sccache ≥ 0.17.0** — обязателен, репозиторный `.cargo/config.toml` включает его как `RUSTC_WRAPPER`; более старая версия падает с `0xc0000409` на каждом вызове `rustc`/`clippy-driver` под тулчейном 1.97.0.
+- **sccache ≥ 0.17.0** — обязателен, репозиторный `.cargo/config.toml` включает его как `RUSTC_WRAPPER`; более старая версия падает с `0xc0000409` на каждом вызове `rustc`/`clippy-driver`.
 
 ### Установка Rust
 
@@ -101,7 +101,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 После установки перезапусти терминал и проверь:
 ```bash
-rustc --version    # должно показать 1.97.0
+rustc --version    # 1.97.0 по умолчанию, или твой override
 cargo --version
 ```
 

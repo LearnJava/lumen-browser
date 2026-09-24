@@ -17,6 +17,7 @@ above both. When a row and its file disagree, the file wins and the row is the t
 | lumen-css-parser | 🟡 complete CSS3 selector set; per-property status in `CSS-SPECS.md` | [subsystems/css-parser.md](subsystems/css-parser.md) |
 | lumen-layout | 🟡 block + inline-flow + flex + grid + replaced + cascade | [subsystems/layout.md](subsystems/layout.md) |
 | lumen-paint | 🟡 display list + wgpu renderer (femtovg fallback, ADR-017) + deterministic CPU rasterizer | [subsystems/paint.md](subsystems/paint.md) |
+| lumen-renderer | 🟡 separate GPU-process renderer: own headless wgpu device, IPC over `lumen-ipc` (GPU sandbox, `docs/tasks/ph3-gpu-process-sandbox.md`) | no own file yet — see [subsystems/paint.md](subsystems/paint.md) |
 | lumen-font | 🟡 TTF/OTF + WOFF2 + variable fonts + COLR/CPAL + rustybuzz shaping (LIB-2/LIB-3) | [subsystems/font.md](subsystems/font.md) |
 | lumen-encoding | ✅ detector + decoders + Unicode provider + hyphenation | [subsystems/encoding.md](subsystems/encoding.md) |
 | lumen-image | ✅ PNG + JPEG + WebP + GIF + AVIF + SVG (resvg, LIB-4) | [subsystems/image.md](subsystems/image.md) |

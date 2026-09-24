@@ -20,6 +20,8 @@ Goal: no panics/UB on arbitrary input, not correctness of parsing.
 
 ## Where these actually run: CI
 
+**Not on native Windows, structurally:** PE/COFF has no equivalent of the `__start___sancov_*` section-boundary symbols libFuzzer needs. Use WSL or `gh workflow run fuzz.yml`.
+
 **The primary way to run these harnesses is the `Fuzz` GitHub Actions
 workflow** ([../.github/workflows/fuzz.yml](../.github/workflows/fuzz.yml)),
 not a dev machine. libFuzzer needs an ASan runtime and ELF section-boundary

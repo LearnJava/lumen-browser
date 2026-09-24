@@ -27,7 +27,7 @@
 ## Как получить `lumen.exe`
 
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"   # Git Bash, если ещё не в PATH
+export PATH="$HOME/.cargo/bin:$PATH"   # Git Bash, если ещё не в PATH
 
 # Быстрая сборка для тестирования (в 2-3 раза быстрее release):
 LUMEN_PROFILE=dev-release cargo build -p lumen-shell --profile dev-release

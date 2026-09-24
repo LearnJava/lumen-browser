@@ -27,7 +27,6 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## Navigation, frames and documents
 
-- **`window.open()` and `<a target=_blank>` replace the *calling* document** ([BUG-883](../bugs/BUG-883-OPEN.md)) — the opener's timers never fire again.
 - An entry made by `history.pushState(state, "")` (no URL argument) fires no `popstate` on traversal ([BUG-886](../bugs/BUG-886-OPEN.md)).
 
 ## Resource loading

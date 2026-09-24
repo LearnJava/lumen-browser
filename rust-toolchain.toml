@@ -3,6 +3,9 @@
 # машинах — локально 1.96.1, на раннерах CI последний stable, отсюда clippy,
 # зелёный у разработчика и красный в CI. Версию поднимать осознанным
 # коммитом, прогнав workspace-clippy.
+# Это пин CI и чекаута по умолчанию, а не требование к машине: более новый
+# тулчейн (1.98) тоже собирает и проходит гейт — `rustup override set <версия>`
+# в каталоге или RUSTUP_TOOLCHAIN (docs/conventions.md).
 channel = "1.97.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

@@ -3,7 +3,7 @@ name: lumen-health-check
 description: >
   Периодическая ревизия здоровья кодовой базы Lumen (роль P5): workspace-clippy,
   аудит заглушек (todo!/unimplemented!/висящие // CSS:), чистка влитых веток и
-  осиротевших worktree, дрейф SYMBOLS.md/lumen-plan.md, аудит зависимостей,
+  осиротевших worktree, дрейф документации (битые ссылки, lumen-plan.md), аудит зависимостей,
   поиск дублирующих полей ComputedStyle. Делает безопасную механическую чистку,
   крупные находки оформляет задачами для P1–P4.
 when_to_use: >
@@ -22,7 +22,7 @@ $ARGUMENTS — таргет свипа. Допустимо: `full` (по умо�
 
 **Перед любым cargo** (Windows + Git Bash):
 ```bash
-export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
 Принцип роли: **аудит + безопасная механическая чистка + заведение задач.**
@@ -104,7 +104,7 @@ git worktree remove .claude/worktrees/<name>    # для пустых/завер
 
 **Запрещено:** `git branch -D` (force) для невлитых веток, удаление чужих
 активных worktree. Если worktree чужой и непустой — оставить, сообщить пользователю.
-Зомби-worktree (path не совпадает с веткой) — см. `.claude/docs/zombie-worktree.md`,
+Зомби-worktree (path не совпадает с веткой) — см. `docs/git-workflow.md` §Never leave a worktree on `main`,
 не форсить.
 
 ---
@@ -178,11 +178,11 @@ cargo tree -d                     # дублирующиеся версии од
 ### clippy        <OK | N ошибок>
 ### stubs         <N todo!, M висящих // CSS!, K OPEN-багов>
 ### branches      <N влитых к удалению, M зомби-worktree>
-### docs          <SYMBOLS.md актуален? | дрейф маркеров: …>
+### docs          <check_doc_links: новые битые? | дрейф маркеров: …>
 ### deps          <дубли версий: … | недокументированные deps: …>
 
 ### Сделано безопасно
-- <удалённые ветки, регенерация SYMBOLS.md, тривиальные clippy-фиксы>
+- <удалённые ветки, тривиальные clippy-фиксы>
 
 ### Заведено задач
 - BUGS.md: BUG-NNN …
