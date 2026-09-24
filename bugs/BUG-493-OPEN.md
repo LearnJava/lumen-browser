@@ -412,3 +412,21 @@ bug's "no synchronous flush" gap is live on `--bidi-port`, not just the
 (it already tracks one narrow instance, `_lumen_request_scroll`'s
 `is_clip` check; this residual generalizes it to plain
 `getComputedStyle()`/`.sheet` with no scroll/clip involved at all).
+
+
+## Реальные сайты (2026-09-24, разбор совместимости без блокировщика)
+
+Остаток «`HTMLStyleElement.sheet` равно `null` сразу после `appendChild`» ломает styled-components
+(`getSheet` → ошибка #17, «CSSStyleSheet could not be found on HTMLStyleElement») на трёх сайтах:
+
+- **twitch** — React Router ловит ошибку при рендере → пустое приложение;
+- **quora** — `https://git.io/JUIaE#17`;
+- **bbc** — за ней `A client-side exception has occurred` (Next.js), гидрация падает.
+
+Репро (`.tmp/compat/g2/scsheet.html`, `sheetlater.html`, `.tmp/compat/g5/styled.html`): Lumen —
+`.sheet === null` синхронно и в микротаске, объект только после `setTimeout(0)`/релэйаута,
+`document.styleSheets.length` 1 вместо 3; Chrome — объект сразу. Геттер
+`_lumen_element_sheet_getter` (`web_api_shim_tail_b.js:2027-2039`) читает реестр
+`_lumen_stylesheet_owner_nids()`, который шелл заполняет только после каскада
+(`page_pipeline.rs:1220` `update_stylesheet_nodes`). CSSOM-4 закрыл путь `InProcessSession`, живое
+окно этот остаток не покрывает. Передан P6 по решению пользователя.

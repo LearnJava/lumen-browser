@@ -44,3 +44,15 @@ reject; проверить заодно).
 - Живьём: stackoverflow.com, ebay.com, costco.com (4xx-страница сайта вместо
   «Ошибка загрузки»); прохождение челленджей — отдельный вопрос JS-совместимости,
   но без этого фикса он даже не начинается.
+
+
+## `fetch()` — тот же корень (2026-09-24)
+
+`fetch()` с ответом 4xx/5xx реджектится (`TypeError: fetch: network error`), а должен
+резолвиться `Response{ok:false}` (Fetch §4.1: HTTP-ошибка — не network error). fandom:
+`fetch('https://services.fandom.com/whoami/')` → 401 → `fetch error: network error: HTTP 401`.
+Репро `.tmp/compat/g4/repro-fetch.html`: Lumen `fetch404 REJECT`, Chrome `resolved status=404
+ok=false`, тело 335 байт. Тот же `lib.rs:2964` (`status => Err(HTTP {status})`), путь
+`fetch_request_impl` → `fetch_with_redirect` (`lib.rs:5352`). Там же duolingo: переход на
+`/errors/not-supported.html` (из-за отсутствующего `IntersectionObserverEntry`) даёт 404 и страницу
+ошибки Lumen вместо тела.
