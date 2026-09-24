@@ -218,6 +218,8 @@ mod v8_bug387_computed_style_map;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug732_node_and_collections;
+#[cfg(feature = "v8-backend")]
+mod v8_bug892_document_collections;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug377_base_uri;
