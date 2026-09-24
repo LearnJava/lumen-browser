@@ -3522,13 +3522,15 @@ pub trait PushBackend: Send + Sync {
 /// generation and dedup set all captured at construction) and hands an
 /// `Arc<dyn ImageLoadHook>` to `V8JsRuntime::with_image_load_hook`.
 ///
-/// Scope (срез 1): only the plain `src` attribute on `<img>`, only for the
-/// runtime built for the top-level document's own parser/inline scripts
+/// Scope: only the plain `src` attribute on `<img>`, only for the runtime
+/// built for the top-level document's own parser/inline scripts
 /// (`run_scripts_with_dom`'s primary call site). `srcset`/`<picture>`
-/// selection, subtree insertion (`appendChild` of an already-`src`-bearing
-/// `<img>`), iframes and bfcache-thaw runtimes are not wired — those keep
+/// selection, iframes and bfcache-thaw runtimes are not wired — those keep
 /// relying on the post-relayout sweep ([`Self::queue_image_load`]'s caller
 /// doc comment has no bearing on them), same as before this trait existed.
+/// Срез 2 added subtree insertion (`appendChild`/`insertBefore` of an
+/// already-`src`-bearing `<img>`, and `innerHTML` parsed straight from
+/// markup) — see `queue_pending_img_loads` in `lumen-js`'s `dom_core.rs`.
 pub trait ImageLoadHook: Send + Sync {
     /// `raw_src` is the attribute value as written by script, not yet
     /// resolved against the document base URL — the implementation resolves

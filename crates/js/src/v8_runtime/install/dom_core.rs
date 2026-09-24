@@ -23,6 +23,34 @@ fn log_foreign_node_id(doc: &lumen_dom::Document, what: &str, id: u32) {
     );
 }
 
+/// BUG-1118 срез 2: `_lumen_set_attr`'s image-load hook only fires when the
+/// `src` attribute is *assigned after* the `<img>` already exists in the
+/// document — a subtree built by `innerHTML`/`insertAdjacentHTML` (parsed
+/// straight from markup, `src` never goes through `_lumen_set_attr`) or by
+/// `cloneNode(true)` of an element that already had `src` set carries the
+/// attribute in from the start. Walks `root` and its descendants looking for
+/// `<img src="…">` and queues each one through `hook`, same as a live
+/// `_lumen_set_attr` call would — the shared dedup set in
+/// `DynamicImgFetchHook::queue_image_load` skips anything the post-relayout
+/// sweep or `_lumen_set_attr` already requested.
+fn queue_pending_img_loads(
+    doc: &lumen_dom::Document,
+    root: lumen_dom::NodeId,
+    hook: &dyn lumen_core::ext::ImageLoadHook,
+) {
+    let mut stack = vec![root];
+    while let Some(nid) = stack.pop() {
+        let Some(node) = doc.try_get(nid) else { continue };
+        if node.element_name().is_some_and(|n| n.local == "img")
+            && let Some(src) = node.get_attr("src")
+            && !src.trim().is_empty()
+        {
+            hook.queue_image_load(src);
+        }
+        stack.extend(node.children.iter().copied());
+    }
+}
+
 /// `document.documentElement`/`body`/`head` and other document-level reads.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_document_meta(
@@ -888,7 +916,8 @@ pub(crate) fn install_node_properties(
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
+        let img_hook = image_load_hook.clone();
+        reg!(scope, ctx, store,
             "_lumen_set_inner_html",
             move |node_id: u32, html: String| {
                 // BUG-368: parse `html` as a fragment and replace `nid`'s children
@@ -932,6 +961,12 @@ pub(crate) fn install_node_properties(
                 let new_children = parse_html_fragment_with_context(&mut doc, &html, Some(nid));
                 for c in new_children {
                     doc.append_child(target, c);
+                    // BUG-1118 срез 2: markup parsed straight from `innerHTML`
+                    // carries `src` in from the start — `_lumen_set_attr` never
+                    // fires for it, so this is the only hook point.
+                    if let Some(hook) = &img_hook {
+                        queue_pending_img_loads(&doc, c, hook.as_ref());
+                    }
                 }
                 record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
@@ -939,7 +974,7 @@ pub(crate) fn install_node_properties(
             }
         );
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_get_outer_html",
             move |node_id: u32| -> String {
                 // BUG-351: serialize `nid` itself (open tag + attrs + children +
@@ -1037,6 +1072,7 @@ pub(crate) fn install_node_count(
 
 /// `appendChild`/`removeChild`/`insertBefore` and friends.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // BUG-1118 срез 2 added the 8th; mirrors install_node_properties
 pub(crate) fn install_tree_mutation(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
@@ -1045,6 +1081,7 @@ pub(crate) fn install_tree_mutation(
     dom_dirty: Arc<AtomicBool>,
     flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
+    image_load_hook: Option<Arc<dyn lumen_core::ext::ImageLoadHook>>,
 ) -> JsResult<()> {
     // ── tree mutation ────────────────────────────────────────────────────────
     {
@@ -1119,7 +1156,8 @@ pub(crate) fn install_tree_mutation(
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
+        let img_hook = image_load_hook.clone();
+        reg!(scope, ctx, store,
             "_lumen_append_child",
             move |parent_id: u32, child_id: u32| {
                 let mut doc = d.lock().unwrap();
@@ -1139,6 +1177,12 @@ pub(crate) fn install_tree_mutation(
                 // children (all within `restyle_root_set_for_node_change`'s
                 // parent-subtree invalidation).
                 record_dom_touch(&touched, parent);
+                // BUG-1118 срез 2: `child` may already be a fully-built
+                // `<img src>` subtree (cloneNode(true), or a fragment from
+                // `_lumen_parse_html_fragment`) — see `queue_pending_img_loads`.
+                if let Some(hook) = &img_hook {
+                    queue_pending_img_loads(&doc, child, hook.as_ref());
+                }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
             }
@@ -1208,6 +1252,7 @@ pub(crate) fn install_tree_mutation(
 
 /// Shadow DOM attachment and shadow-tree queries.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // BUG-1118 срез 2 added the 8th; mirrors install_node_properties
 pub(crate) fn install_shadow_dom(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
@@ -1216,6 +1261,7 @@ pub(crate) fn install_shadow_dom(
     dom_dirty: Arc<AtomicBool>,
     flush_stale: Arc<AtomicBool>,
     dom_touched: Arc<Mutex<DomTouched>>,
+    image_load_hook: Option<Arc<dyn lumen_core::ext::ImageLoadHook>>,
 ) -> JsResult<()> {
     // ── Shadow DOM ───────────────────────────────────────────────────────────────
     // Attaches a new shadow root to `nid` and returns the shadow root NodeId.
@@ -1348,7 +1394,8 @@ pub(crate) fn install_shadow_dom(
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
+        let img_hook = image_load_hook.clone();
+        reg!(scope, ctx, store,
             "_lumen_insert_before",
             move |_parent_id: u32, child_id: u32, reference_id: u32| {
                 let mut doc = d.lock().unwrap();
@@ -1364,6 +1411,10 @@ pub(crate) fn install_shadow_dom(
                 doc.insert_before(child, reference);
                 if let Some(parent) = parent {
                     record_dom_touch(&touched, parent);
+                }
+                // BUG-1118 срез 2: same rationale as `_lumen_append_child`.
+                if let Some(hook) = &img_hook {
+                    queue_pending_img_loads(&doc, child, hook.as_ref());
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);
