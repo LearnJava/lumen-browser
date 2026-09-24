@@ -3762,6 +3762,84 @@ function _lumen_is_details(nid) {
     return t !== null && t !== undefined && String(t).toLowerCase() === 'details';
 }
 
+// HTML LS §6.1 "ancestor revealing algorithm" (GAP-BEFOREMATCH срез 2): the
+// remaining reveal half of `hidden="until-found"` — fires `beforematch` and
+// removes `hidden` on a matched element's ancestors, and opens any enclosing
+// closed `<details>`. Combined into one tree walk + one processing pass per
+// whatwg/html#11457 (the two algorithms used to be separate, which could
+// infinite-loop if a `beforematch` handler mutated the tree while a second
+// walk was still in flight — `beforematch-infinite-loop.html`): the whole
+// ancestor chain is collected FIRST, before any event fires, so a handler
+// that moves nodes around cannot cause a re-walk to see them again.
+//
+// `_lumen_details_second_slot_parent` mirrors `_lumen_summary_details_parent`
+// (just above): Lumen has no real shadow-DOM slot for `<details>`/`<summary>`
+// (GAP-UASHADOWSLOT), so "ancestor is slotted into the second slot of a
+// `<details>`" is approximated the same way the rest of the details
+// machinery already does — "parent is `<details>` and this child is not
+// *the* first-summary-child" (the sole content occupying the first slot).
+// Returns the `<details>` nid, or -1.
+function _lumen_details_second_slot_parent(nid) {
+    var parent = _lumen_u2n(_lumen_get_parent(nid));
+    if (parent === null || (_lumen_get_tag_name(parent) || '').toUpperCase() !== 'DETAILS') return -1;
+    return _lumen_summary_details_parent(nid) === parent ? -1 : parent;
+}
+
+// `true` when `nid`'s `hidden` attribute is in the Hidden Until Found state
+// (present, and ASCII case-insensitively equal to "until-found") — the same
+// test `tristate-bool` reflection (BUG-594) exposes to script as `hidden ===
+// 'until-found'`, reimplemented here in nid terms for the reveal walk below.
+function _lumen_hidden_is_until_found(nid) {
+    if (!_lumen_has_attr(nid, 'hidden')) return false;
+    var v = _lumen_u2n(_lumen_get_attr(nid, 'hidden'));
+    return v !== null && String(v).toLowerCase() === 'until-found';
+}
+
+// Called from the shell (fragment navigation / scroll-to-text-fragment) and
+// from find-in-page before scrolling to a match that may live inside a
+// `hidden=until-found` subtree or a closed `<details>`. Per the spec
+// algorithm the walk STARTS AT `target` itself (`target` is checked exactly
+// like any other ancestor, not skipped) and climbs while there is still a
+// parent — so a directly `hidden=until-found` target is itself revealed,
+// same as one further up the tree.
+function _lumen_ancestor_revealing_algorithm(target) {
+    var ancestorsToReveal = [];
+    var ancestor = target;
+    for (var guard = 0; guard < 1024; guard++) {
+        var parent = _lumen_u2n(_lumen_get_parent(ancestor));
+        if (parent === null) parent = _lumen_u2n(_lumen_get_shadow_root_host(ancestor));
+        if (parent === null) break;
+        if (_lumen_hidden_is_until_found(ancestor)) {
+            ancestorsToReveal.push([ancestor, 'until-found']);
+        }
+        var detailsParent = _lumen_details_second_slot_parent(ancestor);
+        if (detailsParent !== -1 && !_lumen_has_attr(detailsParent, 'open')) {
+            ancestorsToReveal.push([detailsParent, 'details']);
+        }
+        ancestor = parent;
+    }
+    for (var i = 0; i < ancestorsToReveal.length; i++) {
+        var pair = ancestorsToReveal[i];
+        var nid = pair[0], revealType = pair[1];
+        // Step 1 of the per-pair loop: abort the WHOLE algorithm (not just
+        // this pair) the instant an earlier pair's event handler disconnects
+        // a later one — same "collect first, mutate later" hazard the
+        // combined walk above already guards the collection phase against.
+        if (!_lumen_resource_is_connected(nid)) return;
+        if (revealType === 'until-found') {
+            if (!_lumen_hidden_is_until_found(nid)) return;
+            var evt = new Event('beforematch', { bubbles: true, cancelable: false, isTrusted: true });
+            _lumen_dispatch(nid, evt);
+            if (!_lumen_resource_is_connected(nid)) return;
+            if (!_lumen_hidden_is_until_found(nid)) return;
+            _lumen_remove_attr(nid, 'hidden');
+        } else {
+            if (_lumen_has_attr(nid, 'open')) return;
+            _lumen_set_attr(nid, 'open', ''); // fires `toggle` via the set_attr hook above.
+        }
+    }
+}
+
 function _lumen_details_fire_toggle(nid) {
     var rec = _details_toggle_pending[nid];
     if (!rec) return;

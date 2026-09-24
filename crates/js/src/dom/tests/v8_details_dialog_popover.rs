@@ -1251,3 +1251,107 @@ fn oncommand_content_attribute_installs_handler() {
                  el.setAttribute('oncommand', 'this.dataset.fired = \"1\"'); \
                  typeof el.oncommand === 'function'"));
 }
+
+// ── GAP-BEFOREMATCH срез 2: `_lumen_ancestor_revealing_algorithm` ────────
+// HTML LS §6.1 "ancestor revealing algorithm" — the shell calls this by nid
+// before scrolling to a fragment-navigation/find-in-page target; see
+// `crates/shell/src/page_load.rs` and `crates/shell/src/lumen/find_bar.rs`.
+
+#[test]
+fn reveal_fires_beforematch_and_removes_hidden() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "document.getElementById('main').innerHTML = \
+                 '<p id=\"p\" hidden=\"until-found\">text</p>';",
+    )
+    .unwrap();
+    assert!(bool_eval(
+        &rt,
+        "var p = document.getElementById('p'); \
+                 var fired = false; \
+                 p.addEventListener('beforematch', function() { fired = true; }); \
+                 _lumen_ancestor_revealing_algorithm(p.__nid__); \
+                 fired && !p.hasAttribute('hidden')"
+    ));
+}
+
+#[test]
+fn reveal_ignores_ordinary_hidden() {
+    // Only the `until-found` state reveals — a plain boolean `hidden` is
+    // left untouched (HTML LS: the algorithm only inspects elements whose
+    // `hidden` content attribute is in the Hidden Until Found state).
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "document.getElementById('main').innerHTML = \
+                 '<p id=\"p\" hidden>text</p>';",
+    )
+    .unwrap();
+    assert!(bool_eval(
+        &rt,
+        "var p = document.getElementById('p'); \
+                 var fired = false; \
+                 p.addEventListener('beforematch', function() { fired = true; }); \
+                 _lumen_ancestor_revealing_algorithm(p.__nid__); \
+                 !fired && p.hasAttribute('hidden')"
+    ));
+}
+
+#[test]
+fn reveal_opens_ancestor_details() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "document.getElementById('main').innerHTML = \
+                 '<details id=\"d\"><summary>s</summary><p id=\"p\">text</p></details>';",
+    )
+    .unwrap();
+    assert!(bool_eval(
+        &rt,
+        "var p = document.getElementById('p'); \
+                 var d = document.getElementById('d'); \
+                 var fired = false; \
+                 d.addEventListener('toggle', function() { fired = true; }); \
+                 _lumen_ancestor_revealing_algorithm(p.__nid__); \
+                 d.hasAttribute('open')"
+    ));
+}
+
+#[test]
+fn reveal_walks_multiple_ancestors() {
+    // A `hidden=until-found` `<div>` nested inside a closed `<details>` —
+    // both reveal steps must fire from a single call (HTML LS: one combined
+    // walk, not two separate top-level algorithms).
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "document.getElementById('main').innerHTML = \
+                 '<details id=\"d\"><summary>s</summary>\
+                  <div id=\"h\" hidden=\"until-found\"><p id=\"p\">text</p></div></details>';",
+    )
+    .unwrap();
+    assert!(bool_eval(
+        &rt,
+        "var p = document.getElementById('p'); \
+                 var d = document.getElementById('d'); \
+                 var h = document.getElementById('h'); \
+                 _lumen_ancestor_revealing_algorithm(p.__nid__); \
+                 d.hasAttribute('open') && !h.hasAttribute('hidden')"
+    ));
+}
+
+#[test]
+fn reveal_target_itself_is_checked_too() {
+    // Per spec the walk STARTS at `target` (step 2: "Let ancestor be
+    // target"), not at its parent — a directly `hidden=until-found` target
+    // reveals itself, exactly like an ancestor further up would.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "document.getElementById('main').innerHTML = \
+                 '<p id=\"p\" hidden=\"until-found\">text</p>';",
+    )
+    .unwrap();
+    assert!(bool_eval(
+        &rt,
+        "var p = document.getElementById('p'); \
+                 _lumen_ancestor_revealing_algorithm(p.__nid__); \
+                 !p.hasAttribute('hidden')"
+    ));
+}

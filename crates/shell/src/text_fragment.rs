@@ -129,6 +129,11 @@ fn percent_decode(s: &str) -> String {
 pub struct DirectiveMatch {
     /// One rect per distinct [`TextFragment`] the match touches, in document order.
     pub rects: Vec<lumen_core::geom::Rect>,
+    /// DOM node of the FIRST fragment the match touches (document order) —
+    /// the reveal-algorithm entry point (GAP-BEFOREMATCH срез 2): the
+    /// ancestor walk starts from wherever the match actually lives, same as
+    /// the id-fragment path starts from the id'd element itself.
+    pub node: lumen_dom::NodeId,
 }
 
 impl DirectiveMatch {
@@ -319,8 +324,9 @@ pub fn find_directive_match(frags: &[TextFragment], directive: &TextDirective) -
                     .map(|b| b.frag_index)
                     .collect();
                 frag_indices.dedup();
+                let node = frags[frag_indices[0]].node;
                 let rects = frag_indices.into_iter().map(|i| frags[i].rect).collect();
-                return Some(DirectiveMatch { rects });
+                return Some(DirectiveMatch { rects, node });
             }
         }
         search_from = start_idx + 1;
@@ -580,6 +586,7 @@ mod tests {
                 lumen_core::geom::Rect::new(0.0, 0.0, 50.0, 20.0),
                 lumen_core::geom::Rect::new(60.0, 0.0, 40.0, 20.0),
             ],
+            node: lumen_dom::NodeId::from_index(1),
         };
         let b = m.bounding_rect();
         assert!((b.x - 0.0).abs() < 0.01);
