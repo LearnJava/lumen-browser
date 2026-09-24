@@ -1,7 +1,7 @@
 # BUG-951 — `<label>.focus()` не форвардит фокус на связанный контрол и не фокусирует саму метку
 
-**Статус:** OPEN
-**Тип:** дефект реализованного кода — `HTMLElement.prototype.focus` уже существует и работает для всех прочих тегов; у `<label>` не хватает одной специальной ветки (HTML LS §6.6.3 «the focusing steps», шаг про forwarding), а не целой подсистемы.
+**Статус:** FIXED (P3, 2026-09-24)
+**Тип:** дефект реализованного кода — `HTMLElement.prototype.focus` уже существует и работает для всех прочих тегов; у `<label>` не хватало одной специальной ветки (HTML LS §6.6.3 «the focusing steps», шаг про forwarding), а не целой подсистемы.
 **Заведён:** 2026-09-01 (WPT-RUN-6, срез 32, живая проба `verify_slice32_gaps.py --variant label-focus-forward`)
 **Область:** js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable` не знает тега `LABEL`; `HTMLElement.prototype.focus` не резолвит «связанный контрол» метки)
 **Владелец:** P3.
@@ -50,3 +50,29 @@
 явным `tabindex` (включая пустую строку и отрицательный) фокусируется как
 обычно — общая ветка уже это покрывает, специальный случай нужен только
 когда `tabindex` отсутствует.
+
+## Фикс
+
+Резолвинг «связанный контрол» уже существовал отдельно для геттера
+`label.control` (`for` → `getElementById`, иначе первый потомок из
+`_LUMEN_LABELABLE_TAGS`) — вынесен в общий хелпер `_lumen_label_control_nid`
+(`crates/js/src/shim/web_api_shim_tail_b.js`), которым теперь пользуются три
+места вместо одного:
+
+* `label.control` (геттер) — просто зовёт хелпер, без изменения поведения.
+* `_lumen_is_focusable`: для тега `LABEL` без явного `tabindex` (явный
+  `tabindex` уже возвращает `true` веткой выше) — фокусируемость метки равна
+  фокусируемости её резолвленного контрола (рекурсивный вызов на его nid, не
+  зацикливается — резолвленный тег никогда не `LABEL`).
+* `HTMLElement.prototype.focus`: тот же спецслучай (тег `LABEL`, нет
+  `tabindex`) подменяет `nid`/`target` на резолвленный контрол ДО
+  `_lumen_request_focus`/`_lumen_focus_update`, так что фокус (и «scroll into
+  view») применяется к контролу, а не к метке.
+
+**Тесты:** `crates/js/src/dom/tests/v8_bug951_label_focus.rs` — форвардинг
+через `for`, форвардинг через первый labelable-потомок, явный `tabindex`
+фокусирует саму метку (регресс на общую ветку), метка без резолвящегося
+контрола и без `tabindex` — no-op, `label.control` согласован с целью
+`focus()`. Все 5 зелёные (`cargo test -p lumen-js --lib --features
+v8-backend v8_bug951_label_focus`). `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings` чист.

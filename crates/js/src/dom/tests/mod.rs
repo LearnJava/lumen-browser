@@ -340,3 +340,6 @@ mod v8_gap_useract;
 
 #[cfg(feature = "v8-backend")]
 mod v8_gap_p3gcjsdom_wrapper_refcount;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug951_label_focus;
