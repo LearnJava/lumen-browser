@@ -474,3 +474,86 @@ fn a_shadow_host_sibling_does_not_get_a_plain_siblings_cached_style() {
         ":host rule must apply to the shadow-host sibling, not the plain sibling's cached style"
     );
 }
+
+#[test]
+fn an_unreachable_ancestor_hover_pseudo_class_does_not_disable_sharing() {
+    // BUG-1112 срез 6: `.btn:hover .octicon` used to zero `shareable` for
+    // EVERY `.octicon` node in the document (the abstract selector has a
+    // `:hover` in ancestor position, which the key cannot pin at any depth),
+    // even here, where `.btn` does not exist anywhere in the document —
+    // `RuleIndex` hands the rule back as a candidate purely because its
+    // subject (`.octicon`) matches, regardless of whether the ancestor part
+    // could ever apply. Since the rule can never contribute a declaration to
+    // any of these nodes (real or shared), it cannot threaten sharing either.
+    clear_shadow_sheets();
+    let doc = octicon_group(6);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".octicon { fill: rgb(1, 2, 3); } .btn:hover .octicon { fill: rgb(0, 0, 255); }",
+    );
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let first = map.style_arc(svgs[0]).expect("arc");
+    for &svg in &svgs[1..] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &arc),
+            "an ancestor :hover selector that can never reach these nodes must not block sharing"
+        );
+        assert_eq!(
+            map.style_for(svg).expect("style").svg_fill,
+            SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+            "the unreachable rule must never apply"
+        );
+    }
+}
+
+#[test]
+fn a_reachable_ancestor_hover_pseudo_class_still_disables_sharing() {
+    // Companion regression guard: unlike a plain HTML ancestor (`.btn`,
+    // never `is_svg_presentational_element`, so two DIFFERENT `.btn`
+    // instances can never collide on `inherited_ptr` in the first place —
+    // see `a_combinator_rule_disables_sharing_for_the_nodes_it_could_reach`),
+    // an `is_svg_presentational_element` ancestor like `<g>` CAN collide:
+    // two structurally identical `<g class="wrap">` siblings under the same
+    // live `<svg>` parent get the same `ShareKey` and so the same cached
+    // `Arc`, which their own children then inherit as `inherited_ptr` too.
+    // `.wrap:hover` sitting on that ancestor is still a genuinely dynamic,
+    // per-instance fact the key does not pin — hovering only the FIRST `<g>`
+    // must not leak its `:hover`-styled fill onto the second `<g>`'s icon via
+    // a wrongly-shared cache entry. The rescue in `ancestor_prefix_could_
+    // rescue` must find this ancestor reachable (real `<g class="wrap">`
+    // elements exist) and leave the selector unsafe.
+    clear_shadow_sheets();
+    let doc = lumen_html_parser::parse(concat!(
+        "<svg>",
+        r#"<g class="wrap"><path class="octicon" d="M1 1"></path></g>"#,
+        r#"<g class="wrap"><path class="octicon" d="M1 1"></path></g>"#,
+        "</svg>",
+    ));
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".octicon { fill: rgb(1, 2, 3); } .wrap:hover .octicon { fill: rgb(0, 0, 255); }",
+    );
+    let svg = doc.get(doc.body().unwrap()).children[0];
+    let wraps: Vec<NodeId> = doc.get(svg).children.clone();
+    assert_eq!(wraps.len(), 2);
+    let icons: Vec<NodeId> = wraps.iter().map(|&w| doc.get(w).children[0]).collect();
+
+    crate::set_interactive_state(Some(wraps[0]), None, None);
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+    crate::clear_interactive_state();
+
+    assert_eq!(
+        map.style_for(icons[0]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 0, g: 0, b: 255, a: 255 }),
+        "hovered wrapper's icon must get the :hover fill"
+    );
+    assert_eq!(
+        map.style_for(icons[1]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+        "un-hovered wrapper's icon must NOT leak the other one's :hover fill via a shared cache entry"
+    );
+}
