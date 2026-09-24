@@ -120,6 +120,14 @@ pub struct FindMatch {
 pub const HIGHLIGHT_INACTIVE: Color = Color { r: 255, g: 235, b: 90, a: 255 };
 pub const HIGHLIGHT_ACTIVE: Color = Color { r: 255, g: 150, b: 50, a: 255 };
 
+/// STTF-1 остаток: default `::target-text` highlight colour (WICG Scroll To
+/// Text Fragment §4 recommends the UA default match `::selection`'s look;
+/// this engine's own `::selection` OS-default is `#308aff` translucent —
+/// same colour [`crate::forms::SELECTION_HIGHLIGHT_DEFAULT`] uses for the
+/// form-control selection fallback — but a `::target-text` rule in page CSS
+/// overrides it via [`lumen_layout::compute_target_text_style`]).
+pub const TARGET_TEXT_HIGHLIGHT_DEFAULT: Color = Color { r: 0x30, g: 0x8a, b: 0xff, a: 110 };
+
 /// Доля viewport-а сверху, в которую попадает match при scroll-to.
 const SCROLL_MARGIN_FRACTION: f32 = 0.25;
 
@@ -340,6 +348,31 @@ pub fn build_page_with_highlights(
         }
         out.push(cmd.clone());
     }
+    out
+}
+
+/// STTF-1 остаток: overlays `::target-text` highlight `FillRect`s for the
+/// active Scroll-To-Text-Fragment match (`Lumen::target_text_highlight`).
+/// Unlike [`build_page_with_highlights`] (which maps matches back to a
+/// specific `DrawText` command via `dl_index` so highlights of *inactive*
+/// find-in-page matches can be interleaved anywhere in paint order), a
+/// text-fragment match is singular and always drawn behind text — so the
+/// rects are simply prepended, mirroring how `::selection` rects precede
+/// their glyphs in the ordered paint (`crates/engine/paint/src/display_list`
+/// `SelectionHighlight` convention: fill before text in the same bucket).
+pub fn build_page_with_target_text_highlight(
+    base: &DisplayList,
+    rects: &[Rect],
+    color: Color,
+) -> DisplayList {
+    if rects.is_empty() {
+        return base.clone();
+    }
+    let mut out: DisplayList = Vec::with_capacity(base.len() + rects.len());
+    for rect in rects {
+        out.push(DisplayCommand::FillRect { rect: *rect, color });
+    }
+    out.extend(base.iter().cloned());
     out
 }
 
@@ -618,6 +651,43 @@ mod tests {
     fn find_returns_empty_when_query_empty_even_with_text() {
         let dl = vec![draw_text("anything", 0.0, 0.0, 100.0, 20.0)];
         assert!(find_matches(&dl, "", &Fixed8).is_empty());
+    }
+
+    // ── build_page_with_target_text_highlight (STTF-1 остаток) ──────────────────
+
+    #[test]
+    fn target_text_highlight_prepends_fill_rects_before_base_commands() {
+        let base = vec![draw_text("hello world", 0.0, 0.0, 100.0, 20.0)];
+        let rects = vec![Rect::new(10.0, 0.0, 30.0, 20.0)];
+        let out = build_page_with_target_text_highlight(&base, &rects, TARGET_TEXT_HIGHLIGHT_DEFAULT);
+        assert_eq!(out.len(), 2);
+        match &out[0] {
+            DisplayCommand::FillRect { rect, color } => {
+                assert_eq!(*rect, rects[0]);
+                assert_eq!(*color, TARGET_TEXT_HIGHLIGHT_DEFAULT);
+            }
+            other => panic!("expected FillRect first, got {other:?}"),
+        }
+        assert_eq!(out[1], base[0]);
+    }
+
+    #[test]
+    fn target_text_highlight_supports_multiple_rects() {
+        let base = vec![draw_text("hello world", 0.0, 0.0, 100.0, 20.0)];
+        let rects = vec![
+            Rect::new(0.0, 0.0, 30.0, 20.0),
+            Rect::new(50.0, 0.0, 50.0, 20.0),
+        ];
+        let out = build_page_with_target_text_highlight(&base, &rects, TARGET_TEXT_HIGHLIGHT_DEFAULT);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[2], base[0]);
+    }
+
+    #[test]
+    fn target_text_highlight_empty_rects_returns_base_unchanged() {
+        let base = vec![draw_text("hello world", 0.0, 0.0, 100.0, 20.0)];
+        let out = build_page_with_target_text_highlight(&base, &[], TARGET_TEXT_HIGHLIGHT_DEFAULT);
+        assert_eq!(out, base);
     }
 
     // ── scroll_to_match ────────────────────────────────────────────────────────

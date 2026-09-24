@@ -541,6 +541,18 @@ impl Lumen {
                 // highlighted-page overlay above is page content, not
                 // chrome, and stays unconditional.
                 (Some(page), Vec::new())
+            } else if let Some(rects) = self.target_text_highlight.as_ref().filter(|r| !r.is_empty()) {
+                // STTF-1 остаток: `::target-text` highlight for the active
+                // Scroll-To-Text-Fragment match. Mutually exclusive with the
+                // find-in-page overlay above (both are "one active page-level
+                // highlight" concepts; find-in-page, if opened, wins — same
+                // as `::selection` losing to an active find highlight today).
+                let page = find::build_page_with_target_text_highlight(
+                    &self.display_list,
+                    rects,
+                    find::TARGET_TEXT_HIGHLIGHT_DEFAULT,
+                );
+                (Some(page), Vec::new())
             } else {
                 (None, Vec::new())
             };

@@ -284,6 +284,7 @@ pub(crate) fn run_window_mode(
         last_frame_fp: None,
         scroll_cache: lumen_paint::ScrollCache::default_overscan(),
         find: find::FindState::default(),
+        target_text_highlight: None,
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
         scroll_y: initial_scroll.1,

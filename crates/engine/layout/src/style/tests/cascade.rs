@@ -1383,6 +1383,63 @@ use super::*;
         assert!((s.font_size - 24.0).abs() < 0.01, "font-size should inherit: got {}", s.font_size);
     }
 
+    // ── ::target-text pseudo-element (CSS Pseudo-Elements L4 §5.7 / STTF-1) ────
+
+    #[test]
+    fn target_text_style_returns_some_when_rules_match() {
+        let css = "div::target-text { background-color: #0078D4; color: white; }";
+        let sheet = lumen_css_parser::parse(css);
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_target_text_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some(), "::target-text rules should produce Some(style)");
+        let s = result.unwrap();
+        if let Some(CssColor::Rgba(bg)) = s.background_color {
+            assert_eq!(bg.r, 0, "r should be 0");
+            assert_eq!(bg.g, 120, "g should be 120");
+            assert_eq!(bg.b, 212, "b should be 212");
+        } else {
+            panic!("background_color should be CssColor::Rgba, got {:?}", s.background_color);
+        }
+    }
+
+    #[test]
+    fn target_text_style_returns_none_when_no_rules() {
+        let sheet = lumen_css_parser::parse("div { color: red; }");
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_target_text_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_none(), "no ::target-text rules → None");
+    }
+
+    #[test]
+    fn target_text_style_no_content_required() {
+        let sheet = lumen_css_parser::parse("div::target-text { color: green; }");
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_target_text_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some(), "::target-text without content should still return Some");
+        let s = result.unwrap();
+        assert_eq!(s.color.r, 0, "color red should be 0");
+        assert_eq!(s.color.g, 128, "color green should be 128");
+    }
+
+    #[test]
+    fn target_text_style_independent_of_selection_rules() {
+        // A `::selection` rule alone must not leak into `::target-text` — each
+        // pseudo-element's rules are matched independently (both funnel through
+        // the same `compute_pseudo_element_style` with a different `pseudo` name).
+        let sheet = lumen_css_parser::parse("div::selection { background-color: yellow; }");
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_target_text_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_none(), "::selection rule must not match ::target-text");
+    }
+
     // ── ::placeholder pseudo-element (CSS Pseudo-Elements L4 §4.10) ────────────
 
     fn make_placeholder_doc() -> (lumen_dom::Document, lumen_dom::NodeId) {

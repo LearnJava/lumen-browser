@@ -364,6 +364,13 @@ pub(crate) struct Lumen {
     /// (close() полностью очищает state); это сознательно: после reload
     /// display list другой, и старые позиции совпадений уже невалидны.
     pub(crate) find: find::FindState,
+    /// STTF-1 остаток: rects of the currently active `:~:text=` fragment-directive
+    /// match (WICG Scroll To Text Fragment §4 `::target-text`), set by
+    /// [`Lumen::navigate_fragment`] when a text directive resolves. `None` when no
+    /// text-fragment navigation is active, or once cleared by a later navigation.
+    /// Consumed by the redraw path to overlay a highlight `FillRect` per rect,
+    /// the same mechanism [`find::build_page_with_highlights`] uses for find-in-page.
+    pub(crate) target_text_highlight: Option<Vec<lumen_core::geom::Rect>>,
     /// Состояние Ctrl+L адресной строки. Открыт ли бар и текущий ввод.
     /// Закрывается при навигации (commit) и при Esc.
     pub(crate) address_bar: address_bar::AddressBarState,
