@@ -29,6 +29,16 @@
 //! рендере идёт через error scope ([`configure_checked`]): `Invalid surface`
 //! — отказ кандидата, а не паника процесса.
 //!
+//! **Причина белого захвата — перекрытие окна (BUG-1073 срез 2).** Замер:
+//! все белые захваты при рабочем readback — у окна, центр которого накрыт
+//! соседним окном (другим `lumen` той же пачки); у открытого окна захват
+//! сходится. `PrintWindow(PW_RENDERFULLCONTENT)` накрытого окна
+//! flip-модельного swapchain не отдаёт его содержимое. Поэтому захват
+//! накрытого окна не в счёт: сигнал `Unavailable`, решает readback, а
+//! принятый так кандидат в кэш не пишется. Цена: машина с настоящим
+//! BUG-275, чьё окно накрыто при старте, получит Vulkan на этот запуск —
+//! без записи в кэш, следующий запуск пробует снова.
+//!
 //! Управление:
 //! - `WGPU_BACKEND=...` — проба пропускается, env-выбор главнее;
 //! - `LUMEN_NO_BACKEND_PROBE=1` — проба выключена, работает статическая
@@ -173,6 +183,10 @@ struct CandidateReport {
     texture: Signal,
     /// Сигнал захвата презентации.
     present: Signal,
+    /// Захват не в счёт: окно накрыто чужим окном (BUG-1073). Кандидат,
+    /// принятый по одному readback, в кэш не пишется — кэш «поручается»
+    /// только за полную пробу.
+    covered: bool,
     /// Разбивка времени кандидата по фазам (BUG-1073).
     phases: PhaseTimes,
 }
@@ -495,6 +509,12 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
     }
 
     eprintln!("[probe] бэкенд выбран за {} мс: {name}", started.elapsed().as_millis());
+    // BUG-1073: принятый по readback при накрытом окне — не полная проба;
+    // запиши его в кэш, и бюджет пробы следующего запуска «поручился» бы
+    // за кандидата, которого захват ни разу не видел (BUG-275: белое окно).
+    if rep.covered {
+        return Some(backends);
+    }
     write_cache(&ProbeCache {
         winner: name.to_string(),
         adapter: rep.adapter.clone(),
@@ -695,6 +715,7 @@ async fn probe_candidate(
     // рабочем GPU отклонял исправный бэкенд.
     let tries = if texture == Signal::Match { CAPTURE_TRIES_TEXTURE_OK } else { CAPTURE_TRIES };
     let mut present = Signal::Unavailable;
+    let mut covered = false;
     for _ in 0..tries {
         std::thread::sleep(std::time::Duration::from_millis(CAPTURE_STEP_MS));
         match capture_present(window, format.is_srgb()) {
@@ -709,16 +730,37 @@ async fn probe_candidate(
                 break;
             }
         }
+        // BUG-1073: центр окна накрыт чужим окном — `PrintWindow` отдаёт
+        // белое при рабочем GPU (замер: все белые захваты под нагрузкой —
+        // у окна, накрытого соседним окном Lumen). Такой захват о
+        // презентации ничего не говорит: сигнал недоступен, решает
+        // readback, как на системе без захвата.
+        if let Some((true, detail)) = window_cover(window) {
+            eprintln!("[probe]   захват {} не в счёт, окно накрыто: {detail}", present.label());
+            present = Signal::Unavailable;
+            covered = true;
+            break;
+        }
     }
 
     phases.capture = t_phase.elapsed().as_millis();
-
+    // Состояние окна: всегда при несошедшемся захвате открытого окна
+    // (BUG-275 — окно наверху, на экране белое), а под `LUMEN_FRAME_LOG` —
+    // у каждого кандидата, чтобы видеть, как часто захват накрытого окна
+    // всё же сходится.
+    if !covered
+        && (!matches!(present, Signal::Match | Signal::Unavailable) || crate::frame_log_enabled())
+        && let Some((_, detail)) = window_cover(window)
+    {
+        eprintln!("[probe]   захват {}: {detail}", present.label());
+    }
     let info = adapter.get_info();
     Ok(CandidateReport {
         adapter: info.name,
         driver: format!("{} {}", info.driver, info.driver_info),
         texture,
         present,
+        covered,
         phases,
     })
 }
@@ -788,6 +830,26 @@ fn capture_present(_window: &Window, _srgb: bool) -> Option<Signal> {
     None
 }
 
+/// Перекрыто ли окно чужим окном и строка его состояния для лога —
+/// для решения по несошедшемуся захвату (BUG-1073).
+#[cfg(target_os = "windows")]
+fn window_cover(window: &Window) -> Option<(bool, String)> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => {
+            let cover = win_capture::cover(h.hwnd.get() as *mut std::ffi::c_void);
+            Some((cover.covered, cover.detail))
+        }
+        _ => None,
+    }
+}
+
+/// Заглушка для не-Windows: захвата нет, перекрытие не проверяется.
+#[cfg(not(target_os = "windows"))]
+fn window_cover(_window: &Window) -> Option<(bool, String)> {
+    None
+}
+
 // ── Windows: PrintWindow-захват клиентской области ──────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -838,12 +900,186 @@ mod win_capture {
         fn GetDC(h_wnd: *mut c_void) -> *mut c_void;
         fn ReleaseDC(h_wnd: *mut c_void, h_dc: *mut c_void) -> i32;
         fn PrintWindow(h_wnd: *mut c_void, h_dc: *mut c_void, flags: u32) -> i32;
+        fn IsWindowVisible(h_wnd: *mut c_void) -> i32;
+        fn IsIconic(h_wnd: *mut c_void) -> i32;
+        fn GetForegroundWindow() -> *mut c_void;
+        fn ClientToScreen(h_wnd: *mut c_void, point: *mut Point) -> i32;
+        fn WindowFromPoint(point: Point) -> *mut c_void;
+        fn GetAncestor(h_wnd: *mut c_void, flags: u32) -> *mut c_void;
+        fn GetWindowThreadProcessId(h_wnd: *mut c_void, pid: *mut u32) -> u32;
+        fn GetClassNameW(h_wnd: *mut c_void, name: *mut u16, max: i32) -> i32;
+    }
+
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmGetWindowAttribute(h_wnd: *mut c_void, attr: u32, value: *mut c_void, size: u32) -> i32;
+    }
+
+    /// POINT (windef.h).
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    /// `GA_ROOT` для `GetAncestor`.
+    const GA_ROOT: u32 = 2;
+    /// `DWMWA_CLOAKED` для `DwmGetWindowAttribute`.
+    const DWMWA_CLOAKED: u32 = 14;
+    /// `SRCCOPY` для `BitBlt`.
+    const SRCCOPY: u32 = 0x00CC_0020;
+
+    /// Кто лежит поверх центра клиентской области окна (BUG-1073).
+    pub struct Cover {
+        /// Центр клиентской области перекрыт чужим окном верхнего уровня.
+        pub covered: bool,
+        /// Строка для `[probe]`-лога: видимость, фокус, `cloaked`, владелец
+        /// перекрывающего окна (pid, класс) и цвет экрана в центре.
+        pub detail: String,
+    }
+
+    /// Состояние окна в момент несошедшегося захвата (BUG-1073). Замер
+    /// показал: `PrintWindow` у окна, центр которого накрыт другим окном,
+    /// отдаёт белое при рабочем GPU — захват в этом случае ничего не говорит
+    /// о презентации. Отличает «окно накрыто» от BUG-275 (окно наверху,
+    /// на экране белое).
+    pub fn cover(hwnd: *mut c_void) -> Cover {
+        // SAFETY: вызовы Win32/DWM с `hwnd` окна winit; выходные буферы —
+        // локальные переменные нужного размера, длины переданы явно.
+        unsafe {
+            let visible = IsWindowVisible(hwnd) != 0;
+            let iconic = IsIconic(hwnd) != 0;
+            let foreground = GetForegroundWindow() == hwnd;
+            let mut cloaked: u32 = 0;
+            let cloak_hr = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                (&raw mut cloaked).cast::<c_void>(),
+                std::mem::size_of::<u32>() as u32,
+            );
+            let mut rect = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+            GetClientRect(hwnd, &raw mut rect);
+            let mut center = Point { x: (rect.right - rect.left) / 2, y: (rect.bottom - rect.top) / 2 };
+            ClientToScreen(hwnd, &raw mut center);
+            let at_center = GetAncestor(WindowFromPoint(center), GA_ROOT);
+            let covered = !at_center.is_null() && at_center != hwnd;
+            let owner = if covered {
+                let mut pid: u32 = 0;
+                GetWindowThreadProcessId(at_center, &raw mut pid);
+                let mut class = [0u16; 64];
+                let len = GetClassNameW(at_center, class.as_mut_ptr(), class.len() as i32);
+                let class = String::from_utf16_lossy(&class[..usize::try_from(len).unwrap_or(0)]);
+                format!(" cover=pid {pid} class \"{class}\"")
+            } else {
+                String::new()
+            };
+            let screen = screen_avg(center)
+                .map_or_else(|| "n/a".to_string(), |[r, g, b]| format!("({r},{g},{b})"));
+            let cloaked = if cloak_hr == 0 { cloaked.to_string() } else { format!("hr{cloak_hr:#x}") };
+            Cover {
+                covered,
+                detail: format!(
+                    "visible={visible} iconic={iconic} foreground={foreground} cloaked={cloaked} \
+                     own_pid={} covered={covered}{owner} screen={screen}",
+                    std::process::id()
+                ),
+            }
+        }
+    }
+
+    /// Средний цвет блока 32×32 экрана вокруг `center` (экранные координаты):
+    /// то, что видит пользователь, а не содержимое окна по `PrintWindow`.
+    fn screen_avg(center: Point) -> Option<[u8; 3]> {
+        const SIDE: i32 = 32;
+        // SAFETY: паттерн `client_center_avg`: каждый handle проверяется,
+        // ресурсы освобождаются до выхода; буфер пикселей — SIDE×SIDE×4.
+        unsafe {
+            let screen_dc = GetDC(std::ptr::null_mut());
+            if screen_dc.is_null() {
+                return None;
+            }
+            let mem_dc = CreateCompatibleDC(screen_dc);
+            let bitmap = if mem_dc.is_null() {
+                std::ptr::null_mut()
+            } else {
+                CreateCompatibleBitmap(screen_dc, SIDE, SIDE)
+            };
+            let mut pixels = vec![0u8; (SIDE * SIDE * 4) as usize];
+            let mut ok = false;
+            if !bitmap.is_null() {
+                let old_obj = SelectObject(mem_dc, bitmap);
+                if BitBlt(mem_dc, 0, 0, SIDE, SIDE, screen_dc, center.x - SIDE / 2, center.y - SIDE / 2, SRCCOPY)
+                    != 0
+                {
+                    let mut bmi = dib_info(SIDE, SIDE);
+                    ok = GetDIBits(
+                        mem_dc,
+                        bitmap,
+                        0,
+                        SIDE as u32,
+                        pixels.as_mut_ptr().cast::<c_void>(),
+                        &raw mut bmi,
+                        DIB_RGB_COLORS,
+                    ) > 0;
+                }
+                SelectObject(mem_dc, old_obj);
+                DeleteObject(bitmap);
+            }
+            if !mem_dc.is_null() {
+                DeleteDC(mem_dc);
+            }
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            if !ok {
+                return None;
+            }
+            let mut sum = [0u64; 3];
+            for px in pixels.chunks_exact(4) {
+                sum[0] += u64::from(px[2]);
+                sum[1] += u64::from(px[1]);
+                sum[2] += u64::from(px[0]);
+            }
+            let n = (SIDE * SIDE) as u64;
+            Some([(sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8])
+        }
+    }
+
+    /// Top-down 32-битный BITMAPINFO размера `w`×`h`.
+    fn dib_info(w: i32, h: i32) -> BitmapInfo {
+        BitmapInfo {
+            bmi_header: BitmapInfoHeader {
+                bi_size: std::mem::size_of::<BitmapInfoHeader>() as u32,
+                bi_width: w,
+                bi_height: -h,
+                bi_planes: 1,
+                bi_bit_count: 32,
+                bi_compression: BI_RGB,
+                bi_size_image: 0,
+                bi_x_pels_per_meter: 0,
+                bi_y_pels_per_meter: 0,
+                bi_clr_used: 0,
+                bi_clr_important: 0,
+            },
+            bmi_colors: [0],
+        }
     }
 
     #[link(name = "gdi32")]
     unsafe extern "system" {
         fn CreateCompatibleDC(h_dc: *mut c_void) -> *mut c_void;
         fn CreateCompatibleBitmap(h_dc: *mut c_void, cx: i32, cy: i32) -> *mut c_void;
+        #[allow(clippy::too_many_arguments)]
+        fn BitBlt(
+            h_dc: *mut c_void,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            h_dc_src: *mut c_void,
+            x1: i32,
+            y1: i32,
+            rop: u32,
+        ) -> i32;
         fn SelectObject(h_dc: *mut c_void, h: *mut c_void) -> *mut c_void;
         fn GetDIBits(
             h_dc: *mut c_void,
