@@ -143,6 +143,17 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }
 
+  // `isSecureContext` (BUG-766) — same rule as the dedicated-worker twin
+  // (`worker.rs`'s `worker_global_shim`), computed from the same
+  // `_lumen_worker_location_url` `location` was just built from.
+  if (typeof _lumen_worker_secure_context_for === 'function') {
+    Object.defineProperty(globalThis, 'isSecureContext', {
+      value: _lumen_worker_secure_context_for(
+        typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : ''),
+      enumerable: true, configurable: true,
+    });
+  }
+
   // Report an uncaught exception from onconnect/onmessage/a flushed timer.
   // HTML LS §8.1.3.6 then §10.2.6: it fires `error` at this global scope and
   // stops there — a shared worker's runtime error has no single owning
@@ -1182,6 +1193,21 @@ mod tests_v8 {
         ] {
             assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(true), "{expr}");
         }
+    }
+
+    /// BUG-766: `SharedWorkerGlobalScope.isSecureContext` follows the same
+    /// rule as the dedicated worker's — see `worker.rs`'s
+    /// `v8_worker_has_is_secure_context_true_on_https` for the sibling test.
+    #[test]
+    fn shared_worker_global_scope_has_is_secure_context() {
+        let rt = V8JsRuntime::new().unwrap();
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        install_shared_worker_globals_v8(
+            &rt, ports, None, "https://example.com/sw.js", false,
+            Arc::new(AtomicBool::new(false)), None,
+        )
+        .unwrap();
+        assert_eq!(rt.eval("self.isSecureContext").unwrap(), JsValue::Bool(true));
     }
 
     /// [BUG-815] The shared scope gets the same deadline-ordered timers the

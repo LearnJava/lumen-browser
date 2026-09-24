@@ -625,6 +625,16 @@ fn worker_global_shim(worker_id: u32) -> String {
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }}
 
+  // `isSecureContext` (BUG-766) — computed from the same
+  // `_lumen_worker_location_url` `location` was just built from.
+  if (typeof _lumen_worker_secure_context_for === 'function') {{
+    Object.defineProperty(globalThis, 'isSecureContext', {{
+      value: _lumen_worker_secure_context_for(
+        typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : ''),
+      enumerable: true, configurable: true,
+    }});
+  }}
+
   // ── "report the exception" inside a WorkerGlobalScope ──────────────────────
   // HTML LS §8.1.3.6 then §10.2.6 "runtime script errors": an uncaught
   // exception fires `error` at the worker's *own* global scope first, and only
@@ -2320,6 +2330,68 @@ mod tests_v8 {
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
         let encoded = rt.eval("btoa('hello')").unwrap();
         assert_eq!(encoded, lumen_core::JsValue::String("aGVsbG8=".into()));
+    }
+
+    /// BUG-766: `DedicatedWorkerGlobalScope.isSecureContext` must exist and
+    /// answer the same trustworthiness rule the page's own flag uses,
+    /// computed from the worker's own script URL.
+    #[test]
+    fn v8_worker_has_is_secure_context_true_on_https() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(
+            &rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None,
+            "https://example.com/worker.js", false, Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None,
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("'isSecureContext' in self").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("self.isSecureContext").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    /// BUG-766: an insecure (plain http, non-loopback) worker script URL
+    /// answers `false`, mirroring `window.isSecureContext`'s own rule.
+    #[test]
+    fn v8_worker_has_is_secure_context_false_on_insecure_origin() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(
+            &rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None,
+            "http://example.com/worker.js", false, Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None,
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("self.isSecureContext").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+    }
+
+    /// BUG-766: a plain http URL on `localhost` is loopback, so it is still
+    /// potentially trustworthy — same rule as the page's own flag.
+    #[test]
+    fn v8_worker_has_is_secure_context_true_on_loopback_http() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(
+            &rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None,
+            "http://localhost:8080/worker.js", false, Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None,
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("self.isSecureContext").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
     }
 
     /// BUG-1016: a worker's `atob`/`btoa` must throw the spec `DOMException

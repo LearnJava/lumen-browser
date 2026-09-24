@@ -24,6 +24,93 @@
     return loc;
   };
 
+  // BUG-766: `isSecureContext` (WindowOrWorkerGlobalScope mixin,
+  // `[Exposed=(Window,Worker)]`). The page's own rule
+  // (`_lumen_url_is_potentially_trustworthy`, Secure Contexts §3.1/§3.2)
+  // lives in `web_api_shim_mid_b.js`, which is page-only — a worker scope has
+  // no `document`/`window` and cannot share that closure. Duplicated here
+  // rather than pulled apart into a shared file (the same call this file's
+  // own header makes for `WORKER_ERROR_EVENT_SHIM`/`WORKER_MESSAGE_EVENT_SHIM`
+  // in `worker.rs`): the function is small, self-contained (only
+  // `parts.href`/`parts.hostname`, both of which `_lumen_parse_url` already
+  // supplies), and a real divergence between the two copies would need a
+  // deliberate edit to both — same trade the sibling classes already made.
+  // By the same reasoning as `_lumen_make_worker_location` just above, the
+  // value is computed from the worker's own scope URL: a worker inherits its
+  // creator's trust boundary in spec terms, but in practice the worker's own
+  // script URL was already fetched through that same same-origin/CSP-gated
+  // path, so it is the same boundary restated.
+  function _lumen_worker_host_is_loopback(host) {
+    var h = String(host || '').toLowerCase();
+    if (h === 'localhost' || h === 'localhost.') return true;
+    if (h.slice(-10) === '.localhost' || h.slice(-11) === '.localhost.') return true;
+    if (h.length > 2 && h.charAt(0) === '[' && h.charAt(h.length - 1) === ']') {
+      return _lumen_worker_ipv6_is_loopback(h.slice(1, -1));
+    }
+    var octets = h.split('.');
+    if (octets.length !== 4) return false;
+    for (var i = 0; i < 4; i++) {
+      var o = octets[i];
+      if (o.length === 0 || o.length > 3) return false;
+      for (var j = 0; j < o.length; j++) {
+        var c = o.charCodeAt(j);
+        if (c < 0x30 || c > 0x39) return false;
+      }
+      if (parseInt(o, 10) > 255) return false;
+    }
+    return parseInt(octets[0], 10) === 127;
+  }
+  function _lumen_worker_ipv6_is_loopback(addr) {
+    var groups, i;
+    var dbl = addr.indexOf('::');
+    if (dbl >= 0) {
+      if (addr.indexOf('::', dbl + 2) >= 0) return false;
+      var head = addr.slice(0, dbl);
+      var tail = addr.slice(dbl + 2);
+      var h = head === '' ? [] : head.split(':');
+      var t = tail === '' ? [] : tail.split(':');
+      if (h.length + t.length > 7) return false;
+      groups = [];
+      for (i = 0; i < h.length; i++) groups.push(h[i]);
+      for (i = h.length + t.length; i < 8; i++) groups.push('0');
+      for (i = 0; i < t.length; i++) groups.push(t[i]);
+    } else {
+      groups = addr.split(':');
+    }
+    if (groups.length !== 8) return false;
+    for (i = 0; i < 8; i++) {
+      var g = groups[i];
+      if (g.length === 0 || g.length > 4) return false;
+      for (var j = 0; j < g.length; j++) {
+        var c = g.charCodeAt(j) | 0x20;
+        var isDigit = c >= 0x30 && c <= 0x39;
+        var isHex   = c >= 0x61 && c <= 0x66;
+        if (!isDigit && !isHex) return false;
+      }
+      if (parseInt(g, 16) !== (i === 7 ? 1 : 0)) return false;
+    }
+    return true;
+  }
+  function _lumen_worker_url_is_potentially_trustworthy(parts) {
+    var href   = String(parts.href || '');
+    var colon  = href.indexOf(':');
+    var scheme = colon >= 0 ? href.slice(0, colon).toLowerCase() : '';
+    if (scheme === 'about') {
+      var rest = href.slice(colon + 1);
+      return rest === 'blank' || rest === 'srcdoc';
+    }
+    if (scheme === 'data') return true;
+    if (scheme === 'blob') {
+      return _lumen_worker_url_is_potentially_trustworthy(_lumen_parse_url(href.slice(colon + 1)));
+    }
+    if (scheme === 'https' || scheme === 'wss' || scheme === 'file') return true;
+    return _lumen_worker_host_is_loopback(parts.hostname);
+  }
+  globalThis._lumen_worker_secure_context_for = function(url) {
+    return _lumen_worker_url_is_potentially_trustworthy(
+      _lumen_parse_url(String(url == null ? '' : url)));
+  };
+
   function WorkerNavigator() { throw new TypeError('Illegal constructor'); }
   globalThis.WorkerNavigator = WorkerNavigator;
 

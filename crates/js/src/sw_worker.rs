@@ -64,6 +64,14 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   globalThis.location = _lumen_make_worker_location(
     (scope.indexOf('://') !== -1) ? scope
       : (origin + (scope.charAt(0) === '/' ? scope : '/' + scope)));
+  // `isSecureContext` (BUG-766) — same rule as the other two worker
+  // flavours; a service worker's scope URL doubles as its own location URL.
+  if (typeof _lumen_worker_secure_context_for === 'function') {{
+    Object.defineProperty(globalThis, 'isSecureContext', {{
+      value: _lumen_worker_secure_context_for(globalThis.location.href),
+      enumerable: true, configurable: true,
+    }});
+  }}
   globalThis.registration = {{
     scope: scope,
     active: {{ state: 'activated', scriptURL: '' }},
@@ -885,6 +893,20 @@ mod tests_v8 {
                 "{expr}"
             );
         }
+    }
+
+    /// BUG-766: `ServiceWorkerGlobalScope.isSecureContext` follows the same
+    /// rule as the other two worker flavours' — see `worker.rs`'s sibling
+    /// test on the dedicated scope.
+    #[test]
+    fn sw_global_scope_has_is_secure_context() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None, None)
+            .unwrap();
+        assert_eq!(
+            rt.eval("self.isSecureContext").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
     }
 
     /// `WorkerLocation` целиком + `URL`/`URLSearchParams` в области воркера:
