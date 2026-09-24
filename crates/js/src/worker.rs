@@ -475,6 +475,19 @@ pub(crate) fn install_worker_scope_globals_v8(
     // `_lumen_port_prepare_transfer`/`_lumen_port_post_to_worker`/
     // `_lumen_port_post_reply` (message_channel_shim.js, worker.rs).
     rt.eval(crate::dom::MESSAGE_CHANNEL_SHIM)?;
+    // BUG-1078: `WebAssembly.compileStreaming`/`instantiateStreaming` are
+    // installed only in the page runtime (`v8_runtime.rs::install_dom` via
+    // `install_webassembly_bindings_v8`) — every worker flavour otherwise
+    // sees V8's built-in `WebAssembly` global, which has no streaming
+    // methods without an embedder callback. Shared here (dedicated, shared
+    // and service workers all go through this function) rather than
+    // duplicated per flavour, same as the rest of `WORKER-1`'s
+    // `[Exposed=Worker]` surface. The shim's `compileStreaming`/
+    // `instantiateStreaming` only call `resp.arrayBuffer()` at invocation
+    // time, so it does not matter that `worker_net`'s `Response` (installed
+    // later, by `install_worker_globals_v8`/`sw_worker`) is not yet defined
+    // at this point.
+    crate::webassembly::install_webassembly_bindings_v8(rt)?;
     Ok(())
 }
 
@@ -3074,6 +3087,29 @@ mod tests_v8 {
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
         for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
+            assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
+        }
+    }
+
+    /// BUG-1078: `WebAssembly.compileStreaming`/`instantiateStreaming` must
+    /// exist inside a dedicated-worker scope, not just the page — before this
+    /// fix the worker saw V8's built-in `WebAssembly` (no streaming methods
+    /// without an embedder callback), so `wasm/webapi/*.any.worker.html`
+    /// failed on the first line with `WebAssembly.instantiateStreaming is
+    /// not a function`.
+    #[test]
+    fn v8_worker_globals_have_wasm_streaming() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None).unwrap();
+        for expr in [
+            "typeof WebAssembly.compileStreaming",
+            "typeof WebAssembly.instantiateStreaming",
+            "typeof WebAssembly.compile",
+            "typeof WebAssembly.instantiate",
+            "typeof WebAssembly.validate",
+        ] {
             assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
         }
     }
