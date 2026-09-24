@@ -682,3 +682,113 @@ fn agreeing_subject_hover_pseudo_class_state_now_shares() {
         );
     }
 }
+
+#[test]
+fn a_bare_universal_next_sibling_subject_does_not_disable_sharing_when_irrelevant() {
+    // BUG-1112 срез 11: `* + subject`'s real match reduces to "does subject
+    // have ANY preceding element sibling" — exactly what `is_first_child`
+    // already pins, same shape as `a_subject_first_child_pseudo_class_does_
+    // not_disable_sharing_when_irrelevant` above but for a `NextSibling`
+    // combinator instead of an explicit `:first-child` pseudo-class. None of
+    // these icons are descendants of `.toolbar-x`, so the rule never reaches
+    // them at all — a pre-срез-11 build would still ban `NextSibling`
+    // outright and disable sharing here regardless.
+    clear_shadow_sheets();
+    let doc = octicon_group(6);
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet =
+        lumen_css_parser::parse(".toolbar-x > * + * { color: red; } .octicon { fill: rgb(1, 2, 3); }");
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    let middle = map.style_arc(svgs[1]).expect("arc");
+    for &svg in &svgs[2..5] {
+        let arc = map.style_arc(svg).expect("arc");
+        assert!(
+            std::sync::Arc::ptr_eq(&middle, &arc),
+            "middle siblings, never reachable by the `* + *` rule, must still share"
+        );
+    }
+    for &svg in &svgs {
+        assert_eq!(
+            map.style_for(svg).expect("style").svg_fill,
+            SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+            "every icon's own style must stay correct regardless of sharing"
+        );
+    }
+}
+
+#[test]
+fn a_bare_universal_next_sibling_subject_still_applies_correctly_when_relevant() {
+    // Companion positive check, mirroring `a_subject_first_child_pseudo_
+    // class_still_applies_correctly_when_relevant`: the second icon DOES have
+    // a preceding element sibling, the first does not — sharing must still
+    // give each its own correct answer.
+    let doc = lumen_html_parser::parse(concat!(
+        r#"<div class="toolbar">"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"</div>"#,
+    ));
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children.clone();
+    let flat = lumen_dom::build_flat_tree(&doc);
+    // `.octicon` declared FIRST: both rules tie on specificity (0,1,0), so
+    // the later `* + *` rule must win on the node it actually matches purely
+    // by cascade order, not by accidentally being more specific.
+    let sheet =
+        lumen_css_parser::parse(".octicon { fill: rgb(1, 2, 3); } .toolbar > * + * { fill: rgb(255, 0, 0); }");
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    assert_eq!(
+        map.style_for(svgs[0]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+        "`* + *` must not match the actual first child"
+    );
+    assert_eq!(
+        map.style_for(svgs[1]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 255, g: 0, b: 0, a: 255 }),
+        "`* + *` must still win on the actual second child now that it is share-safe"
+    );
+}
+
+#[test]
+fn a_next_sibling_subject_with_a_non_universal_left_compound_still_disables_sharing() {
+    // Boundary check: `:not(label) + *`/`h1 + *`/`.foo + *` need the actual
+    // preceding sibling's own tag/attrs, which no `ShareKey` field captures
+    // (unlike the bare `* + *` case above) — срез 11's exception must stay
+    // narrow to exactly `Universal` on the left, or this would be unsound.
+    let doc = lumen_html_parser::parse(concat!(
+        r#"<div class="toolbar">"#,
+        r#"<label></label>"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"<svg class="octicon" aria-hidden="true"></svg>"#,
+        r#"</div>"#,
+    ));
+    let toolbar = doc.get(doc.body().unwrap()).children[0];
+    let svgs: Vec<NodeId> = doc.get(toolbar).children[1..].to_vec();
+    let flat = lumen_dom::build_flat_tree(&doc);
+    let sheet = lumen_css_parser::parse(
+        ".toolbar > :not(label) + * { fill: rgb(255, 0, 0); } .octicon { fill: rgb(1, 2, 3); }",
+    );
+    let map = crate::counters::precompute_counters(&doc, &sheet, VP, &flat, false);
+
+    // `svgs[0]` is preceded by `<label>` (excluded by `:not(label)`), so it
+    // keeps the base color; `svgs[1]` is preceded by `svgs[0]`, an `<svg>`,
+    // which does match `:not(label)`. A build that unsoundly treated this
+    // shape as share-safe (folding it into `is_first_child` the same way as
+    // the bare-universal case) would give both the wrong answer, since both
+    // have `is_first_child == false`.
+    assert_eq!(
+        map.style_for(svgs[0]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 1, g: 2, b: 3, a: 255 }),
+        "`:not(label) + *` must not match the icon directly preceded by <label>"
+    );
+    assert_eq!(
+        map.style_for(svgs[1]).expect("style").svg_fill,
+        SvgPaint::Color(Color { r: 255, g: 0, b: 0, a: 255 }),
+        "`:not(label) + *` must still match the icon preceded by another icon"
+    );
+}
