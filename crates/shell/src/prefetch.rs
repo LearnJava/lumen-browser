@@ -63,6 +63,16 @@ impl Slot {
     }
 }
 
+/// Outcome of reserving a URL's slot ([`PrefetchCache::claim`]).
+enum Claim {
+    /// `generation` is not the cache's current one — bypass the cache.
+    Stale,
+    /// This caller created the slot and must fill it.
+    Filler(Arc<Slot>),
+    /// Someone else owns the fetch; wait for its result.
+    Waiter(Arc<Slot>),
+}
+
 /// Mutable cache contents guarded by a single lock.
 struct Inner {
     /// Navigation generation these slots belong to.
@@ -123,43 +133,95 @@ impl PrefetchCache {
     ///
     /// `fetch` returns the resource on success or an error string; the error is
     /// cached too so waiters share one outcome instead of stampeding the network.
-    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn fetch(
         &self,
         generation: u64,
         url: &str,
         fetch: impl FnOnce() -> Result<CachedResource, String>,
     ) -> FetchResult {
-        let (slot, is_filler) = {
-            let mut inner = self.inner.lock().unwrap();
-            if inner.generation != generation {
-                drop(inner);
-                return fetch().map(Arc::new);
-            }
-            if let Some(existing) = inner.slots.get(url) {
-                (Arc::clone(existing), false)
-            } else {
-                let slot = Arc::new(Slot::new());
-                inner.slots.insert(url.to_owned(), Arc::clone(&slot));
-                (slot, true)
-            }
-        };
-
-        if is_filler {
+        match self.claim(generation, url) {
+            Claim::Stale => fetch().map(Arc::new),
             // Run the (potentially slow, network-bound) fetch WITHOUT holding any
             // lock, then publish the result and wake waiters.
-            let result = fetch().map(Arc::new);
-            let mut state = slot.state.lock().unwrap();
-            *state = Some(result.clone());
-            slot.cv.notify_all();
-            result
-        } else {
-            let mut state = slot.state.lock().unwrap();
-            while state.is_none() {
-                state = slot.cv.wait(state).unwrap();
-            }
-            state.clone().unwrap()
+            Claim::Filler(slot) => Self::fill(&slot, fetch().map(Arc::new)),
+            Claim::Waiter(slot) => Self::wait(&slot),
         }
+    }
+
+    /// BUG-1116: start filling `url`'s slot in the background, reserving the
+    /// slot *before* returning.
+    ///
+    /// [`Self::fetch`] reserves the slot only once it runs, so a caller that
+    /// spawns a thread around it leaves a window in which a consumer probing
+    /// with [`Self::lookup_current`] finds no slot and goes to the network
+    /// itself — the duplicate request this bug is about. Reserving here, on
+    /// the caller's thread, closes that window: anything that looks the URL
+    /// up afterwards waits on this fetch. A URL that already has a slot, or a
+    /// superseded `generation`, spawns nothing.
+    pub(crate) fn warm(
+        &self,
+        generation: u64,
+        url: &str,
+        fetch: impl FnOnce() -> Result<CachedResource, String> + Send + 'static,
+    ) {
+        if let Claim::Filler(slot) = self.claim(generation, url) {
+            std::thread::spawn(move || {
+                let _ = Self::fill(&slot, fetch().map(Arc::new));
+            });
+        }
+    }
+
+    /// BUG-1116: the bytes of `url` if something this navigation already put
+    /// it into the cache (waiting for an in-flight fetch to finish), `None`
+    /// when nothing did.
+    ///
+    /// For consumers that deliberately do NOT fill the cache themselves —
+    /// `<img>`/`@font-face`/media bodies (`subresources.rs::
+    /// fetch_subresource_bytes`) are held decoded elsewhere (`IMAGE_CACHE`,
+    /// the font registry), so keeping their raw bytes here for the whole
+    /// navigation would only double the memory. They still read a slot a
+    /// `<link rel=preload as=image|font>` hint warmed, which is what stops the
+    /// hint and the real consumer from each fetching the same URL.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub(crate) fn lookup_current(&self, url: &str) -> Option<FetchResult> {
+        let slot = Arc::clone(self.inner.lock().unwrap().slots.get(url)?);
+        Some(Self::wait(&slot))
+    }
+
+    /// Reserve `url`'s slot for `generation`: the first caller becomes the
+    /// filler, later ones wait on it, a superseded generation bypasses the
+    /// cache entirely.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn claim(&self, generation: u64, url: &str) -> Claim {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.generation != generation {
+            return Claim::Stale;
+        }
+        if let Some(existing) = inner.slots.get(url) {
+            return Claim::Waiter(Arc::clone(existing));
+        }
+        let slot = Arc::new(Slot::new());
+        inner.slots.insert(url.to_owned(), Arc::clone(&slot));
+        Claim::Filler(slot)
+    }
+
+    /// Publish the filler's result and wake every waiter.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn fill(slot: &Slot, result: FetchResult) -> FetchResult {
+        let mut state = slot.state.lock().unwrap();
+        *state = Some(result.clone());
+        slot.cv.notify_all();
+        result
+    }
+
+    /// Block until the slot's filler has published its result.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn wait(slot: &Slot) -> FetchResult {
+        let mut state = slot.state.lock().unwrap();
+        while state.is_none() {
+            state = slot.cv.wait(state).unwrap();
+        }
+        state.clone().unwrap()
     }
 
     /// Convenience for the UI-thread consumer (`parse_and_layout`): fetch using the
@@ -206,6 +268,11 @@ impl lumen_core::ext::SubresourceCache for SharedPrefetchCache {
                 fetch().map(|(body, content_type)| CachedResource { body, content_type })
             })
             .map(|resource| (resource.body.clone(), resource.content_type.clone()))
+    }
+
+    fn lookup(&self, url: &str) -> Option<lumen_core::ext::SubresourceOutcome> {
+        let result = PREFETCH_CACHE.lookup_current(url)?;
+        Some(result.map(|resource| (resource.body.clone(), resource.content_type.clone())))
     }
 }
 
@@ -347,5 +414,59 @@ mod tests {
             h.join().unwrap();
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lookup_misses_when_nothing_warmed() {
+        // BUG-1116: a consumer that only reads the cache (image/font) must
+        // not find anything — and must not create a slot — for a URL no hint
+        // warmed, so it goes to the network itself.
+        let cache = PrefetchCache::new();
+        cache.reset(1);
+        assert!(cache.lookup_current("http://x/a.png").is_none());
+        let calls = AtomicUsize::new(0);
+        let _ = cache.fetch(1, "http://x/a.png", || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(resource(b"net"))
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "lookup must not reserve the slot");
+    }
+
+    #[test]
+    fn lookup_waits_for_warm_reserved_before_its_thread_runs() {
+        // BUG-1116: `warm` reserves the slot on the caller's thread, so a
+        // lookup issued right after it — before the warm-up thread has even
+        // started its fetch — waits for that fetch instead of missing and
+        // sending a second request.
+        let cache: &'static PrefetchCache = Box::leak(Box::new(PrefetchCache::new()));
+        cache.reset(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        cache.warm(1, "http://x/font.woff2", move || {
+            let _ = release_rx.recv();
+            Ok(resource(b"font"))
+        });
+        let reader = std::thread::spawn(move || cache.lookup_current("http://x/font.woff2"));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        release_tx.send(()).unwrap();
+        let got = reader.join().unwrap().expect("slot reserved by warm").unwrap();
+        assert_eq!(&got.body, b"font");
+    }
+
+    #[test]
+    fn warm_is_noop_for_already_cached_or_stale() {
+        let cache: &'static PrefetchCache = Box::leak(Box::new(PrefetchCache::new()));
+        cache.reset(2);
+        let _ = cache.fetch(2, "http://x/a.js", || Ok(resource(b"first")));
+        let calls = Arc::new(AtomicUsize::new(0));
+        for generation in [2, 1] {
+            let calls = Arc::clone(&calls);
+            cache.warm(generation, "http://x/a.js", move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(resource(b"second"))
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(&cache.lookup_current("http://x/a.js").unwrap().unwrap().body, b"first");
     }
 }

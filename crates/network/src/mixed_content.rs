@@ -59,6 +59,37 @@ pub enum RequestDestination {
     Other,
 }
 
+impl RequestDestination {
+    /// Destination of a `<link rel=preload as=…>` request (BUG-1116): HTML LS
+    /// §4.6.7 «translate a preload destination» — the `as` keyword *is* the
+    /// destination, not a generic «prefetch». `None` for an absent or
+    /// unrecognized keyword: such a preload is in no state and obtains no
+    /// resource at all (the JS shim's `_LUMEN_LINK_AS_DESTINATIONS` gate), so
+    /// nobody may fetch it on its behalf either.
+    ///
+    /// A preload's bytes are later handed to the real consumer (`<script
+    /// src>`, `<link rel=stylesheet>`, `<img>`, `@font-face`) without a second
+    /// request, so the preload must pass the gates that consumer's own fetch
+    /// would: a script fetched as optionally-blockable [`Self::Prefetch`] would
+    /// reach `<script src>` on an HTTPS page although [`Self::Script`] is
+    /// blockable. Valid keywords with no own variant here map to
+    /// [`Self::Other`], which is blockable too.
+    pub fn for_preload_as(as_kind: &str) -> Option<Self> {
+        Some(match as_kind {
+            "script" | "worker" | "sharedworker" | "serviceworker" | "audioworklet"
+            | "paintworklet" => Self::Script,
+            "style" => Self::Style,
+            "image" => Self::Image,
+            "font" => Self::Font,
+            "audio" | "video" | "track" => Self::Media,
+            "fetch" | "json" => Self::Connect,
+            "document" | "iframe" | "frame" | "embed" | "object" => Self::Document,
+            "manifest" | "report" | "webidentity" | "xslt" => Self::Other,
+            _ => return None,
+        })
+    }
+}
+
 /// Mixed-content уровень для запроса в secure-контексте.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MixedContentLevel {
@@ -317,6 +348,31 @@ mod tests {
                 RequestDestination::Media,
             ),
             MixedContentLevel::OptionallyBlockable
+        );
+    }
+
+    #[test]
+    fn preload_as_maps_to_consumer_destination() {
+        // BUG-1116: a preloaded script must be gated as a script (blockable),
+        // not as an optionally-blockable prefetch — its bytes feed the real
+        // `<script src>` without a second request.
+        let d = RequestDestination::for_preload_as;
+        assert_eq!(d("script"), Some(RequestDestination::Script));
+        assert_eq!(d("style"), Some(RequestDestination::Style));
+        assert_eq!(d("image"), Some(RequestDestination::Image));
+        assert_eq!(d("font"), Some(RequestDestination::Font));
+        assert_eq!(d("fetch"), Some(RequestDestination::Connect));
+        assert_eq!(d("video"), Some(RequestDestination::Media));
+        assert_eq!(d("manifest"), Some(RequestDestination::Other));
+        assert_eq!(d("bogus"), None);
+        assert_eq!(d(""), None);
+        assert_eq!(
+            classify_subresource_request(
+                &secure_top(),
+                &url("http://cdn.example.org/lib.js"),
+                RequestDestination::Script,
+            ),
+            MixedContentLevel::Blockable
         );
     }
 

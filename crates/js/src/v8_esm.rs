@@ -175,7 +175,14 @@ fn fetch_over_network(
 ) -> Result<String, String> {
     let mut fetch_span = lumen_core::trace::span(format!("module {specifier}"), "net");
     let started = std::time::Instant::now();
-    let outcome = match provider.fetch_sync(specifier, "GET") {
+    // BUG-1116: a `<link rel=modulepreload>` hint has usually fetched this
+    // very module already (the shell warms it as soon as the preload scanner
+    // sees the tag) — take those bytes instead of a second GET.
+    let fetched = match provider.fetch_preloaded(specifier) {
+        Some(res) => Ok(res),
+        None => provider.fetch_sync(specifier, "GET"),
+    };
+    let outcome = match fetched {
         Ok(res) if (200..300).contains(&res.status) => {
             fetch_span.set_bytes(res.body.len());
             Ok(String::from_utf8_lossy(&res.body).into_owned())
@@ -1153,6 +1160,9 @@ mod tests {
         calls: std::sync::Mutex<Vec<String>>,
         /// Сколько запросов в полёте прямо сейчас и максимум за прогон.
         inflight: std::sync::Mutex<(usize, usize)>,
+        /// URL → тело, уже забранное `<link rel=modulepreload>` (BUG-1116):
+        /// отдаётся через `fetch_preloaded`, в `calls` не попадает.
+        preloaded: HashMap<String, String>,
     }
 
     impl GraphFetch {
@@ -1164,7 +1174,16 @@ mod tests {
                     .collect(),
                 calls: std::sync::Mutex::new(Vec::new()),
                 inflight: std::sync::Mutex::new((0, 0)),
+                preloaded: HashMap::new(),
             })
+        }
+
+        /// Двойник, у которого `preloaded` уже лежат в кэше подсказок.
+        fn with_preloaded(sources: &[(&str, &str)], preloaded: &[(&str, &str)]) -> Arc<Self> {
+            let mut net = Arc::into_inner(Self::new(sources)).unwrap();
+            net.preloaded =
+                preloaded.iter().map(|(u, s)| ((*u).to_owned(), (*s).to_owned())).collect();
+            Arc::new(net)
         }
 
         /// Пик одновременности за прогон.
@@ -1187,6 +1206,16 @@ mod tests {
     }
 
     impl lumen_core::ext::JsFetchProvider for GraphFetch {
+        fn fetch_preloaded(&self, url: &str) -> Option<lumen_core::ext::JsFetchResult> {
+            self.preloaded.get(url).map(|text| lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: text.clone().into_bytes(),
+                url: url.to_string(),
+            })
+        }
+
         fn fetch_sync(
             &self,
             url: &str,
@@ -1269,6 +1298,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rt.eval("globalThis.__net").unwrap(), JsValue::String("chunk".into()));
+    }
+
+    #[test]
+    fn v8_module_graph_takes_modulepreloaded_bytes() {
+        // BUG-1116: модуль, который `<link rel=modulepreload>` уже забрал,
+        // загрузчик берёт из кэша подсказок, а не вторым GET.
+        let net = GraphFetch::with_preloaded(
+            &[(
+                "https://example.com/app/main.js",
+                "import { a } from './a.js'; export const m = a;",
+            )],
+            &[("https://example.com/app/a.js", "export const a = 'preloaded';")],
+        );
+        let rt = rt_with_fetch(Arc::clone(&net));
+        rt.eval_module(
+            "import { m } from 'https://example.com/app/main.js'; globalThis.__pre = m;",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__pre").unwrap(), JsValue::String("preloaded".into()));
+        assert_eq!(net.calls_for("https://example.com/app/a.js"), 0);
+        assert_eq!(net.calls_for("https://example.com/app/main.js"), 1);
     }
 
     #[test]

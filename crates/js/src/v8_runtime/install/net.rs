@@ -446,7 +446,7 @@ pub(crate) fn install_fetch(
             }
         });
 
-        // _lumen_link_prefetch_sync(url) → bool. BUG-1116: the same shape as
+        // _lumen_link_prefetch_sync(url, as) → bool. BUG-1116: the same shape as
         // `_lumen_fetch_sync` above and sharing its `FetchCache` slot/accessors
         // (`_lumen_fetch_get_status`/`_get_body`/`_get_headers`/`_get_url`) —
         // JS calls these one at a time (blocking), so reuse is safe — but
@@ -455,9 +455,9 @@ pub(crate) fn install_fetch(
         // hint's own fetch (`_lumen_link_hint_fetch` in the shim) shares bytes
         // with whatever else on the page fetches the same URL this
         // navigation, rather than always hitting the network again.
-        reg!(scope, ctx, store, "_lumen_link_prefetch_sync", move |url: String| -> bool {
+        reg!(scope, ctx, store, "_lumen_link_prefetch_sync", move |url: String, as_kind: String| -> bool {
             let Some(ref provider) = fp_preload else { return false };
-            match provider.fetch_preload_cached(&url) {
+            match provider.fetch_preload_cached(&url, &as_kind) {
                 Ok(resp) => {
                     let mut flat = Vec::with_capacity(resp.headers.len() * 2);
                     for (k, v) in resp.headers {
@@ -784,11 +784,16 @@ pub(crate) fn install_fetch(
                 Arc::new(Mutex::new(HashMap::new()));
             let async_next: Arc<AtomicU32> = Arc::new(AtomicU32::new(1));
 
-            // _lumen_fetch_async_start(url, method, content_type, body, has_body, headers) → handle u32 (0 = no provider)
+            // _lumen_fetch_async_start(url, method, content_type, body, has_body, headers, use_preloaded) → handle u32 (0 = no provider)
+            //
+            // `use_preloaded` (BUG-1116): an element's own load (`<script src>`,
+            // `<link rel=stylesheet>`) first asks for the bytes a `<link
+            // rel=preload>` hint already fetched — `fetch_preloaded` — and goes to
+            // the network only when there are none.
             let am_start = Arc::clone(&async_map);
             reg!(scope, ctx, store, 
                 "_lumen_fetch_async_start",
-                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool, headers: Vec<String>| -> u32 {
+                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool, headers: Vec<String>, use_preloaded: bool| -> u32 {
                     let provider = match fp_async.as_ref() {
                         Some(p) => Arc::clone(p),
                         None => return 0,
@@ -802,16 +807,20 @@ pub(crate) fn install_fetch(
                     let map = Arc::clone(&am_start);
                     let headers = pairs_from_flat(headers);
                     std::thread::spawn(move || {
-                        let res = provider.fetch_request(&lumen_core::ext::JsFetchRequest {
-                            url: &url,
-                            method: &method,
-                            headers: &headers,
-                            body: has_body.then(|| lumen_core::ext::JsFetchBody {
-                                content_type: &content_type,
-                                bytes: &body,
+                        let preloaded = if use_preloaded { provider.fetch_preloaded(&url) } else { None };
+                        let res = match preloaded {
+                            Some(r) => Ok(r),
+                            None => provider.fetch_request(&lumen_core::ext::JsFetchRequest {
+                                url: &url,
+                                method: &method,
+                                headers: &headers,
+                                body: has_body.then(|| lumen_core::ext::JsFetchBody {
+                                    content_type: &content_type,
+                                    bytes: &body,
+                                }),
+                                token: Some(&token),
                             }),
-                            token: Some(&token),
-                        });
+                        };
                         let outcome = match res {
                             Ok(r) => AsyncOutcome::Ok {
                                 status: r.status,

@@ -1,6 +1,6 @@
 # BUG-1116 — `<link rel=preload>` перезапрашивается шимом синхронно, по одному, мимо кэшей движка
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P6)
 **Заведён:** 2026-09-23 (P2, разбор последовательной загрузки после прогона top100,
 [журнал](../docs/perf/journal.md) §2026-09-23 top100 split). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js:12182` — `_lumen_link_hint_fetch` →
@@ -95,3 +95,49 @@
 повторён; ожидание — заметное снижение (script/stylesheet — самые частые `as` в подсчёте
 среди tradingview/github), но не до нуля, пока `as=image`/`as=font` не заведены на общий
 кэш с картиночным/шрифтовым загрузчиком. Бага остаётся OPEN.
+
+## Срез 2 (2026-09-24) — закрытие
+
+Срез 1 делил кэш только с `<script src>`/`<link rel=stylesheet>` парсера. Живой прогон пяти
+худших сайтов показал, что дубли почти целиком шли другими путями; все они закрыты здесь.
+
+- **Destination = `as`.** `RequestDestination::for_preload_as` (`crates/network/src/mixed_content.rs`,
+  HTML LS «translate a preload destination»): прогрев `page_pipeline.rs::warm_preload_cache` и
+  `HttpClient::fetch_preload_cached` идут с destination будущего потребителя, а не `Prefetch`.
+  Иначе скрипт, полученный как optionally-blockable prefetch, попадал бы в `<script src>` на
+  HTTPS-странице мимо блокировки mixed content. Неизвестный/пустой `as` не грузится вовсе.
+- **`as=image`/`as=font`.** `subresources.rs::fetch_subresource_bytes` (`<img>`, CSS-фон,
+  `@font-face`) сначала читает `PREFETCH_CACHE.lookup_current` — только чтение, байты картинок и
+  шрифтов в кэш без подсказки не кладутся. Чтобы потребитель не проскочил мимо ещё не начатого
+  прогрева, `PrefetchCache::warm` резервирует слот на вызывающем потоке до старта фонового.
+- **`modulepreload` → загрузчик модулей.** `v8_esm::fetch_over_network` спрашивает
+  `JsFetchProvider::fetch_preloaded` (новый метод, дефолт `None`; `HttpClient` читает
+  `SubresourceCache::lookup`). github: 75 из 76 дублей были модулями.
+- **Динамический `<script src>`/`<link rel=stylesheet>`/`@import`.** Шим грузит их через `fetch()`
+  с `_lumenInitiatorType`; для таких (и только GET без тела) `_lumen_fetch_async_start` получил
+  флаг `use_preloaded` и сначала берёт байты подсказки. Обычный `fetch()` страницы и XHR — нет:
+  их mode/credentials могут не совпадать с подсказкой.
+
+Проверка — `perf_audit.py --mode compat` на тех же пяти сайтах, `--maximized`, ad-block выключен,
+повторные `→ GET` по URL из `⤷ preload`:
+
+| сайт | main 2026-09-23 | срез 2 |
+|---|---|---|
+| github | 76 | 0 |
+| tiktok | 61 | 0 |
+| cnbc | 39 | 0 |
+| airbnb | 39 | 0 |
+| tradingview | 203 | 158 |
+
+Остаток на tradingview — не подсказки: 155 из 158 — `<img crossorigin>`, которые
+`decode_image_cors` по замыслу грузит мимо любого кэша (каждый логотип стоит в разметке 2-6 раз);
+вынесено в [BUG-1150](BUG-1150-OPEN.md). Стенд `.tmp/seqlab` (700 мс/ответ, окно): с подсказками
+последний ответ 3.7 с, без них 4.7 с (Chrome 2.8/2.9) — подсказки больше не замедляют загрузку.
+Единственный дубль стенда — `<link rel=preload as=fetch>` + `fetch('/api')`: странице отдаётся
+отдельный запрос, [BUG-1151](BUG-1151-OPEN.md). Попутно на стенде видно, что каждый подресурс
+уходит с `Sec-Fetch-Dest: document`/`Mode: navigate`/`Site: none` — [BUG-1152](BUG-1152-OPEN.md).
+
+Тесты: `mixed_content::preload_as_maps_to_consumer_destination`,
+`prefetch::{lookup_misses_when_nothing_warmed, lookup_waits_for_warm_reserved_before_its_thread_runs,
+warm_is_noop_for_already_cached_or_stale}`, `v8_esm::v8_module_graph_takes_modulepreloaded_bytes`. Гейты: clippy по четырём крейтам
+чист, `scripts/scoped-test.sh` — 0 FAILED, `dump_golden.py` — 12/12.

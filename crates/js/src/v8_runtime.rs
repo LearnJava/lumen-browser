@@ -22,7 +22,7 @@ use crate::dom::{
 use crate::heap_snapshot;
 use crate::v8_compat::{
     OwnedNativeFn, into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5,
-    into_v8_fn6, register_v8_native,
+    into_v8_fn6, into_v8_fn7, register_v8_native,
 };
 use lumen_core::ext::{AbortToken, JsSseEvent, JsWsEvent};
 use lumen_core::url::Url;
