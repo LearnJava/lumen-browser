@@ -1004,6 +1004,14 @@ function _lumen_is_focusable(nid) {
     if (tag === 'A' || tag === 'AREA') return _lumen_has_attr(nid, 'href');
     if (tag === 'AUDIO' || tag === 'VIDEO') return _lumen_has_attr(nid, 'controls');
     if (tag === 'BODY' || tag === 'HTML') return true;
+    // HTML LS §6.6.3 "the focusing steps": a <label> with no `tabindex` of
+    // its own (the explicit-tabindex case already returned above) is a
+    // focusable area exactly when its associated control is (BUG-951) — the
+    // label itself never receives focus in that case, `focus()` forwards.
+    if (tag === 'LABEL') {
+        var ctrl = _lumen_label_control_nid(nid);
+        return ctrl !== -1 && _lumen_is_focusable(ctrl);
+    }
     return _LUMEN_FOCUSABLE_TAGS[tag] === 1;
 }
 
@@ -1100,11 +1108,21 @@ HTMLElement.prototype.focus = function(options) {
     var nid = this.__nid__;
     if (nid === null || nid === undefined) return;
     if (!_lumen_is_focusable(nid)) return;
+    var target = this;
+    // BUG-951: a <label> with no `tabindex` of its own is not itself the
+    // focus target — `_lumen_is_focusable` above already confirmed its
+    // associated control resolves and is focusable, so forward to it
+    // instead of focusing the label.
+    if ((_lumen_get_tag_name(nid) || '').toUpperCase() === 'LABEL' &&
+        _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex'))) === null) {
+        nid = _lumen_label_control_nid(nid);
+        target = _lumen_make_element(nid);
+    }
     _lumen_request_focus(nid);
     _lumen_focus_update(nid);
     // HTML LS §6.6.3 «scroll into view» step, unless the caller opted out.
-    if (!(options && options.preventScroll) && typeof this.scrollIntoView === 'function') {
-        try { this.scrollIntoView(); } catch (e) {}
+    if (!(options && options.preventScroll) && target && typeof target.scrollIntoView === 'function') {
+        try { target.scrollIntoView(); } catch (e) {}
     }
 };
 HTMLElement.prototype.blur = function() {
@@ -2512,26 +2530,35 @@ function _lumen_labels_for(nid) {
     });
 });
 
+// HTML LS §4.10.4 — a <label>'s associated control: the element named by
+// `for`, else the first labelable descendant. Returns -1 if neither
+// resolves. Shared by `label.control` below and the focus-forwarding branch
+// of `HTMLElement.prototype.focus`/`_lumen_is_focusable` (BUG-951).
+function _lumen_label_control_nid(nid) {
+    var target = _lumen_u2n(_lumen_get_attr(nid, 'for'));
+    if (target !== null && String(target) !== '') {
+        var byId = _lumen_u2n(_lumen_get_element_by_id(String(target)));
+        if (byId === null) return -1;
+        var t = (_lumen_get_tag_name(byId) || '').toUpperCase();
+        return _LUMEN_LABELABLE_TAGS[t] === 1 ? byId : -1;
+    }
+    var desc = _lumen_descendant_elements(nid, []);
+    for (var i = 0; i < desc.length; i++) {
+        if (_LUMEN_LABELABLE_TAGS[(_lumen_get_tag_name(desc[i]) || '').toUpperCase()] === 1) {
+            return desc[i];
+        }
+    }
+    return -1;
+}
+
 // HTML LS §4.10.4 — `label.control`: the element named by `for`, else the first
 // labelable descendant.
 Object.defineProperty(HTMLLabelElement.prototype, 'control', {
     get: function() {
         var n = _lumen_reflect_nid(this);
         if (n === -1) return null;
-        var target = _lumen_u2n(_lumen_get_attr(n, 'for'));
-        if (target !== null && String(target) !== '') {
-            var byId = _lumen_u2n(_lumen_get_element_by_id(String(target)));
-            if (byId === null) return null;
-            var t = (_lumen_get_tag_name(byId) || '').toUpperCase();
-            return _LUMEN_LABELABLE_TAGS[t] === 1 ? _lumen_make_element(byId) : null;
-        }
-        var desc = _lumen_descendant_elements(n, []);
-        for (var i = 0; i < desc.length; i++) {
-            if (_LUMEN_LABELABLE_TAGS[(_lumen_get_tag_name(desc[i]) || '').toUpperCase()] === 1) {
-                return _lumen_make_element(desc[i]);
-            }
-        }
-        return null;
+        var ctrl = _lumen_label_control_nid(n);
+        return ctrl === -1 ? null : _lumen_make_element(ctrl);
     },
     enumerable: true, configurable: true,
 });
