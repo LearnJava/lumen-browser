@@ -721,6 +721,78 @@ use super::*;
         assert_eq!(style.display, Display::None);
     }
 
+    // ── HTML LS §3.2.6.2 / Rendering §hiddenCSS: `[hidden]` presentational hint ──
+
+    #[test]
+    fn hidden_boolean_attribute_display_none() {
+        let doc = lumen_html_parser::parse("<div hidden>x</div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.display, Display::None);
+        assert_eq!(style.content_visibility, ContentVisibility::Visible);
+    }
+
+    #[test]
+    fn hidden_arbitrary_value_display_none() {
+        // HTML LS: any value other than a case-insensitive "until-found" match
+        // is the plain hidden state, same as the empty-string form above.
+        let doc = lumen_html_parser::parse("<div hidden=\"asdf\">x</div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.display, Display::None);
+    }
+
+    #[test]
+    fn hidden_until_found_content_visibility_hidden() {
+        let doc = lumen_html_parser::parse("<div hidden=\"until-found\">x</div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.display, Display::Block);
+        assert_eq!(style.content_visibility, ContentVisibility::Hidden);
+    }
+
+    #[test]
+    fn hidden_until_found_is_ascii_case_insensitive() {
+        for v in ["UNTIL-FOUND", "UnTiL-FoUnD"] {
+            let doc = lumen_html_parser::parse(&format!("<div hidden=\"{v}\">x</div>"));
+            let sheet = lumen_css_parser::parse("");
+            let root = ComputedStyle::root();
+            let div = doc.get(doc.body().unwrap()).children[0];
+            let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!(style.content_visibility, ContentVisibility::Hidden, "value={v}");
+        }
+    }
+
+    #[test]
+    fn hidden_zero_value_is_still_the_plain_hidden_state() {
+        // "0" is not "until-found" -- HTML LS treats it as the ordinary hidden
+        // state (there is no falsy-string special case for content attributes).
+        let doc = lumen_html_parser::parse("<div hidden=\"0\">x</div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.display, Display::None);
+    }
+
+    #[test]
+    fn hidden_author_display_overrides_ua_rule() {
+        // UA origin has the lowest cascade priority -- an author `display`
+        // declaration on the hidden element itself wins.
+        let doc = lumen_html_parser::parse("<div id=\"d\" hidden>x</div>");
+        let sheet = lumen_css_parser::parse("#d { display: block; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.display, Display::Block);
+    }
+
     #[test]
     fn form_input_checkbox_size() {
         let doc = lumen_html_parser::parse("<input type=\"checkbox\">");
