@@ -855,166 +855,7 @@ fn worker_global_shim(worker_id: u32) -> String {
 /// a repeat re-runs the timer initialization steps with the nesting level
 /// incremented, so the third cycle onward is 4 ms apart.
 #[cfg(feature = "v8-backend")]
-pub(crate) const WORKER_TIMERS_SHIM: &str = r#"(function() {
-  // {id, fn, args, due (epoch ms), delay, interval (bool), nesting, seq}
-  var _timers = [];
-  var _micro = [];
-  var _nextId = 1;
-  // HTML LS §8.6 "timer nesting level" of the task currently running, so a
-  // timer armed from inside a callback inherits its parent's depth.
-  var _nesting = 0;
-
-  function _report(e) {
-    var r = globalThis._lumen_worker_exception_reporter;
-    if (typeof r === 'function') { try { r(e); } catch (_e) {} }
-  }
-
-  // WebIDL `long`: ToInt32 (so 2^32 becomes 0, matching every other engine),
-  // then HTML LS §8.6 step 5 — a negative timeout becomes 0.
-  function _toDelay(v) {
-    var n = Number(v) | 0;
-    return n < 0 ? 0 : n;
-  }
-
-  function _clamp(delay, nesting) {
-    return (nesting > 5 && delay < 4) ? 4 : delay;
-  }
-
-  // HTML LS §8.6: a non-Function handler is a string run as a classic script
-  // when the timer fires, recompiled on every firing of an interval (BUG-831).
-  // Indirect eval is what makes it global-scope: a direct call would evaluate
-  // the code inside this closure. A string handler takes no trailing
-  // arguments (§8.6 step 8 hands them to a Function handler only), so the
-  // list the dispatch loop `apply`s is emptied here.
-  function _stringHandler(code) {
-    var src = String(code);
-    return function () { (0, eval)(src); };
-  }
-
-  function _schedule(fn, delay, args, repeating) {
-    if (typeof fn !== 'function') { fn = _stringHandler(fn); args = []; }
-    var nesting = _nesting + 1;
-    var d = _toDelay(delay);
-    var id = _nextId++;
-    _timers.push({
-      id: id, fn: fn, args: args, delay: d, interval: repeating,
-      nesting: nesting, due: Date.now() + _clamp(d, nesting), seq: id,
-    });
-    return id;
-  }
-
-  globalThis.setTimeout = function(fn, delay) {
-    return _schedule(fn, delay, Array.prototype.slice.call(arguments, 2), false);
-  };
-  globalThis.setInterval = function(fn, delay) {
-    return _schedule(fn, delay, Array.prototype.slice.call(arguments, 2), true);
-  };
-  // The handle is a WebIDL `long` exactly as the delay is, so
-  // `clearTimeout(String(id))` has to cancel timer `id`: the strict `===`
-  // against a raw argument never matched one (BUG-847, the same conversion
-  // the page shim was missing on both arguments).
-  globalThis.clearTimeout = function(id) {
-    var handle = Number(id) | 0;
-    for (var i = 0; i < _timers.length; i++) {
-      if (_timers[i].id === handle) { _timers.splice(i, 1); return; }
-    }
-  };
-  // One list, one id space — as the spec's single "map of active timers" has.
-  globalThis.clearInterval = globalThis.clearTimeout;
-
-  globalThis.queueMicrotask = function(fn) {
-    if (typeof fn !== 'function') {
-      throw new TypeError('queueMicrotask: callback is not a function');
-    }
-    _micro.push(fn);
-  };
-
-  function _drainMicrotasks() {
-    while (_micro.length) {
-      var fn = _micro.shift();
-      try { fn(); } catch (e) { _report(e); }
-    }
-  }
-
-  // Index of the due timer that should run next: earliest deadline, ties
-  // broken by insertion order (`seq`, re-stamped on every repeat so a
-  // reloaded interval queues behind whatever was already waiting).
-  function _nextDue(now) {
-    var best = -1;
-    for (var i = 0; i < _timers.length; i++) {
-      var t = _timers[i];
-      if (t.due > now) continue;
-      if (best === -1 || t.due < _timers[best].due
-          || (t.due === _timers[best].due && t.seq < _timers[best].seq)) {
-        best = i;
-      }
-    }
-    return best;
-  }
-
-  // Run ONE timer that was already due at `limit` (the turn's start time),
-  // with the shim's own microtasks drained around it; true if one ran. One
-  // per call because V8 runs promise reactions only when the outermost
-  // `eval` returns: a Rust call per task is what puts the HTML LS §8.1.7.3
-  // microtask checkpoint between two timers, and what lets a timer armed from
-  // a `.then()` reach `_lumen_worker_next_wait` at all (WORKER-1 срез 2 — a
-  // `WritableStream` whose sink awaits `setTimeout` stalled after one write).
-  // `limit` bounds the turn, so a self-rearming zero-delay timer cannot keep
-  // the thread from ever reading its message channel.
-  globalThis._lumen_worker_run_one_task = function(limit) {
-    _drainMicrotasks();
-    if (globalThis._lumen_worker_closed === true) return false;
-    var i = _nextDue(Math.min(Date.now(), limit));
-    if (i === -1) return false;
-    var task = _timers[i];
-    var now = Date.now();
-    if (task.interval) {
-      // HTML LS §8.6 step 12: a repeating timer re-runs the initialization
-      // steps with the nesting level incremented — which is what puts the
-      // 4 ms floor under a zero-delay interval after a few cycles.
-      task.nesting += 1;
-      task.due = now + _clamp(task.delay, task.nesting);
-      task.seq = _nextId++;
-    } else {
-      _timers.splice(i, 1);
-    }
-    var outer = _nesting;
-    _nesting = task.nesting;
-    try { task.fn.apply(globalThis, task.args); } catch (e) { _report(e); }
-    _nesting = outer;
-    _drainMicrotasks();
-    return true;
-  };
-
-  // How long the thread may sleep: milliseconds until the next deadline, or
-  // -1 when nothing is pending. Asked in an `eval` of its own, after the one
-  // that ran the tasks, so the promise reactions those tasks queued have
-  // already run and armed whatever timers they arm.
-  globalThis._lumen_worker_next_wait = function() {
-    if (_micro.length) return 0;
-    if (!_timers.length) return -1;
-    var soonest = Infinity;
-    for (var j = 0; j < _timers.length; j++) {
-      if (_timers[j].due < soonest) soonest = _timers[j].due;
-    }
-    var wait = soonest - Date.now();
-    return wait > 0 ? wait : 0;
-  };
-
-  // Everything due in one call — for the message-loop eval strings below,
-  // which already run inside a larger eval. The task loop itself goes through
-  // `run_worker_tasks` on the Rust side instead.
-  globalThis._lumen_worker_run_tasks = function() {
-    var limit = Date.now();
-    while (globalThis._lumen_worker_run_one_task(limit)) {}
-    return globalThis._lumen_worker_next_wait();
-  };
-
-  // The name the message-loop eval strings have called since before the queue
-  // had deadlines; kept so the dispatch path still flushes what is due.
-  globalThis._lumen_flush_timers = function() { globalThis._lumen_worker_run_tasks(); };
-})();
-"#;
+pub(crate) const WORKER_TIMERS_SHIM: &str = include_str!("shim/worker_timers_shim.js");
 
 /// Shared `fetch()`/`XMLHttpRequest`/`Headers`/`Response` surface for a
 /// `WorkerGlobalScope` (BUG-778): minimal but spec-shaped, synchronous over
@@ -1755,6 +1596,7 @@ pub(crate) fn install_worker_bindings_v8(
     blob_store: &WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     port_queue: &WorkerPortMessageQueue,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) -> JsResult<()> {
     // GAP-CSPENF срез 13: single-slot side channel carrying
     // `(blocked_uri, original_policy)` from `_lumen_worker_fetch_script`'s
@@ -1802,7 +1644,7 @@ pub(crate) fn install_worker_bindings_v8(
             into_v8_fn3(move |script: String, script_url: String, is_module: bool| -> u32 {
                 spawn_worker_v8(
                     &reg, &q, &errs, &nid, &bs, script, script_url, is_module, fp.clone(),
-                    &pq, &pnid,
+                    &pq, &pnid, ws_provider.clone(),
                 )
             }),
         )?;
@@ -2070,6 +1912,7 @@ fn spawn_worker_v8(
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     port_queue: &WorkerPortMessageQueue,
     port_next_id: &Arc<Mutex<u32>>,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) -> u32 {
     let id = {
         let mut n = next_id.lock().unwrap();
@@ -2090,7 +1933,7 @@ fn spawn_worker_v8(
         .spawn(move || {
             run_worker_thread_v8(
                 id, script, script_url, is_module, rx, reply, err_reply, store, fetch_provider,
-                port_reply, port_nid,
+                port_reply, port_nid, ws_provider,
             )
         })
         .expect("failed to spawn Web Worker thread (v8)");
@@ -2128,6 +1971,7 @@ fn run_worker_thread_v8(
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     port_reply: WorkerPortMessageQueue,
     port_next_id: Arc<Mutex<u32>>,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -2172,6 +2016,13 @@ fn run_worker_thread_v8(
         crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt, &worker_origin)
     {
         eprintln!("[worker-{id}] v8 offscreen_canvas install failed: {e:?}");
+    }
+    // WORKER-1 срез 3 (BUG-1071): `new WebSocket()` here dials through the
+    // page's provider, as the worker's `fetch()` goes through its fetch one.
+    if let Some(wp) = ws_provider
+        && let Err(e) = crate::dom::bind_worker_websocket_v8(&rt, wp)
+    {
+        eprintln!("[worker-{id}] v8 websocket bind failed: {e:?}");
     }
 
     // A module worker evaluates its script under its own URL (BUG-777), so a
@@ -2308,19 +2159,35 @@ pub(crate) fn run_worker_tasks(rt: &V8JsRuntime) -> Option<std::time::Duration> 
     // One timer per `eval`, see `_lumen_worker_run_one_task`: the turn is
     // bounded by its own start time, and the wait is asked only after the
     // last task's promise reactions have run.
+    // WORKER-1 срез 3 (BUG-1071): a socket's events land on the provider's
+    // threads with nothing to wake this one, so each turn polls them in an
+    // eval of its own (a handler's reactions get their checkpoint) and the
+    // sleep is capped at `WORKER_SOCKET_POLL` while a socket is live — asked
+    // after this turn's tasks, since one of them may have opened it.
+    let _ = rt.eval("if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();");
     let turn = match rt.eval("(typeof _lumen_worker_run_one_task==='function')?Date.now():-1") {
         Ok(lumen_core::JsValue::Number(t)) if t >= 0.0 => t,
         _ => return None,
     };
     let step = format!("_lumen_worker_run_one_task({turn})");
     while matches!(rt.eval(&step), Ok(lumen_core::JsValue::Bool(true))) {}
-    match rt.eval("_lumen_worker_next_wait()") {
+    let wait = match rt.eval("_lumen_worker_next_wait()") {
         Ok(lumen_core::JsValue::Number(ms)) if ms >= 0.0 => {
             Some(std::time::Duration::from_millis(ms.min(3_600_000.0) as u64))
         }
         _ => None,
-    }
+    };
+    let sockets_live = matches!(
+        rt.eval("typeof _ws_instances==='object'&&_ws_instances.length>0"),
+        Ok(lumen_core::JsValue::Bool(true))
+    );
+    if sockets_live { Some(wait.map_or(WORKER_SOCKET_POLL, |w| w.min(WORKER_SOCKET_POLL))) } else { wait }
 }
+
+/// Longest a worker thread sleeps while one of its `WebSocket`s is open — the
+/// latency of a message pushed by the server (see [`run_worker_tasks`]).
+#[cfg(feature = "v8-backend")]
+const WORKER_SOCKET_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Install the Worker global environment into a V8 runtime. Registers the
 /// natives `_lumen_worker_post_reply`, `_lumen_worker_console_log`,
@@ -2691,7 +2558,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new()))).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None).unwrap();
         let result = rt.eval("typeof Worker === 'function'").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
@@ -2976,7 +2843,7 @@ mod tests_v8 {
             false,
             None,
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)),
+            &Arc::new(Mutex::new(0u32)), None,
         );
 
         post_to_worker(&reg, worker_id, "\"boom\"".to_string());
@@ -3029,7 +2896,7 @@ mod tests_v8 {
             false,
             None,
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)),
+            &Arc::new(Mutex::new(0u32)), None,
         );
         std::thread::sleep(Duration::from_millis(400));
 
@@ -3162,7 +3029,7 @@ mod tests_v8 {
                         postMessage(performance.now() >= t0 && performance.timeOrigin > 0);\
                       };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3185,7 +3052,7 @@ mod tests_v8 {
 
         // Worker echoes its received message doubled.
         let script = "onmessage = function(e) { postMessage(e.data * 2); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         post_to_worker(&reg, worker_id, "21".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3214,7 +3081,7 @@ mod tests_v8 {
         let script = "postMessage(typeof OffscreenCanvas + ',' + \
                        typeof _lumen_offscreen_canvas_from_image_data);"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         std::thread::sleep(Duration::from_millis(300));
 
@@ -3243,7 +3110,7 @@ mod tests_v8 {
             "');onmessage = function(e) { postMessage(add(e.data, 8)); };",
         )
         .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         post_to_worker(&reg, worker_id, "34".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3275,7 +3142,7 @@ mod tests_v8 {
              onmessage = function(e) { postMessage(mul(e.data, 3)); };"
                 .to_string();
 
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
         post_to_worker(&reg, worker_id, "7".to_string());
         std::thread::sleep(Duration::from_millis(300));
 
@@ -3297,7 +3164,7 @@ mod tests_v8 {
 
         // Worker posts a reply to every message.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         // Terminate immediately before any postMessage.
         terminate_worker(&reg, worker_id);
@@ -3354,7 +3221,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new()))).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None).unwrap();
 
         let result = rt
             .eval(r#"_lumenSerializeWithTransfers({x: 1, y: "hello"}, [])"#)
@@ -3372,7 +3239,7 @@ mod tests_v8 {
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new()))).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None, &Arc::new(Mutex::new(Vec::new())), None).unwrap();
         crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt, "https://example.test").unwrap();
 
         let result = rt
@@ -3450,7 +3317,7 @@ mod tests_v8 {
         // First message replies then closes; a second message must produce
         // no further reply.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); self.close(); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         post_to_worker(&reg, worker_id, "1".to_string());
         std::thread::sleep(Duration::from_millis(200));
@@ -3495,7 +3362,7 @@ mod tests_v8 {
               .then(function(t) { postMessage(t); });\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3527,7 +3394,7 @@ mod tests_v8 {
             x.send();\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net), &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -3875,7 +3742,7 @@ mod tests_v8 {
             true,
             Some(net),
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)),
+            &Arc::new(Mutex::new(0u32)), None,
         );
 
         post_to_worker(&reg, worker_id, "0".to_string());
@@ -3917,7 +3784,7 @@ mod tests_v8 {
             false,
             None,
             &Arc::new(Mutex::new(Vec::new())),
-            &Arc::new(Mutex::new(0u32)),
+            &Arc::new(Mutex::new(0u32)), None,
         );
         std::thread::sleep(Duration::from_millis(300));
 
@@ -4308,7 +4175,7 @@ mod tests_v8 {
                       setInterval(function() { n++; postMessage('interval:' + n); }, 20);"
             .to_string();
         let worker_id =
-            spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)));
+            spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None, &Arc::new(Mutex::new(Vec::new())), &Arc::new(Mutex::new(0u32)), None);
 
         let mut got: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -4412,3 +4279,7 @@ mod tests_v8 {
         assert_eq!(rt.eval("ok").unwrap(), lumen_core::JsValue::Bool(true));
     }
 }
+
+#[cfg(all(test, feature = "v8-backend"))]
+#[path = "worker_ws_tests.rs"]
+mod ws_tests;

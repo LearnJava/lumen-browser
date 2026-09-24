@@ -1267,13 +1267,30 @@ impl lumen_core::ext::JsWebSocketSession for PendingWsSession {
 }
 
 /// The WebSocket API over the shell's `JsWebSocketProvider`.
-#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_websocket(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) -> JsResult<()> {
+    for (name, native) in websocket_natives(ws_provider) {
+        register_v8_native(scope, ctx, store, name, native)?;
+    }
+    Ok(())
+}
+
+/// The `_lumen_ws_*` natives behind the `WebSocket` shim
+/// (`shim/websocket_shim.js`), built once per scope over `ws_provider` — the
+/// page registers them through [`install_websocket`], every worker scope
+/// through [`crate::dom::install_worker_exposed_v8`] (WORKER-1 срез 3,
+/// BUG-1071: `WebSocket` is `[Exposed=(Window,Worker)]`). One builder keeps
+/// both scopes on the same handshake/registry/poll-format code; each call
+/// owns its own handle registry, so a handle never crosses scopes.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn websocket_natives(
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+) -> Vec<(&'static str, Box<dyn crate::v8_compat::V8NativeFn + Send>)> {
+    let mut natives: Vec<(&'static str, Box<dyn crate::v8_compat::V8NativeFn + Send>)> = Vec::new();
     // ── WebSocket API ─────────────────────────────────────────────────────────
     // GAP-WSASYNC срез 1: async connect — handle returned immediately,
     // handshake runs on a background thread, background recv thread (started
@@ -1308,7 +1325,7 @@ pub(crate) fn install_websocket(
 
         let (reg_c, nid_c, wp) = (Arc::clone(&registry), Arc::clone(&next_id), ws_provider);
         let lcb_ws = Arc::clone(&last_csp_block);
-        reg!(scope, ctx, store, "_lumen_ws_connect", move |url: String, proto_csv: String| -> u32 {
+        natives.push(("_lumen_ws_connect", into_v8_fn2(move |url: String, proto_csv: String| -> u32 {
             let Some(ref provider) = wp else { return 0 };
             let protos: Vec<String> = proto_csv
                 .split(',')
@@ -1384,57 +1401,57 @@ pub(crate) fn install_websocket(
             });
 
             id
-        });
+        })));
 
         // _lumen_ws_last_csp_block() → [blockedUri, originalPolicy] | []
         {
             let lcb_get = Arc::clone(&last_csp_block);
-            reg!(scope, ctx, store, "_lumen_ws_last_csp_block", move || -> Vec<String> {
+            natives.push(("_lumen_ws_last_csp_block", into_v8_fn0(move || -> Vec<String> {
                 match lcb_get.lock().unwrap().take() {
                     Some((uri, policy)) => vec![uri, policy],
                     None => Vec::new(),
                 }
-            });
+            })));
         }
 
         let reg_c = Arc::clone(&registry);
-        reg!(scope, ctx, store, "_lumen_ws_send", move |handle: u32, text: String| -> bool {
+        natives.push(("_lumen_ws_send", into_v8_fn2(move |handle: u32, text: String| -> bool {
             let mut map = reg_c.lock().unwrap();
             if let Some(sess) = map.get_mut(&handle) {
                 sess.send_text(&text).is_ok()
             } else {
                 false
             }
-        });
+        })));
 
         let reg_c = Arc::clone(&registry);
-        reg!(scope, ctx, store, 
+        natives.push((
             "_lumen_ws_send_bin",
-            move |handle: u32, data: Vec<u8>| -> bool {
+            into_v8_fn2(move |handle: u32, data: Vec<u8>| -> bool {
                 let mut map = reg_c.lock().unwrap();
                 if let Some(sess) = map.get_mut(&handle) {
                     sess.send_binary(&data).is_ok()
                 } else {
                     false
                 }
-            }
-        );
+            }),
+        ));
 
         let reg_c = Arc::clone(&registry);
-        reg!(scope, ctx, store, 
+        natives.push((
             "_lumen_ws_close",
-            move |handle: u32, code: u32, reason: String| {
+            into_v8_fn3(move |handle: u32, code: u32, reason: String| {
                 let mut map = reg_c.lock().unwrap();
                 if let Some(sess) = map.get_mut(&handle) {
                     let _ = sess.close(code as u16, &reason);
                 }
-            }
-        );
+            }),
+        ));
 
         let reg_c = Arc::clone(&registry);
-        reg!(scope, ctx, store, 
+        natives.push((
             "_lumen_ws_poll",
-            move |handle: u32| -> Option<String> {
+            into_v8_fn1(move |handle: u32| -> Option<String> {
                 let map = reg_c.lock().unwrap();
                 let sess = map.get(&handle)?;
                 sess.poll().map(|ev| match ev {
@@ -1476,10 +1493,10 @@ pub(crate) fn install_websocket(
                         format!(r#"{{"t":"flushed","bytes":{bytes}}}"#)
                     }
                 })
-            }
-        );
+            }),
+        ));
     }
-    Ok(())
+    natives
 }
 
 /// `TextDecoder` (WHATWG Encoding Standard §8-9).

@@ -613,16 +613,17 @@ fn connect_shared_worker_v8(
     outbox: SharedWorkerOutbox,
     errors: crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) -> u32 {
     let port_id = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut map = hub_v8().lock().unwrap();
 
     let spawn = |key: String, script: String, script_url: String| -> SharedWorkerThread {
         let (tx, rx) = mpsc::channel::<SwInMsg>();
-        let fp = fetch_provider.clone();
+        let (fp, wp) = (fetch_provider.clone(), ws_provider.clone());
         let thread = thread::Builder::new()
             .name(format!("lumen-shared-worker-v8-{key}"))
-            .spawn(move || run_shared_worker_thread_v8(script, script_url, is_module, rx, fp))
+            .spawn(move || run_shared_worker_thread_v8(script, script_url, is_module, rx, fp, wp))
             .expect("failed to spawn SharedWorker thread (v8)");
         SharedWorkerThread { tx, _thread: thread }
     };
@@ -678,6 +679,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
     outbox: &SharedWorkerOutbox,
     errors: &crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) -> JsResult<()> {
     // GAP-CSPENF срез 13: same one-slot `(blocked_uri, original_policy)` side
     // channel as `worker.rs::install_worker_bindings_v8`'s `last_csp_block` —
@@ -714,6 +716,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
                         Arc::clone(&out),
                         Arc::clone(&errs),
                         fp.clone(),
+                        ws_provider.clone(),
                     )
                 },
             ),
@@ -818,6 +821,7 @@ fn run_shared_worker_thread_v8(
     is_module: bool,
     rx: Receiver<SwInMsg>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -852,6 +856,12 @@ fn run_shared_worker_thread_v8(
     ) {
         eprintln!("[shared-worker] v8 globals install failed: {e:?}");
         return;
+    }
+    // WORKER-1 срез 3 (BUG-1071): the twin of `worker.rs::run_worker_thread_v8`.
+    if let Some(wp) = ws_provider
+        && let Err(e) = crate::dom::bind_worker_websocket_v8(&rt, wp)
+    {
+        eprintln!("[shared-worker] v8 websocket bind failed: {e:?}");
     }
 
     // BUG-905: the top-level script goes through the runtime-only reporting
@@ -1320,7 +1330,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, None).unwrap();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, None, None).unwrap();
         (rt, outbox, errors)
     }
 
@@ -1553,7 +1563,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, &errors, Some(fp)).unwrap();
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, Some(fp), None).unwrap();
         (rt, outbox)
     }
 
@@ -1811,6 +1821,7 @@ mod tests_v8 {
             false,
             Arc::clone(&outbox),
             Arc::clone(&errors),
+            None,
             None,
         );
         std::thread::sleep(Duration::from_millis(300));

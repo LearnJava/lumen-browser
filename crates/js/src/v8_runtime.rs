@@ -86,7 +86,7 @@ mod thread;
 
 pub use named_access::ensure_v8_platform;
 pub(crate) use command::DOM_EXCEPTION_POLYFILL;
-pub(crate) use install::net::{text_decode, text_encoding_for_label};
+pub(crate) use install::net::{text_decode, text_encoding_for_label, websocket_natives};
 use command::{V8Command, V8Inner, V8_CMD_QUEUE_BOUND};
 use named_access::set_named_access_document;
 use style_flush::FlushHandles;
@@ -211,6 +211,9 @@ impl V8JsRuntime {
         // installation happens after that closure returns.
         let fp_worker = fetch_provider.clone();
         let fp_shared_worker = fetch_provider.clone();
+        // WORKER-1 срез 3: `WebSocket` in either worker flavour dials through
+        // the page's provider, same as their `fetch()` above.
+        let ws_worker = ws_provider.clone();
         // Тот же провайдер отдаётся загрузчику модулей: `import('./chunk.js')`
         // обязан сходить в сеть, а не искать чанк в заранее зарегистрированных
         // исходниках (иначе code-split приложение не собирается вовсе).
@@ -1068,6 +1071,7 @@ impl V8JsRuntime {
             &self.worker_blob_store,
             fp_worker,
             &self.worker_port_messages,
+            ws_worker.clone(),
         ) {
             eprintln!("v8: worker::install_worker_bindings_v8 failed: {e}");
         }
@@ -1076,6 +1080,7 @@ impl V8JsRuntime {
             &self.shared_worker_outbox,
             &self.shared_worker_errors,
             fp_shared_worker,
+            ws_worker,
         ) {
             eprintln!("v8: shared_worker::install_shared_worker_bindings_v8 failed: {e}");
         }

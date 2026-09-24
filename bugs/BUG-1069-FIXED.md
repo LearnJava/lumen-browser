@@ -80,7 +80,7 @@ DNS:127.0.0.1,DNS:localhost,DNS:*.localhost`. `ca-cert.pem` — копия, ка
   и `shared-storage` — 88 `.https.`-файлов из 90, срез 42, 2026-09-20: 264 строки `ExecutorException` = 88×3, все
   с этой ошибкой;
   и `websockets` — срез 43 WPT-RUN-7, 2026-09-20: в логе 430 уникальных `https://localhost:19000/…` (весь класс `?wpt_flags=h2`, HTTP/2-сервер wptserve)
-  и 56 `https://localhost:18443/…`, все с этой ошибкой; harness-`ERROR` из-за неё — ~224 секций из 333, остальные 108 — не сертификат, а [BUG-1071](BUG-1071-OPEN.md)).
+  и 56 `https://localhost:18443/…`, все с этой ошибкой; harness-`ERROR` из-за неё — ~224 секций из 333, остальные 108 — не сертификат, а [BUG-1071](BUG-1071-FIXED.md)).
 - Пробный перевыпуск сертификата (SAN + `localhost`, `*.localhost`; срез 41→42, 2026-09-20, не закоммичен):
   на `fedcm` TLS-ошибка исчезает (0 из 81), файлы доходят до страницы и дают `TIMEOUT` на
   `testharnessreport.js` вместо `ERROR` — то есть после починки baseline сдвинется `ERROR → TIMEOUT` (или лучше),

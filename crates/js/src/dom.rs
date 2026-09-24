@@ -357,6 +357,13 @@ fn set_attribute(doc: &mut Document, id: NodeId, name: &str, value: &str) {
 #[cfg(feature = "v8-backend")]
 const WEB_API_SHIM_HEAD: &str = include_str!("shim/web_api_shim_head.js");
 
+/// `Event`/`CustomEvent` (DOM §2.2/§2.4) — `[Exposed=*]`, cut out of the tail
+/// of [`WEB_API_SHIM_HEAD`] (WORKER-1 срез 3) so every worker scope runs the
+/// same constructors through [`worker_exposed_shim`]; before it a worker had
+/// no `Event` at all. A verbatim slice — the only thing that moved is the
+/// page-only `_lumen_legacy_event_ctor` declaration, hoisted either way.
+pub(crate) const EVENT_SHIM: &str = include_str!("shim/event_shim.js");
+
 /// `EventTarget` — the first of the two shim blocks shared verbatim between the
 /// page global scope and every `WorkerGlobalScope` (BUG-401).
 ///
@@ -417,6 +424,15 @@ pub(crate) const TEXT_ENCODING_SHIM: &str = include_str!("shim/text_encoding_shi
 /// Exists only for that split; the splice order is pinned by
 /// `web_api_shim_splices_its_parts_in_source_order`.
 const WEB_API_SHIM_MID_B3: &str = include_str!("shim/web_api_shim_mid_b3.js");
+
+/// `WebSocket` + `CloseEvent` (WHATWG WebSockets) — `[Exposed=(Window,Worker)]`,
+/// cut out of [`WEB_API_SHIM_MID_B3`] (WORKER-1 срез 3, BUG-1071) so workers
+/// run the same class through [`worker_exposed_shim`]. Its natives come from
+/// the one builder both scopes share, `install::websocket_natives`.
+pub(crate) const WEBSOCKET_SHIM: &str = include_str!("shim/websocket_shim.js");
+
+/// Continuation of [`WEB_API_SHIM_MID_B3`] after [`WEBSOCKET_SHIM`].
+const WEB_API_SHIM_MID_B4: &str = include_str!("shim/web_api_shim_mid_b4.js");
 
 /// Geometry Interfaces Module (BUG-522/GAP-GEOM) — `DOMPointReadOnly`/
 /// `DOMPoint`, `DOMRectReadOnly`/`DOMRect`, `DOMRectList`,
@@ -528,12 +544,13 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{STREAMS_SHIM}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{STREAMS_SHIM}{HEADERS_SHIM}{WEB_API_SHIM_MID_B2}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
-/// `WorkerGlobalScope`: [`EVENT_TARGET_SHIM`] followed by [`PERFORMANCE_SHIM`],
-/// the URL pair and [`TEXT_ENCODING_SHIM`].
+/// `WorkerGlobalScope`: [`EVENT_SHIM`], [`EVENT_TARGET_SHIM`],
+/// [`PERFORMANCE_SHIM`], the URL pair, [`TEXT_ENCODING_SHIM`],
+/// [`STREAMS_SHIM`] and [`WEBSOCKET_SHIM`].
 ///
 /// Evaluated as one script (like in the page) so `Performance`'s prototype
 /// chain finds `EventTarget`. The trailing `undefined` keeps the completion
@@ -548,8 +565,8 @@ pub(crate) fn web_api_shim() -> String {
 #[cfg(feature = "v8-backend")]
 pub(crate) fn worker_exposed_shim() -> String {
     format!(
-        "{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\
-         {TEXT_ENCODING_SHIM}{STREAMS_SHIM}{WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
+        "{EVENT_SHIM}{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\
+         {TEXT_ENCODING_SHIM}{STREAMS_SHIM}{WEBSOCKET_SHIM}{WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
     )
 }
 
@@ -560,6 +577,11 @@ pub(crate) fn worker_exposed_shim() -> String {
 /// backing function (WORKER-1: `TextDecoder.decode` calls `_lumen_text_decode`,
 /// which only the page runtime used to register).
 #[cfg(feature = "v8-backend")]
+///
+/// The `_lumen_ws_*` natives are bound here without a provider, so a scope
+/// that never gets one (a service worker, a test) still has a working class
+/// whose constructor fails the way the page's does with no provider —
+/// `error` + `close(1006)`; [`bind_worker_websocket_v8`] rebinds them.
 pub(crate) fn install_worker_exposed_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn4};
     // `DOMException` is `[Exposed=*]` and the slices below throw it; the
@@ -599,7 +621,26 @@ pub(crate) fn install_worker_exposed_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
         "_lumen_cs_free",
         into_v8_fn1(|handle: f64| crate::compression::cs_free(handle as u32)),
     )?;
+    for (name, native) in crate::v8_runtime::websocket_natives(None) {
+        rt.register_native(name, native)?;
+    }
     lumen_core::ext::JsRuntime::eval(rt, &worker_exposed_shim())?;
+    Ok(())
+}
+
+/// Rebinds a worker scope's `_lumen_ws_*` natives (installed provider-less by
+/// [`install_worker_exposed_v8`]) to `provider`, so `new WebSocket()` in a
+/// dedicated or shared worker dials through its page's network stack
+/// (WORKER-1 срез 3, BUG-1071). Call before the worker script runs: a socket
+/// opened earlier stays in the old natives' registry, which no longer polls.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn bind_worker_websocket_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    provider: std::sync::Arc<dyn lumen_core::ext::JsWebSocketProvider>,
+) -> lumen_core::JsResult<()> {
+    for (name, native) in crate::v8_runtime::websocket_natives(Some(provider)) {
+        rt.register_native(name, native)?;
+    }
     Ok(())
 }
 

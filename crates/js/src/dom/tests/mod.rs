@@ -26,6 +26,8 @@ fn web_api_shim_splices_its_parts_in_source_order() {
     let mut prev = 0usize;
     for marker in [
         "function _lumen_u2n",
+        // Event — своя часть с WORKER-1 срез 3 (её исполняет и воркер).
+        "function Event(",
         "function EventTarget()",
         "function UIEvent(",
         // Streams — своя часть с WORKER-1 срез 2 (её исполняет и воркер).
@@ -34,6 +36,8 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         // Encoding — своя часть с WORKER-1 срез 1 (её исполняет и воркер).
         "function TextEncoder()",
         "function TextDecoder(",
+        // WebSocket — своя часть с WORKER-1 срез 3 (её исполняет и воркер).
+        "function WebSocket(",
         "function Performance()",
         "function PerformanceObserver(",
         // IndexedDB — своя часть с 2026-08-17 (её же исполняет область
@@ -64,7 +68,10 @@ fn worker_exposed_shim_is_a_verbatim_slice_of_the_page_shim() {
     assert!(page.contains(EVENT_TARGET_SHIM));
     assert!(page.contains(PERFORMANCE_SHIM));
     let worker = worker_exposed_shim();
-    assert!(worker.starts_with(EVENT_TARGET_SHIM));
+    assert!(worker.starts_with(EVENT_SHIM));
+    assert!(worker.contains(EVENT_TARGET_SHIM));
+    assert!(page.contains(WEBSOCKET_SHIM));
+    assert!(worker.contains(WEBSOCKET_SHIM));
     assert!(worker.contains(PERFORMANCE_SHIM));
     // Интерфейсы `[Exposed=Worker]` в странице появиться не должны: это
     // единственная часть воркерного шима, которой в странице нет (BUG-776).
