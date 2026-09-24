@@ -1,7 +1,7 @@
 # BUG-524: CSS Scroll Anchoring (`overflow-anchor`) is entirely unimplemented
 — property not parsed, no anchor-selection/adjustment logic anywhere in layout
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
 **Дата:** 2026-08-03
 **Компонент:** css-parser (property missing) + layout (no anchoring algorithm)
 **Найден:** WPT-RUN-3 срез 24 (`ROADMAP.md`) — массовый прогон `css/css-scroll-anchoring`
@@ -58,3 +58,29 @@ closes the two `= "all"`/`= "auto none"` parsing-rejection assertions
 mentioned in Симптом above; the rest of the module (anchor node selection,
 suppression heuristics, scroll-offset compensation on relayout) is still the
 whole remaining scope.
+
+## Ревизия P3 2026-09-25: переквалифицирован в ДОРАБОТКА → CSS-SPECS.md
+
+Взят как следующий top-down пункт `STATUS-P3.md` (BUGS.md:61; строки выше —
+DEBTOR-якоря ратчетов с остатком в доменах P1 и приостановленный пользователем
+BUG-341). Оба условия теста ДОРАБОТКА (`docs/probe-method.md` §8) выполнены:
+
+1. **Функциональности нет вовсе.** После среза 1 (грамматика + CSSOM)
+   `grep -rn -i "scroll.anchor|anchor_node|overflow_anchor" crates --include=*.rs`
+   вне `layout/src/style*` и `selector_query.rs` даёт ноль: значение
+   `overflow-anchor` разбирается и сериализуется, но не читается ни одним
+   потребителем — ни в layout, ни в shell-пути скролла.
+2. **Объём — модель состояния, а не один член.** CSS Scroll Anchoring 1 требует
+   хранить якорный узел на КАЖДЫЙ scroll-контейнер (включая вьюпорт), выбирать
+   его обходом кандидатов с исключениями (`overflow-anchor: none`, абсолютные/
+   fixed-боксы, полностью невидимые), вести эвристики подавления (изменение
+   `position`/`top`/`transform`/размеров на цепочке якорь → контейнер) и
+   применять компенсирующую дельту между layout и paint — то есть связывать
+   результат релейаута со scroll-состоянием shell. Точечной правки в одном
+   месте нет.
+
+Это прямое продолжение уже записанного в разделе «Фикс (не сделан)» вывода
+(«likely its own multi-slice task»). Заведено не в `ROADMAP.md`, а в
+`CSS-SPECS.md` (строка `overflow-anchor`, 🟡) — тот же прецедент, что
+BUG-491/492/495: P4 владеет этим файлом как очередью CSS-свойств. Статус
+переведён в `OPEN (ДОРАБОТКА → CSS-SPECS.md)`; строка снята с `STATUS-P3.md`.
