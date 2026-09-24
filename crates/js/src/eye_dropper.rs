@@ -23,6 +23,21 @@ const EYE_DROPPER_SHIM: &str = r#"
     constructor() {}
 
     async open(options) {
+      // WICG Eye Dropper API §3 step 3 — without transient activation the
+      // call must reject with NotAllowedError before doing anything else
+      // (BUG-698). Mirrors the same gate in window_management.rs/
+      // local_font_access.rs; `activation` undefined (no `navigator` stub,
+      // e.g. this module's own unit tests) stays permissive like those do.
+      const activation = (typeof navigator !== 'undefined') ? navigator.userActivation : undefined;
+      if (activation && activation.isActive === false) {
+        throw new DOMException(
+          'EyeDropper.open() requires transient activation.', 'NotAllowedError');
+      }
+      // WICG Eye Dropper API §3 — consume user activation once the check passes.
+      if (typeof _lumen_consume_user_activation === 'function') {
+        _lumen_consume_user_activation();
+      }
+
       const signal = options?.signal;
 
       // Check if abort signal is already aborted
@@ -94,16 +109,50 @@ const EYE_DROPPER_SHIM: &str = r#"
 mod tests {
     // Хелперы тестового модуля: исключение из clippy.toml покрывает
     // только тело `#[test]` (docs/lint-policy.md §10).
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
 
     fn with_eye_dropper(f: impl FnOnce(&V8JsRuntime)) {
+        with_eye_dropper_setup("", f);
+    }
+
+    /// Same harness with `extra` evaluated after the default `navigator`
+    /// stub (transient activation granted, the happy-path default), so a
+    /// test can override `userActivation` before install.
+    fn with_eye_dropper_setup(extra: &str, f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            "var navigator = { userActivation: { isActive: true } }; \
+             function DOMException(msg, name) { this.message = msg; this.name = name; } \
+             DOMException.prototype = Object.create(Error.prototype); \
+             globalThis.DOMException = DOMException;",
+        )
+        .unwrap();
+        if !extra.is_empty() {
+            rt.eval(extra).unwrap();
+        }
         install_eye_dropper_bindings_v8(&rt).unwrap();
         f(&rt);
+    }
+
+    /// Resolves `expr` (a promise) and reports `"resolved"` or `"rejected|<name>|<message>"`.
+    fn settle(rt: &V8JsRuntime, expr: &str) -> String {
+        rt.eval(&format!(
+            r#"
+            var __out = 'never settled';
+            ({expr}).then(
+              function() {{ __out = 'resolved'; }},
+              function(e) {{ __out = 'rejected|' + e.name + '|' + e.message; }});
+            "#
+        ))
+        .unwrap();
+        match rt.eval("String(__out)").unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        }
     }
 
     #[test]
@@ -217,6 +266,30 @@ mod tests {
 
             let hex = rt.eval("globalThis.__ok && globalThis.__ok.sRGBHex").unwrap();
             assert_eq!(hex, JsValue::String("#ffffff".to_string()));
+        });
+    }
+
+    /// BUG-698 — WICG Eye Dropper API §3 step 3: without transient
+    /// activation, `open()` must reject with `NotAllowedError` instead of
+    /// running its fallback logic.
+    #[test]
+    fn test_eye_dropper_open_requires_transient_activation() {
+        with_eye_dropper_setup("navigator.userActivation.isActive = false;", |rt| {
+            let out = settle(rt, "new EyeDropper().open()");
+            assert_eq!(
+                out,
+                "rejected|NotAllowedError|EyeDropper.open() requires transient activation."
+            );
+        });
+    }
+
+    /// BUG-698 companion: with transient activation granted, `open()` must
+    /// still resolve the documented fallback (no regression on the happy path).
+    #[test]
+    fn test_eye_dropper_open_succeeds_with_transient_activation() {
+        with_eye_dropper(|rt| {
+            let out = settle(rt, "new EyeDropper().open()");
+            assert_eq!(out, "resolved");
         });
     }
 }
