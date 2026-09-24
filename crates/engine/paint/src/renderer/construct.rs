@@ -32,6 +32,19 @@ pub(crate) fn renderer_instance_descriptor(backends: wgpu::Backends) -> wgpu::In
     wgpu::InstanceDescriptor { backends, flags, ..Default::default() }.with_env()
 }
 
+/// Оконный wgpu-бэкенд, открытый [`Renderer::open_window_backend`]:
+/// поверхность уже сконфигурирована.
+struct OpenedWindowBackend {
+    surface: wgpu::Surface<'static>,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    caps: wgpu::SurfaceCapabilities,
+    /// Потолок стороны текстуры адаптера (до `requested_max_texture_dim`).
+    adapter_max_dim: u32,
+}
+
 impl Renderer {
     pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
@@ -97,84 +110,29 @@ impl Renderer {
         // `backend_probe::pick_backend`) to find where the ~9s launch->first-frame
         // gap actually goes.
         let t_adapter0 = std::time::Instant::now();
+        // BUG-1073: `Surface::configure` может отказать и на адаптере,
+        // который `request_adapter` только что выдал (`Invalid surface` —
+        // драйвер не отдал swapchain окну при одновременном старте
+        // нескольких процессов). Без error scope wgpu паникует; поэтому
+        // device + configure идут внутри перебора, и отказ ведёт к
+        // следующему бэкенду, а не к падению процесса.
         let mut picked = None;
+        let mut last_err = String::from("no GPU adapter under any candidate backend (Vulkan/DX12/GL)");
         for backends in backend_prefs {
-            let instance = wgpu::Instance::new(&renderer_instance_descriptor(backends));
-            let Ok(surface) = instance.create_surface(window.clone()) else {
-                continue;
-            };
-            match instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: false,
-                })
-                .await
-            {
-                Ok(adapter) => {
-                    picked = Some((surface, adapter));
+            match Self::open_window_backend(&window, backends, width, height, target_color_space).await {
+                Ok(opened) => {
+                    picked = Some(opened);
                     break;
                 }
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("[wgpu] {backends:?}: {e} — следующий бэкенд");
+                    last_err = e;
+                }
             }
         }
-        let (surface, adapter) =
-            picked.ok_or("no GPU adapter under any candidate backend (DX12/Vulkan/GL)")?;
-        // BUG-405 срез 23: всё, кроме стороны текстуры, остаётся на
-        // `downlevel_defaults()` (переносимость), а сторона поднимается до
-        // тира адаптера — от неё зависит, работает ли скролл-композитор:
-        // полоса высотой 2.5 вьюпорта не влезала в 2048 уже на окне
-        // клиентской высотой ~819 device px.
-        let mut limits = wgpu::Limits::downlevel_defaults();
-        let adapter_max_dim = adapter.limits().max_texture_dimension_2d;
-        limits.max_texture_dimension_2d =
-            requested_max_texture_dim(adapter_max_dim, !texture_limit_raise_disabled());
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("lumen-device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            })
-            .await?;
-
-        let caps = surface.get_capabilities(&adapter);
-        let format = select_surface_format(&caps, target_color_space);
-        // LUMEN_PRESENT=mailbox|immediate|fifo — эксперимент BUG-274/Vulkan-white:
-        // выбор present mode из поддерживаемых драйвером (дефолт Fifo).
-        let present_mode = match std::env::var("LUMEN_PRESENT").as_deref() {
-            Ok("mailbox") if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) => {
-                wgpu::PresentMode::Mailbox
-            }
-            Ok("immediate") if caps.present_modes.contains(&wgpu::PresentMode::Immediate) => {
-                wgpu::PresentMode::Immediate
-            }
-            _ => wgpu::PresentMode::Fifo,
-        };
-        // BUG-277 (срез 3): `mix-blend-mode` на боксе без offscreen-предка
-        // композитится прямо в swapchain-поверхность (`from_level == 1`), а
-        // blend-шейдеру нужен ЧИТАЕМЫЙ backdrop. Сэмплировать поверхность
-        // нельзя (`TEXTURE_BINDING` у неё не запросить), но её можно
-        // скопировать в scratch-текстуру — для этого нужен `COPY_SRC`.
-        // Драйверы, не отдающие `COPY_SRC` на поверхность, остаются на
-        // старом alpha-over fallback (см. `RenderPlanItem::Composite`).
-        let surface_usage = if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
-        } else {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-        };
-        let config = wgpu::SurfaceConfiguration {
-            usage: surface_usage,
-            format,
-            width,
-            height,
-            present_mode,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
+        let OpenedWindowBackend { surface, adapter, device, queue, config, caps, adapter_max_dim } =
+            picked.ok_or(last_err)?;
+        let format = config.format;
 
         let adapter_info = adapter.get_info();
         // BUG-274: имя адаптера в stderr — диагностика «не WARP ли это»
@@ -228,6 +186,96 @@ impl Renderer {
             );
         }
         result
+    }
+
+    /// Открывает оконный wgpu-бэкенд `backends` целиком: surface → adapter →
+    /// device → `configure`. `Err` на любом шаге — вызывающий пробует
+    /// следующий бэкенд (BUG-1073: `configure` мог паниковать `Invalid
+    /// surface` на адаптере, который `request_adapter` уже выдал).
+    async fn open_window_backend(
+        window: &Arc<Window>,
+        backends: wgpu::Backends,
+        width: u32,
+        height: u32,
+        target_color_space: ColorSpace,
+    ) -> Result<OpenedWindowBackend, String> {
+        let instance = wgpu::Instance::new(&renderer_instance_descriptor(backends));
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("create_surface: {e}"))?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .map_err(|e| format!("request_adapter: {e}"))?;
+        // BUG-405 срез 23: всё, кроме стороны текстуры, остаётся на
+        // `downlevel_defaults()` (переносимость), а сторона поднимается до
+        // тира адаптера — от неё зависит, работает ли скролл-композитор:
+        // полоса высотой 2.5 вьюпорта не влезала в 2048 уже на окне
+        // клиентской высотой ~819 device px.
+        let mut limits = wgpu::Limits::downlevel_defaults();
+        let adapter_max_dim = adapter.limits().max_texture_dimension_2d;
+        limits.max_texture_dimension_2d =
+            requested_max_texture_dim(adapter_max_dim, !texture_limit_raise_disabled());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("lumen-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits,
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })
+            .await
+            .map_err(|e| format!("request_device: {e}"))?;
+
+        let caps = surface.get_capabilities(&adapter);
+        // Пустые caps — поверхность с этим адаптером несовместима:
+        // `formats[0]`/`alpha_modes[0]` паниковали бы вместо отказа.
+        let Some(&alpha_mode) = caps.alpha_modes.first() else {
+            return Err("surface: адаптер не отдал ни одного формата".into());
+        };
+        if caps.formats.is_empty() {
+            return Err("surface: адаптер не отдал ни одного формата".into());
+        }
+        let format = select_surface_format(&caps, target_color_space);
+        // LUMEN_PRESENT=mailbox|immediate|fifo — эксперимент BUG-274/Vulkan-white:
+        // выбор present mode из поддерживаемых драйвером (дефолт Fifo).
+        let present_mode = match std::env::var("LUMEN_PRESENT").as_deref() {
+            Ok("mailbox") if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) => {
+                wgpu::PresentMode::Mailbox
+            }
+            Ok("immediate") if caps.present_modes.contains(&wgpu::PresentMode::Immediate) => {
+                wgpu::PresentMode::Immediate
+            }
+            _ => wgpu::PresentMode::Fifo,
+        };
+        // BUG-277 (срез 3): `mix-blend-mode` на боксе без offscreen-предка
+        // композитится прямо в swapchain-поверхность (`from_level == 1`), а
+        // blend-шейдеру нужен ЧИТАЕМЫЙ backdrop. Сэмплировать поверхность
+        // нельзя (`TEXTURE_BINDING` у неё не запросить), но её можно
+        // скопировать в scratch-текстуру — для этого нужен `COPY_SRC`.
+        // Драйверы, не отдающие `COPY_SRC` на поверхность, остаются на
+        // старом alpha-over fallback (см. `RenderPlanItem::Composite`).
+        let surface_usage = if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+        let config = wgpu::SurfaceConfiguration {
+            usage: surface_usage,
+            format,
+            width,
+            height,
+            present_mode,
+            alpha_mode,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        crate::backend_probe::configure_checked(&surface, &device, &config).await?;
+        Ok(OpenedWindowBackend { surface, adapter, device, queue, config, caps, adapter_max_dim })
     }
 
     /// Creates a headless `Renderer` for off-screen rendering without a winit window.
