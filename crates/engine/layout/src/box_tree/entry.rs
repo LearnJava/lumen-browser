@@ -8,7 +8,7 @@ use super::*;
 /// rules in their proper scope. The page's document `<style>` is collected
 /// separately by the shell (`extract_style_blocks`), which does NOT descend into
 /// shadow roots — so the two collections never overlap.
-fn build_shadow_sheets(doc: &Document) -> std::collections::HashMap<NodeId, Stylesheet> {
+pub(super) fn build_shadow_sheets(doc: &Document) -> std::collections::HashMap<NodeId, Stylesheet> {
     let mut map = std::collections::HashMap::new();
     if doc.is_empty() {
         return map;

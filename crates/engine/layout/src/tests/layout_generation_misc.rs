@@ -466,6 +466,58 @@ fn collect_bg_image_ignores_real_img() {
     );
 }
 
+// ── BUG-1117: collect_cascade_background_image_requests ──────────────────
+
+fn cascade_bg_urls(html: &str, css: &str, dpr: f32) -> Vec<String> {
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    collect_cascade_background_image_requests(&doc, &sheet, vp(), false, dpr)
+}
+
+/// Ранний (по каскаду) и авторитетный (по дереву боксов) сборщики обязаны
+/// давать одни и те же URL-ы: всё, что ранний пропустит, пойдёт в сеть
+/// последней волной, а лишнее — лишний запрос.
+#[test]
+fn cascade_bg_urls_match_layout_collector() {
+    let cases: &[(&str, &str, f32)] = &[
+        ("<body><div></div></body>", "div { width: 50px; height: 50px; background-image: url(bg.png); }", 1.0),
+        (
+            r#"<body><div class="a"></div><div class="b"></div><div class="a"></div></body>"#,
+            ".a { background-image: url(a.png); } .b { background: url(b.png) no-repeat; }",
+            1.0,
+        ),
+        ("<body><div></div></body>", "div { background-image: image-set(url(one.png) 1x, url(two.png) 2x); }", 2.0),
+        ("<body><div></div></body>", "div { background-image: -webkit-cross-fade(url(f.png), url(t.png), 50%); }", 1.0),
+        ("<body><div></div></body>", "div { background-image: url(x.png), linear-gradient(red, blue), url(y.png); }", 1.0),
+        ("<body><ul><li>a</li></ul></body>", "li { list-style-image: url(\"bullet.png\"); }", 1.0),
+        ("<body><p>x</p></body>", "p::before { content: url(icon.png); }", 1.0),
+        ("<body><p>x</p></body>", "p::after { content: \"\"; display: block; width: 5px; height: 5px; background: url(after.png); }", 1.0),
+        (r#"<body><p><img src="real.png"></p></body>"#, "", 1.0),
+    ];
+    for (html, css, dpr) in cases {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = layout(&doc, &sheet, vp());
+        let from_layout = collect_background_image_requests(&root, *dpr);
+        let from_cascade = collect_cascade_background_image_requests(&doc, &sheet, vp(), false, *dpr);
+        assert_eq!(from_cascade, from_layout, "css: {css}");
+    }
+}
+
+/// `display: none` у предка — бокса нет, фон не рисуется и не запрашивается
+/// (как и в Chrome). `display: contents` — у самого элемента бокса нет, а у
+/// потомков есть.
+#[test]
+fn cascade_bg_urls_skip_boxless_elements() {
+    let urls = cascade_bg_urls(
+        r#"<body><div class="h"><div class="in"></div></div><div class="c"><div class="kid"></div></div></body>"#,
+        ".h { display: none; background: url(h.png); } .in { background: url(in.png); } \
+         .c { display: contents; background: url(c.png); } .kid { background: url(kid.png); }",
+        1.0,
+    );
+    assert_eq!(urls, vec!["kid.png".to_string()]);
+}
+
 /// Смешанный `content: "A" url(i.png) "B"` → текст «A», картинка i.png, текст «B»
 /// как отдельные сегменты (url() разрывает текстовый run).
 #[test]

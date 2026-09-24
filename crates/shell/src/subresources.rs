@@ -95,28 +95,18 @@ pub(crate) fn fetch_and_decode_background_images(
                 return Err((abs, violated.into_iter().map(str::to_owned).collect::<Vec<_>>()));
             }
         }
-        let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone(), referrer_policy) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("Пропуск bg-картинки {url}: {e}");
-                return Ok(None);
-            }
+        let Some(image) = decode_background_image(
+            image_cache::IMAGE_CACHE.current_generation(),
+            url,
+            base,
+            sink,
+            cookie_jar.clone(),
+            target,
+            referrer_policy,
+        ) else {
+            return Ok(None);
         };
-        // LIB-4: SVG больше не особый случай — `decode_to` рисует его через
-        // resvg наравне с любым растровым форматом.
-        let image = match lumen_image::decode_to(&bytes, target) {
-            Ok(i) => i,
-            Err(e) => {
-                eprintln!("Не декодируется bg-картинка {url}: {e}");
-                return Ok(None);
-            }
-        };
-        eprintln!(
-            "Загружена bg-картинка: {url} ({}×{}, {:?})",
-            image.width, image.height, image.format
-        );
-        // BUG-272 срез 17: wrap once in Arc so `register_image` shares the buffer.
-        Ok(Some((url.clone(), Arc::new(image))))
+        Ok(Some((url.clone(), image)))
     });
     let mut decoded = Vec::new();
     let mut blocked = Vec::new();
@@ -135,6 +125,97 @@ pub(crate) fn fetch_and_decode_background_images(
         }
     }
     (decoded, blocked)
+}
+
+/// Одна картинка фона через общий кэш декодов (`IMAGE_CACHE`, BUG-172).
+///
+/// BUG-1117: через кэш, а не мимо него, чтобы ранний старт
+/// ([`spawn_background_image_prefetch`]), финальный проход
+/// ([`fetch_and_decode_background_images`]) и пост-релейаутный
+/// (`spawn_dynamic_background_image_loads`) делили один запрос и один декод.
+/// Слот заполняется тем же `decode_image`, что у `<img>`: картинка с тем же URL
+/// может быть и фоном, и `<img>`, и если слот займёт фон (он теперь стартует
+/// раньше), анимированный GIF у `<img>` не должен превратиться в статичный.
+/// Фону достаётся первый кадр — как и раньше.
+#[allow(clippy::too_many_arguments)] // docs/lint-policy.md §10
+pub(crate) fn decode_background_image(
+    generation: u64,
+    url: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    target: lumen_core::ColorSpace,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Option<Arc<lumen_image::Image>> {
+    let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, url, || {
+        decode_image(url, base, sink, cookie_jar, target, referrer_policy)
+    })?;
+    Some(match decoded {
+        image_cache::DecodedImage::Static(image) => image,
+        image_cache::DecodedImage::Animated { first, .. } => first,
+    })
+}
+
+/// Вход раннего старта фоновых картинок ([`spawn_background_image_prefetch`]).
+pub(crate) struct BackgroundPrefetch {
+    /// URL-ы в том виде, в каком их знает эмиттер (ключ кэша декодов).
+    pub(crate) urls: Vec<String>,
+    /// Эффективная база документа — та же, что получит финальный проход.
+    pub(crate) base: ResourceBase,
+    pub(crate) sink: Arc<dyn EventSink>,
+    pub(crate) cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    pub(crate) target: lumen_core::ColorSpace,
+    /// Политика CSP документа и его origin — заблокированный `img-src` URL не
+    /// уходит в сеть и здесь; событие о нарушении шлёт финальный проход.
+    pub(crate) csp: Option<(Vec<lumen_network::csp::CspPolicy>, Option<lumen_network::Origin>)>,
+    pub(crate) referrer_policy: lumen_network::ReferrerPolicy,
+}
+
+/// BUG-1117: запустить загрузку фоновых картинок, не дожидаясь layout.
+///
+/// Раньше URL-ы `background-image` собирались только из финального дерева
+/// боксов, а оно строится после загрузки всех `<img>` (их intrinsic-размеры
+/// нужны layout-у), поэтому фон всегда шёл последней волной. Фон размеры
+/// боксов не меняет, так что хватает каскада: вызывающая сторона берёт URL-ы из
+/// уже посчитанного до этого момента layout-а (или из каскада) и запускает их
+/// здесь, в отдельном потоке — параллельно с `<img>`. Результат ложится в
+/// `IMAGE_CACHE`; финальный проход находит его там (или ждёт незавершённый
+/// слот) и в сеть второй раз не идёт.
+pub(crate) fn spawn_background_image_prefetch(job: BackgroundPrefetch) {
+    if job.urls.is_empty() {
+        return;
+    }
+    let generation = image_cache::IMAGE_CACHE.current_generation();
+    let spawned = std::thread::Builder::new().name("lumen-bg-prefetch".to_owned()).spawn(move || {
+        parallel_map(&job.urls, |_, url| {
+            if let Some((policy, self_origin)) = &job.csp {
+                let abs = match job.base.resolve(url) {
+                    ResolvedResource::Url(u) => u,
+                    ResolvedResource::File(p) => p.display().to_string(),
+                };
+                if !crate::csp_enforce::violating_fetch_policy(
+                    policy, &lumen_network::csp::CspDirective::ImgSrc, &abs, self_origin.as_ref(),
+                )
+                .is_empty()
+                {
+                    return;
+                }
+            }
+            let _ = decode_background_image(
+                generation,
+                url,
+                &job.base,
+                &job.sink,
+                job.cookie_jar.clone(),
+                job.target,
+                job.referrer_policy,
+            );
+        });
+    });
+    if let Err(err) = spawned {
+        // Не страшно: финальный проход загрузит фон сам, как до BUG-1117.
+        eprintln!("не удалось запустить ранний старт фоновых картинок: {err}");
+    }
 }
 
 /// Загружает шрифты из @font-face правил таблицы стилей в `FontRegistry`.

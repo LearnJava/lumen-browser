@@ -1387,6 +1387,53 @@ pub(crate) fn parse_and_layout(
         apply_iframe_sandbox_gates(&d);
     }
 
+    // BUG-1117: фоновые картинки CSS стартуют здесь, а не после layout в конце
+    // функции. Layout ждёт загрузки всех `<img>` (intrinsic-размеры), а фон
+    // размеры боксов не меняет — ему хватает каскада, и он уходит в сеть одной
+    // волной с `<img>` ниже. URL-ы считает отдельный поток по снимку документа и
+    // таблицы стилей (скрипты уже отработали — это тот же каскад, что увидит
+    // layout), результат ложится в `IMAGE_CACHE`, и финальный
+    // `fetch_and_decode_background_images` берёт его оттуда. Печать в PDF не
+    // трогаем: её каскад — с media `print` на своём потоке.
+    if !media_print {
+        let _s = lumen_core::trace::span("prefetch-bg-images", "net");
+        let d = doc_arc.lock().unwrap();
+        let root = d.root();
+        let job_base = effective_base(&d, base);
+        let csp = crate::csp_enforce::document_csp_policy(&d, root)
+            .map(|(policy, _)| (policy, base.origin()));
+        let referrer_policy = crate::resource_base::document_referrer_policy(&d);
+        let doc_snapshot = d.clone();
+        drop(d);
+        let sheet_snapshot = cascade.sheet.clone();
+        let sink = Arc::clone(sink);
+        let cookie_jar = cookie_jar.clone();
+        // Каскад — рекурсия по глубине DOM, отсюда тот же стек, что у
+        // pipeline-потока (BUG-1027).
+        let spawned = std::thread::Builder::new()
+            .name("lumen-bg-urls".to_owned())
+            .stack_size(lumen_core::DEEP_TREE_STACK_BYTES)
+            .spawn(move || {
+                let urls = lumen_layout::collect_cascade_background_image_requests(
+                    &doc_snapshot, &sheet_snapshot, viewport, dark_mode, 1.0,
+                );
+                crate::subresources::spawn_background_image_prefetch(
+                    crate::subresources::BackgroundPrefetch {
+                        urls,
+                        base: job_base,
+                        sink,
+                        cookie_jar,
+                        target,
+                        csp,
+                        referrer_policy,
+                    },
+                );
+            });
+        if let Err(err) = spawned {
+            eprintln!("не удалось запустить сбор фоновых картинок: {err}");
+        }
+    }
+
     // BUG-480 срез 1: загрузка sub-документов <iframe>. Локи внутри функции
     // короткие — скрипты детей и `load` хоста идут без удержания дерева.
     // Срез 3: документ/база страницы передаются и как top — у фреймов
@@ -1706,6 +1753,12 @@ pub(crate) fn parse_and_layout(
     // после layout-а (картинки фона не влияют на расчёт коробок). Декодируем
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
+    //
+    // BUG-1117: это авторитетный список, но уже не первый запрос — фон,
+    // найденный каскадом, ушёл в сеть ещё до `<img>` (`prefetch-bg-images`
+    // выше), и здесь он берётся из `IMAGE_CACHE` (или дожидается своего
+    // незавершённого слота). Сеть здесь видят только URL-ы, которых каскад не
+    // предсказал.
     //
     // GAP-CSPENF срез 18: `img-src`/`default-src` теперь гейтит и этот
     // производитель — до этого среза `fetch_and_decode_background_images`

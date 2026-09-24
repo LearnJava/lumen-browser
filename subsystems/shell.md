@@ -1,5 +1,22 @@
 # lumen-shell 🟡 (window + render + network)
 
+- **Done (BUG-1117 — CSS background images start with `<img>`, not after layout, 2026-09-24):**
+  `parse_and_layout` spawns `prefetch-bg-images` right after the scripts, before
+  `fetch-iframes`/`fetch-images`: a `lumen-bg-urls` thread (deep-tree stack) runs
+  `lumen_layout::collect_cascade_background_image_requests(doc, sheet, viewport, dark, dpr)`
+  — the same URL set as `collect_background_image_requests(&layout)`, from the cascade
+  alone (box-less `display: none`/closed popover/SVG `<defs>` subtrees skipped,
+  `display: contents` keeps its descendants) — and
+  `subresources::spawn_background_image_prefetch` fills `IMAGE_CACHE` through the same
+  CSP `img-src` gate. The post-layout `fetch_and_decode_background_images` stays the
+  authoritative list, now via `decode_background_image` → `IMAGE_CACHE.get_or_decode`,
+  so a prefetched URL is taken from the cache (or waits for its in-flight slot) instead
+  of a second request. The slot is filled by the shared `decode_image`, so a URL used
+  both as a background and as an animated `<img>` keeps its animation; the background
+  gets frame 0. PDF print (`media_print`) is not prefetched. Stand `.tmp/seqlab`
+  (700 ms/response, window): `bg.png` requested at 1750 ms next to the `<img>` wave
+  (was 3063–3344 ms, the last request of the page); last response 2453 ms.
+
 - **Done (DS-1 design-token generator, 2026-07-22):**
   [`scripts/gen_tokens.py`](../scripts/gen_tokens.py) parses the four CSS
   custom-property blocks of the design-system prototype
