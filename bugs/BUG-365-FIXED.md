@@ -29,7 +29,7 @@
    `test_eye_dropper_no_stray_options_property`, `test_eye_dropper_to_string_tag`.
    `cargo test -p lumen-js --features v8-backend eye_dropper` — 9/9 зелёных.
 
-**Не исправлено, вынесено в [BUG-698](BUG-698-OPEN.md):** проверка transient user
+**Не исправлено, вынесено в [BUG-698](BUG-698-FIXED.md):** проверка transient user
 activation (спека WICG требует `NotAllowedError` без предшествующего пользовательского
 жеста) — в кодовой базе нет инфраструктуры отслеживания активации ни для одного API
 (grep по `user activation`/`UserActivation`/`transient activation` — пусто), заводить
@@ -148,6 +148,6 @@ const result = _lumen_eye_dropper_open?.call?.(null);
 1. ~~Читать привязку безопасно~~ — сделано.
 2. ~~Решить судьбу нативной части~~ — сделано (снята мёртвая заглушка, честный стаб).
 3. Добавить проверку пользовательской активации с отказом `NotAllowedError` —
-   **не сделано**, вынесено в [BUG-698](BUG-698-OPEN.md) (нет инфраструктуры
+   **не сделано**, вынесено в [BUG-698](BUG-698-FIXED.md) (нет инфраструктуры
    отслеживания активации ни для одного API в кодовой базе).
 4. ~~Переписать `test_eye_dropper_resolve_value`~~ — сделано.

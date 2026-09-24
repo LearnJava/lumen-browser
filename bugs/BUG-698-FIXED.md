@@ -1,6 +1,6 @@
 # BUG-698 — `EyeDropper.open()` не проверяет transient user activation (спека требует `NotAllowedError`)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24 (P3)
 **Компонент:** js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)
 **Найден:** P3, при фиксе [BUG-365](BUG-365-FIXED.md), 2026-08-09
 
@@ -37,10 +37,20 @@
 это просто резолвится безобидным `#ffffff` (нет реального пикера), но после
 появления платформенной интеграции это станет реальной проблемой приватности.
 
-## Возможный фикс (не реализован)
+## Фикс
 
-Инфраструктура transient-activation-трекинга — общая для BUG-390/655/667/698,
-имеет смысл проектировать один раз (хук на входящие input-события в
-`lumen-shell`, флаг с TTL, доступный JS-биндингам через один `_lumen_has_transient_activation()`),
-а не четыре раза по одному на API. Не чинится в этой сессии — вне скоупа
-точечного бага BUG-365, дорожка P1/P3 по решению на следующей сессии.
+К моменту этой сессии общая инфраструктура transient-activation-трекинга
+(GAP-USERACT/BUG-751, `install_user_activation` в
+`crates/js/src/v8_runtime/install/platform.rs`, `_lumen_mark_user_activation`/
+`_lumen_consume_user_activation`/`_lumen_user_activation_is_active`) уже была
+построена и используется `window_management.rs`/`local_font_access.rs` —
+описанный выше «Возможный фикс» больше не требовался. `EyeDropper.open()`
+переведён на тот же гейт: если `navigator.userActivation.isActive === false`,
+`open()` бросает `NotAllowedError` до всякой прочей логики; при успешной
+проверке зовёт `_lumen_consume_user_activation()`. `navigator`/`activation`
+undefined (нет полного шима, например в собственных unit-тестах модуля)
+остаётся permissive — тот же паттерн, что у соседних гейтов.
+
+Остальные API того же класса пробела: [BUG-390](BUG-390-FIXED.md) и
+[BUG-667](BUG-667-FIXED.md) уже FIXED; [BUG-655](BUG-655-OPEN.md)
+(`requestPointerLock()`) всё ещё OPEN — не в скоупе этого бага.
