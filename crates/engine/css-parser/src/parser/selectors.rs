@@ -361,6 +361,10 @@ pub enum PseudoElementKind {
     /// `::selection` (CSS Pseudo-Elements L4 §5.6) — selected text.
     /// В Phase 0 парсится как имя; P3 интеграция с DOM selection для highlight.
     Selection,
+    /// `::target-text` (CSS Pseudo-Elements L4 §5.7 / WICG Scroll To Text
+    /// Fragment §4) — text matched by a `:~:text=` URL fragment directive.
+    /// Same restricted property subset as `::selection` (STTF-1 остаток).
+    TargetText,
     /// `::placeholder` (CSS Pseudo-Elements L4 §4.10) — placeholder hint text
     /// of a text-like `<input>`/`<textarea>` (matched while the field's `value`
     /// is empty). P4 wires: color/opacity/font-* overrides applied when the
@@ -737,6 +741,7 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         }
         PseudoElementKind::Marker => "::marker".into(),
         PseudoElementKind::Selection => "::selection".into(),
+        PseudoElementKind::TargetText => "::target-text".into(),
         PseudoElementKind::Placeholder => "::placeholder".into(),
         PseudoElementKind::Highlight(name) => format!("::highlight({name})"),
         PseudoElementKind::Picker(name) => format!("::picker({name})"),
@@ -982,7 +987,7 @@ pub(crate) fn pseudo_element_pair_allowed(first: &PseudoElementKind, second: &Ps
 pub(crate) fn pseudo_element_allows_user_action(pe: &PseudoElementKind) -> bool {
     !matches!(
         pe,
-        PseudoElementKind::Selection | PseudoElementKind::Highlight(_)
+        PseudoElementKind::Selection | PseudoElementKind::TargetText | PseudoElementKind::Highlight(_)
     )
 }
 
@@ -1340,6 +1345,7 @@ impl<'a> Parser<'a> {
                 "first-letter" => PseudoElementKind::FirstLetter,
                 "marker" => PseudoElementKind::Marker,
                 "selection" => PseudoElementKind::Selection,
+                "target-text" => PseudoElementKind::TargetText,
                 "placeholder" => PseudoElementKind::Placeholder,
                 "checkmark" => PseudoElementKind::Checkmark,
                 "picker-icon" => PseudoElementKind::PickerIcon,

@@ -48,6 +48,7 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::Slotted(_) => "slotted",
         PseudoElementKind::Marker => "marker",
         PseudoElementKind::Selection => "selection",
+        PseudoElementKind::TargetText => "target-text",
         PseudoElementKind::Placeholder => "placeholder",
         PseudoElementKind::Highlight(_) => "highlight",
         PseudoElementKind::Picker(_) => "picker",
@@ -521,6 +522,7 @@ fn compute_pseudo_element_style_inner(
     if pseudo.eq_ignore_ascii_case("first-letter")
         || pseudo.eq_ignore_ascii_case("first-line")
         || pseudo.eq_ignore_ascii_case("selection")
+        || pseudo.eq_ignore_ascii_case("target-text")
         || pseudo.eq_ignore_ascii_case("placeholder")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-thumb")
@@ -560,4 +562,19 @@ pub fn compute_selection_style(
     dark_mode: bool,
 ) -> Option<ComputedStyle> {
     compute_pseudo_element_style(doc, node, "selection", sheet, parent, viewport, dark_mode)
+}
+
+/// Computes the `::target-text` override style for a DOM element (CSS
+/// Pseudo-Elements L4 §5.7 / WICG Scroll To Text Fragment §4) — text matched
+/// by a `:~:text=` URL fragment directive. Same restricted property subset
+/// and `None`-means-fall-back-to-UA-default contract as [`compute_selection_style`].
+pub fn compute_target_text_style(
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    compute_pseudo_element_style(doc, node, "target-text", sheet, parent, viewport, dark_mode)
 }

@@ -900,6 +900,11 @@ impl Lumen {
         if let Some(m) = &text_match {
             self.scroll_nested_ancestors_into_view(m.node, m.bounding_rect());
         }
+        // STTF-1 остаток: stash the match's rects so the redraw path can
+        // overlay a `::target-text` highlight (mirrors `::selection`'s
+        // paint-time rect list). `None` when no text directive resolved —
+        // e.g. a plain `#id` fragment or no `:~:text=` in the URL at all.
+        self.target_text_highlight = text_match.as_ref().map(|m| m.rects.clone());
         let text_match_y = text_match.map(|m| m.bounding_rect().y);
         if let Some(y) = target_y.or(text_match_y) {
             // CSS Scroll Behavior L1 §3: respect scroll-behavior on the scrolling box.
