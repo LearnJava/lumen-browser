@@ -2341,6 +2341,27 @@ fn destination_to_resource_type(dest: RequestDestination) -> lumen_core::ext::Re
     }
 }
 
+// BUG-1114: shared tail for every non-2xx/3xx/304 status `fetch_with_redirect`
+// can end on (401 that gave up on auth-retry, and the generic 4xx/5xx
+// catch-all). HTML LS: a navigation response is a document regardless of
+// status; Fetch §4.1: an HTTP error is not a network error — so callers that
+// opted in via `http_error_is_response` (navigation, `fetch()`) get the
+// decoded body back as `Ok`, exactly like the 2xx branch. Everyone else keeps
+// the historical `Err(Error::Network("HTTP <code>"))`.
+fn resolve_http_error_status(
+    mut resp: Response,
+    url: &Url,
+    decoders: &[Arc<dyn ContentDecoder>],
+    http_error_is_response: bool,
+) -> Result<(Response, Url)> {
+    if http_error_is_response {
+        resp.body = apply_content_encoding(resp.body, &resp.headers, decoders)?;
+        Ok((resp, url.clone()))
+    } else {
+        Err(Error::Network(format!("HTTP {}", resp.status)))
+    }
+}
+
 /// Пройти цепочку редиректов и вернуть финальный (не-3xx) ответ **вместе с
 /// URL hop-а, который его отдал**.
 ///
@@ -2405,6 +2426,15 @@ fn fetch_with_redirect(
     // Request body for POST/PUT/PATCH/DELETE (it also carries the method);
     // `None` для GET/HEAD. На redirect-hop переносится по правилам Fetch §4.4.
     body: Option<&RequestBody<'_>>,
+    // BUG-1114: `true` for navigation (`fetch_page`/`fetch_page_streaming`) and
+    // `fetch()` (`fetch_request_impl`) — callers that must see the final
+    // non-2xx/3xx response as an `Ok(Response)` body (HTML LS: any HTTP status
+    // is a document; Fetch §4.1: an HTTP error is not a network error).
+    // `false` everywhere else (range/multi-range, ad-block conditional GET,
+    // engine subresources, `NetworkTransport::fetch`/downloads) keeps the old
+    // "4xx/5xx ⇒ Err" contract those callers already rely on. Propagated
+    // verbatim across redirect hops, like `is_top_level`.
+    http_error_is_response: bool,
 ) -> Result<(Response, Url)> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -2924,6 +2954,8 @@ fn fetch_with_redirect(
                         301 | 302 if !actual_method.eq_ignore_ascii_case("POST") => body,
                         _ => None,
                     },
+                    // Redirected navigation/fetch() keeps the same error-body contract.
+                    http_error_is_response,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -2933,18 +2965,18 @@ fn fetch_with_redirect(
                 // 401 как есть, без retry.
                 let www_auth = match header_value(&resp.headers, "www-authenticate") {
                     Some(v) => v.to_owned(),
-                    None => return Err(Error::Network("HTTP 401".to_owned())),
+                    None => return resolve_http_error_status(resp, url, decoders, http_error_is_response),
                 };
                 let challenges = auth::parse_www_authenticate(&www_auth);
                 let (scheme, parsed) = match auth::select_best_challenge(&challenges) {
                     Some(pair) => pair,
-                    None => return Err(Error::Network("HTTP 401".to_owned())),
+                    None => return resolve_http_error_status(resp, url, decoders, http_error_is_response),
                 };
                 let origin = auth::origin_of(url);
                 let api_challenge = auth::challenge_for_provider(&origin, scheme, parsed);
                 let creds = match credentials.unwrap().credentials(&api_challenge) {
                     Some(c) => c,
-                    None => return Err(Error::Network("HTTP 401".to_owned())),
+                    None => return resolve_http_error_status(resp, url, decoders, http_error_is_response),
                 };
                 let header = match scheme {
                     HttpAuthScheme::Basic => auth::build_basic_authorization(&creds),
@@ -2955,13 +2987,13 @@ fn fetch_with_redirect(
                         &url.path_and_query(),
                     ) {
                         Some(h) => h,
-                        None => return Err(Error::Network("HTTP 401".to_owned())),
+                        None => return resolve_http_error_status(resp, url, decoders, http_error_is_response),
                     },
                 };
                 authorization = Some(header);
                 // Continue loop — повторим тот же hop с Authorization.
             }
-            status => return Err(Error::Network(format!("HTTP {status}"))),
+            _ => return resolve_http_error_status(resp, url, decoders, http_error_is_response),
         }
     }
 }
@@ -3740,6 +3772,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                false, // BUG-1114: CORS fetch keeps the old "4xx/5xx ⇒ Err" contract
         )
         .map(|(resp, _final_url)| resp.body)
     }
@@ -3783,6 +3816,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -3860,6 +3894,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -4027,6 +4062,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -4091,6 +4127,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -4211,6 +4248,7 @@ impl HttpClient {
             None, // PH1-2a: conditional GET is not streamed
             false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         if resp.status == 304 {
             return Ok(ConditionalFetch::NotModified);
@@ -4321,6 +4359,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                true, // BUG-1114: navigation/fetch() see the final status as Ok
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -4358,6 +4397,7 @@ impl HttpClient {
             None, // PH1-2a: streaming sink — only fetch_page_streaming streams
             true, // BUG-292: top-level document navigation
             req_body, // E2E-1: тело POST-навигации; None — обычный GET
+            true, // BUG-1114: navigation sees the final status as Ok
         )?;
         // E2E-1: ответ на POST не кэшируется под адресом запроса — иначе
         // следующая GET-навигация на ту же форму получила бы её результат.
@@ -4443,6 +4483,7 @@ impl HttpClient {
                     Some(on_chunk),
                     true, // BUG-292: top-level document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                true, // BUG-1114: navigation/fetch() see the final status as Ok
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -4483,6 +4524,7 @@ impl HttpClient {
             Some(on_chunk),
             true, // BUG-292: top-level document navigation
             req_body, // E2E-1: тело POST-навигации; None — обычный GET
+            true, // BUG-1114: navigation sees the final status as Ok
         )?;
         // E2E-1: см. `fetch_page` — ответ на POST под URL-ключ не кладём.
         if req_body.is_none()
@@ -4551,6 +4593,7 @@ impl NetworkTransport for HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -4591,6 +4634,7 @@ impl NetworkTransport for HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -5528,6 +5572,7 @@ impl HttpClient {
             None,  // PH1-2a: streaming sink — only fetch_page_streaming streams
             false, // BUG-292: subresource, not a document navigation
             request_body.as_ref(),
+            true, // BUG-1114: fetch() resolves ok:false on 4xx/5xx, doesn't reject
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -7924,6 +7969,39 @@ mod tests {
         let page = client.fetch_page(&url, None, false).expect("fetch");
         assert_eq!(page.body, b"hi");
         assert_eq!(page.final_url.as_str(), format!("http://127.0.0.1:{port}/auth/login/"));
+        server.join().unwrap();
+    }
+
+    /// BUG-1114: navigation with a non-2xx/3xx status must still render the
+    /// server's body (HTML LS: any HTTP status is a document), not surface a
+    /// network error — a 403 challenge page or a site's own 404 page must
+    /// reach the DOM instead of Lumen's "Ошибка загрузки" interstitial.
+    #[test]
+    fn fetch_page_returns_body_for_403_instead_of_err() {
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 22\r\nConnection: close\r\n\r\n<html>forbidden</html>".to_vec()
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/blocked")).unwrap();
+        let page = client.fetch_page(&url, None, false).expect("4xx must not be a network error");
+        assert_eq!(page.status, 403);
+        assert_eq!(page.body, b"<html>forbidden</html>");
+        server.join().unwrap();
+    }
+
+    /// BUG-1114 — same contract for `fetch()`: Fetch §4.1 says an HTTP error
+    /// is not a network error, so the promise must resolve with `ok: false`,
+    /// not reject.
+    #[test]
+    fn js_fetch_sync_resolves_ok_false_for_404_instead_of_rejecting() {
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found".to_vec()
+        });
+        let client = HttpClient::new();
+        let url = format!("http://127.0.0.1:{port}/missing");
+        let result = JsFetchProvider::fetch_sync(&client, &url, "GET").expect("404 must not reject the fetch promise");
+        assert_eq!(result.status, 404);
+        assert_eq!(result.body, b"not found");
         server.join().unwrap();
     }
 
