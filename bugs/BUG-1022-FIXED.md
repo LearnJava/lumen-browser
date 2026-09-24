@@ -1,6 +1,6 @@
 # BUG-1022 — `html/semantics`: три `--check` подряд дают три РАЗНЫХ набора регрессий
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3 — механизм части 3; остальные экземпляры класса → BUG-1011)
 **Заведён:** 2026-09-07 (P2, WPT-RUN-7 срез 19 — `html/*` по под-путям, продолжение среза 18)
 **Область:** не локализован. Общий знаменатель всех трёх прогонов —
 `tabular-data/the-table-element/insertRow-method-02.html` (одни и те же 3 сабтеста FAIL
@@ -89,7 +89,7 @@ FAIL-сабтестов в обоих случаях. Механизм — го�
 «отказ промиса N-го элемента» vs «завершение последнего из 10 `async_test`» зависит от
 реального времени ответа decoder-потока. Не BiDi-транспорт: `crates/bidi-server` не
 реализует ни одного log-события, гонка целиком в JS-документе теста. Заведён
-[BUG-1033](BUG-1033-OPEN.md) — частичный митигейт (`setTimeout(0)` + синхронный reject на
+[BUG-1033](BUG-1033-FIXED.md) — частичный митигейт (`setTimeout(0)` + синхронный reject на
 уже установленной ошибке) снижает частоту гонки, но не устраняет её (5/9 ERROR живьём после
 митигейта против 9/10 baseline) — полноценный фикс остаётся архитектурным (poll → event-driven).
 
@@ -204,3 +204,65 @@ identично во всех трёх прогонах и были исправл
 `request-cache-only-if-cached.any.sharedworker.html`, `img-mime-types-coverage.tentative.
 sub.html` (`fetch/corb`), `status.sub.any.worker.html` (`fetch/orb/tentative`), `style.https.
 sub.html` — детали в `docs/tasks/p2-test-track.md#test-3-срез-63-2026-09-23`.
+
+## Фикс P3 2026-09-25 — механизм части 3: упавший браузер не перезапускался
+
+**Корень — в раннере, не в движке.** `run_smoke.py` запускает wptrunner с
+`--no-restart-on-unexpected`, поэтому Lumen между тестами перезапускается только по
+статусам `CRASH`/`EXTERNAL-TIMEOUT`/`INTERNAL-ERROR` (`testrunner.py`,
+`restart_before_next`). Когда тест *убивает* браузер, `executorlumen.py` отдавал обычный
+`ERROR`:
+
+* `LumenBidiProtocol.is_alive()` проверял `session.transport is not None`, а
+  `BidiSession` не обнуляет `transport` при обрыве сокета — после смерти процесса
+  метод продолжал отвечать `True`, так что и `TimedRunner` не мог переквалифицировать
+  результат в `CRASH`;
+* `do_test` пропускал `UnknownErrorException("WebSocket connection closed")` из
+  `browsingContext.navigate` как `ExecutorException("ERROR", …)`.
+
+Воркер оставался с мёртвой сессией, и **следующий** тест в его очереди падал на
+`_reset_and_mark` тем же `ConnectionClosedError` — голый `ERROR` без сабтестов. Какой
+файл окажется «следующим», решает шардинг `--processes 6`, поэтому каждый `--check`
+переворачивал OK→ERROR другой невиновный файл — ровно почерк части 3 (`table-rows.html`,
+затем `table-insertRow.html`, затем `tHead.html` — все соседи по `tabular-data`).
+
+**Кто убивает браузер.** `processing-model-1/span-limits.html` делает
+`tbody.innerHTML += "<tr><td>" × 65532`. Lumen разбирает фрагмент в режиме `in body`
+вместо `in table body` и вкладывает каждую строку в ячейку предыдущей — DOM-цепочка
+глубиной ~131 000, `Maximum call stack size exceeded` и
+`thread 'lumen-pipeline' has overflowed its stack` → abort. Заведён
+[BUG-1155](BUG-1155-OPEN.md). Воспроизведение живым прогоном 2026-09-25
+(`run_report.py --all --root html/semantics/tabular-data --recursive --processes 6`,
+четыре прогона до фикса): в двух из четырёх вместе с `span-limits.html` упал сосед —
+`caption-methods.html` (прогон 1) и после первой половины фикса `sectionRowIndex.html`/
+`rows.html` (прогоны 3–4).
+
+Второй облик той же утечки нашёлся в прогонах 3–4: `span-limits.html` иногда не роняет
+процесс сразу, а вешает цикл автоматизации (`navigate: automation command timed out`,
+`crates/driver/src/automation.rs`) — сокет ещё жив, процесс умирает уже на навигации
+соседа.
+
+**Фикс** (`tools/wptrunner/wptrunner/executors/executorlumen.py`):
+
+* `is_alive()` смотрит на `transport.read_message_task` — задача-читатель
+  завершается именно на `ConnectionClosed`;
+* `do_test` переводит исключение в `CRASH`, если после него сессия мертва, и в
+  `EXTERNAL-TIMEOUT`, если сервер ответил `automation command timed out`. Оба статуса
+  перезапускают браузер перед следующим тестом.
+
+**Проверка.** Два прогона `tabular-data` после фикса — 28/29 harness OK, 142/152
+сабтестов, единственный не-OK — сам `span-limits.html` (`TIMEOUT`); у соседей ERROR
+больше нет. Регрессионная проверка
+[`tests/wpt/verify_bug1022_crash_restart.py`](../tests/wpt/verify_bug1022_crash_restart.py)
+убивает `lumen --bidi-port` посреди настоящего `do_test` и требует `CRASH` и
+`is_alive() == False`; на коде до фикса она падает (`WebSocket connection closed`
+вылетает как ошибка, а не `CRASH`). Полный `--check` по `html/semantics` (2223 id,
+40+ мин) не повторялся; частичный прогон 2026-09-25 (665 файлов до ручной остановки)
+не дал ни одного `WebSocket connection closed`/`CRASH` — все 33 `ERROR` содержательные
+(`addTextTrack is not a function`, `originSameOrigin is not defined`, селекторы `*|`).
+
+**Что закрыто и что нет.** Закрыт механизм части 3 — «чужой» OK→ERROR после падения
+браузера. Дописанные ниже экземпляры (`referrer-policy/4K` — голый `ERROR`, похоже на тот
+же механизм, но не перепроверялся; `fetch`/`signed-exchange`/`shared-storage` и
+TIMEOUT-кластер `forms/form-submission-0/*` — гонки таймаутов самих тестов, а не
+заражение соседа) относятся к классу [BUG-1011](BUG-1011-OPEN.md) и ведутся там.

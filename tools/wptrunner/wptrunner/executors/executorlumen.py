@@ -100,6 +100,11 @@ POLL_INTERVAL_S = 0.05
 #: document-swap lag the "JS context not available" retry below covers.
 NAV_SETTLE_S = 2.0
 
+#: Text Lumen's BiDi server returns when its UI-thread automation channel did
+#: not reply in time (`crates/driver/src/automation.rs`, `RecvTimeoutError::
+#: Timeout`) — the browser is alive but wedged (BUG-1022).
+AUTOMATION_TIMEOUT_MARKER = "automation command timed out"
+
 #: Run in the outgoing document immediately before `browsingContext.navigate`:
 #: drops any result/testdriver state the *previous* test left behind (a failed
 #: navigation keeps that document alive, and one browsing context is reused for
@@ -205,7 +210,15 @@ class LumenBidiProtocol(Protocol):
         self.loop.stop()
 
     def is_alive(self):
-        return self.session is not None and self.session.transport is not None
+        """`False` once the browser's WebSocket is gone, not merely before
+        `connect` (BUG-1022). `BidiSession` never clears `transport` when the
+        peer drops, so the old `transport is not None` check stayed `True`
+        after Lumen aborted mid-test; the transport's reader task is what
+        actually ends on `ConnectionClosed` (`bidi/transport.py`)."""
+        if self.session is None or self.session.transport is None:
+            return False
+        reader = self.session.transport.read_message_task
+        return reader is None or not reader.done()
 
 
 class LumenTestharnessExecutor(TestharnessExecutor):
@@ -230,7 +243,31 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         url = self.test_url(test)
         timeout = (test.timeout * self.timeout_multiplier
                    if self.debug_info is None else None)
-        raw_result = self.protocol.run(self._run_testharness(url, timeout))
+        try:
+            raw_result = self.protocol.run(self._run_testharness(url, timeout))
+        except Exception as e:
+            # BUG-1022: a test that kills the browser (a stack overflow on
+            # `lumen-pipeline` aborts the whole process) used to come back as
+            # a plain ERROR. ERROR does not make `testrunner.py` restart the
+            # browser, so the *next* test in the same worker inherited the
+            # dead WebSocket and got an ERROR of its own — which neighbour
+            # that was depended on sharding, and every `--check` flipped a
+            # different innocent file OK→ERROR. CRASH is the status that
+            # triggers `restart_before_next`, and is also the honest one.
+            if not self.protocol.is_alive():
+                raise ExecutorException(
+                    "CRASH", f"browser connection lost while running {url}: {e}") from e
+            # Second shape of the same leak: the socket is still up but
+            # Lumen's automation loop stopped answering (`crates/driver/src/
+            # automation.rs` — `span-limits.html` wedges it before the process
+            # finally dies during the *next* test's navigate). A wedged
+            # browser is exactly what EXTERNAL-TIMEOUT means, and it too
+            # triggers the restart; ERROR would hand the wedge to a neighbour.
+            if AUTOMATION_TIMEOUT_MARKER in str(e):
+                raise ExecutorException(
+                    "EXTERNAL-TIMEOUT",
+                    f"browser stopped answering automation while running {url}: {e}") from e
+            raise
         return self.convert_result(test, raw_result)
 
     async def _run_testharness(self, url, timeout):

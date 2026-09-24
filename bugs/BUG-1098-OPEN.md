@@ -66,7 +66,7 @@ WPT-RUN-7 срез 55, `fetch` (`--update-expected --all --root fetch
 `--check` (независимые полные прогоны категории) стабильно репортуют его
 как `REGRESSION: /fetch/api/redirect/redirect-schemes.any.html [Fetch:
 handling different schemes in redirects 1]: expected PASS, got FAIL`. В
-отличие от известного класса флапа [BUG-1022](BUG-1022-OPEN.md) (три
+отличие от известного класса флапа [BUG-1022](BUG-1022-FIXED.md) (три
 прогона дают три РАЗНЫХ набора регрессий на TIMEOUT-кластере
 `fetch/orb/tentative`/`fetch/metadata/generated` — не тронуто этим багом,
 см. заметку в `docs/tasks/p2-test-track.md#test-3-срез-55-2026-09-22`),

@@ -4,7 +4,7 @@
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача
 `GAP-TABLEIDL` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт (`docs/probe-method.md` §8:
 функциональности нет вовсе, объём — целая семья интерфейсов, не точечная правка).
-**Найден:** P3 2026-09-07, побочно при локализации [BUG-1022](BUG-1022-OPEN.md)
+**Найден:** P3 2026-09-07, побочно при локализации [BUG-1022](BUG-1022-FIXED.md)
 (`html/semantics` — три `--check` подряд дают три разных набора регрессий)
 **Компонент:** js (`crates/js/src/shim/*.js` — `HTMLTableElement`/`HTMLTableRowElement`/
 `HTMLTableSectionElement` заведены только как теговые алиасы generic `HTMLElement`,
@@ -41,7 +41,7 @@ Tabular data. Элемент `<table>`/`<tr>`/`<thead>`/… ведёт себя 
 
 Живой прогон (`run_smoke.py`, 10 повторов подряд — детерминировано,
 **не** флак): `insertRow-method-02.html` (часть общего знаменателя,
-упомянутого в [BUG-1022](BUG-1022-OPEN.md)) — 0/3 сабтестов, 10/10 раз:
+упомянутого в [BUG-1022](BUG-1022-FIXED.md)) — 0/3 сабтестов, 10/10 раз:
 
 ```
 FAIL table should start out empty - Cannot read properties of undefined (reading 'length')
