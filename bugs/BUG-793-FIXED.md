@@ -1,9 +1,9 @@
 # BUG-793 — `@media;` (at-правило без блока, закрытое `;`) съедает весь остаток таблицы стилей
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-24
 **Заведён:** 2026-08-20 (WPT-RUN-5, срез 13 — зонд механизма инертного CSS)
-**Область:** `crates/engine/css-parser/src/parser.rs` — `parse_media_rule` (3282) и однотипные `parse_supports_rule` / `parse_keyframes_rule` / `parse_container_rule` / `parse_scope_rule`
-**Владелец:** P4 (css-parser). Заведён P2 в ходе тулинговой задачи, здесь не чинится.
+**Область:** `crates/engine/css-parser/src/parser/at_rules.rs` — `parse_media_rule` (top-level), `parse_supports_rule`, `parse_keyframes_rule`, `parse_container_prelude` (общая с nested-веткой), `parse_scope_rule`; однотипные nested-ветки в `crates/engine/css-parser/src/parser.rs::parse_nested_at_rule`
+**Владелец:** P4 (css-parser) по разметке домена; исправлено P3 по прямому решению пользователя — очередь P3 состояла из одной этой строки.
 
 ## Симптом
 
@@ -109,3 +109,34 @@ prelude становится `; #b`, а тело `@media` — объявлени
 4. `css/CSS2/cascade/at-import-009.xht` перестаёт быть `inert`:
    `.venv-wpt/bin/python tests/wpt/inert_style_audit.py --explain <json>` даёт
    для него `sheet_live` вместо `tail_eaten`.
+
+## Фикс (2026-09-24, P3)
+
+CSS Syntax L3 §5.4.2: верхнеуровневый `<semicolon-token>` завершает
+at-правило без блока и разбор продолжается со следующего правила. Каждая из
+пяти прелюдий-сканов (`@media`/`@supports`/`@keyframes`/`@container`/
+`@scope`, и top-level, и nested-ветка CSS Nesting §5) теперь останавливается
+не только на `{`, но и на `;` вне скобок/строк — глубина `(`/`)` учитывается
+явно у `@supports` и `@container`, той же оговорки для `@media`/`@scope` не
+требуется, так как их прелюдии сами не содержат сбалансированных скобок,
+внутри которых мог бы встретиться содержательный `;` (media-query и
+scope-root разбираются отдельными вызовами уже ПОСЛЕ остановки на первом
+верхнеуровневом `;`/`{`). При останове на `;` функция потребляет его и
+возвращает `None`/`vec![]`, не сдвигая позицию дальше — ровно так уже вело
+себя `@layer` (единственное правило, изначально различавшее две формы) и
+общий `skip_at_rule` для неизвестных at-правил.
+
+Отдельный случай — `@keyframes;` без имени вовсе: `parse_ident()` при
+неудаче не двигает позицию, так что даже проверка `peek() != Some('{')`
+после неё не успевала запуститься; теперь при пустом имени сразу вызывается
+`skip_until_block_end()` (та же функция, что уже обрабатывала «имя есть,
+блока нет»).
+
+**Регресс-тесты** — `crates/engine/css-parser/src/parser/tests/at_rules.rs`:
+по одному на каждое из пяти at-правил top-level (`media_without_block_does_not_eat_tail`
+и однотипные), `keyframes_named_without_block_does_not_eat_tail` (имя есть,
+блока нет — старый код это уже обрабатывал, тест защищает от регресса),
+`nested_media_without_block_does_not_eat_tail` (CSS Nesting §5 вариант) и
+`supports_with_semicolon_inside_parens_not_treated_as_terminator` (оговорка
+про `;` внутри `()`). Все 529 тестов крейта и `cargo clippy -p
+lumen-css-parser --all-targets -- -D warnings` зелёные.
