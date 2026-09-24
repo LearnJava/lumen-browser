@@ -31,7 +31,7 @@
 ## Связанное
 
 - [GAP-WORKERSCOPE](../ROADMAP.md) — интерфейсные объекты в воркерной области; `Worker` в его список не входил.
-- [BUG-1071](BUG-1071-OPEN.md) — тот же класс дефекта для `WebSocket` (`[Exposed=(Window,Worker)]`, в воркере нет).
+- [BUG-1071](BUG-1071-FIXED.md) — тот же класс дефекта для `WebSocket` (`[Exposed=(Window,Worker)]`, в воркере нет).
 - `docs/tasks/p2-test-track.md#test-3-срез-46-2026-09-21`.
 
 ## Не проверялось

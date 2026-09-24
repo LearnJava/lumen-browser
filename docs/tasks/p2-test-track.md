@@ -1603,7 +1603,7 @@ BUG-1069, гейта не даёт. `websockets` — единственный к
 | Причина | Секций в baseline | Доказательство |
 |---|---|---|
 | `?wpt_flags=h2`, и `https://localhost:18443/…` | 215 (`h2`) + ещё 9 | `navigate(https://localhost:19000/…)` / `…:18443/…` → `TLS handshake … not valid for name "localhost"` — [BUG-1069](../../bugs/BUG-1069-FIXED.md); 430 уникальных URL на `:19000` и 56 на `:18443` в логе |
-| `WebSocket` нет в воркере: `.any.worker.html?default\|?wss` | 108 | `[worker-0] v8 script error: … Browser does not support WebSocket` (86 строк) / `WebSocket is not defined` (4–5) — новый [BUG-1071](../../bugs/BUG-1071-OPEN.md) |
+| `WebSocket` нет в воркере: `.any.worker.html?default\|?wss` | 108 | `[worker-0] v8 script error: … Browser does not support WebSocket` (86 строк) / `WebSocket is not defined` (4–5) — новый [BUG-1071](../../bugs/BUG-1071-FIXED.md) |
 
 Оценка «все `ERROR` — сертификат», как у срезов 39–42, здесь неверна: 28 навигаций на `:18443` на 333 `ERROR` — остальное дают `:19000` (h2) и воркеры.
 Сопоставление «строка лога → id» — счётом и по URL, не пофайловое: из 108 воркерных секций строкой лога подтверждено 90–91, причина остальных
@@ -1736,7 +1736,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | harness `TIMEOUT` | 58 | 18 из них — `SharedWorker`/`.any.sharedworker.html`, 11 — модульные воркеры/`import`; причина по файлам не устанавливалась. Строки лога не привязаны к id при `--processes 4` |
 
 Известные открытые дефекты того же слоя: [BUG-866](../../bugs/BUG-866-OPEN.md), [BUG-867](../../bugs/BUG-867-OPEN.md), [BUG-1000](../../bugs/BUG-1000-OPEN.md) (SharedWorker),
-[BUG-1071](../../bugs/BUG-1071-OPEN.md) (`WebSocket` в воркере). В логе есть ещё `[shared-worker] v8 script error: Runtime("Unexpected token '<'")` и
+[BUG-1071](../../bugs/BUG-1071-FIXED.md) (`WebSocket` в воркере). В логе есть ещё `[shared-worker] v8 script error: Runtime("Unexpected token '<'")` и
 `network error: unsupported scheme: blob` — не диагностировались; в одиночном прогоне `baseurl/alpha` (`importScripts-in-sharedworker`, `xhr-in-sharedworker`, оба 1/1) `<` не воспроизвёлся,
 то есть при `--processes 4` строку нельзя приписать конкретному файлу.
 
@@ -2375,7 +2375,7 @@ unexpected pass, 0 других отклонений** на каждом из т
 
 **Что нашлось.** Остаток НЕ-OK — две уже известные причины, не новая находка: 214+129+7 строк
 `Browser does not support WebSocket`/`WebSocket is not defined` в `.any.worker.html`-вариантах —
-[BUG-1071](../../bugs/BUG-1071-OPEN.md) (WebSocket отсутствует в глобальной области воркера,
+[BUG-1071](../../bugs/BUG-1071-FIXED.md) (WebSocket отсутствует в глобальной области воркера,
 заведён в срезе 43); 116 строк `ReferenceError: WebSocketStream is not defined` —
 `websockets/stream/tentative/*`, тентативный API, не реализован, отдельный `BUG-NNN` не заводится
 (по аналогии с Shared Storage в срезе 61). 48 `Timed out waiting for testharnessreport` —
