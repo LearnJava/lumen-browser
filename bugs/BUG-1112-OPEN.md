@@ -667,3 +667,93 @@ per-node фактов узла (`is_first_child`/`is_last_child`), это тот
 не сдвинул `share_insert` (остался 0), так что предпосылка среза 7
 («переизмерить после share_insert > 0») не выполнена — переизмерение
 осталось бы тем же экспериментом на неизменном состоянии.
+
+## Срез 10 (2026-09-24)
+
+Реализован механизм, который срез 9 назвал недостающим: фингерпринт
+самого SUBJECT-компаунда узла (не только предка). `ancestor_prefix_
+is_fingerprintable`/`dynamic_ancestor_fingerprint`/`ShareKey::dynamic_
+ancestor_sig` переименованы и обобщены (`is_fingerprintable`/
+`dynamic_fingerprint`/`ShareKey::dynamic_fingerprint_sig`) как объединение
+двух форм — анцестор-форма (срез 8) и новая `subject_is_fingerprintable`:
+эскейп для селектора вида `node:hover` — все компаунды-предки (если
+есть) должны быть структурно safe, сам subject-компаунд не проверяется
+(его реальный матч и так фолдится в ключ через `matches_complex`).
+Два новых теста-регрессии (`a_subject_hover_pseudo_class_still_disables_
+sharing_when_state_disagrees`, `agreeing_subject_hover_pseudo_class_
+state_now_shares`) воспроизводят ровно найденный в срезе 9 паттерн
+(`:where(...):hover` без анцестор-компаунда) и проходят.
+
+Живой перемер (`LUMEN_SHARECACHE_STATS=1 LUMEN_NO_ADBLOCK=1
+./target/dev-release/lumen.exe --screenshot <out> <url>`, бинарник
+собран на коде этого среза) — **числа бит-в-бит совпадают со срезом 9**:
+
+- **github.com:** `insert=0 miss=1780 (key_none=1389 key_some_unshareable=391)`.
+- **lenta.ru:** `insert=0 miss=1498 (key_none=1415 key_some_unshareable=83)`.
+
+Срез 10 не задел НИ ОДНОГО кандидата на обоих сайтах — притом что
+механизм реализован корректно и тесты его подтверждают. Причина:
+**срез 9 неверно диагностировал доминирующий блокер по чтению кода**,
+не по прямому замеру. Временный зонд (`eprintln!` в `compute_
+style_shareable` на каждом небезопасном `rule.selector_text()` для
+SVG-presentational узлов — не закоммичен, откачен после измерения)
+показал реальную картину:
+
+- **github.com:** доминируют селекторы с sibling-комбинатором, subject
+  которых `*`/`:not(label)` (Primer, преимущественно внутри `@layer`) —
+  `.prc-FormControl-ControlVerticalLayout-8YotI > :not(label) + *`
+  (23112 срабатываний зонда), `... h1 + *, ... h2 + *, ... p` (23112),
+  `.prc-CheckboxOrRadioGroup-Body-S3dlj > * + *` (11556),
+  `...:hover ... path:nth-of-type(2), ...:focus-within ...` (11064),
+  `... * + *` (7704×2), плюс не-Primer `.PhoneInputWithCountrySearch-…
+  > :first-child > :nth-child(2)` (1926) и `.radio-input:disabled +
+  .radio-label .octicon` (165). Ни одного случая доминирующего
+  `:where(...):hover`-паттерна срез 9 не нашёл в зонде вообще — то
+  есть либо он не входит в кандидаты именно для SVG-presentational
+  узлов (RuleIndex-бакетирование по классу, а не universal, как решил
+  срез 9 по чтению исходника), либо он действительно есть, но полностью
+  замаскирован количеством sibling-блокеров, которые сами по себе уже
+  дисквалифицируют те же самые 391 узла.
+- **lenta.ru:** один-единственный блокер объясняет все 83:
+  `.goodnews__label:hover :is(.goodnews__checkbox:checked ~
+  .goodnews__tooltip._turn-off, .goodnews__checkbox:not(:checked) ~
+  .goodnews__tooltip._turn-on)` (360 срабатываний зонда) — sibling-
+  комбинатор `~` СПРЯТАН внутри аргумента `:is(...)`, что делает саму
+  `:is(...)`-компаунду структурно unsafe (`complex_is_share_safe`
+  рекурсивно требует `Descendant`/`Child` и для внутренних комбинаторов)
+  независимо от того, что снаружи неё стоит фингерпринтируемый
+  `:hover`-предок.
+
+Оба случая — селекторы с sibling-комбинатором (`+`/`~`), для которых
+`ShareKey` архитектурно не имеет и не может дёшево завести поле: в
+отличие от `is_first_child`/`is_last_child` (позиция ДАННОГО узла среди
+СВОИХ соседей — O(1) факт), общий sibling-комбинатор требует знать
+identity/состояние ПРОИЗВОЛЬНОГО количества соседей на произвольную
+глубину (`~` — "любой предшествующий", не только соседний), что не
+сводится к конечному набору bool-полей ключа тем же способом. Фингерпринт
+среза 8/10 в принципе не может рескьюить эти селекторы, потому что
+`ancestor_prefix_is_fingerprintable`/`subject_is_fingerprintable` обе
+требуют `Descendant`/`Child`-комбинаторы структурно — sibling-комбинатор
+отклоняется до попытки фингерпринта, по замыслу (см. doc comment
+`selector_is_share_safe`).
+
+**Вывод:** срез 10 — корректное, протестированное обобщение механизма
+(полезно как факт для будущих сайтов с чистым `node:hover`-паттерном без
+sibling-соседей), но НЕ прогресс по измеренной цели (`share_insert` на
+github.com/lenta.ru). Реальный блокер на этих двух сайтах — sibling-
+комбинаторы, путь вперёд для них лежит не через фингерпринт, а либо
+через (a) добавление в `ShareKey` ограниченной формы sibling-identity
+(например, только `:nth-child`/`:nth-of-type` с константным индексом —
+тот же класс, что уже решён для `first`/`last`, но существенно шире:
+`nth-of-type(N)` для произвольного N, не только 1), либо (b) сужение
+`RuleIndex`-кандидатуры так, чтобы sibling-комбинаторные правила не
+попадали в кандидаты SVG-presentational узлов, когда их subject-класс
+заведомо не соответствует (не применимо здесь — `*`/`:not(label)` как
+subject делает кандидатуру для любого узла законной, не багом
+бакетирования), либо (c) признать эту ветку BUG-1112 исчерпанной для
+данных двух сайтов и закрыть как «известное архитектурное ограничение»
+без дальнейших срезов в этом направлении.
+
+Гейты: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист;
+`cargo test -p lumen-layout --lib style::tests::share_cache` — 17/17;
+`cargo test -p lumen-layout --lib style::` — зелёный.

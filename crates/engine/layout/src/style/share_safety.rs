@@ -3,7 +3,7 @@
 //! rule selector `cascade::compute_style_shareable`'s `RuleIndex` bucketing
 //! could hand back as a candidate for two *different* nodes sharing the same
 //! [`super::share_cache::ShareKey`] is safe to cache, or must instead
-//! contribute a real-match bit to the key (`dynamic_ancestor_fingerprint`).
+//! contribute a real-match bit to the key (`dynamic_fingerprint`).
 //! See [`selector_is_share_safe`]'s doc comment for the induction and
 //! [`super::share_cache`]'s module doc for how the two halves compose.
 
@@ -55,12 +55,15 @@ use crate::style::{ensure_cascade_index, matches_complex, with_front_cascade_ind
 /// stay banned: sibling position is not part of this key at any level, so
 /// nothing here proves two colliding nodes even have comparable siblings.
 ///
-/// BUG-1112 срез 8: when the abstract check above fails only because of an
-/// otherwise-unpinned ANCESTOR compound (dynamic pseudo-class like `:hover`,
-/// or a sibling-position pseudo-class the key only pins for the node it was
-/// built for), `sel` is not banned outright any more — it is
-/// [`ancestor_prefix_is_fingerprintable`], meaning [`super::share_cache::ShareCache::compute`]
-/// (via [`dynamic_ancestor_fingerprint`]) folds `sel`'s REAL, current
+/// BUG-1112 срез 8 (ancestor), срез 10 (subject — see
+/// [`subject_is_fingerprintable`]): when the abstract check above fails only
+/// because of an otherwise-unpinned dynamic part — ANCESTOR compound
+/// (dynamic pseudo-class like `:hover`, or a sibling-position pseudo-class
+/// the key only pins for the node it was built for) or the SUBJECT compound
+/// itself (`node:hover` — a dynamic fact about the key node, not an
+/// ancestor) — `sel` is not banned outright any more — it is
+/// [`is_fingerprintable`], meaning [`super::share_cache::ShareCache::compute`]
+/// (via [`dynamic_fingerprint`]) folds `sel`'s REAL, current
 /// [`matches_complex`] result into [`super::share_cache::ShareKey`] as one
 /// more bit. `ShareCache` is rebuilt from scratch every pass (see
 /// `share_cache.rs`'s module doc — it never survives across a dynamic-state
@@ -71,22 +74,36 @@ use crate::style::{ensure_cascade_index, matches_complex, with_front_cascade_ind
 /// path is now just the `false` value of the same bit — subsumed, not a
 /// special case, so this replaces (not layers alongside) that mechanism.
 pub(crate) fn selector_is_share_safe(sel: &lumen_css_parser::ComplexSelector) -> bool {
-    complex_is_share_safe(sel, true) || ancestor_prefix_is_fingerprintable(sel)
+    complex_is_share_safe(sel, true) || is_fingerprintable(sel)
+}
+
+/// BUG-1112 срез 10: union of the two shapes [`dynamic_fingerprint`]'s real
+/// match can rescue — [`ancestor_prefix_is_fingerprintable`] (dynamic
+/// ANCESTOR compound, subject already structurally safe) or
+/// [`subject_is_fingerprintable`] (dynamic SUBJECT compound, every ancestor
+/// compound already structurally safe). Both compile down to the exact same
+/// action — fold `matches_complex(sel, doc, node)`'s real value into the key
+/// — because that call already re-derives the WHOLE selector's match against
+/// `node`, so it does not matter on which side of the selector the dynamic
+/// part sits; only ONE side may be dynamic (a selector with a dynamic part on
+/// BOTH sides, e.g. `.wrap:hover .icon:focus`, is eligible for neither shape
+/// and stays unsafe — future work, not a soundness gap in what is fingerprinted
+/// today).
+fn is_fingerprintable(sel: &lumen_css_parser::ComplexSelector) -> bool {
+    ancestor_prefix_is_fingerprintable(sel) || subject_is_fingerprintable(sel)
 }
 
 /// BUG-1112 срез 8: one-time-per-pass sheet scan (mirrors `share_cache::
 /// sheet_has_position_dependent_subject`) — does `sheet` (or any of its
 /// `@layer`/`@media`/`@supports` blocks) contain ANY selector
-/// [`dynamic_ancestor_fingerprint`] would ever need to test? `false` lets
+/// [`dynamic_fingerprint`] would ever need to test? `false` lets
 /// [`super::share_cache::ShareCache::compute`] skip
-/// `dynamic_ancestor_fingerprint`'s `RuleIndex::candidates` queries entirely
+/// `dynamic_fingerprint`'s `RuleIndex::candidates` queries entirely
 /// on every eligible node for the (overwhelming majority of) sheets with no
-/// ancestor-dynamic rule at all — same cost shape as `track_position`.
-pub(crate) fn sheet_has_fingerprintable_ancestor_selector(sheet: &Stylesheet) -> bool {
+/// fingerprintable rule at all — same cost shape as `track_position`.
+pub(crate) fn sheet_has_fingerprintable_selector(sheet: &Stylesheet) -> bool {
     fn rule_has_it(rule: &lumen_css_parser::Rule) -> bool {
-        rule.selectors
-            .iter()
-            .any(|sel| !complex_is_share_safe(sel, true) && ancestor_prefix_is_fingerprintable(sel))
+        rule.selectors.iter().any(|sel| !complex_is_share_safe(sel, true) && is_fingerprintable(sel))
     }
     fn rules_have_it(rules: &[lumen_css_parser::Rule]) -> bool {
         rules.iter().any(rule_has_it)
@@ -118,7 +135,7 @@ pub(crate) fn sheet_has_fingerprintable_ancestor_selector(sheet: &Stylesheet) ->
 /// `Descendant`/`Child` qualifies — exactly the shape srez 6 used to walk
 /// with `ancestor_chain_reachable`, but now the shape is all that is needed
 /// here: the actual real-vs-permissive matching moves entirely into
-/// [`dynamic_ancestor_fingerprint`], which every fingerprintable selector
+/// [`dynamic_fingerprint`], which every fingerprintable selector
 /// reaches through the SAME shape check, so the two can never disagree on
 /// which selectors qualify.
 fn ancestor_prefix_is_fingerprintable(sel: &lumen_css_parser::ComplexSelector) -> bool {
@@ -147,10 +164,53 @@ fn ancestor_prefix_is_fingerprintable(sel: &lumen_css_parser::ComplexSelector) -
         .all(|c| matches!(c, lumen_css_parser::Combinator::Descendant | lumen_css_parser::Combinator::Child))
 }
 
-/// BUG-1112 срез 8: the real, current [`matches_complex`] result for every
-/// selector [`selector_is_share_safe`] treats as
-/// [`ancestor_prefix_is_fingerprintable`] among `node`'s candidates in
-/// `sheet` — one `bool` per such selector, in [`crate::rule_index::RuleIndex::candidates`]'s
+/// BUG-1112 срез 10: the mirror image of [`ancestor_prefix_is_fingerprintable`]
+/// — is `sel`'s *shape* eligible for the escape hatch when the dynamic part
+/// sits on the SUBJECT compound (`node:hover { .. }`, the depth-0 case срез 9
+/// found dominant on github.com: `:where(.prc-Link-Link-9ZwDx):where([data-muted=true]):hover`,
+/// a single compound with no ancestor at all) instead of an ancestor one?
+///
+/// Every ancestor compound (everything but the last) must already be
+/// structurally safe — `Type`/`Class`/`Id`/`Universal`/`Attribute` only, same
+/// `compound_is_share_safe(_, false)` call [`complex_is_share_safe`] uses for
+/// an ancestor position — because [`dynamic_fingerprint`]'s real match is
+/// only ever recorded per KEY NODE, not per ancestor: if the ancestor part
+/// itself were only conditionally equal between two colliding nodes, folding
+/// one shared bool for the whole selector would not capture that. What is
+/// "wrong" with the subject compound does not matter here (unlike
+/// `ancestor_prefix_is_fingerprintable`, this function does not re-check
+/// `compound_is_share_safe` on the subject at all) — [`matches_complex`]
+/// re-derives the WHOLE selector's real match against `node` regardless of
+/// which simple selector inside the subject compound made it dynamic, so a
+/// bare `:hover` and something like `.foo:hover:focus` are equally covered by
+/// one real-match bit. Combinators are restricted to `Descendant`/`Child` for
+/// the same reason as the ancestor case — see
+/// [`ancestor_prefix_is_fingerprintable`]'s doc comment.
+fn subject_is_fingerprintable(sel: &lumen_css_parser::ComplexSelector) -> bool {
+    let mut compounds: Vec<&lumen_css_parser::CompoundSelector> =
+        Vec::with_capacity(1 + sel.tail.len());
+    let mut combinators: Vec<lumen_css_parser::Combinator> = Vec::with_capacity(sel.tail.len());
+    compounds.push(&sel.head);
+    for (comb, comp) in &sel.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+    let n = compounds.len();
+    if !compounds[..n - 1].iter().all(|c| compound_is_share_safe(c, false)) {
+        // An ancestor compound is itself the problem — not eligible, see
+        // doc comment.
+        return false;
+    }
+    // A sibling combinator anywhere — not eligible, see doc comment.
+    combinators
+        .iter()
+        .all(|c| matches!(c, lumen_css_parser::Combinator::Descendant | lumen_css_parser::Combinator::Child))
+}
+
+/// BUG-1112 срез 8 (ancestor), срез 10 (subject): the real, current
+/// [`matches_complex`] result for every selector [`selector_is_share_safe`]
+/// treats as [`is_fingerprintable`] among `node`'s candidates in `sheet` —
+/// one `bool` per such selector, in [`crate::rule_index::RuleIndex::candidates`]'s
 /// own order.
 ///
 /// Walks the exact same four candidate sources
@@ -168,7 +228,7 @@ fn ancestor_prefix_is_fingerprintable(sel: &lumen_css_parser::ComplexSelector) -
 /// vector could ever be compared against (via `ShareKey`'s `Eq`/`Hash`)
 /// are guaranteed to have queried the very same candidate rules in the very
 /// same order.
-pub(crate) fn dynamic_ancestor_fingerprint(
+pub(crate) fn dynamic_fingerprint(
     doc: &Document,
     node: NodeId,
     sheet: &Stylesheet,
@@ -189,7 +249,7 @@ pub(crate) fn dynamic_ancestor_fingerprint(
     let mut sig: Vec<bool> = Vec::new();
     let mut push_from = |rule: &lumen_css_parser::Rule| {
         for sel in &rule.selectors {
-            if !complex_is_share_safe(sel, true) && ancestor_prefix_is_fingerprintable(sel) {
+            if !complex_is_share_safe(sel, true) && is_fingerprintable(sel) {
                 sig.push(matches_complex(sel, doc, node));
             }
         }
