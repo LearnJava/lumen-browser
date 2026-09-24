@@ -88,6 +88,45 @@ use super::*;
         assert_eq!(s.rules[1].declarations[0].value, "blue");
     }
 
+    // --- BUG-788: cartesian selector-nesting expansion must not blow up ---
+    //
+    // Malformed CSS full of unclosed `{`/stray `.`/`:`/`[` keeps sending
+    // recovery back into `parse_implicit_nested_rule`, and each level's
+    // `expand_nesting` multiplies the live selector list by the nested
+    // rule's own selector count — a 676-byte fuzzer minimization reached
+    // 50 MiB / ×74 000 blowup this way, and doubling the input pushed it
+    // past 300 s (superlinear, not just slow). The fix caps a single
+    // `expand_nesting` call's output, bounding total work to roughly
+    // input-length × cap instead of exploding with nesting depth.
+    //
+    // A byte-count assertion can't tell a fixed parser from a reverted one
+    // (`MAX_EXPANDED_SELECTORS` a few orders too high would still "pass" on
+    // this input) — the defect was about *how long*, so the test carries a
+    // wall-clock budget, read off a background thread so a genuine hang
+    // fails the test instead of the test runner itself. 5 s is generous
+    // against the fixed path's ~0.3 s and nowhere close to the old path's
+    // 300 s+ on this same repro doubled.
+    #[test]
+    fn oom_repro_stays_within_time_budget() {
+        let input = include_str!(
+            "../../../../../../fuzz/regressions/fuzz_css_parser-oom-unclosed-blocks"
+        );
+        // Doubled, per BUG-788's own measurement: the single copy alone was
+        // already reproducing the blowup, but concatenation is what showed
+        // the growth is worse than linear in input size.
+        let doubled = input.repeat(2);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = parse(&doubled);
+            let _ = tx.send(());
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
+            "parse() did not return within the time budget — cartesian \
+             selector-nesting expansion regressed (BUG-788)"
+        );
+    }
+
     #[test]
     fn vendor_bundle_shape_keeps_every_utility_after_the_hack() {
         // The exact shape found in `rust-lang.org`'s minified vendor bundle

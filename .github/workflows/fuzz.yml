@@ -199,8 +199,10 @@ jobs:
           # that outcome for the two-month CI outage). Remove a target from here
           # in the commit that fixes its bug.
           #
-          #   fuzz_css_parser — BUG-788, parse() blows up to hundreds of MiB on
-          #                     a kilobyte of malformed CSS
+          # fuzz_css_parser was delisted 2026-09-24 with the BUG-788 fix (cap
+          # on cartesian selector-nesting expansion). If a blocking run finds
+          # a different OOM/hang in this target, re-list it with a fresh bug
+          # reference instead of assuming it is the same defect back.
           #
           # fuzz_image was delisted on 2026-08-20 with the BUG-787 fix (GIF LZW
           # unpack never returned), re-listed the same day when the very first
@@ -209,7 +211,7 @@ jobs:
           # 2026-09-23 with the BUG-790 fix (upper bound on GIF logical screen
           # area). Both repros sit in regressions/ and are replayed by the
           # blocking step above, which KNOWN_FAILING does not cover.
-          KNOWN_FAILING: 'fuzz_css_parser'
+          KNOWN_FAILING: ''
         run: |
           set -u
           failed=""

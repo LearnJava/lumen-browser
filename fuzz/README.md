@@ -58,10 +58,11 @@ being read. If such a target finds nothing in a run, the job prints a
 stochastic). **Remove a target from `KNOWN_FAILING` in the commit that fixes
 its bug.**
 
-Currently listed:
+Currently listed: none.
 
-- `fuzz_css_parser` — [BUG-788](../bugs/BUG-788-OPEN.md), `parse` blows up to
-  hundreds of MiB on a kilobyte of malformed CSS.
+`fuzz_css_parser` was delisted 2026-09-24 with the
+[BUG-788](../bugs/BUG-788-FIXED.md) fix (cap on cartesian selector-nesting
+expansion, see the bug file for the mechanism).
 
 `fuzz_image`'s history is the argument for keeping the two mechanisms
 separate. It was delisted on 2026-08-20 together with the
