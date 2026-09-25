@@ -155,7 +155,39 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
     throw new TypeError(sink + " requires a Trusted Script URL value, no default policy is set.");
   };
 
-  // TRUSTEDTYPES-1 срез 3: TT L2 §4.1.1's "attribute type get algorithm" +
+  // TRUSTEDTYPES-1 срез 7: the eval()-specific subset of the same §4.1.1
+  // algorithm, called from the native `ModifyCodeGenerationFromStrings`
+  // hook (`crates/js/src/v8_runtime/codegen_hook.rs`) rather than from a
+  // DOM-sink shim wrapper — `eval`/`new Function` compile a string inside
+  // V8's own built-ins, which no JS-level interposition can reach.
+  //
+  // Returns `null` for "not a compile-time concern": anything that isn't a
+  // string and isn't a `TrustedScript` (`eval(42)`, `eval({})`,
+  // `eval(null)`, ...) — HTML/ECMA-262 never runs the TT check on those,
+  // they're returned to the caller unevaluated. Returns the source string to
+  // actually compile otherwise, or throws.
+  //
+  // `eval()`'s own extra rule (TT L2 §4.1.1 note, WPT
+  // `eval-csp-tt-default-policy-mutate.html`): unlike every other sink, the
+  // default policy's return value must be *identical* to the original
+  // string, or the call fails — a transforming default policy is fine for
+  // `innerHTML`/`setAttribute`/etc. but not for dynamic code, since there is
+  // no later point to re-inject a modified script the way there is for
+  // e.g. `<script src>`.
+  globalThis._lumen_tt_get_compliant_script_for_codegen = function (input, sink) {
+    if (input instanceof TrustedScript && VALUES.has(input)) return VALUES.get(input);
+    if (typeof input !== 'string') return null;
+    if (!REQUIRE_TT_FOR_SCRIPT) return input;
+    if (!defaultPolicy) {
+      throw new TypeError(sink + " requires a Trusted Script value, no default policy is set.");
+    }
+    var compliant = String(defaultPolicy.createScript(input, 'TrustedScript', sink));
+    if (compliant !== input) {
+      throw new TypeError(sink + ": the default policy's createScript must return the exact source string for eval().");
+    }
+    return compliant;
+  };
+
   // "Get Trusted Types compliant attribute value" run together — the entry
   // point `Element.setAttribute`/`setAttributeNS` call for every attribute
   // write, HTML/Script/ScriptURL alike. `getAttributeType` (TT §4.4's sink

@@ -1,6 +1,6 @@
 # BUG-946 — Trusted Types: политика существует, но ни один DOM sink её не спрашивает
 
-**Статус:** OPEN
+**Статус:** FIXED (2026-09-25, срез 7 TRUSTEDTYPES-1, `p1-trustedtypes1-srez7`)
 **Тип:** дефект реализованного кода — объектная модель заведена целиком (`trusted_types.rs`), но не подключена ни к одному потребителю.
 **Заведён:** 2026-09-01 (WPT-RUN-6, срез 31)
 **Область:** js (`crates/js/src/trusted_types.rs` — политика/фабрика; `crates/js/src/shim/web_api_shim_mid_b.js` — `_lumen_timer_string_handler`, единственный найденный sink-подобный путь)
@@ -60,3 +60,16 @@ default-policy-путь по спеке применяется только по
 `require_trusted_types_for_script`) — задача становится доделываемой: чтение
 директив есть, остаётся подключить его к `_lumen_timer_string_handler` и
 остальным sink'ам по направлению починки выше.
+
+## Закрыт (2026-09-25, TRUSTEDTYPES-1 срезы 1-7)
+
+Все sink'и спеки TT §4 подключены последовательными срезами: строковые
+`setTimeout`/`setInterval` (срез 1), `innerHTML`/`outerHTML`/
+`insertAdjacentHTML`/`setHTMLUnsafe`/`document.write`/`.writeln` (срез 2),
+`setAttribute`/`setAttributeNS`/`HTMLScriptElement.src`/
+`HTMLIFrameElement.srcdoc`/`Range.createContextualFragment` (срез 3),
+`<script>` `.textContent`/`.innerText`/`.text` (срез 4), `eval`/
+`new Function`/`AsyncFunction`/`GeneratorFunction`/`AsyncGeneratorFunction`
+через нативный V8-хук `ModifyCodeGenerationFromStrings` (срезы 5-7,
+`crates/js/src/v8_runtime/codegen_hook.rs` + `cpp/codegen_callback.cc`).
+Подробности каждого среза — ROADMAP.md TRUSTEDTYPES-1.

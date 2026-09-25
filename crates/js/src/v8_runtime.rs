@@ -77,6 +77,7 @@ mod install;
 
 // ── Голова рантайма: модули SPLIT-JS7 ─────────────────────────────────────────
 
+mod codegen_hook;
 mod command;
 mod html_all;
 mod named_access;
