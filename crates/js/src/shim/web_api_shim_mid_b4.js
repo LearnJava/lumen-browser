@@ -917,8 +917,7 @@ var _IO_INITIAL_MAX_ATTEMPTS = 120;
 // §2.2 "parse a margin": whitespace-separated, 1–4 tokens, each an absolute
 // px length or a percentage, expanded to four sides like the `margin`
 // shorthand. Returns the four token strings, or null for a value the
-// constructor must reject (the SyntaxError itself is BUG-626; until then an
-// invalid margin falls back to the default instead of surfacing verbatim).
+// constructor must reject with a SyntaxError (_io_margin_or_throw).
 var _IO_MARGIN_TOKEN = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(px|%)$/i;
 function _io_parse_margin(str) {
     var s = str === undefined ? '0px' : String(str);
@@ -937,28 +936,83 @@ function _io_parse_margin(str) {
     return toks;
 }
 
-// §2.2 constructor steps for `threshold`: a single number becomes a one-item
-// list, the list is sorted ascending and an empty one becomes [0]. The range
-// and type checks (RangeError/TypeError) are BUG-626.
-function _io_parse_thresholds(t) {
-    var list = t === undefined ? [0] : (Array.isArray(t) ? t.slice() : [t]);
-    list = list.map(function(v) { return Number(v); });
+// §2.2 steps 3–4 (BUG-626): an unparsable margin is a SyntaxError
+// DOMException, not a silent fallback to the default.
+function _io_margin_or_throw(value, name) {
+    var toks = _io_parse_margin(value);
+    if (!toks) {
+        throw new DOMException("Failed to construct 'IntersectionObserver': "
+            + name + " must be specified in pixels or percent.", 'SyntaxError');
+    }
+    return toks.join(' ');
+}
+
+// WebIDL conversion of `threshold`, whose IDL type is
+// `(double or sequence<double>)` (BUG-626): an iterable becomes a list, any
+// other value one double, and a non-finite entry («foo» → NaN) is a
+// TypeError. Runs with the dictionary conversion, i.e. before the
+// constructor steps that can throw SyntaxError for a margin.
+function _io_convert_thresholds(t) {
+    if (t === undefined) return [0];
+    var list = (t !== null && typeof t === 'object' && typeof t[Symbol.iterator] === 'function')
+        ? Array.from(t) : [t];
+    return list.map(function(v) {
+        var n = Number(v);
+        if (!isFinite(n)) {
+            throw new TypeError("Failed to construct 'IntersectionObserver': "
+                + 'The provided double value is non-finite.');
+        }
+        return n;
+    });
+}
+
+// §2.2 constructor step 5 for `threshold`: a value outside [0, 1] is a
+// RangeError (BUG-626); the list is sorted ascending and an empty one
+// becomes [0].
+function _io_parse_thresholds(list) {
+    for (var i = 0; i < list.length; i++) {
+        if (list[i] < 0 || list[i] > 1) {
+            throw new RangeError("Failed to construct 'IntersectionObserver': "
+                + 'Threshold values must be numbers between 0 and 1');
+        }
+    }
+    list = list.slice();
     list.sort(function(a, b) { return a - b; });
     if (list.length === 0) list.push(0);
     return Object.freeze(list);
 }
 
 function IntersectionObserver(callback, options) {
+    // WebIDL conversions come before any constructor step: the callback must
+    // be callable, the dictionary an object (or undefined/null), and `root`
+    // an Element, a Document or null.
+    if (typeof callback !== 'function') {
+        throw new TypeError("Failed to construct 'IntersectionObserver': "
+            + "The callback provided as parameter 1 is not a function.");
+    }
+    if (options !== undefined && options !== null && typeof options !== 'object' && typeof options !== 'function') {
+        throw new TypeError("Failed to construct 'IntersectionObserver': "
+            + "The provided value is not of type 'IntersectionObserverInit'.");
+    }
     this._cb = callback;
     this._options = options || {};
+    // A sub-frame's `contentDocument` is a frame_bridge.rs facade that carries
+    // `__bid__` but no `nodeType`, so it is accepted by that marker.
+    var root = this._options.root;
+    if (root != null && !(typeof root === 'object'
+            && (root.nodeType === 1 || root.nodeType === 9 || root.__bid__ !== undefined))) {
+        throw new TypeError("Failed to construct 'IntersectionObserver': "
+            + "The provided value is not of type '(Document or Element)'.");
+    }
+    var thresholds = _io_convert_thresholds(this._options.threshold);
     this._observations = [];
     // [[QueuedEntries]] (§2.2): filled by the observation update and drained
     // either by the notification step or by takeRecords().
     this._queuedEntries = [];
     this._root = this._options.root == null ? null : this._options.root;
-    this._rootMargin = (_io_parse_margin(this._options.rootMargin) || ['0px', '0px', '0px', '0px']).join(' ');
-    this._scrollMargin = (_io_parse_margin(this._options.scrollMargin) || ['0px', '0px', '0px', '0px']).join(' ');
-    this._thresholds = _io_parse_thresholds(this._options.threshold);
+    this._rootMargin = _io_margin_or_throw(this._options.rootMargin, 'rootMargin');
+    this._scrollMargin = _io_margin_or_throw(this._options.scrollMargin, 'scrollMargin');
+    this._thresholds = _io_parse_thresholds(thresholds);
     _io_observers.push(this);
 }
 // §2.2 readonly IDL attributes, exposed as prototype accessors like every
@@ -980,7 +1034,16 @@ IntersectionObserver.prototype.takeRecords = function() {
     return q;
 };
 IntersectionObserver.prototype.observe = function(target) {
-    if (!target || target.__nid__ === undefined) return;
+    // §2.2: observe() takes an Element; anything else is a TypeError from the
+    // WebIDL conversion (BUG-626 — this used to return silently). The lazy-image
+    // observer (_lumen_init_lazy_images) passes a bare {__nid__} proxy with no
+    // nodeType, so only a value carrying a non-element nodeType or no __nid__
+    // at all is rejected (a frame_bridge.rs element facade has both).
+    if (!target || typeof target !== 'object' || target.__nid__ === undefined
+            || (target.nodeType !== undefined && target.nodeType !== 1)) {
+        throw new TypeError("Failed to execute 'observe' on 'IntersectionObserver': "
+            + "parameter 1 is not of type 'Element'.");
+    }
     for (var i = 0; i < this._observations.length; i++) {
         // §3.2 step 1: observing an already-observed target is a no-op, so it
         // queues nothing either.

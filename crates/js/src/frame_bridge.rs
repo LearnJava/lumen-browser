@@ -2041,6 +2041,11 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     var cached = docs[bid];
     if (cached) return cached;
     var d = {};
+    // Same binding marker the element facades carry (frameElem): lets
+    // same-realm APIs that take a Document — IntersectionObserver's `root`
+    // (BUG-626) — recognise this facade. Non-enumerable, so the facade's
+    // visible key set is unchanged.
+    Object.defineProperty(d, '__bid__', { value: bid, enumerable: false });
     function el(nid) { return frameElem(bid, nid); }
     Object.defineProperty(d, 'body',              { get: function() { return el(_lumen_f_body(bid)); }, configurable: true });
     Object.defineProperty(d, 'head',              { get: function() { return el(_lumen_f_head(bid)); }, configurable: true });
