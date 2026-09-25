@@ -1997,6 +1997,14 @@ the time — read dates.
   `OffscreenCanvasRenderingContext2D` — separate Rust-native implementation,
   not this shim); its `setTransform` still only accepts six positional
   numbers.
+- **`CDATASection` + `document.createCDATASection` (DOM §4.5/§4.12, BUG-863, [P6] 2026-09-25).**
+  The arena keeps a CDATA section a plain `NodeData::Text` node; `Document::cdata_sections`
+  (arena-index set, pruned in `reclaim_dead_nodes`, carried by `deep_clone`) marks it, and
+  `_lumen_is_cdata_section` picks `nodeType 4`/`#cdata-section`/`CDATASection.prototype` in the
+  wrapper. Every text path (layout, `textContent`, ranges, `normalize`) sees an ordinary Text node.
+  The factory is on the live `document`, every detached document and `DOMParser`'s `VDocument`:
+  `NotSupportedError` for `text/html`, `InvalidCharacterError` on `]]>`. `XMLSerializer` writes
+  `<![CDATA[…]]>` verbatim. The parser still turns a parsed `<![CDATA[…]]>` into plain text.
 
 ## Deferred
 

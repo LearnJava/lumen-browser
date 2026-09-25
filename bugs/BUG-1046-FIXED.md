@@ -25,7 +25,7 @@
 `cargo test -p lumen-js --features v8-backend` зелёный, `cargo clippy
 --workspace --all-targets -- -D warnings` чист. `dom/traversal/TreeWalker.html`/
 `NodeIterator*.html` в WPT по-прежнему не доходят до ассертов из-за
-[BUG-863](BUG-863-OPEN.md) (`createCDATASection`) — счёт по категории
+[BUG-863](BUG-863-FIXED.md) (`createCDATASection`) — счёт по категории
 изменится отдельным срезом после его починки.
 
 ## Симптом
@@ -111,7 +111,7 @@ text/comment/**всё остальное = SHOW_ELEMENT**, поэтому `DOCTY
   как корень работает, поэтому дефект виден не всем.
 * `dom/traversal/TreeWalker.html` и `NodeIterator*.html` в WPT сейчас
   не доходят до ассертов вовсе — их `setup()` падает на
-  [BUG-863](BUG-863-OPEN.md) (`createCDATASection`), так что прогон об этом
+  [BUG-863](BUG-863-FIXED.md) (`createCDATASection`), так что прогон об этом
   дефекте не свидетельствует и после починки BUG-863 счёт по категории
   изменится ещё раз.
 * Цены на реальных страницах не измерялось.

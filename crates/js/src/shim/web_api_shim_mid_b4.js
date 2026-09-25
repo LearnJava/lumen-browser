@@ -1186,13 +1186,14 @@ function _nf_accepts(nid, whatToShow, filter) {
     if (nid === _lumen_root_nid) { nt = 9; }
     else if (_lumen_is_doctype(nid)) { nt = 10; }
     else if (_lumen_is_document_fragment(nid)) { nt = 11; }
-    else if (_lumen_is_text_node(nid)) { nt = 3; }
+    else if (_lumen_is_text_node(nid)) { nt = _lumen_is_cdata_section(nid) ? 4 : 3; }
     else if (_lumen_is_comment_node(nid)) { nt = 8; }
     else if (_lumen_is_processing_instruction_node(nid)) { nt = 7; }
     else { nt = 1; }
     var bit;
     switch (nt) {
         case 3:  bit = NodeFilter.SHOW_TEXT; break;
+        case 4:  bit = NodeFilter.SHOW_CDATA_SECTION; break;
         case 7:  bit = NodeFilter.SHOW_PROCESSING_INSTRUCTION; break;
         case 8:  bit = NodeFilter.SHOW_COMMENT; break;
         case 9:  bit = NodeFilter.SHOW_DOCUMENT; break;

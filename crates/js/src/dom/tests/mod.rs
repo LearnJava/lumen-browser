@@ -360,3 +360,6 @@ mod v8_bug624_navigator_interface;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug628_io_take_records;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug863_cdata_section;
