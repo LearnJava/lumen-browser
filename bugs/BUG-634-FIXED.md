@@ -1,6 +1,6 @@
 # BUG-634 — `BlobEvent` constructor doesn't validate required init dict / member, `timecode` defaults to 0 instead of NaN
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/media_stream_recording.rs`)
 **Найден:** 2026-08-05, P2, WPT-VENDOR-mediacapture-record
 

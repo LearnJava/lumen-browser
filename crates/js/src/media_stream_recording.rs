@@ -25,17 +25,52 @@ const MEDIA_STREAM_RECORDING_SHIM: &str = r#"(function() {
   'use strict';
 
   // ── BlobEvent ──────────────────────────────────────────────────────────────
-  // W3C MediaStream Recording §4.2
+  // W3C MediaStream Recording §4.2. IDL:
+  //   constructor(DOMString type, BlobEventInit eventInitDict);
+  //   dictionary BlobEventInit : EventInit {
+  //     required Blob data; DOMHighResTimeStamp timecode; };
+  // A required dictionary argument and a required member both throw
+  // TypeError when absent (WebIDL §3.2.2 / §3.10.23) — the shim used to
+  // substitute an empty Blob and 0 instead (BUG-634).
   function BlobEvent(type, init) {
-    if (typeof Event === 'function') {
-      Event.call(this, type, init);
+    if (!new.target) {
+      throw new TypeError("Failed to construct 'BlobEvent': Please use the 'new' operator.");
     }
-    this.type = String(type || '');
-    this.bubbles = !!(init && init.bubbles);
-    this.cancelable = !!(init && init.cancelable);
-    init = init || {};
-    this.data = (init.data instanceof Blob) ? init.data : new Blob([]);
-    this.timecode = (typeof init.timecode === 'number') ? init.timecode : 0;
+    if (arguments.length < 2) {
+      throw new TypeError("Failed to construct 'BlobEvent': 2 arguments required, but only " +
+        arguments.length + ' present.');
+    }
+    // WebIDL dictionary conversion: only undefined/null/object are accepted,
+    // and undefined/null become an empty dictionary — which then fails on
+    // the required `data` member below.
+    if (init !== undefined && init !== null && typeof init !== 'object' && typeof init !== 'function') {
+      throw new TypeError("Failed to construct 'BlobEvent': parameter 2 is not of type 'BlobEventInit'.");
+    }
+    var dict = init || {};
+    var data = dict.data;
+    if (data === undefined) {
+      throw new TypeError("Failed to construct 'BlobEvent': required member data is undefined.");
+    }
+    if (!(typeof Blob === 'function' && data instanceof Blob)) {
+      throw new TypeError("Failed to construct 'BlobEvent': member data is not of type 'Blob'.");
+    }
+    // DOMHighResTimeStamp is a restricted `double`: non-finite input throws.
+    // An absent member has no IDL default, and the attribute reports NaN.
+    var timecode = NaN;
+    if (dict.timecode !== undefined) {
+      timecode = Number(dict.timecode);
+      if (!isFinite(timecode)) {
+        throw new TypeError("Failed to construct 'BlobEvent': member timecode is not a finite floating-point value.");
+      }
+    }
+    if (typeof Event === 'function') {
+      Event.call(this, type, dict);
+    }
+    this.type = String(type);
+    this.bubbles = !!dict.bubbles;
+    this.cancelable = !!dict.cancelable;
+    this.data = data;
+    this.timecode = timecode;
   }
   if (typeof Event === 'function') {
     BlobEvent.prototype = Object.create(Event.prototype);
@@ -203,6 +238,44 @@ mod tests {
                 .eval("typeof BlobEvent === 'function' ? 'yes' : 'no'")
                 .unwrap();
             assert_eq!(res, JsValue::String("yes".to_string()));
+        });
+    }
+
+    /// BUG-634: mirrors `mediacapture-record/BlobEvent-constructor.html` —
+    /// the init dictionary and its `data` member are required, `timecode`
+    /// defaults to NaN.
+    #[test]
+    fn blob_event_constructor_validates_init() {
+        with_media_recorder(|rt| {
+            let res = rt
+                .eval(
+                    "function throwsType(f) { try { f(); return false; } \
+                       catch (e) { return e instanceof TypeError; } } \
+                     var b = new Blob([]); \
+                     [ BlobEvent.length === 2, \
+                       throwsType(function() { new BlobEvent('t'); }), \
+                       throwsType(function() { new BlobEvent('t', null); }), \
+                       throwsType(function() { new BlobEvent('t', undefined); }), \
+                       throwsType(function() { new BlobEvent('t', {}); }), \
+                       throwsType(function() { new BlobEvent('t', {data: null}); }), \
+                       throwsType(function() { new BlobEvent('t', {data: undefined}); }), \
+                       throwsType(function() { new BlobEvent('t', {data: {}}); }), \
+                       throwsType(function() { new BlobEvent('t', {data: b, timecode: NaN}); }), \
+                       throwsType(function() { BlobEvent('t', {data: b}); }), \
+                       new BlobEvent('t', {data: b}).data === b, \
+                       new BlobEvent('t', {data: b}).type === 't', \
+                       Number.isNaN(new BlobEvent('t', {data: b}).timecode), \
+                       new BlobEvent('t', {data: b, timecode: 42.5}).timecode === 42.5 \
+                     ].join(',')",
+                )
+                .unwrap();
+            assert_eq!(
+                res,
+                JsValue::String(
+                    "true,true,true,true,true,true,true,true,true,true,true,true,true,true"
+                        .to_string()
+                )
+            );
         });
     }
 
