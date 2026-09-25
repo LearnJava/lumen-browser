@@ -1,6 +1,6 @@
 # BUG-1181 — CSP: `securitypolicyviolation` для листов и `<style>` сообщает `style-src`, а не `style-src-elem`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Заведён:** 2026-09-26 (P3, по ходу [BUG-1180](BUG-1180-FIXED.md); видимое окно `--maximized`,
 `LUMEN_NO_ADBLOCK=1`, сравнение с Chrome 153 тем же способом).
 **Область:** shell (`crates/shell/src/page_pipeline.rs:1678`, `:1681`, `:1696`;
@@ -37,3 +37,23 @@ CSP3 §6.8.2 «Get the effective directive for request»: у запроса с d
 `script-src` вместо `script-src-elem` ([BUG-1175](BUG-1175-FIXED.md), «Не сделано»).
 
 Критерий: `/link_style_spv.html` даёт `style-src-elem`, как Chrome.
+
+## Решение (2026-09-26, P3)
+
+Все шесть вызовов `fire_csp_violation` для листа, `@import` и inline `<style>` передают
+`style-src-elem`: каскад документа (`page_pipeline.rs`), iframe (`frames.rs`), relayout
+(`relayout.rs`). `@import` отдельного вызова не имеет — его заблокированные URL уже
+подмешаны в `blocked_by_style_src`. `effectiveDirective` берётся из того же аргумента
+(`_lumen_dispatch_csp_violation`, `crates/js/src/csp.rs`), так что оба поля совпадают.
+
+Тест: `tests::page_pipeline::style_src_violations_report_style_src_elem` — `<link>` и
+`<style>` под `style-src 'none'` дают `style-src-elem/style-src-elem` (до правки
+`style-src/style-src`).
+
+Живая проба `/link_style_spv.html` (dev-release, `--maximized`, `LUMEN_NO_ADBLOCK=1`):
+`SPV = ["style-src-elem http://127.0.0.1:8735/a.css"]`, `EV = ["error"]`, запроса `/a.css`
+нет — как у Chrome 153 в таблице выше.
+
+Не сделано: парсерный `<script src>` по-прежнему сообщает `script-src`, а директивы
+`style-src-elem`/`script-src-elem`/`script-src-attr` в самой политике не участвуют в
+принятии решения — это [BUG-1183](BUG-1183-OPEN.md).

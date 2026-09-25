@@ -133,7 +133,7 @@ impl Lumen {
                 // combined text — same switch as `page_pipeline.rs`'s inline
                 // `<style>` dispatch.
                 for text in &blocked {
-                    js.fire_csp_violation("style-src", "inline", text);
+                    js.fire_csp_violation("style-src-elem", "inline", text);
                 }
             }
             let mut css =

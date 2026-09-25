@@ -2400,15 +2400,15 @@ pub(crate) fn spawn_frame(
                     policy, &lumen_network::csp::CspDirective::StyleSrc, url, child_self_origin.as_ref(),
                 );
                 if texts.is_empty() {
-                    js.fire_csp_violation("style-src", url, original_policy);
+                    js.fire_csp_violation("style-src-elem", url, original_policy);
                 } else {
                     for text in &texts {
-                        js.fire_csp_violation("style-src", url, text);
+                        js.fire_csp_violation("style-src-elem", url, text);
                     }
                 }
             }
             for text in &subresources.blocked_inline_style_policies {
-                js.fire_csp_violation("style-src", "inline", text);
+                js.fire_csp_violation("style-src-elem", "inline", text);
             }
             for text in &subresources.blocked_style_attr_policies {
                 js.fire_csp_violation("style-src-attr", "inline", text);

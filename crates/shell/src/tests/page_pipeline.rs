@@ -1467,6 +1467,31 @@ fn script_created_style_attr_is_csp_checked_without_stylesheet_touch() {
     );
 }
 
+/// BUG-1181: a stylesheet request and an inline `<style>` report the
+/// effective directive `style-src-elem` (CSP3 §6.8.2/§6.8.3), even when the
+/// policy only has `style-src` — Chrome 153 does the same. Before the fix
+/// both dispatches passed the literal `style-src`.
+#[cfg(feature = "v8")]
+#[test]
+fn style_src_violations_report_style_src_elem() {
+    let page = parse_and_layout_for_test(
+        "<html><head>\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"style-src 'none'\">\
+         <script>document.addEventListener('securitypolicyviolation',function(e){\
+         var h=document.documentElement;\
+         h.setAttribute('data-spv',(h.getAttribute('data-spv')||'')+\
+         e.violatedDirective+'/'+e.effectiveDirective+'/'+\
+         (e.blockedURI==='inline'?'inline':'url')+';');});</script>\
+         <link rel=stylesheet href=bug1181.css>\
+         <style>p{color:red}</style>\
+         </head><body><p>t</p></body></html>",
+    );
+    let spv = probe_attr(&page, "data-spv");
+    assert!(spv.contains("style-src-elem/style-src-elem/url;"), "link: {spv}");
+    assert!(spv.contains("style-src-elem/style-src-elem/inline;"), "style: {spv}");
+    assert!(!spv.contains("style-src/"), "no bare style-src: {spv}");
+}
+
 /// BUG-470: `prop in getComputedStyle(el)` used to be `false` for every
 /// property, not just `float`/`clear` — the returned `Proxy({}, handler)`
 /// had no `has` trap, so `in` fell through to `Reflect.has` on the empty

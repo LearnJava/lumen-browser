@@ -61,7 +61,7 @@ CSP `style-src 'none'`, скрипт вставляет `<link rel=stylesheet hr
 | `/link_style_spv.html`: события `securitypolicyviolation` | одно | одно |
 
 Критерий выполнен. Попутно на `/link_style_spv.html` видны два расхождения, не входящие в этот баг:
-`violatedDirective` у Lumen `style-src`, у Chrome `style-src-elem` ([BUG-1181](BUG-1181-OPEN.md));
+`violatedDirective` у Lumen `style-src`, у Chrome `style-src-elem` ([BUG-1181](BUG-1181-FIXED.md));
 `document.styleSheets.length` у Lumen `0`, у Chrome `1`. Второе — не дефект: Chrome держит пустой
 лист у любого `<link>` с провалом загрузки (404: `cssRules.length == 0`; CSP: `cssRules` бросает
 `SecurityError`), а HTML «process the linked resource» создаёт лист только при `success`. Lumen
