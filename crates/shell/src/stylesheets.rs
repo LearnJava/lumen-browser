@@ -523,6 +523,19 @@ pub(crate) fn build_stylesheet_node_registry(
                 });
             }
             StylesheetOwner::Link(id, href, charset_attr) => {
+                // BUG-1180: тот же гейт `style-src`, что `load_linked_stylesheets`
+                // ставит каскаду, — иначе вставленный скриптом `<link>` под
+                // `style-src 'none'` уходил бы в сеть отсюда и его лист попадал
+                // в `document.styleSheets`, а через него в `getComputedStyle`.
+                // Нарушение здесь не сообщается: его уже отправил путь каскада.
+                if let Some((policy, _original)) = &csp_gate {
+                    let resolved_url = base.resolve_str(&href);
+                    let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url);
+                    let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
+                    if crate::csp_enforce::style_src_blocked(policy, gate_url, self_origin.as_ref()) {
+                        continue;
+                    }
+                }
                 if let Some((text, _, _)) = fetch_stylesheet_text(
                     &href,
                     base,
