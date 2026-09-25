@@ -642,9 +642,9 @@ fn wrapper_dialog_return_value_is_per_node() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
-// The shared prototype sits BELOW the interface prototype, so a member
-// defined by both still resolves to the wrapper's own — BUG-383's
-// `select.remove(index)` is the canonical case.
+// The shared members now sit on the interface prototypes (BUG-1122), and
+// `select.remove(index)` still reaches the select-aware `remove` through
+// `HTMLSelectElement.prototype` — BUG-383's canonical case.
 #[test]
 fn wrapper_members_still_shadow_the_interface_prototype() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -654,7 +654,7 @@ fn wrapper_members_still_shadow_the_interface_prototype() {
                      var o = document.createElement('option'); \
                      s.appendChild(o); s.remove(0); \
                      s.children.length === 0 && \
-                     s.remove !== HTMLSelectElement.prototype.remove",
+                     Object.getPrototypeOf(s) === HTMLSelectElement.prototype",
         )
         .unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));

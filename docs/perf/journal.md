@@ -323,7 +323,7 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 | нет `document.scripts`/`links` ([BUG-892](../../bugs/BUG-892-FIXED.md)) | imdb, espn, amazon (челлендж AWS WAF), discord |
 | `document.referrer` — `undefined` ([BUG-1121](../../bugs/BUG-1121-FIXED.md)) | imgur, fandom, yahoo, yahoo-jp |
 | `defer` исполняется в порядке документа ([BUG-1120](../../bugs/BUG-1120-FIXED.md)) | khanacademy, coursera |
-| члены DOM не на прототипах интерфейсов ([BUG-1122](../../bugs/BUG-1122-OPEN.md)), `EventTarget` вне цепочки ([BUG-1123](../../bugs/BUG-1123-OPEN.md)), нет `CDATASection` (BUG-863) | youtube |
+| члены DOM не на прототипах интерфейсов ([BUG-1122](../../bugs/BUG-1122-FIXED.md)), `EventTarget` вне цепочки ([BUG-1123](../../bugs/BUG-1123-OPEN.md)), нет `CDATASection` (BUG-863) | youtube |
 | `document.cookie` не сохраняется ([BUG-1119](../../bugs/BUG-1119-OPEN.md)) | msft-login |
 | CSP nonce не пускает внешний скрипт ([BUG-1124](../../bugs/BUG-1124-OPEN.md)) | dropbox, gemini (гипотеза) |
 | `<style>.sheet === null` сразу после вставки ([BUG-493](../../bugs/BUG-493-OPEN.md)) | twitch, quora, bbc |

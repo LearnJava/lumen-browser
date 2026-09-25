@@ -3860,6 +3860,14 @@ function _lumen_create_cdata_section_checked(isHtmlDocument, data) {
 function DocumentFragment() { return _lumen_make_document_fragment(_lumen_create_fragment()); }
 DocumentFragment.prototype = Object.create(Node.prototype);
 DocumentFragment.prototype.constructor = DocumentFragment;
+// DOM §4.4: a fragment's (and so a ShadowRoot's) `nodeType`/`nodeName`. The
+// arena-backed ShadowRoot wrapper has no own copy of either, and since BUG-1122
+// it would otherwise inherit `Node.prototype`'s element-oriented getters and
+// report `1`/its host-less tag name.
+Object.defineProperty(DocumentFragment.prototype, 'nodeType',
+    { get: function() { return 11; }, enumerable: true, configurable: true });
+Object.defineProperty(DocumentFragment.prototype, 'nodeName',
+    { get: function() { return '#document-fragment'; }, enumerable: true, configurable: true });
 
 // DOM LS §4.2.2.1 ShadowRoot extends DocumentFragment — a real `class`/
 // prototype chain (BUG-676), same defect class already fixed for
@@ -7039,10 +7047,11 @@ function _lumen_body_potentially_scrollable(bodyNid, htmlNid) {
 // `_LUMEN_EVENT_HANDLER_ATTRS` — roughly 250 closures per element. That cost
 // ~142 us per `document.createElement` and ~35 KB of heap per node, so 40 000
 // script-built nodes reached 1.4 GB and a fatal V8 out-of-memory. The members
-// are built ONCE here instead and installed on a per-interface shared prototype
-// (`_lumen_wrapper_proto_for`), the same «onto the interface prototype, not onto
-// every instance» move BUG-383 already made for reflected IDL attributes; an
-// instance now owns nothing but `__nid__`.
+// are built ONCE here instead and installed on the interface prototypes
+// (`Node.prototype`/`Element.prototype`/`CharacterData.prototype`, BUG-1122 —
+// see `_lumen_install_node_members`), the same «onto the interface prototype,
+// not onto every instance» move BUG-383 already made for reflected IDL
+// attributes; an instance now owns nothing but `__nid__`.
 //
 // Consequence for anything added here: a member reads its node through
 // `this.__nid__` (the `var nid = this.__nid__;` prologue every one of them
@@ -7494,11 +7503,23 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return false;
         },
         appendChild:     function(c) { var nid = this.__nid__;
+            // WebIDL: the `Node` argument is converted before pre-insert runs,
+            // so `appendChild(null)` is a TypeError on every parent kind. A
+            // wrapper from another frame's realm fails `instanceof Node` but
+            // carries `__nid__`, so that one is let through.
+            if (!c || typeof c !== 'object' || (c.__nid__ === undefined && !(c instanceof Node))) {
+                throw new TypeError("Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.");
+            }
             // BUG-325: DOM §4.2.3 pre-insert validity — Text/Comment/PI (all
             // wrapped here via `_lumen_make_element`, sharing this literal)
             // are CharacterData and can never have children.
             if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid) || _lumen_is_processing_instruction_node(nid)) {
                 throw _lumen_character_data_insertion_error();
+            }
+            // Nor can a DocumentType, which reaches this member through
+            // `Node.prototype` since BUG-1122.
+            if (_lumen_is_doctype(nid)) {
+                throw new DOMException('A DocumentType node cannot have children', 'HierarchyRequestError');
             }
             if (!c || c.__nid__ === undefined) return c;
             _lumen_ce_push_element_queue();
@@ -8822,53 +8843,99 @@ var _LUMEN_WRAPPER_DESCRIPTORS    = Object.getOwnPropertyDescriptors(_LUMEN_WRAP
 var _LUMEN_WRAPPER_CD_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_CD_MEMBERS);
 var _LUMEN_WRAPPER_PI_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_PI_MEMBERS);
 var _LUMEN_WRAPPER_ON_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAPPER_ON_MEMBERS);
-var _lumen_wrapper_protos = new Map();
 
-// BUG-1101: `firstChild`/`nextSibling` above live one link BELOW `iface` on a
-// hidden per-interface proto (see `_lumen_wrapper_proto_for`), never on
-// `Node.prototype` itself, even though DOM §4.4 places both there. Ordinary
-// `el.firstChild` reads still resolve fine through the chain, but code that
-// grabs the *native* accessor directly off `Node.prototype` — Svelte 5's
-// hydration runtime does exactly this (`Object.getOwnPropertyDescriptor(
-// Node.prototype, 'firstChild').get`), a common anti-monkey-patch pattern —
-// found `undefined` and crashed on `.get` (`crates.io`, blank page). Reusing
-// the same descriptor objects here keeps both copies backed by the identical
-// getter, so this changes nothing about what either accessor returns.
-Object.defineProperties(Node.prototype, {
-    firstChild:  _LUMEN_WRAPPER_DESCRIPTORS.firstChild,
-    nextSibling: _LUMEN_WRAPPER_DESCRIPTORS.nextSibling,
-});
-
-// A wrapper's [[Prototype]]: an interface-specific object carrying every shared
-// member, whose own prototype is the interface prototype (BUG-322's chain, so
-// `instanceof Element`/`HTMLDivElement`/`Text`/`CharacterData` still resolve).
-// Sitting one link BELOW the interface prototype it also keeps the shadowing the
-// old own-property layout gave for free — e.g. `remove` here still wins over
-// `HTMLSelectElement.prototype`'s (BUG-383) — while costing one object per
-// interface instead of one property set per node.
+// BUG-1122: the shared members are installed on the interface prototypes
+// themselves, as WebIDL §3.7 requires — `Node.prototype`, `Element.prototype`,
+// `CharacterData.prototype`, `ProcessingInstruction.prototype` — not on a
+// hidden per-interface object one link below `HTMLDivElement.prototype` (the
+// BUG-849 layout). Code that reads the "native" member off the interface
+// prototype rather than off an instance found nothing there: ShadyDOM
+// (youtube) tests `Element.prototype.attachShadow && Node.prototype.getRootNode`
+// and, finding them absent, patched the whole DOM with its polyfill; DOMPurify's
+// `lookupGetter(Element.prototype, 'cloneNode')` fell back to `() => null`.
+// BUG-1101 had already moved `firstChild`/`nextSibling` for the same reason.
 //
-// `kind`: 'cd' for Text/Comment, 'pi' for ProcessingInstruction (GAP-XMLDOC
-// срез 23 — same CharacterData surface plus `target`), anything else
-// (including omitted) falls back to the plain element/event-handler members.
-function _lumen_wrapper_proto_for(iface, kind) {
-    var proto = _lumen_wrapper_protos.get(iface);
-    if (proto !== undefined) return proto;
-    proto = Object.create(iface);
-    Object.defineProperties(proto, _LUMEN_WRAPPER_DESCRIPTORS);
-    Object.defineProperties(proto, kind === 'cd' ? _LUMEN_WRAPPER_CD_DESCRIPTORS
-                                  : kind === 'pi' ? _LUMEN_WRAPPER_PI_DESCRIPTORS
-                                                  : _LUMEN_WRAPPER_ON_DESCRIPTORS);
-    _lumen_wrapper_protos.set(iface, proto);
-    return proto;
+// Which prototype gets which member (DOM §4.4 Node, §4.2.8 ChildNode,
+// §4.2.7 NonDocumentTypeChildNode; `EventTarget` members sit on `Node.prototype`
+// until `Node` inherits from `EventTarget`, BUG-1123). Everything else in
+// `_LUMEN_WRAPPER_MEMBERS` goes on `Element.prototype`: the bundle never told
+// Element members from HTMLElement/HTMLDialogElement/form-control ones, and
+// SVG/MathML elements rely on reaching them through `Element.prototype`.
+var _LUMEN_NODE_MEMBER_NAMES = [
+    'nodeType', 'nodeName', 'parentNode', 'parentElement', 'childNodes',
+    'firstChild', 'lastChild', 'previousSibling', 'nextSibling', 'ownerDocument',
+    'isConnected', 'textContent', 'appendChild', 'insertBefore', 'removeChild',
+    'replaceChild', 'cloneNode', 'isSameNode', 'isEqualNode', 'getRootNode',
+    'normalize', 'addEventListener', 'removeEventListener', 'dispatchEvent',
+];
+var _LUMEN_CHILD_NODE_MEMBER_NAMES = [
+    'before', 'after', 'replaceWith', 'remove',
+    'nextElementSibling', 'previousElementSibling',
+];
+
+// A member now also sits where a receiver without a node can reach it: the
+// interface prototype itself (`Element.prototype.classList`), the detached
+// JS-only nodes (`new Document()`, a created doctype, `new Text()`, `Attr`)
+// and the members' own callers passing a foreign `this`. Every member reads
+// `this.__nid__`, and the lazy slots (`classList`, `style`, `dataset`,
+// `attributes`, `returnValue`) would freeze their object onto whatever `this`
+// is — onto `Element.prototype`, i.e. onto every element at once. So each
+// member is wrapped: a getter answers `undefined` (what the absent member
+// answered before), a setter does nothing, a method throws `TypeError`
+// ("Illegal invocation", as a browser does for a foreign receiver). The tree
+// links are the exception: a JS-only node that defines no link of its own is a
+// real node with no parent/child/sibling, so it answers `null` — what
+// `foreignDoc.nextSibling` read before, through BUG-1101's raw getter.
+var _LUMEN_NODE_LINK_NAMES = ['parentNode', 'parentElement', 'firstChild',
+    'lastChild', 'previousSibling', 'nextSibling'];
+function _lumen_node_member_descriptor(name, desc) {
+    if (desc.get || desc.set) {
+        var g = desc.get, s = desc.set, out = { enumerable: desc.enumerable, configurable: true };
+        var link = _LUMEN_NODE_LINK_NAMES.indexOf(name) >= 0;
+        if (g) out.get = function() {
+            if (this.__nid__ !== undefined) return g.call(this);
+            return (link && this instanceof Node && !Object.prototype.hasOwnProperty.call(this, 'constructor')) ? null : undefined;
+        };
+        if (s) out.set = function(v) { if (this.__nid__ !== undefined) s.call(this, v); };
+        return out;
+    }
+    if (typeof desc.value !== 'function') return desc;
+    var f = desc.value;
+    var w = function() {
+        if (this.__nid__ === undefined) throw new TypeError("Illegal invocation: '" + name + "' called on a non-node");
+        return f.apply(this, arguments);
+    };
+    Object.defineProperty(w, 'name', { value: name, configurable: true });
+    Object.defineProperty(w, 'length', { value: f.length, configurable: true });
+    return { value: w, writable: true, enumerable: desc.enumerable, configurable: true };
 }
+function _lumen_install_node_members(proto, descs, names) {
+    var keys = names || Object.keys(descs);
+    for (var i = 0; i < keys.length; i++) {
+        var d = descs[keys[i]];
+        if (d !== undefined) Object.defineProperty(proto, keys[i], _lumen_node_member_descriptor(keys[i], d));
+    }
+}
+(function() {
+    var elementDescs = {};
+    Object.keys(_LUMEN_WRAPPER_DESCRIPTORS).forEach(function(k) {
+        if (_LUMEN_NODE_MEMBER_NAMES.indexOf(k) < 0) elementDescs[k] = _LUMEN_WRAPPER_DESCRIPTORS[k];
+    });
+    _lumen_install_node_members(Node.prototype, _LUMEN_WRAPPER_DESCRIPTORS, _LUMEN_NODE_MEMBER_NAMES);
+    _lumen_install_node_members(Element.prototype, elementDescs);
+    // After the bundle, as on the old hidden prototype: the `on<type>`
+    // accessors replace the bundle's plain `ondrag*: null` fields.
+    _lumen_install_node_members(Element.prototype, _LUMEN_WRAPPER_ON_DESCRIPTORS);
+    _lumen_install_node_members(CharacterData.prototype, _LUMEN_WRAPPER_DESCRIPTORS, _LUMEN_CHILD_NODE_MEMBER_NAMES);
+    _lumen_install_node_members(CharacterData.prototype, _LUMEN_WRAPPER_CD_DESCRIPTORS);
+    _lumen_install_node_members(ProcessingInstruction.prototype, _LUMEN_WRAPPER_PI_DESCRIPTORS, ['target']);
+})();
 
 // Re-points a live wrapper at another interface. `svg.rs` does this to give a
-// `createElementNS` result its typed `SVG*Element` chain; a plain
-// `Object.setPrototypeOf(el, Ctor.prototype)` would drop every shared member
-// now that BUG-849 has moved them off the instance.
+// `createElementNS` result its typed `SVG*Element` chain.
 function _lumen_retarget_wrapper(el, iface) {
     if (!el || !iface) { return el; }
-    Object.setPrototypeOf(el, _lumen_wrapper_proto_for(iface, null));
+    Object.setPrototypeOf(el, iface);
     return el;
 }
 
@@ -8909,8 +8976,7 @@ function _lumen_build_element(nid, ifaceOverride) {
                   : isText ? (_lumen_is_cdata_section(nid) ? CDATASection.prototype : Text.prototype)
                   : (isComment ? Comment.prototype
                   : (isPI ? ProcessingInstruction.prototype : _lumen_element_prototype_for(nid)));
-    var kind      = (isText || isComment) ? 'cd' : (isPI ? 'pi' : null);
-    var _obj = Object.create(_lumen_wrapper_proto_for(iface, kind));
+    var _obj = Object.create(iface);
     // BUG-367: `__nid__` is the wrapper's internal arena handle, not a DOM
     // member — non-enumerable (an enumerable one was the first key of
     // `Object.keys`/`for…in`/spread/`JSON.stringify` on every node, a Lumen

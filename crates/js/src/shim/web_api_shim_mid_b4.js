@@ -382,12 +382,11 @@ _lumen_insert_before = function(parent, child, reference) {
 // here, past the two natives, so it builds that one record directly instead.
 //
 // `_LUMEN_WRAPPER_MEMBERS` is only the *source* object: `web_api_shim_mid.js`
-// already froze a member-by-member snapshot into `_LUMEN_WRAPPER_DESCRIPTORS`
-// (`Object.getOwnPropertyDescriptors`, mid.js:8658) before this file runs, and
-// every per-interface wrapper prototype is built from that snapshot, lazily,
-// via `Object.defineProperties`. Reassigning `_LUMEN_WRAPPER_MEMBERS.replaceChild`
-// alone edits a dictionary nothing reads again — the snapshot's own `.value`
-// has to be patched too, or every node keeps calling the two-record original.
+// has already installed its members on the interface prototypes (BUG-1122,
+// `_lumen_install_node_members`) before this file runs. Reassigning
+// `_LUMEN_WRAPPER_MEMBERS.replaceChild` alone edits a dictionary nothing reads
+// again — `Node.prototype.replaceChild` has to be re-installed, or every node
+// keeps calling the two-record original.
 function _lumen_mo_replace_child(newChild, oldChild) { var nid = this.__nid__;
     if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
         throw new TypeError('replaceChild: both arguments must be nodes');
@@ -402,7 +401,9 @@ function _lumen_mo_replace_child(newChild, oldChild) { var nid = this.__nid__;
     return oldChild;
 }
 _LUMEN_WRAPPER_MEMBERS.replaceChild = _lumen_mo_replace_child;
-_LUMEN_WRAPPER_DESCRIPTORS.replaceChild.value = _lumen_mo_replace_child;
+_lumen_install_node_members(Node.prototype, {
+    replaceChild: { value: _lumen_mo_replace_child, writable: true, enumerable: true, configurable: true },
+});
 
 // Wrap _lumen_set_text_content to intercept mutations. DOM §4.9.1: setting
 // textContent on an ELEMENT replaces all its children with (at most) one text

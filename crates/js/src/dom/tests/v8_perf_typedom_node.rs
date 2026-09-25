@@ -646,9 +646,13 @@ fn bug_281_element_namespace_uri_is_xhtml() {
 
 #[test]
 fn bug_281_text_node_namespace_uri_is_null() {
+    // DOM §4.9/§4.9.2: `namespaceURI` is an `Element`/`Attr` attribute, not a
+    // `Node` one, so a Text node has none at all — `undefined`, as in Chrome.
+    // It answered `null` only while every node shared the element bundle
+    // (BUG-1122).
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
-        .eval("document.getElementsByTagName('title')[0].firstChild.namespaceURI === null")
+        .eval("document.getElementsByTagName('title')[0].firstChild.namespaceURI === undefined")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
