@@ -1256,6 +1256,45 @@ function _lumen_define_reflection(proto, entry) {
             var n = _lumen_reflect_nid(this);
             if (n !== -1) _lumen_set_attr(n, attr, String(v));
         };
+    } else if (kind === 'url-scripturl') {
+        // TRUSTEDTYPES-1 срез 3: the one IDL-property URL reflection that is
+        // also a TT L2 §4.4 sink table entry (`HTMLScriptElement.src`) —
+        // property assignment must be checked the same way `setAttribute`
+        // is, since it writes the attribute directly rather than going
+        // through the generic `setAttribute` wrapper above.
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            return n === -1 ? '' : _lumen_reflect_url(n, attr);
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            var s = (typeof _lumen_tt_get_compliant_script_url === 'function')
+                ? _lumen_tt_get_compliant_script_url(v, 'HTMLScriptElement src')
+                : String(v);
+            _lumen_set_attr(n, attr, s);
+        };
+    } else if (kind === 'html-string') {
+        // TRUSTEDTYPES-1 срез 3: `HTMLIFrameElement.srcdoc` (TT §4.4 sink
+        // table). Unlike `innerHTML`/`outerHTML` this is a plain DOMString
+        // IDL attribute (no `[LegacyNullToEmptyString]`), so a bare `null`
+        // stringifies to the literal text "null" once a default policy makes
+        // string assignment legal at all — matching
+        // `block-string-assignment-to-HTMLIFrameElement-srcdoc.html`.
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return '';
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            return v !== null ? String(v) : '';
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            var s = (typeof _lumen_tt_get_compliant_html === 'function')
+                ? _lumen_tt_get_compliant_html(v, 'HTMLIFrameElement srcdoc', false)
+                : String(v);
+            _lumen_set_attr(n, attr, s);
+        };
     } else if (kind === 'tristate-bool') {
         // HTML LS §3.2.6.2 "hidden" -- getter returns `false` (attribute
         // absent), `true` (attribute present, any value other than an ASCII
@@ -1950,7 +1989,7 @@ _lumen_install_reflection(HTMLBodyElement.prototype, [
 ]);
 
 _lumen_install_reflection(HTMLScriptElement.prototype, [
-    ['src',            'src',            'url'],
+    ['src',            'src',            'url-scripturl'],
     ['type',           'type',           'string'],
     ['async',          'async',          'bool'],
     ['defer',          'defer',          'bool'],
@@ -2055,7 +2094,7 @@ Object.defineProperty(HTMLLinkElement.prototype, 'sheet', {
 
 _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['src',            'src',            'url'],
-    ['srcdoc',         'srcdoc',         'string'],
+    ['srcdoc',         'srcdoc',         'html-string'],
     ['name',           'name',           'string'],
     ['allow',          'allow',          'string'],
     ['allowFullscreen','allowfullscreen','bool'],

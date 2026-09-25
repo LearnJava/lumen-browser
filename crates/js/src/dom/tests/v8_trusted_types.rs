@@ -15,9 +15,12 @@ use crate::v8_runtime::V8JsRuntime;
 /// V8 twin of [`super::runtime_with_dom`].
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
-    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, None, false)
+    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true")
         .unwrap();
+    rt.install_dom(
+        doc, "", None, None, None, None, None, None, None, None, None, false,
+    )
+    .unwrap();
     rt
 }
 
@@ -25,13 +28,15 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 fn trusted_types_create_policy_invokes_rule() {
     let rt = v8_runtime_with_dom(make_doc());
     // The policy's own createHTML callback transforms the input.
-    let r = rt.eval(
-        "var p = trustedTypes.createPolicy('escape', {
+    let r = rt
+        .eval(
+            "var p = trustedTypes.createPolicy('escape', {
                      createHTML: function(s) { return s.replace(/</g, '&lt;'); }
                  });
                  var h = p.createHTML('<b>x</b>');
-                 p.name === 'escape' && h instanceof TrustedHTML && String(h) === '&lt;b>x&lt;/b>'"
-    ).unwrap();
+                 p.name === 'escape' && h instanceof TrustedHTML && String(h) === '&lt;b>x&lt;/b>'",
+        )
+        .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
@@ -39,14 +44,16 @@ fn trusted_types_create_policy_invokes_rule() {
 fn trusted_types_missing_rule_throws_type_error() {
     let rt = v8_runtime_with_dom(make_doc());
     // Policy without a createScript member: calling createScript throws TypeError.
-    let r = rt.eval(
-        "var p = trustedTypes.createPolicy('html-only', {
+    let r = rt
+        .eval(
+            "var p = trustedTypes.createPolicy('html-only', {
                      createHTML: function(s) { return s; }
                  });
                  var got = '';
                  try { p.createScript('x'); } catch (e) { got = e.constructor.name; }
-                 got === 'TypeError'"
-    ).unwrap();
+                 got === 'TypeError'",
+        )
+        .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
@@ -70,8 +77,9 @@ fn trusted_types_brand_checks() {
     let rt = v8_runtime_with_dom(make_doc());
     // isHTML/isScript/isScriptURL: true only for the matching brand,
     // false for plain strings and for forged prototype chains.
-    let r = rt.eval(
-        "var p = trustedTypes.createPolicy('p', {
+    let r = rt
+        .eval(
+            "var p = trustedTypes.createPolicy('p', {
                      createHTML: function(s) { return s; },
                      createScript: function(s) { return s; },
                      createScriptURL: function(s) { return s; }
@@ -81,8 +89,9 @@ fn trusted_types_brand_checks() {
                  trustedTypes.isHTML(h) && !trustedTypes.isHTML(s) && !trustedTypes.isHTML('a') &&
                      !trustedTypes.isHTML(forged) &&
                      trustedTypes.isScript(s) && !trustedTypes.isScript(h) &&
-                     trustedTypes.isScriptURL(u) && !trustedTypes.isScriptURL(s)"
-    ).unwrap();
+                     trustedTypes.isScriptURL(u) && !trustedTypes.isScriptURL(s)",
+        )
+        .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
@@ -113,16 +122,18 @@ fn trusted_types_illegal_constructor() {
 #[test]
 fn trusted_types_sink_tables() {
     let rt = v8_runtime_with_dom(make_doc());
-    let r = rt.eval(
-        "trustedTypes.getAttributeType('iframe', 'srcdoc') === 'TrustedHTML' &&
+    let r = rt
+        .eval(
+            "trustedTypes.getAttributeType('iframe', 'srcdoc') === 'TrustedHTML' &&
                  trustedTypes.getAttributeType('script', 'src') === 'TrustedScriptURL' &&
                  trustedTypes.getAttributeType('div', 'onclick') === 'TrustedScript' &&
                  trustedTypes.getAttributeType('div', 'id') === null &&
                  trustedTypes.getPropertyType('div', 'innerHTML') === 'TrustedHTML' &&
                  trustedTypes.getPropertyType('script', 'src') === 'TrustedScriptURL' &&
                  trustedTypes.getPropertyType('script', 'textContent') === 'TrustedScript' &&
-                 trustedTypes.getPropertyType('div', 'className') === null"
-    ).unwrap();
+                 trustedTypes.getPropertyType('div', 'className') === null",
+        )
+        .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
@@ -130,12 +141,14 @@ fn trusted_types_sink_tables() {
 fn trusted_types_rule_receives_extra_args() {
     let rt = v8_runtime_with_dom(make_doc());
     // createHTML(input, ...args): extra arguments are forwarded to the rule.
-    let r = rt.eval(
-        "var p = trustedTypes.createPolicy('args', {
+    let r = rt
+        .eval(
+            "var p = trustedTypes.createPolicy('args', {
                      createHTML: function(s, a, b) { return s + ':' + a + ':' + b; }
                  });
-                 String(p.createHTML('x', 1, 2)) === 'x:1:2'"
-    ).unwrap();
+                 String(p.createHTML('x', 1, 2)) === 'x:1:2'",
+        )
+        .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
@@ -501,16 +514,158 @@ fn tt_enforced_document_write_throws_plain_string() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// TRUSTEDTYPES-1 срез 3: `Element.setAttribute`/`setAttributeNS` gated by
+// `getAttributeType` (`on*` -> TrustedScript, `iframe[srcdoc]` -> TrustedHTML,
+// `script[src]` -> TrustedScriptURL), the matching IDL property pair
+// (`HTMLScriptElement.src`, `HTMLIFrameElement.srcdoc`), and
+// `Range.createContextualFragment` (an HTML sink).
+
 #[test]
-fn tt_enforced_document_write_accepts_trusted_html_per_argument() {
+fn tt_enforced_set_attribute_onclick_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var d = document.createElement('div'); \
+                     var threw = false; \
+                     try { d.setAttribute('onclick', 'x=1'); } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_set_attribute_onclick_accepts_trusted_script() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createScript: s => s }); \
+                     var d = document.createElement('div'); \
+                     d.setAttribute('onclick', p.createScript('x=1')); \
+                     d.getAttribute('onclick') === 'x=1'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_set_attribute_unrelated_attr_untouched() {
+    // `id`/`class`/etc. are not in the TT §4.4 sink table -- plain string
+    // assignment must keep working even under enforcement.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var d = document.createElement('div'); \
+                     d.setAttribute('id', 'foo'); \
+                     d.getAttribute('id') === 'foo'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_set_attribute_ns_onclick_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var d = document.createElement('div'); \
+                     var threw = false; \
+                     try { d.setAttributeNS(null, 'onclick', 'x=1'); } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_iframe_srcdoc_property_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var f = document.createElement('iframe'); \
+                     var threw = false; \
+                     try { f.srcdoc = '<p>x</p>'; } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_iframe_srcdoc_property_accepts_trusted_html() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
         .eval(
             "_lumen_tt_set_require_script(true); \
                      var p = trustedTypes.createPolicy('p', { createHTML: s => s }); \
-                     document.body.textContent = ''; \
-                     document.write(p.createHTML('abc'), p.createHTML('def')); \
-                     document.body.textContent === 'abcdef'",
+                     var f = document.createElement('iframe'); \
+                     f.srcdoc = p.createHTML('<p>x</p>'); \
+                     f.srcdoc === '<p>x</p>'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_script_src_property_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var s = document.createElement('script'); \
+                     var threw = false; \
+                     try { s.src = 'http://example.test/x.js'; } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_script_src_property_accepts_trusted_script_url() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createScriptURL: s => s }); \
+                     var s = document.createElement('script'); \
+                     s.src = p.createScriptURL('http://example.test/x.js'); \
+                     s.src === 'http://example.test/x.js'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_create_contextual_fragment_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var range = document.createRange(); \
+                     var threw = false; \
+                     try { range.createContextualFragment('<b>x</b>'); } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_create_contextual_fragment_accepts_trusted_html() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createHTML: s => s }); \
+                     var range = document.createRange(); \
+                     var frag = range.createContextualFragment(p.createHTML('<b>x</b>')); \
+                     frag.textContent === 'x'",
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
