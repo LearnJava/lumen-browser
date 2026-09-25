@@ -46,7 +46,7 @@ in-memory заглушки, задокументированные собств�
 ## Масштаб
 
 Тот же класс дефекта, что уже открыт для `Report`/`ReportingObserver`
-([BUG-629](BUG-629-OPEN.md)), `FileSystemFileHandle`
+([BUG-629](BUG-629-FIXED.md)), `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)) и `Serial`/`SerialPort`
 ([BUG-672](BUG-672-OPEN.md)) — подделываемый объект, неотличимый через
 `instanceof` от настоящего, выданного движком. Здесь — четвёртая-шестая
