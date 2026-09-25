@@ -44,7 +44,7 @@ Promise'ом с нужными полями, `toJSON()` отдаёт корре�
 
 Тот же класс дефекта, что уже открыт для `SerialPort`/`Serial`
 ([BUG-672](BUG-672-OPEN.md)), `Report`/`ReportingObserver`
-([BUG-629](BUG-629-OPEN.md)), `FileSystemFileHandle`
+([BUG-629](BUG-629-FIXED.md)), `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)) и `FaceDetector`/`BarcodeDetector`/`TextDetector`
 ([BUG-677](BUG-677-OPEN.md)) — интерфейс без спекового конструктора,
 подделываемый со страницы; здесь дополнительно совпадает и с отсутствующим

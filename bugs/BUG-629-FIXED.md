@@ -1,6 +1,6 @@
 # BUG-629: Reporting API shim — `ReportingObserver`/`Report` callable without `new` (pollutes `globalThis`), `Report` is illegally constructible, prototype methods wrongly enumerable
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3) — `Report` бросает `Illegal constructor`, `ReportingObserver` стал `class`, состояние в замкнутых WeakMap; регрессия — `reporting_api.rs` тесты `bug629_*`.
 **Компонент:** js (`crates/js/src/reporting_api.rs`, `REPORTING_API_SHIM`)
 **Найден:** P2, WPT-VENDOR-intervention-reporting, 2026-08-05
 

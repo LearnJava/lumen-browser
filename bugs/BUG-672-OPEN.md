@@ -38,7 +38,7 @@ ES6 `class X extends EventTarget`, поэтому `new SerialPort()`/`new Serial
 ## Масштаб
 
 Тот же класс дефекта, что уже открыт для `Report`/`ReportingObserver`
-([BUG-629](BUG-629-OPEN.md)) и `FileSystemFileHandle`
+([BUG-629](BUG-629-FIXED.md)) и `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)) — подделываемый объект, неотличимый через
 `instanceof SerialPort`/`instanceof Serial` от настоящего, выданного
 движком. Здесь — третья независимая поверхность того же системного паттерна
