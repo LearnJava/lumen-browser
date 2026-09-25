@@ -139,7 +139,7 @@ expression = f"window.{RESULTS_GLOBAL} !== undefined ? window.{RESULTS_GLOBAL} :
 `navigate(...) reported success but the document was never replaced (still at
 <href>)` примерно за 2 с вместо ~20–30 с `TIMEOUT`. Это заметно при сверке с
 записанными прогонами вендор-заметок: 12 `.https.`-тестов `web-share`, стоявших
-на TLS-гэпе [BUG-657](BUG-657-OPEN.md), в новом прогоне числятся `ERROR`, а не
+на TLS-гэпе [BUG-657](BUG-657-FIXED.md), в новом прогоне числятся `ERROR`, а не
 `TIMEOUT` (весь прогон — 54 с). Статус хуже читается как «ожидаемый», зато
 причина названа прямо, а не спрятана за таймаутом. Исключение — **первый** тест
 прогона: на стартовом контексте JS-рантайма ещё нет, маркер поставить некуда,

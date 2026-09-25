@@ -15,7 +15,7 @@ Also pulled in 7 out-of-category dependencies discovered via `grep -rhoE '(src|h
 `run_report.py --all --root webmessaging --recursive` (~11:30, 136 отобранных id, после довендоривания 7 внекатегорийных зависимостей): **77/136 harness OK, 82/206 сабтестов**. Первый прогон (до довендоривания) дал похожие цифры (79/136, 83/210) — довендоривание убрало 19 ложных 404-провалов, но большинство затронутых тестов упирается в те же корни, что и остальная категория (см. ниже), поэтому итоговый счёт почти не сдвинулся.
 
 Основная масса провалов — уже задокументированные корни:
-- TLS `UnknownIssuer` на `.https.`-тестах ([BUG-657](../../bugs/BUG-657-OPEN.md));
+- TLS `UnknownIssuer` на `.https.`-тестах ([BUG-657](../../bugs/BUG-657-FIXED.md));
 - отсутствие отдельного browsing context у `<iframe>`/`window.open()` ([BUG-480](../../bugs/BUG-480-OPEN.md)/[BUG-359](../../bugs/BUG-359-FIXED.md)) — доминирует в `with-ports/`/`without-ports/` численных сериях и `postMessage_crosssite.sub.htm`.
 
 Новый, ранее не описанный сигнал — сам `postMessage`:

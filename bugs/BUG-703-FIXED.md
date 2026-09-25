@@ -224,7 +224,7 @@ BUG-721. Приложение прислало сам диагноз:
   `requestIdleCallback`/`setTimeout` — все срабатывают.
 - Необработанных отклонений промисов у приложения нет: остаются только
   сетевые (`eventea-beer/event`, `mddc.tbank.ru` — TLS
-  [BUG-657](BUG-657-OPEN.md), `twa/ttm/…/index.js` — 404).
+  [BUG-657](BUG-657-FIXED.md), `twa/ttm/…/index.js` — 404).
 - Диф сетевых логов Lumen (68 URL) против headless Edge (130 URL): Lumen ни
   разу не запрашивает `api/common/v1/session`, `session_status`,
   `id.tbank.ru/*`, `cobrowsing.tbank.ru/*`, `fingerprint.t-static.ru/*` и ни
@@ -280,7 +280,7 @@ script element» теперь живой — вставленный в `document
 (`/api/front/*/log/collect`, `eventea-beer/event`) падают с
 `network error: EOF before status line`, а `https://mddc.tbank.ru/` — с
 `TLS handshake: invalid peer certificate: UnknownIssuer` (класс
-[BUG-657](BUG-657-OPEN.md)). Все они обработаны приложением и на рендер не
+[BUG-657](BUG-657-FIXED.md)). Все они обработаны приложением и на рендер не
 влияют, но заслуживают отдельной проверки.
 
 ## Возможный общий класс с BUG-702

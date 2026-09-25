@@ -22,7 +22,7 @@ far enough to call `requestDevice()` necessarily fails.
 **2/32 harness OK, 0/15 subtests**. 30 of 32 ids are `.https.` (WebUSB
 requires a secure context by spec) and hit the pre-existing, already-documented
 TLS-trust gap from WPT-RUN-2 (`tests/wpt/certs/README.md`, `UnknownIssuer`,
-also tracked as [BUG-657](../../bugs/BUG-657-OPEN.md)) before touching
+also tracked as [BUG-657](../../bugs/BUG-657-FIXED.md)) before touching
 `webusb.rs` at all — not a category finding.
 
 The 2 non-`.https.` ids that did run produced two FAILs, neither a new
@@ -56,7 +56,7 @@ No new `BUG-NNN` filed.
 2026-08-18 (коммит `35be3b44`, `tests/wpt/webusb/`, 41 файл, 32 id, 6
 `-manual.https.html` исключены, без variant-фан-аута). `run_report.py --all
 --root webusb --recursive` (~2:52) — **2/32 harness OK, 0/15 сабтестов**.
-30/32 — `.https.`-гэп TLS `UnknownIssuer` ([BUG-657](../../bugs/BUG-657-OPEN.md)),
+30/32 — `.https.`-гэп TLS `UnknownIssuer` ([BUG-657](../../bugs/BUG-657-FIXED.md)),
 не находка категории. Два исполнившихся non-`.https.` теста дали два FAIL —
 оба не новые баги: `insecure-context.any.html` переподтверждает уже открытый
 [BUG-765](../../bugs/BUG-765-FIXED.md) (`navigator.usb` ставится безусловно, без

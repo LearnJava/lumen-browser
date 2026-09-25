@@ -18,7 +18,7 @@ wptrunner ran 258 instances, not 224).
 `run_report.py --all --root webrtc --recursive --processes=4` (~17:42
 wall-clock): **102/258 harness OK, 86/1126 subtests passed**. 112 harness
 outcomes (60 TIMEOUT + 52 navigate ERROR) are the already-documented TLS gap
-([BUG-657](../../bugs/BUG-657-OPEN.md), `UnknownIssuer` — grep count of
+([BUG-657](../../bugs/BUG-657-FIXED.md), `UnknownIssuer` — grep count of
 `UnknownIssuer` in the run log matches exactly). Of the remaining signal, the
 two largest failure clusters (66× `setConfiguration(config)` + 63×
 `new RTCPeerConnection(config)`, 129 of 1040 unpassed subtests) both trace to
@@ -42,7 +42,7 @@ throws `TypeError`). Filed as [BUG-1058](../../bugs/BUG-1058-FIXED.md).
 `run_report.py --all --root webrtc --recursive --processes=4` — ~17:42,
 258 реально исполненных инстансов (variant-фан-аут): **102/258 harness OK,
 86/1126 сабтестов**. 112 исходов (60 TIMEOUT + 52 ERROR при навигации) —
-уже задокументированный TLS-гэп [BUG-657](../../bugs/BUG-657-OPEN.md)
+уже задокументированный TLS-гэп [BUG-657](../../bugs/BUG-657-FIXED.md)
 (подтверждено точным совпадением с числом строк `UnknownIssuer` в логе).
 Два крупнейших кластера падений (66× `setConfiguration(config)` + 63×
 `new RTCPeerConnection(config)`, 129 из 1040 непройденных сабтестов) —

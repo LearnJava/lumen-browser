@@ -1,6 +1,6 @@
 # BUG-657 — `ServiceWorkerRegistration` global class никогда не определяется в продакшн-инсталляции V8: реальные регистрации `navigator.serviceWorker.register()` — plain-объекты без `pushManager`/`sync`/`showNotification`/`periodicSync`/`backgroundFetch`/`cookies`/`index`, вопреки заявлению BUG-549 об обратном
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js — `crates/js/src/dom.rs` (`_sw_make_registration`, ~строка 4843: `Object.assign({...}, et)` без привязки к какому-либо прототипу) + все семь модулей, вешающих себя на `ServiceWorkerRegistration.prototype` (`push_api.rs:124`, `background_sync.rs:66`, `periodic_sync.rs:74`, `background_fetch.rs:116`, `cookie_store.rs:229`, `content_index.rs:73`, `notifications_bindings.rs:280`) — каждый guard`ится `if (typeof ServiceWorkerRegistration !== 'undefined')`, но ни один модуль (включая сам `content_index.rs`, чей док-комментарий утверждает обратное) не определяет этот глобал в продакшн V8-инсталляции; единственные определения — локальные тестовые стабы внутри `#[cfg(all(test, feature = "v8-backend"))] mod tests` каждого файла
 **Найден:** P2, WPT-VENDOR-push-api (2026-08-05), живая проба через `--mcp-live-port` после того, как `run_report.py --all --root push-api --recursive` не дал сигнала (все 4 исполнившихся id упёрлись в TLS-гэп `UnknownIssuer`, см. ROADMAP.md WPT-VENDOR-push-api)
 
@@ -49,3 +49,10 @@ navigator.serviceWorker.register('/sw.js').then(reg => reg.pushManager.subscribe
 ## Предлагаемый фикс
 
 Определить `function ServiceWorkerRegistration() {}` + `globalThis.ServiceWorkerRegistration = ServiceWorkerRegistration;` один раз в продакшн-инсталляции (например, в `dom.rs` рядом с `_sw_make_registration`, до вызова всех семи `install_v8!(...)` модулей в `v8_runtime.rs`), и переключить `_sw_make_registration`/`_sw_make_worker` на `Object.setPrototypeOf(reg, ServiceWorkerRegistration.prototype)` (или строить через `Object.create(ServiceWorkerRegistration.prototype)` вместо `Object.assign({...}, et)`), чтобы прототипные методы семи модулей реально становились видны на живых регистрациях.
+
+## Исправление (2026-09-26, P3)
+
+- `crates/js/src/shim/web_api_shim_mid_b.js`: перед `_sw_make_registration` определён интерфейс `ServiceWorkerRegistration` — функциональное выражение во внутреннем имени `_lumen_sw_registration_iface` (объявление `function` на верхнем уровне шима попало бы на глобал безусловно, а интерфейс `[SecureContext]`), конструктор бросает `TypeError('Illegal constructor')`, прототип наследует `EventTarget.prototype`; глобал ставится через `defineProperty` (non-enumerable, WebIDL §3.7.1) только при `_lumen_secure_context !== false`. Регистрации строятся через `Object.create(ServiceWorkerRegistration.prototype)`, поэтому члены семи модулей видны на реальном результате `register()`.
+- `crates/js/src/background_sync.rs`: `sync` был **методом** прототипа, а по Background Sync §5 это `readonly attribute SyncManager sync` — канонический `reg.sync.register(tag)` падал бы и после фикса прототипа. Переведён на ленивый геттер, как у `periodicSync`/`pushManager`.
+- Тесты: `dom::tests::v8_events_cache::sw_registration_inherits_per_api_members` (все семь членов на реальном `register()`, `instanceof` обоих интерфейсов, неперечислимость глобала), `sw_registration_interface_is_not_constructible`, `sw_registration_interface_absent_on_insecure_origin`; `background_sync::tests::service_worker_registration_has_sync_attribute`.
+- Заявление в [BUG-549](BUG-549-FIXED.md) о том, что базовый класс определяет `content_index.rs`, было неверным — теперь инвариант из док-комментария `content_index.rs:14` («после SW-шима интерфейс уже на `globalThis`») действительно выполняется.
