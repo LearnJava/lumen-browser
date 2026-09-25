@@ -2058,6 +2058,17 @@ the time — read dates.
   enclose that character, skipping collapsed ranges and invalid `StaticRange`s, and sorts by
   `priority`, then last-registered-first. Not modelled: occlusion, the `shadowRoots` filter.
 
+- **`requestIdleCallback` / `IdleDeadline` (W3C Cooperative Scheduling, BUG-660, [P3] 2026-09-26).**
+  Shim in `web_api_shim_tail.js`. An idle period is an «idle marker» entry in `_lumen_timers`
+  (`idleMarker: true`) that `_lumen_tick_timers` runs *after* the tick's ordinary tasks; the period
+  starts only if no ordinary timer is due and no task longer than a frame ended within the last frame
+  (`_lumen_idle_busy_until`, set by the tick and by idle callbacks), else the marker is re-armed.
+  `timeRemaining()` is live: min(start + 50 ms, earliest ordinary timer, start + 1000/60 while rAF
+  callbacks are queued). `options.timeout` arms an `idleTimeout: true` timer that runs the callback
+  with `didTimeout === true` and a zero budget. `IdleDeadline` is a real non-constructible interface
+  (non-enumerable global, brand-checked members). The shell's Rust `runtime::run_idle_callbacks` is
+  a separate internal queue, unrelated to the page API.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.

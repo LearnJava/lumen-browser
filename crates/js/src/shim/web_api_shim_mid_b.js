@@ -831,10 +831,13 @@ function _lumen_tick_timers() {
     var now = _lumen_now_ms();
     var ready = [];
     var keep = [];
+    // BUG-660: requestIdleCallback's idle-period markers run after this
+    // tick's ordinary tasks, so the period sees whether they kept the loop busy.
+    var idleMarkers = [];
     for (var i = 0; i < _lumen_timers.length; i++) {
         var t = _lumen_timers[i];
         if (t.deadline <= now) {
-            ready.push(t);
+            (t.idleMarker ? idleMarkers : ready).push(t);
         } else {
             keep.push(t);
         }
@@ -859,12 +862,20 @@ function _lumen_tick_timers() {
         // ("setTimeout"/"setInterval") used by `longtask-attributes.html`.
         var _timerInvoker = ready[k].interval !== null ? 'setInterval' : 'setTimeout';
         var _t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+        var _busy0 = _lumen_now_ms();
         try { ready[k].fn.apply(globalThis, ready[k].args || []); } catch(e) { _lumen_report_exception(e); }
         if (typeof _lumen_record_script_timing === 'function') {
             _lumen_record_script_timing(_t0, _timerInvoker, 'user-callback', ready[k].fn);
         }
+        // A task longer than a frame keeps idle periods off for one more
+        // frame (BUG-660, `_lumen_idle_period` in web_api_shim_tail.js).
+        var _busy1 = _lumen_now_ms();
+        if (_busy1 - _busy0 > 1000 / 60 && typeof _lumen_idle_busy_until === 'number') {
+            _lumen_idle_busy_until = _busy1 + 1000 / 60;
+        }
     }
     _lumen_timer_nesting = 0;
+    for (var q = 0; q < idleMarkers.length; q++) idleMarkers[q].fn();
     // Notify shell of next wakeup if any timers remain.
     if (_lumen_timers.length > 0) {
         var next = _lumen_timers[0].deadline;

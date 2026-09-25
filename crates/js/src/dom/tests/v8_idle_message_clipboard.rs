@@ -63,6 +63,106 @@ fn request_idle_callback_bad_arg_throws() {
                  threw"));
 }
 
+/// Makes every queued timer due and runs one event-loop tick — the idle
+/// machinery lives in `_lumen_timers`, and a unit test must not sleep.
+const TICK_ALL: &str = "for (var i = 0; i < _lumen_timers.length; i++) _lumen_timers[i].deadline = 0; \
+                        _lumen_tick_timers();";
+
+/// BUG-660: the callback got a plain object literal, so `IdleDeadline`
+/// branding (`basic.html`'s `assert_class_string`) could not hold.
+#[test]
+fn bug660_idle_callback_receives_idle_deadline_instance() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var d = null; requestIdleCallback(function(x) { d = x; });").unwrap();
+    rt.eval(TICK_ALL).unwrap();
+    assert!(bool_eval(&rt,
+        "d instanceof IdleDeadline && Object.prototype.toString.call(d) === '[object IdleDeadline]' \
+         && window.IdleDeadline === IdleDeadline && d.didTimeout === false \
+         && typeof d.timeRemaining() === 'number' && d.timeRemaining() <= 50 \
+         && Object.keys(d).length === 0          && !Object.getOwnPropertyDescriptor(globalThis, 'IdleDeadline').enumerable          && requestIdleCallback.length === 1"));
+    assert!(bool_eval(&rt,
+        "var threw = false; try { cancelIdleCallback.call({}, 1); }          catch (e) { threw = e instanceof TypeError; } threw && window.cancelIdleCallback(1) === undefined"));
+    assert!(bool_eval(&rt,
+        "var threw = false; try { new IdleDeadline(); } catch (e) { threw = e instanceof TypeError; } threw"));
+    assert!(bool_eval(&rt,
+        "var threw = false; try { IdleDeadline.prototype.timeRemaining.call({}); } \
+         catch (e) { threw = e instanceof TypeError; } threw"));
+}
+
+/// BUG-660: `didTimeout` was hardcoded `false` — a callback run because its
+/// `timeout` elapsed while the loop stayed busy must see `true` and a spent
+/// deadline (`callback-timeout-when-busy.html`).
+#[test]
+fn bug660_timeout_path_sets_did_timeout_and_zero_budget() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var d = null; requestIdleCallback(function(x) { d = x; }, { timeout: 200 }); \
+         _lumen_idle_busy_until = Infinity;",
+    )
+    .unwrap();
+    rt.eval(TICK_ALL).unwrap();
+    assert!(bool_eval(&rt, "d !== null && d.didTimeout === true && d.timeRemaining() === 0"));
+}
+
+/// BUG-660: the budget was the constant 50 — it must shrink to the next frame
+/// while `requestAnimationFrame` callbacks are pending (`deadline-max-rAF*.html`)
+/// and to a timer scheduled from inside the callback
+/// (`deadline-max-timeout-dynamic.html`).
+#[test]
+fn bug660_time_remaining_is_capped_by_raf_and_new_timers() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var before = -1, afterRaf = -1, afterTimer = -1; \
+         requestIdleCallback(function(d) { \
+             before = d.timeRemaining(); \
+             requestAnimationFrame(function() {}); \
+             afterRaf = d.timeRemaining(); \
+             setTimeout(function() {}, 5); \
+             afterTimer = d.timeRemaining(); \
+         });",
+    )
+    .unwrap();
+    rt.eval(TICK_ALL).unwrap();
+    assert!(bool_eval(&rt,
+        "before > 0 && before <= 50 && afterRaf <= before && afterRaf <= 1000 / 60 \
+         && afterTimer <= afterRaf && afterTimer <= 5"));
+}
+
+/// BUG-660: the stub always fired after a fixed delay; a task longer than a
+/// frame must keep the idle period off (`callback-timeout-when-busy.html`),
+/// and the callback must still run once the loop calms down.
+#[test]
+fn bug660_idle_period_waits_out_a_long_task() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var ran = false; \
+         setTimeout(function() { \
+             requestIdleCallback(function() { ran = true; }); \
+             var end = _lumen_now_ms() + 25; while (_lumen_now_ms() < end) {} \
+         }, 0);",
+    )
+    .unwrap();
+    rt.eval(TICK_ALL).unwrap();
+    assert!(bool_eval(&rt, "ran === false && _lumen_idle_busy_until > _lumen_now_ms() - 1"));
+    rt.eval(&format!("_lumen_idle_busy_until = -Infinity; {TICK_ALL}")).unwrap();
+    assert!(bool_eval(&rt, "ran === true"));
+}
+
+/// Cancelling also disarms the `timeout` timer, so a cancelled callback
+/// cannot sneak back in through the timeout path.
+#[test]
+fn bug660_cancel_idle_callback_disarms_timeout() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var ran = false; var h = requestIdleCallback(function() { ran = true; }, { timeout: 10 }); \
+         cancelIdleCallback(h); _lumen_idle_busy_until = Infinity;",
+    )
+    .unwrap();
+    rt.eval(TICK_ALL).unwrap();
+    assert!(bool_eval(&rt,
+        "ran === false && _lumen_timers.every(function(t) { return !t.idleTimeout; })"));
+}
+
 // ── MessageChannel / MessagePort tests ────────────────────────────────────
 
 #[test]
