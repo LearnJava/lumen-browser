@@ -275,6 +275,9 @@ mod v8_bug1118_srez2_subtree_img_load;
 mod v8_bug552_document_metadata;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1121_document_referrer;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug567_title_text;
 
 #[cfg(feature = "v8-backend")]

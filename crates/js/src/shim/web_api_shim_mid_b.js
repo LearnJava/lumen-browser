@@ -10,6 +10,13 @@ var _lumen_loc_hash  = _lumen_loc_parts.hash;
 // touches it); a real cross-document navigation gets a fresh JS context, so
 // this re-initializes for free rather than needing an explicit reset.
 var _lumen_document_domain = _lumen_loc_parts.hostname;
+// BUG-1121: `document.referrer`'s backing store (HTML LS §3.1.2 "the
+// document's referrer"). The spec value is the referrer of the request that
+// fetched the document; a top-level navigation in Lumen sends no `Referer`
+// (`HttpClient::fetch_page` has no document context — BUG-1156), so the
+// document's referrer is "no referrer" and the getter reports ''. Kept as a
+// variable, not a literal, so the navigation slice seeds it in one place.
+var _lumen_document_referrer = '';
 
 // BUG-765: single source of truth for every `[SecureContext]`-gated surface
 // installed below and by the per-module shims that run after `WEB_API_SHIM`

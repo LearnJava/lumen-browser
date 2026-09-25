@@ -12,14 +12,24 @@
 //! trusted values stringify transparently when assigned. TRUSTEDTYPES-1 срез 1
 //! added the first enforced sink — `setTimeout`/`setInterval` string handlers
 //! under `require-trusted-types-for 'script'` — via
-//! `_lumen_tt_get_compliant_script`. Срез 2 adds the HTML sink group
+//! `_lumen_tt_get_compliant_script`. Срез 2 added the HTML sink group
 //! (`_lumen_tt_get_compliant_html`, TT L2 §4.1.1's "Get Trusted Type
 //! compliant string" run with `expectedType` = `TrustedHTML`): `Element`/
 //! `ShadowRoot` `innerHTML`/`outerHTML` setters, `insertAdjacentHTML`,
-//! `setHTMLUnsafe`, `Document.write`/`writeln`. Script/ScriptURL/attribute
-//! sinks beyond the срез 1 timer pair (`<script src>`, `on*` attributes,
-//! `eval`/`new Function`, `Range.createContextualFragment`, ...) are still
-//! unenforced — see TRUSTEDTYPES-1 in ROADMAP.md for the remaining scope.
+//! `setHTMLUnsafe`, `Document.write`/`writeln`. Срез 3 adds the remaining
+//! table-driven sinks: `Element.setAttribute`/`setAttributeNS` (gated per
+//! attribute through `_lumen_tt_get_compliant_attribute_value`, which reuses
+//! the §4.4 `getAttributeType` sink table — `on*` → TrustedScript, `iframe
+//! srcdoc` → TrustedHTML, `script src` → TrustedScriptURL, everything else
+//! untouched), the matching IDL property pair (`HTMLScriptElement.src` via
+//! the new `_lumen_tt_get_compliant_script_url`, `HTMLIFrameElement.srcdoc`
+//! via `_lumen_tt_get_compliant_html`), and `Range.createContextualFragment`
+//! (an HTML sink). Still unenforced: `eval`/`new Function` compile-time
+//! interception (needs a V8 `ModifyCodeGenerationFromStrings`-style host
+//! hook, not a JS-shim change), and the `<script>` `textContent`/`innerText`/
+//! `.text` "internal slot" sinks (HTML LS's script-specific alternative
+//! source-text mechanism, distinct from the plain attribute/property sinks
+//! above) — see TRUSTEDTYPES-1 in ROADMAP.md for the remaining scope.
 
 #[cfg(feature = "v8-backend")]
 pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
@@ -129,6 +139,45 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
       return String(defaultPolicy.createHTML(stringified, 'TrustedHTML', sink));
     }
     throw new TypeError(sink + " requires a Trusted HTML value, no default policy is set.");
+  };
+
+  // TRUSTEDTYPES-1 срез 3: the ScriptURL subset of the same §4.1.1 algorithm
+  // (TT L2 §4.1.1 "Get Trusted Type compliant string", expectedType =
+  // TrustedScriptURL) — needed by the attribute-sink group below (`script.src`
+  // as an attribute/property) and by any future navigational sink.
+  globalThis._lumen_tt_get_compliant_script_url = function (input, sink) {
+    if (input instanceof TrustedScriptURL && VALUES.has(input)) return VALUES.get(input);
+    var stringified = String(input);
+    if (!REQUIRE_TT_FOR_SCRIPT) return stringified;
+    if (defaultPolicy) {
+      return String(defaultPolicy.createScriptURL(stringified, 'TrustedScriptURL', sink));
+    }
+    throw new TypeError(sink + " requires a Trusted Script URL value, no default policy is set.");
+  };
+
+  // TRUSTEDTYPES-1 срез 3: TT L2 §4.1.1's "attribute type get algorithm" +
+  // "Get Trusted Types compliant attribute value" run together — the entry
+  // point `Element.setAttribute`/`setAttributeNS` call for every attribute
+  // write, HTML/Script/ScriptURL alike. `getAttributeType` (TT §4.4's sink
+  // table above) says which trusted interface (if any) the attribute expects;
+  // an attribute outside that table (the overwhelming majority — `id`,
+  // `class`, `href` on a plain `<a>`, ...) is untouched, matching Phase 0
+  // behaviour. Sink naming mirrors the two spec-table entries this shim
+  // knows by tag+attribute (`HTMLIFrameElement srcdoc`, `HTMLScriptElement
+  // src`); every other TrustedScript sink (the `on*` handler family, per
+  // GlobalEventHandlers) reports as the generic `Element <attrName>`, which
+  // is what the WPT fixtures (`GlobalEventHandlers-onclick.html`,
+  // `get-trusted-types-compliant-attribute-value.html`) assert for `onclick`.
+  globalThis._lumen_tt_get_compliant_attribute_value = function (tagLower, attrLower, value) {
+    var type = factory.getAttributeType(tagLower, attrLower);
+    if (type === null) return String(value);
+    var sink;
+    if (tagLower === 'iframe' && attrLower === 'srcdoc') sink = 'HTMLIFrameElement srcdoc';
+    else if (tagLower === 'script' && attrLower === 'src') sink = 'HTMLScriptElement src';
+    else sink = 'Element ' + attrLower;
+    if (type === 'TrustedHTML') return _lumen_tt_get_compliant_html(value, sink, false);
+    if (type === 'TrustedScript') return _lumen_tt_get_compliant_script(value, sink);
+    return _lumen_tt_get_compliant_script_url(value, sink);
   };
 
   // TrustedTypePolicyFactory (the window.trustedTypes singleton).
