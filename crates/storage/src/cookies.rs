@@ -186,6 +186,28 @@ impl CookieJar {
         Ok(())
     }
 
+    /// Хранится ли под ключом (domain, path, name, top_level_site) cookie с
+    /// флагом `HttpOnly` — проверка RFC 6265 §5.3 шаг 10 для записи из
+    /// скрипта. Ошибка БД трактуется как «нет».
+    pub fn is_http_only(
+        &self,
+        domain: &str,
+        path: &str,
+        name: &str,
+        top_level_site: Option<&str>,
+    ) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        conn.query_row(
+            "SELECT http_only FROM cookies WHERE top_level_site = ?1 AND domain = ?2
+             AND path = ?3 AND name = ?4",
+            params![top_level_site.unwrap_or(""), domain.to_lowercase(), path, name],
+            |row| row.get::<_, i32>(0),
+        )
+        .is_ok_and(|v| v != 0)
+    }
+
     /// Удалить все expired cookies (`expires_at < now`). Session cookies
     /// (`expires_at IS NULL`) не трогаются — для них зачистка отдельная
     /// (например, при закрытии сессии).
@@ -668,6 +690,55 @@ impl CookieProvider for CookieJarProvider {
         is_secure: bool,
         top_level_site: Option<&str>,
     ) {
+        self.store(header, host, request_path, is_secure, top_level_site, false);
+    }
+
+    fn get_for_script(
+        &self,
+        host: &str,
+        path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+    ) -> String {
+        let Ok(cookies) =
+            self.jar.get_for_request(host, path, is_secure, now_unix(), top_level_site)
+        else {
+            return String::new();
+        };
+        // RFC 6265 §5.4 шаг 1: для «non-HTTP» API HttpOnly-cookie исключаются.
+        // SameSite не фильтрует: документ читает cookie своего же сайта.
+        cookies
+            .iter()
+            .filter(|c| !c.http_only)
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    fn set_from_script(
+        &self,
+        cookie: &str,
+        host: &str,
+        path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+    ) {
+        self.store(cookie, host, path, is_secure, top_level_site, true);
+    }
+}
+
+impl CookieJarProvider {
+    /// RFC 6265 §5.3 — общий storage model для `Set-Cookie` и
+    /// `document.cookie`; `from_script` — флаг «non-HTTP API» (шаг 10).
+    fn store(
+        &self,
+        header: &str,
+        host: &str,
+        request_path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+        from_script: bool,
+    ) {
         let now = now_unix();
         // RFC 6265 §5.3 шаг 7: без атрибута `Path` cookie получает
         // default-path запроса (§5.1.4), а не сам путь запроса. Вывод
@@ -683,6 +754,14 @@ impl CookieProvider for CookieJarProvider {
         }
         // RFC 6265 §5.3 step 8: Secure-flagged cookies are only set via secure requests.
         if cookie.secure && !is_secure {
+            return;
+        }
+        // RFC 6265 §5.3 шаг 10: «non-HTTP» API не создаёт HttpOnly-cookie и не
+        // перезаписывает существующую HttpOnly с тем же (domain, path, name).
+        if from_script
+            && (cookie.http_only
+                || self.jar.is_http_only(&cookie.domain, &cookie.path, &cookie.name, top_level_site))
+        {
             return;
         }
         let _ = self.jar.set(cookie, top_level_site);

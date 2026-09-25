@@ -70,6 +70,6 @@ HTML LS §3.1.2 «The document's referrer»: геттер возвращает U
 | Сайт | Следующая ошибка | Заявка |
 |---|---|---|
 | imgur (106 узлов, Chrome 1231) | `transformPose`: `getComputedStyle().transform` не `matrix(…)` → `null[1]` | [BUG-1157](BUG-1157-OPEN.md) |
-| fandom (3473 / 3448) | `JSON.parse(cookie Geo)` → `"undefined" is not valid JSON` | [BUG-1119](BUG-1119-OPEN.md) |
+| fandom (3473 / 3448) | `JSON.parse(cookie Geo)` → `"undefined" is not valid JSON` | [BUG-1119](BUG-1119-FIXED.md) |
 | yahoo | `SyntaxError: Unexpected token ':'` в скрипте, вставленном `appendChild` | [BUG-1158](BUG-1158-OPEN.md) |
 | yahoo.co.jp | `eval` пробы через 8 с: `JS context not available` | [BUG-1145](BUG-1145-OPEN.md) |

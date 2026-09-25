@@ -2213,6 +2213,9 @@ pub(crate) fn spawn_frame(
         // hook yet — see `ImageLoadHook`'s doc comment for scope; sub-
         // documents keep relying on the post-relayout sweep only.
         None,
+        // BUG-1119: the frame's `document.cookie` uses the jar its requests
+        // go through; an opaque origin has no cookies (HTML LS §3.1.3).
+        env.cookie_jar.clone().filter(|_| !opaque),
     );
     // PERF-14: same headless settle the page gets after its own scripts.
     crate::page_pipeline::settle_headless_fetches(child_js.as_ref());

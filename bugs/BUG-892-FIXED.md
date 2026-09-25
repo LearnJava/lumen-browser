@@ -97,5 +97,5 @@ getElementsByTagName = 1       children = 6        form-elements = 1
 - **imdb** — `[unhandled-rejection] TypeError … 'length'` исчез, челлендж AWS WAF проходит
   `inputs` → `verify` (200) в каждом раунде, но всё ещё упирается в «Max challenge attempts
   exceeded»: `aws-waf-token` кладётся через `document.cookie`, а тот не сохраняет ни одну запись
-  (даже `'t1=a'`) — это [BUG-1119](BUG-1119-OPEN.md). espn/amazon — тот же челлендж, та же
+  (даже `'t1=a'`) — это [BUG-1119](BUG-1119-FIXED.md). espn/amazon — тот же челлендж, та же
   следующая стена.

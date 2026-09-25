@@ -382,6 +382,40 @@ pub trait CookieProvider: Send + Sync {
         is_secure: bool,
         top_level_site: Option<&str>,
     );
+
+    /// `document.cookie` getter (HTML LS §3.1.3, RFC 6265 §5.4 over a
+    /// "non-HTTP" API): the same `name=value; …` list as [`Self::get_for_request`]
+    /// for the document URL, minus every `HttpOnly` cookie.
+    ///
+    /// The default is the empty list: an implementor that cannot tell
+    /// `HttpOnly` apart must not leak those cookies to script.
+    fn get_for_script(
+        &self,
+        _host: &str,
+        _path: &str,
+        _is_secure: bool,
+        _top_level_site: Option<&str>,
+    ) -> String {
+        String::new()
+    }
+
+    /// `document.cookie` setter: one `Set-Cookie`-syntax string through the
+    /// RFC 6265 §5.3 storage model with the "non-HTTP" API flag — a string
+    /// carrying `HttpOnly` is ignored, and so is one that would overwrite an
+    /// existing `HttpOnly` cookie. `path` is the document URL path; the
+    /// default-path is derived from it exactly as in
+    /// [`Self::process_set_cookie`].
+    ///
+    /// The default ignores the write (see [`Self::get_for_script`]).
+    fn set_from_script(
+        &self,
+        _cookie: &str,
+        _host: &str,
+        _path: &str,
+        _is_secure: bool,
+        _top_level_site: Option<&str>,
+    ) {
+    }
 }
 
 /// Определение кодировки HTML-документа. Для кириллицы критично уметь

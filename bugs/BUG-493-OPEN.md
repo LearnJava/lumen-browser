@@ -422,6 +422,10 @@ bug's "no synchronous flush" gap is live on `--bidi-port`, not just the
 - **twitch** — React Router ловит ошибку при рендере → пустое приложение;
 - **quora** — `https://git.io/JUIaE#17`;
 - **bbc** — за ней `A client-side exception has occurred` (Next.js), гидрация падает.
+- **imdb** (2026-09-25, P6, после [BUG-1119](BUG-1119-FIXED.md)) — челлендж AWS WAF пройден, главная
+  грузится (`200`), и первой ошибкой становится та же #17, за ней `client-side exception` (Next.js):
+  13 узлов против 5298. Проба: новый `<style data-styled>` → `appendChild` → `.sheet === null`,
+  `document.styleSheets.length` 1 против 6 у Chrome.
 
 Репро (`.tmp/compat/g2/scsheet.html`, `sheetlater.html`, `.tmp/compat/g5/styled.html`): Lumen —
 `.sheet === null` синхронно и в микротаске, объект только после `setTimeout(0)`/релэйаута,

@@ -97,6 +97,7 @@ pub(crate) fn restore_js_context(
     let ss_store = crate::ss_store_for_base(&base, ss_storage);
     let idb = crate::idb_store_for_base(&base, idb_dir);
     let sw = crate::sw_store_for_base(&base, sw_backend);
+    let js_cookie_jar = cookie_jar.clone();
     let (fetch_provider, ws_provider, sse_provider) = match &base {
         ResourceBase::Url(_) => {
             // GAP-REFERRER срез 3: same reasoning as `page_pipeline.rs`'s
@@ -154,6 +155,8 @@ pub(crate) fn restore_js_context(
         // BUG-1118: restore path not wired to the immediate-`<img src>` hook
         // either — same scope note as the iframe call site in `frames.rs`.
         None,
+        // BUG-1119: the restored page's `document.cookie` sees the tab's jar.
+        js_cookie_jar,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

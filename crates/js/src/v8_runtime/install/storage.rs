@@ -390,24 +390,36 @@ pub(crate) fn install_cookie(
     cookie_jar: Option<Arc<dyn lumen_core::ext::CookieProvider>>,
 ) -> JsResult<()> {
     // ── document.cookie (RFC 6265 §5.3-5.4) ─────────────────────────────────
-    // The getter/setter wrap CookieProvider using host/scheme derived from
-    // page_url parsed once at install time. Best-effort: if the URL cannot be
-    // parsed (e.g. file://) we skip cookie injection silently.
+    // The getter/setter wrap CookieProvider using host/scheme/path derived from
+    // page_url parsed once at install time. A URL without a host (file://,
+    // data:, about:blank) is a "cookie-averse" document (HTML LS §3.1.3):
+    // reads give "" and writes are dropped.
     {
         let parsed = Url::parse(&page_url).ok();
-        let host = parsed.as_ref().map(|u| u.host().to_ascii_lowercase()).unwrap_or_default();
-        let is_secure = parsed.as_ref().map(|u| u.scheme() == "https").unwrap_or(false);
+        let host = parsed
+            .as_ref()
+            .map(|u| u.host_ascii_normalized().to_ascii_lowercase())
+            .unwrap_or_default();
+        let is_secure = parsed.as_ref().is_some_and(|u| u.scheme() == "https");
+        // RFC 6265 §5.4 path-match and the §5.1.4 default-path of a write both
+        // use the document's path, not `/` — a `Path=/app` cookie is invisible
+        // to `/other/page`, and `a=1` written on `/app/page` lands on `/app`.
+        let path = parsed.as_ref().map(|u| u.path().to_owned()).unwrap_or_else(|| "/".into());
+        let cookie_averse = host.is_empty()
+            || !parsed.as_ref().is_some_and(|u| matches!(u.scheme(), "http" | "https"));
 
-        if let Some(jar) = cookie_jar {
+        if let Some(jar) = cookie_jar.filter(|_| !cookie_averse) {
+            // `top_level_site = None`: the page's `HttpClient` is attached to
+            // the same jar with `None` too, so script and network share one
+            // partition.
             let jar_get = Arc::clone(&jar);
-            let host_get = host.clone();
+            let (host_get, path_get) = (host.clone(), path.clone());
             reg!(scope, ctx, store, "_lumen_cookie_get", move || -> String {
-                jar_get.get_for_request(&host_get, "/", is_secure, None, false)
+                jar_get.get_for_script(&host_get, &path_get, is_secure, None)
             });
 
-            let host_set = host;
             reg!(scope, ctx, store, "_lumen_cookie_set", move |cookie_str: String| {
-                jar.process_set_cookie(&cookie_str, &host_set, "/", is_secure, None);
+                jar.set_from_script(&cookie_str, &host, &path, is_secure, None);
             });
         } else {
             reg!(scope, ctx, store, "_lumen_cookie_get", move || -> String { String::new() });

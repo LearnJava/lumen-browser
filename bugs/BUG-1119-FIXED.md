@@ -1,6 +1,6 @@
 # BUG-1119 — `document.cookie` молча не сохраняет запись: в V8-рантайм передаётся `cookie_jar = None`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/v8_runtime.rs:156` — `let cookie_jar = None`, дальше `install_cookie` ставит заглушки `_lumen_cookie_get → ""`/`_lumen_cookie_set → {}`)
 
@@ -73,3 +73,50 @@ fandom больше не падает, и первой ошибкой верхн
 `document.cookie` на fandom — 9 записей, `Geo={"region":"01","city":"tallinn",…,"country":"EE"}`;
 в Lumen — одна пустая запись, `Geo` нет. Cookie ставит сервер или скрипт — в любом случае
 `document.cookie` её не видит; это тот же дефект, отдельной заявки не заводится.
+
+## Исправление (2026-09-25, P6)
+
+**Причина.** `V8JsRuntime::install_dom` жёстко ставил `cookie_jar = None` («не часть сигнатуры
+S3»), и никто из шелла банку в рантайм не передавал, хотя та же `CookieJar` вкладки уже уходила
+в `HttpClient` страницы. Второй слой: даже с банкой `install_cookie` читал и писал по пути `/`
+вместо пути документа и через сетевые методы — `HttpOnly` было бы видно скрипту.
+
+**Что сделано.**
+
+1. `lumen_core::ext::CookieProvider` получил пару «non-HTTP API» — `get_for_script` /
+   `set_from_script` (по умолчанию пусто/игнор, чтобы реализация, не различающая `HttpOnly`,
+   не отдала его скрипту). `CookieJarProvider` (`crates/storage/src/cookies.rs`) реализует их
+   поверх общего storage model: чтение без `HttpOnly` (RFC 6265 §5.4 шаг 1), запись отбрасывает
+   строку с `HttpOnly` и не перезаписывает существующую `HttpOnly`-cookie (§5.3 шаг 10,
+   `CookieJar::is_http_only`). `Set-Cookie` и `document.cookie` идут через один `store`.
+2. `V8JsRuntime::with_cookie_jar` — банка вкладки ставится до `install_dom`, как
+   `with_session_storage` (BUG-836). `install_cookie` берёт хост через
+   `host_ascii_normalized`, путь документа для path-match и default-path записи, а документ без
+   сетевого хоста (`about:`, `data:`, `file:`) считает cookie-averse (HTML LS §3.1.3).
+3. Шелл передаёт банку во все пути, где рождается рантайм документа: `run_scripts_with_dom`
+   (новый параметр; `page_pipeline` — `cookie_jar` страницы, фрейм — `env.cookie_jar`, кроме
+   opaque origin, гибернация — банка восстановления) и разморозка из bfcache
+   (`active_cookie_jar()`). Headless `--dump`/PDF, как и раньше, без банки.
+
+Разбиение (`top_level_site`) у скрипта `None` — ровно то же, что у `HttpClient` страницы
+(`with_cookie_jar(…, None)`), поэтому скрипт и сеть видят одну и ту же партицию.
+
+**Проверка.**
+
+- `cargo test -p lumen-js --features v8-backend --lib -- v8_bug1119` — 6 тестов
+  (`crates/js/src/dom/tests/v8_bug1119_document_cookie.rs`): семь форм репро хранятся, `SameSite=None`
+  без `Secure` — нет; cookie из скрипта уходит в `Cookie` следующего запроса, `Set-Cookie` читается
+  скриптом; `HttpOnly` не видна и не перезаписывается; путь документа ограничивает чтение и задаёт
+  default-path; `Secure` с `http:` отбрасывается; cookie-averse документы и рантайм без банки — пусто.
+- Живое окно `--maximized`, без блокировщика, `probe.py both`, Chrome 153 — одинаково:
+  - `g3/cookie.html` (сервер `127.0.0.1` с `/echo`, отдающим заголовок `Cookie`): Lumen
+    `all` = те же 7 cookie, что в Chrome; в `Cookie` синхронного XHR — `c_path`, `c_nosp`, `CkTst`
+    (у остальных default-path `/g3`), как у Chrome;
+  - страница с `Set-Cookie: srv=hdr` и `srv_ho=secret; HttpOnly`, скрипт пишет `srv_ho=overwrite`:
+    оба браузера — `document.cookie = 'srv=hdr'`, в заголовке `srv=hdr; srv_ho=secret`.
+- Реальные сайты (те же пробы):
+  - login.microsoftonline.com — 138 узлов против 136 у Chrome (до правки 31 против 99), форма входа;
+  - fandom — `Geo` есть, 9 cookie в обоих, 3456 / 3448 узлов, ошибок JS нет;
+  - imdb — челлендж AWS WAF пройден: `202` → `inputs` → `verify` → повторный `GET /` = `200`.
+    Страница дальше падает на styled-components #17 (`HTMLStyleElement.sheet === null` сразу после
+    `appendChild`) — это остаток [BUG-493](BUG-493-OPEN.md), записан туда.
