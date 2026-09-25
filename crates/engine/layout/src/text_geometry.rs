@@ -5,7 +5,8 @@
 //! is painted under a viewport point, then ask whether a highlight's range
 //! covers that character. [`crate::collect_client_rects`] only answers per
 //! *element*; this module keeps the same `InlineRun` line walk but records
-//! each `InlineFrag` against its source text node together with the
+//! each `InlineFrag` (split per [`frag_source_spans`] where one fragment
+//! merged several text nodes) against its source text node together with the
 //! UTF-16 offset span (DOM offsets are UTF-16 code units) it came from.
 //!
 //! Character boxes inside one fragment are split in proportion to their
@@ -17,7 +18,60 @@
 
 use std::collections::HashMap;
 
-use crate::{BoxKind, LayoutBox};
+use lumen_dom::NodeId;
+
+use crate::{BoxKind, InlineFrag, LayoutBox};
+
+/// The part of one [`InlineFrag`] that came from a single DOM text node.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FragSpan<'a> {
+    /// The DOM text node these glyphs came from.
+    pub source_node: NodeId,
+    /// UTF-8 byte offset of `text[0]` within that node's content.
+    pub source_char_offset: u32,
+    /// This span's slice of `InlineFrag::text`, without the collapsed
+    /// inter-node space that separates it from the next span.
+    pub text: &'a str,
+    /// Start x, relative to the fragment's own `x`.
+    pub x: f32,
+    /// Width of this span's glyphs.
+    pub width: f32,
+}
+
+/// Split `frag` into one [`FragSpan`] per DOM text node — a single span for
+/// an ordinary fragment, several for one `wrap_inline_run` merged across
+/// same-style text nodes ([`InlineFrag::merged_sources`]).
+pub fn frag_source_spans(frag: &InlineFrag) -> Vec<FragSpan<'_>> {
+    let len = frag.text.len();
+    let byte = |b: u32| {
+        let mut b = (b as usize).min(len);
+        while !frag.text.is_char_boundary(b) {
+            b -= 1;
+        }
+        b
+    };
+    let mut out = Vec::with_capacity(1 + frag.merged_sources.len());
+    let (mut node, mut off, mut start, mut x) = (frag.source_node, frag.source_char_offset, 0usize, 0.0f32);
+    for m in &frag.merged_sources {
+        let end = byte(m.text_byte).max(start);
+        out.push(FragSpan {
+            source_node: node,
+            source_char_offset: off,
+            text: frag.text[start..end].trim_end_matches(' '),
+            x,
+            width: (m.prev_end_x - x).max(0.0),
+        });
+        (node, off, start, x) = (m.source_node, m.source_char_offset, end, m.x);
+    }
+    out.push(FragSpan {
+        source_node: node,
+        source_char_offset: off,
+        text: &frag.text[start..],
+        x,
+        width: (frag.width - x).max(0.0),
+    });
+    out
+}
 
 /// One laid-out fragment of a DOM text node, in viewport-relative CSS px.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,21 +102,23 @@ pub fn collect_text_frag_rects(
                     if frag.text.is_empty() || frag.img_src.is_some() {
                         continue;
                     }
-                    let lumen_dom::NodeData::Text(source) = &doc.get(frag.source_node).data else {
-                        continue;
-                    };
-                    let byte_start = frag.source_char_offset as usize;
-                    let byte_end = byte_start.saturating_add(frag.text.len());
-                    let start = utf16_offset_of_byte(source, byte_start);
-                    let end = utf16_offset_of_byte(source, byte_end);
-                    if end <= start {
-                        continue;
+                    for span in frag_source_spans(frag) {
+                        let lumen_dom::NodeData::Text(source) = &doc.get(span.source_node).data else {
+                            continue;
+                        };
+                        let byte_start = span.source_char_offset as usize;
+                        let byte_end = byte_start.saturating_add(span.text.len());
+                        let start = utf16_offset_of_byte(source, byte_start);
+                        let end = utf16_offset_of_byte(source, byte_end);
+                        if end <= start {
+                            continue;
+                        }
+                        out.entry(span.source_node.index() as u32).or_default().push(TextFragRect {
+                            rect: [b.rect.x + frag.x + span.x, line_y, span.width, line_h],
+                            start,
+                            end,
+                        });
                     }
-                    out.entry(frag.source_node.index() as u32).or_default().push(TextFragRect {
-                        rect: [b.rect.x + frag.x, line_y, frag.width, line_h],
-                        start,
-                        end,
-                    });
                 }
             }
         }

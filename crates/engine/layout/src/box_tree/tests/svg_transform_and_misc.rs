@@ -712,6 +712,7 @@ fn make_frag(x: f32, width: f32) -> super::super::InlineFrag {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        merged_sources: Vec::new(),
     }
 }
 

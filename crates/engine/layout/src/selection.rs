@@ -265,6 +265,7 @@ mod tests {
             source_node,
             source_char_offset,
             bidi_level: 0,
+            merged_sources: Vec::new(),
         }
     }
 

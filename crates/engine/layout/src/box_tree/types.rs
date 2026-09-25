@@ -269,6 +269,31 @@ pub struct InlineFrag {
     /// paint feeds it to [`crate::bidi::visual_text`], which is what turns an
     /// odd level into right-to-left glyph order.
     pub bidi_level: u8,
+    /// Later DOM text nodes whose words `wrap_inline_run` merged into this
+    /// fragment, in text order (GAP-HLHITTEST). Paint wants one `DrawText`
+    /// per same-style run, geometry wants one owner per character:
+    /// `source_node`/`source_char_offset` describe `text[..]` up to the first
+    /// entry here, each entry the rest up to the next one. Empty for the
+    /// common single-source fragment. Read through
+    /// [`crate::text_geometry::frag_source_spans`].
+    pub merged_sources: Vec<MergedSource>,
+}
+
+/// Where a later DOM text node's words start inside a merged [`InlineFrag`]
+/// (see [`InlineFrag::merged_sources`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergedSource {
+    /// Byte offset in [`InlineFrag::text`] of this node's first word.
+    pub text_byte: u32,
+    /// x of that word, relative to the fragment's own `x`.
+    pub x: f32,
+    /// Where the previous node's glyphs end (relative x) — before the
+    /// collapsed inter-node space, when there is one.
+    pub prev_end_x: f32,
+    /// The DOM text node the words come from.
+    pub source_node: NodeId,
+    /// UTF-8 byte offset of the first word within that node's content.
+    pub source_char_offset: u32,
 }
 
 /// LIB-9 — resolved `<mask>` element content, attached to a masked

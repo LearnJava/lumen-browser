@@ -254,6 +254,34 @@ use super::*;
         assert_eq!(list[0], union_rects[&a_nid], "must agree with getBoundingClientRect's rect");
     }
 
+    /// GAP-HLHITTEST: `wrap_inline_run` merges same-style words of adjacent
+    /// text nodes into one `InlineFrag` (one `DrawText` for paint). Each
+    /// inline element must still get its own, non-overlapping rect from the
+    /// merge boundary `merged_sources` records — the second `<span>` used to
+    /// get none at all, and the first the width of both.
+    #[test]
+    fn merged_fragment_still_gives_each_inline_sibling_its_own_rect() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><p><span id=a>foo</span> <span id=b>bar</span><span id=c>baz</span></p></body></html>",
+            "body{margin:0}",
+        );
+        let nid = |sel: &str| find_first_dom_node_by_selector(&doc, sel).expect(sel).index() as u32;
+        let rects = collect_layout_rects(&root, &doc);
+        let client = collect_client_rects(&root, &doc);
+        let (a, b, c) = (rects[&nid("#a")], rects[&nid("#b")], rects[&nid("#c")]);
+        for r in [a, b, c] {
+            assert!(r[2] > 0.0, "every span must have a nonzero width: {a:?} {b:?} {c:?}");
+        }
+        assert!(a[0] + a[2] < b[0], "collapsed space separates #a and #b: {a:?} {b:?}");
+        assert!((b[0] + b[2] - c[0]).abs() < 0.01, "#b and #c abut: {b:?} {c:?}");
+        assert_eq!(client[&nid("#b")], vec![b], "getClientRects agrees with the bounding rect");
+
+        let texts = crate::collect_text_frag_rects(&root, &doc);
+        let tb = &texts[&(doc.get(lumen_dom::NodeId::from_raw(nid("#b"))).children[0].index() as u32)];
+        assert_eq!((tb.len(), tb[0].start, tb[0].end), (1, 0, 3), "{tb:?}");
+        assert!((tb[0].rect[0] - b[0]).abs() < 0.01, "{tb:?} vs {b:?}");
+    }
+
     /// BUG-1007: a plain inline element (`<span>`, `<em>`, …) that owns no
     /// `LayoutBox` of its own (BUG-488) and wraps onto more than one visual
     /// line must get one rect per line from `collect_client_rects` — unlike
