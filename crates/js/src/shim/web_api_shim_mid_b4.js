@@ -1049,8 +1049,11 @@ IntersectionObserver.prototype.observe = function(target) {
         // queues nothing either.
         if (this._observations[i].target === target) return;
     }
-    // lastRatio = -1 means «never delivered» → first delivery always fires
-    this._observations.push({ target: target, lastRatio: -1 });
+    // §3.2.2 IntersectionObserverRegistration: previousThresholdIndex = -1
+    // means «never delivered», so the first update always queues an entry.
+    // lastRatio mirrors it (-1 until then) for _io_has_pending_initial.
+    this._observations.push({ target: target, lastRatio: -1,
+                              lastIndex: -1, lastIntersecting: false });
     // disconnect() unregisters the observer; observing again re-arms it.
     if (_io_observers.indexOf(this) < 0) _io_observers.push(this);
     _io_initial_attempts = 0;
@@ -1131,68 +1134,231 @@ function _io_resolve_margin(str, w, h) {
     return out;
 }
 
+// ── Intersection geometry (§2.2 root intersection rectangle, §3.2.7) ────────
+// Rects below are [left, top, right, bottom] in the coordinate space
+// `_lumen_get_bounding_rect` answers in (BUG-627).
+
+// Expand a rect outward by a serialized margin ("T R B L", px or %); a
+// negative component shrinks it. Percentages resolve against the undilated
+// rect: height for top/bottom, width for left/right — what the WPT
+// `root-margin-root-element.html` expectations encode.
+function _io_expand(r, marginStr) {
+    var m = _io_resolve_margin(marginStr, r[2] - r[0], r[3] - r[1]);
+    return [r[0] - m[3], r[1] - m[0], r[2] + m[1], r[3] + m[2]];
+}
+
+// Edge-inclusive intersection (§3.2.10 step «isIntersecting»: touching rects
+// still intersect, with zero area). null when the rects are disjoint.
+function _io_intersect(a, b) {
+    var l = Math.max(a[0], b[0]), t = Math.max(a[1], b[1]);
+    var r = Math.min(a[2], b[2]), btm = Math.min(a[3], b[3]);
+    if (r < l || btm < t) return null;
+    return [l, t, r, btm];
+}
+
+function _io_dom_rect(r) {
+    var x = r ? r[0] : 0, y = r ? r[1] : 0;
+    var w = r ? r[2] - r[0] : 0, h = r ? r[3] - r[1] : 0;
+    return { x: x, y: y, width: w, height: h,
+             top: y, left: x, bottom: y + h, right: x + w };
+}
+
+// §2.2 «content clip»: overflow clips the element's content to its padding
+// edge. Every such element (overflow scroll/auto/hidden/clip) is exactly the
+// set `_lumen_get_scroll_state` has an entry for (BUG-504 part 7), so this
+// needs no computed-style read. <html>/<body> are left out: their overflow
+// propagates to the viewport, and the viewport is already the implicit root.
+function _io_has_content_clip(nid) {
+    if (nid === _io_html_nid || nid === _io_body_nid) return false;
+    return !!_lumen_get_scroll_state(nid);
+}
+
+function _io_px(nid, prop) {
+    var v = parseFloat(_lumen_get_computed_style(nid, prop));
+    return isFinite(v) ? v : 0;
+}
+
+// Padding box of an element with a content clip: its border box minus the
+// border widths. null when the element has no box.
+function _io_padding_box(nid) {
+    var r = _lumen_get_bounding_rect(nid);
+    if (!r) return null;
+    return [r[0] + _io_px(nid, 'border-left-width'), r[1] + _io_px(nid, 'border-top-width'),
+            r[0] + r[2] - _io_px(nid, 'border-right-width'),
+            r[1] + r[3] - _io_px(nid, 'border-bottom-width')];
+}
+
+// The clip a content-clipping ancestor applies, grown by scrollMargin. An
+// axis whose overflow stays `visible` (only possible opposite `clip`, CSS
+// Overflow 3 §3.1) does not clip, so it is left unbounded.
+function _io_clip_rect(nid, scrollMargin) {
+    var pb = _io_padding_box(nid);
+    if (!pb) return null;
+    var r = _io_expand(pb, scrollMargin);
+    if (_lumen_get_computed_style(nid, 'overflow-x') === 'visible') {
+        r[0] = -Infinity; r[2] = Infinity;
+    }
+    if (_lumen_get_computed_style(nid, 'overflow-y') === 'visible') {
+        r[1] = -Infinity; r[3] = Infinity;
+    }
+    return r;
+}
+
+function _io_position(nid) {
+    var p = _lumen_get_computed_style(nid, 'position');
+    return p || 'static';
+}
+
+// The target's containing-block chain (CSS 2 §10.1), nearest first, as a
+// list of element nids — the path §3.2.7 walks from target up to the root.
+// An absolutely positioned box skips to its nearest positioned ancestor, a
+// fixed one leaves the document entirely (its containing block is the
+// viewport). Transforms/containment establishing a containing block for
+// positioned descendants are not modelled.
+//
+// Reading `position` flags the computed-style cache as needed for the rest
+// of the page's life (BUG-935 S44), so an implicit-root observer whose target
+// sits under no clipping ancestor — the lazy-load/analytics common case —
+// takes the plain DOM parent chain and never touches computed styles.
+function _io_cb_chain(nid, needPositions) {
+    var parents = [];
+    var p = _lumen_u2n(_lumen_get_parent(nid));
+    while (p !== null && p !== undefined) {
+        parents.push(p);
+        p = _lumen_u2n(_lumen_get_parent(p));
+    }
+    if (!needPositions) {
+        var anyClip = false;
+        for (var i = 0; i < parents.length; i++) {
+            if (_io_has_content_clip(parents[i])) { anyClip = true; break; }
+        }
+        if (!anyClip) return parents;
+    }
+    var chain = [];
+    var mode = _io_position(nid);
+    for (var j = 0; j < parents.length; j++) {
+        if (mode === 'fixed') break;
+        var a = parents[j];
+        var pos = _io_position(a);
+        if (mode === 'absolute' && pos === 'static') continue;
+        chain.push(a);
+        mode = pos;
+    }
+    return chain;
+}
+
+var _io_html_nid = null, _io_body_nid = null;
+
+// Per-observer part of one update pass: the intersection root and its root
+// intersection rectangle (§2.2). `rect` is null when the root has no box.
+function _io_root_info(obs, vpW, vpH) {
+    var root = obs._root;
+    if (root == null || root === document) {
+        // Implicit root, or the top-level document: the viewport.
+        return { kind: 'document', bid: undefined, nid: null,
+                 rect: _io_expand([0, 0, vpW, vpH], obs._rootMargin) };
+    }
+    if (root.nodeType !== 1) {
+        // Another Document — a detached one (createHTMLDocument) or a
+        // sub-frame's contentDocument facade. Neither has geometry here.
+        return { kind: 'other-document', bid: root.__bid__, nid: null, rect: null };
+    }
+    if (root.__bid__ !== undefined) {
+        // An element of a sub-frame: frame_bridge.rs reports no geometry.
+        return { kind: 'element', bid: root.__bid__, nid: root.__nid__, rect: null };
+    }
+    var nid = root.__nid__;
+    var clip = _io_has_content_clip(nid);
+    var r = clip ? _io_padding_box(nid) : null;
+    if (!clip) {
+        var br = _lumen_get_bounding_rect(nid);
+        r = br ? [br[0], br[1], br[0] + br[2], br[1] + br[3]] : null;
+    }
+    // Both rootMargin and scrollMargin apply to a scrollable root.
+    if (r) r = _io_expand(r, obs._rootMargin);
+    if (r && clip) r = _io_expand(r, obs._scrollMargin);
+    return { kind: 'element', bid: undefined, nid: nid, rect: r };
+}
+
+// §3.2.10 steps 5–9 for one target: its bounding box, the intersection
+// rectangle after every clip on the way to the root (§3.2.7), and whether the
+// two intersect at all.
+function _io_compute(obs, info, target) {
+    var res = { target: null, inter: null, rootBounds: info.rect, hit: false };
+    // Step 6: an explicit root in another document never intersects. A
+    // sub-frame target has no geometry in this realm either way.
+    var sameDoc = info.kind === 'document'
+        ? target.__bid__ === undefined
+        : info.bid === target.__bid__ && info.kind === 'element';
+    if (!sameDoc) {
+        res.rootBounds = null;
+        return res;
+    }
+    if (target.__bid__ !== undefined) return res;
+    var nid = target.__nid__;
+    var br = _lumen_get_bounding_rect(nid);
+    if (!br) return res;
+    res.target = [br[0], br[1], br[0] + br[2], br[1] + br[3]];
+    if (!info.rect) return res;
+    var chain = _io_cb_chain(nid, info.kind === 'element');
+    var ir = res.target;
+    var reached = info.kind === 'document';
+    for (var i = 0; i < chain.length && ir; i++) {
+        var a = chain[i];
+        if (a === info.nid) { reached = true; break; }
+        if (!_io_has_content_clip(a)) continue;
+        // A scroll container on the way clips the target by its padding box,
+        // grown by [[scrollMargin]] («apply scroll margin to a scrollport»).
+        var clipRect = _io_clip_rect(a, obs._scrollMargin);
+        ir = clipRect ? _io_intersect(ir, clipRect) : null;
+    }
+    // Step 7: an Element root must be on the target's containing-block chain.
+    if (!reached) return res;
+    if (ir) ir = _io_intersect(ir, info.rect);
+    res.inter = ir;
+    res.hit = !!ir;
+    return res;
+}
+
 function _lumen_deliver_intersection_observers() {
     if (_io_observers.length === 0) return;
     var vp = _lumen_get_viewport_size();
     var vpW = vp[0], vpH = vp[1];
+    var de = document.documentElement, body = document.body;
+    _io_html_nid = de ? de.__nid__ : null;
+    _io_body_nid = body ? body.__nid__ : null;
     for (var oi = 0; oi < _io_observers.length; oi++) {
         var obs = _io_observers[oi];
-        // Apply rootMargin to expand/contract the intersection root (viewport).
-        // Positive margin expands outward; negative contracts inward.
-        // Percentages resolve against the root's height (top/bottom) and
-        // width (left/right), §2.2 "rootMargin".
-        var rm = _io_resolve_margin(obs._rootMargin, vpW, vpH);
-        var rootTop = -rm[0], rootLeft = -rm[3];
-        var rootRight = vpW + rm[1], rootBottom = vpH + rm[2];
+        var info = _io_root_info(obs, vpW, vpH);
         var thresholds = obs._thresholds;
         var entries = obs._queuedEntries;
         for (var ei = 0; ei < obs._observations.length; ei++) {
             var o = obs._observations[ei];
-            var nid = o.target.__nid__;
-            var rect = _lumen_get_bounding_rect(nid);
-            // A target with no box (display:none, detached) still owes its
-            // first notification: §3.2.1 reports such a target as an empty box
-            // with isIntersecting false rather than as «no observation», and
-            // §3.2 makes that notification unconditional. Skipping it here left
-            // an observe-and-wait on such a target hanging forever even with
-            // the pass now queued (BUG-807). A target that had a box and lost
-            // one keeps the old skip — reporting *that* transition is the
-            // delivery-content gap of BUG-626/627/628, not this bug.
-            if (!rect && o.lastRatio >= 0) continue;
-            var ex = rect ? rect[0] : 0, ey = rect ? rect[1] : 0;
-            var ew = rect ? rect[2] : 0, eh = rect ? rect[3] : 0;
-            var ix = Math.max(ex, rootLeft);
-            var iy = Math.max(ey, rootTop);
-            var iw = Math.max(0, Math.min(ex + ew, rootRight) - ix);
-            var ih = Math.max(0, Math.min(ey + eh, rootBottom) - iy);
-            var area = ew * eh;
-            var ratio = area > 0 ? (iw * ih) / area : 0;
-            var prev = o.lastRatio;
-            var crossed = prev < 0; // first observation
-            if (!crossed) {
-                for (var ti = 0; ti < thresholds.length; ti++) {
-                    var thr = thresholds[ti];
-                    if ((prev < thr) !== (ratio < thr) ||
-                        (prev === 0 && ratio > 0) || (prev > 0 && ratio === 0)) {
-                        crossed = true;
-                        break;
-                    }
-                }
-            }
-            if (!crossed) continue;
+            // A target with no box (display:none, detached) is reported as an
+            // empty box with isIntersecting false — for its first notification
+            // (BUG-807) and, per §3.2.10, when a box it had goes away.
+            var c = _io_compute(obs, info, o.target);
+            var t = c.target, it = c.inter;
+            var area = t ? (t[2] - t[0]) * (t[3] - t[1]) : 0;
+            var iarea = it ? (it[2] - it[0]) * (it[3] - it[1]) : 0;
+            // Step 10: a zero-area target that touches the root counts as
+            // fully visible.
+            var ratio = area > 0 ? iarea / area : (c.hit ? 1 : 0);
+            // Step 11: index of the first threshold above the ratio.
+            var idx = 0;
+            while (idx < thresholds.length && thresholds[idx] <= ratio) idx++;
+            var changed = idx !== o.lastIndex || c.hit !== o.lastIntersecting;
+            o.lastIndex = idx;
+            o.lastIntersecting = c.hit;
             o.lastRatio = ratio;
+            if (!changed) continue;
             entries.push({
                 target: o.target,
-                isIntersecting: ratio > 0,
+                isIntersecting: c.hit,
                 intersectionRatio: ratio,
-                boundingClientRect: { x: ex, y: ey, width: ew, height: eh,
-                                      top: ey, left: ex, bottom: ey+eh, right: ex+ew },
-                intersectionRect:   { x: ix, y: iy, width: iw, height: ih,
-                                      top: iy, left: ix, bottom: iy+ih, right: ix+iw },
-                rootBounds: { x: rootLeft, y: rootTop,
-                              width: rootRight - rootLeft, height: rootBottom - rootTop,
-                              top: rootTop, left: rootLeft,
-                              bottom: rootBottom, right: rootRight },
+                boundingClientRect: _io_dom_rect(t),
+                intersectionRect: _io_dom_rect(it),
+                rootBounds: _io_dom_rect(c.rootBounds),
                 time: typeof performance !== 'undefined' ? performance.now() : 0,
             });
         }
