@@ -1,6 +1,6 @@
 # BUG-642: `new Notification()` never fires `error` when permission is not `"granted"`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/notifications_bindings.rs`, `NOTIFICATIONS_SHIM`)
 **Найден:** P2, WPT-VENDOR-notifications, 2026-08-05
 
@@ -88,3 +88,32 @@ Fix scope: в `else`-ветке (или явном `if (_permission !== 'granted
 симметрично существующей `granted`-ветке. Не требует изменения
 `_permission`-модели или native-биндингов; вне скоупа этой
 WPT-VENDOR-задачи (только вендоринг + прогон).
+
+## Исправление (P3, 2026-09-25)
+
+Конструктор в `NOTIFICATIONS_SHIM` получил ветку для не-`granted`
+разрешения (`denied`, `default`, несекьюрный контекст): на созданном
+объекте ставится отложенный `_fire('error')` — симметрично `show` в
+`granted`-ветке, через тот же `queueMicrotask`. Отложенность существенна:
+страница (и WPT) назначает `onerror` уже *после* `new`, синхронный
+диспатч никто бы не услышал. Уведомление в этой ветке, как и раньше, не
+показывается и в очередь ОС не попадает.
+
+Проверка:
+
+- регресс-тесты `onerror_fired_when_not_granted` (обработчик и слушатель
+  `addEventListener` получают `error`, назначенные после `new`, при
+  отложенной очереди микрозадач) и `onerror_not_fired_when_granted`;
+  `cargo test -p lumen-js --features v8-backend --lib notifications_bindings`
+  — 30/30;
+- живой WPT (`run_report.py --all --root notifications --recursive`,
+  dev-release сборка слота): `constructor-non-secure.html` TIMEOUT → **PASS
+  (UNEXPECTED-PASS)**, файл ожиданий
+  `tests/wpt/metadata/notifications/constructor-non-secure.html.ini` удалён.
+  Прогон категории целиком: 8/28 harness OK, 29/160 сабтестов.
+
+Попутно в том же прогоне `constructor-basic.https.html` и
+`idlharness.https.any.html` дали UNEXPECTED-OK против ожиданий `ERROR` —
+это `.https.`-тесты, которых правка не касается (дрейф после TLS-работ
+P3-tlshard); их `.ini` не тронуты — переснятие ожиданий категории отдельная
+работа.
