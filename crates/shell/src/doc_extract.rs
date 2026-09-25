@@ -160,6 +160,16 @@ pub(crate) struct DynamicCssBase {
     /// настоящим фингерпринтом, до того как этот `PageCascade` попадёт в
     /// `LayoutSource` и станет виден `refresh_dynamic_css`.
     pub(crate) adopted_fp: u64,
+    /// BUG-493: последний увиденный `PersistentJs::cssom_epoch()` — поколение
+    /// журнала CSSOM-правок (`insertRule`/`deleteRule`/`.style`). Отличие —
+    /// сигнал наложить правки на каскад, по которому рисует шелл.
+    pub(crate) cssom_epoch: u64,
+    /// BUG-493: лист до наложения CSSOM-правок, когда текущий `stylesheet` в
+    /// `LayoutSource` — уже результат `PersistentJs::patch_cascade`. Правки
+    /// всегда накладываются на него, а не на прошлый результат — иначе
+    /// каждая сверка применяла бы весь журнал ещё раз. `None` — текущий
+    /// лист и есть исходный.
+    pub(crate) pristine: Option<std::sync::Arc<lumen_css_parser::Stylesheet>>,
 }
 
 fn walk_style_blocks(

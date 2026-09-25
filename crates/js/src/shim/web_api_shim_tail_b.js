@@ -2201,14 +2201,26 @@ _lumen_install_reflection(HTMLStyleElement.prototype, [
 
 // CSSOM §4.3 (CSSOM-1 срез 3): `<style>`/`<link rel=stylesheet>.sheet` — the
 // per-element `CSSStyleSheet`, or `null` when this element has no entry in
-// the registry (never inserted, or its `<link>` failed to load — same
-// simplification the registry itself makes, see
-// `docs/tasks/p1-cssom-1-stylesheets.md`).
+// the registry (disconnected, or its `<link>` has not loaded / failed — see
+// `docs/tasks/p1-cssom-1-stylesheets.md`). BUG-493: the registry is
+// reconciled with the DOM on this read, so a `<style>` a script just
+// inserted has its sheet at once, as in a browser. One wrapper per sheet:
+// CSS-in-JS libraries compare `tag.sheet` by identity across calls.
 function _lumen_element_sheet_getter() {
     var nid = _lumen_reflect_nid(this);
     if (nid === -1) return null;
-    var idx = _lumen_stylesheet_owner_nids().indexOf(nid);
-    return idx === -1 ? null : _lumen_make_css_style_sheet(idx);
+    var idx = _lumen_stylesheet_index_for(nid);
+    if (idx === -1) {
+        if (this.__lumen_sheet__) this.__lumen_sheet__ = null;
+        return null;
+    }
+    var cached = this.__lumen_sheet__;
+    if (cached && cached.ownerNode !== null) return cached;
+    var sheet = _lumen_make_css_style_sheet(idx);
+    try {
+        Object.defineProperty(this, '__lumen_sheet__', { value: sheet, writable: true, configurable: true, enumerable: false });
+    } catch (e) { /* frozen wrapper — serve a fresh sheet each time */ }
+    return sheet;
 }
 Object.defineProperty(HTMLStyleElement.prototype, 'sheet', {
     get: _lumen_element_sheet_getter, enumerable: true, configurable: true,

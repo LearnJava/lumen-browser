@@ -257,6 +257,9 @@ mod v8_cssom5_constructed_stylesheets;
 mod v8_bug493_sync_flush;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug493_sheet_registry;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug504_scroll_flush;
 
 #[cfg(feature = "v8-backend")]

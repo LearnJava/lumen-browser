@@ -70,7 +70,9 @@ impl Lumen {
 
     /// BUG-743: пересобрать каскад, если набор инлайновых `<style>` изменился
     /// с последней сборки, или CSSOM-5 срез 2 (BUG-897) — если изменился
-    /// `document.adoptedStyleSheets`. Возвращает `true`, если лист заменён.
+    /// `document.adoptedStyleSheets`, или BUG-493 — если страница правила лист
+    /// через CSSOM (`insertRule`/`deleteRule`/`.style`). Возвращает `true`,
+    /// если лист заменён.
     ///
     /// Таблица стилей страницы собирается один раз за навигацию — на этапе
     /// разбора, сразу после выполнения синхронных скриптов. Всё, что вставляет
@@ -87,13 +89,16 @@ impl Lumen {
     /// для загрузок. Обычный CSS-in-JS ни того, ни другого не использует.
     pub(crate) fn refresh_dynamic_css(&mut self) -> bool {
         // Читается ДО заимствования `self.layout_source` — разные поля
-        // `self`, но так проще: `js_ctx` нужен дважды (тут и ниже, для
-        // самого мёрджа), а `layout_source` — только внутри этого вызова.
-        let adopted_fp = self
-            .js_ctx
+        // `self`, но так проще: ручка нужна дважды (тут и ниже, для самого
+        // мёрджа), а `layout_source` — только внутри этого вызова.
+        // BUG-493: через `cascade_feed`, не `js_ctx` — под движковым потоком
+        // (по умолчанию) `js_ctx` на UI-потоке пуст, и правки CSSOM с
+        // `adoptedStyleSheets` до каскада отрисовки не доходили вовсе.
+        let feed = self.cascade_feed.clone();
+        let (adopted_fp, cssom_epoch) = feed
             .as_ref()
-            .map(|js| js.document_adopted_fingerprint())
-            .unwrap_or(0);
+            .map(|f| (f.document_adopted_fingerprint(), f.cssom_epoch()))
+            .unwrap_or((0, 0));
         let Some(src) = self.layout_source.as_mut() else {
             return false;
         };
@@ -107,46 +112,69 @@ impl Lumen {
             return false;
         };
         let fp = inline_style_fingerprint(&doc);
-        if fp == base.inline_fp && adopted_fp == base.adopted_fp {
+        let text_changed = fp != base.inline_fp || adopted_fp != base.adopted_fp;
+        if !text_changed && cssom_epoch == base.cssom_epoch {
             return false;
         }
-        // GAP-CSPENF срез 21: та же политика, что `build_page_cascade` уже
-        // считает для первичной сборки — поздно вставленный `<style>` (тот,
-        // ради которого существует этот путь, BUG-743) обязан пройти тот же
-        // гейт, иначе CSS-in-JS обходил бы style-src, вставляя стиль после
-        // навигации вместо разметки.
-        let root = doc.root();
-        let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
-        let (inline, blocked) =
-            extract_style_blocks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
-        drop(doc);
-        if let Some(js) = self.js_ctx.as_ref() {
-            // GAP-CSPENF срез 57: each dispatch now carries the text of the
-            // policy actually violated by that block, not the document's
-            // combined text — same switch as `page_pipeline.rs`'s inline
-            // `<style>` dispatch.
-            for text in &blocked {
-                js.fire_csp_violation("style-src", "inline", text);
+        let pristine = if text_changed {
+            // GAP-CSPENF срез 21: та же политика, что `build_page_cascade` уже
+            // считает для первичной сборки — поздно вставленный `<style>` (тот,
+            // ради которого существует этот путь, BUG-743) обязан пройти тот же
+            // гейт, иначе CSS-in-JS обходил бы style-src, вставляя стиль после
+            // навигации вместо разметки.
+            let root = doc.root();
+            let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
+            let (inline, blocked) =
+                extract_style_blocks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
+            drop(doc);
+            if let Some(js) = self.js_ctx.as_ref() {
+                // GAP-CSPENF срез 57: each dispatch now carries the text of the
+                // policy actually violated by that block, not the document's
+                // combined text — same switch as `page_pipeline.rs`'s inline
+                // `<style>` dispatch.
+                for text in &blocked {
+                    js.fire_csp_violation("style-src", "inline", text);
+                }
+            }
+            let mut css =
+                String::with_capacity(base.imports_prefix.len() + inline.len() + base.linked.len());
+            css.push_str(&base.imports_prefix);
+            css.push_str(&inline);
+            css.push_str(&base.linked);
+            let mut sheet = lumen_css_parser::parse(&css);
+            if let Some(adopted) = feed.as_ref().and_then(|f| f.document_adopted_stylesheet()) {
+                sheet.merge_from(adopted);
+            }
+            eprintln!(
+                "CSS пересобран после правки <style>: {} правил",
+                sheet.rules.len()
+            );
+            Arc::new(sheet)
+        } else {
+            // Документ нужен только для отпечатка; `patch_cascade` ниже сам
+            // берёт его на сверку реестра — отпускаем до вызова.
+            drop(doc);
+            base.pristine.clone().unwrap_or_else(|| Arc::clone(stylesheet))
+        };
+        // BUG-493: CSSOM-правки страницы (`insertRule` в `<style>` от
+        // CSS-in-JS в speedy-режиме, `deleteRule`, запись `.style`)
+        // накладываются на каскад, по которому шелл рисует, а не только на
+        // лист синхронного флаша — иначе правило, вставленное через CSSOM,
+        // влияло бы на `getComputedStyle`, но не на экран.
+        let patched = feed.as_ref().and_then(|f| f.patch_cascade(&pristine));
+        match patched {
+            Some(sheet) => {
+                *stylesheet = Arc::new(sheet);
+                base.pristine = Some(pristine);
+            }
+            None => {
+                *stylesheet = pristine;
+                base.pristine = None;
             }
         }
-        let mut css =
-            String::with_capacity(base.imports_prefix.len() + inline.len() + base.linked.len());
-        css.push_str(&base.imports_prefix);
-        css.push_str(&inline);
-        css.push_str(&base.linked);
-        let mut sheet = lumen_css_parser::parse(&css);
-        if let Some(js) = self.js_ctx.as_ref()
-            && let Some(adopted) = js.document_adopted_stylesheet()
-        {
-            sheet.merge_from(adopted);
-        }
-        eprintln!(
-            "CSS пересобран после правки <style>: {} правил",
-            sheet.rules.len()
-        );
-        *stylesheet = Arc::new(sheet);
         base.inline_fp = fp;
         base.adopted_fp = adopted_fp;
+        base.cssom_epoch = cssom_epoch;
         // Инкрементальный рестайл (BUG-341 S7) переиспользует стили прошлого
         // прохода — против нового листа они недействительны.
         self.page_prev_cascade_styles = None;
@@ -1618,6 +1646,7 @@ impl Lumen {
         self.pseudo_styles_needed_flag = handle.as_ref().and_then(|h| h.pseudo_styles_needed_flag());
         self.custom_props_needed_flag = handle.as_ref().and_then(|h| h.custom_props_needed_flag());
         self.computed_styles_needed_flag = handle.as_ref().and_then(|h| h.computed_styles_needed_flag());
+        self.cascade_feed = handle.as_ref().and_then(|h| h.cascade_feed());
         match self.engine_thread.as_ref() {
             // Flag on: the handle lives engine-side; deposit it into
             // `EngineJsState.js` and leave the UI field empty.

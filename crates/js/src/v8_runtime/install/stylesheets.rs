@@ -79,18 +79,48 @@ pub(crate) fn install_stylesheets(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
-    stylesheet_nodes: Arc<Mutex<Vec<lumen_css_parser::StylesheetNodeEntry>>>,
-    cssom_deltas: super::super::style_flush::CssomDeltaLog,
-    cssom_dirty: Arc<std::sync::atomic::AtomicBool>,
+    sync: super::super::sheet_sync::SheetSync,
 ) -> JsResult<()> {
+    let stylesheet_nodes = Arc::clone(&sync.nodes);
     // Owner node ids in document order — the JS side's "sheet index" is this
     // array's index, addressed fresh on every call rather than cached, so a
     // registry rebuild (script touched `<style>`/`<link>`, BUG-443 gate) is
     // visible without rebuilding any JS wrapper.
+    //
+    // BUG-493: every read of the list first reconciles the registry with the
+    // DOM (`SheetSync::sync`, a no-op while the DOM mutation epoch is
+    // unchanged), so a `<style>` a script inserted after load is listed.
     {
-        let s = Arc::clone(&stylesheet_nodes);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_owner_nids", move || -> Vec<u32> {
-            s.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|e| e.node).collect()
+            sync.sync();
+            sync.nodes.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|e| e.node).collect()
+        });
+    }
+    // BUG-493: registry indices of the sheets that belong to the document
+    // itself (`document.styleSheets`) — shadow-tree sheets belong to their
+    // own `ShadowRoot.styleSheets`.
+    {
+        let sync = sync.clone();
+        reg!(scope, ctx, store, "_lumen_stylesheet_document_indices", move || -> Vec<u32> {
+            sync.sync();
+            let shadow = sync.shadow_owned.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            sync.nodes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| !shadow.contains(&e.node))
+                .map(|(i, _)| i as u32)
+                .collect()
+        });
+    }
+    // BUG-493: `<style>`/`<link>.sheet` — registry index of `nid`'s own sheet,
+    // `-1` for none. See `SheetSync::index_for_owner` for the fast path.
+    {
+        let sync = sync.clone();
+        reg!(scope, ctx, store, "_lumen_stylesheet_index_for", move |nid: u32| -> i32 {
+            sync.index_for_owner(nid)
         });
     }
     {
@@ -200,8 +230,7 @@ pub(crate) fn install_stylesheets(
     // CSSOM addressing first, which this registry has no address for.
     {
         let s = Arc::clone(&stylesheet_nodes);
-        let deltas = Arc::clone(&cssom_deltas);
-        let dirty = Arc::clone(&cssom_dirty);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_insert_rule", move |idx: u32, rule_text: String, index: u32| -> i32 {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
@@ -211,11 +240,7 @@ pub(crate) fn install_stylesheets(
                     // CSSOM-8 вариант C: recorded in the owning node's own
                     // `cssRules` index space — `replay_cssom_ops` rebases it
                     // onto the cascade sheet at flush time.
-                    deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
-                        node,
-                        lumen_css_parser::CssomOp::InsertRule { index: index as usize, text: rule_text },
-                    ));
-                    dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                    sync.record(node, lumen_css_parser::CssomOp::InsertRule { index: index as usize, text: rule_text });
                     new_index as i32
                 }
                 Err(lumen_css_parser::CssomRuleMutationError::IndexSize) => -1,
@@ -225,19 +250,14 @@ pub(crate) fn install_stylesheets(
     }
     {
         let s = Arc::clone(&stylesheet_nodes);
-        let deltas = Arc::clone(&cssom_deltas);
-        let dirty = Arc::clone(&cssom_dirty);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_delete_rule", move |idx: u32, index: u32| -> i32 {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
             let node = entry.node;
             match std::sync::Arc::make_mut(&mut entry.sheet).delete_rule(index as usize) {
                 Ok(()) => {
-                    deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
-                        node,
-                        lumen_css_parser::CssomOp::DeleteRule { index: index as usize },
-                    ));
-                    dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                    sync.record(node, lumen_css_parser::CssomOp::DeleteRule { index: index as usize });
                     0
                 }
                 Err(_) => -1,
@@ -254,8 +274,7 @@ pub(crate) fn install_stylesheets(
     // doc comment.
     {
         let s = Arc::clone(&stylesheet_nodes);
-        let deltas = Arc::clone(&cssom_deltas);
-        let dirty = Arc::clone(&cssom_dirty);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_rule_set_style", move |idx: u32, rule_idx: u32, css_text: String| -> bool {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return false };
@@ -264,11 +283,7 @@ pub(crate) fn install_stylesheets(
                 .set_rule_style_text(rule_idx as usize, &css_text)
                 .is_ok();
             if ok {
-                deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
-                    node,
-                    lumen_css_parser::CssomOp::SetRuleStyle { index: rule_idx as usize, css_text },
-                ));
-                dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                sync.record(node, lumen_css_parser::CssomOp::SetRuleStyle { index: rule_idx as usize, css_text });
             }
             ok
         });
@@ -279,8 +294,7 @@ pub(crate) fn install_stylesheets(
     // position, `child_idx` its position inside that block).
     {
         let s = Arc::clone(&stylesheet_nodes);
-        let deltas = Arc::clone(&cssom_deltas);
-        let dirty = Arc::clone(&cssom_dirty);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_media_child_set_style", move |idx: u32, rule_idx: u32, child_idx: u32, css_text: String| -> bool {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return false };
@@ -289,15 +303,11 @@ pub(crate) fn install_stylesheets(
                 .set_media_child_style_text(rule_idx as usize, child_idx as usize, &css_text)
                 .is_ok();
             if ok {
-                deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
-                    node,
-                    lumen_css_parser::CssomOp::SetMediaChildStyle {
+                sync.record(node, lumen_css_parser::CssomOp::SetMediaChildStyle {
                         media_index: rule_idx as usize,
                         child_index: child_idx as usize,
                         css_text,
-                    },
-                ));
-                dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                    });
             }
             ok
         });
@@ -337,8 +347,7 @@ pub(crate) fn install_stylesheets(
     }
     {
         let s = Arc::clone(&stylesheet_nodes);
-        let deltas = Arc::clone(&cssom_deltas);
-        let dirty = Arc::clone(&cssom_dirty);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_mixin_set_node_style", move |idx: u32, rule_idx: u32, path: Vec<u32>, css_text: String| -> bool {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return false };
@@ -348,15 +357,11 @@ pub(crate) fn install_stylesheets(
                 .set_mixin_result_style(rule_idx as usize, &path, &css_text)
                 .is_ok();
             if ok {
-                deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
-                    node,
-                    lumen_css_parser::CssomOp::SetMixinResultStyle {
+                sync.record(node, lumen_css_parser::CssomOp::SetMixinResultStyle {
                         mixin_index: rule_idx as usize,
                         path,
                         css_text,
-                    },
-                ));
-                dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                    });
             }
             ok
         });
@@ -368,8 +373,7 @@ pub(crate) fn install_stylesheets(
     // above (`-2` = `Syntax`, other negative = `IndexSize`).
     {
         let s = Arc::clone(&stylesheet_nodes);
-        let deltas = Arc::clone(&cssom_deltas);
-        let dirty = Arc::clone(&cssom_dirty);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_rule_insert_apply", move |idx: u32, rule_idx: u32, rule_text: String, index: u32| -> i32 {
             let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
@@ -380,15 +384,11 @@ pub(crate) fn install_stylesheets(
                 &rule_text,
             ) {
                 Ok(new_index) => {
-                    deltas.lock().unwrap_or_else(|e| e.into_inner()).push((
-                        node,
-                        lumen_css_parser::CssomOp::InsertRuleBodyApply {
+                    sync.record(node, lumen_css_parser::CssomOp::InsertRuleBodyApply {
                             rule_index: rule_idx as usize,
                             index: index as usize,
                             text: rule_text,
-                        },
-                    ));
-                    dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                        });
                     new_index as i32
                 }
                 Err(lumen_css_parser::CssomRuleMutationError::IndexSize) => -1,

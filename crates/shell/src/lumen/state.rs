@@ -861,6 +861,10 @@ pub(crate) struct Lumen {
     /// `collect_computed_styles` itself — set by `_lumen_get_computed_style`/
     /// `_lumen_get_computed_style_entries`/`_lumen_request_scroll`.
     pub(crate) computed_styles_needed_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// BUG-493: UI-side handle to the page's share of the paint cascade
+    /// (CSSOM edits, adopted sheets) — set by `set_js_ctx` in both
+    /// engine-thread modes, read by `refresh_dynamic_css`.
+    pub(crate) cascade_feed: Option<Arc<dyn crate::persistent_js::CascadeFeed>>,
     /// ADR-016 M2.3: `true` while a `run_animation_frame` batch dispatched to the
     /// engine thread is still executing. Set by the UI thread before firing the
     /// (fire-and-forget) rAF `task`, cleared by that task on completion. Guards
