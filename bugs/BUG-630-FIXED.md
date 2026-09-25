@@ -1,6 +1,6 @@
 # BUG-630: `<img>` never fires `load`/`error`, and `HTMLImageElement` has no `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` at all — for every image format, not just JPEG XL
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-LOADEV](../ROADMAP.md))
+**Статус:** FIXED 2026-09-25 — дрейф трекера: закрыт GAP-LOADEV срезами 1-2; остаток `new Image()` вне документа — BUG-1048; строка BUGS.md не была перенесена при закрытии задачи (сверка с кодом 2026-09-25)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-LOADEV` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Компонент:** js (`crates/js/src/dom.rs:10864-10875` — `HTMLImageElement.prototype` gets only `_lumen_install_reflection` attribute reflection, no decoded-state accessors, no event-handler IDL attributes), shell (`crates/shell/src/main.rs:4892-4904` `decode_image`, `crates/shell/src/main.rs:10630-10635` lazy-load path, `crates/shell/src/main.rs:5507-5512` background-image path — all three log-and-drop a decode `Err`/`Ok` with no signal back to JS)
 **Найден:** P2, WPT-VENDOR-jpegxl, 2026-08-05
@@ -187,7 +187,7 @@ ioa-checked
 --all-targets --features v8-backend -- -D warnings` чисты.
 
 **Не в этом срезе (найден и заведён отдельно, не регрессия):**
-[BUG-1048](BUG-1048-OPEN.md) — третий путь загрузки, BUG-730's
+[BUG-1048](BUG-1048-FIXED.md) — третий путь загрузки, BUG-730's
 "streaming/dynamic" (скрипт создаёт/меняет `<img>` уже ПОСЛЕ первичной
 загрузки, самый частый случай на клиентски отрисованных страницах) реально
 фетчит и декодирует байты, но не диспатчит `load`/`error` вовсе — обнаружено

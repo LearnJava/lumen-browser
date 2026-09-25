@@ -1,6 +1,6 @@
 # BUG-535: `ruby-position: alternate` has no layout effect — annotations never flip over/under across stacked `<rtc>`s
 
-**Статус:** OPEN (ДОРАБОТКА → GAP-RUBYBOX)
+**Статус:** OPEN (ДОРАБОТКА → GAP-RUBYBOX-2)
 **Тип:** ДОРАБОТКА — `lay_out_ruby`/`RubyBox` (over/under-стекинг, `ruby-align`, `ruby-merge`) существуют, но не вызываются ни из одного места конвейера; `alternate` в мёртвом коде не даёт наблюдаемого эффекта. Перенесено в [GAP-RUBYBOX](../ROADMAP.md).
 **Дата:** 2026-08-03
 **Компонент:** layout (`crates/engine/layout/src/*` — ruby box layout)
@@ -25,7 +25,7 @@ This is distinct from the already-covered `ruby-*` gaps in the same slice:
   and `ruby-position-valid.html`/`ruby-position.html` (parsing/basic
   positioning) both already pass 100%, so `ruby-position` **is** parsed and
   **is** applied for the plain `over`/`under`/`inter-character` values.
-- [BUG-484](BUG-484-OPEN.md) (inline style setter validation) does not apply
+- [BUG-484](BUG-484-FIXED.md) (inline style setter validation) does not apply
   either — these are valid values being *set* successfully, just not
   producing the spec'd layout.
 

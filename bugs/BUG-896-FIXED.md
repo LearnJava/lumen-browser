@@ -52,7 +52,7 @@ dyn-json {"vcsi":42}
 
 HTML LS «create a CSS module script»: тело разбирается как таблица стилей и
 экспортируется как `CSSStyleSheet` по умолчанию. Порядок работ поэтому
-обратный обычному — сначала [BUG-897](BUG-897-FIXED.md)/[BUG-471](BUG-471-OPEN.md)
+обратный обычному — сначала [BUG-897](BUG-897-FIXED.md)/[BUG-471](BUG-471-FIXED.md)
 (объект таблицы), потом ветка `"css"` в `ModuleType::from_attr`.
 
 ## Исправлено

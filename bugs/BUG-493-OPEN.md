@@ -248,7 +248,7 @@ call (not verified per-file this slice, per the established mechanism —
 see [[project_wpt_run3_css_easing_slice15_landed]] et al.). Two files worth
 noting: `invalidation-003.html`/`invalidation-004.html` have a *second*
 assertion later in the same `test()` that would exercise
-[BUG-471](BUG-471-OPEN.md) (`document.styleSheets[0].rules[...]`) — never
+[BUG-471](BUG-471-FIXED.md) (`document.styleSheets[0].rules[...]`) — never
 reached, since the first assertion throws first; `.ini` attributes both
 files to this bug only. `.ini` under `tests/wpt/metadata/css/css-nesting/`
 for all 9 files.
@@ -434,3 +434,53 @@ bug's "no synchronous flush" gap is live on `--bidi-port`, not just the
 `_lumen_stylesheet_owner_nids()`, который шелл заполняет только после каскада
 (`page_pipeline.rs:1220` `update_stylesheet_nodes`). CSSOM-4 закрыл путь `InProcessSession`, живое
 окно этот остаток не покрывает. Передан P6 по решению пользователя.
+
+## Срез P6 2026-09-25 — живое окно: `.sheet` сразу после вставки, CSSOM-правки доходят до экрана
+
+**Причина двух половин остатка.** (1) Реестр `document.styleSheets`/`element.sheet`
+(`V8JsRuntime::stylesheet_nodes`) заполнял только шелл — один раз, после каскада загрузки
+(`build_stylesheet_node_registry`). `<style>`, вставленный скриптом позже, до следующего
+пересчёта каскада в реестр не попадал: `.sheet === null`, отсюда ошибка #17 styled-components.
+(2) Журнал CSSOM-правок (`CssomDeltaLog`, CSSOM-8) применялся только к листу синхронного
+флаша (`getComputedStyle`), а каскад отрисовки шелла собирался из **текста** `<style>`, где
+правил, вставленных через `insertRule`, нет. Кроме того, под движковым потоком (ADR-023,
+по умолчанию) `Lumen::js_ctx` на UI-потоке пуст, и `refresh_dynamic_css` не видел ни
+CSSOM-правок, ни `document.adoptedStyleSheets` (CSSOM-5 срез 2) — работало только с
+`LUMEN_NO_ENGINE_THREAD=1`.
+
+**Фикс.**
+- `crates/js/src/v8_runtime/sheet_sync.rs` (новый) — `SheetSync::sync` сверяет реестр с DOM
+  при чтении: обход дерева (включая теневые корни — их листы в `document.styleSheets` не
+  попадают), `<style>` с неизменным текстом сохраняет прежнюю запись (правки не теряются),
+  с изменённым — перепарсивается, а его правки выбрасываются; отключённый узел теряет лист.
+  Сверка пропускается, если счётчик мутаций DOM (`DomTouched::epoch`, новый) не менялся.
+  Геттер `.sheet` идёт быстрым путём `index_for_owner` без обхода дерева, если узел уже
+  в реестре, подключён и текст совпадает.
+- `.sheet` сохраняет идентичность между чтениями (кэш на обёртке элемента), `CSSStyleSheet`
+  привязан к узлу-владельцу, а не к индексу реестра — индекс пересчитывается при каждом
+  обращении, поэтому вставка другого `<style>` перед ним не подменяет лист.
+- `patched_cascade` накладывает журнал правок на каскад шелла; `<style>`, наполненный
+  только через `insertRule` (speedy-режим styled-components/emotion), вливается целиком.
+  Шелл берёт это через новую ручку `CascadeFeed` (`crates/shell/src/persistent_js.rs`),
+  которую `set_js_ctx` кэширует на UI-стороне в обоих режимах движкового потока — тем же
+  приёмом, что lock-free флаги. `refresh_dynamic_css` сверяет поколение журнала
+  (`cssom_epoch`) на каждом релейауте; правка поднимает `dom_dirty`, чтобы `insertRule` из
+  таймера без мутаций DOM всё равно дал релейаут. Исходный (не пропатченный) лист хранится
+  в `DynamicCssBase::pristine`, флаш по ревизии узнаёт уже пропатченный лист и не
+  накладывает правки дважды.
+
+**Проверка.** Юнит-тесты `crates/js/src/dom/tests/v8_bug493_sheet_registry.rs`: `.sheet`
+сразу после `appendChild`, `document.styleSheets` растёт, удалённый узел → `null`,
+идентичность, `insertRule` в пустой `<style>` виден `getComputedStyle`, теневой `<style>` не
+в `document.styleSheets`. Живое окно (`--mcp-live-port`, dev-release, `.tmp/b493/`):
+`sheet.html` — лист есть синхронно при парсинге и в `load`, `nSheets` 1→2 и 3→4;
+`paint.html` — `insertRule('#t{width:300px;height:200px;background:red}')` из `setTimeout`
+после `load`: промежуточная версия фикса, читавшая правки через `js_ctx`, давала 0 красных пикселей на скриншоте (под движковым потоком `js_ctx` пуст), с `CascadeFeed` — 59 960 (≈300×200), в
+`resource://layout` у `#t` бокс 300×200.
+
+**Не проверено на реальных сайтах.** Прогон imdb/quora/twitch в этой сессии упёрся в сеть/
+челлендж: imdb — `H2 I/O: peer closed connection without sending TLS close_notify` на
+навигации, quora — Cloudflare «Just a moment...», twitch — таймаут `document_ready`. Ни
+одна из трёх страниц не дошла до кода styled-components, поэтому ошибка #17 не
+воспроизведена и не опровергнута живьём — баг остаётся OPEN до повторного прогона этих
+сайтов.

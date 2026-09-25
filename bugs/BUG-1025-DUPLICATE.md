@@ -1,7 +1,7 @@
 # BUG-1025 — `<img src="data:image/svg+xml,...">` не всегда даёт `load`: `svg-in-img-auto.html` виснет на первом сабтесте до 60-секундного тайм-аута
 
-**Статус:** DUPLICATE → [BUG-630](BUG-630-OPEN.md)
-**Тип:** дубликат [BUG-630](BUG-630-OPEN.md) («`<img>` never fires `load`/`error`… for every
+**Статус:** DUPLICATE → [BUG-630](BUG-630-FIXED.md)
+**Тип:** дубликат [BUG-630](BUG-630-FIXED.md) («`<img>` never fires `load`/`error`… for every
 image format») — тот же общий, ранее задокументированный отсутствующий механизм, найденный
 здесь заново на одном конкретном WPT-файле. `docs/engine-gaps.md` §Resource loading уже называл
 его прямым текстом («`<img>` fires neither `load` nor `error` on any insertion path») — эта
@@ -22,7 +22,7 @@ image format») — тот же общий, ранее задокументир�
 (или приходит не для первой сгенерированной комбинации), из-за чего вся последовательная цепочка
 сабтестов (каждый следующий стартует только из колбэка `checkSize`/`cont(id+1)` предыдущего)
 блокируется на первом же сабтесте
-**Владелец:** P1/P3 через [BUG-630](BUG-630-OPEN.md)/`GAP-LOADEV`
+**Владелец:** P1/P3 через [BUG-630](BUG-630-FIXED.md)/`GAP-LOADEV`
 
 ## Симптом
 

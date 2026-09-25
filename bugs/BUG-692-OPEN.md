@@ -103,7 +103,7 @@ scheme по spec §4.1) на non-loopback host, переписать схему 
 `page_load::spawn_image_requests`, отложенный
 `page_load::fetch_and_register_lazy_images`). Апгрейд выполняется до гейта
 `img-src` — Fetch §4.1 ставит upgrade шагом 5, CSP-проверку шагом 6.
-Живая проба и точный список изменений — `bugs/BUG-811-OPEN.md`, раздел
+Живая проба и точный список изменений — `bugs/BUG-811-FIXED.md`, раздел
 «Срез 43».
 
 Баг остаётся OPEN: не покрыты картинки `<iframe>`/`background-image`,
@@ -122,7 +122,7 @@ scheme по spec §4.1) на non-loopback host, переписать схему 
 навигационному запросу, когда инициирующий документ объявил директиву —
 `PageSource::Url::upgrade_insecure_requests` несёт флаг от `click.rs`/
 `form_submit.rs`/`about_to_wait.rs` до `HttpClient`. Детали —
-`bugs/BUG-811-OPEN.md`, «Срез 54».
+`bugs/BUG-811-FIXED.md`, «Срез 54».
 
 Остаток списка среза 43/53 сузился до: картинки/навигация `<iframe>` уже
 закрыты (срезы 44, 52-53), заголовок `Upgrade-Insecure-Requests: 1` для

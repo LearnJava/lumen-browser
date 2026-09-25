@@ -85,7 +85,7 @@ NetworkInformation.prototype.removeEventListener = function() {};
 
 ## Связанные
 
-* [BUG-641](BUG-641-OPEN.md) — тот же шим (`dom.rs:12855-12874`), другая
+* [BUG-641](BUG-641-FIXED.md) (FIXED 2026-09-25) — тот же шим (`dom.rs:12855-12874`), другая
   находка: `downlinkMax` отсутствует целиком.
 * [BUG-386](BUG-386-FIXED.md) / [BUG-394](BUG-394-FIXED.md) /
   [BUG-400](BUG-400-FIXED.md) — тот же класс дефекта (не-`EventTarget`

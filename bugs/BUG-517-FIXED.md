@@ -27,7 +27,7 @@ FAIL e.style['block-step'] = "auto" should set the property value
 the parser's known-property table at all — no parsing, no `ComputedStyle`
 storage, no cascade/inheritance entry. The `e.style[...] = "..."` failures
 are not a distinct gap: because the property name is unrecognized, the
-generic inline-style-setter passthrough ([BUG-484](BUG-484-OPEN.md)) takes
+generic inline-style-setter passthrough ([BUG-484](BUG-484-FIXED.md)) takes
 over and stores the raw string verbatim instead of parsing+canonicalizing
 it — same downstream shape as every other unimplemented-property category
 in this track.

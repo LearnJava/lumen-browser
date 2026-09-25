@@ -39,7 +39,7 @@ Timing L2 §4) — записи остаются "утиными" plain-object �
 
 ## Причина
 
-Тот же класс дефекта, что [BUG-645](BUG-645-OPEN.md)
+Тот же класс дефекта, что [BUG-645](BUG-645-FIXED.md)
 (`PerformancePaintTiming`), [BUG-624](BUG-624-FIXED.md)
 (`Navigator`), [BUG-637](BUG-637-OPEN.md) (`Window`) и
 [BUG-589](BUG-589-FIXED.md) (`window` сам не WebIDL-объект) —

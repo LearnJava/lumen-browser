@@ -30,7 +30,7 @@
 //! `document_csp_policy` из этого модуля используется лишь один раз — в
 //! `page_pipeline.rs::parse_and_layout`, чтобы собрать политику для этого
 //! `HttpClient` перед тем, как он станет `fetch_provider`. Детали —
-//! `bugs/BUG-811-OPEN.md` срез 10.
+//! `bugs/BUG-811-FIXED.md` срез 10.
 //!
 //! Срезы 11/12 (тоже вне этого файла, по той же причине, что срез 10) добавили
 //! `connect-src` против WebSocket/EventSource (`crates/network/src/lib.rs`'s
@@ -47,7 +47,7 @@
 //! `lumen-network::HttpClient::check_worker_src` (`with_worker_src_policy`),
 //! тот же `document_csp_policy` из `page_pipeline.rs::parse_and_layout`, что
 //! срез 10 уже собирает для `connect_src_policy`. Детали — `bugs/
-//! BUG-811-OPEN.md` срез 13.
+//! BUG-811-FIXED.md` срез 13.
 //!
 //! Срез 14 (`crates/js/src/csp.rs`, вне этого файла — JS-only) добавил
 //! доставку отчётов `report-uri`: `_lumen_dispatch_csp_violation`
@@ -252,7 +252,7 @@
 //! — распознаётся [`CspDirective::ManifestSrc`], но манифест ничем не
 //! фетчится этим движком, гейтить нечего), `report-to` (Reporting API,
 //! нужны группы эндпоинтов из `Report-To`, этот движок его не разбирает). См.
-//! `bugs/BUG-811-OPEN.md`.
+//! `bugs/BUG-811-FIXED.md`.
 //!
 //! Срез 56 закрыл дрейф, который [`document_csp_policy`]'s doc comment сам
 //! называл открытым: каждая точка диспетчеризации `securitypolicyviolation`

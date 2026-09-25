@@ -488,6 +488,14 @@ fn navigator_connection_save_data_false() {
     assert!(bool_eval(&rt, "navigator.connection.saveData === false"));
 }
 
+#[test]
+fn navigator_connection_downlink_max_is_unknown_infinity() {
+    // BUG-641: the attribute used to be missing (`undefined`), failing
+    // WPT `netinfo-basics.html`'s `downlinkMax >= 0` check.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "navigator.connection.downlinkMax === Infinity"));
+}
+
 // ── navigator.userActivation (GAP-USERACT, BUG-751/BUG-758) ──────────────────
 // Full model coverage (marking, decay window, consume) lives in
 // `dom::tests::v8_gap_useract`; this file only checks the object shape and

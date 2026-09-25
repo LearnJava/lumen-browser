@@ -1,6 +1,7 @@
 //! Device Orientation Event and Device Motion Event APIs (W3C Device Orientation L2 & L3)
 //!
 //! Phase 0 stub: DeviceOrientationEvent and DeviceMotionEvent with default values.
+//! Registering a listener schedules one all-zero reading, dispatched on `window`.
 //! requestPermission() always resolves to 'granted'.
 
 /// V8 port of the former rquickjs `install_device_sensors_bindings` (Ph3 V8 migration S5-S7,
@@ -56,47 +57,61 @@ const DEVICE_SENSORS_SHIM: &str = r#"
     const originalAddEventListener = window.addEventListener;
     const originalRemoveEventListener = window.removeEventListener;
 
-    // Store listeners
+    // Listeners already registered per type. A reading is scheduled only
+    // for a listener not seen before, so a handler that re-adds an already
+    // registered listener (a no-op in the DOM) cannot reschedule readings
+    // forever. `once` listeners are not remembered — the DOM drops them after
+    // the first delivery, so re-adding one is a genuinely new registration.
     const deviceOrientationListeners = new Set();
     const deviceMotionListeners = new Set();
 
-    // Fire a single deviceorientation event with default values on first listener add
-    let firedOrientationEvent = false;
-    let firedMotionEvent = false;
+    function makeReading(type) {
+      if (type === 'deviceorientation') {
+        return new DeviceOrientationEvent('deviceorientation', {
+          alpha: 0, beta: 0, gamma: 0, absolute: false
+        });
+      }
+      return new DeviceMotionEvent('devicemotion', {
+        acceleration: { x: 0, y: 0, z: 0 },
+        accelerationIncludingGravity: { x: 0, y: 0, z: 0 },
+        rotationRate: { alpha: 0, beta: 0, gamma: 0 },
+        interval: 0
+      });
+    }
+
+    // One pending reading per type (BUG-643: a global "fired once" flag used
+    // to deliver it to the very first listener ever registered and to no one
+    // else). Every registration made before the reading is delivered shares
+    // it; a registration made later — including from inside a handler —
+    // schedules the next one. Delivery goes through `dispatchEvent`, so the
+    // reading gets exactly the semantics of any other window event (whose
+    // own gaps — `handleEvent`, `once`, `event.target` — are BUG-1172).
+    const pendingReading = { deviceorientation: false, devicemotion: false };
+    function scheduleReading(target, type) {
+      if (pendingReading[type]) return;
+      pendingReading[type] = true;
+      setTimeout(() => {
+        pendingReading[type] = false;
+        target.dispatchEvent(makeReading(type));
+      }, 0);
+    }
 
     window.addEventListener = function(type, listener, options) {
-      if (type === 'deviceorientation' && !firedOrientationEvent) {
-        firedOrientationEvent = true;
-        // Fire event with default values {0, 0, 0, false} after listener registration
-        setTimeout(() => {
-          if (deviceOrientationListeners.has(listener)) {
-            const evt = new DeviceOrientationEvent('deviceorientation', {
-              alpha: 0,
-              beta: 0,
-              gamma: 0,
-              absolute: false
-            });
-            listener(evt);
+      const result = originalAddEventListener.call(this, type, listener, options);
+      const known = type === 'deviceorientation' ? deviceOrientationListeners
+        : type === 'devicemotion' ? deviceMotionListeners : null;
+      if (known && listener && !known.has(listener)) {
+        const once = typeof options === 'object' && options !== null && options.once;
+        const signal = typeof options === 'object' && options !== null ? options.signal : undefined;
+        if (!(signal && signal.aborted)) {
+          if (!once) {
+            known.add(listener);
+            if (signal) signal.addEventListener('abort', () => known.delete(listener));
           }
-        }, 0);
-        deviceOrientationListeners.add(listener);
-      } else if (type === 'devicemotion' && !firedMotionEvent) {
-        firedMotionEvent = true;
-        // Fire event with default values after listener registration
-        setTimeout(() => {
-          if (deviceMotionListeners.has(listener)) {
-            const evt = new DeviceMotionEvent('devicemotion', {
-              acceleration: { x: 0, y: 0, z: 0 },
-              accelerationIncludingGravity: { x: 0, y: 0, z: 0 },
-              rotationRate: { alpha: 0, beta: 0, gamma: 0 },
-              interval: 0
-            });
-            listener(evt);
-          }
-        }, 0);
-        deviceMotionListeners.add(listener);
+          scheduleReading(this, type);
+        }
       }
-      return originalAddEventListener.call(this, type, listener, options);
+      return result;
     };
 
     window.removeEventListener = function(type, listener, options) {
@@ -178,6 +193,54 @@ mod tests {
                        evt.acceleration.x === 0 && evt.interval === 0"#,
                 )
                 .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-643: every listener gets the synthetic reading, not only the
+    /// first one ever registered — including one added from inside a handler
+    /// after the first reading was already delivered.
+    #[test]
+    fn every_sensor_listener_receives_the_synthetic_reading() {
+        with_device_sensors(|rt| {
+            for ty in ["deviceorientation", "devicemotion"] {
+                rt.eval(&format!(
+                    r#"var a = 0, b = 0, c = 0;
+                       function late() {{ c++; }}
+                       addEventListener('{ty}', function() {{ a++; addEventListener('{ty}', late); }});
+                       addEventListener('{ty}', function() {{ b++; }});"#
+                ))
+                .unwrap();
+                for _ in 0..4 {
+                    rt.eval("_lumen_tick_timers()").unwrap();
+                }
+                // Two readings: one shared by the two listeners registered
+                // together, one scheduled by the late registration.
+                let ok = rt.eval("a === 2 && b === 2 && c === 1").unwrap();
+                assert_eq!(ok, JsValue::Bool(true), "{ty}: every listener must fire");
+            }
+        });
+    }
+
+    /// A listener removed before the reading is delivered never sees it, and
+    /// re-adding an already registered listener from its own handler does not
+    /// keep rescheduling the reading forever.
+    #[test]
+    fn removed_listener_is_skipped_and_readd_does_not_loop() {
+        with_device_sensors(|rt| {
+            rt.eval(
+                r#"var gone = 0, self = 0;
+                   function g() { gone++; }
+                   function s() { self++; addEventListener('deviceorientation', s); }
+                   addEventListener('deviceorientation', g);
+                   removeEventListener('deviceorientation', g);
+                   addEventListener('deviceorientation', s);"#,
+            )
+            .unwrap();
+            for _ in 0..6 {
+                rt.eval("_lumen_tick_timers()").unwrap();
+            }
+            let ok = rt.eval("gone === 0 && self === 1").unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
     }

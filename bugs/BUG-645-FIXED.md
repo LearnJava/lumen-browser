@@ -1,6 +1,6 @@
 # BUG-645: `window.PerformancePaintTiming` interface object doesn't exist — blocks nearly all `paint-timing` WPT conformance
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8253-8432)
 **Найден:** P2, WPT-VENDOR-paint-timing, 2026-08-05
 
@@ -48,7 +48,7 @@ plain-object значениями, а не инстансами этого ин�
 `window.PerformancePaintTiming` = `undefined`.
 
 Тот же класс дефекта, что [BUG-624](BUG-624-FIXED.md) (`Navigator`),
-[BUG-637](BUG-637-OPEN.md) (`Window`) и
+[BUG-637](BUG-637-FIXED.md) (`Window`) и
 [BUG-589](BUG-589-FIXED.md) (`window` сам не WebIDL-объект) —
 WebIDL-интерфейсные объекты систематически отсутствуют как глобалы,
 хотя поведение самих shim-функций местами уже реализовано.
@@ -78,3 +78,34 @@ tests/wpt/run_report.py --binary <lumen.exe> --all --root paint-timing --recursi
 ```
 или живой probe: `eval("typeof window.PerformancePaintTiming")` →
 `"undefined"` на любой странице.
+
+## Исправление (2026-09-25, P3)
+
+`crates/js/src/shim/web_api_shim_tail.js`: введён интерфейсный объект
+`PerformancePaintTiming` — `new` из скрипта бросает `TypeError` (в IDL нет
+конструктора), на прототипе WebIDL-`[Default] toJSON()` полей
+PerformanceEntry. `_lumen_deliver_paint_entry` строит запись от этого
+прототипа (`Object.create`), поля остаются собственными свойствами, как у
+остальных типов записей шима. `window.PerformancePaintTiming` выставлен в
+`web_api_shim_tail_mc.js` рядом с `LayoutShift`.
+
+`PerformanceEntry` как глобал сознательно **не** выставлен: записи
+mark/measure/resource по-прежнему плоские объекты, и `instanceof
+PerformanceEntry` отвечал бы для них `false` — ложь хуже отсутствия.
+
+Регресс-тест: `performance_paint_timing_interface_backs_paint_entries`
+(`crates/js/src/dom/tests/v8_perf_observers.rs`).
+
+**A/B** (`run_report.py --all --root paint-timing`, верхний уровень, тот же
+слот, dev-release): **0/9 → 7/9** сабтестов. Все 9 до правки падали на
+`assert_implements`. Оставшиеся два — другой механизм, не этот дефект:
+
+- `first-contentful-paint.html` — `FP only. expected 1 but got 2`: шелл
+  выдаёт FCP в том же кадре, что и FP, без проверки «контентности» кадра
+  (Phase 0-аппроксимация, `crates/shell/src/app/window_event/redraw_requested.rs`,
+  шаг 5). Это нереализованная часть Paint Timing, а не дефект интерфейса.
+- `first-contentful-bg-image.html` — TIMEOUT; FCP от фоновой картинки, того
+  же класса (что именно считается контентным кадром).
+
+Вторичные находки из шапки (BUG-346 `../`, невендоренный idlharness) этой
+правкой не затрагивались.

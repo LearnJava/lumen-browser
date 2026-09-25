@@ -225,6 +225,26 @@ fn performance_observer_paint_entry_via_lumen_deliver() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-645: every paint-timing WPT opens with
+// `assert_implements(window.PerformancePaintTiming)`; the interface object must
+// exist, refuse `new`, and be the prototype of the entries the shell delivers.
+#[test]
+fn performance_paint_timing_interface_backs_paint_entries() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("\
+                var threw = false;\
+                try { new PerformancePaintTiming(); } catch (e) { threw = e instanceof TypeError; }\
+                _lumen_deliver_paint_entry('first-contentful-paint', 7.5);\
+                var e = performance.getEntriesByType('paint')[0];\
+                var j = e.toJSON();\
+                typeof window.PerformancePaintTiming === 'function' && threw\
+                    && e instanceof PerformancePaintTiming\
+                    && j.name === 'first-contentful-paint' && j.entryType === 'paint'\
+                    && j.startTime === 7.5 && j.duration === 0\
+            ").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn performance_observer_buffered_delivers_existing() {
     let rt = v8_runtime_with_dom(make_doc());

@@ -83,6 +83,7 @@ mod html_all;
 mod named_access;
 mod promise_reject;
 mod script_attribution;
+mod sheet_sync;
 mod style_flush;
 mod thread;
 
@@ -101,6 +102,7 @@ pub use overrides::{
     timezone_override_script, user_agent_override_script,
 };
 pub use runtime::{CustomPropertySnapshot, DomTouched, PseudoComputedStyles, V8JsRuntime};
+pub use sheet_sync::CascadeSource;
 pub(crate) use script_attribution::capture_call_site as script_attribution_capture_call_site;
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)
 // продолжала видеть помощника под прежним именем.
@@ -307,6 +309,22 @@ impl V8JsRuntime {
             // CSSOM-4/BUG-493: bundled handles a same-tick accessor native
             // needs to force a synchronous style+layout flush before reading
             // `computed_styles`/`layout_rects`/`custom_properties`.
+            // BUG-493: what reconciles the `<style>`/`<link>` registry with
+            // the DOM and records CSSOM edits — shared by the stylesheet
+            // natives, the same-tick flush and the shell's `patch_cascade`.
+            let sheet_sync = sheet_sync::SheetSync {
+                doc: Arc::clone(&doc),
+                nodes: Arc::clone(&stylesheet_nodes),
+                deltas: Arc::clone(&self.cssom_deltas),
+                dirty: Arc::clone(&self.cssom_dirty),
+                epoch: Arc::clone(&self.cssom_epoch),
+                relayout: Arc::clone(&dom_dirty),
+                touched: Arc::clone(&dom_touched),
+                synced: Arc::clone(&self.sheet_synced),
+                shadow_owned: Arc::clone(&self.shadow_sheet_owners),
+                pristine: Arc::clone(&self.patched_pristine),
+            };
+            *self.sheet_sync.lock().unwrap_or_else(|e| e.into_inner()) = Some(sheet_sync.clone());
             let flush_handles = FlushHandles {
                 doc: Arc::clone(&doc),
                 layout_rects: Arc::clone(&layout_rects),
@@ -321,9 +339,7 @@ impl V8JsRuntime {
                 scroll_states: Arc::clone(&scroll_states),
                 focused_nid: Arc::clone(&self.focused_nid),
                 last_flushed_focus: Arc::clone(&self.last_flushed_focus),
-                stylesheet_nodes: Arc::clone(&stylesheet_nodes),
-                cssom_deltas: Arc::clone(&self.cssom_deltas),
-                cssom_dirty: Arc::clone(&self.cssom_dirty),
+                sheet_sync: sheet_sync.clone(),
                 pseudo_styles_needed: Arc::clone(&self.pseudo_styles_needed),
                 pseudo_styles_collected: Arc::clone(&self.pseudo_styles_collected),
                 custom_props_needed: Arc::clone(&self.custom_props_needed),
@@ -532,9 +548,7 @@ impl V8JsRuntime {
                 scope,
                 ctx,
                 store,
-                Arc::clone(&stylesheet_nodes),
-                Arc::clone(&self.cssom_deltas),
-                Arc::clone(&self.cssom_dirty),
+                sheet_sync,
             )?;
 
             install::install_constructed_stylesheets(

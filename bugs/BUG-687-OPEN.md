@@ -45,7 +45,7 @@ constructor in the shim (`typeof window.PerformanceMark ===
 therefore falls back to the generic `[object Object]` tag instead of
 `[object PerformanceMark]`/`[object PerformanceMeasure]`.
 
-Same defect class as [BUG-645](BUG-645-OPEN.md)
+Same defect class as [BUG-645](BUG-645-FIXED.md)
 (`PerformancePaintTiming`) and [BUG-673](BUG-673-OPEN.md)
 (`PerformanceResourceTiming`/`PerformanceNavigationTiming`) — WebIDL
 interface objects for `PerformanceEntry` subtypes are systematically

@@ -103,7 +103,7 @@ identifier), not this bug.
 The *-invalid.html "should reject garbage" failures and the *-valid.html
 "serialization should be canonical" / "should set `<longhand>`" failures for
 these same properties are **not** this bug — they're
-[BUG-484](../bugs/BUG-484-OPEN.md) (`_lumen_make_style`'s inline style setter
+[BUG-484](../bugs/BUG-484-FIXED.md) (`_lumen_make_style`'s inline style setter
 never routes through the real CSS parser at all, for *any* property,
 implemented or not: it always stores the raw string and echoes it back
 verbatim). Evidence this is BUG-484 and not a symptom of the property being

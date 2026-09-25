@@ -700,7 +700,7 @@ pub struct Document {
     /// down only this set of node ids, keeping the layering boundary
     /// (`dom`/`layout` know nothing about CSP itself) intact. Computed once,
     /// against the tree as parsed — a `style` attribute added or changed by
-    /// a script afterward is not re-evaluated (see `bugs/BUG-811-OPEN.md`
+    /// a script afterward is not re-evaluated (see `bugs/BUG-811-FIXED.md`
     /// срез 23 "не покрыто").
     #[serde(default)]
     style_attr_csp_blocked: HashSet<NodeId>,

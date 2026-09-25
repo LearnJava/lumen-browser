@@ -589,7 +589,11 @@ pub(crate) struct Lumen {
     /// того как `spawn_image_requests`/`spawn_stream_image_loads` на shell-
     /// потоке успеют дойти до того же `<img>` — без общего множества оба пути
     /// задвоили бы запрос на одну и ту же картинку.
-    pub(crate) stream_images_requested: Arc<Mutex<std::collections::HashSet<String>>>,
+    ///
+    /// BUG-1048: рядом с URL-ами хук пишет и узел, который их запросил, —
+    /// неприкреплённый `new Image()` иначе не найти: `load`/`error` разносит
+    /// обход дерева (см. [`crate::dynamic_image_hook::ImageRequestLedger`]).
+    pub(crate) stream_images_requested: Arc<Mutex<crate::dynamic_image_hook::ImageRequestLedger>>,
     /// BUG-735: intrinsic-размеры `src` → `(width, height)` всех картинок,
     /// декодированных streaming/динамическим путём в текущей навигации.
     /// Карта живёт до конца навигации (а не дренируется за проход), потому что
@@ -857,6 +861,10 @@ pub(crate) struct Lumen {
     /// `collect_computed_styles` itself — set by `_lumen_get_computed_style`/
     /// `_lumen_get_computed_style_entries`/`_lumen_request_scroll`.
     pub(crate) computed_styles_needed_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// BUG-493: UI-side handle to the page's share of the paint cascade
+    /// (CSSOM edits, adopted sheets) — set by `set_js_ctx` in both
+    /// engine-thread modes, read by `refresh_dynamic_css`.
+    pub(crate) cascade_feed: Option<Arc<dyn crate::persistent_js::CascadeFeed>>,
     /// ADR-016 M2.3: `true` while a `run_animation_frame` batch dispatched to the
     /// engine thread is still executing. Set by the UI thread before firing the
     /// (fire-and-forget) rAF `task`, cleared by that task on completion. Guards

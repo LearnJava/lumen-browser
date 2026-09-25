@@ -95,7 +95,7 @@ drawing-images-to-the-canvas/drawimage_svg_image_with_foreign_object_does_not_ta
 Регистрировать битмап в момент, когда картинка декодирована, а не в момент
 разбора документа, и не стирать стор целиком: `set_img_bitmap(nid, image)`
 уже точечный. Достаточно, чтобы декодер (все три места, перечисленные в
-[BUG-630](BUG-630-OPEN.md): `decode_image`, ленивая загрузка,
+[BUG-630](BUG-630-FIXED.md): `decode_image`, ленивая загрузка,
 background-image) вызывал его для своего `nid`, а смена `src` — снимала
 прежнюю запись. Тогда же станет верным и `createImageBitmap`.
 

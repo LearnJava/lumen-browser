@@ -161,7 +161,9 @@ pub(super) fn is_template_element(doc: &lumen_dom::Document, nid: NodeId) -> boo
 
 /// BUG-341 S7: record `nid` as touched by a tracked DOM-mutation primitive.
 pub(super) fn record_dom_touch(tracker: &Mutex<DomTouched>, nid: NodeId) {
-    tracker.lock().unwrap_or_else(|e| e.into_inner()).nodes.insert(nid);
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.nodes.insert(nid);
+    t.epoch = t.epoch.wrapping_add(1);
 }
 
 /// BUG-341 S7: mark this cycle's DOM mutations as unattributable — a mutation
@@ -170,7 +172,9 @@ pub(super) fn record_dom_touch(tracker: &Mutex<DomTouched>, nid: NodeId) {
 /// nodes' selector-relevant state changed cannot be precisely determined.
 /// Forces the page pipeline to fall back to a full cascade this cycle.
 pub(super) fn record_dom_touch_unattributed(tracker: &Mutex<DomTouched>) {
-    tracker.lock().unwrap_or_else(|e| e.into_inner()).unattributed = true;
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    t.unattributed = true;
+    t.epoch = t.epoch.wrapping_add(1);
 }
 
 /// Mirrors `dom::set_text_content`.

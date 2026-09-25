@@ -64,7 +64,7 @@ impl Lumen {
         self.preload_dispatched.clear();
         // BUG-839: same reset as the navigation path above, for the first load.
         resource_timing::clear();
-        self.stream_images_requested = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        self.stream_images_requested = Arc::default();
         self.stream_image_sizes.clear();
         self.stream_image_pixels.clear();
         self.stream_image_sizes_dirty = false;

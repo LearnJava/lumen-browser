@@ -102,7 +102,7 @@ pub(crate) struct PageSnapshot {
     /// PH1-2c: image `src` keys already dispatched to background decode threads
     /// during the current streaming load. Dedup across intermediate frames so
     /// each `<img>` is fetched once. Cleared at the start of every navigation.
-    pub(crate) stream_images_requested: Arc<Mutex<std::collections::HashSet<String>>>,
+    pub(crate) stream_images_requested: Arc<Mutex<crate::dynamic_image_hook::ImageRequestLedger>>,
     /// BUG-735: mirrors [`Lumen::stream_image_sizes`].
     pub(crate) stream_image_sizes: HashMap<String, (u32, u32)>,
     /// BUG-938: mirrors [`Lumen::stream_image_pixels`].

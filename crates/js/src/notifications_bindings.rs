@@ -112,8 +112,8 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
   /**
    * Notification(title[, options]) — W3C Notifications API Level 1 §2.
    *
-   * Fires 'show' immediately when permission is 'granted'.
-   * Does nothing (silent drop) when permission is 'denied'.
+   * Fires 'show' when permission is 'granted'; otherwise fires 'error'
+   * and never shows.
    */
   function Notification(title, options) {
     if (!(this instanceof Notification)) {
@@ -170,6 +170,15 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
         if (!self._closed) {
           self._fire('show');
         }
+      });
+    } else {
+      // Spec §2.3 constructor step: permission not "granted" (denied, default,
+      // or a non-secure context) → queue a task to fire `error` on this and
+      // return it unshown. Deferred so handlers assigned right after `new`
+      // still hear it (WPT constructor-non-secure.html, BUG-642).
+      var failed = this;
+      queueMicrotask(function() {
+        failed._fire('error');
       });
     }
   }
@@ -408,6 +417,50 @@ cbResult
         let rt = rt_with_notifications(false);
         rt.eval("var n = new Notification('Hello');").unwrap();
         assert!(rt.take_notification_requests().is_empty());
+    }
+
+    #[test]
+    fn onerror_fired_when_not_granted() {
+        // BUG-642: a deferred microtask queue, so the handler is assigned after
+        // `new` exactly as a page (and WPT constructor-non-secure.html) does it.
+        let rt = rt_with_notifications(false);
+        let fired = rt
+            .eval(
+                r#"
+var q = [];
+globalThis.queueMicrotask = function(fn) { q.push(fn); };
+var errors = [];
+var n = new Notification('x');
+n.onerror = function(e) { errors.push('on:' + e.type); };
+n.addEventListener('error', function(e) { errors.push('listener:' + e.type); });
+while (q.length) q.shift()();
+errors.join(',')
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            fired,
+            JsValue::String("on:error,listener:error".to_string())
+        );
+    }
+
+    #[test]
+    fn onerror_not_fired_when_granted() {
+        let rt = rt_with_notifications(true);
+        let fired = rt
+            .eval(
+                r#"
+var q = [];
+globalThis.queueMicrotask = function(fn) { q.push(fn); };
+var errors = 0;
+var n = new Notification('x');
+n.onerror = function() { errors++; };
+while (q.length) q.shift()();
+errors
+"#,
+            )
+            .unwrap();
+        assert_eq!(fired, JsValue::Number(0.0));
     }
 
     #[test]

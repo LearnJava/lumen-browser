@@ -2932,6 +2932,19 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
     return _lumen_wrapper_cache_set(nid, sr);
 }
 
+// BUG-1130: the `ShadowRootInit` flags (DOM §4.8) `attachShadow()` was given,
+// by shadow-root nid — the arena records only `mode`. A declarative
+// (`<template shadowrootmode>`) root has no entry and reads the defaults.
+var _lumen_shadow_root_init = {};
+function _lumen_shadow_root_init_from(init) {
+    return {
+        delegatesFocus: !!(init && init.delegatesFocus),
+        slotAssignment: (init && init.slotAssignment === 'manual') ? 'manual' : 'named',
+        clonable: !!(init && init.clonable),
+        serializable: !!(init && init.serializable),
+    };
+}
+
 // DOM §4.4 Node.getRootNode(): shared shadow-boundary climb. `_lumen_get_parent`
 // never crosses a `ShadowRoot` (it has no parent by construction — BUG-878's
 // note on `Document::attach_shadow`), so hitting a null parent only means "top
@@ -7849,6 +7862,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var m = (init && init.mode === 'closed') ? 'closed' : 'open';
             var sr_nid = _lumen_attach_shadow(nid, m);
             _lumen_ce_shadow_host_by_nid[sr_nid] = nid;
+            _lumen_shadow_root_init[sr_nid] = _lumen_shadow_root_init_from(init);
             if (init && init.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[sr_nid] = { registry: init.customElements._registry, pending: init.customElements._pending };
             }
@@ -8940,6 +8954,134 @@ function _lumen_install_node_members(proto, descs, names) {
     _lumen_install_node_members(CharacterData.prototype, _LUMEN_WRAPPER_CD_DESCRIPTORS);
     _lumen_install_node_members(ProcessingInstruction.prototype, _LUMEN_WRAPPER_PI_DESCRIPTORS, ['target']);
 })();
+
+// ── BUG-1130: the rest of ShadowRoot's interfaces ────────────────────────────
+// `ShadowRoot : DocumentFragment : Node` (DOM §4.8) with `ParentNode` on
+// `DocumentFragment` and `DocumentOrShadowRoot` on `ShadowRoot`. `Node`
+// members come through `Node.prototype` (BUG-1122); the ParentNode element
+// traversal and `moveBefore` were element-only, and `DocumentOrShadowRoot` and
+// `ShadowRoot`'s own attributes did not exist — `sr.firstElementChild` was
+// `undefined` and Lit-based pages that read these failed. The element's
+// descriptors are reused as-is: each reads only `this.__nid__`, which a shadow
+// root has. The plain `new DocumentFragment()` literal does not inherit
+// `DocumentFragment.prototype`, so this reaches shadow roots only.
+_lumen_install_node_members(DocumentFragment.prototype, _LUMEN_WRAPPER_DESCRIPTORS,
+    ['firstElementChild', 'lastElementChild', 'childElementCount', 'moveBefore']);
+
+// DOM §4.8 ShadowRoot's init-derived attributes, readonly (see
+// `_lumen_shadow_root_init`).
+['delegatesFocus', 'slotAssignment', 'clonable', 'serializable'].forEach(function(k) {
+    Object.defineProperty(ShadowRoot.prototype, k, {
+        get: function() {
+            if (this.__nid__ === undefined) return undefined;
+            var init = _lumen_shadow_root_init[this.__nid__] || _lumen_shadow_root_init_from(null);
+            return init[k];
+        },
+        enumerable: true, configurable: true,
+    });
+});
+_lumen_define_on_handler_prop(ShadowRoot.prototype, 'onslotchange');
+
+// The root of `nid`'s own tree (not crossing a shadow boundary).
+function _lumen_tree_root_nid(nid) {
+    var cur = nid, pid;
+    while ((pid = _lumen_u2n(_lumen_get_parent(cur))) !== null) cur = pid;
+    return cur;
+}
+// Is `anc` a shadow-including inclusive ancestor of `nid` (DOM §4.2.2)?
+function _lumen_shadow_including_ancestor(anc, nid) {
+    var cur = nid;
+    while (cur !== null) {
+        if (cur === anc) return true;
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        cur = pid !== null ? pid : _lumen_u2n(_lumen_get_shadow_root_host(cur));
+    }
+    return false;
+}
+// DOM §4.2.2 «retarget A against B»: climb out of every shadow tree that does
+// not contain B, stopping at that tree's host. Node ids in, node id out.
+function _lumen_retarget_nid(a, b) {
+    var cur = a;
+    while (true) {
+        var root = _lumen_tree_root_nid(cur);
+        if (!_lumen_is_shadow_root(root) || _lumen_shadow_including_ancestor(root, b)) return cur;
+        var host = _lumen_u2n(_lumen_get_shadow_root_host(root));
+        if (host === null) return cur;
+        cur = host;
+    }
+}
+// The DocumentOrShadowRoot «retarget, then must be in this tree» step shared by
+// `activeElement`/`fullscreenElement`/`pointerLockElement` (HTML §6.6.3,
+// Fullscreen §4, Pointer Lock §5): null unless the retargeted node lies in the
+// shadow tree rooted at `srNid`.
+function _lumen_shadow_root_own_element(srNid, nid) {
+    if (nid === null || nid === undefined || nid === -1) return null;
+    var t = _lumen_retarget_nid(nid, srNid);
+    return _lumen_tree_root_nid(t) === srNid && t !== srNid ? _lumen_make_element(t) : null;
+}
+Object.defineProperties(ShadowRoot.prototype, {
+    activeElement: {
+        get: function() {
+            if (this.__nid__ === undefined) return undefined;
+            return _lumen_shadow_root_own_element(this.__nid__, _lumen_last_focused_nid);
+        },
+        enumerable: true, configurable: true,
+    },
+    fullscreenElement: {
+        get: function() {
+            if (this.__nid__ === undefined) return undefined;
+            return _lumen_shadow_root_own_element(this.__nid__, _fs_nid);
+        },
+        enumerable: true, configurable: true,
+    },
+    pointerLockElement: {
+        get: function() {
+            if (this.__nid__ === undefined) return undefined;
+            var el = _ptr_lock_el;
+            return _lumen_shadow_root_own_element(this.__nid__, el ? el.__nid__ : null);
+        },
+        enumerable: true, configurable: true,
+    },
+    // CSSOM §6.3: the sheets whose owner node is in this shadow tree, out of
+    // the same document-order registry `document.styleSheets` reads.
+    styleSheets: {
+        get: function() {
+            var srNid = this.__nid__;
+            if (srNid === undefined) return undefined;
+            return _lumen_make_indexed_list(function() {
+                var nids = _lumen_stylesheet_owner_nids();
+                var out = [];
+                for (var i = 0; i < nids.length; i++) {
+                    if (_lumen_tree_root_nid(nids[i]) === srNid) out.push(_lumen_make_css_style_sheet(i));
+                }
+                return out;
+            }, StyleSheetList.prototype);
+        },
+        enumerable: true, configurable: true,
+    },
+});
+// Web Animations §5.21 DocumentOrShadowRoot.getAnimations(): the document's
+// animations whose target is a shadow-including descendant of this root.
+ShadowRoot.prototype.getAnimations = function() {
+    var srNid = this.__nid__;
+    return _wa_doc_get_animations().filter(function(a) {
+        var t = a.effect && a.effect.target;
+        return !!t && t.__nid__ !== undefined && _lumen_shadow_including_ancestor(srNid, t.__nid__);
+    });
+};
+// CSSOM View §6.1: the document hit test, retargeted against this root.
+ShadowRoot.prototype.elementFromPoint = function(x, y) {
+    var n = _lumen_u2n(_lumen_element_from_point(Number(x), Number(y)));
+    return n !== null ? _lumen_make_element(_lumen_retarget_nid(n, this.__nid__)) : null;
+};
+ShadowRoot.prototype.elementsFromPoint = function(x, y) {
+    var srNid = this.__nid__, seen = {}, out = [];
+    _lumen_elements_from_point(Number(x), Number(y)).forEach(function(n) {
+        var t = _lumen_retarget_nid(n, srNid);
+        if (!seen[t]) { seen[t] = true; out.push(_lumen_make_element(t)); }
+    });
+    return out;
+};
 
 // Re-points a live wrapper at another interface. `svg.rs` does this to give a
 // `createElementNS` result its typed `SVG*Element` chain.
@@ -10481,21 +10623,31 @@ function _lumen_make_css_rule(sheetIdx, ruleIdx) {
 // `_lumen_stylesheet_owner_nids`/`V8JsRuntime::stylesheet_nodes`).
 function _lumen_make_css_style_sheet(sheetIdx) {
     var s = Object.create(CSSStyleSheet.prototype);
+    // BUG-493: the sheet is bound to its owner node, not to the position it
+    // had when this wrapper was made — a `<style>` inserted earlier in the
+    // document shifts every later registry index, and CSS-in-JS libraries
+    // keep `tag.sheet` for the page's whole lifetime. `-1` once the owner
+    // lost its sheet (removed from the tree, or its text was replaced).
+    var ownerNid = _lumen_stylesheet_owner_nids()[sheetIdx];
+    function cur() {
+        return ownerNid === undefined ? -1 : _lumen_stylesheet_index_for(ownerNid);
+    }
     function ownerNode() {
-        var nids = _lumen_stylesheet_owner_nids();
-        return sheetIdx < nids.length ? _lumen_make_element(nids[sheetIdx]) : null;
+        return cur() < 0 ? null : _lumen_make_element(ownerNid);
     }
     function cssRuleList() {
         return _lumen_make_css_rule_list(function() {
-            var n = _lumen_stylesheet_rule_count(sheetIdx);
+            var idx = cur();
             var out = [];
-            for (var i = 0; i < n; i++) out.push(_lumen_make_css_rule(sheetIdx, i));
+            if (idx < 0) return out;
+            var n = _lumen_stylesheet_rule_count(idx);
+            for (var i = 0; i < n; i++) out.push(_lumen_make_css_rule(idx, i));
             return out;
         });
     }
     Object.defineProperties(s, {
         type:     { get: function() { return 'text/css'; }, enumerable: true, configurable: true },
-        disabled: { get: function() { return _lumen_stylesheet_disabled(sheetIdx); }, enumerable: true, configurable: true },
+        disabled: { get: function() { var idx = cur(); return idx >= 0 && _lumen_stylesheet_disabled(idx); }, enumerable: true, configurable: true },
         ownerNode: { get: ownerNode, enumerable: true, configurable: true },
         href: { get: function() {
             var el = ownerNode();
@@ -10521,7 +10673,8 @@ function _lumen_make_css_style_sheet(sheetIdx) {
     // and native function names are already distinct per-registry pairs.
     s.insertRule = function(ruleText, index) {
         index = (index === undefined) ? 0 : (index >>> 0);
-        var result = _lumen_stylesheet_insert_rule(sheetIdx, String(ruleText), index);
+        var idx = cur();
+        var result = idx < 0 ? -1 : _lumen_stylesheet_insert_rule(idx, String(ruleText), index);
         if (result === -2) {
             throw new DOMException(
                 "Failed to execute 'insertRule' on 'CSSStyleSheet': the supplied text is not a valid rule.",
@@ -10536,7 +10689,8 @@ function _lumen_make_css_style_sheet(sheetIdx) {
     };
     s.deleteRule = function(index) {
         index = index >>> 0;
-        if (_lumen_stylesheet_delete_rule(sheetIdx, index) < 0) {
+        var idx = cur();
+        if (idx < 0 || _lumen_stylesheet_delete_rule(idx, index) < 0) {
             throw new DOMException(
                 "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
                 'IndexSizeError');
@@ -10548,9 +10702,11 @@ function _lumen_make_css_style_sheet(sheetIdx) {
 // `document.styleSheets` — a live `StyleSheetList` over the registry.
 function _lumen_make_style_sheet_list() {
     return _lumen_make_indexed_list(function() {
-        var nids = _lumen_stylesheet_owner_nids();
+        // BUG-493: only the document's own sheets — a `<style>` inside a
+        // shadow tree is listed by its `ShadowRoot.styleSheets` instead.
+        var idxs = _lumen_stylesheet_document_indices();
         var out = [];
-        for (var i = 0; i < nids.length; i++) out.push(_lumen_make_css_style_sheet(i));
+        for (var i = 0; i < idxs.length; i++) out.push(_lumen_make_css_style_sheet(idxs[i]));
         return out;
     }, StyleSheetList.prototype);
 }
