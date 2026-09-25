@@ -23,6 +23,13 @@ the time — read dates.
 
 ## Done
 
+- **LoAF culprit source location comes from the invoked function, not a stack walk (LONGTASK-1
+  срезы 4-5, P1, 2026-09-25).** `_lumen_capture_call_site(fn)` (`v8_runtime/script_attribution.rs`)
+  reads `ScriptOrigin`/name/line/column and `sourceCharPosition` from the `v8::Function` the dispatcher
+  is about to call. `GetScriptStartPosition()` has no `v8`-crate wrapper: it is bound locally in
+  `cpp/undetectable.cc` (stand-in declaration, like `MarkAsUndetectable`); V8 reports the offset of
+  the parameter list's `(`, not of the `function` keyword. `-1` (unavailable) maps to the default `0`.
+
 - **The document's named collections come from one cached factory ([BUG-892](../bugs/BUG-892-FIXED.md),
   P6, 2026-09-25).** `images`/`forms`/`scripts`/`links`/`embeds`/`plugins`/`anchors`/`applets` are
   getters on the `document` literal calling `_lumen_document_collection(key, selector)`, which

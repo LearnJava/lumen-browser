@@ -1604,7 +1604,7 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
 
 mod dom_suspend_focus;
 
-// ── LONGTASK-1 срез 4: culprit source-location attribution ────────────────
+// ── LONGTASK-1 срез 4-5: culprit source-location attribution ──────────────
 
 /// `_lumen_capture_call_site` is registered on every page runtime and
 /// returns `sourceURL`/`sourceFunctionName`/`sourceLine`/`sourceColumn` for
@@ -1625,6 +1625,28 @@ fn capture_call_site_reports_named_function_location() {
         rt.eval("__site.sourceLine > 0 && __site.sourceColumn > 0").unwrap(),
         JsValue::Bool(true)
     ));
+}
+
+/// Срез 5: `sourceCharPosition` — the character offset the local
+/// `GetScriptStartPosition()` binding reports — is now a real, non-default
+/// value for a function that isn't at the very start of its script (offset 0
+/// would be indistinguishable from the "unavailable" default).
+#[test]
+fn capture_call_site_reports_source_char_position() {
+    let rt = runtime_with_dom(make_doc(), "https://example.test/app.js");
+    // Ten-character prefix so a correct offset is distinguishable from both
+    // the `0` default and an accidental line/column value. V8's start
+    // position is the function literal's `(` (10 + "function " + name = 30),
+    // not the `function` keyword.
+    rt.eval(
+        "var a = 1;function my_named_fn() { return 1; }\n\
+             globalThis.__site = _lumen_capture_call_site(my_named_fn);",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("__site.sourceCharPosition").unwrap(),
+        JsValue::Number(30.0)
+    );
 }
 
 /// A non-function argument must not throw — the native declines and the

@@ -19,10 +19,9 @@
 //! `_lumen_deliver_long_animation_frame` drains it into `scripts[]` when the
 //! shell passes `scripts_json = null` (the only caller today,
 //! `V8PersistentJs::deliver_long_animation_frame`). `invoker`/`invokerType`
-//! and timing are therefore real measurements; `sourceURL`/
-//! `sourceFunctionName`/`sourceCharPosition` (culprit source location) stay
-//! the class defaults — that needs V8 stack introspection at the call site,
-//! a separate, larger slice.
+//! and timing are therefore real measurements; culprit source location
+//! (`sourceURL`/`sourceFunctionName`/`sourceLine`/`sourceColumn`/
+//! `sourceCharPosition`) was added in срезы 4-5 (`script_attribution.rs`).
 //!
 //! Spec: <https://w3c.github.io/long-animation-frames/>
 

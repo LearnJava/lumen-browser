@@ -44,7 +44,9 @@ var _lumen_frame_scripts = [];
 // LONGTASK-1 срез 4: optional 4th argument `fn` — the actual callback that
 // was invoked — feeds `_lumen_capture_call_site` (native, V8 stack/function
 // introspection, `script_attribution.rs`) to fill in `sourceURL`/
-// `sourceFunctionName`/`sourceLine`/`sourceColumn`. Best-effort: absent `fn`,
+// `sourceFunctionName`/`sourceLine`/`sourceColumn` (срез 5 added
+// `sourceCharPosition` to the same native call — see that module's docs for
+// the `-1`→`0` "unavailable" convention). Best-effort: absent `fn`,
 // a non-function `fn` (e.g. an EventListener object's `handleEvent`, or a
 // scope with the native missing — the classic-script/module-script parse-time
 // path has no single callback function at all, see `scripts.rs`) or an
@@ -68,6 +70,7 @@ function _lumen_record_script_timing(startTime, invoker, invokerType, fn) {
                 entry.sourceFunctionName = site.sourceFunctionName;
                 entry.sourceLine = site.sourceLine;
                 entry.sourceColumn = site.sourceColumn;
+                entry.sourceCharPosition = site.sourceCharPosition;
             }
         } catch (_) { /* best-effort attribution — never let it break dispatch */ }
     }
