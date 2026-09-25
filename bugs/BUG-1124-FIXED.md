@@ -1,6 +1,6 @@
 # BUG-1124 — CSP: внешний `<script nonce src>` не загружается — fetch-гейт `script-src` не учитывает nonce
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** shell (`crates/shell/src/scripts.rs:385-391` — `violating_fetch_policy(policy, ScriptSrc, url)` без nonce элемента; `crates/shell/src/csp_enforce.rs:720`)
 
@@ -96,3 +96,61 @@ CSP3 §6.7.2.1 «Does a request match a source list» / §6.1.1.1 `script-src` p
 check: для запроса с nonce элемента, совпадающим с `'nonce-…'` политики, — «Matches» без проверки
 URL; при `'strict-dynamic'` host-source и `'self'` игнорируются, а nonce/hash решают. Передать
 nonce `<script>` в fetch-гейт. Критерий: обе страницы репро дают `ext:true`; dropbox перемерить.
+
+## Исправление (P6, 2026-09-25)
+
+**Корень.** Гейт внешних парсерных `<script src>` в `resolve_script_sources` звал
+`violating_fetch_policy(policy, ScriptSrc, url)`. Это общий гейт fetch-директив, и он смотрит
+только на URL. Список `'nonce-abc' 'strict-dynamic'` URL не покрывает ни одним
+источником, поэтому каждый `<script nonce src>` блокировался ещё до запроса. Первые два
+шага CSP3 §6.7.1.1 (nonce элемента, хэши `integrity`) и шаг 1.3 (`'strict-dynamic'`) выпали.
+
+**Правка.**
+- `crates/network/src/csp.rs:242` — `CspPolicy::script_element_fetch_allows(url, self_origin,
+  &ScriptRequestMetadata)`: pre-request check директив скриптов по §6.7.1.1 шаг 1.
+  Совпавший непустой nonce пропускает запрос при любом URL. Хэши `integrity` пропускают его,
+  если в списке есть hash-источники и каждый хэш метаданных среди них; неизвестные алгоритмы
+  не учитываются, пустые метаданные обход не дают. При `'strict-dynamic'` парсерный скрипт
+  блокируется, остальные проходят, host-источники и `'self'` не смотрятся. Иначе решает URL.
+  Цепочка `script-src` → `default-src` прежняя (`effective_sources`).
+  `ScriptRequestMetadata` (`:376`) — nonce, `integrity`, `parser_inserted`.
+- `crates/shell/src/csp_enforce.rs:761` — `violating_script_element_policy`: аналог
+  `violating_fetch_policy` для элемента `<script>`.
+- `crates/shell/src/scripts.rs:410` — гейт передаёт `nonce`/`integrity` узла и
+  `parser_inserted: true` (весь этот путь вставлен парсером).
+
+**Тесты.** `crates/network/src/csp.rs:1086`-`1150` — шесть юнит-тестов: nonce при любом URL;
+nonce и `'strict-dynamic'` для парсерного скрипта (без nonce — блок, неверный nonce — блок,
+вставленный скриптом — пропуск); без `'strict-dynamic'` решает URL; обход по `integrity`
+требует каждый хэш; без hash-источников `integrity` не обходит; откат на `default-src`.
+`crates/shell/src/tests/scripts_and_frames.rs:62` —
+`resolve_script_sources_lets_a_nonced_external_script_through_csp`: `<script nonce=abc src>`
+проходит гейт, а без nonce и с чужим nonce остаётся `blocked_by_csp`.
+
+**Живая проверка** (dev-release, видимое окно `--maximized`, `LUMEN_NO_ADBLOCK=1`, MCP eval):
+
+| Страница | До | После | Chrome 153 |
+|---|---|---|---|
+| `/csp_nonce_ext_nostrict.html` | `inl:true, ext:false` | `inl:true, ext:true, out:'ext ran'` | то же |
+| `/csp_nonce_ext.html` | `inl:true, ext:false` | `inl:true, ext:true, dyn:true` | то же |
+| dropbox.com | 0 из 2 «Загружен скрипт», 95 узлов | 2 из 2, **1567** узлов, 1375 под `#root` | 1630 |
+
+Повторно на `main` с PERF-13 (одно HTTP/2-соединение на origin), три загрузки dropbox:
+(1) `ready` за 123 с, 2 из 2 скриптов, `eval` → `JS context not available`
+([BUG-1145](BUG-1145-OPEN.md)); (2) `ready` за 45 с, **1574** узла, 1426 под `#root`, в логе
+1 строка «Загружен скрипт» — лог перезаписан следующим прогоном, причину не установил;
+(3) `ready` за 133 с, 2 из 2, зонд упал на втором `eval`.
+
+На dropbox один динамический чанк (`c_api_v2_unauthed_client-*.js`) не загрузился:
+TLS-рукопожатие дважды оборвалось EOF. CSP тут ни при чём: `connect-src https://*`
+его пропускает. Причина — шторм свежих рукопожатий: 147 запросов, 14 рукопожатий оборвались
+(8 на `cfl.dropboxstatic.com`). Контроль: 30 параллельных `curl` к тому же URL дают 26×200,
+2× `schannel: failed to receive handshake` и 2 таймаута. Это класс
+[BUG-1115](BUG-1115-FIXED.md) (одно HTTP/2-соединение на origin, влит параллельно с этой
+правкой). Замер снят на сборке без PERF-13.
+
+**Найдено по ходу, заведено отдельно.** `dyn:true` на `/csp_nonce_ext.html` получен не через
+`'strict-dynamic'`. Вставленный скриптом `<script src>` грузится через JS-`fetch()`, и его
+судит `connect-src`, а `script-src` не смотрится вовсе. Страница с `script-src 'nonce-abc'`
+без `'strict-dynamic'` исполняет вставленный скрипт, Chrome — нет. Это
+[BUG-1175](BUG-1175-OPEN.md).

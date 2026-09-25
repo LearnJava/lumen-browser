@@ -224,6 +224,49 @@ impl CspPolicy {
             .any(|s| source_matches_url(s, url, self_origin))
     }
 
+    /// `true` if this policy's `script-src` (or `default-src`) lets a
+    /// `<script>` element fetch `url` — CSP3 §6.7.1.1 «Script directives
+    /// pre-request check» (BUG-1124). Unlike [`Self::fetch_directive_allows`],
+    /// which looks at the URL alone, a script element's request carries its
+    /// own cryptographic metadata, and the directive decides on it first:
+    ///
+    /// 1. the element's `nonce` matches a `'nonce-…'` source → allowed,
+    ///    whatever the URL;
+    /// 2. the list has hash sources and every hash of the element's
+    ///    `integrity` metadata is one of them → allowed;
+    /// 3. the list has `'strict-dynamic'` → a parser-inserted script is
+    ///    blocked, any other allowed — host sources, schemes and `'self'` are
+    ///    never consulted;
+    /// 4. otherwise the URL must match the source list, as for every other
+    ///    fetch directive.
+    pub fn script_element_fetch_allows(
+        &self,
+        url: &Url,
+        self_origin: Option<&Origin>,
+        request: &ScriptRequestMetadata<'_>,
+    ) -> bool {
+        let Some(sources) = self.effective_sources(&CspDirective::ScriptSrc) else {
+            return true;
+        };
+        // Step 1.1: «Does nonce match source list?» — a non-empty nonce equal
+        // to some nonce-source's base64-value.
+        if let Some(nonce) = request.nonce.filter(|n| !n.is_empty())
+            && sources.iter().any(|s| matches!(s, CspSource::Nonce(n) if n == nonce))
+        {
+            return true;
+        }
+        // Step 1.2: integrity bypass — only when the list names hashes at all.
+        if integrity_matches_hash_sources(sources, request.integrity) {
+            return true;
+        }
+        // Step 1.3.
+        if sources.contains(&CspSource::StrictDynamic) {
+            return !request.parser_inserted;
+        }
+        // Step 1.4.
+        sources.iter().any(|s| source_matches_url(s, url, self_origin))
+    }
+
     /// Returns the effective source list for `directive`, falling back to
     /// `child-src` and then `default-src` — the CSP3 §6.4 granular chain
     /// that `frame-src` and `worker-src` get (unlike every other fetch
@@ -324,6 +367,53 @@ impl CspPolicy {
             .iter()
             .any(|s| source_matches_url(s, target_url, self_origin))
     }
+}
+
+/// What a `<script>` element's request carries besides its URL — the inputs
+/// of CSP3 §6.7.1.1 «Script directives pre-request check» that
+/// [`CspPolicy::script_element_fetch_allows`] reads.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScriptRequestMetadata<'a> {
+    /// The element's cryptographic nonce (its `nonce` content attribute).
+    pub nonce: Option<&'a str>,
+    /// The element's `integrity` attribute, raw SRI metadata.
+    pub integrity: Option<&'a str>,
+    /// `true` for a script the HTML parser inserted, `false` for one a
+    /// script created — `'strict-dynamic'` trusts only the latter.
+    pub parser_inserted: bool,
+}
+
+/// CSP3 §6.7.1.1 step 1.2: `true` if `sources` holds at least one hash source
+/// and every hash in the SRI `integrity` metadata (SRI §3.3.2 «parse
+/// metadata»: whitespace-separated `alg-value[?options]`, unknown algorithms
+/// skipped) names one of them. Empty or absent metadata never bypasses.
+fn integrity_matches_hash_sources(sources: &[CspSource], integrity: Option<&str>) -> bool {
+    if !sources.iter().any(|s| matches!(s, CspSource::Hash { .. })) {
+        return false;
+    }
+    let mut hashes = integrity
+        .unwrap_or("")
+        .split_ascii_whitespace()
+        .filter_map(|token| {
+            let (alg, rest) = token.split_once('-')?;
+            let algorithm = match alg.to_ascii_lowercase().as_str() {
+                "sha256" => HashAlgorithm::Sha256,
+                "sha384" => HashAlgorithm::Sha384,
+                "sha512" => HashAlgorithm::Sha512,
+                _ => return None,
+            };
+            let value = rest.split_once('?').map_or(rest, |(v, _)| v);
+            Some((algorithm, value))
+        })
+        .peekable();
+    if hashes.peek().is_none() {
+        return false;
+    }
+    hashes.all(|(algorithm, value)| {
+        sources.iter().any(|s| {
+            matches!(s, CspSource::Hash { algorithm: a, value: v } if *a == algorithm && v == value)
+        })
+    })
 }
 
 /// `true` if `source` (one token of a fetch-directive source list) matches
@@ -984,5 +1074,78 @@ mod tests {
         assert!(only_form.navigate_to_allowed(&img_url("https://example.com/next"), None));
         let only_nav = parse_csp_header("navigate-to 'none'");
         assert!(only_nav.form_action_allowed(&img_url("https://example.com/submit"), None));
+    }
+
+    // ── BUG-1124: CSP3 §6.7.1.1 script directives pre-request check ───────
+
+    fn script_req<'a>(nonce: Option<&'a str>, integrity: Option<&'a str>, parser_inserted: bool) -> ScriptRequestMetadata<'a> {
+        ScriptRequestMetadata { nonce, integrity, parser_inserted }
+    }
+
+    #[test]
+    fn script_element_matching_nonce_allows_any_url() {
+        let p = parse_csp_header("script-src 'nonce-abc'");
+        let url = img_url("https://cdn.other.example/ext.js");
+        assert!(p.script_element_fetch_allows(&url, None, &script_req(Some("abc"), None, true)));
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(Some("abd"), None, true)));
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(None, None, true)));
+        // An empty nonce never matches, even against an empty-looking source.
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(Some(""), None, true)));
+    }
+
+    #[test]
+    fn script_element_nonce_bypasses_strict_dynamic_for_parser_inserted() {
+        let p = parse_csp_header("script-src 'nonce-abc' 'strict-dynamic'");
+        let url = img_url("https://example.com/ext.js");
+        assert!(p.script_element_fetch_allows(&url, None, &script_req(Some("abc"), None, true)));
+    }
+
+    #[test]
+    fn strict_dynamic_ignores_host_sources_for_parser_inserted() {
+        // 'strict-dynamic' drops host/scheme/'self' matching: a parser-inserted
+        // script without a nonce is blocked even from an allowed host, one a
+        // script inserted is allowed from anywhere.
+        let p = parse_csp_header("script-src 'nonce-abc' 'strict-dynamic' https: 'self'");
+        let doc_origin = origin("https://example.com/");
+        let url = img_url("https://example.com/dyn.js");
+        assert!(!p.script_element_fetch_allows(&url, Some(&doc_origin), &script_req(None, None, true)));
+        assert!(p.script_element_fetch_allows(&url, Some(&doc_origin), &script_req(None, None, false)));
+    }
+
+    #[test]
+    fn script_element_without_strict_dynamic_falls_back_to_url() {
+        let p = parse_csp_header("script-src 'nonce-abc' cdn.example.com");
+        assert!(p.script_element_fetch_allows(&img_url("https://cdn.example.com/a.js"), None, &script_req(None, None, true)));
+        assert!(!p.script_element_fetch_allows(&img_url("https://evil.example/a.js"), None, &script_req(None, None, false)));
+    }
+
+    #[test]
+    fn script_element_integrity_bypass_needs_every_hash_listed() {
+        let p = parse_csp_header("script-src 'sha256-AAA' 'sha384-BBB'");
+        let url = img_url("https://evil.example/a.js");
+        assert!(p.script_element_fetch_allows(&url, None, &script_req(None, Some("sha256-AAA"), true)));
+        assert!(p.script_element_fetch_allows(&url, None, &script_req(None, Some("sha256-AAA?opt sha384-BBB"), true)));
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(None, Some("sha256-AAA sha384-CCC"), true)));
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(None, Some(""), true)));
+        // Unknown algorithms are skipped, not failed; with nothing left there
+        // is no bypass.
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(None, Some("md5-AAA"), true)));
+    }
+
+    #[test]
+    fn script_element_integrity_without_hash_sources_is_not_a_bypass() {
+        let p = parse_csp_header("script-src cdn.example.com");
+        let url = img_url("https://evil.example/a.js");
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(None, Some("sha256-AAA"), true)));
+    }
+
+    #[test]
+    fn script_element_falls_back_to_default_src() {
+        let p = parse_csp_header("default-src 'nonce-abc'");
+        let url = img_url("https://example.com/a.js");
+        assert!(p.script_element_fetch_allows(&url, None, &script_req(Some("abc"), None, true)));
+        assert!(!p.script_element_fetch_allows(&url, None, &script_req(None, None, true)));
+        let none = parse_csp_header("img-src 'none'");
+        assert!(none.script_element_fetch_allows(&url, None, &script_req(None, None, true)));
     }
 }

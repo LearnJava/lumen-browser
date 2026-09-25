@@ -397,8 +397,18 @@ pub(crate) fn resolve_script_sources(
                 .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url));
             let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
             if let Some((policy, _)) = &csp_gate {
-                let violated: Vec<String> = crate::csp_enforce::violating_fetch_policy(
-                    policy, &lumen_network::csp::CspDirective::ScriptSrc, gate_url, self_origin.as_ref(),
+                // BUG-1124: `script-src` решает по метаданным элемента раньше,
+                // чем по URL (CSP3 §6.7.1.1): совпавший nonce или хэши
+                // `integrity` пропускают запрос, `'strict-dynamic'` отключает
+                // host-источники. Все скрипты этого пути вставлены парсером.
+                let node = doc.get(*nid);
+                let request = lumen_network::csp::ScriptRequestMetadata {
+                    nonce: node.get_attr("nonce"),
+                    integrity: node.get_attr("integrity"),
+                    parser_inserted: true,
+                };
+                let violated: Vec<String> = crate::csp_enforce::violating_script_element_policy(
+                    policy, gate_url, self_origin.as_ref(), &request,
                 ).into_iter().map(str::to_owned).collect();
                 if !violated.is_empty() {
                     return Some(ResolvedScript::blocked_by_csp(*nid, gate_url.to_owned(), violated));
