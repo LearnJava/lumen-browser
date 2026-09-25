@@ -25,7 +25,7 @@ This is distinct from the already-covered `ruby-*` gaps in the same slice:
   and `ruby-position-valid.html`/`ruby-position.html` (parsing/basic
   positioning) both already pass 100%, so `ruby-position` **is** parsed and
   **is** applied for the plain `over`/`under`/`inter-character` values.
-- [BUG-484](BUG-484-OPEN.md) (inline style setter validation) does not apply
+- [BUG-484](BUG-484-FIXED.md) (inline style setter validation) does not apply
   either — these are valid values being *set* successfully, just not
   producing the spec'd layout.
 

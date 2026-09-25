@@ -489,7 +489,7 @@ fn frame_subresources_no_policy_keeps_inline_style() {
 /// блокирует его СОБСТВЕННЫЙ атрибут `style=""` — срез 23 дал это top-level
 /// документу через `page_pipeline.rs::build_page_cascade`, срез 22 дал
 /// инлайновый `<style>` фрейма, но атрибут внутри `<iframe>` оставался
-/// непокрытым (`bugs/BUG-811-OPEN.md` срез 23 "не покрыто").
+/// непокрытым (`bugs/BUG-811-FIXED.md` срез 23 "не покрыто").
 #[test]
 fn frame_subresources_reports_csp_blocked_style_attr() {
     let doc = lumen_html_parser::parse(

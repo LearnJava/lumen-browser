@@ -339,7 +339,7 @@ pub(crate) fn flush_parser_inserts(
 /// `doc` is used only to compute the CSP gate (GAP-CSPENF срез 6) — the same
 /// "recompute the policy at every enforcement point" pattern already used by
 /// `subresources.rs::fetch_and_decode_images`/`scripts.rs::run_scripts_with_dom`
-/// (see `bugs/BUG-811-OPEN.md` срез 5's rationale). A `script-src`/
+/// (see `bugs/BUG-811-FIXED.md` срез 5's rationale). A `script-src`/
 /// `default-src` mismatch is checked against the resolved URL before either
 /// branch below touches the filesystem or the network. `upgrade-insecure-
 /// requests` (срез 45) rewrites an `http:` URL to `https:` before that gate

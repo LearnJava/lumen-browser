@@ -11,7 +11,7 @@
 `grep -rn "overflow-anchor\|overflow_anchor" crates/engine/css-parser/src/` —
 zero hits: the property isn't parsed at all (any value, valid or not, is
 silently accepted/ignored by the generic inline-style passthrough, i.e. the
-[BUG-484](BUG-484-OPEN.md) pattern). `grep -rln "ScrollAnchor\|scroll.anchor"
+[BUG-484](BUG-484-FIXED.md) pattern). `grep -rln "ScrollAnchor\|scroll.anchor"
 crates/ -i` finds a single hit, a doc-comment in
 `crates/engine/layout/src/style.rs:896` noting the engine has "no support for
 `overflow-anchor`" — there is no anchor-node-selection algorithm, no

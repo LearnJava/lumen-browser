@@ -38,7 +38,7 @@ supported" feature-detect before ever reaching interpolation math),
 `parsing/text-size-adjust-invalid.html` (4) and one subtest of
 `parsing/text-size-adjust-valid.html` (`calc(10% + 5%)` not canonicalized to
 `calc(15%)`) fail on the separate, generic inline-`style`-setter gap
-([BUG-484](BUG-484-OPEN.md)) instead.
+([BUG-484](BUG-484-FIXED.md)) instead.
 
 ## .ini
 

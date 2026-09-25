@@ -95,7 +95,7 @@ clamping itself is implemented"): the 5 `css-device-adapt` files now get a
 real `visualViewport.scale` reading (`1`) instead of a `TypeError`, but that
 reading is not the spec-correct clamped value (`2.0` etc.) — actual `<meta
 viewport>` scale-clamping is a separate, much larger feature, out of a P3
-point-fix's scope. This is the same root cause [BUG-875](bugs/BUG-875-OPEN.md)
+point-fix's scope. This is the same root cause [BUG-875](bugs/BUG-875-FIXED.md)
 tracks under [`ROADMAP.md`](../ROADMAP.md)'s `GAP-VVPORT` — BUG-875 predates
 this fix by a WPT-RUN-6 re-discovery of the identical "`window.visualViewport`
 absent" symptom, filed after this bug (which is the earlier, 2026-08-02

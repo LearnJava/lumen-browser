@@ -48,7 +48,7 @@ field at all, not just the resolved-value map), `inheritance.html` (4 of its
 [BUG-472](BUG-472-OPEN.md)), `parsing/overscroll-behavior-computed.html` (8
 of its 16 fails, same split). The remaining `-block`/`-inline` subtests in
 `parsing/overscroll-behavior-invalid.html` fail on the separate, generic
-inline-`style`-setter gap ([BUG-484](BUG-484-OPEN.md)) instead, since that
+inline-`style`-setter gap ([BUG-484](BUG-484-FIXED.md)) instead, since that
 gap accepts any string regardless of whether the property name is
 recognized.
 
@@ -101,5 +101,5 @@ forms alike — that shared remainder is [BUG-472](BUG-472-OPEN.md)
 (`getComputedStyle` resolved-value gaps, ДОРАБОТКА → CSSOM-3), not
 BUG-516; both `.ini` files were re-attributed accordingly.
 `parsing/overscroll-behavior-{valid,invalid}.html` were not touched — their
-`-block`/`-inline` subtests are governed by [BUG-484](BUG-484-OPEN.md), as
+`-block`/`-inline` subtests are governed by [BUG-484](BUG-484-FIXED.md), as
 the original filing already noted, and are unaffected by this fix.

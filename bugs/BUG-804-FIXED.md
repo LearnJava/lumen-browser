@@ -147,7 +147,7 @@ function _lumen_resource_track(nid, local) {
 - [BUG-571](BUG-571-FIXED.md) / [BUG-722](BUG-722-FIXED.md) —
   `createElement`-путь для `<script>`/`<link>`; **работает**, подтверждено
   A/B выше. Чинить их заново не нужно.
-- [BUG-630](BUG-630-OPEN.md) (`<img>`), [BUG-798](BUG-798-OPEN.md)
+- [BUG-630](BUG-630-FIXED.md) (`<img>`), [BUG-798](BUG-798-OPEN.md)
   (`<embed>`/`<object>`) — тот же КЛАСС («элемент не сообщает об исходе
   загрузки»), но другие элементы и другой код; общего фикса с ними нет.
 
@@ -199,7 +199,7 @@ loadObserver.load)`), поэтому слова `load` в самом файле 
 |---|---|
 | `script-parsed-load-listener` | `found-parsed-script=yes`, `slow-script-ran=number` — скрипт **выполнился**, но ни `addEventListener('load')`, ни `onload` не сработали |
 | `link-parsed-stylesheet-load` | `found-parsed-link=yes`; лист загружен (сервер видел запрос), событий нет ни в одной форме |
-| `style-element-load` | `style-appended sheet=no`, `style-sheet-later=no` — `load` нет никогда, и `style.sheet` остаётся `null` (CSSOM, [BUG-471](BUG-471-OPEN.md)) |
+| `style-element-load` | `style-appended sheet=no`, `style-sheet-later=no` — `load` нет никогда, и `style.sheet` остаётся `null` (CSSOM, [BUG-471](BUG-471-FIXED.md)) |
 | `script-dynamic-load` / `script-dynamic-404` (контроль) | `script-load` и `script-error` — созданный скриптом элемент событие даёт |
 
 Маркер расширен третьей формой: `LoadObserver`/`test_render_blocking` плюс
@@ -347,4 +347,4 @@ for (var i = 0; i < video.textTracks.length; i++)
   `ModuleFailure` схлопывается в `JsResult`);
 * `<link media=print>` на экране не грузится вовсе, поэтому не даёт и события
   (остаток среза 2);
-* `style.sheet` по-прежнему `null` — CSSOM, [BUG-471](BUG-471-OPEN.md).
+* `style.sheet` по-прежнему `null` — CSSOM, [BUG-471](BUG-471-FIXED.md).
