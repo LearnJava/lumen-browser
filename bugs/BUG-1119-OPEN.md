@@ -63,3 +63,13 @@ cookie, выставленная скриптом, уходит в заголо�
 странице imdb все шесть проб-записей, включая голое `'t1=a'`, читаются обратно как `''`. Сайт
 отдаёт 202 с челленджем снова, после четырёх попыток — «Max challenge attempts exceeded»
 (14 узлов). espn и amazon стоят на том же челлендже.
+
+## Реальный сайт: fandom (2026-09-25, P6, после BUG-1121)
+
+После починки `document.referrer` ([BUG-1121](BUG-1121-FIXED.md)) модуль `tracking-*.js` на
+fandom больше не падает, и первой ошибкой верхнего уровня становится
+`SyntaxError: "undefined" is not valid JSON` в `_common-DwRVE_Wm.js` (`O()` → `ge()`,
+`initLogoTakeover`): `JSON.parse(D.get("Geo"))`, где `D` читает cookie `Geo`. В Chrome
+`document.cookie` на fandom — 9 записей, `Geo={"region":"01","city":"tallinn",…,"country":"EE"}`;
+в Lumen — одна пустая запись, `Geo` нет. Cookie ставит сервер или скрипт — в любом случае
+`document.cookie` её не видит; это тот же дефект, отдельной заявки не заводится.

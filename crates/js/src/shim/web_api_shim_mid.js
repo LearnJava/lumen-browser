@@ -4288,6 +4288,8 @@ function _lumen_build_detached_document(proto, contentType) {
     Object.defineProperty(doc, 'inputEncoding', { get: function() { return 'UTF-8'; },       enumerable: true });
     Object.defineProperty(doc, 'contentType',   { get: function() { return contentType; },   enumerable: true });
     Object.defineProperty(doc, 'location',      { get: function() { return null; },          enumerable: true });
+    // BUG-1121: a created document was never fetched, so it has no referrer.
+    Object.defineProperty(doc, 'referrer',      { get: function() { return ''; },            enumerable: true });
     // BUG-586: a document with no browsing context has no effective domain —
     // the getter reports the empty string and the setter always throws,
     // mirroring the live document's opaque-origin branch above.
@@ -10975,6 +10977,10 @@ var document = {
     // to inherit from, …) — no effective domain, so it throws rather than
     // silently accepting a value that can never take effect.
     get domain() { return _lumen_document_domain; },
+    // BUG-1121 (HTML LS §3.1.2): readonly; '' when the document has no
+    // referrer. Analytics (mixpanel, Yahoo Rapid, fandom tracking) call
+    // `.indexOf`/`.search` on it unguarded — `undefined` threw at top level.
+    get referrer() { return _lumen_document_referrer; },
     set domain(v) {
         if (!_lumen_loc_parts.hasAuthority) {
             throw new DOMException(

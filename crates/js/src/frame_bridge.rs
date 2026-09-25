@@ -2065,6 +2065,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     });
     Object.defineProperty(d, 'URL',               { get: function() { return _lumen_f_url(bid); }, configurable: true });
     Object.defineProperty(d, 'documentURI',       { get: function() { return _lumen_f_url(bid); }, configurable: true });
+    // BUG-1121: строка, а не undefined. Реферер `<iframe src>` (GAP-REFERRER
+    // срез 4 шлёт его в запросе) в документ ребёнка не протянут — BUG-1156.
+    Object.defineProperty(d, 'referrer',          { get: function() { return ''; }, configurable: true });
     // Ребёнок получил window load ещё в срезе 1 — readyState к моменту доступа
     // всегда «complete»; отдельного трекинга переходов срез 2 не ведёт.
     Object.defineProperty(d, 'readyState',        { get: function() { return 'complete'; }, configurable: true });
