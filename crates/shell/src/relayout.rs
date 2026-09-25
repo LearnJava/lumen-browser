@@ -2271,7 +2271,7 @@ fn collect_js_data(
     let client_rects = step!("collect_client_rects", collect_client_rects(lb_ref, &doc_guard));
     let hit_test_tree = step!("clone_hit_test_tree", Arc::new(lb_ref.clone()));
     let styles = if computed_styles_needed {
-        Some(step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None)))
+        Some(step!("collect_computed_styles", collect_computed_styles(lb_ref, &doc_guard, None, viewport)))
     } else {
         None
     };

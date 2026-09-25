@@ -901,6 +901,10 @@ pub(crate) fn install_computed_styles(
         let needed = Arc::clone(&computed_styles_needed);
         reg!(scope, ctx, store, "_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
             needed.store(true, Ordering::Relaxed);
+            // CSSOM-9: the snapshot's stashed computed values are not properties.
+            if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) {
+                return String::new();
+            }
             flush.maybe_flush();
             cs.lock()
                 .unwrap()
@@ -1293,15 +1297,39 @@ pub(crate) fn install_crypto_and_typed_om(
             }
             _style_entries_to_json(pairs)
         });
-        // Iteration source of `computedStyleMap()`: the resolved cascade, i.e.
-        // exactly what `getComputedStyle` answers from — standard properties
-        // plus this node's resolved custom properties (BUG-732 keeps the latter
-        // in their own `Arc`-shared map, so they are merged here rather than
-        // stored per node).
+        // CSSOM-9 (BUG-472): `computedStyleMap().get(prop)` — the *computed*
+        // value, where `_lumen_get_computed_style` answers the resolved one.
+        // The snapshot keeps the two apart only for the geometry properties
+        // layout replaced with used px values (`COMPUTED_VALUE_KEY_PREFIX`);
+        // every other property's computed value is its resolved value.
+        {
+            let cs = Arc::clone(&computed_styles);
+            let flush = flush.clone();
+            let needed = Arc::clone(&flush.computed_styles_needed);
+            reg!(scope, ctx, store, "_lumen_get_computed_value", move |nid: u32, prop: String| -> String {
+                needed.store(true, Ordering::Relaxed);
+                flush.maybe_flush();
+                let map = cs.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(m) = map.get(&nid) else { return String::new() };
+                if prop.starts_with(lumen_layout::COMPUTED_VALUE_KEY_PREFIX) {
+                    return String::new();
+                }
+                m.get(&format!("{}{prop}", lumen_layout::COMPUTED_VALUE_KEY_PREFIX))
+                    .or_else(|| m.get(&prop))
+                    .cloned()
+                    .unwrap_or_default()
+            });
+        }
+        // Iteration source of both `getComputedStyle()` (`computed == false`:
+        // resolved values) and `computedStyleMap()` (`computed == true`:
+        // computed values, CSSOM-9) — standard properties plus this node's
+        // resolved custom properties (BUG-732 keeps the latter in their own
+        // `Arc`-shared map, so they are merged here rather than stored per
+        // node).
         let cs = Arc::clone(&computed_styles);
         let cp = Arc::clone(&custom_properties);
         let computed_styles_needed_for_entries = Arc::clone(&flush.computed_styles_needed);
-        reg!(scope, ctx, store, "_lumen_get_computed_style_entries", move |nid: u32| -> String {
+        reg!(scope, ctx, store, "_lumen_get_computed_style_entries", move |nid: u32, computed: bool| -> String {
             // BUG-935 S43/S44: `computedStyleMap()` merges custom properties
             // into its answer (below) and is itself a `computed_styles` read,
             // so both "needed" flags must be set here.
@@ -1314,7 +1342,11 @@ pub(crate) fn install_crypto_and_typed_om(
             if let Ok(map) = cs.lock()
                 && let Some(m) = map.get(&nid)
             {
-                pairs.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
+                let prefix = lumen_layout::COMPUTED_VALUE_KEY_PREFIX;
+                pairs.extend(m.iter().filter(|(k, _)| !k.starts_with(prefix)).map(|(k, v)| {
+                    let v = if computed { m.get(&format!("{prefix}{k}")).unwrap_or(v) } else { v };
+                    (k.clone(), v.clone())
+                }));
             }
             if let Ok(map) = cp.lock()
                 && let Some(m) = map.get(&nid)

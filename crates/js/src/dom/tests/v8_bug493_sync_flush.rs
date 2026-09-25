@@ -75,3 +75,33 @@ fn get_computed_style_without_pushed_stylesheet_stays_a_plain_cache_read() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::String(String::new()));
 }
+
+/// CSSOM-9 (BUG-472): `getComputedStyle` answers the *resolved* value — the
+/// used px width of an auto-width block (800px viewport − 2×8px UA body
+/// margin) and its percentage padding in px — while `computedStyleMap()`
+/// keeps the *computed* `auto` / `%` (CSS Typed OM L1 §5.3), both off the
+/// one snapshot.
+#[test]
+fn get_computed_style_resolves_geometry_but_typed_om_keeps_computed() {
+    let rt = v8_runtime_with_flush(make_doc());
+    let r = rt
+        .eval(
+            "(function() {
+                var el = document.getElementById('main');
+                el.style.paddingLeft = '10%';
+                var cs = getComputedStyle(el);
+                var map = el.computedStyleMap();
+                var list = [];
+                for (var p of cs) list.push(p);
+                return [cs.width, cs.paddingLeft, String(map.get('width')),
+                        String(map.get('padding-left')),
+                        list.indexOf('width') >= 0, list.some(function(p) { return p.indexOf(':') >= 0; }),
+                        cs.getPropertyValue('computed:width')].join('|');
+            })()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("705.6px|78.4px|auto|10%|true|false|".to_string())
+    );
+}

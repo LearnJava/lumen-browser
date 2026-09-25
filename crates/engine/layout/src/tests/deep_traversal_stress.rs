@@ -89,7 +89,7 @@ fn serialize_layout_tree_deep_chain_does_not_overflow_the_stack() {
 fn collect_computed_styles_deep_chain_does_not_overflow_the_stack() {
     let root = deep_chain(SHALLOWER_DEPTH);
     let doc = lumen_dom::Document::new();
-    let styles = collect_computed_styles(&root, &doc, None);
+    let styles = collect_computed_styles(&root, &doc, None, Size::new(800.0, 600.0));
     assert_eq!(styles.len(), SHALLOWER_DEPTH + 1);
     assert!(styles.contains_key(&0));
     assert!(styles.contains_key(&(SHALLOWER_DEPTH as u32)));

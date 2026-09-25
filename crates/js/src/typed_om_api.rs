@@ -941,14 +941,16 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   }
   StylePropertyMapReadOnly.prototype.__computed__ = true;
 
-  // Resolved value of one property, or '' when this map has none.
+  // Computed value of one property, or '' when this map has none.
   StylePropertyMapReadOnly.prototype.__lookup__ = function(prop) {
     var name = camelToKebab(String(prop));
     if (!this.__computed__) return _lumen_get_style_property(this.__nid__, name) || '';
     // Custom properties live in their own inherited snapshot (BUG-732), so the
     // computed map has to ask the same two bindings `getComputedStyle` does.
     if (name.slice(0, 2) === '--') return _lumen_get_custom_property(this.__nid__, name) || '';
-    return _lumen_get_computed_style(this.__nid__, name) || '';
+    // CSSOM-9: computed, not resolved — `width: auto` stays `auto` here even
+    // though `getComputedStyle` answers the used px value.
+    return _lumen_get_computed_value(this.__nid__, name) || '';
   };
 
   // All declarations of this map as [property, value] pairs, property-sorted.
@@ -956,7 +958,7 @@ const TYPED_OM_SHIM: &str = r#"(function(global) {
   // the JSON error surface rather than report "no declarations".
   StylePropertyMapReadOnly.prototype.__entries__ = function() {
     return JSON.parse(this.__computed__
-      ? _lumen_get_computed_style_entries(this.__nid__)
+      ? _lumen_get_computed_style_entries(this.__nid__, true)
       : _lumen_get_style_entries(this.__nid__));
   };
 

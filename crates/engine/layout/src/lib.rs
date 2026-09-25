@@ -41,6 +41,7 @@ pub mod pagination;
 pub mod property_trees;
 pub mod ruby;
 pub mod rule_index;
+mod resolved_geometry;
 pub mod selection;
 pub mod selector_query;
 pub mod scroll_timeline;
@@ -119,6 +120,7 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
+pub use resolved_geometry::COMPUTED_VALUE_KEY_PREFIX;
 pub use inert::{collect_inert_regions, is_inert, InertRegion};
 pub use starting_style::{resolve_starting_style, StartingStyleTracker};
 pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
@@ -1553,13 +1555,20 @@ fn content_height(b: &LayoutBox) -> f32 {
 /// sites that reuse an already-built `LayoutBox` without a matching fresh
 /// [`CounterMap`] (e.g. `relayout_scoped`'s incremental pass); such sites keep
 /// today's behaviour (an empty entry) for this one element shape.
+///
+/// `viewport` is the initial containing block: CSSOM-9 (BUG-472) replaces the
+/// computed `width`/`height`/`margin-*`/`padding-*`/inset values of every
+/// element's principal box with their used px values (CSSOM §6.7.2
+/// resolved value) — see [`resolved_geometry`] — and percentages / viewport
+/// units resolve against it.
 pub fn collect_computed_styles(
     root: &LayoutBox,
     doc: &lumen_dom::Document,
     counters: Option<&CounterMap>,
+    viewport: lumen_core::geom::Size,
 ) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
-    collect_computed_styles_rec(doc, root, &mut out);
+    collect_computed_styles_rec(doc, root, viewport, &mut out);
     if let Some(counters) = counters {
         for i in 0..doc.len() {
             let idx = i as u32;
@@ -1603,14 +1612,19 @@ pub const INLINE_SEGMENT_PROPERTIES: [&str; 3] = ["visibility", "white-space", "
 fn collect_computed_styles_rec(
     doc: &lumen_dom::Document,
     root: &LayoutBox,
+    viewport: lumen_core::geom::Size,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
-    let mut stack: Vec<&LayoutBox> = vec![root];
-    while let Some(b) = stack.pop() {
+    let mut stack: Vec<(&LayoutBox, resolved_geometry::GeomCtx)> =
+        vec![(root, resolved_geometry::GeomCtx::root(viewport))];
+    while let Some((b, ctx)) = stack.pop() {
         // First box in tree order wins — see `collect_layout_rects_rec` for why
         // several boxes can carry the same `NodeId`.
-        out.entry(b.node.index() as u32)
-            .or_insert_with(|| computed_style_to_map(&b.style));
+        out.entry(b.node.index() as u32).or_insert_with(|| {
+            let mut m = computed_style_to_map(&b.style);
+            resolved_geometry::apply_used_geometry(&mut m, b, &ctx, viewport);
+            m
+        });
         if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
             for seg in segments {
                 // `NodeId(0)` is the document root, which `InlineSegment::source_node`
@@ -1629,7 +1643,8 @@ fn collect_computed_styles_rec(
                 }
             }
         }
-        stack.extend(b.children.iter().rev());
+        let child_ctx = resolved_geometry::child_ctx(b, &ctx, viewport);
+        stack.extend(b.children.iter().rev().map(|c| (c, child_ctx)));
     }
 }
 
