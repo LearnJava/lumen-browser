@@ -3,7 +3,10 @@
 //! Installs `navigator.permissions` (a `Permissions` singleton), the
 //! `Permissions` and `PermissionStatus` interface objects, and the internal
 //! `_lumen_permission_state_changed(name)` notifier the rest of the engine
-//! calls when a permission's state really moves.
+//! calls when a permission's state really moves. `Permissions` carries both
+//! `query()` and the WICG Requesting Permissions `request()`
+//! (<https://wicg.github.io/permissions-request/>, [BUG-650]); the older
+//! `requestAll()` was dropped from that draft and is not installed.
 //!
 //! # The two rules this module exists to enforce (BUG-386)
 //!
@@ -55,6 +58,7 @@
 //!
 //! [BUG-385]: ../../../bugs/BUG-385-FIXED.md
 //! [BUG-624]: ../../../bugs/BUG-624-FIXED.md
+//! [BUG-650]: ../../../bugs/BUG-650-FIXED.md
 
 /// Install the Permissions API.
 ///
@@ -189,6 +193,13 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
       value: value, writable: true, enumerable: false, configurable: true });
   }
 
+  // WebIDL §3.7.6: a regular operation is a writable, *enumerable*,
+  // configurable data property of the interface prototype object.
+  function defOp(obj, name, fn) {
+    Object.defineProperty(obj, name, {
+      value: fn, writable: true, enumerable: true, configurable: true });
+  }
+
   function defAttr(obj, name, get, set) {
     Object.defineProperty(obj, name, {
       get: get, set: set, enumerable: true, configurable: true });
@@ -283,32 +294,63 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
   // §5.2 step 2 — WebIDL conversion of the PermissionDescriptor. Every failure
   // here is a rejection rather than a synchronous throw, because `query` is
   // declared to return a promise.
-  function readDescriptor(descriptor) {
+  function readDescriptor(descriptor, op) {
+    var prefix = "Failed to execute '" + op + "' on 'Permissions': ";
     if (descriptor === null || descriptor === undefined
         || (typeof descriptor !== 'object' && typeof descriptor !== 'function')) {
-      throw new TypeError(
-        "Failed to execute 'query' on 'Permissions': the provided value is not of type 'PermissionDescriptor'");
+      throw new TypeError(prefix + "the provided value is not of type 'PermissionDescriptor'");
     }
     var raw = descriptor.name;
     if (raw === undefined) {
-      throw new TypeError(
-        "Failed to execute 'query' on 'Permissions': required member 'name' is undefined");
+      throw new TypeError(prefix + "required member 'name' is undefined");
     }
     var name = String(raw);
     if (!isRecognised(name)) {
       throw new TypeError(
-        "Failed to execute 'query' on 'Permissions': '" + name
-        + "' is not a valid value for enumeration PermissionName");
+        prefix + "'" + name + "' is not a valid value for enumeration PermissionName");
     }
     return name;
   }
 
-  def(Permissions.prototype, 'query', function query(descriptor) {
+  defOp(Permissions.prototype, 'query', function query(descriptor) {
     try {
-      return Promise.resolve(makeStatus(readDescriptor(descriptor)));
+      return Promise.resolve(makeStatus(readDescriptor(descriptor, 'query')));
     } catch (e) {
       return Promise.reject(e);
     }
+  });
+
+  // -- request() — WICG Requesting Permissions (BUG-650) ----------------------
+  //
+  // «Request permission to use» only has somebody to ask while the state is
+  // `prompt`; `granted` and `denied` are already final answers, and the status
+  // comes back unchanged. Asking goes through the API that owns the answer, so
+  // the two cannot disagree afterwards — the same reason `notifications` is in
+  // LIVE rather than in STATIC. A name without an entry here never reaches
+  // `prompt` today (STATIC holds only granted/denied).
+  var ASK = {
+    'notifications': function() {
+      var N = globalThis.Notification;
+      if (typeof N === 'function' && typeof N.requestPermission === 'function') {
+        return N.requestPermission();
+      }
+    },
+  };
+
+  defOp(Permissions.prototype, 'request', function request(permissionDesc) {
+    var name;
+    try {
+      name = readDescriptor(permissionDesc, 'request');
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    function settle() { return makeStatus(name); }
+    if (resolveState(name) !== PROMPT || !owns(ASK, name)) {
+      return Promise.resolve(settle());
+    }
+    // A failing prompt is not a grant: the status still reports whatever the
+    // owning API now says, and the caller learns it from `state`.
+    return Promise.resolve().then(ASK[name]).then(settle, settle);
   });
 
   // -- Installation -----------------------------------------------------------
@@ -794,6 +836,93 @@ mod tests {
                 rt.eval("Notification.permission = 'granted'; _lumen_permission_state_changed('notifications');")
                     .unwrap();
                 assert!(bool_eval(rt, "fired === 2"));
+            },
+        );
+    }
+
+    // -- request() (BUG-650) ------------------------------------------------------
+
+    /// Settles `navigator.permissions.request(<descriptor>)`, reported like
+    /// [`query`].
+    fn request(rt: &V8JsRuntime, descriptor: &str) -> String {
+        rt.eval(&format!(
+            r#"
+            var __out = 'never settled';
+            navigator.permissions.request({descriptor}).then(
+              function(status) {{ __out = 'resolved|' + status.name + '|' + status.state; }},
+              function(e) {{ __out = 'rejected|' + e.constructor.name + '|' + e.message; }});
+            "#
+        ))
+        .unwrap();
+        string_eval(rt, "String(__out)")
+    }
+
+    /// BUG-650: the operation was missing outright — `request` was `undefined`.
+    #[test]
+    fn request_is_an_enumerable_prototype_operation_of_length_one() {
+        with_permissions(|rt| {
+            assert!(bool_eval(rt, "typeof Permissions.prototype.request === 'function'"));
+            assert!(bool_eval(rt, "Permissions.prototype.request.length === 1"));
+            assert!(bool_eval(
+                rt,
+                "!Object.prototype.hasOwnProperty.call(navigator.permissions, 'request') &&                  Object.getOwnPropertyDescriptor(Permissions.prototype, 'request').enumerable &&                  Object.getOwnPropertyDescriptor(Permissions.prototype, 'query').enumerable"
+            ));
+        });
+    }
+
+    /// A final answer is handed back as is: nothing to ask the user about.
+    #[test]
+    fn request_resolves_granted_and_denied_names_unchanged() {
+        with_permissions(|rt| {
+            assert_eq!(request(rt, "{ name: 'geolocation' }"), "resolved|geolocation|denied");
+            assert_eq!(request(rt, "{ name: 'clipboard-read' }"), "resolved|clipboard-read|granted");
+            assert!(bool_eval(
+                rt,
+                "(function() { var s = null;                    navigator.permissions.request({ name: 'camera' }).then(function(x) { s = x; });                    return s; })() === null"
+            ));
+        });
+    }
+
+    /// The same WebIDL conversion as `query`, reported under its own name and
+    /// always as a rejection — including the no-argument call idlharness makes.
+    #[test]
+    fn request_rejects_bad_descriptors_without_throwing() {
+        with_permissions(|rt| {
+            for descriptor in ["", "null", "'camera'", "{}", "{ name: 'geolocaton' }"] {
+                let out = request(rt, descriptor);
+                assert!(out.starts_with("rejected|TypeError|"), "descriptor `{descriptor}` gave `{out}`");
+                assert!(out.contains("'request'"), "descriptor `{descriptor}` gave `{out}`");
+            }
+        });
+    }
+
+    /// A `prompt` name is asked through the API that owns it, and the status
+    /// reports that API's new answer — and every earlier status hears `change`.
+    #[test]
+    fn request_asks_the_notification_api_while_prompt() {
+        with_permissions_setup(
+            "var asked = 0;              function Notification() {}              Notification.permission = 'default';              Notification.requestPermission = function() {                asked++; Notification.permission = 'granted';                _lumen_permission_state_changed('notifications');                return Promise.resolve('granted'); };              globalThis.Notification = Notification;",
+            |rt| {
+                rt.eval(
+                    "var fired = 0;                      navigator.permissions.query({ name: 'notifications' }).then(function(s) {                        s.onchange = function() { fired++; }; });",
+                )
+                .unwrap();
+                assert_eq!(request(rt, "{ name: 'notifications' }"), "resolved|notifications|granted");
+                assert!(bool_eval(rt, "asked === 1 && fired === 1"));
+                // Already granted: no second prompt.
+                assert_eq!(request(rt, "{ name: 'notifications' }"), "resolved|notifications|granted");
+                assert!(bool_eval(rt, "asked === 1"));
+            },
+        );
+    }
+
+    /// A prompt that fails is not a grant.
+    #[test]
+    fn request_survives_a_failing_prompt() {
+        with_permissions_setup(
+            "function Notification() {}              Notification.permission = 'default';              Notification.requestPermission = function() { throw new Error('no shell'); };              globalThis.Notification = Notification;",
+            |rt| {
+                assert_eq!(request(rt, "{ name: 'notifications' }"), "resolved|notifications|prompt");
             },
         );
     }
