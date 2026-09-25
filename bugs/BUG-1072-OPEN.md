@@ -51,3 +51,11 @@ RuntimeError: lumen --bidi-port did not print [bidi] token
 предшественника (в отличие от срезов выше, где `websockets`/`pointerevents`-триггеры были видны).
 Два других `--check`-прогона `fetch` (до и после) прошли чисто на том же бинаре — разовая
 нагрузочная флуктуация, не привязана к конкретному тесту категории.
+
+## Заметка BUG-1073 срез 6 (2026-09-25)
+
+Хвост «три релонча подряд `did not print [bidi] token`» разобран: `LumenBrowser` запускал новый
+`lumen` на порту недобитого старого, `wait_for_service` подключался к старому процессу, новый падал на
+`bind` (`os error 10048`). Исправлено в `tools/wptrunner/wptrunner/browsers/lumen.py` (свежий порт на
+каждый запуск) — зависший тест больше не уносит хвост очереди. Сам триггер этого бага (TIMEOUT
+`back-forward-cache-closes-open-websocket-connection` и процесс, не умирающий по kill) этим не снят.
