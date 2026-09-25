@@ -49,6 +49,11 @@
 //! следующего: две живые поверхности разных API на одном окне — риск
 //! `Invalid surface`.
 //!
+//! **Пробный цвет закрывается сразу (BUG-1073 срез 4).** Принятый кандидат
+//! презентует один белый кадр ([`present_neutral`]) до возврата из
+//! [`pick_backend`]: без этого синий пробный кадр стоял до первого кадра
+//! рендера — под нагрузкой ещё 1.6–3.7 с после выбора бэкенда.
+//!
 //! Управление:
 //! - `WGPU_BACKEND=...` — проба пропускается, env-выбор главнее;
 //! - `LUMEN_NO_BACKEND_PROBE=1` — проба выключена, работает статическая
@@ -121,6 +126,11 @@ pub(crate) struct ProbedGpu {
 /// (симптом BUG-275), и от чёрного (пустой захват), с попарно различными
 /// каналами — перепутанный порядок каналов не даст ложного совпадения.
 const PROBE_COLOR: wgpu::Color = wgpu::Color { r: 0.25, g: 0.55, b: 0.85, a: 1.0 };
+
+/// Цвет кадра, которым принятый кандидат закрывает пробный до первого кадра
+/// рендера (BUG-1073 срез 4). Белый — фон страницы по умолчанию и то, что
+/// окно показывает до пробы.
+const NEUTRAL_COLOR: wgpu::Color = wgpu::Color::WHITE;
 
 /// Допуск сравнения каналов (байты). Покрывает округление формата,
 /// dithering DWM и лёгкие цветовые преобразования драйвера.
@@ -551,6 +561,19 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<ProbeOutcome> {
         }
     }
 
+    // BUG-1073 срез 4: пробный цвет свою работу сделал — сразу закрыть его
+    // нейтральным кадром, а не держать до первого кадра рендера (под
+    // нагрузкой ещё 1.5–5 с: сборка пайплайнов, первая страница).
+    if let Some(gpu) = rep.gpu.as_ref() {
+        let t = Instant::now();
+        match present_neutral(gpu) {
+            Ok(()) if crate::frame_log_enabled() => {
+                eprintln!("[probe]   нейтральный кадр: {} мс", t.elapsed().as_millis());
+            }
+            Ok(()) => {}
+            Err(e) => eprintln!("[probe]   нейтральный кадр не показан: {e}"),
+        }
+    }
     eprintln!("[probe] бэкенд выбран за {} мс: {name}", started.elapsed().as_millis());
     // BUG-1073: принятый по readback при накрытом окне — не полная проба;
     // запиши его в кэш, и бюджет пробы следующего запуска «поручился» бы
@@ -804,6 +827,44 @@ async fn probe_candidate(
         phases,
         gpu: Some(ProbedGpu { surface, adapter, device, queue, config }),
     })
+}
+
+/// Презентует кадр [`NEUTRAL_COLOR`] поверх пробного (BUG-1073 срез 4).
+///
+/// Пробный цвет нужен только на время захвата. Дальше окно стоит им до
+/// первого кадра рендера, а под нагрузкой это 1.5–5 с после выбора бэкенда
+/// (замер: фоновые пайплайны, первая страница на голодающем рендер-потоке) —
+/// пользователь видит «синий экран» и считает, что браузер завис. Кадр
+/// ставится устройством пробы, ожидания GPU нет: `present` уходит в очередь.
+fn present_neutral(gpu: &ProbedGpu) -> Result<(), String> {
+    let frame = gpu
+        .surface
+        .get_current_texture()
+        .map_err(|e| format!("get_current_texture: {e}"))?;
+    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("probe-neutral-encoder"),
+    });
+    {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("probe-neutral"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(NEUTRAL_COLOR),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+    gpu.queue.submit([encoder.finish()]);
+    frame.present();
+    Ok(())
 }
 
 /// Читает staging-буфер readback-а и классифицирует средний цвет региона.
