@@ -309,7 +309,7 @@ impl FlushHandles {
                 .computed_styles
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) =
-                lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters));
+                lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters), viewport);
             self.computed_styles_collected.store(true, Ordering::Relaxed);
         }
         // BUG-935 S43: skip while the page has never read the corresponding

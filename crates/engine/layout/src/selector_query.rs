@@ -484,7 +484,7 @@ pub fn matches_selector(doc: &Document, node: NodeId, sel: &str) -> bool {
 
 /// Serialises a single CSS pixel value as a CSS string (`"16px"`, `"0px"`).
 /// Omits the decimal point for whole-number values.
-fn px_str(v: f32) -> String {
+pub(crate) fn px_str(v: f32) -> String {
     if v.fract() == 0.0 {
         format!("{}px", v as i64)
     } else {

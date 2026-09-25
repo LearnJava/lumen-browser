@@ -142,7 +142,7 @@ use super::*;
             "rect snapshot must describe the element's own box"
         );
 
-        let styles = collect_computed_styles(&root, &doc, None);
+        let styles = collect_computed_styles(&root, &doc, None, Size::new(800.0, 600.0));
         assert_eq!(
             styles[&div_nid].get("width").map(String::as_str),
             Some("50px"),
@@ -174,7 +174,7 @@ use super::*;
         assert!(rect[2] > 0.0, "span must have a nonzero width: {rect:?}");
         assert!(rect[3] > 0.0, "span must have a nonzero height: {rect:?}");
 
-        let styles = collect_computed_styles(&root, &doc, None);
+        let styles = collect_computed_styles(&root, &doc, None, Size::new(800.0, 600.0));
         let style = styles
             .get(&span_nid)
             .expect("inline element must have a computed-style entry");
@@ -356,13 +356,13 @@ use super::*;
 
         // `None` reproduces today's (broken) behaviour for callers with no
         // fresh `CounterMap` — the element must stay entirely absent.
-        let styles_without_counters = collect_computed_styles(&root, &doc, None);
+        let styles_without_counters = collect_computed_styles(&root, &doc, None, Size::new(800.0, 600.0));
         assert!(
             !styles_without_counters.contains_key(&c_nid),
             "without a CounterMap the element must have no entry at all"
         );
 
-        let styles = collect_computed_styles(&root, &doc, Some(&counters));
+        let styles = collect_computed_styles(&root, &doc, Some(&counters), Size::new(800.0, 600.0));
         let style = styles
             .get(&c_nid)
             .expect("display:contents element must have a computed-style entry");
@@ -386,14 +386,135 @@ use super::*;
             "",
         );
         let html_nid = doc.document_element().expect("document must have a root element");
-        let styles = collect_computed_styles(&root, &doc, None);
+        let styles = collect_computed_styles(&root, &doc, None, Size::new(800.0, 600.0));
         let style = styles
             .get(&(html_nid.index() as u32))
             .expect("root element must have a computed-style entry");
         assert_eq!(style.get("display").map(String::as_str), Some("block"));
     }
 
-    /// BUG-732: `getComputedStyle(el).getPropertyValue('--x')` answered `""`
+    /// CSSOM-9 (BUG-472): collects the snapshot for `html` and returns the
+    /// entry of the element matching `sel`.
+    fn resolved_style_of(html: &str, css: &str, sel: &str) -> std::collections::HashMap<String, String> {
+        let (doc, root) = lay_full_measured_with_doc(html, css);
+        let nid = find_first_dom_node_by_selector(&doc, sel)
+            .unwrap_or_else(|| panic!("{sel} must be findable in the DOM"))
+            .index() as u32;
+        collect_computed_styles(&root, &doc, None, Size::new(800.0, 600.0))
+            .remove(&nid)
+            .unwrap_or_else(|| panic!("{sel} must have a computed-style entry"))
+    }
+
+    fn prop<'a>(style: &'a std::collections::HashMap<String, String>, name: &str) -> &'a str {
+        style.get(name).map_or("<absent>", String::as_str)
+    }
+
+    /// CSSOM-9 (BUG-472): CSSOM §6.7.2 — for a rendered element `width`/
+    /// `height`/`padding-*` resolve to the *used* px value, not the computed
+    /// `auto` / percentage the snapshot used to publish (`jQuery.css('height')`,
+    /// carousels and virtual-scroll libraries read these).
+    #[test]
+    fn resolved_size_and_padding_are_used_px_values() {
+        let s = resolved_style_of(
+            "<html><body><div id=a style=\"padding:5% 10px\"><div style=\"height:30px\"></div></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "width"), "780px", "auto width = cb 800 − 2×10px padding");
+        assert_eq!(prop(&s, "height"), "30px", "auto height = content height");
+        assert_eq!(prop(&s, "padding-top"), "40px", "5% of the 800px containing block");
+        assert_eq!(prop(&s, "padding-left"), "10px");
+        // Typed OM still needs the computed value (CSS Typed OM L1 §5.3).
+        assert_eq!(prop(&s, "computed:width"), "auto");
+        assert_eq!(prop(&s, "computed:padding-top"), "5%");
+        assert_eq!(prop(&s, "computed:padding-left"), "<absent>", "unchanged value is not duplicated");
+
+        let s = resolved_style_of(
+            "<html><body><div id=a style=\"width:50%;height:10px\"></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "width"), "400px");
+
+        let s = resolved_style_of(
+            "<html><body><div id=a style=\"box-sizing:border-box;width:100px;padding:10px;border:2px solid\"></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "width"), "100px", "border-box sizing reports the border box");
+        assert_eq!(prop(&s, "height"), "24px", "padding + border of an empty border-box block");
+    }
+
+    /// CSSOM-9 (BUG-472): `auto` horizontal margins of a block in normal flow
+    /// resolve to the space they absorbed (`margin: 0 auto` centering), vertical
+    /// `auto` margins to 0, percentages against the containing block's width.
+    #[test]
+    fn resolved_margins_are_used_px_values() {
+        let s = resolved_style_of(
+            "<html><body><div id=a style=\"width:200px;height:10px;margin:auto\"></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "margin-left"), "300px");
+        assert_eq!(prop(&s, "margin-right"), "300px");
+        assert_eq!(prop(&s, "margin-top"), "0px");
+
+        let s = resolved_style_of(
+            "<html><body><div id=a style=\"height:10px;margin-left:10%\"></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "margin-left"), "80px");
+        assert_eq!(prop(&s, "width"), "720px");
+    }
+
+    /// CSSOM-9 (BUG-472): insets of a positioned box resolve to used px —
+    /// relative offsets mirror the opposite side, absolute `auto` sides are
+    /// read off the box's position inside the positioned ancestor's padding
+    /// box. A static box keeps the computed value (the property doesn't apply).
+    #[test]
+    fn resolved_insets_of_positioned_boxes() {
+        let s = resolved_style_of(
+            "<html><body><div id=a style=\"position:relative;left:10px;height:10px\"></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "left"), "10px");
+        assert_eq!(prop(&s, "right"), "-10px");
+        assert_eq!(prop(&s, "top"), "0px");
+
+        let s = resolved_style_of(
+            "<html><body><div style=\"position:relative;width:400px;height:300px\">\
+             <div id=a style=\"position:absolute;top:10%;left:50px;width:100px;height:20px\"></div></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "top"), "30px", "10% of the 300px containing block height");
+        assert_eq!(prop(&s, "left"), "50px");
+        assert_eq!(prop(&s, "right"), "250px", "400 − 50 − 100");
+        assert_eq!(prop(&s, "bottom"), "250px", "300 − 30 − 20");
+
+        let s = resolved_style_of(
+            "<html><body><div id=a style=\"top:10%;height:10px\"></div></body></html>",
+            "body{margin:0}",
+            "#a",
+        );
+        assert_eq!(prop(&s, "top"), "10%", "static box keeps the computed inset");
+    }
+
+    /// CSSOM-9 (BUG-472): a non-replaced inline element has no box of its own
+    /// and `width` does not apply to it — the computed `auto` stays.
+    #[test]
+    fn resolved_width_of_inline_element_stays_auto() {
+        let s = resolved_style_of(
+            "<html><body><div>x <span id=s>hi</span></div></body></html>",
+            "body{margin:0}",
+            "#s",
+        );
+        assert_eq!(prop(&s, "width"), "auto");
+    }
+
+    /// BUG-732:`getComputedStyle(el).getPropertyValue('--x')` answered `""`
     /// because nothing published custom properties at all. The snapshot carries
     /// *computed* values — `var()` chains substituted, an unresolvable
     /// reference reported as the empty string (guaranteed-invalid).

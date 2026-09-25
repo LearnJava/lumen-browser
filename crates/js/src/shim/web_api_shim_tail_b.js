@@ -48,7 +48,7 @@ window.getComputedStyle = function(element, pseudoElt) {
         if (entries === null) {
             entries = nid == null ? [] : JSON.parse(
                 pseudo ? _lumen_get_computed_style_pseudo_entries(nid, pseudo)
-                       : _lumen_get_computed_style_entries(nid)
+                       : _lumen_get_computed_style_entries(nid, false)
             );
         }
         return entries;

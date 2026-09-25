@@ -1076,7 +1076,7 @@ fn layout_frame_document(
         lumen_layout::clear_interactive_state();
         let rects = lumen_layout::collect_layout_rects(&frame_layout, &d);
         let client_rects = lumen_layout::collect_client_rects(&frame_layout, &d);
-        let styles = lumen_layout::collect_computed_styles(&frame_layout, &d, Some(&counters));
+        let styles = lumen_layout::collect_computed_styles(&frame_layout, &d, Some(&counters), viewport);
         let pseudo_styles = lumen_layout::collect_pseudo_computed_styles(&frame_layout);
         (frame_layout, rects, client_rects, styles, pseudo_styles)
     };

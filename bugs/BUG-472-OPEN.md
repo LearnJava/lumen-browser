@@ -1,6 +1,6 @@
 # BUG-472: `getComputedStyle()` resolved-value coverage gaps
 
-**Статус:** OPEN (ДОРАБОТКА → CSSOM-9)
+**Статус:** OPEN (ДОРАБОТКА; CSSOM-9 влит 2026-09-25 — остаток в разделе «CSSOM-9» ниже)
 **Тип:** доработка (нереализованная функциональность), не дефект — ведётся как задача [`CSSOM-3`](../ROADMAP.md) дорожки CSSOM, а не как строка очереди P3. Файл остаётся детальной записью наблюдений: «срезы» ниже — прогоны категорий WPT, упиравшиеся в эту же дыру, а не куски выполненной работы. Переклассифицировано 2026-08-28 по решению пользователя.
 **Дата:** 2026-08-02
 **Компонент:** layout (`crates/engine/layout/src/selector_query.rs::
@@ -239,3 +239,20 @@ initial value"/"inherits" pairs); `css-page/inheritance.html` (2) +
 `css-page/parsing/page-computed.html` (6) — the `page` property. `.ini`
 under `tests/wpt/metadata/css/css-ruby/` and
 `tests/wpt/metadata/css/css-page/`.
+
+## CSSOM-9 (2026-09-25) — used value для геометрии
+
+`getComputedStyle(el).width` у блока с авто-шириной отдавал `"auto"`, у
+процентного — `"50%"`: снимок писал specified/computed value. Теперь
+`crates/engine/layout/src/resolved_geometry.rs` при сборе снимка
+(`collect_computed_styles`, новый параметр `viewport`) подменяет для
+principal-бокса элемента `width`/`height`/`padding-*`/`margin-*` и инсеты
+relative/absolute-боксов на used px (CSSOM §6.7.2): размеры — из
+`LayoutBox.rect` за вычетом border/padding по `box-sizing`, проценты — от
+containing block, `auto`-margin в блочном потоке — из геометрии относительно
+контент-бокса родителя, `auto`-инсеты absolute — из положения внутри
+padding-бокса позиционированного предка. Computed-значение сохраняется под
+ключом `computed:<prop>`: `computedStyleMap()` (Typed OM) по-прежнему отдаёт
+`auto`/`%`. Остаток — `auto`-margin у flex/grid-элементов и float,
+`auto`-инсеты `position: fixed` (rect включает скролл на момент layout),
+sticky-инсеты.

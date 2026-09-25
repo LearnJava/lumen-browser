@@ -456,7 +456,7 @@ impl InProcessSession {
             if let Ok(doc_guard) = doc.lock() {
                 rt.update_layout_rects(lumen_layout::collect_layout_rects(layout_root, &doc_guard));
                 rt.update_client_rects(lumen_layout::collect_client_rects(layout_root, &doc_guard));
-                rt.update_computed_styles(lumen_layout::collect_computed_styles(layout_root, &doc_guard, counters));
+                rt.update_computed_styles(lumen_layout::collect_computed_styles(layout_root, &doc_guard, counters, self.viewport));
                 rt.update_pseudo_computed_styles(lumen_layout::collect_pseudo_computed_styles(layout_root));
             }
             rt.update_custom_properties(lumen_layout::collect_custom_properties(layout_root, self.viewport));
