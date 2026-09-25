@@ -1072,15 +1072,15 @@ pub(crate) fn parse_and_layout(
     // BUG-164: collect classic + module scripts in document order and fetch
     // external `<script src>` bodies via the subresource fetcher, so SPA
     // bundles execute (lenta.ru owlBundle.js etc.), not just inline scripts.
-    let (classic_scripts, module_scripts) = {
+    let (classic_scripts, deferred_scripts) = {
         let _s = lumen_core::trace::span("fetch-scripts", "net");
         let mut classic_items = Vec::new();
-        let mut module_items = Vec::new();
-        collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
+        let mut deferred_items = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut deferred_items);
         let eff_base = effective_base(&doc, base);
         (
             resolve_script_sources(&classic_items, &eff_base, sink, cookie_jar.clone(), &doc),
-            resolve_script_sources(&module_items, &eff_base, sink, cookie_jar.clone(), &doc),
+            resolve_script_sources(&deferred_items, &eff_base, sink, cookie_jar.clone(), &doc),
         )
     };
     // BUG-443: the cascade is built BEFORE the page's scripts run, and so is the
@@ -1165,7 +1165,7 @@ pub(crate) fn parse_and_layout(
     // no images decoded yet, no web fonts registered — exactly what a real
     // browser answers for a forced layout at this point.
     let has_parse_time_scripts =
-        !classic_scripts.is_empty() || !module_scripts.is_empty() || !ext_scripts.is_empty();
+        !classic_scripts.is_empty() || !deferred_scripts.is_empty() || !ext_scripts.is_empty();
     let parse_time_box = has_parse_time_scripts.then(|| {
         layout_page(&doc, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print)
     });
@@ -1252,7 +1252,7 @@ pub(crate) fn parse_and_layout(
         cross_origin_isolated,
         &ext_scripts,
         classic_scripts,
-        module_scripts,
+        deferred_scripts,
         false,
         parse_time_snapshot,
         cascade.stylesheet_nodes.clone(),

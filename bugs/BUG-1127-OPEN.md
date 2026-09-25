@@ -40,3 +40,10 @@ CSS Values §4.3 (и CSS Syntax: база `url()` — URL таблицы сти�
 Резолвить `url()` каждой таблицы от её собственного URL (для `@import` — от URL
 импортированного листа, для `<style>` — от базы документа) в момент разбора, до склейки листов.
 Критерий: репро запрашивает `/css/…`; шрифты футера apple загружаются.
+
+## Ещё сайт: khanacademy (2026-09-25, P6, перемер при BUG-1120)
+
+`https://cdn.kastatic.org/khanacademy/khanacademy.*.css` объявляет `@font-face` с
+`url(fonts/19b341e83898cab0-NotoSans-Regular.woff2)`. Lumen запрашивает
+`https://www.khanacademy.org/fonts/…` → 403, ни один шрифт страницы не грузится; верный адрес
+`https://cdn.kastatic.org/khanacademy/fonts/…` отдаёт 200.
