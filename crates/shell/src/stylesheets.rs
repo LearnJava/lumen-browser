@@ -343,7 +343,7 @@ const MAX_CSS_IMPORT_DEPTH: u32 = 16;
 /// том же общем формате, что [`load_linked_stylesheets`] уже даёт для
 /// заблокированного `<link>` — вызывающая сторона подмешивает его в
 /// `blocked_by_style_src` для одного и того же `securitypolicyviolation`-пути
-/// (`violatedDirective="style-src"`, `blockedURI` = URL импорта).
+/// (`violatedDirective="style-src-elem"`, `blockedURI` = URL импорта).
 #[allow(clippy::too_many_arguments)] // recursive helper threading fetch context — see BUG-509
 pub(crate) fn inline_css_imports(
     css_text: &str,

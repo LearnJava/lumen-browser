@@ -1656,7 +1656,11 @@ pub(crate) fn parse_and_layout(
 
     // GAP-CSPENF срез 7: `securitypolicyviolation` for every `style-src`-
     // blocked `<link rel=stylesheet>` — same one-shot-push shape as the
-    // `img-src` push above (`blocked_by_img_src`, срез 4).
+    // `img-src` push above (`blocked_by_img_src`, срез 4). BUG-1181: the
+    // reported directive is the effective one, `style-src-elem` (CSP3 §6.8.2:
+    // destination `style`), even when the policy only has `style-src` — the
+    // same for the inline `<style>` dispatch below (§6.8.3), in `frames.rs`
+    // and in `relayout.rs`.
     #[cfg(feature = "v8")]
     if !blocked_by_style_src.is_empty()
         && let Some(js) = &js_ctx
@@ -1675,10 +1679,10 @@ pub(crate) fn parse_and_layout(
                     policy, &lumen_network::csp::CspDirective::StyleSrc, url, self_origin.as_ref(),
                 );
                 if texts.is_empty() {
-                    js.fire_csp_violation("style-src", url, original_policy);
+                    js.fire_csp_violation("style-src-elem", url, original_policy);
                 } else {
                     for text in &texts {
-                        js.fire_csp_violation("style-src", url, text);
+                        js.fire_csp_violation("style-src-elem", url, text);
                     }
                 }
             }
@@ -1693,7 +1697,7 @@ pub(crate) fn parse_and_layout(
     #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx {
         for text in &blocked_inline_style_policies {
-            js.fire_csp_violation("style-src", "inline", text);
+            js.fire_csp_violation("style-src-elem", "inline", text);
         }
     }
 
