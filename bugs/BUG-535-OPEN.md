@@ -1,6 +1,6 @@
 # BUG-535: `ruby-position: alternate` has no layout effect — annotations never flip over/under across stacked `<rtc>`s
 
-**Статус:** OPEN (ДОРАБОТКА → GAP-RUBYBOX)
+**Статус:** OPEN (ДОРАБОТКА → GAP-RUBYBOX-2)
 **Тип:** ДОРАБОТКА — `lay_out_ruby`/`RubyBox` (over/under-стекинг, `ruby-align`, `ruby-merge`) существуют, но не вызываются ни из одного места конвейера; `alternate` в мёртвом коде не даёт наблюдаемого эффекта. Перенесено в [GAP-RUBYBOX](../ROADMAP.md).
 **Дата:** 2026-08-03
 **Компонент:** layout (`crates/engine/layout/src/*` — ruby box layout)
