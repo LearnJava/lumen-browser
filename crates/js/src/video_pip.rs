@@ -75,14 +75,21 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
     if (el.__lumen_pip_patched) return;
     el.__lumen_pip_patched = true;
 
-    var _disabled = el.hasAttribute ? el.hasAttribute('disablepictureinpicture') : false;
+    // Boolean reflection of the `disablepictureinpicture` content attribute
+    // (HTML §2.6.1 "reflect"): the getter reads attribute presence on every
+    // access. BUG-653: a snapshot taken at patch time went stale after a
+    // direct setAttribute/removeAttribute.
+    function isDisabled() {
+      return el.hasAttribute ? el.hasAttribute('disablepictureinpicture') : false;
+    }
 
     Object.defineProperty(el, 'disablePictureInPicture', {
-      get: function() { return _disabled; },
+      get: isDisabled,
       set: function(v) {
-        _disabled = !!v;
-        if (_disabled && el.hasAttribute) {
-          el.setAttribute('disablepictureinpicture', '');
+        if (v) {
+          if (el.setAttribute) el.setAttribute('disablepictureinpicture', '');
+          // PiP spec §3.1: disabling the element currently in PiP exits it.
+          if (_pipVideo === el) exitCurrentPip();
         } else if (el.removeAttribute) {
           el.removeAttribute('disablepictureinpicture');
         }
@@ -91,7 +98,7 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
     });
 
     el.requestPictureInPicture = async function() {
-      if (_disabled) {
+      if (isDisabled()) {
         throw Object.assign(new Error('disablePictureInPicture is set'), { name: 'InvalidStateError' });
       }
 
@@ -391,6 +398,59 @@ el.disablePictureInPicture === false
             JsValue::Bool(true),
             "disablePictureInPicture should be false by default"
         );
+    }
+
+    /// BUG-653: the IDL attribute live-reflects the content attribute in both
+    /// directions (WPT `disable-picture-in-picture.html`, first subtest).
+    #[test]
+    fn disable_picture_in_picture_reflects_content_attribute() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval(
+                r#"
+var el = document.createElement('video');
+var r = [];
+el.setAttribute('disablepictureinpicture', 'foo');
+r.push(el.disablePictureInPicture === true);
+el.removeAttribute('disablepictureinpicture');
+r.push(el.disablePictureInPicture === false);
+el.disablePictureInPicture = true;
+r.push(el._attrs['disablepictureinpicture'] === '');
+el.disablePictureInPicture = false;
+r.push(!el.hasAttribute('disablepictureinpicture'));
+r.join(',')
+"#,
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String("true,true,true,true".into()));
+    }
+
+    /// Disabling the video currently in PiP exits the session; disabling
+    /// another video leaves it alone.
+    #[test]
+    fn disabling_active_pip_video_exits_it() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval(
+                r#"
+var a = document.createElement('video');
+var left = 0;
+a.addEventListener('leavepictureinpicture', function() { left++; });
+a.requestPictureInPicture();
+var r = [document.pictureInPictureElement === a];
+document.createElement('video').disablePictureInPicture = true;
+r.push(document.pictureInPictureElement === a);
+a.disablePictureInPicture = true;
+r.push(document.pictureInPictureElement === null, left === 1);
+r.join(',')
+"#,
+            )
+            .unwrap();
+        assert_eq!(result, JsValue::String("true,true,true,true".into()));
     }
 
     #[test]
