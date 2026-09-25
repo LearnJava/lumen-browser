@@ -2420,7 +2420,13 @@ _lumen_install_reflection(HTMLBaseElement.prototype, [['target', 'target', 'stri
 
 // `text` is a child-text alias rather than an attribute reflection, so it is
 // defined by hand: HTML LS §4.5.1 (`a.text`), §4.12.1 (`script.text`).
+// TRUSTEDTYPES-1 срез 4: `HTMLScriptElement.text` is the third member of the
+// TT §4.4 property-type table's script trio (with `.textContent`/`.innerText`
+// above) — `HTMLAnchorElement.text` is a plain string alias sharing this same
+// definition and must stay untouched, hence the per-element interface check
+// rather than gating the whole `forEach` on the sink.
 [HTMLAnchorElement.prototype, HTMLScriptElement.prototype].forEach(function(_p) {
+    var _isScriptText = _p === HTMLScriptElement.prototype;
     Object.defineProperty(_p, 'text', {
         get: function() {
             var n = _lumen_reflect_nid(this);
@@ -2428,7 +2434,11 @@ _lumen_install_reflection(HTMLBaseElement.prototype, [['target', 'target', 'stri
         },
         set: function(v) {
             var n = _lumen_reflect_nid(this);
-            if (n !== -1) _lumen_set_text_content(n, String(v));
+            if (n === -1) return;
+            var s = (_isScriptText && typeof _lumen_tt_get_compliant_script === 'function')
+                ? _lumen_tt_get_compliant_script(v, 'HTMLScriptElement text')
+                : String(v);
+            _lumen_set_text_content(n, s);
         },
         enumerable: true, configurable: true,
     });

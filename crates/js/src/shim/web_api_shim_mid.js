@@ -7082,7 +7082,21 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return new CSS.StylePropertyMapReadOnly(nid);
         },
         get textContent()    { var nid = this.__nid__; return _lumen_get_text_content(nid); },
-        set textContent(v)   { var nid = this.__nid__; _lumen_set_text_content(nid, String(v)); },
+        // TRUSTEDTYPES-1 срез 4: TT L2 §3.6 "prepare the script text" runs the
+        // Script-sink half of §4.1.1's compliant-string algorithm for EVERY
+        // way a `<script>`'s source text can be (re)written as a whole —
+        // `.textContent`, `.innerText` (below) and `.text` (the script-only
+        // alias, `web_api_shim_tail_b.js`) all funnel through the same sink
+        // name (`HTMLScriptElement text`, spec-given regardless of which of
+        // the three setters was called). Every non-script element keeps the
+        // old unconditional `String(v)` — the tag check is the one added cost.
+        set textContent(v)   { var nid = this.__nid__;
+            var s = (typeof _lumen_tt_get_compliant_script === 'function'
+                      && (_lumen_get_tag_name(nid) || '').toUpperCase() === 'SCRIPT')
+                ? _lumen_tt_get_compliant_script(v, 'HTMLScriptElement text')
+                : String(v);
+            _lumen_set_text_content(nid, s);
+        },
         get innerHTML()      { var nid = this.__nid__; return _lumen_get_inner_html(nid); },
         // TRUSTEDTYPES-1 срез 2: TT L2 §4.1.1 HTML sink.
         set innerHTML(v)     { var nid = this.__nid__;
@@ -7131,12 +7145,22 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         // `[LegacyNullToEmptyString]` is why `null` becomes '' here while
         // `undefined` stringifies to 'undefined'.
+        // TRUSTEDTYPES-1 срез 4: TT §4.4 property-type table lists
+        // `HTMLScriptElement innerText` alongside `.text`/`.textContent` —
+        // same sink name, same script-only gate, run before the text is
+        // turned into child nodes (a throw here must leave the element's
+        // existing children untouched, matching the other setters below
+        // that still run `_lumen_rendered_text_nids` unconditionally).
         set innerText(v) { var nid = this.__nid__;
             if (!_lumen_is_html_element_nid(nid)) {
                 _lumen_assign_as_expando(this, 'innerText', v);
                 return;
             }
-            var kids = _lumen_rendered_text_nids(v === null ? '' : String(v));
+            var _itv = (typeof _lumen_tt_get_compliant_script === 'function'
+                         && (_lumen_get_tag_name(nid) || '').toUpperCase() === 'SCRIPT')
+                ? _lumen_tt_get_compliant_script(v === null ? '' : v, 'HTMLScriptElement text')
+                : (v === null ? '' : String(v));
+            var kids = _lumen_rendered_text_nids(_itv);
             var old  = _lumen_get_children(nid).slice();
             for (var _iti = 0; _iti < old.length; _iti++) { _lumen_remove_child(nid, old[_iti]); }
             for (var _itj = 0; _itj < kids.length; _itj++) { _lumen_append_child(nid, kids[_itj]); }
