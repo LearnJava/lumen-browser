@@ -528,6 +528,74 @@ fn sw_worker_has_state_installing() {
     assert_eq!(result, lumen_core::JsValue::String("installing".into()));
 }
 
+/// BUG-657: a real `register()` result inherits from the production
+/// `ServiceWorkerRegistration` interface, so the members the per-API modules
+/// hang on its prototype (`pushManager`, `sync`, `periodicSync`,
+/// `backgroundFetch`, `cookies`, `index`, `showNotification`) reach it —
+/// previously each module's `typeof` guard found no global and skipped.
+#[test]
+fn sw_registration_inherits_per_api_members() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                    .then(function(r) { reg = r; });
+                "#,
+    )
+    .unwrap();
+    let result = rt
+        .eval(
+            r#"
+                [
+                    typeof ServiceWorkerRegistration === 'function',
+                    reg instanceof ServiceWorkerRegistration,
+                    reg instanceof EventTarget,
+                    typeof reg.pushManager.subscribe === 'function',
+                    typeof reg.sync.register === 'function',
+                    typeof reg.periodicSync.register === 'function',
+                    typeof reg.backgroundFetch.fetch === 'function',
+                    typeof reg.cookies.subscribe === 'function',
+                    typeof reg.index.add === 'function',
+                    typeof reg.showNotification === 'function',
+                    Object.keys(globalThis).indexOf('ServiceWorkerRegistration') === -1,
+                ].join()
+                "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        lumen_core::JsValue::String(
+            "true,true,true,true,true,true,true,true,true,true,true".into()
+        )
+    );
+}
+
+#[test]
+fn sw_registration_interface_is_not_constructible() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    let result = rt
+        .eval(
+            r#"
+                try { new ServiceWorkerRegistration(); 'constructed' }
+                catch (e) { e instanceof TypeError ? 'TypeError' : String(e) }
+                "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("TypeError".into()));
+}
+
+/// BUG-657 + BUG-765: the interface is `[SecureContext]`, like
+/// `navigator.serviceWorker` itself.
+#[test]
+fn sw_registration_interface_absent_on_insecure_origin() {
+    let rt = v8_runtime_with_url("http://example.com/");
+    let result = rt
+        .eval("'ServiceWorkerRegistration' in globalThis")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(false));
+}
+
 #[test]
 fn sw_container_has_event_target() {
     let rt = v8_runtime_with_url("https://example.com/");

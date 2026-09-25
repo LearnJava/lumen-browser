@@ -67,7 +67,7 @@ into the shell (currently `set_credential_provider` is never called anywhere
 under `crates/shell/`, confirmed via `grep -rln set_credential_provider
 crates/shell/` — zero hits, which is why `WPT-VENDOR-webauthn`'s scope is
 correctly marked 🚫 today and every real `.https.` WPT test in the category
-TIMEOUTs on the unrelated TLS gap [BUG-657](BUG-657-OPEN.md) rather than
+TIMEOUTs on the unrelated TLS gap [BUG-657](BUG-657-FIXED.md) rather than
 reaching this code), any page could mint/assert credentials against any
 other origin's `rp.id` with zero client-side gate.
 

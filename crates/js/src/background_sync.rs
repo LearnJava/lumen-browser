@@ -62,14 +62,19 @@ const BACKGROUND_SYNC_SHIM: &str = r#"(function() {
     return Promise.resolve(copy);
   };
 
-  // Attach SyncManager to ServiceWorkerRegistration.prototype
+  // Attach SyncManager to ServiceWorkerRegistration.prototype as a lazy getter:
+  // `readonly attribute SyncManager sync` (Background Sync §5), so the
+  // canonical `reg.sync.register(tag)` reads it, not calls it (BUG-657).
   if (typeof ServiceWorkerRegistration !== 'undefined') {
-    ServiceWorkerRegistration.prototype.sync = function() {
-      if (!this._syncManager) {
-        this._syncManager = new SyncManager(this);
-      }
-      return this._syncManager;
-    };
+    Object.defineProperty(ServiceWorkerRegistration.prototype, 'sync', {
+      get: function() {
+        if (!this._syncManager) {
+          this._syncManager = new SyncManager(this);
+        }
+        return this._syncManager;
+      },
+      configurable: true
+    });
   }
 
   // Export SyncManager for tests
@@ -143,10 +148,14 @@ mod tests {
     }
 
     #[test]
-    fn service_worker_registration_has_sync_method() {
+    fn service_worker_registration_has_sync_attribute() {
         with_background_sync(|rt| {
             let result = rt
-                .eval("typeof ServiceWorkerRegistration.prototype.sync === 'function' ? 'yes' : 'no'")
+                .eval(
+                    "var d = Object.getOwnPropertyDescriptor(ServiceWorkerRegistration.prototype, 'sync'); \
+                     typeof d.get === 'function' && \
+                     new ServiceWorkerRegistration().sync instanceof SyncManager ? 'yes' : 'no'",
+                )
                 .unwrap();
             assert_eq!(result, JsValue::String("yes".to_string()));
         });

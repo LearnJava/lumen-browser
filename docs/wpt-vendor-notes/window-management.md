@@ -28,7 +28,7 @@ design; "reaches and reports", not "passes", was WPT-RUN-2's stated DoD).
 **Citation correction, found while writing this note:** at least 16 prior
 WPT-VENDOR merge commits (starting from at least `web-share`, most recently
 `webtransport`/`webxr`) cite `BUG-657` as the source of this TLS gap.
-`bugs/BUG-657-OPEN.md` is actually titled `ServiceWorkerRegistration` global
+`bugs/BUG-657-FIXED.md` is actually titled `ServiceWorkerRegistration` global
 class never defined in production V8 — a completely unrelated finding from
 `WPT-VENDOR-push-api` (2026-08-05); `git log --follow` on that file shows a
 single creating commit, so this isn't a renumber collision, just a citation
@@ -68,7 +68,7 @@ window-management --recursive` (~5 мин) — **0/5 harness OK**, все 5 TIME
 
 Уточнение цитаты: минимум 16 предыдущих мерж-коммитов WPT-VENDOR (начиная как
 минимум с `web-share`) ссылаются на этот же TLS-гэп как [BUG-657]
-(../bugs/BUG-657-OPEN.md) — но этот номер на самом деле про
+(../bugs/BUG-657-FIXED.md) — но этот номер на самом деле про
 `ServiceWorkerRegistration`, к TLS отношения не имеет; ошибка копировалась
 без проверки. Не переисправлялось задним числом (объём вне одной категории).
 

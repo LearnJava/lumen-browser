@@ -27,7 +27,7 @@ hash, `LICENSE-WPT.md` copied from the sibling `webrtc`, 3 files total
 
 `run_report.py --all --root webrtc-ice --recursive` (~45 s wall-clock):
 **0/1 harness OK**. The single id TIMEOUTs on the already-documented TLS
-gap [BUG-657](../../bugs/BUG-657-OPEN.md) (`UnknownIssuer` on `.https.`
+gap [BUG-657](../../bugs/BUG-657-FIXED.md) (`UnknownIssuer` on `.https.`
 navigation) before any page script runs — no functional signal from the
 run itself, but the constructor's total absence (confirmed by the source
 grep above) means the result would be a harness-level `ReferenceError`
@@ -53,6 +53,6 @@ webrtc_stub.rs` — ноль совпадений); ICE-состояние та�
 variant-фан-аута, 0 `testdriver.js`). `run_report.py --all --root
 webrtc-ice --recursive` — ~45 с, **0/1 harness OK**: единственный id
 падает TIMEOUT на уже задокументированном TLS-гэпе
-[BUG-657](../../bugs/BUG-657-OPEN.md), сигнала из самого прогона нет, но
+[BUG-657](../../bugs/BUG-657-FIXED.md), сигнала из самого прогона нет, но
 подтверждённое грепом полное отсутствие `RTCIceTransport` означает, что
 и без TLS-гэпа тест упал бы `ReferenceError`. Новый BUG-NNN не заводился.

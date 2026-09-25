@@ -2173,7 +2173,7 @@ activation-after-registration.https.html` — было `ERROR` на TLS, ста�
 стал чисто-OK), 3 не изменились.
 
 **Доминирующая причина остальных провалов — уже заведённый
-[BUG-657](../../bugs/BUG-657-OPEN.md)** (`ServiceWorkerRegistration` не заведён глобальным
+[BUG-657](../../bugs/BUG-657-FIXED.md)** (`ServiceWorkerRegistration` не заведён глобальным
 классом V8-инсталляции — `reg.pushManager`/`reg.sync`/… не существуют ни на одном
 объекте, возвращённом `register()`). В этом одном прогоне — 42 `ReferenceError:
 ServiceWorkerRegistration is not defined`, самый частый паттерн категории. Не новая

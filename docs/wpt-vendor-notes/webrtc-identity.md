@@ -25,7 +25,7 @@ hash, `LICENSE-WPT.md` copied from the sibling `webrtc-ice`, 5 files total
 `RTCPeerConnection-peerIdentity.https.html`, `idlharness.https.window.html`)
 hit the TLS handshake directly (`network error: TLS handshake: invalid peer
 certificate: UnknownIssuer`) — the already-documented TLS gap
-[BUG-657](../../bugs/BUG-657-OPEN.md). The first of the three additionally
+[BUG-657](../../bugs/BUG-657-FIXED.md). The first of the three additionally
 tripped the stale-browsing-context assertion
 (`AssertionError: Got results from RTCPeerConnection-constructor.html,
 expected RTCPeerConnection-getIdentityAssertion.sub.https.html`) — the same
@@ -56,7 +56,7 @@ No new `BUG-NNN` filed.
 5 файлов, 4 id по глобу, без variant-фан-аута, 0 `testdriver.js`).
 `run_report.py --all --root webrtc-identity --recursive` — ~57 с,
 **1/4 harness OK, 0/1 сабтестов**: три `.https.`-файла падают TIMEOUT/ERROR
-на уже задокументированном TLS-гэпе [BUG-657](../../bugs/BUG-657-OPEN.md)
+на уже задокументированном TLS-гэпе [BUG-657](../../bugs/BUG-657-FIXED.md)
 (`UnknownIssuer`), один из них попутно словил BUG-380-паттерн (устаревшие
 результаты предыдущего теста из-за неудавшейся навигации). Единственный
 исполнившийся тест (`RTCPeerConnection-constructor.html`) падает на

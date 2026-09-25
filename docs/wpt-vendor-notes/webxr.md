@@ -26,7 +26,7 @@ wall instead of a cheap SKIP wall.
 **1/165 harness OK, 17/19 subtests**. 164 of 165 ids are `.https.` (WebXR
 requires a secure context by spec) and hit the pre-existing, already-documented
 TLS-trust gap from WPT-RUN-2 (`tests/wpt/certs/README.md`, `UnknownIssuer`,
-also tracked as [BUG-657](../../bugs/BUG-657-OPEN.md)) before touching
+also tracked as [BUG-657](../../bugs/BUG-657-FIXED.md)) before touching
 `webxr.rs` at all — not a category finding. Once the one non-`.https.` id
 below became the last successfully-loaded document, every subsequent
 `.https.` navigate attempt was reported by the (already-fixed, [BUG-380]
@@ -74,7 +74,7 @@ XR в воркспейсе нет. Вендорена целиком 2026-08-18 
 `tests/wpt/webxr/`, 178 файлов, 165 id, без variant-фан-аута). `run_report.py
 --all --root webxr --recursive` (~17 мин) — **1/165 harness OK, 17/19
 сабтестов**. 164/165 — `.https.`-гэп TLS `UnknownIssuer`
-([BUG-657](../../bugs/BUG-657-OPEN.md)), не находка категории; после первой (и
+([BUG-657](../../bugs/BUG-657-FIXED.md)), не находка категории; после первой (и
 единственной) успешной загрузки страницы все последующие навигации
 отчитывались уже починенным ([BUG-380](../../bugs/BUG-380-FIXED.md)) детектором
 маркера как явный `ERROR` («document was never replaced») вместо голого

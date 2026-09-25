@@ -464,9 +464,36 @@ function _sw_make_worker(scriptUrl, initState) {
     return w;
 }
 
+// Service Workers §3.2 `interface ServiceWorkerRegistration : EventTarget`
+// (BUG-657). The seven per-API modules installed after this shim (push_api,
+// background_sync, periodic_sync, background_fetch, cookie_store,
+// content_index, notifications_bindings) hang `pushManager`/`sync`/
+// `periodicSync`/`backgroundFetch`/`cookies`/`index`/`showNotification` on
+// `ServiceWorkerRegistration.prototype` behind a `typeof` guard — so the
+// interface object must exist here, and every registration must inherit from
+// it, or those members never reach a real `register()` result. `[SecureContext]`
+// like `navigator.serviceWorker` itself (BUG-765) — hence a function
+// *expression* held in an internal name rather than a top-level declaration,
+// which would land on the global object unconditionally.
+var _lumen_sw_registration_iface = function ServiceWorkerRegistration() {
+    throw new TypeError('Illegal constructor');
+};
+if (typeof EventTarget === 'function') {
+    Object.setPrototypeOf(_lumen_sw_registration_iface.prototype, EventTarget.prototype);
+}
+if (_lumen_secure_context !== false) {
+    // WebIDL §3.7.1: interface objects are writable, non-enumerable, configurable.
+    Object.defineProperty(globalThis, 'ServiceWorkerRegistration', {
+        value: _lumen_sw_registration_iface,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+    });
+}
+
 function _sw_make_registration(scope, scriptUrl) {
     var et = _sw_make_event_target();
-    var reg = Object.assign({
+    var reg = Object.assign(Object.create(_lumen_sw_registration_iface.prototype), {
         scope: scope,
         scriptURL: String(scriptUrl),
         updateViaCache: 'imports',
