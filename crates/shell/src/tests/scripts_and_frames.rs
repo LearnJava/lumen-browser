@@ -54,6 +54,40 @@ fn resolve_script_sources_keeps_a_failed_external_for_its_error_event() {
     assert!(resolved[1].source.contains("ok=1"));
 }
 
+/// BUG-1124: `script-src 'nonce-…'` (с `'strict-dynamic'` и без) пропускает
+/// внешний `<script nonce src>` с совпавшим nonce, а не судит его по URL —
+/// раньше гейт видел только адрес, не находил подходящего источника и не
+/// запрашивал скрипт вовсе. Скрипт без nonce по-прежнему заблокирован.
+#[test]
+fn resolve_script_sources_lets_a_nonced_external_script_through_csp() {
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    for policy in ["script-src 'nonce-abc'", "script-src 'nonce-abc' 'strict-dynamic'"] {
+        let doc = lumen_html_parser::parse(&format!(
+            r#"<html><head><meta http-equiv="Content-Security-Policy" content="{policy}"></head><body>
+                  <script nonce="abc" src="b1124-missing.js"></script>
+                  <script nonce="abd" src="b1124-missing.js"></script>
+                  <script src="b1124-missing.js"></script>
+                </body></html>"#
+        ));
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        // URL-база: файловый путь не разбирается как URL, и гейт его не
+        // судит вовсе. Порт 9 (discard) на loopback отказывает в соединении
+        // сразу — пропущенному скрипту незачем ходить в настоящую сеть.
+        let base = ResourceBase::Url("http://127.0.0.1:9/page.html".to_owned());
+        let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+        let resolved = resolve_script_sources(&classic, &base, &sink, None, &doc);
+        assert_eq!(resolved.len(), 3);
+        assert!(resolved[0].csp_blocked.is_empty(), "{policy}: matching nonce is fetched");
+        assert_eq!(resolved[1].csp_blocked, vec![policy.to_owned()], "{policy}: wrong nonce is blocked");
+        assert_eq!(resolved[2].csp_blocked, vec![policy.to_owned()], "{policy}: no nonce is blocked");
+    }
+}
+
 // ── BUG-827: порядок парсерных вставок для MutationObserver ───────────────
 
 /// Собрать `ResolvedScript` из результата [`collect_scripts_ordered`] —
