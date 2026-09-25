@@ -84,6 +84,11 @@ impl Lumen {
                     if let Some(store) = ss_store {
                         rt = rt.with_session_storage(store);
                     }
+                    // BUG-1119: a thawed page's `document.cookie` reads the
+                    // tab's live jar — cookies set while it was frozen included.
+                    rt = rt.with_cookie_jar(Arc::new(lumen_storage::CookieJarProvider::new(
+                        self.active_cookie_jar(),
+                    )));
                     let idb_backend = self.idb_dir.as_deref().and_then(|d| idb_store_for_url(url, Some(d)));
                     let fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> = None;
                     let ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> = None;

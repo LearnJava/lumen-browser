@@ -317,6 +317,11 @@ pub struct V8JsRuntime {
     /// via [`Self::with_session_storage`]; `None` (tests, headless) means a
     /// fresh, document-local store — which is what every document used to get.
     pub(super) ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    /// The tab's cookie store behind `document.cookie` (BUG-1119) — the same
+    /// jar the network stack sends `Cookie`/stores `Set-Cookie` through, handed
+    /// in via [`Self::with_cookie_jar`]. `None` (tests, headless, opaque-origin
+    /// frames) leaves `document.cookie` reading `""` and ignoring writes.
+    pub(super) cookie_jar: Option<Arc<dyn lumen_core::ext::CookieProvider>>,
     /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     pub(super) broadcast_channels: crate::broadcast_channel::BroadcastRegistry,
@@ -463,6 +468,7 @@ impl V8JsRuntime {
             sw_worker_store: None,
             image_load_hook: None,
             ss_store: None,
+            cookie_jar: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -713,6 +719,18 @@ impl V8JsRuntime {
     /// [`Self::with_sw_worker_store`]).
     pub fn with_session_storage(mut self, store: Arc<Mutex<lumen_core::WebStorage>>) -> Self {
         self.ss_store = Some(store);
+        self
+    }
+
+    /// Attach the tab's cookie store to `document.cookie` (BUG-1119).
+    ///
+    /// Pass the provider the page's `HttpClient` got through `with_cookie_jar`,
+    /// so a cookie set by script goes out in the next request's `Cookie` header
+    /// and one set by `Set-Cookie` is readable by script (RFC 6265 §5.3/§5.4,
+    /// HTML LS §3.1.3). Must be called before `install_dom` to take effect
+    /// (mirrors [`Self::with_sw_worker_store`]).
+    pub fn with_cookie_jar(mut self, jar: Arc<dyn lumen_core::ext::CookieProvider>) -> Self {
+        self.cookie_jar = Some(jar);
         self
     }
 

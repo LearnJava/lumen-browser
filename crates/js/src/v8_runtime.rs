@@ -152,9 +152,9 @@ impl V8JsRuntime {
         // PH3-20: an explicit `sw_worker_store` argument takes precedence over a
         // store set earlier via a builder (mirrors `QuickJsRuntime::install_dom`).
         let sw_worker_store = sw_worker_store.or_else(|| self.sw_worker_store.clone());
-        // Cookie access is not part of the S3 DOM-core signature; document.cookie
-        // reads/writes as empty until a future slice threads a CookieProvider through.
-        let cookie_jar: Option<Arc<dyn lumen_core::ext::CookieProvider>> = None;
+        // BUG-1119: the tab's jar, attached via `with_cookie_jar`; `None` keeps
+        // `document.cookie` empty (tests, headless, opaque-origin frames).
+        let cookie_jar = self.cookie_jar.clone();
         let deterministic_seed = if self
             .deterministic
             .load(std::sync::atomic::Ordering::Relaxed)

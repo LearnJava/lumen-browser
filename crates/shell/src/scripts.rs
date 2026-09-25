@@ -736,6 +736,11 @@ pub(crate) fn run_scripts_with_dom(
     // call in `page_pipeline::parse_and_layout` — see
     // `lumen_core::ext::ImageLoadHook`'s doc comment for scope.
     image_load_hook: Option<Arc<dyn lumen_core::ext::ImageLoadHook>>,
+    // BUG-1119: the jar the document's `HttpClient` stores `Set-Cookie` in and
+    // sends `Cookie` from — handed to `document.cookie` so script and network
+    // see one store. `None` (headless dump/PDF, opaque-origin frames) keeps
+    // `document.cookie` empty.
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // GAP-NAVCTX срез 5 (BUG-797): taken unconditionally, before either early
     // return below — see `window_messaging::take_pending_opener`'s doc
@@ -803,6 +808,9 @@ pub(crate) fn run_scripts_with_dom(
                 }
                 if let Some(hook) = image_load_hook {
                     rt = rt.with_image_load_hook(hook);
+                }
+                if let Some(jar) = cookie_jar {
+                    rt = rt.with_cookie_jar(Arc::new(lumen_storage::CookieJarProvider::new(jar)));
                 }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
