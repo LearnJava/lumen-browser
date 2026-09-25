@@ -60,7 +60,7 @@ The file-level `expected: ERROR` in the committed `.ini` (from WPT-RUN-3 slice 3
 
 Побочный, но существенный для триажа факт того же замера: `label.focus()` не
 передаёт фокус связанному контролу и не фокусирует даже сам `<label>`
-(`activeElement` остаётся `BODY`) — это [BUG-621](BUG-621-OPEN.md),
+(`activeElement` остаётся `BODY`) — это [BUG-621](BUG-621-FIXED.md),
 перезамеренный, а не новый.
 
 ## Замер 2026-09-01 (WPT-RUN-6, срез 31): та же отложенность топит `scrollIntoView()` внутри `.focus()`

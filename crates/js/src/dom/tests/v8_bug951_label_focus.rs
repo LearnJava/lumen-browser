@@ -114,3 +114,81 @@ fn label_control_getter_matches_focus_target() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+/// BUG-621 — `inert-label-focus.html` subtest 1: an `inert` label is not
+/// itself focusable, but `focus()` still forwards to its (non-inert)
+/// control. The inert check belongs to the focus target, not the label.
+#[test]
+fn inert_label_focus_still_forwards_to_control() {
+    let rt = rt_with_dom();
+    let r = rt
+        .eval(
+            "(function() {
+                var input = document.createElement('input');
+                input.id = 'submit621';
+                input.type = 'submit';
+                document.body.appendChild(input);
+                var label = document.createElement('label');
+                label.setAttribute('for', 'submit621');
+                label.setAttribute('inert', '');
+                document.body.appendChild(label);
+                label.focus();
+                return document.activeElement === input;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-621 — same forwarding when the inertness comes from an ancestor of
+/// the label rather than the label itself.
+#[test]
+fn label_inside_inert_subtree_forwards_to_control_outside() {
+    let rt = rt_with_dom();
+    let r = rt
+        .eval(
+            "(function() {
+                var input = document.createElement('input');
+                input.id = 'outside621';
+                document.body.appendChild(input);
+                var wrap = document.createElement('div');
+                wrap.setAttribute('inert', '');
+                var label = document.createElement('label');
+                label.setAttribute('for', 'outside621');
+                wrap.appendChild(label);
+                document.body.appendChild(wrap);
+                label.focus();
+                return document.activeElement === input;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-621 — `inert-label-focus.html` subtest 3: a label whose control sits
+/// in an inert subtree must not move focus anywhere.
+#[test]
+fn label_for_control_in_inert_subtree_has_no_effect() {
+    let rt = rt_with_dom();
+    let r = rt
+        .eval(
+            "(function() {
+                var text = document.createElement('input');
+                document.body.appendChild(text);
+                var wrap = document.createElement('div');
+                wrap.setAttribute('inert', '');
+                var input = document.createElement('input');
+                input.id = 'inside621';
+                wrap.appendChild(input);
+                document.body.appendChild(wrap);
+                var label = document.createElement('label');
+                label.setAttribute('for', 'inside621');
+                document.body.appendChild(label);
+                text.focus();
+                label.focus();
+                return document.activeElement === text;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}

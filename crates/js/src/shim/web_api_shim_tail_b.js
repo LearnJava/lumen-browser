@@ -1101,17 +1101,20 @@ window._lumen_focus_fixup = _lumen_focus_fixup;
 HTMLElement.prototype.focus = function(options) {
     var nid = this.__nid__;
     if (nid === null || nid === undefined) return;
-    if (!_lumen_is_focusable(nid)) return;
     var target = this;
-    // BUG-951: a <label> with no `tabindex` of its own is not itself the
-    // focus target — `_lumen_is_focusable` above already confirmed its
-    // associated control resolves and is focusable, so forward to it
-    // instead of focusing the label.
+    // BUG-951: a <label> that is not a focusable area itself (no `tabindex`
+    // of its own) forwards focus to its associated control. BUG-621: the
+    // label's own focusability — including an `inert` label or an inert
+    // ancestor — must not gate that forwarding; only the control's does
+    // (`inert-label-focus.html`, matches Chromium's HTMLLabelElement::focus).
     if ((_lumen_get_tag_name(nid) || '').toUpperCase() === 'LABEL' &&
-        _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex'))) === null) {
+        !(_lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex'))) !== null &&
+          _lumen_is_focusable(nid))) {
         nid = _lumen_label_control_nid(nid);
+        if (nid === -1) return;
         target = _lumen_make_element(nid);
     }
+    if (!_lumen_is_focusable(nid)) return;
     _lumen_request_focus(nid);
     _lumen_focus_update(nid);
     // HTML LS §6.6.3 «scroll into view» step, unless the caller opted out.
