@@ -18,25 +18,43 @@
 //! entry, so `PerformanceScriptTiming.sourceURL`/`sourceFunctionName` are now
 //! real per-callback values instead of the always-empty-string class default.
 //!
-//! **Known remaining gap:** the spec field `sourceCharPosition` (byte/char
-//! offset into `sourceURL`, not line/column) has no direct `rusty_v8`
-//! accessor — V8's C++ `v8::Function::GetScriptStartPosition()` (character
-//! offset) exists but, like `ObjectTemplate::MarkAsUndetectable` before
-//! GAP-DOCALLDDA's local binding, is not exposed by the `v8` crate. This
-//! slice exposes `sourceLine`/`sourceColumn` (1-based, from
+//! Срез 4 exposed `sourceLine`/`sourceColumn` (1-based, from
 //! `get_script_line_number`/`get_script_column_number`, both documented
-//! 0-indexed by `rusty_v8`) instead — real, spec-adjacent values that satisfy
-//! `loaf-source-location.html`'s `sourceLine`/`sourceColumn` assertions —
-//! while `sourceCharPosition` stays the class default (0) until a follow-up
-//! slice adds the same kind of local C++ wrapper GAP-DOCALLDDA used for
-//! `MarkAsUndetectable`. Bound functions (`Function.prototype.bind`) are not
+//! 0-indexed by `rusty_v8`) but left `sourceCharPosition` at the class
+//! default: V8's C++ `v8::Function::GetScriptStartPosition()` (character
+//! offset) exists in the headers and is already linked into the prebuilt
+//! `rusty_v8.lib` (confirmed by scanning the archive's symbol table for
+//! `?GetScriptStartPosition@Function@v8@@QEBAHXZ` — present, same mangling
+//! shape as the already-wrapped `GetScriptColumnNumber`), but, like
+//! `ObjectTemplate::MarkAsUndetectable` before GAP-DOCALLDDA's local binding,
+//! is not exposed by the `v8` crate's Rust surface.
+//!
+//! **Срез 5 (this slice): `sourceCharPosition` closed.** Rather than a fourth
+//! `.cc` translation unit, the wrapper
+//! `lumen_v8__Function__GetScriptStartPosition` was added to the existing
+//! `cpp/undetectable.cc` (same stand-in-declaration technique GAP-DOCALLDDA
+//! established: no V8 headers included, a minimal `class Function { int
+//! GetScriptStartPosition() const; };` stand-in whose only job is to make the
+//! C++ compiler mangle the name identically to V8's real declaration).
+//! `-1` (V8's own "unavailable" convention, matching the sibling
+//! `get_script_line_number`/`get_script_column_number` `rusty_v8` already
+//! wraps) maps to the class default `0`, same as the other source fields.
+//! Bound functions (`Function.prototype.bind`) are not
 //! unwrapped to their target either — V8 does not expose the wrapped
 //! function through the embedder API — so `sourceFunctionName` for
 //! `my_bound_function.bind(obj)` follows whatever V8's own `GetName()`
 //! reports for the bound wrapper (empirically the bind target's name is
 //! preserved by V8 itself, but this slice does not special-case it further).
 
-/// `_lumen_capture_call_site(fn)` — see module docs.
+// `_lumen_capture_call_site(fn)` — see module docs.
+unsafe extern "C" {
+    /// Lumen's local C++ binding for `v8::Function::GetScriptStartPosition()`
+    /// (`cpp/undetectable.cc`, compiled by this crate's `build.rs`). Same
+    /// convention as `rusty_v8`'s own `get_script_line_number`/
+    /// `get_script_column_number`: a negative return means "unavailable".
+    fn lumen_v8__Function__GetScriptStartPosition(this: *const v8::Function) -> i32;
+}
+
 pub(crate) fn capture_call_site(
     scope: &mut v8::PinScope,
     args: &v8::FunctionCallbackArguments,
@@ -57,6 +75,12 @@ pub(crate) fn capture_call_site(
     let source_line = func.get_script_line_number().map(|n| n + 1).unwrap_or(0);
     let source_column = func.get_script_column_number().map(|n| n + 1).unwrap_or(0);
     let name = func.get_name(scope).to_rust_string_lossy(scope);
+    // SAFETY: the callee only forwards the pointer to a non-virtual,
+    // non-inline V8 member function that takes no arguments and touches no
+    // Rust-owned memory. `&*func` is a live `v8::Function*` for as long as
+    // the `Local` is in scope, which covers this call.
+    let raw_char_position = unsafe { lumen_v8__Function__GetScriptStartPosition(&*func) };
+    let source_char_position = raw_char_position.max(0);
 
     let obj: v8::Local<v8::Object> = v8::Object::new(scope);
     let set = |scope: &mut v8::PinScope,
@@ -77,6 +101,8 @@ pub(crate) fn capture_call_site(
     set(scope, obj, "sourceLine", line_val);
     let col_val: v8::Local<v8::Value> = v8::Integer::new(scope, source_column as i32).into();
     set(scope, obj, "sourceColumn", col_val);
+    let char_pos_val: v8::Local<v8::Value> = v8::Integer::new(scope, source_char_position).into();
+    set(scope, obj, "sourceCharPosition", char_pos_val);
 
     rv.set(obj.into());
 }

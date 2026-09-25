@@ -1395,7 +1395,7 @@ tests/wpt/.venv/Scripts/python.exe -m pip install -r tests/wpt/requirements.txt`
 Что записано как сегодняшняя правда движка (7 файлов `ERROR`, 9 `TIMEOUT`, остальное `OK` с непройденными
 подтестами):
 
-- **TIMEOUT/NOTRUN почти везде — [BUG-948](../../bugs/BUG-948-OPEN.md):** `long-animation-frame` намеренно
+- **TIMEOUT/NOTRUN почти везде — [BUG-948](../../bugs/BUG-948-FIXED.md):** `long-animation-frame` намеренно
   нет в `supportedEntryTypes`, и ни одна `PerformanceLongAnimationFrameTiming` не производится, поэтому
   `PerformanceObserver`-тесты ждут запись, которая не придёт. Отдельного бага не заводилось.
 - **`ERROR` на `*|body:nth-child(2)` — [BUG-1063](../../bugs/BUG-1063-OPEN.md):** в логе прогона это
