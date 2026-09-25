@@ -5818,5 +5818,14 @@ var dispatchEvent       = window.dispatchEvent.bind(window);
         value: Window, writable: true, enumerable: false, configurable: true,
     });
     Object.setPrototypeOf(window, Window.prototype);
-    globalThis.Window = Window;
+    // BUG-637: WebIDL §3.7 interface-object shape. A plain assignment made
+    // `Window` an enumerable global and left `Window.prototype` writable;
+    // the interface object inherits from its parent interface's object.
+    Object.defineProperty(Window, 'prototype', {
+        writable: false, enumerable: false, configurable: false,
+    });
+    Object.setPrototypeOf(Window, EventTarget);
+    Object.defineProperty(globalThis, 'Window', {
+        value: Window, writable: true, enumerable: false, configurable: true,
+    });
 })();

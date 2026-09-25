@@ -1,6 +1,6 @@
 # BUG-637: global `Window` interface object doesn't exist — `typeof Window === "undefined"`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, V8 global scope install)
 **Найден:** P2, WPT-VENDOR-merchant-validation, 2026-08-05, проба `--mcp-live-port`
 
@@ -46,3 +46,23 @@ Window` and `Window.prototype` to the existing `window` global, or whether a
 minimal shim (bare `class Window {}` global with no prototype linkage) is
 sufficient to unblock the common `"X" in Window` idiom used across the WPT
 corpus.
+
+## Исправление (P3, 2026-09-25)
+
+К моменту разбора симптом уже не воспроизводился: `Window` заводит IIFE
+BUG-589 в `crates/js/src/shim/web_api_shim_tail_b.js` (2026-09-16), так что
+`"X" in Window` вычисляется. Но форма интерфейсного объекта была неверной:
+`globalThis.Window = Window` делал его *перечисляемым* свойством глобала,
+`Window.prototype` оставался перезаписываемым/конфигурируемым, а
+`[[Prototype]]` самого `Window` был `Function.prototype`, а не `EventTarget`
+(WebIDL §3.7.1: объект интерфейса наследует объект родительского интерфейса).
+Теперь `Window` ставится через `defineProperty` (writable, не enumerable,
+configurable), `prototype` — `{writable:false, enumerable:false,
+configurable:false}`, `Object.setPrototypeOf(Window, EventTarget)`.
+
+Регрессия — `crates/js/src/dom/tests/v8_bug637_window_interface.rs`
+(3 теста: идиома WPT, форма по WebIDL, отсутствие `Window` в
+`Object.keys(globalThis)`). Весь `cargo test -p lumen-js --features
+v8-backend --lib`: 4343/4345, два упавших (`credentials::…installed_provider`,
+`frame_bridge::…does_not_mark_dirty`) — флейки глобального состояния при
+параллельном прогоне, изолированно зелёные и с фиксом, и без.
