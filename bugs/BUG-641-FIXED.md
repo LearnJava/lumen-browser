@@ -1,6 +1,6 @@
 # BUG-641: `navigator.connection.downlinkMax` missing from the `NetworkInformation` stub
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/dom.rs`, Network Information API shim)
 **Найден:** P2, WPT-VENDOR-netinfo, 2026-08-05
 
@@ -61,3 +61,25 @@ Fix scope: добавить `this.downlinkMax = Infinity;` (или конечн�
 конкретики) в конструктор `NetworkInformation` рядом с остальными
 полями-заглушками. Тривиальный однострочный фикс, но вне скоупа этой
 WPT-VENDOR-задачи (только вендоринг + прогон).
+
+## Исправление (P3, 2026-09-25)
+
+Шим переехал из `dom.rs` в `crates/js/src/shim/web_api_shim_tail_b.js`
+(блок «Network Information API»). Конструктор `NetworkInformation` теперь
+ставит `downlinkMax = Infinity` — по WICG Network Information
+(«max downlink speed»): UA без знания о максимальной скорости канала
+отдаёт `+Infinity`. Конечное число выдумывать не стали — `type = 'wifi'`
+у заглушки такой же условный, как и остальные поля, а `+Infinity` —
+единственное значение, которое спека прямо называет для «не знаю».
+
+Регрессионный тест: `navigator_connection_downlink_max_is_unknown_infinity`
+(`crates/js/src/dom/tests/v8_fullscreen_locks.rs`). Метаданные
+`tests/wpt/metadata/netinfo/netinfo-basics.html.ini` (единственная запись —
+`expected: FAIL` для этого сабтеста) удалены.
+
+Живой прогон `run_report.py --all --root netinfo --recursive`:
+`netinfo-basics.html` — **6/6**, Unexpected 0. `idlharness.any.html` теперь
+не TIMEOUT (idlharness.js вендорен с тех пор) и падает на WebIDL-форме
+интерфейса (атрибуты — собственные свойства экземпляра, а не аксессоры
+прототипа; `NetworkInformation` enumerable на `window`) — это класс
+[BUG-664](BUG-664-OPEN.md), не эта заявка.

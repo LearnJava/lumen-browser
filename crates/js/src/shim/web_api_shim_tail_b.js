@@ -5445,12 +5445,15 @@ function _wa_doc_get_animations() {
 })();
 
 // ── Network Information API (W3C Network Information §7) ──────────────────────
-// navigator.connection — effective type, downlink, rtt, saveData.
+// navigator.connection — effective type, downlink, downlinkMax, rtt, saveData.
 // Phase 1 stub: reports '4g'/10 Mbps/100 ms (reasonable desktop default).
 (function() {
   function NetworkInformation() {
     this.effectiveType = '4g';
     this.downlink      = 10;
+    // BUG-641: WICG Network Information §`downlinkMax` — with no knowledge of
+    // the underlying link's max speed the UA reports +Infinity.
+    this.downlinkMax   = Infinity;
     this.rtt           = 100;
     this.saveData      = false;
     this.type          = 'wifi';
