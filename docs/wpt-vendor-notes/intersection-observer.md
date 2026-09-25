@@ -16,3 +16,14 @@ Test category, added 2026-08-05 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 базе — 128/143, 33/229), регрессий по сабтестам нет. `.ini`-baseline
 переписан `--update-expected`. Главный остаток — число записей (`entries.length`,
 66 сабтестов: BUG-627), `IntersectionObserverEntry` (BUG-1131), валидация (BUG-626).
+
+## BUG-626 исправлен (P3, 2026-09-25)
+
+Валидация аргументов конструктора и `observe()`. Тот же прогон: **129/143
+harness OK, 124/381 сабтестов** (было 114/381), `--check` — 0 регрессий.
+`observer-exceptions.html` 9/9 (`.ini` удалён), в `idlharness.window.js`
+позеленел «observe(Element) with too few arguments must throw TypeError».
+Попутно: `root: iframe.contentDocument` — фасад frame_bridge без `nodeType`;
+он помечен `__bid__` и принимается как Document, иначе
+`document-scrolling-element-root.html` и
+`iframe-root-with-overflow-propagation.html` падали бы на конструкторе.
