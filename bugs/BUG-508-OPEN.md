@@ -29,7 +29,7 @@ Animations at all — every test that probes the property fails the same way:
 
 `parsing.html`'s 16 failures (13/29 subtests pass) are a *different*,
 already-tracked mechanism entirely — the inline `style` setter never
-rejects invalid values ([BUG-484](BUG-484-OPEN.md)) — and are not
+rejects invalid values ([BUG-484](BUG-484-FIXED.md)) — and are not
 attributed to this bug.
 
 ## Масштаб находки
@@ -70,7 +70,7 @@ css/css-color-hdr --recursive --update-expected` на свежей `dev-release`
 `background-position-{x,y}`. `.ini` обоих файлов обновлены: тот же список
 FAIL, что и раньше, но заголовок теперь атрибутирует остаток к BUG-493, не
 к «свойство не распознаётся». `parsing.html` не затронут, остаётся
-[BUG-484](BUG-484-OPEN.md) (комментарий `.ini` восстановлен после того, как
+[BUG-484](BUG-484-FIXED.md) (комментарий `.ini` восстановлен после того, как
 `--update-expected` его стёр — содержимое не изменилось).
 
 **Интерполяция/Web Animations — НЕ реализована живьём, остаётся ДОРАБОТКОЙ.**

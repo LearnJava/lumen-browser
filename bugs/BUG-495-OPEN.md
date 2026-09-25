@@ -51,7 +51,7 @@ wptreport:
 
 `parsing/background-position-{x,y}-{valid,invalid}.html` (13 subtests
 total) are **not** attributed to this bug despite touching the same
-properties — those fail on [BUG-484](BUG-484-OPEN.md) instead
+properties — those fail on [BUG-484](BUG-484-FIXED.md) instead
 (`_lumen_make_style`'s inline setter never routes through the parser for
 *any* property, implemented or not, so it echoes the raw string back
 regardless of whether `background-position-x` itself exists).

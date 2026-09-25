@@ -1,9 +1,9 @@
 # BUG-941 — у канвы нет флага origin-clean: cross-origin картинка рисуется и читается обратно, `getImageData`/`toDataURL` не бросают `SecurityError` никогда
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-CANVASORIGIN](../ROADMAP.md))
+**Статус:** FIXED 2026-09-25 — дрейф трекера: закрыт GAP-CANVASORIGIN; строка BUGS.md не была перенесена при закрытии задачи (сверка с кодом 2026-09-25)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — модели origin-clean в движке нет вовсе (`grep` по `crates/js` за `origin.clean`/`SecurityError` в `canvas2d.rs`/`offscreen_canvas.rs` даёт ноль), и она требует не одной правки, а сквозного состояния: режим запроса по атрибуту `crossorigin`, результат CORS-проверки ответа, распространение флага через `drawImage`/`createPattern`/`ImageBitmap`/`transferToImageBitmap` и проверка на трёх читающих членах. Ведётся как задача `GAP-CANVASORIGIN` в [ROADMAP.md](../ROADMAP.md); P3 как баг не берёт.
 **Заведён:** 2026-09-01 (WPT-RUN-6, срез 30 — живой замер, вариант `canvas-taint-crossorigin`)
-**Область:** js (`crates/js/src/canvas2d.rs` — `getImageData`/`toDataURL`/`drawImage`; `crates/js/src/offscreen_canvas.rs`), network (режим запроса и CORS-ответ до канвы не доходят — ср. [BUG-859](BUG-859-OPEN.md): исходящий запрос не несёт даже `Origin`)
+**Область:** js (`crates/js/src/canvas2d.rs` — `getImageData`/`toDataURL`/`drawImage`; `crates/js/src/offscreen_canvas.rs`), network (режим запроса и CORS-ответ до канвы не доходят — ср. [BUG-859](BUG-859-FIXED.md): исходящий запрос не несёт даже `Origin`)
 **Владелец:** дорожка `GAP-CANVASORIGIN`.
 
 ## Симптом

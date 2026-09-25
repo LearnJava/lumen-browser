@@ -234,7 +234,7 @@ Curated-прогон — главный признак отсутствия ре
 `highlight-pseudo-parsing.html` как было 0/13, так и осталось, и в отчёте у
 всех шести «should be an invalid selector» сабтестов теперь именно
 insertRule-сообщение, а не «did not throw in querySelector». Барьер уже
-заведён — [BUG-471](BUG-471-OPEN.md) и [BUG-746](BUG-746-OPEN.md); отдельной
+заведён — [BUG-471](BUG-471-FIXED.md) и [BUG-746](BUG-746-FIXED.md); отдельной
 заявки не создавалось.
 
 **Строгость валидатора ограничена охватом самого парсера**: селектор,

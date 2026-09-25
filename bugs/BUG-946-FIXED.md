@@ -22,7 +22,7 @@ trustedTypes\|defaultPolicy crates/js/src/shim/` — ноль совпадени
 createScript` автоматически — никогда не вызывают политику вовсе, и их
 колбэк не срабатывает.
 
-Отличие от [BUG-811](BUG-811-OPEN.md) (CSP не enforced): здесь речь не о
+Отличие от [BUG-811](BUG-811-FIXED.md) (CSP не enforced): здесь речь не о
 CSP-директиве, а о том, что объектная модель Trusted Types сама по себе
 никогда не консультируется, независимо от того, задан ли `require-trusted-
 types-for` вообще.
@@ -55,7 +55,7 @@ to a TrustedScript»), иначе — оставить прежнее повед
 default-policy-путь по спеке применяется только под CSP-директивами
 `trusted-types`/`require-trusted-types-for`, а те не распознавались даже
 парсером CSP — реальный блокер был не в этом баге, а в
-[BUG-811](BUG-811-OPEN.md). Срезом 2 GAP-CSPENF `crates/network/src/csp.rs`
+[BUG-811](BUG-811-FIXED.md). Срезом 2 GAP-CSPENF `crates/network/src/csp.rs`
 теперь парсит обе директивы (`CspPolicy::trusted_types`/
 `require_trusted_types_for_script`) — задача становится доделываемой: чтение
 директив есть, остаётся подключить его к `_lumen_timer_string_handler` и

@@ -39,7 +39,7 @@ getComputedStyle(document.getElementById("t1")).getPropertyValue("--x")   // →
 The inline-style path (`div.style.getPropertyValue('--x')`, not
 `getComputedStyle`) is unaffected — `_lumen_make_style`'s `getPropertyValue`
 (`dom.rs:4271`) reads straight off the parsed `style=` attribute string, a
-different, working code path (see [BUG-484](BUG-484-OPEN.md) for that path's
+different, working code path (see [BUG-484](BUG-484-FIXED.md) for that path's
 *own*, unrelated gaps).
 
 ## Симптом

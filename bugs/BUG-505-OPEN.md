@@ -27,7 +27,7 @@ this whole cluster of Overflow L3-L5 features):
 reach `getComputedStyle()`.** `e.style['text-overflow'] = 'auto'` (an invalid
 value per spec) is accepted verbatim instead of being rejected — the same
 "unknown property falls through to a raw passthrough setter" shape as
-[BUG-484](BUG-484-OPEN.md), but here the property itself
+[BUG-484](BUG-484-FIXED.md), but here the property itself
 (`text-overflow`, `line-clamp`, `-webkit-line-clamp`, `max-lines`,
 `block-ellipsis`, `continue`, `scroll-axis-lock`, `scroll-marker-group`,
 `scroll-target-group`) has **no** parser arm at all, not even a validating

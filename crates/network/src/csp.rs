@@ -176,7 +176,7 @@ pub struct CspPolicy {
     /// The header/`<meta>` text this policy was parsed from, verbatim — CSP3
     /// §7.8's `SecurityPolicyViolationEvent.originalPolicy` names the text of
     /// the ONE policy that was violated, not every policy the document
-    /// declared (GAP-CSPENF срез 56, `bugs/BUG-811-OPEN.md`).
+    /// declared (GAP-CSPENF срез 56, `bugs/BUG-811-FIXED.md`).
     pub raw: String,
 }
 
@@ -355,7 +355,7 @@ fn source_matches_url(source: &CspSource, url: &Url, self_origin: Option<&Origin
 /// component (`https://example.com/scripts/`) is treated as if it named the
 /// whole host. That is broader than the spec — a URL outside the path still
 /// matches here — never narrower, so it cannot turn an allowed fetch into a
-/// blocked one; see `bugs/BUG-811-OPEN.md` GAP-CSPENF срез 4 for the scope
+/// blocked one; see `bugs/BUG-811-FIXED.md` GAP-CSPENF срез 4 for the scope
 /// note.
 fn host_source_matches(pattern: &str, url: &Url) -> bool {
     let (scheme_part, rest) = match pattern.split_once("://") {

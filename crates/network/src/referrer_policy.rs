@@ -4,7 +4,7 @@
 //!
 //! GAP-REFERRER срез 1: policy keyword parsing + the strip/downgrade
 //! algorithm, applied to `fetch()`/`XMLHttpRequest`/`navigator.sendBeacon`
-//! (the surfaces [BUG-859](../../../bugs/BUG-859-OPEN.md) measured directly).
+//! (the surfaces [BUG-859](../../../bugs/BUG-859-FIXED.md) measured directly).
 //! Срез 2: the same algorithm reaches engine-issued subresource fetches too
 //! (`<img>`/`<script src>`/`<link>`/`@import`/`@font-face`/…, all GET-only —
 //! `Origin` does not apply there) via

@@ -37,7 +37,7 @@ ima-plain-resolved mapped-module                                ← import('./vc
 `import-maps/dynamic-module-map-key.html` — файл строит карту из скрипта и
 импортирует по ключу; оба ключа относительные. Оставшиеся два id остатка в
 `import-maps/` (`no-referencing-script-integrity*.html`) упираются раньше в
-[BUG-630](BUG-630-OPEN.md) — их импорт запускается из `onload`-атрибута
+[BUG-630](BUG-630-FIXED.md) — их импорт запускается из `onload`-атрибута
 `<img>`, которого движок не диспатчит. Категория целиком не вендорена, так
 что настоящая цена больше измеренной.
 

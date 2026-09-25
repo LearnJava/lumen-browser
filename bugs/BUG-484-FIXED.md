@@ -1,6 +1,6 @@
 # BUG-484: Inline `style` setter never parses/validates values — no rejection, no shorthand expansion, no canonicalization
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 — дрейф трекера: закрыт CSSOM-2 (19 срезов); валидаторы по семействам свойств, общего пропуска через CSS-парсер нет; строка BUGS.md не была перенесена при закрытии задачи (сверка с кодом 2026-09-25)
 **Тип:** доработка (нереализованная функциональность), не дефект — ведётся как задача [`CSSOM-2`](../ROADMAP.md) дорожки CSSOM, а не как строка очереди P3. Файл остаётся детальной записью наблюдений: «срезы» ниже — прогоны категорий WPT, упиравшиеся в эту же дыру, а не куски выполненной работы. Переклассифицировано 2026-08-28 по решению пользователя.
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs:4264-4302` — `_lumen_make_style`)
@@ -169,7 +169,7 @@ directly-observable defects, all confirmed via WPT this slice:
 `variable-cssText.html`'s 6 failing subtests (`target6`…`target11`) are all
 instances of the first two defects. `variable-invalidation.html`'s "inline
 style test"/"inline style test important" (2 of its 4 subtests — the other
-2 are [BUG-471](BUG-471-OPEN.md)) are the third. `variable-reference-shorthands.html`'s
+2 are [BUG-471](BUG-471-FIXED.md)) are the third. `variable-reference-shorthands.html`'s
 5 failing subtests (`target1`/`target2`/`target3` `margin`/`margin-top`)
 and part of `variable-reference.html`'s failures are the **shorthand-not-
 expanded** symptom already documented above (setting `margin-top` after

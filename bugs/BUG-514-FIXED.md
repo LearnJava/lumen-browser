@@ -21,7 +21,7 @@ rather than substituting the environment value, so the property falls back
 to its own initial value (empty string surfaces through `getComputedStyle`,
 since the declaration never took effect at all).
 
-This is distinct from [BUG-484](BUG-484-OPEN.md) (inline `style` setter
+This is distinct from [BUG-484](BUG-484-FIXED.md) (inline `style` setter
 accepts anything unvalidated): these failures come from **stylesheet**
 declarations (`<style>` blocks, not `element.style = ...`), where the real
 `css-parser` grammar is supposed to run — `env()` genuinely isn't a token
@@ -54,7 +54,7 @@ fallback-to-`var()` never resolves).
 
 Three more files in this category attribute elsewhere: `env-parsing.html` (5)
 and `indexed-env.tentative.html` (4) fail on the generic inline-`style`
-rejection gap ([BUG-484](BUG-484-OPEN.md) — malformed `env(...)` accepted by
+rejection gap ([BUG-484](BUG-484-FIXED.md) — malformed `env(...)` accepted by
 `element.style` instead of rejected, a JS-layer issue independent of this
 one), `env-revert-rule.html` (1) fails because `revert-rule` inside an
 `env()` fallback is substituted textually before the cascade sees it, so the

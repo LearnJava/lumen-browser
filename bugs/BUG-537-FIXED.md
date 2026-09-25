@@ -30,7 +30,7 @@ is unconditional (not gradient-grammar-specific).
 216 subtests, one per `{gradient-function, stop-list, expected parse}` triple)
 runs `check_gradient()`, which asserts twice per case: first that
 `div.style.getPropertyValue('background-image')` round-trips (inline echo —
-always passes independently, [BUG-484](BUG-484-OPEN.md)'s territory), then
+always passes independently, [BUG-484](BUG-484-FIXED.md)'s territory), then
 that `getComputedStyle(div).getPropertyValue('background-image')` starts with
 the gradient function name. Every `[ parsable ]` case reaches the second
 assertion (the first already passes per BUG-484) and fails there — computed

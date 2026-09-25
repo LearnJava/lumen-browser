@@ -29,7 +29,7 @@ document.head.appendChild(l);
 а событие потеряно.
 
 Отдельно (не чинится здесь): `link.sheet` — `undefined`, это CSSOM-пробел
-[BUG-471](BUG-471-OPEN.md).
+[BUG-471](BUG-471-FIXED.md).
 
 ## Почему это ломает страницы
 

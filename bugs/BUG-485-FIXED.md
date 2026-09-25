@@ -70,7 +70,7 @@ Not css-cascade-specific — `grep -rl 'document\.head\.' tests/wpt/css --
 include=*.html \| wc -l` → **84 files** in the vendored `css/` tree alone use
 this idiom, so it will recur in every future WPT-RUN-3 slice that dynamically
 injects a stylesheet. Second-highest-leverage fix in this slice after
-verifying scope (behind [BUG-471](BUG-471-OPEN.md)'s CSSOM stylesheet model,
+verifying scope (behind [BUG-471](BUG-471-FIXED.md)'s CSSOM stylesheet model,
 which is a larger undertaking; this one is a single accessor).
 
 ## Что нужно

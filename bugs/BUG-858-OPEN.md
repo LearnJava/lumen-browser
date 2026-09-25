@@ -34,7 +34,7 @@ navigator.sendBeacon(abs, new Uint8Array([1,2,3]));     // true, тело пус
 | абсолютный, тело — `FormData` | `true` | `content-type=application/x-www-form-urlencoded;charset=UTF-8` (спека: `multipart/form-data; boundary=…`) |
 | контроль `fetch(POST)` на тот же абсолютный URL | — | `POST` дошёл |
 
-Отдельно измерено и вынесено в [BUG-859](BUG-859-OPEN.md): ни один из этих
+Отдельно измерено и вынесено в [BUG-859](BUG-859-FIXED.md): ни один из этих
 запросов (включая контрольный `fetch`) не несёт `Origin` и `Referer`.
 
 ## Масштаб

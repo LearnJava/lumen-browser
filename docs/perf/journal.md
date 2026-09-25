@@ -328,7 +328,7 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 | CSP nonce не пускает внешний скрипт ([BUG-1124](../../bugs/BUG-1124-OPEN.md)) | dropbox, gemini (гипотеза) |
 | `<style>.sheet === null` сразу после вставки ([BUG-493](../../bugs/BUG-493-OPEN.md)) | twitch, quora, bbc |
 | `document.write` не исполняет `<script>` ([BUG-568](../../bugs/BUG-568-OPEN.md)) | tumblr |
-| `ShadowRoot` без `insertBefore` ([BUG-1130](../../bugs/BUG-1130-OPEN.md)) | archive |
+| `ShadowRoot` без `insertBefore` ([BUG-1130](../../bugs/BUG-1130-FIXED.md)) | archive |
 | `classList` не итерируем ([BUG-1125](../../bugs/BUG-1125-OPEN.md)) | wordpress, mozilla |
 | `blob:` URL не загружается ([BUG-1126](../../bugs/BUG-1126-OPEN.md)) | zoom, bing |
 | `url()` во внешнем CSS от базы документа ([BUG-1127](../../bugs/BUG-1127-OPEN.md)) | apple, tumblr |
