@@ -53,6 +53,7 @@ pub mod style;
 pub mod masonry;
 pub mod subgrid;
 pub mod table;
+pub mod text_geometry;
 pub mod text_iter;
 pub mod vertical;
 
@@ -101,6 +102,7 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
+pub use text_geometry::{collect_text_frag_rects, text_hits_at_point, TextFragRect};
 pub use style::{compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style};
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,

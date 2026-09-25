@@ -285,6 +285,26 @@ pub(crate) fn install_element_geometry(
         });
     }
 
+    // GAP-HLHITTEST: which character of which text node is laid out under a
+    // viewport point — flat `[nid, utf16Offset, nid, utf16Offset, …]`,
+    // usually zero or one pair. Backs `CSS.highlights.highlightsFromPoint()`.
+    // The first call opts the page into collecting the per-text-node table on
+    // every later flush (see `FlushHandles::text_frags_needed`).
+    {
+        let table = Arc::clone(&flush.text_frag_rects);
+        let needed = Arc::clone(&flush.text_frags_needed);
+        let flush_tp = flush.clone();
+        reg!(scope, ctx, store, "_lumen_text_at_point", move |x: f64, y: f64| -> Vec<u32> {
+            needed.store(true, Ordering::Relaxed);
+            flush_tp.maybe_flush();
+            let t = table.lock().unwrap();
+            lumen_layout::text_hits_at_point(&t, x as f32, y as f32)
+                .into_iter()
+                .flat_map(|(nid, off)| [nid, off])
+                .collect()
+        });
+    }
+
     // BUG-1007: per-fragment rects backing `Element.prototype.getClientRects()`/
     // `getBoxQuads()` — one `[x, y, width, height]` per CSS fragment (visual
     // line, for a multi-line plain inline element) instead of the single

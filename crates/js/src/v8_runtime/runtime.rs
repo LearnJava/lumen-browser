@@ -196,6 +196,17 @@ pub struct V8JsRuntime {
     pub(super) computed_styles_needed: Arc<AtomicBool>,
     /// BUG-935 S44: mirrors [`super::style_flush::FlushHandles::computed_styles_collected`].
     pub(super) computed_styles_collected: Arc<AtomicBool>,
+    /// GAP-HLHITTEST: per-text-node fragment geometry backing
+    /// `CSS.highlights.highlightsFromPoint()` — see
+    /// [`super::style_flush::FlushHandles::text_frag_rects`]. Filled only by
+    /// the same-tick flush, never pushed by the embedder.
+    pub(super) text_frag_rects: Arc<Mutex<HashMap<u32, Vec<lumen_layout::TextFragRect>>>>,
+    /// GAP-HLHITTEST: mirrors [`super::style_flush::FlushHandles::text_frags_needed`].
+    pub(super) text_frags_needed: Arc<AtomicBool>,
+    /// GAP-HLHITTEST: mirrors [`super::style_flush::FlushHandles::text_frags_collected`];
+    /// cleared by [`Self::update_client_rects`] so fresh embedder geometry
+    /// forces the next reader through a real flush.
+    pub(super) text_frags_collected: Arc<AtomicBool>,
     /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
     /// via [`Self::update_stylesheet`] so a same-tick `getComputedStyle`/
     /// geometry read can force a synchronous flush (see
@@ -461,6 +472,9 @@ impl V8JsRuntime {
             custom_props_collected: Arc::new(AtomicBool::new(false)),
             computed_styles_needed: Arc::new(AtomicBool::new(false)),
             computed_styles_collected: Arc::new(AtomicBool::new(false)),
+            text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
+            text_frags_needed: Arc::new(AtomicBool::new(false)),
+            text_frags_collected: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             cssom_deltas: Arc::new(Mutex::new(Vec::new())),
@@ -806,6 +820,10 @@ impl V8JsRuntime {
     /// [`Self::update_layout_rects`] wherever the shell pushes fresh geometry.
     pub fn update_client_rects(&self, rects: HashMap<u32, Vec<[f32; 4]>>) {
         *self.client_rects.lock().unwrap_or_else(|e| e.into_inner()) = rects;
+        // GAP-HLHITTEST: the text-fragment table is derived from a flush
+        // tree, not pushed here — mark it stale so the next
+        // `highlightsFromPoint()` re-collects against the new layout.
+        self.text_frags_collected.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Replace the `LayoutBox` tree snapshot backing `elementFromPoint`/

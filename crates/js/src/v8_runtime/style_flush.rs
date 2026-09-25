@@ -128,6 +128,18 @@ pub(crate) struct FlushHandles {
     /// [`Self::computed_styles_needed`] was set, mirroring
     /// [`Self::never_flushed`] but scoped to this one cache.
     pub(crate) computed_styles_collected: Arc<AtomicBool>,
+    /// GAP-HLHITTEST: `text node index → laid-out fragments` with their UTF-16
+    /// offset spans ([`lumen_layout::collect_text_frag_rects`]), the geometry
+    /// `CSS.highlights.highlightsFromPoint()` hit-tests against. Collected
+    /// only while [`Self::text_frags_needed`] is set — most pages never call
+    /// that API, and the walk touches every inline fragment.
+    pub(crate) text_frag_rects: Arc<Mutex<HashMap<u32, Vec<lumen_layout::TextFragRect>>>>,
+    /// GAP-HLHITTEST: set by `_lumen_text_at_point` before it flushes.
+    pub(crate) text_frags_needed: Arc<AtomicBool>,
+    /// GAP-HLHITTEST: same bypass as [`Self::computed_styles_collected`];
+    /// additionally cleared by `update_client_rects`, because the table is
+    /// never pushed by the embedder alongside its fresh geometry.
+    pub(crate) text_frags_collected: Arc<AtomicBool>,
 }
 
 /// Recorded CSSOM writes awaiting replay onto the cascade sheet, each paired
@@ -200,6 +212,8 @@ impl FlushHandles {
             && !self.pseudo_styles_collected.load(Ordering::Relaxed);
         let custom_props_pending = self.custom_props_needed.load(Ordering::Relaxed)
             && !self.custom_props_collected.load(Ordering::Relaxed);
+        let text_frags_pending = self.text_frags_needed.load(Ordering::Relaxed)
+            && !self.text_frags_collected.load(Ordering::Relaxed);
         if !self.never_flushed.load(Ordering::Relaxed)
             && !self.flush_stale.load(Ordering::Relaxed)
             && !focus_changed
@@ -207,6 +221,7 @@ impl FlushHandles {
             && !computed_styles_pending
             && !pseudo_styles_pending
             && !custom_props_pending
+            && !text_frags_pending
         {
             return;
         }
@@ -332,6 +347,14 @@ impl FlushHandles {
                 .unwrap_or_else(|e| e.into_inner()) =
                 lumen_layout::collect_custom_properties(&layout_root, viewport);
             self.custom_props_collected.store(true, Ordering::Relaxed);
+        }
+        if self.text_frags_needed.load(Ordering::Relaxed) {
+            *self
+                .text_frag_rects
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_text_frag_rects(&layout_root, &doc_guard);
+            self.text_frags_collected.store(true, Ordering::Relaxed);
         }
         *self
             .scroll_states

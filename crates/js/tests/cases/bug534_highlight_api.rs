@@ -479,8 +479,8 @@ e.done === true && e.value === undefined
     ));
 }
 
-// ── HighlightRegistry-highlightsFromPoint.html (argument validation only —
-// real hit-testing is not implemented, see crates/js/src/highlight_api.rs) ─
+// ── HighlightRegistry-highlightsFromPoint.html (argument validation; real
+// hit-testing against layout — GAP-HLHITTEST, `src/dom/tests/v8_gap_hlhittest.rs`) ─
 
 #[test]
 fn highlights_from_point_validates_its_arguments() {
@@ -508,6 +508,6 @@ fn highlights_from_point_returns_empty_array_for_valid_arguments() {
 JSON.stringify(CSS.highlights.highlightsFromPoint(-1, -1))
 "#,
     );
-    assert_eq!(out, "[]", "no paint hit-testing is wired up yet — see BUG-534's remaining scope");
+    assert_eq!(out, "[]", "a point outside the viewport never hits");
 }
 
