@@ -54,7 +54,7 @@ impl Lumen {
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.stream_layout_seeded = false;
         self.preload_dispatched = std::collections::HashSet::new();
-        self.stream_images_requested = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        self.stream_images_requested = Arc::default();
         self.stream_image_sizes = HashMap::new();
         self.stream_image_sizes_dirty = false;
         self.stream_image_errors = std::collections::HashSet::new();

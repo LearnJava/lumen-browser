@@ -74,6 +74,6 @@ intrinsic-пикселя; чинит и row-, и column-направление (
 Гейт: `cargo clippy --workspace --all-targets -- -D warnings` чисто;
 `lumen-layout --lib` (3957 тестов) и `--all-targets` (77) зелёные.
 `scripts/scoped-test.sh` — единственный красный `cpu_snapshots_match_references`
-(те же 7 файлов, что и в [BUG-1048](BUG-1048-OPEN.md)) — предсуществующий
+(те же 7 файлов, что и в [BUG-1048](BUG-1048-FIXED.md)) — предсуществующий
 дрейф, не регрессия (правка не трогает paint); `lumen-network` — известный
 сломанный гейт [BUG-805](BUG-805-OPEN.md).

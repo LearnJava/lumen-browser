@@ -45,7 +45,7 @@ fn queue_pending_img_loads(
             && let Some(src) = node.get_attr("src")
             && !src.trim().is_empty()
         {
-            hook.queue_image_load(src);
+            hook.queue_image_load(nid.raw(), src);
         }
         stack.extend(node.children.iter().copied());
     }
@@ -694,7 +694,7 @@ pub(crate) fn install_node_properties(
                     && let Some(hook) = &img_hook
                     && doc.get(nid).element_name().is_some_and(|n| n.local == "img")
                 {
-                    hook.queue_image_load(&value);
+                    hook.queue_image_load(nid.raw(), &value);
                 }
                 dirty.store(true, Ordering::Relaxed);
                 stale.store(true, Ordering::Relaxed);

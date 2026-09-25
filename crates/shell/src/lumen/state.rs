@@ -589,7 +589,11 @@ pub(crate) struct Lumen {
     /// того как `spawn_image_requests`/`spawn_stream_image_loads` на shell-
     /// потоке успеют дойти до того же `<img>` — без общего множества оба пути
     /// задвоили бы запрос на одну и ту же картинку.
-    pub(crate) stream_images_requested: Arc<Mutex<std::collections::HashSet<String>>>,
+    ///
+    /// BUG-1048: рядом с URL-ами хук пишет и узел, который их запросил, —
+    /// неприкреплённый `new Image()` иначе не найти: `load`/`error` разносит
+    /// обход дерева (см. [`crate::dynamic_image_hook::ImageRequestLedger`]).
+    pub(crate) stream_images_requested: Arc<Mutex<crate::dynamic_image_hook::ImageRequestLedger>>,
     /// BUG-735: intrinsic-размеры `src` → `(width, height)` всех картинок,
     /// декодированных streaming/динамическим путём в текущей навигации.
     /// Карта живёт до конца навигации (а не дренируется за проход), потому что

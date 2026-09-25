@@ -27,7 +27,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## Resource loading
 
-- **Only a parser-written `<img>` reliably fires `load`/`error`**; a script-created one (`new Image()`, `createElement('img')`, reassigned `src`) may stay silent ([BUG-1048](../bugs/BUG-1048-OPEN.md)). Sequence a probe on a parser-written image, and never read a silent script-made `<img>` as evidence that a policy blocked it.
+- **A script-made `<img>` fires `load`/`error` reliably only via plain `src` in the top-level document** ([BUG-1048](../bugs/BUG-1048-FIXED.md) fixed that path, including a never-inserted `new Image()`). Inside an iframe, in a tab thawed from hibernation, or selected through `srcset`/`<picture>`, a *detached* image stays silent ([BUG-1148](../bugs/BUG-1148-OPEN.md)) — never read that silence as evidence that a policy blocked it.
 - **`<object data>` and `<embed src>` fetch and fire `load`/`error`, but render nothing** ([BUG-798](../bugs/BUG-798-OPEN.md), OBJECT-1); `<input type=image>` and SVG `<image>` fetch but fire no `load`/`error`. A probe needing a subresource should use `<link rel=stylesheet>`, `<script src>` or `fetch()`.
 
 ## Media
