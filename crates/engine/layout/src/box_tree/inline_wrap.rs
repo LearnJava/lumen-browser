@@ -627,6 +627,7 @@ pub(crate) fn wrap_inline_run(
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                merged_sources: Vec::new(),
             });
             current_x += frag_w + seg.post_space;
             continue;
@@ -662,6 +663,7 @@ pub(crate) fn wrap_inline_run(
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                merged_sources: Vec::new(),
             });
             current_x += img_w + seg.post_space;
             // Trailing whitespace after the image (a collapsed ws-only node) is
@@ -797,6 +799,7 @@ pub(crate) fn wrap_inline_run(
                         // this; CJK text does not use them.
                         source_char_offset: frag_source_offset.saturating_add(start as u32),
                         bidi_level: seg.bidi_level,
+                        merged_sources: Vec::new(),
                     });
                     current_x += chunk_w;
                     first_chunk = false;
@@ -845,6 +848,7 @@ pub(crate) fn wrap_inline_run(
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
                         bidi_level: seg.bidi_level,
+                        merged_sources: Vec::new(),
                     });
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
@@ -865,6 +869,7 @@ pub(crate) fn wrap_inline_run(
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
                         bidi_level: seg.bidi_level,
+                        merged_sources: Vec::new(),
                     });
                     current_x += sfx_w + post;
                     continue;
@@ -899,6 +904,7 @@ pub(crate) fn wrap_inline_run(
                                 source_node: seg.source_node,
                                 source_char_offset: frag_source_offset,
                                 bidi_level: seg.bidi_level,
+                                merged_sources: Vec::new(),
                             });
                             current_x += head_w;
                             first_chunk = false;
@@ -951,6 +957,7 @@ pub(crate) fn wrap_inline_run(
                             source_node: seg.source_node,
                             source_char_offset: frag_source_offset,
                             bidi_level: seg.bidi_level,
+                            merged_sources: Vec::new(),
                         });
                         current_x += head_w;
                         first_chunk = false;
@@ -981,10 +988,27 @@ pub(crate) fn wrap_inline_run(
                         && last.padding_right == 0.0
                         && last.bidi_level == seg.bidi_level
                     {
+                        let prev_end_x = last.width;
                         // No separating space when the boundary joined tightly
                         // (word_inter == 0): the glyphs abut, e.g. `“`+`auto`.
                         if word_inter > 0.0 {
                             last.text.push(' ');
+                        }
+                        // GAP-HLHITTEST: a word from another DOM text node
+                        // still shares this fragment (one `DrawText` for
+                        // paint), but geometry needs to know where it starts.
+                        let owner = last
+                            .merged_sources
+                            .last()
+                            .map_or(last.source_node, |m| m.source_node);
+                        if owner != seg.source_node {
+                            last.merged_sources.push(crate::box_tree::MergedSource {
+                                text_byte: last.text.len() as u32,
+                                x: prev_end_x + word_inter,
+                                prev_end_x,
+                                source_node: seg.source_node,
+                                source_char_offset: frag_source_offset,
+                            });
                         }
                         last.text.push_str(&display_word);
                         last.width += word_inter + word_w;
@@ -1016,6 +1040,7 @@ pub(crate) fn wrap_inline_run(
                     source_node: seg.source_node,
                     source_char_offset: frag_source_offset,
                     bidi_level: seg.bidi_level,
+                    merged_sources: Vec::new(),
                 });
                 current_x += word_w;
             }
@@ -1178,6 +1203,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                merged_sources: Vec::new(),
             });
             prev_trailing_ws = seg.text.ends_with(|c: char| c.is_whitespace());
             continue;
@@ -1225,6 +1251,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                merged_sources: Vec::new(),
             });
         }
         prev_trailing_ws = seg_trail_ws;

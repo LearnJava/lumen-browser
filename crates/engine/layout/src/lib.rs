@@ -53,6 +53,7 @@ pub mod style;
 pub mod masonry;
 pub mod subgrid;
 pub mod table;
+pub mod text_geometry;
 pub mod text_iter;
 pub mod vertical;
 
@@ -88,7 +89,7 @@ pub use box_tree::{
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters, layout_mutation_incremental,
     layout_mutation_incremental_with_counters, layout_streaming_incremental,
     lay_out_incremental, select_widget_arrow_width, select_widget_font_size, BoxKind, BoxOrigin,
-    BoxRole, CrossOriginMode, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
+    BoxRole, CrossOriginMode, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     ViewBox, SELECT_WIDGET_PAD_PX,
 };
@@ -101,6 +102,7 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
+pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
 pub use style::{compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style};
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
@@ -2003,12 +2005,17 @@ fn collect_layout_rects_rec(
             let line_h = b.used_line_height;
             for (line_idx, line) in lines.iter().enumerate() {
                 let line_y = b.rect.y + line_idx as f32 * line_h;
-                for frag in line {
-                    let fx1 = b.rect.x + frag.x;
+                // GAP-HLHITTEST: per source span, so an inline element whose
+                // words `wrap_inline_run` merged into its same-style
+                // neighbour's fragment still gets its own geometry.
+                for (frag, span) in line.iter().flat_map(|f| {
+                    text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
+                }) {
+                    let fx1 = b.rect.x + frag.x + span.x;
                     let fy1 = line_y;
-                    let fx2 = fx1 + frag.width;
+                    let fx2 = fx1 + span.width;
                     let fy2 = fy1 + line_h;
-                    for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                    for anc in inline_element_ancestors(doc, span.source_node, b.node) {
                         out.entry(anc.index() as u32)
                             .and_modify(|cur| {
                                 let cx1 = cur[0].min(fx1);
@@ -2098,12 +2105,14 @@ fn collect_client_rects_rec(
                 // line, not a frag.
                 let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
                     std::collections::HashMap::new();
-                for frag in line {
-                    let fx1 = b.rect.x + frag.x;
+                for (frag, span) in line.iter().flat_map(|f| {
+                    text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
+                }) {
+                    let fx1 = b.rect.x + frag.x + span.x;
                     let fy1 = line_y;
-                    let fx2 = fx1 + frag.width;
+                    let fx2 = fx1 + span.width;
                     let fy2 = fy1 + line_h;
-                    for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                    for anc in inline_element_ancestors(doc, span.source_node, b.node) {
                         per_owner_this_line
                             .entry(anc.index() as u32)
                             .and_modify(|cur| {

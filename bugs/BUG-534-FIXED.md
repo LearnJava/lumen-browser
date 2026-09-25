@@ -1,6 +1,6 @@
 # BUG-534: CSS Custom Highlight API — `Highlight`/`HighlightRegistry` are ad-hoc Phase-0 stubs, not the spec's Setlike/Maplike interfaces
 
-**Статус:** OPEN (ДОРАБОТКА → GAP-HLHITTEST)
+**Статус:** FIXED 2026-09-26 (P1, GAP-HLHITTEST)
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`, installed via `install_highlight_api_bindings_v8`)
 **Найден:** P2, WPT-RUN-3 срез 26 (`css/css-highlight-api`) — массовый прогон
@@ -219,3 +219,28 @@ paint↔JS-registry, а не точечная правка. Заведена [GA
 (`planned`), статус этой карточки — `OPEN (ДОРАБОТКА → GAP-HLHITTEST)`. Сама
 Setlike/Maplike-реализация Highlight/HighlightRegistry (срез 2026-09-13 выше) не
 затронута — полностью готова и работает.
+
+## Закрытие 2026-09-26 (P1, GAP-HLHITTEST)
+
+Остаток — реальный hit-testing в `highlightsFromPoint()` — сделан без участия
+paint: точку сопоставляет с символом текстового узла layout
+(`crates/engine/layout/src/text_geometry.rs`, таблица собирается same-tick
+flush-ем лениво, натив `_lumen_text_at_point`), дальше шим проверяет, покрывает
+ли диапазон этот символ (сравнение граничных точек DOM §5.2), отбрасывает
+collapsed и невалидные StaticRange и сортирует по `priority`, затем по обратному
+порядку регистрации. Попутно найден и исправлен дефект геометрии: wrap
+склеивает слова соседних текстовых узлов одного стиля в один `InlineFrag`
+(один `DrawText` — это намеренно, раздельные фрагменты сдвигали CPU-снапшот
+`117-quotes`), а `source_node` у фрагмента один, поэтому второй inline-элемент
+оставался без геометрии (нулевой `getBoundingClientRect`) — именно на нём
+падал подтест «skips invalid StaticRanges». Теперь склейка записывает границу
+(`InlineFrag::merged_sources`: байт, x, узел), а `collect_layout_rects`/
+`collect_client_rects`/`collect_text_frag_rects` режут фрагмент по
+`frag_source_spans`.
+
+Живой WPT-прогон `css/css-highlight-api`: `HighlightRegistry-highlightsFromPoint-ranges.html`
+1/1 (`.ini` удалён), `HighlightRegistry-highlightsFromPoint.html` 7/8 — остался
+подтест с `display:none` iframe, он падает на `iframe.contentWindow === null`
+(BUG-480) раньше, чем доходит до `highlightsFromPoint()`. Не моделируются:
+перекрытие (occlusion) и фильтр `shadowRoots`. Отрисовка `::highlight()` — вне
+этой карточки.

@@ -346,6 +346,9 @@ impl V8JsRuntime {
                 custom_props_collected: Arc::clone(&self.custom_props_collected),
                 computed_styles_needed: Arc::clone(&self.computed_styles_needed),
                 computed_styles_collected: Arc::clone(&self.computed_styles_collected),
+                text_frag_rects: Arc::clone(&self.text_frag_rects),
+                text_frags_needed: Arc::clone(&self.text_frags_needed),
+                text_frags_collected: Arc::clone(&self.text_frags_collected),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);

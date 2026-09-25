@@ -150,7 +150,7 @@ pub use image_requests::{
 use image_requests::resolve_image_source;
 
 mod types;
-pub use types::{BoxKind, BoxOrigin, BoxRole, InlineFrag, InlineSegment, LayoutBox, PseudoKind, SvgMaskContent};
+pub use types::{BoxKind, BoxOrigin, BoxRole, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, SvgMaskContent};
 
 mod pseudo_text;
 use pseudo_text::{

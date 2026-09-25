@@ -92,11 +92,10 @@ pub(crate) fn install_highlight_api_bindings_v8(rt: &crate::v8_runtime::V8JsRunt
 // expect every method to work — the same reason `Headers` (`web_api_shim_mid_b.js`)
 // keeps its own array-backed list instead of a real `Map`.
 //
-// `highlightsFromPoint()` (spec §5) is defined with full argument validation
-// but always returns an empty array — real hit-testing against painted
-// highlight ranges needs paint to consume this registry at all, which it
-// doesn't yet (`highlight_name` on `DisplayCommand::DrawText` is a Phase-0
-// stub, never fed from here). That remains open scope.
+// `highlightsFromPoint()` (spec §5) hit-tests against layout's per-text-node
+// fragment geometry (GAP-HLHITTEST) — it does not need paint to consume this
+// registry. Painting `::highlight()` itself is separate, still-open scope
+// (`highlight_name` on `DisplayCommand::DrawText` is a Phase-0 stub).
 #[cfg(feature = "v8-backend")]
 const HIGHLIGHT_API_SHIM: &str = r#"(function(global) {
   'use strict';
@@ -307,11 +306,58 @@ const HIGHLIGHT_API_SHIM: &str = r#"(function(global) {
   });
   Object.defineProperty(HighlightRegistry.prototype, Symbol.toStringTag, { value: 'HighlightRegistry', configurable: true });
 
-  // §5 highlightsFromPoint(x, y, options?): argument validation per spec IDL
-  // overload resolution; real hit-testing is not implemented (see file doc
-  // comment above), so a validated call always resolves to no hits.
+  // DOM §5.2 "position of a boundary point relative to another", over arena
+  // node ids: -1 before, 0 equal, 1 after, `null` when the two points live
+  // in different trees (no order exists). Walks parent chains natively
+  // instead of going through `compareDocumentPosition` wrappers — this runs
+  // once per range per hit-test call.
+  function nidChain(nid) {
+    var c = [];
+    while (nid !== null && nid !== undefined) { c.push(nid); nid = _lumen_u2n(_lumen_get_parent(nid)); }
+    return c;
+  }
+  function compareBoundary(na, oa, nb, ob) {
+    if (na === nb) return oa === ob ? 0 : (oa < ob ? -1 : 1);
+    var ca = nidChain(na), cb = nidChain(nb);
+    if (ca[ca.length - 1] !== cb[cb.length - 1]) return null;
+    var ib = cb.indexOf(na);
+    if (ib > 0) return _lumen_get_children(na).indexOf(cb[ib - 1]) < oa ? 1 : -1;
+    var ia = ca.indexOf(nb);
+    if (ia > 0) return _lumen_get_children(nb).indexOf(ca[ia - 1]) < ob ? -1 : 1;
+    var i = ca.length - 1, j = cb.length - 1;
+    while (i >= 0 && j >= 0 && ca[i] === cb[j]) { i--; j--; }
+    var kids = _lumen_get_children(ca[i + 1]);
+    return kids.indexOf(ca[i]) < kids.indexOf(cb[j]) ? -1 : 1;
+  }
+  // DOM §5.4: a StaticRange is "valid" when both boundary nodes share a root,
+  // both offsets are within their node's length, and start is not after
+  // end. A live Range maintains that itself, so only StaticRange is checked.
+  function staticRangeValid(r) {
+    if (r.__start_off__ > _lumen_node_length(r.__start_nid__)) return false;
+    if (r.__end_off__ > _lumen_node_length(r.__end_nid__)) return false;
+    var c = compareBoundary(r.__start_nid__, r.__start_off__, r.__end_nid__, r.__end_off__);
+    return c !== null && c <= 0;
+  }
+  // Does range `r` cover the character at UTF-16 offset `off` of text node
+  // `nid`, i.e. contain both boundary points (nid, off) and (nid, off + 1)?
+  function rangeCoversChar(r, nid, off) {
+    var a = compareBoundary(r.__start_nid__, r.__start_off__, nid, off);
+    if (a === null || a > 0) return false;
+    var b = compareBoundary(nid, off + 1, r.__end_nid__, r.__end_off__);
+    return b !== null && b <= 0;
+  }
+
+  // §5 highlightsFromPoint(x, y, options?) — GAP-HLHITTEST. Layout answers
+  // which character of which text node is under the point
+  // (`_lumen_text_at_point`, see `lumen_layout::text_geometry`); a range is
+  // hit when it covers that character. Collapsed ranges and invalid
+  // StaticRanges never hit. Results are ordered by descending `priority`,
+  // ties broken by registration order, last registered first — the order
+  // highlights paint in, topmost first. Not modelled: occlusion (a text run
+  // under an opaque positioned box still hits) and the `shadowRoots` filter
+  // (validated, but a hit inside any shadow tree is reported regardless).
   hdef(HighlightRegistry.prototype, 'highlightsFromPoint', function(x, y, options) {
-    registryStateOf(this);
+    var chain = registryStateOf(this).chain;
     var nx = Number(x), ny = Number(y);
     if (Number.isNaN(nx) || Number.isNaN(ny)) {
       throw new TypeError('highlightsFromPoint requires numeric x and y coordinates');
@@ -332,7 +378,29 @@ const HIGHLIGHT_API_SHIM: &str = r#"(function(global) {
         }
       }
     }
-    return [];
+    if (typeof _lumen_text_at_point !== 'function') return [];
+    var vs = _lumen_get_viewport_size();
+    if (nx < 0 || ny < 0 || nx > vs[0] || ny > vs[1]) return [];
+    var hits = _lumen_text_at_point(nx, ny);
+    if (!hits || hits.length === 0) return [];
+    var found = [], order = 0;
+    chainForEach(chain, function(name, highlight) {
+      var st = HIGHLIGHT_STATE.get(highlight);
+      order++;
+      if (!st) return;
+      var ranges = [];
+      chainForEach(st.chain, function(range) {
+        if (!range || typeof range.__start_nid__ !== 'number') return;
+        if (range.__start_nid__ === range.__end_nid__ && range.__start_off__ === range.__end_off__) return;
+        if (range instanceof StaticRange && !staticRangeValid(range)) return;
+        for (var h = 0; h < hits.length; h += 2) {
+          if (rangeCoversChar(range, hits[h], hits[h + 1])) { ranges.push(range); return; }
+        }
+      });
+      if (ranges.length) found.push({ highlight: highlight, ranges: ranges, priority: st.priority, order: order });
+    });
+    found.sort(function(a, b) { return (b.priority - a.priority) || (b.order - a.order); });
+    return found.map(function(f) { return { highlight: f.highlight, ranges: f.ranges }; });
   });
 
   global.HighlightRegistry = HighlightRegistry;

@@ -397,6 +397,7 @@ mod tests {
             source_node: lumen_dom::NodeId::from_index(0),
             source_char_offset: 0,
             bidi_level: level,
+            merged_sources: Vec::new(),
         }
     }
 
