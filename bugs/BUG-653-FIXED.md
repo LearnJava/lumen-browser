@@ -1,6 +1,6 @@
 # BUG-653: `HTMLVideoElement.disablePictureInPicture` не отражает content-атрибут после патчинга
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/video_pip.rs:74-91` — `patchVideoPip`)
 **Найден:** P2, WPT-VENDOR-picture-in-picture, 2026-08-05
 
@@ -82,3 +82,22 @@ v.disablePictureInPicture // ожидается true, получаем false
 свериться с `requestPictureInPicture()`'s внутренним чтением этого же
 значения (строка 94, `if (_disabled) { ... }`) — она использует ту же
 устаревшую переменную и должна быть переведена на прямое чтение атрибута.
+
+## Исправление (2026-09-25, P3)
+
+`patchVideoPip` (`crates/js/src/video_pip.rs`) больше не держит
+замыкание-кеш `_disabled`: геттер `disablePictureInPicture` и проверка в
+`requestPictureInPicture()` читают присутствие content-атрибута при каждом
+обращении (HTML «reflect», boolean). Сеттер пишет только в атрибут
+(`''` / `removeAttribute`) и, если отключается видео, которое сейчас в PiP,
+выходит из PiP (Picture-in-Picture §3.1) — сессии другого видео не касается.
+
+Тесты: `disable_picture_in_picture_reflects_content_attribute`,
+`disabling_active_pip_video_exits_it`.
+
+WPT `picture-in-picture` (перепрогон на dev-release): 30/108 → **31/108
+сабтестов**, 15/17 harness OK; "Test disablePictureInPicture IDL attribute"
+PASS, это единственное отклонение от эталона — ожидание FAIL снято из
+`tests/wpt/metadata/picture-in-picture/disable-picture-in-picture.html.ini`.
+Остальные пять сабтестов файла падают на `loadVideo()` (`/common/media.js`
+не вендорен — тот же документированный гэп категории), а не на этом дефекте.
