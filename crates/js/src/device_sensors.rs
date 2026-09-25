@@ -85,7 +85,7 @@ const DEVICE_SENSORS_SHIM: &str = r#"
     // it; a registration made later — including from inside a handler —
     // schedules the next one. Delivery goes through `dispatchEvent`, so the
     // reading gets exactly the semantics of any other window event (whose
-    // own gaps — `handleEvent`, `once`, `event.target` — are BUG-1171).
+    // own gaps — `handleEvent`, `once`, `event.target` — are BUG-1172).
     const pendingReading = { deviceorientation: false, devicemotion: false };
     function scheduleReading(target, type) {
       if (pendingReading[type]) return;
