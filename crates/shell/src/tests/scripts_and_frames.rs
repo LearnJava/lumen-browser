@@ -136,7 +136,36 @@ fn parser_insert_log_is_empty_without_classic_scripts() {
     assert_eq!(log.segment_end(None), 0);
 }
 
-/// `<script type=module src>` lands in the module list as `External`.
+/// BUG-1120: внешний классический `defer` без `async` уходит в отложенный
+/// список вместе с модулями, в порядке документа (HTML LS §4.12.1.1 шаг 31).
+/// `defer` на инлайновом скрипте игнорируется, `async` его отменяет.
+#[test]
+fn collect_scripts_ordered_puts_external_defer_into_deferred_list() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+              <script>head=1;</script>
+              <script defer src="/d1.js"></script>
+              <script type="module">mod=1;</script>
+              <script defer>inlineDefer=1;</script>
+              <script defer async src="/da.js"></script>
+              <script src="/sync.js"></script>
+              <script defer src="/d2.js"></script>
+            </head><body><script>tail=1;</script></body></html>"#,
+    );
+    let mut classic = Vec::new();
+    let mut deferred = Vec::new();
+    collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut deferred);
+    let describe = |s: &ScriptSource| match s {
+        ScriptSource::Inline(_, b) => b.trim().to_owned(),
+        ScriptSource::External(_, u) => u.clone(),
+    };
+    let classic: Vec<String> = classic.iter().map(describe).collect();
+    let deferred: Vec<String> = deferred.iter().map(describe).collect();
+    assert_eq!(classic, ["head=1;", "inlineDefer=1;", "/da.js", "/sync.js", "tail=1;"]);
+    assert_eq!(deferred, ["/d1.js", "mod=1;", "/d2.js"]);
+}
+
+/// `<script type=module src>` lands in the deferred list as `External`.
 #[test]
 fn collect_scripts_ordered_external_module() {
     let doc = lumen_html_parser::parse(

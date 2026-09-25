@@ -2159,13 +2159,13 @@ pub(crate) fn spawn_frame(
     }
     // Скрипты ребёнка собираются и (внешние) скачиваются ДО передачи
     // документа в рантайм: run_scripts_with_dom принимает doc по значению.
-    let (classic_scripts, module_scripts) = {
+    let (classic_scripts, deferred_scripts) = {
         let mut classic_items = Vec::new();
-        let mut module_items = Vec::new();
-        collect_scripts_ordered(&child_doc, child_doc.root(), &mut classic_items, &mut module_items);
+        let mut deferred_items = Vec::new();
+        collect_scripts_ordered(&child_doc, child_doc.root(), &mut classic_items, &mut deferred_items);
         (
             resolve_script_sources(&classic_items, &child_base, sink, cookie_jar.clone(), &child_doc),
-            resolve_script_sources(&module_items, &child_base, sink, cookie_jar.clone(), &child_doc),
+            resolve_script_sources(&deferred_items, &child_base, sink, cookie_jar.clone(), &child_doc),
         )
     };
     // Opaque origin (sandbox без allow-same-origin) — без персистентных
@@ -2191,7 +2191,7 @@ pub(crate) fn spawn_frame(
         env.cross_origin_isolated,
         &[],
         classic_scripts,
-        module_scripts,
+        deferred_scripts,
         // BUG-480 срез 8: фрейму рантайм нужен даже без единого парсерного
         // скрипта — иначе ему нечем принимать кросс-фреймовые postMessage/
         // события/RunScript (срезы 4–8), а статические iframe — самый
