@@ -34,6 +34,14 @@
 // defined for callable objects (`document.all(name)` is part of the legacy
 // interface). `SetCallAsFunctionHandler` has no `rusty_v8` binding either, so
 // it comes from here as well.
+//
+// A third, unrelated method rides along in this file rather than a new
+// translation unit: `v8::Function::GetScriptStartPosition()`
+// (LONGTASK-1 срез 5, `script_attribution.rs`) — same situation (declared in
+// V8's headers, already linked into the prebuilt `rusty_v8.lib`, no `v8`
+// crate wrapper), same fix (a stand-in declaration that mangles identically),
+// so it is grouped with the other local V8 bindings this crate maintains
+// rather than duplicating the file-level rationale in a third `.cc`.
 namespace v8 {
 class Value;
 template <typename T>
@@ -56,6 +64,14 @@ class ObjectTemplate {
   void SetCallAsFunctionHandler(
       void (*callback)(const FunctionCallbackInfo<Value>&), Local<Value> data);
 };
+
+// Only the one member this file needs — matches `rusty_v8`'s own
+// `binding.cc` convention of declaring narrow stand-ins per translation unit,
+// not the whole class.
+class Function {
+ public:
+  int GetScriptStartPosition() const;
+};
 }  // namespace v8
 
 extern "C" void lumen_v8__ObjectTemplate__MarkAsUndetectable(
@@ -71,4 +87,14 @@ extern "C" void lumen_v8__ObjectTemplate__SetCallAsFunctionHandler(
     v8::ObjectTemplate* self,
     void (*callback)(const v8::FunctionCallbackInfo<v8::Value>&)) {
   self->SetCallAsFunctionHandler(callback, v8::Local<v8::Value>());
+}
+
+// Character offset (0-indexed, per V8's own convention for the sibling
+// `GetScriptColumnNumber`/`GetScriptLineNumber` this crate already wraps) of
+// `self`'s definition within its source script. Negative return means
+// "unavailable" (bound/native functions), same convention `rusty_v8` already
+// applies to the two methods above.
+extern "C" int lumen_v8__Function__GetScriptStartPosition(
+    const v8::Function* self) {
+  return self->GetScriptStartPosition();
 }
