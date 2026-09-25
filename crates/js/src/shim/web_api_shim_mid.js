@@ -7171,12 +7171,18 @@ var _LUMEN_WRAPPER_MEMBERS = {
             _lumen_merge_with_next_text(pid, prevNid);
         },
         getAttribute:    function(n)    { var nid = this.__nid__; return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
+        // TRUSTEDTYPES-1 срез 3: TT L2 §4.1.1 attribute sink. Only attributes
+        // in the `getAttributeType` sink table (on*/srcdoc/script-src) are
+        // checked; every other attribute stringifies exactly as before.
         setAttribute:    function(n, v) { var nid = this.__nid__;
             _lumen_ce_push_element_queue();
             try {
                 var attrName = String(n);
                 var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
-                var newVal   = String(v);
+                var newVal   = (typeof _lumen_tt_get_compliant_attribute_value === 'function')
+                    ? _lumen_tt_get_compliant_attribute_value(
+                          (_lumen_get_tag_name(nid) || '').toLowerCase(), attrName.toLowerCase(), v)
+                    : String(v);
                 _lumen_set_attr(nid, attrName, newVal);
                 // BUG-360: (re)compile `on<type>` content attributes into a handler
                 // as soon as they are set programmatically, not just at parse time.
@@ -7222,8 +7228,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
             try {
                 var qualifiedName = String(n);
                 var oldVal = _lumen_u2n(_lumen_get_attr(nid, qualifiedName));
-                _lumen_set_attr_ns(nid, _lumen_ns_arg(ns), qualifiedName, String(v));
-                _lumen_ce_maybe_attr_changed(nid, qualifiedName, oldVal, String(v));
+                var localName = qualifiedName.indexOf(':') >= 0
+                    ? qualifiedName.slice(qualifiedName.indexOf(':') + 1) : qualifiedName;
+                var newVal = (typeof _lumen_tt_get_compliant_attribute_value === 'function')
+                    ? _lumen_tt_get_compliant_attribute_value(
+                          (_lumen_get_tag_name(nid) || '').toLowerCase(), localName.toLowerCase(), v)
+                    : String(v);
+                _lumen_set_attr_ns(nid, _lumen_ns_arg(ns), qualifiedName, newVal);
+                _lumen_ce_maybe_attr_changed(nid, qualifiedName, oldVal, newVal);
                 _lumen_embed_object_maybe_attr_changed(nid, qualifiedName);
             } finally { _lumen_ce_pop_current_element_queue(); }
         },
@@ -9920,8 +9932,11 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         // like innerHTML/insertAdjacentHTML do elsewhere in this file — same
         // approximation, not a new one.
         createContextualFragment: function(fragmentHtml) {
+            var html = (typeof _lumen_tt_get_compliant_html === 'function')
+                ? _lumen_tt_get_compliant_html(fragmentHtml, 'Range createContextualFragment', false)
+                : String(fragmentHtml);
             var fragNid = _lumen_create_fragment();
-            var newIds = _lumen_parse_html_fragment(String(fragmentHtml));
+            var newIds = _lumen_parse_html_fragment(html);
             for (var _cfi = 0; _cfi < newIds.length; _cfi++) {
                 _lumen_append_child(fragNid, newIds[_cfi]);
             }
