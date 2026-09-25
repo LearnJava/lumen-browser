@@ -26,7 +26,9 @@ pub mod matrix_util;
     feature = "compare"
 ))]
 pub mod backends;
-#[cfg(any(feature = "backend-wgpu", feature = "backend-femtovg"))]
+// Без feature-гейта: кроме бэкендов эти байты читает и измеритель хрома
+// (`MultiFontMeasurer::register_chrome_bundled_families`, BUG-625), который
+// компилируется в любой конфигурации крейта.
 pub mod chrome_fonts;
 pub mod backdrop_cache;
 pub mod display_list_cache;
@@ -1117,6 +1119,28 @@ impl MultiFontMeasurer {
         }
     }
 
+    /// Регистрирует зарезервированные bundled-семейства хрома (DS-4):
+    /// `"Golos Text"`, `"Golos Text Medium"`, `"JetBrains Mono"` — те же байты
+    /// [`crate::chrome_fonts`], на которые рендер коротит эти имена ещё до
+    /// провайдера (`Renderer::resolve_face_id`, femtovg `text.rs`).
+    ///
+    /// Без этого документ хрома, объявивший `font-family: 'JetBrains Mono'`,
+    /// рисуется bundled JetBrains Mono, а меряется тем, что найдёт системный
+    /// набор (на машине без установленного шрифта — bundled Inter), BUG-625.
+    /// Регистрация идёт как @font-face-семей: слоты проверяются раньше
+    /// системного имени, то есть установленный в ОС одноимённый шрифт не
+    /// перебьёт bundled — ровно как у рендера.
+    pub fn register_chrome_bundled_families(&mut self) {
+        use crate::chrome_fonts::{GOLOS_TEXT_MEDIUM, GOLOS_TEXT_REGULAR, JETBRAINS_MONO_REGULAR};
+        for (family, bytes) in [
+            ("Golos Text", GOLOS_TEXT_REGULAR),
+            ("Golos Text Medium", GOLOS_TEXT_MEDIUM),
+            ("JetBrains Mono", JETBRAINS_MONO_REGULAR),
+        ] {
+            self.register_family(family, bytes.to_vec());
+        }
+    }
+
     /// Количество зарегистрированных семей (для тестов).
     pub fn family_count(&self) -> usize {
         self.faces.len()
@@ -1441,6 +1465,35 @@ mod multi_font_tests {
             after_generics + 2,
             "промах тоже кэшируется, иначе индекс опрашивается на каждый символ"
         );
+    }
+
+    /// BUG-625: зарезервированные bundled-имена хрома меряются теми же
+    /// bundled-байтами, которыми их рисует рендер, — а не bundled Inter-ом и
+    /// не одноимённым системным шрифтом.
+    #[test]
+    fn chrome_bundled_families_measured_with_bundled_faces() {
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let mono = vec!["JetBrains Mono".to_string()];
+        let golos = vec!["Golos Text".to_string()];
+        let inter_i = m.char_width_with_families('i', 16.0, &mono);
+        let inter_w = m.char_width_with_families('W', 16.0, &mono);
+        assert!(inter_i < inter_w, "до регистрации — пропорциональный Inter");
+        let golos_before = m.char_width_with_families('a', 16.0, &golos);
+
+        m.register_chrome_bundled_families();
+        assert_eq!(m.family_count(), 3);
+
+        let mono_i = m.char_width_with_families('i', 16.0, &mono);
+        let mono_w = m.char_width_with_families('W', 16.0, &mono);
+        assert!((mono_i - mono_w).abs() < 0.01, "JetBrains Mono моноширинный: {mono_i} vs {mono_w}");
+        let expected = OwnedFontMetrics::from_bytes(crate::chrome_fonts::GOLOS_TEXT_REGULAR)
+            .unwrap()
+            .try_char_width('a', 16.0)
+            .unwrap();
+        let golos_after = m.char_width_with_families('a', 16.0, &golos);
+        assert!((golos_after - expected).abs() < f32::EPSILON, "{golos_after} vs {expected}");
+        assert!((golos_after - golos_before).abs() > 0.01, "Golos ≠ Inter: {golos_before}");
     }
 
     #[test]

@@ -223,7 +223,7 @@ use crate::frame_log::{
 };
 use crate::relayout::{
     ContentVisibilityChange, collect_cv_auto, diff_cv_state, meta_initial_scale, relayout_page,
-    system_font_faces,
+    chrome_measurer, system_font_faces,
 };
 use crate::storage_stores::{
     idb_store_for_base, idb_store_for_url, ls_store_for_base, lumen_idb_dir, ss_store_for_base,

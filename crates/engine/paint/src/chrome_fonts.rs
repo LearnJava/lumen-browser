@@ -5,6 +5,9 @@
 //! Shared by every [`crate::backends`] render backend that draws chrome text
 //! (`FemtovgBackend` and the wgpu [`crate::renderer::Renderer`]) so the two
 //! text-rendering paths agree on which bytes back each reserved family name.
+//! The chrome measurer reads the same constants
+//! (`MultiFontMeasurer::register_chrome_bundled_families`, BUG-625), so layout
+//! measures a reserved name with the bytes the backends draw it with.
 //!
 //! Reserved family names recognized by each backend's face/font resolver:
 //! `"Golos Text"`, `"Golos Text Medium"`, `"JetBrains Mono"`. Chrome

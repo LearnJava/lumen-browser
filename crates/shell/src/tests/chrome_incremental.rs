@@ -2078,3 +2078,42 @@ fn bug1059_chrome_dl_excludes_demo_bar_after_detach_but_floating_dl_includes_it(
          contain #demoBar's box fill any more — it was detached before paint_ordered ran"
     );
 }
+
+// ── BUG-625: хром меряется тем же шрифтом, которым рисуется ─────────────
+
+/// `<kbd>Ctrl</kbd>` в `.demo-hint` объявлен `font-family: var(--font-mono)`
+/// (`'JetBrains Mono', …`), а рендер коротит это имя на bundled JetBrains
+/// Mono. Раньше `relayout_chrome_host` мерил весь хром голым `FontMeasurer`
+/// (bundled Inter, `font-family` отбрасывается), и ширина фрагмента была
+/// пропорциональной ширины Inter-а — надпись рисовалась одним шрифтом, а
+/// размечалась другим.
+#[test]
+fn bug625_chrome_mono_text_measured_with_bundled_jetbrains_mono() {
+    let (doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let viewport = Size::new(1280.0, 800.0);
+    let measurer = chrome_measurer().expect("измеритель хрома");
+    let layout = lumen_layout::layout_measured(&doc, &sheet, viewport, measurer);
+
+    let frag = lumen_layout::collect_visible_text(&layout)
+        .into_iter()
+        .find(|f| f.text == "Ctrl")
+        .expect("в хроме есть видимый фрагмент <kbd>Ctrl</kbd>");
+    // `.demo-hint kbd{font-size:10px}`; JetBrains Mono — моноширинный, у всех
+    // четырёх букв одна ширина.
+    let mono = lumen_paint::MultiFontMeasurer::new(
+        &lumen_font::Font::parse(lumen_paint::chrome_fonts::JETBRAINS_MONO_REGULAR).expect("bundled JetBrains Mono"),
+    )
+    .expect("метрики JetBrains Mono");
+    let expected = 4.0 * lumen_layout::TextMeasurer::char_width(&mono, 'C', 10.0);
+    assert!(
+        (frag.rect.width - expected).abs() < 0.05,
+        "ширина «Ctrl» {} ≠ 4 моно-ячейкам JetBrains Mono {expected}",
+        frag.rect.width
+    );
+
+    // И это действительно не ширина Inter-а — иначе тест ничего не ловит.
+    let inter = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter");
+    let inter_m = lumen_paint::FontMeasurer::new(&inter).expect("метрики Inter");
+    let inter_w: f32 = "Ctrl".chars().map(|c| lumen_layout::TextMeasurer::char_width(&inter_m, c, 10.0)).sum();
+    assert!((inter_w - expected).abs() > 0.5, "Inter {inter_w} vs mono {expected}");
+}

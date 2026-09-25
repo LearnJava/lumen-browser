@@ -47,7 +47,6 @@ impl Lumen {
     /// `#findBar`/`#downloadsPanel` (CC-9), salvaged back into the tree at
     /// `#contentArea`'s former slot since they're real popovers, not preview
     /// placeholder content.
-    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn relayout_chrome_host(&mut self) {
         if self.chrome_doc.is_none() {
             return;
@@ -70,8 +69,8 @@ impl Lumen {
         // interactive-state transition (S5's limit — see BUG-341 "S5" §"Not
         // attempted").
         let touched = lumen_chrome::bind_model_tracked(doc, &model);
-        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
-        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        // BUG-625: меряем тем же резолвом семейств, которым хром рисуется.
+        let Some(measurer) = chrome_measurer() else { return };
         // CC-7: `#omniInput` is focused (`:focus`/`:focus-within`, e.g. the
         // `.omnibox` accent ring) exactly while the legacy `address_bar` is
         // open — there is no other focusable element in the chrome document
@@ -197,7 +196,7 @@ impl Lumen {
                     doc,
                     sheet,
                     viewport,
-                    &measurer,
+                    measurer,
                     &*self.hyp_provider,
                     self.dark_mode,
                     prev,
@@ -211,7 +210,7 @@ impl Lumen {
                 doc,
                 sheet,
                 viewport,
-                &measurer,
+                measurer,
                 &*self.hyp_provider,
                 self.dark_mode,
             ),
