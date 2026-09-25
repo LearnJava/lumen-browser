@@ -12345,6 +12345,28 @@ function _lumen_script_exec_drain() {
     }
 }
 
+// BUG-1175: the CSP gate of an element a script inserted and that loads itself
+// through `fetch()` below. Such a request has destination `script`/`style`, so
+// CSP3 judges it by `script-src`/`style-src` (falling back to `default-src`),
+// never by `connect-src` — and those directives consult the element's own
+// nonce (and, for a script, its integrity metadata and `'strict-dynamic'`)
+// before the URL, which only this side can read. `nid` is null when the
+// request has no element of its own (`@import`): the check is URL-only then,
+// as the shell's `@import` gate is. Returns
+// `[effectiveDirective, blockedUri, originalPolicy]` for a blocked request,
+// null otherwise.
+function _lumen_element_src_blocked(destination, url, nid) {
+    if (typeof _lumen_check_element_src !== 'function') return null;
+    var nonce = null, integrity = null;
+    if (nid !== null) {
+        nonce = _lumen_u2n(_lumen_get_attr(nid, 'nonce'));
+        if (destination === 'script') integrity = _lumen_u2n(_lumen_get_attr(nid, 'integrity'));
+    }
+    var r = _lumen_check_element_src(destination, url,
+        nonce === null ? '' : String(nonce), integrity === null ? '' : String(integrity));
+    return (r && r.length === 3) ? r : null;
+}
+
 function _lumen_script_load_external(nid, src, isModule) {
     // state: 0 = fetching, 1 = body ready, 2 = failed.
     var job = { state: 0, run: null };
@@ -12358,6 +12380,22 @@ function _lumen_script_load_external(nid, src, isModule) {
             job.state = 2;
             job.run = function() {
                 _lumen_console_error('script load failed: ' + src + ': ' + e);
+                _lumen_resource_fire(nid, 'error');
+            };
+            _lumen_script_exec_drain();
+            return;
+        }
+        // BUG-1175: `script-src` refuses the request before a byte is sent.
+        // The violation is reported at once; the element's `error` still
+        // waits for its turn in the execution queue, as a failed fetch does.
+        var csp = _lumen_element_src_blocked('script', url, nid);
+        if (csp) {
+            if (typeof _lumen_dispatch_csp_violation === 'function') {
+                _lumen_dispatch_csp_violation(csp[0], csp[1], csp[2], 'enforce');
+            }
+            job.state = 2;
+            job.run = function() {
+                _lumen_console_error('script load failed: ' + url + ': blocked by ' + csp[0]);
                 _lumen_resource_fire(nid, 'error');
             };
             _lumen_script_exec_drain();
@@ -12591,6 +12629,16 @@ function _lumen_link_prepare(nid) {
     // `link.onload = …` assignment almost always follows the appendChild.
     setTimeout(function() {
         var url = _url_resolve(href, _lumen_document_base_url());
+        // BUG-1175: `style-src` decides, not `connect-src`. Only `error` is
+        // reported here: whether the sheet applies — and its
+        // `securitypolicyviolation` — belongs to the shell's `style-src`
+        // gate for `<link>` (GAP-CSPENF срез 7), which a second event from
+        // this side would duplicate.
+        if (_lumen_element_src_blocked('style', url, nid)) {
+            _lumen_console_error('stylesheet load failed: ' + url + ': blocked by style-src');
+            _lumen_resource_fire(nid, 'error');
+            return;
+        }
         fetch(url, { _lumenInitiatorType: 'link' }).then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             // Drain the body: an unread response holds its fetch slot (BUG-721).
@@ -13036,6 +13084,15 @@ function _lumen_style_load_imports(nid, imports) {
             var url;
             try { url = _url_resolve(href, base); }
             catch (e) { failed = true; settle(); return; }
+            // BUG-1175: `style-src`, URL-only — same split of duties as the
+            // `<link>` path above (the shell's `@import` gate, срез 38, owns
+            // the violation event).
+            if (_lumen_element_src_blocked('style', url, null)) {
+                _lumen_console_error('@import failed: ' + url + ': blocked by style-src');
+                failed = true;
+                settle();
+                return;
+            }
             fetch(url, { _lumenInitiatorType: 'css' }).then(function(resp) {
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 var ctype = '';

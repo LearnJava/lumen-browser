@@ -1042,7 +1042,11 @@ pub(crate) fn parse_and_layout(
                     // `_lumen_check_media_src` reads this via `check_media_src`,
                     // same one-`HttpClient`-per-document approach as the three
                     // gates above.
-                    .with_media_src_policy(policies, self_origin, original_policy);
+                    .with_media_src_policy(policies.clone(), self_origin.clone(), original_policy.clone())
+                    // BUG-1175: `script-src`/`style-src` for a `<script src>`/
+                    // `<link rel=stylesheet>`/`@import` a script inserted —
+                    // the shim asks `check_element_src` before its `fetch()`.
+                    .with_element_src_policy(policies, self_origin, original_policy);
             }
             // GAP-POLICYREPORT (BUG-953): attach the precomputed sync-xhr
             // disposition regardless of whether either header was present —

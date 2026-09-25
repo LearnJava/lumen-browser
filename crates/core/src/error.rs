@@ -65,6 +65,17 @@ pub enum Error {
         blocked_uri: String,
         original_policy: String,
     },
+    /// BUG-1175: a `<script src>`/`<link rel=stylesheet>`/`@import` that a
+    /// script inserted was refused before any network I/O by the document's
+    /// `script-src`/`style-src` (falling back to `default-src`). Raised by
+    /// `lumen-network::HttpClient::check_element_src`; `directive` is the
+    /// effective directive the violation reports (`script-src-elem` or
+    /// `style-src-elem`), since one pre-check serves both destinations.
+    CspElementSrcBlocked {
+        directive: String,
+        blocked_uri: String,
+        original_policy: String,
+    },
     /// ph3-tls-hardening (A1): the TLS handshake completed but the peer's
     /// certificate failed trust verification. Distinct from [`Self::Network`]
     /// so the shell can route this to a cert interstitial ("your connection
@@ -147,6 +158,9 @@ impl fmt::Display for Error {
             }
             Self::CspMediaSrcBlocked { blocked_uri, original_policy } => {
                 write!(f, "media-src blocked '{blocked_uri}' per policy \"{original_policy}\"")
+            }
+            Self::CspElementSrcBlocked { directive, blocked_uri, original_policy } => {
+                write!(f, "{directive} blocked '{blocked_uri}' per policy \"{original_policy}\"")
             }
             Self::CertInvalid(cert_err) => write!(f, "TLS handshake: {cert_err}"),
         }

@@ -399,6 +399,7 @@ pub(crate) fn install_fetch(
         let fp_object = fetch_provider.clone();
         let fp_media = fetch_provider.clone();
         let fp_media_uir = fetch_provider.clone();
+        let fp_element = fetch_provider.clone();
         let fp_cancel = fetch_provider.clone();
         let fp_cancel_body = fetch_provider.clone();
         let c_cancel = Arc::clone(&cache);
@@ -1131,6 +1132,31 @@ pub(crate) fn install_fetch(
                     None => Vec::new(),
                 }
             });
+        }
+
+        // _lumen_check_element_src(destination, url, nonce, integrity)
+        //   → [] | [effectiveDirective, blockedUri, originalPolicy]
+        // BUG-1175: `script-src`/`style-src` pre-check for a `<script src>`/
+        // `<link rel=stylesheet>`/`@import` that a script inserted. The shim's
+        // `fetch()` of such an element is no longer judged by `connect-src`,
+        // so this is its only CSP gate; the element's nonce/integrity ride
+        // along because the directive consults them before the URL. The
+        // verdict comes back in the return value itself — no side channel,
+        // the shim needs the directive name as well.
+        {
+            let fp = fp_element;
+            reg!(scope, ctx, store, "_lumen_check_element_src",
+                move |destination: String, url: String, nonce: String, integrity: String| -> Vec<String> {
+                    let Some(ref provider) = fp else { return Vec::new() };
+                    match provider.check_element_src(&destination, &url, &nonce, &integrity) {
+                        Err(lumen_core::error::Error::CspElementSrcBlocked {
+                            directive,
+                            blocked_uri,
+                            original_policy,
+                        }) => vec![directive, blocked_uri, original_policy],
+                        _ => Vec::new(),
+                    }
+                });
         }
 
         // _lumen_upgrade_insecure_url(url) → String
