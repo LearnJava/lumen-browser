@@ -78,13 +78,13 @@ pub(crate) fn restore_js_context(
     // BUG-164: re-collect classic + module scripts in document order and
     // re-fetch external `<script src>` bodies, so a restored tab re-runs the
     // same scripts a fresh load would (mirrors `parse_and_layout`).
-    let (classic_scripts, module_scripts) = {
+    let (classic_scripts, deferred_scripts) = {
         let mut classic_items = Vec::new();
-        let mut module_items = Vec::new();
-        crate::collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
+        let mut deferred_items = Vec::new();
+        crate::collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut deferred_items);
         (
             crate::resolve_script_sources(&classic_items, &base, &event_sink, cookie_jar.clone(), &doc),
-            crate::resolve_script_sources(&module_items, &base, &event_sink, cookie_jar.clone(), &doc),
+            crate::resolve_script_sources(&deferred_items, &base, &event_sink, cookie_jar.clone(), &doc),
         )
     };
 
@@ -140,7 +140,7 @@ pub(crate) fn restore_js_context(
         false, // cross_origin_isolated: not preserved across hibernation
         &ext_scripts,
         classic_scripts,
-        module_scripts,
+        deferred_scripts,
         false, // always_runtime: страница после гибернации — не фрейм-получатель
         // BUG-443: the restore path lays the page out afterwards, so it has no
         // parse-time snapshot to publish either.
