@@ -97,11 +97,82 @@ const PRESENTATION_API_SHIM: &str = r#"(function() {
 
   // ── PresentationRequest ───────────────────────────────────────────────────
 
+  // Base for relative presentation URLs: the document's base URL (§6.3.1 step 3).
+  function _presentationBase() {
+    if (typeof document !== 'undefined' && document && typeof document.baseURI === 'string' && document.baseURI) {
+      return document.baseURI;
+    }
+    if (typeof location !== 'undefined' && location && typeof location.href === 'string') {
+      return location.href;
+    }
+    return undefined;
+  }
+
+  // "a priori unauthenticated URL" (Mixed Content §3.1): `http:`/`ws:` not
+  // pointing at a loopback host, which would be potentially trustworthy.
+  function _isAPrioriUnauthenticated(u) {
+    if (u.protocol !== 'http:' && u.protocol !== 'ws:') { return false; }
+    var h = u.hostname;
+    return !(h === 'localhost' || /\.localhost$/.test(h) || h === '[::1]' || /^127\./.test(h));
+  }
+
   /// Initiates a presentation session to one of the provided URLs.
   /// Phase 0: `start()` and `reconnect()` always reject with NotSupportedError.
+  ///
+  /// BUG-656: the constructor validates its input per W3C Presentation API
+  /// §6.3.1 — no argument → TypeError (WebIDL), empty sequence →
+  /// NotSupportedError, unparsable URL → SyntaxError, `http:` URL in a secure
+  /// context → SecurityError (mixed content), and NotSupportedError when no
+  /// URL has a scheme a presentation display could load (only `http:`/`https:`
+  /// in Phase 0). Unsupported URLs next to a supported one are dropped.
   function PresentationRequest(urls) {
-    // Normalise single string to array per spec §6.3.
-    this._urls = Array.isArray(urls) ? urls : (typeof urls === 'string' ? [urls] : []);
+    if (!new.target) {
+      throw new TypeError("Failed to construct 'PresentationRequest': Please use the 'new' operator");
+    }
+    if (arguments.length === 0) {
+      throw new TypeError("Failed to construct 'PresentationRequest': 1 argument required, but only 0 present.");
+    }
+    // WebIDL overload `(USVString url)` / `(sequence<USVString> urls)`: an
+    // iterable object selects the sequence form, anything else is stringified.
+    var list;
+    if (urls !== null && (typeof urls === 'object' || typeof urls === 'function') &&
+        typeof urls[Symbol.iterator] === 'function') {
+      list = Array.from(urls, function(u) { return String(u); });
+    } else {
+      list = [String(urls)];
+    }
+    if (list.length === 0) {
+      throw new DOMException('An empty sequence of URLs is not supported.', 'NotSupportedError');
+    }
+    var base = _presentationBase();
+    var parsed = [];
+    for (var i = 0; i < list.length; i++) {
+      var u;
+      try {
+        u = base === undefined ? new URL(list[i]) : new URL(list[i], base);
+      } catch (_e) {
+        throw new DOMException("'" + list[i] + "' can't be resolved to a valid URL.", 'SyntaxError');
+      }
+      parsed.push(u);
+    }
+    if (globalThis.isSecureContext === true) {
+      for (var j = 0; j < parsed.length; j++) {
+        if (_isAPrioriUnauthenticated(parsed[j])) {
+          throw new DOMException("Presentation of an insecure document '" + parsed[j].href +
+            "' is prohibited from a secure context.", 'SecurityError');
+        }
+      }
+    }
+    var supported = [];
+    for (var k = 0; k < parsed.length; k++) {
+      if (parsed[k].protocol === 'http:' || parsed[k].protocol === 'https:') {
+        supported.push(parsed[k].href);
+      }
+    }
+    if (supported.length === 0) {
+      throw new DOMException('None of the presentation URLs is supported.', 'NotSupportedError');
+    }
+    this._urls = supported;
     this._listeners = Object.create(null);
   }
 
@@ -171,28 +242,19 @@ mod tests {
     // Хелперы тестового модуля: исключение из clippy.toml покрывает
     // только тело `#[test]` (docs/lint-policy.md §10).
     #![allow(clippy::unwrap_used)]
-    use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
+    use lumen_dom::Document;
+    use std::sync::{Arc, Mutex};
 
     fn with_presentation_api(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
-        rt.eval(
-            r#"
-            globalThis.navigator = globalThis.navigator || {};
-            if (typeof DOMException === 'undefined') {
-                function DOMException(msg, name) {
-                    var e = new Error(msg);
-                    e.name = name || 'Error';
-                    return e;
-                }
-                globalThis.DOMException = DOMException;
-            }
-            "#,
-        )
-        .unwrap();
-        install_presentation_api_v8(&rt).unwrap();
+        let doc = Arc::new(Mutex::new(Document::new()));
+        // `install_dom` installs this module itself (v8_runtime.rs `install_v8!`),
+        // along with the `URL`/`DOMException` the constructor depends on.
+        rt.install_dom(doc, "https://example.org/", None, None, None, None, None, None, None, None, None, false)
+            .unwrap();
         f(&rt);
     }
 
@@ -277,5 +339,91 @@ mod tests {
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
+    }
+}
+
+/// BUG-656: §6.3.1 constructor validation, cases mirror WPT
+/// `presentation-api/controlling-ua/PresentationRequest_{error,success,mixedcontent}.https.html`.
+#[cfg(all(test, feature = "v8-backend"))]
+mod ctor_validation_tests {
+    #![allow(clippy::unwrap_used)]
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
+    use lumen_dom::Document;
+    use std::sync::{Arc, Mutex};
+
+    const SECURE_PAGE: &str = "https://example.org/dir/page.html";
+
+    /// Returns the thrown error's `name` (or `"NO THROW"`) for `expr`.
+    fn thrown(rt: &V8JsRuntime, expr: &str) -> String {
+        let js = format!("(function() {{ try {{ {expr}; return 'NO THROW'; }} catch (e) {{ return e.name; }} }})()");
+        match rt.eval(&js).unwrap() {
+            JsValue::String(s) => s,
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// Page runtime at `url`; `window.isSecureContext` follows its scheme.
+    fn runtime(url: &str) -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        let doc = Arc::new(Mutex::new(Document::new()));
+        rt.install_dom(doc, url, None, None, None, None, None, None, None, None, None, false)
+            .unwrap();
+        rt
+    }
+
+    #[test]
+    fn error_cases_throw_spec_exceptions() {
+        let rt = runtime(SECURE_PAGE);
+        assert_eq!(thrown(&rt, "new PresentationRequest()"), "TypeError");
+        assert_eq!(thrown(&rt, "PresentationRequest('https://example.org/')"), "TypeError");
+        assert_eq!(thrown(&rt, "new PresentationRequest([])"), "NotSupportedError");
+        assert_eq!(thrown(&rt, "new PresentationRequest('https://@')"), "SyntaxError");
+        assert_eq!(thrown(&rt, "new PresentationRequest('unsupported://example.com')"), "NotSupportedError");
+        assert_eq!(
+            thrown(&rt, "new PresentationRequest(['presentation.html', 'https://@'])"),
+            "SyntaxError"
+        );
+        assert_eq!(
+            thrown(&rt, "new PresentationRequest(['unsupported://example.com', 'invalid://example.com'])"),
+            "NotSupportedError"
+        );
+        // The error must be a real DOMException, not a plain Error with a name.
+        assert_eq!(
+            rt.eval("(function(){ try { new PresentationRequest([]); } catch (e) { return e instanceof DOMException; } })()")
+                .unwrap(),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn success_cases_construct_and_drop_unsupported_urls() {
+        let rt = runtime(SECURE_PAGE);
+        assert_eq!(thrown(&rt, "new PresentationRequest('https://example.org/')"), "NO THROW");
+        // Relative URLs resolve against the document base URL.
+        assert_eq!(
+            rt.eval("new PresentationRequest('presentation.html')._urls[0]").unwrap(),
+            JsValue::String("https://example.org/dir/presentation.html".into())
+        );
+        assert_eq!(
+            rt.eval(
+                "JSON.stringify(new PresentationRequest(['unsupported://example.com', 'https://example.org/presentation/'])._urls)"
+            )
+            .unwrap(),
+            JsValue::String(r#"["https://example.org/presentation/"]"#.into())
+        );
+    }
+
+    #[test]
+    fn insecure_url_from_secure_context_is_security_error() {
+        let rt = runtime(SECURE_PAGE);
+        assert_eq!(thrown(&rt, "new PresentationRequest('http://example.org/presentation.html')"), "SecurityError");
+        assert_eq!(thrown(&rt, "new PresentationRequest('http://localhost/presentation.html')"), "NO THROW");
+        let insecure = runtime("http://example.org/dir/page.html");
+        assert_eq!(
+            thrown(&insecure, "new PresentationRequest('http://example.org/presentation.html')"),
+            "NO THROW"
+        );
     }
 }

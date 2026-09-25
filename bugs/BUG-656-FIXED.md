@@ -1,6 +1,6 @@
 # BUG-656 — `PresentationRequest` constructor performs no argument validation at all
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/presentation_api.rs:102-106` — `PresentationRequest`
 constructor in `PRESENTATION_API_SHIM`)
 **Найден:** P2, WPT-VENDOR-presentation-api (2026-08-05), category run
@@ -88,3 +88,27 @@ This bug was found only by reading `presentation_api.rs` directly and
 confirming with a live probe, per the "a 🚫-scoped category is not
 automatically finding-free" rule
 ([[reference_wpt_run_report_invocation_recipe]]).
+
+## Починка (2026-09-26, P3)
+
+Конструктор в `presentation_api.rs` валидирует вход по §6.3.1 и WebIDL-перегрузке
+`(USVString url)` / `(sequence<USVString> urls)`:
+
+- вызов без `new` или без аргументов → `TypeError`;
+- итерируемый объект → последовательность (`String()` на каждый элемент), иначе
+  `[String(arg)]`; пустая последовательность → `NotSupportedError`;
+- каждый URL разбирается `new URL(u, document.baseURI)` (запасной — `location.href`),
+  ошибка → `SyntaxError`;
+- в защищённом контексте (`isSecureContext === true`) любой a priori
+  unauthenticated URL (`http:`/`ws:` не на loopback) → `SecurityError` —
+  это WPT `PresentationRequest_mixedcontent{,_multiple}.https.html`;
+- поддерживаются только `http:`/`https:`: неподдерживаемые отбрасываются, если
+  рядом есть поддерживаемый (WPT `PresentationRequest_success`), иначе
+  `NotSupportedError`. `_urls` хранит разрешённые `href`.
+
+Регрессия: `presentation_api::ctor_validation_tests` — все случаи WPT
+`PresentationRequest_error.https.html` плюс success/mixedcontent, через реальный
+`install_dom` (настоящие `URL`/`DOMException`, `isSecureContext` от схемы страницы).
+Старый тестовый модуль переведён на тот же `install_dom`: голый `V8JsRuntime`
+не содержит `URL`, а конструктор теперь от него зависит. WPT-прогон категории
+по-прежнему упирается в TLS-гэп `UnknownIssuer` до JS.
