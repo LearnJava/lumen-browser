@@ -1680,7 +1680,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 ### TEST-3: срез 45 (2026-09-21) — `navigation-api`: 70 из 475 id падают на относительном URL в `navigation.navigate()`, найден BUG-1075
 
 **Выбор кандидата.** Следующая по списку среза 44: `navigation-api` (475 id, 0 `.https.`, категория без `tests/wpt/metadata/navigation-api/`). Число категорий
-249 → 250. Категория уже измерялась вручную ([BUG-639](../../bugs/BUG-639-OPEN.md): 6/417 подтестов) — теперь у неё есть baseline-гейт.
+249 → 250. Категория уже измерялась вручную ([BUG-639](../../bugs/BUG-639-FIXED.md): 6/417 подтестов) — теперь у неё есть baseline-гейт.
 
 **Baseline.** `--update-expected --recursive --processes 4` — ~19 мин. **307/475 harness OK, 8/430 подтестов**, 437 новых `.ini`. Бинарь `dev-release`
 не пересобирался в ходе среза — baseline и все `--check` сняты одним и тем же `lumen.exe`.
@@ -1700,7 +1700,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | harness `ERROR` с подтестами | 19 | — |
 | harness `OK` | 307 | из них 283 — `Subtests passed 0/1` (единственный подтест падает) |
 
-Итог: проходят только 8 из 430 подтестов — Navigation API остаётся Phase-0-partial ([BUG-639](../../bugs/BUG-639-OPEN.md)); 283 harness-`OK` с `0/1` —
+Итог: проходят только 8 из 430 подтестов — Navigation API остаётся Phase-0-partial ([BUG-639](../../bugs/BUG-639-FIXED.md)); 283 harness-`OK` с `0/1` —
 тесты, у которых единственный подтест падает на отсутствующем `navigation.reload`/`updateCurrentEntry`/`NavigationDestination`
 (`TypeError: … is not a function` в логе). BUG-1075 маскирует остальное: 70 id не доходят даже до этого.
 

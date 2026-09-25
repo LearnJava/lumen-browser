@@ -2010,6 +2010,15 @@ the time — read dates.
   The factory is on the live `document`, every detached document and `DOMParser`'s `VDocument`:
   `NotSupportedError` for `text/html`, `InvalidCharacterError` on `]]>`. `XMLSerializer` writes
   `<![CDATA[…]]>` verbatim. The parser still turns a parsed `<![CDATA[…]]>` into plain text.
+- **Navigation API spec types (HTML LS §7.2.9, BUG-639, [P3] 2026-09-25).** `NAVIGATION_API_SHIM`
+  (`navigation_api.rs`) caches one `NavigationHistoryEntry` (an `EventTarget`) per shell key and
+  reconciles the cache on every `_lumen_navigation_set_state` (the shim wraps the native), so
+  identity is stable and an entry the shell drops gets `index -1` + `dispose`. Before the first
+  publish a stand-in entry for the document exists; the first publish re-keys it by URL.
+  `getState()` state is per key in the realm (structured clone), separate from `history.state`.
+  `_lumen_fire_currententrychange` builds a `NavigationCurrentEntryChangeEvent` from the change
+  `_sync` recorded, so the shell must call `commit_nav_state` **before** `fire_current_entry_change`.
+  `_lumen_dispatch_navigate` takes an optional 5th arg (target key) for traversal destinations.
 
 ## Deferred
 

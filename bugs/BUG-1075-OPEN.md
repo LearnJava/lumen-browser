@@ -34,9 +34,9 @@ webdriver.bidi.error.UnknownErrorException: unknown error (navigate: navigation 
 
 - Работает ли тот же путь через `NavigateEvent.intercept()` после исправления: 70 id — верхняя граница числа, которое исправление сдвинет; часть из них
   упрётся дальше в BUG-639 (`updateCurrentEntry`, `NavigationDestination`).
-- `navigation.reload()` (метода в шиме нет вовсе — [BUG-639](BUG-639-OPEN.md)).
+- `navigation.reload()` — метода в шиме по-прежнему нет: попытка добавить его в фиксе [BUG-639](BUG-639-FIXED.md) дала ~10 новых TIMEOUT — действие 5 шелла (`self.reload()`) перезагружает страницу, не диспатча `navigate`, так что `intercept()` теста не срабатывает.
 - Отдельно в том же прогоне: `navigation.navigate('file:///')` — `network error: file: not a local path` (1 id, `navigate-file-url.html`) — другая причина.
 
 ## Связанное
 
-- [BUG-639](BUG-639-OPEN.md) — остальные пробелы Navigation API; этот дефект их маскирует (тест не доходит до подтестов).
+- [BUG-639](BUG-639-FIXED.md) — остальные пробелы Navigation API; этот дефект их маскирует (тест не доходит до подтестов).
