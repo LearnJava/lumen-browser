@@ -39,6 +39,16 @@
 //! BUG-275, чьё окно накрыто при старте, получит Vulkan на этот запуск —
 //! без записи в кэш, следующий запуск пробует снова.
 //!
+//! **Устройство победителя переходит рендеру (BUG-1073 срез 3).** Проба
+//! открывает кандидата тем же инстансом ([`renderer_instance_descriptor`])
+//! и с теми же лимитами ([`window_device_limits`]), что рендер, и отдаёт
+//! surface/adapter/device принятого кандидата в [`ProbeOutcome::gpu`]:
+//! `Renderer::new_async` только переконфигурирует поверхность, а не
+//! открывает бэкенд второй раз (`request_adapter` + `request_device` под
+//! нагрузкой — 1–2.2 с драйвера). Отклонённые кандидаты закрываются до
+//! следующего: две живые поверхности разных API на одном окне — риск
+//! `Invalid surface`.
+//!
 //! Управление:
 //! - `WGPU_BACKEND=...` — проба пропускается, env-выбор главнее;
 //! - `LUMEN_NO_BACKEND_PROBE=1` — проба выключена, работает статическая
@@ -80,6 +90,32 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use winit::window::Window;
+
+use crate::renderer::{renderer_instance_descriptor, window_device_limits};
+
+/// Итог пробы: выбранный бэкенд и, если он принят полной пробой, уже
+/// открытое им устройство.
+pub struct ProbeOutcome {
+    /// Выбранный бэкенд — первым в цепочке рендера.
+    pub backends: wgpu::Backends,
+    /// Surface/adapter/device принятого кандидата (BUG-1073 срез 3). `None`
+    /// — кандидат выбран без живого устройства (все отклонены, взят по
+    /// readback): рендер открывает бэкенд сам.
+    pub(crate) gpu: Option<ProbedGpu>,
+}
+
+/// Бэкенд, открытый пробой: поверхность окна сконфигурирована пробным
+/// форматом, рендер переконфигурирует её под себя.
+pub(crate) struct ProbedGpu {
+    pub(crate) surface: wgpu::Surface<'static>,
+    pub(crate) adapter: wgpu::Adapter,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    /// Конфигурация, с которой проба оставила поверхность: совпадёт с
+    /// нужной рендеру — повторный `configure` (пересоздание swapchain,
+    /// сотни мс под нагрузкой) не нужен.
+    pub(crate) config: wgpu::SurfaceConfiguration,
+}
 
 /// Пробный цвет кадра, линейные компоненты 0..1. Выбран далёким и от белого
 /// (симптом BUG-275), и от чёрного (пустой захват), с попарно различными
@@ -189,6 +225,9 @@ struct CandidateReport {
     covered: bool,
     /// Разбивка времени кандидата по фазам (BUG-1073).
     phases: PhaseTimes,
+    /// Открытый кандидатом бэкенд — рендер переиспользует его, если
+    /// кандидат принят (BUG-1073 срез 3). У отклонённого закрывается сразу.
+    gpu: Option<ProbedGpu>,
 }
 
 /// Время фаз пробы одного кандидата, мс. Без разбивки 24-секундный DX12
@@ -418,7 +457,7 @@ fn candidates_before<T: Copy>(
 ///
 /// `None` — проба выключена/неприменима (env-override, не Windows) или все
 /// кандидаты провалились; вызывающий код использует статическую цепочку.
-pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
+pub async fn pick_backend(window: &Arc<Window>) -> Option<ProbeOutcome> {
     // BUG-275 — специфика Windows (DWM/WSI); на других ОС проба не нужна,
     // а пробный цветной кадр в окне — неоправданный побочный эффект.
     if !cfg!(target_os = "windows") || probe_disabled() {
@@ -471,7 +510,7 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
                 started.elapsed().as_millis(),
                 r.name
             );
-            return Some(r.backends);
+            return Some(ProbeOutcome { backends: r.backends, gpu: None });
         }
         eprintln!(
             "[probe] {why} за {} мс — статическая цепочка",
@@ -495,6 +534,10 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
             "[probe] окружение изменилось (адаптер/драйвер/версия) — \
              перепроверяю кандидатов впереди {name}"
         );
+        // Устройство победителя закрывается до пробы других: вторая живая
+        // поверхность другого API на том же окне — риск `Invalid surface`.
+        // Если перепроверка не найдёт лучшего, рендер откроет его сам.
+        rep.gpu = None;
         for (b, n) in candidates_before(candidates, backends) {
             if started.elapsed().as_millis() >= PROBE_BUDGET_MS {
                 break;
@@ -512,16 +555,15 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
     // BUG-1073: принятый по readback при накрытом окне — не полная проба;
     // запиши его в кэш, и бюджет пробы следующего запуска «поручился» бы
     // за кандидата, которого захват ни разу не видел (BUG-275: белое окно).
-    if rep.covered {
-        return Some(backends);
+    if !rep.covered {
+        write_cache(&ProbeCache {
+            winner: name.to_string(),
+            adapter: rep.adapter.clone(),
+            driver: rep.driver.clone(),
+            app: env!("CARGO_PKG_VERSION").to_string(),
+        });
     }
-    write_cache(&ProbeCache {
-        winner: name.to_string(),
-        adapter: rep.adapter.clone(),
-        driver: rep.driver.clone(),
-        app: env!("CARGO_PKG_VERSION").to_string(),
-    });
-    Some(backends)
+    Some(ProbeOutcome { backends, gpu: rep.gpu })
 }
 
 /// Пробует одного кандидата и печатает его отчёт. `Ok` — принят; `Err` —
@@ -562,12 +604,10 @@ async fn probe_candidate(
 ) -> Result<CandidateReport, String> {
     let mut phases = PhaseTimes::default();
     let t_phase = Instant::now();
-    // Явный выбор бэкенда — без `.with_env()`: probe_disabled() уже
-    // гарантировал, что WGPU_BACKEND не задан.
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends,
-        ..Default::default()
-    });
+    // Инстанс — как у рендера (флаги BUG-406): устройство победителя
+    // переходит рендеру (BUG-1073 срез 3). `with_env()` внутри не сменит
+    // бэкенд: probe_disabled() уже гарантировал, что WGPU_BACKEND не задан.
+    let instance = wgpu::Instance::new(&renderer_instance_descriptor(backends));
     let surface = instance
         .create_surface(window.clone())
         .map_err(|e| format!("create_surface: {e}"))?;
@@ -583,9 +623,9 @@ async fn probe_candidate(
     let t_phase = Instant::now();
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            label: Some("lumen-probe-device"),
+            label: Some("lumen-device"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
+            required_limits: window_device_limits(adapter.limits().max_texture_dimension_2d),
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::Off,
         })
@@ -762,6 +802,7 @@ async fn probe_candidate(
         present,
         covered,
         phases,
+        gpu: Some(ProbedGpu { surface, adapter, device, queue, config }),
     })
 }
 
