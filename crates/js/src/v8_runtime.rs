@@ -1099,6 +1099,10 @@ impl V8JsRuntime {
         ) {
             eprintln!("v8: shared_worker::install_shared_worker_bindings_v8 failed: {e}");
         }
+        // BUG-624: every module above has hung its members on `navigator` by
+        // now; move them onto `Navigator.prototype` in one pass. Before the
+        // BUG-378 seal, which must stay last.
+        install_v8!(navigator_bindings::finalize_navigator_interface_v8);
         // BUG-378: must be the LAST install step — it hides every internal
         // `_lumen_*` global from enumeration and freezes the function-valued
         // ones, so anything registering a native or patching one afterwards

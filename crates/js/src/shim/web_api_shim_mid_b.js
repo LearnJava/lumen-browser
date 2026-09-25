@@ -637,7 +637,13 @@ var _sw_container = Object.assign({
     },
 }, _sw_container_et);
 
-var navigator = {
+// HTML LS §8.9.1 `interface Navigator` (BUG-624). The members below — and the
+// ones the per-API modules hang on `navigator` later in `install_dom` — start
+// out as own properties of the singleton; `navigator_bindings.rs`'s
+// `finalize_navigator_interface_v8` moves them onto `Navigator.prototype` as
+// brand-checked accessors/operations once every module has run.
+function Navigator() { throw new TypeError('Illegal constructor'); }
+var navigator = Object.assign(Object.create(Navigator.prototype), {
     userAgent: 'Lumen/0.5.0',
     language: 'en-US',
     onLine: false,
@@ -669,7 +675,7 @@ var navigator = {
             return ok;
         } catch(e) { return false; }
     },
-};
+});
 
 // BUG-765: `navigator.serviceWorker` is `[SecureContext]` (Service Workers
 // §2.9) — absent entirely on an insecure origin, not merely inert, per

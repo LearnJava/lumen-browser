@@ -59,7 +59,8 @@ const SERIAL_SHIM: &str = r#"
   Object.defineProperty(navigator, 'serial', {
     value: new Serial(),
     writable: false,
-    enumerable: true
+    enumerable: true,
+    configurable: true
   });
 
   window.Serial = Serial;

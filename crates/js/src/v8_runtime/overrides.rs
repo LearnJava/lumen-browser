@@ -35,14 +35,29 @@ pub(super) fn global_user_agent_override() -> Option<String> {
 }
 
 /// Build the JS snippet that redefines `navigator.userAgent` to `ua`
-/// (BUG-295). `navigator` is a plain object literal in `WEB_API_SHIM`
-/// (writable, configurable `userAgent` property), so a direct assignment is
-/// enough — no `Object.defineProperty` needed. Shared between `install_dom`
-/// (next-navigation application) and the shell's immediate-apply path (the
-/// already-loaded page), so both go through the same escaping.
+/// (BUG-295). Shared between `install_dom` (next-navigation application) and
+/// the shell's immediate-apply path (the already-loaded page), so both go
+/// through the same escaping.
+///
+/// The two paths see different shapes (BUG-624): during `install_dom`
+/// `userAgent` is still a writable own property of the singleton, while on a
+/// loaded page it is a getter on `Navigator.prototype` with no setter, where a
+/// plain assignment is silently dropped. Hence: assign while the own property
+/// exists, otherwise redefine the prototype getter.
 pub fn user_agent_override_script(ua: &str) -> String {
     let escaped = ua.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-    format!("navigator.userAgent = \"{escaped}\";")
+    format!(
+        "(function() {{ var ua = \"{escaped}\"; \
+           if (Object.prototype.hasOwnProperty.call(navigator, 'userAgent') || \
+               typeof Navigator !== 'function') {{ navigator.userAgent = ua; return; }} \
+           var nav = navigator; \
+           Object.defineProperty(Navigator.prototype, 'userAgent', {{ \
+             get: Object.getOwnPropertyDescriptor({{ get userAgent() {{ \
+               if (this !== nav) throw new TypeError('Illegal invocation'); return ua; \
+             }} }}, 'userAgent').get, \
+             enumerable: true, configurable: true }}); \
+         }})();"
+    )
 }
 
 /// Process-global `Intl`/`Date` timezone override (WebDriver BiDi

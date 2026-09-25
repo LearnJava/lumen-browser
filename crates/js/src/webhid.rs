@@ -126,7 +126,8 @@ const WEBHID_SHIM: &str = r#"
   Object.defineProperty(navigator, 'hid', {
     value: new HIDManager(BRAND),
     writable: false,
-    enumerable: true
+    enumerable: true,
+    configurable: true
   });
 
   // Export classes to globalThis

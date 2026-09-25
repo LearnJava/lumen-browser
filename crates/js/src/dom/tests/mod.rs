@@ -354,3 +354,6 @@ mod v8_bug951_label_focus;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug623_window_find;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug624_navigator_interface;
