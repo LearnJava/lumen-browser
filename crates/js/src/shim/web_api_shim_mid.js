@@ -982,14 +982,14 @@ function _lumen_invoke_at(nid, event, capture) {
         for (var i = 0; i < copy.length; i++) {
             var _t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
             try { copy[i].call(obj, event); } catch(e) { _lumen_report_exception(e); }
-            _lumen_record_script_timing(_t0, invoker, 'event-listener');
+            _lumen_record_script_timing(_t0, invoker, 'event-listener', copy[i]);
             if (event._stopImmediate) return;
         }
     }
     if (onFn) {
         var _t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
         try { onFn.call(obj, event); } catch(e) { _lumen_report_exception(e); }
-        _lumen_record_script_timing(_t1, invoker, 'event-listener');
+        _lumen_record_script_timing(_t1, invoker, 'event-listener', onFn);
     }
 }
 

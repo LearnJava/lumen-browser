@@ -1603,3 +1603,72 @@ fn dom_touched_drives_incremental_restyle_matching_full_cascade() {
 }
 
 mod dom_suspend_focus;
+
+// ── LONGTASK-1 срез 4: culprit source-location attribution ────────────────
+
+/// `_lumen_capture_call_site` is registered on every page runtime and
+/// returns `sourceURL`/`sourceFunctionName`/`sourceLine`/`sourceColumn` for
+/// a real named function evaluated as a classic script.
+#[test]
+fn capture_call_site_reports_named_function_location() {
+    let rt = runtime_with_dom(make_doc(), "https://example.test/app.js");
+    rt.eval(
+        "function my_named_fn() { return 1; }\n\
+             globalThis.__site = _lumen_capture_call_site(my_named_fn);",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("__site.sourceFunctionName").unwrap(),
+        JsValue::String("my_named_fn".into())
+    );
+    assert!(matches!(
+        rt.eval("__site.sourceLine > 0 && __site.sourceColumn > 0").unwrap(),
+        JsValue::Bool(true)
+    ));
+}
+
+/// A non-function argument must not throw — the native declines and the
+/// caller (`_lumen_record_script_timing`) treats `undefined` as "no
+/// attribution", matching the class defaults `PerformanceScriptTiming`
+/// already falls back to.
+#[test]
+fn capture_call_site_returns_undefined_for_non_function() {
+    let rt = runtime_with_dom(make_doc(), "https://example.test/app.js");
+    let result = rt.eval("typeof _lumen_capture_call_site(42)").unwrap();
+    assert_eq!(result, JsValue::String("undefined".into()));
+}
+
+/// End-to-end: a real DOM event listener's timing entry
+/// (`_lumen_frame_scripts`, fed by `_lumen_record_script_timing`'s new `fn`
+/// argument) carries the listener's own name and a positive source line —
+/// not the class defaults `long_animation_frames.rs`'s unit tests exercise
+/// in isolation.
+#[test]
+fn dom_event_listener_timing_entry_carries_source_location() {
+    let rt = runtime_with_dom(make_doc(), "https://example.test/app.js");
+    rt.eval(
+        "document.getElementById('main').addEventListener('click', function my_click_handler() {});\n\
+             document.getElementById('main').dispatchEvent({type: 'click', bubbles: false, cancelable: false});",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("_lumen_frame_scripts.length > 0").unwrap(),
+        JsValue::Bool(true)
+    );
+    // Two entries land here: a capture-phase hop at the document sentinel
+    // (no listener registered there — invoker "document.click", no
+    // attribution) and the actual target-phase invocation of the listener
+    // registered above. The listener's own entry is always last: capture
+    // runs root→target before the target-phase invocation this test cares
+    // about (DOM §2.9 "dispatch" steps 5-6).
+    assert_eq!(
+        rt.eval("_lumen_frame_scripts[_lumen_frame_scripts.length - 1].sourceFunctionName")
+            .unwrap(),
+        JsValue::String("my_click_handler".into())
+    );
+    assert!(matches!(
+        rt.eval("_lumen_frame_scripts[_lumen_frame_scripts.length - 1].sourceLine > 0")
+            .unwrap(),
+        JsValue::Bool(true)
+    ));
+}
