@@ -9,7 +9,7 @@
 ## Симптом
 
 Вторая половина CSSOM — конструируемая. Читающая половина уже описана в
-[BUG-471](BUG-471-OPEN.md)/[BUG-746](BUG-746-OPEN.md) (`document.styleSheets`,
+[BUG-471](BUG-471-FIXED.md)/[BUG-746](BUG-746-FIXED.md) (`document.styleSheets`,
 `<style>.sheet`, классы правил); здесь — записывающая:
 
 * `new CSSStyleSheet()` — `ReferenceError: CSSStyleSheet is not defined`,
@@ -49,7 +49,7 @@ shadow-adopted = undefined     shadow-adopted-set = 1
 
 ## Что дальше
 
-Одной работой с [BUG-746](BUG-746-OPEN.md): объект таблицы стилей в JS-слое
+Одной работой с [BUG-746](BUG-746-FIXED.md): объект таблицы стилей в JS-слое
 плюс плюмбинг «разобранный `Stylesheet` из шелла → рантайм». Конструируемая
 таблица проще читающей — её содержимое приходит из `replaceSync`, а не из
 шелла, — но применять её всё равно должен каскад, так что точка подключения

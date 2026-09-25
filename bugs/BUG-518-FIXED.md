@@ -31,7 +31,7 @@ the resulting computed style gets the unset initial value instead
 reached the cascade at all, not a wrong-value bug). `@contents` (the
 mixin-body placeholder for @apply's own nested block) is the same gap one
 level down. Tests that probe the CSSOM surface for these rules
-additionally hit the already-open [BUG-471](BUG-471-OPEN.md)
+additionally hit the already-open [BUG-471](BUG-471-FIXED.md)
 (`CSSStyleSheet`/`CSSRule` hierarchy missing) — not a separate cause, just
 a second gap the same test trips over after the first.
 
@@ -46,10 +46,10 @@ a second gap the same test trips over after the first.
 `mixin-layers` (4, additionally needs bare-id named access —
 [BUG-384](BUG-384-FIXED.md) — since `e1`/`e2`/`e3`/`e4` are read as globals),
 `mixin-cssom.tentative`/`mixin-invalidation.tentative` (CSSOM surface,
-[BUG-471](BUG-471-OPEN.md)). Not filing the sibling `css-mixins/functions/`
+[BUG-471](BUG-471-FIXED.md)). Not filing the sibling `css-mixins/functions/`
 subdirectory under this bug — those 20 files test `@function` itself
 (partially implemented) and fail almost entirely on already-open
-[BUG-471](BUG-471-OPEN.md)/[BUG-384](BUG-384-FIXED.md) or the documented
+[BUG-471](BUG-471-FIXED.md)/[BUG-384](BUG-384-FIXED.md) or the documented
 CSS-SPECS.md T3 deferred scope (`returns` typing, conditional group rules),
 not on a missing `@mixin`/`@apply`/`@contents` construct.
 
@@ -431,7 +431,7 @@ Status remains `OPEN` — `mixin-shadow-dom.html` was blocked on
 [BUG-1009](BUG-1009-FIXED.md) (not further actionable from this bug), fixed
 2026-09-06 (unblocked, not re-verified by this slice), and the CSSOM-gated
 `mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
-blocked on [BUG-471](BUG-471-OPEN.md) as already documented.
+blocked on [BUG-471](BUG-471-FIXED.md) as already documented.
 
 ## Срез P3 2026-09-06 (часть 5)
 
@@ -521,7 +521,7 @@ Status remains `OPEN` — `mixin-cross-stylesheet.html` was already closed
 (срез 4), `mixin-shadow-dom.html` is now fully closed except its
 adopted-stylesheets subtest (separate gap, not mixin-specific), and the
 CSSOM-gated `mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
-blocked on [BUG-471](BUG-471-OPEN.md) as already documented — that CSSOM gap
+blocked on [BUG-471](BUG-471-FIXED.md) as already documented — that CSSOM gap
 is the entire remainder of this bug's original 15-file/~45-subtest scope.
 
 ## Срез P3 2026-09-07 (срез 6)

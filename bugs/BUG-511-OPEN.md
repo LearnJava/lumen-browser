@@ -47,7 +47,7 @@ FAIL Property link-parameters value 'param(--a, orange)'
 (5). A third file, `link-parameters-invalid.html` (12 subtests), fails on a
 different, pre-existing mechanism — the inline `style` setter accepts
 malformed `param(...)` syntax instead of rejecting it — attributed to
-[BUG-484](BUG-484-OPEN.md) instead, since that gap is generic to every
+[BUG-484](BUG-484-FIXED.md) instead, since that gap is generic to every
 property, not specific to `link-parameters`. `link-parameters-valid.html`
 (6/6) passes outright: setting a syntactically valid value through
 `element.style` round-trips correctly even without real grammar validation,

@@ -1,6 +1,6 @@
 # BUG-471: CSSOM stylesheet/rule object model not implemented
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 — дрейф трекера: закрыт CSSOM-1 (чтение), запись — CSSOM-5/CSSOM-8; строка BUGS.md не была перенесена при закрытии задачи (сверка с кодом 2026-09-25)
 **Тип:** доработка (нереализованная функциональность), не дефект — ведётся как задача [`CSSOM-1`](../ROADMAP.md) дорожки CSSOM, а не как строка очереди P3. Файл остаётся детальной записью наблюдений: «срезы» ниже — прогоны категорий WPT, упиравшиеся в эту же дыру, а не куски выполненной работы. Переклассифицировано 2026-08-28 по решению пользователя.
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs`)
@@ -77,7 +77,7 @@ test important" both do `document.styleSheets[0].cssRules[0].style` —
 end of stylesheet" does `document.getElementById(id).sheet.cssRules[0]` —
 same failure, `<style>`'s `.sheet` property. `.ini` for both files cites
 BUG-471 for these specific subtests (each file's remaining subtests are
-[BUG-484](BUG-484-OPEN.md) instead — see that bug's own extension).
+[BUG-484](BUG-484-FIXED.md) instead — see that bug's own extension).
 
 **WPT-RUN-3 срез 12 (`css/css-logical`, 2026-08-02):** `logicalprops-quirklength.html`
 does `document.styleSheets[0].cssRules[0]` at the top of its

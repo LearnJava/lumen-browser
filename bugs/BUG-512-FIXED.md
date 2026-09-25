@@ -31,7 +31,7 @@ FAIL Property forced-color-adjust value 'preserve-parent-color'
 
 2 files / 5 subtests: `inheritance.html` (2), `parsing/forced-color-adjust-computed.html`
 (3). `parsing/forced-color-adjust-invalid.html` (6 subtests) fails on the
-separate, generic inline-`style`-setter gap ([BUG-484](BUG-484-OPEN.md) —
+separate, generic inline-`style`-setter gap ([BUG-484](BUG-484-FIXED.md) —
 invalid values like `"auto auto"`/`"1"`/`"default"` are accepted instead of
 rejected) rather than on this property specifically.
 `parsing/forced-color-adjust-valid.html` (3/3) passes: valid values
@@ -92,7 +92,7 @@ test style::tests::color::forced_color_adjust_inherited ... ok
 ```
 
 Точечного P3-дефекта не найдено. `parsing/forced-color-adjust-invalid.html`
-(6 сабтестов) по-прежнему числится за [BUG-484](BUG-484-OPEN.md) (generic
+(6 сабтестов) по-прежнему числится за [BUG-484](BUG-484-FIXED.md) (generic
 inline-`style`-setter не валидирует значения) — не этим багом, не тронут.
 
 `.ini` `inheritance.html`/`parsing/forced-color-adjust-computed.html` удалены

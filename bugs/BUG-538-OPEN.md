@@ -39,7 +39,7 @@ text-box-edge` shorthand), is also unimplemented by the same absence.
 
 Every inline-style assignment to either longhand is accepted verbatim and
 echoed back by the generic (non-validating) style setter —
-[BUG-484](BUG-484-OPEN.md)'s mechanism, not specific to this bug — while
+[BUG-484](BUG-484-FIXED.md)'s mechanism, not specific to this bug — while
 every `getComputedStyle()` probe reports "doesn't seem to be supported":
 
 ```

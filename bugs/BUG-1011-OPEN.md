@@ -198,7 +198,7 @@ GAP-LOADEV`): `<object data="data:...">` не резолвит ресурс во
 раскрыло, что **BUG-1025 сам был тем же классом ошибки, что предостерегает
 [docs/probe-method.md §8](../docs/probe-method.md)** («доработка, заведённая багом, стоит в
 очереди, которая её не берёт») — `docs/engine-gaps.md` §Resource loading уже прямым текстом
-называл «`<img>` fires neither `load` nor `error` on any insertion path» ([BUG-630](BUG-630-OPEN.md),
+называл «`<img>` fires neither `load` nor `error` on any insertion path» ([BUG-630](BUG-630-FIXED.md),
 `GAP-LOADEV`) до заведения BUG-1025 срезом 22; BUG-1025 слит в BUG-630 этим же срезом.
 
 **Вывод по директории `svg-embedded-sizing/`:** из пяти известных к этому срезу файлов два
@@ -243,7 +243,7 @@ filter) в `run_report.py` — безопаснее `--offset`/`--limit` для 
 
 **Не закрывает баг** — `replaced-elements/svg-embedded-sizing/` (9 файлов: 3
 `svg-in-iframe-*` с флакующими rAF-сабтестами, 3 `svg-in-img-*`/3 `svg-in-object-*`
-детерминированный TIMEOUT от [BUG-630](BUG-630-OPEN.md)/[BUG-798](BUG-798-OPEN.md)) по-прежнему
+детерминированный TIMEOUT от [BUG-630](BUG-630-FIXED.md)/[BUG-798](BUG-798-OPEN.md)) по-прежнему
 без baseline и по-прежнему демонстрирует исходный симптом (три `--check` подряд дадут разные
 наборы, если её вернуть в выборку без починки GAP-LOADEV или без изоляции от тяжёлых соседей).
 Следующий шаг для самой директории — не в этом срезе: дождаться починки GAP-LOADEV (тогда
