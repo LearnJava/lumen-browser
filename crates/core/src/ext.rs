@@ -2328,6 +2328,25 @@ pub trait JsFetchProvider: Send + Sync {
         Ok(())
     }
 
+    /// I/O-free pre-check: would the document's `script-src` (for
+    /// `destination == "script"`) or `style-src` (for `"style"`) policy — each
+    /// falling back to `default-src` — block an element that a script inserted
+    /// from fetching `url` (BUG-1175).
+    ///
+    /// Such an element (`<script src>`, `<link rel=stylesheet>`, `@import` in
+    /// a `<style>`) loads itself through the shim's `fetch()`, which the
+    /// provider sees only as a URL with a destination; the element's `nonce`
+    /// and `integrity` — which the directive consults before the URL (CSP3
+    /// §6.7.1.1) — exist only on the element, so the shim hands them over
+    /// here before it calls `fetch()`. An empty `nonce`/`integrity` means the
+    /// element has none. Any other destination is never blocked. Default
+    /// implementation never blocks, matching `HttpClient` with no policy
+    /// installed.
+    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, integrity: &str) -> Result<()> {
+        let _ = (destination, url, nonce, integrity);
+        Ok(())
+    }
+
     /// Rewrites `url` per the document's `upgrade-insecure-requests`
     /// directive (`http:`→`https:`, `ws:`→`wss:`), or returns it unchanged
     /// when no policy applies (GAP-CSPENF срез 51).

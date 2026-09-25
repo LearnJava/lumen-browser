@@ -3157,6 +3157,15 @@ pub struct HttpClient {
     /// — a separate field because it is checked against a different
     /// [`CspDirective`].
     media_src_policy: Option<(Vec<CspPolicy>, Option<Origin>, String)>,
+    /// BUG-1175: CSP `script-src`/`style-src` (each falling back to
+    /// `default-src`) gate for a `<script src>`/`<link rel=stylesheet>`/
+    /// `@import` that a script inserted, driven by the native
+    /// `_lumen_check_element_src` binding before the shim's `fetch()` call.
+    /// The element's own nonce/integrity decide first (CSP3 §6.7.1.1), and
+    /// only the shim has them. Parser-inserted elements keep their
+    /// `&Document`-backed gates in `crates/shell/src/csp_enforce.rs`. Same
+    /// shape and provenance as [`Self::media_src_policy`].
+    element_src_policy: Option<(Vec<CspPolicy>, Option<Origin>, String)>,
     /// GAP-POLICYREPORT (BUG-953): `sync-xhr` disposition from `Document-Policy`
     /// (+ `-Report-Only`) and `Permissions-Policy` (+ `-Report-Only`)
     /// respectively, precomputed once by `crate::document_policy`/
@@ -3223,6 +3232,7 @@ impl HttpClient {
             worker_src_policy: None,
             object_src_policy: None,
             media_src_policy: None,
+            element_src_policy: None,
             sync_xhr_policy: (None, None),
             document_context: None,
             subresource_cache: None,
@@ -3308,6 +3318,21 @@ impl HttpClient {
         original_policy: String,
     ) -> Self {
         self.media_src_policy = Some((policies, self_origin, original_policy));
+        self
+    }
+
+    /// Attach the document's CSP `script-src`/`style-src` gate for elements a
+    /// script inserted (BUG-1175). Same argument shape and provenance as
+    /// [`Self::with_media_src_policy`]; only [`Self::check_element_src`]
+    /// checks this.
+    #[must_use]
+    pub fn with_element_src_policy(
+        mut self,
+        policies: Vec<CspPolicy>,
+        self_origin: Option<Origin>,
+        original_policy: String,
+    ) -> Self {
+        self.element_src_policy = Some((policies, self_origin, original_policy));
         self
     }
 
@@ -4898,6 +4923,17 @@ impl JsFetchProvider for HttpClient {
         self.media_src_gate(&url)
     }
 
+    /// BUG-1175: `script-src`/`style-src` pre-check for a `<script src>`/
+    /// `<link rel=stylesheet>`/`@import` that a script inserted, called by the
+    /// native `_lumen_check_element_src` binding before the shim's `fetch()` —
+    /// same "not a single outgoing byte" shape as [`Self::check_media_src`].
+    /// The URL is upgraded first, as `fetch_request_impl` will send it.
+    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, integrity: &str) -> Result<()> {
+        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let url = self.upgrade_insecure_requests_url(url);
+        self.element_src_gate(destination, &url, nonce, integrity)
+    }
+
     /// GAP-CSPENF срез 51: `upgrade-insecure-requests` for `<audio src>` —
     /// the JS shim resolves the URL to absolute (`_abs`) for its
     /// `_lumen_check_media_src` call anyway, so this reuses that same
@@ -5472,6 +5508,46 @@ impl HttpClient {
         Ok(())
     }
 
+    /// `script-src`/`style-src` gate backing [`JsFetchProvider::check_element_src`]
+    /// (BUG-1175) — same shape as [`Self::media_src_gate`], but the check is
+    /// the element pre-request one: nonce (and, for a script, integrity and
+    /// `'strict-dynamic'`) before the URL. Any destination other than
+    /// `script`/`style` passes.
+    fn element_src_gate(&self, destination: &str, url: &Url, nonce: &str, integrity: &str) -> Result<()> {
+        let Some((policies, self_origin, original_policy)) = &self.element_src_policy else {
+            return Ok(());
+        };
+        let nonce = Some(nonce).filter(|n| !n.is_empty());
+        let (directive, blocked) = match destination {
+            "script" => {
+                let request = csp::ScriptRequestMetadata {
+                    nonce,
+                    integrity: Some(integrity).filter(|i| !i.is_empty()),
+                    parser_inserted: false,
+                };
+                let blocked = policies
+                    .iter()
+                    .any(|policy| !policy.script_element_fetch_allows(url, self_origin.as_ref(), &request));
+                ("script-src-elem", blocked)
+            }
+            "style" => {
+                let blocked = policies
+                    .iter()
+                    .any(|policy| !policy.style_element_fetch_allows(url, self_origin.as_ref(), nonce));
+                ("style-src-elem", blocked)
+            }
+            _ => return Ok(()),
+        };
+        if blocked {
+            return Err(Error::CspElementSrcBlocked {
+                directive: directive.to_owned(),
+                blocked_uri: url.to_string(),
+                original_policy: original_policy.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// GAP-CSPENF срез 49: `upgrade-insecure-requests` for JS-initiated
     /// network requests — the last item срез 48 named not covered
     /// (`fetch()`/`XMLHttpRequest`/WebSocket/EventSource; `sendBeacon` is a
@@ -5522,7 +5598,13 @@ impl HttpClient {
     ) -> Result<JsFetchResult> {
         let url = Url::parse(req.url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
         let url = self.upgrade_insecure_requests_url(url);
-        self.connect_src_gate(&url)?;
+        // BUG-1175: an element loading itself through the shim is not a
+        // `connect-src` request — CSP3 judges a `script`/`style` destination
+        // by `script-src`/`style-src`, which the shim has already asked
+        // `check_element_src` about (only it knows the element's nonce).
+        if !matches!(req.destination, "script" | "style") {
+            self.connect_src_gate(&url)?;
+        }
         let method_upper = req.method.to_ascii_uppercase();
         match (req.body.is_some(), method_upper.as_str()) {
             (false, "GET" | "HEAD") | (true, "POST" | "PUT" | "PATCH" | "DELETE") => {}
@@ -7543,6 +7625,79 @@ mod tests {
             "not a url",
         );
         assert!(!matches!(result, Err(Error::CspMediaSrcBlocked { .. })));
+    }
+
+    /// BUG-1175: an `HttpClient` carrying `policy` as the element gate, the
+    /// verdict of its `check_element_src` for `destination`/`url`/`nonce`.
+    fn element_src_check(policy: &str, destination: &str, url: &str, nonce: &str) -> Result<()> {
+        let client = HttpClient::new().with_element_src_policy(
+            vec![csp::parse_csp_header(policy)],
+            None,
+            policy.to_owned(),
+        );
+        <HttpClient as lumen_core::ext::JsFetchProvider>::check_element_src(&client, destination, url, nonce, "")
+    }
+
+    #[test]
+    fn element_src_script_is_judged_by_script_src_and_nonce() {
+        // The BUG-1175 repro: `script-src 'nonce-abc'`, an inserted
+        // `<script src>` without the nonce is refused, one with it passes.
+        let url = "https://example.com/dyn.js";
+        match element_src_check("script-src 'nonce-abc'", "script", url, "") {
+            Err(Error::CspElementSrcBlocked { directive, blocked_uri, original_policy }) => {
+                assert_eq!(directive, "script-src-elem");
+                assert_eq!(blocked_uri, url);
+                assert_eq!(original_policy, "script-src 'nonce-abc'");
+            }
+            other => panic!("expected CspElementSrcBlocked, got {other:?}"),
+        }
+        assert!(element_src_check("script-src 'nonce-abc'", "script", url, "abc").is_ok());
+        // `'strict-dynamic'` trusts a script a script inserted (step 1.3).
+        assert!(element_src_check("script-src 'nonce-abc' 'strict-dynamic'", "script", url, "").is_ok());
+    }
+
+    #[test]
+    fn element_src_ignores_connect_src() {
+        // The other half of the repro: `connect-src 'none'` says nothing
+        // about a script or a stylesheet.
+        assert!(element_src_check("connect-src 'none'", "script", "https://example.com/dyn.js", "").is_ok());
+        assert!(element_src_check("connect-src 'none'", "style", "https://example.com/a.css", "").is_ok());
+    }
+
+    #[test]
+    fn element_src_style_is_judged_by_style_src() {
+        match element_src_check("default-src 'self'; style-src example.com", "style", "https://evil.example/a.css", "") {
+            Err(Error::CspElementSrcBlocked { directive, .. }) => assert_eq!(directive, "style-src-elem"),
+            other => panic!("expected CspElementSrcBlocked, got {other:?}"),
+        }
+        assert!(element_src_check("style-src example.com", "style", "https://example.com/a.css", "").is_ok());
+        assert!(element_src_check("style-src 'nonce-n'", "style", "https://evil.example/a.css", "n").is_ok());
+        // Neither directive applies to any other destination.
+        assert!(element_src_check("default-src 'none'", "", "https://example.com/x", "").is_ok());
+    }
+
+    #[test]
+    fn fetch_request_skips_connect_src_for_element_destinations() {
+        // `fetch_request_impl` runs the `connect-src` gate before its method
+        // check, so an unsupported bodiless method tells without any I/O
+        // whether the gate fired: `CspConnectSrcBlocked` for a plain
+        // `fetch()`, a method error for an element load (BUG-1175).
+        let policy = csp::parse_csp_header("connect-src 'none'");
+        let client = HttpClient::new().with_connect_src_policy(vec![policy], None, "connect-src 'none'".to_owned());
+        let request = |destination| lumen_core::ext::JsFetchRequest {
+            url: "https://example.com/dyn.js",
+            method: "OPTIONS",
+            headers: &[],
+            body: None,
+            mode: "no-cors",
+            destination,
+            token: None,
+        };
+        assert!(matches!(client.fetch_request(&request("")), Err(Error::CspConnectSrcBlocked { .. })));
+        for destination in ["script", "style"] {
+            let result = client.fetch_request(&request(destination));
+            assert!(matches!(result, Err(Error::Network(_))), "{destination}: connect-src gate fired");
+        }
     }
 
     #[test]

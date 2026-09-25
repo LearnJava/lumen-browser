@@ -928,6 +928,89 @@ impl lumen_core::ext::JsFetchProvider for CspBlockedBeaconProvider {
     }
 }
 
+/// BUG-1175: mock provider whose `check_element_src` behaves like
+/// `HttpClient` under `script-src 'nonce-abc'` — a script without that nonce
+/// is refused — and which counts every fetch that still reaches it: a refused
+/// element must not send a single byte.
+struct NonceScriptSrcProvider {
+    fetches: std::sync::atomic::AtomicUsize,
+}
+impl lumen_core::ext::JsFetchProvider for NonceScriptSrcProvider {
+    fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.fetches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"globalThis.__b1175_ran = true;".to_vec(), url: url.to_string() })
+    }
+    fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Err(lumen_core::error::Error::Network("no body expected".into()))
+    }
+    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, _integrity: &str) -> lumen_core::error::Result<()> {
+        if destination == "script" && nonce != "abc" {
+            return Err(lumen_core::error::Error::CspElementSrcBlocked {
+                directive: "script-src-elem".into(),
+                blocked_uri: url.into(),
+                original_policy: "script-src 'nonce-abc'".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// BUG-1175: an inserted `<script src>` without the nonce `script-src`
+/// demands is refused before its fetch — `securitypolicyviolation` names
+/// `script-src-elem`, the element gets `error`, the provider sees nothing.
+#[test]
+fn inserted_script_without_nonce_is_refused_by_script_src() {
+    let provider = Arc::new(NonceScriptSrcProvider { fetches: std::sync::atomic::AtomicUsize::new(0) });
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider.clone();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    let r = rt
+        .eval(
+            r#"globalThis.__b1175 = [];
+                       document.addEventListener('securitypolicyviolation', function(e) {
+                           globalThis.__b1175.push(e.effectiveDirective + ' ' + e.blockedURI);
+                       });
+                       var s = document.createElement('script');
+                       s.src = '/dyn.js';
+                       s.onerror = function() { globalThis.__b1175.push('error'); };
+                       document.body.appendChild(s);
+                       _lumen_tick_timers();
+                       _lumen_tick_timers();
+                       globalThis.__b1175.join('|') + '|ran=' + (globalThis.__b1175_ran === true)"#,
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("script-src-elem https://example.com/dyn.js|error|ran=false".into())
+    );
+    assert_eq!(provider.fetches.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// BUG-1175: the element's own nonce reaches the check — with the right one
+/// the gate passes and no violation is reported.
+#[test]
+fn inserted_script_nonce_reaches_script_src_check() {
+    let provider = Arc::new(NonceScriptSrcProvider { fetches: std::sync::atomic::AtomicUsize::new(0) });
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider.clone();
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, None, false).unwrap();
+    let r = rt
+        .eval(
+            r#"globalThis.__b1175n = 0;
+                       document.addEventListener('securitypolicyviolation', function() { globalThis.__b1175n++; });
+                       var s = document.createElement('script');
+                       s.src = '/dyn.js';
+                       s.setAttribute('nonce', 'abc');
+                       document.body.appendChild(s);
+                       _lumen_tick_timers();
+                       [_lumen_check_element_src('script', 'https://example.com/dyn.js', 'abc', '').length,
+                        _lumen_check_element_src('script', 'https://example.com/dyn.js', '', '').length,
+                        globalThis.__b1175n].join(',')"#,
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("0,3,0".into()));
+}
+
 fn v8_runtime_with_csp_blocked_beacon(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(CspBlockedBeaconProvider);

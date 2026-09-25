@@ -153,4 +153,4 @@ TLS-рукопожатие дважды оборвалось EOF. CSP тут н�
 `'strict-dynamic'`. Вставленный скриптом `<script src>` грузится через JS-`fetch()`, и его
 судит `connect-src`, а `script-src` не смотрится вовсе. Страница с `script-src 'nonce-abc'`
 без `'strict-dynamic'` исполняет вставленный скрипт, Chrome — нет. Это
-[BUG-1175](BUG-1175-OPEN.md).
+[BUG-1175](BUG-1175-FIXED.md).

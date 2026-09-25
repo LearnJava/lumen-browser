@@ -267,6 +267,24 @@ impl CspPolicy {
         sources.iter().any(|s| source_matches_url(s, url, self_origin))
     }
 
+    /// `true` if this policy's `style-src` (or `default-src`) lets a
+    /// `<link rel=stylesheet>` or an `@import` fetch `url` — CSP3
+    /// `style-src` «Pre-request check» (BUG-1175): a `nonce` matching a
+    /// `'nonce-…'` source allows the request whatever the URL, otherwise the
+    /// URL must match the source list. Unlike scripts there is no integrity
+    /// bypass and no `'strict-dynamic'`.
+    pub fn style_element_fetch_allows(&self, url: &Url, self_origin: Option<&Origin>, nonce: Option<&str>) -> bool {
+        let Some(sources) = self.effective_sources(&CspDirective::StyleSrc) else {
+            return true;
+        };
+        if let Some(nonce) = nonce.filter(|n| !n.is_empty())
+            && sources.iter().any(|s| matches!(s, CspSource::Nonce(n) if n == nonce))
+        {
+            return true;
+        }
+        sources.iter().any(|s| source_matches_url(s, url, self_origin))
+    }
+
     /// Returns the effective source list for `directive`, falling back to
     /// `child-src` and then `default-src` — the CSP3 §6.4 granular chain
     /// that `frame-src` and `worker-src` get (unlike every other fetch
@@ -1147,5 +1165,20 @@ mod tests {
         assert!(!p.script_element_fetch_allows(&url, None, &script_req(None, None, true)));
         let none = parse_csp_header("img-src 'none'");
         assert!(none.script_element_fetch_allows(&url, None, &script_req(None, None, true)));
+    }
+
+    #[test]
+    fn style_element_nonce_or_url_allows() {
+        let p = parse_csp_header("style-src 'nonce-abc' cdn.example.com");
+        let other = img_url("https://evil.example/a.css");
+        assert!(p.style_element_fetch_allows(&other, None, Some("abc")));
+        assert!(!p.style_element_fetch_allows(&other, None, Some("xyz")));
+        assert!(!p.style_element_fetch_allows(&other, None, None));
+        assert!(p.style_element_fetch_allows(&img_url("https://cdn.example.com/a.css"), None, None));
+        // `default-src` is the fallback; a policy with neither never blocks.
+        let d = parse_csp_header("default-src 'none'");
+        assert!(!d.style_element_fetch_allows(&other, None, None));
+        let none = parse_csp_header("script-src 'none'");
+        assert!(none.style_element_fetch_allows(&other, None, None));
     }
 }
