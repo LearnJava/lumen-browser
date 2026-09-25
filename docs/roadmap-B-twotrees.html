@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-25",
  "counts": {
-  "open": 248,
-  "fixed": 866,
+  "open": 245,
+  "fixed": 872,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1114,
+ "total_bugs": 1117,
  "phases": [
   {
    "id": "P0",
@@ -2327,9 +2327,9 @@
       {
        "id": "PERF-13",
        "title": "PERF-13: мультиплексирование HTTP/2 на одном соединении",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Разделяемое HTTP/2-соединение на origin с конкурентными потоками (RFC 9113 §5). Сейчас `H2Pool::acquire` вынимает соединение из пула на время запроса, и каждый параллельный запрос к тому же origin открывает свежий TCP+TLS: github.com — 98 соединений за загрузку, прогон top100 2026-09-23 — 22.9 соединения на хост против 5.4 у Chrome 153. Каждое лишнее рукопожатие стоит 2-3 RTT, на VPN/мобильной сети — секунды на страницу. Задача: поток-владелец сокета читает кадры и раздаёт ответы по stream id, запросы ставятся к нему в очередь; промежуточный шаг — не выбрасывать открытые соединения на `release` и держать несколько на origin. Приёмка: `conn_count` на github.com ≤ 2 соединений на origin, ready_s медианы top100 без регресса. Движковая часть — P1",
+       "note": "DONE 2026-09-25 (ветка `p1-perf13-h2-mux`): одно разделяемое HTTP/2-соединение на origin с конкурентными потоками (RFC 9113 §5). `crates/network/src/h2/mux.rs` — `H2Mux`: поток-владелец сокета пишет запросы новыми потоками, читает кадры и раздаёт ответы по stream id, соблюдая MAX_CONCURRENT_STREAMS, GOAWAY, простой 30 с и таймаут потока 60 с; `h2/pool.rs` отдаёт `Arc<H2Mux>` вместо «аренды» и склеивает параллельные первые запросы к origin в одно рукопожатие. Пулы HTTP/1.1 и HTTP/2 стали процессными (`pool::shared_pools`) с партицией по маршруту (профиль TLS/HTTP, SOCKS, DoH, private) и сайту документа (eTLD+1), за HTTP-прокси остаются приватными. Живой A/B вскрыл два латентных дефекта, которые не проявлялись при 1-2 запросах на соединение: HPACK-кодировщик молча растил таблицу до SETTINGS_HEADER_TABLE_SIZE пира без size update (GOAWAY COMPRESSION_ERROR после ~45 запросов) и окно соединения оставалось 65 535 байт на все потоки — оба исправлены. Приёмка: github.com с холодным профилем — 6 соединений и 131/131 ответ против 93-120 соединений у базы; lenta.ru 185→28. ready_s: усечённый A/B compat на 13 сайтах top100 (не полный прогон 100) регресса не показал — github/apple/spotify из HUNG стали доходить до готовности, bing 33→8 с, canva 88→40 с; imdb медленнее, потому что проходит AWS WAF-челлендж и грузит настоящую страницу, а база остаётся на челлендже",
        "bugs": [
         "BUG-1115"
        ]
@@ -3759,7 +3759,7 @@
        "title": "WPT: вендорить + прогнать категорию `orientation-event`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (legacy DeviceOrientation). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root orientation-event --recursive`, ~7 мин, 27 отобранных id из 33 вендоренных файлов — 10 `-manual` раннер исключает) — **0/27 harness OK, 0/0 сабтестов**. 26/27 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (все id `.https.`); 1/27 (`idlharness.https.window.html`) — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md) (browsing context переиспользуется между тестами). API (`DeviceOrientationEvent`/`DeviceMotionEvent`) реально реализован как Phase 0 заглушка; сам прогон сигнала не дал (всё упирается в TLS-гэп раньше кода API), но живая проба через `--mcp-live-port` нашла реальный дефект шима — заведён [BUG-643](bugs/BUG-643-OPEN.md)",
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (legacy DeviceOrientation). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root orientation-event --recursive`, ~7 мин, 27 отобранных id из 33 вендоренных файлов — 10 `-manual` раннер исключает) — **0/27 harness OK, 0/0 сабтестов**. 26/27 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (все id `.https.`); 1/27 (`idlharness.https.window.html`) — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md) (browsing context переиспользуется между тестами). API (`DeviceOrientationEvent`/`DeviceMotionEvent`) реально реализован как Phase 0 заглушка; сам прогон сигнала не дал (всё упирается в TLS-гэп раньше кода API), но живая проба через `--mcp-live-port` нашла реальный дефект шима — заведён [BUG-643](bugs/BUG-643-FIXED.md)",
        "bugs": [
         "BUG-643"
        ]
@@ -3790,7 +3790,7 @@
        "title": "WPT: вендорить + прогнать категорию `paint-timing`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root paint-timing --recursive`, ~4 мин, 56 id, ни testdriver, ни `.https.`, ни variant-ов) — **34/56 harness OK, 1/36 сабтестов**. Доминирующая причина (20/36): каждый тест стартует с `assert_implements(window.PerformancePaintTiming, …)`, а этого глобального интерфейса в шиме нет вовсе — заведён [BUG-645](bugs/BUG-645-OPEN.md) (тот же класс, что BUG-624/637/589). Доставка `first-paint`/`first-contentful-paint` в реальный рендер-пайплайн при этом подключена (`main.rs:15551-15566`). Остальные 20/22 harness-TIMEOUT (`fcp-only/*.html`) — реконфирмация [BUG-346](bugs/BUG-346-FIXED.md) (`../resources/utils.js` не резолвится, 404). `idlharness.window.html` TIMEOUT — известный невендоренный `idlharness.js`+`WebIDLParser.js`",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root paint-timing --recursive`, ~4 мин, 56 id, ни testdriver, ни `.https.`, ни variant-ов) — **34/56 harness OK, 1/36 сабтестов**. Доминирующая причина (20/36): каждый тест стартует с `assert_implements(window.PerformancePaintTiming, …)`, а этого глобального интерфейса в шиме нет вовсе — заведён [BUG-645](bugs/BUG-645-FIXED.md) (тот же класс, что BUG-624/637/589). Доставка `first-paint`/`first-contentful-paint` в реальный рендер-пайплайн при этом подключена (`main.rs:15551-15566`). Остальные 20/22 harness-TIMEOUT (`fcp-only/*.html`) — реконфирмация [BUG-346](bugs/BUG-346-FIXED.md) (`../resources/utils.js` не резолвится, 404). `idlharness.window.html` TIMEOUT — известный невендоренный `idlharness.js`+`WebIDLParser.js`",
        "bugs": [
         "BUG-645"
        ]
@@ -3807,7 +3807,7 @@
        "title": "WPT: вендорить + прогнать категорию `payment-method-basic-card`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-method-basic-card --recursive`, ~1 мин 21 с, 4 отобранных id из 6 вендоренных файлов — 2 `-manual` в имени раннер исключает) — **0/4 harness OK**. Все 4 TIMEOUT: 2 `.https.` на уже задокументированном TLS-гэпе `UnknownIssuer`, 2 оставшихся — тесты без `-manual` в имени файла, но фактически ручные (промисы навешаны только на `onclick`), не завершаются автоматически. `window.PaymentRequest` реально реализован (Phase 0 stub, `crates/js/src/payment_request.rs`) — первая живая проверка конструктора живой пробой (`--mcp-live-port`) нашла: конструктор не валидирует вход вовсе (пустой `methodData`, отрицательная/нечисловая сумма, некорректная валюта — все обязаны бросать по спеке, ни один не бросает). Заведён [BUG-646](bugs/BUG-646-OPEN.md)",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-method-basic-card --recursive`, ~1 мин 21 с, 4 отобранных id из 6 вендоренных файлов — 2 `-manual` в имени раннер исключает) — **0/4 harness OK**. Все 4 TIMEOUT: 2 `.https.` на уже задокументированном TLS-гэпе `UnknownIssuer`, 2 оставшихся — тесты без `-manual` в имени файла, но фактически ручные (промисы навешаны только на `onclick`), не завершаются автоматически. `window.PaymentRequest` реально реализован (Phase 0 stub, `crates/js/src/payment_request.rs`) — первая живая проверка конструктора живой пробой (`--mcp-live-port`) нашла: конструктор не валидирует вход вовсе (пустой `methodData`, отрицательная/нечисловая сумма, некорректная валюта — все обязаны бросать по спеке, ни один не бросает). Заведён [BUG-646](bugs/BUG-646-FIXED.md)",
        "bugs": [
         "BUG-646"
        ]
@@ -3817,7 +3817,7 @@
        "title": "WPT: вендорить + прогнать категорию `payment-method-id`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-method-id --recursive`, ~36 с, 1 id) — **0/1 harness OK**. Единственный `.https.sub.html`-тест TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, не исполнился. Тест проверяет валидацию PMI-строки в конструкторе `PaymentRequest` — живая проба (`--mcp-live-port`, 6 кейсов) подтвердила: конструктор не бросает ни на одном синтаксически невалидном PMI, тот же дефект, что уже заведён [BUG-646](bugs/BUG-646-OPEN.md) (`supportedMethods` не читается вовсе). Новый баг не заведён"
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-method-id --recursive`, ~36 с, 1 id) — **0/1 harness OK**. Единственный `.https.sub.html`-тест TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, не исполнился. Тест проверяет валидацию PMI-строки в конструкторе `PaymentRequest` — живая проба (`--mcp-live-port`, 6 кейсов) подтвердила: конструктор не бросает ни на одном синтаксически невалидном PMI, тот же дефект, что уже заведён [BUG-646](bugs/BUG-646-FIXED.md) (`supportedMethods` не читается вовсе). Новый баг не заведён"
       },
       {
        "id": "WPT-VENDOR-payment-request",
@@ -3865,7 +3865,7 @@
        "title": "WPT: вендорить + прогнать категорию `permissions-request`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root permissions-request --recursive`, ~14 с, 1 id) — **0/1 harness OK**. Единственный тест `idlharness.any.html` TIMEOUT на уже задокументированном гэпе `/resources/idlharness.js`+`/resources/WebIDLParser.js` (не вендорены). Живая проба (`--mcp-live-port`) `navigator.permissions.*` показала, что метод и не мог бы пройти: `request`/`requestAll` отсутствуют вовсе (`Object.getOwnPropertyNames` → `[\"query\"]`), вызов бросает `TypeError` — заведён [BUG-650](bugs/BUG-650-OPEN.md). Попутно при настройке живой пробы найден и заведён [BUG-651](bugs/BUG-651-FIXED.md): `file://`-URL как начальный CLI-аргумент (`--dump-layout`/`--mcp-live-port <src>`/…) не грузится — `PageSource::from_arg` не снимает схему `file://`, в отличие от `page_source_for_automation_url`",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root permissions-request --recursive`, ~14 с, 1 id) — **0/1 harness OK**. Единственный тест `idlharness.any.html` TIMEOUT на уже задокументированном гэпе `/resources/idlharness.js`+`/resources/WebIDLParser.js` (не вендорены). Живая проба (`--mcp-live-port`) `navigator.permissions.*` показала, что метод и не мог бы пройти: `request`/`requestAll` отсутствуют вовсе (`Object.getOwnPropertyNames` → `[\"query\"]`), вызов бросает `TypeError` — заведён [BUG-650](bugs/BUG-650-FIXED.md). Попутно при настройке живой пробы найден и заведён [BUG-651](bugs/BUG-651-FIXED.md): `file://`-URL как начальный CLI-аргумент (`--dump-layout`/`--mcp-live-port <src>`/…) не грузится — `PageSource::from_arg` не снимает схему `file://`, в отличие от `page_source_for_automation_url`",
        "bugs": [
         "BUG-650",
         "BUG-651"
@@ -4141,7 +4141,7 @@
        "title": "WPT: вендорить + прогнать категорию `secure-payment-confirmation`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root secure-payment-confirmation --recursive`, ~8 мин 50 с, 28 файлов, 20 отобранных id) — **0/20 harness OK, 0/0 сабтестов**. Все 20 id TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` — ни один тест не дошёл до навигации. Живая проба (`--mcp-live-port`) подтвердила: `window.PaymentRequest`/`window.PublicKeyCredential` присутствуют, `new PaymentRequest([{supportedMethods: 'secure-payment-confirmation', data: {...}}], details)` конструируется без единой проверки SPC-специфичных полей (`credentialIds`/`challenge`/`rpId`/`payeeOrigin`/`instrument`) — тот же класс, что уже открытый [BUG-646](bugs/BUG-646-OPEN.md) (общая нулевая валидация конструктора `PaymentRequest`); SPC не добавляет собственной логики поверх Phase-0 шима. Новых номеров багов не заведено (реконфирмация BUG-646)",
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root secure-payment-confirmation --recursive`, ~8 мин 50 с, 28 файлов, 20 отобранных id) — **0/20 harness OK, 0/0 сабтестов**. Все 20 id TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` — ни один тест не дошёл до навигации. Живая проба (`--mcp-live-port`) подтвердила: `window.PaymentRequest`/`window.PublicKeyCredential` присутствуют, `new PaymentRequest([{supportedMethods: 'secure-payment-confirmation', data: {...}}], details)` конструируется без единой проверки SPC-специфичных полей (`credentialIds`/`challenge`/`rpId`/`payeeOrigin`/`instrument`) — тот же класс, что уже открытый [BUG-646](bugs/BUG-646-FIXED.md) (общая нулевая валидация конструктора `PaymentRequest`); SPC не добавляет собственной логики поверх Phase-0 шима. Новых номеров багов не заведено (реконфирмация BUG-646)",
        "bugs": [
         "BUG-646"
        ]
@@ -4171,7 +4171,7 @@
        "title": "WPT: вендорить + прогнать категорию `server-timing`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root server-timing --recursive`, ~3 мин 33 с, 9 отобранных id) — **0/9 harness OK, 0/0 сабтестов**. Все файлы категории `.https.`, все 9 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` — ни один тест не дошёл до навигации. Server-Timing API (`serverTiming` на `PerformanceResourceTiming`/`PerformanceNavigationTiming`) не реализован в движке вовсе (`grep -rli \"serverTiming\\|PerformanceServerTiming\" crates/` — ноль совпадений). Живая проба (`--mcp-live-port`) на контейнере (`PerformanceObserver.supportedEntryTypes` содержит `'resource'`/`'navigation'`, доставка реально подключена) нашла независимую находку — [BUG-673](bugs/BUG-673-OPEN.md): `window.PerformanceResourceTiming`/`window.PerformanceNavigationTiming` интерфейсные конструкторы отсутствуют вовсе, записи — обычные объектные литералы, не инстансы ничего (тот же класс, что [BUG-645](bugs/BUG-645-OPEN.md)). Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root server-timing --recursive`, ~3 мин 33 с, 9 отобранных id) — **0/9 harness OK, 0/0 сабтестов**. Все файлы категории `.https.`, все 9 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` — ни один тест не дошёл до навигации. Server-Timing API (`serverTiming` на `PerformanceResourceTiming`/`PerformanceNavigationTiming`) не реализован в движке вовсе (`grep -rli \"serverTiming\\|PerformanceServerTiming\" crates/` — ноль совпадений). Живая проба (`--mcp-live-port`) на контейнере (`PerformanceObserver.supportedEntryTypes` содержит `'resource'`/`'navigation'`, доставка реально подключена) нашла независимую находку — [BUG-673](bugs/BUG-673-OPEN.md): `window.PerformanceResourceTiming`/`window.PerformanceNavigationTiming` интерфейсные конструкторы отсутствуют вовсе, записи — обычные объектные литералы, не инстансы ничего (тот же класс, что [BUG-645](bugs/BUG-645-FIXED.md)). Один новый номер бага",
        "bugs": [
         "BUG-673"
        ]
@@ -4327,7 +4327,7 @@
        "title": "WPT: вендорить + прогнать категорию `timing-entrytypes-registry`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root timing-entrytypes-registry --recursive`, ~45 с, 2 файла/2 id) — **0/2 harness OK, 2/8 сабтестов**. `performance.mark()`/`performance.measure()` доставляют записи через `PerformanceObserver`, но записи — обычные объектные литералы, не инстансы `PerformanceMark`/`PerformanceMeasure` (`[object Object]` вместо `[object PerformanceMark]`/`[object PerformanceMeasure]`) — заведён [BUG-687](bugs/BUG-687-OPEN.md), тот же класс, что [BUG-645](bugs/BUG-645-OPEN.md)/[BUG-673](bugs/BUG-673-OPEN.md). Второстепенный сигнал — реконфирмация: `resource` NOTRUN (BUG-520), `paint`/`longtask` NOTRUN (BUG-645/BUG-354). Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root timing-entrytypes-registry --recursive`, ~45 с, 2 файла/2 id) — **0/2 harness OK, 2/8 сабтестов**. `performance.mark()`/`performance.measure()` доставляют записи через `PerformanceObserver`, но записи — обычные объектные литералы, не инстансы `PerformanceMark`/`PerformanceMeasure` (`[object Object]` вместо `[object PerformanceMark]`/`[object PerformanceMeasure]`) — заведён [BUG-687](bugs/BUG-687-OPEN.md), тот же класс, что [BUG-645](bugs/BUG-645-FIXED.md)/[BUG-673](bugs/BUG-673-OPEN.md). Второстепенный сигнал — реконфирмация: `resource` NOTRUN (BUG-520), `paint`/`longtask` NOTRUN (BUG-645/BUG-354). Один новый номер бага",
        "bugs": [
         "BUG-687"
        ]
@@ -6678,7 +6678,7 @@
        "title": "GAP: модель загрузки сабресурсов и её события",
        "status": "done",
        "size": "L",
-       "note": "События загрузки сабресурсов не диспатчит ни один тег, и это три независимых куска кода. `<img>` не шлёт ни `load`, ни `error` ни на одном пути вставки при видимо декодирующейся картинке, а `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` отсутствуют во всей цепочке прототипов `HTMLImageElement` — члены IDL просто не заводились (BUG-630). `<object data>` и `<embed src>` не грузят содержимое вовсе: ни резолва URL, ни запроса, ни события (BUG-798). `<script src>`, добавленный в теневой корень, не порождает запроса — доказано записью на стороне сервера пробы, лог браузера здесь не улика (BUG-878). Нужна общая модель «ресурс элемента: резолв, запрос, исход, событие», иначе четвёртый тег повторит то же. **Срез 1 (2026-09-12, `p1-gap-loadev-srez1`):** BUG-630 закрыт для eager- и lazy-путей загрузки `<img>` — `complete`/`naturalWidth`/`naturalHeight` и диспатч `load`/`error` работают (`onload`/`onerror` IDL-атрибуты оказались уже реализованы генериком до этого среза); третий путь (BUG-730 «streaming/dynamic» — скрипт создаёт/меняет `<img>` после первичной загрузки) фетчит байты, но не диспатчит события — заведён отдельно как [BUG-1048](bugs/BUG-1048-OPEN.md). BUG-798/BUG-878 не начаты. **Срез 2 (2026-09-13, `p1-gap-loadev-bug1048`):** BUG-1048 закрыт для прикреплённого скриптового `<img>` — новое событие `LoadEvent::ImageDecodeFailed` и per-node dedup (`stream_image_events_fired`) дают `load`/`error` тем же коалесцированным проходом, что уже разносит intrinsic-размеры; неприкреплённый `new Image()` не тронут — детали в [BUG-1048](bugs/BUG-1048-OPEN.md). BUG-798/BUG-878 не начаты. **Срез 3 (2026-09-13, `p1-gap-loadev-bug878`):** BUG-878 закрыт — дело было не в отсутствии подготовки скрипта для `ShadowRoot.appendChild` (тот же общий путь `_lumen_resource_pending`, что и у light DOM), а в connected-проверке `_lumen_resource_is_connected`/`Node.isConnected`: подъём по `Node::parent` дохнет на самом узле `ShadowRoot` (намеренно не DOM-ребёнок host'а), поэтому вставленный в тень `<script src>` читался как вечно отсоединённый и фетч не стартовал. Новый `Document::shadow_host_of` (обратный поиск `root -> host`) и его использование в native-мосте `_lumen_get_shadow_root_host` чинят и связанный побочный дефект — `HTMLSlotElement.assignedNodes()` тоже был всегда пуст. Детали — [BUG-878](bugs/BUG-878-FIXED.md). **Срез 4 (2026-09-13, `p1-gap-loadev-bug798`):** BUG-798 закрыт — GAP-LOADEV закрыта целиком. `<embed src>`/`<object data>` не имели вообще никакого пути загрузки (не то же самое, что «сломанный» — код просто отсутствовал), так что фикс не чинит существующий механизм, а заводит его: оба тега добавлены в JS-only fetch-based модель, уже обкатанную на `<link rel=stylesheet>` (`_lumen_resource_pending`/`_lumen_resource_try_prepare`/`_lumen_resource_is_connected` в `web_api_shim_mid.js`) — резолв `src`/`data`, `fetch()` (переиспользован `_lumen_link_hint_fetch` как есть), диспатч `load`/`error`. Три пути: элемент от `createElement` + вставка (через `_lumen_resource_track`), элемент от парсера (новый `_lumen_embed_object_scan()`, вызывается из `_lumen_apply_ready_state('interactive')` тем же способом, что и `_lumen_link_hints_scan`), и смена `src`/`data` на уже подключённом элементе (`embed-change-src.html` требует второй `load` после второго `src`) — заведена через собственные IDL-аксессоры `object.data`/`embed.src` (заменили генерическую `'url'`-рефлексию) и через `_lumen_embed_object_maybe_attr_changed` из общей обёртки `setAttribute`/`setAttributeNS`. Полноценная встроенная browsing context (`object.contentDocument`/`contentWindow`) и §4.8.6 fallback-content — не в этом срезе, тот же уровень, что уже принят для `<iframe>`/`<frame>`: диспатча `load`/`error` достаточно, чтобы снять WPT TIMEOUT. Проверено `tests/wpt/verify_frame_load_media_gaps.py --variant nbc-object --variant nbc-embed --variant nbc-parser` — сервер видит все три запроса, `load` печатается для скриптовых и парсерных `<embed>`/`<object>`.",
+       "note": "События загрузки сабресурсов не диспатчит ни один тег, и это три независимых куска кода. `<img>` не шлёт ни `load`, ни `error` ни на одном пути вставки при видимо декодирующейся картинке, а `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` отсутствуют во всей цепочке прототипов `HTMLImageElement` — члены IDL просто не заводились (BUG-630). `<object data>` и `<embed src>` не грузят содержимое вовсе: ни резолва URL, ни запроса, ни события (BUG-798). `<script src>`, добавленный в теневой корень, не порождает запроса — доказано записью на стороне сервера пробы, лог браузера здесь не улика (BUG-878). Нужна общая модель «ресурс элемента: резолв, запрос, исход, событие», иначе четвёртый тег повторит то же. **Срез 1 (2026-09-12, `p1-gap-loadev-srez1`):** BUG-630 закрыт для eager- и lazy-путей загрузки `<img>` — `complete`/`naturalWidth`/`naturalHeight` и диспатч `load`/`error` работают (`onload`/`onerror` IDL-атрибуты оказались уже реализованы генериком до этого среза); третий путь (BUG-730 «streaming/dynamic» — скрипт создаёт/меняет `<img>` после первичной загрузки) фетчит байты, но не диспатчит события — заведён отдельно как [BUG-1048](bugs/BUG-1048-FIXED.md). BUG-798/BUG-878 не начаты. **Срез 2 (2026-09-13, `p1-gap-loadev-bug1048`):** BUG-1048 закрыт для прикреплённого скриптового `<img>` — новое событие `LoadEvent::ImageDecodeFailed` и per-node dedup (`stream_image_events_fired`) дают `load`/`error` тем же коалесцированным проходом, что уже разносит intrinsic-размеры; неприкреплённый `new Image()` не тронут — детали в [BUG-1048](bugs/BUG-1048-FIXED.md). BUG-798/BUG-878 не начаты. **Срез 3 (2026-09-13, `p1-gap-loadev-bug878`):** BUG-878 закрыт — дело было не в отсутствии подготовки скрипта для `ShadowRoot.appendChild` (тот же общий путь `_lumen_resource_pending`, что и у light DOM), а в connected-проверке `_lumen_resource_is_connected`/`Node.isConnected`: подъём по `Node::parent` дохнет на самом узле `ShadowRoot` (намеренно не DOM-ребёнок host'а), поэтому вставленный в тень `<script src>` читался как вечно отсоединённый и фетч не стартовал. Новый `Document::shadow_host_of` (обратный поиск `root -> host`) и его использование в native-мосте `_lumen_get_shadow_root_host` чинят и связанный побочный дефект — `HTMLSlotElement.assignedNodes()` тоже был всегда пуст. Детали — [BUG-878](bugs/BUG-878-FIXED.md). **Срез 4 (2026-09-13, `p1-gap-loadev-bug798`):** BUG-798 закрыт — GAP-LOADEV закрыта целиком. `<embed src>`/`<object data>` не имели вообще никакого пути загрузки (не то же самое, что «сломанный» — код просто отсутствовал), так что фикс не чинит существующий механизм, а заводит его: оба тега добавлены в JS-only fetch-based модель, уже обкатанную на `<link rel=stylesheet>` (`_lumen_resource_pending`/`_lumen_resource_try_prepare`/`_lumen_resource_is_connected` в `web_api_shim_mid.js`) — резолв `src`/`data`, `fetch()` (переиспользован `_lumen_link_hint_fetch` как есть), диспатч `load`/`error`. Три пути: элемент от `createElement` + вставка (через `_lumen_resource_track`), элемент от парсера (новый `_lumen_embed_object_scan()`, вызывается из `_lumen_apply_ready_state('interactive')` тем же способом, что и `_lumen_link_hints_scan`), и смена `src`/`data` на уже подключённом элементе (`embed-change-src.html` требует второй `load` после второго `src`) — заведена через собственные IDL-аксессоры `object.data`/`embed.src` (заменили генерическую `'url'`-рефлексию) и через `_lumen_embed_object_maybe_attr_changed` из общей обёртки `setAttribute`/`setAttributeNS`. Полноценная встроенная browsing context (`object.contentDocument`/`contentWindow`) и §4.8.6 fallback-content — не в этом срезе, тот же уровень, что уже принят для `<iframe>`/`<frame>`: диспатча `load`/`error` достаточно, чтобы снять WPT TIMEOUT. Проверено `tests/wpt/verify_frame_load_media_gaps.py --variant nbc-object --variant nbc-embed --variant nbc-parser` — сервер видит все три запроса, `load` печатается для скриптовых и парсерных `<embed>`/`<object>`.",
        "bugs": [
         "BUG-630",
         "BUG-798",
@@ -7577,38 +7577,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-643": {
-   "status": "open",
-   "title": "The Phase 0 `deviceorientation`/`devicemotion` synthetic event only ever fires for the very first listener registered for a given type over the page's lifetime…",
-   "component": "js (`crates/js/src/device_sensors.rs` — `DEVICE_SENSORS_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-645": {
-   "status": "open",
-   "title": "`window.PerformancePaintTiming` interface object doesn't exist at all — every `paint-timing` WPT test starts with `assert_implements(window.PerformancePaintTimi…",
-   "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-646": {
-   "status": "open",
-   "title": "`new PaymentRequest(methodData, details)` performs zero input validation beyond `typeof === 'object'` — spec-mandated `TypeError`/`RangeError` throws (empty `me…",
-   "component": "js (`crates/js/src/payment_request.rs`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-648": {
    "status": "open",
    "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
    "component": "js (`crates/js/src/dom.rs:8258-8335` — `PerformanceObserver`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-650": {
-   "status": "open",
-   "title": "`navigator.permissions.request()`/`requestAll()` (WICG Permissions Request API) are entirely absent — `navigator.permissions` is a plain object literal with onl…",
-   "component": "js (`crates/js/src/dom.rs:5061-5090` — `navigator.permissions`)",
    "date": null,
    "debtor": false
   },
@@ -8368,13 +8340,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1048": {
-   "status": "open",
-   "title": "Скриптом созданный/переприсвоенный `<img>` (BUG-730 «streaming/dynamic» путь — уже существует и реально фетчит+декодирует байты) не диспатчит `load`/`error` и н…",
-   "component": "shell (`crates/shell/src/app/user_event.rs:51-87` — `LoadEvent::ImageDecoded`, `crates/shell/src/page_load.rs:1015-1140` — `spawn_dynamic_image_loads`/`apply_stream_intrinsic_sizes`/`spawn_image_requests`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1049": {
    "status": "open",
    "title": "Динамически подгруженный классический скрипт (`loadScript()`) объявляет верхнеуровневый `const originSameOrigin = …`; JS-модуль, читающий его как свободную пере…",
@@ -8652,13 +8617,6 @@
    "status": "open",
    "title": "Chrome-профиль заголовков выдаёт не-браузер: `DNT: 1` (Chrome по умолчанию его не шлёт — проверено эхо-сервером на Chrome 153) и UA `Chrome/130` при стабильном…",
    "component": "network (`crates/network/src/http/headers.rs::build_request_headers` — `DNT: 1` в `HttpProfile::Chrome`; `crates/network/src/http/mod.rs:39` — `CHROME_USER_AGENT` = Chrome/130)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1115": {
-   "status": "open",
-   "title": "HTTP/2-соединение отдаётся одному запросу целиком, параллельные запросы к тому же origin открывают новое TCP+TLS: github.com — 98 соединений за загрузку (97 к о…",
-   "component": "network (`crates/network/src/h2/pool.rs` — `acquire`=`remove`, `release`=«new one wins»)",
    "date": null,
    "debtor": false
   },
@@ -8995,6 +8953,27 @@
    "status": "open",
    "title": "`TreeWalker.nextNode()` идёт по списку поддерева `root`, а не от `currentNode` (DOM §6.2): при `currentNode = template.content` обход начинается с `<html>` доку…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1612` `_TreeWalker.prototype.nextNode` — `_tw_subtree(root)` + `indexOf(currentNode)`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1172": {
+   "status": "open",
+   "title": "`window` как EventTarget: `addEventListener` молча отбрасывает слушатель-объект с `handleEvent` (`typeof fn !== 'function'`), регистрирует один и тот же слушате…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1887` `window.addEventListener`, `:1950` `window.dispatchEvent`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1173": {
+   "status": "open",
+   "title": "`new URL(x)` без второго аргумента резолвит `x` относительно `location.href` вместо того, чтобы бросить `TypeError` на строке без схемы (URL Standard: base не п…",
+   "component": "js (`crates/js/src/shim/url_shim.js:254` `URL`, `:166` `_url_resolve`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1174": {
+   "status": "open",
+   "title": "`WorkerNavigator.permissions` отсутствует: Permissions API (`[Exposed=(Window,Worker)]`) не установлен в воркерах, `navigator.permissions === undefined` в `Dedi…",
+   "component": "js (`crates/js/src/permissions.rs` ставится только в окно; воркерный глобал)",
    "date": null,
    "debtor": false
   },
@@ -15052,6 +15031,48 @@
    "component": "js (`crates/js/src/canvas2d.rs`, `crates/js/src/offscreen_canvas.rs`), network",
    "date": "2026-09-25",
    "debtor": false
+  },
+  "BUG-643": {
+   "status": "fixed",
+   "title": "The Phase 0 `deviceorientation`/`devicemotion` synthetic event only ever fires for the very first listener registered for a given type over the page's lifetime…",
+   "component": "js (`crates/js/src/device_sensors.rs` — `DEVICE_SENSORS_SHIM`)",
+   "date": "2026-09-25",
+   "debtor": false
+  },
+  "BUG-1048": {
+   "status": "fixed",
+   "title": "Скриптом созданный/переприсвоенный `<img>` (BUG-730 «streaming/dynamic» путь — уже существует и реально фетчит+декодирует байты) не диспатчит `load`/`error` и н…",
+   "component": "shell (`crates/shell/src/app/user_event.rs:51-87` — `LoadEvent::ImageDecoded`, `crates/shell/src/page_load.rs:1015-1140` — `spawn_dynamic_image_loads`/`apply_stream_intrinsic_sizes`/`spawn_image_requests`)",
+   "date": "2026-09-25",
+   "debtor": false
+  },
+  "BUG-645": {
+   "status": "fixed",
+   "title": "`window.PerformancePaintTiming` interface object doesn't exist at all — every `paint-timing` WPT test starts with `assert_implements(window.PerformancePaintTimi…",
+   "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim)",
+   "date": "2026-09-25",
+   "debtor": false
+  },
+  "BUG-646": {
+   "status": "fixed",
+   "title": "`new PaymentRequest(methodData, details)` performs zero input validation beyond `typeof === 'object'` — spec-mandated `TypeError`/`RangeError` throws (empty `me…",
+   "component": "js (`crates/js/src/payment_request.rs` — `PAYMENT_REQUEST_SHIM` constructor)",
+   "date": "2026-09-25",
+   "debtor": false
+  },
+  "BUG-1115": {
+   "status": "fixed",
+   "title": "HTTP/2-соединение отдаётся одному запросу целиком, параллельные запросы к тому же origin открывают новое TCP+TLS: github.com — 98 соединений за загрузку (97 к о…",
+   "component": "network (`crates/network/src/h2/pool.rs` — `acquire`=`remove`, `release`=«new one wins»)",
+   "date": "2026-09-25",
+   "debtor": false
+  },
+  "BUG-650": {
+   "status": "fixed",
+   "title": "`navigator.permissions.request()`/`requestAll()` (WICG Permissions Request API) are entirely absent — `navigator.permissions` is a plain object literal with onl…",
+   "component": "js (`crates/js/src/permissions.rs` — `Permissions.prototype.request`)",
+   "date": "2026-09-25",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15575,6 +15596,9 @@
   "js (`crates/js/src/offscreen_canvas.rs` — `transferToImageBitmap`/`createImageBitmap`)": [
    "BUG-933"
   ],
+  "js (`crates/js/src/permissions.rs` ставится только в окно; воркерный глобал)": [
+   "BUG-1174"
+  ],
   "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
    "BUG-697"
   ],
@@ -15610,6 +15634,9 @@
   ],
   "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)": [
    "BUG-904"
+  ],
+  "js (`crates/js/src/shim/url_shim.js:254` `URL`, `:166` `_url_resolve`)": [
+   "BUG-1173"
   ],
   "js (`crates/js/src/shim/web_api_shim_head.js`)": [
    "BUG-1104"
@@ -15763,6 +15790,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1612` `_TreeWalker.prototype.nextNode` — `_tw_subtree(root)` + `indexOf(currentNode)`)": [
    "BUG-1171"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1887` `window.addEventListener`, `:1950` `window.dispatchEvent`)": [
+   "BUG-1172"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_c.js:17-39` — проверка `s.length % 4 !== 0` и `=` в любой позиции; сверить `worker.rs:2514` `atob_native_v8`)": [
    "BUG-1133"
