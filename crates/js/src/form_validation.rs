@@ -173,8 +173,14 @@ const FORM_VALIDATION_SHIM: &str = r#"
   const selectProto   = typeof HTMLSelectElement   !== 'undefined' ? HTMLSelectElement.prototype   : null;
   const buttonProto   = typeof HTMLButtonElement   !== 'undefined' ? HTMLButtonElement.prototype   : null;
 
+  // BUG-1122: in the page runtime the shared node wrapper (`web_api_shim_mid.js`)
+  // already puts the constraint-validation members on `Element.prototype`,
+  // backed by the document-side dirty value and `_validity_msg` that layout and
+  // form submission read. They used to shadow this mixin from a prototype below
+  // `HTMLInputElement.prototype`; now that they sit above it, installing the
+  // mixin would win and swap in a JS-only `_customValidationMessage` expando.
   for (const proto of [inputProto, textareaProto, selectProto, buttonProto]) {
-    if (proto) applyConstraintValidationMixin(proto);
+    if (proto && !('willValidate' in proto)) applyConstraintValidationMixin(proto);
   }
 
   // HTMLFormElement: checkValidity / reportValidity iterate all form controls (§4.10.22.3)

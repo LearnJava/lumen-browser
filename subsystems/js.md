@@ -109,21 +109,26 @@ the time — read dates.
   prototype; a node owns `__nid__` and nothing else, plus up to four lazy slots
   (`classList`/`style`/`dataset`/`attributes`, previously closure variables the builder
   created unconditionally). Measured: builder 129,6 → 3,1 µs, `createElement` 176,3 → 6,0 µs,
-  `el.id` read 2,5 → 0,3 µs. Three invariants the layout preserves deliberately — the shared
-  object sits one link *below* the interface prototype, so a member still shadows the
-  interface's own of the same name ([BUG-383](../bugs/BUG-383-FIXED.md)'s
-  `select.remove(index)`); the chain above it is untouched, so `instanceof`
-  ([BUG-322](../bugs/BUG-322-FIXED.md)) is unchanged; and interning
-  ([BUG-291](../bugs/BUG-291-FIXED.md)) is untouched, so `===` identity and expandos hold.
-  Two consequences worth knowing before editing the bundle: a member reads its node through
-  `this.__nid__`, so it may **not** be called with a foreign `this`, and a nested callback
-  inside a member must not repeat the `var nid = this.__nid__;` prologue (`this` is the global
-  object there). `Object.setPrototypeOf(el, Ctor.prototype)` on a live wrapper — what
-  `svg.rs` does for `createElementNS` — would now drop the whole interface, so that goes
-  through `_lumen_retarget_wrapper(el, iface)` instead. `'x' in Element.prototype` still
-  answers `false` for these members ([BUG-747](../bugs/BUG-747-FIXED.md)): the bundle is a
-  private object below the interface prototype, not the interface prototype itself. Observable
-  change, matching a real engine: `Object.keys(el)`/`for…in` no longer enumerate the interface.
+  `el.id` read 2,5 → 0,3 µs. Since [BUG-1122](../bugs/BUG-1122-FIXED.md) (P6, 2026-09-25)
+  the bundle is installed on the interface prototypes themselves, as WebIDL §3.7 requires —
+  `Node.prototype` (the `_LUMEN_NODE_MEMBER_NAMES` list), `Element.prototype` (everything
+  else plus the `on<type>` accessors), `CharacterData.prototype` (ChildNode members, `data`,
+  `nodeValue`), `ProcessingInstruction.prototype` (`target`) — by `_lumen_install_node_members`,
+  not on a hidden per-interface object below `HTMLDivElement.prototype` (the BUG-849 layout,
+  which libraries reading members off `Element.prototype` — ShadyDOM, DOMPurify — could not
+  see). Consequences before editing the bundle: a member reads its node through
+  `this.__nid__`, and every installed copy is wrapped so a receiver without one (the
+  interface prototype itself, a JS-only detached node) gets `undefined` from a getter, a
+  no-op setter and `TypeError` from a method — never a lazy slot frozen onto
+  `Element.prototype`. A nested callback inside a member must not repeat the
+  `var nid = this.__nid__;` prologue (`this` is the global object there). A member that also
+  exists on an `HTML*Element.prototype` is now *shadowed by* the interface's own (BUG-383's
+  `select.remove(index)` resolves through `HTMLSelectElement.prototype`), so a tag-specific
+  override belongs there. Re-installing a bundle member later (`web_api_shim_mid_b4.js`'s
+  `replaceChild`) goes through `_lumen_install_node_members` too — editing
+  `_LUMEN_WRAPPER_MEMBERS` after the fact changes nothing. Interning
+  ([BUG-291](../bugs/BUG-291-FIXED.md)) and `instanceof` ([BUG-322](../bugs/BUG-322-FIXED.md))
+  are unchanged; `Object.keys(el)`/`for…in` still do not enumerate the interface.
 - **`permissions.query()` recognises names instead of saying yes to all of them
   (BUG-386, P3, 2026-08-10).** The Permissions API used to be 25 lines of
   `WEB_API_SHIM`: one `_perm_denied` array of 11 names and `granted` for
@@ -2221,14 +2226,12 @@ the time — read dates.
   content attribute (HTML LS §4.10.5.5 dirty-value flag), and an own property shadows the prototype —
   so adding a `value`/`checked` row to the reflection table would be dead code. Everything else belongs
   in the table (`_LUMEN_*` entries near `_lumen_install_reflection`), never as a new own property.
-  **The shadowing survived BUG-849 — `_LUMEN_WRAPPER_MEMBERS` is no longer per-node, but the shared
-  prototype it is installed on sits one link BELOW the interface prototype, so it still outranks every
-  reflection row and every hand-written `HTML*Element.prototype` accessor.** That is deliberate for the
-  genuinely cross-element members it holds, and a trap for anything tag-specific: `content` lived there
-  as a `<template>`-only getter answering `undefined` on everything else, and thereby swallowed
-  `HTMLMetaElement.content` for two months ([BUG-796](../bugs/BUG-796-FIXED.md)) — `testharness.js`
-  reads exactly that property to pick its own timeout. A member that belongs to one interface goes on
-  that interface's prototype; the shared table is for what every element really has.
+  Since [BUG-1122](../bugs/BUG-1122-FIXED.md) the shared bundle (`_LUMEN_WRAPPER_MEMBERS`) sits on
+  `Element.prototype`/`Node.prototype`, i.e. ABOVE every `HTML*Element.prototype`, so a reflection row
+  or a hand-written interface accessor now wins over it. Under the BUG-849 layout it sat below and
+  swallowed tag-specific members — `HTMLMetaElement.content` for two months
+  ([BUG-796](../bugs/BUG-796-FIXED.md)). A member that belongs to one interface still goes on that
+  interface's prototype; the shared table is for what every element really has.
 - **DOM shim: `Object.defineProperty` that *redefines* an existing property inherits every attribute
   the new descriptor omits — the `false` defaults only apply to brand-new properties (BUG-367).** The
   shim's usual lock-down idiom, copied from `_lumen_make_doctype` (`{ value: nid, enumerable: false }`),
