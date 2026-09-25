@@ -752,6 +752,28 @@ pub(crate) fn violating_fetch_policy_via_child_src<'a>(
         .collect()
 }
 
+/// `<script>` element counterpart of [`violating_fetch_policy`] (BUG-1124):
+/// text of every policy whose `script-src`/`default-src` pre-request check
+/// (CSP3 §6.7.1.1 — nonce, integrity hashes, `'strict-dynamic'`, then the URL;
+/// [`CspPolicy::script_element_fetch_allows`]) forbids this element's fetch of
+/// `url`. The URL-only [`violating_fetch_policy`] read a `'nonce-…'`-only list
+/// as «no source matches» and never fetched a nonced `<script src>` at all.
+pub(crate) fn violating_script_element_policy<'a>(
+    policies: &'a [CspPolicy],
+    url: &str,
+    self_origin: Option<&Origin>,
+    request: &lumen_network::csp::ScriptRequestMetadata<'_>,
+) -> Vec<&'a str> {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return Vec::new();
+    };
+    policies
+        .iter()
+        .filter(|policy| !policy.script_element_fetch_allows(&parsed, self_origin, request))
+        .map(|policy| policy.raw.as_str())
+        .collect()
+}
+
 /// Inline counterpart of [`violating_fetch_policy`]: text of every policy
 /// whose inline check (`'unsafe-inline'`/nonce/hash) forbids `body` for
 /// `directive` — same predicate `inline_script_blocked`/
