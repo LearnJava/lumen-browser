@@ -1008,7 +1008,7 @@ impl Lumen {
             // fetched the page's stylesheets, scripts and images, so a clear
             // there would throw away exactly the rows the page is owed.
             resource_timing::clear();
-            self.stream_images_requested = Arc::new(Mutex::new(std::collections::HashSet::new()));
+            self.stream_images_requested = Arc::default();
             self.stream_image_sizes.clear();
             self.stream_image_pixels.clear();
             self.stream_image_sizes_dirty = false;
@@ -1736,6 +1736,8 @@ impl Lumen {
             // Тот же picker, что эмитит ключи `src` в `DrawImage`, — url из
             // запроса совпадает с ключом карты по построению.
             let requests = lumen_layout::collect_image_requests(&doc, viewport);
+            let walked: std::collections::HashSet<u32> =
+                requests.iter().map(|r| r.node_id.raw()).collect();
             let mut changed = false;
             for req in requests {
                 if req.is_lazy {
@@ -1756,23 +1758,57 @@ impl Lumen {
                     fires.push((nid, None));
                 }
             }
+            // BUG-1048: `<img>` nodes the tree walk above cannot see — a
+            // `new Image()` that was never inserted. Their fetch was started by
+            // `DynamicImgFetchHook`, which recorded who asked. A node the walk
+            // did see is dropped here (it got its event above, keyed by the
+            // picker's URL, which may differ from the raw `src` under
+            // `srcset`), as is one that died or has since changed `src`.
+            let mut ledger = self.stream_images_requested.lock().unwrap_or_else(|e| e.into_inner());
+            ledger.script_nodes.retain(|(nid, url)| {
+                if walked.contains(nid) {
+                    return false;
+                }
+                let current_src = doc.resolve(*nid).and_then(|id| doc.try_get(id)).and_then(|n| n.get_attr("src"));
+                if current_src != Some(url.as_str()) {
+                    return false;
+                }
+                let settled = if let Some(&size) = self.stream_image_sizes.get(url) {
+                    Some(Some(size))
+                } else if self.stream_image_errors.contains(url) {
+                    Some(None)
+                } else {
+                    None
+                };
+                let Some(size) = settled else { return true };
+                if self.stream_image_events_fired.insert((*nid, url.clone())) {
+                    fires.push((*nid, size));
+                    if let (Some(_), Some(image)) = (size, self.stream_image_pixels.get(url)) {
+                        bitmap_regs.push((*nid, Arc::clone(image)));
+                    }
+                }
+                false
+            });
             changed
         };
+        // BUG-938: GAP-CANVASORIGIN (BUG-941) isn't checked on this
+        // streaming/dynamic producer at all yet (only the eager pipeline in
+        // `page_pipeline.rs` does) — `tainted=false` matches that existing
+        // gap, not a regression introduced here.
+        // BUG-1048: queued before the events — `route_task_js` runs tasks in
+        // order, and an `onload` that draws the image into a canvas (the
+        // usual reason to wait for it) must find the pixels already there.
+        for (nid, image) in bitmap_regs {
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.set_img_bitmap(nid, image, false);
+            });
+        }
         for (nid, size) in fires {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                 match size {
                     Some((w, h)) => j.fire_image_load(nid, w, h),
                     None => j.fire_image_error(nid),
                 }
-            });
-        }
-        // BUG-938: GAP-CANVASORIGIN (BUG-941) isn't checked on this
-        // streaming/dynamic producer at all yet (only the eager pipeline in
-        // `page_pipeline.rs` does) — `tainted=false` matches that existing
-        // gap, not a regression introduced here.
-        for (nid, image) in bitmap_regs {
-            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.set_img_bitmap(nid, image, false);
             });
         }
         if !changed {
@@ -1831,6 +1867,7 @@ impl Lumen {
                 .stream_images_requested
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
+                .urls
                 .insert(req.url.clone())
             {
                 continue;

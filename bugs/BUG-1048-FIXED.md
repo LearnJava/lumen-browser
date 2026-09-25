@@ -1,6 +1,6 @@
 # BUG-1048 — Скриптом созданный/переприсвоенный `<img>` (BUG-730 «streaming/dynamic» путь) фетчится и декодируется, но не диспатчит `load`/`error` и не обновляет `complete`/`naturalWidth`/`naturalHeight`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3) — срез 1 (GAP-LOADEV) закрыл прикреплённый `<img>`, срез 2 — неприкреплённый `new Image()`
 **Область:** `crates/shell/src/app/user_event.rs:51-87` (`LoadEvent::ImageDecoded` — только рендерер + `stream_image_sizes`, нет события), `crates/shell/src/page_load.rs:1015-1080` (`spawn_dynamic_image_loads`/`apply_stream_intrinsic_sizes` — URL-keyed, без per-node dedup, без канала ошибки), `crates/shell/src/page_load.rs:1102-1140` (`spawn_image_requests` — decode failure — `None` arm — молча ничего не шлёт, ни лога, ни события)
 **Найден:** P1, GAP-LOADEV срез 1 (BUG-630), живой замер `verify_callback_import_preload_gaps.py --variant img-onload-attr`, 2026-09-12
 
@@ -141,3 +141,47 @@ warnings` и `cargo clippy --workspace --all-targets -- -D warnings` чисто;
 `scripts/scoped-test.sh` (база `90fcdc8cb`) — единственный красный
 (`cpu_snapshots_match_references`, те же 7 файлов) — предсуществующий дрейф,
 не регрессия (правка не трогает paint/layout).
+
+## Срез 2 (P3, 2026-09-25, `p3-bug1048-detached-image`) — неприкреплённый `new Image()`, заявка закрыта
+
+Пункт 4 причины. К этому моменту фетч для такого узла уже шёл: BUG-1118
+добавил `ImageLoadHook`, который запускает загрузку в момент присвоения
+`src`, а не на обходе дерева. Сервер пробы `canvas-misc` видел
+`GET /vwjh-square.svg`, лог писал «Загружена картинка», но `img.complete`
+оставался `false`: события разносит `apply_stream_intrinsic_sizes`, а он
+находит ждущие узлы через `collect_image_requests`, то есть только в
+связном дереве.
+
+* `ImageLoadHook::queue_image_load` получил `nid` узла (`crates/core/src/ext.rs`);
+  оба места вызова в `dom_core.rs` его передают.
+* Дедуп-множество `stream_images_requested` стало `ImageRequestLedger`
+  (`crates/shell/src/dynamic_image_hook.rs`): прежнее множество URL плюс
+  список `(nid, src)` от хука. Узел пишется в список **до** проверки дедупа:
+  второй `new Image()` на уже скачанный URL ничего не фетчит, но событие ему
+  всё равно положено. Жизненный цикл — тот же `Arc`, что пересоздаётся в
+  начале навигации, поэтому новых полей per-tab состояния не понадобилось.
+* `apply_stream_intrinsic_sizes` после обхода дерева проходит этот список:
+  узел, который обход уже видел, выкидывается (своё событие он получил выше
+  по URL picker-а — под `srcset` тот может не совпасть с сырым `src`), как и
+  мёртвый узел или узел, сменивший `src`. Узлу с готовым декодом или
+  неудачей — `load`/`error` через тот же дедуп `stream_image_events_fired`;
+  ещё ждущий остаётся в списке.
+* Регистрация пикселей для canvas (`set_img_bitmap`, BUG-938) теперь
+  ставится в очередь JS-задач **перед** событиями: `onload`, рисующий
+  картинку в canvas, иначе приходил раньше пикселей.
+
+**Живая проверка** (dev-release): `verify_window_history_jsurl_gaps.py
+--variant canvas-misc` — `drew-svg`, `toDataURL len=1070`,
+`canvas-alive complete=true` (раньше — `complete=false`, onload не
+приходил). Новый вариант `verify_callback_import_preload_gaps.py --variant
+img-detached`: `idt-first-load w=1`, `idt-again-load w=1` (второй узел на
+тот же URL, сервер видел один запрос), `idt-bad-error complete=true` (404).
+Регрессии прикреплённого пути нет: `img-onload-attr` и
+`img-onerror-dynamic` печатают прежние маркеры.
+
+**Тест:** `v8_bug1118_srez2_subtree_img_load::detached_image_src_queues_with_its_own_nid`
+— хук получает `nid` неприкреплённого `new Image()`.
+
+**Не в этом срезе:** неприкреплённая картинка в iframe, во вкладке после
+гибернации или выбранная через `srcset`/`<picture>` — хука там нет или он
+читает только `src`; это [BUG-1148](BUG-1148-OPEN.md).

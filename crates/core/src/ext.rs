@@ -3608,7 +3608,12 @@ pub trait ImageLoadHook: Send + Sync {
     /// `raw_src` is the attribute value as written by script, not yet
     /// resolved against the document base URL — the implementation resolves
     /// it itself, the same way the post-relayout sweep does.
-    fn queue_image_load(&self, raw_src: &str);
+    ///
+    /// `nid` is the `<img>`'s packed node id (`NodeId::raw`). BUG-1048: a
+    /// disconnected `<img>` (`new Image()` never inserted) is invisible to the
+    /// DOM walk that dispatches `load`/`error`, so the implementation has to
+    /// remember which node asked for `raw_src`.
+    fn queue_image_load(&self, nid: u32, raw_src: &str);
 }
 
 // ============================================================================

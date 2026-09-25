@@ -11,14 +11,17 @@ use lumen_core::ext::ImageLoadHook;
 #[derive(Default)]
 struct RecordingHook {
     queued: Mutex<Vec<String>>,
+    /// BUG-1048: the `nid` passed alongside each entry of `queued`.
+    nids: Mutex<Vec<u32>>,
 }
 
 impl ImageLoadHook for RecordingHook {
-    fn queue_image_load(&self, raw_src: &str) {
+    fn queue_image_load(&self, nid: u32, raw_src: &str) {
         self.queued
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(raw_src.to_string());
+        self.nids.lock().unwrap_or_else(|e| e.into_inner()).push(nid);
     }
 }
 
@@ -95,4 +98,16 @@ fn subtree_img_without_src_does_not_queue() {
     rt.eval("document.getElementById('main').innerHTML = '<img alt=\"no src\">';")
         .unwrap();
     assert!(hook.queued.lock().unwrap().is_empty());
+}
+
+/// BUG-1048: a `new Image()` that is never inserted is invisible to the shell's
+/// DOM walk, so the hook must name the node itself — otherwise its `load`/
+/// `error` has nowhere to go and `img.complete` stays `false` forever.
+#[test]
+fn detached_image_src_queues_with_its_own_nid() {
+    let (rt, hook) = runtime_with_hook(make_doc());
+    let nid = rt.eval("var i = new Image(); i.src = '/pre.png'; i.__nid__").unwrap();
+    let lumen_core::JsValue::Number(nid) = nid else { panic!("__nid__ is not a number: {nid:?}") };
+    assert_eq!(hook.queued.lock().unwrap().clone(), vec!["/pre.png".to_string()]);
+    assert_eq!(hook.nids.lock().unwrap().clone(), vec![nid as u32]);
 }

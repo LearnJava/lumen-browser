@@ -24,6 +24,23 @@ use crate::page_load::LoadEvent;
 use crate::resource_base::ResourceBase;
 use crate::{image_cache, subresources};
 
+/// Per-navigation record of which image URLs are already on the wire, and —
+/// BUG-1048 — which `<img>` nodes asked for them through the hook.
+///
+/// `urls` is the dedup set `spawn_image_requests` and the hook share.
+/// `script_nodes` exists because `apply_stream_intrinsic_sizes` finds the
+/// nodes waiting on a URL by walking the document tree, and a disconnected
+/// `<img>` (`new Image()` that is never inserted — the usual preload and
+/// canvas-source pattern) is not in that tree: its fetch ran, but `load`/
+/// `error` never reached it and `img.complete` stayed `false`. Entries are
+/// removed once settled, so the list only holds requests still in flight.
+#[derive(Default)]
+pub(crate) struct ImageRequestLedger {
+    pub(crate) urls: std::collections::HashSet<String>,
+    /// `(NodeId::raw, raw src)` in the order script assigned them.
+    pub(crate) script_nodes: Vec<(u32, String)>,
+}
+
 /// Everything [`DynamicImgFetchHook`] needs that only a live `Lumen` (not a
 /// headless/test render) can provide — see [`crate::page_pipeline::parse_and_layout`]'s
 /// doc comment on its `dynamic_image_hook_ctx` parameter for why this is one
@@ -36,7 +53,7 @@ pub(crate) struct DynamicImageHookCtx {
     /// `Lumen::stream_images_requested` — shared with `spawn_image_requests`/
     /// `spawn_stream_image_loads` so an `<img>` this hook already fetched is
     /// never re-fetched by the later sweep, and vice versa.
-    pub(crate) dedup: Arc<Mutex<std::collections::HashSet<String>>>,
+    pub(crate) dedup: Arc<Mutex<ImageRequestLedger>>,
     /// `Lumen::load_proxy` — posts `LoadEvent::ImageDecoded`/
     /// `ImageDecodeFailed` back to the shell's event loop, same as every
     /// other background decode thread.
@@ -55,12 +72,15 @@ pub(crate) struct DynamicImgFetchHook {
 }
 
 impl lumen_core::ext::ImageLoadHook for DynamicImgFetchHook {
-    fn queue_image_load(&self, raw_src: &str) {
+    fn queue_image_load(&self, nid: u32, raw_src: &str) {
         // Same dedup set `spawn_image_requests` inserts into — whichever of
-        // the two producers gets here first wins, the other skips.
+        // the two producers gets here first wins, the other skips. The node is
+        // recorded before the dedup check: a second `new Image()` with an
+        // already-requested URL fetches nothing but is still owed its event.
         {
             let mut requested = self.ctx.dedup.lock().unwrap_or_else(|e| e.into_inner());
-            if !requested.insert(raw_src.to_string()) {
+            requested.script_nodes.push((nid, raw_src.to_string()));
+            if !requested.urls.insert(raw_src.to_string()) {
                 return;
             }
         }

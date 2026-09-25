@@ -754,6 +754,33 @@ setTimeout(function () { console.log("PROBE ioe-checked"); }, 3000);
 </script>
 """, "ioe-listener-fired complete=true naturalWidth=0"),
 
+    # BUG-1048 item 4: `new Image()` that is never inserted into the document
+    # (preload / canvas-source pattern). The second image reuses the first
+    # one's URL after it loaded — no second fetch happens, the event must
+    # still come. The third one 404s.
+    "img-detached": ("""
+<script>
+window.addEventListener("load", function () {
+    var first = new Image();
+    first.onload = function () {
+        console.log("PROBE idt-first-load w=" + first.naturalWidth);
+        var again = new Image();
+        again.onload = function () {
+            console.log("PROBE idt-again-load w=" + again.naturalWidth);
+        };
+        again.src = "vcip-pixel.png?detached";
+    };
+    first.src = "vcip-pixel.png?detached";
+    var bad = new Image();
+    bad.onerror = function () {
+        console.log("PROBE idt-bad-error complete=" + bad.complete);
+    };
+    bad.src = "vcip-missing.png?detached-404";
+});
+setTimeout(function () { console.log("PROBE idt-checked"); }, 3000);
+</script>
+""", "idt-first-load w=1, idt-again-load w=1, idt-bad-error complete=true"),
+
     # `import-maps/dynamic-module-map-key.html` hangs on a subtest that has
     # nothing to do with import maps: a `<script>` first connected as an
     # *empty* `type=importmap`, then removed, retyped `text/javascript`, given
