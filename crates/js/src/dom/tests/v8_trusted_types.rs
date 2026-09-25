@@ -800,3 +800,148 @@ fn tt_enforced_anchor_text_property_unaffected() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+// TRUSTEDTYPES-1 срез 7: `eval`/`new Function`-family codegen-from-strings
+// interception, the last sink of TT L2 §4 this task closes. Native hook
+// (`crates/js/src/v8_runtime/codegen_hook.rs`, installed once per isolate at
+// `Isolate::new` time), unlike every sink above — gated by the same
+// `_lumen_tt_set_require_script` flag through
+// `_lumen_tt_get_compliant_script_for_codegen`.
+
+#[test]
+fn tt_codegen_eval_of_plain_string_throws_eval_error_when_enforced() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var threw = false; \
+                     try { eval('1+1'); } \
+                     catch (e) { threw = e instanceof EvalError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_codegen_eval_of_plain_string_works_without_enforcement() {
+    // require-trusted-types-for not set on this page: eval(string) must keep
+    // working exactly as before this срез (no default policy needed).
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("eval('1+1')").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(2.0));
+}
+
+#[test]
+fn tt_codegen_eval_of_trusted_script_works_when_enforced() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createScript: s => s }); \
+                     eval(p.createScript('1+1'))",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(2.0));
+}
+
+#[test]
+fn tt_codegen_eval_routes_through_default_policy_when_enforced() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     trustedTypes.createPolicy('default', { createScript: s => s }); \
+                     eval('1+1')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(2.0));
+}
+
+#[test]
+fn tt_codegen_eval_default_policy_mutation_throws_eval_error() {
+    // eval()'s extra §4.1.1 rule: the default policy's createScript must
+    // return the source unchanged for eval, unlike every other sink. The
+    // shim itself throws `TypeError` for this (wrong kind for this sink) —
+    // `codegen_hook.rs` maps ANY thrown exception from the compliance check
+    // to `codegen_allowed: false`, which V8 turns into the spec-mandated
+    // `EvalError` (`eval-csp-tt-default-policy-mutate.html` asserts exactly
+    // this).
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     trustedTypes.createPolicy('default', { createScript: s => s + ';2' }); \
+                     var threw = false; \
+                     try { eval('1'); } \
+                     catch (e) { threw = e instanceof EvalError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_codegen_eval_of_non_string_non_trusted_passes_through_when_enforced() {
+    // TT never runs its check on values that aren't string/TrustedScript --
+    // eval(42) etc. keep their normal ECMA-262 "not a string, return as is"
+    // behaviour even under enforcement.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     eval(42) === 42 && eval(null) === null && eval(undefined) === undefined",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_codegen_function_constructor_of_plain_string_throws_eval_error_when_enforced() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var threw = false; \
+                     try { new Function('return 1+1')(); } \
+                     catch (e) { threw = e instanceof EvalError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// NOTE (known remaining gap, not this срез): `new Function(p.createScript(...))`
+// with an explicit (non-default) `TrustedScript` argument still throws under
+// enforcement, unlike `eval(p.createScript(...))` above. V8's
+// `CreateDynamicFunction` (`builtins-function.cc`) always
+// `Object::ToString()`s every constructor argument into one combined
+// wrapper string *before* `ValidateDynamicCompilationSource` ever runs --
+// the callback only ever sees that already-stringified text, never the
+// individual `TrustedScript` handles, unlike `eval()` which hands the
+// original argument through untouched. The one signal V8 preserves through
+// the stringify step is `is_code_like` (true only when *every* constructor
+// argument is `Object::IsCodeLike`, i.e. built from a `v8::ObjectTemplate`
+// with `SetCodeLike()` set) -- real engines make their `TrustedScript` class
+// itself code-like for exactly this reason. Lumen's `TrustedScript`
+// (`trusted_types.rs`) is a plain JS class, not backed by a native
+// `ObjectTemplate`, so it can never be marked code-like without its own
+// native rewrite (the same `MarkAsUndetectable`-class C++ trampoline work as
+// `html_all.rs`'s `document.all`) -- a follow-up srez, not a one-line fix on
+// top of this one.
+
+#[test]
+fn tt_codegen_generator_function_constructor_of_string_throws_when_enforced() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var GeneratorFunction = function*() {}.constructor; \
+                     var threw = false; \
+                     try { new GeneratorFunction('return 1+1')(); } \
+                     catch (e) { threw = e instanceof EvalError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}

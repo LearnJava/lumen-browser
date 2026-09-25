@@ -2,9 +2,10 @@
 //!
 //! Выделено из `v8_runtime.rs` батчем SPLIT-JS7 без изменений поведения.
 
-use super::*;
+use super::codegen_hook;
 use super::named_access::window_named_properties_template;
 use super::promise_reject::{drain_promise_rejections, install_promise_reject_hook};
+use super::*;
 
 // ── Thread entry point ────────────────────────────────────────────────────────
 
@@ -66,6 +67,12 @@ pub(super) fn v8_thread_main(
         native_fn_store_scoped: Vec::new(),
         baseline_globals,
     };
+    // TRUSTEDTYPES-1 срез 7: `eval`/`new Function`-family codegen-from-
+    // strings interception, isolate/context-wide like the hooks above —
+    // gating on `require-trusted-types-for 'script'` happens inside the
+    // callback itself (`_lumen_tt_get_compliant_script_for_codegen`), same
+    // division as every other sink this task closed.
+    codegen_hook::install(&mut inner.isolate, &inner.context);
     let _ = init_tx.send(Ok(()));
 
     while let Ok(cmd) = cmd_rx.recv() {
