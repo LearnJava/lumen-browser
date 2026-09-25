@@ -1323,6 +1323,53 @@ fn parse_time_script_overflow_clip_zeroes_scroll_request() {
     assert_eq!(probe_attr(&page, "data-direct"), "0,0");
 }
 
+/// BUG-1120: внешний `<script defer src>` исполняется после конца разбора —
+/// после инлайнового скрипта из конца `<body>` и до `DOMContentLoaded`, в
+/// порядке документа вместе с модулями (HTML LS §4.12.1.1 шаг 31, §13.2.7
+/// шаг 5). Оба репро заявки: khanacademy/coursera читают в defer-бандле
+/// данные, которые задаёт хвостовой инлайн.
+#[cfg(feature = "v8")]
+#[test]
+fn external_defer_script_runs_after_parsing_before_dom_content_loaded() {
+    let dir = std::env::temp_dir();
+    std::fs::write(
+        dir.join("bug1120_defer_a.js"),
+        "LOG.push('defer:' + (typeof window.DATA));",
+    )
+    .expect("defer_a.js");
+    std::fs::write(dir.join("bug1120_defer_d.js"), "LOG.push('defer-d');").expect("defer_d.js");
+    std::fs::write(dir.join("bug1120_sync.js"), "LOG.push('sync-ext');").expect("sync.js");
+
+    let page = parse_and_layout_for_test(
+        "<html><head><script>window.LOG = [];</script>\
+         <script defer src='bug1120_defer_a.js'></script>\
+         </head><body><div>content</div>\
+         <script>LOG.push('inline-end-of-body'); window.DATA = {ok: true};</script>\
+         <script>document.addEventListener('DOMContentLoaded', function () {\
+         LOG.push('DCL'); document.documentElement.setAttribute('data-log', LOG.join(','));\
+         });</script></body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-log"), "inline-end-of-body,defer:object,DCL");
+
+    let page = parse_and_layout_for_test(
+        "<html><head><script>window.LOG = ['inline-head'];</script>\
+         <script defer src='bug1120_defer_d.js'></script>\
+         <script type='module'>LOG.push('module');</script>\
+         <script defer async src='bug1120_sync.js'></script>\
+         </head><body>\
+         <script>LOG.push('inline-tail');\
+         document.addEventListener('DOMContentLoaded', function () {\
+         document.documentElement.setAttribute('data-log', LOG.join(','));\
+         });</script></body></html>",
+    );
+    assert_eq!(
+        probe_attr(&page, "data-log"),
+        "inline-head,sync-ext,inline-tail,defer-d,module",
+        "defer и модуль — в порядке документа после разбора; async-скрипт \
+         пока исполняется в порядке документа"
+    );
+}
+
 /// A `DOMContentLoaded` handler sees geometry that includes what the scripts
 /// themselves changed — the snapshot is re-derived after they run, not reused
 /// from before them.

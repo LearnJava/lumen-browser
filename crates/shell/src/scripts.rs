@@ -55,18 +55,24 @@ pub(crate) fn is_classic_script_type(t: Option<&str>) -> bool {
     }
 }
 
-/// Walk the DOM in document order, classifying `<script>` elements into
-/// `classic` and `module` execution lists (HTML LS §8.1.3.1). Unlike
-/// [`collect_inline_scripts`], external `<script src>` are recorded as
-/// [`ScriptSource::External`] so the caller can fetch and execute their bodies
-/// (BUG-164). `defer`/`async` are not modelled separately — the shell runs
-/// every script synchronously in document order, which matches the eventual
-/// classic-then-module execution in [`run_scripts_with_dom`].
+/// Walk the DOM in document order, classifying `<script>` elements into the
+/// parser-blocking `classic` list and the `deferred` list (HTML LS §4.12.1.1
+/// «prepare the script element», step 31). Unlike [`collect_inline_scripts`],
+/// external `<script src>` are recorded as [`ScriptSource::External`] so the
+/// caller can fetch and execute their bodies (BUG-164).
+///
+/// `deferred` is «the list of scripts that will execute when the document has
+/// finished parsing», in document order: every `type=module` script and every
+/// external classic `<script defer src>` without `async` (BUG-1120 — until then
+/// the latter ran in document order, before inline scripts further down, and a
+/// bundle reading data that a tail-of-body inline script sets died on start).
+/// `defer` on an inline classic script is ignored, as the spec requires.
+/// Classic `async` is not modelled: such a script still runs in document order.
 pub(crate) fn collect_scripts_ordered(
     doc: &Document,
     id: NodeId,
     classic: &mut Vec<ScriptSource>,
-    modules: &mut Vec<ScriptSource>,
+    deferred: &mut Vec<ScriptSource>,
 ) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
@@ -96,7 +102,6 @@ pub(crate) fn collect_scripts_ordered(
         if !is_module && node.get_attr("nomodule").is_some() {
             return;
         }
-        let target = if is_module { modules } else { classic };
         // `src` wins over inline body (HTML LS §4.12.1 — inline ignored if set).
         // GAP-XMLDOC срез 13 (BUG-685): SVG's `<script>` names its external
         // source `href` (or the legacy `xlink:href`), not `src` — measured
@@ -108,6 +113,15 @@ pub(crate) fn collect_scripts_ordered(
                 None
             }
         });
+        // §4.12.1.1 шаг 31: модуль без `async` и внешний классический
+        // `defer` без `async` ждут конца разбора. Асинхронный модуль тоже
+        // идёт сюда — отдельной очереди «как можно скорее» у шелла нет.
+        let is_deferred = is_module
+            || (external_src.is_some()
+                && name.namespace == Namespace::Html
+                && node.get_attr("defer").is_some()
+                && node.get_attr("async").is_none());
+        let target = if is_deferred { deferred } else { classic };
         if let Some(src) = external_src {
             let src = src.trim();
             if !src.is_empty() {
@@ -127,7 +141,7 @@ pub(crate) fn collect_scripts_ordered(
         return;
     }
     for &child in &node.children {
-        collect_scripts_ordered(doc, child, classic, modules);
+        collect_scripts_ordered(doc, child, classic, deferred);
     }
 }
 
@@ -553,6 +567,91 @@ fn collect_import_map_impl(
     None
 }
 
+/// Execute one parser-inserted classic script (HTML LS §4.12.1 «execute the
+/// script block»): CSP gate, `document.currentScript` bracket, the body, then
+/// the element's `load`/`error`. Shared by the parser-blocking list and the
+/// deferred one (BUG-1120) in [`run_scripts_with_dom`].
+#[cfg(feature = "v8")]
+fn run_parser_classic_script(
+    rt: &lumen_js::v8_runtime::V8JsRuntime,
+    doc_arc: &Arc<Mutex<Document>>,
+    csp_policy: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+    script: &ResolvedScript,
+) {
+    use lumen_core::ext::JsRuntime as _;
+    let ResolvedScript { node: nid, source: src, url, external_ok, csp_blocked } = script;
+    // BUG-804: внешний файл не пришёл — исполнять нечего, но
+    // элемент обязан сообщить об отказе на своём месте в
+    // порядке документа. GAP-CSPENF срез 6: если файл не
+    // пришёл потому, что `script-src`/`default-src` запретил
+    // сам fetch (`resolve_script_sources`), это ещё и
+    // нарушение — `securitypolicyviolation` с резолвленным
+    // `url` как `blockedURI`.
+    if *external_ok == Some(false) {
+        // Срез 58: одно событие на каждую нарушенную политику.
+        let blocked_uri = url.as_deref().unwrap_or("");
+        for policy_text in csp_blocked {
+            crate::csp_enforce::fire_script_src_violation(rt, blocked_uri, policy_text);
+        }
+        fire_parser_script_event(rt, *nid, *external_ok);
+        return;
+    }
+    // GAP-CSPENF срез 1: `script-src` против инлайна — только
+    // инлайновые классические скрипты (`external_ok ==
+    // None`); внешний `<script src>` покрыт срезом 6 выше,
+    // до этого места (fetch не выполнялся вовсе).
+    if external_ok.is_none()
+        && let Some((policy, _)) = csp_policy
+    {
+        let nonce = {
+            let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+            doc.get(*nid).get_attr("nonce").map(str::to_owned)
+        };
+        // Срез 56/58: `originalPolicy` — текст КАЖДОЙ
+        // нарушенной политики (`violating_inline_policy`), не
+        // объединённый `csp_policy.1`, и не только первая.
+        let violated = crate::csp_enforce::violating_inline_policy(
+            policy,
+            &lumen_network::csp::CspDirective::ScriptSrc,
+            nonce.as_deref(),
+            src,
+        );
+        if !violated.is_empty() {
+            for policy_text in &violated {
+                crate::csp_enforce::fire_script_src_violation(rt, "inline", policy_text);
+            }
+            fire_parser_script_event(rt, *nid, *external_ok);
+            return;
+        }
+    }
+    // BUG-486: `document.currentScript` must name the element
+    // being executed for the whole body and nothing else, so the
+    // push/pop pair brackets the eval — including the error paths
+    // below, or one throwing script would leave a stale value
+    // behind for every script after it.
+    let _ = rt.eval(&format!("_lumen_push_current_script({});", nid.index()));
+    // eval_and_report (not the plain trait eval()) — this is
+    // the genuine top-level page-script execution boundary,
+    // so an uncaught exception must also reach the page's own
+    // window 'error'/onerror listeners (BUG-591), not just
+    // this stderr line.
+    match rt.eval_and_report(src) {
+        Ok(_) => {}
+        Err(lumen_core::JsError::NotImplemented) => {
+            eprintln!(
+                "script: engine=v8, выполнение пропущено ({} байт)",
+                src.len()
+            );
+        }
+        Err(e) => eprintln!("script error: {e}"),
+    }
+    let _ = rt.eval("_lumen_pop_current_script();");
+    // §4.12.1 «execute the script block», последний шаг:
+    // внешний классический скрипт стреляет `load` сразу после
+    // тела. Инлайновый — ничего (`external_ok` = `None`).
+    fire_parser_script_event(rt, *nid, *external_ok);
+}
+
 /// Выполнить inline `<script>` блоки с DOM-доступом (V8 + install_dom).
 ///
 /// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
@@ -571,7 +670,8 @@ fn collect_import_map_impl(
 /// `ss_store` — sessionStorage partition вкладки для того же origin (BUG-836):
 /// живёт, пока жива вкладка, и переживает смену документа.
 /// `None` = no network (sandboxed context или отключён v8 feature).
-/// `scripts` / `module_scripts` — уже разрешённые тела classic / module скриптов
+/// `scripts` / `deferred_scripts` — уже разрешённые тела парсер-блокирующих
+/// классических и отложенных (модули + внешние `defer`, BUG-1120) скриптов
 /// в порядке документа, включая дозагруженные внешние `<script src>` (BUG-164);
 /// собираются вызывающим через [`collect_scripts_ordered`] + [`resolve_script_sources`].
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
@@ -599,7 +699,7 @@ pub(crate) fn run_scripts_with_dom(
     cross_origin_isolated: bool,
     extra_scripts: &[String],
     scripts: Vec<ResolvedScript>,
-    module_scripts: Vec<ResolvedScript>,
+    deferred_scripts: Vec<ResolvedScript>,
     // BUG-480 срез 8: создать рантайм даже при отсутствии парсерных скриптов
     // (фреймы: получатель кросс-фреймовых конвертов). Sandbox=SCRIPTS всё
     // равно побеждает — он запрещает исполнение целиком.
@@ -635,7 +735,7 @@ pub(crate) fn run_scripts_with_dom(
     // GAP-NAVCTX срез 12 (BUG-883): same one-shot take, same reason — see
     // `window_messaging::take_pending_window_name`'s doc comment.
     let armed_window_name = lumen_js::window_messaging::take_pending_window_name();
-    // `scripts` / `module_scripts` are already resolved by the caller in
+    // `scripts` / `deferred_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
     // Import map must be captured before `doc` moves into the Arc and applied
     // to the runtime before any module evaluation (HTML LS §8.1.6.2).
@@ -645,17 +745,30 @@ pub(crate) fn run_scripts_with_dom(
     // Arc, — дальше исполнение скриптов уже начнет менять дерево.
     #[cfg(feature = "v8")]
     let mut parser_inserts = ParserInsertLog::build(&doc, &scripts);
+    // BUG-1120: вид отложенного скрипта (модуль или классический `defer`)
+    // определён при «prepare the script element», то есть по разметке, —
+    // снимаем его до исполнения, чтобы скрипт, переписавший `type`, не
+    // поменял, как исполняется уже поставленный в очередь элемент.
+    #[cfg(feature = "v8")]
+    let deferred_is_module: Vec<bool> = deferred_scripts
+        .iter()
+        .map(|s| {
+            doc.get(s.node)
+                .get_attr("type")
+                .is_some_and(|t| t.trim().eq_ignore_ascii_case("module"))
+        })
+        .collect();
 
     let doc_arc = Arc::new(Mutex::new(doc));
 
-    if !always_runtime && scripts.is_empty() && module_scripts.is_empty() && extra_scripts.is_empty()
+    if !always_runtime && scripts.is_empty() && deferred_scripts.is_empty() && extra_scripts.is_empty()
     {
         return (doc_arc, None, None);
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
         eprintln!(
-            "sandbox: заблокировано {} скрипт(ов) + {} модул(ей) (sandbox=scripts)",
-            scripts.len(), module_scripts.len()
+            "sandbox: заблокировано {} скрипт(ов) + {} отложенн(ых) (sandbox=scripts)",
+            scripts.len(), deferred_scripts.len()
         );
         return (doc_arc, None, None);
     }
@@ -807,92 +920,32 @@ pub(crate) fn run_scripts_with_dom(
                     };
                     let _ = rt.eval(&format!("setTimeout(function() {{ {action}; }}, {delay_ms});"));
                 }
-                // Classic scripts run first (HTML LS §8.1.3 execution order).
-                for ResolvedScript { node: nid, source: src, url, external_ok, csp_blocked } in &scripts {
+                // Parser-blocking classic scripts, in document order.
+                for script in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
                     // что стоит в документе выше этого скрипта, и сам его
                     // элемент — наблюдатель, поставленный предыдущим скриптом,
                     // обязан увидеть эти вставки записями.
-                    flush_parser_inserts(&mut parser_inserts, Some(*nid), &rt);
-                    // BUG-804: внешний файл не пришёл — исполнять нечего, но
-                    // элемент обязан сообщить об отказе на своём месте в
-                    // порядке документа. GAP-CSPENF срез 6: если файл не
-                    // пришёл потому, что `script-src`/`default-src` запретил
-                    // сам fetch (`resolve_script_sources`), это ещё и
-                    // нарушение — `securitypolicyviolation` с резолвленным
-                    // `url` как `blockedURI`.
-                    if *external_ok == Some(false) {
-                        // Срез 58: одно событие на каждую нарушенную политику.
-                        let blocked_uri = url.as_deref().unwrap_or("");
-                        for policy_text in csp_blocked {
-                            crate::csp_enforce::fire_script_src_violation(&rt, blocked_uri, policy_text);
-                        }
-                        fire_parser_script_event(&rt, *nid, *external_ok);
-                        continue;
-                    }
-                    // GAP-CSPENF срез 1: `script-src` против инлайна — только
-                    // инлайновые классические скрипты (`external_ok ==
-                    // None`); внешний `<script src>` покрыт срезом 6 выше,
-                    // до этого места (fetch не выполнялся вовсе).
-                    if external_ok.is_none()
-                        && let Some((policy, _)) = &csp_policy
-                    {
-                        let nonce = {
-                            let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                            doc.get(*nid).get_attr("nonce").map(str::to_owned)
-                        };
-                        // Срез 56/58: `originalPolicy` — текст КАЖДОЙ
-                        // нарушенной политики (`violating_inline_policy`), не
-                        // объединённый `csp_policy.1`, и не только первая.
-                        let violated = crate::csp_enforce::violating_inline_policy(
-                            policy,
-                            &lumen_network::csp::CspDirective::ScriptSrc,
-                            nonce.as_deref(),
-                            src,
-                        );
-                        if !violated.is_empty() {
-                            for policy_text in &violated {
-                                crate::csp_enforce::fire_script_src_violation(&rt, "inline", policy_text);
-                            }
-                            fire_parser_script_event(&rt, *nid, *external_ok);
-                            continue;
-                        }
-                    }
-                    // BUG-486: `document.currentScript` must name the element
-                    // being executed for the whole body and nothing else, so the
-                    // push/pop pair brackets the eval — including the error paths
-                    // below, or one throwing script would leave a stale value
-                    // behind for every script after it.
-                    let _ = rt.eval(&format!("_lumen_push_current_script({});", nid.index()));
-                    // eval_and_report (not the plain trait eval()) — this is
-                    // the genuine top-level page-script execution boundary,
-                    // so an uncaught exception must also reach the page's own
-                    // window 'error'/onerror listeners (BUG-591), not just
-                    // this stderr line.
-                    match rt.eval_and_report(src) {
-                        Ok(_) => {}
-                        Err(lumen_core::JsError::NotImplemented) => {
-                            eprintln!(
-                                "script: engine=v8, выполнение пропущено ({} байт)",
-                                src.len()
-                            );
-                        }
-                        Err(e) => eprintln!("script error: {e}"),
-                    }
-                    let _ = rt.eval("_lumen_pop_current_script();");
-                    // §4.12.1 «execute the script block», последний шаг:
-                    // внешний классический скрипт стреляет `load` сразу после
-                    // тела. Инлайновый — ничего (`external_ok` = `None`).
-                    fire_parser_script_event(&rt, *nid, *external_ok);
+                    flush_parser_inserts(&mut parser_inserts, Some(script.node), &rt);
+                    run_parser_classic_script(&rt, &doc_arc, csp_policy.as_ref(), script);
                 }
                 // BUG-827: хвост документа парсер вставил ещё до того, как
-                // отложенные модули начали исполняться, — отдаём его одним
+                // отложенные скрипты начали исполняться, — отдаём его одним
                 // отрезком здесь, пока наблюдатель последнего классического
                 // скрипта ещё может его услышать.
                 flush_parser_inserts(&mut parser_inserts, None, &rt);
-                // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
-                // No `currentScript` bracket: it is `null` inside a module by spec.
-                for item in &module_scripts {
+                // «The end» of parsing (HTML LS §13.2.7, step 5): the list of
+                // scripts that will execute when the document has finished
+                // parsing, in document order — modules and external classic
+                // `defer` scripts interleaved (BUG-1120), before
+                // `DOMContentLoaded`, which the caller fires afterwards.
+                // No `currentScript` bracket for a module: it is `null` inside
+                // a module by spec.
+                for (item, &is_module) in deferred_scripts.iter().zip(&deferred_is_module) {
+                    if !is_module {
+                        run_parser_classic_script(&rt, &doc_arc, csp_policy.as_ref(), item);
+                        continue;
+                    }
                     // BUG-804: внешний модуль, чей файл не пришёл, обязан
                     // выстрелить `error` ровно так же, как классический.
                     // GAP-CSPENF срез 6: та же CSP-разметка, что у

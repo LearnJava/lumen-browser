@@ -72,3 +72,11 @@
 ebay.com и stackoverflow.com отдают 403 даже Chrome-TLS + Chrome-заголовкам: это
 JS-челлендж Akamai / Cloudflare, для прохождения которого нужно отрендерить тело
 403-ответа — отдельный дефект [BUG-1114](BUG-1114-FIXED.md).
+
+## Ещё сайт: khanacademy (2026-09-25, P6, перемер при BUG-1120)
+
+khanacademy отдаёт в `__KA_DATA__` флаг `KA-is-unsupported-browser: true` и рисует баннер
+«Unsupported browser / Upgrade your browser» вместо главной. Флаг ставит сервер по UA:
+Chrome 153 (видимое окно, `--user-agent=…`) с `Chrome/130.0.0.0` получает `true`,
+с `Chrome/140.0.0.0` — `false`, со своим UA — `false`. Lumen шлёт `Chrome/130` из
+`CHROME_USER_AGENT`. Критерий фикса дополняется: на khanacademy `KA-is-unsupported-browser` — `false`.
