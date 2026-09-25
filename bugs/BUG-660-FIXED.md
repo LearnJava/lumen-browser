@@ -1,6 +1,6 @@
 # BUG-660 — `requestIdleCallback`/`IdleDeadline` shim is a fixed-delay stub, not spec-shaped: no `IdleDeadline` class, constant fake `timeRemaining()`, `didTimeout` always `false`, callback exceptions silently swallowed
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/dom.rs:8456`–`8480`, `requestIdleCallback`/`cancelIdleCallback` — JS shim, evaluated by the V8 install path per `CLAUDE.md`)
 **Найден:** P2, WPT-VENDOR-requestidlecallback (2026-08-05), `run_report.py --all --root requestidlecallback --recursive` real run
 
@@ -82,3 +82,36 @@ already use instead of a bare `catch(e) {}`. Real busy/idle detection
 (items 2 and 5) requires tracking actual main-thread idle periods — bigger
 scope, worth splitting into a follow-up if the class/`didTimeout`/exception
 fixes land first.
+
+## Решение (2026-09-26, P3)
+
+Пункт 4 (исключения) к этому моменту уже был закрыт BUG-591
+(`_lumen_report_exception`). Остальное переписано в
+`crates/js/src/shim/web_api_shim_tail.js` + `_lumen_tick_timers`
+(`web_api_shim_mid_b.js`):
+
+1. **`IdleDeadline`** — настоящий интерфейс: конструктор бросает
+   `TypeError`, `timeRemaining()`/`didTimeout` на прототипе с brand-check
+   через `WeakMap`, `Symbol.toStringTag`, глобал неперечисляемый (WebIDL §3.7.1).
+2. **`timeRemaining()` живой**: min(начало периода + 50 мс, ближайший обычный
+   таймер, начало + 1000/60 при ожидающих rAF) минус «сейчас» — `setTimeout`/
+   `requestAnimationFrame` изнутри колбэка сокращают его сразу.
+3. **`didTimeout`**: `options.timeout` взводит отдельный таймер; если он
+   срабатывает раньше idle-периода — колбэк получает `didTimeout === true` и
+   `timeRemaining() === 0`.
+5. **Модель занятости**: idle-период — маркер в `_lumen_timers`, который тик
+   запускает после обычных задач; период начинается, только если ни один
+   обычный таймер не просрочен и задача длиннее кадра не завершилась в пределах
+   последнего кадра (`_lumen_idle_busy_until`). Иначе маркер перевзводится.
+
+Попутно: `requestIdleCallback.length === 1`, `cancelIdleCallback()` без
+аргумента и с чужим `this` бросает `TypeError` (idlharness).
+
+Живой прогон `run_report.py --all --root requestidlecallback --recursive`:
+**16/28 → 53/57 сабтестов, 14/20 → 17/20 harness OK**; все 8 тестов этого бага
+и `idlharness.window.html` — PASS, их `.ini`-ожидания удалены. Остаток —
+`callback-iframe*`, `callback-removed-frame`, `callback-suspended`,
+`callback-timeRemaining-cross-realm-method` — `<iframe>` без собственного
+контекста, [BUG-480](BUG-480-OPEN.md).
+
+Тесты: `crates/js/src/dom/tests/v8_idle_message_clipboard.rs`, `bug660_*`.

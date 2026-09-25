@@ -389,28 +389,163 @@ var scheduler = {
     },
 };
 
-// ── requestIdleCallback / cancelIdleCallback (HTML LS §8.6) ──────────────────
-// Stub: fires via setTimeout(~50ms) with a synthetic IdleDeadline that always
-// reports 50ms remaining — Lumen is single-process, so there is no real idle
-// detection. The timeout option is honoured as the scheduling delay.
-var _idle_cbs    = {};
-var _idle_seq    = 1;
+// ── requestIdleCallback / cancelIdleCallback (W3C Cooperative Scheduling) ───
+// BUG-660: this used to be a fixed `setTimeout(~50ms)` handing the callback a
+// plain object literal — no `IdleDeadline` interface, `timeRemaining()` the
+// constant 50, `didTimeout` always false. Now:
+//
+// * An idle period is started by `_lumen_tick_timers` (web_api_shim_mid_b.js)
+//   through an «idle marker» entry in `_lumen_timers`, which it runs after the
+//   tick's ordinary tasks. The period starts only when the event loop is idle:
+//   no ordinary timer is due and no task longer than a frame ended within the
+//   last frame (`_lumen_idle_busy_until`) — the «remain responsive» latitude
+//   the spec leaves to the UA. Otherwise the marker is re-armed.
+// * The deadline is live (§«deadline» is computed on every `timeRemaining()`
+//   call): the earliest of period start + 50 ms, the earliest pending ordinary
+//   timer, and — while rAF callbacks are queued — the next frame (start +
+//   1000/60). A `setTimeout`/`requestAnimationFrame` made from inside the
+//   callback therefore shortens it immediately.
+// * `options.timeout` arms its own timer; if that fires first the callback runs
+//   with `didTimeout === true` and a deadline of «now» (`timeRemaining()` 0).
+var _LUMEN_IDLE_MAX_MS  = 50;
+var _LUMEN_IDLE_FRAME_MS = 1000 / 60;
+var _idle_list          = [];     // [{ id, fn, timeoutTimer }] in request order
+var _idle_seq           = 1;
+var _idle_marker_armed  = false;
+var _lumen_idle_busy_until = -Infinity;
+var _idle_deadline_state = new WeakMap();
 
-function requestIdleCallback(cb, opts) {
+// A function *expression* under an internal name, published below as a
+// non-enumerable global (WebIDL §3.7.1) — a top-level declaration would land
+// on the global object enumerable and non-configurable (idlharness).
+var _lumen_idle_deadline_iface = function IdleDeadline() { throw new TypeError('Illegal constructor'); };
+Object.defineProperty(_lumen_idle_deadline_iface, 'prototype', { writable: false });
+Object.defineProperty(globalThis, 'IdleDeadline', {
+    value: _lumen_idle_deadline_iface, writable: true, enumerable: false, configurable: true,
+});
+Object.defineProperty(IdleDeadline.prototype, 'timeRemaining', {
+    value: function timeRemaining() {
+        var st = _idle_deadline_state.get(this);
+        if (!st) throw new TypeError('Illegal invocation');
+        var left = st.getDeadline() - _lumen_now_ms();
+        return left > 0 ? left : 0;
+    },
+    writable: true, enumerable: true, configurable: true,
+});
+var _lumen_idle_did_timeout_get = function() {
+    var st = _idle_deadline_state.get(this);
+    if (!st) throw new TypeError('Illegal invocation');
+    return st.didTimeout;
+};
+Object.defineProperty(_lumen_idle_did_timeout_get, 'name', { value: 'get didTimeout' });
+Object.defineProperty(IdleDeadline.prototype, 'didTimeout', {
+    get: _lumen_idle_did_timeout_get, enumerable: true, configurable: true,
+});
+Object.defineProperty(IdleDeadline.prototype, Symbol.toStringTag, {
+    value: 'IdleDeadline', configurable: true,
+});
+
+function _lumen_make_idle_deadline(getDeadline, didTimeout) {
+    var d = Object.create(IdleDeadline.prototype);
+    _idle_deadline_state.set(d, { getDeadline: getDeadline, didTimeout: didTimeout });
+    return d;
+}
+
+// Earliest deadline among ordinary timers — the idle machinery's own entries
+// (markers and rIC timeouts) are not work the period has to yield to.
+function _lumen_idle_next_timer() {
+    var next = Infinity;
+    for (var i = 0; i < _lumen_timers.length; i++) {
+        var t = _lumen_timers[i];
+        if (t.idleMarker || t.idleTimeout) continue;
+        if (t.deadline < next) next = t.deadline;
+    }
+    return next;
+}
+
+function _lumen_idle_arm(deadline) {
+    if (_idle_marker_armed) return;
+    _idle_marker_armed = true;
+    _lumen_timers.push({ id: _lumen_timer_seq++, fn: _lumen_idle_period, deadline: deadline,
+                         interval: null, nesting: 0, idleMarker: true });
+    _lumen_request_wakeup(deadline);
+}
+
+function _lumen_idle_invoke(fn, deadline) {
+    var t0 = _lumen_now_ms();
+    try { fn(deadline); } catch (e) { _lumen_report_exception(e); }
+    var t1 = _lumen_now_ms();
+    if (t1 - t0 > _LUMEN_IDLE_FRAME_MS) _lumen_idle_busy_until = t1 + _LUMEN_IDLE_FRAME_MS;
+}
+
+// Run by `_lumen_tick_timers` after the tick's ordinary tasks.
+function _lumen_idle_period() {
+    _idle_marker_armed = false;
+    if (_idle_list.length === 0) return;
+    var start = _lumen_now_ms();
+    if (start < _lumen_idle_busy_until) { _lumen_idle_arm(_lumen_idle_busy_until); return; }
+    if (_lumen_idle_next_timer() <= start) { _lumen_idle_arm(start); return; }
+    var getDeadline = function() {
+        var d = start + _LUMEN_IDLE_MAX_MS;
+        var t = _lumen_idle_next_timer();
+        if (t < d) d = t;
+        if (_lumen_raf_callbacks.length > 0 && start + _LUMEN_IDLE_FRAME_MS < d) d = start + _LUMEN_IDLE_FRAME_MS;
+        return d;
+    };
+    // Only the callbacks requested before the period began run in it.
+    var runnable = _idle_list.slice(0);
+    for (var i = 0; i < runnable.length; i++) {
+        if (getDeadline() <= _lumen_now_ms()) break;
+        var rec = runnable[i];
+        var at = _idle_list.indexOf(rec);
+        if (at < 0) continue;              // cancelled by an earlier callback
+        _idle_list.splice(at, 1);
+        if (rec.timeoutTimer) clearTimeout(rec.timeoutTimer);
+        _lumen_idle_invoke(rec.fn, _lumen_make_idle_deadline(getDeadline, false));
+    }
+    if (_idle_list.length > 0) _lumen_idle_arm(Math.max(_lumen_now_ms(), _lumen_idle_busy_until));
+}
+
+// WebIDL operations on `Window` reject a foreign `this` (a sloppy-mode
+// function sees `globalThis` for a bare call, so only a real receiver passes).
+function _lumen_idle_check_this(self, name) {
+    if (self !== globalThis && self !== undefined) throw new TypeError(name + ': Illegal invocation');
+}
+
+// `opts` is read from `arguments`: WebIDL `.length` counts only the required
+// callback argument.
+function requestIdleCallback(cb) {
+    _lumen_idle_check_this(this, 'requestIdleCallback');
+    var opts = arguments[1];
     if (typeof cb !== 'function') throw new TypeError('requestIdleCallback: argument must be a function');
-    var delay = (opts && typeof opts.timeout === 'number' && opts.timeout > 0) ? Math.min(opts.timeout, 50) : 50;
-    var id = _idle_seq++;
-    _idle_cbs[id] = cb;
-    setTimeout(function() {
-        var fn = _idle_cbs[id];
-        if (!fn) return;
-        delete _idle_cbs[id];
-        var deadline = { timeRemaining: function() { return 50; }, didTimeout: false };
-        try { fn(deadline); } catch(e) { _lumen_report_exception(e); }
-    }, delay);
-    return id;
+    var rec = { id: _idle_seq++, fn: cb, timeoutTimer: 0 };
+    var timeout = (opts && opts.timeout !== undefined) ? (Number(opts.timeout) >>> 0) : 0;
+    if (timeout > 0) {
+        var deadline = _lumen_now_ms() + timeout;
+        rec.timeoutTimer = _lumen_timer_seq++;
+        _lumen_timers.push({ id: rec.timeoutTimer, deadline: deadline, interval: null, nesting: 0,
+                             idleTimeout: true, fn: function() {
+            var at = _idle_list.indexOf(rec);
+            if (at < 0) return;
+            _idle_list.splice(at, 1);
+            _lumen_idle_invoke(rec.fn, _lumen_make_idle_deadline(_lumen_now_ms, true));
+        } });
+        _lumen_request_wakeup(deadline);
+    }
+    _idle_list.push(rec);
+    _lumen_idle_arm(_lumen_now_ms());
+    return rec.id;
 }
 
 function cancelIdleCallback(id) {
-    delete _idle_cbs[id | 0];
+    _lumen_idle_check_this(this, 'cancelIdleCallback');
+    if (arguments.length < 1) throw new TypeError('cancelIdleCallback: 1 argument required, but only 0 present');
+    var handle = Number(id) >>> 0;
+    for (var i = 0; i < _idle_list.length; i++) {
+        if (_idle_list[i].id === handle) {
+            if (_idle_list[i].timeoutTimer) clearTimeout(_idle_list[i].timeoutTimer);
+            _idle_list.splice(i, 1);
+            return;
+        }
+    }
 }
