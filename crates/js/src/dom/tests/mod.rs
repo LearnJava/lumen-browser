@@ -225,6 +225,9 @@ mod v8_bug892_document_collections;
 mod v8_bug377_base_uri;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug646_payment_request_ctor;
+
+#[cfg(feature = "v8-backend")]
 mod v8_webcrypto;
 
 #[cfg(feature = "v8-backend")]

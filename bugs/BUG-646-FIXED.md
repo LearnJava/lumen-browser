@@ -1,6 +1,6 @@
 # BUG-646: `PaymentRequest` constructor performs zero input validation (spec requires 4+ throw cases)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/payment_request.rs`, Payment Request API shim)
 **Найден:** P2, WPT-VENDOR-payment-method-basic-card, 2026-08-05
 
@@ -87,3 +87,42 @@ Fix scope: добавить валидацию в конструктор `Paymen
 `methodData`, `checkAndCanonicalizeAmount`-подобная проверка `total.amount.value`
 на decimal-формат и неотрицательность, `currency` на 3-буквенный ISO 4217
 формат) — вне скоупа этой WPT-VENDOR-задачи (только вендоринг + прогон).
+
+## Исправление (2026-09-25, P3)
+
+Конструктор в `PAYMENT_REQUEST_SHIM` (`crates/js/src/payment_request.rs`)
+переписан по шагам Payment Request API §3.1:
+
+- WebIDL-конверсия аргументов: `methodData`/`displayItems`/`shippingOptions`/
+  `modifiers` — последовательности (неитерируемое → `TypeError`), словари с
+  `required`-членами (`total`, `label`, `amount`, `currency`, `value`, `id`,
+  `supportedMethods`) → `TypeError` при отсутствии; `shippingType` — enum
+  (`shipping`/`delivery`/`pickup`), иное → `TypeError`; вызов без `new` → `TypeError`.
+- Пустой `methodData` → `TypeError`; невалидный PMI (URL-based: схема `https`,
+  без логина/пароля; стандартизованный: `part *("-" part)`, part =
+  lower-alpha *(lower-alpha / DIGIT)) и дубль PMI → `RangeError`; PMI модификатора
+  проверяется так же.
+- `checkAndCanonicalizeAmount`: валюта не из трёх ASCII-букв → `RangeError`,
+  значение не `^-?[0-9]+(\.[0-9]+)?$` → `TypeError`, валюта приводится к
+  верхнему регистру; для total и `modifier.total` ведущий `-` → `TypeError`,
+  у `displayItems` отрицательные суммы разрешены.
+- Опции доставки проверяются только при `requestShipping`: дубль `id` →
+  `TypeError`, последняя `selected` становится `shippingOption`.
+- `data` (метода и модификатора): `null`/примитив → `TypeError`, затем
+  `JSON.stringify` — цикл пробрасывает его `TypeError`.
+- Добавлены геттеры на прототипе: `id` (из `details.id` либо UUID), 
+  `shippingAddress` (`null`), `shippingOption`, `shippingType` (`null` без
+  `requestShipping`).
+
+**Регрессия:** `crates/js/src/dom/tests/v8_bug646_payment_request_ctor.rs` — 6 тестов
+на полном рантайме (`install_dom`, настоящий `URL`), кейсы перенесены из WPT
+`payment-request-constructor.https.sub.html`, `payment-request-ctor-pmi-handling.https.sub.html`,
+`payment-request-ctor-currency-code-checks.https.sub.html` — сами файлы через раннер не
+доходят до конструктора (`.https.`, TLS-гэп). До фикса падали все четыре кейса заявки.
+
+**Попутная находка — BUG-1173:** первая версия валидатора PMI отдавала строку в
+`new URL(pmi)` и считала PMI URL-based, если парсинг удался. На `"0"`, `"a--b"`,
+`"../realitive/url"` и т.п. он «удавался»: шим `URL` при отсутствии `base`
+резолвит вход относительно `location.href`, тогда как по URL Standard без base
+строка без схемы — failure (`TypeError`). В валидаторе это обойдено явной
+проверкой схемы перед `new URL`; сам дефект `URL` заведён отдельно.
