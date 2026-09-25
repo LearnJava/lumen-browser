@@ -1875,6 +1875,7 @@ fn harvest_frame_lazy_requests_empty_without_js_or_requests() {
         fetch_priority: None,
         crossorigin: None,
         referrer_policy_attr: None,
+        embedded_content: false,
     };
     // `js: None` (фрейм без скриптов, срез 1) — тот же ранний выход.
     assert_eq!(crate::frames::harvest_frame_lazy_requests(None, &[req]), Vec::new());
@@ -1907,6 +1908,7 @@ fn fetch_frame_lazy_images_fetches_decodes_and_folds_into_frame() {
         fetch_priority: None,
         crossorigin: None,
         referrer_policy_attr: None,
+        embedded_content: false,
     }];
     handle.pending_lazy = vec![(0, "lazy.png".to_owned())];
 

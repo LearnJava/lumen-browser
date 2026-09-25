@@ -522,10 +522,16 @@ pub(crate) fn fetch_and_decode_images(
         // Ключ кэша/реестра картинок остаётся сырым `req.url` (его знает
         // layout и рендерер); апгрейд меняет только адрес запроса.
         let fetch_url: &str = upgraded.as_deref().unwrap_or(&req.url);
-        if let Some((policy, _original)) = &csp_gate
-            && crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref())
-        {
-            return ImgOutcome::Blocked;
+        if let Some((policy, _original)) = &csp_gate {
+            // OBJECT-1: `<object>`/`<embed>` — `object-src`; нарушение
+            // сообщает JS-шим, поэтому здесь просто `Skip`.
+            if req.embedded_content {
+                if crate::csp_enforce::object_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
+                    return ImgOutcome::Skip;
+                }
+            } else if crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
+                return ImgOutcome::Blocked;
+            }
         }
         let url_cross_origin = is_cross_origin(&resolved_url);
         // GAP-REFERRER срез 7: `referrerpolicy` on this `<img>` element

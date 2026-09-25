@@ -27,6 +27,12 @@ pub struct ImageRequest {
     /// в `lumen_network::ReferrerPolicy` — на стороне shell, тем же приёмом,
     /// что уже даёт `<script src>`/`<link>`/`<iframe src>` (срез 6).
     pub referrer_policy_attr: Option<String>,
+    /// OBJECT-1: запрос от `<object data>`/`<embed src>`, а не от картинки.
+    /// Такой элемент сам отчитывается `load`/`error` (JS-шим,
+    /// `_lumen_embed_object_reload`) и гейтится CSP `object-src`, не
+    /// `img-src` — шелл не шлёт для него image-событий, не пишет
+    /// `img-src`-нарушений и не отдаёт пиксели canvas `drawImage`.
+    pub embedded_content: bool,
 }
 
 /// Значение CORS settings attribute (HTML LS §2.5.1). Отсутствие атрибута —
@@ -257,6 +263,12 @@ fn collect_bg_image_inner(root: &LayoutBox, dpr: f32, out: &mut Vec<String>) {
 /// обратно в DOM — правило заполнения слотов обязано быть у обоих одно.
 pub fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height: u32) -> bool {
     use lumen_dom::{Attribute, QualName};
+    // OBJECT-1: у `<object>`/`<embed>` размер уходит в боковую таблицу
+    // документа, а не в атрибуты — `object.width` отражает атрибут как есть.
+    if let Some(url) = embedded_resource_url(doc.get(node_id)) {
+        let url = url.to_string();
+        return doc.set_embedded_image(node_id, &url, width, height);
+    }
     let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
         return false;
     };
@@ -363,6 +375,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
                 fetch_priority,
                 crossorigin,
                 referrer_policy_attr,
+                embedded_content: false,
             });
         }
         return; // void element — нет children
@@ -388,6 +401,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
             // `referrerpolicy` тоже не определён на этих трёх тегах (HTML LS
             // §6.6 перечисляет только `a`/`area`/`iframe`/`img`/`link`/`script`).
             referrer_policy_attr: None,
+            embedded_content: embedded_resource_url(node).is_some(),
         });
     }
     for &child in &node.children {
@@ -397,7 +411,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
 
 /// URL for the three BUG-848 element kinds that carry an image but are not
 /// `<img>`: `<video poster>`, `<input type=image src>`, SVG `<image
-/// href|xlink:href>`. `None` for every other element, or when the relevant
+/// href|xlink:href>`. OBJECT-1 adds `<object data>`/`<embed src>`. `None` for every other element, or when the relevant
 /// attribute is absent/empty — same "nothing to fetch" rule `<img>` uses.
 fn image_subresource_url(node: &lumen_dom::Node) -> Option<String> {
     let name = node.element_name()?;
@@ -408,6 +422,9 @@ fn image_subresource_url(node: &lumen_dom::Node) -> Option<String> {
         // `href` this parser keeps as one attribute, same fallback `<use>`
         // resolution already uses a few lines up.
         "image" => node.get_attr("href").or_else(|| node.get_attr("xlink:href")),
+        // OBJECT-1: `<object data>`/`<embed src>` — пробуются как картинка;
+        // не декодировалось — элемент остаётся на fallback-содержимом.
+        "object" | "embed" => embedded_resource_url(node),
         _ => None,
     }?;
     (!url.is_empty()).then(|| url.to_string())
@@ -428,6 +445,15 @@ fn image_subresource_url(node: &lumen_dom::Node) -> Option<String> {
 /// picker пропускает `<source type="image/webp">` и аналогичные пока
 /// неподдерживаемые форматы вместо того чтобы выбирать их и показывать пустую коробку.
 pub(crate) fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Size) -> ImageSource {
+    // OBJECT-1: `<object>`/`<embed>` без srcset/picture — URL из `data`/`src`,
+    // intrinsic-размер из декодированной картинки.
+    if let Some((url, w, h)) = embedded_image(doc, img_id) {
+        return ImageSource {
+            url: url.to_string(),
+            intrinsic_width: Some(w),
+            intrinsic_height: Some(h),
+        };
+    }
     let sizes_vp = SizesViewport {
         width_px: viewport.width,
         height_px: viewport.height,

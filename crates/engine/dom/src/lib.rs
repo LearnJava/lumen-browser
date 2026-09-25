@@ -594,6 +594,20 @@ pub struct Document {
     /// slot is freed, so a reused slot never inherits the mark.
     #[serde(default)]
     cdata_sections: HashSet<u32>,
+    /// `<object>`/`<embed>` whose fetched resource decoded as an image
+    /// (OBJECT-1): arena index → (the raw `data`/`src` URL that produced it,
+    /// intrinsic width, intrinsic height). HTML LS §4.8.6/§4.8.7 — such an
+    /// element then *represents* that image (a replaced box, fallback children
+    /// not rendered); without an entry it represents its fallback content.
+    ///
+    /// A side table and not the `width`/`height` attributes `<img>` gets its
+    /// decoded size through: on these two tags the attributes are reflected
+    /// by `object.width`/`embed.width` verbatim, so writing them would leak
+    /// into script. The URL is kept so a later `data`/`src` change makes the
+    /// entry stale instead of painting the old image — see
+    /// [`Self::embedded_image`].
+    #[serde(default)]
+    embedded_images: HashMap<u32, (String, u32, u32)>,
     /// Active pointer captures: maps `pointerId` → captured `NodeId`.
     ///
     /// Set by `Element.setPointerCapture(pointerId)` (W3C Pointer Events L3 §4.1).
@@ -767,6 +781,7 @@ impl Document {
             meta_refresh: None,
             non_executable_foreign_scripts: HashSet::new(),
             cdata_sections: HashSet::new(),
+            embedded_images: HashMap::new(),
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
@@ -1504,6 +1519,34 @@ impl Document {
         self.cdata_sections.contains(&(id.index() as u32))
     }
 
+    /// Record that the `<object>`/`<embed>` `id` fetched `url` and it decoded
+    /// as a `width`×`height` image (OBJECT-1). Returns `true` when the entry
+    /// changed — the caller then owes the page a relayout, same contract as
+    /// `lumen_layout::apply_intrinsic_size`.
+    pub fn set_embedded_image(&mut self, id: NodeId, url: &str, width: u32, height: u32) -> bool {
+        let key = id.index() as u32;
+        if self
+            .embedded_images
+            .get(&key)
+            .is_some_and(|(u, w, h)| u == url && *w == width && *h == height)
+        {
+            return false;
+        }
+        self.embedded_images.insert(key, (url.to_string(), width, height));
+        true
+    }
+
+    /// Decoded image `id` represents, if its current resource URL is one
+    /// [`Self::set_embedded_image`] recorded: `(url, width, height)`. An entry
+    /// for a URL the element no longer points at is stale and yields `None`,
+    /// so the element falls back until the new resource reports in.
+    pub fn embedded_image(&self, id: NodeId, current_url: &str) -> Option<(&str, u32, u32)> {
+        self.embedded_images
+            .get(&(id.index() as u32))
+            .filter(|(u, _, _)| u == current_url)
+            .map(|(u, w, h)| (u.as_str(), *w, *h))
+    }
+
     /// Allocate a `DocumentFragment` node in the arena.
     ///
     /// Used by the tree builder to hold `<template>` content. The fragment is
@@ -1842,6 +1885,7 @@ impl Document {
             self.shadow_roots.remove(&id);
             self.template_contents.remove(&id);
             self.cdata_sections.remove(&(id.index() as u32));
+            self.embedded_images.remove(&(id.index() as u32));
             let Some(node) = self.nodes.get_mut(id.index()) else {
                 continue;
             };

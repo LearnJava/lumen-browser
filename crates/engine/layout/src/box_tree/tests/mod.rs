@@ -446,6 +446,7 @@ fn collect_seg_text(b: &super::LayoutBox, out: &mut String) {
 
 mod intrinsic_and_wrap;
 mod flow_modes;
+mod object_embed;
 mod inline_absolute;
 mod pseudo_first_line;
 

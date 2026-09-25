@@ -578,6 +578,21 @@ pub(crate) fn img_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Op
         .any(|policy| !policy.fetch_directive_allows(&CspDirective::ImgSrc, &parsed, self_origin))
 }
 
+/// `true` if `object-src` (or `default-src`) forbids fetching `url` as the
+/// content of an `<object data>`/`<embed src>` (OBJECT-1) — same fetch-gate
+/// shape as [`img_src_blocked`]. The violation itself is reported by the JS
+/// shim, which gates the element's own `load`/`error` on the same directive
+/// (`_lumen_check_object_src`, GAP-CSPENF срез 16); the image pipeline only
+/// has to keep the bytes off the wire.
+pub(crate) fn object_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
+    let Ok(parsed) = lumen_core::url::Url::parse(url) else {
+        return false;
+    };
+    policies
+        .iter()
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::ObjectSrc, &parsed, self_origin))
+}
+
 /// `true` if `style-src` (or `default-src`) forbids fetching the external
 /// `<link rel=stylesheet>` at `url` — срез 7, same fetch-gate shape as
 /// [`img_src_blocked`]/`script_src_blocked`: absence of a policy is not

@@ -70,6 +70,11 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // line instead of flowing beside it. `is_atomic_inline_level` picks
         // them up the same way it picks up `<img>` (IFC-3).
         "video" | "canvas" | "audio" | "iframe" => Display::Inline,
+        // OBJECT-1: `<object>`/`<embed>` — тот же класс (HTML LS §15.3.1 не
+        // даёт им `display: block`). С картинкой внутри это atomic inline
+        // replaced-бокс (`is_image_element`), с fallback-содержимым — обычный
+        // inline, потомки текут в строке родителя.
+        "object" | "embed" => Display::Inline,
         // CSS 2.1 table model — UA default display values per HTML spec.
         "table" => Display::Table,
         "caption" => Display::TableCaption,

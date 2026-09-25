@@ -1678,6 +1678,7 @@ impl Lumen {
                     fetch_priority: None,
                     crossorigin: None,
                     referrer_policy_attr: None,
+                    embedded_content: false,
                 })
                 .collect();
             (requests, csp_gate)
@@ -1744,6 +1745,14 @@ impl Lumen {
                     continue;
                 }
                 let nid = req.node_id.raw();
+                // OBJECT-1: `<object>`/`<embed>` получают размер, но не
+                // image-события — `load`/`error` им шлёт JS-шим.
+                if req.embedded_content {
+                    if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
+                        changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+                    }
+                    continue;
+                }
                 if let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) {
                     changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
                     if self.stream_image_events_fired.insert((nid, req.url.clone())) {
@@ -1888,7 +1897,11 @@ impl Lumen {
                 .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url));
             let resolved_url = upgraded.clone().unwrap_or(resolved_url);
             if let Some((policy, _original)) = &csp_gate
-                && crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref())
+                && if req.embedded_content {
+                    crate::csp_enforce::object_src_blocked(policy, &resolved_url, self_origin.as_ref())
+                } else {
+                    crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref())
+                }
             {
                 let _ = self.load_proxy.send_event(LoadEvent::ImageDecodeFailed { src: req.url });
                 continue;
