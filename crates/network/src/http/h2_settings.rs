@@ -21,6 +21,12 @@ pub struct H2Settings {
     pub max_frame_size: u32,
     /// SETTINGS_HEADER_COMPRESSION_SIZE_LIMIT (HTTP/2 extension, optional).
     pub header_compression_size_limit: Option<u32>,
+    /// Increment of the stream-0 WINDOW_UPDATE sent right after the preface
+    /// SETTINGS, raising the connection receive window above the 65 535
+    /// default (RFC 9113 §6.9.2). Browsers send it, and its value is part of
+    /// the HTTP/2 fingerprint. Without it every stream of a multiplexed
+    /// connection shares 64 KiB per round trip (PERF-13).
+    pub connection_window_increment: u32,
 }
 
 impl H2Settings {
@@ -41,6 +47,7 @@ impl H2Settings {
                     initial_window_size: 6291456,   // 6 MB
                     max_frame_size: 16384,
                     header_compression_size_limit: None,
+                    connection_window_increment: 15_663_105,  // 15 MB connection window
                 }
             }
             HttpProfile::Firefox => {
@@ -52,6 +59,7 @@ impl H2Settings {
                     initial_window_size: 2147483647,  // Very large window (max i32)
                     max_frame_size: 16384,
                     header_compression_size_limit: None,
+                    connection_window_increment: 12_517_377,  // 12 MB connection window
                 }
             }
             HttpProfile::Safari => {
@@ -63,6 +71,7 @@ impl H2Settings {
                     initial_window_size: 65535,    // RFC default
                     max_frame_size: 16384,
                     header_compression_size_limit: None,
+                    connection_window_increment: 10_420_225,  // 10 MB connection window
                 }
             }
             HttpProfile::Edge => {
@@ -74,6 +83,7 @@ impl H2Settings {
                     initial_window_size: 6291456,   // 6 MB (same as Chrome)
                     max_frame_size: 16384,
                     header_compression_size_limit: None,
+                    connection_window_increment: 15_663_105,  // 15 MB connection window
                 }
             }
             HttpProfile::TorBrowser => {
@@ -85,6 +95,7 @@ impl H2Settings {
                     initial_window_size: 65535,    // RFC default
                     max_frame_size: 16384,         // RFC default
                     header_compression_size_limit: None,
+                    connection_window_increment: 12_517_377,  // 12 MB connection window
                 }
             }
             HttpProfile::Lumen => {
@@ -96,6 +107,7 @@ impl H2Settings {
                     initial_window_size: 1048576,   // 1 MB — RAM optimization
                     max_frame_size: 16384,
                     header_compression_size_limit: None,
+                    connection_window_increment: 15_663_105,  // 15 MB connection window
                 }
             }
         }

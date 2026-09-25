@@ -145,7 +145,8 @@ pub struct H2Conn<S: Read + Write> {
     /// Next client-initiated stream ID (odd, starts at 1; RFC 9113 §5.1.1).
     next_stream_id: u32,
     /// Our connection-level receive window (bytes the server may still send before
-    /// we send WINDOW_UPDATE). RFC 9113 §6.9 — starts at INITIAL_WINDOW.
+    /// we send WINDOW_UPDATE). RFC 9113 §6.9 — starts at INITIAL_WINDOW plus the
+    /// preface WINDOW_UPDATE.
     conn_recv_window: u32,
     /// Connection-level *send* window (RFC 9113 §6.9.1): bytes of request body we
     /// may still write across all streams before the peer must grant more with
@@ -205,6 +206,15 @@ impl<S: Read + Write> H2Conn<S> {
         }
         .encode(&mut preface)
         .map_err(frame_err)?;
+        // Raise the connection receive window right after SETTINGS, as browsers
+        // do: the 65 535 default is shared by every stream of the connection,
+        // which caps a multiplexed page load at 64 KiB per round trip (PERF-13).
+        Frame::WindowUpdate {
+            stream_id: 0,
+            increment: settings.connection_window_increment,
+        }
+        .encode(&mut preface)
+        .map_err(frame_err)?;
         stream.write_all(&preface).map_err(io_err)?;
         stream.flush().map_err(io_err)?;
 
@@ -224,7 +234,7 @@ impl<S: Read + Write> H2Conn<S> {
             remote_max_frame: MAX_FRAME_PAYLOAD_DEFAULT,
             remote_init_window: INITIAL_WINDOW,
             next_stream_id: 1,
-            conn_recv_window: INITIAL_WINDOW,
+            conn_recv_window: INITIAL_WINDOW + settings.connection_window_increment,
             conn_send_window: INITIAL_WINDOW as i64,
             pending_streams: HashMap::new(),
             remote_max_streams: None,
@@ -1384,10 +1394,19 @@ mod tests {
             }
             _ => panic!("Expected Settings frame with Chrome parameters"),
         }
-        // Must contain SETTINGS ACK for server's SETTINGS.
-        // Find it after our SETTINGS frame.
-        // Chrome SETTINGS frame: 9-byte header + (5 params * 6 bytes) = 9 + 30 = 39 bytes
+        // Chrome SETTINGS frame: 9-byte header + (5 params * 6 bytes) = 9 + 30 = 39 bytes,
+        // followed by Chrome's connection-window WINDOW_UPDATE (PERF-13).
         let offset = CLIENT_PREFACE_MAGIC.len() + 39;
+        let (window_frame, used) = Frame::parse(&written[offset..], MAX_FRAME_PAYLOAD_DEFAULT)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            window_frame,
+            Frame::WindowUpdate { stream_id: 0, increment: 15_663_105 },
+            "preface must raise the connection window like Chrome"
+        );
+        // Then the SETTINGS ACK for the server's SETTINGS.
+        let offset = offset + used;
         let (ack_frame, _) = Frame::parse(&written[offset..], MAX_FRAME_PAYLOAD_DEFAULT)
             .unwrap()
             .unwrap();
@@ -1643,7 +1662,8 @@ mod tests {
     /// `(stream_id, increment)` pairs in order.
     ///
     /// Skips the client connection preface magic (24 non-frame bytes) that
-    /// the client writes before any frames during `H2Conn::connect`.
+    /// the client writes before any frames during `H2Conn::connect`, and the
+    /// preface's own connection-window raise, which is not a response credit.
     fn collect_window_updates(buf: &[u8]) -> Vec<(u32, u32)> {
         use crate::h2::frame::MAX_FRAME_PAYLOAD_DEFAULT;
         let start = if buf.starts_with(CLIENT_PREFACE_MAGIC) {
@@ -1656,7 +1676,9 @@ mod tests {
         while pos < buf.len() {
             match Frame::parse(&buf[pos..], MAX_FRAME_PAYLOAD_DEFAULT) {
                 Ok(Some((Frame::WindowUpdate { stream_id, increment }, consumed))) => {
-                    result.push((stream_id, increment));
+                    if !(pos == start + PREFACE_SETTINGS_LEN && stream_id == 0) {
+                        result.push((stream_id, increment));
+                    }
                     pos += consumed;
                 }
                 Ok(Some((_, consumed))) => {
@@ -1667,6 +1689,9 @@ mod tests {
         }
         result
     }
+
+    /// Chrome-profile preface SETTINGS frame: 9-byte header + 5 params × 6 bytes.
+    const PREFACE_SETTINGS_LEN: usize = 39;
 
     #[test]
     fn fetch_with_body_sends_window_update_for_data() {
@@ -1795,8 +1820,9 @@ mod tests {
 
         // Check that a HEADERS frame was written.
         let written = conn.stream.written();
-        // Skip the preface (24 bytes) + SETTINGS (9+30 bytes) + SETTINGS ACK (9 bytes).
-        let expected_offset = 24 + 39 + 9;
+        // Skip the preface (24 bytes) + SETTINGS (9+30 bytes) + connection
+        // WINDOW_UPDATE (9+4 bytes) + SETTINGS ACK (9 bytes).
+        let expected_offset = 24 + 39 + 13 + 9;
         let frame = Frame::parse(&written[expected_offset..], MAX_FRAME_PAYLOAD_DEFAULT)
             .unwrap()
             .unwrap();
