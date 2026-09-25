@@ -1197,6 +1197,27 @@ fn stylesheet_node_registry_drops_unfetchable_link() {
     assert_eq!(entries[0].sheet.rules[0].selector_text(), "a");
 }
 
+/// BUG-1180: `<link>`, который `style-src` запрещает, реестр не качает и не
+/// разбирает — тот же гейт, что у каскада (`load_linked_stylesheets`). Лист
+/// существует на диске, так что пустой реестр означает именно блокировку, а
+/// не провал загрузки.
+#[test]
+fn stylesheet_node_registry_skips_style_src_blocked_link() {
+    let dir = import_fixture_dir("bug1180_registry_csp");
+    std::fs::write(dir.join("a.css"), "#out { color: red; }").unwrap();
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                <meta http-equiv="Content-Security-Policy" content="style-src 'none'">
+                <link rel="stylesheet" href="a.css">
+            </head><body></body></html>"#,
+    );
+    let base = ResourceBase::File(dir.join("page.html"));
+
+    let entries = build_stylesheet_node_registry(&doc, &base, &null_sink(), None);
+
+    assert!(entries.is_empty(), "style-src 'none' must keep the link out of the registry");
+}
+
 // ──────────── BUG-509: CSS "determine the fallback encoding" wiring ───────
 
 /// `#\xC8{ visibility:hidden }` — byte 0xC8 decodes to `И` (U+0418) under
