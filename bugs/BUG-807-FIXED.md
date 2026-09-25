@@ -51,7 +51,7 @@ dev-release, Linux, 2026-08-21, коммит `a7ee9468f`):
 
 Это отдельный от уже открытых дефект: [BUG-626](BUG-626-OPEN.md) (нет
 валидации аргументов), [BUG-627](BUG-627-OPEN.md) (`root`/`scrollMargin`
-игнорируются) и [BUG-628](BUG-628-OPEN.md) (`takeRecords`/`root`/
+игнорируются) и [BUG-628](BUG-628-FIXED.md) (`takeRecords`/`root`/
 `rootMargin`/`thresholds` отсутствуют) описывают *содержимое* доставки; здесь
 доставки нет вовсе, и потому тест не падает, а виснет.
 
@@ -78,7 +78,7 @@ event loop'а, а не следующий релэйаут; тот же путь
 
 1. `verify_event_delivery_gaps.py --variant io-initial` печатает `io-cb`.
 2. `--variant io-v2-trackvisibility` печатает `io-cb` (значение `isVisible`
-   при этом останется неверным — это [BUG-628](BUG-628-OPEN.md)/v2, не здесь).
+   при этом останется неверным — это [BUG-628](BUG-628-FIXED.md)/v2, не здесь).
 3. WPT: `run_report.py --all --root intersection-observer --recursive` —
    TIMEOUT'ы уходят, часть тестов при этом станет FAIL (по BUG-626/627/628),
    и это ожидаемый результат починки.
@@ -122,7 +122,7 @@ Windows, та же проба, что заводила баг):
 | `io-v2-trackvisibility` | колбэка нет | `io-cb isVisible=undefined` |
 
 Страница жива во всех вариантах (13 тиков `setInterval` за 8 с). `isVisible`
-остался `undefined` — это [BUG-628](BUG-628-OPEN.md), как и было записано в
+остался `undefined` — это [BUG-628](BUG-628-FIXED.md), как и было записано в
 критерии проверки: механизм у v2 тот же, отдельного дефекта здесь нет.
 
 Регрессионные тесты — три штуки в `crates/js/src/dom.rs`
@@ -134,4 +134,4 @@ Windows, та же проба, что заводила баг):
 [BUG-626](BUG-626-OPEN.md) — её нельзя добавить, не сломав внутренний
 наблюдатель ленивых картинок, который наблюдает прокси-объект `{__nid__}`, а
 не `Element`; `root`/`scrollMargin` [BUG-627](BUG-627-OPEN.md);
-`takeRecords`/геттеры [BUG-628](BUG-628-OPEN.md).
+`takeRecords`/геттеры [BUG-628](BUG-628-FIXED.md).
