@@ -58,7 +58,7 @@ purple; margin-bottom: 20px;\``, one `<div>` per test case) — every one of
 its 11 `{input, expected}` pairs never actually applies any border/outline
 styling at all, so the div keeps its default (unstyled) appearance
 regardless of `input`. This overlaps with — but is mechanistically distinct
-from — [BUG-493](../bugs/BUG-493-OPEN.md) (same file, same failing
+from — [BUG-493](../bugs/BUG-493-FIXED.md) (same file, same failing
 subtests): even if this bug were fixed today, BUG-493's same-tick
 `getComputedStyle()` staleness would still make the assertions fail, so no
 new `.ini` beyond what's already committed for BUG-472/493 on this file is

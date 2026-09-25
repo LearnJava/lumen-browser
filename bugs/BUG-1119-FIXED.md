@@ -119,4 +119,4 @@ S3»), и никто из шелла банку в рантайм не пере�
   - fandom — `Geo` есть, 9 cookie в обоих, 3456 / 3448 узлов, ошибок JS нет;
   - imdb — челлендж AWS WAF пройден: `202` → `inputs` → `verify` → повторный `GET /` = `200`.
     Страница дальше падает на styled-components #17 (`HTMLStyleElement.sheet === null` сразу после
-    `appendChild`) — это остаток [BUG-493](BUG-493-OPEN.md), записан туда.
+    `appendChild`) — это остаток [BUG-493](BUG-493-FIXED.md), записан туда.

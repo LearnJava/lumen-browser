@@ -2,7 +2,7 @@
 mutations made earlier in the same script execution — no synchronous
 style/layout flush before the read
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P6) — остаток живого окна закрыт срезом 2026-09-25, реальные сайты перепроверены (см. §Закрытие)
 **Тип:** доработка (нереализованная функциональность), не дефект — ведётся как задача [`CSSOM-4`](../ROADMAP.md) дорожки CSSOM, а не как строка очереди P3. Файл остаётся детальной записью наблюдений: «срезы» ниже — прогоны категорий WPT, упиравшиеся в эту же дыру, а не куски выполненной работы. Переклассифицировано 2026-08-28 по решению пользователя.
 **Дата:** 2026-08-02
 **Компонент:** js/layout boundary (`crates/js/src/v8_runtime.rs::_lumen_get_computed_style`
@@ -129,7 +129,7 @@ boundary (e.g. `load`, a later separate script, `setTimeout`), will observe
 this gap. This is now confirmed as the dominant root cause across most of
 `css/css-variables`'s failures this slice (compounding with
 [BUG-472](BUG-472-OPEN.md) for properties additionally missing from the map,
-and with [BUG-499](BUG-499-OPEN.md) for custom-property reads specifically) —
+and with [BUG-499](BUG-499-FIXED.md) for custom-property reads specifically) —
 see files listed in that category's `.ini` headers for the full list; too
 numerous to enumerate here (roughly two dozen files).
 
@@ -484,3 +484,43 @@ CSSOM-правок, ни `document.adoptedStyleSheets` (CSSOM-5 срез 2) — 
 одна из трёх страниц не дошла до кода styled-components, поэтому ошибка #17 не
 воспроизведена и не опровергнута живьём — баг остаётся OPEN до повторного прогона этих
 сайтов.
+
+## Закрытие (P6, 2026-09-25): перепроверка на реальных сайтах
+
+Условие, на котором баг оставался открытым после среза «живое окно», — повторный прогон сайтов,
+где остаток ломал styled-components. Сборка `dev-release` от `origin/main` `bc9d3a03c` (срез
+внутри), видимое окно `--maximized`, `LUMEN_NO_ADBLOCK=1`, Chrome 153 — тем же способом
+(`.tmp/compat/probe.py`, проба `.tmp/b493/site.js` в слоте `p6-work`, не отслеживается). Проба
+читает `.sheet` каждого `<style data-styled>`/`data-emotion`, число правил в них и `.sheet`
+свежевставленного `<style>` синхронно после `appendChild`; ошибки — `resource://console` и stderr.
+
+| Сайт | Lumen | Chrome 153 | Ошибка #17 |
+|---|---|---|---|
+| imdb (3 прогона) | `<style data-styled>` с листом, 687–721 правило; 1960–4720 узлов; `.sheet` синхронно — есть | 720 правил, 5331 узел | нет |
+| twitch (2 прогона) | лист есть, 239–528 правил (растёт по мере рендера); 625–3382 узла | 521 правило, 2010 узлов | нет |
+| bbc (3 прогона) | лист есть, 742 правила; 2008 узлов, заголовок страницы | — (проба Chrome упала на своей стороне) | нет |
+| quora | до приложения не доходит: Cloudflare «Just a moment...» | приложение, 1 styled-лист, 8 правил | не проверяемо |
+
+Ни в одном из восьми прогонов Lumen нет ни `#17`, ни `CSSStyleSheet could not be found`, ни
+`client-side exception`. До фикса imdb после челленджа давал 13 узлов и #17 первой ошибкой, twitch —
+пустое приложение (React Router ловил #17), bbc — `client-side exception` Next.js. `.sheet` у
+styled-тега не `null` ни разу. Quora к styled-components не пускает челлендж — это не этот остаток,
+заведено отдельно (BUG-1176). Остаток бага закрыт.
+
+**Что вскрылось попутно** (заведено отдельно или дописано в существующие):
+
+- [BUG-1176](BUG-1176-OPEN.md) — quora: управляемый челлендж Cloudflare падает в Lumen с
+  `Cannot read properties of null (reading 'eval')` и перезапускается по кругу;
+- [BUG-1177](BUG-1177-OPEN.md) — bbc: два чанка Next.js потеряны с `H2 connection unusable:
+  connection closing` после обрыва общего HTTP/2-соединения (1 прогон из 3);
+- [BUG-1178](BUG-1178-OPEN.md) — MCP `eval` на странице без `<script>` всегда отвечает
+  `JS context not available`: у такого документа рантайма нет вовсе;
+- [BUG-1179](BUG-1179-OPEN.md) — imdb: страница челленджа (13 узлов) остаётся текущим документом
+  до 26–88 с после навигации, хотя HTML настоящей страницы и её скрипты получены к 9-й секунде;
+  первый непустой кадр — 37–87 с (Chrome: `load` за 21.7 с);
+- [BUG-648](BUG-648-OPEN.md) — imdb тоже падает на синхронной доставке buffered-записей
+  `PerformanceObserver` (`a is not a function`), дописано к cnbc;
+- [BUG-1158](BUG-1158-OPEN.md) — bbc даёт `Unexpected token ':'` на вставленном скрипте 3 из 3,
+  дописано к yahoo;
+- [BUG-1145](BUG-1145-OPEN.md) — imdb и twitch: `eval` отвечает `JS context not available` посреди
+  загрузки и снова работает через 10–25 с, дописано.

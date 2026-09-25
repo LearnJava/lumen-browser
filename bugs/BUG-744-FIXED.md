@@ -79,7 +79,7 @@ console.log('STYLE_COUNT=' + document.getElementsByTagName('style').length);
 значение (`static`), а не пересчитанное (`fixed`). Не специфично для
 `innerHTML` — идентично воспроизводится и через
 `document.createElement('style')` + `appendChild`. Это уже заведённый
-отдельно пробел [BUG-493](BUG-493-OPEN.md) (ДОРАБОТКА → CSSOM-4,
+отдельно пробел [BUG-493](BUG-493-FIXED.md) (ДОРАБОТКА → CSSOM-4,
 «`getComputedStyle()` не форсирует синхронный пересчёт стиля»), не часть
 этого бага.
 

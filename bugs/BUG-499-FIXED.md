@@ -21,14 +21,14 @@ inserting a `"--…"`-prefixed key. Since `_lumen_get_computed_style` is a flat
 whether it resolved successfully, is guaranteed-invalid, or was never
 declared — returns `None` → `.unwrap_or_default()` → `""`, indistinguishably
 from a genuinely-absent property. This is unconditional: it does not depend
-on cache-freshness (contrast [BUG-493](BUG-493-OPEN.md)) or on the property
+on cache-freshness (contrast [BUG-493](BUG-493-FIXED.md)) or on the property
 being registered via `@property` — even a `--var: value;` custom property
 read back through `getComputedStyle()` on a fully-settled, statically-marked-up
 element returns `""`.
 
 Confirmed live (`--mcp-port`, page with `<div id="t1" style="--x: 20px; width:
 var(--x);">`, read via a **separate** `eval()` call after `navigate()`
-returned — i.e. the [BUG-493](BUG-493-OPEN.md) cache-timing gap is ruled
+returned — i.e. the [BUG-493](BUG-493-FIXED.md) cache-timing gap is ruled
 out):
 
 ```js
