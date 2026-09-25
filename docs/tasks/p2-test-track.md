@@ -1731,7 +1731,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 | Причина | id | Доказательство |
 |---|---|---|
 | https-origin: `TLS handshake … not valid for name "localhost"`, [BUG-1069](../../bugs/BUG-1069-FIXED.md) | 25 | 14 `*.any.serviceworker.html` + 11 `*.https.*`; в логе `https://localhost:18443/workers/…` |
-| в воркере нет `Worker` — вложенные воркеры, новый [BUG-1076](../../bugs/BUG-1076-OPEN.md) | не менее 8 | `ReferenceError: Worker is not defined` (30 строк лога); одиночный прогон `baseurl/alpha/worker-in-worker.html` — 0/1, соседи 1/1 |
+| в воркере нет `Worker` — вложенные воркеры, новый [BUG-1076](../../bugs/BUG-1076-FIXED.md) | не менее 8 | `ReferenceError: Worker is not defined` (30 строк лога); одиночный прогон `baseurl/alpha/worker-in-worker.html` — 0/1, соседи 1/1 |
 | harness `ERROR` без https в имени: `modules/{dedicated,shared}-worker-import-{csp,referrer}.html`, `semantics/structured-clone/{dedicated,shared}.html` | 6 | не разбирались |
 | harness `TIMEOUT` | 58 | 18 из них — `SharedWorker`/`.any.sharedworker.html`, 11 — модульные воркеры/`import`; причина по файлам не устанавливалась. Строки лога не привязаны к id при `--processes 4` |
 

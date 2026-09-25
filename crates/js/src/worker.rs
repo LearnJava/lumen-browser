@@ -77,6 +77,17 @@ pub struct WorkerHandle {
     _thread: thread::JoinHandle<()>,
 }
 
+#[cfg(feature = "v8-backend")]
+impl WorkerHandle {
+    /// Has the worker thread returned (`self.close()`, `Terminate`, or a
+    /// failed runtime init)? Its registry entry outlives it — see
+    /// [`WorkerCloseFlag`] — so this is how a parent worker tells a live
+    /// child from a dead one (WORKER-2, `NestedWorkers::busy`).
+    fn is_finished(&self) -> bool {
+        self._thread.is_finished()
+    }
+}
+
 /// All live Worker instances for the current page, keyed by worker ID.
 ///
 /// Shared between the main JS thread (via `Arc` clone in native bindings) and
@@ -1434,6 +1445,41 @@ pub(crate) fn install_worker_bindings_v8(
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     determinism: Option<WorkerDeterminism>,
 ) -> JsResult<()> {
+    // BUG-868 GAP-WORKERSCOPE срез 2: global counter for `MessagePort`
+    // transfer ids, shared by the page and every worker it spawns (cloned
+    // into `spawn_worker_v8` below) — a port id only needs to be unique
+    // within one page's own worker set, since each side's `_lumenPortRegistry`
+    // is a separate `globalThis` map with no cross-page namespace to collide in.
+    let port_next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+    install_worker_constructor_v8(
+        rt, registry, queue, errors, next_id, blob_store, fetch_provider, port_queue,
+        ws_provider, determinism, port_next_id,
+    )
+}
+
+/// The body of [`install_worker_bindings_v8`], with the `MessagePort` transfer
+/// id counter supplied by the caller rather than created fresh — WORKER-2: a
+/// dedicated worker that gets its own `Worker` constructor must keep
+/// allocating from the counter it already shares with its parent (the one
+/// [`install_worker_globals_v8`] registered `_lumen_next_port_id` over), or a
+/// port it transfers to a child would collide in its `_lumenPortRegistry`
+/// with a port transferred in from above.
+#[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // same state as install_worker_bindings_v8 plus the port counter
+fn install_worker_constructor_v8(
+    rt: &V8JsRuntime,
+    registry: &WorkerRegistry,
+    queue: &WorkerMessageQueue,
+    errors: &WorkerErrorQueue,
+    next_id: &Arc<Mutex<u32>>,
+    blob_store: &WorkerBlobStore,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    port_queue: &WorkerPortMessageQueue,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    determinism: Option<WorkerDeterminism>,
+    port_next_id: Arc<Mutex<u32>>,
+) -> JsResult<()> {
     // GAP-CSPENF срез 13: single-slot side channel carrying
     // `(blocked_uri, original_policy)` from `_lumen_worker_fetch_script`'s
     // `worker-src` refusal to `_lumen_worker_last_csp_block` — same one-slot
@@ -1446,12 +1492,6 @@ pub(crate) fn install_worker_bindings_v8(
     // `_lumen_worker_fetch_script_url` right after — same one-slot shape and
     // justification as `last_csp_block` above.
     let last_fetch_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    // BUG-868 GAP-WORKERSCOPE срез 2: global counter for `MessagePort`
-    // transfer ids, shared by the page and every worker it spawns (cloned
-    // into `spawn_worker_v8` below) — a port id only needs to be unique
-    // within one page's own worker set, since each side's `_lumenPortRegistry`
-    // is a separate `globalThis` map with no cross-page namespace to collide in.
-    let port_next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     // _lumen_create_worker(script: String, script_url: String, is_module: bool) → u32
     //
     // `script_url` is the worker's own resolved script URL (the opaque URL
@@ -1772,6 +1812,11 @@ fn run_worker_thread_v8(
     // ESM loader *on this thread*, so the same bridge the classic path hands to
     // `fetch()`/`importScripts()` has to reach `v8_esm`'s thread-local state too.
     let fp_esm = fetch_provider.clone();
+    // WORKER-2: the child workers of this one reach the network, sockets and
+    // the deterministic clock through the same bridges it does.
+    let fp_nested = fetch_provider.clone();
+    let ws_nested = ws_provider.clone();
+    let det_nested = determinism.clone();
 
     if let Err(e) = install_worker_globals_v8(
         &rt,
@@ -1789,6 +1834,29 @@ fn run_worker_thread_v8(
     ) {
         eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
         return;
+    }
+
+    // WORKER-2 (BUG-1076): `Worker` is `[Exposed=(Window,DedicatedWorker,
+    // SharedWorker)]` — the same `WORKER_SHIM` the page runs, over a registry
+    // and queues of this thread's own. After the globals above: the shim reads
+    // `TextDecoder`, `ErrorEvent`/`MessageEvent`, `_url_resolve` and
+    // `_lumen_document_base_url` (the worker's own base, `worker_net_shim.js`),
+    // so a relative child URL resolves against this worker's script, not the page.
+    let nested = NestedWorkers::new();
+    if let Err(e) = install_worker_constructor_v8(
+        &rt,
+        &nested.registry,
+        &nested.messages,
+        &nested.errors,
+        &Arc::new(Mutex::new(0)),
+        &blob_store,
+        fp_nested,
+        &nested.port_messages,
+        ws_nested,
+        det_nested,
+        Arc::clone(&port_next_id),
+    ) {
+        eprintln!("[worker-{id}] v8 nested Worker install failed: {e:?}");
     }
 
     // BUG-937: same origin derivation as the page's `page_origin` in
@@ -1870,9 +1938,15 @@ fn run_worker_thread_v8(
         if close_flag.load(Ordering::Relaxed) {
             break;
         }
-        let wait = run_worker_tasks(&rt);
+        // WORKER-2: what the children posted is a task of this worker, the
+        // way a page gets its workers' messages from `pump_workers`.
+        nested.deliver(&rt);
+        let mut wait = run_worker_tasks(&rt);
         if close_flag.load(Ordering::Relaxed) {
             break;
+        }
+        if nested.busy() {
+            wait = Some(wait.map_or(WORKER_SOCKET_POLL, |w| w.min(WORKER_SOCKET_POLL)));
         }
         let msg = match wait {
             Some(d) => match rx.recv_timeout(d) {
@@ -1917,6 +1991,7 @@ fn run_worker_thread_v8(
             WorkerInMsg::Terminate => break,
         }
     }
+    nested.terminate_all();
     // `rt` drops here: `V8JsRuntime::drop` sends `Shutdown` to its own JS
     // thread and joins it.
 }
@@ -1971,6 +2046,91 @@ pub(crate) fn run_worker_tasks(rt: &V8JsRuntime) -> Option<std::time::Duration> 
 /// latency of a message pushed by the server (see [`run_worker_tasks`]).
 #[cfg(feature = "v8-backend")]
 const WORKER_SOCKET_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Hand everything the workers owned by `rt`'s scope have queued for it —
+/// messages, uncaught-exception reports (BUG-591) and `MessagePort` traffic
+/// (BUG-868) — to the `WORKER_SHIM` delivery functions of that scope.
+///
+/// The page calls it from `V8JsRuntime::pump_workers`; a dedicated worker
+/// that has spawned workers of its own (WORKER-2) calls it from its task loop
+/// through [`NestedWorkers::deliver`], so both parents go through the same
+/// routing.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn deliver_worker_queues(
+    rt: &V8JsRuntime,
+    messages: &WorkerMessageQueue,
+    errors: &WorkerErrorQueue,
+    port_messages: &WorkerPortMessageQueue,
+) {
+    for (items, deliver) in [
+        (drain_messages(messages), "_lumen_deliver_worker_messages"),
+        (drain_errors(errors), "_lumen_deliver_worker_errors"),
+        // Routed by port id, not worker id — hence its own delivery function.
+        (drain_messages(port_messages), "_lumen_deliver_port_messages"),
+    ] {
+        if items.is_empty() {
+            continue;
+        }
+        let json = crate::build_worker_messages_json(&items);
+        let _ = rt.eval(&format!("if(typeof {deliver}==='function'){deliver}({json})"));
+    }
+}
+
+/// The workers a dedicated worker has created itself with `new Worker()`
+/// (WORKER-2) — the worker-side twin of the page's `workers`/
+/// `worker_messages`/`worker_errors`/`worker_port_messages` fields on
+/// `V8JsRuntime`. Owned by [`run_worker_thread_v8`], which has no shell tick
+/// to pump it, so it drains these queues itself on every loop turn.
+#[cfg(feature = "v8-backend")]
+struct NestedWorkers {
+    registry: WorkerRegistry,
+    messages: WorkerMessageQueue,
+    errors: WorkerErrorQueue,
+    port_messages: WorkerPortMessageQueue,
+}
+
+#[cfg(feature = "v8-backend")]
+impl NestedWorkers {
+    fn new() -> Self {
+        Self {
+            registry: Arc::new(Mutex::new(HashMap::new())),
+            messages: Arc::new(Mutex::new(Vec::new())),
+            errors: Arc::new(Mutex::new(Vec::new())),
+            port_messages: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn deliver(&self, rt: &V8JsRuntime) {
+        deliver_worker_queues(rt, &self.messages, &self.errors, &self.port_messages);
+    }
+
+    /// Can a child still post something this thread has not delivered yet?
+    /// A child's reply lands in a plain queue with nothing to wake this
+    /// thread, so while this holds the loop polls at [`WORKER_SOCKET_POLL`].
+    ///
+    /// Liveness is read *before* the queues: a child that pushes its last
+    /// message and exits between the two reads is then still caught by the
+    /// queue check, instead of the thread going to sleep on an undelivered
+    /// message.
+    fn busy(&self) -> bool {
+        let live = self
+            .registry
+            .lock()
+            .is_ok_and(|reg| reg.values().any(|h| !h.is_finished()));
+        let queued = |q: &Arc<Mutex<Vec<(u32, String)>>>| q.lock().is_ok_and(|v| !v.is_empty());
+        live || queued(&self.messages) || queued(&self.errors) || queued(&self.port_messages)
+    }
+
+    /// Stop every child still registered — HTML LS §10.2.4: when a worker is
+    /// closed or terminated, the workers it owns go with it. Each child does
+    /// the same for its own children as its loop exits.
+    fn terminate_all(&self) {
+        let children = self.registry.lock().map(|mut reg| std::mem::take(&mut *reg)).unwrap_or_default();
+        for h in children.into_values() {
+            let _ = h.tx.send(WorkerInMsg::Terminate);
+        }
+    }
+}
 
 /// Install the Worker global environment into a V8 runtime. Registers the
 /// natives `_lumen_worker_post_reply`, `_lumen_worker_console_log`,
@@ -4223,6 +4383,135 @@ mod tests_v8 {
         .unwrap();
         rt.eval("_lumen_worker_dispatch_message('hi');").unwrap();
         assert_eq!(rt.eval("ok").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    // ── WORKER-2 (BUG-1076): nested dedicated workers ─────────────────────────
+
+    /// Spawn a top-level worker the way the page does and collect what it
+    /// posts to the page until `n` messages arrived or `budget` ran out.
+    fn run_top_worker(
+        script: &str,
+        script_url: &str,
+        net: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+        n: usize,
+        budget: std::time::Duration,
+    ) -> (WorkerRegistry, u32, Vec<String>) {
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let id = spawn_worker_v8(
+            &reg, &queue, &errors, &Arc::new(Mutex::new(0u32)), &make_store(), script.to_string(),
+            script_url.to_string(), false, net, &Arc::new(Mutex::new(Vec::new())),
+            &Arc::new(Mutex::new(0u32)), None, None,
+        );
+        let deadline = std::time::Instant::now() + budget;
+        let mut got = Vec::new();
+        while got.len() < n && std::time::Instant::now() < deadline {
+            got.extend(drain_messages(&queue).into_iter().map(|(_, m)| m));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(drain_errors(&errors).is_empty(), "worker reported an error");
+        (reg, id, got)
+    }
+
+    /// `Worker` is `[Exposed=(Window,DedicatedWorker,SharedWorker)]` — before
+    /// WORKER-2 only the page runtime had it, and `new Worker()` inside a
+    /// worker threw `ReferenceError: Worker is not defined`.
+    #[test]
+    fn v8_nested_worker_constructor_exists_in_dedicated_worker() {
+        let (_reg, _id, got) = run_top_worker(
+            "postMessage(typeof Worker);", "", None, 1, std::time::Duration::from_secs(5),
+        );
+        assert_eq!(got, vec!["\"function\"".to_string()]);
+    }
+
+    /// The child's messages reach the parent worker's `onmessage` — the
+    /// parent has no shell tick, so its own task loop must deliver them — and
+    /// the parent's `postMessage` reaches the child.
+    #[test]
+    fn v8_nested_worker_round_trip_through_parent() {
+        let child = "onmessage = function(e) { postMessage('child:' + e.data); };";
+        let parent = format!(
+            "var w = new Worker('data:text/javascript,' + encodeURIComponent({child:?})); \
+             w.onmessage = function(e) {{ postMessage(e.data); }}; \
+             w.postMessage('ping');"
+        );
+        let (_reg, _id, got) = run_top_worker(&parent, "", None, 1, std::time::Duration::from_secs(5));
+        assert_eq!(got, vec!["\"child:ping\"".to_string()]);
+    }
+
+    /// A relative child URL resolves against the parent worker's own script
+    /// URL (the worker's API base URL), not against the page — WPT's
+    /// `baseurl/alpha/worker-in-worker.html` shape.
+    #[test]
+    fn v8_nested_worker_url_resolves_against_parent_script() {
+        let net: Arc<dyn lumen_core::ext::JsFetchProvider> = TestNet::new(&[
+            ("http://example.test/a/child.js", "postMessage(location.href);"),
+        ]);
+        let parent = "var w = new Worker('child.js'); w.onmessage = function(e) { postMessage(e.data); };";
+        let (_reg, _id, got) = run_top_worker(
+            parent, "http://example.test/a/parent.js", Some(net), 1, std::time::Duration::from_secs(5),
+        );
+        assert_eq!(got, vec!["\"http://example.test/a/child.js\"".to_string()]);
+    }
+
+    /// A child whose script fails to load fires `error` at the `Worker`
+    /// object inside the parent, same as it does on the page.
+    #[test]
+    fn v8_nested_worker_load_failure_fires_error_in_parent() {
+        let net: Arc<dyn lumen_core::ext::JsFetchProvider> = TestNet::new(&[]);
+        let parent = "var w = new Worker('missing.js'); w.onerror = function() { postMessage('error'); };";
+        let (_reg, _id, got) = run_top_worker(
+            parent, "http://example.test/parent.js", Some(net), 1, std::time::Duration::from_secs(5),
+        );
+        assert_eq!(got, vec!["\"error\"".to_string()]);
+    }
+
+    /// Counts requests per URL — lets a test see a child worker still
+    /// running after its parent is gone, when the child can no longer post
+    /// anything that would reach the page.
+    struct CountNet {
+        hits: Mutex<HashMap<String, usize>>,
+    }
+    impl lumen_core::ext::JsFetchProvider for CountNet {
+        fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            *self.hits.lock().unwrap().entry(url.to_string()).or_default() += 1;
+            let body = if url.ends_with("/child.js") {
+                "setInterval(function() { var x = new XMLHttpRequest(); \
+                   x.open('GET', '/tick', false); x.send(); }, 5); postMessage('up');"
+            } else {
+                ""
+            };
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: body.as_bytes().to_vec(),
+                url: url.to_string(),
+            })
+        }
+    }
+
+    /// HTML LS §10.2.4: terminating a worker takes the workers it owns down
+    /// with it. The child polls `/tick` over sync XHR; once the page
+    /// terminates the parent, the count must stop growing.
+    #[test]
+    fn v8_nested_worker_terminated_with_parent() {
+        let net = Arc::new(CountNet { hits: Mutex::new(HashMap::new()) });
+        let parent = "var w = new Worker('child.js'); w.onmessage = function(e) { postMessage(e.data); };";
+        let (reg, id, got) = run_top_worker(
+            parent, "http://example.test/parent.js", Some(Arc::clone(&net) as _), 1,
+            std::time::Duration::from_secs(5),
+        );
+        assert_eq!(got, vec!["\"up\"".to_string()]);
+        let ticks = || net.hits.lock().unwrap().get("http://example.test/tick").copied().unwrap_or(0);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(ticks() > 0, "child never ticked");
+        terminate_worker(&reg, id);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let after_stop = ticks();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(ticks(), after_stop, "child kept running after its parent was terminated");
     }
 }
 
