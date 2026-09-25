@@ -635,7 +635,16 @@ fn run_parser_classic_script(
     // so an uncaught exception must also reach the page's own
     // window 'error'/onerror listeners (BUG-591), not just
     // this stderr line.
-    match rt.eval_and_report(src) {
+    //
+    // LONGTASK-1: parser-blocking classic scripts run before any
+    // `PersistentJs` handle exists (`run_scripts_with_dom` builds one only
+    // after this loop), so they never go through `V8PersistentJs::eval_js`'s
+    // measurement — timed here directly, same threshold/delivery helper.
+    let started = std::time::Instant::now();
+    let outcome = rt.eval_and_report(src);
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    crate::persistent_js::deliver_longtask_entry(rt, elapsed_ms);
+    match outcome {
         Ok(_) => {}
         Err(lumen_core::JsError::NotImplemented) => {
             eprintln!(
@@ -993,10 +1002,17 @@ pub(crate) fn run_scripts_with_dom(
                     // reach window 'error'/onerror (BUG-591); a load/link
                     // failure stays unreported here (belongs to the script
                     // element's own 'error' event instead).
+                    //
+                    // LONGTASK-1: same gap as classic parser-blocking scripts
+                    // (`run_parser_classic_script`) — this loop runs before
+                    // `run_scripts_with_dom` builds its `PersistentJs` handle.
+                    let started = std::time::Instant::now();
                     let outcome = match &item.url {
                         Some(url) => rt.eval_module_at_and_report(url, src),
                         None => rt.eval_module_and_report(src),
                     };
+                    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+                    crate::persistent_js::deliver_longtask_entry(&rt, elapsed_ms);
                     match outcome {
                         Ok(()) => {}
                         Err(lumen_core::JsError::NotImplemented) => {

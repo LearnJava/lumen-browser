@@ -915,6 +915,27 @@ pub(crate) fn popstate_eval_source(state_json: &str, url: &str) -> String {
     format!("_lumen_deliver_popstate({state_lit}, '{escaped}')")
 }
 
+/// LONGTASK-1: shared long-task delivery, factored out so both
+/// [`V8PersistentJs::eval_js`] (post-load event/timer/rAF dispatch) and
+/// `scripts.rs`'s parser-script executors can report a `longtask` entry the
+/// same way. The parser path runs *before* any [`PersistentJs`] handle
+/// exists — `run_scripts_with_dom` builds one only after all parser-blocking
+/// scripts have already executed — so it never went through `eval_js` above;
+/// this was the "начальное исполнение классических `<script>` во время
+/// парсинга идёт мимо этой обёртки" gap noted in `ROADMAP.md`'s LONGTASK-1
+/// entry, now closed by calling this helper directly from `scripts.rs`.
+#[cfg(feature = "v8")]
+pub(crate) fn deliver_longtask_entry(rt: &lumen_js::v8_runtime::V8JsRuntime, elapsed_ms: f64) {
+    use lumen_core::ext::JsRuntime as _;
+    if elapsed_ms < LONGTASK_THRESHOLD_MS {
+        return;
+    }
+    let deliver = format!(
+        "_lumen_deliver_longtask_entry(performance.now() - {elapsed_ms}, {elapsed_ms})"
+    );
+    let _ = rt.eval(&deliver);
+}
+
 #[cfg(feature = "v8")]
 impl PersistentJs for V8PersistentJs {
     fn eval_js(&self, script: &str) {
@@ -936,16 +957,12 @@ impl PersistentJs for V8PersistentJs {
             eprintln!("JS event error: {e}");
         }
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-        if elapsed_ms >= LONGTASK_THRESHOLD_MS {
-            // Delivered through `self.rt.eval` directly, not `self.eval_js`,
-            // so this call is never itself measured — it is always cheap
-            // (one small literal script), and re-entering the wrapper above
-            // would double the (identical) elapsed-time check for no reason.
-            let deliver = format!(
-                "_lumen_deliver_longtask_entry(performance.now() - {elapsed_ms}, {elapsed_ms})"
-            );
-            let _ = self.rt.eval(&deliver);
-        }
+        // Delivered through `self.rt.eval` directly (inside the helper), not
+        // `self.eval_js`, so this call is never itself measured — it is
+        // always cheap (one small literal script), and re-entering the
+        // wrapper above would double the (identical) elapsed-time check for
+        // no reason.
+        deliver_longtask_entry(&self.rt, elapsed_ms);
     }
     fn eval_js_value(&self, script: &str) -> Result<String, String> {
         use lumen_core::ext::JsRuntime as _;

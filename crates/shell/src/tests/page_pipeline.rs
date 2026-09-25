@@ -1275,6 +1275,32 @@ fn parse_time_script_reads_computed_style_and_rect() {
     assert_eq!(probe_attr(&page, "data-r"), "300x120");
 }
 
+/// LONGTASK-1: an inline classic `<script>` that runs during parsing (before
+/// `run_scripts_with_dom` builds its `PersistentJs` handle) still produces a
+/// `longtask` `PerformanceEntry` when it blocks past the 50ms threshold.
+/// Regression guard for the gap `ROADMAP.md`'s LONGTASK-1 entry documented as
+/// known-missing: detection lived only in `V8PersistentJs::eval_js`, which
+/// this parser-time path never goes through.
+#[cfg(feature = "v8")]
+#[test]
+fn parse_time_classic_script_reports_longtask() {
+    let page = parse_and_layout_for_test(
+        "<html><body>\
+         <script>\
+         var start = Date.now(); while (Date.now() - start < 60) {}\
+         </script>\
+         <script>\
+         var n = performance.getEntriesByType('longtask').length;\
+         document.documentElement.setAttribute('data-longtasks', String(n));\
+         </script>\
+         </body></html>",
+    );
+    let n: i64 = probe_attr(&page, "data-longtasks")
+        .parse()
+        .expect("data-longtasks must be a number");
+    assert!(n >= 1, "expected at least one longtask entry, got {n}");
+}
+
 /// BUG-658: `offsetWidth`/`offsetHeight` share the same
 /// `_lumen_get_bounding_rect` native as `getBoundingClientRect`, which
 /// BUG-443 already fixed for parse-time reads — this pins the offset*
