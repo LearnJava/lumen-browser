@@ -2049,6 +2049,15 @@ the time — read dates.
   `elementFromPoint(s)`) and `delegatesFocus`/`slotAssignment`/`clonable`/`serializable`
   (`_lumen_shadow_root_init`, recorded by `attachShadow`) sit on `ShadowRoot.prototype`.
 
+- **`CSS.highlights.highlightsFromPoint()` (CSS Custom Highlight API §5, GAP-HLHITTEST, [P1]
+  2026-09-26).** `_lumen_text_at_point(x, y)` (`install/platform.rs`) answers `[nid, utf16Offset, …]`
+  from `FlushHandles::text_frag_rects` — `lumen_layout::collect_text_frag_rects` over the flush tree,
+  collected only once the page has called the API (`text_frags_needed`), re-collected after every
+  embedder push (`update_client_rects` clears `text_frags_collected`). The shim
+  (`highlight_api.rs`) keeps a range whose boundary points (DOM §5.2, walked over arena ids)
+  enclose that character, skipping collapsed ranges and invalid `StaticRange`s, and sorts by
+  `priority`, then last-registered-first. Not modelled: occlusion, the `shadowRoots` filter.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.

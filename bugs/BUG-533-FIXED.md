@@ -39,9 +39,9 @@ already documented for [BUG-485](BUG-485-FIXED.md) (`document.head`):
   `Highlight-setlike-tampered-Set-prototype.html`,
   `HighlightRegistry-highlightsFromPoint-ranges.html`, `highlight-priority.html`,
   and 1 of `HighlightRegistry-highlightsFromPoint.html`'s 7 fails (the other
-  6 are [BUG-534](BUG-534-OPEN.md)/[BUG-480](BUG-480-OPEN.md)). Note
+  6 are [BUG-534](BUG-534-FIXED.md)/[BUG-480](BUG-480-OPEN.md)). Note
   `Highlight-setlike.html`'s single fail is a *different* symptom
-  (`.size` missing) — that one is [BUG-534](BUG-534-OPEN.md) only, not this
+  (`.size` missing) — that one is [BUG-534](BUG-534-FIXED.md) only, not this
   bug, despite the similar file name.
 - **TIMEOUT via corrupted harness internals** —
   `HighlightRegistry-maplike-tampered-Map-prototype.html` deliberately
@@ -80,7 +80,7 @@ with no substantiating detail added and no matching commit (`git log --all
 -- crates/ | grep -i static.range` — zero hits); `grep -rn "StaticRange"
 crates/` on `HEAD` confirmed the constructor still did not exist anywhere.
 Discovered while writing regression tests for
-[BUG-534](BUG-534-OPEN.md) — its Setlike test files construct
+[BUG-534](BUG-534-FIXED.md) — its Setlike test files construct
 `new StaticRange(...)`, which threw `ReferenceError`.
 
 Implemented in `crates/js/src/shim/web_api_shim_mid.js`, immediately after
