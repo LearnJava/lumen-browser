@@ -834,7 +834,7 @@ function _lumen_tick_timers() {
         var _t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
         try { ready[k].fn.apply(globalThis, ready[k].args || []); } catch(e) { _lumen_report_exception(e); }
         if (typeof _lumen_record_script_timing === 'function') {
-            _lumen_record_script_timing(_t0, _timerInvoker, 'user-callback');
+            _lumen_record_script_timing(_t0, _timerInvoker, 'user-callback', ready[k].fn);
         }
     }
     _lumen_timer_nesting = 0;
@@ -928,7 +928,7 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
             var _t0 = performance.now();
             try { callbacks[i].fn(ts); } catch(e) { _lumen_report_exception(e); }
             if (typeof _lumen_record_script_timing === 'function') {
-                _lumen_record_script_timing(_t0, 'requestAnimationFrame', 'user-callback');
+                _lumen_record_script_timing(_t0, 'requestAnimationFrame', 'user-callback', callbacks[i].fn);
             }
         }
     }

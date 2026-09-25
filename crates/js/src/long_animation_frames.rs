@@ -77,6 +77,14 @@ const LOAF_SHIM: &str = r#"(function() {
     this.sourceFunctionName    = typeof o.sourceFunctionName  !== 'undefined' ? String(o.sourceFunctionName)  : '';
     /// Character offset in sourceURL of the function entry point.
     this.sourceCharPosition    = Number(o.sourceCharPosition) || 0;
+    /// LONGTASK-1 срез 4: 1-based line number of the function's definition in
+    /// `sourceURL` (not part of the W3C spec's field list, but what
+    /// `loaf-source-location.html` asserts alongside `sourceCharPosition` —
+    /// exposed because `rusty_v8` has no `GetScriptStartPosition()` binding
+    /// yet, see `script_attribution.rs` module docs).
+    this.sourceLine             = Number(o.sourceLine)         || 0;
+    /// LONGTASK-1 срез 4: 1-based column number, same rationale as sourceLine.
+    this.sourceColumn           = Number(o.sourceColumn)       || 0;
   }
   PerformanceScriptTiming.prototype.toJSON = function() {
     return {
@@ -89,7 +97,9 @@ const LOAF_SHIM: &str = r#"(function() {
       pauseDuration: this.pauseDuration,
       sourceURL: this.sourceURL,
       sourceFunctionName: this.sourceFunctionName,
-      sourceCharPosition: this.sourceCharPosition
+      sourceCharPosition: this.sourceCharPosition,
+      sourceLine: this.sourceLine,
+      sourceColumn: this.sourceColumn
     };
   };
 
@@ -328,7 +338,9 @@ mod tests {
                     pauseDuration: 0,\
                     sourceURL: 'https://example.com/app.js',\
                     sourceFunctionName: 'handleClick',\
-                    sourceCharPosition: 1234\
+                    sourceCharPosition: 1234,\
+                    sourceLine: 5,\
+                    sourceColumn: 9\
                 });",
             )
             .unwrap();
@@ -338,6 +350,19 @@ mod tests {
             assert_eq!(rt.eval("s.sourceURL").unwrap(), JsValue::String("https://example.com/app.js".into()));
             assert_eq!(rt.eval("s.sourceFunctionName").unwrap(), JsValue::String("handleClick".into()));
             assert_eq!(rt.eval("s.sourceCharPosition").unwrap(), JsValue::Number(1234.0));
+            assert_eq!(rt.eval("s.sourceLine").unwrap(), JsValue::Number(5.0));
+            assert_eq!(rt.eval("s.sourceColumn").unwrap(), JsValue::Number(9.0));
+        });
+    }
+
+    /// LONGTASK-1 срез 4: `sourceLine`/`sourceColumn` default to 0 the same
+    /// way `sourceCharPosition` already did, when the initializer omits them.
+    #[test]
+    fn script_timing_source_location_defaults_to_zero() {
+        with_loaf(|rt| {
+            rt.eval("var s = new PerformanceScriptTiming({});").unwrap();
+            assert_eq!(rt.eval("s.sourceLine").unwrap(), JsValue::Number(0.0));
+            assert_eq!(rt.eval("s.sourceColumn").unwrap(), JsValue::Number(0.0));
         });
     }
 

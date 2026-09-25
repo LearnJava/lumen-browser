@@ -665,6 +665,13 @@ pub(crate) fn install_worker_exposed_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
     // (`js_url::install_url_parse_v8`) — `URL_PARSE_SHIM`/`URL_SHIM` above call
     // it unconditionally, and a worker has no page install pass to fall back on.
     crate::js_url::install_url_parse_v8(rt)?;
+    // LONGTASK-1 срез 4: same for `_lumen_capture_call_site` — a worker's own
+    // `event_target_shim.js`/timer/rAF dispatch paths call it unconditionally
+    // too (BUG-401, this file is shared page/worker).
+    rt.register_native_scoped(
+        "_lumen_capture_call_site",
+        Box::new(crate::v8_runtime::script_attribution_capture_call_site),
+    )?;
     lumen_core::ext::JsRuntime::eval(rt, &worker_exposed_shim())?;
     Ok(())
 }

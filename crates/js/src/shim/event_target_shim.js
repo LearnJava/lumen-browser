@@ -40,16 +40,38 @@ var _lumen_frame_scripts = [];
 // taken immediately before the call; safe to call from a scope without
 // `performance` (falls back to a no-op) so this shim doesn't gain a hard
 // dependency on `PERFORMANCE_SHIM`'s install order.
-function _lumen_record_script_timing(startTime, invoker, invokerType) {
+//
+// LONGTASK-1 срез 4: optional 4th argument `fn` — the actual callback that
+// was invoked — feeds `_lumen_capture_call_site` (native, V8 stack/function
+// introspection, `script_attribution.rs`) to fill in `sourceURL`/
+// `sourceFunctionName`/`sourceLine`/`sourceColumn`. Best-effort: absent `fn`,
+// a non-function `fn` (e.g. an EventListener object's `handleEvent`, or a
+// scope with the native missing — the classic-script/module-script parse-time
+// path has no single callback function at all, see `scripts.rs`) or an
+// exception inside the native all fall back to the class defaults instead of
+// throwing.
+function _lumen_record_script_timing(startTime, invoker, invokerType, fn) {
     if (typeof performance === 'undefined' || typeof performance.now !== 'function') return;
     var duration = performance.now() - startTime;
-    _lumen_frame_scripts.push({
+    var entry = {
         startTime: startTime,
         duration: duration,
         invoker: String(invoker),
         invokerType: invokerType,
         executionStart: startTime
-    });
+    };
+    if (typeof fn === 'function' && typeof _lumen_capture_call_site === 'function') {
+        try {
+            var site = _lumen_capture_call_site(fn);
+            if (site) {
+                entry.sourceURL = site.sourceURL;
+                entry.sourceFunctionName = site.sourceFunctionName;
+                entry.sourceLine = site.sourceLine;
+                entry.sourceColumn = site.sourceColumn;
+            }
+        } catch (_) { /* best-effort attribution — never let it break dispatch */ }
+    }
+    _lumen_frame_scripts.push(entry);
 }
 EventTarget.prototype.addEventListener = function(type, callback, options) {
     if (!callback) return;
@@ -92,7 +114,7 @@ EventTarget.prototype.dispatchEvent = function(event) {
                 if (typeof entry.callback === 'function') entry.callback.call(this, event);
                 else if (entry.callback && typeof entry.callback.handleEvent === 'function') entry.callback.handleEvent(event);
             } catch (e) { _lumen_et_report(e); }
-            _lumen_record_script_timing(_t0, invoker, 'event-listener');
+            _lumen_record_script_timing(_t0, invoker, 'event-listener', entry.callback);
             if (entry.once) this.removeEventListener(type, entry.callback, entry.capture);
             if (event._stopImmediate) break;
         }
@@ -101,7 +123,7 @@ EventTarget.prototype.dispatchEvent = function(event) {
     if (typeof this[onprop] === 'function') {
         var _t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
         try { this[onprop].call(this, event); } catch (e) { _lumen_et_report(e); }
-        _lumen_record_script_timing(_t1, invoker, 'event-listener');
+        _lumen_record_script_timing(_t1, invoker, 'event-listener', this[onprop]);
     }
     event.currentTarget = null;
     return !event.defaultPrevented;
