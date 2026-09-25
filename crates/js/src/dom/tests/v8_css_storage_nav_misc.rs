@@ -398,6 +398,10 @@ fn navigation_entries_reads_shell_state() {
 #[test]
 fn navigation_traverse_to_queues_numeric_action() {
     let rt = v8_runtime_with_dom(make_doc());
+    // BUG-639: a key that is not in the entry list rejects without queueing
+    // (HTML LS §7.2.9.4 step «no such entry → InvalidStateError»), so the
+    // state has to be published first.
+    rt.eval("_lumen_navigation_set_state('{\"entries\":[{\"url\":\"https://a/\",\"key\":\"nav-1\",\"id\":\"id-1\",\"state\":null},{\"url\":\"https://b/\",\"key\":\"nav-2\",\"id\":\"id-2\",\"state\":null}],\"index\":1}')").unwrap();
     rt.eval("navigation.traverseTo('nav-1'); true").unwrap();
     let q = rt.take_nav_updates();
     assert!(q.iter().any(|(action, _, key, _)| matches!(action, NavAction::TraverseTo) && key == "nav-1"));

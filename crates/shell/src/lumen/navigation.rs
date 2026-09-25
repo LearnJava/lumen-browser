@@ -309,8 +309,11 @@ impl Lumen {
         }
         // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
         // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        // BUG-639: the target entry's key, so `NavigateEvent.destination`
+        // describes that entry (`key`/`id`/`index`/`getState()`).
+        let dest_key = self.nav_back.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
         });
         if let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
@@ -365,11 +368,14 @@ impl Lumen {
                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                     j.fire_popstate(&state_json, &url);
                 });
-                self.fire_current_entry_change();
                 self.request_redraw();
                 self.current_nav_key = prev.nav_key;
                 self.source = prev.source;
                 self.commit_nav_state();
+                // BUG-639: after `commit_nav_state` — both are queued JS tasks,
+                // and the event's `from`/`navigationType` are derived from the
+                // stacks JS already holds when it fires.
+                self.fire_current_entry_change();
                 return;
             }
             // Cross-document unification: the multi-step shuffle passed through
@@ -497,8 +503,11 @@ impl Lumen {
         }
         // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
         // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        // BUG-639: the target entry's key, so `NavigateEvent.destination`
+        // describes that entry (`key`/`id`/`index`/`getState()`).
+        let dest_key = self.nav_fwd.last().map(|e| e.nav_key.replace('\\', "\\\\").replace('\'', "\\'")).unwrap_or_default();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.eval_js(&format!("_lumen_dispatch_navigate('traverse', '', true, false, '{dest_key}')"));
         });
         if let Some(intercept) = route_query_js(
             self.engine_thread.as_ref(),
@@ -552,11 +561,14 @@ impl Lumen {
                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                     j.fire_popstate(&state_json, &url);
                 });
-                self.fire_current_entry_change();
                 self.request_redraw();
                 self.current_nav_key = next.nav_key;
                 self.source = next.source;
                 self.commit_nav_state();
+                // BUG-639: after `commit_nav_state` — both are queued JS tasks,
+                // and the event's `from`/`navigationType` are derived from the
+                // stacks JS already holds when it fires.
+                self.fire_current_entry_change();
                 return;
             }
             // Cross-document unification: see `navigate_back`.
