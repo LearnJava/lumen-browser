@@ -1,4 +1,4 @@
-# BUG-1176 — CSP: вставленный скриптом `<link rel=stylesheet>` применяется в обход `style-src`
+# BUG-1180 — CSP: вставленный скриптом `<link rel=stylesheet>` применяется в обход `style-src`
 
 **Статус:** OPEN
 **Заведён:** 2026-09-26 (P3, по ходу [BUG-1175](BUG-1175-FIXED.md); видимое окно `--maximized`,

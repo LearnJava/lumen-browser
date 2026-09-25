@@ -88,7 +88,7 @@
 
 `<link rel=stylesheet>`, вставленный скриптом: при `connect-src 'none'` `load` в обоих браузерах.
 При `style-src 'none'` `error` в обоих, но Lumen всё равно применяет лист. Это отдельный путь
-shell-а, [BUG-1176](BUG-1176-OPEN.md).
+shell-а, [BUG-1180](BUG-1180-OPEN.md).
 
 Не сделано: `script-src-elem`/`style-src-elem` как самостоятельные директивы не разбираются,
 `effective_sources` падает сразу на `default-src`. Парсерный `<script src>` (BUG-1124)
