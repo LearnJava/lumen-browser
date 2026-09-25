@@ -6,7 +6,7 @@
 //! - 5A.2 — frame codec ([`frame`]).
 //! - 5A.3 — HPACK header compression (planned).
 //! - 5A.4 — connection driver: preface + SETTINGS exchange + single GET (planned).
-//! - 5A.5 — stream multiplexing inside a single connection (planned).
+//! - 5A.5 — stream multiplexing inside a single connection ([`mux`], PERF-13).
 //! - 5A.6 — flow control + WINDOW_UPDATE (planned).
 //!
 //! The codec is pure (no IO, no connection state). Higher layers build on top:
@@ -17,4 +17,5 @@
 pub mod conn;
 pub mod frame;
 pub mod hpack;
+pub mod mux;
 pub mod pool;

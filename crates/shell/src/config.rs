@@ -352,6 +352,25 @@ impl FingerprintProfile {
             client = client.with_http_cache(cache);
         }
 
+        // PERF-13: process-wide connection pools, so an HTTP/2 origin keeps
+        // one multiplexed connection across navigations and subresource
+        // batches instead of a handshake per client. The route string holds
+        // everything that makes connections non-interchangeable; the caller
+        // narrows it to the document's site with `with_connection_site`.
+        // Not behind an HTTP proxy: there the pooled HTTP/1.1 key is the
+        // proxy itself, and a CONNECT tunnel to one origin must never be
+        // handed to a request for another.
+        if self.proxy.is_none() {
+            let route = format!(
+                "{private}|{:?}|{:?}|{:?}|{:?}",
+                self.http_profile,
+                self.effective_tls_profile(),
+                self.socks5_proxy,
+                self.doh_url,
+            );
+            client = client.with_shared_connection_pools(&route);
+        }
+
         client
     }
 
@@ -370,6 +389,20 @@ impl FingerprintProfile {
         }
         None
     }
+}
+
+/// Connection-pool partition of a document at `url`: its registrable domain
+/// (eTLD+1), or the bare host for IPs/localhost. Passed to
+/// `HttpClient::with_connection_site` so pooled connections are never shared
+/// between unrelated top-level sites (PERF-13).
+#[must_use]
+pub fn connection_site(url: &lumen_core::url::Url) -> String {
+    use lumen_core::ext::PublicSuffixList;
+    let host = url.host_ascii_normalized();
+    lumen_storage::PslProvider::new()
+        .registrable_domain(host)
+        .unwrap_or(host)
+        .to_owned()
 }
 
 /// Resolve the path to the portable `fingerprint.toml`.

@@ -248,7 +248,9 @@ impl PageSource {
                         None,
                     );
                 }
-                let client = crate::config::global().apply_http(builder);
+                let client = crate::config::global()
+                    .apply_http(builder)
+                    .with_connection_site(&crate::config::connection_site(&lumen_url));
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
@@ -364,7 +366,9 @@ impl PageSource {
                 None,
             );
         }
-        let client = crate::config::global().apply_http(builder);
+        let client = crate::config::global()
+            .apply_http(builder)
+            .with_connection_site(&crate::config::connection_site(&lumen_url));
         let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status, early_hint_links, cert_info } =
             client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref(), *upgrade_insecure_requests)?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.

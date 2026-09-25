@@ -48,7 +48,8 @@ use lumen_core::error::Error;
 use crate::h2::{
     frame::{
         Frame, FrameError, MAX_FRAME_PAYLOAD_DEFAULT, SETTING_HEADER_TABLE_SIZE,
-        SETTING_INITIAL_WINDOW_SIZE, SETTING_MAX_FRAME_SIZE,
+        ERROR_CANCEL, ERROR_NO_ERROR, ERROR_REFUSED_STREAM, SETTING_INITIAL_WINDOW_SIZE,
+        SETTING_MAX_CONCURRENT_STREAMS, SETTING_MAX_FRAME_SIZE,
     },
     hpack::{Decoder, Encoder, HeaderField},
 };
@@ -72,6 +73,12 @@ struct StreamState {
     end_stream: bool,
     /// Accumulated response body.
     body: Vec<u8>,
+    /// The request was cancelled (RST_STREAM(CANCEL) sent) or the stream was
+    /// never ours (orphan HEADERS). Its frames are still consumed — header
+    /// blocks must be HPACK-decoded to keep the shared decoder table in sync
+    /// (RFC 7541 §2.2), DATA must credit the connection window — but no
+    /// [`StreamEvent`] is produced for it.
+    discard: bool,
     /// Status of the final (non-1xx) response, once its header block has
     /// been decoded. `None` while still skipping informational responses.
     final_status: Option<u16>,
@@ -86,6 +93,7 @@ impl StreamState {
             end_headers: false,
             end_stream: false,
             body: Vec::new(),
+            discard: false,
             final_status: None,
             final_headers: Vec::new(),
         }
@@ -149,6 +157,15 @@ pub struct H2Conn<S: Read + Write> {
     /// Empty when using single-stream [`fetch`]; populated when using
     /// [`send_request`]/[`read_response_for_stream`].
     pending_streams: HashMap<u32, StreamState>,
+    /// SETTINGS_MAX_CONCURRENT_STREAMS from the remote peer (RFC 9113 §5.1.2);
+    /// `None` until the peer states a limit ("initially no limit").
+    remote_max_streams: Option<u32>,
+    /// Header block of a PUSH_PROMISE still waiting for its CONTINUATION
+    /// frames (multiplexed driver only; see [`Self::handle_mux_frame`]).
+    push_block: Option<Vec<u8>>,
+    /// The last [`Self::read_frame`] failed because the transport's read
+    /// timeout expired, not because the connection broke.
+    last_read_timed_out: bool,
     /// Impersonated browser profile — determines the HTTP/2 pseudo-header order
     /// (part of the HTTP/2 fingerprint anti-bot layers key on; see
     /// [`H2Conn::pseudo_headers`]).
@@ -210,6 +227,9 @@ impl<S: Read + Write> H2Conn<S> {
             conn_recv_window: INITIAL_WINDOW,
             conn_send_window: INITIAL_WINDOW as i64,
             pending_streams: HashMap::new(),
+            remote_max_streams: None,
+            push_block: None,
+            last_read_timed_out: false,
             profile,
         };
 
@@ -254,6 +274,7 @@ impl<S: Read + Write> H2Conn<S> {
                 SETTING_HEADER_TABLE_SIZE => self.encoder.set_max_size(val as usize),
                 SETTING_INITIAL_WINDOW_SIZE => self.remote_init_window = val,
                 SETTING_MAX_FRAME_SIZE => self.remote_max_frame = val,
+                SETTING_MAX_CONCURRENT_STREAMS => self.remote_max_streams = Some(val),
                 _ => {}
             }
         }
@@ -291,11 +312,20 @@ impl<S: Read + Write> H2Conn<S> {
                 Ok(None) => {
                     let old_len = self.buf.len();
                     self.buf.resize(old_len + READ_CHUNK, 0);
-                    let n = self
-                        .stream
-                        .read(&mut self.buf[old_len..])
-                        .map_err(io_err)?;
+                    let read = self.stream.read(&mut self.buf[old_len..]);
+                    // Truncate BEFORE propagating an error: the zero padding
+                    // from `resize` must never be parsed as frame bytes by a
+                    // later call (the multiplexer retries after read timeouts).
+                    let n = *read.as_ref().unwrap_or(&0);
                     self.buf.truncate(old_len + n);
+                    self.last_read_timed_out = matches!(
+                        &read,
+                        Err(e) if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        )
+                    );
+                    let n = read.map_err(io_err)?;
                     if n == 0 {
                         return Err(Error::Network("H2: unexpected EOF".to_owned()));
                     }
@@ -821,6 +851,344 @@ impl<S: Read + Write> H2Conn<S> {
         // Stream is complete; extract and return the response.
         let stream = self.pending_streams.remove(&sid).unwrap();
         Ok((stream.final_status.unwrap(), stream.final_headers, stream.body))
+    }
+}
+
+// ── Multiplexed driver primitives (PERF-13) ──────────────────────────────
+
+/// Highest client-initiated stream identifier (RFC 9113 §5.1.1: 31 bits).
+const MAX_STREAM_ID: u32 = (1 << 31) - 1;
+
+/// What one frame fed through [`H2Conn::handle_mux_frame`] meant for the
+/// requests multiplexed on the connection.
+#[derive(Debug)]
+pub(crate) enum StreamEvent {
+    /// The final (non-1xx) response of stream `.0` arrived in full.
+    Complete(u32, H2Response),
+    /// Stream `sid` ended without a usable response. `retryable` is true only
+    /// when the peer guarantees it did not process the request
+    /// (RST_STREAM(REFUSED_STREAM), RFC 9113 §8.7).
+    Failed {
+        /// The stream that failed.
+        sid: u32,
+        /// Why.
+        error: Error,
+        /// Safe to resend on another connection.
+        retryable: bool,
+    },
+    /// The peer is shutting the connection down (RFC 9113 §6.8): streams
+    /// above `last_stream_id` were not processed and may be retried.
+    GoAway {
+        /// Highest stream id the peer may still answer.
+        last_stream_id: u32,
+    },
+}
+
+impl<S: Read + Write> H2Conn<S> {
+    /// The underlying transport (the multiplexer adjusts its read timeout).
+    pub(crate) fn transport(&self) -> &S {
+        &self.stream
+    }
+
+    /// Peer's SETTINGS_MAX_CONCURRENT_STREAMS, if it stated one.
+    pub(crate) fn max_concurrent_streams(&self) -> Option<u32> {
+        self.remote_max_streams
+    }
+
+    /// Whether another client stream id is still available (RFC 9113 §5.1.1:
+    /// an exhausted id space means a new connection is needed).
+    pub(crate) fn can_open_stream(&self) -> bool {
+        self.next_stream_id <= MAX_STREAM_ID
+    }
+
+    /// Whether the final response headers of `sid` have been received — past
+    /// that point the request was certainly processed and must not be resent.
+    pub(crate) fn response_started(&self, sid: u32) -> bool {
+        self.pending_streams
+            .get(&sid)
+            .is_some_and(|s| s.final_status.is_some())
+    }
+
+    /// Open a stream and write the whole request (HEADERS, then DATA frames
+    /// for a non-empty `body`) without waiting for the response; the response
+    /// arrives as a [`StreamEvent`] from [`Self::handle_mux_frame`].
+    ///
+    /// A body that exceeds the current send window is refused with
+    /// [`H2_BODY_EXCEEDS_SEND_WINDOW`] before anything is written — same
+    /// contract as [`Self::fetch_with_body`].
+    pub(crate) fn open_stream(
+        &mut self,
+        method: &str,
+        scheme: &str,
+        authority: &str,
+        path: &str,
+        extra_headers: &[(&[u8], &[u8])],
+        body: &[u8],
+    ) -> Result<u32, Error> {
+        if !body.is_empty() {
+            let budget = self.conn_send_window.min(self.remote_init_window as i64);
+            if body.len() as i64 > budget {
+                return Err(Error::Network(H2_BODY_EXCEEDS_SEND_WINDOW.to_owned()));
+            }
+        }
+        let sid = self.allocate_stream_id();
+        self.pending_streams.insert(sid, StreamState::new());
+
+        let mut req = self.pseudo_headers(method, scheme, authority, path);
+        req.extend_from_slice(extra_headers);
+        let block = self.encoder.encode(&req);
+        self.send_frame(&Frame::Headers {
+            stream_id: sid,
+            end_stream: body.is_empty(),
+            end_headers: true,
+            priority: None,
+            block_fragment: block,
+        })?;
+        let max_chunk = (self.remote_max_frame as usize).max(1);
+        let mut offset = 0;
+        while offset < body.len() {
+            let end = (offset + max_chunk).min(body.len());
+            let chunk = &body[offset..end];
+            self.send_frame(&Frame::Data {
+                stream_id: sid,
+                end_stream: end == body.len(),
+                data: chunk.to_vec(),
+            })?;
+            self.conn_send_window -= chunk.len() as i64;
+            offset = end;
+        }
+        Ok(sid)
+    }
+
+    /// Abandon stream `sid`: RST_STREAM(CANCEL) to the peer. Frames the peer
+    /// already had in flight are still consumed by [`Self::handle_mux_frame`]
+    /// (header blocks decoded, DATA credited) but produce no event.
+    pub(crate) fn cancel_stream(&mut self, sid: u32) -> Result<(), Error> {
+        let Some(st) = self.pending_streams.get_mut(&sid) else {
+            return Ok(());
+        };
+        st.discard = true;
+        self.send_frame(&Frame::RstStream { stream_id: sid, error_code: ERROR_CANCEL })
+    }
+
+    /// Best-effort graceful shutdown notice (GOAWAY(NO_ERROR), RFC 9113 §6.8).
+    pub(crate) fn send_goaway(&mut self) {
+        let _ = self.send_frame(&Frame::Goaway {
+            last_stream_id: 0,
+            error_code: ERROR_NO_ERROR,
+            debug_data: Vec::new(),
+        });
+    }
+
+    /// [`Self::read_frame`] for a transport with a short read timeout:
+    /// `Ok(None)` when nothing arrived within it, so the caller can service
+    /// other work (new requests, deadlines) between reads.
+    pub(crate) fn poll_frame(&mut self) -> Result<Option<Frame>, Error> {
+        match self.read_frame() {
+            Ok(frame) => Ok(Some(frame)),
+            Err(_) if self.last_read_timed_out => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Feed one frame read off a multiplexed connection. Connection-level
+    /// frames are answered in place (SETTINGS ACK, PING ACK, window credits);
+    /// stream frames are accumulated per stream id. Returns an event when a
+    /// request finished, failed or the connection is going away.
+    ///
+    /// `Err` is a connection error (HPACK desync, write failure): every stream
+    /// on the connection is lost.
+    pub(crate) fn handle_mux_frame(&mut self, frame: Frame) -> Result<Option<StreamEvent>, Error> {
+        let sid = match frame {
+            Frame::Settings { ack: false, params } => {
+                self.apply_remote_settings(&params);
+                self.send_frame(&Frame::Settings { ack: true, params: vec![] })?;
+                return Ok(None);
+            }
+            Frame::WindowUpdate { stream_id: 0, increment } => {
+                self.credit_conn_send_window(increment);
+                return Ok(None);
+            }
+            Frame::Ping { ack: false, opaque_data } => {
+                self.send_frame(&Frame::Ping { ack: true, opaque_data })?;
+                return Ok(None);
+            }
+            Frame::Goaway { last_stream_id, .. } => {
+                return Ok(Some(StreamEvent::GoAway { last_stream_id }));
+            }
+            Frame::RstStream { stream_id, error_code } => {
+                return Ok(match self.pending_streams.remove(&stream_id) {
+                    Some(st) if !st.discard => Some(StreamEvent::Failed {
+                        sid: stream_id,
+                        error: Error::Network(format!(
+                            "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
+                        )),
+                        retryable: error_code == ERROR_REFUSED_STREAM,
+                    }),
+                    _ => None,
+                });
+            }
+            Frame::PushPromise { end_headers, promised_stream_id, block_fragment, .. } => {
+                // We advertise ENABLE_PUSH for fingerprint parity but never use
+                // pushed responses: decode the block (HPACK sync) and refuse
+                // the promised stream.
+                self.push_block = Some(block_fragment);
+                if end_headers {
+                    self.finish_push_block()?;
+                }
+                self.send_frame(&Frame::RstStream {
+                    stream_id: promised_stream_id,
+                    error_code: ERROR_CANCEL,
+                })?;
+                return Ok(None);
+            }
+            Frame::Headers { stream_id, end_stream, end_headers, block_fragment, .. } => {
+                // A block for a stream we don't track (a pushed stream, one
+                // already reset) is still decoded, then dropped.
+                let st = self.pending_streams.entry(stream_id).or_insert_with(|| {
+                    let mut s = StreamState::new();
+                    s.discard = true;
+                    s
+                });
+                st.hdr_block.extend_from_slice(&block_fragment);
+                st.end_headers = end_headers;
+                if end_stream {
+                    st.end_stream = true;
+                }
+                stream_id
+            }
+            Frame::Continuation { stream_id, end_headers, block_fragment } => {
+                if let Some(push) = self.push_block.as_mut() {
+                    push.extend_from_slice(&block_fragment);
+                    if end_headers {
+                        self.finish_push_block()?;
+                    }
+                    return Ok(None);
+                }
+                let Some(st) = self.pending_streams.get_mut(&stream_id) else {
+                    return Ok(None);
+                };
+                st.hdr_block.extend_from_slice(&block_fragment);
+                st.end_headers = end_headers;
+                stream_id
+            }
+            Frame::Data { stream_id, end_stream, data } => {
+                let consumed = data.len() as u32;
+                let (tracked, open) = match self.pending_streams.get_mut(&stream_id) {
+                    Some(st) => {
+                        if !st.discard {
+                            st.body.extend_from_slice(&data);
+                        }
+                        if end_stream {
+                            st.end_stream = true;
+                        }
+                        (true, !st.discard)
+                    }
+                    None => (false, false),
+                };
+                // RFC 9113 §6.9: DATA on ANY stream consumes the connection
+                // window, so it is always credited back; the stream window
+                // only matters while the stream stays open — a stream we
+                // reset is closed, and a WINDOW_UPDATE on it would draw
+                // STREAM_CLOSED from the peer (§5.1).
+                if consumed > 0 {
+                    self.conn_recv_window = self.conn_recv_window.saturating_sub(consumed);
+                    self.send_frame(&Frame::WindowUpdate { stream_id: 0, increment: consumed })?;
+                    if open && !end_stream {
+                        self.send_frame(&Frame::WindowUpdate { stream_id, increment: consumed })?;
+                    }
+                }
+                if !tracked {
+                    return Ok(None);
+                }
+                stream_id
+            }
+            // SETTINGS/PING ACKs, stream WINDOW_UPDATEs (our bodies are fully
+            // written up front), PRIORITY, unknown extension frames.
+            _ => return Ok(None),
+        };
+
+        if self.pending_streams.get(&sid).is_some_and(|s| s.end_headers)
+            && let Some(event) = self.finish_mux_header_block(sid)?
+        {
+            self.pending_streams.remove(&sid);
+            return Ok(Some(event));
+        }
+        let done = self
+            .pending_streams
+            .get(&sid)
+            .is_some_and(|st| st.end_stream && (st.final_status.is_some() || st.discard));
+        if !done {
+            return Ok(None);
+        }
+        Ok(self.pending_streams.remove(&sid).and_then(|st| {
+            let status = st.final_status.filter(|_| !st.discard)?;
+            Some(StreamEvent::Complete(sid, (status, st.final_headers, st.body)))
+        }))
+    }
+
+    /// Decode the just-completed header block of `sid`: the first non-1xx
+    /// block is the response head, 1xx blocks are skipped, a block after the
+    /// head is a trailer section (RFC 9113 §8.1) — decoded only to keep the
+    /// shared HPACK table in sync. Returns an event only for a head without
+    /// `:status` (the stream is unusable; the caller drops it).
+    fn finish_mux_header_block(&mut self, sid: u32) -> Result<Option<StreamEvent>, Error> {
+        let Some(st) = self.pending_streams.get_mut(&sid) else {
+            return Ok(None);
+        };
+        let block = std::mem::take(&mut st.hdr_block);
+        st.end_headers = false;
+        let fields = self
+            .decoder
+            .decode(&block)
+            .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+        let Some(st) = self.pending_streams.get_mut(&sid) else {
+            return Ok(None);
+        };
+        if st.discard || st.final_status.is_some() {
+            return Ok(None);
+        }
+        let status = fields
+            .iter()
+            .find(|f| f.name == b":status")
+            .and_then(|f| std::str::from_utf8(&f.value).ok())
+            .and_then(|s| s.parse::<u16>().ok());
+        match status {
+            None => Ok(Some(StreamEvent::Failed {
+                sid,
+                error: Error::Network("H2: response missing :status".to_owned()),
+                retryable: false,
+            })),
+            // Informational — RFC 9113 §8.1 forbids END_STREAM on a 1xx block.
+            Some(s) if (100..200).contains(&s) => {
+                st.end_stream = false;
+                Ok(None)
+            }
+            Some(s) => {
+                st.final_status = Some(s);
+                st.final_headers = fields
+                    .into_iter()
+                    .filter(|f| !f.name.starts_with(b":"))
+                    .map(|f| {
+                        (
+                            String::from_utf8_lossy(&f.name).into_owned(),
+                            String::from_utf8_lossy(&f.value).into_owned(),
+                        )
+                    })
+                    .collect();
+                Ok(None)
+            }
+        }
+    }
+
+    /// Decode and drop a completed PUSH_PROMISE header block.
+    fn finish_push_block(&mut self) -> Result<(), Error> {
+        if let Some(block) = self.push_block.take() {
+            self.decoder
+                .decode(&block)
+                .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+        }
+        Ok(())
     }
 }
 

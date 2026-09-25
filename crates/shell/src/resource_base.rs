@@ -223,7 +223,10 @@ impl ResourceBase {
         // is the caller's resolved policy (see this method's doc comment) —
         // still the project default at every call site not yet upgraded.
         if let Some(document_url) = self.url() {
-            client = client.with_document_context(document_url, referrer_policy);
+            // PERF-13: pooled connections are partitioned by document site.
+            client = client
+                .with_connection_site(&crate::config::connection_site(&document_url))
+                .with_document_context(document_url, referrer_policy);
         }
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
