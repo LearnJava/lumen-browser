@@ -93,7 +93,7 @@ synchronous `_perf_entries` push.
 ## Реконфирмации (не новые)
 
 - `PerformanceObserverEntryList is not defined` (`po-observe.any.html`) —
-  same class as [BUG-645](BUG-645-OPEN.md)/[BUG-624](BUG-624-FIXED.md)/
+  same class as [BUG-645](BUG-645-FIXED.md)/[BUG-624](BUG-624-FIXED.md)/
   [BUG-637](BUG-637-OPEN.md)/[BUG-589](BUG-589-FIXED.md): WebIDL
   interface objects absent as globals even where the underlying behavior
   (the plain-object "list" passed to callbacks, `dom.rs:8319-8326`) works.
