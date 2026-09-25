@@ -1138,6 +1138,131 @@ HTMLElement.prototype.blur = function() {
 window.focus = function() {};
 window.blur  = function() {};
 
+// BUG-623 — `window.find(string, caseSensitive, backwards, wrapAround, …)`:
+// legacy, unspecified text search (Firefox/Safari/Chromium all ship it). Walks
+// the *flat tree* (a shadow host's shadow root instead of its light children,
+// a `<slot>`'s assigned nodes instead of its fallback), skipping what the user
+// cannot find in page: inert subtrees (HTML LS §6.7), everything outside the
+// topmost modal `<dialog>` (it makes the rest of the document inert), `hidden`,
+// `display:none` and non-rendered containers. The search starts at the end of
+// the current selection (or its start, backwards) and, on a match, selects it
+// — so repeated calls step through occurrences, and without `wrapAround` the
+// call after the last one answers `false`. Text is matched per concatenated
+// run of text nodes, so a match may span inline element boundaries.
+var _LUMEN_FIND_SKIP_TAGS = {
+    HEAD: 1, SCRIPT: 1, STYLE: 1, TEMPLATE: 1, NOSCRIPT: 1, TITLE: 1,
+    IFRAME: 1, OBJECT: 1, EMBED: 1, SELECT: 1, TEXTAREA: 1, INPUT: 1
+};
+
+function _lumen_find_slot_assigned(slot_nid) {
+    var host_nid = _lumen_u2n(_lumen_get_shadow_root_host(slot_nid));
+    if (host_nid === null) return null;
+    var name = _lumen_u2n(_lumen_get_attr(slot_nid, 'name')) || '';
+    var kids = _lumen_get_children(host_nid);
+    var out = [];
+    for (var i = 0; i < kids.length; i++) {
+        var slot_attr = _lumen_is_text_node(kids[i]) ? '' : (_lumen_u2n(_lumen_get_attr(kids[i], 'slot')) || '');
+        if (slot_attr === name) out.push(kids[i]);
+    }
+    return out;
+}
+
+// Flat-tree text runs: [{nid, start}], `text` is their concatenation.
+function _lumen_find_collect() {
+    var modal = -1;
+    for (var m = _lumen_modal_dialog_nids.length - 1; m >= 0; m--) {
+        if (_lumen_has_attr(_lumen_modal_dialog_nids[m], 'open')) { modal = _lumen_modal_dialog_nids[m]; break; }
+    }
+    var runs = [];
+    var text = '';
+    function walk(nid, inModal, depth) {
+        if (depth > 512) return;
+        if (_lumen_is_comment_node(nid)) return;
+        if (_lumen_is_text_node(nid)) {
+            if (modal !== -1 && !inModal) return;
+            var data = _lumen_get_text_content(nid);
+            if (data.length === 0) return;
+            runs.push({ nid: nid, start: text.length });
+            text += data;
+            return;
+        }
+        var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+        if (tag !== '') {
+            if (_LUMEN_FIND_SKIP_TAGS[tag] === 1) return;
+            if (_lumen_has_attr(nid, 'inert') || _lumen_has_attr(nid, 'hidden')) return;
+            if (_lumen_get_computed_style(nid, 'display') === 'none') return;
+            if (tag === 'DIALOG' && !_lumen_has_attr(nid, 'open')) return;
+        }
+        if (nid === modal) inModal = true;
+        var kids = null;
+        var sr = tag !== '' ? _lumen_u2n(_lumen_get_shadow_root(nid)) : null;
+        if (sr !== null) {
+            kids = _lumen_get_children(sr);
+        } else if (tag === 'SLOT') {
+            var assigned = _lumen_find_slot_assigned(nid);
+            kids = (assigned !== null && assigned.length > 0) ? assigned : _lumen_get_children(nid);
+        } else {
+            kids = _lumen_get_children(nid);
+        }
+        for (var i = 0; i < kids.length; i++) walk(kids[i], inModal, depth + 1);
+    }
+    walk(_lumen_root_nid, false, 0);
+    return { runs: runs, text: text };
+}
+
+// Global offset → [nid, offset]; `atEnd` prefers the end of the previous run
+// at a boundary so a selection never ends at offset 0 of the next node.
+function _lumen_find_locate(runs, pos, atEnd) {
+    for (var i = runs.length - 1; i >= 0; i--) {
+        var r = runs[i];
+        if (pos > r.start || (!atEnd && pos === r.start)) {
+            return [r.nid, pos - r.start];
+        }
+    }
+    return runs.length > 0 ? [runs[0].nid, 0] : null;
+}
+
+// Selection boundary → global offset, or -1 if it is not in any run.
+function _lumen_find_offset_of(runs, nid, off) {
+    for (var i = 0; i < runs.length; i++) {
+        if (runs[i].nid === nid) return runs[i].start + off;
+    }
+    return -1;
+}
+
+window.find = function(string, caseSensitive, backwards, wrapAround) {
+    var needle = (string === undefined || string === null) ? '' : String(string);
+    if (needle.length === 0) return false;
+    var c = _lumen_find_collect();
+    if (c.runs.length === 0) return false;
+    var hay = c.text;
+    if (!caseSensitive) {
+        var lh = hay.toLowerCase(), ln = needle.toLowerCase();
+        // Only fold when folding keeps offsets aligned with the DOM text.
+        if (lh.length === hay.length && ln.length === needle.length) { hay = lh; needle = ln; }
+    }
+    var from = backwards ? hay.length : 0;
+    var s = _lumen_get_selection();
+    if (s) {
+        var a = _lumen_find_offset_of(c.runs, s[0], s[1]);
+        var f = _lumen_find_offset_of(c.runs, s[2], s[3]);
+        if (a !== -1 && f !== -1) from = backwards ? Math.min(a, f) : Math.max(a, f);
+    }
+    var at;
+    if (backwards) {
+        at = from - needle.length >= 0 ? hay.lastIndexOf(needle, from - needle.length) : -1;
+        if (at === -1 && wrapAround) at = hay.lastIndexOf(needle);
+    } else {
+        at = hay.indexOf(needle, from);
+        if (at === -1 && wrapAround) at = hay.indexOf(needle);
+    }
+    if (at === -1) return false;
+    var st = _lumen_find_locate(c.runs, at, false);
+    var en = _lumen_find_locate(c.runs, at + needle.length, true);
+    if (st && en) _lumen_set_selection(st[0], st[1], en[0], en[1]);
+    return true;
+};
+
 // HTML LS §obsolete (BUG-606): `window.captureEvents()`/`releaseEvents()` are
 // historical no-ops kept only so old feature-detection code calling them
 // unconditionally doesn't die on `is not a function`.
