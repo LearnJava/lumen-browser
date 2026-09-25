@@ -118,3 +118,23 @@ fn same_tick_dom_mutation_is_seen_by_the_hit_test() {
          before.length === 1 && hit(er.left + er.width / 2, er.top + er.height / 2).length === 0",
     );
 }
+
+/// Adjacent inline elements used to share one `InlineFrag` (the wrapper
+/// merged same-style words across DOM text nodes), so the second one had
+/// no geometry at all: a zero `getBoundingClientRect()` and no hit — the
+/// root cause of the WPT "skips invalid StaticRanges" subtest failing.
+#[test]
+fn adjacent_inline_siblings_keep_their_own_fragments() {
+    let rt = rt_with_text();
+    check(
+        &rt,
+        "document.body.innerHTML = '<span id=a>0123456789</span> <span id=b>temporary</span><span id=c>xyz</span>';
+         var b = document.getElementById('b'), c = document.getElementById('c');
+         var br = b.getBoundingClientRect(), cr = c.getBoundingClientRect();
+         var bt = b.firstChild;
+         CSS.highlights.set('b', new Highlight(new StaticRange({startContainer: bt, startOffset: 0, endContainer: bt, endOffset: 9})));
+         var h = hit(br.left + br.width / 2, br.top + br.height / 2);
+         br.width > 0 && cr.width > 0 && cr.left >= br.right - 0.5
+           && h.length === 1 && hit(cr.left + cr.width / 2, cr.top + cr.height / 2).length === 0",
+    );
+}
