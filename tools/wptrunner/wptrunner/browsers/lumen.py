@@ -29,7 +29,7 @@ import traceback
 
 import mozprocess
 
-from .base import ExecutorBrowser, OutputHandler, WebDriverBrowser, get_timeout_multiplier, require_arg  # noqa: F401
+from .base import ExecutorBrowser, OutputHandler, WebDriverBrowser, get_free_port, get_timeout_multiplier, require_arg  # noqa: F401
 from ..environment import wait_for_service
 from ..executors import executor_kwargs as base_executor_kwargs
 from ..executors.executorlumen import LumenRefTestExecutor, LumenTestharnessExecutor  # noqa: F401
@@ -328,8 +328,22 @@ class LumenBrowser(WebDriverBrowser):
         so passing `bufsize=` here reaches `subprocess.Popen` exactly the way
         srez 47b's isolated repro did — no vendor patch, no reapply-per-venv
         step (unlike the pywebsocket3 patch, CLAUDE.md's WPT-harness gotcha).
+
+        BUG-1073 срез 6: a fresh port on EVERY launch, not only the first.
+        `WebDriverBrowser.port` picks one lazily and then keeps it, so a
+        relaunch (restart after an ERROR/TIMEOUT) reused the previous
+        process's port. `TerminateProcess` of a `lumen.exe` holding a live
+        wgpu device does not free it at once: measured 0.7 s for one process,
+        1.8-3.8 s for four killed together, longer under a WPT run (the old
+        process outlived `proc.kill(timeout=5)` — `IO Completion Port failed
+        to signal process shutdown`). Meanwhile `wait_for_service` below
+        connected to the OLD, dying process and reported success; the new
+        one failed `bind` (`os error 10048`) and exited without a token, and
+        `token` raised `did not print [bidi] token` — three times in a row
+        ended the whole `TestRunnerManager` and left its queue `MISSING`.
         """
         assert self.init_deadline is not None
+        self._port = get_free_port()
         cmd = self.make_command()
         self._output_handler = self.create_output_handler(cmd)
 
