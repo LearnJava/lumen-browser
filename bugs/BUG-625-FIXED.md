@@ -1,6 +1,6 @@
 # BUG-625
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** shell (`main.rs::relayout_chrome_host`), chrome
 (`assets/chrome/chrome.html` — `--font-ui` / `--font-mono`)
 **Файл:** `crates/shell/src/main.rs` (`relayout_chrome_host`, строка с
@@ -60,3 +60,60 @@ Inter-ом, а рисуются тем, что провайдер нашёл п�
 документов.
 
 Домен — хром (CC-дорожка P1), не P3-точечный фикс.
+
+## Фикс (P3, 2026-09-25)
+
+Выбран первый вариант из «Что делать» — хром-путь получил тот же
+`MultiFontMeasurer` + `SystemFaceSet`, что и страница, плюс зарезервированные
+bundled-имена:
+
+- `MultiFontMeasurer::register_chrome_bundled_families`
+  (`crates/engine/paint/src/lib.rs`) регистрирует `Golos Text` /
+  `Golos Text Medium` / `JetBrains Mono` из `chrome_fonts` как
+  @font-face-слоты. Слоты проверяются раньше системного имени, поэтому
+  установленный в ОС одноимённый шрифт bundled не перебьёт — ровно как
+  `Renderer::resolve_face_id` коротит эти имена до провайдера.
+- `relayout::chrome_measurer()` (`crates/shell/src/relayout.rs`) строит такой
+  измеритель один раз на процесс (веб-шрифтов у хрома нет, а перекладывается он
+  на каждый hover); `relayout_chrome_host` берёт его вместо голого
+  `FontMeasurer`. Заодно с функции снят унаследованный
+  `#[allow(clippy::expect_used)]` — `expect` в ней больше нет.
+- `chrome_fonts` вынесен из-под feature-гейта бэкендов: измеритель
+  компилируется в любой конфигурации `lumen-paint`.
+
+Остальные вызовы `FontMeasurer::new` в shell (`find_bar`, `spell_menu`,
+выделение/каретка `<textarea>`, `paint_partial_dom`) меряют **страничный**
+текст и к хрому не относятся; их рассинхрон со шрифтом страницы — отдельный
+вопрос, в этот баг не входит.
+
+## Замер
+
+Раскладка `chrome.html` на 1024×720, старый измеритель против нового:
+из 86 текстовых фрагментов ширина сменилась у 79 (Segoe UI на этой машине
+примерно на 7 % уже Inter-а; `<kbd>Ctrl</kbd>` 16.76 → 24.00 px — ровно 4
+моно-ячейки JetBrains Mono по 10px). Ни один блочный бокс не сдвинулся
+(`#sidebar`, `#contentArea`, `#demoBar` — те же rect), меняются только
+инлайн-позиции внутри `#demoBar` и сайдбара.
+
+Живой кадр (`LUMEN_TEXT_SIG=2`, dev-release): `Ctrl`/`K` рисуются face-ом
+id=3 (upem 1000, 270224 байт — bundled JetBrains Mono), UI-надписи —
+`segoeui.ttf`/`seguisb.ttf`, то есть рендер действительно шёл по стеку, а
+измеритель теперь совпадает с ним.
+
+## Регрессия
+
+- `multi_font_tests::chrome_bundled_families_measured_with_bundled_faces`
+  (lumen-paint).
+- `tests::chrome_incremental::bug625_chrome_mono_text_measured_with_bundled_jetbrains_mono`
+  (lumen-shell) — на настоящем `chrome.html`; без регистрации bundled-семей
+  падает с `ширина «Ctrl» 21.99 ≠ 24`.
+
+## Гейты
+
+`dump_golden.py` — 12/12 совпадают (хром в дампы не попадает). CPU-снапшоты
+хром не рисуют. Полный `graphic_tests/run.py` в этой сессии не запускался:
+TEST-00 не находит магента-маркер, и так же падает бинарь **без** фикса
+(окно из процесса вне foreground-цепочки — класс BUG-1062). На пиксели
+страниц правка не влияет; в живом окне сдвигается текст плавающей
+`#demoBar`, которую Edge не рисует вообще (BUG-1077), — ратчеты TEST-57/157
+могут шевельнуться в пределах уже приписанного ей дифа.

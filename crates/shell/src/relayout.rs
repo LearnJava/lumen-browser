@@ -1757,6 +1757,32 @@ pub(crate) fn page_measurer(
     measurer
 }
 
+/// Измеритель для документа хрома (BUG-625): тот же резолв семейств, что у
+/// рендера хрома — зарезервированные bundled-имена (`Golos Text`,
+/// `Golos Text Medium`, `JetBrains Mono`, DS-4) плюс системный набор для
+/// остального стека (`--font-ui` без установленного Inter уходит в Segoe UI).
+///
+/// До BUG-625 хром мерился голым [`lumen_paint::FontMeasurer`], который
+/// выбрасывает `font-family` и всё меряет bundled Inter-ом, тогда как рисуется
+/// хром по объявленному стеку. Веб-шрифтов у хрома нет, поэтому измеритель
+/// процесс-глобальный: хром перекладывается на каждый hover, а парсить три
+/// bundled-файла на каждый проход незачем. `None` — bundled Inter не
+/// разобрался (недостижимо для `include_bytes!`-ассета); вызывающий пропускает
+/// проход, как при любом другом отсутствии входа.
+pub(crate) fn chrome_measurer() -> Option<&'static lumen_paint::MultiFontMeasurer> {
+    static SHARED: std::sync::OnceLock<Option<lumen_paint::MultiFontMeasurer>> =
+        std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            let font = lumen_font::Font::parse(INTER_FONT).ok()?;
+            let mut measurer = lumen_paint::MultiFontMeasurer::new(&font).ok()?;
+            measurer.register_chrome_bundled_families();
+            measurer.set_system_faces(system_font_faces());
+            Some(measurer)
+        })
+        .as_ref()
+}
+
 /// Ядро style+layout+display-list по immutable-снапшоту документа и стилей.
 ///
 /// Вынесено из [`relayout_page`], чтобы одну и ту же работу можно было вызвать и
