@@ -164,11 +164,49 @@ pub(crate) fn scrollbar_gutter_block_start(s: &ComputedStyle) -> f32 {
 /// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
 /// Tag-name в DOM хранится lower-case (HTML5 tree-builder), поэтому
 /// сравнение точное, без `eq_ignore_ascii_case`.
+///
+/// OBJECT-1: `<object>`/`<embed>`, чей ресурс декодировался как картинка,
+/// тоже replaced-бокс изображения (HTML LS §4.8.6/§4.8.7) — см.
+/// [`embedded_image`].
 pub(crate) fn is_image_element(doc: &Document, id: NodeId) -> bool {
-    matches!(
-        &doc.get(id).data,
-        NodeData::Element { name, .. } if name.local == "img"
-    )
+    match &doc.get(id).data {
+        NodeData::Element { name, .. } if name.local == "img" => true,
+        NodeData::Element { .. } => embedded_image(doc, id).is_some(),
+        _ => false,
+    }
+}
+
+/// URL ресурса `<object data>` / `<embed src>`, который имеет смысл пробовать
+/// как картинку (OBJECT-1). `None` — не эти теги, атрибута нет/пуст, либо
+/// автор явно назвал не-картиночный тип (`type="text/html"`,
+/// `application/pdf`, …): HTML LS §4.8.7 шаг 4 доверяет `type`, пока не
+/// пришёл ответ, и тянуть документ декодером картинок незачем. Тип ответа
+/// здесь не виден — решает декодер по сигнатуре байтов.
+pub(crate) fn embedded_resource_url(node: &lumen_dom::Node) -> Option<&str> {
+    let name = node.element_name()?;
+    let url = match name.local.as_str() {
+        "object" => node.get_attr("data"),
+        "embed" => node.get_attr("src"),
+        _ => None,
+    }?;
+    if url.trim().is_empty() {
+        return None;
+    }
+    if let Some(ty) = node.get_attr("type") {
+        let ty = ty.trim();
+        if !ty.is_empty() && !ty.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("image/")) {
+            return None;
+        }
+    }
+    Some(url)
+}
+
+/// Декодированная картинка, которую представляет `<object>`/`<embed>`
+/// (OBJECT-1): `(url, intrinsic width, intrinsic height)`. Шелл кладёт её в
+/// `Document::set_embedded_image` через [`crate::apply_intrinsic_size`].
+pub(crate) fn embedded_image(doc: &Document, id: NodeId) -> Option<(&str, u32, u32)> {
+    let url = embedded_resource_url(doc.get(id))?;
+    doc.embedded_image(id, url)
 }
 
 /// HTML-имя `<video>` для распознавания media replaced-боксов в layout.

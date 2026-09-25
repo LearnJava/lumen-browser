@@ -1588,6 +1588,9 @@ pub(crate) fn parse_and_layout(
         // taint bit into `img_bitmap_store` alongside the pixels.
         let cross_origin_set: std::collections::HashSet<&str> =
             cross_origin_img_urls.iter().map(String::as_str).collect();
+        // OBJECT-1: `<object>`/`<embed>` — не источник `drawImage` и сами
+        // отчитываются `load`/`error` (JS-шим); из обоих проходов ниже их нет.
+        let img_reqs: Vec<_> = img_reqs.into_iter().filter(|r| !r.embedded_content).collect();
         let bitmaps: Vec<(u32, std::sync::Arc<lumen_image::Image>, bool)> = img_reqs
             .iter()
             .filter_map(|req| {

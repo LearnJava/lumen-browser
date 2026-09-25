@@ -146,3 +146,7 @@ BUG-480, но **не тот же баг** — `<embed>`/`<object>` не имею
 Гейт: изменения — только `crates/js/src/shim/{web_api_shim_mid,
 web_api_shim_tail_b}.js`, без Rust-кода — `scripts/scoped-test.sh` и
 workspace clippy прогоняются в `/lumen-task-finish`, не здесь.
+
+## OBJECT-1 срез 1 (2026-09-26, `p1-object1-render`) — отрисовка картинки
+
+`<object data>`/`<embed src>`, чей ресурс декодируется как картинка (PNG/JPEG/GIF/WebP, SVG через resvg), теперь рисуются как replaced-бокс изображения с intrinsic-размером и `width`/`height`-хинтами; без декодированной картинки `<object>` показывает fallback-потомков. Размер хранится в боковой таблице `Document::set_embedded_image`, а не в атрибутах (`object.width` отражает атрибут как есть). Фетч гейтится CSP `object-src`; image-событий шелл для этих тегов не шлёт — `load`/`error` по-прежнему от JS-шима (срез 4 GAP-LOADEV). Проверка: `lumen --dump-display-list` на странице с `<object data="x.svg">FALLBACK</object>` даёт `DrawImage 120×40 src="x.svg"` без текста `FALLBACK`; битый `data` — текст fallback. Остаток OBJECT-1 — HTML/текстовый ресурс как вложенный документ.

@@ -640,7 +640,13 @@ pub(crate) fn fetch_frame_subresources(
             .and_then(|(policy, _)| crate::csp_enforce::upgrade_insecure_url(policy, &key));
         if let Some((policy, _)) = &csp_gate {
             let resolved_url = upgraded.clone().unwrap_or_else(|| key.clone());
-            if crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
+            // OBJECT-1: `<object>`/`<embed>` гейтятся `object-src`, и
+            // `img-src`-нарушения для них нет.
+            if req.embedded_content {
+                if crate::csp_enforce::object_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
+                    return (key, None, None);
+                }
+            } else if crate::csp_enforce::img_src_blocked(policy, &resolved_url, self_origin.as_ref()) {
                 return (key, None, Some(resolved_url));
             }
         }

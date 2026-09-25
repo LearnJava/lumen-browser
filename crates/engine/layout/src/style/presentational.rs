@@ -17,7 +17,8 @@ use crate::style::{
     BorderStyle, Color, ComputedStyle, CssColor, FontWeight, Length, LengthOrAuto, TextAlign,
 };
 
-/// Применяет HTML presentational hints для `<img>`, `<video>`, `<iframe>`:
+/// Применяет HTML presentational hints для `<img>`, `<video>`, `<iframe>`,
+/// `<object>`, `<embed>`:
 /// `width`/`height`, `hspace`/`vspace` (→ margin), `border` для `<img>`.
 /// HTML5 §15.3.9. Author CSS поверх — выигрывает.
 pub(in crate::style) fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
@@ -27,7 +28,10 @@ pub(in crate::style) fn apply_image_presentational_hints(doc: &Document, node: N
     let is_img = name.local == "img";
     let is_video = name.local == "video";
     let is_iframe = name.local == "iframe";
-    if !is_img && !is_video && !is_iframe {
+    // OBJECT-1: HTML LS §15.4.3 «maps to the dimension property» — тот же
+    // список `embed, iframe, img, object, video`.
+    let is_embedded = name.local == "object" || name.local == "embed";
+    if !is_img && !is_video && !is_iframe && !is_embedded {
         return;
     }
     let node_ref = doc.get(node);
