@@ -1,6 +1,6 @@
 # BUG-621: `HTMLLabelElement.focus()` doesn't delegate focus to the labeled control
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/dom.rs::HTMLElement.prototype.focus`, `dom.rs:10510-10520`)
 **Найден:** P2, WPT-VENDOR-inert, 2026-08-04
 
@@ -75,3 +75,31 @@ instead of operating on `this`.
 (`html/semantics/forms/the-label-element/forward-focus-to-associated-element.html`,
 три зависших подтеста), но добраться до него тест сможет только после
 [BUG-478](BUG-478-FIXED.md) — он стартует с `test_driver.click`.
+
+## Исправление 2026-09-25 (P3)
+
+Большую часть симптома закрыл [BUG-951](BUG-951-FIXED.md) (2026-09-24):
+`_lumen_is_focusable` узнал тег `LABEL`, `focus()` форвардит на связанный
+контрол через общий хелпер `_lumen_label_control_nid`. Остаток — именно
+случай из `inert-label-focus.html`: у метки с атрибутом `inert` (или под
+инертным предком) `focus()` первой строкой спрашивал
+`_lumen_is_focusable(label)`, получал `false` из-за инертности самой метки и
+выходил, так и не дойдя до контрола.
+
+Фикс (`crates/js/src/shim/web_api_shim_tail_b.js`,
+`HTMLElement.prototype.focus`): для `<label>`, которая сама не является
+фокусируемой областью (нет своего `tabindex` или он есть, но метка инертна),
+сначала резолвится контрол, и проверка фокусируемости делается уже для него.
+Метка, чей контрол лежит в инертном поддереве, по-прежнему ничего не
+двигает (подтест 3 того же файла). Метка с собственным `tabindex` и не
+инертная фокусируется сама, как раньше. Поведение совпадает с Chromium
+(`HTMLLabelElement::focus`), которым написан тест.
+
+Регрессия — 3 новых теста в `crates/js/src/dom/tests/v8_bug951_label_focus.rs`
+(инертная метка, метка под инертным предком, контрол в инертном поддереве);
+первые два до фикса красные.
+
+Живой WPT (`run_report.py --all --root inert --check`, dev-release):
+`inert-label-focus.html` 3/3 OK (было 2/3); `.ini` с ожиданием FAIL удалён.
+Список REGRESSION категории против сборки без фикса отличается ровно этим
+подтестом — остальные 31 предсуществуют на main и к правке не относятся.
