@@ -1,6 +1,6 @@
 # BUG-655 — `requestPointerLock()` не проверяет transient user activation, всегда гарантирует блокировку
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/pointer_lock.rs:42-46` — `request_pointer_lock`,
 `crates/js/src/v8_runtime.rs:3248-3250` — привязка `_lumen_ptr_lock_request`)
 **Найден:** P2, WPT-VENDOR-pointerlock (2026-08-05), прогон
@@ -90,3 +90,33 @@ detached` в половине FAIL), [BUG-462](BUG-462-OPEN.md)/[BUG-574](BUG-57
 `test_driver.Actions().pointerMove(...)`/аналоги, которые
 `executors/executorlumen.py::_handle_action` не реализует (только `click`),
 известный инфраструктурный пробел, не движковый баг.
+
+## Исправление (2026-09-25, P3)
+
+Гейт вынесен в JS-шим по образцу `requestFullscreen()` (BUG-390), Rust-сторона
+(`pointer_lock.rs`) не тронута — она лишь исполняет уже разрешённый запрос.
+
+- `_lumen_ptr_lock_request_error(nid)` (`crates/js/src/shim/web_api_shim_tail_b.js`)
+  проверяет предусловия Pointer Lock 2.0 §requestPointerLock в порядке спеки:
+  шаг 2 — элемент подключён к документу, иначе `WrongDocumentError`; шаг 4 —
+  `navigator.userActivation.isActive` (единый источник GAP-USERACT), иначе
+  `NotAllowedError`. Исключение шага 4: документ, отпустивший блокировку через
+  `exitPointerLock()`, может взять её снова без нового жеста (флаг
+  `_ptr_lock_released_by_exit`). Активация не потребляется — спека pointer lock
+  этого не требует.
+- При отказе `requestPointerLock()` не меняет состояние, диспатчит
+  `pointerlockerror` на документ (`document.onpointerlockerror` срабатывает через
+  тот же `dispatchEvent`) и отклоняет промис `DOMException`.
+
+Тесты: `crates/js/src/dom/tests/v8_pointer_lock.rs` — отказ без активации (два
+вызова подряд, как в WPT), отказ для отсоединённого элемента, повторная
+блокировка после `exitPointerLock()`; три прежних теста блокировки получили
+синтетический `mousedown` перед вызовом.
+
+WPT `pointerlock` (`--all --recursive`): `pointerlock-requires-gesture.html` и
+`pointerlock_without_gesture.html` PASS, их `.ini` удалены. A/B `--check`
+бинарником main — отклонения только на этих двух тестах.
+
+Остаток вне этого бага: снятие блокировки при удалении целевого элемента из DOM
+(`pointerlock_remove_target.html`) и конфликт с блокировкой другого документа не
+реализованы.

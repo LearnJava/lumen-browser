@@ -35,7 +35,7 @@ activation (спека WICG требует `NotAllowedError` без предше
 (grep по `user activation`/`UserActivation`/`transient activation` — пусто), заводить
 её ради одного `EyeDropper` вне скоупа точечного бага; тот же класс пробела уже
 отдельно заведён на [BUG-390](BUG-390-FIXED.md) (`requestFullscreen`),
-[BUG-655](BUG-655-OPEN.md) (`requestPointerLock`),
+[BUG-655](BUG-655-FIXED.md) (`requestPointerLock`),
 [BUG-667](BUG-667-FIXED.md) (`getScreenDetails`).
 
 ## Симптом

@@ -24,7 +24,7 @@
 попаданий. Тот же класс пробела уже отдельно заведён на:
 
 - [BUG-390](BUG-390-FIXED.md) — `requestFullscreen()`;
-- [BUG-655](BUG-655-OPEN.md) — `requestPointerLock()`;
+- [BUG-655](BUG-655-FIXED.md) — `requestPointerLock()`;
 - [BUG-667](BUG-667-FIXED.md) — `getScreenDetails()` (permission-state вариант того же класса).
 
 ## Масштаб
@@ -52,5 +52,5 @@ undefined (нет полного шима, например в собствен�
 остаётся permissive — тот же паттерн, что у соседних гейтов.
 
 Остальные API того же класса пробела: [BUG-390](BUG-390-FIXED.md) и
-[BUG-667](BUG-667-FIXED.md) уже FIXED; [BUG-655](BUG-655-OPEN.md)
+[BUG-667](BUG-667-FIXED.md) уже FIXED; [BUG-655](BUG-655-FIXED.md)
 (`requestPointerLock()`) всё ещё OPEN — не в скоупе этого бага.
