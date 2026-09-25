@@ -151,10 +151,29 @@ function _perf_observer_notify(entries) {
     }
 }
 
+// Paint Timing `interface PerformancePaintTiming : PerformanceEntry` —
+// the interface object every paint-timing WPT feature-detects first
+// (`assert_implements(window.PerformancePaintTiming)`, BUG-645). The IDL
+// declares no constructor, so script-side `new` throws; the shell's entries
+// are built off the prototype instead. Fields stay own properties, as on every
+// other entry type in this shim; `toJSON` is the WebIDL `[Default]` one of
+// PerformanceEntry. PerformanceEntry itself is not exposed: mark/measure/
+// resource entries are still plain objects, and a global that `instanceof`
+// answered false for would lie about them.
+function PerformancePaintTiming() { throw new TypeError('Illegal constructor'); }
+PerformancePaintTiming.prototype.toJSON = function() {
+    return { name: this.name, entryType: this.entryType, startTime: this.startTime,
+             duration: this.duration };
+};
+
 // Called by the shell after first paint / first contentful paint.
 // name = 'first-paint' | 'first-contentful-paint', start_ms = DOMHighResTimeStamp.
 function _lumen_deliver_paint_entry(name, start_ms) {
-    var entry = { entryType: 'paint', name: String(name), startTime: start_ms, duration: 0 };
+    var entry = Object.create(PerformancePaintTiming.prototype);
+    entry.entryType = 'paint';
+    entry.name = String(name);
+    entry.startTime = start_ms;
+    entry.duration = 0;
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }
