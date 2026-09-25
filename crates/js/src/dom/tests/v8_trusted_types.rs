@@ -336,3 +336,182 @@ fn tt_get_compliant_script_unwraps_trusted_script() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+// TRUSTEDTYPES-1 срез 2: `_lumen_tt_get_compliant_html`, the HTML-sink half
+// of the same §4.1.1 algorithm, gated by the same `_lumen_tt_set_require_script`
+// flag (CSP `require-trusted-types-for 'script'` names the one sink group
+// TT L2 defines, covering HTML/Script/ScriptURL sinks alike).
+
+#[test]
+fn tt_get_compliant_html_passthrough_without_require_flag() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("_lumen_tt_get_compliant_html('<p>x</p>', 'test-sink') === '<p>x</p>'")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_html_null_no_flag_no_nulltoempty() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // Without the flag, `null` is not special-cased unless the caller opts in
+    // via the third `nullToEmpty` argument (insertAdjacentHTML's plain
+    // DOMString parameter stringifies null as the text "null").
+    let r = rt
+        .eval("_lumen_tt_get_compliant_html(null, 'test-sink') === 'null'")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_html_null_to_empty_opt_in() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("_lumen_tt_get_compliant_html(null, 'test-sink', true) === ''")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_html_throws_without_default_policy() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var threw = false; \
+                     try { _lumen_tt_get_compliant_html('<p>x</p>', 'test-sink'); } \
+                     catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_html_routes_through_default_policy() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var seenType, seenSink; \
+                     trustedTypes.createPolicy('default', { createHTML: function (s, t, sink) { \
+                         seenType = t; seenSink = sink; return s + ':ok'; \
+                     }}); \
+                     _lumen_tt_get_compliant_html('<p>x</p>', 'test-sink') === '<p>x</p>:ok' && \
+                         seenType === 'TrustedHTML' && seenSink === 'test-sink'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_html_unwraps_trusted_html() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // A TrustedHTML value already satisfies the sink; the default policy
+    // (absent here) must not be consulted.
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createHTML: s => s }); \
+                     var th = p.createHTML('<p>x</p>'); \
+                     _lumen_tt_get_compliant_html(th, 'test-sink') === '<p>x</p>'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_element_innerhtml_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var d = document.createElement('div'); \
+                     var threw = false; \
+                     try { d.innerHTML = '<b>x</b>'; } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_element_innerhtml_accepts_trusted_html() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createHTML: s => s }); \
+                     var d = document.createElement('div'); \
+                     d.innerHTML = p.createHTML('<b>x</b>'); \
+                     d.innerHTML === '<b>x</b>'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_element_innerhtml_null_becomes_empty_via_default_policy() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // `innerHTML=null` carries [LegacyNullToEmptyString]: with a default
+    // policy set, the compliant-string algorithm still routes '' through it
+    // (not skipped), matching HTMLElement-generic.html's expectation that
+    // `null` "accepts ... after default policy was created" (result '').
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var seen; \
+                     trustedTypes.createPolicy('default', { createHTML: function(s) { seen = s; return s; } }); \
+                     var d = document.createElement('div'); \
+                     d.innerHTML = null; \
+                     seen === '' && d.innerHTML === ''",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_insert_adjacent_html_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var d = document.createElement('div'); \
+                     document.body.appendChild(d); \
+                     var threw = false; \
+                     try { d.insertAdjacentHTML('beforeend', '<b>x</b>'); } \
+                     catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_document_write_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var threw = false; \
+                     try { document.write('<b>x</b>'); } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_document_write_accepts_trusted_html_per_argument() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createHTML: s => s }); \
+                     document.body.textContent = ''; \
+                     document.write(p.createHTML('abc'), p.createHTML('def')); \
+                     document.body.textContent === 'abcdef'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
