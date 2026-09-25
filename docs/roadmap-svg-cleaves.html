@@ -55,10 +55,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-25",
+ "generated": "2026-09-26",
  "counts": {
-  "open": 242,
-  "fixed": 876,
+  "open": 241,
+  "fixed": 877,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3895,7 +3895,7 @@
        "title": "WPT: вендорить + прогнать категорию `pointerlock`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root pointerlock --recursive`, ~2 мин, 20 id) — **10/20 harness OK, 2/22 сабтестов**. Найден и заведён [BUG-655](bugs/BUG-655-OPEN.md): `requestPointerLock()` не проверяет transient user activation, блокировка выдаётся синхронно и безусловно (тот же класс пробела, что BUG-365/BUG-390). Остальной сигнал — реконфирмации [BUG-622](bugs/BUG-622-DUPLICATE.md) (`document.defaultView`, доминирует), BUG-462/574 (`Node.prototype.contains`), [BUG-596](bugs/BUG-596-OPEN.md) (`Event.prototype.initEvent`); часть id TIMEOUT на неполном `test_driver.Actions` (только `click` реализован в исполнителе, известный инфраструктурный пробел)",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root pointerlock --recursive`, ~2 мин, 20 id) — **10/20 harness OK, 2/22 сабтестов**. Найден и заведён [BUG-655](bugs/BUG-655-FIXED.md): `requestPointerLock()` не проверял transient user activation, блокировка выдавалась синхронно и безусловно (тот же класс пробела, что BUG-365/BUG-390; FIXED 2026-09-25 — оба gesture-теста PASS). Остальной сигнал — реконфирмации [BUG-622](bugs/BUG-622-DUPLICATE.md) (`document.defaultView`, доминирует), BUG-462/574 (`Node.prototype.contains`), [BUG-596](bugs/BUG-596-OPEN.md) (`Event.prototype.initEvent`); часть id TIMEOUT на неполном `test_driver.Actions` (только `click` реализован в исполнителе, известный инфраструктурный пробел)",
        "bugs": [
         "BUG-655"
        ]
@@ -4106,7 +4106,7 @@
        "title": "WPT: вендорить + прогнать категорию `scroll-to-text-fragment`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root scroll-to-text-fragment --recursive`, ~1 мин 39 с, 62 файла, 39 отобранных id, 25 фактически запущенных) — **18/25 harness OK, 0/142 сабтестов**. Весь сигнал сводится к уже задокументированным дефектам: большинство FAIL — `ReferenceError: token is not defined` от невендоренного `/common/utils.js` (документированный гэп, не движковый баг); кластер `TypeError: elementDocument.contains is not a function` — реконфирмация [BUG-462](bugs/BUG-462-OPEN.md)/[BUG-574](bugs/BUG-574-OPEN.md)/[BUG-655](bugs/BUG-655-OPEN.md) (`element.ownerDocument.contains` не определён); `document.fragmentDirective` не существует — Scroll To Text Fragment API не реализован в движке вовсе (`grep -rli fragmentDirective crates/` — ноль совпадений), согласуется с уже задокументированным пробелом у соседней `scroll-performance-timing`; 6 TIMEOUT (0/0 сабтестов, все используют `<body onload=\"runTests()\">`) — реконфирмация [BUG-360](bugs/BUG-360-FIXED.md) (инлайн-обработчики событий мертвы); `iframe-scroll.sub.html` `Cannot set properties of undefined (setting 'location')` на `frames[0].location = ...` — реконфирмация класса [BUG-480](bugs/BUG-480-OPEN.md) (у `<iframe>` нет отдельного browsing context). Новых багов не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root scroll-to-text-fragment --recursive`, ~1 мин 39 с, 62 файла, 39 отобранных id, 25 фактически запущенных) — **18/25 harness OK, 0/142 сабтестов**. Весь сигнал сводится к уже задокументированным дефектам: большинство FAIL — `ReferenceError: token is not defined` от невендоренного `/common/utils.js` (документированный гэп, не движковый баг); кластер `TypeError: elementDocument.contains is not a function` — реконфирмация [BUG-462](bugs/BUG-462-OPEN.md)/[BUG-574](bugs/BUG-574-OPEN.md)/[BUG-655](bugs/BUG-655-FIXED.md) (`element.ownerDocument.contains` не определён); `document.fragmentDirective` не существует — Scroll To Text Fragment API не реализован в движке вовсе (`grep -rli fragmentDirective crates/` — ноль совпадений), согласуется с уже задокументированным пробелом у соседней `scroll-performance-timing`; 6 TIMEOUT (0/0 сабтестов, все используют `<body onload=\"runTests()\">`) — реконфирмация [BUG-360](bugs/BUG-360-FIXED.md) (инлайн-обработчики событий мертвы); `iframe-scroll.sub.html` `Cannot set properties of undefined (setting 'location')` на `frames[0].location = ...` — реконфирмация класса [BUG-480](bugs/BUG-480-OPEN.md) (у `<iframe>` нет отдельного browsing context). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-secure-contexts",
@@ -7563,13 +7563,6 @@
    "status": "open",
    "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
    "component": "js (`crates/js/src/dom.rs:8258-8335` — `PerformanceObserver`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-655": {
-   "status": "open",
-   "title": "`requestPointerLock()` не проверяет transient user activation (и никакое другое предусловие спеки) — блокировка выдаётся синхронно и безусловно даже без предшес…",
-   "component": "js (`crates/js/src/pointer_lock.rs:42-46` — `request_pointer_lock`, `crates/js/src/v8_runtime.rs:3248-3250` — привязка)",
    "date": null,
    "debtor": false
   },
@@ -15053,6 +15046,13 @@
    "status": "fixed",
    "title": "При CSP `script-src 'nonce-abc'` (с `'strict-dynamic'` и без) внешний `<script nonce=abc src>` не загружался: fetch-гейт `script-src` судил только URL и не виде…",
    "component": "shell/network (`crates/network/src/csp.rs:242` — `CspPolicy::script_element_fetch_allows`; `crates/shell/src/scripts.rs:410`)",
+   "date": "2026-09-25",
+   "debtor": false
+  },
+  "BUG-655": {
+   "status": "fixed",
+   "title": "`requestPointerLock()` выдавал блокировку безусловно, без transient user activation, `pointerlockerror` нигде не диспатчился. Исправлено по Pointer Lock 2.0 §re…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `requestPointerLock`/`exitPointerLock`, `crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_ptr_lock_request_error`)",
    "date": "2026-09-25",
    "debtor": false
   },

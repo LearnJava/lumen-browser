@@ -25,7 +25,8 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
 fn pointer_lock_request_sets_lock_state() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(
-        "var el = document.createElement('div'); document.body.appendChild(el); \
+        "_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0); \
+                 var el = document.createElement('div'); document.body.appendChild(el); \
                  el.requestPointerLock(); \
                  document.pointerLockElement === el"
     ).unwrap();
@@ -36,7 +37,8 @@ fn pointer_lock_request_sets_lock_state() {
 fn pointer_lock_request_dispatches_pointerlockchange() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(
-        "var el = document.createElement('div'); document.body.appendChild(el); \
+        "_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0); \
+                 var el = document.createElement('div'); document.body.appendChild(el); \
                  var fired = false; \
                  document.addEventListener('pointerlockchange', function() { fired = true; }); \
                  el.requestPointerLock(); \
@@ -49,12 +51,81 @@ fn pointer_lock_request_dispatches_pointerlockchange() {
 fn pointer_lock_exit_clears_lock_element() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(
-        "var el = document.createElement('div'); document.body.appendChild(el); \
+        "_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0); \
+                 var el = document.createElement('div'); document.body.appendChild(el); \
                  el.requestPointerLock(); \
                  document.exitPointerLock(); \
                  document.pointerLockElement === null"
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
+    rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
+}
+
+/// BUG-655 — Pointer Lock 2.0 §requestPointerLock step 4: without transient
+/// activation the request is refused with NotAllowedError, pointerlockerror
+/// fires at the document (and its on-handler), and no lock is granted.
+/// `Object.defineProperty` pins the activation signal to `false`, same as
+/// `request_fullscreen_rejects_without_transient_activation`.
+#[test]
+fn pointer_lock_rejects_without_transient_activation() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "Object.defineProperty(navigator, 'userActivation', { \
+                     value: { isActive: false, hasBeenActive: false }, configurable: true }); \
+                 var el = document.createElement('div'); document.body.appendChild(el); \
+                 var errs = 0, onerr = 0, changes = 0, res = []; \
+                 document.addEventListener('pointerlockerror', function() { errs++; }); \
+                 document.onpointerlockerror = function() { onerr++; }; \
+                 document.addEventListener('pointerlockchange', function() { changes++; }); \
+                 [el.requestPointerLock(), el.requestPointerLock()].forEach(function(p) { \
+                     p.then(function() { res.push('resolved'); }, \
+                            function(e) { res.push(e instanceof DOMException ? e.name : 'other'); }); \
+                 });",
+    )
+    .unwrap();
+    assert!(bool_eval(&rt, "res.join() === 'NotAllowedError,NotAllowedError'"));
+    assert!(bool_eval(&rt, "errs === 2 && onerr === 2 && changes === 0"));
+    assert!(bool_eval(&rt, "document.pointerLockElement === null"));
+}
+
+/// BUG-655 — step 2: an element outside the document is refused with
+/// WrongDocumentError even when the call carries a gesture.
+#[test]
+fn pointer_lock_rejects_detached_element() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0); \
+                 var res = 'pending'; \
+                 document.createElement('div').requestPointerLock().then( \
+                     function() { res = 'resolved'; }, function(e) { res = e.name; });",
+    )
+    .unwrap();
+    assert!(bool_eval(&rt, "res === 'WrongDocumentError'"));
+    assert!(bool_eval(&rt, "document.pointerLockElement === null"));
+}
+
+/// BUG-655 — step 4 exemption: a document that released a lock through
+/// `exitPointerLock()` may re-lock without a fresh gesture.
+#[test]
+fn pointer_lock_relock_after_exit_needs_no_gesture() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "_lumen_dispatch_mouse_event(_lumen_root_nid, 'mousedown', 0, 0, 0, 1, 0); \
+                 var el = document.createElement('div'); document.body.appendChild(el); \
+                 el.requestPointerLock(); \
+                 document.exitPointerLock(); \
+                 Object.defineProperty(navigator, 'userActivation', { \
+                     value: { isActive: false, hasBeenActive: true }, configurable: true }); \
+                 var res = 'pending'; \
+                 el.requestPointerLock().then(function() { res = 'resolved'; }, \
+                                              function(e) { res = e.name; });",
+    )
+    .unwrap();
+    assert!(bool_eval(&rt, "res === 'resolved'"));
+    assert!(bool_eval(&rt, "document.pointerLockElement === el"));
 }
 
 #[test]

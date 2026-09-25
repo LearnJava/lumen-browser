@@ -7465,6 +7465,15 @@ var _LUMEN_WRAPPER_MEMBERS = {
         requestPointerLock: function() { var nid = this.__nid__;
             var self = this;
             return new Promise(function(resolve, reject) {
+                // Pointer Lock 2.0 §requestPointerLock steps 2-4 (BUG-655):
+                // before this list the request was granted unconditionally,
+                // even from a script with no user gesture behind it.
+                var err = _lumen_ptr_lock_request_error(nid);
+                if (err !== null) {
+                    _lumen_fire_pointer_lock_error();
+                    reject(new DOMException('requestPointerLock(): ' + err[1], err[0]));
+                    return;
+                }
                 // Phase 1: set JS-side mirror of locked element for pointerLockElement getter.
                 _ptr_lock_el = self;
                 if (typeof _lumen_ptr_lock_request === 'function') {
@@ -11026,6 +11035,8 @@ function _lumen_handle_contenteditable_key(inputType, data, targetNid) {
 // Current locked element — null when unlocked.  Mirrored in Rust pointer_lock
 // thread-local for cross-thread movement accumulation.
 var _ptr_lock_el = null;
+// Set once the document released a lock via exitPointerLock() (BUG-655).
+var _ptr_lock_released_by_exit = false;
 
 // ── Fullscreen API (WHATWG Fullscreen §4) ────────────────────────────────────
 // Current fullscreen element NID (-1 = none).
@@ -12001,6 +12012,9 @@ var document = {
         return _ptr_lock_el;
     },
     exitPointerLock: function() {
+        // §requestPointerLock step 4: a document that released a lock through
+        // exitPointerLock() may re-lock without a fresh gesture.
+        if (_ptr_lock_el !== null) _ptr_lock_released_by_exit = true;
         _ptr_lock_el = null;
         if (typeof _lumen_exit_ptr_lock === 'function') { _lumen_exit_ptr_lock(); }
         document.dispatchEvent(new Event('pointerlockchange'));

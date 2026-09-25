@@ -4526,6 +4526,31 @@ function _lumen_fire_fullscreen_error(nid) {
     }
 }
 
+// ── Pointer Lock API helpers ──────────────────────────────────────────────────
+// Pointer Lock 2.0 §requestPointerLock — the error preconditions, in spec order.
+// Returns null when the request may proceed, or [DOMException name, reason]
+// (BUG-655).
+function _lumen_ptr_lock_request_error(nid) {
+    // Step 2: this's shadow-including root must be the active document.
+    if (!_lumen_resource_is_connected(nid)) return ['WrongDocumentError', 'element is not connected'];
+    // Step 4: transient activation, unless the document previously released a
+    // lock with exitPointerLock(). navigator.userActivation is the engine's
+    // single answer (GAP-USERACT); pointer lock does not consume activation.
+    var activation = (typeof navigator !== 'undefined') ? navigator.userActivation : undefined;
+    if (activation && activation.isActive === false && !_ptr_lock_released_by_exit) {
+        return ['NotAllowedError', 'no transient user activation'];
+    }
+    return null;
+}
+
+// Pointer Lock 2.0 §requestPointerLock error path: pointerlockerror is fired at
+// the element's node document, not the element. document.dispatchEvent already
+// runs document.onpointerlockerror — no explicit call, unlike
+// _lumen_fire_fullscreen_error (its element-targeted path does not reach it).
+function _lumen_fire_pointer_lock_error() {
+    document.dispatchEvent(new Event('pointerlockerror', { bubbles: true, cancelable: false }));
+}
+
 // Called by the shell (via eval_js) when fullscreen is exited externally, e.g.
 // the user pressed Escape or the OS window manager exited fullscreen mode.
 // This keeps JS state consistent with reality — _fs_nid → -1, fires events.
