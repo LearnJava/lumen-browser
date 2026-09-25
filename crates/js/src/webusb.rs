@@ -194,7 +194,8 @@ const WEBUSB_SHIM: &str = r#"
   Object.defineProperty(navigator, 'usb', {
     value: new USBManager(),
     writable: false,
-    enumerable: true
+    enumerable: true,
+    configurable: true
   });
 
   // Export classes to globalThis

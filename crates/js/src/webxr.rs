@@ -111,7 +111,7 @@ const WEBXR_SHIM: &str = r#"
     value: new XRSystem(),
     writable: false,
     enumerable: true,
-    configurable: false
+    configurable: true
   });
 
   window.XRSystem = XRSystem;

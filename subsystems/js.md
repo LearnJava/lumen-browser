@@ -150,9 +150,21 @@ the time — read dates.
   `_lumen_permission_state_changed(name)` is called from
   `Notification.requestPermission()` — and only on a real move, since an event
   for an unchanged value would misreport the engine. `navigator.permissions` is
-  a non-writable own property (the BUG-366 precedent); the spec's
-  `Navigator.prototype` accessor is impossible while there is no `Navigator`
-  interface at all ([BUG-624](../bugs/BUG-624-OPEN.md)).
+  installed as an own property and becomes a readonly accessor on
+  `Navigator.prototype` in the finalize pass below.
+- **`navigator` members are moved onto `Navigator.prototype` at the end of
+  `install_dom` (BUG-624, P3, 2026-09-25).** `WEB_API_SHIM` creates `navigator`
+  as `Object.create(Navigator.prototype)`, and the page shim plus ~40 modules
+  keep hanging their members on the *instance*;
+  `navigator_bindings::finalize_navigator_interface_v8` (run right before the
+  BUG-378 seal) turns function values into prototype operations and everything
+  else into brand-checked, setter-less prototype getters, leaving the singleton
+  with no own properties. Trap: after `install_dom`, `navigator.x = v` is a
+  silent no-op and `Object.defineProperty(navigator, …)` shadows the getter as
+  an own property — code that must change a member on a live page redefines
+  the getter on `Navigator.prototype` (see `user_agent_override_script`). A
+  module adding a `navigator` member must keep it `configurable: true`, or the
+  pass has to leave it on the instance.
 - **Sensors are real `EventTarget`s, and the two abstract bases are not
   constructible (BUG-394, P3, 2026-08-11).** `generic_sensor.rs` used to define
   a private `_SensorEventTarget` mixin "to avoid depending on a global

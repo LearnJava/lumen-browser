@@ -48,15 +48,13 @@
 //! script can no longer replace the whole object and hand every later caller
 //! forged answers (the BUG-366 class).
 //!
-//! Not done here: `navigator.permissions` should be an accessor on
-//! `Navigator.prototype`, but this engine has no `Navigator` interface at all —
-//! `navigator` is a plain object literal in `WEB_API_SHIM` and all ~48 of its
-//! members are own data properties. That is [BUG-624], one change for the whole
-//! object; this module follows the `navigator.credentials` precedent
-//! (`crates/js/src/credentials.rs`) instead.
+//! `navigator.permissions` is installed here as an own property of the
+//! singleton; `navigator_bindings::finalize_navigator_interface_v8` turns it
+//! into a readonly accessor on `Navigator.prototype` at the end of
+//! `install_dom` ([BUG-624]), together with every other `navigator` member.
 //!
 //! [BUG-385]: ../../../bugs/BUG-385-FIXED.md
-//! [BUG-624]: ../../../bugs/BUG-624-OPEN.md
+//! [BUG-624]: ../../../bugs/BUG-624-FIXED.md
 
 /// Install the Permissions API.
 ///

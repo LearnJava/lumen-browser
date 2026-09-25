@@ -47,7 +47,7 @@ PerformanceEntry` по W3C Paint Timing §2) — записи остаются "
 plain-object значениями, а не инстансами этого интерфейса, поэтому
 `window.PerformancePaintTiming` = `undefined`.
 
-Тот же класс дефекта, что [BUG-624](BUG-624-OPEN.md) (`Navigator`),
+Тот же класс дефекта, что [BUG-624](BUG-624-FIXED.md) (`Navigator`),
 [BUG-637](BUG-637-OPEN.md) (`Window`) и
 [BUG-589](BUG-589-FIXED.md) (`window` сам не WebIDL-объект) —
 WebIDL-интерфейсные объекты систематически отсутствуют как глобалы,

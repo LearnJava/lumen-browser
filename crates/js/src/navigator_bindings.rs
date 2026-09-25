@@ -129,6 +129,78 @@ pub(crate) fn install_navigator_bindings_v8_with(
     Ok(())
 }
 
+/// Move every member of the `navigator` singleton onto `Navigator.prototype`
+/// (HTML LS §8.9.1, BUG-624).
+///
+/// `WEB_API_SHIM` creates `navigator` as `Object.create(Navigator.prototype)`,
+/// but its own literal and the ~40 per-API modules that run after it in
+/// `install_dom` (`permissions.rs`, `webgpu.rs`, this file's own
+/// profile shim, …) all put their members on the instance, each with its own
+/// idea of the attributes. Rewriting every one of those sites would scatter
+/// the WebIDL shape over forty files; instead this pass runs once, at the end
+/// of `install_dom` (before the BUG-378 sealing pass), and turns whatever is
+/// there into the IDL shape in one place:
+///
+/// * a function-valued data property is an operation — it moves to the
+///   prototype unchanged (writable, enumerable, configurable);
+/// * any other data property is a `readonly attribute` — a getter on the
+///   prototype that returns the stored value (`[SameObject]` for free);
+/// * an accessor keeps its getter, now called with the instance.
+///
+/// Getters are brand-checked (`this !== navigator` → `TypeError`), as a WebIDL
+/// attribute getter is. Afterwards `navigator` has no own properties at all,
+/// like in every browser. Non-configurable own properties are left alone —
+/// they cannot be deleted from the instance.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn finalize_navigator_interface_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(FINALIZE_NAVIGATOR_INTERFACE)?;
+    Ok(())
+}
+
+#[cfg(feature = "v8-backend")]
+const FINALIZE_NAVIGATOR_INTERFACE: &str = r#"(function() {
+  'use strict';
+  if (typeof Navigator !== 'function' || typeof navigator !== 'object' ||
+      navigator === null || Object.getPrototypeOf(navigator) !== Navigator.prototype) return;
+  var nav = navigator;
+  var proto = Navigator.prototype;
+  function getterFor(name, read) {
+    // An object-literal getter carries the WebIDL name `get <name>` and length 0.
+    return Object.getOwnPropertyDescriptor({
+      get [name]() {
+        if (this !== nav) throw new TypeError('Illegal invocation');
+        return read();
+      }
+    }, name).get;
+  }
+  Object.getOwnPropertyNames(nav).forEach(function(k) {
+    var d = Object.getOwnPropertyDescriptor(nav, k);
+    if (!d || !d.configurable) return;
+    var pd;
+    if ('value' in d && typeof d.value === 'function') {
+      pd = { value: d.value, writable: true, enumerable: true, configurable: true };
+    } else if ('value' in d) {
+      var v = d.value;
+      pd = { get: getterFor(k, function() { return v; }), enumerable: true, configurable: true };
+    } else if (d.get) {
+      var g = d.get;
+      pd = { get: getterFor(k, function() { return g.call(nav); }), enumerable: true, configurable: true };
+    } else {
+      return;
+    }
+    Object.defineProperty(proto, k, pd);
+    delete nav[k];
+  });
+  Object.defineProperty(proto, Symbol.toStringTag, {
+    value: 'Navigator', writable: false, enumerable: false, configurable: true });
+  Object.defineProperty(Navigator, 'prototype', { writable: false });
+  // Interface objects are non-enumerable own properties of the global.
+  Object.defineProperty(globalThis, 'Navigator', { enumerable: false });
+})();"#;
+
 /// Render a JS array literal from a locale list, falling back to `["en-US"]`
 /// when empty. Each entry is JSON-escaped to stay injection-safe.
 #[cfg(feature = "v8-backend")]
