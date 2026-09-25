@@ -82,6 +82,7 @@ mod command;
 mod html_all;
 mod named_access;
 mod promise_reject;
+mod script_attribution;
 mod style_flush;
 mod thread;
 
@@ -100,6 +101,7 @@ pub use overrides::{
     timezone_override_script, user_agent_override_script,
 };
 pub use runtime::{CustomPropertySnapshot, DomTouched, PseudoComputedStyles, V8JsRuntime};
+pub(crate) use script_attribution::capture_call_site as script_attribution_capture_call_site;
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)
 // продолжала видеть помощника под прежним именем.
 use overrides::{global_timezone_override, global_user_agent_override};
@@ -152,9 +154,9 @@ impl V8JsRuntime {
         // PH3-20: an explicit `sw_worker_store` argument takes precedence over a
         // store set earlier via a builder (mirrors `QuickJsRuntime::install_dom`).
         let sw_worker_store = sw_worker_store.or_else(|| self.sw_worker_store.clone());
-        // Cookie access is not part of the S3 DOM-core signature; document.cookie
-        // reads/writes as empty until a future slice threads a CookieProvider through.
-        let cookie_jar: Option<Arc<dyn lumen_core::ext::CookieProvider>> = None;
+        // BUG-1119: the tab's jar, attached via `with_cookie_jar`; `None` keeps
+        // `document.cookie` empty (tests, headless, opaque-origin frames).
+        let cookie_jar = self.cookie_jar.clone();
         let deterministic_seed = if self
             .deterministic
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -583,7 +585,6 @@ impl V8JsRuntime {
             // LIB-11 (BUG-693): must run before URL_PARSE_SHIM/URL_SHIM
             // below are evaluated — they call `_lumen_url_parse` unconditionally.
             install::install_url_parse(scope, ctx, store)?;
-
             install::install_crypto_and_typed_om(
                 scope,
                 ctx,
@@ -643,6 +644,18 @@ impl V8JsRuntime {
                     native,
                 )?;
             }
+
+            // LONGTASK-1 срез 4: `_lumen_capture_call_site(fn)` — culprit
+            // source-location attribution for `PerformanceScriptTiming`
+            // (`script_attribution.rs`). Registered once here (page); worker
+            // scopes get the same native from `install_worker_exposed_v8`.
+            crate::v8_compat::register_v8_native_scoped(
+                scope,
+                ctx,
+                store_scoped,
+                "_lumen_capture_call_site",
+                Box::new(script_attribution::capture_call_site),
+            )?;
 
             // Polyfill `DOMException`: quickjs-ng provides it as a built-in (part of
             // `Context::full()`'s bundled extras), V8 has no web-platform globals at

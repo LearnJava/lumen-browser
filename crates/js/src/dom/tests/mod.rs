@@ -377,3 +377,5 @@ mod v8_bug628_io_take_records;
 mod v8_bug863_cdata_section;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1122_iface_protos;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1119_document_cookie;

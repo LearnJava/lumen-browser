@@ -38,7 +38,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## DOM / CSSOM surface that is simply absent
 
-- **`document.cookie` never stores anything** — reads `''` after every write ([BUG-1119](../bugs/BUG-1119-OPEN.md)) — and **`document.referrer` is always `''`**: navigation sends no `Referer` ([BUG-1156](../bugs/BUG-1156-OPEN.md)). A probe that round-trips state through a cookie or logs the referrer measures these, not its subject.
+- **`document.referrer` is always `''`**: navigation sends no `Referer` ([BUG-1156](../bugs/BUG-1156-OPEN.md)). A probe that logs the referrer measures this, not its subject.
 - **`EventTarget.prototype.addEventListener.call(node)` throws** ([BUG-1123](../bugs/BUG-1123-OPEN.md)): `Node.prototype` does not inherit from `EventTarget.prototype`. Call `addEventListener` on the instance.
 - **A script-inserted `<script src>` neither delays `window` `load` ([BUG-1129](../bugs/BUG-1129-OPEN.md)) nor gets its `load` right after executing ([BUG-1128](../bugs/BUG-1128-OPEN.md)), and a parser-inserted classic `async` script still runs in document order.** Do not order a probe's steps by script `onload` or by `async`.
 - Missing as globals: `StaticRange`, `XSLTProcessor`/`document.evaluate`, `document.forms`/`scripts`/`links`. `DOMRect`/`DOMPoint`/`DOMMatrix`/`DOMQuad`/`getClientRects` shipped 2026-09-05 (GAP-GEOM). The CSSOM's write half — `new CSSStyleSheet()`, `insertRule`/`deleteRule`, `adoptedStyleSheets` — shipped 2026-09-06 (CSSOM-5); a shadow root's `adoptedStyleSheets`/own `<style>` still don't reach paint (no shadow-scoped cascade at all).

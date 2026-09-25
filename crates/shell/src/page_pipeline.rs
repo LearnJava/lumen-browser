@@ -1258,6 +1258,7 @@ pub(crate) fn parse_and_layout(
         cascade.stylesheet_nodes.clone(),
         parse_time_stylesheet,
         dynamic_image_hook,
+        cookie_jar.clone(),
     );
     // PERF-14: headless has no event loop to settle the `fetch()` requests
     // the scripts just started — do it here, before the post-script cascade
