@@ -64,7 +64,7 @@ branch, `computed_style_to_map` (`getComputedStyle`) и `SUPPORTED_PROPERTIES`
 css/css-color-hdr --recursive --update-expected` на свежей `dev-release`)
 по-прежнему в основном красные — но НЕ из-за этого бага: каждый упавший
 сабтест мутирует и читает `getComputedStyle()` в ОДНОМ синхронном тике
-скрипта, а [BUG-493](BUG-493-OPEN.md) (`getComputedStyle()` не форсирует
+скрипта, а [BUG-493](BUG-493-FIXED.md) (`getComputedStyle()` не форсирует
 синхронный релейаут перед чтением кэша) отдаёт снимок до мутации — тот же
 механизм, что уже задокументирован в [BUG-495](BUG-495-OPEN.md) для
 `background-position-{x,y}`. `.ini` обоих файлов обновлены: тот же список

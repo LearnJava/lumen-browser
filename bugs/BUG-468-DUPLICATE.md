@@ -1,6 +1,6 @@
 # BUG-468: percentage margin/padding not re-resolved after JS `style.width` mutation on the containing block
 
-**Статус:** DUPLICATE → [BUG-493](BUG-493-OPEN.md)
+**Статус:** DUPLICATE → [BUG-493](BUG-493-FIXED.md)
 **Дата:** 2026-08-02
 **Найден:** WPT-RUN-3 срез 2 (`ROADMAP.md`) — массовый прогон `css/CSS2`, 8
 files `css/CSS2/normal-flow/containing-block-percent-{padding,margin}-{left,right,top,bottom}.html`
@@ -12,7 +12,7 @@ Probed live (`--dump-layout` with `console.log` bracketing the mutation) to
 confirm the exact mechanism before attempting a fix — see
 `docs/probe-method.md`. Confirmed the bug description's own diagnosis was
 imprecise ("измеряется 0") and the true root is the same architectural gap
-already tracked as [BUG-493](BUG-493-OPEN.md)/[CSSOM-4](../ROADMAP.md): no
+already tracked as [BUG-493](BUG-493-FIXED.md)/[CSSOM-4](../ROADMAP.md): no
 synchronous style/layout flush before a JS geometry read, so a node mutated
 and read back in the *same* synchronous script tick observes the pre-mutation
 snapshot, not zero and not a fresh recompute.

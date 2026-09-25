@@ -125,7 +125,7 @@ that it's gone.
 
 **All 5 files still fail today, but every failure is now attributable to
 a single, already-tracked, different defect: CSSOM-4/BUG-493's shell
-coverage gap.** `bugs/BUG-493-OPEN.md`'s CSSOM-4 slice (2026-09-03)
+coverage gap.** `bugs/BUG-493-FIXED.md`'s CSSOM-4 slice (2026-09-03)
 made `FlushHandles::maybe_flush` force a synchronous style+layout
 recompute before `_lumen_get_computed_style`/`_lumen_get_bounding_rect`/
 `_lumen_get_custom_property` read their snapshot maps — **but only for
@@ -228,7 +228,7 @@ re-verification once CSSOM-4/BUG-493's shell coverage lands.
 ### Что осталось — вне этого бага
 
 - `animation-002/003/004` (32 подтеста): `HTMLStyleElement.sheet === null`
-  сразу после `appendChild` — остаток [BUG-493](BUG-493-OPEN.md) (передан P6
+  сразу после `appendChild` — остаток [BUG-493](BUG-493-FIXED.md) (передан P6
   2026-09-24, ломает styled-components на реальных сайтах).
 - `animation-001` (17 подтестов) и `logical-shorthand-…tentative`: логические
   свойства в keyframes Web Animations не учитывают `writing-mode`/`direction`

@@ -82,7 +82,7 @@ keys (full list, checked against `computed_style_to_map` source directly,
 `-size` family (only `background-color` is present — `background` itself, as
 well as `margin`/`padding`/`border`/`border-radius` shorthands, are likewise
 absent; only their physical longhands are in the map). Most of these
-co-occur with [BUG-493](BUG-493-OPEN.md) in the same files (a file testing
+co-occur with [BUG-493](BUG-493-FIXED.md) in the same files (a file testing
 `border-spacing` via `var()` substitution fails at the BUG-493 layer before
 this gap is even reachable — the whole per-node cache entry is empty, not
 just this one key) — flagged here as the *compounding, still-present-after-
@@ -121,7 +121,7 @@ and asserts each name is present in the resolved computed style),
 `logicalprops-with-deferred-writing-mode.html` (fails on the very first
 checked property, `margin-block-start`), and `logicalprops-with-variables.html`
 (the `margin-inline-start`/`-end`/`margin-inline` computed-value checks —
-compounded by [BUG-493](BUG-493-OPEN.md), but the map gap alone is
+compounded by [BUG-493](BUG-493-FIXED.md), but the map gap alone is
 sufficient: even a synchronous flush wouldn't produce a value for a key
 that was never inserted). `.ini` under `tests/wpt/metadata/css/css-logical/`
 for all 19 files, `expected: FAIL` per subtest.

@@ -23,7 +23,7 @@ page load), with an `async_test` registering an `'animationend'` listener
 via `addEventListener` and calling `step_func_done()` inside it. Every one
 of these `async_test`s times out — the listener callback never fires, so
 `done()` is never called. This is independent of
-[BUG-499](BUG-499-OPEN.md)/[BUG-493](BUG-493-OPEN.md) (which affect the
+[BUG-499](BUG-499-OPEN.md)/[BUG-493](BUG-493-FIXED.md) (which affect the
 *synchronous* "before animation" assertions in the same files, a separate
 symptom) — the manually-constructible `AnimationEvent` (confirmed present,
 `dom.rs:3555`, used in an existing unit test that manually dispatches one)

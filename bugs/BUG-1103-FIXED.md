@@ -57,7 +57,7 @@ report the propagated color as `html`'s own, which is equally wrong (not
 separately reproduced with a live probe, but follows from the same
 `html_style.background_color = bg_color` assignment).
 
-This is **not** the same defect as [BUG-493](BUG-493-OPEN.md)/CSSOM-4 (stale
+This is **not** the same defect as [BUG-493](BUG-493-FIXED.md)/CSSOM-4 (stale
 cache on a script-mutated-in-the-same-tick node) — reproduces on a
 statically-parsed `<body>` that was never touched by script, and `color`/
 `margin-top` on the identical element read back fine in the same call.

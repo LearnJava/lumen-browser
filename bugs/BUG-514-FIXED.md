@@ -89,7 +89,7 @@ attributed files, `expected: FAIL` per subtest.
    БАЗОВЫЙ кейс без единого `env()` (`div.style.cssText = ''`, ожидание —
    цвет из `<style>`) и вообще любое свойство (`display`/`color` на только
    что созданном узле) отдают `""` — классический
-   [BUG-493](BUG-493-OPEN.md)/CSSOM-4 (`getComputedStyle` не форсирует
+   [BUG-493](BUG-493-FIXED.md)/CSSOM-4 (`getComputedStyle` не форсирует
    flush, недавно созданный узел не виден). Реатрибутировано на BUG-493.
 2. **`at-supports.tentative.html` + `fallback-nested-var.tentative.html`
    (по 1 сабтесту)** — оба читают

@@ -144,3 +144,11 @@ o.disconnect();
 `PerformanceObserver._cb` → `_perf_deliver_to_observer`. Репро `.tmp/compat/g6/site/perfobs.html`:
 Lumen `['cb:1','after-observe']` + `report is not a function`, Chrome `['after-observe','cb:1',
 'report:1']`. Передан P6 по решению пользователя.
+
+## Реальный сайт (2026-09-25, P6): imdb
+
+Тот же шаблон на imdb (3 из 3 прогонов, видимое окно, `LUMEN_NO_ADBLOCK=1`): `Uncaught TypeError:
+a is not a function` из колбэка `PerformanceObserver._cb` → `_perf_deliver_to_observer` →
+`PerformanceObserver.observe` — колбэк вызван синхронно изнутри `observe()`, до того как страница
+присвоила функцию отчёта. Chrome этой ошибки не даёт. Найдено по ходу закрытия
+[BUG-493](BUG-493-FIXED.md).

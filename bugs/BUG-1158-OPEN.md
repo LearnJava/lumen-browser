@@ -48,3 +48,11 @@ Chrome 153 на той же странице этой ошибки не даёт
    классического) или получения тела (`src`, ответ не JS).
 
 Критерий: на yahoo нет `Unexpected token ':'`.
+
+## Второй сайт (2026-09-25, P6): bbc
+
+bbc.com — `Uncaught SyntaxError: Unexpected token ':'` 3 из 3 прогонов (видимое окно,
+`LUMEN_NO_ADBLOCK=1`), тот же путь: `_lumen_append_child` → `_lumen_resource_after_insert` →
+`_lumen_resource_try_prepare` → `_lumen_script_prepare` → `_lumen_script_execute_classic` → `eval`.
+Chrome ошибки не даёт. Страница Next.js, так что второй кандидат для локализации по п. 1 выше —
+с меньшим числом сторонних скриптов, чем yahoo. Найдено по ходу закрытия [BUG-493](BUG-493-FIXED.md).

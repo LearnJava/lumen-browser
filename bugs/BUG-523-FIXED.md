@@ -43,7 +43,7 @@ document.getElementById('t').scrollTop   // => 175
 ```
 
 This is the same architectural symptom family as
-[BUG-493](BUG-493-OPEN.md) (script mutates state, then reads a
+[BUG-493](BUG-493-FIXED.md) (script mutates state, then reads a
 derived/cached value in the same task and gets the stale snapshot) but a
 *different* code path/root cause — BUG-493 is about the `computed_styles`
 cache populated by `update_computed_styles`, this is about the
