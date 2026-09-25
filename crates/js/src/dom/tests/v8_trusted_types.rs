@@ -670,3 +670,133 @@ fn tt_enforced_create_contextual_fragment_accepts_trusted_html() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+// TRUSTEDTYPES-1 срез 4: `<script>` `.textContent`/`.innerText`/`.text` — the
+// "internal slot" text sinks HTML LS §3.6 "prepare the script text" gates
+// against `HTMLScriptElement text` (all three IDL members share one sink
+// name per the TT §4.4 property-type table). A non-script element must stay
+// on the old unconditional-stringify path.
+
+#[test]
+fn tt_enforced_script_textcontent_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var s = document.createElement('script'); \
+                     var threw = false; \
+                     try { s.textContent = 'x=1'; } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_script_textcontent_accepts_trusted_script() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createScript: s => s }); \
+                     var s = document.createElement('script'); \
+                     s.textContent = p.createScript('x=1'); \
+                     s.textContent === 'x=1'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_div_textcontent_unaffected() {
+    // Non-script elements must keep accepting plain strings even under
+    // enforcement -- `HTMLScriptElement text` names one specific interface.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var d = document.createElement('div'); \
+                     d.textContent = 'hello'; \
+                     d.textContent === 'hello'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_script_innertext_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var s = document.createElement('script'); \
+                     document.body.appendChild(s); \
+                     var threw = false; \
+                     try { s.innerText = 'x=1'; } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_script_innertext_accepts_trusted_script() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createScript: s => s }); \
+                     var s = document.createElement('script'); \
+                     document.body.appendChild(s); \
+                     s.innerText = p.createScript('x=1'); \
+                     s.textContent === 'x=1'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_script_text_property_throws_plain_string() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var s = document.createElement('script'); \
+                     var threw = false; \
+                     try { s.text = 'x=1'; } catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_script_text_property_accepts_trusted_script() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createScript: s => s }); \
+                     var s = document.createElement('script'); \
+                     s.text = p.createScript('x=1'); \
+                     s.text === 'x=1'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_enforced_anchor_text_property_unaffected() {
+    // `HTMLAnchorElement.text` shares the `.text` reflection definition with
+    // `HTMLScriptElement.text` -- it must not be gated by the script sink.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var a = document.createElement('a'); \
+                     a.text = 'hello'; \
+                     a.text === 'hello'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
