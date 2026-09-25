@@ -108,11 +108,18 @@ fn style_element_sheet_getter() {
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
 }
 
+/// BUG-493: a connected `<style>` has a sheet even before the shell pushed
+/// its registry (CSSOM §4.3 — the sheet is created on insertion); only a
+/// disconnected one answers `null`.
 #[test]
-fn style_element_sheet_null_without_registry_entry() {
+fn style_element_sheet_without_registry_entry() {
     let (doc, _style_nid) = make_doc_with_style();
     let rt = v8_runtime_with_dom(doc);
-    let r = rt.eval("document.getElementById('s1').sheet").unwrap();
+    let r = rt
+        .eval("document.getElementById('s1').sheet instanceof CSSStyleSheet")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+    let r = rt.eval("document.createElement('style').sheet").unwrap();
     assert_eq!(r, lumen_core::JsValue::Null);
 }
 

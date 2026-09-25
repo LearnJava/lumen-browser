@@ -32,6 +32,12 @@ pub struct DomTouched {
     /// `nodes` alone is **not** a safe restyle root-set — the caller must
     /// fall back to a full cascade for this cycle.
     pub unattributed: bool,
+    /// BUG-493 (`.sheet` после `appendChild`): монотонный счётчик мутаций DOM
+    /// через любой отслеживаемый примитив. В отличие от `nodes`/`unattributed`
+    /// не сбрасывается [`V8JsRuntime::take_dom_touched`] — по нему реестр
+    /// листов (`sheet_sync::SheetSync`) понимает, что DOM сдвинулся с его
+    /// последней сверки, не заводя собственного флага в двадцати трёх нативах.
+    pub(crate) epoch: u64,
 }
 
 /// Per-node snapshot of resolved CSS custom properties: node id → the map of
@@ -216,6 +222,23 @@ pub struct V8JsRuntime {
     /// CSSOM-8 вариант C: `true` when [`Self::cssom_deltas`] grew since the
     /// last successful flush — see [`super::style_flush::FlushHandles::cssom_dirty`].
     pub(super) cssom_dirty: Arc<AtomicBool>,
+    /// BUG-493: поколение журнала [`Self::cssom_deltas`] — см.
+    /// [`super::sheet_sync::SheetSync::epoch`]. Шелл сверяет его на каждом
+    /// релейауте ([`Self::cssom_epoch`]), чтобы донести правку `insertRule`
+    /// до каскада, по которому рисует.
+    pub(super) cssom_epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// BUG-493: `DomTouched::epoch` последней сверки реестра листов с DOM —
+    /// см. [`super::sheet_sync::SheetSync::synced`].
+    pub(super) sheet_synced: Arc<Mutex<Option<u64>>>,
+    /// BUG-493: узлы реестра из теневых деревьев — см.
+    /// [`super::sheet_sync::SheetSync::shadow_owned`].
+    pub(super) shadow_sheet_owners: Arc<Mutex<HashSet<u32>>>,
+    /// BUG-493: см. [`super::sheet_sync::SheetSync::pristine`].
+    pub(super) patched_pristine: super::sheet_sync::PristineCascade,
+    /// BUG-493: ручки сверки реестра, собранные в `install_dom` (им нужен
+    /// документ). `None` до установки DOM — тогда [`Self::patch_cascade`]
+    /// ничего не накладывает.
+    pub(super) sheet_sync: Arc<Mutex<Option<super::sheet_sync::SheetSync>>>,
     /// Pending popup window requests queued by JS `window.open()`.
     pub(super) window_open_requests: Arc<Mutex<Vec<crate::dom::PopupRequest>>>,
     /// Console messages queued by `console.log/warn/error` calls in JS.
@@ -442,6 +465,11 @@ impl V8JsRuntime {
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             cssom_deltas: Arc::new(Mutex::new(Vec::new())),
             cssom_dirty: Arc::new(AtomicBool::new(false)),
+            cssom_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sheet_synced: Arc::new(Mutex::new(None)),
+            shadow_sheet_owners: Arc::new(Mutex::new(HashSet::new())),
+            patched_pristine: Arc::new(Mutex::new(None)),
+            sheet_sync: Arc::new(Mutex::new(None)),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
@@ -752,7 +780,10 @@ impl V8JsRuntime {
     /// primitives since the last call, clearing it (and the `unattributed`
     /// flag) for the next cycle. See [`DomTouched`].
     pub fn take_dom_touched(&self) -> DomTouched {
-        std::mem::take(&mut *self.dom_touched.lock().unwrap_or_else(|e| e.into_inner()))
+        let mut guard = self.dom_touched.lock().unwrap_or_else(|e| e.into_inner());
+        // `epoch` survives the drain — see the field's doc comment.
+        let epoch = guard.epoch;
+        std::mem::replace(&mut *guard, DomTouched { epoch, ..DomTouched::default() })
     }
 
     /// Returns `true` if `requestAnimationFrame` was called since the last call,
@@ -1028,11 +1059,74 @@ impl V8JsRuntime {
     /// Push a fresh per-`<style>`/`<link rel=stylesheet>` node registry into
     /// the JS runtime (CSSOM-1 срез 3) — `document.styleSheets`/
     /// `element.sheet`/`CSSStyleSheet.cssRules` read this.
+    ///
+    /// BUG-493: запись, чей узел уже есть в реестре с тем же разобранным
+    /// текстом, остаётся прежней — иначе правки `insertRule`, сделанные
+    /// скриптом до этого пуша, пропали бы из `cssRules` (в журнал они
+    /// записаны и в каскад попадают в любом случае). Пуш считается сверенным
+    /// с текущим DOM: шелл строит реестр из того же документа, между сборкой
+    /// и пушем скрипты не выполняются.
     pub fn update_stylesheet_nodes(&self, entries: Vec<lumen_css_parser::StylesheetNodeEntry>) {
-        *self
+        let mut nodes = self
             .stylesheet_nodes
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = entries;
+            .unwrap_or_else(|e| e.into_inner());
+        let mut old: HashMap<u32, lumen_css_parser::StylesheetNodeEntry> =
+            nodes.drain(..).map(|e| (e.node, e)).collect();
+        *nodes = entries
+            .into_iter()
+            .map(|e| match old.remove(&e.node) {
+                Some(prev) if prev.sheet.source() == e.sheet.source() => prev,
+                _ => e,
+            })
+            .collect();
+        drop(nodes);
+        let dom_epoch = self
+            .dom_touched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .epoch;
+        *self.sheet_synced.lock().unwrap_or_else(|e| e.into_inner()) = Some(dom_epoch);
+        self.shadow_sheet_owners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
+    /// BUG-493: поколение журнала CSSOM-правок — меняется при каждом
+    /// `insertRule`/`deleteRule`/записи `.style` в лист `<style>`/`<link>` и
+    /// когда правки выбрасываются (сменился текст `<style>`). Шелл сравнивает
+    /// его со своим на релейауте и пересобирает каскад через
+    /// [`Self::patch_cascade`].
+    pub fn cssom_epoch(&self) -> u64 {
+        self.cascade_source().cssom_epoch()
+    }
+
+    /// BUG-493: `sheet` (каскад шелла, собранный из текста `<style>`/`<link>`)
+    /// плюс CSSOM-правки страницы и правила `<style>`, наполненных только
+    /// через `insertRule`. `None` — накладывать нечего. См.
+    /// [`super::sheet_sync::patched_cascade`].
+    ///
+    /// Запоминает пару «ревизия результата → исходный лист»: шелл потом
+    /// отдаёт результат обратно как лист синхронного флаша
+    /// ([`Self::update_stylesheet`]), и флаш по ревизии узнаёт, что правки в
+    /// нём уже есть, и накладывает их на исходный лист, а не второй раз.
+    pub fn patch_cascade(
+        &self,
+        sheet: &lumen_css_parser::Stylesheet,
+    ) -> Option<lumen_css_parser::Stylesheet> {
+        self.cascade_source().patch_cascade(sheet)
+    }
+
+    /// BUG-493: ручка каскада для шелла, работающая с любого потока — см.
+    /// [`super::sheet_sync::CascadeSource`].
+    pub fn cascade_source(&self) -> super::sheet_sync::CascadeSource {
+        super::sheet_sync::CascadeSource {
+            sync: Arc::clone(&self.sheet_sync),
+            epoch: Arc::clone(&self.cssom_epoch),
+            constructed: Arc::clone(&self.constructed_stylesheets),
+            adopted: Arc::clone(&self.adopted_stylesheets),
+        }
     }
 
     /// CSSOM-5 срез 2 (BUG-897): cheap change detector for

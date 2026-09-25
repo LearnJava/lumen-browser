@@ -729,6 +729,10 @@ fn build_page_cascade(
             inline_fp: inline_style_fingerprint(doc),
             // CSSOM-5 срез 2: placeholder — see the field's doc comment.
             adopted_fp: 0,
+            // BUG-493: the first relayout after load compares against 0 and
+            // lays in whatever CSSOM edits the page's scripts made by then.
+            cssom_epoch: 0,
+            pristine: None,
         };
         (css, dyn_css, link_outcomes, blocked_by_style_src, blocked_inline_style_policies, blocked_style_attr_nodes, blocked_style_attr_policies)
     };

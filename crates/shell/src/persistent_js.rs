@@ -34,6 +34,43 @@ pub(crate) const LONGTASK_THRESHOLD_MS: f64 = 50.0;
 // уже берут `&self`, а `QuickJsRuntime` — `Send + Sync` (все вызовы туннелируются
 // на выделенный JS-поток через `SyncSender`, ADR-014), поэтому `Sync` держится
 // без `unsafe`. UI-сторонний `Arc`-клон удаляется в M2.2c-2d.
+/// BUG-493: the page's share of the shell's paint cascade, readable from any
+/// thread. With the engine thread on (ADR-023, default) the JS handle lives
+/// engine-side and `Lumen::js_ctx` is empty on the UI thread, so
+/// `refresh_dynamic_css` could never see CSSOM edits or adopted sheets through
+/// it; this handle is cached UI-side by `set_js_ctx` in both modes, like the
+/// lock-free flags.
+pub(crate) trait CascadeFeed: Send + Sync {
+    /// Generation of the page's CSSOM edit log — changes on every
+    /// `insertRule`/`deleteRule`/`.style` write to a `<style>`/`<link>` sheet
+    /// and when edits are dropped.
+    fn cssom_epoch(&self) -> u64;
+    /// `sheet` plus the page's CSSOM edits and the rules of `<style>`
+    /// elements filled only through `insertRule`; `None` when there is
+    /// nothing to lay in.
+    fn patch_cascade(&self, sheet: &lumen_css_parser::Stylesheet) -> Option<lumen_css_parser::Stylesheet>;
+    /// See [`PersistentJs::document_adopted_fingerprint`].
+    fn document_adopted_fingerprint(&self) -> u64;
+    /// See [`PersistentJs::document_adopted_stylesheet`].
+    fn document_adopted_stylesheet(&self) -> Option<lumen_css_parser::Stylesheet>;
+}
+
+#[cfg(feature = "v8")]
+impl CascadeFeed for lumen_js::v8_runtime::CascadeSource {
+    fn cssom_epoch(&self) -> u64 {
+        lumen_js::v8_runtime::CascadeSource::cssom_epoch(self)
+    }
+    fn patch_cascade(&self, sheet: &lumen_css_parser::Stylesheet) -> Option<lumen_css_parser::Stylesheet> {
+        lumen_js::v8_runtime::CascadeSource::patch_cascade(self, sheet)
+    }
+    fn document_adopted_fingerprint(&self) -> u64 {
+        lumen_js::v8_runtime::CascadeSource::document_adopted_fingerprint(self)
+    }
+    fn document_adopted_stylesheet(&self) -> Option<lumen_css_parser::Stylesheet> {
+        lumen_js::v8_runtime::CascadeSource::document_adopted_stylesheet(self)
+    }
+}
+
 pub(crate) trait PersistentJs: Send + Sync {
     /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
     fn eval_js(&self, script: &str);
@@ -449,6 +486,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// everything adopted is disabled).
     #[allow(dead_code)]
     fn document_adopted_stylesheet(&self) -> Option<lumen_css_parser::Stylesheet>;
+    /// BUG-493: thread-free handle to what the page contributes to the
+    /// shell's paint cascade — see [`CascadeFeed`]. `None` when unsupported
+    /// (default).
+    fn cascade_feed(&self) -> Option<Arc<dyn CascadeFeed>> {
+        None
+    }
     /// Advance `document.readyState` to `"interactive"` and fire
     /// `readystatechange` + `DOMContentLoaded` on `document`.
     ///
@@ -1250,6 +1293,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn document_adopted_stylesheet(&self) -> Option<lumen_css_parser::Stylesheet> {
         self.rt.document_adopted_stylesheet()
+    }
+    fn cascade_feed(&self) -> Option<Arc<dyn CascadeFeed>> {
+        Some(Arc::new(self.rt.cascade_source()))
     }
     fn notify_dom_content_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('interactive')");

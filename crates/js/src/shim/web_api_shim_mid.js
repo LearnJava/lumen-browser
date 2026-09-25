@@ -10623,21 +10623,31 @@ function _lumen_make_css_rule(sheetIdx, ruleIdx) {
 // `_lumen_stylesheet_owner_nids`/`V8JsRuntime::stylesheet_nodes`).
 function _lumen_make_css_style_sheet(sheetIdx) {
     var s = Object.create(CSSStyleSheet.prototype);
+    // BUG-493: the sheet is bound to its owner node, not to the position it
+    // had when this wrapper was made — a `<style>` inserted earlier in the
+    // document shifts every later registry index, and CSS-in-JS libraries
+    // keep `tag.sheet` for the page's whole lifetime. `-1` once the owner
+    // lost its sheet (removed from the tree, or its text was replaced).
+    var ownerNid = _lumen_stylesheet_owner_nids()[sheetIdx];
+    function cur() {
+        return ownerNid === undefined ? -1 : _lumen_stylesheet_index_for(ownerNid);
+    }
     function ownerNode() {
-        var nids = _lumen_stylesheet_owner_nids();
-        return sheetIdx < nids.length ? _lumen_make_element(nids[sheetIdx]) : null;
+        return cur() < 0 ? null : _lumen_make_element(ownerNid);
     }
     function cssRuleList() {
         return _lumen_make_css_rule_list(function() {
-            var n = _lumen_stylesheet_rule_count(sheetIdx);
+            var idx = cur();
             var out = [];
-            for (var i = 0; i < n; i++) out.push(_lumen_make_css_rule(sheetIdx, i));
+            if (idx < 0) return out;
+            var n = _lumen_stylesheet_rule_count(idx);
+            for (var i = 0; i < n; i++) out.push(_lumen_make_css_rule(idx, i));
             return out;
         });
     }
     Object.defineProperties(s, {
         type:     { get: function() { return 'text/css'; }, enumerable: true, configurable: true },
-        disabled: { get: function() { return _lumen_stylesheet_disabled(sheetIdx); }, enumerable: true, configurable: true },
+        disabled: { get: function() { var idx = cur(); return idx >= 0 && _lumen_stylesheet_disabled(idx); }, enumerable: true, configurable: true },
         ownerNode: { get: ownerNode, enumerable: true, configurable: true },
         href: { get: function() {
             var el = ownerNode();
@@ -10663,7 +10673,8 @@ function _lumen_make_css_style_sheet(sheetIdx) {
     // and native function names are already distinct per-registry pairs.
     s.insertRule = function(ruleText, index) {
         index = (index === undefined) ? 0 : (index >>> 0);
-        var result = _lumen_stylesheet_insert_rule(sheetIdx, String(ruleText), index);
+        var idx = cur();
+        var result = idx < 0 ? -1 : _lumen_stylesheet_insert_rule(idx, String(ruleText), index);
         if (result === -2) {
             throw new DOMException(
                 "Failed to execute 'insertRule' on 'CSSStyleSheet': the supplied text is not a valid rule.",
@@ -10678,7 +10689,8 @@ function _lumen_make_css_style_sheet(sheetIdx) {
     };
     s.deleteRule = function(index) {
         index = index >>> 0;
-        if (_lumen_stylesheet_delete_rule(sheetIdx, index) < 0) {
+        var idx = cur();
+        if (idx < 0 || _lumen_stylesheet_delete_rule(idx, index) < 0) {
             throw new DOMException(
                 "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
                 'IndexSizeError');
@@ -10690,9 +10702,11 @@ function _lumen_make_css_style_sheet(sheetIdx) {
 // `document.styleSheets` — a live `StyleSheetList` over the registry.
 function _lumen_make_style_sheet_list() {
     return _lumen_make_indexed_list(function() {
-        var nids = _lumen_stylesheet_owner_nids();
+        // BUG-493: only the document's own sheets — a `<style>` inside a
+        // shadow tree is listed by its `ShadowRoot.styleSheets` instead.
+        var idxs = _lumen_stylesheet_document_indices();
         var out = [];
-        for (var i = 0; i < nids.length; i++) out.push(_lumen_make_css_style_sheet(i));
+        for (var i = 0; i < idxs.length; i++) out.push(_lumen_make_css_style_sheet(idxs[i]));
         return out;
     }, StyleSheetList.prototype);
 }
