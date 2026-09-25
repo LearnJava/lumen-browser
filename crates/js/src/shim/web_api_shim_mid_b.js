@@ -828,7 +828,14 @@ function _lumen_tick_timers() {
     // schedules inherit level+1 (§8.6 step 3).
     for (var k = 0; k < ready.length; k++) {
         _lumen_timer_nesting = ready[k].nesting || 1;
+        // LONGTASK-1 срез 3: invoker string mirrors the spec examples
+        // ("setTimeout"/"setInterval") used by `longtask-attributes.html`.
+        var _timerInvoker = ready[k].interval !== null ? 'setInterval' : 'setTimeout';
+        var _t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
         try { ready[k].fn.apply(globalThis, ready[k].args || []); } catch(e) { _lumen_report_exception(e); }
+        if (typeof _lumen_record_script_timing === 'function') {
+            _lumen_record_script_timing(_t0, _timerInvoker, 'user-callback');
+        }
     }
     _lumen_timer_nesting = 0;
     // Notify shell of next wakeup if any timers remain.
@@ -918,7 +925,11 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     if (callbacks.length !== 0) {
         ran = true;
         for (var i = 0; i < callbacks.length; i++) {
+            var _t0 = performance.now();
             try { callbacks[i].fn(ts); } catch(e) { _lumen_report_exception(e); }
+            if (typeof _lumen_record_script_timing === 'function') {
+                _lumen_record_script_timing(_t0, 'requestAnimationFrame', 'user-callback');
+            }
         }
     }
     // BUG-600: the focus fixup rule runs at the very end of "update the

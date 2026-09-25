@@ -1301,6 +1301,28 @@ fn parse_time_classic_script_reports_longtask() {
     assert!(n >= 1, "expected at least one longtask entry, got {n}");
 }
 
+/// LONGTASK-1 срез 3: a real DOM event dispatch (button click through
+/// `addEventListener`) records into the shared `_lumen_frame_scripts`
+/// buffer with a recognisable `invoker` string — end-to-end through the
+/// actual shim wiring (`_lumen_invoke_at` in `web_api_shim_mid.js`), not
+/// just the delivery-binding unit tests in `long_animation_frames.rs`.
+#[cfg(feature = "v8")]
+#[test]
+fn dom_event_dispatch_records_script_timing_for_loaf() {
+    let page = parse_and_layout_for_test(
+        "<html><body><button id=\"btn\">go</button>\
+         <script>\
+         document.getElementById('btn').addEventListener('click', function(){});\
+         document.getElementById('btn').dispatchEvent(new Event('click', {bubbles:true}));\
+         var found = _lumen_frame_scripts.filter(function(s){return s.invoker === 'BUTTON.click';});\
+         document.documentElement.setAttribute('data-n', String(found.length));\
+         </script>\
+         </body></html>",
+    );
+    let n: i64 = probe_attr(&page, "data-n").parse().expect("data-n must be a number");
+    assert!(n >= 1, "expected a BUTTON.click script timing entry, got {n} matches");
+}
+
 /// BUG-658: `offsetWidth`/`offsetHeight` share the same
 /// `_lumen_get_bounding_rect` native as `getBoundingClientRect`, which
 /// BUG-443 already fixed for parse-time reads — this pins the offset*

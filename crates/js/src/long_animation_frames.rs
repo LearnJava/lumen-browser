@@ -13,6 +13,17 @@
 //!
 //! Phase 1: automatic detection of frames > 50 ms from the shell rendering loop.
 //!
+//! LONGTASK-1 срез 3: script-level attribution. `event_target_shim.js` times
+//! every event-listener/`on<type>`-handler/timer/rAF callback the shim
+//! dispatches into a shared per-frame buffer (`_lumen_frame_scripts`);
+//! `_lumen_deliver_long_animation_frame` drains it into `scripts[]` when the
+//! shell passes `scripts_json = null` (the only caller today,
+//! `V8PersistentJs::deliver_long_animation_frame`). `invoker`/`invokerType`
+//! and timing are therefore real measurements; `sourceURL`/
+//! `sourceFunctionName`/`sourceCharPosition` (culprit source location) stay
+//! the class defaults — that needs V8 stack introspection at the call site,
+//! a separate, larger slice.
+//!
 //! Spec: <https://w3c.github.io/long-animation-frames/>
 
 /// Install Long Animation Frames API into the JS context.
@@ -149,7 +160,23 @@ const LOAF_SHIM: &str = r#"(function() {
     var scripts = [];
     if (scripts_json) {
       try { scripts = JSON.parse(scripts_json); } catch (_) {}
+    } else if (typeof _lumen_frame_scripts !== 'undefined' && _lumen_frame_scripts.length) {
+      // LONGTASK-1 срез 3: no explicit scripts_json from the shell (the
+      // common case — `relayout()`'s `deliver_long_animation_frame` always
+      // passes `null`) — fall back to the shared per-callback timing buffer
+      // (`event_target_shim.js`'s `_lumen_frame_scripts`), accumulated since
+      // the previous frame by every event-listener/timer/rAF callback this
+      // shim dispatched. Culprit script/function attribution
+      // (`sourceURL`/`sourceFunctionName`/`sourceCharPosition`) stays the
+      // class defaults — V8 stack introspection to fill them in is a
+      // separate, larger slice — but `invoker`/`invokerType`/timing are now
+      // real per-callback measurements instead of an always-empty array.
+      scripts = _lumen_frame_scripts;
     }
+    // Buffer is per-frame: drained unconditionally so a short (non-long)
+    // frame's callbacks don't leak into whichever frame happens to be next
+    // reported as long.
+    if (typeof _lumen_frame_scripts !== 'undefined') _lumen_frame_scripts = [];
     var bd = Number(blocking_duration_ms);
     var entry = new PerformanceLongAnimationFrameTiming({
       startTime:             Number(start_ms),
@@ -383,6 +410,54 @@ mod tests {
                 rt.eval("_perf_entries[0].scripts[0].invoker").unwrap(),
                 JsValue::String("fetch.then".into())
             );
+        });
+    }
+
+    /// LONGTASK-1 срез 3: with no `scripts_json` (the shell's real call shape —
+    /// `V8PersistentJs::deliver_long_animation_frame` always passes `null`),
+    /// the delivery binding falls back to `_lumen_frame_scripts`
+    /// (`event_target_shim.js`'s shared per-callback timing buffer).
+    #[test]
+    fn deliver_falls_back_to_frame_scripts_buffer() {
+        with_loaf_and_perf(|rt| {
+            rt.eval(
+                r#"var _lumen_frame_scripts = [
+                    {startTime: 10, duration: 5, invoker: 'BUTTON.onclick', invokerType: 'event-listener'}
+                ];"#,
+            )
+            .unwrap();
+            rt.eval("_lumen_deliver_long_animation_frame(0, 60, 0, 0, 0, -1, null);")
+                .unwrap();
+            assert_eq!(rt.eval("_perf_entries[0].scripts.length").unwrap(), JsValue::Number(1.0));
+            assert_eq!(
+                rt.eval("_perf_entries[0].scripts[0].invoker").unwrap(),
+                JsValue::String("BUTTON.onclick".into())
+            );
+            assert_eq!(
+                rt.eval("_perf_entries[0].scripts[0].invokerType").unwrap(),
+                JsValue::String("event-listener".into())
+            );
+        });
+    }
+
+    /// The buffer must drain unconditionally so a later frame's `scripts[]`
+    /// doesn't inherit an earlier frame's already-reported callbacks.
+    #[test]
+    fn deliver_drains_frame_scripts_buffer_after_use() {
+        with_loaf_and_perf(|rt| {
+            rt.eval(
+                r#"var _lumen_frame_scripts = [
+                    {startTime: 10, duration: 5, invoker: 'setTimeout', invokerType: 'user-callback'}
+                ];"#,
+            )
+            .unwrap();
+            rt.eval("_lumen_deliver_long_animation_frame(0, 60, 0, 0, 0, -1, null);")
+                .unwrap();
+            assert_eq!(rt.eval("_lumen_frame_scripts.length").unwrap(), JsValue::Number(0.0));
+            // A second delivery with the buffer empty gets an empty scripts array.
+            rt.eval("_lumen_deliver_long_animation_frame(100, 60, 0, 0, 0, -1, null);")
+                .unwrap();
+            assert_eq!(rt.eval("_perf_entries[1].scripts.length").unwrap(), JsValue::Number(0.0));
         });
     }
 }
