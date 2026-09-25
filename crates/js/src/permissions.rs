@@ -6,7 +6,10 @@
 //! calls when a permission's state really moves. `Permissions` carries both
 //! `query()` and the WICG Requesting Permissions `request()`
 //! (<https://wicg.github.io/permissions-request/>, [BUG-650]); the older
-//! `requestAll()` was dropped from that draft and is not installed.
+//! `requestAll()` was dropped from that draft and is not installed. The WICG
+//! Relinquishing Permissions `revoke()`
+//! (<https://wicg.github.io/permissions-revoke/>, [BUG-652]) gives a grant
+//! back; it never touches a `denied`.
 //!
 //! # The two rules this module exists to enforce (BUG-386)
 //!
@@ -59,6 +62,7 @@
 //! [BUG-385]: ../../../bugs/BUG-385-FIXED.md
 //! [BUG-624]: ../../../bugs/BUG-624-FIXED.md
 //! [BUG-650]: ../../../bugs/BUG-650-FIXED.md
+//! [BUG-652]: ../../../bugs/BUG-652-FIXED.md
 
 /// Install the Permissions API.
 ///
@@ -351,6 +355,39 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
     // A failing prompt is not a grant: the status still reports whatever the
     // owning API now says, and the caller learns it from `state`.
     return Promise.resolve().then(ASK[name]).then(settle, settle);
+  });
+
+  // -- revoke() — WICG Relinquishing Permissions (BUG-652) --------------------
+  //
+  // The page gives up a grant, and the state falls back to `prompt`. Only a
+  // user's `granted` can be relinquished: a `denied` stays (a page must not
+  // lift its own block — Chromium resets granted permissions only), and the
+  // STATIC answers are not decisions anybody made but a description of what
+  // the engine can do, which revoking cannot change (module docs, rule 2).
+  // The hook is captured at install time, so page script cannot shadow it: the
+  // Notifications shim installs before this one.
+  var RELINQUISH_NOTIFICATIONS = (typeof globalThis._lumen_notification_relinquish === 'function')
+    ? globalThis._lumen_notification_relinquish : null;
+  var RELINQUISH = {
+    'notifications': function() {
+      if (RELINQUISH_NOTIFICATIONS) RELINQUISH_NOTIFICATIONS();
+    },
+  };
+
+  defOp(Permissions.prototype, 'revoke', function revoke(permissionDesc) {
+    var name;
+    try {
+      name = readDescriptor(permissionDesc, 'revoke');
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    // Resolved in a later task, as the draft's «in parallel» steps require.
+    return Promise.resolve().then(function() {
+      if (resolveState(name) === GRANTED && owns(RELINQUISH, name)) {
+        try { RELINQUISH[name](); } catch (e) {}
+      }
+      return makeStatus(name);
+    });
   });
 
   // -- Installation -----------------------------------------------------------
@@ -925,6 +962,98 @@ mod tests {
                 assert_eq!(request(rt, "{ name: 'notifications' }"), "resolved|notifications|prompt");
             },
         );
+    }
+
+    // -- revoke() (BUG-652) -------------------------------------------------------
+
+    /// Settles `navigator.permissions.revoke(<descriptor>)`, reported like
+    /// [`request`].
+    fn revoke(rt: &V8JsRuntime, descriptor: &str) -> String {
+        rt.eval(&format!(
+            r#"
+            var __out = 'never settled';
+            navigator.permissions.revoke({descriptor}).then(
+              function(status) {{ __out = 'resolved|' + status.name + '|' + status.state; }},
+              function(e) {{ __out = 'rejected|' + e.constructor.name + '|' + e.message; }});
+            "#
+        ))
+        .unwrap();
+        string_eval(rt, "String(__out)")
+    }
+
+    /// The real Notifications shim, installed ahead of this one as `install_dom`
+    /// does, with the shell's answer set to `allow`.
+    fn with_notifications_and_permissions(allow: bool, f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        crate::notifications_bindings::install_notifications_bindings_v8(&rt, allow).unwrap();
+        install_permissions_api_v8(&rt).unwrap();
+        f(&rt);
+    }
+
+    /// BUG-652: the operation was missing outright — `revoke` was `undefined`.
+    #[test]
+    fn revoke_is_an_enumerable_prototype_operation_of_length_one() {
+        with_permissions(|rt| {
+            assert!(bool_eval(rt, "typeof Permissions.prototype.revoke === 'function'"));
+            assert!(bool_eval(rt, "Permissions.prototype.revoke.length === 1"));
+            assert!(bool_eval(
+                rt,
+                "!Object.prototype.hasOwnProperty.call(navigator.permissions, 'revoke') &&                  Object.getOwnPropertyDescriptor(Permissions.prototype, 'revoke').enumerable"
+            ));
+        });
+    }
+
+    /// The same WebIDL conversion as `query`, always as a rejection.
+    #[test]
+    fn revoke_rejects_bad_descriptors_without_throwing() {
+        with_permissions(|rt| {
+            for descriptor in ["", "null", "'camera'", "{}", "{ name: 'geolocaton' }"] {
+                let out = revoke(rt, descriptor);
+                assert!(out.starts_with("rejected|TypeError|"), "descriptor `{descriptor}` gave `{out}`");
+                assert!(out.contains("'revoke'"), "descriptor `{descriptor}` gave `{out}`");
+            }
+        });
+    }
+
+    /// A grant the shell gave is handed back: the state falls to `prompt`, a
+    /// status the page already holds hears `change`, and `Notification`
+    /// reports the same answer — the two APIs cannot disagree afterwards.
+    #[test]
+    fn revoke_relinquishes_a_notifications_grant() {
+        with_notifications_and_permissions(true, |rt| {
+            rt.eval(
+                "var fired = 0;                  navigator.permissions.query({ name: 'notifications' }).then(function(s) {                    s.onchange = function() { fired++; }; });",
+            )
+            .unwrap();
+            assert_eq!(query(rt, "{ name: 'notifications' }"), "resolved|granted");
+            assert_eq!(revoke(rt, "{ name: 'notifications' }"), "resolved|notifications|prompt");
+            assert!(bool_eval(rt, "Notification.permission === 'default' && fired === 1"));
+            // Nothing left to give back: a second revoke is silent.
+            assert_eq!(revoke(rt, "{ name: 'notifications' }"), "resolved|notifications|prompt");
+            assert!(bool_eval(rt, "fired === 1"));
+            // Asking again goes back to the shell, whose standing answer applies.
+            assert_eq!(request(rt, "{ name: 'notifications' }"), "resolved|notifications|granted");
+        });
+    }
+
+    /// A page must not be able to lift its own block by revoking it.
+    #[test]
+    fn revoke_leaves_a_denied_notifications_permission_denied() {
+        with_notifications_and_permissions(false, |rt| {
+            assert_eq!(revoke(rt, "{ name: 'notifications' }"), "resolved|notifications|denied");
+            assert!(bool_eval(rt, "Notification.permission === 'denied'"));
+        });
+    }
+
+    /// The STATIC answers describe what the engine can do, not a decision
+    /// anybody made — revoking them changes nothing.
+    #[test]
+    fn revoke_does_not_move_static_answers() {
+        with_permissions(|rt| {
+            assert_eq!(revoke(rt, "{ name: 'clipboard-read' }"), "resolved|clipboard-read|granted");
+            assert_eq!(revoke(rt, "{ name: 'geolocation' }"), "resolved|geolocation|denied");
+        });
     }
 
     /// Every name the registry claims to recognise resolves to one of the three

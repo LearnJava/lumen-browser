@@ -12,7 +12,8 @@ W3C Permissions §5 объявляет `[Exposed=(Window,Worker)] Permissions` �
 получает: в `DedicatedWorker` `navigator.permissions === undefined`.
 
 WPT: `permissions-request/idlharness.any.worker.html` — 3 FAIL на
-`request(object)`, `permissions/idlharness.any.worker.html` — весь блок
+`request(object)`, `permissions-revoke/idlharness.any.worker.html` — 3 FAIL на
+`revoke(object)` (остаток [BUG-652](BUG-652-FIXED.md)), `permissions/idlharness.any.worker.html` — весь блок
 `Permissions`/`PermissionStatus`/`WorkerNavigator.permissions` в `.ini`
 как ожидаемые FAIL.
 

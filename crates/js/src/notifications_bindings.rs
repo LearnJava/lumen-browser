@@ -283,6 +283,20 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
     });
   };
 
+  /**
+   * Internal: the page gives up a grant it holds (WICG Relinquishing
+   * Permissions, `navigator.permissions.revoke()`, BUG-652). Only a `granted`
+   * moves, and only back to `default`: a page must not be able to lift its own
+   * `denied`. The next requestPermission() asks the shell again.
+   */
+  globalThis._lumen_notification_relinquish = function() {
+    if (_permission !== 'granted') return;
+    _permission = 'default';
+    if (typeof _lumen_permission_state_changed === 'function') {
+      try { _lumen_permission_state_changed('notifications'); } catch(e) {}
+    }
+  };
+
   window.Notification = Notification;
 
   // ── ServiceWorkerRegistration integration (W3C Notifications API §5) ──────
@@ -673,6 +687,32 @@ Notification.requestPermission();
         )
         .unwrap();
         assert_eq!(rt.eval("notified.length === 0").unwrap(), JsValue::Bool(true));
+    }
+
+    /// BUG-652: `permissions.revoke()` gives a grant back through this hook —
+    /// `granted` falls to `default` and is announced; the move happens once.
+    #[test]
+    fn relinquish_moves_granted_to_default_once() {
+        let rt = rt_with_notifications(true);
+        rt.eval(
+            r#"
+var notified = [];
+globalThis._lumen_permission_state_changed = function(name) { notified.push(name); };
+_lumen_notification_relinquish();
+_lumen_notification_relinquish();
+"#,
+        )
+        .unwrap();
+        assert_eq!(rt.eval("Notification.permission").unwrap(), JsValue::String("default".to_string()));
+        assert_eq!(rt.eval("notified.join(',')").unwrap(), JsValue::String("notifications".to_string()));
+    }
+
+    /// A page must not lift its own block: `denied` does not move.
+    #[test]
+    fn relinquish_leaves_denied_alone() {
+        let rt = rt_with_notifications(false);
+        rt.eval("_lumen_notification_relinquish();").unwrap();
+        assert_eq!(rt.eval("Notification.permission").unwrap(), JsValue::String("denied".to_string()));
     }
 
     #[test]
