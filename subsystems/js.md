@@ -2026,6 +2026,13 @@ the time — read dates.
   `_lumen_fire_currententrychange` builds a `NavigationCurrentEntryChangeEvent` from the change
   `_sync` recorded, so the shell must call `commit_nav_state` **before** `fire_current_entry_change`.
   `_lumen_dispatch_navigate` takes an optional 5th arg (target key) for traversal destinations.
+- **`ShadowRoot` interface members (DOM §4.8, BUG-1130, [P6] 2026-09-25).** `Node` members reach a
+  shadow root through `DocumentFragment.prototype → Node.prototype`; the ParentNode element
+  traversal and `moveBefore` are installed on `DocumentFragment.prototype` from the element
+  descriptors; `DocumentOrShadowRoot` (`activeElement`/`fullscreenElement`/`pointerLockElement`
+  retargeted, `styleSheets` filtered from the sheet registry by owner tree, `getAnimations`,
+  `elementFromPoint(s)`) and `delegatesFocus`/`slotAssignment`/`clonable`/`serializable`
+  (`_lumen_shadow_root_init`, recorded by `attachShadow`) sit on `ShadowRoot.prototype`.
 
 ## Deferred
 

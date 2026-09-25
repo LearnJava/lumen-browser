@@ -378,4 +378,6 @@ mod v8_bug863_cdata_section;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1122_iface_protos;
 #[cfg(feature = "v8-backend")]
+mod v8_bug1130_shadow_root_members;
+#[cfg(feature = "v8-backend")]
 mod v8_bug1119_document_cookie;
