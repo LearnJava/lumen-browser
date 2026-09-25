@@ -914,12 +914,71 @@ var _io_initial_scheduled = false;
 var _io_initial_attempts = 0;
 var _IO_INITIAL_MAX_ATTEMPTS = 120;
 
+// §2.2 "parse a margin": whitespace-separated, 1–4 tokens, each an absolute
+// px length or a percentage, expanded to four sides like the `margin`
+// shorthand. Returns the four token strings, or null for a value the
+// constructor must reject (the SyntaxError itself is BUG-626; until then an
+// invalid margin falls back to the default instead of surfacing verbatim).
+var _IO_MARGIN_TOKEN = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(px|%)$/i;
+function _io_parse_margin(str) {
+    var s = str === undefined ? '0px' : String(str);
+    var parts = s.split(/[ \t\n\f\r]+/).filter(function(p) { return p.length > 0; });
+    if (parts.length === 0) parts = ['0px'];
+    if (parts.length > 4) return null;
+    var toks = [];
+    for (var i = 0; i < parts.length; i++) {
+        var m = _IO_MARGIN_TOKEN.exec(parts[i]);
+        if (!m) return null;
+        toks.push(String(Number(m[1])) + (m[2] === '%' ? '%' : 'px'));
+    }
+    if (toks.length === 1) toks.push(toks[0]);
+    if (toks.length === 2) toks.push(toks[0]);
+    if (toks.length === 3) toks.push(toks[1]);
+    return toks;
+}
+
+// §2.2 constructor steps for `threshold`: a single number becomes a one-item
+// list, the list is sorted ascending and an empty one becomes [0]. The range
+// and type checks (RangeError/TypeError) are BUG-626.
+function _io_parse_thresholds(t) {
+    var list = t === undefined ? [0] : (Array.isArray(t) ? t.slice() : [t]);
+    list = list.map(function(v) { return Number(v); });
+    list.sort(function(a, b) { return a - b; });
+    if (list.length === 0) list.push(0);
+    return Object.freeze(list);
+}
+
 function IntersectionObserver(callback, options) {
     this._cb = callback;
     this._options = options || {};
     this._observations = [];
+    // [[QueuedEntries]] (§2.2): filled by the observation update and drained
+    // either by the notification step or by takeRecords().
+    this._queuedEntries = [];
+    this._root = this._options.root == null ? null : this._options.root;
+    this._rootMargin = (_io_parse_margin(this._options.rootMargin) || ['0px', '0px', '0px', '0px']).join(' ');
+    this._scrollMargin = (_io_parse_margin(this._options.scrollMargin) || ['0px', '0px', '0px', '0px']).join(' ');
+    this._thresholds = _io_parse_thresholds(this._options.threshold);
     _io_observers.push(this);
 }
+// §2.2 readonly IDL attributes, exposed as prototype accessors like every
+// other interface attribute; each returns the value fixed at construction
+// (thresholds is a FrozenArray, so the same frozen object every time).
+Object.defineProperty(IntersectionObserver.prototype, 'root', {
+    get: function() { return this._root; }, enumerable: true, configurable: true });
+Object.defineProperty(IntersectionObserver.prototype, 'rootMargin', {
+    get: function() { return this._rootMargin; }, enumerable: true, configurable: true });
+Object.defineProperty(IntersectionObserver.prototype, 'scrollMargin', {
+    get: function() { return this._scrollMargin; }, enumerable: true, configurable: true });
+Object.defineProperty(IntersectionObserver.prototype, 'thresholds', {
+    get: function() { return this._thresholds; }, enumerable: true, configurable: true });
+// §2.2 takeRecords(): return the queued entries and empty the queue, so the
+// notification step that follows has nothing left to deliver for them.
+IntersectionObserver.prototype.takeRecords = function() {
+    var q = this._queuedEntries;
+    this._queuedEntries = [];
+    return q;
+};
 IntersectionObserver.prototype.observe = function(target) {
     if (!target || target.__nid__ === undefined) return;
     for (var i = 0; i < this._observations.length; i++) {
@@ -929,6 +988,8 @@ IntersectionObserver.prototype.observe = function(target) {
     }
     // lastRatio = -1 means «never delivered» → first delivery always fires
     this._observations.push({ target: target, lastRatio: -1 });
+    // disconnect() unregisters the observer; observing again re-arms it.
+    if (_io_observers.indexOf(this) < 0) _io_observers.push(this);
     _io_initial_attempts = 0;
     _io_schedule_initial();
 };
@@ -939,6 +1000,7 @@ IntersectionObserver.prototype.disconnect = function() {
     var idx = _io_observers.indexOf(this);
     if (idx >= 0) _io_observers.splice(idx, 1);
     this._observations = [];
+    this._queuedEntries = [];
 };
 
 // Queue the first-delivery pass as an event-loop task. Written straight into
@@ -992,6 +1054,20 @@ function _parse_root_margin(str) {
     return [vals[0], vals[1], vals[2], vals[3]];
 }
 
+// Resolve a serialized rootMargin ("T R B L", each px or %) to px against a
+// root of the given size.
+function _io_resolve_margin(str, w, h) {
+    var parts = str.split(' ');
+    var out = [];
+    for (var i = 0; i < 4; i++) {
+        var p = parts[i];
+        var n = parseFloat(p);
+        if (p.charAt(p.length - 1) === '%') n = n * ((i === 0 || i === 2) ? h : w) / 100;
+        out.push(n);
+    }
+    return out;
+}
+
 function _lumen_deliver_intersection_observers() {
     if (_io_observers.length === 0) return;
     var vp = _lumen_get_viewport_size();
@@ -1000,12 +1076,13 @@ function _lumen_deliver_intersection_observers() {
         var obs = _io_observers[oi];
         // Apply rootMargin to expand/contract the intersection root (viewport).
         // Positive margin expands outward; negative contracts inward.
-        var rm = _parse_root_margin(obs._options.rootMargin);
+        // Percentages resolve against the root's height (top/bottom) and
+        // width (left/right), §2.2 "rootMargin".
+        var rm = _io_resolve_margin(obs._rootMargin, vpW, vpH);
         var rootTop = -rm[0], rootLeft = -rm[3];
         var rootRight = vpW + rm[1], rootBottom = vpH + rm[2];
-        var t = obs._options.threshold !== undefined ? obs._options.threshold : 0;
-        var thresholds = Array.isArray(t) ? t : [t];
-        var entries = [];
+        var thresholds = obs._thresholds;
+        var entries = obs._queuedEntries;
         for (var ei = 0; ei < obs._observations.length; ei++) {
             var o = obs._observations[ei];
             var nid = o.target.__nid__;
@@ -1056,9 +1133,18 @@ function _lumen_deliver_intersection_observers() {
                 time: typeof performance !== 'undefined' ? performance.now() : 0,
             });
         }
-        if (entries.length > 0) {
-            try { obs._cb(entries, obs); } catch(e) { _lumen_report_exception(e); }
-        }
+    }
+    // §3.2.4 notify: every observer's queue is filled above before any
+    // callback runs, and each queue is taken just before its own callback, so
+    // a callback that calls another observer's takeRecords() drains entries
+    // that observer then never sees delivered a second time.
+    var notify = _io_observers.slice();
+    for (var ni = 0; ni < notify.length; ni++) {
+        var nobs = notify[ni];
+        var queue = nobs._queuedEntries;
+        nobs._queuedEntries = [];
+        if (queue.length === 0) continue;
+        try { nobs._cb(queue, nobs); } catch(e) { _lumen_report_exception(e); }
     }
 }
 
