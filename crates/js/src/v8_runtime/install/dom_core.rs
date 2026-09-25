@@ -495,6 +495,8 @@ pub(crate) fn install_node_properties(
             };
             match &node.data {
                 NodeData::Element { name, .. } => name.local.to_ascii_uppercase(),
+                // BUG-863: a CDATASection is a Text node with its own nodeName.
+                NodeData::Text(_) if doc.is_cdata_section(nid) => "#cdata-section".into(),
                 NodeData::Text(_) => "#text".into(),
                 NodeData::Document => "#document".into(),
                 NodeData::Comment(_) => "#comment".into(),
@@ -532,6 +534,16 @@ pub(crate) fn install_node_properties(
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_raw(node_id);
                 matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Text(_)))
+            }
+        );
+        let d = Arc::clone(&doc);
+        // BUG-863: a Text node that is a DOM §4.12 CDATASection — still
+        // `_lumen_is_text_node`, this only picks nodeType 4 / the prototype.
+        reg!(scope, ctx, store,
+            "_lumen_is_cdata_section",
+            move |node_id: u32| -> bool {
+                let doc = d.lock().unwrap();
+                doc.is_cdata_section(NodeId::from_raw(node_id))
             }
         );
         let d = Arc::clone(&doc);
@@ -1147,6 +1159,18 @@ pub(crate) fn install_tree_mutation(
                 // Returns -1 when MAX_DOM_NODES is reached; JS shim checks `nid < 0`
                 // (BUG-418: was ungated, letting the arena grow past the limit).
                 match doc.try_create_comment(text) {
+                    Ok(nid) => nid.index() as i32,
+                    Err(_) => -1,
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_create_cdata_section",
+            move |text: String| -> i32 {
+                let mut doc = d.lock().unwrap();
+                // BUG-863: same -1-on-overflow contract as `_lumen_create_text_node`.
+                match doc.try_create_cdata_section(text) {
                     Ok(nid) => nid.index() as i32,
                     Err(_) => -1,
                 }

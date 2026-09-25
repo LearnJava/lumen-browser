@@ -580,6 +580,20 @@ pub struct Document {
     /// records the exception here for that walk to skip instead.
     #[serde(default)]
     non_executable_foreign_scripts: HashSet<NodeId>,
+    /// Text nodes that are DOM §4.12 `CDATASection` nodes (BUG-863).
+    ///
+    /// `CDATASection` inherits `Text` and differs from it only in `nodeType`
+    /// (4), `nodeName` (`#cdata-section`) and XML serialization, so the node
+    /// itself stays a [`NodeData::Text`] — every text path (layout,
+    /// `textContent`, `normalize`, ranges) keeps working unchanged — and the
+    /// kind lives in this set. Only `document.createCDATASection` on an XML
+    /// document fills it; the parser never does (a parsed `<![CDATA[…]]>`
+    /// becomes plain text, as before). Keyed by arena index, not the packed
+    /// `NodeId`: the JS bridge hands back bare indices from the `create_*`
+    /// bindings, and [`Self::reclaim_dead_nodes`] drops the entry when the
+    /// slot is freed, so a reused slot never inherits the mark.
+    #[serde(default)]
+    cdata_sections: HashSet<u32>,
     /// Active pointer captures: maps `pointerId` → captured `NodeId`.
     ///
     /// Set by `Element.setPointerCapture(pointerId)` (W3C Pointer Events L3 §4.1).
@@ -752,6 +766,7 @@ impl Document {
             viewport_meta: None,
             meta_refresh: None,
             non_executable_foreign_scripts: HashSet::new(),
+            cdata_sections: HashSet::new(),
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
@@ -1473,6 +1488,22 @@ impl Document {
         }))
     }
 
+    /// Create a DOM §4.12 `CDATASection` node — a [`NodeData::Text`] node
+    /// marked in [`Self::is_cdata_section`] (BUG-863) — returning
+    /// `Err(`[`NodeLimitExceeded`]`)` if the arena already holds
+    /// [`MAX_DOM_NODES`] or more nodes. Called by the `_lumen_create_cdata_section`
+    /// JS binding; the `]]>` check is the caller's.
+    pub fn try_create_cdata_section(&mut self, content: impl Into<String>) -> Result<NodeId, NodeLimitExceeded> {
+        let id = self.try_create_text(content)?;
+        self.cdata_sections.insert(id.index() as u32);
+        Ok(id)
+    }
+
+    /// `true` for a text node created by [`Self::try_create_cdata_section`].
+    pub fn is_cdata_section(&self, id: NodeId) -> bool {
+        self.cdata_sections.contains(&(id.index() as u32))
+    }
+
     /// Allocate a `DocumentFragment` node in the arena.
     ///
     /// Used by the tree builder to hold `<template>` content. The fragment is
@@ -1610,6 +1641,10 @@ impl Document {
     pub fn deep_clone(&mut self, node: NodeId, deep: bool) -> NodeId {
         let data = self.nodes[node.index()].data.clone();
         let clone = self.alloc(data);
+        // DOM §4.4 clone: a CDATASection clones into a CDATASection (BUG-863).
+        if self.is_cdata_section(node) {
+            self.cdata_sections.insert(clone.index() as u32);
+        }
         if deep {
             let children: Vec<NodeId> = self.nodes[node.index()].children.clone();
             for child in children {
@@ -1806,6 +1841,7 @@ impl Document {
         for &id in ids {
             self.shadow_roots.remove(&id);
             self.template_contents.remove(&id);
+            self.cdata_sections.remove(&(id.index() as u32));
             let Some(node) = self.nodes.get_mut(id.index()) else {
                 continue;
             };

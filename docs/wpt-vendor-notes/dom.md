@@ -79,9 +79,9 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
 | Подкаталог | id | OK | TIMEOUT | ERROR | сабтесты | Головная причина |
 |---|---:|---:|---:|---:|---|---|
 | `events/` | 192 | 141 | 16 | 35 | 198/578 | россыпь известных гэпов (см. ниже), крупнейший локальный — [BUG-865](../../bugs/BUG-865-OPEN.md) |
-| `ranges/` | 57 | 33 | 0 | 24 | 10/251 | [BUG-863](../../bugs/BUG-863-OPEN.md) — **все 24 ERROR** из одной причины |
+| `ranges/` | 57 | 33 | 0 | 24 | 10/251 | [BUG-863](../../bugs/BUG-863-FIXED.md) — **все 24 ERROR** из одной причины ; после починки (2026-09-25) — 46/57 OK, 12262/44063 сабтестов, причины остатка — [BUG-1159](../../bugs/BUG-1159-OPEN.md), [BUG-1160](../../bugs/BUG-1160-OPEN.md), [BUG-1161](../../bugs/BUG-1161-OPEN.md) |
 | `observable/` | 29 | 25 | 4 | 0 | 0/251 | `Observable` не реализован (WICG-предложение, каталог `tentative/`) |
-| `traversal/` | 18 | 14 | 1 | 3 | 26/56 | 3 ERROR — та же [BUG-863](../../bugs/BUG-863-OPEN.md) |
+| `traversal/` | 18 | 14 | 1 | 3 | 26/56 | 3 ERROR — та же [BUG-863](../../bugs/BUG-863-FIXED.md) ; после починки — 17/18 OK, 1031/1583, остаток — [BUG-1164](../../bugs/BUG-1164-OPEN.md) |
 | `collections/` | 10 | 10 | 0 | 0 | 11/53 | `HTMLCollection.namedItem` отсутствует |
 | `abort/` | 6 | 6 | 0 | 0 | 33/37 | практически зелено |
 | `lists/` | 5 | 4 | 0 | 1 | 123/189 | `DOMTokenList` живой; ERROR — дубли имён сабтестов в одном файле |
@@ -89,7 +89,7 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
 
 ### Заведено (новые причины)
 
-* [BUG-863](../../bugs/BUG-863-OPEN.md) — `document.createCDATASection` отсутствует.
+* [BUG-863](../../bugs/BUG-863-FIXED.md) — `document.createCDATASection` отсутствует.
   **Крупнейшая единичная причина в категории: 31 id из 86 не-OK.** Вызов стоит в
   общем `setupRangeTests()` (`tests/wpt/dom/common.js:60`), то есть в `setup()`
   каждого теста `Range`/`NodeIterator`/`TreeWalker` — исключение летит до

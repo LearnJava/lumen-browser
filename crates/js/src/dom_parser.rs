@@ -51,6 +51,7 @@ const DOM_PARSER_SHIM: &str = r#"
 // ── Node type constants ───────────────────────────────────────────────────────
 var ELEMENT_NODE           = 1;
 var TEXT_NODE              = 3;
+var CDATA_SECTION_NODE     = 4;
 var COMMENT_NODE           = 8;
 var DOCUMENT_NODE          = 9;
 var DOCUMENT_FRAGMENT_NODE = 11;
@@ -295,6 +296,18 @@ Object.defineProperty(VText.prototype, 'nextSibling', {
 });
 VText.prototype.cloneNode = function() { return new VText(this.nodeValue, this.ownerDocument); };
 
+// ── VCDATASection (BUG-863) ──────────────────────────────────────────────────
+// DOM §4.12: a Text node with nodeType 4. Only `createCDATASection` on an XML
+// document builds one; the virtual XML parser keeps `<![CDATA[…]]>` as text.
+function VCDATASection(data, doc) {
+  VText.call(this, data, doc);
+  this.nodeType = CDATA_SECTION_NODE;
+  this.nodeName = '#cdata-section';
+}
+VCDATASection.prototype = Object.create(VText.prototype);
+VCDATASection.prototype.constructor = VCDATASection;
+VCDATASection.prototype.cloneNode = function() { return new VCDATASection(this.nodeValue, this.ownerDocument); };
+
 // ── VComment ─────────────────────────────────────────────────────────────────
 function VComment(data, doc) {
   VNode.call(this, COMMENT_NODE, doc);
@@ -339,6 +352,17 @@ Object.defineProperty(VDocument.prototype, 'innerHTML', {
 VDocument.prototype.createElement        = function(t) { return new VElement(t, this, this._isXML); };
 VDocument.prototype.createTextNode       = function(d) { return new VText(String(d), this); };
 VDocument.prototype.createComment        = function(d) { return new VComment(String(d), this); };
+// DOM §4.5 createCDATASection — same checks as the live document's (BUG-863).
+VDocument.prototype.createCDATASection   = function(d) {
+  if (!this._isXML) {
+    throw new DOMException('createCDATASection: this operation is not supported for HTML documents', 'NotSupportedError');
+  }
+  var s = String(d);
+  if (s.indexOf(']]>') !== -1) {
+    throw new DOMException('createCDATASection: the data must not contain the sequence ]]>', 'InvalidCharacterError');
+  }
+  return new VCDATASection(s, this);
+};
 VDocument.prototype.createDocumentFragment = function() {
   var f = new VNode(DOCUMENT_FRAGMENT_NODE, this);
   f.nodeName = '#document-fragment'; f.nodeValue = null;
@@ -412,7 +436,7 @@ function _vInsertBefore(newNode, ref) {
 // ── Text content collector ───────────────────────────────────────────────────
 function _vCollectText(node) {
   if (!node) return '';
-  if (node.nodeType === TEXT_NODE) return node.nodeValue || '';
+  if (node.nodeType === TEXT_NODE || node.nodeType === CDATA_SECTION_NODE) return node.nodeValue || '';
   if (node.nodeType === COMMENT_NODE) return '';
   var r = '';
   for (var i = 0; i < node.childNodes.length; i++) r += _vCollectText(node.childNodes[i]);
@@ -824,6 +848,7 @@ function _vSerializeNode(node, isXML) {
   if (!node) return '';
   switch (node.nodeType) {
     case TEXT_NODE:     return _escH(node.nodeValue || '');
+    case CDATA_SECTION_NODE: return '<![CDATA[' + (node.nodeValue || '') + ']]>';
     case COMMENT_NODE:  return '<!--' + (node.nodeValue || '') + '-->';
     case ELEMENT_NODE:  return _vSerializeElement(node, isXML);
     case DOCUMENT_NODE:
@@ -853,7 +878,13 @@ function _nativeSerializeNode(node) {
   if (!node || node.__nid__ === undefined) return '';
   var nid = node.__nid__;
   if (typeof _lumen_is_text_node === 'function' && _lumen_is_text_node(nid)) {
-    return _escH(typeof _lumen_get_text_content === 'function' ? _lumen_get_text_content(nid) : '');
+    var text = typeof _lumen_get_text_content === 'function' ? _lumen_get_text_content(nid) : '';
+    // DOM Parsing §3.2.1.7: a CDATASection serializes verbatim inside its
+    // markers, unescaped (BUG-863).
+    if (typeof _lumen_is_cdata_section === 'function' && _lumen_is_cdata_section(nid)) {
+      return '<![CDATA[' + text + ']]>';
+    }
+    return _escH(text);
   }
   var tagRaw = typeof _lumen_get_tag_name === 'function' ? (_lumen_get_tag_name(nid) || '') : '';
   // '#text', '#comment', '#document', '#document-fragment' — descend into children

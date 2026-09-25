@@ -3825,6 +3825,33 @@ Comment.prototype.constructor = Comment;
 function Text(data) { return _lumen_make_character_data(3, '#text', data, Text.prototype); }
 Text.prototype = Object.create(CharacterData.prototype);
 Text.prototype.constructor = Text;
+// DOM §4.12 CDATASection — a Text node with nodeType 4 (BUG-863). Not
+// constructible; `document.createCDATASection` on an XML document is the only
+// way to get one. The arena keeps it a Text node (`Document::cdata_sections`
+// marks it), so every Text path below applies to it unchanged.
+function CDATASection() { throw new TypeError('Illegal constructor'); }
+CDATASection.prototype = Object.create(Text.prototype);
+CDATASection.prototype.constructor = CDATASection;
+
+// DOM §4.5 createCDATASection(data), shared by the live `document` and the
+// detached documents: NotSupportedError on an HTML document, then
+// InvalidCharacterError when `data` contains the section terminator `]]>`.
+function _lumen_create_cdata_section_checked(isHtmlDocument, data) {
+    if (isHtmlDocument) {
+        throw new DOMException(
+            'createCDATASection: this operation is not supported for HTML documents',
+            'NotSupportedError');
+    }
+    var s = String(data);
+    if (s.indexOf(']]>') !== -1) {
+        throw new DOMException(
+            'createCDATASection: the data must not contain the sequence ]]>',
+            'InvalidCharacterError');
+    }
+    var nid = _lumen_create_cdata_section(s);
+    if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+    return _lumen_make_element(nid);
+}
 
 // DOM §4.7 DocumentFragment() — a native (arena-backed) empty fragment, so it
 // can hold real inserted children. The wrapper is a plain native-backed object,
@@ -4331,6 +4358,11 @@ function _lumen_build_detached_document(proto, contentType) {
     // Node-replaceChild.html, Node-normalize.html).
     doc.createProcessingInstruction = function(target, data) {
         return _lumen_create_processing_instruction_checked(target, data);
+    };
+    // BUG-863: `setupRangeTests()` (WPT `dom/common.js`) calls this on
+    // `new Document()` — an XML document, so it must build a real node.
+    doc.createCDATASection = function(data) {
+        return _lumen_create_cdata_section_checked(contentType === 'text/html', data);
     };
     doc.createDocumentFragment = function() { return _lumen_make_document_fragment(_lumen_create_fragment()); };
     // -- BUG-415: Node / ParentNode over the document's own child list ------
@@ -7031,7 +7063,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // what `'prefix' in el` feature checks look for, not absent (BUG-367).
         get localName()      { var nid = this.__nid__; return _lumen_u2n(_lumen_get_local_name(nid)); },
         get prefix()         { var nid = this.__nid__; return null; },
-        get nodeType()       { var nid = this.__nid__; return _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : (_lumen_is_processing_instruction_node(nid) ? 7 : 1)); },
+        get nodeType()       { var nid = this.__nid__; return _lumen_is_text_node(nid) ? (_lumen_is_cdata_section(nid) ? 4 : 3) : (_lumen_is_comment_node(nid) ? 8 : (_lumen_is_processing_instruction_node(nid) ? 7 : 1)); },
         // DOM LS §4.9.1: XHTML namespace for HTML elements, `null` for non-element nodes
         // (text/comment). react-dom's root-listening bootstrap (BUG-281) reads this.
         get namespaceURI()   { var nid = this.__nid__; return _lumen_u2n(_lumen_get_namespace_uri(nid)); },
@@ -8874,7 +8906,7 @@ function _lumen_build_element(nid, ifaceOverride) {
         isPI      = (isText || isComment) ? false : _lumen_is_processing_instruction_node(nid);
     }
     var iface     = ifaceOverride ? ifaceOverride
-                  : isText ? Text.prototype
+                  : isText ? (_lumen_is_cdata_section(nid) ? CDATASection.prototype : Text.prototype)
                   : (isComment ? Comment.prototype
                   : (isPI ? ProcessingInstruction.prototype : _lumen_element_prototype_for(nid)));
     var kind      = (isText || isComment) ? 'cd' : (isPI ? 'pi' : null);
@@ -11372,6 +11404,11 @@ var document = {
     // node (BUG-313).
     createProcessingInstruction: function(target, data) {
         return _lumen_create_processing_instruction_checked(target, data);
+    },
+    // DOM LS §4.5: createCDATASection(data) — NotSupportedError here unless
+    // the page itself is an XML document (BUG-863).
+    createCDATASection: function(data) {
+        return _lumen_create_cdata_section_checked(_lumen_get_document_content_type() === 'text/html', data);
     },
     // ── DOM §4.4 Node mutation, over the document's own children (BUG-557) ──
     // `ReactDOM.hydrateRoot(document, …)` — the form every Next.js 14 App
