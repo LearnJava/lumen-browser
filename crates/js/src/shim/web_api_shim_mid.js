@@ -3861,7 +3861,14 @@ Object.defineProperty(ShadowRoot.prototype, 'host', {
 });
 Object.defineProperty(ShadowRoot.prototype, 'innerHTML', {
     get: function() { return _lumen_get_inner_html(this.__nid__); },
-    set: function(v) { _lumen_set_inner_html(this.__nid__, String(v)); },
+    // TRUSTEDTYPES-1 срез 2: TT L2 §4.1.1 HTML sink, same gate as Element's
+    // innerHTML setter below.
+    set: function(v) {
+        var s = (typeof _lumen_tt_get_compliant_html === 'function')
+            ? _lumen_tt_get_compliant_html(v, 'ShadowRoot innerHTML', true)
+            : String(v);
+        _lumen_set_inner_html(this.__nid__, s);
+    },
     enumerable: true, configurable: true,
 });
 Object.defineProperty(ShadowRoot.prototype, 'textContent', {
@@ -3977,7 +3984,13 @@ ShadowRoot.prototype.dispatchEvent = function(evt) {
 // object-literal copy lives further down this file; `ShadowRoot` shares the
 // same `_lumen_get_inner_html`/`_lumen_set_inner_html` natives via `__nid__`.
 ShadowRoot.prototype.setHTMLUnsafe = function(html) {
-    _lumen_set_inner_html(this.__nid__, String(html));
+    // TRUSTEDTYPES-1 срез 2: same TT L2 §4.1.1 gate as `innerHTML=`; the
+    // "Unsafe" name refers to sanitization (none, unlike the Sanitizer API),
+    // not to Trusted Types, which still applies to this sink (HTML LS §14.5).
+    var s = (typeof _lumen_tt_get_compliant_html === 'function')
+        ? _lumen_tt_get_compliant_html(html, 'ShadowRoot setHTMLUnsafe', true)
+        : String(html);
+    _lumen_set_inner_html(this.__nid__, s);
 };
 ShadowRoot.prototype.getHTML = function(opts) {
     return _lumen_get_inner_html(this.__nid__);
@@ -7069,7 +7082,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
         get textContent()    { var nid = this.__nid__; return _lumen_get_text_content(nid); },
         set textContent(v)   { var nid = this.__nid__; _lumen_set_text_content(nid, String(v)); },
         get innerHTML()      { var nid = this.__nid__; return _lumen_get_inner_html(nid); },
-        set innerHTML(v)     { var nid = this.__nid__; _lumen_set_inner_html(nid, String(v)); },
+        // TRUSTEDTYPES-1 срез 2: TT L2 §4.1.1 HTML sink.
+        set innerHTML(v)     { var nid = this.__nid__;
+            var s = (typeof _lumen_tt_get_compliant_html === 'function')
+                ? _lumen_tt_get_compliant_html(v, 'Element innerHTML', true)
+                : String(v);
+            _lumen_set_inner_html(nid, s);
+        },
         // DOM Parsing §2.6 'Extensions to the Element interface' — outerHTML
         // (BUG-351). Getter serializes this element itself; setter parses the
         // assigned markup and replaces `this` with the result in its parent,
@@ -7077,6 +7096,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // parent is the Document node itself (i.e. `this` is the root element).
         get outerHTML()      { var nid = this.__nid__; return _lumen_get_outer_html(nid); },
         set outerHTML(v) { var nid = this.__nid__;
+            // TRUSTEDTYPES-1 срез 2: TT L2 §4.1.1 HTML sink — checked before the
+            // parent/document-root guards below, matching the WPT fixture
+            // (`block-string-assignment-to-Element-outerHTML.html`) that expects
+            // a plain TypeError even when the parent is the document itself.
+            var s = (typeof _lumen_tt_get_compliant_html === 'function')
+                ? _lumen_tt_get_compliant_html(v, 'Element outerHTML', true)
+                : String(v);
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid === null) return;
             if (pid === _lumen_get_document_root()) {
@@ -7084,7 +7110,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     'Failed to set the outerHTML property: This element has no parent node.',
                     'NoModificationAllowedError');
             }
-            var newIds = _lumen_parse_html_fragment(String(v));
+            var newIds = _lumen_parse_html_fragment(s);
             var wrapped = [];
             for (var _ohi = 0; _ohi < newIds.length; _ohi++) { wrapped.push(_lumen_make_element(newIds[_ohi])); }
             this.replaceWith.apply(this, wrapped);
@@ -7585,8 +7611,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // DOM Parsing §2.6 — insertAdjacentHTML (BUG-351). Parses `html` and
         // inserts the result at the given position, same delegation pattern as
         // insertAdjacentText/insertAdjacentElement above.
+        // TRUSTEDTYPES-1 срез 2: TT L2 §4.1.1 HTML sink, checked before the
+        // `where` validation below (WPT: `insertAdjacentHTML(string)` throws
+        // TypeError even with an invalid position argument).
         insertAdjacentHTML: function(where, html) { var nid = this.__nid__;
-            var newIds = _lumen_parse_html_fragment(String(html));
+            var s = (typeof _lumen_tt_get_compliant_html === 'function')
+                ? _lumen_tt_get_compliant_html(html, 'Element insertAdjacentHTML')
+                : String(html);
+            var newIds = _lumen_parse_html_fragment(s);
             var wrapped = [];
             for (var _iahi = 0; _iahi < newIds.length; _iahi++) { wrapped.push(_lumen_make_element(newIds[_iahi])); }
             switch (String(where).toLowerCase()) {
@@ -11487,18 +11519,44 @@ var document = {
     // call; once the document has finished loading it is a no-op, matching
     // real browsers' document.write() intervention for scripts that call it
     // after load instead of erasing the page.
+    // TRUSTEDTYPES-1 срез 2: HTML LS §8.4.4's own "Document write steps" run
+    // TT L2's "Get Trusted Type compliant string" PER ARGUMENT (sink
+    // `"Document write"`/`"Document writeln"`), concatenating the already-
+    // compliant strings — not one check over the joined text. Each argument
+    // is checked here directly (not by delegating to `insertAdjacentHTML`,
+    // which would re-check the already-compliant joined string a second time
+    // under the wrong sink name and, for a page with its own default policy,
+    // double-invoke the transform).
     write: function() {
         if (_doc_ready_state !== 'loading') return;
         var body = document.body;
         if (!body) return;
         var text = '';
-        for (var i = 0; i < arguments.length; i++) text += String(arguments[i]);
-        body.insertAdjacentHTML('beforeend', text);
+        for (var i = 0; i < arguments.length; i++) {
+            text += (typeof _lumen_tt_get_compliant_html === 'function')
+                ? _lumen_tt_get_compliant_html(arguments[i], 'Document write')
+                : String(arguments[i]);
+        }
+        var newIds = _lumen_parse_html_fragment(text);
+        for (var _wi = 0; _wi < newIds.length; _wi++) {
+            body.append(_lumen_make_element(newIds[_wi]));
+        }
     },
     writeln: function() {
-        var args = Array.prototype.slice.call(arguments);
-        args.push('\n');
-        document.write.apply(document, args);
+        if (_doc_ready_state !== 'loading') return;
+        var body = document.body;
+        if (!body) return;
+        var text = '';
+        for (var i = 0; i < arguments.length; i++) {
+            text += (typeof _lumen_tt_get_compliant_html === 'function')
+                ? _lumen_tt_get_compliant_html(arguments[i], 'Document writeln')
+                : String(arguments[i]);
+        }
+        text += '\n';
+        var newIds = _lumen_parse_html_fragment(text);
+        for (var _wli = 0; _wli < newIds.length; _wli++) {
+            body.append(_lumen_make_element(newIds[_wli]));
+        }
     },
     // HTML LS §8.4.4 document.open()/close() (BUG-888) — the explicit entry
     // point `write()` above needed: `write()` after load is a deliberate

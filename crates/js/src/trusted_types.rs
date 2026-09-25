@@ -10,10 +10,16 @@
 //!
 //! Phase 0: most DOM sinks (innerHTML etc.) still accept plain strings and
 //! trusted values stringify transparently when assigned. TRUSTEDTYPES-1 срез 1
-//! adds the first enforced sink — `setTimeout`/`setInterval` string handlers
+//! added the first enforced sink — `setTimeout`/`setInterval` string handlers
 //! under `require-trusted-types-for 'script'` — via
-//! `_lumen_tt_get_compliant_script`; the rest of the sink list (§4.4) is still
-//! unenforced.
+//! `_lumen_tt_get_compliant_script`. Срез 2 adds the HTML sink group
+//! (`_lumen_tt_get_compliant_html`, TT L2 §4.1.1's "Get Trusted Type
+//! compliant string" run with `expectedType` = `TrustedHTML`): `Element`/
+//! `ShadowRoot` `innerHTML`/`outerHTML` setters, `insertAdjacentHTML`,
+//! `setHTMLUnsafe`, `Document.write`/`writeln`. Script/ScriptURL/attribute
+//! sinks beyond the срез 1 timer pair (`<script src>`, `on*` attributes,
+//! `eval`/`new Function`, `Range.createContextualFragment`, ...) are still
+//! unenforced — see TRUSTEDTYPES-1 in ROADMAP.md for the remaining scope.
 
 #[cfg(feature = "v8-backend")]
 pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
@@ -100,6 +106,29 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
       return String(defaultPolicy.createScript(stringified, 'TrustedScript', sink));
     }
     throw new TypeError(sink + " requires a Trusted Script value, no default policy is set.");
+  };
+
+  // TRUSTEDTYPES-1 срез 2: the HTML subset of the same §4.1.1 algorithm.
+  // The `require-trusted-types-for 'script'` gate is not script-specific —
+  // per spec it names the single defined sink *group*, which covers every
+  // Trusted Types sink (HTML/Script/ScriptURL alike); `REQUIRE_TT_FOR_SCRIPT`
+  // is reused here unchanged, matching the WPT fixtures that set only that
+  // one CSP directive and then assert both script and HTML sinks throw.
+  // `nullToEmpty` mirrors the IDL: `innerHTML`/`outerHTML`/`setHTMLUnsafe`
+  // carry `[LegacyNullToEmptyString]` (DOM Parsing InnerHTML mixin) so a bare
+  // `null` becomes '', while `insertAdjacentHTML`'s plain-`DOMString`
+  // parameter stringifies `null` to the literal text "null" like any other
+  // non-HTML-sink DOM API — both behaviours are asserted by the WPT fixtures
+  // in tests/wpt/trusted-types/ (e.g. `HTMLElement-generic.html` vs.
+  // `block-string-assignment-to-Element-insertAdjacentHTML.html`).
+  globalThis._lumen_tt_get_compliant_html = function (input, sink, nullToEmpty) {
+    if (input instanceof TrustedHTML && VALUES.has(input)) return VALUES.get(input);
+    var stringified = (input === null && nullToEmpty) ? '' : String(input);
+    if (!REQUIRE_TT_FOR_SCRIPT) return stringified;
+    if (defaultPolicy) {
+      return String(defaultPolicy.createHTML(stringified, 'TrustedHTML', sink));
+    }
+    throw new TypeError(sink + " requires a Trusted HTML value, no default policy is set.");
   };
 
   // TrustedTypePolicyFactory (the window.trustedTypes singleton).
