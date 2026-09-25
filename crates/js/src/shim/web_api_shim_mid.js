@@ -971,15 +971,25 @@ function _lumen_invoke_at(nid, event, capture) {
     if (!arr && !onFn) return;
     var obj = isDoc ? document : _lumen_make_element(nid);
     event.currentTarget = obj;
+    // LONGTASK-1 срез 3: `PerformanceScriptTiming.invoker` descriptor, e.g.
+    // "BUTTON#btn.onclick" (matches `longtask-timing/longtask-attributes.html`'s
+    // sample shape) — tag name where available, node id otherwise (document/window
+    // sentinels have no tag), the event type as the member name.
+    var invokerTag = isDoc ? 'document' : (obj && obj.tagName ? obj.tagName : ('node' + nid));
+    var invoker = invokerTag + '.' + event.type;
     if (arr) {
         var copy = arr.slice(); // snapshot in case a handler mutates the list
         for (var i = 0; i < copy.length; i++) {
+            var _t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
             try { copy[i].call(obj, event); } catch(e) { _lumen_report_exception(e); }
+            _lumen_record_script_timing(_t0, invoker, 'event-listener');
             if (event._stopImmediate) return;
         }
     }
     if (onFn) {
+        var _t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
         try { onFn.call(obj, event); } catch(e) { _lumen_report_exception(e); }
+        _lumen_record_script_timing(_t1, invoker, 'event-listener');
     }
 }
 

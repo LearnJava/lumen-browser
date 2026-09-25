@@ -18,6 +18,39 @@ function EventTarget() {
 function _lumen_et_report(e) {
     if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
 }
+
+// LONGTASK-1 срез 3: per-callback timing buffer feeding
+// `PerformanceLongAnimationFrameTiming.scripts[]` (Long Animation Frames API
+// §4, `long_animation_frames.rs`). Every user callback the shim invokes
+// (event listener here, timer/rAF callback in `web_api_shim_mid.js`) pushes
+// one entry; `V8PersistentJs::deliver_long_animation_frame`
+// (`crates/shell/src/persistent_js.rs`) reads and clears this array once per
+// rendering opportunity (`relayout()`), independent of whether that frame
+// turns out to be long — so a frame's `scripts[]` covers everything that ran
+// since the previous frame, matching the spec's "update the rendering"
+// framing. Declared here (not in the page-only `web_api_shim_mid.js`)
+// because this file is shared with `worker_exposed_shim` (BUG-401) and
+// dispatchEvent below is the one invocation site common to both; the buffer
+// itself is harmless dead weight in a worker, which has no `relayout()` to
+// drain it.
+var _lumen_frame_scripts = [];
+
+// Record one user-callback invocation's timing into the current frame's
+// script-attribution buffer. `startTime` must come from `performance.now()`
+// taken immediately before the call; safe to call from a scope without
+// `performance` (falls back to a no-op) so this shim doesn't gain a hard
+// dependency on `PERFORMANCE_SHIM`'s install order.
+function _lumen_record_script_timing(startTime, invoker, invokerType) {
+    if (typeof performance === 'undefined' || typeof performance.now !== 'function') return;
+    var duration = performance.now() - startTime;
+    _lumen_frame_scripts.push({
+        startTime: startTime,
+        duration: duration,
+        invoker: String(invoker),
+        invokerType: invokerType,
+        executionStart: startTime
+    });
+}
 EventTarget.prototype.addEventListener = function(type, callback, options) {
     if (!callback) return;
     type = String(type);
@@ -42,22 +75,33 @@ EventTarget.prototype.dispatchEvent = function(event) {
     var type = String(event.type);
     event.target = event.target || this;
     event.currentTarget = this;
+    // LONGTASK-1 срез 3: descriptor for `PerformanceScriptTiming.invoker`,
+    // best-effort ("Ctor.type", e.g. "XMLHttpRequest.load") since this base
+    // class has no element/tag-name info of its own — DOM-node dispatch goes
+    // through the native path instead (`_lumen_propagate` in
+    // `web_api_shim_mid.js`), not this one.
+    var ctorName = (this && this.constructor && this.constructor.name) || 'EventTarget';
+    var invoker = ctorName + '.' + type;
     var list = this._listeners[type];
     if (list) {
         var snapshot = list.slice();
         for (var i = 0; i < snapshot.length; i++) {
             var entry = snapshot[i];
+            var _t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
             try {
                 if (typeof entry.callback === 'function') entry.callback.call(this, event);
                 else if (entry.callback && typeof entry.callback.handleEvent === 'function') entry.callback.handleEvent(event);
             } catch (e) { _lumen_et_report(e); }
+            _lumen_record_script_timing(_t0, invoker, 'event-listener');
             if (entry.once) this.removeEventListener(type, entry.callback, entry.capture);
             if (event._stopImmediate) break;
         }
     }
     var onprop = 'on' + type;
     if (typeof this[onprop] === 'function') {
+        var _t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
         try { this[onprop].call(this, event); } catch (e) { _lumen_et_report(e); }
+        _lumen_record_script_timing(_t1, invoker, 'event-listener');
     }
     event.currentTarget = null;
     return !event.defaultPrevented;
