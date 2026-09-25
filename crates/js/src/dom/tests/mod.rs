@@ -362,6 +362,9 @@ mod v8_bug624_navigator_interface;
 mod v8_bug626_io_validation;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug627_io_root;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug628_io_take_records;
 
 #[cfg(feature = "v8-backend")]
