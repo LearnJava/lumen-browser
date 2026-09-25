@@ -818,6 +818,9 @@ pub struct Encoder {
     dynamic: DynamicTable,
     /// Whether to use Huffman encoding for string literals.
     use_huffman: bool,
+    /// Table size to announce with a dynamic table size update (§6.3) at the
+    /// start of the next header block.
+    pending_size_update: Option<usize>,
 }
 
 impl Encoder {
@@ -825,6 +828,7 @@ impl Encoder {
         Self {
             dynamic: DynamicTable::new(),
             use_huffman: true,
+            pending_size_update: None,
         }
     }
 
@@ -833,10 +837,21 @@ impl Encoder {
         self
     }
 
-    /// Update the maximum dynamic table size. Emits a dynamic table size
-    /// update instruction at the start of the next block if the size changed.
+    /// Apply the peer's SETTINGS_HEADER_TABLE_SIZE — the upper bound for the
+    /// table this encoder may use. The encoder keeps at most
+    /// [`DynamicTable::DEFAULT_MAX`]: a larger limit only *permits* growth,
+    /// and the peer's decoder stays at 4096 bytes until a dynamic table size
+    /// update says otherwise (RFC 7541 §4.2). Growing silently desyncs the
+    /// two tables once 4 KiB of headers accumulate, and the peer tears the
+    /// connection down with COMPRESSION_ERROR (PERF-13: Fastly advertises
+    /// 65536, ~45 requests on one connection). A size change is announced at
+    /// the start of the next block.
     pub fn set_max_size(&mut self, max: usize) {
-        self.dynamic.set_max_size(max);
+        let size = max.min(DynamicTable::DEFAULT_MAX);
+        if size != self.dynamic.max_size {
+            self.dynamic.set_max_size(size);
+            self.pending_size_update = Some(size);
+        }
     }
 
     /// Encode a list of `(name, value)` pairs into a header block fragment.
@@ -848,6 +863,10 @@ impl Encoder {
     /// - Otherwise → Literal with incremental indexing, new name (§6.2.1).
     pub fn encode(&mut self, headers: &[(&[u8], &[u8])]) -> Vec<u8> {
         let mut out = Vec::new();
+        if let Some(size) = self.pending_size_update.take() {
+            // §6.3 Dynamic Table Size Update.
+            out.extend_from_slice(&encode_int(size as u64, 5, 0x20));
+        }
         for &(name, value) in headers {
             if let Some(idx) = self.find_full(name, value) {
                 // §6.1 Indexed.
@@ -1178,5 +1197,42 @@ mod tests {
         // :method GET is static[2]. Encoded as single byte 0x82.
         let block = enc.encode(&[(b":method", b"GET")]);
         assert_eq!(block, vec![0x82]);
+    }
+
+    /// Many requests with unique paths over one connection — enough to
+    /// overflow a 4096-byte table several times.
+    fn unique_request_blocks(enc: &mut Encoder, dec: &mut Decoder) {
+        for i in 0..200 {
+            let path = format!("/assets/chunk-{i:03}-0123456789abcdef.js");
+            let headers: [(&[u8], &[u8]); 3] = [
+                (b":method", b"GET"),
+                (b":path", path.as_bytes()),
+                (b"accept", b"*/*"),
+            ];
+            let fields = dec.decode(&enc.encode(&headers)).expect("peer decodes the block");
+            assert_eq!(fields[1].value_str(), path, "request {i}: tables desynced");
+        }
+    }
+
+    #[test]
+    fn encoder_stays_in_sync_when_peer_allows_a_larger_table() {
+        // PERF-13: the peer advertises SETTINGS_HEADER_TABLE_SIZE 65536, but
+        // its decoder keeps 4096 bytes until a size update says otherwise.
+        let mut enc = Encoder::new();
+        enc.set_max_size(65536);
+        let mut dec = Decoder::new();
+        dec.set_proto_max(65536);
+        unique_request_blocks(&mut enc, &mut dec);
+    }
+
+    #[test]
+    fn encoder_announces_a_smaller_table() {
+        let mut enc = Encoder::new().with_huffman(false);
+        enc.set_max_size(0);
+        let mut dec = Decoder::new();
+        dec.set_proto_max(0);
+        let block = enc.encode(&[(b":method", b"GET")]);
+        assert_eq!(block, vec![0x20, 0x82], "size update to 0 precedes the first field");
+        unique_request_blocks(&mut enc, &mut dec);
     }
 }

@@ -30,10 +30,11 @@
 #![allow(missing_docs)]
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::Connection;
+use crate::H2Pool;
 
 /// Сколько idle-соединений хранить на один origin. Современные браузеры
 /// держат 6 параллельных коннектов на host — для последовательного клиента
@@ -128,6 +129,31 @@ impl Default for ConnectionPool {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Process-wide connection pools of one partition — see [`shared_pools`].
+type PoolPair = (Arc<ConnectionPool>, Arc<H2Pool>);
+
+/// HTTP/1.1 and HTTP/2 pools shared by every `HttpClient` of one partition
+/// (PERF-13). Before this each client — built per navigation and per
+/// subresource batch — owned private pools, so no connection outlived the
+/// batch that opened it and an HTTP/2 origin paid a fresh handshake per batch.
+///
+/// `partition` must name everything that makes two connections
+/// non-interchangeable or that must not be linkable across contexts: the
+/// route (TLS/HTTP fingerprint profile, proxy, private mode) and the site of
+/// the document the requests belong to (connection reuse must not correlate
+/// one user across unrelated top-level sites). The registry keeps one entry
+/// per distinct partition for the life of the process; the pools themselves
+/// drop idle connections on their own timers.
+pub fn shared_pools(partition: &str) -> PoolPair {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, PoolPair>>> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (h1, h2) = map.entry(partition.to_owned()).or_insert_with(|| {
+        (Arc::new(ConnectionPool::new()), Arc::new(H2Pool::new()))
+    });
+    (Arc::clone(h1), Arc::clone(h2))
 }
 
 impl std::fmt::Debug for ConnectionPool {

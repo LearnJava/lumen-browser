@@ -7,8 +7,9 @@
 //! в закрытое сервером idle-соединение.
 //! TLS handshake негоциирует ALPN `[h2, http/1.1]`; при `h2` запрос идёт через
 //! полноценный клиентский HTTP/2-стек (`h2/`: frame codec RFC 9113, HPACK
-//! RFC 7541, мультиплексирование потоков, flow-control, пул по origin) —
-//! `check_negotiated_alpn` → `h2_do_request`. HTTP/1.1 остаётся для origin-ов
+//! RFC 7541, flow-control) — `check_negotiated_alpn` → `h2::mux::H2Mux`: одно
+//! разделяемое соединение на origin, параллельные запросы идут потоками в нём
+//! (PERF-13), общий пул — `h2::pool::H2Pool`. HTTP/1.1 остаётся для origin-ов
 //! без h2.
 //!
 //! URL парсится в `lumen_core::url::Url` — никакого собственного парсера здесь
@@ -627,14 +628,14 @@ struct Response {
     /// Constructors that don't come from a live TLS connection (H3, data
     /// URLs, Service Worker interception, tests) leave this `None` — H3 is
     /// out of this task's scope (see `docs/tasks/ph3-tls-security-hardening.md`
-    /// §Goal), and a pooled HTTP/2 request that reused an already-open
-    /// connection (`h2_do_request_conn`) has no `Connection` to read it from.
+    /// §Goal). An HTTP/2 request reports the certificate of the handshake
+    /// that opened its shared connection (`h2::mux::H2Mux::cert_info`).
     cert_info: Option<tls::CertInfo>,
 }
 
 /// Map an [`h3::h3_exchange::H3Response`] onto the crate's [`Response`] at the
 /// HTTP/3 dispatch boundary — the QUIC counterpart of the `Response { … }` the
-/// H2 path returns from [`h2_do_request`] (RFC 9114 §4.1).
+/// H2 path returns from `h2_mux_request` (RFC 9114 §4.1).
 ///
 /// The h3 module is deliberately free of the crate-private [`Response`] and
 /// returns its protocol-native [`h3::h3_exchange::H3Response`]; this conversion
@@ -1129,8 +1130,7 @@ pub struct PageResponse {
     /// Real TLS certificate info for the connection that served `final_url`
     /// (ph3-tls-hardening, live-wiring slice; see [`tls::CertInfo`]).
     /// `None` for plain HTTP, an HTTP-cache hit with no network round-trip,
-    /// a Service Worker/`FetchInterceptor` synthetic response, or a request
-    /// that reused a pooled HTTP/2 connection (see `Response::cert_info`).
+    /// or a Service Worker/`FetchInterceptor` synthetic response.
     pub cert_info: Option<tls::CertInfo>,
 }
 
@@ -1690,39 +1690,54 @@ fn fetch_single(
         is_tls: connect_is_tls,
     };
 
-    // HTTP/2 pool: try reusing an existing H2 connection for this origin.
+    // HTTP/2 (PERF-13): every request to an origin shares one multiplexed
+    // connection. Only for direct/SOCKS5 routes — behind an HTTP proxy `key`
+    // names the proxy, not the origin a CONNECT tunnel leads to.
+    let h2_pool = if effective_proxy.is_none() { h2_pool } else { None };
+    let scheme = if is_tls { "https" } else { "http" };
+    let mut reservation = None;
     if let Some(h2p) = h2_pool {
-        let h2_key = pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls };
-        if let Some(h2_conn) = h2p.acquire(&h2_key) {
-            let scheme = if is_tls { "https" } else { "http" };
-            match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
-                Ok((resp, h2_conn)) => {
-                    h2p.release(h2_key, h2_conn);
-                    return Ok(resp);
+        let mut retried = false;
+        loop {
+            match h2p.acquire(&key) {
+                h2::pool::Acquire::Mux(mux) => {
+                    match h2_mux_request(&mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
+                        Ok(resp) => return Ok(resp),
+                        // Body larger than the peer's send window: not a failure, a
+                        // routing decision — retry the same request over HTTP/1.1,
+                        // where the body streams into the socket buffer.
+                        Err(e) if is_h2_body_window_error(&e.error) => {
+                            return fetch_single_h1_only(
+                                pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
+                                request_host_header, request_path, range, if_range, authorization,
+                                accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
+                            );
+                        }
+                        // The peer never processed it (GOAWAY, refused stream,
+                        // connection gone before any response): once more on
+                        // whatever connection the pool has or opens next.
+                        Err(e) if e.retryable && !retried => {
+                            h2p.evict(&key, &mux);
+                            retried = true;
+                        }
+                        Err(e) => return Err(e.error),
+                    }
                 }
-                // Body larger than the peer's send window: not a failure, a
-                // routing decision — retry the same request over HTTP/1.1
-                // below, where the body streams into the socket buffer.
-                Err(e) if is_h2_body_window_error(&e) => {
-                    h2p.evict(&pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls });
-                    return fetch_single_h1_only(
-                        pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
-                        request_host_header, request_path, range, if_range, authorization,
-                        accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
-                    );
+                h2::pool::Acquire::Connect(r) => {
+                    reservation = Some(r);
+                    break;
                 }
-                Err(e) if is_stale_error(&e) => {
-                    // H2 conn went stale (server sent GOAWAY or closed socket).
-                    // Evict and fall through to fresh connect below.
-                    h2p.evict(&pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls });
-                }
-                Err(e) => return Err(e),
+                h2::pool::Acquire::Direct => break,
             }
         }
     }
 
     // Попытка 1: используем pooled connection, если он есть.
     if let Some(pooled) = pool.acquire(&key) {
+        // Живое HTTP/1.1-соединение к origin-у — значит, h2 он не говорит.
+        if let Some(r) = reservation.take() {
+            r.mark_http1();
+        }
         match do_request(
             pooled,
             method,
@@ -1829,21 +1844,31 @@ fn fetch_single(
         }
     }
 
-    // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
+    // HTTP/2: hand the fresh connection to a multiplexer and share it via
+    // the pool (the reservation's waiters are parked on exactly this).
     if conn.is_h2 {
-        let scheme = if is_tls { "https" } else { "http" };
-        match h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile, accept_encoding, method, body) {
+        let cert_info = conn.cert_info.clone();
+        let h2 = h2::conn::H2Conn::connect_with_profile(conn.into_stream(), http_profile)?;
+        let mux = h2::mux::H2Mux::spawn(h2, cert_info)?;
+        let mux = match (reservation.take(), h2_pool) {
+            (Some(r), _) => r.fulfill(mux),
+            (None, Some(h2p)) => h2p.offer(&key, mux),
+            (None, None) => Arc::new(mux),
+        };
+        return match h2_mux_request(&mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
+            Ok(resp) => Ok(resp),
             // Same routing fallback as the pooled branch: a body that doesn't fit
             // the peer's send window goes over HTTP/1.1 instead.
-            Err(e) if is_h2_body_window_error(&e) => {
-                return fetch_single_h1_only(
-                    pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
-                    request_host_header, request_path, range, if_range, authorization,
-                    accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
-                );
-            }
-            other => return other,
-        }
+            Err(e) if is_h2_body_window_error(&e.error) => fetch_single_h1_only(
+                pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
+                request_host_header, request_path, range, if_range, authorization,
+                accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
+            ),
+            Err(e) => Err(e.error),
+        };
+    }
+    if let Some(r) = reservation.take() {
+        r.mark_http1();
     }
 
     // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
@@ -1929,57 +1954,44 @@ fn is_h2_body_window_error(err: &Error) -> bool {
     format!("{err:?}").contains(h2::conn::H2_BODY_EXCEEDS_SEND_WINDOW)
 }
 
-/// Выполнить один HTTP/2 запрос, открыв свежее соединение. После успешного
-/// ответа соединение возвращается в `h2_pool` (если передан).
+/// Run one request as a stream of the shared HTTP/2 connection `mux`
+/// (PERF-13). The fetching thread's abort token, if any, cancels just this
+/// stream.
 #[allow(clippy::too_many_arguments)]
-fn h2_do_request(
-    conn: Connection,
+fn h2_mux_request(
+    mux: &h2::mux::H2Mux,
     scheme: &str,
     authority: &str,
     path: &str,
     extra_headers: &str,
-    h2_pool: Option<&H2Pool>,
-    host: &str,
-    port: u16,
-    is_tls: bool,
     http_profile: HttpProfile,
     accept_encoding: Option<&str>,
     method: &str,
     body: Option<&RequestBody<'_>>,
-) -> Result<Response> {
-    use h2::conn::H2Conn;
-    let cert_info = conn.cert_info.clone();
-    let stream = conn.into_stream();
-    let mut h2 = H2Conn::connect_with_profile(stream, http_profile)?;
-
+) -> std::result::Result<Response, h2::mux::MuxError> {
     // RP-7: the H2 path must carry the same browser-fingerprint headers
     // (User-Agent/Accept/Sec-Fetch/…) the H1 path builds in `write_request`;
     // without them Cloudflare-class anti-bot layers answer 403.
-    let all_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
-    let mut extra_refs: Vec<(&[u8], &[u8])> = all_headers
-        .iter()
-        .map(|(k, v)| (k.as_slice(), v.as_slice()))
-        .collect();
-    let body_len_owned = body.map(|b| b.bytes.len().to_string());
-    push_h2_body_headers(&mut extra_refs, body, body_len_owned.as_deref());
-
-    let (status, headers, resp_body) = h2.fetch_with_body(
-        method,
-        scheme,
-        authority,
-        path,
-        &extra_refs,
-        body.map_or(&[][..], |b| b.bytes),
-    )?;
-
-    if let Some(h2p) = h2_pool {
-        let key = pool::PoolKey { host: host.to_owned(), port, is_tls };
-        h2p.release(key, h2);
+    let mut headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
+    if let Some(b) = body {
+        let len = b.bytes.len().to_string();
+        let mut refs: Vec<(&[u8], &[u8])> = Vec::new();
+        push_h2_body_headers(&mut refs, Some(b), Some(&len));
+        headers.extend(refs.into_iter().map(|(k, v)| (k.to_vec(), v.to_vec())));
     }
-
-    // h2::conn::fetch_with_body discards 1xx header blocks entirely today —
-    // see the comment on `Response::early_hint_links`.
-    Ok(Response { status, headers, body: resp_body, early_hint_links: Vec::new(), cert_info })
+    let req = h2::mux::MuxRequest {
+        method: method.to_owned(),
+        scheme: scheme.to_owned(),
+        authority: authority.to_owned(),
+        path: path.to_owned(),
+        headers,
+        body: body.map_or_else(Vec::new, |b| b.bytes.to_vec()),
+    };
+    let token = current_abort_token();
+    let (status, headers, resp_body) = mux.request(req, token.as_ref())?;
+    // The H2 driver discards 1xx header blocks entirely today — see the
+    // comment on `Response::early_hint_links`.
+    Ok(Response { status, headers, body: resp_body, early_hint_links: Vec::new(), cert_info: mux.cert_info() })
 }
 
 /// Дописать `content-type`/`content-length` в набор заголовков HTTP/2-запроса.
@@ -1996,43 +2008,6 @@ fn push_h2_body_headers<'a>(
         headers.push((b"content-type", b.content_type.as_bytes()));
         headers.push((b"content-length", len.as_bytes()));
     }
-}
-
-/// Выполнить HTTP/2 запрос через уже существующее `H2Conn`. Возвращает
-/// `(Response, H2Conn)` — caller решает, вернуть ли conn в пул.
-#[allow(clippy::too_many_arguments)]
-fn h2_do_request_conn(
-    mut h2: h2::conn::H2Conn<RawStream>,
-    scheme: &str,
-    authority: &str,
-    path: &str,
-    extra_headers: &str,
-    http_profile: HttpProfile,
-    accept_encoding: Option<&str>,
-    method: &str,
-    body: Option<&RequestBody<'_>>,
-) -> Result<(Response, h2::conn::H2Conn<RawStream>)> {
-    // Same fingerprint set as a fresh H2 connection (RP-7) — a pooled
-    // connection must not send a weaker header block than a new one.
-    let all_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
-    let mut extra_refs: Vec<(&[u8], &[u8])> = all_headers
-        .iter()
-        .map(|(k, v)| (k.as_slice(), v.as_slice()))
-        .collect();
-    let body_len_owned = body.map(|b| b.bytes.len().to_string());
-    push_h2_body_headers(&mut extra_refs, body, body_len_owned.as_deref());
-
-    let (status, headers, resp_body) = h2.fetch_with_body(
-        method,
-        scheme,
-        authority,
-        path,
-        &extra_refs,
-        body.map_or(&[][..], |b| b.bytes),
-    )?;
-    // Pooled H2 connections carry no `Connection`/`CertInfo` to read back
-    // from — see the doc comment on `Response::cert_info`.
-    Ok((Response { status, headers, body: resp_body, early_hint_links: Vec::new(), cert_info: None }, h2))
 }
 
 /// Build the full HTTP/2 request header list — browser-fingerprint headers
@@ -3078,6 +3053,10 @@ pub struct HttpClient {
     interceptor: Option<Arc<dyn FetchInterceptor>>,
     pool: Arc<ConnectionPool>,
     h2_pool: Option<Arc<H2Pool>>,
+    /// Route part of the shared-pool partition, set by
+    /// [`Self::with_shared_connection_pools`]; `None` — the client keeps its
+    /// own pools.
+    pool_route: Option<String>,
     resolver: Arc<dyn DnsResolver>,
     hsts: Option<Arc<dyn HstsEnforcement>>,
     credentials: Option<Arc<dyn HttpCredentialProvider>>,
@@ -3217,7 +3196,10 @@ impl HttpClient {
             filter: None,
             interceptor: None,
             pool: Arc::new(ConnectionPool::new()),
-            h2_pool: None,
+            // Own pool by default: even a client that is never pointed at the
+            // shared pools multiplexes its parallel requests per origin.
+            h2_pool: Some(Arc::new(H2Pool::new())),
+            pool_route: None,
             resolver: Arc::new(SystemDnsResolver),
             hsts: None,
             credentials: None,
@@ -3395,14 +3377,45 @@ impl HttpClient {
         self
     }
 
-    /// Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-    /// соединения открываются заново на каждый запрос. С подключённым пулом
-    /// соединение переиспользуется: последовательные запросы к одному origin-у
-    /// идут по одному TLS/TCP-сокету, stream ID монотонно растёт (1, 3, 5...).
+    /// Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию у клиента
+    /// свой пул; общий нужен, чтобы несколько клиентов делили одно
+    /// мультиплексированное соединение на origin (PERF-13).
     #[must_use]
     pub fn with_h2_pool(mut self, pool: Arc<H2Pool>) -> Self {
         self.h2_pool = Some(pool);
         self
+    }
+
+    /// Переключить клиента на процесс-общие HTTP/1.1- и HTTP/2-пулы маршрута
+    /// `route` (`pool::shared_pools`, PERF-13). `route` — всё, что делает
+    /// соединения невзаимозаменяемыми: профили TLS/HTTP, прокси, приватный
+    /// режим. Пока не вызван [`Self::with_connection_site`], клиент живёт в
+    /// разделе маршрута без сайта (служебные запросы: загрузки, обновления).
+    #[must_use]
+    pub fn with_shared_connection_pools(mut self, route: &str) -> Self {
+        self.pool_route = Some(route.to_owned());
+        self.attach_shared_pools("");
+        self
+    }
+
+    /// Сузить общие пулы до сайта документа `site` (eTLD+1), от имени
+    /// которого идут запросы: соединение, открытое для одного сайта, не
+    /// переиспользуется другим — иначе оно связывало бы визиты пользователя
+    /// на разные сайты (та же изоляция, что у Chrome/Firefox по top-level
+    /// site). Без предшествующего [`Self::with_shared_connection_pools`] —
+    /// no-op: у клиента остаются собственные пулы.
+    #[must_use]
+    pub fn with_connection_site(mut self, site: &str) -> Self {
+        self.attach_shared_pools(site);
+        self
+    }
+
+    fn attach_shared_pools(&mut self, site: &str) {
+        if let Some(route) = &self.pool_route {
+            let (h1, h2) = pool::shared_pools(&format!("{route}#{site}"));
+            self.pool = h1;
+            self.h2_pool = Some(h2);
+        }
     }
 
     /// Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
