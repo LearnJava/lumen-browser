@@ -1,6 +1,6 @@
 # BUG-636 — MediaSession API skips WebIDL validation/freezing across the board; `chapterInfo` unimplemented
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-25 (P3)
 **Компонент:** js (`crates/js/src/media_session.rs`)
 **Найден:** 2026-08-05, P2, WPT-VENDOR-mediasession
 
@@ -138,3 +138,39 @@ navigator.mediaSession.setActionHandler('bogus', null);    // should throw TypeE
 already-documented vendoring gap (`/resources/idlharness.js` +
 `/resources/WebIDLParser.js` not vendored, same class as every other
 category using `idlharness.js`), not an engine defect.
+
+## Исправление (2026-09-25, P3)
+
+`crates/js/src/media_session.rs` переписан по IDL спеки:
+
+- `MediaMetadata` и `ChapterInformation` — ES-классы (требуют `new`,
+  неписуемый `prototype`, геттеры `get title`), состояние в `WeakMap`,
+  поэтому посторонние члены init на экземпляр не попадают. Интерфейсные
+  объекты на `window` — неперечислимые.
+- Конверсия словаря: не-объект → `TypeError`. `artwork` — sequence
+  `MediaImage`: `src` обязателен, резолвится через `new URL(src,
+  document.baseURI)` (невалидный URL → `TypeError`), `sizes`/`type` по
+  умолчанию `''`; массив и элементы — замороженные копии. Конверсия идёт
+  до записи, так что неудачное присваивание `artwork` оставляет старое
+  значение.
+- `chapterInfo` — замороженный массив `ChapterInformation`
+  (title/startTime/artwork), только чтение.
+- `metadata =` не-`MediaMetadata` → `TypeError` (раньше молча `null`).
+- `setPositionState`: пустой словарь сбрасывает состояние; нет
+  duration, duration < 0, position < 0, position > duration,
+  playbackRate == 0, нефинитные position/playbackRate → `TypeError`.
+- `setActionHandler`: значение вне enum `MediaSessionAction` и
+  не-функциональный обработчик → `TypeError`; enum дополнен
+  `togglescreenshare`/`previousslide`/`nextslide`/`voiceactivity`.
+
+Регрессия: `media_metadata_validates_and_freezes`,
+`position_state_and_action_handler_validate`,
+`media_image_src_resolved_against_base` (полный page-рантайм с URL
+`http://example.org/a/b.html`).
+
+WPT после фикса: `mediametadata.html` 20/20, `positionstate.html` 12/12,
+`setactionhandler.html` 18/18; категория 8/9 harness OK, 99/130 сабтестов
+(было 34/56 до вендоринга idlharness-ресурсов). Остаток —
+`idlharness.window.html` 43/70: `navigator.mediaSession` — обычный объект,
+а не экземпляр интерфейса `MediaSession`, нет `setScreenshareActive`. Это
+форма интерфейса, а не валидация из этого бага.
