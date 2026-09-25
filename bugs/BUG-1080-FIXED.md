@@ -32,7 +32,7 @@
 
 ## Связанное
 
-- [BUG-1066](BUG-1066-FIXED.md) (`DOMException`), [BUG-1071](BUG-1071-FIXED.md) (`WebSocket`), [BUG-1076](BUG-1076-OPEN.md) (`Worker`), [BUG-1078](BUG-1078-FIXED.md) (`WebAssembly.*Streaming`) — тот же класс:
+- [BUG-1066](BUG-1066-FIXED.md) (`DOMException`), [BUG-1071](BUG-1071-FIXED.md) (`WebSocket`), [BUG-1076](BUG-1076-FIXED.md) (`Worker`), [BUG-1078](BUG-1078-FIXED.md) (`WebAssembly.*Streaming`) — тот же класс:
   интерфейс есть в окне и отсутствует в воркерной области.
 - `docs/tasks/p2-test-track.md#test-3-срез-50-2026-09-22`.
 

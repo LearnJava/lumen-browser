@@ -470,6 +470,21 @@ the time — read dates.
   `eval`, so a handler's promise reactions get their checkpoint) and caps the
   `recv_timeout` at `WORKER_SOCKET_POLL` (10 ms) while `_ws_instances` is non-empty. An
   idle worker without sockets still blocks indefinitely.
+- **Nested dedicated workers (WORKER-2, 2026-09-25, [BUG-1076](../bugs/BUG-1076-FIXED.md)).**
+  `run_worker_thread_v8` installs the page's own `WORKER_SHIM` into the worker isolate
+  (`install_worker_constructor_v8`) over a `NestedWorkers` of its own — registry + message /
+  error / port queues, the worker-side twin of the page's `V8JsRuntime` fields. With no shell tick
+  behind it, the worker's task loop drains those queues itself (`deliver_worker_queues`, the same
+  routine `V8JsRuntime::pump_workers` calls) and caps its sleep at `WORKER_SOCKET_POLL` while a
+  child is alive or has something queued. The child reuses the parent's `JsFetchProvider`,
+  `WebSocket` provider, determinism config, blob store and **`MessagePort` id counter** — the
+  counter must stay the one shared with the page, which is why `install_worker_bindings_v8` is
+  now a wrapper that only creates it. When the loop exits (`close()`, `terminate()`, channel
+  closed) `NestedWorkers::terminate_all` sends `Terminate` to every child, which does the same for
+  its own. A relative child URL resolves against the parent worker's script URL
+  (`worker_net_shim.js`'s `_lumen_document_base_url`). Not covered: `Worker` in
+  `SharedWorkerGlobalScope`, and CSP `worker-src` for a child is the page's policy (the provider's),
+  not one delivered with the parent worker's own script.
 - **Module workers + `WorkerOptions` ([P1], 2026-08-24,
   [BUG-777](../bugs/BUG-777-FIXED.md)).** Four things worth carrying. (1) *The options parser is
   its own shim.* `worker::WORKER_OPTIONS_SHIM` is evaluated by **both** `install_worker_bindings_v8`

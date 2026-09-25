@@ -580,42 +580,12 @@ impl V8JsRuntime {
     /// instances (Ph3 V8 migration S10). Mirrors
     /// [`crate::QuickJsRuntime::pump_workers`].
     pub fn pump_workers(&self) {
-        let messages = crate::worker::drain_messages(&self.worker_messages);
-        if !messages.is_empty() {
-            let json = crate::build_worker_messages_json(&messages);
-            let script = format!(
-                "if(typeof _lumen_deliver_worker_messages==='function')\
-                 _lumen_deliver_worker_messages({json})"
-            );
-            let _ = self.eval(&script);
-        }
-
-        // BUG-591 worker parent-side reporting: deliver uncaught-exception
-        // reports (top-level script failure, or a message/timer callback
-        // throw) as `Worker`'s `error` event.
-        let errors = crate::worker::drain_errors(&self.worker_errors);
-        if !errors.is_empty() {
-            let json = crate::build_worker_messages_json(&errors);
-            let script = format!(
-                "if(typeof _lumen_deliver_worker_errors==='function')\
-                 _lumen_deliver_worker_errors({json})"
-            );
-            let _ = self.eval(&script);
-        }
-
-        // BUG-868 GAP-WORKERSCOPE срез 2: deliver messages posted by a
-        // `MessagePort` living inside a worker thread to its transferred
-        // partner on this page — routed by port id, not worker id, so a
-        // separate delivery function from `_lumen_deliver_worker_messages`.
-        let port_messages = crate::worker::drain_messages(&self.worker_port_messages);
-        if !port_messages.is_empty() {
-            let json = crate::build_worker_messages_json(&port_messages);
-            let script = format!(
-                "if(typeof _lumen_deliver_port_messages==='function')\
-                 _lumen_deliver_port_messages({json})"
-            );
-            let _ = self.eval(&script);
-        }
+        crate::worker::deliver_worker_queues(
+            self,
+            &self.worker_messages,
+            &self.worker_errors,
+            &self.worker_port_messages,
+        );
     }
 
     /// Deliver messages posted by `SharedWorker` threads to this page's
