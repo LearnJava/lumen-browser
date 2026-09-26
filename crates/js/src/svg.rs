@@ -612,6 +612,40 @@ const SVG_SHIM: &str = r#"
     constructor() { super(); this.tagName = 'a'; }
   }
   window.SVGAElement = SVGAElement;
+  // SVGURIReference (SVG 2 §5.7) on <a>: `href` is an SVGAnimatedString over
+  // the element's attributes — `baseVal` reads `href`, falling back to
+  // `xlink:href`, and writes `href` (GAP-ORIGIN: `Origin.from(svgA)` reads the
+  // URL the page set through it). One object per element, so `a.href ===
+  // a.href`.
+  (function() {
+    var XLINK_NS = 'http://www.w3.org/1999/xlink';
+    var animated = new WeakMap();
+    function current(el) {
+      var v = el.getAttribute('href');
+      if (v === null) v = el.getAttributeNS(XLINK_NS, 'href');
+      return v === null ? '' : v;
+    }
+    Object.defineProperty(SVGAElement.prototype, 'href', {
+      get: function() {
+        var s = animated.get(this);
+        if (s) return s;
+        var el = this;
+        s = Object.create(SVGAnimatedString.prototype);
+        Object.defineProperty(s, 'baseVal', {
+          get: function() { return current(el); },
+          set: function(v) { el.setAttribute('href', String(v)); },
+          enumerable: true, configurable: true,
+        });
+        Object.defineProperty(s, 'animVal', {
+          get: function() { return current(el); },
+          enumerable: true, configurable: true,
+        });
+        animated.set(this, s);
+        return s;
+      },
+      enumerable: true, configurable: true,
+    });
+  })();
   if (typeof _lumen_install_interest_for === 'function') {
     _lumen_install_interest_for(SVGAElement.prototype, 'SVGAElement');
   }

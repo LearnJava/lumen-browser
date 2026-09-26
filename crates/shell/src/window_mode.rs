@@ -63,6 +63,12 @@ pub(crate) fn run_window_mode(
         platform::audio_player::PlatformAudioPlayer::new(),
     ));
 
+    // Public Suffix List for `Origin.prototype.isSameSite()` (GAP-ORIGIN):
+    // lumen-storage owns the table but depends on lumen-js, so it is handed
+    // over here instead of linked. Process-global; before any JS context starts.
+    #[cfg(feature = "v8")]
+    lumen_js::set_public_suffix_list(std::sync::Arc::new(lumen_storage::PslProvider::new()));
+
     // Wire Screen Wake Lock API to the platform backend (PH3-13).
     // Prevents the display from sleeping while JS holds an active WakeLockSentinel.
     #[cfg(feature = "v8")]

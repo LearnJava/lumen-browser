@@ -1,6 +1,6 @@
 # BUG-585: `Origin` WebIDL global (`Origin.from()`) not implemented at all
 
-**Статус:** OPEN (ДОРАБОТКА → GAP-ORIGIN)
+**Статус:** FIXED 2026-09-27 (P1, GAP-ORIGIN)
 **Тип:** ДОРАБОТКА — целиком нереализованная фича (глобальный конструктор,
 opaque/tuple-различение происхождения, PSL-based same-site, cross-origin/
 sandboxing проверки, Worker-скоуп), не дефект реализованного кода.
@@ -82,3 +82,37 @@ is fixed.
 покрыла бы меньшую часть из 181 сабтеста и оставила бы остальные падать с
 менее понятной картиной, чем сейчас. Перенесено в
 [GAP-ORIGIN](../ROADMAP.md).
+
+## Закрытие 2026-09-27 (P1, GAP-ORIGIN, ветка `p1-gap-origin`)
+
+WPT `html/browsers/origin/api/`: **0/307 → 296/325** сабтестов, 15/23 → 18/23 harness OK
+(знаменатель вырос: файлы, падавшие целиком на `Origin is not defined`, теперь исполняются).
+
+- `Origin` — класс в `crates/js/src/shim/origin_shim.js`, вшит и в страничный шим, и в
+  `worker_exposed_shim()` (`[Exposed=*]`). Запись происхождения — `{opaque, id}` или tuple
+  `{scheme, host, port, site}`; идентичность непрозрачного — счётчик, общий у всех `Origin`,
+  обозначающих одно и то же происхождение.
+- Пункт 1: tuple/opaque решает URL Standard §6.1 — новый `lumen_core::url::Url::tuple_origin()`
+  поверх `url::Url::origin()` (вложенный URL у `blob:`, непрозрачность `file:`/`data:`/
+  нестандартных схем даже с хостом); натив `_lumen_url_origin` (`crates/js/src/origin.rs`).
+- Пункт 2: PSL приходит DI — `lumen_js::set_public_suffix_list`, шелл ставит
+  `lumen_storage::PslProvider` в `window_mode.rs`.
+- Пункты 3-4: объекты с происхождением извне шима регистрируют экстрактор
+  (`_lumen_origin_register_source`): фасад `contentWindow` (бросает у cross-origin/opaque
+  фрейма), `MessageEvent` из `window.postMessage` и из моста фреймов. Сконструированный
+  `MessageEvent` экстрактора не имеет — `Origin.from()` бросает.
+- Пункт 6: `SVGAElement.prototype.href` — `SVGAnimatedString` поверх атрибутов `href`/
+  `xlink:href`.
+- Попутно: `new URL(rel)` без `base` резолвился от `location.href` вместо `TypeError`
+  (URL Standard §6.1) — исправлено в `url_shim.js`; WPT `url` 7476 → 7557/12070.
+
+Остаток (29 сабтестов + 5 файлов без результатов):
+
+- 25 — `Origin.from(MathML <a href>)`: тест пишет `a.href = …` — у `MathMLElement` нет IDL
+  `href` (MathML Core), это expando, атрибут не появляется; движок читает атрибут `href`.
+- 1 — blob-воркер непрозрачен: [BUG-1197](BUG-1197-OPEN.md) (`blob:lumen/N` без происхождения).
+- 3 — песочница без `allow-same-origin`: [BUG-1198](BUG-1198-OPEN.md).
+- `origin-from-window`/`origin-from-messageevent` TIMEOUT после `window.open`:
+  [BUG-1199](BUG-1199-OPEN.md).
+- `*.any.serviceworker.html` (2 файла) TIMEOUT — общая беда SW-вариантов под wptrunner, не
+  этого API.
