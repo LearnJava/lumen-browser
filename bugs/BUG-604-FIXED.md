@@ -1,6 +1,6 @@
 # BUG-604: no UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` — light-DOM children render directly instead of being hidden/slotted per spec
 
-**Статус:** OPEN (ДОРАБОТКА → GAP-UASHADOWSLOT, остаток `<select>`/`<details>`)
+**Статус:** FIXED 2026-09-26 (P1, GAP-UASHADOWSLOT)
 **Компонент:** dom (`crates/engine/dom/src/lib.rs` — `Document::create_element`/`try_create_element`, `ua_shadow_kind`/`attach_ua_shadow_root`)
 **Найден:** P2, WPT-VENDOR-html-rendering, 2026-08-04
 
@@ -13,7 +13,7 @@ FAIL <select></select> has a shadow tree with slot - assert_not_equals: child sh
 (`widgets/shadow-dom.html` — the `getClientRects` `TypeError`s are
 [BUG-478](BUG-478-FIXED.md)/[BUG-522](BUG-522-FIXED.md)/[BUG-551](BUG-551-DUPLICATE.md)/[BUG-580](BUG-580-DUPLICATE.md)
 territory and the `outerHTML`-in-test-name-collision harness `ERROR` is
-[BUG-351](BUG-351-OPEN.md); this bug is the *assertion content* underneath
+[BUG-351](BUG-351-FIXED.md); this bug is the *assertion content* underneath
 both, once those are stripped out)
 
 ## Причина
@@ -87,3 +87,32 @@ pixel-moving change far outside this bug's original 9-subtest blast
 radius, gated by a separate, real `display: contents` implementation.
 Reclassified into [GAP-UASHADOWSLOT](../ROADMAP.md) per the same rule as
 BUG-534/553/562/583 (absent primitive + family-sized, not a point fix).
+
+## Закрытие 2026-09-26 (P1, GAP-UASHADOWSLOT)
+
+`ua_shadow_kind` отдаёт вариант со слотом для `<select>` (`UaShadowKind::Contents`, один
+слот) и `<details>` (`UaShadowKind::Details`, слот summary + content-слот). Слоты заполняются
+по позиции (`ua_slot_assignments`: первый дочерний `<summary>` — в первый слот, остальное — во
+второй), атрибут `slot` на детях игнорируется. Корень закрытый, `cloneNode` даёт клону свой.
+UA-стили: `slot { display: contents }` для любого слота (`default_display`), content-слот
+`<details>` — `display: block` + `content-visibility: hidden` без `open` (`apply_ua_slot`,
+ключ — `Document::ua_slot_role`, т.к. ни один селектор узел закрытого UA-дерева не назовёт).
+Правила документа до UA-слота не доходят (CSS Scoping L1 §3.1 — в `compute_style` сопоставленные
+декларации для UA-слота сбрасываются; авторские shadow-деревья правила документа по-прежнему
+видят — это более широкий старый пробел). Сужение рестайла BUG-341 (`restyle.rs`
+`document_has_shadow_roots`) считает только авторские корни (`Document::has_author_shadow_roots`):
+у UA-деревьев нет листа, а иначе сужение выключилось бы на любой странице с `<select>`, включая
+chrome Lumen. Старый фильтр «закрытый `<details>` строит только `<summary>`» в `box_tree/build.rs`
+остался для `<details>` без UA-корня. A11y-дерево разворачивает `<slot>` в его содержимое. S27-хребет
+инкрементального рестайла идёт по `FlatTree::parent_of`, а не по DOM-родителю — иначе он
+отключался бы на любой странице с `<select>`.
+
+A/B `--dump-display-list` по 180 страницам `graphic_tests/` + `samples/`: 0 различий
+(пиксельный прогон недоступен — TEST-00 не находит маркер, захват экрана сломан в этой
+сессии). Ручная страница с `<details>`: изменился только `details { display: flex }` —
+содержимое теперь один flex-item (content-слот), как у Chrome.
+
+Оставшиеся 5 подтестов `widgets/shadow-dom.html` упираются в другое: пустой `<span>` не
+публикует computed style ([BUG-1191](BUG-1191-OPEN.md)), а `all: inherit` каскад не
+применяет (GAP-CSSALL). Проверено юнит-тестами с непустым `<span>` и поштучным `inherit`
+(`crates/js/src/dom/tests/v8_gap_uashadowslot.rs`).

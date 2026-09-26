@@ -118,6 +118,16 @@ fn role_select_multiple_listbox() {
 }
 
 #[test]
+fn ua_slot_adds_no_node_between_select_and_options() {
+    // GAP-UASHADOWSLOT: the options reach the listbox through the UA slot,
+    // which is `display: contents` and so has no accessibility node of its own.
+    let tree = build_tree("<select multiple><option>A</option><option>B</option></select>");
+    let lb = find_role_dfs(&tree.root, AXRole::ListBox).expect("listbox");
+    let roles: Vec<_> = lb.children.iter().map(|c| c.role).collect();
+    assert_eq!(roles, [AXRole::Option, AXRole::Option]);
+}
+
+#[test]
 fn role_table_row_cell() {
     let tree = build_tree("<table><tr><td>Cell</td></tr></table>");
     assert!(find_role_dfs(&tree.root, AXRole::Table).is_some(), "expected Table");

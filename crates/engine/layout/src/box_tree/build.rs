@@ -844,12 +844,15 @@ fn build_box_inner(
     if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::SvgRoot { .. }) {
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
         // HTML5 §4.11.1 — <details>: when `open` attribute absent, only <summary> is rendered.
-        // P3 wires: clicking <summary> should toggle `open` attribute + relayout.
+        // A `<details>` with its UA shadow tree needs no filter: the content
+        // slot is `content-visibility: hidden` while closed (GAP-UASHADOWSLOT,
+        // `apply_ua_slot`). The filter stays for one without it.
         let dom_children: Vec<NodeId> = if textarea_runtime_value.is_some() {
             // The default value's text nodes are replaced by the run above.
             Vec::new()
         } else if is_details_element(doc, id)
             && doc.get(id).get_attr("open").is_none()
+            && doc.shadow_root_of(id).is_none()
         {
             flat.children_of(doc, id)
                 .iter()

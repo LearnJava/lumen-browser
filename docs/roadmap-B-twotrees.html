@@ -76,11 +76,11 @@
  "generated": "2026-09-26",
  "counts": {
   "open": 237,
-  "fixed": 894,
+  "fixed": 896,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1131,
+ "total_bugs": 1133,
  "phases": [
   {
    "id": "P0",
@@ -3272,7 +3272,7 @@
        "title": "WPT: прогнать срез `html/rendering`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-FIXED.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-FIXED.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-FIXED.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-FIXED.md)/[522](bugs/BUG-522-FIXED.md)/[551](bugs/BUG-551-DUPLICATE.md)/[580](bugs/BUG-580-DUPLICATE.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-FIXED.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-FIXED.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-FIXED.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-FIXED.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-FIXED.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-FIXED.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-FIXED.md)/[522](bugs/BUG-522-FIXED.md)/[551](bugs/BUG-551-DUPLICATE.md)/[580](bugs/BUG-580-DUPLICATE.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-FIXED.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-FIXED.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-FIXED.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-FIXED.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
        "bugs": [
         "BUG-602",
         "BUG-603",
@@ -6966,12 +6966,19 @@
       {
        "id": "GAP-UASHADOWSLOT",
        "title": "GAP: `<select>`/`<details>` UA shadow tree со слотом требует настоящего `display: contents`",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Остаток BUG-604 после среза 2026-09-13: `<select>`/`<details>` (HTML LS §4.10.11/§4.11.1) должны иметь UA shadow tree СО слотом (в отличие от `<video>`/`<audio>`, у которых слота нет вовсе — эта половина уже закрыта тем же срезом, `Document::create_element`/`try_create_element` в `crates/engine/dom/src/lib.rs` вызывают `attach_ua_shadow_root` для всех четырёх тегов, `select`/`details` — единственные, кому нужен слот). Завести слот напрямую нельзя: `<slot>` спецификационно `display: contents`, а в этом движке `Display::Contents` только парсится/хранится, в layout трактуется как `Block` (`crates/engine/layout/src/style/values/typography.rs` — комментарий `enum Display::Contents`, «Treated as Block (deferred)»). Реальный `<slot>`-бокс между host и его контентом вставил бы лишний видимый wrapper в КАЖДЫЙ `<select>`/`<details>` на КАЖДОЙ странице — `<details>` вообще не opaque (в отличие от `<select>`, его контент реально проходит через block-flow, `is_details_element`-ветка `box_tree/build.rs:645`), так что это движение пикселей далеко за пределами исходных 9 сабтестов `widgets/shadow-dom.html`. Объём — довести `Display::Contents` до настоящей семантики «бокс не порождается, дети подмешиваются в родительский formatting context» (`BoxKind::Skip` сегодня делает противоположное — выкидывает поддерево целиком, `layout_dispatch.rs:1585` `BoxKind::Skip => unreachable!()` для контейнерного layout), только потом — сам UA shadow root для `select`/`details`. Найден P2, WPT-VENDOR-html-rendering, 2026-08-04; реклассифицировано из остатка BUG-604 2026-09-13 (P3). **Сверка 2026-09-25:** блокер выше снят — `display: contents` в layout работает (`BoxKind::Contents`, `crates/engine/layout/src/box_tree/build.rs:759`, уплощение `flatten_contents` в `inline_build.rs:1449`); комментарий «Treated as Block (deferred)» в `typography.rs` протух. Остаток: UA-правило `slot { display: contents }` и вариант `ua_shadow_kind` со слотом для `select`/`details` (`crates/engine/dom/src/lib.rs:326-341`); размер ближе к S–M. Главный риск — регрессии на `<details>`.",
+       "note": "Остаток BUG-604 после среза 2026-09-13: `<select>`/`<details>` (HTML LS §4.10.11/§4.11.1) должны иметь UA shadow tree СО слотом (в отличие от `<video>`/`<audio>`, у которых слота нет вовсе — эта половина уже закрыта тем же срезом, `Document::create_element`/`try_create_element` в `crates/engine/dom/src/lib.rs` вызывают `attach_ua_shadow_root` для всех четырёх тегов, `select`/`details` — единственные, кому нужен слот). Завести слот напрямую нельзя: `<slot>` спецификационно `display: contents`, а в этом движке `Display::Contents` только парсится/хранится, в layout трактуется как `Block` (`crates/engine/layout/src/style/values/typography.rs` — комментарий `enum Display::Contents`, «Treated as Block (deferred)»). Реальный `<slot>`-бокс между host и его контентом вставил бы лишний видимый wrapper в КАЖДЫЙ `<select>`/`<details>` на КАЖДОЙ странице — `<details>` вообще не opaque (в отличие от `<select>`, его контент реально проходит через block-flow, `is_details_element`-ветка `box_tree/build.rs:645`), так что это движение пикселей далеко за пределами исходных 9 сабтестов `widgets/shadow-dom.html`. Объём — довести `Display::Contents` до настоящей семантики «бокс не порождается, дети подмешиваются в родительский formatting context» (`BoxKind::Skip` сегодня делает противоположное — выкидывает поддерево целиком, `layout_dispatch.rs:1585` `BoxKind::Skip => unreachable!()` для контейнерного layout), только потом — сам UA shadow root для `select`/`details`. Найден P2, WPT-VENDOR-html-rendering, 2026-08-04; реклассифицировано из остатка BUG-604 2026-09-13 (P3). **Сверка 2026-09-25:** блокер выше снят — `display: contents` в layout работает (`BoxKind::Contents`, `crates/engine/layout/src/box_tree/build.rs:759`, уплощение `flatten_contents` в `inline_build.rs:1449`); комментарий «Treated as Block (deferred)» в `typography.rs` протух. Остаток: UA-правило `slot { display: contents }` и вариант `ua_shadow_kind` со слотом для `select`/`details` (`crates/engine/dom/src/lib.rs:326-341`); размер ближе к S–M. Главный риск — регрессии на `<details>`. **Закрыто 2026-09-26 (P1):** UA shadow tree со слотом для `<select>` (один слот) и `<details>` (слот summary + content-слот `display: block`/`content-visibility: hidden` без `open`), заполнение по позиции, `slot { display: contents }` — UA-умолчание (`crates/engine/dom/src/lib.rs` `attach_ua_shadow_root`/`ua_slot_assignments`, `crates/engine/layout/src/style/ua.rs` `apply_ua_slot`); a11y разворачивает слот; S27-хребет рестайла ходит по `FlatTree::parent_of`. BUG-604 FIXED. Остаток подтестов WPT — [BUG-1191](bugs/BUG-1191-OPEN.md) и GAP-CSSALL.",
        "bugs": [
         "BUG-604"
        ]
+      },
+      {
+       "id": "GAP-CSSALL",
+       "title": "GAP: шортхенд `all` не применяется каскадом",
+       "status": "planned",
+       "size": "S",
+       "note": "CSS Cascade L4 §3.2 — шортхенд `all` (`all: inherit | initial | unset | revert | revert-layer`) каскадом не применяется: имя есть в `SUPPORTED_PROPERTIES` (`crates/engine/css-parser/src/lib.rs`), но ни `apply_declaration`, ни `apply_css_wide_keyword` (`crates/engine/layout/src/style/apply/css_wide.rs`, сопоставление по имени свойства) его не разворачивают — `el.style.all = 'inherit'` не меняет ни одного значения. Нужно: развернуть CSS-wide keyword на все longhand-ы, кроме `direction`/`unicode-bidi` (и custom properties), с обычным приоритетом декларации. Критерий: `span { all: inherit }` внутри `div { display: flex }` отдаёт `display: flex`; последний шаг подтестов `select`/`details` в WPT `html/rendering/widgets/shadow-dom.html` (вместе с [BUG-1191](bugs/BUG-1191-OPEN.md)). Найден P1 при закрытии GAP-UASHADOWSLOT, 2026-09-26."
       },
       {
        "id": "GAP-ANCHORCSSOM",
@@ -7546,13 +7553,6 @@
    "status": "open",
    "title": "`DOMTokenList` constructor not exposed on `window` -- `instanceof DOMTokenList` throws `ReferenceError` even though the underlying object (`classList`/`focusGro…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- no `focusGroup`/`focusGroupStart` anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-604": {
-   "status": "open",
-   "title": "No UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` -- light-DOM children appended to `<video>`/`<audio>` render directly instead of b…",
-   "component": "dom (`crates/engine/dom/src/lib.rs` — `Document::create_element`/`try_create_element`, `ua_shadow_kind`/`attach_ua_shadow_root`)",
    "date": null,
    "debtor": false
   },
@@ -8515,13 +8515,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1126": {
-   "status": "open",
-   "title": "`URL.createObjectURL(blob)` → `blob:lumen/1`, дальше `fetch()` → `TypeError: fetch: network error`, XHR → `error`, `<script src=blob:…>` → `onerror`. Chrome — o…",
-   "component": "network (`crates/network/src/lib.rs:479-483` `require_http_scheme` → `unsupported scheme: blob`) + js (`crates/js/src/shim/web_api_shim_mid_c.js:187` `_object_url_store` — в `fetch` не используется)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1127": {
    "status": "open",
    "title": "`/css/s.css` с `url(\"fonts/f.ttf\")` и `url(\"bg.svg\")` → Lumen запрашивает `/fonts/f.ttf` и `/bg.svg` (404), Chrome — `/css/fonts/f.ttf`, `/css/bg.svg`. apple: и…",
@@ -8918,6 +8911,20 @@
    "status": "open",
    "title": "`typeof PerformanceEntry === 'undefined'`; 13 подтестов `PerformanceEntry interface: …` в WPT `performance-timeline/idlharness.any.html` (выполняются только пос…",
    "component": "js (`crates/js/src/shim/performance_shim.js` — записи — объектные литералы)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1190": {
+   "status": "open",
+   "title": "Два соседних inline-элемента с разным `background` сливаются в один фрагмент: `<span style=\"background:#fc0\">a</span><span style=\"background:blue\">b</span>` рис…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — слияние слов в `InlineFrag`; критерий `ComputedStyle::text_rendering_eq`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1191": {
+   "status": "open",
+   "title": "`getComputedStyle(el).length === 0` у элемента flat tree без собственного бокса: пустой inline (`<span></span>`), потомок `content-visibility: hidden`/`display:…",
+   "component": "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles` — снимок по `LayoutBox`-дереву), js (шим `getComputedStyle`)",
    "date": null,
    "debtor": false
   },
@@ -15165,10 +15172,24 @@
    "date": "2026-09-26",
    "debtor": false
   },
+  "BUG-604": {
+   "status": "fixed",
+   "title": "No UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` -- light-DOM children appended to `<video>`/`<audio>` render directly instead of b…",
+   "component": "dom (`crates/engine/dom/src/lib.rs` — `Document::create_element`/`try_create_element`, `ua_shadow_kind`/`attach_ua_shadow_root`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
   "BUG-1073": {
    "status": "fixed",
    "title": "При одновременном старте 4 экземпляров `lumen.exe --bidi-port` (`run_report.py --processes 4`) два из четырёх получают `present=WHITE` на Vulkan и GL и падают п…",
    "component": "paint/shell — выбор wgpu-бэкенда (`[probe]`, `crates/engine/paint/src/backends/wgpu_backend.rs`, `Renderer::new`/`Surface::configure`); причина не локализована",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1126": {
+   "status": "fixed",
+   "title": "`URL.createObjectURL(blob)` → `blob:lumen/1`, дальше `fetch()` → `TypeError: fetch: network error`, XHR → `error`, `<script src=blob:…>` → `onerror`. Chrome — o…",
+   "component": "network (`crates/network/src/lib.rs:479-483` `require_http_scheme` → `unsupported scheme: blob`) + js (`crates/js/src/shim/web_api_shim_mid_c.js:187` `_object_url_store` — в `fetch` не используется)",
    "date": "2026-09-26",
    "debtor": false
   }
@@ -16311,6 +16332,9 @@
   "layout (`crates/engine/layout/src/box_tree/inline_build.rs` — `is_inline_content`/`is_atomic_inline_level`)": [
    "BUG-928"
   ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — слияние слов в `InlineFrag`; критерий `ComputedStyle::text_rendering_eq`)": [
+   "BUG-1190"
+  ],
   "layout (`crates/engine/layout/src/box_tree/intrinsic.rs` — `preferred_inline_block_width`/`max_content_outer_width`/`min_content_outer_width_of_contents`)": [
    "BUG-740"
   ],
@@ -16325,6 +16349,9 @@
   ],
   "layout (`crates/engine/layout/src/invariants.rs`)": [
    "BUG-1001"
+  ],
+  "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles` — снимок по `LayoutBox`-дереву), js (шим `getComputedStyle`)": [
+   "BUG-1191"
   ],
   "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles`/`collect_layout_rects`, `box_tree.rs` inline formatting)": [
    "BUG-488"

@@ -937,7 +937,7 @@ struct IncrRestyle<'a> {
     /// has any reason to enter.
     ///
     /// `None` when this pass may not skip anything, which keeps the pre-S27
-    /// traversal verbatim — see [`restyle_spine`] for the four conditions.
+    /// traversal verbatim — see [`restyle_spine`] for the three conditions.
     spine: Option<HashSet<NodeId>>,
 }
 
@@ -961,13 +961,17 @@ struct IncrRestyle<'a> {
 /// mutation), and a dirty root has to be reached before its subtree can be
 /// force-recomputed.
 ///
-/// # The four conditions
+/// The closure follows [`FlatTree::parent_of`], not `Node::parent`: `walk`
+/// descends the composed tree, and under a shadow host or a slot the two
+/// differ. GAP-UASHADOWSLOT made that the common case — every `<select>`/
+/// `<details>`, Lumen's own chrome included, owns a UA shadow tree — so the
+/// pre-GAP-UASHADOWSLOT licence "no composed-tree override at all" would have
+/// switched S27 off almost everywhere.
+///
+/// # The three conditions
 ///
 /// * **A complete content record.** [`ContentDirty::Untracked`] means "any node
 ///   may have changed", which no spine can narrow.
-/// * **No composed-tree override.** The closure walks `Node::parent`, the DOM
-///   parent; a shadow host or slot makes that a different tree from the one
-///   `walk` descends (see [`FlatTree::is_plain`]).
 /// * **No quote content in the sheet.** `quote_depth` is a running
 ///   document-order counter; a subtree that is not entered cannot advance it.
 /// * **No generated content in the previous pass.** `nodes` and `quotes` are
@@ -982,7 +986,7 @@ fn restyle_spine(
     quotes_possible: bool,
     prev_generated_content: bool,
 ) -> Option<HashSet<NodeId>> {
-    if !content_dirty.tracked() || !flat.is_plain() || quotes_possible || prev_generated_content {
+    if !content_dirty.tracked() || quotes_possible || prev_generated_content {
         return None;
     }
     let content: &[NodeId] = match content_dirty {
@@ -996,7 +1000,7 @@ fn restyle_spine(
         // Stops at the first node already on the spine: everything above it was
         // put there by an earlier seed, so the chains share their tails.
         while let Some(id) = cur.filter(|id| spine.insert(*id)) {
-            cur = doc.get(id).parent;
+            cur = flat.parent_of(doc, id);
         }
     }
     Some(spine)
@@ -1076,6 +1080,10 @@ fn skip_clean_subtree(
     let Some(spine) = delta.spine.as_ref() else { return false };
     if spine.contains(&child)
         || delta.content_dirty.contains(parent)
+        // A slotted node's DOM parent is the host, a shadow tree's top-level
+        // node's is the shadow root — neither is `parent` here, yet a content
+        // mutation names exactly that DOM parent.
+        || doc.get(child).parent.is_some_and(|p| p != parent && delta.content_dirty.contains(p))
         || !ctx.stacks.is_empty()
         || !matches!(doc.get(child).data, NodeData::Element { .. })
     {

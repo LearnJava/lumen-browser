@@ -284,16 +284,21 @@ fn rules_have_dynamic_has(rules: &[lumen_css_parser::Rule]) -> bool {
     rules.iter().any(|r| r.selectors.iter().any(complex_selector_has_dynamic_has))
 }
 
-/// True if `doc` has any shadow host. Shadow-tree stylesheets
+/// True if `doc` has any shadow root a page attached. Shadow-tree stylesheets
 /// ([`SHADOW_SHEETS`]) are not scanned by [`stylesheet_needs_state_fanout`] —
 /// modelling their per-host scoping would need the narrowing check to run
 /// per-node instead of once per pass, deferred until a fixture demonstrates
-/// the benefit is worth that complexity. A document with any shadow root
+/// the benefit is worth that complexity. A document with any such root
 /// therefore always takes the conservative widen-to-parent path, matching
 /// this engine's pre-S7 behaviour exactly (no regression, just no narrowing
 /// win for shadow-DOM-heavy pages yet).
+///
+/// The UA shadow trees of `<select>`/`<details>`/`<video>`/`<audio>`
+/// (GAP-UASHADOWSLOT) do not count: they carry no style sheet, and counting
+/// them would switch the narrowing off on nearly every page, Lumen's own
+/// chrome included.
 fn document_has_shadow_roots(doc: &Document) -> bool {
-    (0..doc.len()).any(|i| doc.is_shadow_host(NodeId::from_index(i)))
+    doc.has_author_shadow_roots()
 }
 
 /// BUG-341 S7/S14 — builds the [`StateRestyleIndex`] for one layout pass.
