@@ -1489,6 +1489,21 @@ function _lumen_make_class_list(nid) {
     return _lumen_make_attr_token_list(nid, 'class');
 }
 
+// GAP-FOCUSGROUP: HTML LS «focusgroup» — `element.focusGroup` is the
+// DOMTokenList over the `focusgroup` attribute, with a `supports()` over the
+// spec's token set (same per-instance `supports` as `relList`, BUG-826).
+var _LUMEN_FOCUSGROUP_TOKENS = [
+    'toolbar', 'tablist', 'radiogroup', 'listbox', 'menu', 'menubar',
+    'wrap', 'nowrap', 'inline', 'block', 'nomemory', 'none'
+];
+function _lumen_make_focus_group_list(nid) {
+    var tl = _lumen_make_attr_token_list(nid, 'focusgroup');
+    tl.supports = function(token) {
+        return _LUMEN_FOCUSGROUP_TOKENS.indexOf(String(token).toLowerCase()) >= 0;
+    };
+    return tl;
+}
+
 // ── CSSStyleDeclaration (inline style) ───────────────────────────────────────
 
 // BUG-964: a TRBL shorthand token (`margin: 10px 20px`, whether authored
@@ -8088,6 +8103,19 @@ var _LUMEN_WRAPPER_MEMBERS = {
         set autofocus(v) { var nid = this.__nid__;
             if (v) { _lumen_set_attr(nid, 'autofocus', ''); }
             else { _lumen_remove_attr(nid, 'autofocus'); }
+        },
+        // GAP-FOCUSGROUP: HTMLOrSVGOrMathMLElement mixin, so on `Element`
+        // like `autofocus`/`dataset`. `focusGroup` is [SameObject,
+        // PutForwards=value] — a string assignment rewrites the attribute and
+        // keeps the cached list object.
+        get focusGroup() {
+            return _lumen_wrapper_slot(this, '__focusGroup__', _lumen_make_focus_group_list);
+        },
+        set focusGroup(v) { this.focusGroup.value = v; },
+        get focusGroupStart() { var nid = this.__nid__; return _lumen_has_attr(nid, 'focusgroupstart'); },
+        set focusGroupStart(v) { var nid = this.__nid__;
+            if (v) { _lumen_set_attr(nid, 'focusgroupstart', ''); }
+            else { _lumen_remove_attr(nid, 'focusgroupstart'); }
         },
         // ── HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement properties ──
         // `type` and `name` used to be own properties here, reflected for every

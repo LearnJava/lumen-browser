@@ -1,6 +1,6 @@
 # BUG-601: `DOMTokenList` constructor not exposed on `window` — `instanceof DOMTokenList` throws `ReferenceError`, even though the object itself works correctly
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P1, GAP-FOCUSGROUP)
 **Компонент:** js (`crates/js/src/dom.rs` — `// ── DOMTokenList (classList) ──` section around line 1191)
 **Найден:** P2, WPT-VENDOR-html-interaction, 2026-08-04
 
@@ -55,3 +55,18 @@ IDL-рефлексия HTML LS `focusgroup`/`focusgroupstart` content-атриб
 над атрибутом `focusgroup`, PutForwards-семантика, `supports()` со списком
 из 12 стандартных токенов). Переквалифицировано в ДОРАБОТКУ →
 [GAP-FOCUSGROUP](../ROADMAP.md). Указатель убран из `STATUS-P3.md`.
+
+## Исправление (2026-09-26, GAP-FOCUSGROUP, ветка `p1-gap-focusgroup`)
+
+- `element.focusGroup` — член `_LUMEN_WRAPPER_MEMBERS` (`crates/js/src/shim/web_api_shim_mid.js`),
+  то есть на `Element.prototype`, как `autofocus`/`dataset`: миксин HTMLOrSVGOrMathMLElement
+  покрыт для SVG и MathML без отдельной установки. Список кэшируется в слоте `__focusGroup__`
+  ([SameObject]); сеттер пишет в `.value` (PutForwards) и объект не подменяет.
+- `_lumen_make_focus_group_list` — `DOMTokenList` над атрибутом `focusgroup` с собственным
+  `supports()` по 12 токенам спецификации (тот же приём, что `relList`, BUG-826).
+- `focusGroupStart` — булева рефлексия `focusgroupstart`.
+
+Проверка: `run_report.py --root html/interaction/focus/focusgroup/tentative` — `idl-reflection.html`
+21/21 (было 1/21), подтесты каталога 6 → 35 из 123 (+20 здесь и 9 негативных Home/End/top-layer в соседних файлах
+держались на наличии `focusGroup`), `--check` чистый; тест `v8_core::focus_group_reflects_and_forwards`.
+Сама навигация стрелками внутри `focusgroup` не реализована и в эту задачу не входила.

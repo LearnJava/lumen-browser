@@ -879,6 +879,32 @@ fn dataset_maps_data_attributes_both_ways() {
     assert_eq!(same, lumen_core::JsValue::Bool(true));
 }
 
+/// GAP-FOCUSGROUP: `focusGroup` is a [SameObject, PutForwards=value]
+/// DOMTokenList with its own `supports()`, `focusGroupStart` a boolean
+/// reflection — both on SVG elements too (HTMLOrSVGOrMathMLElement mixin).
+#[test]
+fn focus_group_reflects_and_forwards() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var d = document.createElement('div'); \
+                     var fg = d.focusGroup; \
+                     d.focusGroup = 'toolbar wrap'; \
+                     var ok = fg instanceof DOMTokenList && d.focusGroup === fg \
+                       && d.getAttribute('focusgroup') === 'toolbar wrap' \
+                       && fg.supports('nomemory') && !fg.supports('vertical'); \
+                     d.focusGroupStart = true; \
+                     ok = ok && d.hasAttribute('focusgroupstart'); \
+                     d.focusGroupStart = false; \
+                     var s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); \
+                     s.focusGroup.value = 'menu'; \
+                     ok && !d.hasAttribute('focusgroupstart') \
+                       && s.getAttribute('focusgroup') === 'menu'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 /// BUG-414: the WPT `dataset` tests assert `instanceof DOMStringMap`,
 /// and one of them asserts it for an SVG element — which used to hit
 /// `svg.rs`'s `get dataset() { return {}; }` stub instead.
