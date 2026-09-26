@@ -46,6 +46,7 @@ window.MutationObserver      = MutationObserver;
 window.MutationRecord        = MutationRecord;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
+window.IntersectionObserverEntry = IntersectionObserverEntry;
 window.HTMLCollection        = HTMLCollection;
 window.NodeList              = NodeList;
 window.NodeFilter            = NodeFilter;

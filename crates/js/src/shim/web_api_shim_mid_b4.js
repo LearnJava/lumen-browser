@@ -1160,9 +1160,64 @@ function _io_intersect(a, b) {
 function _io_dom_rect(r) {
     var x = r ? r[0] : 0, y = r ? r[1] : 0;
     var w = r ? r[2] - r[0] : 0, h = r ? r[3] - r[1] : 0;
-    return { x: x, y: y, width: w, height: h,
-             top: y, left: x, bottom: y + h, right: x + w };
+    return new DOMRectReadOnly(x, y, w, h);
 }
+
+// ── IntersectionObserverEntry (Intersection Observer §2.3) ──────────────────
+// BUG-1131: entries used to be plain object literals, so the interface object
+// was missing from the global and feature checks such as
+// `"intersectionRatio" in IntersectionObserverEntry.prototype` failed
+// (duolingo redirects to /errors/not-supported.html on that). The fields live
+// in one non-enumerable slot and are read through readonly prototype getters.
+function _io_entry_slot(entry, fields) {
+    Object.defineProperty(entry, '_ioe', { value: fields, enumerable: false });
+    return entry;
+}
+
+function IntersectionObserverEntry(init) {
+    if (!(this instanceof IntersectionObserverEntry)) {
+        throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+            + "Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+    }
+    if (init === undefined || init === null || (typeof init !== 'object' && typeof init !== 'function')) {
+        throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+            + "The provided value is not of type 'IntersectionObserverEntryInit'.");
+    }
+    var required = ['time', 'rootBounds', 'boundingClientRect', 'intersectionRect', 'target'];
+    for (var i = 0; i < required.length; i++) {
+        if (init[required[i]] === undefined) {
+            throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+                + "required member " + required[i] + " is undefined.");
+        }
+    }
+    if (!init.target || init.target.nodeType !== 1) {
+        throw new TypeError("Failed to construct 'IntersectionObserverEntry': "
+            + "member target is not of type 'Element'.");
+    }
+    _io_entry_slot(this, {
+        time: +init.time,
+        rootBounds: init.rootBounds === null ? null : DOMRectReadOnly.fromRect(init.rootBounds),
+        boundingClientRect: DOMRectReadOnly.fromRect(init.boundingClientRect),
+        intersectionRect: DOMRectReadOnly.fromRect(init.intersectionRect),
+        isIntersecting: !!init.isIntersecting,
+        intersectionRatio: init.intersectionRatio === undefined ? 0 : +init.intersectionRatio,
+        target: init.target,
+    });
+}
+['time', 'rootBounds', 'boundingClientRect', 'intersectionRect',
+ 'isIntersecting', 'intersectionRatio', 'target'].forEach(function(name) {
+    var get = function() {
+        if (!this || !this._ioe) throw new TypeError('Illegal invocation');
+        return this._ioe[name];
+    };
+    Object.defineProperty(get, 'name', { value: 'get ' + name });
+    Object.defineProperty(IntersectionObserverEntry.prototype, name, {
+        get: get, enumerable: true, configurable: true,
+    });
+});
+Object.defineProperty(IntersectionObserverEntry.prototype, Symbol.toStringTag, {
+    value: 'IntersectionObserverEntry', configurable: true,
+});
 
 // §2.2 «content clip»: overflow clips the element's content to its padding
 // edge. Every such element (overflow scroll/auto/hidden/clip) is exactly the
@@ -1353,7 +1408,7 @@ function _lumen_deliver_intersection_observers() {
             o.lastIntersecting = c.hit;
             o.lastRatio = ratio;
             if (!changed) continue;
-            entries.push({
+            entries.push(_io_entry_slot(Object.create(IntersectionObserverEntry.prototype), {
                 target: o.target,
                 isIntersecting: c.hit,
                 intersectionRatio: ratio,
@@ -1361,7 +1416,7 @@ function _lumen_deliver_intersection_observers() {
                 intersectionRect: _io_dom_rect(it),
                 rootBounds: _io_dom_rect(c.rootBounds),
                 time: typeof performance !== 'undefined' ? performance.now() : 0,
-            });
+            }));
         }
     }
     // §3.2.4 notify: every observer's queue is filled above before any

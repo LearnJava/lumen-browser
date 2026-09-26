@@ -1,6 +1,6 @@
 # BUG-1131 — Нет глобального интерфейса `IntersectionObserverEntry`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid_b3.js:1479` `function IntersectionObserver`, `:1608` — запись собирается литералом `{isIntersecting:…, intersectionRatio:…}`; экспорт — `web_api_shim_tail_mc.js:48`)
 
@@ -40,3 +40,24 @@ console.log("RESULT "+JSON.stringify(r)); window.__r=r;
 Intersection Observer §2.3: интерфейс `IntersectionObserverEntry` с конструктором и
 readonly-атрибутами на prototype; записи наблюдателя создавать через него. Критерий: репро даёт
 `duolingo_check=true`; duolingo перемерить.
+
+## Исправление (2026-09-26, P6)
+
+`web_api_shim_mid_b4.js`: интерфейс `IntersectionObserverEntry` рядом с
+`_io_dom_rect` — конструктор по `IntersectionObserverEntryInit` (обязательные
+члены → `TypeError`, `target` — Element, прямоугольники через
+`DOMRectReadOnly.fromRect`), семь readonly-геттеров на prototype (`get <attr>`),
+поля — в неперечислимом слоте `_ioe`, `Symbol.toStringTag`.
+`_lumen_deliver_intersection_observers` создаёт записи
+`Object.create(IntersectionObserverEntry.prototype)` + `_io_entry_slot`, а
+`_io_dom_rect` возвращает `DOMRectReadOnly` вместо литерала. Экспорт —
+`web_api_shim_tail_mc.js`.
+
+Проверка: репро-проверка duolingo на `--dump-layout` — `true` (сборка `main` до
+фикса — `false`). Тесты `dom::tests::v8_bug1131_io_entry` (3). WPT
+`intersection-observer`: 162/383 → 174/383 сабтестов, регрессий нет
+([заметка](../docs/wpt-vendor-notes/intersection-observer.md)).
+Живой duolingo не перемерялся (нужно окно с сетью).
+
+Остаток вне скоупа: глобал enumerable (общая черта экспорта шима),
+`IntersectionObserverEntry.prototype` writable, `isVisible` (IO v2).
