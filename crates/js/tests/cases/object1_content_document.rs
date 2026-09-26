@@ -103,3 +103,35 @@ fn embed_has_only_get_svg_document() {
         "el.getSVGDocument() === null && el.contentDocument === undefined"
     ));
 }
+
+/// OBJECT-1 срез 4: `contentDocument.location` — тот же Location, что у
+/// `contentWindow`, с компонентами URL под-документа (WPT
+/// `the-object-element/historical.html`, «codebase»).
+#[test]
+fn nested_document_location_exposes_url_components() {
+    let rt = make_rt();
+    let nid = object_nid(&rt, "object");
+    register(&rt, nid, true);
+    assert!(bool_eval(
+        &rt,
+        "var l = el.contentDocument.location; \
+         l === el.contentWindow.location && l === el.contentWindow.location \
+         && l.href === 'https://example.com/inner.html' \
+         && l.origin === location.origin && l.protocol === 'https:' \
+         && l.host === 'example.com' && l.pathname === '/inner.html' \
+         && l.search === '' && l.hash === ''"
+    ));
+}
+
+#[test]
+fn cross_origin_location_components_throw_security_error() {
+    let rt = make_rt();
+    let nid = object_nid(&rt, "object");
+    register(&rt, nid, false);
+    assert!(bool_eval(
+        &rt,
+        "var e = null; try { el.contentWindow.location.origin; } catch (x) { e = x; } \
+         e !== null && e.name === 'SecurityError' \
+         && typeof el.contentWindow.location.replace === 'function'"
+    ));
+}

@@ -2037,6 +2037,21 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return el;
   }
 
+  // OBJECT-1 срез 4: компонент URL под-документа для фасада Location.
+  // Нераспознаваемый URL (пустой — документа ещё нет) даёт пустые компоненты
+  // и origin 'null', как у непрозрачного происхождения.
+  function locationPart(bid, part) {
+    if (!_lumen_f_accessible(bid)) {
+      throw (typeof DOMException === 'function')
+        ? new DOMException('Blocked a frame from accessing a cross-origin frame.', 'SecurityError')
+        : new TypeError('cross-origin frame location');
+    }
+    var u = null;
+    try { u = new URL(String(_lumen_f_url(bid) || '')); } catch (e) {}
+    if (u === null) return part === 'origin' ? 'null' : '';
+    return u[part];
+  }
+
   function docFacade(bid) {
     var cached = docs[bid];
     if (cached) return cached;
@@ -2077,6 +2092,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     // всегда «complete»; отдельного трекинга переходов срез 2 не ведёт.
     Object.defineProperty(d, 'readyState',        { get: function() { return 'complete'; }, configurable: true });
     Object.defineProperty(d, 'defaultView',       { get: function() { return winFacade(bid); }, configurable: true });
+    // OBJECT-1 срез 4: `document.location` — тот же Location, что у окна
+    // (HTML LS §3.1.1; документ под фасадом всегда активен в своём контексте).
+    Object.defineProperty(d, 'location',          { get: function() { return winFacade(bid).location; }, configurable: true });
     d.getElementById = function(id) { return el(_lumen_f_by_id(bid, String(id))); };
     d.querySelector = function(sel) { return el(_lumen_f_query(bid, String(sel))); };
     d.querySelectorAll = function(sel) {
@@ -2164,19 +2182,31 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       },
       configurable: true,
     });
-    Object.defineProperty(w, 'location', {
-      get: function() {
-        var loc = {};
-        Object.defineProperty(loc, 'href', {
-          get: function() { return _lumen_f_url(bid); },
-          set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
+    // OBJECT-1 срез 4: один и тот же объект Location на окно (HTML LS §7.10.1:
+    // `w.location === w.location`, и `document.location` фасада документа —
+    // он же) с компонентами URL (origin/protocol/host/…). Компоненты читаются
+    // только same-origin: чужой фасад отвечает SecurityError, как настоящий
+    // cross-origin Location (§7.2.3.3); href на запись и assign/replace
+    // остаются доступны — навигация чужого фрейма разрешена.
+    var loc = {};
+    Object.defineProperty(loc, 'href', {
+      get: function() { return _lumen_f_url(bid); },
+      set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
+      configurable: true,
+    });
+    ['origin', 'protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash']
+      .forEach(function(part) {
+        Object.defineProperty(loc, part, {
+          get: function() { return locationPart(bid, part); },
           configurable: true,
         });
-        loc.toString = function() { return _lumen_f_url(bid); };
-        loc.assign = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
-        loc.replace = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
-        return loc;
-      },
+      });
+    loc.toString = function() { return _lumen_f_url(bid); };
+    loc.assign = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
+    loc.replace = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
+    loc.reload = function() {};
+    Object.defineProperty(w, 'location', {
+      get: function() { return loc; },
       set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
       configurable: true,
     });
