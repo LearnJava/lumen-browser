@@ -1,6 +1,6 @@
 # BUG-663 — Sanitizer API implements an obsolete draft: no `Document.parseHTML`/`parseHTMLUnsafe`, no config-object methods (`get`/`allowElement`/`removeElement`/`allowAttribute`/`removeAttribute`/`removeUnsafe`/`replaceElementWithChildren`), no `ShadowRoot.setHTML`/`setHTMLUnsafe`, and `setHTML({sanitizer: <plain config>})` crashes instead of implicitly constructing a `Sanitizer`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/sanitizer.rs` — JS shim, `install_sanitizer_bindings_v8`, evaluated by the V8 install path per `CLAUDE.md`; `Element.prototype.setHTMLUnsafe` at `crates/js/src/shim/web_api_shim_mid.js`)
 **Найден:** P2, WPT-VENDOR-sanitizer-api (2026-08-05), `run_report.py --all --root sanitizer-api --recursive` real run
 
@@ -126,3 +126,40 @@ Given the size, worth splitting into the three items above rather than one
 sweep — (1) and (3) are small, additive, and unblock most of the "is not a
 function" noise; (2) is the real design work (matching the spec's default
 allow-list of safe elements/attributes) and can land after.
+
+## Исправление (P3, 2026-09-26)
+
+Весь API переписан по текущему тексту спеки (WICG `index.bs` @ c0f1ca8, сверено
+с `tests/wpt/sanitizer-api`), черновик `sanitizeFor()` + regex удалён. JS
+вынесен в [`crates/js/src/shim/sanitizer_shim.js`](../crates/js/src/shim/sanitizer_shim.js),
+[`sanitizer.rs`](../crates/js/src/sanitizer.rs) только вычисляет его и держит тесты.
+
+- **Пункт 2:** config-объект — canonicalize → validate → store; модификаторы
+  возвращают, изменился ли конфиг; встроенный безопасный default-конфиг;
+  обход-санитайзер работает через обычные DOM-члены, поэтому один и тот же код
+  чистит и живые узлы арены (`setHTML`), и отсоединённые документы.
+- **Пункт 4:** `options.sanitizer` — экземпляр `Sanitizer`, словарь-конфиг
+  (оборачивается в `new Sanitizer(...)`) или строка `"default"`.
+- **Пункт 3:** `ShadowRoot.prototype.setHTML`/`setHTMLUnsafe`, контекст
+  разбора — хост.
+- **Пункт 1:** `Document.parseHTML`/`parseHTMLUnsafe` оборачивают фабрику из
+  `dom_parser.rs` (BUG-592) и санитайзят результат на месте.
+
+WPT `sanitizer-api`: **27/27 harness OK, 428/778 сабтестов** (было 26/27,
+72/480; знаменатель вырос, потому что тесты теперь доходят до конца). Ратчет
+`metadata/sanitizer-api/` перегенерирован (`--update-expected`, затем
+`--check` — exit 0), 9 файлов теперь полностью PASS.
+
+### Остаток — не этот баг
+
+- 53 FAIL `Additional nodes at the of node2` (`sanitizer-basic-filtering`,
+  `sanitizer-parseHTML`) — сравнение идёт через `document.createNodeIterator`
+  по `Document.parseHTML*(...).body`, а `_NodeIterator` обходит только арену
+  живого документа: на узле отсоединённого документа он не отдаёт даже корень
+  (проба: `innerHTML` верный, итератор пуст). Это
+  [BUG-1164](BUG-1164-OPEN.md).
+- Trusted Types (`createParserOptions`, `sethtml-with-trustedtypes*`) — не
+  реализованы вовсе, отдельный API.
+- `<?target data?>` как узел ProcessingInstruction в HTML-разборе и
+  сравнения `<svg>`-поддеревьев — уровень HTML-парсера/`isEqualNode`, не
+  санитайзера.
