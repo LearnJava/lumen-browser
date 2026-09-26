@@ -5,14 +5,12 @@
 //! This is the "greedy" variant of the spec; the optional optimizing variant
 //! (`masonry-auto-flow: ordered`) is a future extension.
 //!
-//! Integration: `box_tree::lay_out_grid` detects `GridTrackSize::Masonry` on either
-//! axis and dispatches to the inline masonry path. This module exposes the standalone
-//! algorithm for unit testing and potential reuse.
-//!
-//! P4 handoff:
-//! - `masonry-auto-flow` in `ComputedStyle` — controls placement order
-//!   (`definite-first | next | ordered`) per CSS Masonry Layout §9.
-//! - `align-tracks` / `justify-tracks` — alignment of tracks in the grid axis.
+//! Integration: currently **unwired, on purpose**. No stable browser ships masonry,
+//! and Edge drops `masonry` as an invalid track value, so `box_tree/grid.rs` strips
+//! the `GridTrackSize::Masonry` sentinel and lays the axis out as a regular grid
+//! (BUG-105/BUG-143, TEST-63/75). `masonry-auto-flow` is parsed and stored but has
+//! no layout effect for the same reason. This module keeps the standalone algorithm
+//! for the day a stable engine ships masonry and the ground truth changes.
 
 use crate::box_tree::LayoutBox;
 
