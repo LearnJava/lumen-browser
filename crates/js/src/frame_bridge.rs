@@ -2243,6 +2243,17 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       _lumen_f_post_message(bid, json, to);
     };
     var proxied = wrapWinFacadeGlobals(w, bid);
+    // GAP-ORIGIN: `Origin.from(contentWindow)` — only a same-origin window
+    // hands out its origin; a cross-origin or opaque-sandboxed one has none
+    // the caller may see (`TypeError`). An `about:` child inherits the origin
+    // of the context that reads it, which `accessible` already vouched for.
+    if (typeof _lumen_origin_register_source === 'function') {
+      _lumen_origin_register_source(proxied, function() {
+        if (!_lumen_f_accessible(bid)) return null;
+        var u = _lumen_f_url(bid);
+        return u.slice(0, 6) === 'about:' ? globalThis : u;
+      });
+    }
     wins[bid] = proxied;
     return proxied;
   }

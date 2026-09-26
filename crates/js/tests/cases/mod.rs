@@ -16,6 +16,7 @@ mod bug569_img_decode;
 mod bug576_options_collection_add;
 mod bug581_table_api;
 mod bug786_srez25_pi_api;
+mod gap_origin_api;
 mod indexed_db;
 mod link_activation;
 mod no_automation_markers;

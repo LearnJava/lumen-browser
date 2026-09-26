@@ -478,6 +478,12 @@ const GEOMETRY_SHIM: &str = include_str!("shim/geometry_shim.js");
 /// is not defined`, и вместе с ним не вставал весь SW).
 pub(crate) const URL_SHIM: &str = include_str!("shim/url_shim.js");
 
+/// `Origin` (HTML LS §7.1.1, GAP-ORIGIN) — `[Exposed=*]`, so shared with every
+/// worker scope like [`URL_SHIM`], right after which it is spliced. Needs the
+/// `_lumen_url_origin`/`_lumen_url_parse` natives (`crate::origin`,
+/// `crate::js_url`), registered in both scopes.
+pub(crate) const ORIGIN_SHIM: &str = include_str!("shim/origin_shim.js");
+
 const WEB_API_SHIM_MID_C: &str = include_str!("shim/web_api_shim_mid_c.js");
 
 /// `Blob`/`File`/`FileReader` (WHATWG File API) — `[Exposed=(Window,Worker)]`,
@@ -579,7 +585,7 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
@@ -601,7 +607,7 @@ pub(crate) fn web_api_shim() -> String {
 #[cfg(feature = "v8-backend")]
 pub(crate) fn worker_exposed_shim() -> String {
     format!(
-        "{EVENT_SHIM}{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\
+        "{EVENT_SHIM}{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}{ORIGIN_SHIM}\
          {TEXT_ENCODING_SHIM}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{FILE_API_SHIM}{WEBSOCKET_SHIM}\
          {WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
     )

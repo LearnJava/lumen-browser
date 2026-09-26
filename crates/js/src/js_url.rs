@@ -115,12 +115,17 @@ pub(crate) fn url_parse_native(href: String, base: Option<String>) -> Option<JsV
 pub(crate) fn install_url_parse_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::into_v8_fn2;
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2};
     rt.register_native(
         "_lumen_url_parse",
         into_v8_fn2(|href: String, base: Option<String>| -> Option<JsValue> {
             url_parse_native(href, base)
         }),
+    )?;
+    // GAP-ORIGIN: `Origin` is `[Exposed=*]` — the worker needs the same native.
+    rt.register_native(
+        "_lumen_url_origin",
+        into_v8_fn1(|href: String| -> Option<JsValue> { crate::origin::url_origin_native(&href) }),
     )
 }
 

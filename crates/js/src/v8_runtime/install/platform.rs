@@ -866,6 +866,15 @@ pub(crate) fn install_url_parse(
             crate::js_url::url_parse_native(href, base)
         }
     );
+    // GAP-ORIGIN: `Origin.from()` (`shim/origin_shim.js`) — same eval-time
+    // reason as `_lumen_url_parse` above.
+    reg!(
+        scope,
+        ctx,
+        store,
+        "_lumen_url_origin",
+        move |href: String| -> Option<JsValue> { crate::origin::url_origin_native(&href) }
+    );
     Ok(())
 }
 

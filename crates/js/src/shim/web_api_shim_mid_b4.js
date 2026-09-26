@@ -2131,6 +2131,9 @@ var window = {
         var ev = new MessageEvent(structuredClone(message));
         ev.origin = origin;
         ev.source = window;
+        // GAP-ORIGIN: a delivered event's real origin — the sender is this
+        // very window — as opposed to a constructed one's author-set `.origin`.
+        _lumen_origin_register_source(ev, function() { return globalThis; });
         // Spec §7.7.4 step 5: dispatch as a task (asynchronously). «Fire an
         // event» — a real dispatch, so `target`/`currentTarget` are the window
         // (BUG-1139).
@@ -2160,6 +2163,9 @@ globalThis._lumen_deliver_frame_message = function(data, origin, source) {
     var ev = new MessageEvent(data);
     ev.origin = origin || '';
     if (source !== null && source !== undefined) ev.source = source;
+    // GAP-ORIGIN: the sender's origin as the frame bridge computed it; empty
+    // (a grandchild posting to top) stays "no origin".
+    if (origin) _lumen_origin_register_source(ev, function() { return origin; });
     window.dispatchEvent(ev);
 };
 

@@ -181,6 +181,24 @@ impl Url {
         }
     }
 
+    /// The URL's origin per URL Standard §6.1 «origin» (GAP-ORIGIN): a tuple
+    /// for `http`/`https`/`ws`/`wss`/`ftp` and for `blob:` whose path is such a
+    /// URL, `None` (an opaque origin) for everything else — `data:`, `file:`,
+    /// `about:`, and non-special schemes even when they carry an authority.
+    /// That last case is where it differs from [`Url::origin`], which keys on
+    /// "has a host" and therefore serializes `foo://host` as a tuple.
+    pub fn tuple_origin(&self) -> Option<TupleOrigin> {
+        match self.inner.origin() {
+            url::Origin::Tuple(scheme, host, port) => Some(TupleOrigin {
+                is_domain: matches!(host, url::Host::Domain(_)),
+                scheme,
+                host: host.to_string(),
+                port,
+            }),
+            url::Origin::Opaque(_) => None,
+        }
+    }
+
     /// Full serialization per the WHATWG URL Standard (`inner.as_str()`,
     /// ASCII/IDNA host) — as opposed to [`Url::as_str`]/[`Display`], which
     /// splice the raw Unicode host back in for the address bar (module doc).
@@ -301,6 +319,23 @@ fn raw_host_from_input(s: &str) -> String {
             None => host_port.to_owned(),
         }
     }
+}
+
+/// A tuple origin (HTML LS §7.1.1 «origin»), as returned by
+/// [`Url::tuple_origin`]. `port` is always filled — the scheme's default port
+/// when the URL omitted it — so two origins are same-origin exactly when all
+/// three fields are equal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TupleOrigin {
+    /// ASCII-lowercase scheme.
+    pub scheme: String,
+    /// Serialized host: ASCII/IDNA domain, dotted IPv4 or bracketed IPv6.
+    pub host: String,
+    /// Port, or the scheme's default port.
+    pub port: u16,
+    /// `true` when `host` is a domain rather than an IP address — only a
+    /// domain has a registrable domain (HTML LS §7.1.1 «same site»).
+    pub is_domain: bool,
 }
 
 /// `scheme://host(raw)[:port]path[?query][#fragment]` — `inner`'s own
@@ -664,6 +699,29 @@ mod tests {
         assert!(!u.has_authority());
         assert_eq!(u.origin(), "");
         assert_eq!(u.host_ascii_normalized(), "");
+    }
+
+    #[test]
+    fn tuple_origin_follows_url_standard_origin() {
+        let t = |s: &str| Url::parse(s).unwrap().tuple_origin();
+        let o = t("https://Site.Example:443/x").unwrap();
+        assert_eq!((o.scheme.as_str(), o.host.as_str(), o.port), ("https", "site.example", 443));
+        assert!(o.is_domain);
+        let ip = t("https://[::1]/").unwrap();
+        assert_eq!(ip.host, "[::1]");
+        assert!(!ip.is_domain);
+        assert_eq!(t("blob:https://example.com/guid").unwrap().host, "example.com");
+        assert_eq!(t("ws://ws.example").unwrap().port, 80);
+        for opaque in [
+            "about:blank",
+            "data:text/plain,x",
+            "file:///a/b.txt",
+            "weird-hierarchical-protocol://host/path",
+            "blob:weird-protocol:whatever",
+            "blob:weird-hierarchical-protocol://host/path",
+        ] {
+            assert!(t(opaque).is_none(), "{opaque} must have an opaque origin");
+        }
     }
 
     #[test]
