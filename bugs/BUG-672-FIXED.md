@@ -1,6 +1,6 @@
 # BUG-672 — `Serial`/`SerialPort` interfaces are directly constructible with `new`, though the spec defines no constructor
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/serial.rs` — `SERIAL_SHIM`)
 **Найден:** P2, WPT-VENDOR-serial, 2026-08-06
 
@@ -64,3 +64,17 @@ Fix scope: заблокировать публичный `new SerialPort()`/`new
 `[Exposed]`-интерфейсов без конструктора). Не требует TLS-гэпа для
 воспроизведения/фикса — живой `--mcp-live-port`-пробы достаточно для
 верификации.
+
+## Исправление (2026-09-26, P3)
+
+`SERIAL_SHIM` получил приватный ключ `ENGINE_KEY` (тот же паттерн, что
+`ChapterInformation` в `media_session.rs` и `BRAND` в `webhid.rs`, BUG-713):
+конструкторы `Serial`/`SerialPort` бросают `TypeError: Illegal constructor`,
+если первым аргументом не передан ключ; единственная легитимная точка
+конструирования — `new Serial(ENGINE_KEY)` при установке `navigator.serial`.
+Параметр объявлен как `key = undefined`, поэтому `Serial.length === 0`, как у
+интерфейса без конструктора. Тесты `serial::tests` —
+`serial_interfaces_are_not_constructible`, `navigator_serial_is_engine_instance`.
+
+Остаток вне скоупа: `onconnect`/`ondisconnect`/`readable`/`writable` — собственные
+поля экземпляра, а не аксессоры прототипа; `[SecureContext]` не учитывается.
