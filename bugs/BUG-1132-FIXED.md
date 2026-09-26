@@ -1,6 +1,6 @@
 # BUG-1132 — Сериализация `innerHTML`/`outerHTML` экранирует текст внутри `<script>`/`<style>`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/v8_runtime/dom_helpers.rs::serialize_node` — `NodeData::Text` всегда через `escape_html_text`, без проверки родителя)
 
@@ -46,3 +46,18 @@ HTML LS §13.3 «Serializing HTML fragments»: текстовый узел, ро
 `script`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext` (и `noscript` при включённом
 скриптинге), выводится буквально, без экранирования. Проверять родителя в `serialize_node`.
 Критерий: репро даёт `ran='yes'`.
+
+## Исправление (2026-09-26, P6)
+
+`crates/js/src/v8_runtime/dom_helpers.rs::serialize_node`: текстовый узел, чей родитель — HTML-элемент
+из `RAW_TEXT_PARENTS` (`style`, `script`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`,
+`noscript` — скриптинг в Lumen всегда включён), выводится буквально (`parent_is_raw_text`). SVG-`<style>`
+по-прежнему экранируется: правило спеки касается только HTML-элементов.
+
+Проверка: юнит-тест `serialize_raw_text_parents_emit_text_verbatim`; репро через
+`lumen --dump-layout` (вместо `appendChild` — `new Function(s.innerHTML)()`, headless не исполняет
+вставленные скрипты): до — `//&lt;![CDATA[ … &amp;&amp;`, `SyntaxError: Unexpected token '&'`, `ran='no'`;
+после — сырой текст, `ran='yes'`, `style.innerHTML` = `a>b{x:"&<"}`.
+
+Вне объёма: JS-сериализатор `_nativeSerializeNode` в `crates/js/src/dom_parser.rs` (путь `XMLSerializer`)
+экранирует всегда — для XML-сериализации это верно. Живой bing не перемерен (нужно окно с сетью).

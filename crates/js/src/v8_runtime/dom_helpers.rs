@@ -359,6 +359,25 @@ pub(super) fn escape_html_attr(s: &str) -> String {
     s.replace('&', "&amp;").replace('"', "&quot;")
 }
 
+/// HTML LS §13.3 "serializing HTML fragments": a text node whose parent is one of
+/// these HTML elements is emitted literally, not escaped. `noscript` is included
+/// because scripting is always enabled in Lumen. BUG-1132: pages that stash inline
+/// script bodies in `<script type=text/…>` and re-run them via `innerHTML` got
+/// `&amp;&amp;`/`&lt;` back and hit a SyntaxError.
+const RAW_TEXT_PARENTS: &[&str] = &[
+    "style", "script", "xmp", "iframe", "noembed", "noframes", "plaintext", "noscript",
+];
+
+fn parent_is_raw_text(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> bool {
+    doc.get(id).parent.is_some_and(|p| match &doc.get(p).data {
+        lumen_dom::NodeData::Element { name, .. } => {
+            name.namespace == lumen_dom::Namespace::Html
+                && RAW_TEXT_PARENTS.iter().any(|t| name.local.eq_ignore_ascii_case(t))
+        }
+        _ => false,
+    })
+}
+
 /// Serializes `id` itself — element open tag + attributes + children + close tag,
 /// or the escaped data for a text/comment node. Mirrors HTML LS §13.3 "serializing
 /// HTML fragments" run on a single node (used for `outerHTML`, BUG-351).
@@ -378,6 +397,7 @@ pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, o
     while let Some(frame) = stack.pop() {
         match frame {
             Frame::Open(id) => match &doc.get(id).data {
+                lumen_dom::NodeData::Text(s) if parent_is_raw_text(doc, id) => out.push_str(s),
                 lumen_dom::NodeData::Text(s) => out.push_str(&escape_html_text(s)),
                 lumen_dom::NodeData::Comment(s) => {
                     out.push_str("<!--");
@@ -639,6 +659,36 @@ mod tests {
 
         assert_eq!(out.matches("<div>").count(), DEEP_CHAIN_DEPTH);
         assert_eq!(out.matches("</div>").count(), DEEP_CHAIN_DEPTH);
+    }
+
+    // BUG-1132: текст внутри `<script>`/`<style>` сериализуется как есть,
+    // в обычном элементе и в SVG-`<style>` — экранируется.
+    #[test]
+    fn serialize_raw_text_parents_emit_text_verbatim() {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let body = "if (a < 3 && b > 1) x = '&amp;';";
+        let mut ser = |parent: lumen_dom::QualName| {
+            let el = doc.create_element(parent);
+            doc.append_child(root, el);
+            let t = doc.create_text(body.to_string());
+            doc.append_child(el, t);
+            let mut out = String::new();
+            serialize_children(&doc, el, &mut out);
+            out
+        };
+        assert_eq!(ser(lumen_dom::QualName::html("script")), body);
+        assert_eq!(ser(lumen_dom::QualName::html("STYLE")), body);
+        assert_eq!(ser(lumen_dom::QualName::html("noscript")), body);
+        assert_eq!(
+            ser(lumen_dom::QualName::html("div")),
+            "if (a &lt; 3 &amp;&amp; b &gt; 1) x = '&amp;amp;';"
+        );
+        let svg_style = lumen_dom::QualName {
+            namespace: lumen_dom::Namespace::Svg,
+            local: "style".into(),
+        };
+        assert_ne!(ser(svg_style), body);
     }
 
     /// Верхний уровень результата `parse_html_fragment` в компактной записи —
