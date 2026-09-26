@@ -15,7 +15,7 @@ Test category, added 2026-08-05 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 --processes 6`: **129/143 harness OK, 114/381 сабтестов** (до фикса на той же
 базе — 128/143, 33/229), регрессий по сабтестам нет. `.ini`-baseline
 переписан `--update-expected`. Главный остаток — число записей (`entries.length`,
-66 сабтестов: BUG-627), `IntersectionObserverEntry` (BUG-1131), валидация (BUG-626).
+66 сабтестов: BUG-627), `IntersectionObserverEntry` (BUG-1131, исправлен 2026-09-26), валидация (BUG-626).
 
 ## BUG-626 исправлен (P3, 2026-09-25)
 
@@ -39,3 +39,14 @@ scrollTop=100 …») и `scroll-margin-dynamic.html` («… after scrolling»):
 раньше проходили случайно, теперь упираются в
 [BUG-1166](../../bugs/BUG-1166-OPEN.md) — `getBoundingClientRect` не видит
 прокрутку контейнера.
+
+## BUG-1131 исправлен (P6, 2026-09-26)
+
+Глобальный интерфейс `IntersectionObserverEntry` (конструктор по WebIDL,
+readonly-атрибуты на prototype с именами геттеров `get <attr>`, прямоугольники —
+`DOMRectReadOnly`); записи наблюдателя — его экземпляры. Тот же прогон:
+**129/143 harness OK, 174/383 сабтестов** (было 162/383), `--update-expected`
+только снял FAIL: 11 сабтестов `idlharness` и `observer-callback-arguments.html`
+целиком, регрессий нет. Остаток `idlharness` по `IntersectionObserverEntry`:
+глобал enumerable (так экспортирует весь шим через `window.X =`),
+`prototype` writable, нет атрибута `isVisible` (IO v2).

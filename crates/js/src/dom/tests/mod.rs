@@ -385,6 +385,9 @@ mod v8_bug627_io_root;
 mod v8_bug628_io_take_records;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1131_io_entry;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug863_cdata_section;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1122_iface_protos;
