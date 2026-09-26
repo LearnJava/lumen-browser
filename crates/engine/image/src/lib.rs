@@ -58,38 +58,55 @@ pub fn supported_mime_types() -> &'static [&'static str] {
 
 /// Checks whether the given bytes look like an SVG document.
 ///
-/// SVG has no magic-byte signature: after skipping an optional UTF-8 BOM and
-/// ASCII whitespace the bytes must start with `<svg`, `<!DOCTYPE svg` or an
-/// XML prolog (`<?xml`) followed by a `<svg` tag within the first 4096 bytes
-/// (the prolog alone is not enough — XHTML starts the same way). Matching is
-/// ASCII-case-insensitive. Used to dispatch to [`decode_svg`] the same way
-/// every other format's signature check dispatches here.
+/// SVG has no magic-byte signature: after an optional UTF-8 BOM the XML prolog
+/// is skipped — whitespace, comments (`<!-- -->`), processing instructions
+/// (`<?xml …?>`) and a `<!DOCTYPE …>` (internal subset included) — and the
+/// first element must be `<svg`. A `<!DOCTYPE svg` is enough on its own.
+/// Matching is ASCII-case-insensitive. Real files lead with a generator
+/// comment (`<!-- by TradingView --><svg>`, Illustrator's header), so the
+/// whole prolog has to be walked, not just a leading `<?xml` (BUG-1134).
+/// Used to dispatch to [`decode_svg`] the same way every other format's
+/// signature check dispatches here.
 #[must_use]
 pub fn is_svg(bytes: &[u8]) -> bool {
     let starts_with_ci = |hay: &[u8], needle: &[u8]| -> bool {
         hay.len() >= needle.len() && hay[..needle.len()].eq_ignore_ascii_case(needle)
     };
+    let find = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).position(|w| w == needle);
 
-    // Skip an optional UTF-8 BOM, then ASCII whitespace.
-    let mut i = 0;
-    if bytes.len() >= 3 && bytes[..3] == [0xEF, 0xBB, 0xBF] {
-        i = 3;
+    let mut rest = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    loop {
+        let ws = rest.iter().take_while(|b| b.is_ascii_whitespace()).count();
+        rest = &rest[ws..];
+        if starts_with_ci(rest, b"<svg") || starts_with_ci(rest, b"<!doctype svg") {
+            return true;
+        }
+        let skip = if rest.starts_with(b"<!--") {
+            find(&rest[4..], b"-->").map(|end| 4 + end + 3)
+        } else if rest.starts_with(b"<?") {
+            find(&rest[2..], b"?>").map(|end| 2 + end + 2)
+        } else if starts_with_ci(rest, b"<!doctype") {
+            // `>` inside an internal subset `[ … ]` does not close the doctype.
+            let mut depth = 0_u32;
+            rest.iter()
+                .position(|&b| {
+                    match b {
+                        b'[' => depth += 1,
+                        b']' => depth = depth.saturating_sub(1),
+                        b'>' => return depth == 0,
+                        _ => {}
+                    }
+                    false
+                })
+                .map(|end| end + 1)
+        } else {
+            None
+        };
+        match skip {
+            Some(n) => rest = &rest[n..],
+            None => return false,
+        }
     }
-    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let rest = &bytes[i..];
-
-    if starts_with_ci(rest, b"<svg") || starts_with_ci(rest, b"<!doctype svg") {
-        return true;
-    }
-    if starts_with_ci(rest, b"<?xml") {
-        let search_end = rest.len().min(4096);
-        return rest[..search_end]
-            .windows(4)
-            .any(|w| w.eq_ignore_ascii_case(b"<svg"));
-    }
-    false
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов и colour-manages
@@ -915,6 +932,32 @@ mod tests {
     fn is_svg_detects_xml_prolog_and_doctype() {
         assert!(is_svg(b"<?xml version=\"1.0\"?>\n<svg></svg>"));
         assert!(is_svg(b"<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\"><svg/>"));
+    }
+
+    /// BUG-1134: tradingview logos lead with `<!-- by TradingView -->`;
+    /// Illustrator exports put a comment after `<?xml?>`; a DTD internal subset
+    /// holds `>` characters that must not close the doctype.
+    #[test]
+    fn is_svg_skips_comments_and_doctype_internal_subset() {
+        assert!(is_svg(b"<!-- by TradingView --><svg width=\"18\"></svg>"));
+        assert!(is_svg(
+            b"<?xml version=\"1.0\"?>\n<!-- Generator: Adobe Illustrator -->\n<svg/>"
+        ));
+        assert!(is_svg(
+            b"<?xml version=\"1.0\"?><!DOCTYPE x [<!ENTITY a \"<b>\">]>\n<svg/>"
+        ));
+        assert!(!is_svg(b"<!-- note --><html><svg/></html>"));
+        assert!(!is_svg(b"<!-- unterminated <svg/>"));
+    }
+
+    #[test]
+    fn decode_accepts_svg_after_leading_comment() {
+        let img = decode(
+            b"<!-- by TradingView --><svg xmlns=\"http://www.w3.org/2000/svg\" \
+              width=\"18\" height=\"18\"><rect width=\"18\" height=\"18\"/></svg>",
+        )
+        .expect("svg after a comment decodes");
+        assert_eq!((img.width, img.height), (18, 18));
     }
 
     #[test]

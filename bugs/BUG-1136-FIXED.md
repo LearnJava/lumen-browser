@@ -1,6 +1,6 @@
 # BUG-1136 — `Element.prototype.getAttributeNames` отсутствует
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js` — у `Element.prototype` метода нет; есть только у `VElement` в `crates/js/src/dom_parser.rs:229`, а сам шим проверяет его наличие в `:10801`)
 
@@ -40,3 +40,12 @@ document.getElementById('out').textContent = JSON.stringify(r);
 DOM §4.9: `getAttributeNames()` — квалифицированные имена атрибутов в порядке списка
 атрибутов; на `Element.prototype`, по образцу `hasAttributes` (`_lumen_get_attr_names(nid)`).
 Критерий: репро даёт результат Chrome.
+
+## Исправление (2026-09-26, P6)
+
+`getAttributeNames` добавлен в объект методов `Element.prototype`
+(`crates/js/src/shim/web_api_shim_mid.js:7334`) рядом с `hasAttributes`: копия
+`_lumen_get_attr_names(nid)` — свежий массив на каждый вызов, порядок списка атрибутов.
+Тест — `get_attribute_names_lists_attributes_in_order`
+(`crates/js/src/dom/tests/v8_perf_observers.rs`). Второй дефект samsung.com
+(`iframe.contentWindow === null`) — BUG-480, не тронут.

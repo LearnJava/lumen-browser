@@ -153,6 +153,50 @@ pub fn resolve_specifier_with(
     name.to_owned()
 }
 
+/// HTML LS §8.1.5.5 «resolve a module specifier» — строгая форма для
+/// `import.meta.resolve()` (BUG-1135).
+///
+/// URL-подобный спецификатор (`/`, `./`, `../` — относительно базы, иначе
+/// абсолютный URL) разбирается WHATWG-парсером, затем import map получает
+/// нормализованную строку. `None` — голое имя без записи в import map: вызов
+/// обязан бросить `TypeError`, а не вернуть имя «как есть», как делает
+/// загрузочный [`resolve_specifier_with`].
+pub fn resolve_module_specifier(
+    page_url: &str,
+    import_map: &ImportMap,
+    base: &str,
+    name: &str,
+) -> Option<String> {
+    let effective_base = if base.is_empty() || base.starts_with("lumen://") {
+        page_url
+    } else {
+        base
+    };
+    let join = |reference: &str| {
+        lumen_core::url::Url::parse(effective_base)
+            .and_then(|b| b.resolve(reference))
+            .ok()
+            .map(|u| u.href_whatwg().to_owned())
+    };
+    let as_url = if name.starts_with('/') || name.starts_with("./") || name.starts_with("../") {
+        join(name)
+    } else {
+        lumen_core::url::Url::parse(name).ok().map(|u| u.href_whatwg().to_owned())
+    };
+    let normalized = as_url.as_deref().unwrap_or(name);
+    if let Some(mapped) = import_map.resolve(normalized, Some(base)) {
+        // Адреса import map хранятся как записаны в JSON; относительные
+        // разрешаются от базы документа (без документа — от базы модуля).
+        let map_base = if page_url.is_empty() { effective_base } else { page_url };
+        return lumen_core::url::Url::parse(map_base)
+            .and_then(|b| b.resolve(&mapped))
+            .ok()
+            .map(|u| u.href_whatwg().to_owned())
+            .or(Some(mapped));
+    }
+    as_url
+}
+
 // ── URL utilities ─────────────────────────────────────────────────────────────
 
 /// Resolve `/path` (root-relative) or `//host/path` (protocol-relative)

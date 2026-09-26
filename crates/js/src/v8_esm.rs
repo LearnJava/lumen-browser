@@ -29,7 +29,7 @@
 //! policy rather than an engine capability, and reusing the transformer keeps
 //! the two engines byte-identical on that surface.
 
-use crate::esm::{resolve_specifier_with, ImportMap};
+use crate::esm::{resolve_module_specifier, resolve_specifier_with, ImportMap};
 use crate::import_meta::transform_import_meta;
 use lumen_core::ext::JsFetchProvider;
 use std::cell::RefCell;
@@ -824,6 +824,63 @@ pub(crate) fn install_dynamic_import_hook(isolate: &mut v8::Isolate) {
     isolate.set_host_import_module_dynamically_callback(dynamic_import_callback);
 }
 
+/// Name of the hidden native behind `import.meta.resolve()` — the preamble
+/// built by [`crate::import_meta`] calls it as `(moduleUrl, specifier)`.
+pub(crate) const IMPORT_META_RESOLVE_NATIVE: &str = "_lumen_import_meta_resolve";
+
+/// Install [`IMPORT_META_RESOLVE_NATIVE`] on the context's global (BUG-1135).
+///
+/// `import.meta.resolve()` must answer exactly what `import()` would load: the
+/// same document-base fallback and import map, but WHATWG URL parsing and a
+/// `TypeError` for an unmapped bare specifier (HTML LS §8.1.5.5). Resolving in
+/// Rust keeps one resolver instead of a second one written in the preamble.
+pub(crate) fn install_import_meta_resolve(
+    isolate: &mut v8::OwnedIsolate,
+    context: &v8::Global<v8::Context>,
+) {
+    v8::scope!(let scope, isolate);
+    let ctx = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, ctx);
+    let (Some(func), Some(key)) = (
+        v8::Function::new(scope, import_meta_resolve_native),
+        v8::String::new(scope, IMPORT_META_RESOLVE_NATIVE),
+    ) else {
+        return;
+    };
+    ctx.global(scope).define_own_property(
+        scope,
+        key.into(),
+        func.into(),
+        v8::PropertyAttribute::DONT_ENUM
+            | v8::PropertyAttribute::READ_ONLY
+            | v8::PropertyAttribute::DONT_DELETE,
+    );
+}
+
+/// `_lumen_import_meta_resolve(moduleUrl, specifier)` — see
+/// [`install_import_meta_resolve`].
+fn import_meta_resolve_native(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let base = args.get(0).to_rust_string_lossy(scope);
+    let name = args.get(1).to_rust_string_lossy(scope);
+    let page_url = document_base_url(scope);
+    let resolved =
+        with_state(|s| resolve_module_specifier(&page_url, &s.import_map, &base, &name));
+    match resolved.and_then(|r| v8::String::new(scope, &r)) {
+        Some(r) => rv.set(r.into()),
+        None => {
+            let msg = format!("Failed to resolve module specifier '{name}'");
+            if let Some(m) = v8::String::new(scope, &msg) {
+                let exc = v8::Exception::type_error(scope, m);
+                scope.throw_exception(exc);
+            }
+        }
+    }
+}
+
 /// Evaluate `source` as the entry ES module of an inline `<script type=module>`.
 ///
 /// The page URL (stored by [`set_page_url`]) becomes `import.meta.url` when
@@ -1443,8 +1500,51 @@ mod tests {
             .unwrap();
         assert_eq!(
             rt.eval("globalThis.__res").unwrap(),
-            JsValue::String("https://example.com/app/./utils.js".into())
+            JsValue::String("https://example.com/app/utils.js".into())
         );
+    }
+
+    /// BUG-1135: `import.meta.resolve()` parses like `new URL(s, import.meta.url)`
+    /// — root-relative, `../`, absolute — and applies the import map.
+    #[test]
+    fn v8_import_meta_resolve_follows_url_parser_and_import_map() {
+        let rt = rt();
+        let map = ImportMap::parse(r#"{ "imports": { "react": "/vendor/react.js" } }"#).unwrap();
+        rt.set_import_map(map);
+        let specifier = "https://example.com/sub/dir/m.js";
+        rt.register_module_source(
+            specifier,
+            "const m = import.meta; export const r = [\
+             m.resolve('/abs/x.js'), m.resolve('../up.js'), m.resolve('./a/../b.js'),\
+             m.resolve('https://cdn.test/y.js'), m.resolve('react')].join(' ');",
+        );
+        rt.eval_module(&format!("import {{ r }} from '{specifier}'; globalThis.__res = r;"))
+            .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__res").unwrap(),
+            JsValue::String(
+                "https://example.com/abs/x.js https://example.com/sub/up.js \
+                 https://example.com/sub/dir/b.js https://cdn.test/y.js \
+                 https://example.com/vendor/react.js"
+                    .into()
+            )
+        );
+    }
+
+    /// BUG-1135: an unmapped bare specifier is a `TypeError`, not the name echoed back.
+    #[test]
+    fn v8_import_meta_resolve_bare_specifier_throws_type_error() {
+        let rt = rt();
+        let specifier = "https://example.com/bare.js";
+        rt.register_module_source(
+            specifier,
+            "let r; try { r = import.meta.resolve('lodash'); } \
+             catch (e) { r = e instanceof TypeError ? 'TypeError' : String(e); } \
+             export { r };",
+        );
+        rt.eval_module(&format!("import {{ r }} from '{specifier}'; globalThis.__res = r;"))
+            .unwrap();
+        assert_eq!(rt.eval("globalThis.__res").unwrap(), JsValue::String("TypeError".into()));
     }
 
     #[test]

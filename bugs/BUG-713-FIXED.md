@@ -44,7 +44,7 @@ doc-комментарию в исходнике). Живая проба (`--mcp
 Тот же класс дефекта, что уже открыт для `Report`/`ReportingObserver`
 ([BUG-629](BUG-629-FIXED.md)), `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)) и `Serial`/`SerialPort`
-([BUG-672](BUG-672-OPEN.md)) — подделываемый объект, неотличимый через
+([BUG-672](BUG-672-FIXED.md)) — подделываемый объект, неотличимый через
 `instanceof HIDManager`/`instanceof HIDDevice` от настоящего, выданного
 движком. Здесь — четвёртая независимая поверхность того же системного
 паттерна (`WEBHID_SHIM` не ставит guard на `new.target`/не блокирует
@@ -72,7 +72,7 @@ EventTarget { constructor(vendorId, productId, productName, collections) {
 ## Дальше
 
 Fix scope: заблокировать публичный `new HIDManager()`/`new HIDDevice(...)`
-(тот же guard-паттерн, что предложен для [BUG-672](BUG-672-OPEN.md); имеет
+(тот же guard-паттерн, что предложен для [BUG-672](BUG-672-FIXED.md); имеет
 смысл чинить оба файла вместе — общий источник дефекта). Не требует
 TLS-гэпа для воспроизведения/фикса — живой `--mcp-live-port`-пробы
 достаточно для верификации.
