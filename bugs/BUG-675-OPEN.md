@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Компонент:** js — `crates/js/src/dom.rs` (`_sw_container.register`, ~line 4999-5013)
-**Найден:** P2, WPT-VENDOR-service-workers (2026-08-06), live `--mcp-live-port` probe (same session as [BUG-674](BUG-674-OPEN.md); the category's own WPT run gave no signal — all `.https.` ids TIMEOUT on the documented TLS gap `UnknownIssuer`)
+**Найден:** P2, WPT-VENDOR-service-workers (2026-08-06), live `--mcp-live-port` probe (same session as [BUG-674](BUG-674-FIXED.md); the category's own WPT run gave no signal — all `.https.` ids TIMEOUT on the documented TLS gap `UnknownIssuer`)
 
 ## Механизм
 
@@ -30,8 +30,8 @@ Any WPT test or real page asserting that `register()` rejects for a cross-origin
 
 ## Что НЕ является причиной
 
-Not [BUG-674](BUG-674-OPEN.md) — that bug is about the origin *key* the registry stores state under being forgeable; this bug is about `register()` accepting a script URL it should reject regardless of which origin's table it lands in. Not the TLS gap — reproduced on a live `file://` page with no `.https.` navigation involved.
+Not [BUG-674](BUG-674-FIXED.md) — that bug is about the origin *key* the registry stores state under being forgeable; this bug is about `register()` accepting a script URL it should reject regardless of which origin's table it lands in. Not the TLS gap — reproduced on a live `file://` page with no `.https.` navigation involved.
 
 ## Предлагаемый фикс
 
-In `_sw_container.register`, before constructing the registration: reject (return a rejected `Promise`) with `TypeError` when `scriptUrl`'s scheme is not `http:`/`https:`, and with a `SecurityError`-shaped rejection when the script URL's origin differs from `_sw_origin` (once [BUG-674](BUG-674-OPEN.md)'s origin-binding fix lands, use the real bound origin for this comparison rather than the forgeable `_sw_origin` global as it exists today).
+In `_sw_container.register`, before constructing the registration: reject (return a rejected `Promise`) with `TypeError` when `scriptUrl`'s scheme is not `http:`/`https:`, and with a `SecurityError`-shaped rejection when the script URL's origin differs from `_sw_origin` (once [BUG-674](BUG-674-FIXED.md)'s origin-binding fix lands, use the real bound origin for this comparison rather than the forgeable `_sw_origin` global as it exists today).
