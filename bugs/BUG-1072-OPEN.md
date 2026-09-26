@@ -38,7 +38,7 @@ RuntimeError: lumen --bidi-port did not print [bidi] token
 
 ## Заметка среза 44 WPT-RUN-7 (2026-09-21)
 
-Тот же хвост (`IO Completion Port failed to signal process shutdown` → `did not print [bidi] token` → обрыв всего прогона) наблюдался и на `pointerevents`, но с другим триггером — падение `lumen.exe` при старте (`present=WHITE`, паника `wgpu … Invalid surface`), а не зависший тест: [BUG-1073](BUG-1073-OPEN.md). Общая часть — `TestRunnerManager` не переживает три неудачных релонча подряд.
+Тот же хвост (`IO Completion Port failed to signal process shutdown` → `did not print [bidi] token` → обрыв всего прогона) наблюдался и на `pointerevents`, но с другим триггером — падение `lumen.exe` при старте (`present=WHITE`, паника `wgpu … Invalid surface`), а не зависший тест: [BUG-1073](BUG-1073-FIXED.md). Общая часть — `TestRunnerManager` не переживает три неудачных релонча подряд.
 
 ## Заметка среза 55 WPT-RUN-7 (2026-09-22)
 

@@ -57,7 +57,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `WebDriverBrowser` subclass) + `__wptrunner__` registration. Every launch,
   relaunches included, takes a fresh `<port>`: a killed `lumen.exe` can hold
   its port for seconds, and reusing it killed the whole `TestRunnerManager`
-  with `did not print [bidi] token` ([BUG-1073](../../bugs/BUG-1073-OPEN.md) срез 6).
+  with `did not print [bidi] token` ([BUG-1073](../../bugs/BUG-1073-FIXED.md) срез 6).
 - `tools/wptrunner/wptrunner/executors/executorlumen.py` — **ours** —
   `LumenBidiProtocol` (BiDi-only session negotiation via
   `webdriver.bidi.client.BidiSession.bidi_only`, no classic HTTP session) and

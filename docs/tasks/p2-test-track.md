@@ -1663,7 +1663,7 @@ FAIL-секции (1226 строк `expected: FAIL`). Починка BUG-1069 с
 у двух из четырёх одновременно стартовавших `lumen.exe`, затем `panicked … wgpu error: Validation Error — In Surface::configure — Invalid surface`
 (`wgpu_core.rs:3526`), `ConnectionRefusedError [WinError 1225]`, `IO Completion Port failed to signal process shutdown`, три релонча подряд
 `did not print [bidi] token`, `TestRunnerManager` падает. Пятый прогон — чистый (`23/258`, `301/489`, 0 регрессий, `present=WHITE` в логе нет).
-Заведён [BUG-1073](../../bugs/BUG-1073-OPEN.md). Причина не установлена: одиночный и тройной ручной запуск `lumen.exe --bidi-port` сбой не воспроизвёл;
+Заведён [BUG-1073](../../bugs/BUG-1073-FIXED.md). Причина не установлена: одиночный и тройной ручной запуск `lumen.exe --bidi-port` сбой не воспроизвёл;
 версия «нагрузка от чужой сборки» проверена и не объясняет (четвёртый обрыв — при 0 `rustc` в системе). Гипотеза о состоянии рабочего стола не проверена.
 Итог: три чистых `--check` (№1, №2, пятый прогон); четыре оборванных в счёт не идут — они не дошли до результата, а не дали иной.
 
