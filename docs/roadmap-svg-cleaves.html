@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-26",
+ "generated": "2026-09-27",
  "counts": {
   "open": 216,
-  "fixed": 921,
+  "fixed": 924,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1137,
+ "total_bugs": 1140,
  "phases": [
   {
    "id": "P0",
@@ -6984,10 +6984,10 @@
       },
       {
        "id": "GAP-ORIGIN",
-       "title": "GAP: `Origin` WebIDL-глобал (tuple/opaque происхождение, cross-origin проверки, PSL same-site) отсутствует целиком",
-       "status": "planned",
+       "title": "GAP: `Origin` WebIDL-глобал (tuple/opaque происхождение, cross-origin проверки, PSL same-site)",
+       "status": "done",
        "size": "M",
-       "note": "`Origin` WebIDL-глобал (`Origin.from()`, `new Origin()`, `.opaque`, `.isSameOrigin()`, `.isSameSite()`, HTML LS §origin-2) не реализован вовсе — `grep` по `crates/js/src/dom.rs` и шим-файлам на `Origin` вне комментариев даёт ноль. Не одна недостающая привязка, шесть переплетённых пробелов: (1) самого понятия opaque-происхождения в JS-слое нет — `_lumen_parse_url` (`crates/js/src/shim/url_parse_shim.js:43`), источник `URL.prototype.origin`/`Location.prototype.origin`, всегда даёт непустую строку `protocol + '//' + host`, даже для `file:`/`data:`/`blob:`; верное opaque/tuple различение есть только на Rust-стороне (`origin_for_url`, `crates/js/src/file_input.rs:82-100`) и в JS не проброшено; (2) `.isSameSite()` требует PSL-aware registrable domain — `lumen_core::ext::PublicSuffixList`/`PslProvider` (`crates/storage/src/psl.rs`) недостижимы из `crates/js` без циклической зависимости (`crates/storage` уже зависит от `lumen-js`), нужен новый нативный биндинг тем же DI-паттерном, что `AudioPlaybackProvider` (`crates/js/src/audio_element.rs:44-84` + `crates/shell/src/window_mode.rs:62`); (3) `Origin.from(Window)`/`Origin.from(MessageEvent)` обязаны бросать `TypeError` на cross-origin/sandboxed фреймах и окнах (`origin-from-window.window.js`, `origin-from-messageevent.window.js`) — упирается в модель same-origin-domain/sandboxing, которой для этого API ещё нет; (4) конструированные `MessageEvent`/`ExtendableMessageEvent` обязаны давать `Origin.from()` бросить (`origin-from-messageevent.window.js:4-7`, `origin-from-extendablemessageevent.any.js:15-18`) — нужен внутренний слот «настоящего» origin отдельно от видимого `.origin`; (5) `Origin` обязан работать и в Worker-скоупе (`origin-from-worker.window.js`) — установка в оба шима (`web_api_shim()`/`worker_exposed_shim()`, `crates/js/src/dom.rs:496-519`); (6) `Origin.from(HyperlinkElementUtils)` цепляет уже отдельно заявленный пробел `SVGAnimatedString.baseVal` на `<a href>`/`xlink:href`. 181 сабтест, самодостаточно `html/browsers/origin/api/`. Найден P2, WPT-VENDOR-html-browsers, 2026-08-04; реклассифицировано из BUG-585 2026-09-15 (P3) по тому же правилу, что BUG-553/554/562/568/583/584 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект).",
+       "note": "ЗАКРЫТ 2026-09-27 (P1, ветка `p1-gap-origin`): интерфейс `Origin` (`[Exposed=*]`, страница и все воркеры) — `new Origin()`, `Origin.from()` над строкой/`URL`/`Origin`/глобалом/`<a>`/`<area>`/SVG `<a>` (`SVGAnimatedString href`)/фасадом `contentWindow`/доставленным `MessageEvent`, `opaque`, `isSameOrigin()`, `isSameSite()` по Public Suffix List (DI `set_public_suffix_list`, шелл ставит `PslProvider`); tuple/opaque — `Url::tuple_origin` по URL Standard §6.1. Попутно `new URL(rel)` без base бросает `TypeError` (WPT url 7476 → 7557). WPT `html/browsers/origin/api` 0/307 → 296/325. Остаток — BUG-1196 (blob-URL без происхождения), BUG-1197 (песочница → непрозрачное происхождение сообщений), BUG-1198 (`window.open` в WPT → TIMEOUT); 25 сабтестов MathML `<a>` пишут expando `href`.",
        "bugs": [
         "BUG-585"
        ]
@@ -7507,20 +7507,6 @@
    "status": "open",
    "title": "`<permission>` element (Permission Element API, single-vendor origin trial) not implemented at all -- falls through to generic unknown-tag/`HTMLUnknownElement`…",
    "component": "dom/js (no `\"permission\"` tag handling anywhere in `crates/dom`, `crates/html-parser`, `crates/js/src/dom.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-585": {
-   "status": "open",
-   "title": "`Origin` WebIDL global (`Origin.from()`, tuple/opaque origin) not implemented at all. 181 subtests, all `html/browsers/origin/api/` (self-contained category). K…",
-   "component": "js (`crates/js/src/dom.rs` -- no `Origin` global constructor anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-677": {
-   "status": "open",
-   "title": "`FaceDetector`/`BarcodeDetector`/`TextDetector` all deviate from their WebIDL interface shape the same way: constructor `.length` is 1 instead of the spec's 0 (…",
-   "component": "js (`crates/js/src/shape_detection.rs:18-86` — `SHAPE_DETECTION_SHIM`)",
    "date": null,
    "debtor": false
   },
@@ -8420,13 +8406,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1142": {
-   "status": "open",
-   "title": "`typeof navigator.javaEnabled === 'undefined'` (Chrome: функция, всегда `false`). apple: Adobe Analytics `t.Wb → track → submit` → `navigator.javaEnabled is not…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — объект `navigator`, члена нет; `grep javaEnabled crates/js/src` — 0)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1143": {
    "status": "open",
    "title": "Каждое из шести имён и `BarProp` → `ReferenceError` (Chrome: объекты с `visible === true`, `typeof BarProp === 'function'`). weibo: бандл `index-*.js` обращаетс…",
@@ -8760,6 +8739,27 @@
    "status": "open",
    "title": "Web Animations смешивает числа разных единиц без приведения (`1s → 2000ms` на 0.5 → `1000.5s`) и зажимает прогресс сегмента в [0,1], так что `cubic-bezier` с вы…",
    "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_lerp_scalar`, `_wa_compute_at_p`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1196": {
+   "status": "open",
+   "title": "`URL.createObjectURL` отдаёт `blob:lumen/N` без происхождения вместо `blob:<origin>/<uuid>` (File API §8.3): blob-воркер получает непрозрачное происхождение (`O…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_c2.js:4` — `URL.createObjectURL`; `crates/js/src/worker.rs` — префикс `blob:lumen/`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1197": {
+   "status": "open",
+   "title": "Сообщение из `<iframe sandbox>` без `allow-same-origin` приходит с tuple-origin по URL, а не с непрозрачным происхождением документа; нет идентичности непрозрач…",
+   "component": "js (`crates/js/src/frame_bridge.rs:507` — `binding_origin`; `web_api_shim_mid_b4.js` — `_lumen_deliver_frame_message`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1198": {
+   "status": "open",
+   "title": "WPT-страница, вызвавшая `window.open()`, не отдаёт результаты харнесса — TIMEOUT всего файла без сабтестов (`origin-from-window`, `origin-from-messageevent`); г…",
+   "component": "shell / wptrunner (`executorlumen.py` — ожидание `testharnessreport.js`), `window.open`",
    "date": null,
    "debtor": false
   },
@@ -15196,11 +15196,32 @@
    "date": "2026-09-26",
    "debtor": false
   },
+  "BUG-1142": {
+   "status": "fixed",
+   "title": "`typeof navigator.javaEnabled === 'undefined'` (Chrome: функция, всегда `false`). apple: Adobe Analytics `t.Wb → track → submit` → `navigator.javaEnabled is not…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` — операция `javaEnabled()` → `false` в литерале `navigator`, `finalize_navigator_interface_v8` переносит её на `Navigator.prototype`; было: члена нет)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
   "BUG-675": {
    "status": "fixed",
    "title": "`navigator.serviceWorker.register()` performs zero validation of its script-URL argument — a cross-origin script URL (`https://evil.example/sw.js`) and a `javas…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_sw_check_register_urls`, вызов из `_sw_container.register`)",
    "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-677": {
+   "status": "fixed",
+   "title": "`FaceDetector`/`BarcodeDetector`/`TextDetector` расходились с WebIDL-формой: `.length` 1 вместо 0, нет `Symbol.toStringTag` (`[object Object]`), `options`/`maxD…",
+   "component": "js (`crates/js/src/shape_detection.rs` — `SHAPE_DETECTION_SHIM`: `constructor(options = {})` без записи в `this`, `Symbol.toStringTag` на трёх прототипах)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-585": {
+   "status": "fixed",
+   "title": "Интерфейс `Origin` отсутствовал целиком. Теперь `new Origin()`, `Origin.from()` (строка, `URL`, `Origin`, глобал окна/воркера, `<a>`/`<area>`/SVG `<a>`, фасад `…",
+   "component": "js (`crates/js/src/shim/origin_shim.js`, `crates/js/src/origin.rs` — натив `_lumen_url_origin` + DI Public Suffix List), core (`Url::tuple_origin`)",
+   "date": "2026-09-27",
    "debtor": false
   }
  },
@@ -15686,6 +15707,9 @@
   "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
    "BUG-698"
   ],
+  "js (`crates/js/src/frame_bridge.rs:507` — `binding_origin`; `web_api_shim_mid_b4.js` — `_lumen_deliver_frame_message`)": [
+   "BUG-1197"
+  ],
   "js (`crates/js/src/frame_bridge.rs::frameElem`)": [
    "BUG-1147"
   ],
@@ -15869,9 +15893,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — объект `document`, `_lumen_build_detached_document`)": [
    "BUG-1017"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` — объект `navigator`, члена нет; `grep javaEnabled crates/js/src` — 0)": [
-   "BUG-1142"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)": [
    "BUG-929"
   ],
@@ -15908,6 +15929,9 @@
   "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `navigator`; `navigator_bindings.rs` — `finalize_navigator_interface_v8`)": [
    "BUG-624"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid_b.js` — операция `javaEnabled()` → `false` в литерале `navigator`, `finalize_navigator_interface_v8` переносит её на `Navigator.prototype`; было: члена нет)": [
+   "BUG-1142"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid_b.js` — у `window` нет члена `stop`) + shell (отмена навигации)": [
    "BUG-1186"
   ],
@@ -15934,6 +15958,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_c.js` `function atob` — требовал длину кратную 4 и пускал `=` в любой позиции; воркерный `crates/js/src/worker.rs::b64_decode` пропускал `=` везде и не проверял длину, `atob_native_v8` читал байты как UTF-8)": [
    "BUG-1133"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid_c2.js:4` — `URL.createObjectURL`; `crates/js/src/worker.rs` — префикс `blob:lumen/`)": [
+   "BUG-1196"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js:103-112` — `window.getComputedStyle`)": [
    "BUG-539"
@@ -16932,6 +16959,9 @@
   ],
   "shell (навигация)": [
    "BUG-308"
+  ],
+  "shell / wptrunner (`executorlumen.py` — ожидание `testharnessreport.js`), `window.open`": [
+   "BUG-1198"
   ],
   "shell+font": [
    "BUG-170"

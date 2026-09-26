@@ -23,6 +23,17 @@ the time — read dates.
 
 ## Done
 
+- **`Origin` (GAP-ORIGIN, P1, 2026-09-27).** `shim/origin_shim.js`, spliced after `URL_SHIM`
+  into the page shim and `worker_exposed_shim()`. Tuple vs opaque comes from the native
+  `_lumen_url_origin` (`origin.rs` → `lumen_core::url::Url::tuple_origin`, URL Standard §6.1),
+  registered next to `_lumen_url_parse` in both scopes; the `site` for `isSameSite()` uses the
+  process-global PSL (`set_public_suffix_list`, installed by the shell's `window_mode.rs` —
+  without it a domain is its own site). Objects whose origin the shim cannot see register an
+  extractor via `_lumen_origin_register_source(obj, fn)`: the `contentWindow` facade
+  (`frame_bridge.rs`, `null` when not `accessible`) and delivered `MessageEvent`s
+  (`window.postMessage`, `_lumen_deliver_frame_message`). A constructed `MessageEvent` has none,
+  hence `Origin.from()` throws for it. Opaque identity is a JS counter: `Origin.from(url)` mints a
+  fresh one per call, the global's own origin is minted once per realm.
 - **Interest Invokers live in the page shim (GAP-INTERESTINVOKER, P1, 2026-09-26).**
   `_lumen_install_interest_for` (`web_api_shim_tail_b.js`) installs `interestForElement` on the
   four mixin interfaces (`svg.rs` calls it for `SVGAElement`). One state record per invoker in
