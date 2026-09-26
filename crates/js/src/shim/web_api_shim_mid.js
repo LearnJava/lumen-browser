@@ -3706,6 +3706,17 @@ Document.prototype.constructor = Document;
 function XMLDocument() { throw new TypeError('Illegal constructor'); }
 XMLDocument.prototype = Object.create(Document.prototype);
 XMLDocument.prototype.constructor = XMLDocument;
+// The page's own `document` is an `HTMLDocument : Document` (BUG-1138), as in
+// every engine: libraries type-sniff it through
+// `toString.call(document)` (yahoo.co.jp `ual`: `/^(HTML)?Document$/`), which
+// needs a per-interface `Symbol.toStringTag`. Not constructible from script.
+function HTMLDocument() { throw new TypeError('Illegal constructor'); }
+HTMLDocument.prototype = Object.create(Document.prototype);
+HTMLDocument.prototype.constructor = HTMLDocument;
+_lumen_idl_tag(Document, 'Document');
+_lumen_idl_tag(XMLDocument, 'XMLDocument');
+_lumen_idl_tag(HTMLDocument, 'HTMLDocument');
+Object.defineProperty(globalThis, 'HTMLDocument', { enumerable: false });
 function DocumentType() { throw new TypeError('Illegal constructor'); }
 DocumentType.prototype = Object.create(Node.prototype);
 DocumentType.prototype.constructor = DocumentType;
@@ -12250,8 +12261,9 @@ for (var _dohi = 0; _dohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _dohi++) {
 // `Document.prototype` carries only `constructor`, and the four members it
 // inherits from `Node.prototype` (`hasChildNodes`, `contains`,
 // `compareDocumentPosition`, `baseURI`) all exist as own properties above,
-// which shadow it.
-Object.setPrototypeOf(document, Document.prototype);
+// which shadow it. BUG-1138: the page document is an `HTMLDocument`, one link
+// below `Document.prototype`, so `instanceof Document` still holds.
+Object.setPrototypeOf(document, HTMLDocument.prototype);
 
 // BUG-587: `document` is a `[LegacyUnforgeable] readonly` own property of the
 // global object (HTML LS, `Window.document`) — the ECMAScript

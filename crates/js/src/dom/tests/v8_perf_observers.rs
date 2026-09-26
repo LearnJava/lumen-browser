@@ -249,6 +249,35 @@ fn performance_paint_timing_interface_backs_paint_entries() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-673: resource/navigation entries are instances of
+// PerformanceResourceTiming / PerformanceNavigationTiming (the latter
+// inheriting from the former); neither interface is constructible, and the
+// `[Default] toJSON` serialises the entry's fields without carrying itself.
+#[test]
+fn performance_resource_and_navigation_timing_interfaces_back_entries() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                var threw = 0;
+                try { new PerformanceResourceTiming(); } catch (e) { if (e instanceof TypeError) threw++; }
+                try { new PerformanceNavigationTiming(); } catch (e) { if (e instanceof TypeError) threw++; }
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 5);
+                _lumen_deliver_perf_entry('navigation', 'https://example.com/', 0.0, 300.0,
+                    '{"type":"navigate","domComplete":250}');
+                var r = performance.getEntriesByType('resource')[0];
+                var n = performance.getEntriesByType('navigation')[0];
+                var rj = r.toJSON(), nj = JSON.parse(JSON.stringify(n));
+                typeof window.PerformanceResourceTiming === 'function'
+                    && typeof window.PerformanceNavigationTiming === 'function' && threw === 2
+                    && r instanceof PerformanceResourceTiming && !(r instanceof PerformanceNavigationTiming)
+                    && n instanceof PerformanceNavigationTiming && n instanceof PerformanceResourceTiming
+                    && Object.getPrototypeOf(PerformanceNavigationTiming.prototype) === PerformanceResourceTiming.prototype
+                    && rj.name === 'https://example.com/a.js' && rj.initiatorType === 'script'
+                    && rj.responseEnd === 15 && !('toJSON' in rj)
+                    && nj.type === 'navigate' && nj.domComplete === 250 && nj.duration === 300
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn performance_observer_buffered_delivers_existing() {
     let rt = v8_runtime_with_dom(make_doc());

@@ -389,7 +389,15 @@ mod v8_bug1131_io_entry;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug671_selection_interface;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug1137_history_interface;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1138_html_document;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1139_message_target;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug863_cdata_section;

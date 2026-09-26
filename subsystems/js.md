@@ -2284,7 +2284,10 @@ the time — read dates.
   the two when the walk reaches the root, and a path built by hand that forgets this finds an empty
   registry. **`window` keeps its own per-type buckets** (`_other_win_listeners` & friends in
   `web_api_shim_mid_b.js`), which is why the window hop delegates to `window.dispatchEvent` instead of
-  reading `_lumen_listeners` — `load` and the 5-argument `onerror` convention live only there. And
+  reading `_lumen_listeners` — `load` and the 5-argument `onerror` convention live only there. Called
+  with an event not in flight (`eventPhase === 0`), `window.dispatchEvent` is a dispatch of its own and
+  sets `target`/`currentTarget`/`eventPhase` itself; as the window hop it leaves them to the walk
+  ([BUG-1139](../bugs/BUG-1139-FIXED.md)) — engine delivery to `window` (`message`, …) goes through it. And
   **capture listeners are a second table** (`_lumen_capture_listeners`, `_win_capture_listeners`) with the
   same `nid:type` key shape: a new reader of `_lumen_listeners` sees only half the registrations, and
   `_lumen_gc_collect` has to purge both. The one deliberate hold-out is `_lumen_dispatch_focus_event`
