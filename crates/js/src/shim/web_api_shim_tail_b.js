@@ -4886,13 +4886,16 @@ function _wa_compute_at_p(effect, p) {
 // Compute the iteration progress [0,1] from animation timing and currentTime.
 function _wa_iter_progress(timing, ct) {
     var dur = +timing.duration || 0;
-    if (dur <= 0) return 1;
     var delay = +(timing.delay || 0);
     var elapsed = ct - delay;
     var fill = timing.fill || 'auto';
     if (elapsed < 0) {
         return (fill === 'backwards' || fill === 'both') ? 0 : -1;
     }
+    // A zero-length active interval is over as soon as the delay is: the
+    // animation must reach `finished` (and resolve `finished`) like any other,
+    // not stay `running` at progress 1 forever (found with BUG-670).
+    if (dur <= 0) return (fill === 'forwards' || fill === 'both') ? 1 : -2;
     var maxIter = (timing.iterations === Infinity || timing.iterations == null) ? Infinity : +(timing.iterations) || 1;
     var totalDur = maxIter === Infinity ? Infinity : dur * maxIter;
     if (totalDur !== Infinity && elapsed >= totalDur) {
@@ -4933,6 +4936,83 @@ KeyframeEffect.prototype.updateTiming = function(t) { Object.assign(this._timing
 KeyframeEffect.prototype.getKeyframes = function() { return this._keyframes.slice(); };
 KeyframeEffect.prototype.setKeyframes = function(kf) { this._keyframes = _wa_normalize_keyframes(kf); };
 
+// Web Animations §5.4.1 `getComputedTiming()` — the *computed* timing, as
+// opposed to `getTiming()`'s *specified* one (BUG-670): `duration: 'auto'`
+// and `fill: 'auto'` resolved, plus the derived `activeDuration`/`endTime`
+// and the time-dependent `localTime`/`progress`/`currentIteration`, which
+// follow §4.6–4.10 against the owning animation's current time. An effect
+// no animation owns has no local time, so those three are null.
+//
+// `duration` resolves `'auto'` to 0 — the §4.5 intrinsic iteration duration
+// of a monotonic timeline; a scroll-driven timeline's intrinsic duration is
+// not modelled by this shim.
+Object.defineProperty(KeyframeEffect.prototype, 'getComputedTiming', {
+    value: function() {
+        var t = this._timing;
+        var duration = +t.duration;
+        if (isNaN(duration)) duration = 0;
+        var iterations = (t.iterations == null) ? 1 : +t.iterations;
+        var delay = +t.delay || 0, endDelay = +t.endDelay || 0;
+        var iterationStart = +t.iterationStart || 0;
+        var fill = (t.fill === 'auto' || !t.fill) ? 'none' : t.fill;
+        var activeDuration = (duration === 0 || iterations === 0) ? 0 : duration * iterations;
+        var endTime = Math.max(delay + activeDuration + endDelay, 0);
+        var anim = this._animation;
+        var localTime = (anim && anim.effect === this) ? anim.currentTime : null;
+        var out = {
+            delay: delay, endDelay: endDelay, fill: fill,
+            iterationStart: iterationStart, iterations: iterations,
+            duration: duration, direction: t.direction || 'normal',
+            easing: t.easing || 'linear',
+            activeDuration: activeDuration, endTime: endTime,
+            localTime: localTime, progress: null, currentIteration: null,
+        };
+        if (localTime === null) return out;
+        // §4.6.2 phases. The animation direction is backwards only for a
+        // negative playback rate.
+        var backwards = anim.playbackRate < 0;
+        var beforeActive = Math.max(Math.min(delay, endTime), 0);
+        var activeAfter = Math.max(Math.min(delay + activeDuration, endTime), 0);
+        var phase = 'active';
+        if (localTime < beforeActive || (backwards && localTime === beforeActive)) phase = 'before';
+        else if (localTime > activeAfter || (!backwards && localTime === activeAfter)) phase = 'after';
+        // §4.8.3 active time.
+        var activeTime = null;
+        if (phase === 'before') {
+            if (fill === 'backwards' || fill === 'both') activeTime = Math.max(localTime - delay, 0);
+        } else if (phase === 'active') {
+            activeTime = localTime - delay;
+        } else if (fill === 'forwards' || fill === 'both') {
+            activeTime = Math.max(Math.min(localTime - delay, activeDuration), 0);
+        }
+        if (activeTime === null) return out;
+        // §4.9.1 overall progress, §4.9.2 simple iteration progress.
+        var overall;
+        if (duration === 0) overall = (phase === 'before') ? iterationStart : iterationStart + iterations;
+        else overall = activeTime / duration + iterationStart;
+        var simple = (overall === Infinity) ? iterationStart % 1 : overall % 1;
+        if (simple === 0 && (phase === 'active' || phase === 'after') &&
+                activeTime === activeDuration && iterations !== 0) {
+            simple = 1;
+        }
+        // §4.9.4 current iteration.
+        var current;
+        if (phase === 'after' && iterations === Infinity) current = Infinity;
+        else if (simple === 1) current = Math.floor(overall) - 1;
+        else current = Math.floor(overall);
+        // §4.10.1 directed progress, then the effect's timing function.
+        var dir = out.direction;
+        var forwards = dir === 'normal' ||
+            ((dir === 'alternate' || dir === 'alternate-reverse') &&
+             (current === Infinity || (current % 2 === 0) === (dir === 'alternate')));
+        var directed = forwards ? simple : 1 - simple;
+        out.currentIteration = current;
+        out.progress = _wa_ease(directed, out.easing);
+        return out;
+    },
+    writable: true, configurable: true,
+});
+
 // Animation constructor (Web Animations §3.4).
 // `Animation : EventTarget` (§5.3) — the three playback events (finish, cancel,
 // remove) must reach `addEventListener` and not only the `on<type>` property,
@@ -4944,6 +5024,12 @@ function Animation(effect, timeline) {
     this._wid         = _wa_anim_seq++;
     this.id           = '';
     this.effect       = effect   || null;
+    // Back-reference for `getComputedTiming()`, which needs the owning
+    // animation's current time as the effect's local time (§4.6.1).
+    if (effect && typeof effect === 'object') {
+        Object.defineProperty(effect, '_animation',
+            { value: this, writable: true, configurable: true });
+    }
     this.timeline     = timeline || _wa_doc_timeline;
     this._startTime   = null;
     this._holdTime    = null;

@@ -10,7 +10,7 @@
 и прогнана целиком (`run_report.py --all --root web-animations --recursive`,
 ~4 мин, 139 отобранных id): 121/139 harness OK, 930/4147 сабтестов. Крупнейший
 одиночный драйвер провалов — уже отдельно задокументированный
-[BUG-670](BUG-670-OPEN.md) (`getComputedTiming` отсутствует, ~556 вхождений
+[BUG-670](BUG-670-FIXED.md) (`getComputedTiming` отсутствует, ~556 вхождений
 текста ошибки по трём вариантам вызывающего кода: `effect.`/`anim.effect.`/
 `animation.effect.getComputedTiming is not a function`).
 
