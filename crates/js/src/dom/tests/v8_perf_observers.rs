@@ -1061,6 +1061,37 @@ fn has_attributes_reflects_attribute_presence() {
 }
 
 #[test]
+fn get_attribute_names_lists_attributes_in_order() {
+    // BUG-1136: Element.prototype.getAttributeNames() (DOM §4.9) was missing,
+    // so samsung.com threw `getAttributeNames is not a function`.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var _el = document.createElement('div');\
+         _el.setAttribute('id', 'd'); _el.setAttribute('class', 'a');\
+         _el.setAttribute('data-x', '1'); _el.setAttribute('aria-label', 'z');",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("'getAttributeNames' in Element.prototype && Array.isArray(_el.getAttributeNames())")
+            .unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    assert_eq!(
+        rt.eval("_el.getAttributeNames().join(',')").unwrap(),
+        lumen_core::JsValue::String("id,class,data-x,aria-label".into())
+    );
+    assert_eq!(
+        rt.eval("_el.getAttributeNames() !== _el.getAttributeNames()").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    rt.eval("_el.removeAttribute('class');").unwrap();
+    assert_eq!(
+        rt.eval("_el.getAttributeNames().join(',')").unwrap(),
+        lumen_core::JsValue::String("id,data-x,aria-label".into())
+    );
+}
+
+#[test]
 fn mutation_observer_fires_on_child_list_change() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(r#"
