@@ -6,6 +6,63 @@
 
 use super::*;
 
+thread_local! {
+    /// CSS Backgrounds L3 §3.6 — the viewport rect (scroll 0, page space) that
+    /// `background-attachment: fixed` layers of the display list being built
+    /// are positioned against. `None` outside a build.
+    static FIXED_BG_VIEWPORT: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `build` — one or more display-list builds of a document laid out
+/// against `viewport` — with that viewport installed as the positioning area of
+/// its `background-attachment: fixed` layers (CSS Backgrounds L3 §3.6).
+///
+/// The layout tree does not carry the viewport: the root box is
+/// `max(viewport, document)` tall, so without this scope a fixed background of
+/// a page taller than the window would be positioned against the whole
+/// document. Builders called outside it fall back to the root box's rect —
+/// exact for a document no taller than its viewport.
+pub fn with_fixed_background_viewport<R>(viewport: Size, build: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Rect>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FIXED_BG_VIEWPORT.with(|c| c.set(self.0));
+        }
+    }
+    let rect = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    let _restore = Restore(FIXED_BG_VIEWPORT.with(|c| c.replace(Some(rect))));
+    build()
+}
+
+/// Installs the fixed-background viewport for one display-list build: keeps
+/// the one an enclosing [`with_fixed_background_viewport`] set, otherwise
+/// falls back to `root`'s rect. Restores the previous value on drop.
+pub(crate) struct FixedBgViewportGuard(Option<Rect>);
+
+impl FixedBgViewportGuard {
+    pub(crate) fn install(root: &LayoutBox) -> Self {
+        let prev = FIXED_BG_VIEWPORT.with(std::cell::Cell::get);
+        if prev.is_none() {
+            FIXED_BG_VIEWPORT.with(|c| c.set(Some(root.rect)));
+        }
+        Self(prev)
+    }
+}
+
+impl Drop for FixedBgViewportGuard {
+    fn drop(&mut self) {
+        FIXED_BG_VIEWPORT.with(|c| c.set(self.0));
+    }
+}
+
+/// Positioning area of a `background-attachment: fixed` layer — the viewport,
+/// when a build installed one and it is non-degenerate.
+fn fixed_bg_viewport() -> Option<Rect> {
+    FIXED_BG_VIEWPORT
+        .with(std::cell::Cell::get)
+        .filter(|r| r.width > 0.0 && r.height > 0.0)
+}
+
 /// CSS Backgrounds L3 §3.3–3.5 — прямоугольники-плитки для градиентного слоя с
 /// явным `background-size`.
 ///
@@ -108,17 +165,36 @@ pub(crate) fn gradient_tile_rects(
 /// по `clip`, т.к. плитка может выходить за painting area). Auto/Cover/Contain
 /// (у градиента нет внутреннего размера/ratio) → одна команда на всю painting
 /// area (`clip`) — историческое поведение, клип не нужен.
-fn gradient_paint_rects(layer: &BackgroundLayer, origin: Rect, clip: Rect) -> (Vec<Rect>, bool) {
+///
+/// `fixed` — `background-attachment: fixed`: `origin` is the viewport and the
+/// renderer moves the gradient with the scroll offset, so tiles are generated
+/// over the whole viewport (not just the ones meeting `clip` at scroll 0) and
+/// an auto-sized gradient spans the viewport rather than the painting area —
+/// both then need the clip.
+fn gradient_paint_rects(
+    layer: &BackgroundLayer,
+    origin: Rect,
+    clip: Rect,
+    fixed: bool,
+) -> (Vec<Rect>, bool) {
+    let tile_bounds = if fixed { origin } else { clip };
     match layer.size {
         BackgroundSize::Length(w, h) => {
             // Gradients have no intrinsic size/ratio: an `auto` axis falls back
             // to the positioning-area extent; percent resolves against it.
             let tile_w = w.resolve(origin.width).unwrap_or(origin.width).max(1.0);
             let tile_h = h.resolve(origin.height).unwrap_or(origin.height).max(1.0);
-            let tiles =
-                gradient_tile_rects(tile_w, tile_h, layer.position, layer.repeat, origin, clip);
+            let tiles = gradient_tile_rects(
+                tile_w,
+                tile_h,
+                layer.position,
+                layer.repeat,
+                origin,
+                tile_bounds,
+            );
             (tiles, true)
         }
+        _ if fixed => (vec![origin], true),
         _ => (vec![clip], false),
     }
 }
@@ -154,10 +230,28 @@ fn emit_background_layer(
     }
     // CSS Backgrounds L3 §3.5: positioning area (background-origin) is independent of
     // the painting/clip area (background-clip). size/position calculations use origin_rect.
-    let origin = background_origin_rect(b, layer.origin);
+    //
+    // CSS Backgrounds L3 §3.6 — `background-attachment: fixed`: the positioning
+    // area is the viewport (initial containing block) instead of
+    // `background-origin`'s box, and the picture must not move when the page
+    // scrolls. The list is scroll-independent, so the layer's draw commands are
+    // bracketed by `BeginFixedBackground`/`EndFixedBackground` and the renderer
+    // cancels the page scroll for their positioning geometry (not for the
+    // painting-area clip). `local` still paints like `scroll`: the element's
+    // own scrolled content isn't threaded into the background yet.
+    let fixed_vp = if layer.attachment == BackgroundAttachment::Fixed {
+        fixed_bg_viewport()
+    } else {
+        None
+    };
+    let fixed = fixed_vp.is_some();
+    let origin = fixed_vp.unwrap_or_else(|| background_origin_rect(b, layer.origin));
     let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
         out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode), bounds: clip });
+    }
+    if fixed {
+        out.push(DisplayCommand::BeginFixedBackground);
     }
     match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
@@ -183,7 +277,7 @@ fn emit_background_layer(
             }
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, corner, stops, repeating }) => {
-            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip, fixed);
             // BUG-631: a rounded box needs its gradient clipped to the rounded
             // painting area even when `needs_clip` is false (single full-`clip`
             // rect, otherwise unclipped) — square corners must not leak through.
@@ -217,7 +311,7 @@ fn emit_background_layer(
         BackgroundImage::Gradient(ParsedGradient::Radial {
             center_x_pct, center_y_pct, shape, size, stops, repeating,
         }) => {
-            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip, fixed);
             let has_radii = !radii.all_zero();
             if (needs_clip || has_radii) && !rects.is_empty() {
                 if has_radii {
@@ -253,7 +347,7 @@ fn emit_background_layer(
         BackgroundImage::Gradient(ParsedGradient::Conic {
             center_x_pct, center_y_pct, from_angle_deg, stops, repeating
         }) => {
-            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip, fixed);
             let has_radii = !radii.all_zero();
             if (needs_clip || has_radii) && !rects.is_empty() {
                 if has_radii {
@@ -320,6 +414,9 @@ fn emit_background_layer(
             });
         }
         _ => {}
+    }
+    if fixed {
+        out.push(DisplayCommand::EndFixedBackground);
     }
     if use_blend {
         out.push(DisplayCommand::PopBlendMode);

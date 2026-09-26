@@ -1661,6 +1661,9 @@ impl Lumen {
         #[cfg(feature = "v8")]
         {
             let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
+            // Вьюпорт — до мутабельного заимствования `layout_box` ниже: им
+            // позиционируются `background-attachment: fixed` слои (§3.6).
+            let fixed_bg_vp = self.relayout_viewport();
             if !scroll_reqs.is_empty()
                 && let Some(lb) = self.layout_box.as_mut()
             {
@@ -1674,7 +1677,10 @@ impl Lumen {
                 }
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
-                    let mut new_dl = paint_ordered(lb);
+                    let mut new_dl = match fixed_bg_vp {
+                        Some(vp) => crate::display_list_metrics::paint_ordered_in(lb, vp),
+                        None => paint_ordered(lb),
+                    };
                     // BUG-480 срез 14: paint_ordered пересобирает список из
                     // layout и о фреймах не знает — без вклейки содержимое
                     // фрейма исчезло бы на первом же скролле контейнера.

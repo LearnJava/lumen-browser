@@ -477,7 +477,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `background-color` | ✅ | |
 | `background-image` | ✅ | url() ✅; linear/radial/repeating gradient GPU ✅; conic-gradient ✅; multiple layers ✅ (WQ#18) |
 | `background-repeat` / `background-position` / `background-size` | ✅ | `repeat`/`no-repeat`/`repeat-x`/`repeat-y` ✅; `round` ✅ (§3.4 tile rescale to whole count, `bg_tile_geometry` 2026-07-12); `space` ✅ (§3.4 whole tiles pinned to both edges, leftover distributed as equal gaps via `space_axis_geometry`; all tiling paths — femtovg/CPU/wgpu bg+mask; 2026-07-18, test 147) |
-| `background-attachment` | 🟡 | parsed; scroll/fixed ⬜ |
+| `background-attachment` | ✅ | `scroll` ✅; `fixed` ✅ — positioning area = viewport (`with_fixed_background_viewport`), `BeginFixedBackground` bracket pinned against page scroll in wgpu/femtovg (2026-09-26, test 158); `local` = `scroll` (no own-content scrolling of backgrounds) |
 | `background-origin` / `background-clip` | 🟡 | parsed; text clip ⬜ |
 | `image-rendering` | ✅ | bilinear/nearest sampler |
 | `object-fit` / `object-position` | ✅ | |

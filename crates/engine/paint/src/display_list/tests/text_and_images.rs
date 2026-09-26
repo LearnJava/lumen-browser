@@ -1732,6 +1732,8 @@
                 DisplayCommand::EndStickyLayer => "EndStickyLayer",
                 DisplayCommand::BeginFixedLayer => "BeginFixedLayer",
                 DisplayCommand::EndFixedLayer => "EndFixedLayer",
+                DisplayCommand::BeginFixedBackground => "BeginFixedBackground",
+                DisplayCommand::EndFixedBackground => "EndFixedBackground",
                 DisplayCommand::PushScrollLayer { .. } => "PushScrollLayer",
                 DisplayCommand::PopScrollLayer => "PopScrollLayer",
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",

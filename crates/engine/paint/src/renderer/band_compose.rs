@@ -413,8 +413,10 @@ impl Renderer {
     /// Применим, когда кадр — чистая трансляция контента: оконный рендер,
     /// нет горизонтального скролла, скролл ДВИЖЕТСЯ (кадры «DL изменился,
     /// скролл тот же» — анимация, ввод — идут монолитом) и в контенте нет
-    /// `BeginStickyLayer` — единственной команды, чей результат зависит от
-    /// scroll_y нелинейно (sticky-кламп); всё остальное транслируется
+    /// `BeginStickyLayer` / `BeginFixedBackground` — команд, чей результат
+    /// зависит от scroll_y нелинейно (sticky-кламп; фон
+    /// `background-attachment: fixed` стоит, пока элемент едет); всё
+    /// остальное транслируется
     /// равномерно, включая fixed (см. BUG-159: fixed не получает спец-
     /// обработки в рендере — полоса воспроизводит его поведение бит-в-бит).
     ///
@@ -463,6 +465,14 @@ impl Renderer {
             .any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }))
         {
             Some("sticky-слой в контенте")
+        } else if content
+            .iter()
+            .any(|c| matches!(c, DisplayCommand::BeginFixedBackground))
+        {
+            // CSS Backgrounds L3 §3.6: картинка `background-attachment: fixed`
+            // стоит на месте, пока её элемент едет со страницей, — пиксели
+            // полосы зависят от scroll_y нелинейно, как у sticky.
+            Some("background-attachment: fixed в контенте")
         } else {
             None
         };

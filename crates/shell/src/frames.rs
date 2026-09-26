@@ -1539,7 +1539,19 @@ pub(crate) fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[
                 let Some(layout) = frames[i].layout.as_ref() else {
                     continue;
                 };
-                let mut dl = crate::display_list_metrics::paint_ordered(layout);
+                let mut dl = crate::display_list_metrics::paint_ordered_in(layout, frames[i].viewport);
+                // CSS Backgrounds L3 §3.6: фиксированный фон под-документа
+                // стоит относительно вьюпорта ФРЕЙМА, а тот едет вместе со
+                // страницей — компенсировать скролл страницы (скобка
+                // `BeginFixedBackground`) здесь нельзя. Геометрия уже от
+                // вьюпорта фрейма при его скролле 0 — снимаем только скобки.
+                dl.retain(|c| {
+                    !matches!(
+                        c,
+                        lumen_paint::DisplayCommand::BeginFixedBackground
+                            | lumen_paint::DisplayCommand::EndFixedBackground
+                    )
+                });
                 // Срез 21: подложка под-документа на весь его вьюпорт — как
                 // [`redraw_requested.rs`] чистит ВСЁ окно в canvas-цвет
                 // страницы (CSS Backgrounds §3.11.1), а не только рамку

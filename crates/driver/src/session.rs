@@ -477,7 +477,9 @@ impl InProcessSession {
         // to the compositor (two-buffer model: pending → active on flush_pending).
         let stacking_tree = StackingTree::build(layout_root);
         let paint_order = PaintOrder::from_tree(&stacking_tree);
-        let (commands, _provenance) = lumen_paint::build_display_list_ordered(layout_root, &stacking_tree, &paint_order);
+        let (commands, _provenance) = lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(layout_root, &stacking_tree, &paint_order)
+        });
         let viewport_rect = lumen_core::geom::Rect::new(0.0, 0.0, self.viewport.width, self.viewport.height);
         let layer_tree = BasicLayerTree::single_layer(viewport_rect, commands);
         self.compositor.commit(Arc::new(property_trees.clone()), Arc::new(layer_tree));
@@ -845,7 +847,9 @@ impl InProcessSession {
         let state = self.state()?;
         let tree = StackingTree::build(&state.layout_root);
         let order = PaintOrder::from_tree(&tree);
-        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0;
+        let display_list = lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0
+        });
         let (width, height) = (self.viewport.width as u32, self.viewport.height as u32);
         // The rasterizer resolves `DrawImage`/`DrawBackgroundImage` against this
         // set alone: an unregistered key paints the grey placeholder (`<img>`) or
@@ -886,7 +890,9 @@ impl InProcessSession {
         let state = self.state()?;
         let tree = StackingTree::build(&state.layout_root);
         let order = PaintOrder::from_tree(&tree);
-        Ok(lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0)
+        Ok(lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0
+        }))
     }
 }
 
@@ -915,7 +921,9 @@ impl BrowserSession for InProcessSession {
 
         let tree = StackingTree::build(&state.layout_root);
         let order = PaintOrder::from_tree(&tree);
-        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0;
+        let display_list = lumen_paint::with_fixed_background_viewport(self.viewport, || {
+            lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0
+        });
 
         // Create headless renderer for off-screen rendering.
         let width = self.viewport.width as u32;

@@ -6,6 +6,7 @@
 use super::*;
 
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
+    let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
     walk(root, &mut list, 1.0, None);
     list
@@ -25,6 +26,7 @@ pub fn build_display_list_with_selection(
     root: &LayoutBox,
     sel: Option<&SelectionHighlight>,
 ) -> DisplayList {
+    let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
     walk(root, &mut list, 1.0, sel);
     list
@@ -43,6 +45,7 @@ pub fn build_display_list_with_anim(
     root: &LayoutBox,
     anim: Option<&CompositorAnimFrame>,
 ) -> DisplayList {
+    let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
     walk_with_anim(root, anim, &mut list, 1.0);
     list
@@ -98,6 +101,7 @@ pub fn build_display_list_ordered_dpr(
     order: &PaintOrder,
     dpr: f32,
 ) -> (DisplayList, ProvenanceIndex) {
+    let _vp = FixedBgViewportGuard::install(root);
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
@@ -280,6 +284,7 @@ fn ordered_with_anim_internal(
     dpr: f32,
     track_split: bool,
 ) -> (DisplayList, Vec<std::ops::Range<usize>>) {
+    let _vp = FixedBgViewportGuard::install(root);
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
