@@ -6976,9 +6976,9 @@
       {
        "id": "GAP-CSSALL",
        "title": "GAP: шортхенд `all` не применяется каскадом",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "CSS Cascade L4 §3.2 — шортхенд `all` (`all: inherit | initial | unset | revert | revert-layer`) каскадом не применяется: имя есть в `SUPPORTED_PROPERTIES` (`crates/engine/css-parser/src/lib.rs`), но ни `apply_declaration`, ни `apply_css_wide_keyword` (`crates/engine/layout/src/style/apply/css_wide.rs`, сопоставление по имени свойства) его не разворачивают — `el.style.all = 'inherit'` не меняет ни одного значения. Нужно: развернуть CSS-wide keyword на все longhand-ы, кроме `direction`/`unicode-bidi` (и custom properties), с обычным приоритетом декларации. Критерий: `span { all: inherit }` внутри `div { display: flex }` отдаёт `display: flex`; последний шаг подтестов `select`/`details` в WPT `html/rendering/widgets/shadow-dom.html` (вместе с [BUG-1191](bugs/BUG-1191-OPEN.md)). Найден P1 при закрытии GAP-UASHADOWSLOT, 2026-09-26."
+       "note": "ЗАКРЫТ 2026-09-27 (P1, ветка `p1-gap-cssall`): CSS Cascade L4 §3.2 — шортхенд `all` применяется каскадом. `apply_all_shorthand` (`crates/engine/layout/src/style/apply/css_wide.rs`) заменяет стиль целиком, а не перебором имён (арм-ы `apply_css_wide_keyword` покрывают не все поля): `inherit` — стиль родителя, `initial` — `ComputedStyle::root()` с `display: inline`, `unset` — новый `ComputedStyle::inheriting` (вынесен из литерала `compute_style`), `revert` — UA-снэпшот; `direction`/`unicode-bidi`/custom properties сохраняются, `font-size` и `zoom` разбирают pre-pass-ы. `span { all: inherit }` в `div { display: flex }` → `display: flex`. Не сделано: `all: revert-layer`/`revert-rule` (каскад откатывает только одноимённую декларацию), `all: inherit` не наследует собственный `zoom` родителя. WPT-подтесты `html/rendering/widgets/shadow-dom.html` ждут ещё [BUG-1191](bugs/BUG-1191-OPEN.md)."
       },
       {
        "id": "GAP-ANCHORCSSOM",

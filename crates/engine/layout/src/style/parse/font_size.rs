@@ -41,7 +41,7 @@ pub(in crate::style) fn apply_font_size(
     viewport: Size,
     is_quirks: bool,
 ) -> Option<FontSizeBasis> {
-    if decl.property != "font" && decl.property != "font-size" {
+    if decl.property != "font" && decl.property != "font-size" && decl.property != "all" {
         return None;
     }
     // CSS Variables L1 §3.3: нераскрываемый `var()` делает декларацию invalid at
@@ -76,6 +76,11 @@ pub(in crate::style) fn apply_font_size(
         };
         style.font_size = px;
         return Some(basis);
+    }
+    // Шортхенд `all` (CSS Cascade L4 §3.2) принимает только CSS-wide keyword-ы:
+    // размер из него взят выше, прочее значение — невалидная декларация.
+    if decl.property == "all" {
+        return None;
     }
     resolve_font_size(style, val, parent_fs, viewport, is_quirks)
 }

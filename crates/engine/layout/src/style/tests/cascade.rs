@@ -533,6 +533,62 @@ use super::*;
         assert!((s.font_size - 20.0 * 0.83).abs() < 1e-4, "font_size={}", s.font_size);
     }
 
+    // ── `all` shorthand (CSS Cascade L4 §3.2, GAP-CSSALL) ────────────────
+
+    #[test]
+    fn all_inherit_copies_non_inherited_parent_values() {
+        let css = "div { display: flex; color: red; margin-left: 7px; font-size: 30px; } \
+                   span { display: block; font-size: 10px; all: inherit; }";
+        let s = cascade_at("<div><span>x</span></div>", css, &[0, 0]);
+        let parent = cascade_at("<div><span>x</span></div>", css, &[0]);
+        assert_eq!(s.display, crate::style::Display::Flex);
+        assert_eq!(s.color, parent.color);
+        assert_eq!(s.margin_left, parent.margin_left);
+        assert!((s.font_size - 30.0).abs() < 1e-4, "font_size={}", s.font_size);
+    }
+
+    #[test]
+    fn all_initial_resets_ua_hints_and_keeps_direction() {
+        let s = cascade_at("<b>x</b>", "b { direction: rtl; margin-top: 3px; all: initial; }", &[0]);
+        assert_eq!(s.display, crate::style::Display::Inline);
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
+        assert_eq!(s.margin_top, ComputedStyle::root().margin_top);
+        assert_eq!(s.direction, crate::style::Direction::Rtl);
+    }
+
+    #[test]
+    fn all_unset_inherits_inherited_and_resets_the_rest() {
+        let css = "div { color: red; } p { all: unset; }";
+        let s = cascade_at("<div><p>x</p></div>", css, &[0, 0]);
+        let parent = cascade_at("<div><p>x</p></div>", css, &[0]);
+        assert_eq!(s.display, crate::style::Display::Inline);
+        assert_eq!(s.color, parent.color);
+    }
+
+    #[test]
+    fn all_revert_restores_ua_hint() {
+        let s = cascade_at("<b>x</b>", "b { font-weight: 100; display: block; all: revert; }", &[0]);
+        assert_eq!(s.font_weight, FontWeight::BOLD);
+        assert_eq!(s.display, crate::style::Display::Inline);
+    }
+
+    #[test]
+    fn all_is_overridden_by_later_longhand_and_keeps_custom_props() {
+        let s = cascade_at(
+            "<div>x</div>",
+            "div { --x: 1; all: initial; display: grid; }",
+            &[0],
+        );
+        assert_eq!(s.display, crate::style::Display::Grid);
+        assert!(s.custom_props.contains_key("--x"));
+    }
+
+    #[test]
+    fn all_with_non_keyword_value_is_ignored() {
+        let s = cascade_at("<div>x</div>", "div { all: block; }", &[0]);
+        assert_eq!(s.display, crate::style::Display::Block);
+    }
+
     // ── matches_defined (CSS Selectors L4 §6.4.1 / HTML LS §4.13.5) ──────
 
     fn first_child_of_root(doc: &lumen_dom::Document) -> lumen_dom::NodeId {

@@ -34,4 +34,4 @@ contents` из кэша каскада (`CounterMap::style_arc`). Inline-эле�
 Полные вычисленные значения для любого элемента flat tree; `innerText`/`checkVisibility` не
 регрессируют. Критерий: в WPT `html/rendering/widgets/shadow-dom.html` проверка
 `assert_not_equals(childStyle.length, 0)` проходит для `<select>`/`<details>` (последний шаг —
-`all: inherit`, см. GAP-CSSALL в [ROADMAP](../ROADMAP.md)).
+`all: inherit`, каскадом применяется с GAP-CSSALL, 2026-09-27).

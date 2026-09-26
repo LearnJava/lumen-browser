@@ -5,7 +5,7 @@
 //! (анкер `fn apply_css_wide_keyword`) без правок тела: изменены только
 //! видимость функции и пути импортов.
 
-use crate::style::{ComputedStyle, CssWideKeyword, WhiteSpace};
+use crate::style::{ComputedStyle, CssWideKeyword, Display, WhiteSpace};
 
 
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
@@ -43,6 +43,44 @@ pub(in crate::style) fn apply_css_wide_keyword(
         let init: &ComputedStyle = if kw == CssWideKeyword::Revert { ua_baseline } else { root };
         apply_css_wide_keyword_with(style, prop, kw, inherited, ua_baseline, init);
     });
+}
+
+/// CSS Cascade L4 §3.2 — шортхенд `all`: CSS-wide keyword применяется ко всем
+/// свойствам сразу, кроме `direction`, `unicode-bidi` и custom properties.
+///
+/// Источник берётся целым стилем, а не перебором имён: список арм-ов
+/// `apply_css_wide_keyword_with` покрывает не все поля `ComputedStyle`, а
+/// `all` обязан сбросить каждое.
+/// - `Inherit` — родительский стиль целиком;
+/// - `Initial` — стиль корня (initial-значения), с `display: inline`;
+/// - `Unset` — [`ComputedStyle::inheriting`]: наследуемые от родителя,
+///   прочие initial;
+/// - `Revert` — UA-снэпшот (`ua_baseline`).
+///
+/// `font-size` и `effective_zoom` сохраняются: их уже посчитали pre-pass-ы
+/// `apply_font_size`/`zoom` в `compute_style`, которые разбирают `all` сами.
+pub(in crate::style) fn apply_all_shorthand(
+    style: &mut ComputedStyle,
+    kw: CssWideKeyword,
+    inherited: &ComputedStyle,
+    ua_baseline: &ComputedStyle,
+) {
+    let mut next = match kw {
+        CssWideKeyword::Inherit => inherited.clone(),
+        CssWideKeyword::Initial => {
+            let mut root = ComputedStyle::root();
+            root.display = Display::Inline;
+            root
+        }
+        CssWideKeyword::Unset => ComputedStyle::inheriting(inherited),
+        CssWideKeyword::Revert => ua_baseline.clone(),
+    };
+    next.direction = style.direction;
+    next.unicode_bidi = style.unicode_bidi;
+    next.custom_props = std::mem::take(&mut style.custom_props);
+    next.font_size = style.font_size;
+    next.effective_zoom = style.effective_zoom;
+    *style = next;
 }
 
 fn apply_css_wide_keyword_with(
