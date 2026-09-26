@@ -53,6 +53,7 @@ window.TreeWalker            = _TreeWalker;
 window.NodeIterator          = _NodeIterator;
 window.Performance           = Performance;
 window.PerformanceObserver   = PerformanceObserver;
+window.PerformanceObserverEntryList = PerformanceObserverEntryList;
 window.PerformancePaintTiming = PerformancePaintTiming;
 window.LayoutShift           = LayoutShift;
 window.LayoutShiftAttribution = LayoutShiftAttribution;

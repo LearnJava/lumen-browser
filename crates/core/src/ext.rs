@@ -3802,7 +3802,7 @@ pub trait BrowserSession: Send {
     ///
     /// Creates a `{entryType, name, startTime, duration}` entry and merges in any
     /// extra properties from `detail_json` (an optional JSON object string).
-    /// Notifies all matching `PerformanceObserver` callbacks synchronously.
+    /// Queues delivery to every matching `PerformanceObserver` (one task, BUG-648).
     ///
     /// Use for entry types without a dedicated binding: 'longtask', 'element',
     /// 'event', 'navigation', etc.

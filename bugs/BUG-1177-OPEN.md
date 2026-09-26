@@ -42,3 +42,14 @@ HTTP/2-соединению (PERF-13). Соединение рвётся на с
    запроса-открывателя.
 
 Критерий: на стенде п. 1 все запросы получают ответ; на bbc нет `connection closing`.
+
+## Второй сайт (2026-09-26, P6): cnbc
+
+При закрытии [BUG-648](BUG-648-FIXED.md) (видимое окно `--maximized`, `LUMEN_NO_ADBLOCK=1`)
+две `rel=preload`-загрузки cnbc (`static-redesign.cnbcfm.com/dist/main-….js`,
+`…/92419-….js`) упали с `read: H2 connection lost: … H2 I/O: peer closed connection without
+sending TLS close_notify`. Повтора на новом соединении не было, и шим сообщил `link hint fetch
+failed`. Позже те же URL пришли `200`, уже через `<script src>`, так что страница собралась
+(2650 узлов). Лишний запрос и событие `error` на `<link rel=preload>` при этом остались.
+Триггер другой (обрыв TLS, а не `connection closing` из очереди), но вывод тот же: запрос,
+потерянный из-за обрыва общего соединения, не повторяется.
