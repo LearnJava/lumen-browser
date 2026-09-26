@@ -233,10 +233,15 @@ pub(crate) fn error_info_json_plain(message: &str, filename: &str, lineno: i32, 
 
 // ─── base64 helpers ───────────────────────────────────────────────────────────
 
-/// Decode standard base64 (RFC 4648 §4) to bytes.
+/// Infra "forgiving-base64 decode" — the algorithm behind `atob` (HTML LS
+/// §8.3) and `data:` URLs (Fetch §data: URLs).
 ///
-/// Returns `None` on any invalid character or bad padding. Whitespace is skipped
-/// so that multi-line base64 (as produced by some tools) is accepted.
+/// ASCII whitespace is stripped; padding is optional, but `=` is accepted only
+/// as one or two trailing characters of an input whose length is a multiple
+/// of 4. Returns `None` for a length ≡ 1 (mod 4) or any character outside the
+/// alphabet — including a `=` anywhere else (BUG-1133: this used to skip `=`
+/// everywhere and ignore the length). Same algorithm as the page-side `atob`
+/// in `shim/web_api_shim_mid_c.js`.
 fn b64_decode(encoded: &str) -> Option<Vec<u8>> {
     const INVALID: u8 = 0xFF;
     let table: [u8; 256] = {
@@ -250,14 +255,25 @@ fn b64_decode(encoded: &str) -> Option<Vec<u8>> {
         t
     };
 
-    let mut out = Vec::with_capacity(encoded.len() * 3 / 4);
+    let mut data: Vec<u8> = encoded
+        .bytes()
+        .filter(|b| !matches!(b, b'\t' | b'\n' | b'\x0C' | b'\r' | b' '))
+        .collect();
+    if data.len().is_multiple_of(4) {
+        for _ in 0..2 {
+            if data.last() == Some(&b'=') {
+                data.pop();
+            }
+        }
+    }
+    if data.len() % 4 == 1 {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(data.len() * 3 / 4);
     let mut buf = 0u32;
     let mut bits = 0u32;
-
-    for b in encoded.bytes() {
-        if b == b'=' || b == b'\n' || b == b'\r' || b == b' ' {
-            continue;
-        }
+    for b in data {
         let v = table[b as usize];
         if v == INVALID {
             return None;
@@ -2350,7 +2366,9 @@ fn atob_native_v8(
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    if let Some(s) = b64_decode(&encoded).and_then(|b| String::from_utf8(b).ok())
+    // `atob` yields a binary string — one Latin-1 code unit per byte, not
+    // UTF-8 (`atob(btoa('\xff'))` must round-trip).
+    if let Some(s) = b64_decode(&encoded).map(|b| b.into_iter().map(char::from).collect::<String>())
         && let Some(v) = v8::String::new(scope, &s)
     {
         rv.set(v.into());
@@ -2425,6 +2443,20 @@ mod tests {
     #[test]
     fn b64_decode_invalid_returns_none() {
         assert!(b64_decode("!!!").is_none());
+    }
+
+    /// BUG-1133: forgiving-base64 — padding optional, `=` only at the end.
+    #[test]
+    fn b64_decode_is_forgiving_base64() {
+        assert_eq!(b64_decode("YQ").unwrap(), b"a");
+        assert_eq!(b64_decode("YWI").unwrap(), b"ab");
+        assert_eq!(b64_decode("YQ==").unwrap(), b"a");
+        assert_eq!(b64_decode(" Y W\tI=\n").unwrap(), b"ab");
+        assert_eq!(b64_decode("").unwrap(), b"");
+        assert!(b64_decode("YWJjZ").is_none(), "length 1 mod 4");
+        assert!(b64_decode("YQ==YQ==").is_none(), "= in the middle");
+        assert!(b64_decode("YQ=").is_none(), "= without length multiple of 4");
+        assert!(b64_decode("YQ===").is_none());
     }
 
     // ── percent_decode ─────────────────────────────────────────────────────────
@@ -2508,6 +2540,20 @@ mod tests_v8 {
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
         let encoded = rt.eval("btoa('hello')").unwrap();
         assert_eq!(encoded, lumen_core::JsValue::String("aGVsbG8=".into()));
+
+        // BUG-1133: forgiving-base64 and a Latin-1 binary result.
+        let r = rt
+            .eval(
+                "function t(f){try{return f();}catch(e){return 'THROW '+e.name;}} \
+                 [t(function(){return atob('YQ');}), t(function(){return atob('YWI');}), \
+                  t(function(){return atob('YWJjZ');}), t(function(){return atob('YQ==YQ==');}), \
+                  atob(btoa('\\xff')) === '\\xff'].join('|')",
+            )
+            .unwrap();
+        assert_eq!(
+            r,
+            lumen_core::JsValue::String("a|ab|THROW InvalidCharacterError|THROW InvalidCharacterError|true".into())
+        );
     }
 
     /// BUG-1086: Trusted Types (`self.trustedTypes`) is `[Exposed=(Window,Worker)]`
