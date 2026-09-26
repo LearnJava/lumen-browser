@@ -711,6 +711,12 @@ window.structuredClone = structuredClone;
 function _lumen_apply_ready_state(state) {
     if (state === 'interactive' && _doc_ready_state !== 'loading') return;
     if (state === 'complete' && _doc_ready_state === 'complete') return;
+    // BUG-1129: inserted external scripts still loading delay `complete`;
+    // `_lumen_load_delay_done` comes back here once the last one finishes.
+    if (state === 'complete' && typeof _lumen_load_delay_count === 'number' && _lumen_load_delay_count > 0) {
+        _lumen_load_deferred = true;
+        return;
+    }
     _doc_ready_state = state;
     // readystatechange on document
     var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });

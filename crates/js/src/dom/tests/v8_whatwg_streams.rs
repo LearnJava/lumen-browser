@@ -1275,6 +1275,32 @@ fn inserted_scripts_interleave_execution_and_load() {
     assert_eq!(r, lumen_core::JsValue::String(r#"["m1<-m1","m2<-m2","m3<-m3","m4<-m4"]"#.into()));
 }
 
+/// BUG-1129: an external script a body script inserts delays the window's
+/// `load` until its own `load` (HTML LS §4.12.1.1) — the shell's
+/// `complete`/`pageshow` pair arriving earlier waits for it, in that order.
+#[test]
+fn inserted_script_delays_window_load() {
+    let rt = v8_runtime_with_fetch(CaptureFetch::new());
+    rt.eval(
+        "window.ORDER = [];          var s = document.createElement('script');          s.src = URL.createObjectURL(new Blob(['window.__exec = [\"m1\"];'], {type: 'text/javascript'}));          s.onload = function() { ORDER.push('script-load'); };          document.head.appendChild(s);          window.addEventListener('load', function() {              ORDER.push('window-load ' + document.readyState + ' exec=' + JSON.stringify(window.__exec || []));          });          window.addEventListener('pageshow', function() { ORDER.push('pageshow'); });          _lumen_apply_ready_state('interactive');          _lumen_apply_ready_state('complete');          _lumen_fire_page_lifecycle('pageshow', false);          ORDER.push('shell-done ' + document.readyState);",
+    )
+    .unwrap();
+    for _ in 0..50 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        if rt.eval("ORDER.length === 4").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = rt.eval("JSON.stringify(ORDER)").unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            r#"["shell-done interactive","script-load","window-load complete exec=[\"m1\"]","pageshow"]"#.into()
+        )
+    );
+}
+
 #[test]
 fn xhr_blob_url_loads_in_sync_and_async_mode() {
     let capture = CaptureFetch::new();

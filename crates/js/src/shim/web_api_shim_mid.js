@@ -12364,9 +12364,37 @@ function _lumen_element_src_blocked(destination, url, nid, parserInserted) {
     return (r && r.length === 3) ? r : null;
 }
 
+// BUG-1129: HTML LS §4.12.1.1 «prepare the script element» — an external
+// script inserted before the document completes delays its load event until
+// the script's own `load`/`error`. `_lumen_apply_ready_state('complete')`
+// holds `readyState`/window `load` while this count is non-zero and leaves
+// `_lumen_load_deferred` set; the last finished script releases it in a task
+// of its own, so microtasks the script's `load` handler queued run first —
+// and a script that handler inserts still counts, as in Chrome.
+var _lumen_load_delay_count = 0;
+var _lumen_load_deferred = false;
+
+function _lumen_load_delay_done(job) {
+    if (!job.delaysLoad) return;
+    job.delaysLoad = false;
+    _lumen_load_delay_count--;
+    if (_lumen_load_delay_count !== 0 || !_lumen_load_deferred) return;
+    setTimeout(function() {
+        if (_lumen_load_delay_count !== 0 || !_lumen_load_deferred) return;
+        _lumen_load_deferred = false;
+        _lumen_apply_ready_state('complete');
+        if (_lumen_pageshow_deferred !== null) {
+            var persisted = _lumen_pageshow_deferred;
+            _lumen_pageshow_deferred = null;
+            _lumen_fire_page_lifecycle('pageshow', persisted);
+        }
+    }, 0);
+}
+
 function _lumen_script_load_external(nid, src, isModule) {
     // state: 0 = fetching, 1 = body ready, 2 = failed.
-    var job = { state: 0, run: null };
+    var job = { state: 0, run: null, delaysLoad: _doc_ready_state !== 'complete' };
+    if (job.delaysLoad) _lumen_load_delay_count++;
     _lumen_script_exec_queue.push(job);
     setTimeout(function() {
         var url;
@@ -12378,6 +12406,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             job.run = function() {
                 _lumen_console_error('script load failed: ' + src + ': ' + e);
                 _lumen_resource_fire(nid, 'error');
+                _lumen_load_delay_done(job);
             };
             _lumen_script_exec_drain();
             return;
@@ -12394,6 +12423,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             job.run = function() {
                 _lumen_console_error('script load failed: ' + url + ': blocked by ' + csp[0]);
                 _lumen_resource_fire(nid, 'error');
+                _lumen_load_delay_done(job);
             };
             _lumen_script_exec_drain();
             return;
@@ -12413,15 +12443,18 @@ function _lumen_script_load_external(nid, src, isModule) {
                 if (!isModule) {
                     _lumen_script_execute_classic(text, nid);
                     _lumen_resource_fire(nid, 'load');
+                    _lumen_load_delay_done(job);
                     return;
                 }
                 Promise.resolve().then(function() {
                     return _lumen_script_run_module(url, text);
                 }).then(function() {
                     _lumen_resource_fire(nid, 'load');
+                    _lumen_load_delay_done(job);
                 }).catch(function(e) {
                     _lumen_console_error('script load failed: ' + url + ': ' + e);
                     _lumen_resource_fire(nid, 'error');
+                    _lumen_load_delay_done(job);
                 });
             };
             _lumen_script_exec_drain();
@@ -12430,6 +12463,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             job.run = function() {
                 _lumen_console_error('script load failed: ' + url + ': ' + e);
                 _lumen_resource_fire(nid, 'error');
+                _lumen_load_delay_done(job);
             };
             _lumen_script_exec_drain();
         });

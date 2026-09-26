@@ -333,7 +333,7 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 | `blob:` URL не загружается ([BUG-1126](../../bugs/BUG-1126-FIXED.md)) | zoom, bing |
 | `url()` во внешнем CSS от базы документа ([BUG-1127](../../bugs/BUG-1127-FIXED.md)) | apple, tumblr |
 | `load` динамического скрипта после всей очереди ([BUG-1128](../../bugs/BUG-1128-FIXED.md)) | aliexpress (SystemJS) |
-| `load` окна не ждёт вставленный скрипт ([BUG-1129](../../bugs/BUG-1129-OPEN.md)) | wordpress |
+| `load` окна не ждёт вставленный скрипт ([BUG-1129](../../bugs/BUG-1129-FIXED.md)) | wordpress |
 | прочие одиночные: `IntersectionObserverEntry`, `innerHTML` у `<script>`, `atob`, SVG с комментарием, `import.meta.resolve`, `getAttributeNames`, `History`, `HTMLDocument`, `postMessage` target, `srcset` с запятой, порядок XHR `progress`, `javaEnabled`, `BarProp`, `innerText` (BUG-1131…1144) | duolingo, bing, airbnb, tradingview, huggingface, samsung, whatsapp, yahoo-jp, webmd, amazon, apple, weibo |
 | iframe `contentWindow`/`contentDocument` (BUG-480, BUG-970) | samsung, w3schools |
 | `PerformanceObserver` buffered синхронно (BUG-648) | cnbc |
