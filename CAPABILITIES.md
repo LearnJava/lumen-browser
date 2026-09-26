@@ -29,7 +29,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - ✅ `InputType` (22 HTML5 input types), `DocumentMode` (NoQuirks/Quirks/LimitedQuirks, set by parser).
 - ✅ Shadow DOM: `attach_shadow`, `FlatTree` + `build_flat_tree` with `<slot name>` assignment. UA shadow trees (HTML LS §15.5.4): `<video>`/`<audio>` get one with no slot (light-tree children never render), `<select>` one slot, `<details>` a summary slot (first `<summary>` child) and a content slot (`display: block`, `content-visibility: hidden` while closed) — filled by position, closed, invisible to `shadowRoot`; `slot { display: contents }` is the UA default for every slot ([GAP-UASHADOWSLOT](ROADMAP.md), 2026-09-26).
 - ✅ Hibernation snapshot: `Document::to_bytes()/from_bytes()` (bincode); JS-wrapper refcounting for GC (`acquire/release_js_ref`, `dead_node_ids()`).
-- ✅ Drag-and-drop draggability; contenteditable editing layer (`Range`, `Selection`, `CommandHistory` undo/redo, paste/drag transfer).
+- ✅ Drag-and-drop draggability; contenteditable editing layer (`Range`, `Selection` — a global WebIDL interface, `getSelection() instanceof Selection` ([BUG-671](bugs/BUG-671-FIXED.md)), `CommandHistory` undo/redo, paste/drag transfer).
 - ✅ Arena free-list / slot reuse: `NodeId` packs a `u8` generation over a 24-bit index; `reclaim_dead_nodes` frees the slot and bumps its generation, `alloc()` reuses it, `Document::resolve(raw)` rejects a stale generation instead of aliasing (GAP-P3GCJSDOM срез 9). A slot's generation permanently retires at 255 reuses instead of wrapping. Auto-set `:target` from URL fragment is shell-side.
 - ~236 tests.
 
