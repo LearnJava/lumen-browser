@@ -2117,14 +2117,10 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // Срез 11: `scrollbar-width` (CSS Scrollbars L1 §3, `ScrollbarWidth::parse`
     // in `style/values/misc.rs` — exact `auto|thin|none` match, no extra
     // keywords) and the three `ruby-*` longhands (CSS Ruby L1 §4,
-    // `style/apply/text.rs`'s bare `match` arms). `ruby-position` excludes
-    // spec-valid `inter-character` — `ruby.rs`'s own doc comment says the
-    // engine parses only `over`/`under`/`alternate`, `inter-character` is
-    // unmatched and silently keeps the previous value, same no-op contract
-    // as `text-align`'s excluded `justify`/`match-parent` (срез 7 note
-    // above). `alternate` IS included — the engine's match has an arm for
-    // it (resolves to `Over`), and CSSOM's specified-value model must keep
-    // the literal token, not the resolved one (same reasoning as
+    // `style/apply/text.rs`'s bare `match` arms). `ruby-position` lists the
+    // full grammar `RubyPosition::parse` (`ruby.rs`, GAP-RUBYBOX-2) accepts,
+    // both orders of the two-keyword forms included; CSSOM's specified-value
+    // model keeps the literal token, not the resolved one (same reasoning as
     // `pointer-events`' SVG aliases, срез 10).
     'scrollbar-width': ['auto', 'thin', 'none'],
     // CSS Overflow L5 §scroll-target-group (BUG-505 срез 6): plain `none |
@@ -2135,7 +2131,10 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // `auto | none` — parsing/CSSOM only, the anchor-selection algorithm
     // itself isn't implemented yet (see bugs/BUG-524-OPEN.md).
     'overflow-anchor': ['auto', 'none'],
-    'ruby-position': ['over', 'under', 'alternate'],
+    'ruby-position': [
+        'over', 'under', 'inter-character', 'alternate', 'alternate over',
+        'over alternate', 'alternate under', 'under alternate',
+    ],
     'ruby-align':    ['start', 'center', 'space-between', 'space-around'],
     'ruby-merge':    ['separate', 'merge', 'auto'],
     // Срез 13: `border-*-style` longhands, physical and logical alike (the

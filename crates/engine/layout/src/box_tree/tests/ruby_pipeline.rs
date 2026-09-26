@@ -175,3 +175,185 @@ fn ruby_without_rt_children_degrades_gracefully() {
     assert!(ruby.rect.width > 0.0);
     assert!(ruby.rect.height > 0.0);
 }
+
+// ── GAP-RUBYBOX-2: `<rtc>` levels, `<rb>` bases, `ruby-position` values ──
+
+/// Every laid-out box built for a `<tag>` element, in tree order.
+fn boxes_of_tag<'a>(
+    doc: &lumen_dom::Document,
+    b: &'a super::super::LayoutBox,
+    tag: &str,
+    out: &mut Vec<&'a super::super::LayoutBox>,
+) {
+    if b.origin.role == super::super::BoxRole::Element
+        && let Some(node) = b.origin.node
+        && let lumen_dom::NodeData::Element { name, .. } = &doc.get(node).data
+        && name.local == tag
+    {
+        out.push(b);
+    }
+    for c in &b.children {
+        boxes_of_tag(doc, c, tag, out);
+    }
+}
+
+/// Base-group boxes (anonymous wrappers owned by the `<ruby>` itself).
+fn base_groups(ruby: &super::super::LayoutBox) -> Vec<&super::super::LayoutBox> {
+    fn walk<'a>(b: &'a super::super::LayoutBox, owner: lumen_dom::NodeId, out: &mut Vec<&'a super::super::LayoutBox>) {
+        if b.origin.role == super::super::BoxRole::AnonymousBlock && b.origin.node == Some(owner) {
+            out.push(b);
+            return;
+        }
+        for c in &b.children {
+            walk(c, owner, out);
+        }
+    }
+    let mut out = Vec::new();
+    for c in &ruby.children {
+        walk(c, ruby.node, &mut out);
+    }
+    out
+}
+
+fn lay_out_html(html: &str) -> (lumen_dom::Document, super::super::LayoutBox) {
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse("");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    (doc, root)
+}
+
+fn is_over(rt: &super::super::LayoutBox, base: &super::super::LayoutBox) -> bool {
+    rt.rect.y + rt.rect.height <= base.rect.y + 0.01
+}
+
+fn is_under(rt: &super::super::LayoutBox, base: &super::super::LayoutBox) -> bool {
+    rt.rect.y >= base.rect.y + base.rect.height - 0.01
+}
+
+/// WPT `css-ruby/ruby-position-alternate.html`: three `<rtc>` levels with the
+/// initial `ruby-position` (`alternate`) go over, under, over.
+#[test]
+fn rtc_levels_alternate_by_default() {
+    let (doc, root) = lay_out_html(
+        r#"<div><ruby>base<rtc><rt>one</rt></rtc><rtc><rt>two</rt></rtc><rtc><rt>three</rt></rtc></ruby></div>"#,
+    );
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let base = base_groups(ruby)[0];
+    let mut rts = Vec::new();
+    boxes_of_tag(&doc, ruby, "rt", &mut rts);
+    assert_eq!(rts.len(), 3);
+    assert!(is_over(rts[0], base), "level 1 over: rt.y={} base.y={}", rts[0].rect.y, base.rect.y);
+    assert!(is_under(rts[1], base), "level 2 under: rt.y={} base.bottom={}", rts[1].rect.y, base.rect.y + base.rect.height);
+    assert!(is_over(rts[2], base), "level 3 over");
+    assert!(rts[2].rect.y < rts[0].rect.y, "level 3 stacks outside level 1");
+}
+
+#[test]
+fn rtc_levels_alternate_from_under() {
+    let (doc, root) = lay_out_html(
+        r#"<div><ruby style="ruby-position: alternate under">base<rtc><rt>one</rt></rtc><rtc><rt>two</rt></rtc></ruby></div>"#,
+    );
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let base = base_groups(ruby)[0];
+    let mut rts = Vec::new();
+    boxes_of_tag(&doc, ruby, "rt", &mut rts);
+    assert!(is_under(rts[0], base));
+    assert!(is_over(rts[1], base));
+}
+
+/// `ruby-position` is read from each `<rtc>`: `under` on both puts both
+/// levels under the base (no alternation between non-`alternate` levels).
+#[test]
+fn rtc_own_ruby_position_is_honoured() {
+    let (doc, root) = lay_out_html(
+        r#"<div><ruby>base<rtc style="ruby-position:under"><rt>one</rt></rtc><rtc style="ruby-position:under"><rt>two</rt></rtc></ruby></div>"#,
+    );
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let base = base_groups(ruby)[0];
+    let mut rts = Vec::new();
+    boxes_of_tag(&doc, ruby, "rt", &mut rts);
+    assert!(is_under(rts[0], base) && is_under(rts[1], base));
+    assert!(rts[1].rect.y > rts[0].rect.y, "second under level stacks below the first");
+}
+
+/// `<rb><rb><rt><rt>`: each `<rb>` is its own base, the `<rt>`s pair with
+/// them by index (before GAP-RUBYBOX-2 both `<rb>` fused into one base and
+/// the second `<rt>` got an empty one).
+#[test]
+fn rb_bases_pair_with_rt_by_index() {
+    let (doc, root) = lay_out_html(
+        r#"<div><ruby><rb>AAAA</rb><rb>BBBB</rb><rt>a</rt><rt>b</rt></ruby></div>"#,
+    );
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let bases = base_groups(ruby);
+    assert_eq!(bases.len(), 2, "one base group per <rb>");
+    let mut rts = Vec::new();
+    boxes_of_tag(&doc, ruby, "rt", &mut rts);
+    assert_eq!(rts.len(), 2);
+    for (rt, base) in rts.iter().zip(&bases) {
+        assert!(is_over(rt, base));
+        assert!(
+            rt.rect.x >= base.rect.x - 0.01
+                && rt.rect.x + rt.rect.width <= base.rect.x + base.rect.width + 0.01,
+            "rt [{}, +{}] outside its base [{}, +{}]",
+            rt.rect.x, rt.rect.width, base.rect.x, base.rect.width
+        );
+    }
+}
+
+/// Base text after the annotation starts a new, unannotated segment whose
+/// base sits on the same line as the annotated one.
+#[test]
+fn trailing_base_gets_its_own_segment_on_the_base_line() {
+    let (_doc, root) = lay_out_html(r#"<div><ruby>XX<rt>x</rt>YY</ruby></div>"#);
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let bases = base_groups(ruby);
+    assert_eq!(bases.len(), 2);
+    assert!((bases[0].rect.y - bases[1].rect.y).abs() < 0.01);
+    assert!(bases[1].rect.x >= bases[0].rect.x + bases[0].rect.width);
+}
+
+/// `inter-character`: the annotation sits after its base on the inline axis,
+/// not above or below it.
+#[test]
+fn inter_character_places_annotation_after_base() {
+    let (doc, root) = lay_out_html(
+        r#"<div><ruby style="ruby-position: inter-character">base<rt>a</rt></ruby></div>"#,
+    );
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let base = base_groups(ruby)[0];
+    let mut rts = Vec::new();
+    boxes_of_tag(&doc, ruby, "rt", &mut rts);
+    assert!(rts[0].rect.x >= base.rect.x + base.rect.width - 0.01);
+    assert!((rts[0].rect.y - base.rect.y).abs() < 0.01);
+}
+
+/// Loose text directly inside `<rtc>` is one spanning annotation.
+#[test]
+fn loose_rtc_text_is_an_annotation() {
+    let (_doc, root) = lay_out_html(r#"<div><ruby><rb>AB</rb><rb>CD</rb><rtc>span</rtc></ruby></div>"#);
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let bases = base_groups(ruby);
+    assert_eq!(bases.len(), 2);
+    let top = ruby.children[0].rect.y;
+    assert!(bases[0].rect.y > top, "the <rtc> text must sit over the bases");
+}
+
+/// CSSOM geometry: `getBoundingClientRect()` of a `<ruby>` is its base-level
+/// box, so an over annotation's top is above it and an under one's bottom is
+/// below it (WPT `css-ruby/ruby-position-alternate.html` helpers).
+#[test]
+fn ruby_client_rect_is_base_level_only() {
+    let (doc, root) = lay_out_html(
+        r#"<div><ruby id="r">base<rtc><rt>one</rt></rtc><rtc><rt>two</rt></rtc></ruby></div>"#,
+    );
+    let rects = crate::collect_layout_rects(&root, &doc);
+    let ruby = find_ruby(&root).expect("BoxKind::Ruby not found");
+    let r = rects[&(ruby.node.index() as u32)];
+    let mut rts = Vec::new();
+    boxes_of_tag(&doc, ruby, "rt", &mut rts);
+    let (over, under) = (rects[&(rts[0].node.index() as u32)], rects[&(rts[1].node.index() as u32)]);
+    assert!(over[1] < r[1], "over rt top {} must be above ruby top {}", over[1], r[1]);
+    assert!(under[1] + under[3] > r[1] + r[3], "under rt bottom must be below ruby bottom");
+    assert!(r[3] < ruby.rect.height, "client rect excludes the annotations");
+}

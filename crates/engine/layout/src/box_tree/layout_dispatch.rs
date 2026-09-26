@@ -1718,8 +1718,7 @@ pub(super) fn dispatch_box(
         // this box's real content origin and adopt its size as our own, so
         // this box behaves as one atomic inline-level unit in its parent's
         // `InlineBlockRow`/flex/grid context.
-        BoxKind::Ruby { base_count } => {
-            let base_count = *base_count;
+        BoxKind::Ruby { shape } => {
             let mut groups = std::mem::take(&mut b.children);
             for group in &mut groups {
                 lay_out(
@@ -1727,10 +1726,25 @@ pub(super) fn dispatch_box(
                     children_pcb, hp, false,
                 );
             }
-            let ruby_text_boxes = groups.split_off(base_count);
-            let base_boxes = groups;
-            let ruby = crate::ruby::RubyBox::from_style(&s, base_boxes, ruby_text_boxes);
-            let mut composed = crate::ruby::lay_out_ruby(&ruby);
+            let mut groups = groups.into_iter();
+            let segments: Vec<crate::ruby::RubySegment> = shape
+                .segments
+                .iter()
+                .map(|seg| crate::ruby::RubySegment {
+                    bases: groups.by_ref().take(seg.bases).collect(),
+                    levels: seg
+                        .levels
+                        .iter()
+                        .map(|level| crate::ruby::RubyLevel {
+                            annotations: groups.by_ref().take(level.annotations).collect(),
+                            position: level.position,
+                        })
+                        .collect(),
+                })
+                .collect();
+            let mut composed = crate::ruby::lay_out_ruby_segments(
+                segments, Arc::clone(&s), s.ruby_align, s.ruby_merge,
+            );
             crate::incremental::translate_subtree(&mut composed, content_x, content_y);
             b.rect.width = composed.rect.width + padding_left + padding_right
                 + s.border_left_width + s.border_right_width;

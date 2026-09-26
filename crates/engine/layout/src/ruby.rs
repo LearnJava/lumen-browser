@@ -7,27 +7,108 @@
 //!
 //! Structure: `<ruby>base text<rt>annotation</rt></ruby>`
 //!
-//! Phase 0: basic stacking and layout. Phase 1 (done): ruby-align, ruby-merge,
-//! ruby-position are parsed into `ComputedStyle` and drive this algorithm via
-//! [`RubyBox::from_style`]. Box-tree integration of `<ruby>` elements into the
-//! inline flow is deferred (this module has no pipeline callers yet).
+//! `ruby-align`, `ruby-merge` and `ruby-position` are parsed into
+//! `ComputedStyle`. The box builder (`box_tree/build.rs`'s `build_ruby_box`)
+//! splits a `<ruby>` into segments — bases plus annotation levels (`<rtc>`,
+//! or consecutive `<rt>`) — recorded as a [`RubyShape`]; `layout_dispatch`
+//! composes them with [`lay_out_ruby_segments`]. A single level goes through
+//! [`lay_out_ruby`]; several levels (or `inter-character`) through the
+//! multi-level composer (GAP-RUBYBOX-2).
 
 use crate::box_tree::{LayoutBox, BoxKind, BoxOrigin, BoxRole};
 use crate::style::ComputedStyle;
 use lumen_dom::NodeId;
 use lumen_core::geom::Rect;
 
-/// CSS Ruby L1 §4 — `ruby-position`. Inherited. Initial: `over`.
+/// CSS Ruby L1 §3.4 — `ruby-position`. Inherited. Initial: `alternate`
+/// (= `alternate over`).
 ///
-/// Position of the annotation relative to base text. The spec's `alternate`
-/// and `inter-character` values are not supported (parsed as `over`).
+/// Applies to ruby annotation containers (`<rtc>`, or the anonymous one
+/// wrapping consecutive `<rt>`). `alternate` resolves per annotation level —
+/// see [`resolve_level_sides`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RubyPosition {
     /// Annotation above the base text (standard for horizontal writing-mode).
-    #[default]
     Over,
     /// Annotation below the base text.
     Under,
+    /// `alternate` / `alternate over`: the first annotation level goes over,
+    /// each following level on the side opposite to the previous one.
+    #[default]
+    AlternateOver,
+    /// `alternate under`: as [`Self::AlternateOver`], starting under.
+    AlternateUnder,
+    /// `inter-character`: annotation on the inline-end side of its base.
+    /// Horizontal writing mode only; the annotation keeps its own
+    /// (horizontal) glyph orientation — the spec's forced `vertical-rl`
+    /// annotation writing mode is not implemented.
+    InterCharacter,
+}
+
+impl RubyPosition {
+    /// Parses the `ruby-position` grammar
+    /// `[ alternate || [ over | under ] ] | inter-character`.
+    pub fn parse(val: &str) -> Option<Self> {
+        let tokens: Vec<String> =
+            val.split_ascii_whitespace().map(str::to_ascii_lowercase).collect();
+        let tokens: Vec<&str> = tokens.iter().map(String::as_str).collect();
+        Some(match tokens.as_slice() {
+            ["over"] => Self::Over,
+            ["under"] => Self::Under,
+            ["inter-character"] => Self::InterCharacter,
+            ["alternate"] | ["alternate", "over"] | ["over", "alternate"] => Self::AlternateOver,
+            ["alternate", "under"] | ["under", "alternate"] => Self::AlternateUnder,
+            _ => return None,
+        })
+    }
+
+    /// Shortest serialization of the computed value (CSSOM).
+    pub fn as_css(self) -> &'static str {
+        match self {
+            Self::Over => "over",
+            Self::Under => "under",
+            Self::AlternateOver => "alternate",
+            Self::AlternateUnder => "alternate under",
+            Self::InterCharacter => "inter-character",
+        }
+    }
+}
+
+/// Resolved placement of one annotation level relative to its bases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RubySide {
+    /// Above the base row.
+    Over,
+    /// Below the base row.
+    Under,
+    /// On the inline-end side of each base (`inter-character`).
+    InterCharacter,
+}
+
+/// CSS Ruby L1 §3.4: resolves the `ruby-position` of each annotation level of
+/// one ruby segment (in document order) to a side. `alternate` puts the first
+/// level on its keyword's side and every later level opposite to the level
+/// before it — whatever that level's own value was (WPT
+/// `css-ruby/ruby-position-alternate.html`: `over`, then two inherited
+/// `alternate` levels → over, under, over).
+pub fn resolve_level_sides(positions: &[RubyPosition]) -> Vec<RubySide> {
+    let mut sides: Vec<RubySide> = Vec::with_capacity(positions.len());
+    for &pos in positions {
+        let prev = sides.last().copied();
+        let side = match pos {
+            RubyPosition::Over => RubySide::Over,
+            RubyPosition::Under => RubySide::Under,
+            RubyPosition::InterCharacter => RubySide::InterCharacter,
+            RubyPosition::AlternateOver | RubyPosition::AlternateUnder => match prev {
+                Some(RubySide::Over) => RubySide::Under,
+                Some(RubySide::Under) => RubySide::Over,
+                _ if pos == RubyPosition::AlternateUnder => RubySide::Under,
+                _ => RubySide::Over,
+            },
+        };
+        sides.push(side);
+    }
+    sides
 }
 
 /// CSS Ruby L1 §4 — `ruby-align`. Inherited. Initial: `space-around`.
@@ -163,6 +244,19 @@ pub fn lay_out_ruby(ruby: &RubyBox) -> LayoutBox {
         return stack_boxes_horizontal(&ruby.base_boxes);
     }
 
+    // A lone level resolves `alternate` to its own keyword's side.
+    let side = match ruby.position {
+        RubyPosition::Under | RubyPosition::AlternateUnder => RubySide::Under,
+        RubyPosition::InterCharacter => {
+            let level = RubyLevel {
+                annotations: ruby.ruby_text_boxes.clone(),
+                position: ruby.position,
+            };
+            return compose_levels(&ruby.base_boxes, &[level], ruby.align, ruby.merge).0;
+        }
+        RubyPosition::Over | RubyPosition::AlternateOver => RubySide::Over,
+    };
+
     // `separate`/`auto` pair each annotation with its own base when counts
     // match; `merge` (or a count mismatch) spans one annotation row over all bases.
     let pair = matches!(ruby.merge, RubyMerge::Separate | RubyMerge::Auto)
@@ -178,7 +272,7 @@ pub fn lay_out_ruby(ruby: &RubyBox) -> LayoutBox {
                 compose_column(
                     std::slice::from_ref(base),
                     std::slice::from_ref(annotation),
-                    ruby.position,
+                    side,
                     ruby.align,
                 )
             })
@@ -186,15 +280,15 @@ pub fn lay_out_ruby(ruby: &RubyBox) -> LayoutBox {
         return stack_boxes_horizontal(&columns);
     }
 
-    compose_column(&ruby.base_boxes, &ruby.ruby_text_boxes, ruby.position, ruby.align)
+    compose_column(&ruby.base_boxes, &ruby.ruby_text_boxes, side, ruby.align)
 }
 
 /// Compose one ruby column: a base row and an annotation row stacked per
-/// `position`, with the narrower row distributed per `align`.
+/// `side` (`Over`/`Under`), with the narrower row distributed per `align`.
 fn compose_column(
     bases: &[LayoutBox],
     annotations: &[LayoutBox],
-    position: RubyPosition,
+    side: RubySide,
     align: RubyAlign,
 ) -> LayoutBox {
     let mut base_row = stack_boxes_horizontal(bases);
@@ -221,13 +315,13 @@ fn compose_column(
     column.rect.width = col_width;
     column.rect.height = base_height + ruby_height;
 
-    match position {
-        RubyPosition::Over => {
+    match side {
+        RubySide::Over | RubySide::InterCharacter => {
             crate::incremental::translate_subtree(&mut base_row, 0.0, ruby_height);
             column.children.push(ruby_row);
             column.children.push(base_row);
         }
-        RubyPosition::Under => {
+        RubySide::Under => {
             crate::incremental::translate_subtree(&mut ruby_row, 0.0, base_height);
             column.children.push(base_row);
             column.children.push(ruby_row);
@@ -235,6 +329,323 @@ fn compose_column(
     }
 
     column
+}
+
+/// CSSOM geometry of a laid-out `BoxKind::Ruby` box: the union of its base
+/// groups (the anonymous blocks the `<ruby>` owns), without the annotations.
+/// Browsers report the ruby container's base-level box and let annotations
+/// overflow it (WPT `css-ruby/ruby-position-alternate.html` compares
+/// `<rt>` rects against it); the layout rect keeps the annotations so the
+/// line reserves room for them. `None` when the ruby has no base.
+pub(crate) fn ruby_base_rect(ruby: &LayoutBox) -> Option<Rect> {
+    let mut acc: Option<Rect> = None;
+    let mut stack: Vec<&LayoutBox> = ruby.children.iter().collect();
+    while let Some(b) = stack.pop() {
+        if b.origin.role == BoxRole::AnonymousBlock && b.origin.node == Some(ruby.node) {
+            let r = b.rect;
+            acc = Some(match acc {
+                None => r,
+                Some(a) => {
+                    let x = a.x.min(r.x);
+                    let y = a.y.min(r.y);
+                    let right = (a.x + a.width).max(r.x + r.width);
+                    let bottom = (a.y + a.height).max(r.y + r.height);
+                    Rect { x, y, width: right - x, height: bottom - y }
+                }
+            });
+            continue;
+        }
+        stack.extend(b.children.iter());
+    }
+    acc
+}
+
+/// Horizontal gap between adjacent bases / annotation boxes — the same
+/// constant `stack_boxes_horizontal` inserts.
+const RUBY_BOX_GAP: f32 = 2.0;
+
+/// Box-tree shape of a `<ruby>` element (GAP-RUBYBOX-2), recorded by
+/// `build.rs`'s `build_ruby_box` in [`BoxKind::Ruby`]. The `<ruby>` box's
+/// `children` are the group boxes flattened in this exact order: for each
+/// segment its `bases` base boxes, then each level's `annotations` boxes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RubyShape {
+    /// Ruby segments in document order (CSS Ruby L1 §2.2).
+    pub segments: Vec<RubySegmentShape>,
+}
+
+/// One ruby segment: a run of bases and the annotation levels over them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RubySegmentShape {
+    /// Number of base boxes (one per `<rb>`, or per run of loose base content).
+    pub bases: usize,
+    /// Annotation levels in document order.
+    pub levels: Vec<RubyLevelShape>,
+}
+
+/// One annotation level (an `<rtc>`, or consecutive bare `<rt>`s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RubyLevelShape {
+    /// Number of annotation boxes in the level.
+    pub annotations: usize,
+    /// Computed `ruby-position` of the level's annotation container.
+    pub position: RubyPosition,
+}
+
+/// A laid-out annotation level handed to [`lay_out_ruby_segments`].
+#[derive(Debug, Clone)]
+pub struct RubyLevel {
+    /// Annotation boxes, index-paired with the segment's bases when the
+    /// counts match (and `ruby-merge` allows pairing), otherwise one span.
+    pub annotations: Vec<LayoutBox>,
+    /// Computed `ruby-position` of the level's annotation container.
+    pub position: RubyPosition,
+}
+
+/// A laid-out ruby segment handed to [`lay_out_ruby_segments`].
+#[derive(Debug, Clone)]
+pub struct RubySegment {
+    /// Base boxes.
+    pub bases: Vec<LayoutBox>,
+    /// Annotation levels in document order.
+    pub levels: Vec<RubyLevel>,
+}
+
+/// Composes every segment of a `<ruby>` and joins them side by side with
+/// their base rows on one line (a segment with an `over` level must not push
+/// its neighbours' bases down). One segment returns its own composed box, so
+/// the single-segment layout is exactly [`lay_out_ruby`]'s.
+pub fn lay_out_ruby_segments(
+    segments: Vec<RubySegment>,
+    style: std::sync::Arc<ComputedStyle>,
+    align: RubyAlign,
+    merge: RubyMerge,
+) -> LayoutBox {
+    let mut composed: Vec<(LayoutBox, f32)> = segments
+        .into_iter()
+        .filter(|seg| {
+            !seg.bases.is_empty() || seg.levels.iter().any(|l| !l.annotations.is_empty())
+        })
+        .map(|seg| compose_segment(seg, align, merge))
+        .collect();
+    match composed.len() {
+        0 => return make_anonymous_box_with_style(style),
+        1 => return composed.remove(0).0,
+        _ => {}
+    }
+    let base_top = composed.iter().map(|(_, top)| *top).fold(0.0, f32::max);
+    let boxes: Vec<LayoutBox> = composed
+        .into_iter()
+        .map(|(mut b, top)| {
+            crate::incremental::translate_subtree(&mut b, 0.0, base_top - top);
+            b
+        })
+        .collect();
+    let mut row = stack_boxes_horizontal(&boxes);
+    let top = row.rect.y;
+    row.rect.height = row
+        .children
+        .iter()
+        .map(|c| c.rect.y - top + c.rect.height)
+        .fold(0.0, f32::max);
+    row
+}
+
+/// Composes one segment; returns the box and the y of its base row inside it.
+fn compose_segment(seg: RubySegment, align: RubyAlign, merge: RubyMerge) -> (LayoutBox, f32) {
+    let RubySegment { bases, mut levels } = seg;
+    levels.retain(|l| !l.annotations.is_empty());
+    if bases.is_empty() {
+        let annotations: Vec<LayoutBox> =
+            levels.into_iter().flat_map(|l| l.annotations).collect();
+        return (stack_boxes_horizontal(&annotations), 0.0);
+    }
+    if levels.is_empty() {
+        return (stack_boxes_horizontal(&bases), 0.0);
+    }
+    if levels.len() == 1 && levels[0].position != RubyPosition::InterCharacter {
+        let level = levels.remove(0);
+        let over = matches!(level.position, RubyPosition::Over | RubyPosition::AlternateOver);
+        let base_top = if over {
+            level.annotations.iter().map(|a| a.rect.height).fold(0.0, f32::max)
+        } else {
+            0.0
+        };
+        let ruby = RubyBox::new(bases, level.annotations)
+            .with_position(level.position)
+            .with_align(align)
+            .with_merge(merge);
+        return (lay_out_ruby(&ruby), base_top);
+    }
+    compose_levels(&bases, &levels, align, merge)
+}
+
+/// Offset of a single box of `width` inside `container` per `ruby-align`.
+fn align_offset(container: f32, width: f32, align: RubyAlign) -> f32 {
+    let slack = (container - width).max(0.0);
+    match align {
+        RubyAlign::Start | RubyAlign::SpaceBetween => 0.0,
+        RubyAlign::Center | RubyAlign::SpaceAround => slack / 2.0,
+    }
+}
+
+/// Moves `b`'s subtree so its rect starts at (`x`, `y`).
+fn place_at(b: &mut LayoutBox, x: f32, y: f32) {
+    let (dx, dy) = (x - b.rect.x, y - b.rect.y);
+    crate::incremental::translate_subtree(b, dx, dy);
+}
+
+/// Multi-level composer (CSS Ruby L1 §3.4, GAP-RUBYBOX-2). Levels resolve to
+/// sides via [`resolve_level_sides`]; `over` levels stack upward from the base
+/// row in document order (first level nearest the base), `under` levels
+/// downward. A level whose annotation count equals the base count pairs one
+/// annotation per base column (unless `ruby-merge: merge`); otherwise it
+/// spans the whole segment as one row. `inter-character` annotations sit on
+/// the inline-end side of their base, top-aligned with it. Returns the
+/// segment box (children flat: bases, then annotations level by level) and
+/// the y of its base row.
+fn compose_levels(
+    bases: &[LayoutBox],
+    levels: &[RubyLevel],
+    align: RubyAlign,
+    merge: RubyMerge,
+) -> (LayoutBox, f32) {
+    let n = bases.len();
+    let positions: Vec<RubyPosition> = levels.iter().map(|l| l.position).collect();
+    let sides = resolve_level_sides(&positions);
+    let paired: Vec<bool> = levels
+        .iter()
+        .map(|l| l.annotations.len() == n && !(merge == RubyMerge::Merge && n > 1))
+        .collect();
+    let inter_paired = |l: usize| paired[l] && sides[l] == RubySide::InterCharacter;
+
+    // Spanning levels become one row each, normalised to (0,0).
+    let rows: Vec<Option<LayoutBox>> = levels
+        .iter()
+        .zip(&paired)
+        .map(|(l, &p)| {
+            (!p).then(|| {
+                let mut row = stack_boxes_horizontal(&l.annotations);
+                place_at(&mut row, 0.0, 0.0);
+                row
+            })
+        })
+        .collect();
+
+    // Inline extent of base `i` plus its paired inter-character annotations.
+    let inline_w = |i: usize| -> f32 {
+        bases[i].rect.width
+            + (0..levels.len())
+                .filter(|&l| inter_paired(l))
+                .map(|l| levels[l].annotations[i].rect.width)
+                .sum::<f32>()
+    };
+    // Column width: that inline extent, or the widest paired over/under annotation.
+    let col_w: Vec<f32> = (0..n)
+        .map(|i| {
+            (0..levels.len())
+                .filter(|&l| paired[l] && sides[l] != RubySide::InterCharacter)
+                .map(|l| levels[l].annotations[i].rect.width)
+                .fold(inline_w(i), f32::max)
+        })
+        .collect();
+    let mut col_x = Vec::with_capacity(n);
+    let mut cursor = 0.0;
+    for (i, w) in col_w.iter().enumerate() {
+        if i > 0 {
+            cursor += RUBY_BOX_GAP;
+        }
+        col_x.push(cursor);
+        cursor += w;
+    }
+    let block_w = cursor;
+    let span_w = rows
+        .iter()
+        .zip(&sides)
+        .filter(|(_, s)| **s != RubySide::InterCharacter)
+        .filter_map(|(r, _)| r.as_ref().map(|r| r.rect.width))
+        .fold(0.0, f32::max);
+    let core_w = block_w.max(span_w);
+    let block_dx = align_offset(core_w, block_w, align);
+
+    // Vertical extents.
+    let base_h = bases.iter().map(|b| b.rect.height).fold(0.0, f32::max);
+    let level_h: Vec<f32> = levels
+        .iter()
+        .zip(&rows)
+        .map(|(l, r)| match r {
+            Some(r) => r.rect.height,
+            None => l.annotations.iter().map(|a| a.rect.height).fold(0.0, f32::max),
+        })
+        .collect();
+    let base_y: f32 = (0..levels.len())
+        .filter(|&l| sides[l] == RubySide::Over)
+        .map(|l| level_h[l])
+        .sum();
+
+    let mut segment = make_anonymous_box_with_style(bases[0].style.clone());
+    // Per column: x where the next inter-character annotation starts.
+    let mut inter_x = Vec::with_capacity(n);
+    for (i, base) in bases.iter().enumerate() {
+        let x = block_dx + col_x[i] + align_offset(col_w[i], inline_w(i), align);
+        let mut b = base.clone();
+        place_at(&mut b, x, base_y);
+        inter_x.push(x + base.rect.width);
+        segment.children.push(b);
+    }
+
+    let mut over_cursor = base_y;
+    let mut under_cursor = base_y + base_h;
+    let mut inter_span_x = core_w;
+    for (l, level) in levels.iter().enumerate() {
+        let y = match sides[l] {
+            RubySide::Over => {
+                over_cursor -= level_h[l];
+                over_cursor
+            }
+            RubySide::Under => {
+                let y = under_cursor;
+                under_cursor += level_h[l];
+                y
+            }
+            RubySide::InterCharacter => base_y,
+        };
+        match &rows[l] {
+            None => {
+                for (i, annotation) in level.annotations.iter().enumerate() {
+                    let x = if sides[l] == RubySide::InterCharacter {
+                        let x = inter_x[i];
+                        inter_x[i] += annotation.rect.width;
+                        x
+                    } else {
+                        block_dx + col_x[i] + align_offset(col_w[i], annotation.rect.width, align)
+                    };
+                    let mut a = annotation.clone();
+                    place_at(&mut a, x, y);
+                    segment.children.push(a);
+                }
+            }
+            Some(row) => {
+                let mut r = row.clone();
+                if sides[l] == RubySide::InterCharacter {
+                    place_at(&mut r, inter_span_x, y);
+                    inter_span_x += r.rect.width;
+                } else {
+                    align_row(&mut r, level.annotations.len(), core_w, align);
+                    crate::incremental::translate_subtree(&mut r, 0.0, y);
+                }
+                segment.children.push(r);
+            }
+        }
+    }
+
+    segment.rect.width = inter_span_x;
+    segment.rect.height = segment
+        .children
+        .iter()
+        .map(|c| c.rect.y + c.rect.height)
+        .fold(base_y + base_h, f32::max);
+    (segment, base_y)
 }
 
 /// Moves `b`'s whole subtree so `b.rect.x` becomes exactly `target_x`,
@@ -527,5 +938,140 @@ mod tests {
         assert_eq!(annotation_row.rect.width, 100.0);
         assert_eq!(annotation_row.children[0].rect.x, 14.5);
         assert_eq!(annotation_row.children[1].rect.x, 22.0 + 43.5);
+    }
+
+    #[test]
+    fn test_ruby_position_parse_and_serialize() {
+        assert_eq!(RubyPosition::parse("alternate"), Some(RubyPosition::AlternateOver));
+        assert_eq!(RubyPosition::parse("under  ALTERNATE"), Some(RubyPosition::AlternateUnder));
+        assert_eq!(RubyPosition::parse("inter-character"), Some(RubyPosition::InterCharacter));
+        assert_eq!(RubyPosition::parse("over under"), None);
+        assert_eq!(RubyPosition::parse("alternate alternate"), None);
+        assert_eq!(RubyPosition::parse("alternate inter-character"), None);
+        assert_eq!(RubyPosition::default(), RubyPosition::AlternateOver);
+        assert_eq!(RubyPosition::AlternateOver.as_css(), "alternate");
+        assert_eq!(RubyPosition::AlternateUnder.as_css(), "alternate under");
+    }
+
+    /// The cases of WPT `css-ruby/ruby-position-alternate.html`.
+    #[test]
+    fn test_resolve_level_sides_alternation() {
+        use RubyPosition::{AlternateOver as AO, AlternateUnder as AU, Over, Under};
+        use RubySide as S;
+        assert_eq!(resolve_level_sides(&[AO, AO, AO]), [S::Over, S::Under, S::Over]);
+        assert_eq!(resolve_level_sides(&[AU, AU, AU]), [S::Under, S::Over, S::Under]);
+        assert_eq!(resolve_level_sides(&[Under, AO, AO]), [S::Under, S::Over, S::Under]);
+        assert_eq!(resolve_level_sides(&[Over, AO, AO]), [S::Over, S::Under, S::Over]);
+        assert_eq!(resolve_level_sides(&[AO, Under, AO]), [S::Over, S::Under, S::Over]);
+        assert_eq!(
+            resolve_level_sides(&[RubyPosition::InterCharacter, AU]),
+            [S::InterCharacter, S::Under]
+        );
+    }
+
+    fn level(annotations: Vec<LayoutBox>, position: RubyPosition) -> RubyLevel {
+        RubyLevel { annotations, position }
+    }
+
+    fn style() -> std::sync::Arc<ComputedStyle> {
+        std::sync::Arc::new(ComputedStyle::root())
+    }
+
+    #[test]
+    fn test_two_alternate_levels_go_over_then_under() {
+        let seg = RubySegment {
+            bases: vec![make_box(0.0, 0.0, 40.0, 20.0)],
+            levels: vec![
+                level(vec![make_box(0.0, 0.0, 40.0, 10.0)], RubyPosition::AlternateOver),
+                level(vec![make_box(0.0, 0.0, 40.0, 8.0)], RubyPosition::AlternateOver),
+            ],
+        };
+        let out = lay_out_ruby_segments(vec![seg], style(), RubyAlign::Start, RubyMerge::Separate);
+        // children: base, level 1 (over), level 2 (under).
+        assert_eq!(out.children[0].rect.y, 10.0);
+        assert_eq!(out.children[1].rect.y, 0.0);
+        assert_eq!(out.children[2].rect.y, 30.0);
+        assert_eq!(out.rect.height, 38.0);
+    }
+
+    #[test]
+    fn test_two_over_levels_stack_outward() {
+        let seg = RubySegment {
+            bases: vec![make_box(0.0, 0.0, 40.0, 20.0)],
+            levels: vec![
+                level(vec![make_box(0.0, 0.0, 40.0, 10.0)], RubyPosition::Over),
+                level(vec![make_box(0.0, 0.0, 40.0, 6.0)], RubyPosition::Over),
+            ],
+        };
+        let out = lay_out_ruby_segments(vec![seg], style(), RubyAlign::Start, RubyMerge::Separate);
+        assert_eq!(out.children[0].rect.y, 16.0); // base below both levels
+        assert_eq!(out.children[1].rect.y, 6.0); // first level nearest the base
+        assert_eq!(out.children[2].rect.y, 0.0); // second level outermost
+    }
+
+    #[test]
+    fn test_paired_and_spanning_levels() {
+        // Two bases; level 1 pairs (2 annotations), level 2 spans (1 annotation).
+        let seg = RubySegment {
+            bases: vec![make_box(0.0, 0.0, 30.0, 20.0), make_box(0.0, 0.0, 30.0, 20.0)],
+            levels: vec![
+                level(
+                    vec![make_box(0.0, 0.0, 10.0, 8.0), make_box(0.0, 0.0, 10.0, 8.0)],
+                    RubyPosition::Over,
+                ),
+                level(vec![make_box(0.0, 0.0, 20.0, 8.0)], RubyPosition::Under),
+            ],
+        };
+        let out = lay_out_ruby_segments(vec![seg], style(), RubyAlign::Center, RubyMerge::Separate);
+        assert_eq!(out.rect.width, 62.0);
+        // Paired annotations centred over their own base column.
+        assert_eq!(out.children[2].rect.x, 10.0);
+        assert_eq!(out.children[3].rect.x, 42.0);
+        // Spanning annotation centred under the whole segment.
+        assert_eq!(out.children[4].rect.x, 21.0);
+        assert_eq!(out.children[4].rect.y, 28.0);
+    }
+
+    #[test]
+    fn test_inter_character_sits_after_its_base() {
+        let seg = RubySegment {
+            bases: vec![make_box(0.0, 0.0, 30.0, 20.0), make_box(0.0, 0.0, 30.0, 20.0)],
+            levels: vec![level(
+                vec![make_box(0.0, 0.0, 8.0, 12.0), make_box(0.0, 0.0, 8.0, 12.0)],
+                RubyPosition::InterCharacter,
+            )],
+        };
+        let out = lay_out_ruby_segments(vec![seg], style(), RubyAlign::Start, RubyMerge::Separate);
+        let (b0, b1, a0, a1) = (&out.children[0], &out.children[1], &out.children[2], &out.children[3]);
+        assert_eq!(a0.rect.x, b0.rect.x + 30.0);
+        assert_eq!(a0.rect.y, b0.rect.y);
+        assert_eq!(b1.rect.x, 40.0); // column 0 is base + annotation wide, plus the gap
+        assert_eq!(a1.rect.x, 70.0);
+        assert_eq!(out.rect.height, 20.0); // no block-axis growth
+    }
+
+    #[test]
+    fn test_segments_share_base_line() {
+        let annotated = RubySegment {
+            bases: vec![make_box(0.0, 0.0, 30.0, 20.0)],
+            levels: vec![level(vec![make_box(0.0, 0.0, 30.0, 10.0)], RubyPosition::Over)],
+        };
+        let bare = RubySegment { bases: vec![make_box(0.0, 0.0, 30.0, 20.0)], levels: vec![] };
+        let out = lay_out_ruby_segments(
+            vec![annotated, bare],
+            style(),
+            RubyAlign::Start,
+            RubyMerge::Separate,
+        );
+        assert_eq!(out.children.len(), 2);
+        let annotated_base_y = out.children[0].children[1].rect.y;
+        assert_eq!(out.children[1].rect.y, annotated_base_y);
+        assert_eq!(out.rect.height, 30.0);
+    }
+
+    #[test]
+    fn test_empty_segments_do_not_panic() {
+        let out = lay_out_ruby_segments(vec![], style(), RubyAlign::Start, RubyMerge::Separate);
+        assert!(out.children.is_empty());
     }
 }

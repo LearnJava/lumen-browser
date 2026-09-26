@@ -75,7 +75,11 @@ pub use mathml::{
     MATH_SCRIPT_SCALE, MathStyle, MathmlBox, MathmlElementKind, collect_mathml_structure,
     lay_out_mathml, math_depth_scale,
 };
-pub use ruby::{RubyAlign, RubyBox, RubyMerge, RubyPosition, lay_out_ruby};
+pub use ruby::{
+    RubyAlign, RubyBox, RubyLevel, RubyLevelShape, RubyMerge, RubyPosition, RubySegment,
+    RubySegmentShape, RubyShape, RubySide, lay_out_ruby, lay_out_ruby_segments,
+    resolve_level_sides,
+};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
@@ -1990,9 +1994,14 @@ fn collect_layout_rects_rec(
         // box, not the flow-position `rect` paint starts from. Ancestor transforms
         // are not accumulated (out of scope of the filed repro, which transforms the
         // queried box itself, not a container above it).
+        // GAP-RUBYBOX-2: a `<ruby>` answers with its base-level box only.
+        let own = match &b.kind {
+            BoxKind::Ruby { .. } => ruby::ruby_base_rect(b).unwrap_or(b.rect),
+            _ => b.rect,
+        };
         let r = match forward_box_transform(b) {
-            Some(m) => transformed_aabb(&b.rect, &m),
-            None => b.rect,
+            Some(m) => transformed_aabb(&own, &m),
+            None => own,
         };
         out.entry(b.node.index() as u32)
             .or_insert([r.x, r.y, r.width, r.height]);
@@ -2092,7 +2101,10 @@ fn collect_client_rects_rec(
     while let Some(b) = stack.pop() {
         // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
         // traversal visits a node's own box before descending into its children.
-        let r = &b.rect;
+        let r = match &b.kind {
+            BoxKind::Ruby { .. } => ruby::ruby_base_rect(b).unwrap_or(b.rect),
+            _ => b.rect,
+        };
         out.entry(b.node.index() as u32)
             .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
         if let BoxKind::InlineRun { lines, .. } = &b.kind {

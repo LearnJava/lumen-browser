@@ -496,12 +496,9 @@ pub(in crate::style) fn apply_decl_text(
             };
         }
         "ruby-position" => {
-            style.ruby_position = match val.trim() {
-                // `alternate` (одиночный) по спеке ведёт себя как over.
-                "over" | "alternate" => RubyPosition::Over,
-                "under" => RubyPosition::Under,
-                _ => style.ruby_position,
-            };
+            if let Some(pos) = RubyPosition::parse(val) {
+                style.ruby_position = pos;
+            }
         }
         "ruby-align" => {
             style.ruby_align = match val.trim() {

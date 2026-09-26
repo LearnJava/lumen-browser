@@ -269,11 +269,18 @@ pub(crate) fn is_ruby_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
-/// HTML-имя `<rt>` — ruby-text annotation child of `<ruby>` (GAP-RUBYBOX).
-/// `<rtc>` groups multiple `<rt>` under one ruby-text container; Phase 0
-/// scope treats each `<rt>` inside an `<rtc>` the same as a bare `<rt>` (the
-/// `<rtc>` wrapper itself contributes no extra grouping — see `build.rs`'s
-/// doc comment on `collect_ruby_groups` for the documented remainder).
+/// HTML-имя `<rb>` — отдельная база ruby-сегмента (GAP-RUBYBOX-2): каждая
+/// `<rb>` — своя колонка, с которой по индексу спариваются `<rt>` уровня.
+pub(crate) fn is_ruby_base_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "rb"
+    )
+}
+
+/// HTML-имя `<rt>` — ruby-text annotation child of `<ruby>` or `<rtc>`
+/// (GAP-RUBYBOX). Consecutive bare `<rt>`s form one anonymous annotation
+/// level; inside an `<rtc>` they are that container's annotations.
 pub(crate) fn is_ruby_text_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,
@@ -292,12 +299,9 @@ pub(crate) fn is_ruby_parenthesis_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
-/// HTML-имя `<rtc>` — ruby-text container grouping several `<rt>` (CSS Ruby
-/// L1 §4.2). GAP-RUBYBOX Phase 0 does not give `<rtc>` its own grouping
-/// semantics — each `<rt>` inside it is flattened into the same per-index
-/// pairing a bare `<rt>` gets (`build.rs`'s `collect_ruby_groups`); this
-/// predicate only lets the box-builder recognise the wrapper and recurse
-/// into it instead of treating it as base content.
+/// HTML-имя `<rtc>` — ruby-text container (CSS Ruby L1 §2.1): один уровень
+/// аннотаций со своим `ruby-position` (GAP-RUBYBOX-2, `build.rs`'s
+/// `build_ruby_box`).
 pub(crate) fn is_ruby_text_container_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,

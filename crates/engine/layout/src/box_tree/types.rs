@@ -442,18 +442,15 @@ pub enum BoxKind {
     /// own here. Paint and hit-test walk `children` exactly like `Block`
     /// (see `walk.rs`/`invariants.rs`'s `Block | FlowRoot | ...` arms).
     ///
-    /// `children` is `base_count` base-group boxes followed by the same
-    /// number of annotation-group boxes, index-paired
-    /// (`children[i]` pairs with `children[base_count + i]`) — built once at
-    /// box-build time by `build.rs`'s `build_ruby_box`/`build_ruby_group_box`
-    /// and read back by `layout_dispatch`'s `Ruby` arm after each group has
-    /// been laid out normally as a Block. `base_count` may be 0 (ruby text
-    /// with no preceding base — `lay_out_ruby`'s "render ruby text alone"
-    /// branch) or equal `children.len()` (base with no `<rt>` at all).
+    /// `children` are the base-group and annotation-group boxes flattened
+    /// in the order `shape` describes (GAP-RUBYBOX-2: per segment its bases,
+    /// then each annotation level's boxes) — built once at box-build time by
+    /// `build.rs`'s `build_ruby_box`/`build_ruby_group_box` and read back by
+    /// `layout_dispatch`'s `Ruby` arm after each group has been laid out
+    /// normally as a Block.
     Ruby {
-        /// Number of leading `children` entries that are base-group boxes;
-        /// the rest are the paired annotation-group boxes.
-        base_count: usize,
+        /// Segment/level partition of `children`.
+        shape: Box<crate::ruby::RubyShape>,
     },
     /// Схлопнутый межэлементный пробел в InlineBlockRow.
     /// Не рисуется; участвует только как горизонтальный gap между
