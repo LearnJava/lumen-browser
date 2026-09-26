@@ -8,5 +8,4 @@ BUGS.md:213
 BUGS.md:214
 BUGS.md:215
 BUGS.md:216
-BUGS.md:217
-BUGS.md:237
+BUGS.md:236

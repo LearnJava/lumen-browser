@@ -1,6 +1,6 @@
 # BUG-1137 — Нет интерфейса `History`: `typeof History === 'undefined'`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid_b.js:1006` — `var history = {` — литерал без интерфейса)
 
@@ -40,3 +40,22 @@ document.getElementById('o').textContent = JSON.stringify(r);
 HTML LS §7.4.2: интерфейс `History` (не конструируемый, `Illegal constructor`), `history` —
 его экземпляр, члены — на `History.prototype`, `Symbol.toStringTag` = `'History'`. Сделать вместе с
 BUG-624/BUG-637 по одному образцу. Критерий: репро даёт результат Chrome.
+
+## Исправление (P6, 2026-09-26)
+
+`WEB_API_SHIM` (`crates/js/src/shim/web_api_shim_mid_b.js`) заводит `function History()`
+(`TypeError: Illegal constructor`), а члены прежнего литерала переносит на `History.prototype`:
+`length`/`state` — геттеры без сеттера (`get length`/`get state`), `go`/`back`/`forward`/
+`pushState`/`replaceState` — операции. Все проверяют бренд: `this` должен быть единственным
+экземпляром, иначе `TypeError: Illegal invocation`. `history` — `Object.create(History.prototype)`
+без собственных свойств; `Symbol.toStringTag = 'History'`, `History.prototype` неперезаписываем,
+сам `History` — неперечисляемое свойство глобала. Образец — BUG-624 (`Navigator`), но без
+Rust-финализатора: других модулей, вешающих члены на `history`, нет.
+
+`back`/`forward` зовут `go` через захваченный экземпляр, а не через глобал `history`, — страница
+может переприсвоить `var history`.
+
+Не сделано (вне пункта): `scrollRestoration` в Lumen отсутствует вовсе.
+
+Тесты: `crates/js/src/dom/tests/v8_bug1137_history_interface.rs` (4 шт.) — репро из заявки даёт
+результат Chrome.
