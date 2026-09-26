@@ -3,5 +3,4 @@ BUGS.md:205
 BUGS.md:206
 BUGS.md:207
 BUGS.md:208
-BUGS.md:209
-BUGS.md:229
+BUGS.md:228

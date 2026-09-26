@@ -705,6 +705,9 @@ var navigator = Object.assign(Object.create(Navigator.prototype), {
             return ok;
         } catch(e) { return false; }
     },
+    // HTML LS §8.9.1.6 `NavigatorPlugins`: always false (BUG-1142 — Adobe
+    // Analytics calls it unguarded and aborted its `track()` on Lumen).
+    javaEnabled: function javaEnabled() { return false; },
 });
 
 // BUG-765: `navigator.serviceWorker` is `[SecureContext]` (Service Workers
