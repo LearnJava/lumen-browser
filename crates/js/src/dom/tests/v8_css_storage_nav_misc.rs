@@ -543,6 +543,7 @@ fn perf_observer_lcp_entry() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['largest-contentful-paint']});
                 _lumen_deliver_lcp_entry(6, 1024, 200.5, 210.5);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].entryType === 'largest-contentful-paint' && got[0].size === 1024 && got[0].element !== null && Math.abs(got[0].duration - 10) < 0.1
                 "#));
 }
@@ -555,6 +556,7 @@ fn perf_observer_layout_shift() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['layout-shift']});
                 _lumen_deliver_layout_shift(0.15, [], false);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].entryType === 'layout-shift' && got[0].value === 0.15 && got[0].hadRecentInput === false
                 "#));
 }
@@ -570,6 +572,7 @@ fn perf_observer_layout_shift_source_carries_previous_and_current_rect() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['layout-shift']});
                 _lumen_deliver_layout_shift(0.15, [{nid: 6, prev: [0, 0, 300, 200], curr: [0, 160, 300, 200]}], false);
+                _lumen_tick_timers();
                 var src = got[0].sources[0];
                 got.length === 1 && got[0].sources.length === 1 && src.node !== null
                     && src.previousRect instanceof DOMRectReadOnly && src.currentRect instanceof DOMRectReadOnly
@@ -586,7 +589,7 @@ fn perf_observer_buffered() {
                 po1.observe({entryTypes: ['layout-shift']});
                 _lumen_deliver_layout_shift(0.1, [], false);
                 var po2 = new PerformanceObserver(function() {});
-                po2.observe({entryTypes: ['layout-shift'], buffered: true});
+                po2.observe({type: 'layout-shift', buffered: true});
                 var buffered = po2.takeRecords();
                 buffered.length === 1 && buffered[0].value === 0.1
                 "#));
@@ -600,8 +603,10 @@ fn perf_observer_disconnect() {
                 var po = new PerformanceObserver(function() { count++; });
                 po.observe({entryTypes: ['layout-shift']});
                 _lumen_deliver_layout_shift(0.1, [], false);
+                _lumen_tick_timers();
                 po.disconnect();
                 _lumen_deliver_layout_shift(0.2, [], false);
+                _lumen_tick_timers();
                 count === 1
                 "#));
 }
