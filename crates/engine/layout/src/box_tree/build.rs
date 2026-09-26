@@ -37,10 +37,22 @@ fn build_ruby_box(
             prev_index,
         )
     };
-    let element = |node: NodeId, parent: &ComputedStyle| {
-        build_box_or_reuse(
-            doc, sheet, node, parent, viewport, flat, counters, registry, dark_mode, prev_index,
-        )
+    // An `<rt>` gets the same shrink-to-fit wrapper as a base group: built
+    // as its own element box it was a block stretched to the whole line
+    // (1008px for `ān`), so neighbouring rubies' annotations overlapped (WPT
+    // `css-ruby/ruby-overhang-no-overlap.html`).
+    let annotation = |node: NodeId, parent: &ComputedStyle| group(node, &[node], parent);
+    // CSS Ruby L1 §2.1: a floated or absolutely positioned `<rt>` is
+    // blockified and stops being ruby text — it stays in the base level
+    // (WPT `css-ruby/rt-display-blockified.html`).
+    let is_annotation = |node: NodeId, parent: &ComputedStyle| {
+        is_ruby_text_element(doc, node) && {
+            let s = counters.style_arc(node).unwrap_or_else(|| {
+                Arc::new(compute_style(doc, node, sheet, parent, viewport, dark_mode))
+            });
+            s.float_side == FloatSide::None
+                && !matches!(s.position, Position::Absolute | Position::Fixed)
+        }
     };
     let skipped = |node: NodeId| match &doc.get(node).data {
         NodeData::Comment(_) | NodeData::Doctype { .. } => true,
@@ -94,9 +106,9 @@ fn build_ruby_box(
         if skipped(cid) {
             continue;
         }
-        if is_ruby_text_element(doc, cid) {
+        if is_annotation(cid, style) {
             flush_loose(&mut loose, &mut bases);
-            implicit.push(element(cid, style));
+            implicit.push(annotation(cid, style));
         } else if is_ruby_text_container_element(doc, cid) {
             flush_loose(&mut loose, &mut bases);
             flush_implicit(&mut implicit, &mut levels);
@@ -109,12 +121,12 @@ fn build_ruby_box(
                 if skipped(rid) {
                     continue;
                 }
-                if is_ruby_text_element(doc, rid) {
+                if is_annotation(rid, &rtc_style) {
                     if !rtc_loose.is_empty() {
                         anns.push(group(cid, &rtc_loose, &rtc_style));
                         rtc_loose.clear();
                     }
-                    anns.push(element(rid, &rtc_style));
+                    anns.push(annotation(rid, &rtc_style));
                 } else {
                     rtc_loose.push(rid);
                 }
