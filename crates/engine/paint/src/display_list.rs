@@ -27,7 +27,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform, perspective_matrix,
     transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     SvgGradientDef, SvgGradientUnits, SvgPaint,
@@ -252,7 +252,8 @@ use inline_frag::background_origin_rect;
 use inline_frag::content_box_rect;
 
 mod background_mask;
-use background_mask::{emit_background_image, emit_push_mask, rendered_mask_layers};
+use background_mask::{emit_background_image, emit_push_mask, rendered_mask_layers, FixedBgViewportGuard};
+pub use background_mask::with_fixed_background_viewport;
 // Used only by `display_list/tests/background_and_layers.rs` (via `super::*`).
 #[cfg(test)]
 use background_mask::gradient_tile_rects;

@@ -580,6 +580,10 @@ pub struct FemtovgBackend {
     layer_stack_depth: usize,
     /// Стек смещений для position:sticky: (dy, dx).
     sticky_stack: Vec<(f32, f32)>,
+    /// CSS Backgrounds L3 §3.6 — depth of open `BeginFixedBackground`
+    /// brackets: inside one, background positioning geometry cancels the page
+    /// scroll (see [`DisplayCommand::BeginFixedBackground`]).
+    fixed_bg_depth: u32,
     /// Текущий scroll_y, обновляется в `render()` перед обходом content.
     scroll_y: f32,
     /// Текущий scroll_x, обновляется в `render()` перед обходом content.
@@ -1837,6 +1841,7 @@ impl FemtovgBackend {
             fallback_chain: Vec::new(),
             layer_stack_depth: 0,
             sticky_stack: Vec::new(),
+            fixed_bg_depth: 0,
             scroll_y: 0.0,
             scroll_x: 0.0,
             page_offset: (0.0, 0.0),
@@ -3887,6 +3892,27 @@ impl FemtovgBackend {
 
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn render_command(&mut self, cmd: &DisplayCommand) {
+        // CSS Backgrounds L3 §3.6 — a gradient tile of a
+        // `background-attachment: fixed` layer is pure positioning geometry
+        // built at the scroll-0 viewport: undo the page scroll for it (before
+        // culling, so the cull sees its on-screen box). Its painting area is the
+        // enclosing `PushClip*`, already applied under the normal transform.
+        if self.fixed_bg_depth > 0
+            && matches!(
+                cmd,
+                DisplayCommand::DrawLinearGradient { .. }
+                    | DisplayCommand::DrawRadialGradient { .. }
+                    | DisplayCommand::DrawConicGradient { .. }
+            )
+        {
+            let depth = std::mem::replace(&mut self.fixed_bg_depth, 0);
+            self.canvas.save();
+            self.canvas.translate(self.scroll_x, self.scroll_y);
+            self.render_command(cmd);
+            self.canvas.restore();
+            self.fixed_bg_depth = depth;
+            return;
+        }
         // ADR-016 M0.2: skip self-contained leaf draws whose box is fully
         // off-screen under the current transform. Structural commands return
         // `None` from `cull_rect` and always execute (stack balance).
@@ -4154,7 +4180,20 @@ impl FemtovgBackend {
             DisplayCommand::DrawBackgroundImage {
                 rect, origin_rect, src, size, position, repeat, ..
             } => {
-                self.draw_background_image(rect, origin_rect, src, *size, position, *repeat);
+                // CSS Backgrounds L3 §3.6: a fixed layer's positioning area is
+                // the scroll-0 viewport — shift it by the page scroll so the
+                // picture stays put while `rect` (painting area) scrolls.
+                let origin = if self.fixed_bg_depth > 0 {
+                    Rect::new(
+                        origin_rect.x + self.scroll_x,
+                        origin_rect.y + self.scroll_y,
+                        origin_rect.width,
+                        origin_rect.height,
+                    )
+                } else {
+                    *origin_rect
+                };
+                self.draw_background_image(rect, &origin, src, *size, position, *repeat);
             }
 
             // ── Gradients ───────────────────────────────────────────────────
@@ -4944,6 +4983,12 @@ impl FemtovgBackend {
             // content is already at viewport-fixed coords, so no canvas offset.
             DisplayCommand::BeginFixedLayer | DisplayCommand::EndFixedLayer => {}
 
+            // ── Fixed background (CSS Backgrounds L3 §3.6) ───────────────────
+            DisplayCommand::BeginFixedBackground => self.fixed_bg_depth += 1,
+            DisplayCommand::EndFixedBackground => {
+                self.fixed_bg_depth = self.fixed_bg_depth.saturating_sub(1);
+            }
+
             // ── Page break (print only) ──────────────────────────────────────
             DisplayCommand::PageBreak => {}
         }
@@ -5037,6 +5082,7 @@ impl RenderBackend for FemtovgBackend {
         // Обновляем scroll context для sticky-вычислений.
         self.scroll_y = scroll_y;
         self.scroll_x = scroll_x;
+        self.fixed_bg_depth = 0;
         // ADR-016 M0.2: reset per-frame culling counters.
         self.cull_stats = (0, 0);
         // BUG-273 срез 2: advance the filter-cache LRU clock and reset the
@@ -5108,8 +5154,15 @@ impl RenderBackend for FemtovgBackend {
         // present assumes an un-scaled band; preview frames fall back to the direct
         // path, leaving the retained band intact for when preview ends). M3.2.1c-5:
         // and no overlay is nested under a compositing ancestor we cannot replay.
+        //
+        // CSS Backgrounds L3 §3.6: a `background-attachment: fixed` picture stays
+        // put while its element scrolls — the band's pixels depend on scroll
+        // non-linearly, so such a list always renders directly.
         let scroll_blit_active = self.scroll_blit
             && !matches!(overlay_plan, crate::NestedOverlayPlan::Fallback)
+            && !content
+                .iter()
+                .any(|c| matches!(c, DisplayCommand::BeginFixedBackground))
             && self.viewport_css_w > 0.0
             && self.viewport_css_h > 0.0
             && (self.preview_scale - 1.0).abs() <= f32::EPSILON;

@@ -308,6 +308,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::EndFixedLayer => {
                 out.push_str("EndFixedLayer\n");
             }
+            DisplayCommand::BeginFixedBackground => {
+                out.push_str("BeginFixedBackground\n");
+            }
+            DisplayCommand::EndFixedBackground => {
+                out.push_str("EndFixedBackground\n");
+            }
             DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
                 out.push_str(&format!(
                     "PushScrollLayer clip=({:.2},{:.2},{:.2},{:.2}) scroll=({:.2},{:.2})\n",

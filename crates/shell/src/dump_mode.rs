@@ -239,7 +239,7 @@ pub(crate) fn render_source_to_png(
 
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");
-        let mut dl = paint_ordered(&parsed.layout);
+        let mut dl = crate::display_list_metrics::paint_ordered_in(&parsed.layout, vp);
         // BUG-480 срез 15: содержимое под-документов фреймов — и здесь. Живой
         // путь вклеивает его в `Lumen::set_display_list` (срез 14), а `--dump-
         // display-list` — у себя; снимок собирает список сам и до этого среза
@@ -649,7 +649,7 @@ pub(crate) fn run_dump(
         DumpKind::DisplayList => {
             let vp = dump_vp;
             let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), None)?;
-            let mut dl = paint_ordered(&parsed.layout);
+            let mut dl = crate::display_list_metrics::paint_ordered_in(&parsed.layout, vp);
             // BUG-480 срез 14: дамп обязан показывать то же, что попадёт на
             // экран, — окно вклеивает содержимое под-документов в список
             // страницы (`Lumen::set_display_list`), и без этой строки дамп

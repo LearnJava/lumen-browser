@@ -458,6 +458,30 @@ pub enum DisplayCommand {
     BeginFixedLayer,
     /// Closes the fixed layer opened by `BeginFixedLayer`. No-op in every backend.
     EndFixedLayer,
+    /// CSS Backgrounds L3 §3.6 — `background-attachment: fixed` bracket around
+    /// one background layer's draw commands.
+    ///
+    /// A fixed background is positioned (and sized) against the **viewport**,
+    /// not against the element's box, while still painting only inside the
+    /// element's `background-clip` area. The emitter builds the layer against
+    /// the viewport rectangle at scroll 0 (the root box's rect, page space), so
+    /// the list stays scroll-independent; a renderer that scrolls the page by
+    /// `(scroll_x, scroll_y)` adds that offset back to the enclosed
+    /// *positioning* geometry — a `DrawBackgroundImage`'s `origin_rect` and the
+    /// gradient tile rects — but not to the painting area (the image's `rect`,
+    /// the `PushClip*` the emitter always wraps gradient tiles in). The picture
+    /// then shows through the element as through a window. Renderers that do
+    /// not scroll the page themselves (`cpu_raster`, the static-screenshot
+    /// path) treat the bracket as a no-op, which is exact at scroll 0.
+    ///
+    /// Unlike `BeginFixedLayer` this is **not** an overlay bracket: the element
+    /// scrolls with the page, only the picture inside it stays put. The page
+    /// scroll compositors therefore cannot reuse a band for such a list — the
+    /// pixels depend on the scroll offset non-linearly — and treat it like
+    /// `BeginStickyLayer`.
+    BeginFixedBackground,
+    /// Closes the bracket opened by `BeginFixedBackground`.
+    EndFixedBackground,
     /// CSS Overflow L3 §3.2 — `overflow: scroll` / `overflow: auto` scroll region.
     ///
     /// Clips rendering to `clip_rect` (padding-box of the container) and translates
@@ -666,6 +690,8 @@ impl DisplayCommand {
             Self::BeginStickyLayer { .. } => "BeginStickyLayer",
             Self::EndStickyLayer => "EndStickyLayer",
             Self::BeginFixedLayer => "BeginFixedLayer",
+            Self::BeginFixedBackground => "BeginFixedBackground",
+            Self::EndFixedBackground => "EndFixedBackground",
             Self::EndFixedLayer => "EndFixedLayer",
             Self::PushScrollLayer { .. } => "PushScrollLayer",
             Self::PopScrollLayer => "PopScrollLayer",
@@ -934,6 +960,8 @@ mod tests {
             DisplayCommand::EndStickyLayer,
             DisplayCommand::BeginFixedLayer,
             DisplayCommand::EndFixedLayer,
+            DisplayCommand::BeginFixedBackground,
+            DisplayCommand::EndFixedBackground,
             DisplayCommand::PushScrollLayer { clip_rect: rect, scroll_x: 1.0, scroll_y: 2.0 },
             DisplayCommand::PopScrollLayer,
             DisplayCommand::DrawSvgPath { vertices: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], color },
@@ -983,6 +1011,7 @@ mod tests {
             "PushMaskConicGradient", "PopMask", "PushMaskLayer", "PopMaskLayer", "PushTransform",
             "PopTransform", "PushFilter", "PopFilter", "PushBackdropFilter", "PopBackdropFilter",
             "BeginStickyLayer", "EndStickyLayer", "BeginFixedLayer", "EndFixedLayer",
+            "BeginFixedBackground", "EndFixedBackground",
             "PushScrollLayer", "PopScrollLayer", "DrawSvgPath", "DrawSvgFill", "DrawSvgStroke",
             "BoxModelOverlay", "DrawScrollbar", "DrawCrossFade", "PageBreak",
         ];

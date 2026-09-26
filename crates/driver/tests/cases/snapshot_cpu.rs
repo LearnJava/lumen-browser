@@ -241,6 +241,10 @@ const PAGES: &[&str] = &[
     // effect is glyph case + size, which diverges from Edge (rule #3); this
     // deterministic CPU snapshot is the regression gate for the synthesis.
     "150-font-variant-caps",
+    // CSS Backgrounds L3 §3.6 — background-attachment: fixed layers positioned
+    // against the 1024×720 viewport (scroll 0); gate for the emitter geometry.
+    // The scroll pinning itself is renderer-side and not visible at scroll 0.
+    "158-background-attachment",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

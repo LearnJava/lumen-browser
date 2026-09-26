@@ -121,7 +121,10 @@ impl Lumen {
                 }
             } else {
                 // Fallback: полная пересборка при любой нестандартной структуре DL.
-                let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
+                let new_dl = match self.relayout_viewport() {
+                    Some(vp) => crate::display_list_metrics::paint_ordered_in(self.layout_box.as_ref().unwrap(), vp),
+                    None => paint_ordered(self.layout_box.as_ref().unwrap()),
+                };
                 self.tile_grid.update_from_diff(&self.display_list, &new_dl);
                 self.set_display_list(new_dl);
             }

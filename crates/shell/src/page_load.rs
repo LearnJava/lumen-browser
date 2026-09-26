@@ -1567,7 +1567,7 @@ impl Lumen {
             ),
             _ => lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer),
         };
-        let dl = paint_ordered(&layout);
+        let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
 
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
