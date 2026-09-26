@@ -397,6 +397,9 @@ mod v8_bug1137_history_interface;
 mod v8_bug1138_html_document;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1139_message_target;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug863_cdata_section;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1122_iface_protos;

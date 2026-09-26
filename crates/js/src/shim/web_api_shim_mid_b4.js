@@ -2004,8 +2004,32 @@ var window = {
     },
     dispatchEvent: function(evt) {
         if (!evt || !evt.type) return true;
+        // BUG-1139: a dispatch aimed at the window itself (not the last hop of
+        // `_lumen_propagate`, which has already set `eventPhase`/`target`) has
+        // the window as its whole path — DOM §2.9: `target` and
+        // `currentTarget` are the window, the phase is AT_TARGET, and both are
+        // cleared again when the dispatch ends.
+        var ownDispatch = !evt.eventPhase;
+        if (ownDispatch) {
+            evt.target = window;
+            evt.currentTarget = window;
+            evt.eventPhase = 2;
+            if (typeof _LUMEN_WIN_LISTENER_NID !== 'undefined') evt._path = [_LUMEN_WIN_LISTENER_NID];
+        }
         var arr;
-        if (evt.type === 'load') {
+        if (evt.type === 'message') {
+            // `message` has its own bucket (see `addEventListener`), so the
+            // generic branch below would never reach it. `onmessage` first:
+            // the order the engine's own delivery has always used.
+            if (typeof window.onmessage === 'function') {
+                try { window.onmessage.call(window, evt); } catch(e) { _lumen_report_exception(e); }
+            }
+            arr = _message_listeners.slice();
+            for (var i = 0; i < arr.length; i++) {
+                if (evt._stopImmediate) break;
+                try { arr[i].call(window, evt); } catch(e) { _lumen_report_exception(e); }
+            }
+        } else if (evt.type === 'load') {
             arr = _load_listeners.slice();
             for (var i = 0; i < arr.length; i++) {
                 try { arr[i].call(window, evt); } catch(e) { _lumen_report_exception(e); }
@@ -2053,10 +2077,15 @@ var window = {
             // property (`onpopstate`, `ongamepadconnected`, …) is reached this
             // way, so a new one needs no dispatch-side change. No double-fire:
             // `load`/`error` are handled by the branches above, and the engine's
-            // own delivery of `hashchange`/`popstate`/`message` calls the
+            // own delivery of `hashchange`/`popstate` calls the
             // handler directly instead of going through `dispatchEvent`.
             var onFn = window['on' + evt.type];
             if (typeof onFn === 'function') { try { onFn.call(window, evt); } catch(e) { _lumen_report_exception(e); } }
+        }
+        if (ownDispatch) {
+            evt.eventPhase = 0;
+            evt.currentTarget = null;
+            evt._path = null;
         }
         return !evt.defaultPrevented;
     },
@@ -2102,15 +2131,10 @@ var window = {
         var ev = new MessageEvent(structuredClone(message));
         ev.origin = origin;
         ev.source = window;
-        // Spec §7.7.4 step 5: dispatch as a task (asynchronously).
-        setTimeout(function() {
-            if (typeof window.onmessage === 'function') {
-                try { window.onmessage(ev); } catch(e) { _lumen_report_exception(e); }
-            }
-            for (var i = 0; i < _message_listeners.length; i++) {
-                try { _message_listeners[i](ev); } catch(e) { _lumen_report_exception(e); }
-            }
-        }, 0);
+        // Spec §7.7.4 step 5: dispatch as a task (asynchronously). «Fire an
+        // event» — a real dispatch, so `target`/`currentTarget` are the window
+        // (BUG-1139).
+        setTimeout(function() { window.dispatchEvent(ev); }, 0);
     },
 };
 
@@ -2136,12 +2160,7 @@ globalThis._lumen_deliver_frame_message = function(data, origin, source) {
     var ev = new MessageEvent(data);
     ev.origin = origin || '';
     if (source !== null && source !== undefined) ev.source = source;
-    if (typeof window.onmessage === 'function') {
-        try { window.onmessage(ev); } catch(e) {}
-    }
-    for (var i = 0; i < _message_listeners.length; i++) {
-        try { _message_listeners[i](ev); } catch(e) {}
-    }
+    window.dispatchEvent(ev);
 };
 
 // BUG-480 срез 6: синтетический click() из родительского фасада iframe
