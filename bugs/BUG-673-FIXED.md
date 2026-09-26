@@ -1,6 +1,6 @@
 # BUG-673: `window.PerformanceResourceTiming`/`window.PerformanceNavigationTiming` interface objects don't exist — entries are plain objects, not instances of anything
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)
 **Найден:** P2, WPT-VENDOR-server-timing, 2026-08-06
 
@@ -83,3 +83,23 @@ PerformanceNavigationTiming : PerformanceResourceTiming`) и делать
 `_lumen_record_resource_timing`/`_lumen_deliver_perf_entry('navigation',
 …)` инстанцировать записи через них, а не как объектные литералы —
 общий рефакторинг с BUG-645/BUG-640, один P3-фикс может закрыть все три.
+
+## Исправление (2026-09-26, P3)
+
+По шаблону BUG-645 (`PerformancePaintTiming`) в
+`crates/js/src/shim/web_api_shim_tail.js` появились интерфейсы
+`PerformanceResourceTiming` и `PerformanceNavigationTiming` (прототип второго
+наследует прототип первого); оба бросают `TypeError: Illegal constructor` на
+`new`, опубликованы на `window` в `web_api_shim_tail_mc.js`.
+`_lumen_record_resource_timing` строит запись через
+`Object.create(PerformanceResourceTiming.prototype)`, а
+`_lumen_deliver_perf_entry` — через прототип нужного интерфейса для
+`'navigation'`/`'resource'` (прочие типы остаются литералами). Поля — как и
+прежде, собственные свойства; `[Default] toJSON` переехал с каждой записи на
+прототип и сериализует собственные поля записи (у навигационной их набор
+задаёт `detail_json` оболочки). Тест —
+`v8_perf_observers::performance_resource_and_navigation_timing_interfaces_back_entries`.
+
+Остаток вне скоупа: `serverTiming` в записях (BUG-640/Server-Timing),
+`PerformanceEntry` как общий базовый интерфейс не выставлен — mark/measure
+по-прежнему литералы ([BUG-687](BUG-687-OPEN.md)).

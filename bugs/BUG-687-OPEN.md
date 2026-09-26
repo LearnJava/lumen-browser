@@ -25,7 +25,7 @@ but got "[object Object]"
 ```
 
 `registry.window.js` shows the same for `navigation` (already
-[BUG-673](BUG-673-OPEN.md) — not a new finding here).
+[BUG-673](BUG-673-FIXED.md) — not a new finding here).
 
 ## Причина
 
@@ -46,7 +46,7 @@ therefore falls back to the generic `[object Object]` tag instead of
 `[object PerformanceMark]`/`[object PerformanceMeasure]`.
 
 Same defect class as [BUG-645](BUG-645-FIXED.md)
-(`PerformancePaintTiming`) and [BUG-673](BUG-673-OPEN.md)
+(`PerformancePaintTiming`) and [BUG-673](BUG-673-FIXED.md)
 (`PerformanceResourceTiming`/`PerformanceNavigationTiming`) — WebIDL
 interface objects for `PerformanceEntry` subtypes are systematically
 absent as globals even though the delivery mechanism itself

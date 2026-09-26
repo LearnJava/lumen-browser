@@ -337,8 +337,8 @@ function _perf_observer_notify(entries) {
 // declares no constructor, so script-side `new` throws; the shell's entries
 // are built off the prototype instead. Fields stay own properties, as on every
 // other entry type in this shim; `toJSON` is the WebIDL `[Default]` one of
-// PerformanceEntry. PerformanceEntry itself is not exposed: mark/measure/
-// resource entries are still plain objects, and a global that `instanceof`
+// PerformanceEntry. PerformanceEntry itself is not exposed: mark/measure
+// entries are still plain objects, and a global that `instanceof`
 // answered false for would lie about them.
 function PerformancePaintTiming() { throw new TypeError('Illegal constructor'); }
 PerformancePaintTiming.prototype.toJSON = function() {
@@ -422,6 +422,26 @@ function _lumen_deliver_layout_shift(value, sources, had_input) {
     _perf_observer_notify([entry]);
 }
 
+// Resource Timing L2 §4 `interface PerformanceResourceTiming : PerformanceEntry`
+// and Navigation Timing L2 §4 `interface PerformanceNavigationTiming :
+// PerformanceResourceTiming` (BUG-673) — the interface objects resource-,
+// navigation- and server-timing WPTs feature-detect and `instanceof`-check.
+// Same shape as PerformancePaintTiming above: no IDL constructor, entries are
+// built off the prototype, fields stay own properties. The `[Default] toJSON`
+// serialises exactly those own fields — a navigation entry carries whatever
+// set the shell's detail_json supplied, so the attribute list is per entry.
+function PerformanceResourceTiming() { throw new TypeError('Illegal constructor'); }
+PerformanceResourceTiming.prototype.toJSON = function() {
+    var out = {};
+    var keys = Object.keys(this);
+    for (var i = 0; i < keys.length; i++) { out[keys[i]] = this[keys[i]]; }
+    return out;
+};
+function PerformanceNavigationTiming() { throw new TypeError('Illegal constructor'); }
+PerformanceNavigationTiming.prototype = Object.create(PerformanceResourceTiming.prototype, {
+    constructor: { value: PerformanceNavigationTiming, writable: true, configurable: true },
+});
+
 // Called when a resource fetch completes — from the shim itself for everything
 // the page starts (`fetch()`, XHR, `<script src>`, `<link>`), and from the
 // shell through `_lumen_deliver_resource_timings` for the subresources the
@@ -447,7 +467,8 @@ function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms, de
     // served from cache transferred nothing.
     var delivery = det.deliveryType ? String(det.deliveryType) : '';
     var transfer = (delivery === 'cache') ? 0 : encoded + 300;
-    var entry = {
+    var entry = Object.create(PerformanceResourceTiming.prototype);
+    var fields = {
         entryType: 'resource',
         name: String(url),
         startTime: s,
@@ -475,18 +496,7 @@ function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms, de
         renderBlockingStatus: 'non-blocking',
         contentType: det.contentType ? String(det.contentType) : '',
     };
-    // §4.2 `[Default] object toJSON()` — the whole attribute set, which is what
-    // `JSON.stringify(entry)` must produce; an own-property spread would also
-    // carry toJSON itself.
-    var _keys = Object.keys(entry);
-    Object.defineProperty(entry, 'toJSON', {
-        value: function() {
-            var out = {};
-            for (var i = 0; i < _keys.length; i++) { out[_keys[i]] = entry[_keys[i]]; }
-            return out;
-        },
-        writable: true, configurable: true, enumerable: false,
-    });
+    for (var f in fields) { entry[f] = fields[f]; }
     // The buffer and the observer stream are separate sinks: an entry the
     // buffer refuses is still delivered to every interested observer.
     _perf_rt_add(entry);
@@ -528,12 +538,14 @@ function _lumen_deliver_resource_timings(rows_json) {
 // types listed in _PERF_SUPPORTED_ENTRY_TYPES (BUG-354) — delivering a type
 // outside that list populates the buffer silently without notifying observers.
 function _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, detail_json) {
-    var entry = {
-        entryType: String(entry_type),
-        name: String(name),
-        startTime: Number(start_ms),
-        duration: Number(duration_ms),
-    };
+    var type = String(entry_type);
+    var entry = type === 'navigation' ? Object.create(PerformanceNavigationTiming.prototype)
+              : type === 'resource' ? Object.create(PerformanceResourceTiming.prototype)
+              : {};
+    entry.entryType = type;
+    entry.name = String(name);
+    entry.startTime = Number(start_ms);
+    entry.duration = Number(duration_ms);
     if (detail_json) {
         try {
             var extra = JSON.parse(String(detail_json));
