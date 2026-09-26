@@ -104,6 +104,10 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // own — only an attribute label — and must recurse so descendant option
         // styles are still computed).
         "option" => Display::None,
+        // HTML rendering §15.3.1 — `slot { display: contents; }`: a slot adds an
+        // inheritance step between the host and its slotted nodes, not a box.
+        // `<details>`' content slot is the one exception (`apply_ua_slot`).
+        "slot" => Display::Contents,
         _ => Display::Block,
     }
 }
@@ -537,6 +541,21 @@ pub(in crate::style) fn apply_ua_hidden(doc: &Document, node: NodeId, style: &mu
         style.content_visibility = ContentVisibility::Hidden;
     } else {
         style.display = Display::None;
+    }
+}
+/// UA stylesheet (HTML LS §15.5.4, GAP-UASHADOWSLOT): the content slot of a
+/// `<details>`' UA shadow tree — `::details-content` in the spec's own sheet —
+/// is `display: block`, and `content-visibility: hidden` while the element has
+/// no `open` attribute. That is what hides a closed `<details>`' content: the
+/// slot keeps a zero-size box, everything slotted into it is skipped.
+///
+/// The slot is keyed by [`lumen_dom::Document::ua_slot_role`], not by a selector: no
+/// author rule can name a node of a closed UA shadow tree.
+pub(in crate::style) fn apply_ua_slot(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let Some((lumen_dom::UaSlotRole::DetailsContent, host)) = doc.ua_slot_role(node) else { return };
+    style.display = Display::Block;
+    if doc.get(host).get_attr("open").is_none() {
+        style.content_visibility = ContentVisibility::Hidden;
     }
 }
 /// UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.

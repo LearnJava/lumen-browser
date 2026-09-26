@@ -392,3 +392,6 @@ mod v8_bug1122_iface_protos;
 mod v8_bug1130_shadow_root_members;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1119_document_cookie;
+
+#[cfg(feature = "v8-backend")]
+mod v8_gap_uashadowslot;

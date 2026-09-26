@@ -358,7 +358,8 @@ use quirks::{apply_quirks_html_height, apply_quirks_line_height, apply_quirks_ta
 use ua::{
     apply_ua_body_margin, apply_ua_dialog_display, apply_ua_form_controls,
     apply_ua_form_controls_field_sizing_clear, apply_ua_heading_style, apply_ua_hidden,
-    apply_ua_hr_style, apply_ua_inert, apply_ua_table_cell_padding, apply_ua_text_decoration,
+    apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_text_decoration,
     default_display, strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,
     ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align, ua_white_space,
 };

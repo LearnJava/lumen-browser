@@ -165,6 +165,21 @@ pub fn build_ax_tree(doc: &Document, root_id: NodeId, flat_tree: &FlatTree) -> A
     }
 }
 
+/// Composed children of `node_id` with every `<slot>` replaced by what is
+/// assigned to it: a slot is `display: contents` and has no role, so its
+/// content belongs to the slot's own parent — the UA slots of `<select>`/
+/// `<details>` (GAP-UASHADOWSLOT) included, whose options and summary must
+/// stay direct children of the listbox / group.
+fn push_composed_children(doc: &Document, node_id: NodeId, flat_tree: &FlatTree, out: &mut Vec<NodeId>) {
+    for &child in flat_tree.children_of(doc, node_id) {
+        if matches!(&doc.get(child).data, NodeData::Element { name, .. } if name.local == "slot") {
+            push_composed_children(doc, child, flat_tree, out);
+        } else {
+            out.push(child);
+        }
+    }
+}
+
 fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat_tree: &FlatTree) -> AXNode {
     let node = doc.get(node_id);
     let state = compute_state(doc, node_id, node);
@@ -174,7 +189,8 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat
     let placeholder = node.get_attr("placeholder").unwrap_or("").to_owned();
 
     // Use flat_tree to get composed children (respects shadow DOM boundaries and slot assignments)
-    let composed_children = flat_tree.children_of(doc, node_id);
+    let mut composed_children = Vec::new();
+    push_composed_children(doc, node_id, flat_tree, &mut composed_children);
     let children = composed_children
         .iter()
         .filter(|&&child_id| {

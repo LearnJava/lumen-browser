@@ -312,21 +312,34 @@ impl fmt::Display for ShadowRootMode {
 }
 
 /// Shape of the UA (user-agent) shadow tree a tag must be given on creation
-/// (BUG-604, HTML LS §4.8.11).
-///
-/// `<select>`/`<details>` (HTML LS §4.10.11/§4.11.1) also spec a UA shadow
-/// tree, but theirs contains a `<slot>` that light-tree children render
-/// through — giving them one for real needs `display: contents` to make the
-/// `<slot>` box itself disappear from the box tree (today `Display::Contents`
-/// is parsed/stored but laid out as `Block`, so a real `<slot>` would insert
-/// a spurious visible wrapper box around every `<select>`/`<details>`'s
-/// content on every page, a layout regression far outside this bug's blast
-/// radius). Deferred, reclassified into `GAP-UASHADOWSLOT`.
+/// (BUG-604, HTML LS §4.8.11; GAP-UASHADOWSLOT, HTML LS §15.5.4/§15.5.15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UaShadowKind {
     /// `<video>`/`<audio>` — shadow root has no `<slot>` at all, so light-tree
     /// children never appear in the flat tree.
     NoSlot,
+    /// `<select>` — one `<slot>` every light-tree child is assigned to. The
+    /// slot is `display: contents` (UA sheet), so it adds an inheritance
+    /// step, not a box.
+    Contents,
+    /// `<details>` — a summary slot taking the first `<summary>` child and a
+    /// content slot taking everything else; the content slot is what the UA
+    /// sheet hides while the element is closed.
+    Details,
+}
+
+/// Which `<slot>` of a UA shadow tree a node is — see
+/// [`Document::ua_slot_role`]. Layout's UA stylesheet keys off this: a slot
+/// the page can neither see nor style has no selector a UA rule could name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UaSlotRole {
+    /// The single slot of `<select>`.
+    SelectContents,
+    /// `<details>`' slot for its first `<summary>` child.
+    DetailsSummary,
+    /// `<details>`' slot for every other child (HTML LS §15.5.4: rendered
+    /// `display: block`, `content-visibility: hidden` while closed).
+    DetailsContent,
 }
 
 /// Which UA shadow tree, if any, `name` must be given on creation.
@@ -336,6 +349,8 @@ fn ua_shadow_kind(name: &QualName) -> Option<UaShadowKind> {
     }
     match name.local.as_str() {
         "video" | "audio" => Some(UaShadowKind::NoSlot),
+        "select" => Some(UaShadowKind::Contents),
+        "details" => Some(UaShadowKind::Details),
         _ => None,
     }
 }
@@ -530,6 +545,17 @@ pub struct Document {
     /// DOM children of the host. The flat tree (see `build_flat_tree`) uses
     /// this map to route layout traversal through shadow trees.
     shadow_roots: HashMap<NodeId, NodeId>,
+    /// UA shadow roots (GAP-UASHADOWSLOT) → their host: the subset of
+    /// `shadow_roots`' values [`Document::attach_ua_shadow_root`] built, as
+    /// opposed to ones a page attached. Keyed by the root, not the host, so a
+    /// later author `attachShadow` on the same host — which replaces the
+    /// host's `shadow_roots` entry — leaves the orphaned UA root recognisably
+    /// out of use ([`Document::ua_shadow_host`]).
+    ///
+    /// Positional slot assignment, the UA styling of the slots and "author
+    /// style sheets do not reach in" all hang off membership here.
+    #[serde(default)]
+    ua_shadow_roots: HashMap<NodeId, NodeId>,
     /// Maps each `<template>` element `NodeId` to its content `DocumentFragment` `NodeId`.
     ///
     /// The fragment is stored in the arena but is not a DOM child of the
@@ -793,6 +819,7 @@ impl Document {
             mode: DocumentMode::default(),
             target_id: None,
             shadow_roots: HashMap::new(),
+            ua_shadow_roots: HashMap::new(),
             template_contents: HashMap::new(),
             selection: Selection::default(),
             composition: None,
@@ -1444,17 +1471,70 @@ impl Document {
         Ok(id)
     }
 
-    /// Attach the UA (user-agent) shadow tree HTML LS §4.8.11 requires every
-    /// `<video>`/`<audio>` instance to ship with, regardless of how the
-    /// element was created (parser or `createElement`).
+    /// Attach the UA (user-agent) shadow tree HTML LS requires every
+    /// `<video>`/`<audio>`/`<select>`/`<details>` instance to ship with,
+    /// regardless of how the element was created (parser, `createElement`,
+    /// `cloneNode`).
     ///
-    /// The shadow root has no `<slot>` at all: [`compute_slot_assignments`]
-    /// already drops any light-tree child that matches no `<slot>`, so an
-    /// empty shadow tree is sufficient to give `<video>`/`<audio>` children
-    /// the spec-required "never part of the flat tree" behavior for free.
+    /// `<video>`/`<audio>`: no `<slot>` at all — [`compute_slot_assignments`]
+    /// leaves every light-tree child unassigned, which is the spec-required
+    /// "never part of the flat tree". `<select>`/`<details>`: one or two
+    /// `<slot>`s, filled by position ([`ua_slot_assignments`]).
+    ///
+    /// The root is closed, so `Element.shadowRoot` never hands it to a page,
+    /// and the slots are allocated directly rather than through
+    /// [`Document::create_element`] — nothing here is a DOM mutation a page
+    /// could observe.
     fn attach_ua_shadow_root(&mut self, host: NodeId, kind: UaShadowKind) {
-        let UaShadowKind::NoSlot = kind;
-        self.attach_shadow(host, ShadowRootMode::Closed);
+        let sr = self.attach_shadow(host, ShadowRootMode::Closed);
+        self.ua_shadow_roots.insert(sr, host);
+        let slots = match kind {
+            UaShadowKind::NoSlot => 0,
+            UaShadowKind::Contents => 1,
+            UaShadowKind::Details => 2,
+        };
+        for _ in 0..slots {
+            let slot = self.alloc(NodeData::Element {
+                name: QualName::html("slot"),
+                attrs: Vec::new(),
+            });
+            self.append_child(sr, slot);
+        }
+    }
+
+    /// The host of `shadow_root` if it is a UA shadow root
+    /// ([`Document::attach_ua_shadow_root`]) that host still uses.
+    pub fn ua_shadow_host(&self, shadow_root: NodeId) -> Option<NodeId> {
+        let host = *self.ua_shadow_roots.get(&shadow_root)?;
+        (self.shadow_roots.get(&host) == Some(&shadow_root)).then_some(host)
+    }
+
+    /// Whether any shadow root in this document was attached by a page rather
+    /// than by [`Document::attach_ua_shadow_root`].
+    ///
+    /// UA shadow trees carry no style sheet, so the layout paths that stay
+    /// conservative around shadow-scoped styles (`:host`, `::slotted()`, a
+    /// shadow tree's own `<style>`) only need to when this is `true` — not on
+    /// every page that merely has a `<select>`.
+    pub fn has_author_shadow_roots(&self) -> bool {
+        self.shadow_roots.values().any(|sr| !self.ua_shadow_roots.contains_key(sr))
+    }
+
+    /// Which slot of a live UA shadow tree `id` is, together with its host.
+    ///
+    /// `None` for everything else, an author-built `<slot>` included, and for
+    /// a UA slot whose root an author `attachShadow` has since replaced.
+    pub fn ua_slot_role(&self, id: NodeId) -> Option<(UaSlotRole, NodeId)> {
+        let sr = self.nodes.get(id.index())?.parent?;
+        let host = self.ua_shadow_host(sr)?;
+        let first = self.get(sr).children.first() == Some(&id);
+        let role = match self.get(host).element_name()?.local.as_str() {
+            "select" => UaSlotRole::SelectContents,
+            "details" if first => UaSlotRole::DetailsSummary,
+            "details" => UaSlotRole::DetailsContent,
+            _ => return None,
+        };
+        Some((role, host))
     }
 
     /// Create a text node unconditionally. Used by the HTML parser — does **not**
@@ -1736,7 +1816,16 @@ impl Document {
     /// explicit re-attachment by the caller.
     pub fn deep_clone(&mut self, node: NodeId, deep: bool) -> NodeId {
         let data = self.nodes[node.index()].data.clone();
+        let ua_shadow = match &data {
+            NodeData::Element { name, .. } => ua_shadow_kind(name),
+            _ => None,
+        };
         let clone = self.alloc(data);
+        // The clone is a new element of the same tag, so it gets the UA
+        // shadow tree `create_element` would have given it.
+        if let Some(kind) = ua_shadow {
+            self.attach_ua_shadow_root(clone, kind);
+        }
         // DOM §4.4 clone: a CDATASection clones into a CDATASection (BUG-863).
         if self.is_cdata_section(node) {
             self.cdata_sections.insert(clone.index() as u32);
@@ -1936,6 +2025,7 @@ impl Document {
     pub fn reclaim_dead_nodes(&mut self, ids: &[NodeId]) {
         for &id in ids {
             self.shadow_roots.remove(&id);
+            self.ua_shadow_roots.remove(&id);
             self.template_contents.remove(&id);
             self.cdata_sections.remove(&(id.index() as u32));
             self.embedded_images.remove(&(id.index() as u32));
@@ -2235,6 +2325,18 @@ fn collect_anchors(doc: &Document, id: NodeId, out: &mut Vec<AnchorInfo>) {
 pub struct FlatTree {
     /// Nodes whose composed-tree children differ from their DOM children.
     overrides: HashMap<NodeId, Vec<NodeId>>,
+    /// `overridden[i]` — node index `i` has an entry in `overrides`.
+    ///
+    /// GAP-UASHADOWSLOT: every `<select>`/`<details>` now owns a UA shadow
+    /// tree, so `overrides` is non-empty on most real pages and on Lumen's
+    /// own chrome. An index check keeps [`FlatTree::children_of`] at the
+    /// cost BUG-341 S26 bought for shadow-free documents instead of one
+    /// SipHash per node per traversal.
+    overridden: Vec<bool>,
+    /// Composed-tree parent of every node whose composed parent is not its
+    /// DOM parent: a shadow root's children (→ the host) and a slot's
+    /// assigned nodes (→ the slot). See [`FlatTree::parent_of`].
+    parents: HashMap<NodeId, NodeId>,
 }
 
 impl FlatTree {
@@ -2249,7 +2351,7 @@ impl FlatTree {
         // `id` to find that out — one SipHash per node per traversal, and the
         // cascade, box build and a11y tree all traverse per pass. Measured at
         // ~13 ns a lookup over the chrome document's 828 elements.
-        if self.overrides.is_empty() {
+        if !self.overridden.get(id.index()).copied().unwrap_or(false) {
             return doc.get(id).children.as_slice();
         }
         self.overrides
@@ -2258,18 +2360,20 @@ impl FlatTree {
             .unwrap_or_else(|| doc.get(id).children.as_slice())
     }
 
-    /// Whether the composed tree *is* the DOM tree — no shadow host or slot
-    /// moves a node away from its DOM parent.
+    /// Composed-tree parent of `id`: the host for a shadow root or its child,
+    /// the slot for an assigned node, the DOM parent otherwise.
     ///
-    /// BUG-341 S27: a traversal that wants to ask "does this subtree contain
-    /// any of these nodes" cheaply does it by walking each of those nodes up to
-    /// the root, and `Node::parent` is the DOM parent. That answer is the
-    /// composed-tree answer exactly when this holds; a document with shadow
-    /// trees keeps the pre-S27 traversal instead of growing a composed-tree
-    /// parent index for a case Lumen's own chrome does not have.
-    pub fn is_plain(&self) -> bool {
-        self.overrides.is_empty()
+    /// A light-tree child no slot took is not in the composed tree at all;
+    /// for it this answers its DOM parent (the host), which is what a caller
+    /// collecting "every ancestor something could be under" wants — an
+    /// over-approximation, never a missed ancestor.
+    pub fn parent_of(&self, doc: &Document, id: NodeId) -> Option<NodeId> {
+        if self.parents.is_empty() {
+            return doc.get(id).parent;
+        }
+        self.parents.get(&id).copied().or_else(|| doc.get(id).parent)
     }
+
 }
 
 /// Build the composed (flat) tree for the document.
@@ -2279,7 +2383,6 @@ impl FlatTree {
 ///
 /// Fast path: if the document has no shadow hosts, returns an empty `FlatTree`
 /// (every `children_of` call falls through to DOM children).
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn build_flat_tree(doc: &Document) -> FlatTree {
     if doc.shadow_roots.is_empty() {
         return FlatTree::default();
@@ -2287,13 +2390,10 @@ pub fn build_flat_tree(doc: &Document) -> FlatTree {
 
     let mut overrides: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
 
-    for i in 0..doc.len() {
-        let id = doc.node_id_at(i);
-        if !doc.is_shadow_host(id) {
-            continue;
-        }
-        let sr = doc.shadow_root_of(id).expect("shadow host has no root");
-
+    // Straight over the host map rather than over every arena slot asking
+    // `is_shadow_host`: with a UA shadow tree on every `<select>`/`<details>`
+    // this runs on most pages, and the host count is what it costs.
+    for (&id, &sr) in &doc.shadow_roots {
         // Shadow host's composed children = shadow root's DOM children.
         overrides.insert(id, doc.get(sr).children.clone());
 
@@ -2302,7 +2402,21 @@ pub fn build_flat_tree(doc: &Document) -> FlatTree {
         wire_slot_overrides(doc, sr, &slot_map, &mut overrides);
     }
 
-    FlatTree { overrides }
+    let mut overridden = vec![false; doc.len()];
+    // A shadow root is not in the composed tree itself, but a mutation of its
+    // child list is a change under its host.
+    let mut parents: HashMap<NodeId, NodeId> =
+        doc.shadow_roots.iter().map(|(&host, &sr)| (sr, host)).collect();
+    for (&parent, children) in &overrides {
+        overridden[parent.index()] = true;
+        for &child in children {
+            if doc.get(child).parent != Some(parent) {
+                parents.insert(child, parent);
+            }
+        }
+    }
+
+    FlatTree { overrides, overridden, parents }
 }
 
 /// Maps each `<slot>` NodeId to its assigned light-tree nodes.
@@ -2315,6 +2429,9 @@ type SlotAssignments = HashMap<NodeId, Vec<NodeId>>;
 /// children are dropped (they don't appear in the flat tree).
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAssignments {
+    if doc.ua_shadow_host(sr) == Some(host) {
+        return ua_slot_assignments(doc, host, sr);
+    }
     let mut slots: Vec<(NodeId, String)> = Vec::new();
     collect_slots(doc, sr, &mut slots);
 
@@ -2331,6 +2448,32 @@ fn compute_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAss
         // Children with no matching slot are not rendered in the flat tree.
     }
 
+    map
+}
+
+/// Slot assignment inside a UA shadow tree (GAP-UASHADOWSLOT).
+///
+/// By position, never by name — a `slot=""` attribute on a light-tree child
+/// means nothing to `<select>`/`<details>`. HTML LS §15.5.4: the summary slot
+/// "is expected to take the details element's first child summary element
+/// child, if any", the other slot takes the rest. No slot (`<video>`/
+/// `<audio>`) leaves every child unassigned.
+fn ua_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAssignments {
+    let children = &doc.get(host).children;
+    let mut map: SlotAssignments = HashMap::new();
+    match doc.get(sr).children.as_slice() {
+        [] => {}
+        [only] => {
+            map.insert(*only, children.clone());
+        }
+        [summary_slot, content_slot, ..] => {
+            let summary = children.iter().copied().find(|&c| {
+                matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "summary")
+            });
+            map.insert(*summary_slot, summary.into_iter().collect());
+            map.insert(*content_slot, children.iter().copied().filter(|&c| Some(c) != summary).collect());
+        }
+    }
     map
 }
 
@@ -3559,11 +3702,106 @@ mod tests {
     fn ordinary_elements_are_not_shadow_hosts() {
         let mut doc = Document::new();
         let div = doc.create_element(QualName::html("div"));
+        assert!(!doc.is_shadow_host(div));
+        assert!(!doc.has_author_shadow_roots());
+    }
+
+    /// `<details>` with `[summary?, other children…]` appended under the root.
+    fn details_with(doc: &mut Document, children: &[&str]) -> (NodeId, Vec<NodeId>) {
+        let details = doc.create_element(QualName::html("details"));
+        doc.append_child(doc.root(), details);
+        let kids = children
+            .iter()
+            .map(|&tag| {
+                let c = doc.create_element(QualName::html(tag));
+                doc.append_child(details, c);
+                c
+            })
+            .collect();
+        (details, kids)
+    }
+
+    #[test]
+    fn select_and_details_get_ua_shadow_root_with_slots() {
+        // GAP-UASHADOWSLOT: one slot for `<select>`, summary + content slot
+        // for `<details>` — none of them visible to a DOM traversal.
+        let mut doc = Document::new();
         let select = doc.create_element(QualName::html("select"));
         let details = doc.create_element(QualName::html("details"));
-        assert!(!doc.is_shadow_host(div));
-        assert!(!doc.is_shadow_host(select));
-        assert!(!doc.is_shadow_host(details));
+        for (host, slots) in [(select, 1), (details, 2)] {
+            let sr = doc.shadow_root_of(host).expect("UA shadow host");
+            assert_eq!(doc.ua_shadow_host(sr), Some(host));
+            assert_eq!(doc.get(sr).children.len(), slots);
+            assert!(doc.get(host).children.is_empty());
+        }
+        let roles: Vec<_> = [select, details]
+            .iter()
+            .flat_map(|&h| doc.get(doc.shadow_root_of(h).unwrap()).children.clone())
+            .map(|slot| doc.ua_slot_role(slot).map(|(role, _)| role))
+            .collect();
+        assert_eq!(
+            roles,
+            [Some(UaSlotRole::SelectContents), Some(UaSlotRole::DetailsSummary), Some(UaSlotRole::DetailsContent)]
+        );
+        assert!(!doc.has_author_shadow_roots());
+    }
+
+    #[test]
+    fn details_slots_take_first_summary_and_the_rest_by_position() {
+        let mut doc = Document::new();
+        let (details, kids) = details_with(&mut doc, &["p", "summary", "summary", "div"]);
+        // A `slot` attribute means nothing to a UA shadow tree.
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(kids[3]).data {
+            attrs.push(Attribute { name: QualName::html("slot"), value: "summary".into() });
+        }
+        let flat = build_flat_tree(&doc);
+        let slots = flat.children_of(&doc, details).to_vec();
+        assert_eq!(slots.len(), 2);
+        assert_eq!(flat.children_of(&doc, slots[0]), &[kids[1]]);
+        assert_eq!(flat.children_of(&doc, slots[1]), &[kids[0], kids[2], kids[3]]);
+        // The composed parent of a slotted node is its slot, of a slot its host.
+        assert_eq!(flat.parent_of(&doc, kids[1]), Some(slots[0]));
+        assert_eq!(flat.parent_of(&doc, slots[1]), Some(details));
+    }
+
+    #[test]
+    fn select_slot_takes_every_child() {
+        let mut doc = Document::new();
+        let select = doc.create_element(QualName::html("select"));
+        doc.append_child(doc.root(), select);
+        let a = doc.create_element(QualName::html("option"));
+        let b = doc.create_element(QualName::html("optgroup"));
+        doc.append_child(select, a);
+        doc.append_child(select, b);
+        let flat = build_flat_tree(&doc);
+        let [slot] = flat.children_of(&doc, select) else { panic!("one slot") };
+        assert_eq!(flat.children_of(&doc, *slot), &[a, b]);
+    }
+
+    #[test]
+    fn cloned_details_gets_its_own_ua_shadow_root() {
+        let mut doc = Document::new();
+        let (details, _) = details_with(&mut doc, &["summary"]);
+        let clone = doc.deep_clone(details, true);
+        let sr = doc.shadow_root_of(clone).expect("clone is a UA shadow host");
+        assert_ne!(Some(sr), doc.shadow_root_of(details));
+        assert_eq!(doc.ua_shadow_host(sr), Some(clone));
+        assert_eq!(doc.get(clone).children.len(), 1);
+    }
+
+    #[test]
+    fn author_shadow_root_replaces_ua_one() {
+        // A later `attachShadow` on the same host orphans the UA root: its slots
+        // lose their role and the author tree is assigned by name again.
+        let mut doc = Document::new();
+        let (details, _) = details_with(&mut doc, &[]);
+        let ua = doc.shadow_root_of(details).unwrap();
+        let ua_slot = doc.get(ua).children[0];
+        let author = doc.attach_shadow(details, ShadowRootMode::Open);
+        assert_eq!(doc.ua_shadow_host(ua), None);
+        assert_eq!(doc.ua_slot_role(ua_slot), None);
+        assert_eq!(doc.ua_shadow_host(author), None);
+        assert!(doc.has_author_shadow_roots());
     }
 
     #[test]
