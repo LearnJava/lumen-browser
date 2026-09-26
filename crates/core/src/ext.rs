@@ -2342,8 +2342,32 @@ pub trait JsFetchProvider: Send + Sync {
     /// element has none. Any other destination is never blocked. Default
     /// implementation never blocks, matching `HttpClient` with no policy
     /// installed.
-    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, integrity: &str) -> Result<()> {
-        let _ = (destination, url, nonce, integrity);
+    ///
+    /// `parser_inserted` (BUG-568): a `<script src>` that `document.write()`
+    /// wrote is parser-inserted even though the shim loads it, and
+    /// `'strict-dynamic'` must not admit it on trust (CSP3 §6.7.1.1 step 2) —
+    /// only a script another script created with the DOM API inherits that
+    /// trust.
+    fn check_element_src(
+        &self,
+        destination: &str,
+        url: &str,
+        nonce: &str,
+        integrity: &str,
+        parser_inserted: bool,
+    ) -> Result<()> {
+        let _ = (destination, url, nonce, integrity, parser_inserted);
+        Ok(())
+    }
+
+    /// `script-src` inline check for a `<script>` without `src` that
+    /// `document.write()` wrote (BUG-568), before its text runs —
+    /// the same rule the shell applies to the page's own inline scripts: an
+    /// `'unsafe-inline'`, a nonce matching `nonce` or a hash of `body` admits
+    /// it. A block is reported as `Error::CspElementSrcBlocked` with
+    /// `blocked_uri` `"inline"`. Default implementation never blocks.
+    fn check_inline_script(&self, nonce: &str, body: &str) -> Result<()> {
+        let _ = (nonce, body);
         Ok(())
     }
 

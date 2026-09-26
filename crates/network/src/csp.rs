@@ -282,6 +282,25 @@ impl CspPolicy {
         sources.iter().any(|s| source_matches_url(s, url, self_origin))
     }
 
+    /// `true` if this policy's `directive` (or `default-src`) lets an inline
+    /// block whose text is `body` and whose `nonce=` attribute is `nonce` run:
+    /// any `'unsafe-inline'`, matching nonce or matching hash source admits it,
+    /// and a policy with no applicable directive does not restrict it. The one
+    /// rule shared by the page's own inline `<script>`/`<style>` (shell
+    /// `csp_enforce`) and a `<script>` `document.write()` wrote (BUG-568), so
+    /// the two can never judge the same text differently.
+    pub fn inline_allows(&self, directive: &CspDirective, nonce: Option<&str>, body: &str) -> bool {
+        let Some(sources) = self.effective_sources(directive) else {
+            return true;
+        };
+        sources.iter().any(|s| match s {
+            CspSource::UnsafeInline => true,
+            CspSource::Nonce(n) => nonce.is_some_and(|actual| actual == n),
+            CspSource::Hash { algorithm, value } => algorithm.digest_base64(body.as_bytes()) == *value,
+            _ => false,
+        })
+    }
+
     /// `true` if this policy's `style-src-elem` (or `style-src`, or
     /// `default-src`) lets a `<link rel=stylesheet>` or an `@import` fetch
     /// `url` — CSP3 `style-src-elem` «Pre-request check» (BUG-1175): a `nonce` matching a

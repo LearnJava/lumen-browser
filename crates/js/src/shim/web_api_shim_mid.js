@@ -1392,7 +1392,24 @@ DOMTokenList.prototype.replace = function(oldCls, newCls) {
 DOMTokenList.prototype.item = function(i) {
     var arr = _lumen_token_list_arr(this); i = i >>> 0; return i < arr.length ? arr[i] : null;
 };
-DOMTokenList.prototype.forEach = function(fn, thisArg) { _lumen_token_list_arr(this).forEach(fn, thisArg); };
+// BUG-1125: DOM §7.1 declares `iterable<DOMString>`, so WebIDL §3.7.9 gives
+// `entries`/`keys`/`values`/`forEach` plus `@@iterator`, which is the very
+// same function object as `values`. Only `forEach` existed, so
+// `classList.values()` (wordpress) and `classList[Symbol.iterator]()`
+// (Transcend `airgap.js` on mozilla) threw. Same live index iterator as
+// `NodeList` (`_lumen_index_iterator`, declared further down this file and
+// looked up only at call time): `this` is the indexed Proxy, so every step
+// re-reads the attribute. `forEach` walks the same live view and passes the
+// list itself as the third callback argument, as WebIDL does.
+DOMTokenList.prototype.forEach = function(fn, thisArg) {
+    if (typeof fn !== 'function') throw new TypeError('callback is not a function');
+    for (var i = 0; i < this.length; i++) fn.call(thisArg, this[i], i, this);
+};
+DOMTokenList.prototype.entries = function() { return _lumen_index_iterator(this, 'entries'); };
+DOMTokenList.prototype.keys    = function() { return _lumen_index_iterator(this, 'keys'); };
+DOMTokenList.prototype.values  = function() { return _lumen_index_iterator(this, 'values'); };
+Object.defineProperty(DOMTokenList.prototype, Symbol.iterator,
+    { value: DOMTokenList.prototype.values, writable: true, enumerable: false, configurable: true });
 DOMTokenList.prototype.toString = function() { return _lumen_token_list_arr(this).join(' '); };
 Object.defineProperty(DOMTokenList.prototype, 'length', {
     get: function() { return _lumen_token_list_arr(this).length; },
@@ -11835,15 +11852,12 @@ var document = {
     // HTML LS §8.4.4 document.write()/writeln() — was missing entirely, so any
     // page calling it (legacy ad/analytics snippets are the common case) threw
     // `document.write is not a function` and aborted the rest of that script.
-    // Spec-accurate behaviour needs an active-parser insertion point we do not
-    // track; instead this covers the two cases that matter without the
-    // destructive implicit document.open() the spec calls for on a closed
-    // document (which would wipe an already-hydrating SPA root out from under
-    // it): while still parsing, the text lands at the end of body, same as a
-    // real browser's insertion point would for a synchronous inline-script
-    // call; once the document has finished loading it is a no-op, matching
+    // Where the text lands and which written `<script>`s run is
+    // `_lumen_document_write` (BUG-568, next to «prepare the script element»
+    // below). Once the document has finished loading it is a no-op, matching
     // real browsers' document.write() intervention for scripts that call it
-    // after load instead of erasing the page.
+    // after load instead of erasing the page — the destructive implicit
+    // document.open() would wipe an already-hydrating SPA root.
     // TRUSTEDTYPES-1 срез 2: HTML LS §8.4.4's own "Document write steps" run
     // TT L2's "Get Trusted Type compliant string" PER ARGUMENT (sink
     // `"Document write"`/`"Document writeln"`), concatenating the already-
@@ -11853,35 +11867,10 @@ var document = {
     // under the wrong sink name and, for a page with its own default policy,
     // double-invoke the transform).
     write: function() {
-        if (_doc_ready_state !== 'loading') return;
-        var body = document.body;
-        if (!body) return;
-        var text = '';
-        for (var i = 0; i < arguments.length; i++) {
-            text += (typeof _lumen_tt_get_compliant_html === 'function')
-                ? _lumen_tt_get_compliant_html(arguments[i], 'Document write')
-                : String(arguments[i]);
-        }
-        var newIds = _lumen_parse_html_fragment(text);
-        for (var _wi = 0; _wi < newIds.length; _wi++) {
-            body.append(_lumen_make_element(newIds[_wi]));
-        }
+        _lumen_document_write(arguments, 'Document write', false);
     },
     writeln: function() {
-        if (_doc_ready_state !== 'loading') return;
-        var body = document.body;
-        if (!body) return;
-        var text = '';
-        for (var i = 0; i < arguments.length; i++) {
-            text += (typeof _lumen_tt_get_compliant_html === 'function')
-                ? _lumen_tt_get_compliant_html(arguments[i], 'Document writeln')
-                : String(arguments[i]);
-        }
-        text += '\n';
-        var newIds = _lumen_parse_html_fragment(text);
-        for (var _wli = 0; _wli < newIds.length; _wli++) {
-            body.append(_lumen_make_element(newIds[_wli]));
-        }
+        _lumen_document_write(arguments, 'Document writeln', true);
     },
     // HTML LS §8.4.4 document.open()/close() (BUG-888) — the explicit entry
     // point `write()` above needed: `write()` after load is a deliberate
@@ -12269,9 +12258,16 @@ var _lumen_current_script_stack = [];
 function _lumen_push_current_script(nid) {
     var n = _lumen_u2n(nid);
     _lumen_current_script_stack.push(n === null || n < 0 ? null : _lumen_make_element(n));
+    // BUG-568: one `document.write()` frame per running script, created only
+    // when that script actually writes (see `_lumen_dw_frame`).
+    _lumen_dw_frames.push(null);
 }
 function _lumen_pop_current_script() {
     _lumen_current_script_stack.pop();
+    var frame = _lumen_dw_frames.pop();
+    // BUG-568: the script that wrote has returned — the parser «resumes» and
+    // runs what it wrote, in order, before the next script of the document.
+    if (frame) _lumen_dw_flush(frame);
 }
 
 // A classic script body runs in global scope — indirect eval is exactly that.
@@ -12355,7 +12351,7 @@ function _lumen_script_exec_drain() {
 // as the shell's `@import` gate is. Returns
 // `[effectiveDirective, blockedUri, originalPolicy]` for a blocked request,
 // null otherwise.
-function _lumen_element_src_blocked(destination, url, nid) {
+function _lumen_element_src_blocked(destination, url, nid, parserInserted) {
     if (typeof _lumen_check_element_src !== 'function') return null;
     var nonce = null, integrity = null;
     if (nid !== null) {
@@ -12363,7 +12359,8 @@ function _lumen_element_src_blocked(destination, url, nid) {
         if (destination === 'script') integrity = _lumen_u2n(_lumen_get_attr(nid, 'integrity'));
     }
     var r = _lumen_check_element_src(destination, url,
-        nonce === null ? '' : String(nonce), integrity === null ? '' : String(integrity));
+        nonce === null ? '' : String(nonce), integrity === null ? '' : String(integrity),
+        parserInserted === true);
     return (r && r.length === 3) ? r : null;
 }
 
@@ -12556,6 +12553,283 @@ function _lumen_script_prepare(nid) {
             _lumen_resource_fire(nid, 'error');
         });
     }, 0);
+}
+
+// ── HTML LS §8.4.4 document.write(): the insertion point (BUG-568) ───────────
+//
+// The shell parses the whole document before any script runs, so there is no
+// live tokenizer to feed. What `write()` can still honour is where the text
+// would land and what it runs:
+//
+// - The text goes right after the `<script>` element that is running (the
+//   spec's insertion point sits just past the end tag the parser stopped on),
+//   not at the end of `<body>`. A write from a `<head>` script keeps head-only
+//   content (`<script>`, `<link>`, `<meta>`, …) in `<head>` and moves the rest
+//   to the start of `<body>`, the way the «in head» insertion mode would have
+//   closed the head. With no script running (a timer, an event handler, the
+//   stream `document.open()` reopened) it goes at the end of `<body>`, as
+//   before.
+// - A tag split over several calls (`write('<i id=')`, `write("'x'>…")`), or a
+//   `<script>` whose end tag has not been written yet, is held back until the
+//   rest arrives or the writing script returns.
+// - Written `<script>`s run: an inline classic one at once, inside the
+//   `write()` call; an external classic one without `async`/`defer` blocks —
+//   its fetch starts at once, and it runs, followed by everything written after
+//   it, as soon as the writing script returns and before the next script of
+//   the document; `defer` joins the end of parsing (before DOMContentLoaded);
+//   `async` and module scripts take the force-async path of a DOM-inserted
+//   script.
+//
+// Not modelled: a written unclosed element does not swallow the markup the
+// parser had already placed after the script, and the markup of a blocked
+// write is in the tree before the blocking script runs (only its scripts
+// wait). The destructive implicit `document.open()` on a closed document
+// stays out, as does the late-write no-op after load (BUG-701).
+
+// One slot per running classic script (pushed with `document.currentScript`):
+// `null` until that script first writes, then its frame.
+var _lumen_dw_frames = [];
+// External `defer` scripts `write()` produced, run at the end of parsing.
+var _lumen_dw_deferred = [];
+// A parser-blocking written script holds the page on its fetch, so the wait
+// is bounded; past it the element reports `error`.
+var _LUMEN_DW_FETCH_TIMEOUT_MS = 20000;
+// What the «in head» insertion mode keeps in `<head>` (HTML LS §13.2.6.4.4).
+var _LUMEN_DW_HEAD_OK = {
+    'base': 1, 'basefont': 1, 'bgsound': 1, 'link': 1, 'meta': 1, 'noscript': 1,
+    'script': 1, 'style': 1, 'template': 1, 'title': 1
+};
+
+// Where the text written while `scriptNid` runs goes. `null` for no body and
+// no usable script (nothing can be written then).
+function _lumen_dw_new_frame(scriptNid) {
+    var frame = { parent: null, ref: null, inHead: false, pending: '', queue: [], blocked: false };
+    if (scriptNid !== null && !_doc_explicit_open && _lumen_resource_is_connected(scriptNid)) {
+        var pid = _lumen_u2n(_lumen_get_parent(scriptNid));
+        if (pid !== null) {
+            frame.parent = _lumen_make_element(pid);
+            frame.ref = _lumen_make_element(scriptNid).nextSibling;
+            var hid = _lumen_u2n(_lumen_get_head());
+            frame.inHead = hid !== null && pid === hid;
+        }
+    }
+    if (frame.parent === null) {
+        var body = document.body;
+        if (!body) return null;
+        frame.parent = body;
+    }
+    return frame;
+}
+
+// Length of the prefix of `s` the fragment parser can take now: everything
+// before an unterminated tag, or before a raw-text element whose end tag has
+// not been written yet.
+function _lumen_dw_safe_cut(s) {
+    var cut = s.length;
+    var lt = s.lastIndexOf('<');
+    if (lt !== -1 && s.indexOf('>', lt) === -1) cut = lt;
+    var lower = s.toLowerCase();
+    var re = /<(script|style|textarea|title|xmp)(?=[\s\/>])/gi;
+    var m;
+    while ((m = re.exec(s)) !== null && m.index < cut) {
+        if (lower.indexOf('</' + m[1].toLowerCase(), m.index) === -1) { cut = m.index; break; }
+    }
+    return cut;
+}
+
+function _lumen_dw_fits_head(node) {
+    if (node.nodeType === 8) return true;
+    if (node.nodeType === 3) return /^[\t\n\f\r ]*$/.test(String(node.data));
+    return node.nodeType === 1 && _LUMEN_DW_HEAD_OK[String(node.localName)] === 1;
+}
+
+function _lumen_dw_collect_scripts(node, out) {
+    if (node.nodeType !== 1) return;
+    if (node.localName === 'script') {
+        if (_lumen_is_html_element_nid(node.__nid__)) out.push(node.__nid__);
+        return;
+    }
+    if (typeof node.getElementsByTagName !== 'function') return;
+    var list = node.getElementsByTagName('script');
+    var nids = [];
+    for (var i = 0; i < list.length; i++) nids.push(list[i].__nid__);
+    for (var j = 0; j < nids.length; j++) {
+        if (_lumen_is_html_element_nid(nids[j])) out.push(nids[j]);
+    }
+}
+
+// Parse `text` and put it at the frame's insertion point, then prepare the
+// scripts it brought, in document order.
+function _lumen_dw_insert(frame, text) {
+    if (text === '') return;
+    var ids = _lumen_parse_html_fragment(text);
+    var scripts = [];
+    for (var i = 0; i < ids.length; i++) {
+        var node = _lumen_make_node(ids[i]);
+        if (!node) continue;
+        if (frame.inHead && !_lumen_dw_fits_head(node)) {
+            frame.inHead = false;
+            var body = document.body;
+            if (body) { frame.parent = body; frame.ref = body.firstChild; }
+        }
+        try { frame.parent.insertBefore(node, frame.ref); }
+        catch (e) {
+            // The reference node left the parent since the frame was made.
+            frame.ref = null;
+            try { frame.parent.appendChild(node); } catch (e2) { continue; }
+        }
+        _lumen_dw_collect_scripts(node, scripts);
+    }
+    for (var k = 0; k < scripts.length; k++) _lumen_dw_prepare(frame, scripts[k]);
+}
+
+// HTML LS §4.12.1 «prepare the script element» for a parser-inserted script
+// that `write()` produced.
+function _lumen_dw_prepare(frame, nid) {
+    if (_lumen_script_started[nid] === 1) return;
+    var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
+    var isClassic = !isModule && _lumen_is_classic_script_type(type);
+    // Step 13: an engine with modules skips a `nomodule` classic script.
+    if (isClassic && _lumen_u2n(_lumen_get_attr(nid, 'nomodule')) !== null) return;
+    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    var external = isClassic && src !== null && String(src).trim() !== '';
+    if (external && _lumen_u2n(_lumen_get_attr(nid, 'async')) === null) {
+        _lumen_script_started[nid] = 1;
+        var job = _lumen_dw_start_fetch(nid, String(src).trim());
+        if (_lumen_u2n(_lumen_get_attr(nid, 'defer')) !== null) { _lumen_dw_deferred.push(job); return; }
+        // Step 31, «pending parsing-blocking script».
+        frame.queue.push(job);
+        frame.blocked = true;
+        return;
+    }
+    // Everything the parser reaches after a blocking script waits for it.
+    if (frame.blocked) { frame.queue.push({ kind: 'prepare', nid: nid }); return; }
+    _lumen_dw_prepare_now(nid);
+}
+
+// Inline classic runs here and now, once `script-src` admits its text;
+// async/module/empty-src go down the same road as a script inserted through
+// the DOM.
+function _lumen_dw_prepare_now(nid) {
+    if (_lumen_script_started[nid] === 1) return;
+    if (_lumen_u2n(_lumen_get_attr(nid, 'src')) === null
+        && typeof _lumen_check_inline_script === 'function') {
+        var nonce = _lumen_u2n(_lumen_get_attr(nid, 'nonce'));
+        var body = _lumen_u2n(_lumen_get_text_content(nid));
+        var r = _lumen_check_inline_script(nonce === null ? '' : String(nonce),
+            body === null ? '' : String(body));
+        if (r && r.length === 3) {
+            // Step 12 has run: a blocked script never starts again.
+            _lumen_script_started[nid] = 1;
+            if (typeof _lumen_dispatch_csp_violation === 'function') {
+                _lumen_dispatch_csp_violation(r[0], r[1], r[2], 'enforce');
+            }
+            _lumen_console_error('inline script blocked by ' + r[0]);
+            return;
+        }
+    }
+    _lumen_script_prepare(nid);
+}
+
+// Start the fetch of a written external classic script right away, so the
+// requests of several written scripts overlap on the wire.
+function _lumen_dw_start_fetch(nid, src) {
+    var job = { kind: 'external', nid: nid, url: '', handle: 0, csp: null, error: null };
+    try { job.url = _url_resolve(src, _lumen_document_base_url()); }
+    catch (e) { job.error = String(e); return job; }
+    // The element is parser-inserted, so `'strict-dynamic'` does not admit it.
+    job.csp = _lumen_element_src_blocked('script', job.url, nid, true);
+    if (job.csp) return job;
+    if (typeof _lumen_fetch_async_start === 'function') {
+        job.handle = _lumen_fetch_async_start(job.url, 'GET', '', [], false, [], 'no-cors|script');
+    }
+    if (!job.handle) job.error = 'no network provider';
+    return job;
+}
+
+function _lumen_dw_run_external(job) {
+    var nid = job.nid;
+    if (job.csp) {
+        if (typeof _lumen_dispatch_csp_violation === 'function') {
+            _lumen_dispatch_csp_violation(job.csp[0], job.csp[1], job.csp[2], 'enforce');
+        }
+        _lumen_console_error('script load failed: ' + job.url + ': blocked by ' + job.csp[0]);
+        _lumen_resource_fire(nid, 'error');
+        return;
+    }
+    var failure = job.error;
+    var body = null;
+    if (failure === null) {
+        var r = _lumen_fetch_async_wait_text(job.handle, _LUMEN_DW_FETCH_TIMEOUT_MS);
+        _lumen_fetch_async_free(job.handle);
+        if (r[0] !== 'ok') failure = r[0];
+        else if (+r[1] < 200 || +r[1] >= 300) failure = 'HTTP ' + r[1];
+        else body = r[3];
+    }
+    if (failure !== null) {
+        _lumen_console_error('script load failed: ' + job.url + ': ' + failure);
+        _lumen_resource_fire(nid, 'error');
+        return;
+    }
+    _lumen_script_execute_classic(body, nid);
+    _lumen_resource_fire(nid, 'load');
+}
+
+// The writing script has returned: parse what is still held back, then run
+// what waited on the blocking script, in order. A script run from here that
+// writes gets a frame of its own, right after itself.
+function _lumen_dw_flush(frame) {
+    if (frame.pending !== '') {
+        var rest = frame.pending;
+        frame.pending = '';
+        _lumen_dw_insert(frame, rest);
+    }
+    while (frame.queue.length > 0) {
+        var item = frame.queue.shift();
+        if (item.kind === 'external') _lumen_dw_run_external(item);
+        else _lumen_dw_prepare_now(item.nid);
+    }
+    frame.blocked = false;
+}
+
+// «The end» step 5 for the `defer` scripts `write()` produced — after the
+// shell's own deferred list, before DOMContentLoaded.
+function _lumen_dw_run_deferred() {
+    while (_lumen_dw_deferred.length > 0) _lumen_dw_run_external(_lumen_dw_deferred.shift());
+}
+
+// The write steps shared by `document.write()`/`writeln()`.
+function _lumen_document_write(args, sink, newline) {
+    if (_doc_ready_state !== 'loading') return;
+    var text = '';
+    for (var i = 0; i < args.length; i++) {
+        text += (typeof _lumen_tt_get_compliant_html === 'function')
+            ? _lumen_tt_get_compliant_html(args[i], sink)
+            : String(args[i]);
+    }
+    if (newline) text += '\n';
+    var frame;
+    var implicit = false;
+    var n = _lumen_dw_frames.length;
+    if (n > 0) {
+        if (_lumen_dw_frames[n - 1] === null) {
+            var cur = _lumen_current_script_stack[_lumen_current_script_stack.length - 1];
+            var snid = (cur && cur.__nid__ !== undefined) ? cur.__nid__ : null;
+            _lumen_dw_frames[n - 1] = _lumen_dw_new_frame(snid) || false;
+        }
+        frame = _lumen_dw_frames[n - 1];
+    } else {
+        frame = _lumen_dw_new_frame(null);
+        implicit = true;
+    }
+    if (!frame) return;
+    var s = frame.pending + text;
+    var cut = _lumen_dw_safe_cut(s);
+    frame.pending = s.slice(cut);
+    _lumen_dw_insert(frame, s.slice(0, cut));
+    // No script to return from: nothing will resume the parser later.
+    if (implicit) _lumen_dw_flush(frame);
 }
 
 // HTML LS §4.6.7 «process the linked resource»: a <link> whose `rel` makes it

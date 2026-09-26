@@ -716,6 +716,10 @@ function _lumen_apply_ready_state(state) {
     var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });
     document.dispatchEvent(rsEv);
     if (state === 'interactive') {
+        // BUG-568: «the end» step 3 — the `defer` scripts `document.write()`
+        // produced run after readyState turns 'interactive' and before
+        // DOMContentLoaded, like the markup's own deferred list.
+        if (typeof _lumen_dw_run_deferred === 'function') _lumen_dw_run_deferred();
         // BUG-826: the parser's `<link rel=preload|modulepreload|prefetch>`
         // elements start their fetch here — parsing is done, so the document
         // holds every hint the markup carries, and a hint appended by a head
@@ -2380,6 +2384,39 @@ _lumen_install_reflection(HTMLObjectElement.prototype, [
 _lumen_install_reflection(HTMLEmbedElement.prototype, [
     ['type',           'type',           'string'],
 ]);
+
+// OBJECT-1 срез 3: доступ к вложенному документу `<object>` — тот же бридж
+// под-документов, что у `<iframe>` (`frame_bridge.rs`): shell регистрирует
+// биндинг «хост → под-документ» в `spawn_frame` для `<object>`/`<embed>` так же,
+// как для `<iframe>`. Без биндинга (ресурс — картинка или fallback, загрузка не
+// удалась, фрейм ещё не загружен) — null; cross-origin — null у
+// `contentDocument`, но не у `contentWindow` (HTML LS §4.8.7, §4.8.5).
+// `<embed>` по IDL имеет только `getSVGDocument()`.
+Object.defineProperty(HTMLObjectElement.prototype, 'contentDocument', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return (n === -1 || typeof _lumen_frame_content_document !== 'function')
+            ? null : _lumen_frame_content_document(n);
+    },
+    configurable: true, enumerable: true,
+});
+Object.defineProperty(HTMLObjectElement.prototype, 'contentWindow', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return (n === -1 || typeof _lumen_frame_content_window !== 'function')
+            ? null : _lumen_frame_content_window(n);
+    },
+    configurable: true, enumerable: true,
+});
+// `getSVGDocument()` отдаёт документ, только если он построен как SVG
+// (`image/svg+xml`); SVG в `<object>`/`<embed>` сегодня рисуется картинкой
+// через resvg, скриптуемого SVG-документа нет — поэтому всегда null.
+[HTMLObjectElement.prototype, HTMLEmbedElement.prototype].forEach(function(p) {
+    Object.defineProperty(p, 'getSVGDocument', {
+        value: function getSVGDocument() { return null; },
+        writable: true, configurable: true, enumerable: true,
+    });
+});
 
 // BUG-798: `object.data`/`embed.src` are plain URL-reflecting attributes like
 // any other, but setting either while the element is connected must also

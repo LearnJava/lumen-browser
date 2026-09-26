@@ -400,6 +400,7 @@ pub(crate) fn install_fetch(
         let fp_media = fetch_provider.clone();
         let fp_media_uir = fetch_provider.clone();
         let fp_element = fetch_provider.clone();
+        let fp_inline_script = fetch_provider.clone();
         let fp_cancel = fetch_provider.clone();
         let fp_cancel_body = fetch_provider.clone();
         let c_cancel = Arc::clone(&cache);
@@ -936,6 +937,54 @@ pub(crate) fn install_fetch(
             reg!(scope, ctx, store, "_lumen_fetch_async_free", move |id: u32| {
                 am_free.lock().unwrap().remove(&id);
             });
+
+            // _lumen_fetch_async_wait_text(handle, timeout_ms)
+            //   → ["ok", status, finalUrl, bodyText] | ["csp", blockedUri, originalPolicy]
+            //   | ["net"] | ["abort"] | ["timeout"]
+            //
+            // BUG-568: the one blocking consumer of an async fetch. A parser-
+            // blocking `<script src>` written by `document.write()` must run
+            // before the writing script's caller continues (HTML LS §13.2.6.4.4,
+            // «pending parsing-blocking script»), so the shim starts the fetch
+            // the moment the element is written — requests of several written
+            // scripts overlap on the wire — and then waits for each here, in
+            // order, once the writing script has returned. The body goes back
+            // as text (UTF-8, lossy) straight away: the script is evaluated
+            // from it and no `Response` is ever built, so nothing needs the
+            // shared `FetchCache` slot. On timeout the request is aborted; the
+            // handle is left for `_lumen_fetch_async_free` either way.
+            let am_wait = Arc::clone(&async_map);
+            reg!(scope, ctx, store, "_lumen_fetch_async_wait_text", move |id: u32, timeout_ms: u32| -> Vec<String> {
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(u64::from(timeout_ms));
+                loop {
+                    {
+                        let mut map = am_wait.lock().unwrap();
+                        let Some(s) = map.get_mut(&id) else { return vec!["net".to_owned()] };
+                        match s.outcome.take() {
+                            Some(AsyncOutcome::Ok { status, url, body, .. }) => {
+                                return vec![
+                                    "ok".to_owned(),
+                                    status.to_string(),
+                                    url,
+                                    String::from_utf8_lossy(&body).into_owned(),
+                                ];
+                            }
+                            Some(AsyncOutcome::CspBlocked { blocked_uri, original_policy }) => {
+                                return vec!["csp".to_owned(), blocked_uri, original_policy];
+                            }
+                            Some(AsyncOutcome::Aborted) => return vec!["abort".to_owned()],
+                            Some(AsyncOutcome::NetError) => return vec!["net".to_owned()],
+                            None => {}
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            s.token.abort();
+                            return vec!["timeout".to_owned()];
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            });
         }
 
         // ── Per-response stream slots ────────────────────────────────────────────
@@ -1134,7 +1183,7 @@ pub(crate) fn install_fetch(
             });
         }
 
-        // _lumen_check_element_src(destination, url, nonce, integrity)
+        // _lumen_check_element_src(destination, url, nonce, integrity, parser_inserted)
         //   → [] | [effectiveDirective, blockedUri, originalPolicy]
         // BUG-1175: `script-src`/`style-src` pre-check for a `<script src>`/
         // `<link rel=stylesheet>`/`@import` that a script inserted. The shim's
@@ -1146,9 +1195,9 @@ pub(crate) fn install_fetch(
         {
             let fp = fp_element;
             reg!(scope, ctx, store, "_lumen_check_element_src",
-                move |destination: String, url: String, nonce: String, integrity: String| -> Vec<String> {
+                move |destination: String, url: String, nonce: String, integrity: String, parser_inserted: bool| -> Vec<String> {
                     let Some(ref provider) = fp else { return Vec::new() };
-                    match provider.check_element_src(&destination, &url, &nonce, &integrity) {
+                    match provider.check_element_src(&destination, &url, &nonce, &integrity, parser_inserted) {
                         Err(lumen_core::error::Error::CspElementSrcBlocked {
                             directive,
                             blocked_uri,
@@ -1157,6 +1206,27 @@ pub(crate) fn install_fetch(
                         _ => Vec::new(),
                     }
                 });
+        }
+
+        // _lumen_check_inline_script(nonce, body)
+        //   → [] | [effectiveDirective, "inline", originalPolicy]
+        // BUG-568: `script-src` for the inline `<script>` `document.write()`
+        // wrote — the shell judges only the markup's own inline scripts, so
+        // without this a written one would run under any policy. Same return
+        // shape as `_lumen_check_element_src`.
+        {
+            let fp = fp_inline_script;
+            reg!(scope, ctx, store, "_lumen_check_inline_script", move |nonce: String, body: String| -> Vec<String> {
+                let Some(ref provider) = fp else { return Vec::new() };
+                match provider.check_inline_script(&nonce, &body) {
+                    Err(lumen_core::error::Error::CspElementSrcBlocked {
+                        directive,
+                        blocked_uri,
+                        original_policy,
+                    }) => vec![directive, blocked_uri, original_policy],
+                    _ => Vec::new(),
+                }
+            });
         }
 
         // _lumen_upgrade_insecure_url(url) → String

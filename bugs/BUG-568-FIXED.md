@@ -1,6 +1,6 @@
 # BUG-568: `document.write()`/`.open()`/`.close()` do not exist — the whole "dynamic markup insertion" family is unimplemented
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-DOCWRITE](../ROADMAP.md))
+**Статус:** FIXED 2026-09-26 (P6) — последняя часть (исполнение записанных `<script>` и точка вставки) закрыта; `open`/`close` — GAP-DOCWRITE
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-DOCWRITE` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Компонент:** js (`crates/js/src/dom.rs` — `document` object literal, `dom.rs:4160` onward, has no `write`/`writeln`/`open`/`close` member at all; confirmed by `grep -n "document\.write\|\"write\"\|parseHTMLUnsafe"` returning nothing for any of the four)
 **Найден:** P2, WPT-VENDOR-html-semantics-embedded-content, 2026-08-04; scope widened P2, WPT-VENDOR-html-webappapis, 2026-08-04
@@ -115,3 +115,36 @@ log ['after:0']`, Chrome `1, 1, ['after:1']`. `write` вставляет раз�
 `body.insertAdjacentHTML` (скрипты инертны), а в `<head>` при `body === null` — no-op
 (`web_api_shim_mid.js:11440-11448`). GAP-DOCWRITE закрыт без этой части; передан P6 по решению
 пользователя.
+
+## Исправление (2026-09-26, P6)
+
+`_lumen_document_write` (`crates/js/src/shim/web_api_shim_mid.js`, рядом с «prepare the script
+element») заменил вставку в конец `<body>`:
+
+- **Точка вставки** — сразу за исполняемым парсерным скриптом (кадр на каждый скрипт, живёт вместе с
+  `document.currentScript`). Из скрипта в `<head>` head-only содержимое остаётся в `<head>`, остальное
+  уходит в начало `<body>` (как режим «in head» закрыл бы head). Без исполняемого скрипта (таймер,
+  обработчик) — конец `<body>`, как раньше. Раньше в `<head>` при `body === null` запись терялась.
+- **Разорванный тег** (`write('<i id=')` + `write("'x'>")`) и `<script>` без закрывающего тега
+  придерживаются до следующей записи или возврата пишущего скрипта.
+- **Записанные скрипты исполняются.** Инлайновый классический — внутри `write()`, после проверки
+  `script-src` (`_lumen_check_inline_script` → `JsFetchProvider::check_inline_script` →
+  `CspPolicy::inline_allows` — то же правило, что у инлайновых скриптов разметки в shell). Внешний
+  классический без `async`/`defer` — парсер-блокирующий: запрос уходит сразу, исполнение — когда
+  пишущий скрипт вернулся, до следующего скрипта документа (`_lumen_fetch_async_wait_text`, лимит
+  20 с); записанное после него ждёт его. `defer` — в `_lumen_apply_ready_state('interactive')` до
+  DOMContentLoaded. `async`/модули — путь DOM-вставленного скрипта. `check_element_src` получил
+  `parser_inserted`: `'strict-dynamic'` записанный `<script src>` не пропускает (CSP3 §6.7.1.1).
+
+Не моделируется: записанный незакрытый элемент не «поглощает» разметку, уже стоящую после скрипта;
+разметка блокированной записи попадает в дерево до исполнения блокирующего скрипта (ждут только скрипты).
+
+**Проверка.** 9 юнит-тестов `crates/js/src/dom/tests/v8_bug568_document_write.rs`. Репро
+`.tmp/compat/g5/docwrite.html` в видимом окне: Lumen `ext=1, inline=1, log ['after:1']`, порядок узлов
+= Chrome. tumblr: 88 запросов к `assets.tumblr.com/pop/js/*` (было 0). WPT
+`document-write/` — +27 подтестов PASS, `script_001`/`script_003` OK вместо TIMEOUT;
+`opening-the-input-stream/` — +2 подтеста; регрессий нет (`mutation-observer.html` под
+`--processes 4` один раз дал TIMEOUT, в одиночку 3/3 OK — как и на main). baseline `.ini` обновлён.
+
+**Остаток на tumblr (не этот баг):** после загрузки бандлов гидрация падает на
+`document.body.classList is not iterable` — [BUG-1125](BUG-1125-FIXED.md) (следующая в очереди P6).

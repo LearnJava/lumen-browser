@@ -943,7 +943,7 @@ impl lumen_core::ext::JsFetchProvider for NonceScriptSrcProvider {
     fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         Err(lumen_core::error::Error::Network("no body expected".into()))
     }
-    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, _integrity: &str) -> lumen_core::error::Result<()> {
+    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, _integrity: &str, _parser_inserted: bool) -> lumen_core::error::Result<()> {
         if destination == "script" && nonce != "abc" {
             return Err(lumen_core::error::Error::CspElementSrcBlocked {
                 directive: "script-src-elem".into(),
@@ -1003,8 +1003,8 @@ fn inserted_script_nonce_reaches_script_src_check() {
                        s.setAttribute('nonce', 'abc');
                        document.body.appendChild(s);
                        _lumen_tick_timers();
-                       [_lumen_check_element_src('script', 'https://example.com/dyn.js', 'abc', '').length,
-                        _lumen_check_element_src('script', 'https://example.com/dyn.js', '', '').length,
+                       [_lumen_check_element_src('script', 'https://example.com/dyn.js', 'abc', '', false).length,
+                        _lumen_check_element_src('script', 'https://example.com/dyn.js', '', '', false).length,
                         globalThis.__b1175n].join(',')"#,
         )
         .unwrap();
