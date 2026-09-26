@@ -611,6 +611,58 @@ var _sw_ready_promise = new Promise(function(resolve) {
     }
 });
 
+// BUG-675: URL checks of `register()` (SW §3.4.3 steps 2–4, §9.2 Start
+// Register steps 3–6, §9.6 Register step 2–3). Returns `{script}` with the
+// absolute script URL, or `{error}` holding the rejection reason.
+function _sw_check_register_urls(scriptUrl, scopeOpt) {
+    var base = (typeof document !== 'undefined' && document && document.baseURI)
+        || (typeof location !== 'undefined' ? location.href : undefined);
+    var docOrigin = (typeof location !== 'undefined') ? location.origin : undefined;
+    function parse(value, what) {
+        try {
+            return { url: new URL(String(value), base) };
+        } catch (e) {
+            return { error: new TypeError('Failed to register a ServiceWorker: the '
+                + what + ' URL \'' + String(value) + '\' is invalid.') };
+        }
+    }
+    // Start Register: scheme and encoded separators — TypeError.
+    function checkShape(u, what) {
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+            return new TypeError('Failed to register a ServiceWorker: the '
+                + what + ' URL protocol \'' + u.protocol + '\' is not supported.');
+        }
+        if (/%2f|%5c/i.test(u.pathname)) {
+            return new TypeError('Failed to register a ServiceWorker: the '
+                + what + ' URL path must not contain an escaped \'/\' or \'\\\'.');
+        }
+        return null;
+    }
+    // Register job: origin mismatch with the registering document — SecurityError.
+    function checkOrigin(u, what) {
+        if (docOrigin !== undefined && u.origin !== docOrigin) {
+            return new DOMException('Failed to register a ServiceWorker: the origin of the '
+                + what + ' URL (\'' + u.origin + '\') does not match the current origin (\''
+                + docOrigin + '\').', 'SecurityError');
+        }
+        return null;
+    }
+    var s = parse(scriptUrl, 'script');
+    if (s.error) return s;
+    var err = checkShape(s.url, 'script');
+    if (err) return { error: err };
+    var sc = null;
+    if (scopeOpt !== undefined && scopeOpt !== null) {
+        sc = parse(scopeOpt, 'scope');
+        if (sc.error) return sc;
+        err = checkShape(sc.url, 'scope');
+        if (err) return { error: err };
+    }
+    err = checkOrigin(s.url, 'script') || (sc && checkOrigin(sc.url, 'scope'));
+    if (err) return { error: err };
+    return { script: s.url.href };
+}
+
 var _sw_container_et = _sw_make_event_target();
 var _sw_container = Object.assign({
     get controller() {
@@ -625,6 +677,14 @@ var _sw_container = Object.assign({
     onmessageerror: null,
     register: function(scriptUrl, options) {
         var scope = (options && options.scope) ? String(options.scope) : '/';
+        // BUG-675: SW §3.4.3 register() + §9.2 Start Register — the script URL
+        // (and an explicit scope) is parsed against the document's base URL and
+        // must be http(s), same-origin with the document, and free of encoded
+        // path separators; otherwise the promise rejects before any
+        // registration state exists. The registry key stays the raw scope.
+        var checked = _sw_check_register_urls(scriptUrl, options && options.scope);
+        if (checked.error) return Promise.reject(checked.error);
+        scriptUrl = checked.script;
         var existing = _sw_registrations[scope];
         if (existing && existing.active && existing.scriptURL === String(scriptUrl)) {
             return Promise.resolve(existing);
