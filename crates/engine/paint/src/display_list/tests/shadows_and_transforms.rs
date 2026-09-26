@@ -1669,3 +1669,102 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
             "после override зелёного фона быть не должно"
         );
     }
+
+    // ─── CSS Transforms L2 §4: perspective ──────────────────────────────────
+
+    /// Perspective-обёртка: единственный `PushTransform`, у которого m[11] ≠ 0
+    /// (элемент (3,4) матрицы perspective(d) = -1/d).
+    fn perspective_pushes(dl: &DisplayList) -> Vec<lumen_layout::Mat4> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushTransform { matrix } if matrix.0[11] != 0.0 => Some(*matrix),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const PERSPECTIVE_HTML: &str = r#"<div id="stage"><div id="card">x</div></div>"#;
+    const PERSPECTIVE_CSS: &str = "#stage { perspective: 200px; width: 200px; height: 100px; } \
+        #card { width: 100px; height: 100px; background: red; transform: rotateY(45deg); }";
+
+    #[test]
+    fn perspective_wraps_3d_children_in_both_builders() {
+        for (name, dl) in [
+            ("walk", build(PERSPECTIVE_HTML, PERSPECTIVE_CSS)),
+            ("ordered", build_ordered(PERSPECTIVE_HTML, PERSPECTIVE_CSS)),
+        ] {
+            let p = perspective_pushes(&dl);
+            assert_eq!(p.len(), 1, "{name}: одна perspective-обёртка: {dl:?}");
+            assert!((p[0].0[11] + 1.0 / 200.0).abs() < 1e-6, "{name}: -1/d");
+            let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushTransform { .. }));
+            let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
+            assert_eq!(pushes, pops, "{name}: Push/PopTransform сбалансированы");
+            // Обёртка открыта до фона ребёнка (красный) — проекция действует на детей.
+            let open = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::PushTransform { matrix } if matrix.0[11] != 0.0))
+                .unwrap();
+            let red = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255 && color.g == 0))
+                .expect("red fill");
+            assert!(open < red, "{name}: perspective до фона ребёнка");
+        }
+    }
+
+    #[test]
+    fn perspective_origin_defaults_to_box_centre() {
+        // perspective-origin: 50% 50% → центр #stage = (100, 50) в viewport.
+        // P = T(100,50)·perspective(200)·T(-100,-50); точка центра неподвижна
+        // при любом z, т.е. P·(100,50,z,1) даёт x/w = 100, y/w = 50.
+        let dl = build(PERSPECTIVE_HTML, PERSPECTIVE_CSS);
+        let m = perspective_pushes(&dl)[0];
+        let (x, y, _) = m.project_point_z(100.0, 50.0, -40.0);
+        assert!((x - 100.0).abs() < 1e-3 && (y - 50.0).abs() < 1e-3, "centre fixed: ({x}, {y})");
+        // Точка вне центра при z < 0 (дальше от зрителя) стягивается к центру.
+        let (x2, _, _) = m.project_point_z(180.0, 50.0, -40.0);
+        assert!(x2 < 180.0 && x2 > 100.0, "far point shrinks toward origin: {x2}");
+    }
+
+    #[test]
+    fn perspective_origin_explicit_is_resolved_against_own_box() {
+        let css = "#stage { perspective: 200px; perspective-origin: 0 0; width: 200px; height: 100px; } \
+            #card { width: 100px; height: 100px; transform: rotateY(45deg); }";
+        let dl = build(PERSPECTIVE_HTML, css);
+        let m = perspective_pushes(&dl)[0];
+        let (x, y, _) = m.project_point_z(0.0, 0.0, -40.0);
+        assert!(x.abs() < 1e-3 && y.abs() < 1e-3, "origin (0,0) fixed: ({x}, {y})");
+    }
+
+    #[test]
+    fn perspective_skipped_for_flat_children() {
+        // На плоскости z = 0 проекция — тождество: обёртка не эмитится, чтобы
+        // не переводить 2D-клипы потомков на 3D-fallback.
+        let css = "#stage { perspective: 200px; } #card { transform: rotate(10deg); }";
+        assert!(perspective_pushes(&build(PERSPECTIVE_HTML, css)).is_empty());
+        assert!(perspective_pushes(&build_ordered(PERSPECTIVE_HTML, css)).is_empty());
+    }
+
+    #[test]
+    fn perspective_none_emits_no_wrapper() {
+        let css = "#card { transform: rotateY(45deg); }";
+        assert!(perspective_pushes(&build(PERSPECTIVE_HTML, css)).is_empty());
+    }
+
+    #[test]
+    fn perspective_does_not_project_the_box_itself() {
+        // Собственный фон #stage рисуется до обёртки (проекция — только для детей).
+        let css = "#stage { perspective: 200px; background: blue; width: 200px; height: 100px; } \
+            #card { width: 100px; height: 100px; transform: rotateY(45deg); }";
+        for dl in [build(PERSPECTIVE_HTML, css), build_ordered(PERSPECTIVE_HTML, css)] {
+            let blue = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.b == 255 && color.r == 0))
+                .expect("blue fill");
+            let open = dl
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::PushTransform { matrix } if matrix.0[11] != 0.0))
+                .expect("perspective push");
+            assert!(blue < open, "own background outside the projection");
+        }
+    }

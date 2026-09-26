@@ -174,6 +174,14 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
             overflow_post.push(DisplayCommand::PopClip);
         }
     }
+    // CSS Transforms L2 §4 — `perspective` projects the children only, so it
+    // rides in the overflow slots (children-only), innermost: pushed after the
+    // clip, popped before it (and before the scrollbars, which must stay flat).
+    let mut perspective_pre = Vec::new();
+    if emit_push_perspective(b, &mut perspective_pre) {
+        overflow_pre.extend(perspective_pre);
+        overflow_post.insert(0, DisplayCommand::PopTransform);
+    }
     if s.mix_blend_mode != LayoutBlendMode::Normal {
         pre.push(DisplayCommand::PushBlendMode {
             mode: map_blend_mode(s.mix_blend_mode),
