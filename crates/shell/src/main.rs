@@ -54,6 +54,7 @@ mod page_source;
 mod page_state;
 mod parallel_fetch;
 mod resource_base;
+mod css_url_rebase;
 mod stylesheets;
 mod subresources;
 mod text_cursor;

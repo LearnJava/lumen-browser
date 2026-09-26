@@ -13,6 +13,7 @@ mod bug341_census;
 mod chrome_float;
 mod chrome_incremental;
 mod cli;
+mod css_url_rebase;
 mod form_post_nav;
 mod page_pipeline;
 mod page_resources;

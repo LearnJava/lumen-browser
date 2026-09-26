@@ -790,7 +790,7 @@ fn import_fixture_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-fn null_sink() -> Arc<dyn EventSink> {
+pub(super) fn null_sink() -> Arc<dyn EventSink> {
     Arc::new(StdoutEventSink)
 }
 
