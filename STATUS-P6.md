@@ -1,4 +1,5 @@
-BUGS.md:190
+BUGS.md:189
+BUGS.md:218
 BUGS.md:219
 BUGS.md:220
 BUGS.md:221
@@ -19,5 +20,4 @@ BUGS.md:235
 BUGS.md:236
 BUGS.md:237
 BUGS.md:238
-BUGS.md:239
-BUGS.md:259
+BUGS.md:258

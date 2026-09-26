@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-26",
  "counts": {
-  "open": 239,
-  "fixed": 888,
+  "open": 240,
+  "fixed": 891,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1127,
+ "total_bugs": 1131,
  "phases": [
   {
    "id": "P0",
@@ -4019,7 +4019,7 @@
        "title": "WPT: вендорить + прогнать категорию `sanitizer-api`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root sanitizer-api --recursive`, ~37 с, 35 файлов, 27 исполнившихся id — дёшево: ни `.https.`, ни `testdriver.js`, ни variant-генератора) — **26/27 harness OK, 72/480 сабтестов**. Заведён [BUG-663](bugs/BUG-663-OPEN.md) — Sanitizer API (помечен в коде как \"Phase 0 stub\") реализует устаревший до-редизайна черновик спеки, а не текущую: `Document.parseHTML`/`parseHTMLUnsafe` отсутствуют целиком (72+32 хита); конфиг-объектные методы `Sanitizer` (`get`/`allowElement`/`removeElement`/`allowAttribute`/`removeAttribute`/`removeUnsafe`/`replaceElementWithChildren`) не реализованы вовсе, есть только устаревший `sanitizeFor()`; `ShadowRoot` (`_lumen_make_shadow_root`, ручной объектный литерал с фиксированным набором методов) никогда не получил `setHTML`/`setHTMLUnsafe`, хотя `Element.prototype` их имеет; `setHTML(html, {sanitizer: <plain-конфиг>})` падает `sanitizeFor is not a function` (166 хитов, крупнейший класс) вместо неявного построения `new Sanitizer(...)` из плоского объекта, как того требует спека. Остаточный сигнал (44 `isEqualNode`/24 `replaceChildren` в `sethtml-with-trustedtypes.tentative.html`) не доисследован — см. секцию «не является причиной» в BUG-663; `insertAdjacentHTML`-хиты (24) — реконфирмация [BUG-351](bugs/BUG-351-FIXED.md); `createParserOptions`-хиты (12) — Trusted Types, вне скоупа этого бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root sanitizer-api --recursive`, ~37 с, 35 файлов, 27 исполнившихся id — дёшево: ни `.https.`, ни `testdriver.js`, ни variant-генератора) — **26/27 harness OK, 72/480 сабтестов**. Заведён [BUG-663](bugs/BUG-663-FIXED.md) — Sanitizer API (помечен в коде как \"Phase 0 stub\") реализует устаревший до-редизайна черновик спеки, а не текущую: `Document.parseHTML`/`parseHTMLUnsafe` отсутствуют целиком (72+32 хита); конфиг-объектные методы `Sanitizer` (`get`/`allowElement`/`removeElement`/`allowAttribute`/`removeAttribute`/`removeUnsafe`/`replaceElementWithChildren`) не реализованы вовсе, есть только устаревший `sanitizeFor()`; `ShadowRoot` (`_lumen_make_shadow_root`, ручной объектный литерал с фиксированным набором методов) никогда не получил `setHTML`/`setHTMLUnsafe`, хотя `Element.prototype` их имеет; `setHTML(html, {sanitizer: <plain-конфиг>})` падает `sanitizeFor is not a function` (166 хитов, крупнейший класс) вместо неявного построения `new Sanitizer(...)` из плоского объекта, как того требует спека. Остаточный сигнал (44 `isEqualNode`/24 `replaceChildren` в `sethtml-with-trustedtypes.tentative.html`) не доисследован — см. секцию «не является причиной» в BUG-663; `insertAdjacentHTML`-хиты (24) — реконфирмация [BUG-351](bugs/BUG-351-FIXED.md); `createParserOptions`-хиты (12) — Trusted Types, вне скоупа этого бага",
        "bugs": [
         "BUG-663"
        ]
@@ -7538,20 +7538,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-648": {
-   "status": "open",
-   "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
-   "component": "js (`crates/js/src/dom.rs:8258-8335` — `PerformanceObserver`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-663": {
-   "status": "open",
-   "title": "Sanitizer API implements a pre-redesign draft, not the current spec: `Document.parseHTML`/`parseHTMLUnsafe` don't exist at all; `Sanitizer`'s config-object meth…",
-   "component": "js (`crates/js/src/sanitizer.rs` — `Sanitizer`/`Element.prototype.setHTML`; `crates/js/src/dom.rs:1315` — `_lumen_make_shadow_root`; `crates/js/src/dom.rs:3499` — `setHTMLUnsafe`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-664": {
    "status": "open",
    "title": "`navigator.connection` (`NetworkInformation`) doesn't inherit from `EventTarget` (`instanceof EventTarget` → `false`, no `dispatchEvent`, `Symbol.toStringTag` →…",
@@ -8532,13 +8518,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1125": {
-   "status": "open",
-   "title": "`typeof el.classList[Symbol.iterator]`/`.values`/`.keys`/`.entries` — `'undefined'` (Chrome: `function`); `[...el.classList]` бросает. wordpress: `e.classList.v…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:1336-1398` — `DOMTokenList.prototype`: есть `forEach`, итераторов нет; образец — `NodeList`, `:6067-6088`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1126": {
    "status": "open",
    "title": "`URL.createObjectURL(blob)` → `blob:lumen/1`, дальше `fetch()` → `TypeError: fetch: network error`, XHR → `error`, `<script src=blob:…>` → `onerror`. Chrome — o…",
@@ -8914,6 +8893,34 @@
    "status": "open",
    "title": "Ранняя предзагрузка запрашивает `<script src>` под `script-src 'none'` и `<link rel=stylesheet>` под `style-src 'none'`: свой сервер видит `GET`, Chrome запроса…",
    "component": "shell (`crates/shell/src/page_load.rs:2581` `feed_preload_and_emit` — ранний прогрев stylesheet/script без CSP)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1186": {
+   "status": "open",
+   "title": "`typeof window.stop === 'undefined'`, `window.stop()` → `TypeError`; WPT `performance-timeline/not-restored-reasons/abort-block-bfcache.window.html`. Вынесен из…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` — у `window` нет члена `stop`) + shell (отмена навигации)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1187": {
+   "status": "open",
+   "title": "Во фрейме `window.top === window`, `top !== parent`; `top.postMessage` уходит самому фрейму. WPT `performance-timeline/not-clonable.html` → TIMEOUT. Найден P6 п…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js:5858` — `top` неконфигурируем, `crates/js/src/frame_bridge.rs:2322` не может его переопределить)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1188": {
+   "status": "open",
+   "title": "`parent.postMessage` из первого синхронного `<script>` фрейма родителю не доходит; то же через 200 мс — доходит. Chrome доставляет оба. Найден P6 при закрытии B…",
+   "component": "js/shell (`crates/js/src/frame_bridge.rs` — доставка `postMessage` между изолятами; место потери не локализовано)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1189": {
+   "status": "open",
+   "title": "`typeof PerformanceEntry === 'undefined'`; 13 подтестов `PerformanceEntry interface: …` в WPT `performance-timeline/idlharness.any.html` (выполняются только пос…",
+   "component": "js (`crates/js/src/shim/performance_shim.js` — записи — объектные литералы)",
    "date": null,
    "debtor": false
   },
@@ -15125,6 +15132,27 @@
    "component": "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln`/`open`/`close` member at all)",
    "date": "2026-09-26",
    "debtor": false
+  },
+  "BUG-1125": {
+   "status": "fixed",
+   "title": "`typeof el.classList[Symbol.iterator]`/`.values`/`.keys`/`.entries` — `'undefined'` (Chrome: `function`); `[...el.classList]` бросает. wordpress: `e.classList.v…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:1336-1398` — `DOMTokenList.prototype`: есть `forEach`, итераторов нет; образец — `NodeList`, `:6067-6088`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-663": {
+   "status": "fixed",
+   "title": "Sanitizer API implements a pre-redesign draft, not the current spec: `Document.parseHTML`/`parseHTMLUnsafe` don't exist at all; `Sanitizer`'s config-object meth…",
+   "component": "js (`crates/js/src/sanitizer.rs` — `Sanitizer`/`Element.prototype.setHTML`; `crates/js/src/dom.rs:1315` — `_lumen_make_shadow_root`; `crates/js/src/dom.rs:3499` — `setHTMLUnsafe`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-648": {
+   "status": "fixed",
+   "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail.js` — `PerformanceObserver`, `PerformanceObserverEntryList`)",
+   "date": "2026-09-26",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15681,6 +15709,9 @@
   "js (`crates/js/src/shim/performance_shim.js` — `Performance.prototype`)": [
    "BUG-767"
   ],
+  "js (`crates/js/src/shim/performance_shim.js` — записи — объектные литералы)": [
+   "BUG-1189"
+  ],
   "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)": [
    "BUG-904"
   ],
@@ -15825,6 +15856,9 @@
   "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `navigator`; `navigator_bindings.rs` — `finalize_navigator_interface_v8`)": [
    "BUG-624"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid_b.js` — у `window` нет члена `stop`) + shell (отмена навигации)": [
+   "BUG-1186"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid_b.js`, `web_api_shim_tail_b.js`, `web_api_shim_tail_mc.js`; `crates/js/src/generic_sensor.rs`, `geolocation.rs`, `wake_lock.rs`)": [
    "BUG-765"
   ],
@@ -15851,6 +15885,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js:103-112` — `window.getComputedStyle`)": [
    "BUG-539"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_tail_b.js:5858` — `top` неконфигурируем, `crates/js/src/frame_bridge.rs:2322` не может его переопределить)": [
+   "BUG-1187"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — Web Animations, `Animation.prototype`)": [
    "BUG-704"
@@ -16101,6 +16138,9 @@
   ],
   "js/shell (`_lumen_get_bounding_rect` — прямоугольники `update_layout_rects`, `crates/shell/src/relayout.rs`)": [
    "BUG-1166"
+  ],
+  "js/shell (`crates/js/src/frame_bridge.rs` — доставка `postMessage` между изолятами; место потери не локализовано)": [
+   "BUG-1188"
   ],
   "js/shell (`crates/js/src/v8_runtime/style_flush.rs`, `crates/js/src/v8_runtime/install/dom_core.rs`, `crates/js/src/v8_runtime/install/platform.rs`, `crates/shell/src/persistent_js.rs`)": [
    "BUG-560"

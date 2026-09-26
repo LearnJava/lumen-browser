@@ -1,12 +1,15 @@
-//! Sanitizer API (W3C Sanitizer API §3)
+//! HTML Sanitizer API (WICG sanitizer-api, now part of WHATWG HTML).
 //!
-//! Phase 0 stub: `new Sanitizer(config)` creates a sanitizer,
-//! `sanitizer.sanitizeFor(element, string)` removes <script> tags and event handlers,
-//! `element.setHTML(html, {sanitizer})` sets innerHTML via sanitizer.
+//! BUG-663: the config-object `Sanitizer` (`get`/`allowElement`/`removeElement`/
+//! `replaceElementWithChildren`/`allow|removeAttribute`/`allow|removeProcessingInstruction`/
+//! `setComments`/`setDataAttributes`/`removeUnsafe`), the sanitize walk, the safe and
+//! unsafe `setHTML*` pair on `Element` and `ShadowRoot`, and the `Document.parseHTML*`
+//! statics. The JS lives in `shim/sanitizer_shim.js`; the previous pre-redesign
+//! draft (`sanitizeFor()` plus a regex strip of `<script>`/`on*`) is gone.
 
-/// V8 port of the former rquickjs `install_sanitizer_bindings` (Ph3 V8 migration S5-S7,
-/// rquickjs side removed in S12b-B3): identical JS shim, evaluated via
-/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Evaluates the Sanitizer shim. Runs after `dom_parser` (alphabetical
+/// `install_v8!` order in `v8_runtime.rs`), whose `Document.parseHTMLUnsafe`
+/// the shim wraps.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_sanitizer_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -15,101 +18,7 @@ pub(crate) fn install_sanitizer_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime)
 }
 
 #[cfg(feature = "v8-backend")]
-const SANITIZER_SHIM: &str = r#"
-// Sanitizer API (Phase 0 stub)
-// Simple sanitizer that removes <script> tags and event handler attributes
-
-const DANGEROUS_ATTRS = new Set([
-  'onload', 'onerror', 'onclick', 'ondblclick', 'onmousedown', 'onmouseup',
-  'onmouseover', 'onmouseout', 'onmousemove', 'onmouseenter', 'onmouseleave',
-  'onfocus', 'onblur', 'onchange', 'onsubmit', 'oninput', 'onkeydown',
-  'onkeyup', 'onkeypress', 'onwheel', 'ondrag', 'ondrop', 'onpaste',
-  'oncopy', 'oncut', 'oncontextmenu', 'ontouchstart', 'ontouchend',
-  'ontouchcancel', 'ontouchmove',
-]);
-
-function removeScriptTags(html) {
-  // Remove <script ...>...</script> (case-insensitive)
-  return html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-}
-
-function removeEventHandlers(html) {
-  // Remove event handler attributes
-  let result = html;
-
-  for (const attr of DANGEROUS_ATTRS) {
-    // Match attribute in both " and ' quotes, handle complex values
-    const patterns = [
-      new RegExp(` ${attr}="[^"]*"`, 'g'),
-      new RegExp(` ${attr}='[^']*'`, 'g'),
-      new RegExp(` ${attr}=[^ >]*`, 'g'),
-    ];
-
-    for (const pattern of patterns) {
-      result = result.replace(pattern, '');
-    }
-  }
-
-  return result;
-}
-
-globalThis.Sanitizer = class {
-  constructor(config) {
-    // Phase 0: config is not used
-    this.config = config || {};
-  }
-
-  sanitizeFor(element, htmlString) {
-    // Validate arguments
-    if (!element) {
-      throw new TypeError('sanitizeFor: element argument is required');
-    }
-    if (typeof htmlString !== 'string') {
-      throw new TypeError('sanitizeFor: html string argument must be a string');
-    }
-
-    // Sanitize by removing dangerous elements and attributes
-    let sanitized = removeScriptTags(htmlString);
-    sanitized = removeEventHandlers(sanitized);
-
-    // Phase 0: Create a DocumentFragment by setting innerHTML on a temporary container
-    // and returning its childNodes
-    const temp = document.createElement('div');
-    temp.innerHTML = sanitized;
-
-    // Create a proper DocumentFragment
-    const frag = document.createDocumentFragment();
-    while (temp.firstChild) {
-      frag.appendChild(temp.firstChild);
-    }
-    return frag;
-  }
-};
-
-// Extend Element.prototype.setHTML
-if (typeof Element !== 'undefined' && Element.prototype) {
-  if (!Element.prototype.setHTML) {
-    Element.prototype.setHTML = function(html, options) {
-      options = options || {};
-      const sanitizer = options.sanitizer;
-
-      if (sanitizer) {
-        const fragment = sanitizer.sanitizeFor(this, html);
-        // Clear current content and append sanitized fragment
-        this.innerHTML = '';
-        this.appendChild(fragment);
-      } else {
-        // Direct innerHTML if no sanitizer
-        this.innerHTML = html;
-      }
-    };
-  }
-}
-
-if (typeof window !== 'undefined') {
-  window.Sanitizer = globalThis.Sanitizer;
-}
-"#;
+const SANITIZER_SHIM: &str = include_str!("shim/sanitizer_shim.js");
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
@@ -122,113 +31,117 @@ mod tests {
     use lumen_dom::Document;
     use std::sync::{Arc, Mutex};
 
-    fn with_sanitizer(f: impl FnOnce(&V8JsRuntime)) {
+    /// `install_dom` already evaluates the shim via `install_v8!`.
+    fn eval_in_page(script: &str) -> JsValue {
         let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        // `install_dom` already installs the Sanitizer shim via `install_v8!`
-        // (v8_runtime.rs) — calling `install_sanitizer_bindings_v8` again would
-        // re-declare the shim's top-level `const`s (not IIFE-wrapped) in the
-        // same global scope and fail with "already been declared".
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, None, false)
+        rt.install_dom(doc, "https://example.test/", None, None, None, None, None, None, None, None, None, false)
             .unwrap();
-        f(&rt);
+        rt.eval(script).unwrap()
+    }
+
+    fn assert_str(script: &str, expected: &str) {
+        assert_eq!(eval_in_page(script), JsValue::String(expected.to_string()), "{script}");
     }
 
     #[test]
-    fn sanitizer_class_exists() {
-        with_sanitizer(|rt| {
-            let ok = rt.eval("typeof Sanitizer === 'function'").unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn get_returns_canonical_sorted_config() {
+        assert_str(
+            "JSON.stringify(new Sanitizer({elements: ['p', 'b'], attributes: ['id']}).get())",
+            r#"{"attributes":[{"name":"id","namespace":null}],"comments":true,"dataAttributes":true,"elements":[{"name":"b","namespace":"http://www.w3.org/1999/xhtml","removeAttributes":[]},{"name":"p","namespace":"http://www.w3.org/1999/xhtml","removeAttributes":[]}],"removeProcessingInstructions":[]}"#,
+        );
     }
 
     #[test]
-    fn sanitizer_can_be_instantiated() {
-        with_sanitizer(|rt| {
-            let ok = rt.eval("typeof new Sanitizer() === 'object'").unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn modifiers_report_whether_the_config_changed() {
+        assert_str(
+            "var s = new Sanitizer({elements: ['div']}); \
+             [s.allowElement('p'), s.allowElement('p'), s.removeElement('div'), \
+              s.removeElement('div'), s.replaceElementWithChildren('b'), \
+              s.replaceElementWithChildren('html')].join()",
+            "true,false,true,false,true,false",
+        );
     }
 
     #[test]
-    fn sanitizer_has_sanitizefor_method() {
-        with_sanitizer(|rt| {
-            let ok = rt
-                .eval("const s = new Sanitizer(); typeof s.sanitizeFor === 'function'")
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn invalid_config_throws_type_error() {
+        assert_eq!(
+            eval_in_page("try { new Sanitizer({elements: [], removeElements: []}); false } catch (e) { e instanceof TypeError }"),
+            JsValue::Bool(true),
+        );
     }
 
     #[test]
-    fn sanitizefor_removes_script_tags() {
-        with_sanitizer(|rt| {
-            let ok = rt
-                .eval(
-                    "const s = new Sanitizer(); const div = document.createElement('div'); \
-                     const frag = s.sanitizeFor(div, '<p>hello</p><script>alert(\"xss\")</script>'); \
-                     const c = document.createElement('div'); c.appendChild(frag); \
-                     !c.innerHTML.includes('script')",
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn set_html_default_config_strips_script_and_handlers() {
+        assert_str(
+            "var d = document.createElement('div'); \
+             d.setHTML('<p onclick=\"x()\" id=a>hi</p><script>bad()</script><custom-x>t</custom-x>'); \
+             d.innerHTML",
+            "<p>hi</p>",
+        );
     }
 
     #[test]
-    fn sanitizefor_removes_event_handlers() {
-        with_sanitizer(|rt| {
-            let ok = rt
-                .eval(
-                    "const s = new Sanitizer(); const div = document.createElement('div'); \
-                     const frag = s.sanitizeFor(div, '<button onclick=\"bad()\">click</button>'); \
-                     const c = document.createElement('div'); c.appendChild(frag); \
-                     !c.innerHTML.includes('onclick')",
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn set_html_accepts_a_plain_config_object() {
+        assert_str(
+            "var d = document.createElement('div'); \
+             d.setHTML('<div><p>Hello <b>World!</b></p></div>', {sanitizer: {elements: ['div', 'p']}}); \
+             d.innerHTML",
+            "<div><p>Hello </p></div>",
+        );
     }
 
     #[test]
-    fn sanitizefor_throws_on_missing_element() {
-        with_sanitizer(|rt| {
-            let ok = rt
-                .eval(
-                    "const s = new Sanitizer(); \
-                     try { s.sanitizeFor(null, '<p>test</p>'); false } \
-                     catch (e) { e instanceof TypeError }",
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn set_html_unsafe_applies_a_sanitizer_but_keeps_script() {
+        assert_str(
+            "var d = document.createElement('div'); \
+             d.setHTMLUnsafe('<p>a<b>b</b></p><script>x</script>', {sanitizer: {replaceWithChildrenElements: ['b']}}); \
+             d.innerHTML",
+            "<p>ab</p><script>x</script>",
+        );
     }
 
     #[test]
-    fn sanitizefor_throws_on_non_string_html() {
-        with_sanitizer(|rt| {
-            let ok = rt
-                .eval(
-                    "const s = new Sanitizer(); const div = document.createElement('div'); \
-                     try { s.sanitizeFor(div, 123); false } \
-                     catch (e) { e instanceof TypeError }",
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn set_html_drops_javascript_urls_only_in_safe_mode() {
+        assert_str(
+            "var cfg = {sanitizer: {elements: [{name: 'a', attributes: ['href']}]}}; \
+             var a = document.createElement('div'); a.setHTML('<a href=\"javascript:x()\">l</a>', cfg); \
+             var b = document.createElement('div'); b.setHTMLUnsafe('<a href=\"javascript:x()\">l</a>', cfg); \
+             a.innerHTML + '|' + b.innerHTML",
+            "<a>l</a>|<a href=\"javascript:x()\">l</a>",
+        );
     }
 
     #[test]
-    fn sanitizefor_returns_document_fragment() {
-        with_sanitizer(|rt| {
-            let ok = rt
-                .eval(
-                    "const s = new Sanitizer(); const div = document.createElement('div'); \
-                     const result = s.sanitizeFor(div, '<p>test</p>'); \
-                     typeof result === 'object'",
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+    fn set_html_on_script_context_is_a_no_op() {
+        assert_str(
+            "var s = document.createElement('script'); s.setHTML('abc'); \
+             var u = document.createElement('script'); u.setHTMLUnsafe('abc'); \
+             s.innerHTML + '|' + u.innerHTML",
+            "|abc",
+        );
+    }
+
+    #[test]
+    fn shadow_root_has_set_html_pair() {
+        assert_str(
+            "var host = document.createElement('div'); var sr = host.attachShadow({mode: 'open'}); \
+             sr.setHTML('<em>x</em><script>y</script>'); var a = sr.innerHTML; \
+             sr.setHTMLUnsafe('<i>z</i>', {sanitizer: {removeElements: ['i']}}); \
+             a + '|' + sr.innerHTML",
+            "<em>x</em>|",
+        );
+    }
+
+    #[test]
+    fn document_parse_html_sanitizes_and_parse_html_unsafe_does_not() {
+        assert_str(
+            "var safe = Document.parseHTML('<p>t</p><script>x</script>'); \
+             var unsafe = Document.parseHTMLUnsafe('<p>t</p><script>x</script>'); \
+             safe.body.getElementsByTagName('script').length + ',' + \
+             unsafe.body.getElementsByTagName('script').length + ',' + \
+             safe.body.getElementsByTagName('p').length",
+            "0,1,1",
+        );
     }
 }
