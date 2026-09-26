@@ -1227,7 +1227,7 @@ the time — read dates.
 - **HTMLIFrameElement JS stubs** (`crates/js/src/iframe_element.rs`, HTML spec §4.8.5, P1 2026-06-03).
   - `src`/`name`/`srcdoc`/`width`/`height`/`sandbox`/`allow`/`referrerPolicy`/`loading` properties reflect HTML attributes via `reflectAttr` helper.
   - `contentDocument`/`contentWindow` getters read the frame bridge (`_lumen_frame_content_document/window(this.__nid__)`) — see the frame-bridge entry below; without a loaded binding both stay `null`.
-  - `getSVGDocument()` → `null`.
+  - `getSVGDocument()` → the nested document only when its `contentType` is `image/svg+xml` (OBJECT-1 slice 5, same rule as `<object>`/`<embed>` in `web_api_shim_tail_b.js`; the frame facade exposes `contentType` via `_lumen_f_content_type`), otherwise `null`.
   - Patches existing `<iframe>` elements at load time + intercepts `document.createElement('iframe')`.
   - 10 unit tests: install_succeeds, src getter/setter, name getter/setter, width/height attrs, sandbox reflects, getSVGDocument null, src default empty string.
 

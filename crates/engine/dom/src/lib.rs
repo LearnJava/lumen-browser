@@ -1574,6 +1574,8 @@ impl Document {
     /// Record whether the `<object>`/`<embed>` `id`'s resource `url` is a
     /// document shown as a nested browsing context (OBJECT-1 срез 2). Returns
     /// `true` when the entry changed — the caller owes the page a relayout.
+    /// An SVG document is recorded as `false` (OBJECT-1 срез 5): it stays
+    /// scriptable, but the image pipeline paints it, not a frame box.
     pub fn set_embedded_document(&mut self, id: NodeId, url: &str, is_document: bool) -> bool {
         let key = id.index() as u32;
         if self
@@ -2511,8 +2513,11 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
 
 /// `type="image/…"` на `<object>`/`<embed>` — автор обещал картинку.
 fn embedded_type_is_image(node: &Node) -> bool {
+    // OBJECT-1 срез 5: `image/svg+xml` — XML MIME-тип, то есть вложенный
+    // документ, а не картинка (HTML LS §4.8.7 шаг 4.9).
     node.get_attr("type")
         .map(str::trim)
+        .filter(|t| !t.eq_ignore_ascii_case("image/svg+xml"))
         .and_then(|t| t.get(..6))
         .is_some_and(|p| p.eq_ignore_ascii_case("image/"))
 }
@@ -4938,23 +4943,28 @@ mod tests {
 
     /// OBJECT-1 срез 2: `<object data>`/`<embed src>` — кандидаты во вложенный
     /// документ; `type="image/…"`, пустой адрес и вердикт «не документ» —
-    /// нет.
+    /// нет. `type="image/svg+xml"` — XML-тип, кандидат (срез 5).
     #[test]
     fn collect_iframes_offers_object_and_embed_as_embedded_hosts() {
         let mut doc = Document::new();
         let obj = append_with_attrs(&mut doc, "object", &[("data", "a.html"), ("name", "o")]);
         let embed = append_with_attrs(&mut doc, "embed", &[("src", "b.txt")]);
-        append_with_attrs(&mut doc, "object", &[("data", "i.svg"), ("type", "image/svg+xml")]);
+        let svg = append_with_attrs(&mut doc, "object", &[("data", "i.svg"), ("type", "image/svg+xml")]);
+        append_with_attrs(&mut doc, "object", &[("data", "i.png"), ("type", "image/png")]);
         append_with_attrs(&mut doc, "object", &[("data", "  ")]);
         append_with_attrs(&mut doc, "embed", &[("data", "wrong-attr.html")]);
         let frames = collect_iframes(&doc);
         let got: Vec<(NodeId, Option<&str>, bool)> =
             frames.iter().map(|f| (f.node, f.src.as_deref(), f.embedded)).collect();
-        assert_eq!(got, vec![(obj, Some("a.html"), true), (embed, Some("b.txt"), true)]);
+        assert_eq!(
+            got,
+            vec![(obj, Some("a.html"), true), (embed, Some("b.txt"), true), (svg, Some("i.svg"), true)]
+        );
         assert_eq!(frames[0].name.as_deref(), Some("o"));
 
         assert!(doc.set_embedded_document(embed, "b.txt", false));
         assert!(!doc.set_embedded_document(embed, "b.txt", false), "тот же вердикт — не изменение");
+        doc.set_embedded_document(svg, "i.svg", false);
         let nodes: Vec<NodeId> = collect_iframes(&doc).iter().map(|f| f.node).collect();
         assert_eq!(nodes, vec![obj], "«не документ» больше не предлагается");
     }

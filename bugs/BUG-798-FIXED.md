@@ -1,6 +1,6 @@
 # BUG-798 — `<embed>`/`<object>` не грузят содержимое вовсе: нет резолва ресурса, нет `load`/`error`, элементы — просто прототип с рефлекторными атрибутами
 
-**Статус:** OPEN (ДОРАБОТКА → [OBJECT-1](../ROADMAP.md)) — загрузка и события сделаны GAP-LOADEV срезом 4, не хватает отрисовки содержимого
+**Статус:** FIXED 2026-09-26 (P1) — загрузка и события — GAP-LOADEV срез 4, отрисовка и скриптуемые вложенные документы — OBJECT-1 срезы 1-5
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-LOADEV` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 6 — `html/semantics/embedded-content/the-embed-element`, `the-object-element`)
 **Область:** `crates/js/src/dom.rs:13837-13851` (`HTMLObjectElement`/`HTMLEmbedElement` — только `_lumen_install_reflection`, никакой загрузки), `crates/shell/src/main.rs` (нет обработки `<embed>`/`<object>` как источников ресурса)
@@ -156,3 +156,11 @@ workspace clippy прогоняются в `/lumen-task-finish`, не здесь
 `<object data>`/`<embed src>` теперь входят в `collect_iframes` (`IframeInfo::embedded`), если автор не назвал `type="image/…"`. `spawn_frame` для них грузит ресурс через `fetch_embedded_source` и классифицирует ответ (`classify_embedded_resource`: `Content-Type`, без него — расширение, затем сигнатура `<!doctype html`/`<html`): HTML — вложенный документ по модели `<iframe>`, `text/*`/JSON/XML — документ с `<pre>`, всё прочее (картинка, PDF, 4xx, `object-src`) — фрейма нет, работает срез 1 или fallback. Вердикт пишется в `Document::set_embedded_document` — по нему layout даёт `BoxKind::Iframe` (300×150 по умолчанию), а повторный скан динамических фреймов перестаёт предлагать «не документ». Дубль `load` не шлётся — его даёт JS-шим. Динамически вставленный `<object>` получает relayout хозяина в `on_frame_new_load_done`.
 
 Проверка: `--dump-display-list`/`--screenshot` на странице с `<object data=inner.html>`, `<embed src=note.txt>`, `<object data=missing.html>` и SVG-объектом — вложенный документ вклеен в свой клип, текст в `<pre>`, fallback у отсутствующего, SVG по-прежнему картинка. Остаток — `contentDocument`/`contentWindow` на `<object>`/`<embed>` и SVG как скриптуемый документ.
+
+## OBJECT-1 срез 5 (2026-09-26, `p1-object1-svgdoc`) — SVG как скриптуемый вложенный документ, закрытие
+
+SVG-ответ (`image/svg+xml`; без заголовка — расширение `.svg` или начало тела `<svg`) получает вид `EmbeddedResourceKind::Svg` (`crates/shell/src/frames.rs`): `spawn_frame` строит под-документ XML-разбором (`parse_xml_flavoured`) с `contentType = image/svg+xml`, а `getSVGDocument()` у `<object>`/`<embed>`/`<iframe>` отдаёт его (по `contentType`, новый натив `_lumen_f_content_type`). Вердикт `set_embedded_document` для SVG — `false`: фрейм-бокса нет, рисует по-прежнему resvg из среза 1, поэтому natural size (например 40×20) верный, без 300×150 и отступов `<body>` под-документа. `type="image/svg+xml"` больше не исключает `<object>` из `collect_iframes` — это XML MIME-тип, по HTML LS §4.8.7 вложенный документ.
+
+Проверка вживую (`--mcp-live-port --maximized`, `<object data=logo.svg>`): `getSVGDocument().contentType === 'image/svg+xml'`, `getElementById('r').getAttribute('fill') === 'green'`, `getBoundingClientRect()` 40×20.
+
+Остаток, осознанно вне бага: правки SVG-документа скриптом на экран не попадают (картинка — исходные байты), `documentElement` под-документа — `<html>`-обёртка общего XML-разбора (GAP-XMLDOC), а не `<svg>`; `window[0]` и `javascript:` в `<object>` (WPT `object-javascript-url.html` 1/3) — отдельные пробелы.

@@ -2134,7 +2134,7 @@ fn frame_scrollbar_overlay_skips_invisible_frames_but_draws_others() {
 // ── OBJECT-1 срез 2: <object>/<embed> как вложенный документ ─────────────
 
 /// Тип ответа решает `Content-Type`; без него — расширение, затем сигнатура
-/// HTML. SVG — картинка (её рисует срез 1), PDF/octet-stream — fallback.
+/// HTML/SVG. SVG — отдельный вид (срез 5), PDF/octet-stream — fallback.
 #[test]
 fn classify_embedded_resource_follows_content_type_then_extension_then_sniff() {
     use crate::frames::{classify_embedded_resource as c, EmbeddedResourceKind::*};
@@ -2142,19 +2142,21 @@ fn classify_embedded_resource_follows_content_type_then_extension_then_sniff() {
     assert_eq!(c(Some("Application/XHTML+XML"), "x", b""), Html);
     assert_eq!(c(Some("text/plain"), "x.html", b"<html>"), Text);
     assert_eq!(c(Some("application/json"), "x", b"{}"), Text);
-    assert_eq!(c(Some("image/svg+xml"), "x.svg", b"<svg/>"), NotDocument);
+    assert_eq!(c(Some("image/svg+xml"), "x.png", b""), Svg);
     assert_eq!(c(Some("image/png"), "x.html", b""), NotDocument);
     assert_eq!(c(Some("application/pdf"), "x", b""), NotDocument);
     assert_eq!(c(None, "https://a.b/p/Doc.HTM?q=1#f", b""), Html);
     assert_eq!(c(None, r"C:\site\readme.txt", b""), Text);
     assert_eq!(c(None, "https://a.b/page", b"  <!DOCTYPE html><p>"), Html);
-    assert_eq!(c(None, "https://a.b/logo.svg", b"<svg/>"), NotDocument);
+    assert_eq!(c(None, "https://a.b/logo.SVG?v=2", b""), Svg);
+    assert_eq!(c(None, "https://a.b/icon", b"\n<svg xmlns='http://www.w3.org/2000/svg'/>"), Svg);
     assert_eq!(c(None, "https://a.b/blob", b"\x89PNG"), NotDocument);
 }
 
-/// Файл-документ даёт источник фрейма (текст — экранированный `<pre>`);
-/// картинка, пропавший файл и `javascript:`/`data:` — `None`, то есть
-/// fallback, а не страница ошибки, как у `<iframe>`.
+/// Файл-документ даёт источник фрейма (текст — экранированный `<pre>`,
+/// SVG — как есть, с видом `Svg`); картинка, пропавший файл и
+/// `javascript:`/`data:` — `None`, то есть fallback, а не страница ошибки,
+/// как у `<iframe>`.
 #[test]
 fn fetch_embedded_source_yields_document_only_for_document_resources() {
     let dir = std::env::temp_dir().join(format!("lumen-object1-{}", std::process::id()));
@@ -2162,6 +2164,7 @@ fn fetch_embedded_source_yields_document_only_for_document_resources() {
     std::fs::write(dir.join("inner.html"), "<p>inner</p>").unwrap();
     std::fs::write(dir.join("note.txt"), "a < b").unwrap();
     std::fs::write(dir.join("logo.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+    std::fs::write(dir.join("pixel.png"), b"\x89PNG\r\n\x1a\n").unwrap();
     let base = ResourceBase::File(dir.join("page.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let fetch = |src: &str| {
@@ -2174,17 +2177,22 @@ fn fetch_embedded_source_yields_document_only_for_document_resources() {
             lumen_network::ReferrerPolicy::default_policy(),
         )
     };
+    use crate::frames::{EmbeddedResourceKind as K, FrameSource as F};
     match fetch("inner.html") {
-        Some(crate::frames::FrameSource::File { html, .. }) => assert_eq!(html, "<p>inner</p>"),
+        Some((F::File { html, .. }, K::Html)) => assert_eq!(html, "<p>inner</p>"),
         _ => panic!("HTML-файл — документ"),
     }
     match fetch("note.txt") {
-        Some(crate::frames::FrameSource::File { html, .. }) => {
+        Some((F::File { html, .. }, K::Text)) => {
             assert!(html.contains("<pre") && html.contains("a &lt; b"), "{html}")
         }
         _ => panic!("текстовый файл — документ с <pre>"),
     }
-    for src in ["logo.svg", "missing.html", "javascript:1", "data:text/html,x", "about:blank"] {
+    match fetch("logo.svg") {
+        Some((F::File { html, .. }, K::Svg)) => assert!(html.starts_with("<svg"), "{html}"),
+        _ => panic!("SVG-файл — SVG-документ"),
+    }
+    for src in ["pixel.png", "missing.html", "javascript:1", "data:text/html,x", "about:blank"] {
         assert!(fetch(src).is_none(), "{src}: не документ");
     }
     let _ = std::fs::remove_dir_all(&dir);

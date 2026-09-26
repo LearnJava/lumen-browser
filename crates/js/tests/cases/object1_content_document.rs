@@ -135,3 +135,40 @@ fn cross_origin_location_components_throw_security_error() {
          && typeof el.contentWindow.location.replace === 'function'"
     ));
 }
+
+/// OBJECT-1 срез 5: SVG-ответ `<object>`/`<embed>` shell строит XML-разбором
+/// с типом `image/svg+xml` — `getSVGDocument()` отдаёт тот же документ, что
+/// `contentDocument`; у HTML-документа тип другой, и ответ — null.
+#[test]
+fn svg_nested_document_is_returned_by_get_svg_document() {
+    for tag in ["object", "embed"] {
+        let rt = make_rt();
+        let nid = object_nid(&rt, tag);
+        let mut child = lumen_html_parser::parse_xml_flavoured(
+            "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r' width='4' height='4'/></svg>",
+        );
+        child.set_content_type("image/svg+xml".to_owned());
+        rt.register_frame_document(
+            nid,
+            Arc::new(Mutex::new(child)),
+            "https://example.com/logo.svg".to_owned(),
+            None,
+            true,
+            None,
+        );
+        assert!(
+            bool_eval(
+                &rt,
+                "var d = el.getSVGDocument(); \
+                 d !== null && d.contentType === 'image/svg+xml' \
+                 && d.getElementById('r').getAttribute('width') === '4' \
+                 && (el.contentDocument === undefined || el.contentDocument === d)"
+            ),
+            "{tag}"
+        );
+    }
+    let rt = make_rt();
+    let nid = object_nid(&rt, "object");
+    register(&rt, nid, true);
+    assert!(bool_eval(&rt, "el.contentDocument.contentType === 'text/html'"));
+}
