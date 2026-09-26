@@ -429,7 +429,10 @@ the time — read dates.
   callback's `FixedArray`; `set_host_import_module_dynamically_callback`), so the Phase 0
   `import_attributes.rs` preprocessor is rquickjs-only; `import.meta` keeps the shared
   `import_meta.rs` transformer because its `.url`/`.resolve()`/`.env` shape is Lumen policy.
-  19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
+  `.resolve()` itself delegates to the hidden native `_lumen_import_meta_resolve`
+  (`v8_esm::install_import_meta_resolve` → `esm::resolve_module_specifier`: WHATWG URL
+  parsing, import map, `TypeError` for an unmapped bare name — BUG-1135); the loader's
+  `resolve_specifier_with` stays lenient (bare name echoed back). 21 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
   [BUG-446](../bugs/BUG-446-FIXED.md), engine-independent (rquickjs had it too).
 - **`[Exposed=Worker]` members come from one place: `dom::install_worker_exposed_v8`
