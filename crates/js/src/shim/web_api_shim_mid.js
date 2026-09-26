@@ -12741,6 +12741,14 @@ function _lumen_dw_start_fetch(nid, src) {
     // The element is parser-inserted, so `'strict-dynamic'` does not admit it.
     job.csp = _lumen_element_src_blocked('script', job.url, nid, true);
     if (job.csp) return job;
+    // BUG-1126: a `blob:` script is read from the blob URL store — the network
+    // bridge rejects the scheme.
+    if (job.url.slice(0, 5) === 'blob:') {
+        var blob = _lumen_blob_url_entry(job.url);
+        if (blob) job.blobText = new TextDecoder().decode(blob._bytes);
+        else job.error = 'network error';
+        return job;
+    }
     if (typeof _lumen_fetch_async_start === 'function') {
         job.handle = _lumen_fetch_async_start(job.url, 'GET', '', [], false, [], 'no-cors|script');
     }
@@ -12760,7 +12768,9 @@ function _lumen_dw_run_external(job) {
     }
     var failure = job.error;
     var body = null;
-    if (failure === null) {
+    if (failure === null && job.blobText !== undefined) {
+        body = job.blobText;
+    } else if (failure === null) {
         var r = _lumen_fetch_async_wait_text(job.handle, _LUMEN_DW_FETCH_TIMEOUT_MS);
         _lumen_fetch_async_free(job.handle);
         if (r[0] !== 'ok') failure = r[0];

@@ -368,18 +368,26 @@ XMLHttpRequest.prototype.send = function(body) {
         self._fireProgress('loadend', 0, 0);
     }
 
+    // The network path reads the response off the native FetchCache; the
+    // `blob:` path (BUG-1126) hands its own status/headers/bytes to `deliver`.
     function commitResponse() {
-        self.status     = _lumen_fetch_get_status();
-        self.statusText = _lumen_fetch_get_status_text();
+        var bodyLen = _lumen_fetch_body_length();
         // BUG-984: the final URL after redirects, not the pre-fetch request URL.
-        self.responseURL = _lumen_fetch_get_url() || self._url;
-        self._parseResponseHeaders(_lumen_fetch_get_headers());
+        deliver(_lumen_fetch_get_status(), _lumen_fetch_get_status_text(),
+                _lumen_fetch_get_url() || self._url, _lumen_fetch_get_headers(),
+                bodyLen > 0 ? _lumen_fetch_body_chunk(0, bodyLen) : []);
+    }
+
+    function deliver(status, statusText, finalUrl, rawHeaders, rawBody) {
+        self.status      = status;
+        self.statusText  = statusText;
+        self.responseURL = finalUrl;
+        self._parseResponseHeaders(rawHeaders);
 
         self._setReadyState(2); // HEADERS_RECEIVED
         self._setReadyState(3); // LOADING
 
-        var bodyLen = _lumen_fetch_body_length();
-        var rawBody = bodyLen > 0 ? _lumen_fetch_body_chunk(0, bodyLen) : [];
+        var bodyLen = rawBody.length;
         self._buildResponse(rawBody);
 
         // BUG-839: Resource Timing entry with initiatorType 'xmlhttprequest'.
@@ -396,6 +404,24 @@ XMLHttpRequest.prototype.send = function(body) {
         self._fireProgress('progress', bodyLen, bodyLen);
         self._fireProgress('load', bodyLen, bodyLen);
         self._fireProgress('loadend', bodyLen, bodyLen);
+    }
+
+    // Fetch §4.2 «scheme fetch», `blob`: answered from the page's blob URL
+    // store, never from the network layer (which rejects the scheme). Only GET;
+    // a revoked URL is a network error. Async mode still returns to the caller
+    // first, same as the network path below.
+    if (self._url.slice(0, 5) === 'blob:' && typeof _lumen_blob_url_entry === 'function') {
+        var blobEntry = (self._method === 'GET') ? _lumen_blob_url_entry(self._url) : null;
+        var blobSettle = function() {
+            if (self._aborted) return;
+            if (!blobEntry) { fail('error'); return; }
+            var blobBytes = new Uint8Array(blobEntry._bytes);
+            deliver(200, 'OK', self._url,
+                    ['Content-Length', String(blobBytes.length), 'Content-Type', blobEntry.type],
+                    blobBytes);
+        };
+        if (self._async === false) { blobSettle(); } else { setTimeout(blobSettle, 0); }
+        return;
     }
 
     // XHR §4.5.1: true synchronous mode (`async === false`, only reachable when

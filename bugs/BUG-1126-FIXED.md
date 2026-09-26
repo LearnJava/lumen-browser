@@ -1,6 +1,6 @@
 # BUG-1126 — `blob:` URL не загружается: `fetch()`, XHR и `<script src=blob:>` дают network error
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** network (`crates/network/src/lib.rs:479-483` `require_http_scheme` → `unsupported scheme: blob`) + js (`crates/js/src/shim/web_api_shim_mid_c.js:187` `_object_url_store` — в `fetch` не используется)
 
@@ -46,3 +46,27 @@ Fetch §4.2 «scheme fetch», ветка `blob`: взять запись из bl
 ответ 200 с `Content-Type` = тип Blob и телом из байт; отозванный URL → network error. Разрешать
 `blob:` в шиме до ухода в сеть — для `fetch`, XHR и загрузки `<script src>`. Критерий: репро даёт
 `__blobRan=42` и текст через `fetch`; zoom перемерить.
+
+## Исправление (2026-09-26, P6)
+
+Корень подтверждён: хранилище blob URL живёт только в JS (`_object_url_store`,
+`web_api_shim_mid_c2.js`), а `fetch()`/XHR отдавали URL сетевому слою как есть.
+
+- `_lumen_blob_url_entry(url)` (`web_api_shim_mid_c2.js`) — File API §8.3 «resolve a blob URL»:
+  ключ без фрагмента, отозванный/чужой URL → `null`.
+- `fetch()` (`web_api_shim_mid_b3.js`): ветка `blob` Fetch §4.2 до ухода в сеть — только `GET`,
+  иначе и для отозванного URL `TypeError`; ответ — `_lumen_response_from_blob`
+  (`fetch_body_shim.js`): 200 `OK`, `Content-Type` = тип Blob, `Content-Length` = размер, тело — копия байт.
+- XHR (`xhr.rs`): та же ветка для синхронного и асинхронного `send()`; сборка ответа вынесена в
+  общий `deliver()`, сетевой путь идёт через него же.
+- Вставленный `<script src=blob:>` грузится через `fetch()` и чинится им; записанный
+  `document.write` (`_lumen_dw_start_fetch`, `web_api_shim_mid.js`) шёл мимо `fetch` прямо в
+  сетевой мост — ему добавлена та же ветка.
+
+Проверка: юнит-тесты `fetch_blob_url_*`, `xhr_blob_url_loads_in_sync_and_async_mode`,
+`inserted_script_with_blob_src_runs_and_fires_load` (`crates/js/src/dom/tests/v8_whatwg_streams.rs`).
+Бинарь dev-release, `--dump-layout` по репро из заявки: `fetch` отдаёт `window.__blobRan = 42;`,
+`document.write('<script src=blob:…>')` исполняется. Вставленный скрипт в `--dump-layout` не
+проверить: headless не крутит `setTimeout`, а загрузка вставленного скрипта стартует из него —
+тот же `pending` у обычного http-скрипта; покрыт юнит-тестом с `_lumen_tick_timers`.
+zoom живьём не перемерен.

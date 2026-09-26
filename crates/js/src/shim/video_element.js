@@ -475,8 +475,8 @@
   }
 
   // The three URL shapes a `<track src>` can carry. `blob:` and `data:` are read
-  // locally because `fetch()` has no branch for either — a `blob:lumen/` URL
-  // would be handed to the network layer and fail — and every test under
+  // locally: `fetch()` has no `data:` branch, and a `blob:` body is already in
+  // the store as text-ready bytes — every test under
   // `webvtt/parsing/cue-text-parsing/` builds its track with createObjectURL.
   // Both are matched on the *raw* attribute, before base resolution: neither is
   // a URL `_url_resolve` has any business rewriting.

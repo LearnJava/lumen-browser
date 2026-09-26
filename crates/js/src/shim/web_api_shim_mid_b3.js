@@ -150,6 +150,18 @@ function _lumen_fetch(input) {
         var method = (init && init.method) ? String(init.method).toUpperCase() :
                      (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
 
+        // Fetch §4.2 «scheme fetch», `blob`: the bytes live in the page's blob
+        // URL store, not behind a socket — before BUG-1126 the URL went to the
+        // network layer and died there as «unsupported scheme». Only GET is
+        // allowed; a revoked URL is a network error.
+        if (url.slice(0, 5) === 'blob:') {
+            var blobEntry = _lumen_blob_url_entry(url);
+            if (!blobEntry || method !== 'GET') {
+                return Promise.reject(new TypeError('fetch: network error for ' + url));
+            }
+            return Promise.resolve(_lumen_response_from_blob(blobEntry, url));
+        }
+
         // Fetch §5.4 keepalive flag: request survives page unload (Beacon semantics).
         // Phase 0: accepted syntactically; detachment from page lifecycle is Phase 2.
         // network: keepalive — Phase 2: spawn detached thread, skip response body

@@ -330,7 +330,7 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 | `document.write` не исполняет `<script>` ([BUG-568](../../bugs/BUG-568-FIXED.md)) | tumblr |
 | `ShadowRoot` без `insertBefore` ([BUG-1130](../../bugs/BUG-1130-FIXED.md)) | archive |
 | `classList` не итерируем ([BUG-1125](../../bugs/BUG-1125-FIXED.md)) | wordpress, mozilla |
-| `blob:` URL не загружается ([BUG-1126](../../bugs/BUG-1126-OPEN.md)) | zoom, bing |
+| `blob:` URL не загружается ([BUG-1126](../../bugs/BUG-1126-FIXED.md)) | zoom, bing |
 | `url()` во внешнем CSS от базы документа ([BUG-1127](../../bugs/BUG-1127-OPEN.md)) | apple, tumblr |
 | `load` динамического скрипта после всей очереди ([BUG-1128](../../bugs/BUG-1128-OPEN.md)) | aliexpress (SystemJS) |
 | `load` окна не ждёт вставленный скрипт ([BUG-1129](../../bugs/BUG-1129-OPEN.md)) | wordpress |

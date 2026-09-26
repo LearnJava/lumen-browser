@@ -12,6 +12,10 @@ use super::*;
 use crate::v8_runtime::V8JsRuntime;
 
 fn runtime(markup: &[(&str, &[&str])]) -> V8JsRuntime {
+    runtime_with_css(markup, "")
+}
+
+fn runtime_with_css(markup: &[(&str, &[&str])], css: &str) -> V8JsRuntime {
     let mut doc = Document::new();
     let root = doc.root();
     let html = doc.create_element(QualName::html("html"));
@@ -32,7 +36,7 @@ fn runtime(markup: &[(&str, &[&str])]) -> V8JsRuntime {
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
     rt.install_dom(Arc::new(Mutex::new(doc)), "", None, None, None, None, None, None, None, None, None, false)
         .unwrap();
-    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("")));
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(css)));
     rt.update_viewport_size(800.0, 600.0);
     rt
 }
@@ -124,4 +128,15 @@ fn ua_shadow_root_is_not_exposed_to_script() {
         }).join(' ');
     })()";
     assert_eq!(eval_str(&rt, src), "null/null/0 null/null/0");
+}
+
+#[test]
+fn page_style_sheet_does_not_reach_ua_slots() {
+    // CSS Scoping: a document rule never matches a node of a shadow tree, so
+    // a page's `slot`/`*` rules leave the UA slots on their UA styles.
+    let rt = runtime_with_css(
+        &[("select", &[]), ("details", &["open"])],
+        "slot { display: inline-block !important; content-visibility: hidden !important }",
+    );
+    assert_eq!(eval_str(&rt, INHERITED), "e0:contents/visible e1:block/visible");
 }

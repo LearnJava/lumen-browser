@@ -1203,6 +1203,13 @@ pub(crate) fn compute_style_shareable(
             None,
         ));
     }
+    // GAP-UASHADOWSLOT: CSS Scoping L1 §3.1 — a document rule never reaches
+    // into a shadow tree, and a UA shadow tree has no sheet of its own, so a
+    // UA slot keeps exactly the UA styles set above. (Author shadow trees
+    // still see document rules here — a wider, pre-existing gap.)
+    if doc.ua_slot_role(node).is_some() {
+        matched.clear();
+    }
     matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _, _)| {
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });

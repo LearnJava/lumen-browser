@@ -97,8 +97,13 @@ BUG-534/553/562/583 (absent primitive + family-sized, not a point fix).
 UA-стили: `slot { display: contents }` для любого слота (`default_display`), content-слот
 `<details>` — `display: block` + `content-visibility: hidden` без `open` (`apply_ua_slot`,
 ключ — `Document::ua_slot_role`, т.к. ни один селектор узел закрытого UA-дерева не назовёт).
-Старый фильтр «закрытый `<details>` строит только `<summary>`» в `box_tree/build.rs` остался
-для `<details>` без UA-корня. A11y-дерево разворачивает `<slot>` в его содержимое. S27-хребет
+Правила документа до UA-слота не доходят (CSS Scoping L1 §3.1 — в `compute_style` сопоставленные
+декларации для UA-слота сбрасываются; авторские shadow-деревья правила документа по-прежнему
+видят — это более широкий старый пробел). Сужение рестайла BUG-341 (`restyle.rs`
+`document_has_shadow_roots`) считает только авторские корни (`Document::has_author_shadow_roots`):
+у UA-деревьев нет листа, а иначе сужение выключилось бы на любой странице с `<select>`, включая
+chrome Lumen. Старый фильтр «закрытый `<details>` строит только `<summary>`» в `box_tree/build.rs`
+остался для `<details>` без UA-корня. A11y-дерево разворачивает `<slot>` в его содержимое. S27-хребет
 инкрементального рестайла идёт по `FlatTree::parent_of`, а не по DOM-родителю — иначе он
 отключался бы на любой странице с `<select>`.
 
