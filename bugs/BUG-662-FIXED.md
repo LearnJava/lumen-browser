@@ -1,6 +1,6 @@
 # BUG-662 — `rt.eval()`'s completion-value serialization eagerly invokes every getter on the result object, corrupting the reported error message (and running unintended side effects) for any classic script whose last statement evaluates to an object with a getter
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/v8_runtime.rs:5041`–`5068` — `from_v8_bounded`, object branch; reached from `V8JsRuntime::eval`'s return-value conversion)
 **Найден:** P2, WPT-VENDOR-resize-observer (2026-08-05), real `run_report.py` run + isolated `--dump-layout` repro
 
@@ -91,3 +91,18 @@ conversion's `Err`. Separately, `crates/shell/src/main.rs`'s classic-script loop
 `eval()`'s `Ok` value at all — consider a cheaper `eval_discard()`/`exec()` entry point for that
 call site that skips completion-value conversion entirely, which would both fix this class of
 bug for that call site and avoid the wasted serialization work on every classic script.
+
+## Исправление (2026-09-26, P3)
+
+`crates/js/src/v8_runtime/value.rs` — `from_v8_bounded`, ветка объекта: если `obj.get()`
+вернул `None` (геттер бросил), свойство получает маркер `"[Getter threw]"` (как
+`"[Circular]"`/`"[Max Depth Exceeded]"`), а конверсия продолжается. Отдельный `TryCatch`
+не нужен: все вызовы `from_v8` в `eval.rs` уже идут под `TryCatch`-скоупом `tc`, так что
+исключение геттера поглощается там и не доходит до страницы. Тест —
+`v8_runtime::tests::eval_completion_object_with_throwing_getter_is_not_an_error`
+(`crates/js/src/v8_runtime/tests/mod.rs`): `eval()` возвращает `Ok` с маркером, соседнее
+data-свойство сериализуется, следующий `eval` чист.
+
+Не сделано (вне скоупа бага): отдельная точка входа `eval_discard()` для цикла классических
+скриптов, которая вообще не конвертирует completion value, — это оптимизация, а не дефект;
+сами геттеры по-прежнему вызываются при сериализации результата.

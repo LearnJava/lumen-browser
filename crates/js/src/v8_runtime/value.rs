@@ -144,9 +144,17 @@ pub(super) fn from_v8_bounded<'s>(
                 .to_string(scope)
                 .ok_or_else(|| JsError::Runtime("property key to_string failed".into()))?
                 .to_rust_string_lossy(scope);
-            let prop_val = obj
-                .get(scope, key)
-                .ok_or_else(|| JsError::Runtime(format!("get '{key_str}' failed")))?;
+            // BUG-662: an own accessor that throws when read off this object
+            // (`Foo.prototype = { get x() { return this._a[0]; } }` read with
+            // `this` = the bare prototype) must not fail the whole conversion
+            // — the script itself ran fine. Every caller runs this under a
+            // `TryCatch` (`eval.rs`), so the getter's exception is caught
+            // there and never reaches page code; it becomes a marker like
+            // `[Circular]` instead.
+            let Some(prop_val) = obj.get(scope, key) else {
+                entries.push((key_str, JsValue::String("[Getter threw]".into())));
+                continue;
+            };
             entries.push((key_str, from_v8_bounded(scope, prop_val, ancestors, visited)?));
         }
         ancestors.pop();
