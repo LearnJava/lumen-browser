@@ -628,7 +628,11 @@ fn build_box_inner(
                 BoxKind::Audio { src, controls }
             } else if is_iframe_element(doc, id) {
                 let node = doc.get(id);
-                let src = node.get_attr("src").unwrap_or("").to_string();
+                // OBJECT-1 срез 2: у `<object>` адрес — в `data`.
+                let src = embedded_document_url(doc, id)
+                    .or_else(|| node.get_attr("src"))
+                    .unwrap_or("")
+                    .to_string();
                 let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
                 // HTML spec §4.8.5: UA default intrinsic size is 300×150 CSS px.
                 // Explicit width/height attrs applied earlier as presentational hints;

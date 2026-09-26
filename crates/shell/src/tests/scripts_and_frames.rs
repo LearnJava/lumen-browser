@@ -2130,3 +2130,62 @@ fn frame_scrollbar_overlay_skips_invisible_frames_but_draws_others() {
         "невидимый фрейм не даёт вклада, видимый рисуется как обычно"
     );
 }
+
+// ── OBJECT-1 срез 2: <object>/<embed> как вложенный документ ─────────────
+
+/// Тип ответа решает `Content-Type`; без него — расширение, затем сигнатура
+/// HTML. SVG — картинка (её рисует срез 1), PDF/octet-stream — fallback.
+#[test]
+fn classify_embedded_resource_follows_content_type_then_extension_then_sniff() {
+    use crate::frames::{classify_embedded_resource as c, EmbeddedResourceKind::*};
+    assert_eq!(c(Some("text/html; charset=utf-8"), "x.png", b""), Html);
+    assert_eq!(c(Some("Application/XHTML+XML"), "x", b""), Html);
+    assert_eq!(c(Some("text/plain"), "x.html", b"<html>"), Text);
+    assert_eq!(c(Some("application/json"), "x", b"{}"), Text);
+    assert_eq!(c(Some("image/svg+xml"), "x.svg", b"<svg/>"), NotDocument);
+    assert_eq!(c(Some("image/png"), "x.html", b""), NotDocument);
+    assert_eq!(c(Some("application/pdf"), "x", b""), NotDocument);
+    assert_eq!(c(None, "https://a.b/p/Doc.HTM?q=1#f", b""), Html);
+    assert_eq!(c(None, r"C:\site\readme.txt", b""), Text);
+    assert_eq!(c(None, "https://a.b/page", b"  <!DOCTYPE html><p>"), Html);
+    assert_eq!(c(None, "https://a.b/logo.svg", b"<svg/>"), NotDocument);
+    assert_eq!(c(None, "https://a.b/blob", b"\x89PNG"), NotDocument);
+}
+
+/// Файл-документ даёт источник фрейма (текст — экранированный `<pre>`);
+/// картинка, пропавший файл и `javascript:`/`data:` — `None`, то есть
+/// fallback, а не страница ошибки, как у `<iframe>`.
+#[test]
+fn fetch_embedded_source_yields_document_only_for_document_resources() {
+    let dir = std::env::temp_dir().join(format!("lumen-object1-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inner.html"), "<p>inner</p>").unwrap();
+    std::fs::write(dir.join("note.txt"), "a < b").unwrap();
+    std::fs::write(dir.join("logo.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+    let base = ResourceBase::File(dir.join("page.html"));
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let fetch = |src: &str| {
+        crate::frames::fetch_embedded_source(
+            src,
+            &base,
+            &sink,
+            None,
+            false,
+            lumen_network::ReferrerPolicy::default_policy(),
+        )
+    };
+    match fetch("inner.html") {
+        Some(crate::frames::FrameSource::File { html, .. }) => assert_eq!(html, "<p>inner</p>"),
+        _ => panic!("HTML-файл — документ"),
+    }
+    match fetch("note.txt") {
+        Some(crate::frames::FrameSource::File { html, .. }) => {
+            assert!(html.contains("<pre") && html.contains("a &lt; b"), "{html}")
+        }
+        _ => panic!("текстовый файл — документ с <pre>"),
+    }
+    for src in ["logo.svg", "missing.html", "javascript:1", "data:text/html,x", "about:blank"] {
+        assert!(fetch(src).is_none(), "{src}: не документ");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

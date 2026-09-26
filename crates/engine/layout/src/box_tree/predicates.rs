@@ -183,15 +183,7 @@ pub(crate) fn is_image_element(doc: &Document, id: NodeId) -> bool {
 /// пришёл ответ, и тянуть документ декодером картинок незачем. Тип ответа
 /// здесь не виден — решает декодер по сигнатуре байтов.
 pub(crate) fn embedded_resource_url(node: &lumen_dom::Node) -> Option<&str> {
-    let name = node.element_name()?;
-    let url = match name.local.as_str() {
-        "object" => node.get_attr("data"),
-        "embed" => node.get_attr("src"),
-        _ => None,
-    }?;
-    if url.trim().is_empty() {
-        return None;
-    }
+    let url = node.embedded_content_src()?;
     if let Some(ty) = node.get_attr("type") {
         let ty = ty.trim();
         if !ty.is_empty() && !ty.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("image/")) {
@@ -234,11 +226,25 @@ pub(crate) fn is_audio_element(doc: &Document, id: NodeId) -> bool {
 }
 
 /// HTML-имя `<iframe>` для распознавания встроенных документов в layout.
+///
+/// OBJECT-1 срез 2: `<object>`/`<embed>`, чей ресурс шелл признал документом,
+/// раскладываются тем же боксом — см. [`embedded_document_url`].
 pub(crate) fn is_iframe_element(doc: &Document, id: NodeId) -> bool {
-    matches!(
-        &doc.get(id).data,
-        NodeData::Element { name, .. } if name.local == "iframe"
-    )
+    match &doc.get(id).data {
+        NodeData::Element { name, .. } if name.local == "iframe" => true,
+        NodeData::Element { .. } => embedded_document_url(doc, id).is_some(),
+        _ => false,
+    }
+}
+
+/// Адрес вложенного документа, который представляет `<object>`/`<embed>`
+/// (OBJECT-1 срез 2; HTML LS §4.8.6/§4.8.7) — сырой `data`/`src`, он же ключ
+/// заглушки, на место которой шелл вклеивает содержимое фрейма. `None` —
+/// не эти теги либо ресурс ещё не признан документом (`Document::
+/// set_embedded_document`).
+pub(crate) fn embedded_document_url(doc: &Document, id: NodeId) -> Option<&str> {
+    let url = doc.get(id).embedded_content_src()?;
+    (doc.embedded_document(id, url) == Some(true)).then_some(url)
 }
 
 /// HTML-имя `<picture>` — обёртка над `<source>`-кандидатами и одним

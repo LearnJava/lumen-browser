@@ -160,6 +160,25 @@ impl Lumen {
         if !frame_dynamic_load::apply_new_frame_load(&mut self.frames, host_doc, host, is_top, handles) {
             return;
         }
+        // OBJECT-1 срез 2: `<object>`/`<embed>` до ответа раскладывался как
+        // fallback — бокс фрейма у хозяина появится только после relayout
+        // его документа (`spawn_frame` уже записал вердикт «документ»).
+        let embedded = host_doc
+            .lock()
+            .ok()
+            .and_then(|d| d.try_get(host).map(|n| n.embedded_content_src().is_some()))
+            .unwrap_or(false);
+        if embedded {
+            if is_top {
+                self.page_prev_cascade_styles = None;
+                self.relayout_raf_dirty();
+                return;
+            }
+            if let Some(parent) = self.frames.iter().position(|h| Arc::ptr_eq(&h.doc, host_doc)) {
+                self.refresh_frames(Some(parent));
+                return;
+            }
+        }
         self.refresh_frames(None);
     }
 }

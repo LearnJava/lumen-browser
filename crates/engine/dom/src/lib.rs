@@ -418,6 +418,18 @@ impl Node {
         }
     }
 
+    /// Адрес ресурса `<object data>` / `<embed src>` (OBJECT-1): сырое значение
+    /// атрибута, `None` — другой тег либо атрибут отсутствует/пуст. Что это за
+    /// ресурс — картинка, документ или ни то ни другое — решает ответ.
+    pub fn embedded_content_src(&self) -> Option<&str> {
+        let url = match self.element_name()?.local.as_str() {
+            "object" => self.get_attr("data"),
+            "embed" => self.get_attr("src"),
+            _ => None,
+        }?;
+        (!url.trim().is_empty()).then_some(url)
+    }
+
     /// Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5.
     ///
     /// Возвращает `None` для всех не-`iframe` элементов. Для `<iframe>` без
@@ -608,6 +620,17 @@ pub struct Document {
     /// [`Self::embedded_image`].
     #[serde(default)]
     embedded_images: HashMap<u32, (String, u32, u32)>,
+    /// `<object>`/`<embed>` whose fetched resource the shell already classified
+    /// as a nested document or not (OBJECT-1 срез 2): arena index → (the raw
+    /// `data`/`src` URL, `true` = document). HTML LS §4.8.6/§4.8.7 — a
+    /// document makes the element represent its nested browsing context (laid
+    /// out like an `<iframe>`), not its fallback content. A `false` entry is
+    /// the verdict «not a document» (image, other type, failed fetch), kept
+    /// so [`collect_iframes`] stops offering the host for a frame load on
+    /// every dynamic-frame poll. Same staleness rule as
+    /// [`Self::embedded_images`].
+    #[serde(default)]
+    embedded_documents: HashMap<u32, (String, bool)>,
     /// Active pointer captures: maps `pointerId` → captured `NodeId`.
     ///
     /// Set by `Element.setPointerCapture(pointerId)` (W3C Pointer Events L3 §4.1).
@@ -782,6 +805,7 @@ impl Document {
             non_executable_foreign_scripts: HashSet::new(),
             cdata_sections: HashSet::new(),
             embedded_images: HashMap::new(),
+            embedded_documents: HashMap::new(),
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
@@ -1547,6 +1571,33 @@ impl Document {
             .map(|(u, w, h)| (u.as_str(), *w, *h))
     }
 
+    /// Record whether the `<object>`/`<embed>` `id`'s resource `url` is a
+    /// document shown as a nested browsing context (OBJECT-1 срез 2). Returns
+    /// `true` when the entry changed — the caller owes the page a relayout.
+    pub fn set_embedded_document(&mut self, id: NodeId, url: &str, is_document: bool) -> bool {
+        let key = id.index() as u32;
+        if self
+            .embedded_documents
+            .get(&key)
+            .is_some_and(|(u, d)| u == url && *d == is_document)
+        {
+            return false;
+        }
+        self.embedded_documents.insert(key, (url.to_string(), is_document));
+        true
+    }
+
+    /// Verdict [`Self::set_embedded_document`] recorded for `id`'s current
+    /// resource URL `current_url`: `Some(true)` — nested document, `Some(false)`
+    /// — not a document, `None` — not classified yet (or the entry is stale:
+    /// the element points elsewhere now).
+    pub fn embedded_document(&self, id: NodeId, current_url: &str) -> Option<bool> {
+        self.embedded_documents
+            .get(&(id.index() as u32))
+            .filter(|(u, _)| u == current_url)
+            .map(|(_, d)| *d)
+    }
+
     /// Allocate a `DocumentFragment` node in the arena.
     ///
     /// Used by the tree builder to hold `<template>` content. The fragment is
@@ -1886,6 +1937,7 @@ impl Document {
             self.template_contents.remove(&id);
             self.cdata_sections.remove(&(id.index() as u32));
             self.embedded_images.remove(&(id.index() as u32));
+            self.embedded_documents.remove(&(id.index() as u32));
             let Some(node) = self.nodes.get_mut(id.index()) else {
                 continue;
             };
@@ -2381,6 +2433,11 @@ pub struct IframeInfo {
     /// стороной (`ReferrerPolicy::parse`), т.к. `lumen-dom` не зависит от
     /// `lumen-network`.
     pub referrer_policy: Option<String>,
+    /// Хост — `<object>`/`<embed>` (OBJECT-1 срез 2), `src` — его `data`/`src`.
+    /// Вложенный документ у такого элемента появляется, только если ответ
+    /// оказался документом (HTML LS §4.8.6/§4.8.7); картинку рисует image-
+    /// конвейер, всё прочее — fallback-содержимое `<object>`.
+    pub embedded: bool,
 }
 
 /// Нормализует значение атрибута `fetchpriority` (HTML LS §2.5.7):
@@ -2424,15 +2481,45 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
         let fetch_priority = normalize_fetch_priority(node.get_attr("fetchpriority"));
         let name = node.get_attr("name").filter(|s| !s.is_empty()).map(str::to_owned);
         let referrer_policy = node.get_attr("referrerpolicy").filter(|s| !s.is_empty()).map(str::to_owned);
-        out.push(IframeInfo { node: id, src, srcdoc, sandbox, is_sandboxed, loading_lazy, fetch_priority, name, referrer_policy });
+        out.push(IframeInfo { node: id, src, srcdoc, sandbox, is_sandboxed, loading_lazy, fetch_priority, name, referrer_policy, embedded: false });
+    } else if let Some(src) = node
+        .embedded_content_src()
+        .filter(|_| !embedded_type_is_image(node))
+        .filter(|src| doc.embedded_document(id, src) != Some(false))
+    {
+        // OBJECT-1 срез 2: `<object>`/`<embed>` — кандидат во вложенный
+        // документ. Автор, явно назвавший `type="image/…"`, получает только
+        // image-конвейер (HTML LS §4.8.7 доверяет `type` до ответа); ресурс,
+        // уже признанный «не документом», повторно не предлагается.
+        out.push(IframeInfo {
+            node: id,
+            src: Some(src.to_owned()),
+            srcdoc: None,
+            sandbox: SandboxFlags::empty(),
+            is_sandboxed: false,
+            loading_lazy: false,
+            fetch_priority: None,
+            name: node.get_attr("name").filter(|s| !s.is_empty()).map(str::to_owned),
+            referrer_policy: None,
+            embedded: true,
+        });
     }
     for &child in &node.children.clone() {
         collect_iframes_inner(doc, child, out);
     }
 }
 
+/// `type="image/…"` на `<object>`/`<embed>` — автор обещал картинку.
+fn embedded_type_is_image(node: &Node) -> bool {
+    node.get_attr("type")
+        .map(str::trim)
+        .and_then(|t| t.get(..6))
+        .is_some_and(|p| p.eq_ignore_ascii_case("image/"))
+}
+
 /// Собрать все элементы-хосты вложенных browsing context (`<iframe>` и
-/// `<frame>`) документа с их sandbox-ограничениями.
+/// `<frame>`, а с OBJECT-1 срез 2 — `<object data>`/`<embed src>`, см.
+/// [`IframeInfo::embedded`]) документа с их sandbox-ограничениями.
 ///
 /// Каждый такой элемент — один `IframeInfo`. Элементы без атрибута `sandbox`
 /// включаются с `is_sandboxed = false` и `sandbox = SandboxFlags::empty()`.
@@ -4836,6 +4923,53 @@ mod tests {
         }
         doc.append_child(doc.root(), iframe);
         doc
+    }
+
+    fn append_with_attrs(doc: &mut Document, tag: &str, pairs: &[(&str, &str)]) -> NodeId {
+        let el = doc.create_element(QualName::html(tag));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(el).data {
+            for (k, v) in pairs {
+                attrs.push(Attribute { name: QualName::html(*k), value: (*v).to_string() });
+            }
+        }
+        doc.append_child(doc.root(), el);
+        el
+    }
+
+    /// OBJECT-1 срез 2: `<object data>`/`<embed src>` — кандидаты во вложенный
+    /// документ; `type="image/…"`, пустой адрес и вердикт «не документ» —
+    /// нет.
+    #[test]
+    fn collect_iframes_offers_object_and_embed_as_embedded_hosts() {
+        let mut doc = Document::new();
+        let obj = append_with_attrs(&mut doc, "object", &[("data", "a.html"), ("name", "o")]);
+        let embed = append_with_attrs(&mut doc, "embed", &[("src", "b.txt")]);
+        append_with_attrs(&mut doc, "object", &[("data", "i.svg"), ("type", "image/svg+xml")]);
+        append_with_attrs(&mut doc, "object", &[("data", "  ")]);
+        append_with_attrs(&mut doc, "embed", &[("data", "wrong-attr.html")]);
+        let frames = collect_iframes(&doc);
+        let got: Vec<(NodeId, Option<&str>, bool)> =
+            frames.iter().map(|f| (f.node, f.src.as_deref(), f.embedded)).collect();
+        assert_eq!(got, vec![(obj, Some("a.html"), true), (embed, Some("b.txt"), true)]);
+        assert_eq!(frames[0].name.as_deref(), Some("o"));
+
+        assert!(doc.set_embedded_document(embed, "b.txt", false));
+        assert!(!doc.set_embedded_document(embed, "b.txt", false), "тот же вердикт — не изменение");
+        let nodes: Vec<NodeId> = collect_iframes(&doc).iter().map(|f| f.node).collect();
+        assert_eq!(nodes, vec![obj], "«не документ» больше не предлагается");
+    }
+
+    /// Вердикт привязан к адресу: смена `data` делает его устаревшим.
+    #[test]
+    fn embedded_document_verdict_is_stale_for_another_url() {
+        let mut doc = Document::new();
+        let obj = append_with_attrs(&mut doc, "object", &[("data", "a.html")]);
+        assert_eq!(doc.embedded_document(obj, "a.html"), None);
+        doc.set_embedded_document(obj, "a.html", true);
+        assert_eq!(doc.embedded_document(obj, "a.html"), Some(true));
+        assert_eq!(doc.embedded_document(obj, "b.html"), None);
+        doc.reclaim_dead_nodes(&[obj]);
+        assert_eq!(doc.embedded_document(obj, "a.html"), None);
     }
 
     #[test]

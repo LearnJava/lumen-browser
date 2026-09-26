@@ -225,6 +225,118 @@ pub(crate) fn fetch_iframe_source(
     }
 }
 
+/// Чем оказался ресурс `<object data>`/`<embed src>` (OBJECT-1 срез 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmbeddedResourceKind {
+    /// HTML-документ — вложенный browsing context по модели `<iframe>`.
+    Html,
+    /// Текст (`text/*`, JSON, XML) — документ с одним `<pre>`, как браузеры
+    /// показывают такой ответ при навигации.
+    Text,
+    /// Картинка, плагинный тип, пустота — элементу не документ: картинку
+    /// рисует image-конвейер (срез 1), остальное — fallback `<object>`.
+    NotDocument,
+}
+
+/// Классифицировать ответ для `<object>`/`<embed>` (HTML LS §4.8.6/§4.8.7:
+/// тип ресурса — из `Content-Type`). Без заголовка (файл с диска, сервер
+/// промолчал) — по расширению пути, затем по сигнатуре HTML в начале тела.
+/// `image/svg+xml` — картинка: SVG в `<object>` срез 1 уже рисует через resvg.
+pub(crate) fn classify_embedded_resource(
+    content_type: Option<&str>,
+    url: &str,
+    body: &[u8],
+) -> EmbeddedResourceKind {
+    use EmbeddedResourceKind::{Html, NotDocument, Text};
+    let essence = content_type
+        .map(|ct| ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
+        .filter(|e| !e.is_empty());
+    if let Some(e) = essence {
+        return match e.as_str() {
+            "text/html" | "application/xhtml+xml" => Html,
+            "application/json" | "application/xml" => Text,
+            _ if e.ends_with("+xml") && !e.starts_with("image/") => Text,
+            _ if e.starts_with("text/") => Text,
+            _ => NotDocument,
+        };
+    }
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let ext = path
+        .rsplit(['/', '\\'])
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("html" | "htm" | "xhtml" | "xht") => return Html,
+        Some("txt" | "text") => return Text,
+        _ => {}
+    }
+    let head = String::from_utf8_lossy(&body[..body.len().min(64)]).trim_start().to_ascii_lowercase();
+    if head.starts_with("<!doctype html") || head.starts_with("<html") {
+        Html
+    } else {
+        NotDocument
+    }
+}
+
+/// Получить источник вложенного документа `<object>`/`<embed>` (OBJECT-1
+/// срез 2). В отличие от [`fetch_iframe_source`], неудача — не страница
+/// ошибки, а `None`: такой элемент по спеке показывает fallback-содержимое
+/// (HTML LS §4.8.7 — «fetch failed» / тип не документ), а картинку за него
+/// рисует image-конвейер. `data:`/`javascript:`/`about:` не грузятся: у
+/// `<object>` они не исполняются и не навигируют.
+#[allow(clippy::too_many_arguments)] // тот же набор, что у fetch_iframe_source
+pub(crate) fn fetch_embedded_source(
+    src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    send_uir_header: bool,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> Option<FrameSource> {
+    let lowered = src.trim_start().to_ascii_lowercase();
+    if lowered.is_empty()
+        || lowered.starts_with("about:")
+        || lowered.starts_with("data:")
+        || lowered.starts_with("javascript:")
+    {
+        return None;
+    }
+    let as_html = |kind: EmbeddedResourceKind, bytes: &[u8]| -> Option<String> {
+        let text = String::from_utf8_lossy(bytes);
+        match kind {
+            EmbeddedResourceKind::Html => Some(text.into_owned()),
+            EmbeddedResourceKind::Text => Some(format!(
+                "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>\
+                 <pre style=\"word-wrap:break-word;white-space:pre-wrap\">{}</pre></body></html>",
+                html_escape(&text)
+            )),
+            EmbeddedResourceKind::NotDocument => None,
+        }
+    };
+    match base.resolve(src) {
+        ResolvedResource::File(path) => {
+            let bytes = std::fs::read(&path).ok()?;
+            let kind = classify_embedded_resource(None, &path.to_string_lossy(), &bytes);
+            as_html(kind, &bytes).map(|html| FrameSource::File { html, path })
+        }
+        ResolvedResource::Url(url) => {
+            let sub_url = lumen_core::url::Url::parse(&url).ok()?;
+            let client = base.http_client_for_subresource_with_policy(
+                Arc::clone(sink),
+                cookie_jar,
+                referrer_policy,
+            );
+            let (bytes, content_type) = client
+                .fetch_subresource_document_with_content_type(&sub_url, send_uir_header)
+                .map_err(|e| eprintln!("object/embed: загрузка '{url}' не удалась: {e}"))
+                .ok()?;
+            let kind = classify_embedded_resource(content_type.as_deref(), &url, &bytes);
+            as_html(kind, &bytes).map(|html| FrameSource::Url { html, url })
+        }
+    }
+}
+
 /// Исполнить `javascript:` `src` фрейма (GAP-NAVCTX срез 6, BUG-884) в
 /// контексте РОДИТЕЛЯ (`parent_js`), а не ребёнка.
 ///
@@ -1960,6 +2072,8 @@ pub(crate) fn spawn_frame(
     // среза 6. Настоящая причина, по которой срез 6 это отложил, не
     // подтвердилась чтением кода.
     let js_url_result = match dest {
+        // OBJECT-1 срез 2: `<object data="javascript:…">` не исполняется.
+        None if info.embedded => None,
         None if info.srcdoc.is_none() => info
             .src
             .as_deref()
@@ -2045,61 +2159,108 @@ pub(crate) fn spawn_frame(
             attempted_url: resolved,
         })
     };
+    // OBJECT-1 срез 2: `<object>`/`<embed>` получают вложенный документ,
+    // только если ответ им оказался (HTML LS §4.8.6/§4.8.7). Иначе фрейма нет
+    // вовсе — ни страницы ошибки, ни `about:blank`: картинку рисует image-
+    // конвейер, прочее — fallback `<object>`. Гейт — `object-src`, а не
+    // `frame-src`; нарушение сообщает JS-шим (`_lumen_embed_object_scan`).
+    let embedded_source = if info.embedded && js_url_result.is_none() {
+        let (src, resolve_base) = match dest {
+            Some((href, nav_base)) => (href, nav_base),
+            None => (info.src.as_deref().unwrap_or(""), base),
+        };
+        let upgraded = maybe_upgrade_frame_src(csp_gate.as_ref(), src, resolve_base);
+        let blocked = csp_gate.as_ref().is_some_and(|(policy, _)| {
+            crate::csp_enforce::object_src_blocked(
+                policy,
+                &resolve_base.resolve_str(&upgraded),
+                self_origin.as_ref(),
+            )
+        });
+        let source = if blocked {
+            None
+        } else {
+            fetch_embedded_source(
+                &upgraded,
+                resolve_base,
+                sink,
+                cookie_jar.clone(),
+                send_uir_header,
+                referrer_policy,
+            )
+        };
+        // Вердикт пишется за сам атрибут (первичная вставка или его смена),
+        // не за ссылку, кликнутую внутри уже показанного документа: layout
+        // решает по `data`/`src`, а повторный скан фреймов по нему же
+        // перестаёт предлагать «не документ» к загрузке.
+        let attr_driven = dest.is_none_or(|(href, _)| info.src.as_deref() == Some(href));
+        if attr_driven && let Some(raw) = info.src.as_deref() {
+            parent.lock().unwrap().set_embedded_document(info.node, raw, source.is_some());
+        }
+        let Some(source) = source else { return Vec::new() };
+        Some(source)
+    } else {
+        None
+    };
     // Источник HTML + база ребёнка для его относительных URL.
-    let fetched = match &js_url_result {
-        // Строковое завершение — новый документ фрейма, тем же путём, что и
-        // любой другой инлайн-источник (`about:blank`-адрес: `javascript:`
-        // не создаёт запись истории, HTML LS §7.4.5).
-        Some(Some(html)) => Some(Ok(FrameSource::Inline(html.clone()))),
-        // Не-строковое завершение — по спеке НЕ навигация: фрейм остаётся на
-        // прежнем документе (для первичной вставки — на пустом `about:blank`,
-        // как если бы `src` не было вовсе), код уже отработал побочные эффекты.
-        Some(None) => None,
-        // GAP-CSPENF срез 52: `src`/`href` апгрейжены
-        // (`upgrade_navigation_url`, UIR §4.1 шаг 5) ДО `frame_src_check` —
-        // тот же порядок, что и у `frame-src` (шаг 6) выше по этой дорожке.
-        // `maybe_upgrade_frame_src` оставляет пустой/`about:`/`data:`/
-        // `javascript:` src нетронутым: и `frame_src_check`, и
-        // `fetch_iframe_source` сами решают, что с ним делать (пустой/
-        // `about:blank` — молча пустой документ, не сеть), а резолв в
-        // абсолютный `http(s)`-адрес превратил бы пустую строку в адрес
-        // РОДИТЕЛЯ (`ResourceBase::resolve("")` возвращает саму базу) — фрейм
-        // бы засетевился на страницу-хозяина вместо пустого документа.
-        None => match dest {
-            Some((href, nav_base)) => {
-                let href = maybe_upgrade_frame_src(csp_gate.as_ref(), href, nav_base);
-                Some(
-                    frame_src_check(&href, nav_base)
+    let fetched = if let Some(source) = embedded_source {
+        Some(Ok(source))
+    } else {
+        match &js_url_result {
+            // Строковое завершение — новый документ фрейма, тем же путём, что и
+            // любой другой инлайн-источник (`about:blank`-адрес: `javascript:`
+            // не создаёт запись истории, HTML LS §7.4.5).
+            Some(Some(html)) => Some(Ok(FrameSource::Inline(html.clone()))),
+            // Не-строковое завершение — по спеке НЕ навигация: фрейм остаётся на
+            // прежнем документе (для первичной вставки — на пустом `about:blank`,
+            // как если бы `src` не было вовсе), код уже отработал побочные эффекты.
+            Some(None) => None,
+            // GAP-CSPENF срез 52: `src`/`href` апгрейжены
+            // (`upgrade_navigation_url`, UIR §4.1 шаг 5) ДО `frame_src_check` —
+            // тот же порядок, что и у `frame-src` (шаг 6) выше по этой дорожке.
+            // `maybe_upgrade_frame_src` оставляет пустой/`about:`/`data:`/
+            // `javascript:` src нетронутым: и `frame_src_check`, и
+            // `fetch_iframe_source` сами решают, что с ним делать (пустой/
+            // `about:blank` — молча пустой документ, не сеть), а резолв в
+            // абсолютный `http(s)`-адрес превратил бы пустую строку в адрес
+            // РОДИТЕЛЯ (`ResourceBase::resolve("")` возвращает саму базу) — фрейм
+            // бы засетевился на страницу-хозяина вместо пустого документа.
+            None => match dest {
+                Some((href, nav_base)) => {
+                    let href = maybe_upgrade_frame_src(csp_gate.as_ref(), href, nav_base);
+                    Some(
+                        frame_src_check(&href, nav_base)
+                            .map(Err)
+                            .unwrap_or_else(|| {
+                                fetch_iframe_source(
+                                    &href,
+                                    nav_base,
+                                    sink,
+                                    cookie_jar.clone(),
+                                    send_uir_header,
+                                    referrer_policy,
+                                )
+                            }),
+                    )
+                }
+                None if info.srcdoc.is_some() => None,
+                None => info.src.as_deref().map(|src| {
+                    let src = maybe_upgrade_frame_src(csp_gate.as_ref(), src, base);
+                    frame_src_check(&src, base)
                         .map(Err)
                         .unwrap_or_else(|| {
                             fetch_iframe_source(
-                                &href,
-                                nav_base,
+                                &src,
+                                base,
                                 sink,
                                 cookie_jar.clone(),
                                 send_uir_header,
                                 referrer_policy,
                             )
-                        }),
-                )
-            }
-            None if info.srcdoc.is_some() => None,
-            None => info.src.as_deref().map(|src| {
-                let src = maybe_upgrade_frame_src(csp_gate.as_ref(), src, base);
-                frame_src_check(&src, base)
-                    .map(Err)
-                    .unwrap_or_else(|| {
-                        fetch_iframe_source(
-                            &src,
-                            base,
-                            sink,
-                            cookie_jar.clone(),
-                            send_uir_header,
-                            referrer_policy,
-                        )
-                    })
-            }),
-        },
+                        })
+                }),
+            },
+        }
     };
     // FRAME-4 срез 2: источник, который получить не удалось, больше не
     // обрывает загрузку фрейма — вместо неё под-документом становится
@@ -2473,7 +2634,11 @@ pub(crate) fn spawn_frame(
             child_peer,
         );
     }
-    fire_iframe_load_event(parent_js, info.node);
+    // OBJECT-1 срез 2: `load` на `<object>`/`<embed>` шлёт JS-шим
+    // (`_lumen_embed_object_scan`) — второй был бы дублем.
+    if !info.embedded {
+        fire_iframe_load_event(parent_js, info.node);
+    }
     let frame_scroll_containers = frame_layout
         .as_ref()
         .map(lumen_layout::collect_scroll_containers)
