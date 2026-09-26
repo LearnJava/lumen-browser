@@ -1,6 +1,6 @@
 # BUG-1138 — `Object.prototype.toString.call(document)` даёт `'[object Object]'`: нет `HTMLDocument` и `Symbol.toStringTag`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js:11694` `Object.setPrototypeOf(document, Document.prototype)` — нет `HTMLDocument.prototype` и тега; `:3553` `Document.prototype`)
 
@@ -44,3 +44,19 @@ document.getElementById('o').textContent = JSON.stringify(r, null, 1);
 HTML LS §3.1.1: `document` HTML-страницы — экземпляр `HTMLDocument : Document`
 (`HTMLDocument.prototype.__proto__ === Document.prototype`); `Symbol.toStringTag` по WebIDL §3.7.6.
 Критерий: репро даёт `'[object HTMLDocument]'`.
+
+## Исправление (P6, 2026-09-26)
+
+`WEB_API_SHIM` (`crates/js/src/shim/web_api_shim_mid.js`) заводит `function HTMLDocument()`
+(`TypeError: Illegal constructor`) с `HTMLDocument.prototype.__proto__ === Document.prototype`;
+живой `document` получает `HTMLDocument.prototype` вместо `Document.prototype`, так что
+`instanceof Document`/`Node` сохраняются. `Symbol.toStringTag` (`_lumen_idl_tag`) теперь у каждого
+из трёх интерфейсов — `Document`, `XMLDocument`, `HTMLDocument`: унаследованный тег заставил бы
+подклассы называться базовым именем. Глобал `HTMLDocument` неперечисляем.
+
+Сделано как в Chrome/Firefox, а не по букве HTML LS (там `window.HTMLDocument` — псевдоним
+`Document`): критерий заявки — тег `HTMLDocument`, и регэксп yahoo принимает оба варианта.
+`createHTMLDocument`/`DOMParser` по-прежнему дают `Document` — вне пункта.
+
+Тесты: `crates/js/src/dom/tests/v8_bug1138_html_document.rs` (3 шт.) — репро из заявки даёт
+результат Chrome.
