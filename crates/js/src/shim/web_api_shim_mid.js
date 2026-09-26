@@ -7330,6 +7330,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
         hasAttribute:    function(n)    { var nid = this.__nid__; return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
         hasAttributes:   function()     { var nid = this.__nid__; return _lumen_get_attr_names(nid).length > 0; },
+        // DOM §4.9: getAttributeNames() — qualified names in attribute-list
+        // order, a fresh array per call (BUG-1136: samsung.com calls it).
+        getAttributeNames: function()   { var nid = this.__nid__; return Array.prototype.slice.call(_lumen_get_attr_names(nid)); },
         // DOM §4.9.2 namespaced attribute accessors (GAP-XMLDOC срез 10,
         // BUG-685, BUG-309): `ns` is looked up against the real `Namespace`
         // the parser (or a prior `setAttributeNS`) tagged the attribute with,
