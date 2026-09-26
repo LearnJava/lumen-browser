@@ -209,14 +209,25 @@ Performance.prototype.measure = function(name, startOrMeasureOptions, endMark) {
     if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);
     return entry;
 };
-Performance.prototype.getEntriesByName = function(name, type) {
-    return _perf_entries_by_name(String(name), type);
+// WebIDL operations: named functions with the IDL `length` (optional
+// arguments do not count) and a TypeError for a missing required argument —
+// what `performance-timeline/idlharness.any.js` checks (BUG-648), including
+// the brand check: `this` that is not a Performance is a TypeError.
+Performance.prototype.getEntriesByName = function getEntriesByName(name) {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'getEntriesByName' on 'Performance': 1 argument required, but only 0 present.");
+    return _perf_entries_by_name(String(name), arguments[1]);
 };
-Performance.prototype.getEntriesByType = function(type) {
+Performance.prototype.getEntriesByType = function getEntriesByType(type) {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'getEntriesByType' on 'Performance': 1 argument required, but only 0 present.");
     var t = String(type);
     return _perf_entries.filter(function(e) { return e.entryType === t; });
 };
-Performance.prototype.getEntries = function() { return _perf_entries.slice(); };
+Performance.prototype.getEntries = function getEntries() {
+    if (!(this instanceof Performance)) throw new TypeError('Illegal invocation');
+    return _perf_entries.slice();
+};
 Performance.prototype.clearMarks = function(name) {
     if (typeof name === 'string') {
         _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'mark' && e.name === name); });

@@ -84,6 +84,7 @@ fn resource_timing_observer_notified() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['resource']});
                 _lumen_record_resource_timing('https://example.com/fetch.json', 'fetch', 300, 15);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].initiatorType === 'fetch' && got[0].duration === 15
                 "#
     ).unwrap();
@@ -214,6 +215,7 @@ fn performance_observer_callback_takes_three_arguments() {
                     argc = arguments.length; opts = options;
                 }).observe({type: 'mark'});
                 performance.mark('m');
+                _lumen_tick_timers();
                 argc === 3 && opts !== null && opts.droppedEntriesCount === 0
                 "#,
         )
@@ -236,9 +238,12 @@ fn dropped_entries_count_reported_once_per_observe() {
                 });
                 po.observe({type: 'resource'});
                 _lumen_record_resource_timing('https://example.com/b.js', 'script', 20, 1);
+                _lumen_tick_timers();
                 _lumen_record_resource_timing('https://example.com/c.js', 'script', 30, 1);
                 _lumen_tick_timers();
-                counts.length === 2 && counts[0] === 1 && counts[1] === undefined
+                // Both a.js and b.js are dropped by the time the queued callback
+                // runs — the same «2» `droppedentriescount.any.js` asserts.
+                counts.length === 2 && counts[0] === 2 && counts[1] === undefined
                 "#,
         )
         .unwrap();
@@ -259,6 +264,7 @@ fn dropped_entries_count_zero_for_an_unbounded_type() {
                     got = options.droppedEntriesCount;
                 }).observe({type: 'mark'});
                 performance.mark('m');
+                _lumen_tick_timers();
                 got === 0
                 "#,
         )
@@ -350,6 +356,7 @@ fn deliver_perf_entry_notifies_observer() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['navigation']});
                 _lumen_deliver_perf_entry('navigation', 'self', 100.0, 60.0, null);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].entryType === 'navigation'
                 "#
     ).unwrap();
@@ -393,6 +400,7 @@ fn nav_timing_observer_receives_navigation_entry() {
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
                 po.observe({entryTypes: ['navigation']});
                 _lumen_deliver_perf_entry('navigation', 'https://example.com/', 0.0, 350.0, null);
+                _lumen_tick_timers();
                 got.length === 1 && got[0].entryType === 'navigation' && got[0].duration === 350
                 "#
     ).unwrap();
@@ -432,7 +440,8 @@ fn nav_timing_buffered_replay() {
                 _lumen_deliver_perf_entry('navigation', 'https://buffered.test/', 0.0, 500.0, null);
                 var got = [];
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
-                po.observe({entryTypes: ['navigation'], buffered: true});
+                po.observe({type: 'navigation', buffered: true});
+                _lumen_tick_timers();
                 got.length === 1 && got[0].name === 'https://buffered.test/'
                 "#
     ).unwrap();

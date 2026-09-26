@@ -1775,7 +1775,8 @@ fn bug591_performance_observer_callback_exception_fires_window_error() {
                  window.addEventListener('error', function(e) { caught = e.message; }); \
                  var po = new PerformanceObserver(function() { throw new Error('po-boom'); }); \
                  po.observe({ entryTypes: ['mark'] }); \
-                 performance.mark('m1');",
+                 performance.mark('m1'); \
+                 _lumen_tick_timers();",
     )
     .unwrap();
     let result = rt.eval("caught").unwrap();

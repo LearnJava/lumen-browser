@@ -192,6 +192,7 @@ fn performance_observer_receives_mark_entry() {
                 var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });\
                 po.observe({entryTypes:['mark']});\
                 performance.mark('obs_test');\
+                _lumen_tick_timers();\
                 got.length === 1 && got[0].name === 'obs_test'\
             ").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -205,8 +206,10 @@ fn performance_observer_disconnect_stops_delivery() {
                 var po = new PerformanceObserver(function() { count++; });\
                 po.observe({entryTypes:['mark']});\
                 performance.mark('before');\
+                _lumen_tick_timers();\
                 po.disconnect();\
                 performance.mark('after');\
+                _lumen_tick_timers();\
                 count === 1\
             ").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -220,6 +223,7 @@ fn performance_observer_paint_entry_via_lumen_deliver() {
                 var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });\
                 po.observe({entryTypes:['paint']});\
                 _lumen_deliver_paint_entry('first-paint', 42.0);\
+                _lumen_tick_timers();\
                 got.length === 1 && got[0].name === 'first-paint' && got[0].startTime === 42.0\
             ").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -252,7 +256,8 @@ fn performance_observer_buffered_delivers_existing() {
                 _lumen_deliver_paint_entry('first-paint', 10.0);\
                 var got = [];\
                 var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });\
-                po.observe({entryTypes:['paint'], buffered: true});\
+                po.observe({type:'paint', buffered: true});\
+                _lumen_tick_timers();\
                 got.length === 1\
             ").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -269,6 +274,7 @@ fn performance_observer_single_type_receives_entry() {
                 var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });
                 po.observe({type: 'mark'});
                 performance.mark('single_type_test');
+                _lumen_tick_timers();
                 got.length === 1 && got[0].name === 'single_type_test'
             "#).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -283,6 +289,7 @@ fn performance_observer_single_type_with_buffered() {
                 var got = [];
                 var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });
                 po.observe({type: 'navigation', buffered: true});
+                _lumen_tick_timers();
                 got.length === 1 && got[0].name === 'https://buf.test/'
             "#).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -299,9 +306,237 @@ fn performance_observer_repeated_observe_accumulates_types() {
                 po.observe({type: 'measure'});
                 performance.mark('m1');
                 performance.measure('ms1', 'm1');
+                _lumen_tick_timers();
                 got.length === 2
             "#).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// ── BUG-648: observe() validation + task-queued delivery (Performance Timeline L2 §4.2/§5.3) ──
+
+fn perf_bool(script: &str) -> bool {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
+}
+
+#[test]
+fn bug648_observe_without_type_or_entry_types_throws_type_error() {
+    assert!(perf_bool(r#"
+        var po = new PerformanceObserver(function() {});
+        var a = false, b = false, c = false, d = false;
+        try { po.observe({}); } catch (e) { a = e instanceof TypeError; }
+        try { po.observe({entryType: ['mark']}); } catch (e) { b = e instanceof TypeError; }
+        try { po.observe({entryTypes: 'mark'}); } catch (e) { c = e instanceof TypeError; }
+        try { po.observe({type: 'mark', entryTypes: ['measure']}); } catch (e) { d = e instanceof TypeError; }
+        a && b && c && d
+    "#));
+}
+
+#[test]
+fn bug648_mixing_observe_forms_throws_invalid_modification_error() {
+    assert!(perf_bool(r#"
+        var p1 = new PerformanceObserver(function() {});
+        p1.observe({entryTypes: ['mark']});
+        var a = null;
+        try { p1.observe({type: 'measure'}); } catch (e) { a = e.name; }
+        var p2 = new PerformanceObserver(function() {});
+        p2.observe({type: 'mark'});
+        var b = null;
+        try { p2.observe({entryTypes: ['measure']}); } catch (e) { b = e.name; }
+        // Unknown values are not errors (observe() aborts with a warning)…
+        new PerformanceObserver(function() {}).observe({type: 'marks'});
+        new PerformanceObserver(function() {}).observe({entryTypes: []});
+        // …but the aborted call has already fixed the observer type.
+        var p4 = new PerformanceObserver(function() {});
+        p4.observe({type: 'marks'});
+        var c = null;
+        try { p4.observe({entryTypes: ['mark']}); } catch (e) { c = e.name; }
+        a === 'InvalidModificationError' && b === 'InvalidModificationError'
+            && c === 'InvalidModificationError'
+    "#));
+}
+
+#[test]
+fn bug648_callback_runs_in_a_task_not_inside_mark() {
+    assert!(perf_bool(r#"
+        var calls = 0;
+        var po = new PerformanceObserver(function() { calls++; });
+        po.observe({entryTypes: ['mark']});
+        performance.mark('m1');
+        performance.mark('m2');
+        var sync = calls;
+        _lumen_tick_timers();
+        sync === 0 && calls === 1
+    "#));
+}
+
+#[test]
+fn bug648_disconnect_after_mark_cancels_the_delivery() {
+    assert!(perf_bool(r#"
+        var calls = 0;
+        var po = new PerformanceObserver(function() { calls++; });
+        po.observe({entryTypes: ['mark']});
+        performance.mark('mark1');
+        po.disconnect();
+        performance.mark('mark2');
+        _lumen_tick_timers();
+        calls === 0
+    "#));
+}
+
+// The web-vitals shape that broke cnbc/imdb: the reporting function the
+// callback calls is assigned after `observe({buffered: true})` returns.
+#[test]
+fn bug648_buffered_observe_does_not_invoke_synchronously() {
+    assert!(perf_bool(r#"
+        performance.mark('early');
+        var log = [];
+        var report;
+        new PerformanceObserver(function(list) { log.push('cb:' + list.getEntries().length); report(); })
+            .observe({type: 'mark', buffered: true});
+        log.push('after-observe');
+        report = function() { log.push('report'); };
+        _lumen_tick_timers();
+        log.join(',') === 'after-observe,cb:1,report'
+    "#));
+}
+
+#[test]
+fn bug648_take_records_drains_the_observer_buffer() {
+    assert!(perf_bool(r#"
+        var calls = 0;
+        var po = new PerformanceObserver(function() { calls++; });
+        var r0 = po.takeRecords().length;
+        po.observe({entryTypes: ['mark']});
+        performance.mark('a'); performance.mark('b');
+        var r1 = po.takeRecords().map(function(e) { return e.name; }).join();
+        performance.mark('c');
+        var r2 = po.takeRecords().length;
+        var r3 = po.takeRecords().length;
+        _lumen_tick_timers();
+        r0 === 0 && r1 === 'a,b' && r2 === 1 && r3 === 0 && calls === 0
+    "#));
+}
+
+#[test]
+fn bug648_entry_types_observe_replaces_type_observe_stacks() {
+    assert!(perf_bool(r#"
+        var got = [];
+        var po = new PerformanceObserver(function(list) {
+            got = got.concat(list.getEntries().map(function(e) { return e.entryType; }));
+        });
+        po.observe({entryTypes: ['mark']});
+        po.observe({entryTypes: ['measure']});
+        performance.mark('m');
+        performance.measure('x');
+        _lumen_tick_timers();
+        var multi = got.join();
+        po.disconnect();
+        got = [];
+        var p2 = new PerformanceObserver(function(list) {
+            got = got.concat(list.getEntries().map(function(e) { return e.entryType; }));
+        });
+        p2.observe({type: 'mark'});
+        p2.observe({type: 'measure'});
+        performance.mark('m2');
+        performance.measure('x2');
+        _lumen_tick_timers();
+        multi === 'measure' && got.sort().join() === 'mark,measure'
+    "#));
+}
+
+#[test]
+fn bug648_disconnect_forgets_observed_types() {
+    assert!(perf_bool(r#"
+        var got = [];
+        var po = new PerformanceObserver(function(list) {
+            got = got.concat(list.getEntries().map(function(e) { return e.name; }));
+        });
+        po.observe({type: 'mark'});
+        po.disconnect();
+        po.observe({type: 'measure'});
+        performance.mark('a');
+        performance.measure('b');
+        _lumen_tick_timers();
+        got.join() === 'b'
+    "#));
+}
+
+#[test]
+fn bug648_entry_list_is_an_interface_instance_sorted_by_start_time() {
+    assert!(perf_bool(r#"
+        var ok = false, thisOk = false;
+        var po = new PerformanceObserver(function(list, obs) {
+            var names = list.getEntries().map(function(e) { return e.name; }).join();
+            ok = list instanceof PerformanceObserverEntryList && obs === po
+                && names === 'early,late'
+                && list.getEntriesByName('late', 'mark').length === 1
+                && list.getEntriesByType('measure').length === 0;
+            thisOk = this === po;
+        });
+        po.observe({entryTypes: ['mark']});
+        performance.mark('late', {startTime: 20});
+        performance.mark('early', {startTime: 10});
+        _lumen_tick_timers();
+        var threw = false;
+        try { new PerformanceObserverEntryList(); } catch (e) { threw = e instanceof TypeError; }
+        ok && thisOk && threw && typeof window.PerformanceObserverEntryList === 'function'
+    "#));
+}
+
+#[test]
+fn bug648_entry_types_ignore_buffered_flag() {
+    assert!(perf_bool(r#"
+        performance.mark('past');
+        var calls = 0;
+        new PerformanceObserver(function() { calls++; })
+            .observe({entryTypes: ['mark'], buffered: true});
+        _lumen_tick_timers();
+        calls === 0
+    "#));
+}
+
+// `performance-timeline/idlharness.any.js`: once the entry list reaches the
+// callback, idlharness checks the interface shapes themselves.
+#[test]
+fn bug648_interface_objects_have_the_webidl_shape() {
+    assert!(perf_bool(r#"
+        var g1 = Object.getOwnPropertyDescriptor(globalThis, 'PerformanceObserver');
+        var g2 = Object.getOwnPropertyDescriptor(globalThis, 'PerformanceObserverEntryList');
+        var p1 = Object.getOwnPropertyDescriptor(PerformanceObserver, 'prototype');
+        var st = Object.getOwnPropertyDescriptor(PerformanceObserver, 'supportedEntryTypes');
+        var tooFew = 0;
+        try { performance.getEntriesByType(); } catch (e) { if (e instanceof TypeError) tooFew++; }
+        try { performance.getEntriesByName(); } catch (e) { if (e instanceof TypeError) tooFew++; }
+        var list = null;
+        var po = new PerformanceObserver(function(l) { list = l; });
+        po.observe({type: 'mark'});
+        performance.mark('m');
+        _lumen_tick_timers();
+        try { list.getEntriesByType(); } catch (e) { if (e instanceof TypeError) tooFew++; }
+        try { list.getEntriesByName(); } catch (e) { if (e instanceof TypeError) tooFew++; }
+        !g1.enumerable && g1.configurable && g1.writable && !g2.enumerable
+            && !p1.writable && !p1.enumerable && !p1.configurable
+            && PerformanceObserver.length === 1 && PerformanceObserver.prototype.observe.length === 0
+            && PerformanceObserver.prototype.takeRecords.name === 'takeRecords'
+            && PerformanceObserverEntryList.prototype.getEntriesByName.length === 1
+            && performance.getEntriesByName.length === 1 && performance.getEntries.name === 'getEntries'
+            && Object.prototype.toString.call(po) === '[object PerformanceObserver]'
+            && Object.prototype.toString.call(list) === '[object PerformanceObserverEntryList]'
+            && st.enumerable && PerformanceObserver.supportedEntryTypes === PerformanceObserver.supportedEntryTypes
+            && Object.isFrozen(PerformanceObserver.supportedEntryTypes)
+            && tooFew === 4
+            && (function() {
+                var n = 0;
+                [function() { PerformanceObserver.prototype.disconnect.call(null); },
+                 function() { PerformanceObserver.prototype.takeRecords.call({}); },
+                 function() { PerformanceObserverEntryList.prototype.getEntries.call(null); },
+                 function() { Performance.prototype.getEntries.call(null); },
+                 function() { Performance.prototype.getEntriesByType.call({}, 'mark'); }]
+                    .forEach(function(f) { try { f(); } catch (e) { if (e instanceof TypeError) n++; } });
+                return n === 5;
+            })()
+    "#));
 }
 
 #[test]

@@ -1851,9 +1851,9 @@ the time — read dates.
     with `onresourcetimingbufferfull` `false → true`, slice-25's `perf-resource` goes
     `rt-late resource 0 → 2`.
   - **Residual:** `EventSource` produces no entry (its long-lived connection bypasses both
-    paths), a failed load produces none, observer delivery is still synchronous rather than
-    a queued task ([BUG-648](../bugs/BUG-648-OPEN.md)), and every per-phase milestone is
-    collapsed onto `fetchStart`.
+    paths), a failed load produces none, and every per-phase milestone is collapsed onto
+    `fetchStart`. (Observer delivery through a queued task — BUG-648, fixed 2026-09-26, next
+    entry.)
 
 - **CSS Font Loading API: `FontFace`/`document.fonts` (FONTLOAD-1, 2026-09-05,
   `crates/js/src/shim/web_api_shim_mid.js`).** Replaced the old ad hoc
@@ -2082,6 +2082,27 @@ the time — read dates.
   with `didTimeout === true` and a zero budget. `IdleDeadline` is a real non-constructible interface
   (non-enumerable global, brand-checked members). The shell's Rust `runtime::run_idle_callbacks` is
   a separate internal queue, unrelated to the page API.
+
+- **`PerformanceObserver` on the spec's queued-task model ([BUG-648](../bugs/BUG-648-FIXED.md),
+  P6 2026-09-26, `crates/js/src/shim/web_api_shim_tail.js`).** An observer holds an *observer
+  type*, an options list and an *observer buffer*. `_perf_observer_notify` is the §5.1
+  «queue a PerformanceEntry» half: it only appends to interested buffers and queues one §5.3
+  task per global (`_perf_po_task_queued` + `_perf_queue_task`, the engine queue with no §8.6
+  clamp). The task hands each observer its buffer. Consequences a test or a new entry producer
+  must respect:
+  - **No callback runs synchronously.** A unit test that creates an entry and then reads what
+    the callback saw must call `_lumen_tick_timers()` in between; a new `_lumen_deliver_*` only
+    pushes to `_perf_entries` and calls `_perf_observer_notify` — never the callback itself.
+  - `takeRecords()` and the task drain the same buffer, so an entry reaches the page once.
+    `disconnect()` empties it, which is what cancels an already-queued delivery.
+  - `observe()` WebIDL-converts its dictionary and throws `TypeError`/`InvalidModificationError`
+    per §4.2. The observer type is fixed by the first call, even one aborted for an unknown type,
+    and survives `disconnect()`. `buffered` next to `entryTypes` is ignored rather than thrown
+    (WPT + every engine, against the spec's «any other member» wording).
+  - The callback's list is a `PerformanceObserverEntryList` instance (non-constructible global),
+    `getEntries*` sorted by `startTime` (§5.5); `this` is the observer.
+  - `long_tasks.rs`/`long_animation_frames.rs` carry their own tiny synchronous
+    `PerformanceObserver` in `PERF_STUB` for their own unit tests only; the live page never sees it.
 
 ## Deferred
 
