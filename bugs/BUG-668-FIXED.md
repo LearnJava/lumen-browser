@@ -50,7 +50,7 @@ Two independent defects in `SCREEN_ORIENTATION_SHIM` (`screen_orientation.rs:20`
    test or page script that dispatches a synthetic `change` event via the standard
    `dispatchEvent(new Event('change'))` path (rather than calling the internal
    `_fireChangeEvent` the shim itself defines) cannot work at all. Same class of defect as
-   [BUG-664](BUG-664-OPEN.md) (`navigator.connection` not an `EventTarget`) and
+   [BUG-664](BUG-664-FIXED.md) (`navigator.connection` not an `EventTarget`) and
    [BUG-400](BUG-400-FIXED.md) (`performance` a plain object literal) — a recurring pattern
    of hand-rolled pub/sub standing in for real `EventTarget` inheritance across Phase 0 shims.
 

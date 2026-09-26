@@ -1,7 +1,7 @@
 //! V8 port of Fullscreen API (WHATWG Fullscreen §4), Web Locks API, Screen Wake
 //! Lock stub, Network Information stub, `navigator.userActivation`, Web Share API
 //! stub and `window.reportError()` — seven adjacent scoping-table sub-families
-//! ported together, **31 tests**, QuickJS copies deleted. All of these are plain
+//! ported together, **33 tests**, QuickJS copies deleted. All of these are plain
 //! JS in the shared `WEB_API_SHIM`, not native bindings, so nothing changed on the
 //! `V8JsRuntime` side.
 //!
@@ -494,6 +494,43 @@ fn navigator_connection_downlink_max_is_unknown_infinity() {
     // WPT `netinfo-basics.html`'s `downlinkMax >= 0` check.
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(&rt, "navigator.connection.downlinkMax === Infinity"));
+}
+
+#[test]
+fn navigator_connection_is_event_target_interface() {
+    // BUG-664: `interface NetworkInformation : EventTarget` — the object used
+    // to be a plain constructor instance with no-op listener stubs.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "navigator.connection instanceof NetworkInformation && \
+         navigator.connection instanceof EventTarget && \
+         Object.getPrototypeOf(NetworkInformation.prototype) === EventTarget.prototype && \
+         Object.prototype.toString.call(navigator.connection) === '[object NetworkInformation]' && \
+         Object.keys(navigator.connection).length === 0"
+    ));
+    assert!(bool_eval(&rt,
+        "(function() { try { new NetworkInformation(); return false; } \
+                       catch (e) { return e instanceof TypeError; } })()"
+    ));
+    // Readonly attributes: assignment must not overwrite the engine's value.
+    assert!(bool_eval(&rt,
+        "navigator.connection.effectiveType = 'slow-2g'; \
+         navigator.connection.effectiveType === '4g'"
+    ));
+}
+
+#[test]
+fn navigator_connection_change_reaches_listener_and_onchange() {
+    // BUG-664: both subscription paths used to be dropped silently.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "var hits = []; var c = navigator.connection; \
+         c.addEventListener('change', function(e) { hits.push('l:' + e.type); }, { once: true }); \
+         c.onchange = function(e) { hits.push('h:' + (e.target === c)); }; \
+         c.dispatchEvent(new Event('change')); \
+         c.dispatchEvent(new Event('change')); \
+         hits.join() === 'l:change,h:true,h:true'"
+    ));
 }
 
 // ── navigator.userActivation (GAP-USERACT, BUG-751/BUG-758) ──────────────────

@@ -46,7 +46,7 @@ interface Performance : EventTarget {
 Timing L2 §4.4), ни `instanceof Performance`, ни самого интерфейсного
 объекта `window.Performance`. Тот же класс дефекта, что
 [BUG-367](BUG-367-FIXED.md) / [BUG-386](BUG-386-FIXED.md) /
-[BUG-394](BUG-394-FIXED.md) / [BUG-664](BUG-664-OPEN.md) /
+[BUG-394](BUG-394-FIXED.md) / [BUG-664](BUG-664-FIXED.md) /
 [BUG-668](BUG-668-FIXED.md) — «WebIDL-форма объекта собрана присваиваниями
 вместо интерфейса».
 
@@ -149,6 +149,6 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
   сохранено дословно.
 * `PerformanceObserver` (соседний класс той же секции) — по спеке
   `EventTarget` не требует, не путать.
-* Тот же класс «не-`EventTarget`»: [BUG-664](BUG-664-OPEN.md)
+* Тот же класс «не-`EventTarget`»: [BUG-664](BUG-664-FIXED.md)
   (`navigator.connection`), [BUG-668](BUG-668-FIXED.md)
   (`screen.orientation`).

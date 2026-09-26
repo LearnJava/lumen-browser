@@ -5527,26 +5527,48 @@ function _wa_doc_get_animations() {
 // navigator.connection — effective type, downlink, downlinkMax, rtt, saveData.
 // Phase 1 stub: reports '4g'/10 Mbps/100 ms (reasonable desktop default).
 (function() {
-  function NetworkInformation() {
-    this.effectiveType = '4g';
-    this.downlink      = 10;
+  // §7 declares `interface NetworkInformation : EventTarget` with no
+  // constructor, so this is a real interface chained to the shared
+  // EventTarget (BUG-664) — not a flat object with no-op listener stubs, which
+  // silently dropped every `change` subscription and failed `instanceof
+  // EventTarget`. The attributes are getter-only accessors on the prototype
+  // (readonly WebIDL attributes, class of BUG-366) over closure state, so page
+  // script cannot answer for the engine by plain assignment.
+  function NetworkInformation() { throw new TypeError('Illegal constructor'); }
+  NetworkInformation.prototype = Object.create(EventTarget.prototype);
+  NetworkInformation.prototype.constructor = NetworkInformation;
+  Object.defineProperty(NetworkInformation.prototype, Symbol.toStringTag,
+    { value: 'NetworkInformation', configurable: true });
+
+  var state = {
+    type:          'wifi',
+    effectiveType: '4g',
+    downlink:      10,
     // BUG-641: WICG Network Information §`downlinkMax` — with no knowledge of
     // the underlying link's max speed the UA reports +Infinity.
-    this.downlinkMax   = Infinity;
-    this.rtt           = 100;
-    this.saveData      = false;
-    this.type          = 'wifi';
-    this._onchange     = null;
-  }
-  Object.defineProperty(NetworkInformation.prototype, 'onchange', {
-    get: function() { return this._onchange; },
-    set: function(fn) { this._onchange = typeof fn === 'function' ? fn : null; },
-    configurable: true,
+    downlinkMax:   Infinity,
+    rtt:           100,
+    saveData:      false,
+  };
+  Object.keys(state).forEach(function(name) {
+    Object.defineProperty(NetworkInformation.prototype, name, {
+      get: function() { return state[name]; },
+      enumerable: true, configurable: true,
+    });
   });
-  NetworkInformation.prototype.addEventListener    = function() {};
-  NetworkInformation.prototype.removeEventListener = function() {};
+  // `attribute EventHandler onchange` — EventTarget.dispatchEvent invokes it
+  // after the listeners. Nothing dispatches `change` yet: Lumen has no live
+  // network measurement, the values above are static.
+  var onchange = null;
+  Object.defineProperty(NetworkInformation.prototype, 'onchange', {
+    get: function() { return onchange; },
+    set: function(fn) { onchange = typeof fn === 'function' ? fn : null; },
+    enumerable: true, configurable: true,
+  });
 
-  navigator.connection = new NetworkInformation();
+  var connection = Object.create(NetworkInformation.prototype);
+  EventTarget.call(connection);
+  navigator.connection = connection;
   window.NetworkInformation = NetworkInformation;
 })();
 
