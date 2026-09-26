@@ -1254,6 +1254,27 @@ fn inserted_script_with_blob_src_runs_and_fires_load() {
     assert!(capture.calls.lock().unwrap().is_empty(), "blob: must not reach the network provider");
 }
 
+/// BUG-1128: each inserted classic script gets its `load` right after its own
+/// body runs (HTML LS §4.12.1.1), before the next queued script executes —
+/// SystemJS reads `System.register` of «the script that just loaded» there.
+#[test]
+fn inserted_scripts_interleave_execution_and_load() {
+    let rt = v8_runtime_with_fetch(CaptureFetch::new());
+    rt.eval(
+        "var RES = [];          ['m1', 'm2', 'm3', 'm4'].forEach(function(n) {              var s = document.createElement('script');              s.src = URL.createObjectURL(new Blob(['window.__last = \"' + n + '\";'], {type: 'text/javascript'}));              s.async = true;              s.addEventListener('load', function() { RES.push(n + '<-' + window.__last); window.__last = null; });              s.addEventListener('error', function() { RES.push(n + ':error'); });              document.head.appendChild(s);          });",
+    )
+    .unwrap();
+    for _ in 0..50 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        if rt.eval("RES.length === 4").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = rt.eval("JSON.stringify(RES)").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(r#"["m1<-m1","m2<-m2","m3<-m3","m4<-m4"]"#.into()));
+}
+
 #[test]
 fn xhr_blob_url_loads_in_sync_and_async_mode() {
     let capture = CaptureFetch::new();
