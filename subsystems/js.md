@@ -2048,6 +2048,20 @@ the time — read dates.
   retargeted, `styleSheets` filtered from the sheet registry by owner tree, `getAnimations`,
   `elementFromPoint(s)`) and `delegatesFocus`/`slotAssignment`/`clonable`/`serializable`
   (`_lumen_shadow_root_init`, recorded by `attachShadow`) sit on `ShadowRoot.prototype`.
+- **`document.write()` insertion point and written scripts (HTML LS §8.4.4, BUG-568, [P6]
+  2026-09-26).** `_lumen_document_write` (`web_api_shim_mid.js`, next to «prepare the script
+  element») puts the text right after the running parser script — a frame per script, pushed/
+  popped with `document.currentScript`; from a `<head>` script head-only content stays in `<head>`
+  and the rest goes to the start of `<body>`; with no script running, end of `<body>`. A split tag
+  or a `<script>` without its end tag yet is held back until the rest arrives or the writer
+  returns. Written inline classic scripts run inside `write()` after
+  `_lumen_check_inline_script` (`JsFetchProvider::check_inline_script`, the shell's own inline rule
+  via `CspPolicy::inline_allows`); external classic ones start their fetch at once and run when the
+  writer returns (`_lumen_fetch_async_wait_text`, blocking, 20 s cap), later written scripts wait
+  for them; `defer` runs from `_lumen_apply_ready_state('interactive')` before DOMContentLoaded;
+  `async`/module go through `_lumen_script_prepare`. `check_element_src` gained `parser_inserted`
+  so `'strict-dynamic'` does not admit a written `<script src>`. Not modelled: a written unclosed
+  element does not swallow the markup already after the script.
 
 - **`CSS.highlights.highlightsFromPoint()` (CSS Custom Highlight API §5, GAP-HLHITTEST, [P1]
   2026-09-26).** `_lumen_text_at_point(x, y)` (`install/platform.rs`) answers `[nid, utf16Offset, …]`
