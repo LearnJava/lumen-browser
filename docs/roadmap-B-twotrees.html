@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-26",
  "counts": {
-  "open": 239,
-  "fixed": 892,
+  "open": 238,
+  "fixed": 893,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4047,7 +4047,7 @@
        "title": "WPT: вендорить + прогнать категорию `savedata`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root savedata --recursive`, ~30 с, единственный тест — `idlharness.any.js`) — **0/1 harness OK** (TIMEOUT, `/resources/WebIDLParser.js`+`idlharness.js` 404, невендоренный общий idlharness-инфра-гэп, реконфирмация уже задокументированного класса). Заведён [BUG-664](bugs/BUG-664-OPEN.md) прямой пробой `--mcp-live-port`/`eval` (та же техника, что у `generic-sensor`/BUG-394): `navigator.connection` (`NetworkInformation`) не наследуется от `EventTarget` (`instanceof` → false, нет `dispatchEvent`, свои no-op заглушки `addEventListener`/`removeEventListener`) — `change`-событие в принципе не может быть доставлено ни одним из двух способов подписки; тот же класс дефекта, что [BUG-386](bugs/BUG-386-FIXED.md)/[BUG-394](bugs/BUG-394-FIXED.md)/[BUG-400](bugs/BUG-400-FIXED.md). Соседняя находка того же шима — [BUG-641](bugs/BUG-641-OPEN.md) (`downlinkMax` отсутствует) — уже заведена категорией `netinfo`",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root savedata --recursive`, ~30 с, единственный тест — `idlharness.any.js`) — **0/1 harness OK** (TIMEOUT, `/resources/WebIDLParser.js`+`idlharness.js` 404, невендоренный общий idlharness-инфра-гэп, реконфирмация уже задокументированного класса). Заведён [BUG-664](bugs/BUG-664-FIXED.md) прямой пробой `--mcp-live-port`/`eval` (та же техника, что у `generic-sensor`/BUG-394): `navigator.connection` (`NetworkInformation`) не наследуется от `EventTarget` (`instanceof` → false, нет `dispatchEvent`, свои no-op заглушки `addEventListener`/`removeEventListener`) — `change`-событие в принципе не может быть доставлено ни одним из двух способов подписки; тот же класс дефекта, что [BUG-386](bugs/BUG-386-FIXED.md)/[BUG-394](bugs/BUG-394-FIXED.md)/[BUG-400](bugs/BUG-400-FIXED.md). Соседняя находка того же шима — [BUG-641](bugs/BUG-641-OPEN.md) (`downlinkMax` отсутствует) — уже заведена категорией `netinfo`",
        "bugs": [
         "BUG-664"
        ]
@@ -7553,13 +7553,6 @@
    "status": "open",
    "title": "No UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` -- light-DOM children appended to `<video>`/`<audio>` render directly instead of b…",
    "component": "dom (`crates/engine/dom/src/lib.rs` — `Document::create_element`/`try_create_element`, `ua_shadow_kind`/`attach_ua_shadow_root`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-664": {
-   "status": "open",
-   "title": "`navigator.connection` (`NetworkInformation`) doesn't inherit from `EventTarget` (`instanceof EventTarget` → `false`, no `dispatchEvent`, `Symbol.toStringTag` →…",
-   "component": "js (`crates/js/src/dom.rs:12855`–`12874` — `NetworkInformation` shim)",
    "date": null,
    "debtor": false
   },
@@ -15162,6 +15155,13 @@
    "status": "fixed",
    "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
    "component": "js (`crates/js/src/shim/web_api_shim_tail.js` — `PerformanceObserver`, `PerformanceObserverEntryList`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-664": {
+   "status": "fixed",
+   "title": "`navigator.connection` (`NetworkInformation`) didn't inherit from `EventTarget` and its `addEventListener`/`removeEventListener` were no-op stubs, so `change` s…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `NetworkInformation` shim)",
    "date": "2026-09-26",
    "debtor": false
   },
