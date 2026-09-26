@@ -290,6 +290,28 @@ fn eval_circular_object_does_not_crash() {
 }
 
 #[test]
+fn eval_completion_object_with_throwing_getter_is_not_an_error() {
+    // BUG-662: WPT `resizeTestHelper.js` ends with
+    // `Helper.prototype = { get _currentStep() { return this._steps[...]; } }`;
+    // reading that getter off the bare prototype throws, which used to fail
+    // the whole `eval()` with a misleading `get '_currentStep' failed`.
+    let rt = rt();
+    let val = rt
+        .eval("var P = { get cur() { return this._steps[0]; }, n: 1 }; P")
+        .unwrap();
+    match val {
+        JsValue::Object(entries) => {
+            let get = |k: &str| entries.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+            assert_eq!(get("cur"), Some(JsValue::String("[Getter threw]".into())));
+            assert_eq!(get("n"), Some(JsValue::Number(1.0)));
+        }
+        other => panic!("expected object, got {other:?}"),
+    }
+    // The getter's exception stays inside the conversion — the next eval is clean.
+    assert_eq!(rt.eval("1 + 1").unwrap(), JsValue::Number(2.0));
+}
+
+#[test]
 fn eval_deeply_nested_array_truncates() {
     // BUG-633: a pathologically deep (but non-cyclic) structure must
     // also be bounded, not just cycles — otherwise a long linked chain
