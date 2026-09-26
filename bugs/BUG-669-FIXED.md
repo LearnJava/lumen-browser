@@ -1,6 +1,6 @@
 # BUG-669 — `WakeLock` interface object never exposed on `globalThis` (only `navigator.wakeLock` and `WakeLockSentinel` are)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/wake_lock.rs`, `WAKE_LOCK_SHIM` — Screen Wake Lock Level 1 Phase 1 shim)
 **Найден:** P2, WPT-VENDOR-screen-wake-lock, 2026-08-06
 
@@ -89,3 +89,23 @@ Fix scope: добавить в `WAKE_LOCK_SHIM` минимальный конс�
 `globalThis.WakeLock = WakeLock;`, аналогично тому, как уже сделано для
 `WakeLockSentinel`. Вне скоупа этой WPT-VENDOR-задачи (только вендоринг +
 прогон + живая проба).
+
+## Исправление (2026-09-26, P3)
+
+`WAKE_LOCK_SHIM` (`crates/js/src/wake_lock.rs`) теперь объявляет интерфейс
+`WakeLock`: конструктор бросает `TypeError('Illegal constructor')`, `request()`
+живёт на `WakeLock.prototype` (аргумент по умолчанию `"screen"` по IDL —
+раньше `request()` без аргумента отклонялся), `Symbol.toStringTag = 'WakeLock'`.
+`navigator.wakeLock` возвращает один экземпляр этого интерфейса
+(`[SameObject]`), так что `navigator.wakeLock instanceof WakeLock`.
+`globalThis.WakeLock` стоит под тем же `[SecureContext]`-гейтом
+`_lumen_secure_context`, что и `navigator.wakeLock` (BUG-765): на insecure-
+странице `'WakeLock' in self === false` — теперь по верной причине.
+
+Тесты: `v8_fullscreen_locks::wake_lock_interface_exposed_on_secure_origin`,
+`wake_lock_request_type_defaults_to_screen`, расширен
+`wake_lock_absent_on_insecure_origin`.
+
+Остаток вне скоупа: `WakeLockSentinel` тоже `[SecureContext]` и должен быть
+`EventTarget`-интерфейсом без конструктора — сейчас он выставлен всегда и
+конструируется (`web_api_shim_tail_b.js` + `wake_lock.rs`).
