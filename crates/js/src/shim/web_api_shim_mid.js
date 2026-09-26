@@ -12404,9 +12404,19 @@ function _lumen_script_load_external(nid, src, isModule) {
         }).then(function(text) {
             job.state = 1;
             job.run = function() {
-                Promise.resolve().then(function() {
-                    if (isModule) return _lumen_script_run_module(url, text);
+                // BUG-1128: HTML LS §4.12.1.1 «execute the script element»
+                // fires `load` right after a classic body runs, in the same
+                // task. Deferring both to microtasks let the drain loop run
+                // every ready body before the first `load`, so SystemJS read
+                // the last script's `System.register` in the first `load`.
+                // Runtime errors are reported inside and still end in `load`.
+                if (!isModule) {
                     _lumen_script_execute_classic(text, nid);
+                    _lumen_resource_fire(nid, 'load');
+                    return;
+                }
+                Promise.resolve().then(function() {
+                    return _lumen_script_run_module(url, text);
                 }).then(function() {
                     _lumen_resource_fire(nid, 'load');
                 }).catch(function(e) {
