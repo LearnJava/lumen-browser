@@ -22,8 +22,14 @@ pub(crate) fn install_service_worker(
     fp_sw_net: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     idb_sw: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     determinism: Option<crate::worker::WorkerDeterminism>,
+    page_origin: String,
 ) -> JsResult<()> {
     // ── Service Worker / Cache Storage ───────────────────────────────────────
+    //
+    // BUG-674: every native below keys on `page_origin` — derived by
+    // `install_dom` from the document URL — and none takes an origin argument.
+    // These natives are plain `window` properties, so a JS-supplied origin let
+    // any script read and write another origin's registrations and caches.
     {
         // SW registrations: origin+scope+scriptUrl stored in-memory.
         // Key: (origin, scope) → script_url
@@ -38,9 +44,11 @@ pub(crate) fn install_service_worker(
         let cache_data: Arc<Mutex<CacheMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         let sw = Arc::clone(&sw_regs);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_register",
-            move |origin: String, scope: String, script_url: String| {
+            move |scope: String, script_url: String| {
+                let origin = o.clone();
                 sw.lock().unwrap().insert((origin, scope), script_url);
             }
         );
@@ -80,26 +88,31 @@ pub(crate) fn install_service_worker(
         }
 
         let sw = Arc::clone(&sw_regs);
+        let o = page_origin.clone();
         reg!(scope, ctx, store,
             "_lumen_sw_has_registration",
-            move |origin: String| -> bool {
-                sw.lock().unwrap().keys().any(|(o, _)| *o == origin)
+            move || -> bool {
+                sw.lock().unwrap().keys().any(|(k, _)| *k == o)
             }
         );
 
         let sw = Arc::clone(&sw_regs);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_unregister",
-            move |origin: String, scope: String| {
+            move |scope: String| {
+                let origin = o.clone();
                 sw.lock().unwrap().remove(&(origin, scope));
             }
         );
 
-        // Persistence bindings — forward to SwBackend when provided.
+        // Persistence bindings — forward to SwBackend when provided. The shell
+        // builds the backend already bound to this document's origin
+        // (`SwStore::new(backend, origin)`), so neither native takes one.
         let sw_be = sw_backend.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_persist",
-            move |_origin: String, snapshot: String| {
+            move |snapshot: String| {
                 if let Some(ref be) = sw_be {
                     be.save(&snapshot);
                 }
@@ -109,12 +122,12 @@ pub(crate) fn install_service_worker(
         let sw_be2 = sw_backend.clone();
         reg!(scope, ctx, store, 
             "_lumen_sw_load",
-            move |_origin: String| -> Option<String> {
+            move || -> Option<String> {
                 sw_be2.as_ref().and_then(|be| be.load())
             }
         );
 
-        // _lumen_sw_activate_script(origin, scope, script_text) — PH3-20: SW fetch interception.
+        // _lumen_sw_activate_script(scope, script_text) — PH3-20: SW fetch interception.
         // Called from the _sw_run_lifecycle JS shim when a SW finishes the activate phase.
         // Spawns a dedicated V8 thread for the SW (Ph3 V8 migration S10 —
         // `spawn_sw_worker_v8`, replacing the QuickJS-only `spawn_sw_worker` this
@@ -128,7 +141,9 @@ pub(crate) fn install_service_worker(
             let fp_sw = fp_sw_net.clone();
             let idb_sw = idb_sw.clone();
             let det_sw = determinism.clone();
-            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |origin: String, scope: String, text: String| {
+            let o = page_origin.clone();
+            reg!(scope, ctx, store, "_lumen_sw_activate_script", move |scope: String, text: String| {
+                let origin = o.clone();
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
                     let handle = crate::sw_worker::spawn_sw_worker_v8(
                         origin.clone(),
@@ -147,11 +162,13 @@ pub(crate) fn install_service_worker(
         // Dispatch helpers: use SQLite backend when provided, fall back to in-memory map.
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_put",
             // meta_json: {"method":"GET","status":200,"statusText":"OK","headers":{...}}
             // Grouped into one string to stay within rquickjs 5-arg IntoJsFunc limit.
-            move |origin: String, cache_name: String, url: String, meta_json: String, body: Vec<u8>| {
+            move |cache_name: String, url: String, meta_json: String, body: Vec<u8>| {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_put(&origin, &cache_name, &url, &meta_json, &body);
                 } else {
@@ -169,9 +186,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match",
-            move |origin: String, cache_name: String, url: String| -> Option<Vec<u8>> {
+            move |cache_name: String, url: String| -> Option<Vec<u8>> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match(&origin, &cache_name, &url).map(|(_, body)| body)
                 } else {
@@ -187,10 +206,12 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match_info",
             // Returns the raw meta_json stored at put time (already JSON-encoded).
-            move |origin: String, cache_name: String, url: String| -> Option<String> {
+            move |cache_name: String, url: String| -> Option<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match(&origin, &cache_name, &url).map(|(meta, _)| meta)
                 } else {
@@ -206,9 +227,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match_any",
-            move |origin: String, url: String| -> Option<Vec<u8>> {
+            move |url: String| -> Option<Vec<u8>> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match_any(&origin, &url).map(|(_, body)| body)
                 } else {
@@ -226,9 +249,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_match_any_info",
-            move |origin: String, url: String| -> Option<String> {
+            move |url: String| -> Option<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_match_any(&origin, &url).map(|(meta, _)| meta)
                 } else {
@@ -246,9 +271,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_delete",
-            move |origin: String, cache_name: String, url: String| -> bool {
+            move |cache_name: String, url: String| -> bool {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_delete(&origin, &cache_name, &url)
                 } else {
@@ -266,9 +293,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_keys",
-            move |origin: String, cache_name: String| -> Vec<String> {
+            move |cache_name: String| -> Vec<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_keys(&origin, &cache_name).into_iter().map(|(u, _)| u).collect()
                 } else {
@@ -284,9 +313,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_keys_full",
-            move |origin: String, cache_name: String| -> String {
+            move |cache_name: String| -> String {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     let pairs = be.cache_keys(&origin, &cache_name);
                     let items: Vec<String> = pairs
@@ -314,9 +345,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_has",
-            move |origin: String, cache_name: String| -> bool {
+            move |cache_name: String| -> bool {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_has(&origin, &cache_name)
                 } else {
@@ -331,9 +364,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_delete_cache",
-            move |origin: String, cache_name: String| -> bool {
+            move |cache_name: String| -> bool {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_delete_cache(&origin, &cache_name)
                 } else if let Some(caches) = cd.lock().unwrap().get_mut(&origin) {
@@ -346,9 +381,11 @@ pub(crate) fn install_service_worker(
 
         let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
+        let o = page_origin.clone();
         reg!(scope, ctx, store, 
             "_lumen_cache_names",
-            move |origin: String| -> Vec<String> {
+            move || -> Vec<String> {
+                let origin = o.clone();
                 if let Some(ref be) = cbe {
                     be.cache_names(&origin)
                 } else {

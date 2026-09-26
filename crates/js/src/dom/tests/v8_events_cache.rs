@@ -547,11 +547,11 @@ fn sw_register_returns_promise() {
 
 #[test]
 fn sw_register_calls_lumen_primitive() {
-    // Pass a file URL so that _sw_origin = 'file://' (protocol + '//' + host).
+    // A file URL: the registry is keyed by the document's own origin (BUG-674).
     let rt = v8_runtime_with_url("file:///test.html");
     rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
         .unwrap();
-    let result = rt.eval("_lumen_sw_has_registration('file://')").unwrap();
+    let result = rt.eval("_lumen_sw_has_registration()").unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
@@ -729,9 +729,9 @@ fn sw_registration_has_event_target() {
 fn sw_persist_and_load_no_throw() {
     let rt = v8_runtime_with_url("https://example.com/");
     // Without a backend, persist/load are no-ops — must not throw.
-    rt.eval("_lumen_sw_persist('https://example.com', '[{\"scope\":\"/\"}]');")
+    rt.eval("_lumen_sw_persist('[{\"scope\":\"/\"}]');")
         .unwrap();
-    let result = rt.eval("_lumen_sw_load('https://example.com')").unwrap();
+    let result = rt.eval("_lumen_sw_load()").unwrap();
     assert!(matches!(
         result,
         lumen_core::JsValue::Null | lumen_core::JsValue::Undefined
@@ -840,7 +840,7 @@ fn sw_register_worker_src_block_never_registers() {
         "navigator.serviceWorker.register('/sw.js').catch(function() {});",
     )
     .unwrap();
-    let result = rt.eval("_lumen_sw_has_registration('https://example.com')").unwrap();
+    let result = rt.eval("_lumen_sw_has_registration()").unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(false));
 }
 
@@ -905,15 +905,15 @@ fn cache_has_returns_false_for_unknown() {
     let rt = v8_runtime_with_dom(make_doc());
     // has() returns promise; we check the primitive directly.
     let result = rt
-        .eval("_lumen_cache_has('', 'nonexistent')")
+        .eval("_lumen_cache_has('nonexistent')")
         .unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(false));
 }
 
 // helper: put a minimal GET 200 cache entry via the native binding
-fn cache_put_test(rt: &V8JsRuntime, origin: &str, name: &str, url: &str) {
+fn cache_put_test(rt: &V8JsRuntime, name: &str, url: &str) {
     rt.eval(&format!(
-        r#"_lumen_cache_put('{origin}', '{name}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72, 101, 108, 108, 111]);"#
+        r#"_lumen_cache_put('{name}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72, 101, 108, 108, 111]);"#
     ))
     .unwrap();
 }
@@ -921,12 +921,12 @@ fn cache_put_test(rt: &V8JsRuntime, origin: &str, name: &str, url: &str) {
 #[test]
 fn cache_put_and_match_roundtrip() {
     let rt = v8_runtime_with_dom(make_doc());
-    cache_put_test(&rt, "", "v1", "https://x.com/a");
+    cache_put_test(&rt, "v1", "https://x.com/a");
     assert_eq!(
-        rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
+        rt.eval("_lumen_cache_has('v1')").unwrap(),
         lumen_core::JsValue::Bool(true)
     );
-    let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
+    let keys = rt.eval("_lumen_cache_keys('v1')").unwrap();
     assert_eq!(
         keys,
         lumen_core::JsValue::Array(vec![lumen_core::JsValue::String("https://x.com/a".into())])
@@ -936,10 +936,10 @@ fn cache_put_and_match_roundtrip() {
 #[test]
 fn cache_match_returns_body_bytes() {
     let rt = v8_runtime_with_dom(make_doc());
-    cache_put_test(&rt, "", "v1", "https://x.com/a");
+    cache_put_test(&rt, "v1", "https://x.com/a");
     // _lumen_cache_match returns a Uint8Array-like value (body bytes)
     let len = rt
-        .eval("_lumen_cache_match('', 'v1', 'https://x.com/a').length")
+        .eval("_lumen_cache_match('v1', 'https://x.com/a').length")
         .unwrap();
     assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
 }
@@ -947,10 +947,10 @@ fn cache_match_returns_body_bytes() {
 #[test]
 fn cache_match_info_returns_json_metadata() {
     let rt = v8_runtime_with_dom(make_doc());
-    rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/css', '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"content-type":"text/css"}}', []);"#)
+    rt.eval(r#"_lumen_cache_put('v1', 'https://x.com/css', '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"content-type":"text/css"}}', []);"#)
         .unwrap();
     let info_str = rt
-        .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/css')")
+        .eval("_lumen_cache_match_info('v1', 'https://x.com/css')")
         .unwrap();
     if let lumen_core::JsValue::String(s) = info_str {
         assert!(s.contains("304"));
@@ -965,7 +965,7 @@ fn cache_match_info_returns_json_metadata() {
 fn cache_match_info_returns_none_on_miss() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
-        .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/missing') === undefined")
+        .eval("_lumen_cache_match_info('v1', 'https://x.com/missing') === undefined")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -974,7 +974,7 @@ fn cache_match_info_returns_none_on_miss() {
 fn cache_match_any_returns_none_on_miss() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt
-        .eval("_lumen_cache_match_any('', 'https://x.com/missing') === undefined")
+        .eval("_lumen_cache_match_any('https://x.com/missing') === undefined")
         .unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
@@ -982,10 +982,10 @@ fn cache_match_any_returns_none_on_miss() {
 #[test]
 fn cache_match_any_info_finds_across_caches() {
     let rt = v8_runtime_with_dom(make_doc());
-    rt.eval(r#"_lumen_cache_put('', 'static', 'https://x.com/style.css', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);"#)
+    rt.eval(r#"_lumen_cache_put('static', 'https://x.com/style.css', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);"#)
         .unwrap();
     let r = rt
-        .eval("_lumen_cache_match_any_info('', 'https://x.com/style.css') !== undefined")
+        .eval("_lumen_cache_match_any_info('https://x.com/style.css') !== undefined")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -993,12 +993,12 @@ fn cache_match_any_info_finds_across_caches() {
 #[test]
 fn cache_delete_returns_true_when_found() {
     let rt = v8_runtime_with_dom(make_doc());
-    cache_put_test(&rt, "", "v1", "https://x.com/b");
+    cache_put_test(&rt, "v1", "https://x.com/b");
     let r = rt
-        .eval("_lumen_cache_delete('', 'v1', 'https://x.com/b')")
+        .eval("_lumen_cache_delete('v1', 'https://x.com/b')")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
-    let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
+    let keys = rt.eval("_lumen_cache_keys('v1')").unwrap();
     assert_eq!(keys, lumen_core::JsValue::Array(vec![]));
 }
 
@@ -1006,7 +1006,7 @@ fn cache_delete_returns_true_when_found() {
 fn cache_delete_returns_false_on_miss() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
-        .eval("_lumen_cache_delete('', 'v1', 'https://x.com/nonexistent')")
+        .eval("_lumen_cache_delete('v1', 'https://x.com/nonexistent')")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(false));
 }
@@ -1014,10 +1014,10 @@ fn cache_delete_returns_false_on_miss() {
 #[test]
 fn cache_keys_full_returns_method() {
     let rt = v8_runtime_with_dom(make_doc());
-    rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/api', '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
+    rt.eval(r#"_lumen_cache_put('v1', 'https://x.com/api', '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
         .unwrap();
     let r = rt
-        .eval("_lumen_cache_keys_full('', 'v1').indexOf('POST') >= 0")
+        .eval("_lumen_cache_keys_full('v1').indexOf('POST') >= 0")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -1025,13 +1025,13 @@ fn cache_keys_full_returns_method() {
 #[test]
 fn cache_delete_cache_returns_true_when_found() {
     let rt = v8_runtime_with_dom(make_doc());
-    cache_put_test(&rt, "", "v1", "https://x.com/r");
+    cache_put_test(&rt, "v1", "https://x.com/r");
     let r = rt
-        .eval("_lumen_cache_delete_cache('', 'v1')")
+        .eval("_lumen_cache_delete_cache('v1')")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
     assert_eq!(
-        rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
+        rt.eval("_lumen_cache_has('v1')").unwrap(),
         lumen_core::JsValue::Bool(false)
     );
 }
@@ -1040,7 +1040,7 @@ fn cache_delete_cache_returns_true_when_found() {
 fn cache_delete_cache_returns_false_when_missing() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
-        .eval("_lumen_cache_delete_cache('', 'nonexistent')")
+        .eval("_lumen_cache_delete_cache('nonexistent')")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(false));
 }
@@ -1048,9 +1048,9 @@ fn cache_delete_cache_returns_false_when_missing() {
 #[test]
 fn cache_names_lists_opened_caches() {
     let rt = v8_runtime_with_dom(make_doc());
-    cache_put_test(&rt, "", "alpha", "https://x.com/r");
-    cache_put_test(&rt, "", "beta", "https://x.com/s");
-    let mut names = match rt.eval("_lumen_cache_names('')").unwrap() {
+    cache_put_test(&rt, "alpha", "https://x.com/r");
+    cache_put_test(&rt, "beta", "https://x.com/s");
+    let mut names = match rt.eval("_lumen_cache_names()").unwrap() {
         lumen_core::JsValue::Array(a) => a
             .into_iter()
             .filter_map(|v| {
@@ -1066,7 +1066,7 @@ fn cache_names_lists_opened_caches() {
 #[test]
 fn caches_open_returns_cache_with_match() {
     let rt = v8_runtime_with_dom(make_doc());
-    // Open cache first to obtain handle, then put with same _sw_origin, then match.
+    // Open cache first to obtain handle, then put into the same cache, then match.
     rt.eval(
         r#"
                 var _cache_oc = null;
@@ -1075,7 +1075,7 @@ fn caches_open_returns_cache_with_match() {
     )
     .unwrap();
     rt.eval(r#"
-                _lumen_cache_put(_sw_origin, 'my-cache', 'https://x.com/data',
+                _lumen_cache_put('my-cache', 'https://x.com/data',
                     '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1,2,3]);
                 var _result_oc;
                 _cache_oc.match('https://x.com/data').then(function(r) { _result_oc = r !== undefined; });
@@ -1087,9 +1087,9 @@ fn caches_open_returns_cache_with_match() {
 #[test]
 fn caches_has_returns_true_after_put() {
     let rt = v8_runtime_with_dom(make_doc());
-    cache_put_test(&rt, "", "my-cache", "https://x.com/x");
+    cache_put_test(&rt, "my-cache", "https://x.com/x");
     let r = rt
-        .eval("_lumen_cache_has('', 'my-cache')")
+        .eval("_lumen_cache_has('my-cache')")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -1097,9 +1097,9 @@ fn caches_has_returns_true_after_put() {
 #[test]
 fn caches_delete_returns_true_when_found() {
     let rt = v8_runtime_with_dom(make_doc());
-    cache_put_test(&rt, "", "old-cache", "https://x.com/z");
+    cache_put_test(&rt, "old-cache", "https://x.com/z");
     // caches.delete returns a Promise<bool>; verify via native binding
-    let had = rt.eval("_lumen_cache_delete_cache('', 'old-cache')").unwrap();
+    let had = rt.eval("_lumen_cache_delete_cache('old-cache')").unwrap();
     assert_eq!(had, lumen_core::JsValue::Bool(true));
 }
 
@@ -1114,8 +1114,8 @@ fn cache_matchall_returns_all_entries() {
     )
     .unwrap();
     rt.eval(r#"
-                _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/a', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1]);
-                _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/b', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [2]);
+                _lumen_cache_put('v1-ma', 'https://x.com/a', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1]);
+                _lumen_cache_put('v1-ma', 'https://x.com/b', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [2]);
                 var _all;
                 _cache_ma.matchAll().then(function(arr) { _all = arr.length; });
             "#).unwrap();
@@ -1134,7 +1134,7 @@ fn cache_keys_returns_request_objects() {
     )
     .unwrap();
     rt.eval(r#"
-                _lumen_cache_put(_sw_origin, 'v1-kr', 'https://x.com/page', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);
+                _lumen_cache_put('v1-kr', 'https://x.com/page', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);
                 var _url_kr;
                 _cache_kr.keys().then(function(reqs) { _url_kr = reqs[0] && reqs[0].url; });
             "#).unwrap();
@@ -1234,7 +1234,7 @@ fn v8_runtime_with_cache_backend() -> V8JsRuntime {
 
 fn sqlite_cache_put(rt: &V8JsRuntime, cache: &str, url: &str) {
     rt.eval(&format!(
-        r#"_lumen_cache_put('https://example.com/', '{cache}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72,101,108,108,111]);"#
+        r#"_lumen_cache_put('{cache}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72,101,108,108,111]);"#
     ))
     .unwrap();
 }
@@ -1243,7 +1243,7 @@ fn sqlite_cache_put(rt: &V8JsRuntime, cache: &str, url: &str) {
 fn sqlite_backend_put_and_has() {
     let rt = v8_runtime_with_cache_backend();
     sqlite_cache_put(&rt, "v1", "https://example.com/main.js");
-    let r = rt.eval("_lumen_cache_has('https://example.com/', 'v1')").unwrap();
+    let r = rt.eval("_lumen_cache_has('v1')").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
@@ -1251,17 +1251,17 @@ fn sqlite_backend_put_and_has() {
 fn sqlite_backend_match_returns_body() {
     let rt = v8_runtime_with_cache_backend();
     sqlite_cache_put(&rt, "v1", "https://example.com/style.css");
-    let len = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/style.css').length").unwrap();
+    let len = rt.eval("_lumen_cache_match('v1', 'https://example.com/style.css').length").unwrap();
     assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
 }
 
 #[test]
 fn sqlite_backend_match_info_roundtrip() {
     let rt = v8_runtime_with_cache_backend();
-    rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/api',
+    rt.eval(r#"_lumen_cache_put('v1', 'https://example.com/api',
                 '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"etag":"abc123"}}', []);"#)
         .unwrap();
-    let meta = rt.eval("_lumen_cache_match_info('https://example.com/', 'v1', 'https://example.com/api')").unwrap();
+    let meta = rt.eval("_lumen_cache_match_info('v1', 'https://example.com/api')").unwrap();
     if let lumen_core::JsValue::String(s) = meta {
         assert!(s.contains("304"));
         assert!(s.contains("etag"));
@@ -1274,7 +1274,7 @@ fn sqlite_backend_match_info_roundtrip() {
 fn sqlite_backend_match_any_searches_all_caches() {
     let rt = v8_runtime_with_cache_backend();
     sqlite_cache_put(&rt, "static", "https://example.com/logo.png");
-    let body = rt.eval("_lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== null && _lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== undefined").unwrap();
+    let body = rt.eval("_lumen_cache_match_any('https://example.com/logo.png') !== null && _lumen_cache_match_any('https://example.com/logo.png') !== undefined").unwrap();
     assert_eq!(body, lumen_core::JsValue::Bool(true));
 }
 
@@ -1282,9 +1282,9 @@ fn sqlite_backend_match_any_searches_all_caches() {
 fn sqlite_backend_delete_entry() {
     let rt = v8_runtime_with_cache_backend();
     sqlite_cache_put(&rt, "v1", "https://example.com/old");
-    let deleted = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/old')").unwrap();
+    let deleted = rt.eval("_lumen_cache_delete('v1', 'https://example.com/old')").unwrap();
     assert_eq!(deleted, lumen_core::JsValue::Bool(true));
-    let after = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/old') === undefined").unwrap();
+    let after = rt.eval("_lumen_cache_match('v1', 'https://example.com/old') === undefined").unwrap();
     assert_eq!(after, lumen_core::JsValue::Bool(true));
 }
 
@@ -1293,7 +1293,7 @@ fn sqlite_backend_keys_lists_urls() {
     let rt = v8_runtime_with_cache_backend();
     sqlite_cache_put(&rt, "v1", "https://example.com/a");
     sqlite_cache_put(&rt, "v1", "https://example.com/b");
-    let keys = rt.eval("_lumen_cache_keys('https://example.com/', 'v1')").unwrap();
+    let keys = rt.eval("_lumen_cache_keys('v1')").unwrap();
     if let lumen_core::JsValue::Array(arr) = keys {
         assert_eq!(arr.len(), 2);
     } else {
@@ -1305,9 +1305,9 @@ fn sqlite_backend_keys_lists_urls() {
 fn sqlite_backend_delete_cache() {
     let rt = v8_runtime_with_cache_backend();
     sqlite_cache_put(&rt, "tmp", "https://example.com/x");
-    let del = rt.eval("_lumen_cache_delete_cache('https://example.com/', 'tmp')").unwrap();
+    let del = rt.eval("_lumen_cache_delete_cache('tmp')").unwrap();
     assert_eq!(del, lumen_core::JsValue::Bool(true));
-    let has = rt.eval("_lumen_cache_has('https://example.com/', 'tmp')").unwrap();
+    let has = rt.eval("_lumen_cache_has('tmp')").unwrap();
     assert_eq!(has, lumen_core::JsValue::Bool(false));
 }
 
@@ -1316,7 +1316,7 @@ fn sqlite_backend_cache_names() {
     let rt = v8_runtime_with_cache_backend();
     sqlite_cache_put(&rt, "alpha", "https://example.com/1");
     sqlite_cache_put(&rt, "beta", "https://example.com/2");
-    let names = rt.eval("_lumen_cache_names('https://example.com/')").unwrap();
+    let names = rt.eval("_lumen_cache_names()").unwrap();
     if let lumen_core::JsValue::Array(arr) = names {
         let strs: Vec<String> = arr
             .into_iter()
@@ -1332,30 +1332,87 @@ fn sqlite_backend_cache_names() {
 #[test]
 fn sqlite_backend_match_miss_returns_none() {
     let rt = v8_runtime_with_cache_backend();
-    let r = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/missing') === undefined").unwrap();
+    let r = rt.eval("_lumen_cache_match('v1', 'https://example.com/missing') === undefined").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
 #[test]
 fn sqlite_backend_keys_full_includes_method() {
     let rt = v8_runtime_with_cache_backend();
-    rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/post',
+    rt.eval(r#"_lumen_cache_put('v1', 'https://example.com/post',
                 '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
         .unwrap();
-    let r = rt.eval("_lumen_cache_keys_full('https://example.com/', 'v1').indexOf('POST') >= 0").unwrap();
+    let r = rt.eval("_lumen_cache_keys_full('v1').indexOf('POST') >= 0").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
 #[test]
 fn sqlite_backend_has_false_when_empty() {
     let rt = v8_runtime_with_cache_backend();
-    let r = rt.eval("_lumen_cache_has('https://example.com/', 'nonexistent')").unwrap();
+    let r = rt.eval("_lumen_cache_has('nonexistent')").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(false));
 }
 
 #[test]
 fn sqlite_backend_delete_returns_false_on_miss() {
     let rt = v8_runtime_with_cache_backend();
-    let r = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/nosuchurl')").unwrap();
+    let r = rt.eval("_lumen_cache_delete('v1', 'https://example.com/nosuchurl')").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(false));
+}
+
+// ── BUG-674: storage keyed by the document's origin, not by a JS argument ──
+
+fn runtime_on_shared_cache(
+    url: &str,
+    be: &Arc<MockCacheBackend>,
+    workers: Option<lumen_core::ext::SwWorkerStore>,
+) -> V8JsRuntime {
+    let be: Arc<dyn lumen_core::ext::CacheBackend> = Arc::clone(be) as _;
+    let rt = V8JsRuntime::new().unwrap();
+    rt.install_dom(make_doc(), url, None, None, None, None, None, None, Some(be), None, workers, false)
+        .unwrap();
+    rt
+}
+
+#[test]
+fn cache_storage_is_keyed_by_document_origin_not_js_string() {
+    let be = Arc::new(MockCacheBackend::new());
+    let victim = runtime_on_shared_cache("https://victim.example/app/", &be, None);
+    victim
+        .eval(r#"_lumen_cache_put('v1', 'https://victim.example/secret',
+                '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1]);"#)
+        .unwrap();
+    // The entry lands under the serialised origin the network interceptor looks
+    // up (`scheme://host`, no path, no trailing slash).
+    let origins: Vec<String> = be.data.lock().unwrap().keys().cloned().collect();
+    assert_eq!(origins, vec!["https://victim.example".to_string()]);
+
+    let attacker = runtime_on_shared_cache("https://attacker.example/", &be, None);
+    // Neither the old calling convention (origin as the first argument) nor a
+    // reassigned `_sw_origin` reaches the victim's partition.
+    let r = attacker
+        .eval(
+            "_sw_origin = 'https://victim.example';
+             [_lumen_cache_names().length,
+              _lumen_cache_has('https://victim.example', 'v1'),
+              _lumen_cache_has('v1'),
+              _lumen_cache_match_any('https://victim.example/secret') === undefined].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("0,false,false,true".into()));
+}
+
+#[test]
+fn sw_worker_store_is_keyed_by_document_origin_not_js_string() {
+    let be = Arc::new(MockCacheBackend::new());
+    let store: lumen_core::ext::SwWorkerStore = Arc::default();
+    let rt = runtime_on_shared_cache("https://attacker.example/", &be, Some(Arc::clone(&store)));
+    rt.eval("_lumen_sw_activate_script('/', ''); _lumen_sw_register('https://victim.example', '/', '/evil.js');")
+        .unwrap();
+    let keys: Vec<(String, String)> = store.lock().unwrap().keys().cloned().collect();
+    assert_eq!(keys, vec![("https://attacker.example".to_string(), "/".to_string())]);
+    // `_lumen_sw_register` took `'https://victim.example'` as the scope of the
+    // document's own origin — the registry has no way to name another origin.
+    let r = rt.eval("_lumen_sw_has_registration()").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
