@@ -862,8 +862,8 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`.
     /// Phase 0: parse + store; glyph rotation — deferred.
     pub text_orientation: TextOrientation,
-    /// CSS Ruby L1 §4 — `ruby-position`. Inherited. Initial: `Over`.
-    /// Drives `lay_out_ruby`; `<ruby>` box-tree integration — deferred.
+    /// CSS Ruby L1 §3.4 — `ruby-position`. Inherited. Initial: `alternate` (`AlternateOver`).
+    /// Read per annotation container by `build_ruby_box` (GAP-RUBYBOX-2).
     pub ruby_position: RubyPosition,
     /// CSS Ruby L1 §4 — `ruby-align`. Inherited. Initial: `SpaceAround`.
     pub ruby_align: RubyAlign,
@@ -1309,7 +1309,7 @@ impl ComputedStyle {
             font_size_adjust: FontSizeAdjust::None,
             writing_mode: WritingMode::HorizontalTb,
             text_orientation: TextOrientation::Mixed,
-            ruby_position: RubyPosition::Over,
+            ruby_position: RubyPosition::AlternateOver,
             ruby_align: RubyAlign::SpaceAround,
             ruby_merge: RubyMerge::Separate,
             math_style: MathStyle::Normal,

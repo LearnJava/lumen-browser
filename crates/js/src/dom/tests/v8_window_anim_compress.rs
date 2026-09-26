@@ -944,6 +944,124 @@ fn animation_pause_reapplies_style_at_current_time() {
     assert_eq!(r, lumen_core::JsValue::String("50px".into()));
 }
 
+// ── AnimationEffect.getComputedTiming() (BUG-670) ──────────────────────────
+
+/// The method exists on both a free `KeyframeEffect` and `animation.effect`,
+/// and stays non-enumerable like every other IDL member on a prototype.
+#[test]
+fn get_computed_timing_is_a_non_enumerable_method() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "var el = document.createElement('div'); \
+         var a = el.animate([{opacity:0},{opacity:1}], 300); \
+         typeof new KeyframeEffect(null, [], 100).getComputedTiming === 'function' && \
+         typeof a.effect.getComputedTiming === 'function' && \
+         Object.keys(KeyframeEffect.prototype).indexOf('getComputedTiming') === -1"
+    ));
+}
+
+/// Without an owning animation there is no local time: the derived
+/// durations resolve, the time-dependent fields are null, `fill: 'auto'`
+/// resolves to `'none'`.
+#[test]
+fn get_computed_timing_unowned_effect_resolves_durations_only() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var c = new KeyframeEffect(null, [], \
+                 {duration: 1000, iterations: 2, delay: 100, endDelay: 50}).getComputedTiming(); \
+             [c.activeDuration, c.endTime, c.fill, c.localTime, c.progress, \
+              c.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("2000,2150,none,,,".into()));
+}
+
+/// `duration: 'auto'` resolves to 0 on the document timeline instead of
+/// leaking the NaN the specified timing holds.
+#[test]
+fn get_computed_timing_auto_duration_is_zero() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("new KeyframeEffect(null, [], {duration: 'auto'}).getComputedTiming().duration")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+}
+
+/// Mid-iteration: local time is the animation's current time, progress is
+/// the eased iteration progress.
+#[test]
+fn get_computed_timing_reports_progress_of_owning_animation() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate([{opacity:0},{opacity:1}], {duration:1000}); \
+             a.pause(); a.currentTime = 250; \
+             var c = a.effect.getComputedTiming(); \
+             [c.localTime, c.progress, c.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("250,0.25,0".into()));
+}
+
+/// `alternate` runs the second iteration backwards (§4.10.1).
+#[test]
+fn get_computed_timing_alternate_second_iteration_runs_backwards() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate([{opacity:0},{opacity:1}], \
+                 {duration:1000, iterations:2, direction:'alternate'}); \
+             a.pause(); a.currentTime = 1250; \
+             var c = a.effect.getComputedTiming(); \
+             [c.progress, c.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("0.75,1".into()));
+}
+
+/// Past the end, progress is null unless the fill mode covers the after
+/// phase; with `forwards` the last iteration holds at progress 1.
+#[test]
+fn get_computed_timing_after_phase_depends_on_fill() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate([{opacity:0},{opacity:1}], {duration:1000}); \
+             var b = el.animate([{opacity:0},{opacity:1}], {duration:1000, fill:'forwards'}); \
+             a.pause(); a.currentTime = 1500; b.pause(); b.currentTime = 1500; \
+             var ca = a.effect.getComputedTiming(), cb = b.effect.getComputedTiming(); \
+             [ca.progress === null, cb.progress, cb.currentIteration].join()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("true,1,0".into()));
+}
+
+/// A zero-duration animation is over once its delay is: it must reach
+/// `finished` instead of ticking at progress 1 forever — WPT
+/// `current-iteration.html` awaits its `finished` promise.
+#[test]
+fn zero_duration_animation_finishes_after_delay() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             _wa_current_time = 0; \
+             var a = el.animate({opacity:[0, 1]}, {delay: 1}); \
+             _wa_current_time = 5; a._tick(5); \
+             a.playState",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("finished".into()));
+}
+
 // ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ──
 //
 // V8 twin note: the originals interleaved write/close/read().then()/assert

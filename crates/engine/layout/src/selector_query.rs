@@ -13,7 +13,7 @@ use lumen_dom::{Document, NodeId};
 use lumen_core::{ColorSpace, Size};
 
 use crate::box_tree::{BoxKind, LayoutBox};
-use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
+use crate::ruby::{RubyAlign, RubyMerge};
 use crate::style::{
     matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
@@ -1885,10 +1885,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     }.into());
 
     // ── Ruby (CSS Ruby L1 §4-6) ───────────────────────────────────────
-    m.insert("ruby-position".into(), match style.ruby_position {
-        RubyPosition::Over => "over",
-        RubyPosition::Under => "under",
-    }.into());
+    m.insert("ruby-position".into(), style.ruby_position.as_css().into());
     m.insert("ruby-align".into(), match style.ruby_align {
         RubyAlign::Start => "start",
         RubyAlign::Center => "center",

@@ -1,29 +1,50 @@
-# BUG-1192 — `atob`/`btoa` в Service Worker не по спецификации
+# BUG-1192 — анимация с `fill: forwards`/`both` не доходит до `finished`
 
 **Статус:** OPEN
-**Заведён:** 2026-09-26 (P6, по ходу BUG-1133 — вне выданного пункта).
-**Область:** js — [`crates/js/src/sw_worker.rs`](../crates/js/src/sw_worker.rs) `install_sw_globals_v8`,
-регистрация нативов `atob`/`btoa` (`base64_decode` + `String::from_utf8`, `base64_encode(s.as_bytes())`).
+**Заведён:** 2026-09-26 (P3, при закрытии [BUG-670](BUG-670-FIXED.md)).
+**Область:** js — Web Animations в
+[`web_api_shim_tail_b.js`](../crates/js/src/shim/web_api_shim_tail_b.js)
+(`_wa_iter_progress`, `Animation.prototype._tick`).
 
-## Симптом (по коду, живой SW не проверялся)
+## Симптом
 
-HTML LS §8.3: `atob` — Infra «forgiving-base64 decode» с результатом-двоичной строкой (один
-Latin-1 символ на байт), `btoa` — только Latin-1 вход, иначе `DOMException InvalidCharacterError`.
-В `ServiceWorkerGlobalScope`:
+```js
+var a = el.animate({opacity: [0, 1]}, {duration: 100, fill: 'forwards'});
+// через 100+ мс:
+a.playState      // 'running' навсегда, ожидается 'finished'
+a.finished       // не резолвится, onfinish/событие finish не приходят
+```
 
-- `atob` декодирует байты как UTF-8 — `atob(btoa('\xff'))` не возвращает `'\xff'`;
-- на невалидном входе натив отдаёт `None` (пустое значение), а не бросает `InvalidCharacterError`;
-- `base64_decode` пропускает `=` в любой позиции и не проверяет длину — `atob('YQ==YQ==')` = `'aa'`;
-- `btoa` кодирует UTF-8 байты строки и не бросает на символах вне Latin-1.
+С `fill: 'none'`/`'auto'` та же анимация финиширует нормально. Воспроизведено
+юнит-пробой (`_wa_current_time = 500; a._tick(500); a.playState` → `running`).
 
-Окно и dedicated/shared-воркеры исправлены в [BUG-1133](BUG-1133-FIXED.md): там
-`worker.rs::b64_decode` — forgiving-base64, `atob_native_v8`/`btoa_native_v8` + `WORKER_ATOB_BTOA_SHIM`.
+## Механизм
 
-## Что сделать
+`_wa_iter_progress` после конца активного интервала возвращает `1` при
+`fill: forwards|both` и `-2` («после конца, не в эффекте») иначе. `_tick`
+переводит анимацию в `finished` только по `-2`; на `1` он применяет последний
+кадр и заново планирует RAF — бесконечно. Фаза («после конца») и то, что
+рисовать (fill), смешаны в одном числе.
 
-Поставить SW те же `atob`/`btoa`, что у dedicated-воркера (`_lumen_atob_impl`/`_lumen_btoa_impl` +
-`WORKER_ATOB_BTOA_SHIM`). Осторожно: SW-шим несёт свой base64→байт-строка декодер для тел
-ответов именно потому, что нативный `atob` отвечает UTF-8 ([`subsystems/js.md`](../subsystems/js.md)
-§SW, пункт 3) — проверить, что ничего не опирается на UTF-8-поведение `atob`/`btoa`.
-`sw_worker::base64_decode` используется ещё `filesystem_access` и телами кэша — его не трогать
-или трогать с их тестами.
+## Что требуется
+
+Разделить фазу и прогресс: `_tick` должен финишировать по концу активного
+интервала независимо от `fill`, а `fill` решать только, какой кадр остаётся.
+Подводные камни, из-за которых это не сделано вместе с BUG-670:
+
+- `_tick` на финише вынимает анимацию из `_wa_animations`, а finished-анимация
+  с `fill: forwards` по спеке остаётся «relevant» и должна быть в
+  `getAnimations()`;
+- став `finished`, такие анимации начнут проходить `_wa_process_replacements`,
+  а `_wa_remove_replaced` зовёт `_clearStyles()` у старой анимации — это
+  стирает inline-стили тех же свойств, уже записанные новой; нужен порядок
+  или композиция, иначе видимый откат стиля.
+
+Проверка — WPT `web-animations/timing-model/animations/finishing-an-animation.html`
+и юнит-тест в `crates/js/src/dom/tests/v8_window_anim_compress.rs`.
+
+Тот же корень у 4 провалов WPT `web-animations/timing-model/animation-effects/active-time.html`
+(«Active time in after phase with forwards/both fill…», `expected 2 but got 1`):
+в фазе after с `fill: forwards` рисуется прогресс `1` без учёта `iterations`/
+`direction`/`endDelay`, хотя `getComputedTiming()` (BUG-670) считает фазу верно.
+Логично перевести отрисовку на тот же расчёт фаз, что в `getComputedTiming`.

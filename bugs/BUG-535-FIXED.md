@@ -1,6 +1,6 @@
 # BUG-535: `ruby-position: alternate` has no layout effect — annotations never flip over/under across stacked `<rtc>`s
 
-**Статус:** OPEN (ДОРАБОТКА → GAP-RUBYBOX-2)
+**Статус:** FIXED 2026-09-26 (P1, GAP-RUBYBOX-2)
 **Тип:** ДОРАБОТКА — `lay_out_ruby`/`RubyBox` (over/under-стекинг, `ruby-align`, `ruby-merge`) существуют, но не вызываются ни из одного места конвейера; `alternate` в мёртвом коде не даёт наблюдаемого эффекта. Перенесено в [GAP-RUBYBOX](../ROADMAP.md).
 **Дата:** 2026-08-03
 **Компонент:** layout (`crates/engine/layout/src/*` — ruby box layout)
@@ -46,3 +46,22 @@ alternate sides (over/under) instead of all rendering on the same side.
 
 Committed `.ini` under `tests/wpt/metadata/css/css-ruby/` for
 `ruby-position-alternate.html`, `expected: FAIL` on all 7 subtests.
+
+## Исправление (2026-09-26, GAP-RUBYBOX-2, ветка `p1-gap-rubybox2`)
+
+- `RubyPosition` получил `AlternateOver` (initial по спеке) / `AlternateUnder` / `InterCharacter`,
+  `RubyPosition::parse` принимает полную грамматику `[ alternate || [ over | under ] ] | inter-character`
+  (`crates/engine/layout/src/ruby.rs`).
+- `build_ruby_box` (`box_tree/build.rs`) делит `<ruby>` на сегменты: база на каждый `<rb>` или прогон
+  свободного текста, уровень аннотаций на каждый `<rtc>` (со своим `ruby-position`) и на подряд идущие `<rt>`.
+  Форма пишется в `BoxKind::Ruby { shape }`.
+- `resolve_level_sides`: `alternate`-уровень встаёт напротив стороны предыдущего уровня, первый — на сторону
+  своего ключевого слова; `lay_out_ruby_segments`/`compose_levels` стекуют уровни наружу от базы.
+- Попутно: `<rt>` оборачивается shrink-to-fit группой (раньше — блок шириной в строку, аннотации соседних
+  ruby налезали), плавающий/abspos `<rt>` остаётся в базе — WPT `ruby-overhang-*-no-overlap`, `rt-display-blockified`.
+- `getBoundingClientRect()` у `<ruby>` — прямоугольник уровня баз (`ruby_base_rect`), как в браузерах:
+  на нём держатся `assert_rt_is_over/under` теста.
+
+Проверка: сценарий `ruby-position-alternate.html` (все 7 подтестов) воспроизведён страницей с теми же
+проверками через `lumen --dump-layout` — 7/7 PASS, затем полный `run_report.py --root css/css-ruby`: подтесты 55 → 59 из 87, `ruby-position-alternate.html` без `.ini` проходит; тесты `box_tree::tests::ruby_pipeline::rtc_levels_*`,
+`ruby_client_rect_is_base_level_only`. Остаток: `inter-character` без принудительного `vertical-rl` у аннотации.

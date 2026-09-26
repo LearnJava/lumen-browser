@@ -74,4 +74,4 @@ Chrome), `worker::tests::b64_decode_is_forgiving_base64`, расширенный
 308 неожиданных PASS, 0 регрессий → 760/760, baseline `base64.any.js.ini` удалён как чистый.
 
 Service Worker держит свои `atob`/`btoa` (UTF-8, без `DOMException`) — отдельный
-[BUG-1192](BUG-1192-OPEN.md).
+[BUG-1193](BUG-1193-OPEN.md).

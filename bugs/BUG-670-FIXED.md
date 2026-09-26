@@ -1,7 +1,7 @@
 # BUG-670 — `AnimationEffect.getComputedTiming()` missing entirely (only `getTiming()` exists)
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:12449-12452`, Web Animations `WEB_API_SHIM` — `KeyframeEffect.prototype`)
+**Статус:** FIXED 2026-09-26 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js` — Web Animations, `KeyframeEffect.prototype`; в момент заведения код жил в `dom.rs:12449-12452`)
 **Найден:** P2, WPT-VENDOR-scroll-animations, 2026-08-06
 
 ## Симптом
@@ -17,7 +17,7 @@ scroll_support.js` аналогично; та же методология, чт�
 
 Отдельно от этого класса — 40× `TypeError: CSS.percent is not a function` и
 6× `TypeError: CSS.px is not a function`: уже покрыто открытым
-[BUG-554](BUG-554-OPEN.md) (CSS Typed OM numeric factory functions отсутствуют
+[BUG-554](BUG-554-FIXED.md) (CSS Typed OM numeric factory functions отсутствуют
 целиком), не новая находка.
 
 Но 2× `TypeError: animation.effect.getComputedTiming is not a function`
@@ -81,3 +81,39 @@ auto-резолюция + `endTime`/`activeDuration`; `localTime`/`progress`/
 `this.target`/родительский `Animation` через back-reference, если он
 существует в шиме). Вне скоупа этой WPT-VENDOR-задачи (только вендоринг +
 прогон + живая проба).
+
+## Исправление (2026-09-26, P3)
+
+`KeyframeEffect.prototype.getComputedTiming` (неперечисляемый, как прочие IDL-члены)
+в [`web_api_shim_tail_b.js`](../crates/js/src/shim/web_api_shim_tail_b.js) считает
+computed timing по Web Animations §4.6–4.10: `duration: 'auto'` → 0, `fill: 'auto'` →
+`'none'`, `activeDuration`, `endTime`; `localTime` — `currentTime` владеющей анимации
+(конструктор `Animation` ставит эффекту неперечисляемую обратную ссылку `_animation`),
+по нему фаза before/active/after, active time, overall/simple progress,
+`currentIteration`, направление и easing → `progress`. У эффекта без анимации три
+временных поля — `null`.
+
+Попутно: анимация нулевой длительности после задержки теперь финиширует
+(`_wa_iter_progress` возвращал `1` вместо «после конца», и `finished` не резолвился
+никогда) — без этого WPT `current-iteration.html` уходил в TIMEOUT, дойдя до ожидания.
+
+Тесты — `get_computed_timing_*` и `zero_duration_animation_finishes_after_delay` в
+`crates/js/src/dom/tests/v8_window_anim_compress.rs`.
+
+**WPT `web-animations` A/B** (`run_report.py --all --root web-animations --recursive`,
+тот же слот, до/после): 123/139 harness OK → 123/139, **907 → 1108/3034 сабтестов**.
+`getComputedTiming.html` 0→36/36, `simple-iteration-progress.html` 0→49/49,
+`current-iteration.html` 0→51/51, `phases-and-states.html` 0→11/11,
+`updateTiming.html` 9→40/68, `active-time.html` 0→8/14, `transformed-progress.html` 0→5/33.
+
+## Остаток
+
+- `fill: forwards|both` не доходит до `finished`, а отрисовка в фазе after игнорирует
+  `iterations`/`direction` — [BUG-1192](BUG-1192-OPEN.md) (4 провала `active-time.html`).
+- Нет интерфейса `AnimationEffect` (`KeyframeEffect` наследует прямо от `Object`).
+- `duration: 'auto'` у scroll-/view-таймлайна должен разрешаться в процентную
+  intrinsic-длительность (CSSNumberish); шим не моделирует её, поэтому
+  `scroll-timelines/intrinsic-iteration-duration.tentative.html` и
+  `view-timelines/zero-intrinsic-iteration-duration.tentative.html` теперь проходят
+  дальше `TypeError`, но падают на `assert_percents_equal` (домен
+  [BUG-127](BUG-127-OPEN.md), scroll-driven animations).

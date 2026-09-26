@@ -106,7 +106,7 @@ pub(crate) use predicates::{
     embedded_document_url, embedded_image, embedded_resource_url, is_audio_element, is_canvas_element,
     is_iframe_element, is_image_element,
     is_inline_replaced_media_element, is_picture_element, is_ruby_element,
-    is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
+    is_ruby_base_element, is_ruby_parenthesis_element, is_ruby_text_container_element, is_ruby_text_element,
     is_video_element, scrollbar_gutter_block,
     scrollbar_gutter_block_start, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };

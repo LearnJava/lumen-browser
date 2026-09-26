@@ -1,24 +1,23 @@
 use super::*;
 
 /// GAP-RUBYBOX — builds the `BoxKind::Ruby` box for a `<ruby>` element:
-/// partitions its DOM children into base/annotation groups and wraps each
-/// group in its own anonymous `Block` box via [`build_ruby_group_box`], so
-/// `layout_dispatch`'s `Ruby` arm can lay each one out with ordinary
-/// block-flow recursion before handing the resulting (sized) `LayoutBox`es
-/// to [`crate::ruby::RubyBox::from_style`] / [`crate::ruby::lay_out_ruby`].
+/// partitions its DOM children into ruby segments and wraps every base /
+/// annotation group in its own anonymous `Block` box via
+/// [`build_ruby_group_box`], so `layout_dispatch`'s `Ruby` arm can lay each
+/// one out with ordinary block-flow recursion before handing the resulting
+/// (sized) `LayoutBox`es to [`crate::ruby::lay_out_ruby_segments`].
 ///
-/// Grouping (CSS Ruby L1 §3 base/annotation pairing, `ruby-merge: separate`
-/// shape): walks children in DOM order, accumulating a "current base" run
-/// until it meets an `<rt>` (direct, or nested one level inside `<rtc>` —
-/// Phase 0 does not give `<rtc>` its own multi-annotation grouping, see the
-/// doc comment above `is_ruby_text_container_element`); that pairs the
-/// accumulated base with the `<rt>`'s own box. `<rp>` fallback-parenthesis
-/// content is dropped entirely (CSS Ruby L1 §4.3 — only meant for UAs
-/// without ruby support). Trailing base content with no following `<rt>`
-/// is folded into the last paired base group (documented remainder: full
-/// `ruby-merge` semantics would give it its own unannotated column) unless
-/// there was no `<rt>` at all, in which case the whole `<ruby>` degrades to
-/// `lay_out_ruby`'s "no ruby text" branch (`base_count == children.len()`).
+/// Segmentation (CSS Ruby L1 §2.2, GAP-RUBYBOX-2): children are walked in
+/// DOM order. Base content accumulates into the current segment's bases —
+/// each `<rb>` is one base, each run of other (loose) content another. An
+/// annotation run follows: consecutive bare `<rt>`s form one annotation level
+/// (anonymous container, `ruby-position` of the `<ruby>`), each `<rtc>` its
+/// own level (`ruby-position` of the `<rtc>`; its `<rt>` children are the
+/// annotations, a run of loose content inside it one more). Base content
+/// after an annotation run starts a new segment, so trailing unannotated base
+/// text gets its own column. `<rp>` fallback-parenthesis content is dropped
+/// (CSS Ruby L1 §4.3 — only meant for UAs without ruby support), as are
+/// whitespace-only text nodes between the pieces.
 #[allow(clippy::too_many_arguments)]
 fn build_ruby_box(
     doc: &Document,
@@ -32,64 +31,135 @@ fn build_ruby_box(
     dark_mode: bool,
     prev_index: Option<&crate::incremental::ReuseIndex>,
 ) -> LayoutBox {
-    let dom_children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
-    let mut base_boxes: Vec<LayoutBox> = Vec::new();
-    let mut ruby_text_boxes: Vec<LayoutBox> = Vec::new();
-    let mut cur_base: Vec<NodeId> = Vec::new();
-
-    let pair_with_rt = |cur_base: &mut Vec<NodeId>,
-                            base_boxes: &mut Vec<LayoutBox>,
-                            ruby_text_boxes: &mut Vec<LayoutBox>,
-                            rt_id: NodeId| {
-        let base_box = build_ruby_group_box(
-            doc, sheet, id, cur_base, style, viewport, flat, counters, registry, dark_mode,
+    let group = |owner: NodeId, nodes: &[NodeId], parent: &ComputedStyle| {
+        build_ruby_group_box(
+            doc, sheet, owner, nodes, parent, viewport, flat, counters, registry, dark_mode,
             prev_index,
-        );
-        cur_base.clear();
-        base_boxes.push(base_box);
-        ruby_text_boxes.push(build_box_or_reuse(
-            doc, sheet, rt_id, style, viewport, flat, counters, registry, dark_mode, prev_index,
-        ));
+        )
+    };
+    // An `<rt>` gets the same shrink-to-fit wrapper as a base group: built
+    // as its own element box it was a block stretched to the whole line
+    // (1008px for `ān`), so neighbouring rubies' annotations overlapped (WPT
+    // `css-ruby/ruby-overhang-no-overlap.html`).
+    let annotation = |node: NodeId, parent: &ComputedStyle| group(node, &[node], parent);
+    // CSS Ruby L1 §2.1: a floated or absolutely positioned `<rt>` is
+    // blockified and stops being ruby text — it stays in the base level
+    // (WPT `css-ruby/rt-display-blockified.html`).
+    let is_annotation = |node: NodeId, parent: &ComputedStyle| {
+        is_ruby_text_element(doc, node) && {
+            let s = counters.style_arc(node).unwrap_or_else(|| {
+                Arc::new(compute_style(doc, node, sheet, parent, viewport, dark_mode))
+            });
+            s.float_side == FloatSide::None
+                && !matches!(s.position, Position::Absolute | Position::Fixed)
+        }
+    };
+    let skipped = |node: NodeId| match &doc.get(node).data {
+        NodeData::Comment(_) | NodeData::Doctype { .. } => true,
+        NodeData::Text(t) => t.chars().all(char::is_whitespace),
+        _ => is_ruby_parenthesis_element(doc, node),
     };
 
-    for &cid in &dom_children {
-        if is_ruby_parenthesis_element(doc, cid) {
+    let mut shape = crate::ruby::RubyShape::default();
+    let mut children: Vec<LayoutBox> = Vec::new();
+    let mut bases: Vec<LayoutBox> = Vec::new();
+    let mut loose: Vec<NodeId> = Vec::new();
+    let mut implicit: Vec<LayoutBox> = Vec::new();
+    let mut levels: Vec<(crate::ruby::RubyPosition, Vec<LayoutBox>)> = Vec::new();
+
+    let flush_loose = |loose: &mut Vec<NodeId>, bases: &mut Vec<LayoutBox>| {
+        if !loose.is_empty() {
+            bases.push(group(id, loose, style));
+            loose.clear();
+        }
+    };
+    let flush_implicit =
+        |implicit: &mut Vec<LayoutBox>, levels: &mut Vec<(crate::ruby::RubyPosition, Vec<LayoutBox>)>| {
+            if !implicit.is_empty() {
+                levels.push((style.ruby_position, std::mem::take(implicit)));
+            }
+        };
+    let finish_segment = |bases: &mut Vec<LayoutBox>,
+                          levels: &mut Vec<(crate::ruby::RubyPosition, Vec<LayoutBox>)>,
+                          shape: &mut crate::ruby::RubyShape,
+                          children: &mut Vec<LayoutBox>| {
+        if bases.is_empty() && levels.is_empty() {
+            return;
+        }
+        shape.segments.push(crate::ruby::RubySegmentShape {
+            bases: bases.len(),
+            levels: levels
+                .iter()
+                .map(|(position, anns)| crate::ruby::RubyLevelShape {
+                    annotations: anns.len(),
+                    position: *position,
+                })
+                .collect(),
+        });
+        children.append(bases);
+        for (_, anns) in levels.drain(..) {
+            children.extend(anns);
+        }
+    };
+
+    for &cid in flat.children_of(doc, id) {
+        if skipped(cid) {
             continue;
         }
-        if is_ruby_text_element(doc, cid) {
-            pair_with_rt(&mut cur_base, &mut base_boxes, &mut ruby_text_boxes, cid);
+        if is_annotation(cid, style) {
+            flush_loose(&mut loose, &mut bases);
+            implicit.push(annotation(cid, style));
         } else if is_ruby_text_container_element(doc, cid) {
-            for &rt_id in flat.children_of(doc, cid) {
-                if is_ruby_text_element(doc, rt_id) {
-                    pair_with_rt(&mut cur_base, &mut base_boxes, &mut ruby_text_boxes, rt_id);
+            flush_loose(&mut loose, &mut bases);
+            flush_implicit(&mut implicit, &mut levels);
+            let rtc_style = counters.style_arc(cid).unwrap_or_else(|| {
+                Arc::new(compute_style(doc, cid, sheet, style, viewport, dark_mode))
+            });
+            let mut anns: Vec<LayoutBox> = Vec::new();
+            let mut rtc_loose: Vec<NodeId> = Vec::new();
+            for &rid in flat.children_of(doc, cid) {
+                if skipped(rid) {
+                    continue;
+                }
+                if is_annotation(rid, &rtc_style) {
+                    if !rtc_loose.is_empty() {
+                        anns.push(group(cid, &rtc_loose, &rtc_style));
+                        rtc_loose.clear();
+                    }
+                    anns.push(annotation(rid, &rtc_style));
+                } else {
+                    rtc_loose.push(rid);
                 }
             }
-        } else if !matches!(doc.get(cid).data, NodeData::Comment(_) | NodeData::Doctype { .. }) {
-            cur_base.push(cid);
+            if !rtc_loose.is_empty() {
+                anns.push(group(cid, &rtc_loose, &rtc_style));
+            }
+            if !anns.is_empty() {
+                levels.push((rtc_style.ruby_position, anns));
+            }
+        } else {
+            if !implicit.is_empty() || !levels.is_empty() {
+                flush_implicit(&mut implicit, &mut levels);
+                finish_segment(&mut bases, &mut levels, &mut shape, &mut children);
+            }
+            if is_ruby_base_element(doc, cid) {
+                flush_loose(&mut loose, &mut bases);
+                bases.push(group(id, &[cid], style));
+            } else {
+                loose.push(cid);
+            }
         }
     }
-
-    if !cur_base.is_empty() {
-        let mut extra = build_ruby_group_box(
-            doc, sheet, id, &cur_base, style, viewport, flat, counters, registry, dark_mode,
-            prev_index,
-        );
-        match base_boxes.last_mut() {
-            Some(last) => last.children.append(&mut extra.children),
-            None => base_boxes.push(extra),
-        }
-    }
-
-    let base_count = base_boxes.len();
-    let mut children = base_boxes;
-    children.extend(ruby_text_boxes);
+    flush_loose(&mut loose, &mut bases);
+    flush_implicit(&mut implicit, &mut levels);
+    finish_segment(&mut bases, &mut levels, &mut shape, &mut children);
 
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
         used_line_height: style.font_size * style.line_height,
         style: Arc::clone(style),
-        kind: BoxKind::Ruby { base_count },
+        kind: BoxKind::Ruby { shape: Box::new(shape) },
         children,
         col_span: 1,
         row_span: 1,
