@@ -1270,6 +1270,17 @@ pub(crate) fn install_frame_bridge_v8(
             }),
         )?;
     }
+    // OBJECT-1 срез 5: тип под-документа — по нему `getSVGDocument()`
+    // отличает SVG-документ (`image/svg+xml`) от HTML.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_content_type",
+            into_v8_fn1(move |bid: u32| -> String {
+                with_accessible_doc(&reg, bid, |d| d.content_type().to_owned(), String::new())
+            }),
+        )?;
+    }
     {
         let reg = Arc::clone(&registry);
         rt.register_native(
@@ -2085,6 +2096,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     });
     Object.defineProperty(d, 'URL',               { get: function() { return _lumen_f_url(bid); }, configurable: true });
     Object.defineProperty(d, 'documentURI',       { get: function() { return _lumen_f_url(bid); }, configurable: true });
+    Object.defineProperty(d, 'contentType',       { get: function() { return _lumen_f_content_type(bid); }, configurable: true });
     // BUG-1121: строка, а не undefined. Реферер `<iframe src>` (GAP-REFERRER
     // срез 4 шлёт его в запросе) в документ ребёнка не протянут — BUG-1156.
     Object.defineProperty(d, 'referrer',          { get: function() { return ''; }, configurable: true });

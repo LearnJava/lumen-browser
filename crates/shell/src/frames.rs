@@ -233,6 +233,11 @@ pub(crate) enum EmbeddedResourceKind {
     /// Текст (`text/*`, JSON, XML) — документ с одним `<pre>`, как браузеры
     /// показывают такой ответ при навигации.
     Text,
+    /// SVG (`image/svg+xml`, без заголовка — `.svg` или сигнатура `<svg`) —
+    /// скриптуемый вложенный документ (срез 5: `contentDocument`,
+    /// `getSVGDocument()`), но рисует его image-конвейер через resvg (срез 1):
+    /// у картинки верный natural size, у фрейм-бокса — 300×150.
+    Svg,
     /// Картинка, плагинный тип, пустота — элементу не документ: картинку
     /// рисует image-конвейер (срез 1), остальное — fallback `<object>`.
     NotDocument,
@@ -240,20 +245,20 @@ pub(crate) enum EmbeddedResourceKind {
 
 /// Классифицировать ответ для `<object>`/`<embed>` (HTML LS §4.8.6/§4.8.7:
 /// тип ресурса — из `Content-Type`). Без заголовка (файл с диска, сервер
-/// промолчал) — по расширению пути, затем по сигнатуре HTML в начале тела.
-/// `image/svg+xml` — картинка: SVG в `<object>` срез 1 уже рисует через resvg.
+/// промолчал) — по расширению пути, затем по сигнатуре HTML/SVG в начале тела.
 pub(crate) fn classify_embedded_resource(
     content_type: Option<&str>,
     url: &str,
     body: &[u8],
 ) -> EmbeddedResourceKind {
-    use EmbeddedResourceKind::{Html, NotDocument, Text};
+    use EmbeddedResourceKind::{Html, NotDocument, Svg, Text};
     let essence = content_type
         .map(|ct| ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
         .filter(|e| !e.is_empty());
     if let Some(e) = essence {
         return match e.as_str() {
             "text/html" | "application/xhtml+xml" => Html,
+            "image/svg+xml" => Svg,
             "application/json" | "application/xml" => Text,
             _ if e.ends_with("+xml") && !e.starts_with("image/") => Text,
             _ if e.starts_with("text/") => Text,
@@ -269,11 +274,14 @@ pub(crate) fn classify_embedded_resource(
     match ext.as_deref() {
         Some("html" | "htm" | "xhtml" | "xht") => return Html,
         Some("txt" | "text") => return Text,
+        Some("svg") => return Svg,
         _ => {}
     }
     let head = String::from_utf8_lossy(&body[..body.len().min(64)]).trim_start().to_ascii_lowercase();
     if head.starts_with("<!doctype html") || head.starts_with("<html") {
         Html
+    } else if head.starts_with("<svg") || head.starts_with("<!doctype svg") {
+        Svg
     } else {
         NotDocument
     }
@@ -284,7 +292,8 @@ pub(crate) fn classify_embedded_resource(
 /// ошибки, а `None`: такой элемент по спеке показывает fallback-содержимое
 /// (HTML LS §4.8.7 — «fetch failed» / тип не документ), а картинку за него
 /// рисует image-конвейер. `data:`/`javascript:`/`about:` не грузятся: у
-/// `<object>` они не исполняются и не навигируют.
+/// `<object>` они не исполняются и не навигируют. Вместе с источником —
+/// вид ресурса: SVG-документ разбирается иначе и не получает фрейм-бокса.
 #[allow(clippy::too_many_arguments)] // тот же набор, что у fetch_iframe_source
 pub(crate) fn fetch_embedded_source(
     src: &str,
@@ -293,7 +302,7 @@ pub(crate) fn fetch_embedded_source(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     send_uir_header: bool,
     referrer_policy: lumen_network::ReferrerPolicy,
-) -> Option<FrameSource> {
+) -> Option<(FrameSource, EmbeddedResourceKind)> {
     let lowered = src.trim_start().to_ascii_lowercase();
     if lowered.is_empty()
         || lowered.starts_with("about:")
@@ -305,7 +314,7 @@ pub(crate) fn fetch_embedded_source(
     let as_html = |kind: EmbeddedResourceKind, bytes: &[u8]| -> Option<String> {
         let text = String::from_utf8_lossy(bytes);
         match kind {
-            EmbeddedResourceKind::Html => Some(text.into_owned()),
+            EmbeddedResourceKind::Html | EmbeddedResourceKind::Svg => Some(text.into_owned()),
             EmbeddedResourceKind::Text => Some(format!(
                 "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>\
                  <pre style=\"word-wrap:break-word;white-space:pre-wrap\">{}</pre></body></html>",
@@ -318,7 +327,7 @@ pub(crate) fn fetch_embedded_source(
         ResolvedResource::File(path) => {
             let bytes = std::fs::read(&path).ok()?;
             let kind = classify_embedded_resource(None, &path.to_string_lossy(), &bytes);
-            as_html(kind, &bytes).map(|html| FrameSource::File { html, path })
+            as_html(kind, &bytes).map(|html| (FrameSource::File { html, path }, kind))
         }
         ResolvedResource::Url(url) => {
             let sub_url = lumen_core::url::Url::parse(&url).ok()?;
@@ -332,7 +341,7 @@ pub(crate) fn fetch_embedded_source(
                 .map_err(|e| eprintln!("object/embed: загрузка '{url}' не удалась: {e}"))
                 .ok()?;
             let kind = classify_embedded_resource(content_type.as_deref(), &url, &bytes);
-            as_html(kind, &bytes).map(|html| FrameSource::Url { html, url })
+            as_html(kind, &bytes).map(|html| (FrameSource::Url { html, url }, kind))
         }
     }
 }
@@ -2164,6 +2173,7 @@ pub(crate) fn spawn_frame(
     // вовсе — ни страницы ошибки, ни `about:blank`: картинку рисует image-
     // конвейер, прочее — fallback `<object>`. Гейт — `object-src`, а не
     // `frame-src`; нарушение сообщает JS-шим (`_lumen_embed_object_scan`).
+    let mut child_is_svg = false;
     let embedded_source = if info.embedded && js_url_result.is_none() {
         let (src, resolve_base) = match dest {
             Some((href, nav_base)) => (href, nav_base),
@@ -2193,11 +2203,15 @@ pub(crate) fn spawn_frame(
         // не за ссылку, кликнутую внутри уже показанного документа: layout
         // решает по `data`/`src`, а повторный скан фреймов по нему же
         // перестаёт предлагать «не документ» к загрузке.
+        // SVG-документ фрейм-бокса не получает (вердикт «не фрейм»): его
+        // рисует image-конвейер, а под-документ остаётся для скриптов.
         let attr_driven = dest.is_none_or(|(href, _)| info.src.as_deref() == Some(href));
         if attr_driven && let Some(raw) = info.src.as_deref() {
-            parent.lock().unwrap().set_embedded_document(info.node, raw, source.is_some());
+            let framed = source.as_ref().is_some_and(|(_, k)| *k != EmbeddedResourceKind::Svg);
+            parent.lock().unwrap().set_embedded_document(info.node, raw, framed);
         }
-        let Some(source) = source else { return Vec::new() };
+        let Some((source, kind)) = source else { return Vec::new() };
+        child_is_svg = kind == EmbeddedResourceKind::Svg;
         Some(source)
     } else {
         None
@@ -2292,7 +2306,16 @@ pub(crate) fn spawn_frame(
 
     let mut child_doc = {
         let _s = lumen_core::trace::span("parse-html-frame", "parse");
-        lumen_html_parser::parse(&html)
+        if child_is_svg {
+            // OBJECT-1 срез 5: тот же XML-разбор, что у SVG верхнего уровня
+            // (`is_xml_flavoured_document`), и тип, по которому
+            // `getSVGDocument()` отличает SVG-документ от HTML.
+            let mut d = lumen_html_parser::parse_xml_flavoured(&html);
+            d.set_content_type("image/svg+xml".to_owned());
+            d
+        } else {
+            lumen_html_parser::parse(&html)
+        }
     };
     // СРЕЗ 11 BUG-480: подресурсы парсерных элементов ребёнка (`<img src>`,
     // `<link rel=stylesheet>`). Сеть стартует ДО скриптов — парсерный порядок

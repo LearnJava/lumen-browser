@@ -2408,12 +2408,17 @@ Object.defineProperty(HTMLObjectElement.prototype, 'contentWindow', {
     },
     configurable: true, enumerable: true,
 });
-// `getSVGDocument()` отдаёт документ, только если он построен как SVG
-// (`image/svg+xml`); SVG в `<object>`/`<embed>` сегодня рисуется картинкой
-// через resvg, скриптуемого SVG-документа нет — поэтому всегда null.
+// `getSVGDocument()` отдаёт вложенный документ, только если он построен как
+// SVG (`image/svg+xml`, HTML LS §4.8.7). OBJECT-1 срез 5: shell строит такой
+// документ для SVG-ответа `<object>`/`<embed>` (рисует его по-прежнему resvg).
 [HTMLObjectElement.prototype, HTMLEmbedElement.prototype].forEach(function(p) {
     Object.defineProperty(p, 'getSVGDocument', {
-        value: function getSVGDocument() { return null; },
+        value: function getSVGDocument() {
+            var n = _lumen_reflect_nid(this);
+            var d = (n === -1 || typeof _lumen_frame_content_document !== 'function')
+                ? null : _lumen_frame_content_document(n);
+            return (d && d.contentType === 'image/svg+xml') ? d : null;
+        },
         writable: true, configurable: true, enumerable: true,
     });
 });
