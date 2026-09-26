@@ -327,7 +327,7 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 | `document.cookie` не сохраняется ([BUG-1119](../../bugs/BUG-1119-FIXED.md)) | msft-login |
 | CSP nonce не пускает внешний скрипт ([BUG-1124](../../bugs/BUG-1124-FIXED.md)) | dropbox, gemini (гипотеза) |
 | `<style>.sheet === null` сразу после вставки ([BUG-493](../../bugs/BUG-493-FIXED.md)) | twitch, quora, bbc |
-| `document.write` не исполняет `<script>` ([BUG-568](../../bugs/BUG-568-OPEN.md)) | tumblr |
+| `document.write` не исполняет `<script>` ([BUG-568](../../bugs/BUG-568-FIXED.md)) | tumblr |
 | `ShadowRoot` без `insertBefore` ([BUG-1130](../../bugs/BUG-1130-FIXED.md)) | archive |
 | `classList` не итерируем ([BUG-1125](../../bugs/BUG-1125-OPEN.md)) | wordpress, mozilla |
 | `blob:` URL не загружается ([BUG-1126](../../bugs/BUG-1126-OPEN.md)) | zoom, bing |

@@ -4928,10 +4928,38 @@ impl JsFetchProvider for HttpClient {
     /// native `_lumen_check_element_src` binding before the shim's `fetch()` —
     /// same "not a single outgoing byte" shape as [`Self::check_media_src`].
     /// The URL is upgraded first, as `fetch_request_impl` will send it.
-    fn check_element_src(&self, destination: &str, url: &str, nonce: &str, integrity: &str) -> Result<()> {
+    fn check_element_src(
+        &self,
+        destination: &str,
+        url: &str,
+        nonce: &str,
+        integrity: &str,
+        parser_inserted: bool,
+    ) -> Result<()> {
         let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
         let url = self.upgrade_insecure_requests_url(url);
-        self.element_src_gate(destination, &url, nonce, integrity)
+        self.element_src_gate(destination, &url, nonce, integrity, parser_inserted)
+    }
+
+    /// BUG-568: the inline `script-src` check for a `<script>`
+    /// `document.write()` wrote, against the same policies as
+    /// [`Self::check_element_src`].
+    fn check_inline_script(&self, nonce: &str, body: &str) -> Result<()> {
+        let Some((policies, _, original_policy)) = &self.element_src_policy else {
+            return Ok(());
+        };
+        let nonce = Some(nonce).filter(|n| !n.is_empty());
+        if policies
+            .iter()
+            .all(|policy| policy.inline_allows(&csp::CspDirective::ScriptSrc, nonce, body))
+        {
+            return Ok(());
+        }
+        Err(Error::CspElementSrcBlocked {
+            directive: "script-src-elem".to_owned(),
+            blocked_uri: "inline".to_owned(),
+            original_policy: original_policy.clone(),
+        })
     }
 
     /// GAP-CSPENF срез 51: `upgrade-insecure-requests` for `<audio src>` —
@@ -5512,8 +5540,17 @@ impl HttpClient {
     /// (BUG-1175) — same shape as [`Self::media_src_gate`], but the check is
     /// the element pre-request one: nonce (and, for a script, integrity and
     /// `'strict-dynamic'`) before the URL. Any destination other than
-    /// `script`/`style` passes.
-    fn element_src_gate(&self, destination: &str, url: &Url, nonce: &str, integrity: &str) -> Result<()> {
+    /// `script`/`style` passes. `parser_inserted` — a `<script src>` that
+    /// `document.write()` wrote (BUG-568), which `'strict-dynamic'` does not
+    /// admit.
+    fn element_src_gate(
+        &self,
+        destination: &str,
+        url: &Url,
+        nonce: &str,
+        integrity: &str,
+        parser_inserted: bool,
+    ) -> Result<()> {
         let Some((policies, self_origin, original_policy)) = &self.element_src_policy else {
             return Ok(());
         };
@@ -5523,7 +5560,7 @@ impl HttpClient {
                 let request = csp::ScriptRequestMetadata {
                     nonce,
                     integrity: Some(integrity).filter(|i| !i.is_empty()),
-                    parser_inserted: false,
+                    parser_inserted,
                 };
                 let blocked = policies
                     .iter()
@@ -7635,7 +7672,7 @@ mod tests {
             None,
             policy.to_owned(),
         );
-        <HttpClient as lumen_core::ext::JsFetchProvider>::check_element_src(&client, destination, url, nonce, "")
+        <HttpClient as lumen_core::ext::JsFetchProvider>::check_element_src(&client, destination, url, nonce, "", false)
     }
 
     #[test]

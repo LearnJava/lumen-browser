@@ -716,6 +716,10 @@ function _lumen_apply_ready_state(state) {
     var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });
     document.dispatchEvent(rsEv);
     if (state === 'interactive') {
+        // BUG-568: «the end» step 3 — the `defer` scripts `document.write()`
+        // produced run after readyState turns 'interactive' and before
+        // DOMContentLoaded, like the markup's own deferred list.
+        if (typeof _lumen_dw_run_deferred === 'function') _lumen_dw_run_deferred();
         // BUG-826: the parser's `<link rel=preload|modulepreload|prefetch>`
         // elements start their fetch here — parsing is done, so the document
         // holds every hint the markup carries, and a hint appended by a head
