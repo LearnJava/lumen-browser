@@ -840,6 +840,12 @@ pub struct ComputedStyle {
     /// transitions/animations. Read by `TransitionScheduler::sync()` to gate
     /// `height: auto` interpolation.
     pub interpolate_size: InterpolateSizeMode,
+    /// Interest Invokers — `interest-delay-start`. NOT inherited. Initial:
+    /// `normal` (`None`); `Some(s)` — задержка в секундах. Читается JS-шимом
+    /// через getComputedStyle, на раскладку не влияет.
+    pub interest_delay_start: Option<f32>,
+    /// Interest Invokers — `interest-delay-end`. См. [`Self::interest_delay_start`].
+    pub interest_delay_end: Option<f32>,
     /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
     /// Phase 0: parse + store; @container query matching — deferred.
     pub container_type: ContainerType,
@@ -1302,6 +1308,8 @@ impl ComputedStyle {
             contain_intrinsic_height: None,
             contain_intrinsic_height_auto: false,
             interpolate_size: InterpolateSizeMode::NumericOnly,
+            interest_delay_start: None,
+            interest_delay_end: None,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
             backdrop_filter: Vec::new(),

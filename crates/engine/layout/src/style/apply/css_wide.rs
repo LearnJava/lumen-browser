@@ -156,6 +156,24 @@ fn apply_css_wide_keyword_with(
             style.interpolate_size =
                 if inh { inherited.interpolate_size } else { init.interpolate_size };
         }
+        // Не наследуемые: только явный `inherit` берёт родителя.
+        "interest-delay-start" => {
+            style.interest_delay_start =
+                if inh_only_inherit { inherited.interest_delay_start } else { init.interest_delay_start };
+        }
+        "interest-delay-end" => {
+            style.interest_delay_end =
+                if inh_only_inherit { inherited.interest_delay_end } else { init.interest_delay_end };
+        }
+        "interest-delay" => {
+            let (s, e) = if inh_only_inherit {
+                (inherited.interest_delay_start, inherited.interest_delay_end)
+            } else {
+                (init.interest_delay_start, init.interest_delay_end)
+            };
+            style.interest_delay_start = s;
+            style.interest_delay_end = e;
+        }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
         }

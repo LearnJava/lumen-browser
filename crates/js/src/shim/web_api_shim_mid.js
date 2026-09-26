@@ -356,6 +356,52 @@ CommandEvent.prototype.constructor = CommandEvent;
 Object.defineProperty(CommandEvent.prototype, Symbol.toStringTag,
     { value: 'CommandEvent', writable: false, enumerable: false, configurable: true });
 
+// InterestEvent — Interest Invokers (WHATWG HTML PR #11006, `.tentative.`).
+// Same nullable-`Element` `source` member as `CommandEvent`, but the getter
+// retargets it against `currentTarget` (DOM §4.2.2): an invoker inside a
+// shadow tree pointing at a light-DOM target reads as the shadow host from a
+// light-DOM listener (`interestevent-dispatch-shadow.tentative.html`).
+var _LUMEN_INTEREST_EVENT_SOURCE = new WeakMap();
+function InterestEvent(type) {
+    if (!new.target) throw new TypeError("Failed to construct 'InterestEvent': Please use the 'new' operator.");
+    var init = arguments[1];
+    Event.call(this, type, init);
+    var source;
+    if (init == null || init.source === undefined || init.source === null) {
+        source = null;
+    } else if (init.source && typeof init.source === 'object' && init.source.__nid__ !== undefined
+               && init.source.nodeType === 1) {
+        source = init.source;
+    } else {
+        throw new TypeError("Failed to construct 'InterestEvent': member source is not of type Element.");
+    }
+    _LUMEN_INTEREST_EVENT_SOURCE.set(this, source);
+}
+// WebIDL shape (idlharness): non-writable `prototype`, non-enumerable
+// `constructor` and global binding, `source` as a prototype accessor.
+Object.defineProperty(InterestEvent, 'prototype', { value: Object.create(Event.prototype), writable: false });
+Object.defineProperty(InterestEvent.prototype, 'constructor',
+    { value: InterestEvent, writable: true, enumerable: false, configurable: true });
+Object.defineProperty(InterestEvent.prototype, 'source', {
+    get: function() {
+        if (!_LUMEN_INTEREST_EVENT_SOURCE.has(this)) {
+            throw new TypeError('Illegal invocation');
+        }
+        var source = _LUMEN_INTEREST_EVENT_SOURCE.get(this);
+        var ct = this.currentTarget;
+        if (source === null || !ct || ct.__nid__ === undefined) return source;
+        var r = _lumen_retarget_nid(source.__nid__, ct.__nid__);
+        return r === source.__nid__ ? source : _lumen_make_element(r);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(InterestEvent.prototype, Symbol.toStringTag,
+    { value: 'InterestEvent', writable: false, enumerable: false, configurable: true });
+Object.defineProperty(Object.getOwnPropertyDescriptor(InterestEvent.prototype, 'source').get, 'name',
+    { value: 'get source' });
+Object.setPrototypeOf(InterestEvent, Event);
+Object.defineProperty(globalThis, 'InterestEvent', { enumerable: false });
+
 // ContentVisibilityAutoStateChangeEvent — CSS Contain L2 §4.1 (BUG-852).
 // `skipped` is a readonly WebIDL boolean with a `false` default, so a member
 // left out (or set to `undefined`) counts as absent, and anything else goes
@@ -1837,6 +1883,8 @@ var _LUMEN_2V_SHORTHANDS = {
     // as the six pairs above, confirmed against `style/apply/motion.rs`'s own
     // `"overscroll-behavior"` arm (`parts.first()` → x, `parts.get(1)` → y).
     'overscroll-behavior': ['overscroll-behavior-x', 'overscroll-behavior-y'],
+    // Interest Invokers: `interest-delay: <start> <end>?`.
+    'interest-delay': ['interest-delay-start', 'interest-delay-end'],
 };
 
 // Срез 15: per-shorthand canon function for `_LUMEN_2V_SHORTHANDS`. The six
@@ -1858,6 +1906,7 @@ var _LUMEN_2V_SHORTHAND_CANON = {
     'place-items':    function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-items']); },
     'place-self':     function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-self']); },
     'overscroll-behavior': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['overscroll-behavior-x']); },
+    'interest-delay': _lumen_css_canonical_interest_delay,
 };
 
 // Same CSS-wide-keyword whole-value fan-out as `_lumen_expand_trbl_shorthand`/
@@ -2411,6 +2460,21 @@ function _lumen_split_top_level_ws_quoted(s) {
 // `ComputedStyle` field (`scroll_marker_group`, `style/values/misc.rs`)
 // since — unlike `block-ellipsis`/`continue` below — this property has a
 // `-computed.html` test.
+// Interest Invokers `interest-delay-start`/`-end` (GAP-INTERESTINVOKER):
+// `normal | <time [0s,∞]>`. The specified value keeps its written unit
+// (`123ms` stays `123ms`, the Rust computed side answers `0.123s`); a unitless
+// `0` and negative times are invalid. A `calc()` is kept verbatim — the
+// grammar allows `calc(2s * sibling-index())`, which only resolves per
+// element.
+function _lumen_css_canonical_interest_delay(strVal) {
+    var v = strVal.trim();
+    if (v.toLowerCase() === 'normal') return 'normal';
+    var m = /^\+?((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)(s|ms)$/i.exec(v);
+    if (m) return m[1] + m[2].toLowerCase();
+    if (/^calc\(.*\)$/i.test(v) && /[0-9.]m?s\b/i.test(v)) return v;
+    return null;
+}
+
 function _lumen_css_canonical_scroll_marker_group(strVal) {
     var v = strVal.trim().toLowerCase();
     if (v === 'none') return 'none';
@@ -2683,6 +2747,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (key === 'scroll-marker-group') {
         return _lumen_css_canonical_scroll_marker_group(strVal);
     }
+    if (key === 'interest-delay-start' || key === 'interest-delay-end') {
+        return _lumen_css_canonical_interest_delay(strVal);
+    }
     if (key === 'zoom') {
         return _lumen_css_canonical_zoom(strVal);
     }
@@ -2856,7 +2923,9 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         // (`scroll-target-group` needs no separate arm — it's a
         // plain `_LUMEN_KEYWORD_PROPERTIES` entry above, already
         // covered by that check in this same condition).
-        key === 'scroll-marker-group') {
+        key === 'scroll-marker-group' ||
+        key === 'interest-delay-start' ||
+        key === 'interest-delay-end') {
         var canon = _lumen_canonicalize_longhand(key, strVal);
         if (canon === null || canon === undefined) return; // invalid value: no-op
         obj[key] = canon;

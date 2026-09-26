@@ -1737,6 +1737,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // ── Transitions / animations (CSS Transitions L1 §3, CSS Animations L1 §4.3) ─
     m.insert("transition-duration".into(), seconds_list_to_css(&style.transition_durations));
     m.insert("transition-delay".into(), seconds_list_to_css(&style.transition_delays));
+    // Interest Invokers: `normal` или время в секундах (`123ms` → `0.123s`).
+    for (name, v) in [
+        ("interest-delay-start", style.interest_delay_start),
+        ("interest-delay-end", style.interest_delay_end),
+    ] {
+        m.insert(name.into(), v.map_or_else(|| "normal".into(), |s| seconds_list_to_css(&[s])));
+    }
     m.insert("transition-timing-function".into(), timing_function_list_to_css(&style.transition_timing_functions));
     m.insert("transition-property".into(), if style.transition_properties.is_empty() {
         "all".into()
@@ -3290,6 +3297,43 @@ mod tests {
         // parser's own rejection independently of the JS shim gate.
         let m = div_computed_map("<div>x</div>", "div { scroll-marker-group: before before; }");
         assert_eq!(m.get("scroll-marker-group").map(String::as_str), Some("none"));
+    }
+
+    // GAP-INTERESTINVOKER — `interest-delay-start`/`-end` и шортхенд.
+    #[test]
+    fn computed_map_interest_delay_defaults_to_normal() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("normal"));
+    }
+
+    #[test]
+    fn computed_map_interest_delay_reports_seconds() {
+        let m = div_computed_map("<div>x</div>", "div { interest-delay-start: 123ms; interest-delay-end: 32s; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("0.123s"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("32s"));
+    }
+
+    #[test]
+    fn computed_map_interest_delay_shorthand_fills_both() {
+        let m = div_computed_map("<div>x</div>", "div { interest-delay: 0s; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("0s"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("0s"));
+        let m = div_computed_map("<div>x</div>", "div { interest-delay: normal 450ms; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("0.45s"));
+    }
+
+    #[test]
+    fn computed_map_interest_delay_rejects_invalid_and_does_not_inherit() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { interest-delay-start: 1s; interest-delay-start: -1s; interest-delay-end: 0; }",
+        );
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("1s"));
+        assert_eq!(m.get("interest-delay-end").map(String::as_str), Some("normal"));
+        let m = div_computed_map("<div>x</div>", "body { interest-delay: 2s; }");
+        assert_eq!(m.get("interest-delay-start").map(String::as_str), Some("normal"));
     }
 
     #[test]

@@ -447,6 +447,17 @@ pub(in crate::style) fn parse_time_list(s: &str) -> Vec<f32> {
         .collect()
 }
 
+/// Interest Invokers — одно значение `interest-delay-start`/`-end`:
+/// `normal | <time [0s,∞]>`. Внешний `None` — невалидное значение (объявление
+/// отбрасывается), `Some(None)` — `normal`, `Some(Some(s))` — секунды.
+pub(in crate::style) fn parse_interest_delay(s: &str) -> Option<Option<f32>> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("normal") {
+        return Some(None);
+    }
+    parse_time_seconds(s).filter(|v| v.is_finite() && *v >= 0.0).map(Some)
+}
+
 fn parse_time_seconds(s: &str) -> Option<f32> {
     let s = s.trim();
     if let Some(num) = s.strip_suffix("ms") {

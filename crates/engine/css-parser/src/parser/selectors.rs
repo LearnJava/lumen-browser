@@ -256,6 +256,13 @@ pub enum PseudoClass {
     /// определяет, что элемент **может быть** popover-ом, но открытое
     /// состояние — runtime-only.
     PopoverOpen,
+    /// `:interest-source` (Interest Invokers, WHATWG HTML PR #11006) —
+    /// `interestfor`-инвокер, у которого сейчас показан интерес. Runtime-only:
+    /// JS-шим ставит `data-lumen-interest-source`.
+    InterestSource,
+    /// `:interest-target` — цель показанного интереса
+    /// (`data-lumen-interest-target`).
+    InterestTarget,
     /// `:current` (CSS Selectors L4 §11.4.1) — element, представляющий
     /// текущий «момент» в timed-text потоке (например, активный WebVTT cue
     /// при видео-воспроизведении). Phase 0 без timed-text runtime — всегда
@@ -709,6 +716,8 @@ pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::Fullscreen => ":fullscreen".into(),
         PseudoClass::Modal => ":modal".into(),
         PseudoClass::PopoverOpen => ":popover-open".into(),
+        PseudoClass::InterestSource => ":interest-source".into(),
+        PseudoClass::InterestTarget => ":interest-target".into(),
         PseudoClass::Current => ":current".into(),
         PseudoClass::Past => ":past".into(),
         PseudoClass::Future => ":future".into(),
@@ -1395,6 +1404,8 @@ impl<'a> Parser<'a> {
             "fullscreen" => PseudoClass::Fullscreen,
             "modal" => PseudoClass::Modal,
             "popover-open" => PseudoClass::PopoverOpen,
+            "interest-source" => PseudoClass::InterestSource,
+            "interest-target" => PseudoClass::InterestTarget,
             "current" => PseudoClass::Current,
             "past" => PseudoClass::Past,
             "future" => PseudoClass::Future,

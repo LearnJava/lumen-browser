@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-26",
  "counts": {
-  "open": 219,
-  "fixed": 916,
+  "open": 218,
+  "fixed": 919,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1135,
+ "total_bugs": 1137,
  "phases": [
   {
    "id": "P0",
@@ -4859,7 +4859,7 @@
        "title": "WPT: прогнать подсрез `html/semantics/{interactive-elements,popovers,permission-element,links,interestfor,selectors,the-button-element,tabular-data,menu,grouping-content,text-level-semantics,disabled-elements,edits,sections}` + 2 корневых файла",
        "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-FIXED.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-FIXED.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-DUPLICATE.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-FIXED.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-FIXED.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-OPEN.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-FIXED.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-FIXED.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-DUPLICATE.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-FIXED.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-FIXED.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-FIXED.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
        "bugs": [
         "BUG-577",
         "BUG-578",
@@ -6975,9 +6975,9 @@
       {
        "id": "GAP-INTERESTINVOKER",
        "title": "GAP: Interest Invokers API (`interestfor`/`InterestEvent`/hover-delay) отсутствует целиком",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Interest Invokers API (WHATWG HTML draft, `.tentative.`, hover/focus-triggered \"preview\" аналог существующего BUG-582 Invoker Commands API) не реализован вовсе: нет `interestForElement` IDL-рефлексии (`commandForElement`-подобный паттерн, `crates/js/src/shim/web_api_shim_tail_b.js:1404-1447`, есть куда встроить), нет `InterestEvent` (`CommandEvent`-подобный шаблон, `web_api_shim_mid.js:303-325`), нет `interest`/`loseinterest` диспатча и hover-delay/focus-delay/Escape таймер-модели. В отличие от BUG-582 (реализован целиком в JS-шиме, без CSS/layout), поведенческие тесты (`interestfor-basic-delays`, `interestfor-delay-start`, `interestfor-delay-end`.tentative.html; `createPopoverAndInvokerForHoverTests`, `tests/wpt/html/semantics/interestfor/resources/invoker-utils.js:96-121`) читают реальные CSS-свойства `interest-delay-start`/`interest-delay-end` через `getComputedStyle` — `grep` по `crates/layout`, `crates/css`, `CSS-SPECS.md` на `interest-delay` даёт ноль совпадений, это новая пара CSS-свойств (не заглушка), плюс `interestfor-pseudo-classes.tentative.html` требует псевдоклассов `:has-interest`/`:target-of-interest`. Найден P2, WPT-VENDOR-html-semantics-misc, 2026-08-04; реклассифицировано из BUG-584 2026-09-15 (P3) по тому же правилу, что BUG-553/554/562/568/583 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект). Не W3C Candidate Recommendation — приоритет по решению, не автоматически.",
+       "note": "ЗАКРЫТ 2026-09-26 (P1, ветка `p1-gap-interestinvoker`): `interestForElement` на button/a/area/SVG a, `InterestEvent`, `interest`/`loseinterest` с hover/focus-задержками и Escape, CSS `interest-delay-*`, `:interest-source`/`:interest-target`; WPT interestfor 49/268 → 164/244. Остаток — BUG-1194 (test_driver hover/Escape), BUG-1195 (Web Animations), интерполяция `<time>` в CSS Transitions/Animations, `::interest-button`. Исходная постановка: Interest Invokers API (WHATWG HTML draft, `.tentative.`, hover/focus-triggered \"preview\" аналог существующего BUG-582 Invoker Commands API) не реализован вовсе: нет `interestForElement` IDL-рефлексии (`commandForElement`-подобный паттерн, `crates/js/src/shim/web_api_shim_tail_b.js:1404-1447`, есть куда встроить), нет `InterestEvent` (`CommandEvent`-подобный шаблон, `web_api_shim_mid.js:303-325`), нет `interest`/`loseinterest` диспатча и hover-delay/focus-delay/Escape таймер-модели. В отличие от BUG-582 (реализован целиком в JS-шиме, без CSS/layout), поведенческие тесты (`interestfor-basic-delays`, `interestfor-delay-start`, `interestfor-delay-end`.tentative.html; `createPopoverAndInvokerForHoverTests`, `tests/wpt/html/semantics/interestfor/resources/invoker-utils.js:96-121`) читают реальные CSS-свойства `interest-delay-start`/`interest-delay-end` через `getComputedStyle` — `grep` по `crates/layout`, `crates/css`, `CSS-SPECS.md` на `interest-delay` даёт ноль совпадений, это новая пара CSS-свойств (не заглушка), плюс `interestfor-pseudo-classes.tentative.html` требует псевдоклассов `:has-interest`/`:target-of-interest`. Найден P2, WPT-VENDOR-html-semantics-misc, 2026-08-04; реклассифицировано из BUG-584 2026-09-15 (P3) по тому же правилу, что BUG-553/554/562/568/583 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект). Не W3C Candidate Recommendation — приоритет по решению, не автоматически.",
        "bugs": [
         "BUG-584"
        ]
@@ -7507,13 +7507,6 @@
    "status": "open",
    "title": "`<permission>` element (Permission Element API, single-vendor origin trial) not implemented at all -- falls through to generic unknown-tag/`HTMLUnknownElement`…",
    "component": "dom/js (no `\"permission\"` tag handling anywhere in `crates/dom`, `crates/html-parser`, `crates/js/src/dom.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-584": {
-   "status": "open",
-   "title": "Interest Invokers API (`interestfor`, `InterestEvent` -- hover/focus analogue of BUG-582's `command`/`commandfor`) not implemented at all, entirely `.tentative.…",
-   "component": "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)",
    "date": null,
    "debtor": false
   },
@@ -8434,20 +8427,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1139": {
-   "status": "open",
-   "title": "Слушатель `message` получает событие с `target === null`, `currentTarget !== window` (`origin`, `data`, `source` верны). Chrome: `target === currentTarget === w…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid_b3.js:2292-2302` `window.postMessage` — слушатели `_message_listeners` вызываются напрямую, без dispatch; то же в `_lumen_deliver_frame_message`, `:2325-2334`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1140": {
-   "status": "open",
-   "title": "`srcset=\"…/51l7ZOsRo7L._AC_AIweblab1431263,T1_SF1282.5,2052_QL80_.jpg 1.5x\"` → Lumen запрашивает `…_AC_AIweblab1431263` (400). По спеке запятая внутри URL допус…",
-   "component": "html-parser (`crates/engine/html-parser/src/srcset.rs:69` — `while … && bytes[pos] != b','`: сбор URL останавливается на запятой)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1141": {
    "status": "open",
    "title": "Порядок событий Lumen: `readystatechange 4` → `progress@4`; Chrome: `progress@3` → `readystatechange 4` → `load` → `loadend`. airbnb: обработчик на `readyState…",
@@ -8781,6 +8760,20 @@
    "status": "open",
    "title": "В Service Worker `atob`/`btoa` не по HTML LS §8.3: `atob(btoa('\\xff'))` даёт не `'\\xff'` (двоичная строка читается как UTF-8), на невалидном входе натив отдаёт…",
    "component": "js (`crates/js/src/sw_worker.rs` — нативы `atob`/`btoa` в `install_sw_globals_v8` (`sw_worker.rs:761-769`): `base64_decode` + `String::from_utf8`, `btoa` кодирует UTF-8 байты)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1194": {
+   "status": "open",
+   "title": "`test_driver.Actions()` не умеет навести курсор и нажать Escape: `pointerMove` без `pointerDown` только запоминает точку (нет `mouseover`/`:hover`), а `keyDown(…",
+   "component": "bidi-server (`crates/bidi-server/src/protocol.rs` — `replay_input_actions`; `crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Type`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1195": {
+   "status": "open",
+   "title": "Web Animations смешивает числа разных единиц без приведения (`1s → 2000ms` на 0.5 → `1000.5s`) и зажимает прогресс сегмента в [0,1], так что `cubic-bezier` с вы…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_lerp_scalar`, `_wa_compute_at_p`)",
    "date": null,
    "debtor": false
   },
@@ -15168,6 +15161,13 @@
    "date": "2026-09-26",
    "debtor": false
   },
+  "BUG-584": {
+   "status": "fixed",
+   "title": "Interest Invokers API did not exist at all. Now `interestForElement` on button/a/area/SVG a, `InterestEvent`, `interest`/`loseinterest` with the hover/focus del…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- `_lumen_install_interest_for`, `_lumen_interest_reevaluate`), layout (`interest-delay-*`, `:interest-source`/`:interest-target`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
   "BUG-1138": {
    "status": "fixed",
    "title": "`toString.call(document) === '[object Object]'`, `typeof HTMLDocument === 'undefined'` (Chrome: `'[object HTMLDocument]'`, `function`). yahoo.co.jp: `ual-2.10.2…",
@@ -15186,6 +15186,20 @@
    "status": "fixed",
    "title": "The entire Service Worker registration table and Cache Storage are keyed by an unauthenticated JS-string \"origin\" argument with zero server-side binding to the…",
    "component": "js (`crates/js/src/dom.rs:4805` — `_sw_origin`; `crates/js/src/v8_runtime.rs:1900`-1940 `_lumen_sw_*`/`_lumen_cache_*` natives)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1139": {
+   "status": "fixed",
+   "title": "Слушатель `message` получает событие с `target === null`, `currentTarget !== window` (`origin`, `data`, `source` верны). Chrome: `target === currentTarget === w…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b4.js:2005` — `window.dispatchEvent` выставляет `target`/`currentTarget`/`eventPhase` и доставляет `message`; `:2137` `postMessage` и `:2163` `_lumen_deliver_frame_message` идут через него; было: прямой вызов слушателей)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1140": {
+   "status": "fixed",
+   "title": "`srcset=\"…/51l7ZOsRo7L._AC_AIweblab1431263,T1_SF1282.5,2052_QL80_.jpg 1.5x\"` → Lumen запрашивает `…_AC_AIweblab1431263` (400). По спеке запятая внутри URL допус…",
+   "component": "html-parser (`crates/engine/html-parser/src/srcset.rs:69` — URL кандидата собирается до пробела, запятые внутри URL сохраняются, снимаются только завершающие; было: сбор останавливался на запятой)",
    "date": "2026-09-26",
    "debtor": false
   }
@@ -15211,6 +15225,9 @@
   ],
   "a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`/`AXRole`; потребитель `crates/engine/a11y/src/lib.rs::resolve_role`)": [
    "BUG-764"
+  ],
+  "bidi-server (`crates/bidi-server/src/protocol.rs` — `replay_input_actions`; `crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Type`)": [
+   "BUG-1194"
   ],
   "bidi-server (protocol.rs)": [
    "BUG-319"
@@ -15398,7 +15415,7 @@
   "html-parser": [
    "BUG-021"
   ],
-  "html-parser (`crates/engine/html-parser/src/srcset.rs:69` — `while … && bytes[pos] != b','`: сбор URL останавливается на запятой)": [
+  "html-parser (`crates/engine/html-parser/src/srcset.rs:69` — URL кандидата собирается до пробела, запятые внутри URL сохраняются, снимаются только завершающие; было: сбор останавливался на запятой)": [
    "BUG-1140"
   ],
   "html-parser (`crates/engine/html-parser/src/tree_builder.rs::new_fragment`/`reset_insertion_mode` — стартовый режим фрагмента всегда `InBody`)": [
@@ -15897,9 +15914,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid_b.js`, `web_api_shim_tail_b.js`, `web_api_shim_tail_mc.js`; `crates/js/src/generic_sensor.rs`, `geolocation.rs`, `wake_lock.rs`)": [
    "BUG-765"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid_b3.js:2292-2302` `window.postMessage` — слушатели `_message_listeners` вызываются напрямую, без dispatch; то же в `_lumen_deliver_frame_message`, `:2325-2334`)": [
-   "BUG-1139"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid_b3.js` — `fetch()`, `usePreloaded` только для загрузок элементов)": [
    "BUG-1151"
   ],
@@ -15911,6 +15925,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1887` `window.addEventListener`, `:1950` `window.dispatchEvent`)": [
    "BUG-1172"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid_b4.js:2005` — `window.dispatchEvent` выставляет `target`/`currentTarget`/`eventPhase` и доставляет `message`; `:2137` `postMessage` и `:2163` `_lumen_deliver_frame_message` идут через него; было: прямой вызов слушателей)": [
+   "BUG-1139"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b4.js` `function IntersectionObserver` — записи собирались литералом `{isIntersecting:…, intersectionRatio:…}`; интерфейс `IntersectionObserverEntry` рядом с `_io_dom_rect`, экспорт — `web_api_shim_tail_mc.js:49`)": [
    "BUG-1131"
@@ -15938,6 +15955,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_iter_progress`/`Animation.prototype._tick`)": [
    "BUG-1192"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_lerp_scalar`, `_wa_compute_at_p`)": [
+   "BUG-1195"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.find`)": [
    "BUG-623"
