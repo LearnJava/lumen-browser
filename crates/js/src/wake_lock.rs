@@ -194,6 +194,25 @@ const WAKE_LOCK_SHIM: &str = r#"(function() {
     }
   };
 
+  // ── WakeLock interface ────────────────────────────────────────────────────
+
+  // BUG-669: `[Exposed=(Window,Worker), SecureContext] interface WakeLock`
+  // (Screen Wake Lock §4) is its own named interface object — the type of
+  // `navigator.wakeLock` — and has no constructor operation. `request()` lives
+  // on the prototype; its IDL argument defaults to "screen".
+  function WakeLock() { throw new TypeError('Illegal constructor'); }
+  Object.defineProperty(WakeLock.prototype, 'request', {
+    configurable: true, enumerable: true, writable: true,
+    value: function request(type) {
+      return _WakeLock.request(type === undefined ? 'screen' : type);
+    }
+  });
+  Object.defineProperty(WakeLock.prototype, Symbol.toStringTag, {
+    configurable: true, value: 'WakeLock'
+  });
+  // `[SameObject] readonly attribute WakeLock wakeLock` — one instance.
+  var _wakeLockObject = Object.create(WakeLock.prototype);
+
   // ── navigator.wakeLock ────────────────────────────────────────────────────
 
   // BUG-765: `NavigatorWakeLock.wakeLock` is `[SecureContext]` (Screen Wake
@@ -202,14 +221,19 @@ const WAKE_LOCK_SHIM: &str = r#"(function() {
   // never declares `_lumen_secure_context` at all (not even as `undefined`),
   // so it is read through `typeof` — the one safe way to probe a name that
   // may not exist in scope — and treated as "expose" (see that variable's
-  // doc comment, `web_api_shim_mid_b.js`).
-  if (typeof navigator !== 'undefined' &&
-      (typeof _lumen_secure_context === 'undefined' || _lumen_secure_context !== false)) {
-    Object.defineProperty(navigator, 'wakeLock', {
-      configurable: true,
-      enumerable:   true,
-      get: function() { return _WakeLock; }
+  // doc comment, `web_api_shim_mid_b.js`). The `WakeLock` interface object
+  // itself is `[SecureContext]` too, so it shares the gate (BUG-669).
+  if (typeof _lumen_secure_context === 'undefined' || _lumen_secure_context !== false) {
+    Object.defineProperty(globalThis, 'WakeLock', {
+      configurable: true, enumerable: false, writable: true, value: WakeLock
     });
+    if (typeof navigator !== 'undefined') {
+      Object.defineProperty(navigator, 'wakeLock', {
+        configurable: true,
+        enumerable:   true,
+        get: function() { return _wakeLockObject; }
+      });
+    }
   }
 
   // ── visibilitychange auto-release ─────────────────────────────────────────

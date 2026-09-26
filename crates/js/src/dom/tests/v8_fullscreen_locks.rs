@@ -469,6 +469,32 @@ fn wake_lock_unsupported_type_rejects() {
 fn wake_lock_absent_on_insecure_origin() {
     let rt = v8_runtime_with_url("http://example.com/");
     assert!(bool_eval(&rt, "typeof navigator.wakeLock === 'undefined'"));
+    // BUG-669: the `WakeLock` interface object is `[SecureContext]` as well.
+    assert!(bool_eval(&rt, "!('WakeLock' in self)"));
+}
+
+#[test]
+fn wake_lock_interface_exposed_on_secure_origin() {
+    // BUG-669: `WakeLock` used to be missing from the global object entirely,
+    // so `'WakeLock' in self` was `false` even in a secure context.
+    let rt = v8_runtime_with_url("https://example.com/");
+    assert!(bool_eval(&rt,
+        "'WakeLock' in self && typeof WakeLock === 'function' &&          navigator.wakeLock instanceof WakeLock &&          navigator.wakeLock === navigator.wakeLock &&          typeof WakeLock.prototype.request === 'function' &&          Object.keys(navigator.wakeLock).length === 0 &&          Object.prototype.toString.call(navigator.wakeLock) === '[object WakeLock]'"
+    ));
+    assert!(bool_eval(&rt,
+        "(function() { try { new WakeLock(); return false; }                        catch (e) { return e instanceof TypeError; } })()"
+    ));
+}
+
+#[test]
+fn wake_lock_request_type_defaults_to_screen() {
+    // `request(optional WakeLockType type = "screen")`.
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(r#"
+                var defType = null;
+                navigator.wakeLock.request().then(function(s) { defType = s.type; });
+            "#).unwrap();
+    assert!(bool_eval(&rt, "defType === 'screen'"));
 }
 
 // ── Network Information stub ────────────────────────────────────────────────
