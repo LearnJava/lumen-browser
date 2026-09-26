@@ -1351,7 +1351,16 @@ var _lumen_bfcache_persisted = false;
 var _pageshow_listeners = [];
 var _pagehide_listeners = [];
 
+// BUG-1129: the shell sends `pageshow` right after `load`; while inserted
+// scripts hold `load` back (`_lumen_load_deferred`), `pageshow` waits for it
+// here and `_lumen_load_delay_done` fires it after `load`.
+var _lumen_pageshow_deferred = null;
+
 function _lumen_fire_page_lifecycle(type, persisted) {
+    if (type === 'pageshow' && typeof _lumen_load_deferred === 'boolean' && _lumen_load_deferred) {
+        _lumen_pageshow_deferred = !!persisted;
+        return;
+    }
     var evt = new PageTransitionEvent(type, { isTrusted: true, persisted: !!persisted });
     if (type === 'pageshow') {
         // HTML LS §7.4.6 «reactivate a document»: the page becomes showing and
