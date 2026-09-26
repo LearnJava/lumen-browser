@@ -1,6 +1,6 @@
 # BUG-1133 — `atob` не принимает base64 без паддинга и принимает `=` в середине (не forgiving-base64)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid_c.js:17-39` — проверка `s.length % 4 !== 0` и `=` в любой позиции; сверить `worker.rs:2514` `atob_native_v8`)
 
@@ -55,3 +55,23 @@ HTML LS §8.3 `atob` → Infra «forgiving-base64 decode»: убрать ASCII-�
 кратна 4 — снять 1–2 завершающих `=`; после этого длина ≡1 mod 4 или символ вне алфавита (в том
 числе `=` в середине) → ошибка. Один алгоритм для окна и воркеров. Критерий: репро даёт результат
 Chrome.
+
+## Исправление (2026-09-26, P6)
+
+Оба `atob` — Infra «forgiving-base64 decode»: снять ASCII-пробелы (TAB/LF/FF/CR/SPACE); если
+длина кратна 4 — снять 1–2 завершающих `=`; длина ≡1 mod 4 или символ вне алфавита (в том числе
+`=` не в хвосте) → `InvalidCharacterError`; лишние младшие биты последней группы отбрасываются.
+
+- Окно — [`crates/js/src/shim/web_api_shim_mid_c.js`](../crates/js/src/shim/web_api_shim_mid_c.js) `function atob`.
+- Dedicated/shared-воркеры — [`crates/js/src/worker.rs`](../crates/js/src/worker.rs) `b64_decode`
+  (тот же декодер обслуживает `data:`-URL скрипта воркера — Fetch тоже берёт forgiving-base64).
+  Попутно `atob_native_v8` отдаёт двоичную строку (байт → Latin-1 символ), а не UTF-8:
+  раньше `atob(btoa('\xff'))` в воркере бросал.
+
+Тесты: `dom::tests::v8_url_abort_clone_blob::atob_is_forgiving_base64` (значения из репро и
+Chrome), `worker::tests::b64_decode_is_forgiving_base64`, расширенный
+`worker::tests_v8::v8_worker_globals_have_atob_btoa`. WPT `html/webappapis/atob`:
+308 неожиданных PASS, 0 регрессий → 760/760, baseline `base64.any.js.ini` удалён как чистый.
+
+Service Worker держит свои `atob`/`btoa` (UTF-8, без `DOMException`) — отдельный
+[BUG-1193](BUG-1193-OPEN.md).

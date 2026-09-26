@@ -15,26 +15,19 @@ function btoa(str) {
     }
     return out;
 }
+// Infra "forgiving-base64 decode" (BUG-1133): padding is optional, `=` only
+// as 1-2 trailing chars of a length-multiple-of-4 input. Same algorithm as the
+// worker native `forgiving_b64_decode` in `crates/js/src/worker.rs`.
 function atob(str) {
-    var s = String(str).replace(/[ \t\r\n]+/g, '');
-    var valid = true;
-    for (var _i = 0; _i < s.length; _i++) {
-        var _c = s.charCodeAt(_i);
-        if (!((_c >= 65 && _c <= 90) || (_c >= 97 && _c <= 122) ||
-              (_c >= 48 && _c <= 57) || _c === 43 || _c === 47 || _c === 61))
-            { valid = false; break; }
-    }
-    if (s.length % 4 !== 0 || !valid)
+    var s = String(str).replace(/[\t\n\f\r ]+/g, '');
+    if (s.length % 4 === 0) s = s.replace(/==?$/, '');
+    if (s.length % 4 === 1 || /[^A-Za-z0-9+\/]/.test(s))
         throw new DOMException('atob: invalid base64 string', 'InvalidCharacterError');
-    var idx = {}, i; for (i = 0; i < _b64c.length; i++) idx[_b64c[i]] = i;
-    var out = '';
-    for (var j = 0; j < s.length; j += 4) {
-        var n = (idx[s[j]] << 18) | (idx[s[j+1]] << 12) |
-                ((s[j+2] === '=' ? 0 : idx[s[j+2]]) << 6) |
-                (s[j+3] === '=' ? 0 : idx[s[j+3]]);
-        out += String.fromCharCode(n >> 16);
-        if (s[j+2] !== '=') out += String.fromCharCode((n >> 8) & 0xff);
-        if (s[j+3] !== '=') out += String.fromCharCode(n & 0xff);
+    var out = '', buf = 0, bits = 0;
+    for (var j = 0; j < s.length; j++) {
+        buf = ((buf << 6) | _b64c.indexOf(s[j])) & 0xffffff;
+        bits += 6;
+        if (bits >= 8) { bits -= 8; out += String.fromCharCode((buf >> bits) & 0xff); }
     }
     return out;
 }

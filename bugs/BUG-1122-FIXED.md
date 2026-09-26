@@ -103,7 +103,7 @@ object (`Node.prototype`, `Element.prototype`, `ParentNode`-миксин — н�
   `hasAttribute`/`querySelector`. Остались: `reading 'focus'` в `EventTarget.addEventListener`
   (это [BUG-1123](BUG-1123-OPEN.md)), `this._attributeToProperty is not a function` и
   `b.Aa is not a function` в колбэках custom elements ([BUG-1167](BUG-1167-OPEN.md)), `atob: invalid base64 string`
-  ([BUG-1133](BUG-1133-OPEN.md)); `innerText` тела пуст — страница ещё не рисует контент.
+  ([BUG-1133](BUG-1133-FIXED.md)); `innerText` тела пуст — страница ещё не рисует контент.
 - WPT `dom/nodes` (`run_report.py --all --root dom/nodes --processes 4`, до/после): 136/157 OK в обоих прогонах,
   сабтесты **6101 → 6129 из 8600**, ни одного нового FAIL: `Node-properties.html` 642 → 664
   (`doctype.parentElement` и соседи), `Node-appendChild.html` 4 → 8 (`appendChild(null)`),
