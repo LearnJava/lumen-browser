@@ -24,7 +24,7 @@ use std::ops::Range;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
+    box_can_own_stacking_context, creates_stacking_context, forward_box_transform, perspective_matrix,
     transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
@@ -297,8 +297,8 @@ use table::{collect_table_cells, emit_table_box, emit_table_cell_border};
 
 mod walk;
 use walk::{
-    depth_sorted_child_order, emit_box_self, establishes_3d_rendering_context, is_backface_hidden,
-    walk,
+    depth_sorted_child_order, emit_box_self, emit_push_perspective, establishes_3d_rendering_context,
+    is_backface_hidden, walk,
 };
 // Used only by `display_list/tests/shadows_and_transforms.rs` (via `use super::*`).
 #[cfg(test)]

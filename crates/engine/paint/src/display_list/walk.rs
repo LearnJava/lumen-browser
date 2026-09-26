@@ -484,6 +484,44 @@ fn apply_color_override(b: &LayoutBox, ov: &CompositorOverride, cmds: &mut [Disp
     }
 }
 
+/// CSS Transforms L2 §4 — open the `perspective` projection around a box's
+/// children: `PushTransform { perspective_matrix(b) }`. Returns `true` when a
+/// wrapper was pushed; the caller owes one `PopTransform` after the children.
+///
+/// Only boxes that can own a stacking context get it (`perspective` makes one,
+/// see `creates_stacking_context`); anonymous boxes that cloned the parent's
+/// style must not duplicate the wrapper.
+///
+/// The wrapper is also skipped unless some child actually leaves the z = 0
+/// plane ([`child_needs_perspective`]): on that plane the projection is the
+/// exact identity, while a non-affine accumulated matrix would push every
+/// descendant's rounded/path clip and sticky culling onto their conservative
+/// 3D fallbacks for no visible gain.
+pub(crate) fn emit_push_perspective(b: &LayoutBox, out: &mut DisplayList) -> bool {
+    if !box_can_own_stacking_context(b) || !b.children.iter().any(child_needs_perspective) {
+        return false;
+    }
+    match perspective_matrix(b) {
+        Some(matrix) => {
+            out.push(DisplayCommand::PushTransform { matrix });
+            true
+        }
+        None => false,
+    }
+}
+
+/// Does `child` of a `perspective` container render off the z = 0 plane —
+/// a 3D (non-2D-affine) own transform, or a `preserve-3d` context whose
+/// descendants may carry one? Anonymous wrappers (`InlineRun`, …) are looked
+/// through, since their children are the container's children in CSS terms.
+fn child_needs_perspective(child: &LayoutBox) -> bool {
+    if !box_can_own_stacking_context(child) {
+        return child.children.iter().any(child_needs_perspective);
+    }
+    establishes_3d_rendering_context(child)
+        || matches!(forward_box_transform(child), Some(m) if !m.is_2d_affine())
+}
+
 /// CSS Transforms L2 §6.1 — does this box establish a **3D rendering context**
 /// for its children? When `true`, the children share one 3D coordinate space
 /// and are painted in depth order (see [`depth_sorted_child_order`]) instead of
@@ -691,6 +729,9 @@ struct BlockEpilogue {
     scroll_padding_box: Option<(f32, f32, f32, f32)>,
     is_scroll_x: bool,
     is_scroll_y: bool,
+    /// `perspective` wrapper (`PushTransform`) opened around the children,
+    /// inside the overflow clip — closed first, before the clip.
+    has_perspective: bool,
     has_filter: bool,
     has_backdrop: bool,
     has_clip_path: bool,
@@ -794,6 +835,11 @@ fn finish_epilogue(frame: &Frame, out: &mut DisplayList) {
 /// (`emit_table_box` handles its own row/cell descent and calls back into
 /// public `walk` for cell content — see `run`'s doc comment).
 fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue) {
+    // Perspective projects only the children; gap rules are the container's
+    // own painting and stay flat.
+    if e.has_perspective {
+        out.push(DisplayCommand::PopTransform);
+    }
     // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
     if e.self_visible {
         let gap_segs = collect_gap_segments(b);
@@ -1108,6 +1154,11 @@ fn dispatch<'a>(
                     out.push(DisplayCommand::PushClipRect { rect: cr });
                 }
             }
+            // CSS Transforms L2 §4 — `perspective` projects the box's children
+            // (not the box itself): wrap only the descendants, inside the
+            // overflow clip. See `perspective_matrix` for why a separate
+            // wrapper rather than folding into each child's own matrix.
+            let has_perspective = emit_push_perspective(b, out);
             // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
             // context children paint back-to-front by transformed depth;
             // otherwise document order (flat compositing).
@@ -1131,6 +1182,7 @@ fn dispatch<'a>(
                 scroll_padding_box,
                 is_scroll_x,
                 is_scroll_y,
+                has_perspective,
                 has_filter,
                 has_backdrop,
                 has_clip_path,

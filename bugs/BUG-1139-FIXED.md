@@ -1,6 +1,6 @@
 # BUG-1139 — `MessageEvent` от `window.postMessage`: `target`/`currentTarget` равны `null`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid_b3.js:2292-2302` `window.postMessage` — слушатели `_message_listeners` вызываются напрямую, без dispatch; то же в `_lumen_deliver_frame_message`, `:2325-2334`)
 
@@ -38,3 +38,18 @@ HTML LS §9.3.3 «window post message steps»: задача, которая **fi
 целевом `Window` — то есть через обычный dispatch (`target`, `currentTarget`, фазы, `stopPropagation`,
 `once`). Доставлять через `dispatchEvent` на `window` в обоих местах. Критерий: репро даёт результат
 Chrome.
+
+## Исправление (P6, 2026-09-26)
+
+`window.dispatchEvent` (`crates/js/src/shim/web_api_shim_mid_b4.js`) при собственной доставке
+(событие не в полёте, `eventPhase === 0`) выставляет `target = currentTarget = window`,
+`eventPhase = AT_TARGET`, `composedPath() === [window]`, а по окончании сбрасывает
+`currentTarget`/`eventPhase` — DOM §2.9. Последний шаг `_lumen_propagate` (там фаза уже выставлена)
+не затронут. У `message` своё ведро `_message_listeners`, поэтому в `dispatchEvent` добавлена ветка
+`message`: сначала `onmessage`, затем слушатели (прежний порядок), с `this === window` и учётом
+`stopImmediatePropagation`. `window.postMessage` и `_lumen_deliver_frame_message` доставляют через
+неё. Попутно `target` получили все прочие `window.dispatchEvent(...)` шима (`unload`, `error`,
+`storage` и др.), где он тоже был `null`.
+
+Тесты: `crates/js/src/dom/tests/v8_bug1139_message_target.rs` (6 шт.) — репро из заявки даёт
+результат Chrome.

@@ -209,8 +209,8 @@ pub enum GridTrackSize {
     /// `masonry` — CSS Grid L3 §14 waterfall layout axis sentinel.
     /// Stored as `vec![GridTrackSize::Masonry]` in `grid_template_columns` or
     /// `grid_template_rows` to signal that the axis uses masonry placement.
-    /// The perpendicular axis defines track sizes; `masonry.rs` handles placement.
-    /// P4 handoff: `masonry-auto-flow`, `align-tracks`, `justify-tracks` in ComputedStyle.
+    /// Layout strips it and falls back to a regular grid (Edge parity, see
+    /// `box_tree/grid.rs` and `masonry.rs`); `masonry.rs` placement is unwired.
     Masonry,
 }
 

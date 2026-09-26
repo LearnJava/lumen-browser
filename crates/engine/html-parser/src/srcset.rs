@@ -64,9 +64,12 @@ pub fn parse_srcset(input: &str) -> Vec<SrcsetCandidate> {
             break;
         }
 
-        // 2. Collect URL — non-whitespace, non-comma chars.
+        // 2. Collect URL — все не-пробельные символы (HTML LS «parse a
+        //    srcset attribute» шаг 4). Запятая внутри URL допустима
+        //    (`…_AC_X,T1_SF1282.5,2052_.jpg`, `data:image/gif;base64,…`) и
+        //    кандидатов не разделяет — снимаются только завершающие (BUG-1140).
         let url_start = pos;
-        while pos < bytes.len() && !is_ascii_ws(bytes[pos]) && bytes[pos] != b',' {
+        while pos < bytes.len() && !is_ascii_ws(bytes[pos]) {
             pos += 1;
         }
         let url_raw = &input[url_start..pos];
@@ -95,9 +98,18 @@ pub fn parse_srcset(input: &str) -> Vec<SrcsetCandidate> {
             pos += 1;
         }
 
-        // 5. Read descriptor — до следующей запятой / конца.
+        // 5. Read descriptor — до следующей запятой вне скобок / конца
+        //    (токенизатор дескрипторов, состояние «in parens»: запятая
+        //    внутри `(…)` кандидата не завершает).
         let desc_start = pos;
-        while pos < bytes.len() && bytes[pos] != b',' {
+        let mut in_parens = false;
+        while pos < bytes.len() {
+            match bytes[pos] {
+                b'(' => in_parens = true,
+                b')' => in_parens = false,
+                b',' if !in_parens => break,
+                _ => {}
+            }
             pos += 1;
         }
         let desc_raw = input[desc_start..pos].trim();
@@ -861,6 +873,46 @@ mod tests {
     fn trailing_comma_in_url_means_no_descriptor() {
         // `a.png,` — URL с trailing comma, без descriptor.
         let c = parse_srcset("a.png, b.png 2x");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].url, "a.png");
+        assert_eq!(c[0].descriptor, SrcsetDescriptor::DEFAULT);
+    }
+
+    #[test]
+    fn comma_inside_url_is_part_of_url() {
+        // BUG-1140: запятая внутри URL не разделяет кандидатов (amazon).
+        let c = parse_srcset("srcset_a,b,c_1x.png 1x, srcset_a,b,c_2x.png 2x");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].url, "srcset_a,b,c_1x.png");
+        assert_eq!(c[0].descriptor, density(1.0));
+        assert_eq!(c[1].url, "srcset_a,b,c_2x.png");
+        assert_eq!(c[1].descriptor, density(2.0));
+
+        let c = parse_srcset(
+            "https://m.media-amazon.com/images/I/51l7ZOsRo7L._AC_AIweblab1431263,T1_SF1282.5,2052_QL80_.jpg 1.5x",
+        );
+        assert_eq!(c.len(), 1);
+        assert!(c[0].url.ends_with("_AC_AIweblab1431263,T1_SF1282.5,2052_QL80_.jpg"));
+        assert_eq!(c[0].descriptor, density(1.5));
+    }
+
+    #[test]
+    fn data_url_with_comma_kept_whole() {
+        let c = parse_srcset("data:image/gif;base64,R0lGODlhAQABAAAAACw= 1x, b.png 2x");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].url, "data:image/gif;base64,R0lGODlhAQABAAAAACw=");
+        assert_eq!(c[1].url, "b.png");
+    }
+
+    #[test]
+    fn url_without_space_before_next_candidate_keeps_trailing_strip() {
+        // `a.png,b.png 2x` — по спеке один URL `a.png,b.png` (запятые
+        // снимаются только с конца), без пробела разделения нет.
+        let c = parse_srcset("a.png,b.png 2x");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].url, "a.png,b.png");
+        // Завершающие запятые снимаются, дескриптора нет → 1x.
+        let c = parse_srcset("a.png,, b.png 2x");
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].url, "a.png");
         assert_eq!(c[0].descriptor, SrcsetDescriptor::DEFAULT);
