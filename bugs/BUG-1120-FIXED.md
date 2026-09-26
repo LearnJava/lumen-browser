@@ -85,7 +85,7 @@ HTML LS §4.12.1.1 «prepare the script element», шаг 31: парсерный
   Chrome 153 с UA `Chrome/130` получает тот же `true`, с `Chrome/140` — `false`, с `Lumen/0.5.0` —
   `false`. Это [BUG-1113](BUG-1113-OPEN.md). Кроме того, все `@font-face` из
   `cdn.kastatic.org/khanacademy/*.css` запрашиваются от базы документа (`www.khanacademy.org/fonts/…`
-  → 403 вместо `cdn.kastatic.org/khanacademy/fonts/…` → 200) — [BUG-1127](BUG-1127-OPEN.md).
+  → 403 вместо `cdn.kastatic.org/khanacademy/fonts/…` → 200) — [BUG-1127](BUG-1127-FIXED.md).
 - **coursera** выше Chrome (9115 против 5922 px): у карусельных колонок
   `max-width: 20%; flex-basis: 20%` ширина 40 px вместо 200 — процентный `max-width`
   flex-элемента резолвится от его же главного размера. Корень общий с
