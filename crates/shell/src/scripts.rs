@@ -622,7 +622,7 @@ fn run_parser_classic_script(
         // объединённый `csp_policy.1`, и не только первая.
         let violated = crate::csp_enforce::violating_inline_policy(
             policy,
-            &lumen_network::csp::CspDirective::ScriptSrc,
+            &lumen_network::csp::CspDirective::ScriptSrcElem,
             nonce.as_deref(),
             src,
         );
@@ -998,7 +998,7 @@ pub(crate) fn run_scripts_with_dom(
                         };
                         let violated = crate::csp_enforce::violating_inline_policy(
                             policy,
-                            &lumen_network::csp::CspDirective::ScriptSrc,
+                            &lumen_network::csp::CspDirective::ScriptSrcElem,
                             nonce.as_deref(),
                             &item.source,
                         );

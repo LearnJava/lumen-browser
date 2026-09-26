@@ -1679,7 +1679,7 @@ pub(crate) fn parse_and_layout(
             // §7.8/§3.4), не только на первую.
             for url in &blocked_by_style_src {
                 let texts = crate::csp_enforce::violating_fetch_policy(
-                    policy, &lumen_network::csp::CspDirective::StyleSrc, url, self_origin.as_ref(),
+                    policy, &lumen_network::csp::CspDirective::StyleSrcElem, url, self_origin.as_ref(),
                 );
                 if texts.is_empty() {
                     js.fire_csp_violation("style-src-elem", url, original_policy);

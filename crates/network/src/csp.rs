@@ -86,13 +86,15 @@ pub enum CspDirective {
     DefaultSrc,
     /// Restricts `<script>` element sources.
     ScriptSrc,
-    /// Restricts `<script>` element src (CSS Level 3 granular split).
+    /// Restricts `<script>` elements, inline and external (CSP Level 3 granular split;
+    /// falls back to `script-src`).
     ScriptSrcElem,
     /// Restricts inline script event handlers.
     ScriptSrcAttr,
     /// Restricts `<style>` element sources.
     StyleSrc,
-    /// Restricts `<style>` element (granular split).
+    /// Restricts `<style>` and `<link rel=stylesheet>` elements (granular split;
+    /// falls back to `style-src`).
     StyleSrcElem,
     /// Restricts inline style attributes.
     StyleSrcAttr,
@@ -192,13 +194,26 @@ impl CspPolicy {
             && self.trusted_types.is_none()
     }
 
-    /// Returns the effective source list for `directive`, falling back to
-    /// `default-src` when the directive is not explicitly set.
+    /// Returns the effective source list for `directive` — the first
+    /// directive of its CSP3 §6.8.4 «fallback list» the policy sets:
+    /// `script-src-elem`/`script-src-attr` → `script-src` → `default-src`,
+    /// `style-src-elem`/`style-src-attr` → `style-src` → `default-src`, any
+    /// other fetch directive → `default-src` (BUG-1183: the granular
+    /// directives used to fall straight to `default-src`, and the gates asked
+    /// for `script-src`/`style-src`, so a `*-src-elem` never decided).
+    /// `frame-src`/`worker-src` take the `child-src` step through
+    /// [`Self::fetch_directive_allows_via_child_src`] instead.
     ///
-    /// Returns `None` only when neither the directive nor `default-src` exists.
+    /// Returns `None` only when no directive of the list exists.
     pub fn effective_sources(&self, directive: &CspDirective) -> Option<&Vec<CspSource>> {
+        let parent = match directive {
+            CspDirective::ScriptSrcElem | CspDirective::ScriptSrcAttr => Some(CspDirective::ScriptSrc),
+            CspDirective::StyleSrcElem | CspDirective::StyleSrcAttr => Some(CspDirective::StyleSrc),
+            _ => None,
+        };
         self.directives
             .get(directive)
+            .or_else(|| parent.and_then(|p| self.directives.get(&p)))
             .or_else(|| self.directives.get(&CspDirective::DefaultSrc))
     }
 
@@ -224,8 +239,8 @@ impl CspPolicy {
             .any(|s| source_matches_url(s, url, self_origin))
     }
 
-    /// `true` if this policy's `script-src` (or `default-src`) lets a
-    /// `<script>` element fetch `url` — CSP3 §6.7.1.1 «Script directives
+    /// `true` if this policy's `script-src-elem` (or `script-src`, or
+    /// `default-src`) lets a `<script>` element fetch `url` — CSP3 §6.7.1.1 «Script directives
     /// pre-request check» (BUG-1124). Unlike [`Self::fetch_directive_allows`],
     /// which looks at the URL alone, a script element's request carries its
     /// own cryptographic metadata, and the directive decides on it first:
@@ -245,7 +260,7 @@ impl CspPolicy {
         self_origin: Option<&Origin>,
         request: &ScriptRequestMetadata<'_>,
     ) -> bool {
-        let Some(sources) = self.effective_sources(&CspDirective::ScriptSrc) else {
+        let Some(sources) = self.effective_sources(&CspDirective::ScriptSrcElem) else {
             return true;
         };
         // Step 1.1: «Does nonce match source list?» — a non-empty nonce equal
@@ -267,14 +282,14 @@ impl CspPolicy {
         sources.iter().any(|s| source_matches_url(s, url, self_origin))
     }
 
-    /// `true` if this policy's `style-src` (or `default-src`) lets a
-    /// `<link rel=stylesheet>` or an `@import` fetch `url` — CSP3
-    /// `style-src` «Pre-request check» (BUG-1175): a `nonce` matching a
+    /// `true` if this policy's `style-src-elem` (or `style-src`, or
+    /// `default-src`) lets a `<link rel=stylesheet>` or an `@import` fetch
+    /// `url` — CSP3 `style-src-elem` «Pre-request check» (BUG-1175): a `nonce` matching a
     /// `'nonce-…'` source allows the request whatever the URL, otherwise the
     /// URL must match the source list. Unlike scripts there is no integrity
     /// bypass and no `'strict-dynamic'`.
     pub fn style_element_fetch_allows(&self, url: &Url, self_origin: Option<&Origin>, nonce: Option<&str>) -> bool {
-        let Some(sources) = self.effective_sources(&CspDirective::StyleSrc) else {
+        let Some(sources) = self.effective_sources(&CspDirective::StyleSrcElem) else {
             return true;
         };
         if let Some(nonce) = nonce.filter(|n| !n.is_empty())
@@ -1180,5 +1195,45 @@ mod tests {
         assert!(!d.style_element_fetch_allows(&other, None, None));
         let none = parse_csp_header("script-src 'none'");
         assert!(none.style_element_fetch_allows(&other, None, None));
+    }
+
+    /// BUG-1183: CSP3 §6.8.4 fallback lists — `*-src-elem`/`*-src-attr` step
+    /// through `script-src`/`style-src` before `default-src`, and a set
+    /// granular directive wins over its parent.
+    #[test]
+    fn granular_directives_follow_csp3_fallback_list() {
+        let p = parse_csp_header("default-src 'none'; script-src 'self'; style-src-elem 'unsafe-inline'");
+        let script_src = p.directives.get(&CspDirective::ScriptSrc);
+        assert_eq!(p.effective_sources(&CspDirective::ScriptSrcElem), script_src);
+        assert_eq!(p.effective_sources(&CspDirective::ScriptSrcAttr), script_src);
+        assert_eq!(
+            p.effective_sources(&CspDirective::StyleSrcElem),
+            p.directives.get(&CspDirective::StyleSrcElem)
+        );
+        // `style-src-attr` does not borrow its sibling `style-src-elem`.
+        assert_eq!(
+            p.effective_sources(&CspDirective::StyleSrcAttr),
+            p.directives.get(&CspDirective::DefaultSrc)
+        );
+        assert!(parse_csp_header("img-src 'none'").effective_sources(&CspDirective::ScriptSrcElem).is_none());
+    }
+
+    /// BUG-1183: the element pre-request checks read `script-src-elem`/
+    /// `style-src-elem` — Chrome blocks under `style-src-elem 'none'` and
+    /// allows `style-src 'none'; style-src-elem 'self'` for a same-origin sheet.
+    #[test]
+    fn element_checks_read_elem_directives() {
+        let doc_origin = origin("https://example.com/");
+        let own = img_url("https://example.com/a.css");
+        let elem_none = parse_csp_header("style-src-elem 'none'");
+        assert!(!elem_none.style_element_fetch_allows(&own, Some(&doc_origin), None));
+        let elem_self = parse_csp_header("style-src 'none'; style-src-elem 'self'");
+        assert!(elem_self.style_element_fetch_allows(&own, Some(&doc_origin), None));
+
+        let js = img_url("https://example.com/a.js");
+        let script_none = parse_csp_header("script-src-elem 'none'");
+        assert!(!script_none.script_element_fetch_allows(&js, Some(&doc_origin), &script_req(None, None, true)));
+        let script_self = parse_csp_header("script-src 'none'; script-src-elem 'self'");
+        assert!(script_self.script_element_fetch_allows(&js, Some(&doc_origin), &script_req(None, None, true)));
     }
 }
