@@ -73,6 +73,8 @@ pub(super) fn v8_thread_main(
     // callback itself (`_lumen_tt_get_compliant_script_for_codegen`), same
     // division as every other sink this task closed.
     codegen_hook::install(&mut inner.isolate, &inner.context);
+    // BUG-1135: the native behind every module's `import.meta.resolve()`.
+    crate::v8_esm::install_import_meta_resolve(&mut inner.isolate, &inner.context);
     let _ = init_tx.send(Ok(()));
 
     while let Ok(cmd) = cmd_rx.recv() {

@@ -9,7 +9,7 @@
 //!   literals) is replaced by `__$lumen_meta__` — a plain `var` defined at the
 //!   top of the module via a one-line preamble.
 //! * The preamble sets `.url` (the resolved module specifier), `.resolve(s)`
-//!   (Phase 0: simple base-dir join for relative paths), and `.env` (Vite-style
+//!   (delegates to the engine's module resolver, BUG-1135), and `.env` (Vite-style
 //!   compat stub: `{MODE:"production", DEV:false, PROD:true, BASE_URL:"/", SSR:false}`).
 //!
 //! The transformer is **fail-open**: when no `import.meta` appears in the
@@ -52,14 +52,12 @@ fn build_preamble(url: &str) -> String {
     let mut p = String::with_capacity(300);
     p.push_str("var __$lumen_meta__=Object.create(null);");
     p.push_str(&format!("__$lumen_meta__.url=\"{esc}\";"));
-    // Phase 0 resolver: handles absolute URLs and relative path joins.
-    p.push_str("__$lumen_meta__.resolve=function(s){");
-    p.push_str("if(!s)return __$lumen_meta__.url;");
-    p.push_str("if(/^[a-zA-Z][a-zA-Z0-9+-.]*:/.test(s))return s;");
-    p.push_str("var b=__$lumen_meta__.url;");
-    p.push_str("var d=b.slice(0,b.lastIndexOf('/')+1);");
-    p.push_str("return d+s;");
-    p.push_str("};");
+    // BUG-1135: resolution is the engine's own module resolver (import map,
+    // WHATWG URL parsing, `TypeError` for a bare name) — see
+    // `v8_esm::install_import_meta_resolve`. The native is captured once so a
+    // later page write to the global can't redirect it.
+    p.push_str("__$lumen_meta__.resolve=(function(r,u){return function resolve(s){");
+    p.push_str("return r(u,String(s));};})(_lumen_import_meta_resolve,__$lumen_meta__.url);");
     // Vite-style env stub so `import.meta.env.MODE` doesn't throw.
     p.push_str("__$lumen_meta__.env={MODE:\"production\",DEV:false,PROD:true,BASE_URL:\"/\",SSR:false};");
     p.push('\n');
