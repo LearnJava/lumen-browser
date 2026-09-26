@@ -17,12 +17,14 @@ pub(crate) fn install_shape_detection_bindings_v8(rt: &crate::v8_runtime::V8JsRu
 #[cfg(feature = "v8-backend")]
 const SHAPE_DETECTION_SHIM: &str = r#"
 (function() {
+  // WebIDL shape (BUG-677): every constructor takes
+  // `optional <X>DetectorOptions options = {}`, so `.length === 0` comes from
+  // the default parameter; the options are internal slots, not own
+  // properties, and Phase 0 never reads them back, so they are not stored.
+
   // FaceDetector stub
   class FaceDetector {
-    constructor(options) {
-      this.options = options || {};
-      this.maxDetectedFaces = options?.maxDetectedFaces || 10;
-    }
+    constructor(options = {}) {}
 
     async detect(image) {
       if (!image) {
@@ -35,11 +37,7 @@ const SHAPE_DETECTION_SHIM: &str = r#"
 
   // BarcodeDetector stub
   class BarcodeDetector {
-    constructor(options) {
-      this.options = options || {};
-      // Phase 0: formats are ignored
-      this.formats = options?.formats || [];
-    }
+    constructor(options = {}) {}
 
     async detect(image) {
       if (!image) {
@@ -57,9 +55,7 @@ const SHAPE_DETECTION_SHIM: &str = r#"
 
   // TextDetector stub
   class TextDetector {
-    constructor(options) {
-      this.options = options || {};
-    }
+    constructor(options = {}) {}
 
     async detect(image) {
       if (!image) {
@@ -68,6 +64,17 @@ const SHAPE_DETECTION_SHIM: &str = r#"
       // Phase 0: Always return empty array - no detection
       return [];
     }
+  }
+
+  for (const [ctor, name] of [[FaceDetector, 'FaceDetector'],
+                              [BarcodeDetector, 'BarcodeDetector'],
+                              [TextDetector, 'TextDetector']]) {
+    Object.defineProperty(ctor.prototype, Symbol.toStringTag, {
+      value: name,
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
   }
 
   // Export to global scope
@@ -153,6 +160,45 @@ mod tests {
                 .eval("typeof BarcodeDetector.getSupportedFormats === 'function'")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    #[test]
+    fn constructors_have_zero_length() {
+        with_shape_detection(|rt| {
+            let v = rt
+                .eval("[FaceDetector, BarcodeDetector, TextDetector].map(c => c.length).join()")
+                .unwrap();
+            assert_eq!(v, JsValue::String("0,0,0".into()));
+        });
+    }
+
+    #[test]
+    fn instances_have_interface_to_string_tag() {
+        with_shape_detection(|rt| {
+            let v = rt
+                .eval(
+                    "[FaceDetector, BarcodeDetector, TextDetector]                     .map(c => Object.prototype.toString.call(new c())).join()",
+                )
+                .unwrap();
+            assert_eq!(
+                v,
+                JsValue::String(
+                    "[object FaceDetector],[object BarcodeDetector],[object TextDetector]".into()
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn instances_have_no_own_properties() {
+        with_shape_detection(|rt| {
+            let v = rt
+                .eval(
+                    "[new FaceDetector({maxDetectedFaces: 3}),                      new BarcodeDetector({formats: ['qr_code']}),                      new TextDetector({})]                     .map(o => Reflect.ownKeys(o).length).join()",
+                )
+                .unwrap();
+            assert_eq!(v, JsValue::String("0,0,0".into()));
         });
     }
 

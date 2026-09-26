@@ -1,6 +1,6 @@
 # BUG-677 — `FaceDetector`/`BarcodeDetector`/`TextDetector`: no `Symbol.toStringTag`, wrong constructor `.length`, internal state leaked as own instance properties
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/shape_detection.rs:18-86` — `SHAPE_DETECTION_SHIM`)
 **Найден:** P2, WPT-VENDOR-shape-detection, 2026-08-06
 
@@ -80,3 +80,20 @@ Fix scope в `crates/js/src/shape_detection.rs`:
   by `this`, либо просто не сохранять — Phase 0 не читает их обратно нигде)
   вместо `this.<field> = …`, чтобы `Object.getOwnPropertyNames(instance)`
   был пуст.
+
+## Исправление (2026-09-26, P3)
+
+`SHAPE_DETECTION_SHIM` в `crates/js/src/shape_detection.rs`:
+
+* все три конструктора — `constructor(options = {}) {}`: `.length === 0`,
+  опции в `this` не пишутся (Phase 0 их обратно не читает), поэтому
+  `Reflect.ownKeys(new X(opts))` пуст;
+* `Symbol.toStringTag` (`writable: false, enumerable: false,
+  configurable: true`) на прототипах `FaceDetector`/`BarcodeDetector`/
+  `TextDetector` — `Object.prototype.toString.call(new FaceDetector())` →
+  `"[object FaceDetector]"`.
+
+Тесты: `shape_detection::tests::{constructors_have_zero_length,
+instances_have_interface_to_string_tag, instances_have_no_own_properties}`.
+Прогон WPT категории по-прежнему упирается в TLS `UnknownIssuer` (все id
+`.https.`) — прямого WPT-сигнала нет.
