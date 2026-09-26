@@ -547,12 +547,88 @@ fn sw_register_returns_promise() {
 
 #[test]
 fn sw_register_calls_lumen_primitive() {
-    // A file URL: the registry is keyed by the document's own origin (BUG-674).
-    let rt = v8_runtime_with_url("file:///test.html");
+    // The registry is keyed by the document's own origin (BUG-674). Not a
+    // `file:` page: its `/sw.js` resolves to a `file:` script URL, which
+    // `register()` rejects (BUG-675).
+    let rt = v8_runtime_with_url("https://example.com/");
     rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
         .unwrap();
     let result = rt.eval("_lumen_sw_has_registration()").unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-675: evaluates `register(args)` and returns the rejection's `name`,
+/// or `"resolved:<scriptURL>"`, plus whether a registration was recorded.
+fn sw_register_outcome(page: &str, args: &str) -> (String, bool) {
+    let rt = v8_runtime_with_url(page);
+    rt.eval(&format!(
+        "var out = null; navigator.serviceWorker.register({args})         .then(function(r) {{ out = 'resolved:' + r.scriptURL; }})         .catch(function(e) {{ out = e.name; }});"
+    ))
+    .unwrap();
+    let lumen_core::JsValue::String(out) = rt.eval("out").unwrap() else {
+        panic!("register() promise did not settle");
+    };
+    let lumen_core::JsValue::Bool(has) = rt.eval("_lumen_sw_has_registration()").unwrap() else {
+        panic!("_lumen_sw_has_registration() is not a bool");
+    };
+    (out, has)
+}
+
+#[test]
+fn sw_register_resolves_script_url_against_document() {
+    let (out, has) = sw_register_outcome("https://example.com/app/page.html", "'sw.js'");
+    assert_eq!(out, "resolved:https://example.com/app/sw.js");
+    assert!(has);
+}
+
+#[test]
+fn sw_register_rejects_cross_origin_script_with_security_error() {
+    let (out, has) = sw_register_outcome(
+        "https://example.com/",
+        "'https://evil.example/sw.js', { scope: '/' }",
+    );
+    assert_eq!(out, "SecurityError");
+    assert!(!has);
+}
+
+#[test]
+fn sw_register_rejects_javascript_scheme_with_type_error() {
+    let (out, has) = sw_register_outcome("https://example.com/", "'javascript:alert(1)', { scope: '/' }");
+    assert_eq!(out, "TypeError");
+    assert!(!has);
+}
+
+#[test]
+fn sw_register_rejects_file_page_script_with_type_error() {
+    let (out, has) = sw_register_outcome("file:///test.html", "'/sw.js'");
+    assert_eq!(out, "TypeError");
+    assert!(!has);
+}
+
+#[test]
+fn sw_register_rejects_encoded_separator_in_script_path() {
+    let (out, _) = sw_register_outcome("https://example.com/", "'/a%2Fb/sw.js'");
+    assert_eq!(out, "TypeError");
+    let (out, _) = sw_register_outcome("https://example.com/", "'/a%5cb/sw.js'");
+    assert_eq!(out, "TypeError");
+}
+
+#[test]
+fn sw_register_rejects_invalid_script_url_with_type_error() {
+    let (out, _) = sw_register_outcome("https://example.com/", "'https://exa mple.com/sw.js'");
+    assert_eq!(out, "TypeError");
+}
+
+#[test]
+fn sw_register_rejects_bad_scope() {
+    let (out, has) = sw_register_outcome(
+        "https://example.com/",
+        "'/sw.js', { scope: 'https://evil.example/' }",
+    );
+    assert_eq!(out, "SecurityError");
+    assert!(!has);
+    let (out, _) = sw_register_outcome("https://example.com/", "'/sw.js', { scope: 'data:,x' }");
+    assert_eq!(out, "TypeError");
 }
 
 #[test]

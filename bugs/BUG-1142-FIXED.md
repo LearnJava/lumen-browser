@@ -1,6 +1,6 @@
 # BUG-1142 — `navigator.javaEnabled` отсутствует
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js` — объект `navigator`, члена нет; `grep javaEnabled crates/js/src` — 0)
 
@@ -52,3 +52,12 @@ window.R={
 
 HTML LS §8.9.1.6 `NavigatorPlugins`: `javaEnabled()` всегда возвращает `false`. Добавить на
 `navigator` (при появлении `Navigator.prototype` из BUG-624 — туда). Критерий: репро даёт `false`.
+
+## Решение (2026-09-26, P6)
+
+`javaEnabled: function javaEnabled() { return false; }` добавлен в литерал `navigator` в
+`crates/js/src/shim/web_api_shim_mid_b.js`; `finalize_navigator_interface_v8` (BUG-624) переносит
+его на `Navigator.prototype` как операцию. Тест —
+`crates/js/src/dom/tests/v8_bug624_navigator_interface.rs::java_enabled_is_an_operation_returning_false`
+(`typeof` → `function`, вызов → `false`, `name === 'javaEnabled'`), плюс `javaEnabled` в списке
+операций `members_live_on_the_prototype_not_the_instance`.

@@ -1,7 +1,7 @@
 # BUG-675 — `navigator.serviceWorker.register()` performs no validation at all on the script URL — cross-origin scripts and `javascript:`-scheme URLs both register successfully instead of rejecting
 
-**Статус:** OPEN
-**Компонент:** js — `crates/js/src/dom.rs` (`_sw_container.register`, ~line 4999-5013)
+**Статус:** FIXED 2026-09-26 (P3)
+**Компонент:** js — `crates/js/src/shim/web_api_shim_mid_b.js` (`_sw_container.register`, `_sw_check_register_urls`)
 **Найден:** P2, WPT-VENDOR-service-workers (2026-08-06), live `--mcp-live-port` probe (same session as [BUG-674](BUG-674-FIXED.md); the category's own WPT run gave no signal — all `.https.` ids TIMEOUT on the documented TLS gap `UnknownIssuer`)
 
 ## Механизм
@@ -35,3 +35,15 @@ Not [BUG-674](BUG-674-FIXED.md) — that bug is about the origin *key* the regis
 ## Предлагаемый фикс
 
 In `_sw_container.register`, before constructing the registration: reject (return a rejected `Promise`) with `TypeError` when `scriptUrl`'s scheme is not `http:`/`https:`, and with a `SecurityError`-shaped rejection when the script URL's origin differs from `_sw_origin` (once [BUG-674](BUG-674-FIXED.md)'s origin-binding fix lands, use the real bound origin for this comparison rather than the forgeable `_sw_origin` global as it exists today).
+
+## Исправление (2026-09-26, P3)
+
+`register()` теперь до создания любого состояния регистрации вызывает `_sw_check_register_urls` (`web_api_shim_mid_b.js`) по SW §3.4.3 + §9.2 Start Register + §9.6 Register:
+
+1. URL скрипта разбирается относительно `document.baseURI` (раньше хранилась сырая строка, `'sw.js'` оставался относительным) — ошибка разбора → `TypeError`; `registration.scriptURL` теперь абсолютный.
+2. Схема не `http:`/`https:` или в пути `%2f`/`%5c` (без учёта регистра) → `TypeError`. То же для явного `options.scope`.
+3. Origin скрипта, затем scope ≠ `location.origin` документа → `DOMException` `SecurityError`. Порядок как в спеке: сначала обе проверки формы (Start Register), затем обе проверки origin (задача Register).
+
+`file:`-страница больше не регистрирует SW (её `/sw.js` — `file:`-URL, `TypeError`), как в Chrome. Тест `sw_register_calls_lumen_primitive` переведён на `https://`, новые тесты — `v8_events_cache.rs` `sw_register_resolves_script_url_against_document`, `sw_register_rejects_*`.
+
+**Остаток (не в этом баге):** ключ реестра — по-прежнему сырая строка `options.scope` (по умолчанию `'/'`), а не разобранный URL scope; умолчание по спеке — `new URL('./', scriptURL)`, а не корень origin; `getRegistration()` сравнивает префиксы сырых строк. Проверка MIME-типа скрипта (§9.4 Update step 7) не делается — скрипт по-прежнему тянется fire-and-forget `fetch()` после разрешения промиса.

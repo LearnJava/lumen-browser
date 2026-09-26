@@ -400,8 +400,12 @@ XMLHttpRequest.prototype.send = function(body) {
                   contentType: self.getResponseHeader('content-type') || '' });
         }
 
+        // BUG-1141, XHR «handle response end-of-body» steps 4–9: the final
+        // `progress` (async only) fires while still LOADING, before DONE's
+        // `readystatechange` — a handler that drops the XHR on readyState 4
+        // must not see another event after it.
+        if (self._async !== false) self._fireProgress('progress', bodyLen, bodyLen);
         self._setReadyState(4); // DONE
-        self._fireProgress('progress', bodyLen, bodyLen);
         self._fireProgress('load', bodyLen, bodyLen);
         self._fireProgress('loadend', bodyLen, bodyLen);
     }
@@ -1172,6 +1176,38 @@ mod tests {
         assert_eq!(
             r.eval("__states.indexOf(4) !== -1").unwrap(),
             bool_true()
+        );
+    }
+
+    /// BUG-1141: the final `progress` fires at readyState 3, before DONE's
+    /// `readystatechange`; a handler that nulls its XHR reference on
+    /// readyState 4 must not be followed by a `progress` (airbnb).
+    #[test]
+    fn xhr_final_progress_precedes_done_readystatechange() {
+        let r = rt_with_policy(None, None);
+        r.eval(
+            "var x = new XMLHttpRequest(); globalThis.__ev = []; \
+             ['loadstart','progress','load','loadend'].forEach(function(n) { \
+               x.addEventListener(n, function() { __ev.push(n + '@' + x.readyState); }); }); \
+             x.onreadystatechange = function() { __ev.push('rsc' + x.readyState); }; \
+             x.open('GET', '/data'); \
+             x.send();",
+        )
+        .unwrap();
+
+        for _ in 0..400 {
+            let _ = r.eval("_lumen_tick_timers();");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if r.eval("__ev.indexOf('loadend@4') !== -1").unwrap() == bool_true() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            r.eval("__ev.join(',')").unwrap(),
+            JsValue::String(
+                "rsc1,loadstart@1,rsc2,rsc3,progress@3,rsc4,load@4,loadend@4".into()
+            )
         );
     }
 
