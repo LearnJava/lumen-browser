@@ -23,6 +23,21 @@ the time — read dates.
 
 ## Done
 
+- **Interest Invokers live in the page shim (GAP-INTERESTINVOKER, P1, 2026-09-26).**
+  `_lumen_install_interest_for` (`web_api_shim_tail_b.js`) installs `interestForElement` on the
+  four mixin interfaces (`svg.rs` calls it for `SVGAElement`). One state record per invoker in
+  `_lumen_interest_states`; every hover (`mouseover`, document capture) and focus change
+  (`_lumen_focus_update` → `_lumen_interest_note_focus`) re-runs `_lumen_interest_reevaluate`,
+  which re-derives the show/hide timers — hide decisions before show decisions, so equal delays
+  give the old target's `loseinterest` before the new target's `interest`. Engagement is transitive
+  (`_lumen_interest_engaged_set`): an interest stays while an engaged invoker sits inside its
+  target. Delays are read from `getComputedStyle` (`interest-delay-*`, Rust `ComputedStyle`
+  fields, not inherited). `:interest-source`/`:interest-target` use the hidden-attr bridge
+  (`data-lumen-interest-source`/`-target`) like `:popover-open`. `_lumen_popover_hide` calls
+  `_lumen_interest_popover_hidden`, and `_lumen_popover_show(nid, invokerNid)` keeps open auto
+  popovers that contain the new one or its invoker (`_lumen_popover_ancestor_index`); hiding one
+  closes those nested above it first.
+
 - **LoAF culprit source location comes from the invoked function, not a stack walk (LONGTASK-1
   срезы 4-5, P1, 2026-09-25).** `_lumen_capture_call_site(fn)` (`v8_runtime/script_attribution.rs`)
   reads `ScriptOrigin`/name/line/column and `sourceCharPosition` from the `v8::Function` the dispatcher

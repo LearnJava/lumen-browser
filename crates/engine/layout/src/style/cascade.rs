@@ -552,6 +552,9 @@ pub(crate) fn compute_style_shareable(
         contain_intrinsic_height_auto: false,
         // CSS Sizing L4 §4.5 — interpolate-size is inherited.
         interpolate_size: inherited.interpolate_size,
+        // Interest Invokers — interest-delay-* не наследуются.
+        interest_delay_start: None,
+        interest_delay_end: None,
         container_type: ContainerType::Normal,
         container_name: Vec::new(),
         // CSS Filter Effects L2 — backdrop-filter не наследуется.

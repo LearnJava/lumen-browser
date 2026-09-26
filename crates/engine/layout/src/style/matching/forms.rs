@@ -138,6 +138,10 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
         // состояние. Phase 0 без Popover API runtime — всегда `false`.
         PseudoClass::PopoverOpen => doc.get(node).get_attr("data-lumen-popover-open").is_some(),
+        // Interest Invokers `:interest-source`/`:interest-target` — тот же
+        // мост через скрытый атрибут, его ставит JS-шим при показе интереса.
+        PseudoClass::InterestSource => doc.get(node).get_attr("data-lumen-interest-source").is_some(),
+        PseudoClass::InterestTarget => doc.get(node).get_attr("data-lumen-interest-target").is_some(),
         // CSS Selectors L4 §17.4 `:state(name)` — WHATWG HTML §4.13.2
         // `ElementInternals.states` (`CustomStateSet`). Runtime-only, same
         // sentinel-attribute pattern as `:fullscreen`/`:modal`: the JS shim

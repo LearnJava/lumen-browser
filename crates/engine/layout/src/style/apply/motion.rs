@@ -44,6 +44,7 @@ use crate::style::parse::timeline::{
     apply_view_timeline_shorthand,
     parse_animation_timeline_list,
     parse_scroll_axis,
+    parse_interest_delay,
     parse_time_list,
 };
 use crate::style::parse::transform::{parse_angle_to_radians, parse_length_px, parse_transform_list};
@@ -373,6 +374,29 @@ pub(in crate::style) fn apply_decl_motion(
         }
         "transition-delay" => {
             style.transition_delays = parse_time_list(val);
+        }
+        // Interest Invokers (GAP-INTERESTINVOKER): задержки показа/снятия
+        // интереса. Раскладку не двигают — их читает JS-шим через
+        // getComputedStyle, когда взводит таймеры `interest`/`loseinterest`.
+        "interest-delay-start" => {
+            if let Some(v) = parse_interest_delay(val) {
+                style.interest_delay_start = v;
+            }
+        }
+        "interest-delay-end" => {
+            if let Some(v) = parse_interest_delay(val) {
+                style.interest_delay_end = v;
+            }
+        }
+        "interest-delay" => {
+            // `<start> <end>?` — одно значение задаёт обе половины.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let parsed: Option<Vec<Option<f32>>> =
+                parts.iter().map(|p| parse_interest_delay(p)).collect();
+            if let Some(v) = parsed.filter(|v| matches!(v.len(), 1 | 2)) {
+                style.interest_delay_start = v[0];
+                style.interest_delay_end = *v.last().unwrap_or(&v[0]);
+            }
         }
         "transition-timing-function" => {
             style.transition_timing_functions = TimingFunction::parse_list(val);

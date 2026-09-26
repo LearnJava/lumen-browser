@@ -605,6 +605,17 @@ const SVG_SHIM: &str = r#"
   });
   window.SVGUseElement = SVGUseElement;
 
+  // SVGAElement — <a> (SVG 2 §16.2). Carries `interestForElement` from the
+  // Interest Invokers `InterestInvokerElement` mixin (GAP-INTERESTINVOKER),
+  // installed by the page shim's shared helper.
+  class SVGAElement extends SVGGraphicsElement {
+    constructor() { super(); this.tagName = 'a'; }
+  }
+  window.SVGAElement = SVGAElement;
+  if (typeof _lumen_install_interest_for === 'function') {
+    _lumen_install_interest_for(SVGAElement.prototype, 'SVGAElement');
+  }
+
   // SVGImageElement — <image>
   class SVGImageElement extends SVGGraphicsElement {
     constructor() {
@@ -1301,6 +1312,7 @@ const SVG_SHIM: &str = r#"
     'defs':             SVGDefsElement,
     'symbol':           SVGSymbolElement,
     'use':              SVGUseElement,
+    'a':                SVGAElement,
     'image':            SVGImageElement,
     'switch':           SVGSwitchElement,
     'rect':             SVGRectElement,

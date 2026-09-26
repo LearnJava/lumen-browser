@@ -1085,6 +1085,9 @@ function _lumen_focus_update(newNid) {
         _lumen_dispatch_focus_event(newNid, 'focus', false, oldEl);
         _lumen_dispatch_focus_event(newNid, 'focusin', true, oldEl);
     }
+    // Interest Invokers: focus entering/leaving an invoker or its target
+    // (re)arms the interest delays.
+    _lumen_interest_note_focus();
 }
 window._lumen_focus_update = _lumen_focus_update;
 
@@ -4313,7 +4316,22 @@ var _LPOP_ATTR = 'data-lumen-popover-open';
 // Fixed-position styles applied to open popovers (top-layer emulation).
 var _LPOP_STYLE = 'position:fixed;z-index:2147483647;inset:auto;margin:auto;overflow:auto;';
 
-function _lumen_popover_show(nid) {
+// HTML LS "topmost popover ancestor": the open auto popover highest in the
+// stack that contains `nid` (shadow-including) or the invoker that shows it.
+// Opening a nested popover must leave its ancestors open.
+function _lumen_popover_ancestor_index(nid, invokerNid) {
+    for (var i = _lumen_popover_stack.length - 1; i >= 0; i--) {
+        var p = _lumen_popover_stack[i];
+        if (p === nid) continue;
+        if (_lumen_shadow_including_ancestor(p, nid)) return i;
+        if (invokerNid !== undefined && invokerNid !== null && _lumen_shadow_including_ancestor(p, invokerNid)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function _lumen_popover_show(nid, invokerNid) {
     if (_lumen_get_attr(nid, 'popover') === undefined) {
         throw new DOMException('Element is not a popover', 'NotSupportedError');
     }
@@ -4339,8 +4357,9 @@ function _lumen_popover_show(nid) {
         // Showing an auto popover closes all hints first, then all autos.
         var hs2 = _lumen_hint_stack.slice();
         for (var hi2 = hs2.length - 1; hi2 >= 0; hi2--) { _lumen_popover_hide(hs2[hi2]); }
+        var keep = _lumen_popover_ancestor_index(nid, invokerNid);
         var snap = _lumen_popover_stack.slice();
-        for (var i = snap.length - 1; i >= 0; i--) { _lumen_popover_hide(snap[i]); }
+        for (var i = snap.length - 1; i > keep; i--) { _lumen_popover_hide(snap[i]); }
         _lumen_popover_stack.push(nid);
     }
     _lumen_set_attr(nid, _LPOP_ATTR, '');
@@ -4358,6 +4377,13 @@ function _lumen_popover_show(nid) {
 
 function _lumen_popover_hide(nid) {
     if (_lumen_get_attr(nid, _LPOP_ATTR) === undefined) return; // already closed
+    // "Hide all popovers until": auto popovers nested above this one in the
+    // stack (see `_lumen_popover_ancestor_index`) close first, top-down.
+    var above = _lumen_popover_stack.indexOf(nid);
+    if (above >= 0) {
+        var nested = _lumen_popover_stack.slice(above + 1);
+        for (var ni = nested.length - 1; ni >= 0; ni--) { _lumen_popover_hide(nested[ni]); }
+    }
     var beforeEvt = new ToggleEvent('beforetoggle', {
         bubbles: false, cancelable: true, oldState: 'open', newState: 'closed' });
     beforeEvt.target = _lumen_make_element(nid);
@@ -4385,6 +4411,8 @@ function _lumen_popover_hide(nid) {
         bubbles: false, cancelable: false, oldState: 'open', newState: 'closed' });
     toggleEvt.target = _lumen_make_element(nid);
     _lumen_dispatch(nid, toggleEvt);
+    // A popover shown through interest loses that interest when it closes.
+    _lumen_interest_popover_hidden(nid);
 }
 
 function _lumen_popover_toggle(nid, force) {
@@ -4517,6 +4545,288 @@ document.addEventListener('click', function(evt) {
         // `command` event itself is the whole point.
     } catch (e) { _lumen_report_exception(e); }
 });
+
+// ── Interest Invokers (WHATWG HTML PR #11006, `.tentative.`, GAP-INTERESTINVOKER) ──
+// `interestfor` on `<button>`/`<a href>`/`<area href>`/SVG `<a href>` is the
+// hover/focus analogue of `commandfor`: pointing at or focusing the invoker for
+// `interest-delay-start` fires a cancelable `interest` InterestEvent at the
+// target (and opens it if it is a popover); leaving both the invoker and the
+// target for `interest-delay-end` fires `loseinterest` (cancelable — a
+// cancelled one keeps the interest) and closes the popover again. Escape drops
+// every interest at once, newest first, with non-cancelable `loseinterest`.
+// State is mirrored into `data-lumen-interest-source`/`-target` for the
+// `:interest-source`/`:interest-target` pseudo-classes, the same hidden-attr
+// bridge `:popover-open` uses.
+
+// `interestForElement` — same explicit-attr-element reflection as
+// `commandForElement` above, on the four interfaces of the
+// `InterestInvokerElement` mixin. The SVG one is installed by `svg.rs` once
+// `SVGAElement` exists.
+var _LUMEN_INTEREST_FOR_EXPLICIT = new WeakMap();
+function _lumen_install_interest_for(proto, iface) {
+    Object.defineProperty(proto, 'interestForElement', {
+        get: function() {
+            if (this === proto || !proto.isPrototypeOf(this)) throw new TypeError('Illegal invocation');
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return null;
+            // Setting the content attribute afterwards clears the explicitly
+            // set element - the setter leaves the attribute at "".
+            if (_LUMEN_INTEREST_FOR_EXPLICIT.has(this) && _lumen_get_attr(n, 'interestfor') !== '') {
+                _LUMEN_INTEREST_FOR_EXPLICIT.delete(this);
+            }
+            if (_LUMEN_INTEREST_FOR_EXPLICIT.has(this)) {
+                var explicit = _LUMEN_INTEREST_FOR_EXPLICIT.get(this);
+                if (explicit === null || explicit.__nid__ === undefined) return null;
+                return _lumen_command_target_reachable(n, explicit.__nid__) ? explicit : null;
+            }
+            var idStr = _lumen_u2n(_lumen_get_attr(n, 'interestfor'));
+            if (idStr === null || idStr === '') return null;
+            var targetNid = _lumen_u2n(_lumen_get_element_by_id(String(idStr)));
+            return targetNid === null ? null : _lumen_make_element(targetNid);
+        },
+        set: function(v) {
+            if (this === proto || !proto.isPrototypeOf(this)) throw new TypeError('Illegal invocation');
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            if (v !== null && !(v && typeof v === 'object' && v.__nid__ !== undefined && v.nodeType === 1)) {
+                throw new TypeError("Failed to set the 'interestForElement' property on '" + iface + "': "
+                    + "the provided value is not of type 'Element'.");
+            }
+            _LUMEN_INTEREST_FOR_EXPLICIT.set(this, v);
+            _lumen_set_attr(n, 'interestfor', '');
+        },
+        enumerable: true, configurable: true,
+    });
+    // Named like WebIDL attribute accessors (`get interestForElement`).
+    var d = Object.getOwnPropertyDescriptor(proto, 'interestForElement');
+    Object.defineProperty(d.get, 'name', { value: 'get interestForElement' });
+    Object.defineProperty(d.set, 'name', { value: 'set interestForElement' });
+}
+_lumen_install_interest_for(HTMLAnchorElement.prototype, 'HTMLAnchorElement');
+_lumen_install_interest_for(HTMLAreaElement.prototype, 'HTMLAreaElement');
+_lumen_install_interest_for(HTMLButtonElement.prototype, 'HTMLButtonElement');
+
+var _LUMEN_INTEREST_SOURCE_ATTR = 'data-lumen-interest-source';
+var _LUMEN_INTEREST_TARGET_ATTR = 'data-lumen-interest-target';
+// `normal` delays — Chromium's defaults for the two properties.
+var _LUMEN_INTEREST_NORMAL_START_MS = 500;
+var _LUMEN_INTEREST_NORMAL_END_MS = 250;
+
+// One record per invoker with pending or shown interest:
+// { inv, tgt, shown, seq, showTimer, hideTimer, vetoed }. `vetoed` marks a
+// shown interest whose `loseinterest` was cancelled while disengaged — it
+// stays until the pointer/focus comes back, instead of re-firing forever.
+var _lumen_interest_states = [];
+var _lumen_interest_seq = 0;
+var _lumen_interest_hover_nid = -1;
+
+function _lumen_interest_state_for(inv) {
+    for (var i = 0; i < _lumen_interest_states.length; i++) {
+        if (_lumen_interest_states[i].inv === inv) return _lumen_interest_states[i];
+    }
+    return null;
+}
+
+function _lumen_interest_drop_state(st) {
+    if (st.showTimer !== null) { clearTimeout(st.showTimer); st.showTimer = null; }
+    if (st.hideTimer !== null) { clearTimeout(st.hideTimer); st.hideTimer = null; }
+    var i = _lumen_interest_states.indexOf(st);
+    if (i >= 0) _lumen_interest_states.splice(i, 1);
+}
+
+// The element types that can carry interest — `interestfor` on anything else
+// (a `<div>`, `<input type=button>`) is inert (`interestfor-input-invalid`).
+function _lumen_interest_is_invoker(nid) {
+    var el = _lumen_make_element(nid);
+    if (!el || el.nodeType !== 1) return false;
+    if (_lumen_get_attr(nid, 'interestfor') === undefined && !_LUMEN_INTEREST_FOR_EXPLICIT.has(el)) return false;
+    var local = String(el.localName || '').toLowerCase();
+    if (el.namespaceURI === 'http://www.w3.org/2000/svg') {
+        return local === 'a' && (_lumen_has_attr(nid, 'href') || _lumen_has_attr(nid, 'xlink:href'));
+    }
+    if (local === 'button') return !_lumen_has_attr(nid, 'disabled');
+    if (local === 'a' || local === 'area') return _lumen_has_attr(nid, 'href');
+    return false;
+}
+
+// The nearest shadow-including inclusive ancestor of `nid` that is an
+// interest invoker with a resolvable target, or -1.
+function _lumen_interest_invoker_for(nid) {
+    var cur = nid, guard = 0;
+    while (cur !== null && cur !== undefined && cur !== -1 && guard++ < 1024) {
+        if (_lumen_interest_is_invoker(cur)) {
+            var t = _lumen_make_element(cur).interestForElement;
+            if (t && t.__nid__ !== undefined && _lumen_resource_is_connected(t.__nid__)) return cur;
+        }
+        var p = _lumen_u2n(_lumen_get_parent(cur));
+        cur = p !== null ? p : _lumen_u2n(_lumen_get_shadow_root_host(cur));
+    }
+    return -1;
+}
+
+function _lumen_interest_inside(nid, anc) {
+    return nid !== -1 && nid !== null && nid !== undefined && _lumen_shadow_including_ancestor(anc, nid);
+}
+
+// Is the pointer or focus on the invoker or its target (or inside either)?
+function _lumen_interest_directly_engaged(st) {
+    var h = _lumen_interest_hover_nid, f = _lumen_last_focused_nid;
+    return _lumen_interest_inside(h, st.inv) || _lumen_interest_inside(h, st.tgt)
+        || _lumen_interest_inside(f, st.inv) || _lumen_interest_inside(f, st.tgt);
+}
+
+// The shown interests to keep: the directly engaged ones, plus - to a fixed
+// point - every interest whose target contains the invoker of one already
+// kept, so moving into a nested invoker's target keeps the whole chain alive
+// (`interestfor-invoker-descendants`).
+function _lumen_interest_engaged_set() {
+    var shown = _lumen_interest_states.filter(function(st) { return st.shown; });
+    var kept = shown.filter(_lumen_interest_directly_engaged);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (var i = 0; i < shown.length; i++) {
+            var st = shown[i];
+            if (kept.indexOf(st) >= 0) continue;
+            for (var j = 0; j < kept.length; j++) {
+                if (_lumen_interest_inside(kept[j].inv, st.tgt)) { kept.push(st); changed = true; break; }
+            }
+        }
+    }
+    return kept;
+}
+
+// `interest-delay-start`/`-end` of the invoker in ms — `normal` maps to the
+// UA default.
+function _lumen_interest_delay_ms(inv, start) {
+    var v = 'normal';
+    try {
+        var cs = getComputedStyle(_lumen_make_element(inv));
+        v = String(cs.getPropertyValue(start ? 'interest-delay-start' : 'interest-delay-end') || 'normal').trim();
+    } catch (e) { v = 'normal'; }
+    var m = /^([0-9]*\.?[0-9]+(?:e[+-]?[0-9]+)?)(ms|s)$/i.exec(v);
+    if (!m) return start ? _LUMEN_INTEREST_NORMAL_START_MS : _LUMEN_INTEREST_NORMAL_END_MS;
+    var n = parseFloat(m[1]);
+    return m[2].toLowerCase() === 's' ? n * 1000 : n;
+}
+
+function _lumen_interest_fire(type, st, cancelable) {
+    var ev = new InterestEvent(type, {
+        source: _lumen_make_element(st.inv), bubbles: false, cancelable: cancelable,
+        composed: true, isTrusted: true,
+    });
+    return _lumen_dispatch(st.tgt, ev);
+}
+
+function _lumen_interest_gain(st) {
+    st.showTimer = null;
+    var ok = _lumen_resource_is_connected(st.inv) && _lumen_interest_is_invoker(st.inv);
+    var t = ok ? _lumen_make_element(st.inv).interestForElement : null;
+    if (!t || t.__nid__ !== st.tgt || !_lumen_resource_is_connected(st.tgt)) {
+        _lumen_interest_drop_state(st);
+        return;
+    }
+    if (!_lumen_interest_fire('interest', st, true)) { _lumen_interest_drop_state(st); return; }
+    if (_lumen_interest_states.indexOf(st) < 0) return; // a listener reset the state
+    st.shown = true;
+    st.seq = ++_lumen_interest_seq;
+    _lumen_set_attr(st.inv, _LUMEN_INTEREST_SOURCE_ATTR, '');
+    _lumen_set_attr(st.tgt, _LUMEN_INTEREST_TARGET_ATTR, '');
+    if (_lumen_get_attr(st.tgt, 'popover') !== undefined && _lumen_get_attr(st.tgt, _LPOP_ATTR) === undefined) {
+        try { _lumen_popover_show(st.tgt, st.inv); } catch (e) { _lumen_report_exception(e); }
+    }
+    _lumen_interest_reevaluate();
+}
+
+// Runs the lose-interest steps; returns false when a cancelable
+// `loseinterest` was cancelled (the interest then stays).
+function _lumen_interest_lose(st, cancelable) {
+    if (st.hideTimer !== null) { clearTimeout(st.hideTimer); st.hideTimer = null; }
+    if (!_lumen_interest_fire('loseinterest', st, cancelable) && cancelable) {
+        st.vetoed = true;
+        return false;
+    }
+    _lumen_interest_drop_state(st);
+    _lumen_remove_attr(st.inv, _LUMEN_INTEREST_SOURCE_ATTR);
+    var targetStillShown = _lumen_interest_states.some(function(o) { return o.shown && o.tgt === st.tgt; });
+    if (!targetStillShown) {
+        _lumen_remove_attr(st.tgt, _LUMEN_INTEREST_TARGET_ATTR);
+        if (_lumen_get_attr(st.tgt, _LPOP_ATTR) !== undefined) {
+            try { _lumen_popover_hide(st.tgt); } catch (e) { _lumen_report_exception(e); }
+        }
+    }
+    return true;
+}
+
+// Re-derives every timer from the current hover and focus nodes. Hide
+// decisions go first so that moving from one invoker to another fires the
+// old target's `loseinterest` before the new target's `interest` when both
+// delays are equal (`interestfor-keyboard-behavior`).
+function _lumen_interest_reevaluate() {
+    var h = _lumen_interest_hover_nid, f = _lumen_last_focused_nid;
+    var engaged = _lumen_interest_engaged_set();
+    _lumen_interest_states.slice().forEach(function(st) {
+        if (st.shown) {
+            if (engaged.indexOf(st) >= 0) {
+                st.vetoed = false;
+                if (st.hideTimer !== null) { clearTimeout(st.hideTimer); st.hideTimer = null; }
+            } else if (st.hideTimer === null && !st.vetoed) {
+                st.hideTimer = setTimeout(function() {
+                    st.hideTimer = null;
+                    if (_lumen_interest_states.indexOf(st) >= 0) _lumen_interest_lose(st, true);
+                }, _lumen_interest_delay_ms(st.inv, false));
+            }
+        } else if (!_lumen_interest_inside(h, st.inv) && !_lumen_interest_inside(f, st.inv)) {
+            _lumen_interest_drop_state(st);
+        }
+    });
+    [h, f].forEach(function(n) {
+        if (n === -1 || n === null || n === undefined) return;
+        var inv = _lumen_interest_invoker_for(n);
+        if (inv === -1 || _lumen_interest_state_for(inv) !== null) return;
+        var st = {
+            inv: inv, tgt: _lumen_make_element(inv).interestForElement.__nid__,
+            shown: false, seq: 0, showTimer: null, hideTimer: null, vetoed: false,
+        };
+        _lumen_interest_states.push(st);
+        st.showTimer = setTimeout(function() { _lumen_interest_gain(st); },
+            _lumen_interest_delay_ms(inv, true));
+    });
+}
+
+// Called by `_lumen_focus_update` after every focus change.
+function _lumen_interest_note_focus() {
+    if (_lumen_interest_states === undefined) return; // shim still loading
+    if (_lumen_interest_states.length === 0 && _lumen_last_focused_nid === -1) return;
+    _lumen_interest_reevaluate();
+}
+
+// Called by `_lumen_popover_hide`: a target popover closed by anything other
+// than the lose-interest steps themselves loses interest right away, no delay.
+function _lumen_interest_popover_hidden(nid) {
+    if (_lumen_interest_states === undefined) return; // shim still loading
+    _lumen_interest_states.slice().reverse().forEach(function(st) {
+        if (st.shown && st.tgt === nid && _lumen_interest_states.indexOf(st) >= 0) {
+            _lumen_interest_lose(st, true);
+        }
+    });
+}
+
+document.addEventListener('mouseover', function(evt) {
+    var n = (evt._path && evt._path.length > 0) ? evt._path[0] : (evt.target && evt.target.__nid__);
+    _lumen_interest_hover_nid = (n === undefined || n === null) ? -1 : n;
+    _lumen_interest_reevaluate();
+}, true);
+
+document.addEventListener('keydown', function(evt) {
+    if (evt.key !== 'Escape' || _lumen_interest_states.length === 0) return;
+    var shown = _lumen_interest_states.filter(function(st) { return st.shown; });
+    _lumen_interest_states.filter(function(st) { return !st.shown; }).forEach(_lumen_interest_drop_state);
+    shown.sort(function(a, b) { return b.seq - a.seq; });
+    shown.forEach(function(st) {
+        if (_lumen_interest_states.indexOf(st) >= 0) _lumen_interest_lose(st, false);
+    });
+}, true);
 
 // ── Fullscreen API helpers ────────────────────────────────────────────────────
 // WHATWG Fullscreen §4.3 — the error preconditions of requestFullscreen(),
