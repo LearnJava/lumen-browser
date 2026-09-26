@@ -1,6 +1,6 @@
 # BUG-1073 — при одновременном старте нескольких окон `lumen` часть процессов получает `present=WHITE` на Vulkan и GL и падает паникой `wgpu: Invalid surface` вместо перехода на следующий бэкенд
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6, срез 7 — перепроверка; правки — срезы 1–4 и 6)
 **Тип:** дефект реализованного кода — выбор wgpu-бэкенда (`[probe]`, BUG-274/275) отклоняет Vulkan и GL как `present=WHITE`, но следующий шаг (`Surface::configure`) паникует в `wgpu-26.0.1/src/backend/wgpu_core.rs:3526`, а не идёт дальше по списку или деградирует в CPU-путь.
 **Заведён:** 2026-09-21 (P2, WPT-RUN-7 срез 44, `pointerevents`)
 **Область:** не локализовано — проба и выбор бэкенда (`crates/engine/paint/src/backends/wgpu_backend.rs`, `crates/engine/paint/src/renderer.rs` — `Renderer::new`/`Surface::configure`); причина `present=WHITE` при параллельном старте не установлена.
@@ -364,3 +364,27 @@ failed` 0), так что медленную смерть он не нагруж
   это только строка `Failed to stop … browser process` в логе, на результат прогона не влияет.
 
 **Что остаётся открытым:** `run_report.py --processes 4` на GTX 1050 (там, где заявка найдена).
+
+## Срез 7 (2026-09-26, P6): перепроверка на третьей машине — закрыт
+
+GTX 1050, на которой заявка найдена, недоступна. По решению пользователя перепроверка сделана на
+этой машине (`Intel(R) Iris(R) Plus Graphics`, третья конфигурация после GTX 1050 и Intel UHD + MX250),
+баг закрыт при чистом результате; прогон на GTX 1050 так и не сделан.
+
+`run_report.py --all --root pointerevents --recursive --processes 4 --check`, `dev-release` от
+`origin/main` `9cd2b4c82` (срезы 1–4 и 6 внутри). Логи — `.tmp/pe-quiet.*`, `.tmp/pe-load.*` в слоте
+`p6-work`, не отслеживаются. Нагрузка — холодная `cargo test -p lumen-shell --no-run -j 8` в отдельный
+`CARGO_TARGET_DIR` без sccache, 8 `rustc` всё время прогона (сборка кончилась за 2.5 мин до конца WPT).
+
+| Прогон | `TEST_END` | Выборов бэкенда | Бэкенд, время выбора | `present=WHITE` / паника | `did not print [bidi] token` / `CRITICAL` | `IO Completion Port failed` |
+|---|---|---|---|---|---|---|
+| тихая система | 258/258 | 19 | Vulkan ×19, 0.3–3.2 с | 0 / 0 | 0 / 0 | 14 |
+| рядом холодная сборка | 258/258 | 18 | Vulkan ×18, 0.4–5.2 с | 0 / 0 | 0 / 0 | 5 |
+
+В обоих прогонах 96/258 harness OK, 424/1057 подтестов — как в срезе 6. `check: 540 regression(s)`
+в обоих — устаревший baseline ([BUG-1170](BUG-1170-OPEN.md)), не сбой. Медленная смерть старого
+процесса (`IO Completion Port failed`) случалась, но релонч на свежий порт (срез 6) её пережил:
+`os error 10048` — 0. Захватов «окно накрыто» — 0: окна этой пачки не перекрывали друг друга в центре.
+
+Попутно в логе: `TypeError: target1.getClientRects is not a function` на части тестов `pointerevents` —
+к пробе не относится, в скоуп не входит.
