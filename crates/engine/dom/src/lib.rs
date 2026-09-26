@@ -2373,7 +2373,6 @@ impl FlatTree {
         }
         self.parents.get(&id).copied().or_else(|| doc.get(id).parent)
     }
-
 }
 
 /// Build the composed (flat) tree for the document.

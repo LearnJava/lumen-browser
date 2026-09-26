@@ -36,7 +36,7 @@ pub enum Display {
     /// CSS Display L3 — `display: flow-root`. Creates a BFC; treated as Block in layout.
     FlowRoot,
     /// CSS Display L3 — `display: contents`. Box itself generates no box;
-    /// children participate in parent formatting context. Treated as Block (deferred).
+    /// children participate in parent formatting context (`BoxKind::Contents`).
     Contents,
     /// CSS 2.1 table display types — parsed/stored; table layout deferred.
     Table,
