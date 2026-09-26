@@ -2154,9 +2154,12 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       get: function() {
         if (hostNid === null) return '';
         // Аналогично frameElement: атрибут хоста предка читаем через бридж.
+        // Для дочернего фрейма — имя, запомненное при регистрации: правка
+        // атрибута хоста после создания контекста его не переименовывает
+        // (HTML LS §7.2.3; та же семантика, что у window.name ребёнка, BUG-921).
         var a = isAncestorBid(bid)
           ? _lumen_f_attr(bid, hostNid, 'name')
-          : _lumen_get_attr(hostNid, 'name');
+          : _lumen_f_name(bid);
         return (a === null || a === undefined) ? '' : a;
       },
       configurable: true,
@@ -2574,6 +2577,28 @@ mod tests {
 
     fn eval_bool(rt: &V8JsRuntime, expr: &str) -> bool {
         matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
+    /// OBJECT-1 срез 3: `contentWindow.name` фасада — имя, запомненное при
+    /// регистрации фрейма, а не живой атрибут `name` хоста (HTML LS §7.2.3,
+    /// WPT `the-object-element/object-attributes.html`).
+    #[test]
+    fn content_window_name_is_registered_name_not_live_attribute() {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        registry.lock().unwrap().frames.push(FrameDocBinding {
+            host_nid: 7,
+            doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html><body></body></html>"))),
+            url: "about:blank".to_owned(),
+            name: Some("o".to_owned()),
+            accessible: true,
+            peer: None,
+        });
+        // Атрибут хоста уже переименован — фасад его не читает.
+        rt.eval("globalThis._lumen_get_attr = function() { return 'o1'; };").unwrap();
+        assert!(eval_bool(&rt, "_lumen_frame_content_window(7).name === 'o'"));
     }
 
     #[test]

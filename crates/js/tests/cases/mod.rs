@@ -19,6 +19,7 @@ mod bug786_srez25_pi_api;
 mod indexed_db;
 mod link_activation;
 mod no_automation_markers;
+mod object1_content_document;
 mod speech_api;
 mod v8_eval;
 mod v8_smoke;
