@@ -74,7 +74,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
 | CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK ✅ (p4-line-break-cjk 2026-07-29); text-wrap-style ✅ | **#23** |
-| CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing ✅ (translate3d/rotateX/matrix3d…, property_trees.rs:773); `backface-visibility` culling ✅ (p4-backface-culling); `perspective`/`perspective-origin` projection wiring 🟡 (P4) | **#24** |
+| CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing ✅ (translate3d/rotateX/matrix3d…, property_trees.rs:773); `backface-visibility` culling ✅ (p4-backface-culling); `perspective`/`perspective-origin` projection ✅ (p4-perspective-3d) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units; `<position>` tri-/quad-value edge-relative offset form (`right -10px`/`left -20%`) and `x-start`/`x-end`/`y-start`/`y-end` keywords not implemented — `PositionComponent` (shared by `background-position` shorthand + `-x`/`-y` longhands, `object-position`, `transform-origin`, `perspective-origin`, `mask-position`) has only `Px`/`Percent`, no anchor+offset representation (BUG-495, ревизия P3 2026-09-03) | **#25** |
 
 ### Tier 3 — Spec compliance (affect specific use-cases)
@@ -102,7 +102,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
 | CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | layout (axis swap + vertical inline flow) ✅; paint glyph rotation ✅ CPU+wgpu (mixed/upright/sideways, P3-vertical срезы 1–4); femtovg fallback backend ⬜ | **#41** |
-| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry ✅ 2026-06-10 (`masonry.rs`, `GridTrackSize::Masonry`, greedy waterfall algorithm) | **#42** |
+| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry — Edge-parity fallback to a regular grid (BUG-105/143; `masonry.rs` waterfall kept unwired) | **#42** |
 | CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03; polygon/ellipse ✅ (`shape_polygons`/`shape_ellipses`); inset() ✅ 2026-06-10 (`shape_insets`, `parse_shape_inset_px`, rounded corners); `clip-path: path()` ✅ 2026-06-14 (p4-clip-path-path); `path()`/`polygon()` `<fill-rule>` evenodd/nonzero ✅ 2026-06-14 (p4-clip-path-fill-rule); `shape-outside: path()` ✅ 2026-06-14 (p4-shape-outside-path: `parse_shape_path_px` flattens SVG path → wrapping polygon) | **#43** |
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
@@ -306,7 +306,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `transform` | ✅ | all 2D functions |
 | `transform-origin` | ✅ | pivot via T(o)·M·T(-o) |
 | `transform-style` | ✅ | preserve-3d depth-sorts children back-to-front, display_list.rs:5538 |
-| `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
+| `perspective` / `perspective-origin` | ✅ | projection wired (p4-perspective-3d): `perspective_matrix()` (property_trees.rs) = T(origin)·perspective(d)·T(−origin), origin resolved against the container's border box; emitted as a children-only `PushTransform` inside the overflow clip by both builders (`emit_push_perspective`, walk.rs / box_layer.rs), only when a child leaves z = 0; `perspective ≠ none` creates a stacking context (stacking.rs). wgpu applies the 4×4 with the divide; CPU raster/femtovg flatten orthographically like any 3D transform |
 | `backface-visibility` | ✅ | parsed → `ComputedStyle` (p4-backface-visibility, 2026-07-04); paint culling via `is_backface_hidden()` (display_list.rs) — sign of `forward_box_transform()`'s `m[10]` (p4-backface-culling) |
 | `translate` / `rotate` / `scale` | ✅ | individual props (Transforms L2); compose before `transform` ✅ 2026-05-26 |
 
@@ -497,7 +497,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `grid-auto-flow` | ✅ | row/column/dense/column dense ✅ 2026-05-24 |
 | `grid-column*` / `grid-row*` / `grid-area` | 🟡 | auto/int/span |
 | `subgrid` | ✅ | CSS Grid L2; track inheritance via `SubgridContext`/`SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` in `box_tree.rs` (WQ#30) 2026-06-03 |
-| `masonry` | 🟡 | CSS Grid L3; layout algorithm ✅ 2026-06-10 (`masonry.rs`, greedy waterfall); CSS: masonry-auto-flow P4 |
+| `masonry` | ✅ | CSS Grid L3; Edge parity: no stable browser ships masonry, so the `masonry` track-list sentinel is dropped and the axis lays out as a regular grid (`box_tree/grid.rs:177`, BUG-105/BUG-143, TEST-63/75); `masonry-auto-flow` parsed + stored, intentionally no layout effect. `masonry.rs` waterfall kept unwired until a stable engine ships it |
 
 ### [T2] Intrinsic Sizing
 
@@ -512,7 +512,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
+| `perspective` / `perspective-origin` | ✅ | projection wired (p4-perspective-3d): `perspective_matrix()` (property_trees.rs) = T(origin)·perspective(d)·T(−origin), origin resolved against the container's border box; emitted as a children-only `PushTransform` inside the overflow clip by both builders (`emit_push_perspective`, walk.rs / box_layer.rs), only when a child leaves z = 0; `perspective ≠ none` creates a stacking context (stacking.rs). wgpu applies the 4×4 with the divide; CPU raster/femtovg flatten orthographically like any 3D transform |
 | `transform-style: preserve-3d` | ✅ | 3D context; children depth-sorted (display_list.rs:5538) |
 | `backface-visibility` | ✅ | parsed → `ComputedStyle` (p4-backface-visibility, 2026-07-04); paint culling via `is_backface_hidden()` (display_list.rs) — sign of `forward_box_transform()`'s `m[10]` (p4-backface-culling) |
 | `translate` / `rotate` / `scale` (individual) | ✅ | CSS Transforms L2; compose before `transform` 2026-05-26 |

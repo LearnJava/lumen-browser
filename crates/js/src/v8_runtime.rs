@@ -252,6 +252,11 @@ impl V8JsRuntime {
             }
         });
         let worker_determinism_inner = worker_determinism.clone();
+        // BUG-674: the Service Worker registry and Cache Storage key on this,
+        // not on an origin string passed in from JS — the same binding the
+        // file-API grants get (BUG-371). Cloned before `page_origin` is needed
+        // again by the installs after `self.run` returns.
+        let sw_origin = page_origin.clone();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -428,6 +433,7 @@ impl V8JsRuntime {
                 fp_sw_net.clone(),
                 idb_sw.clone(),
                 worker_determinism_inner.clone(),
+                sw_origin.clone(),
             )?;
 
             install::install_history(

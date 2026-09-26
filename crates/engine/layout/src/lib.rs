@@ -101,7 +101,7 @@ pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, transl
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
-    compute_local_transform, forward_box_transform, transform_fns_to_matrix,
+    compute_local_transform, forward_box_transform, perspective_matrix, transform_fns_to_matrix,
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };

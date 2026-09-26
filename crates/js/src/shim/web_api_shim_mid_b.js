@@ -335,7 +335,7 @@ function _lumen_build_response(body, infoJson) {
     return new Response(body, opts);
 }
 
-function _lumen_build_cache_object(origin, cacheName) {
+function _lumen_build_cache_object(cacheName) {
     return {
         put: function(request, response) {
             var url = _lumen_req_url(request);
@@ -348,37 +348,37 @@ function _lumen_build_cache_object(origin, cacheName) {
             }
             var metaJson = JSON.stringify({ method: method, status: status, statusText: statusText, headers: hdrs });
             return response.arrayBuffer().then(function(buf) {
-                _lumen_cache_put(origin, cacheName, url, metaJson, new Uint8Array(buf));
+                _lumen_cache_put(cacheName, url, metaJson, new Uint8Array(buf));
                 return undefined;
             });
         },
         match: function(request, options) {
             var url = _lumen_req_url(request);
-            var body = _lumen_cache_match(origin, cacheName, url);
+            var body = _lumen_cache_match(cacheName, url);
             if (body === undefined || body === null) return Promise.resolve(undefined);
-            return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_info(origin, cacheName, url)));
+            return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_info(cacheName, url)));
         },
         matchAll: function(request, options) {
             if (request === undefined) {
-                var urls = _lumen_cache_keys(origin, cacheName);
+                var urls = _lumen_cache_keys(cacheName);
                 return Promise.resolve(urls.map(function(u) {
                     return _lumen_build_response(
-                        _lumen_cache_match(origin, cacheName, u),
-                        _lumen_cache_match_info(origin, cacheName, u)
+                        _lumen_cache_match(cacheName, u),
+                        _lumen_cache_match_info(cacheName, u)
                     );
                 }));
             }
             var url = _lumen_req_url(request);
-            var body = _lumen_cache_match(origin, cacheName, url);
+            var body = _lumen_cache_match(cacheName, url);
             if (body === undefined || body === null) return Promise.resolve([]);
-            return Promise.resolve([_lumen_build_response(body, _lumen_cache_match_info(origin, cacheName, url))]);
+            return Promise.resolve([_lumen_build_response(body, _lumen_cache_match_info(cacheName, url))]);
         },
         delete: function(request, options) {
             var url = _lumen_req_url(request);
-            return Promise.resolve(_lumen_cache_delete(origin, cacheName, url));
+            return Promise.resolve(_lumen_cache_delete(cacheName, url));
         },
         keys: function(request, options) {
-            var entries = JSON.parse(_lumen_cache_keys_full(origin, cacheName));
+            var entries = JSON.parse(_lumen_cache_keys_full(cacheName));
             if (request !== undefined) {
                 var filterUrl = _lumen_req_url(request);
                 entries = entries.filter(function(e) { return e.url === filterUrl; });
@@ -399,26 +399,29 @@ function _lumen_build_cache_object(origin, cacheName) {
     };
 }
 
+// Only the default `getRegistration()` URL reads this. The storage natives take
+// no origin at all — they are bound to the document's origin in Rust (BUG-674),
+// so reassigning this global cannot reach another origin's registrations/caches.
 var _sw_origin = (typeof location !== 'undefined') ? (location.protocol + '//' + location.host) : '';
 
 var caches = {
     open: function(name) {
-        return Promise.resolve(_lumen_build_cache_object(_sw_origin, String(name)));
+        return Promise.resolve(_lumen_build_cache_object(String(name)));
     },
     match: function(request, options) {
         var url = _lumen_req_url(request);
-        var body = _lumen_cache_match_any(_sw_origin, url);
+        var body = _lumen_cache_match_any(url);
         if (body === undefined || body === null) return Promise.resolve(undefined);
-        return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_any_info(_sw_origin, url)));
+        return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_any_info(url)));
     },
     has: function(name) {
-        return Promise.resolve(_lumen_cache_has(_sw_origin, String(name)));
+        return Promise.resolve(_lumen_cache_has(String(name)));
     },
     delete: function(name) {
-        return Promise.resolve(_lumen_cache_delete_cache(_sw_origin, String(name)));
+        return Promise.resolve(_lumen_cache_delete_cache(String(name)));
     },
     keys: function() {
-        return Promise.resolve(_lumen_cache_names(_sw_origin));
+        return Promise.resolve(_lumen_cache_names());
     },
 };
 
@@ -503,7 +506,7 @@ function _sw_make_registration(scope, scriptUrl) {
         onupdatefound: null,
         update: function() { return Promise.resolve(); },
         unregister: function() {
-            _lumen_sw_unregister(_sw_origin, scope);
+            _lumen_sw_unregister(scope);
             delete _sw_registrations[scope];
             _sw_persist();
             return Promise.resolve(true);
@@ -523,7 +526,7 @@ function _sw_persist() {
                 state: r.active ? 'activated' : (r.waiting ? 'installed' : 'installing'),
             });
         }
-        _lumen_sw_persist(_sw_origin, JSON.stringify(snap));
+        _lumen_sw_persist(JSON.stringify(snap));
     } catch(e) {}
 }
 
@@ -541,7 +544,7 @@ function _sw_run_lifecycle(reg) {
             sw._setState('installed');
             reg.waiting = sw;
             reg.installing = null;
-            _lumen_sw_register(_sw_origin, reg.scope, reg.scriptURL);
+            _lumen_sw_register(reg.scope, reg.scriptURL);
             setTimeout(function() {
                 reg.waiting = null;
                 sw._setState('activating');
@@ -557,7 +560,7 @@ function _sw_run_lifecycle(reg) {
                         fetch(scriptURL)
                             .then(function(res) { return res.text(); })
                             .then(function(text) {
-                                _lumen_sw_activate_script(_sw_origin, scope, text);
+                                _lumen_sw_activate_script(scope, text);
                             })
                             .catch(function() {}); // ignore fetch errors — lifecycle still simulated
                     })(reg.scope, reg.scriptURL);
@@ -578,7 +581,7 @@ function _sw_run_lifecycle(reg) {
 // Restore registrations saved from a previous page load.
 (function() {
     try {
-        var snap = _lumen_sw_load(_sw_origin);
+        var snap = _lumen_sw_load();
         if (snap) {
             var arr = JSON.parse(snap);
             for (var i = 0; i < arr.length; i++) {
@@ -588,7 +591,7 @@ function _sw_run_lifecycle(reg) {
                     var sw = _sw_make_worker(item.scriptURL, item.state);
                     reg.active = sw;
                     _sw_registrations[item.scope] = reg;
-                    _lumen_sw_register(_sw_origin, item.scope, item.scriptURL);
+                    _lumen_sw_register(item.scope, item.scriptURL);
                 }
             }
         }
@@ -648,7 +651,7 @@ var _sw_container = Object.assign({
         reg.installing = sw;
         _sw_registrations[scope] = reg;
         // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
-        _lumen_sw_register(_sw_origin, scope, String(scriptUrl));
+        _lumen_sw_register(scope, String(scriptUrl));
         _sw_run_lifecycle(reg);
         return Promise.resolve(reg);
     },

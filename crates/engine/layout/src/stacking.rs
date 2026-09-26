@@ -176,6 +176,8 @@ fn z_sort_key(ctx: &StackingContext) -> i32 {
 /// - `position: relative | absolute` с явным `z-index` (≠ auto);
 /// - `opacity < 1`;
 /// - `transform != none` (непустой `Vec<TransformFn>`);
+/// - `perspective != none` (CSS Transforms L2 §4: «establishes a stacking
+///   context» — проекция детей эмитится обёрткой вокруг всех потомков SC);
 /// - `filter != none` (непустой `Vec<FilterFn>`);
 /// - `clip-path != none`;
 /// - `mix-blend-mode != normal`;
@@ -206,6 +208,13 @@ pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
         || style.rotate.is_some()
         || style.scale.is_some()
     {
+        return true;
+    }
+    // CSS Transforms L2 §4: `perspective` other than `none` establishes a
+    // stacking context. The paint side relies on it: the perspective
+    // projection wraps the box's whole descendant set, child SCs included,
+    // via the SC's own root_bg/post slots (`box_layer_ops`).
+    if style.perspective.is_some() {
         return true;
     }
     if !style.filter.is_empty() {
@@ -683,6 +692,15 @@ mod tests {
     fn transform_creates_stacking_context() {
         let tree = build_tree("<div>x</div>", "div { transform: rotate(45deg); }");
         assert_eq!(tree.contexts.len(), 2);
+    }
+
+    #[test]
+    fn perspective_creates_stacking_context() {
+        // CSS Transforms L2 §4: perspective other than `none` establishes a SC.
+        let tree = build_tree("<div>x</div>", "div { perspective: 300px; }");
+        assert_eq!(tree.contexts.len(), 2);
+        let none = build_tree("<div>x</div>", "div { perspective: none; }");
+        assert_eq!(none.contexts.len(), 1);
     }
 
     #[test]

@@ -798,6 +798,40 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
     }
 }
 
+/// CSS Transforms L2 §4 — the **perspective matrix** a box with
+/// `perspective: <length>` contributes to its children's accumulated 3D
+/// transform, in viewport coordinates (the same space as
+/// [`forward_box_transform`]):
+///
+/// `T(origin) · perspective(d) · T(-origin)`, where `origin` is
+/// `perspective-origin` resolved against the box's own border box (percentages
+/// of its width/height) and offset by `b.rect`'s position.
+///
+/// Returns `None` for `perspective: none` (a zero length is already folded
+/// into `None` by the cascade, see `ComputedStyle::perspective`).
+///
+/// The matrix is meant to be composed **before** a child's own forward
+/// transform (`P · M_child`), never folded into it: on the z = 0 plane it is
+/// the identity, and its 2D-affine part is exactly the identity too, so the
+/// 2D-only backends (femtovg, CPU raster) keep their orthographic flattening
+/// of the child's own transform while the wgpu vertex path — which applies
+/// the accumulated full 4×4 with a perspective divide — gets the projection.
+#[must_use]
+pub fn perspective_matrix(b: &LayoutBox) -> Option<Mat4> {
+    let d = b.style.perspective?;
+    if d <= 0.0 {
+        return None;
+    }
+    let (px, py) = b.style.perspective_origin;
+    let ox = b.rect.x + px.resolve(b.rect.width);
+    let oy = b.rect.y + py.resolve(b.rect.height);
+    Some(
+        Mat4::translation_2d(ox, oy)
+            .multiply(&Mat4::perspective(d))
+            .multiply(&Mat4::translation_2d(-ox, -oy)),
+    )
+}
+
 /// Build the forward transform matrix from a list of TransformFn with a pivot point.
 ///
 /// Used by the animation compositor path to convert an animated `Vec<TransformFn>`
