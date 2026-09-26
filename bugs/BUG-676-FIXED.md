@@ -72,7 +72,7 @@
 `createHTMLDocument()` без Node-методов — `document.createNodeIterator`/
 `importNode` "not a function" на нём же), [BUG-464](BUG-464-OPEN.md)/
 [BUG-477](BUG-477-OPEN.md) (`document.elementFromPoint`/`elementsFromPoint`
-не реализованы), [BUG-601](BUG-601-OPEN.md) (глобальный `DOMTokenList`
+не реализованы), [BUG-601](BUG-601-FIXED.md) (глобальный `DOMTokenList`
 отсутствует), [BUG-471](BUG-471-FIXED.md) (`CSSStyleSheet`/CSSOM не
 подключены). Новых номеров под них не заведено — реконфирмации.
 

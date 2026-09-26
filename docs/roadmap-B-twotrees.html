@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-26",
  "counts": {
-  "open": 234,
-  "fixed": 899,
+  "open": 228,
+  "fixed": 907,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1133,
+ "total_bugs": 1135,
  "phases": [
   {
    "id": "P0",
@@ -4192,7 +4192,7 @@
        "title": "WPT: вендорить + прогнать категорию `shadow-dom`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shadow-dom --recursive --processes=4`, ~4 мин, 393 файла, 276 отобранных id) — **198/276 harness OK, 221/1780 сабтестов**. Категория реально реализована (Shadow DOM работает end-to-end) — резко контрастирует с типичными пустыми прогонами. Доминирующий сигнал — реконфирмация уже открытых дефектов: [BUG-384](bugs/BUG-384-FIXED.md) (именованный доступ на `window`, крупнейший кластер), [BUG-346](bugs/BUG-346-FIXED.md) (`..`-сегменты в `Url::resolve()` — `../../../../html/resources/common.js` 404), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует), [BUG-415](bugs/BUG-415-FIXED.md) (отсоединённый документ без Node-методов), [BUG-464](bugs/BUG-464-OPEN.md)/[BUG-477](bugs/BUG-477-OPEN.md) (`elementFromPoint`/`elementsFromPoint`), [BUG-601](bugs/BUG-601-OPEN.md) (`DOMTokenList` глобал), [BUG-471](bugs/BUG-471-FIXED.md) (CSSOM). Живая проба (`--mcp-live-port`) подтвердила независимую находку — [BUG-676](bugs/BUG-676-FIXED.md): `ShadowRoot` — плоский `{}`-литерал, не WebIDL-интерфейс: нет глобального конструктора `window.ShadowRoot`, нет `cloneNode()` (должен бросать `NotSupportedError`, а не отсутствовать), компаньон — `HTMLSlotElement.prototype.assign()` отсутствует рядом с рабочими `assignedNodes`/`assignedElements`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shadow-dom --recursive --processes=4`, ~4 мин, 393 файла, 276 отобранных id) — **198/276 harness OK, 221/1780 сабтестов**. Категория реально реализована (Shadow DOM работает end-to-end) — резко контрастирует с типичными пустыми прогонами. Доминирующий сигнал — реконфирмация уже открытых дефектов: [BUG-384](bugs/BUG-384-FIXED.md) (именованный доступ на `window`, крупнейший кластер), [BUG-346](bugs/BUG-346-FIXED.md) (`..`-сегменты в `Url::resolve()` — `../../../../html/resources/common.js` 404), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует), [BUG-415](bugs/BUG-415-FIXED.md) (отсоединённый документ без Node-методов), [BUG-464](bugs/BUG-464-OPEN.md)/[BUG-477](bugs/BUG-477-OPEN.md) (`elementFromPoint`/`elementsFromPoint`), [BUG-601](bugs/BUG-601-FIXED.md) (`DOMTokenList` глобал), [BUG-471](bugs/BUG-471-FIXED.md) (CSSOM). Живая проба (`--mcp-live-port`) подтвердила независимую находку — [BUG-676](bugs/BUG-676-FIXED.md): `ShadowRoot` — плоский `{}`-литерал, не WebIDL-интерфейс: нет глобального конструктора `window.ShadowRoot`, нет `cloneNode()` (должен бросать `NotSupportedError`, а не отсутствовать), компаньон — `HTMLSlotElement.prototype.assign()` отсутствует рядом с рабочими `assignedNodes`/`assignedElements`. Один новый номер бага",
        "bugs": [
         "BUG-676"
        ]
@@ -7013,9 +7013,9 @@
       {
        "id": "GAP-FOCUSGROUP",
        "title": "GAP: `focusGroup`/`focusGroupStart` IDL-рефлексия отсутствует целиком",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "HTML LS `focusgroup`/`focusgroupstart` content-атрибуты не заведены вовсе — `grep` по `focusGroup`/`focusgroup` (регистронезависимо) в `crates/js/src` и во всех JS-шимах даёт ноль. Заявка BUG-601 описывала это как точечный дефект («глобальный `DOMTokenList`-конструктор не привязан, сам объект рабочий»), но живой прогон `focusgroup/tentative/idl-reflection.html` даёт 1/21, а не 17/20 — единственный проходящий сабтест тривиален (`focusGroupStart` на элементе без атрибута читается как `undefined`, что и так falsy). Нужно с нуля: (1) `element.focusGroup` — live `DOMTokenList` над атрибутом `focusgroup` с PutForwards-семантикой (присваивание строки не заменяет объект, `_lumen_wrapper_slot`-паттерн из `classList`, `crates/js/src/shim/web_api_shim_mid.js:6542`, подходит как есть); (2) `.supports()` со списком из 12 спецификационных токенов (`toolbar`/`tablist`/`radiogroup`/`listbox`/`menu`/`menubar`/`wrap`/`nowrap`/`inline`/`block`/`nomemory`/`none`) — `DOMTokenList.prototype.supports` на `classList` сейчас не существует вовсе (у `class` нет своего `supports`), паттерн ближе к `relList.supports()` (BUG-826); (3) `element.focusGroupStart` — обычная boolean-рефлексия через существующую IDL-таблицу (BUG-383); (4) экспозиция на `SVGElement`/`MathMLElement` через `HTMLOrSVGOrMathMLElement`-миксин, не только на `HTMLElement`. Сама фокус-навигационная семантика (стрелки внутри `focusgroup`, wrap/nowrap, вложенность) вне этой задачи — тестовый файл проверяет только IDL, не поведение. Найден P2, WPT-VENDOR-html-interaction, 2026-08-04; реклассифицировано из BUG-601 2026-09-16 (P3) по тому же правилу, что BUG-553/554/562/568/583/584/585 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект).",
+       "note": "ЗАКРЫТ 2026-09-26 (P1, ветка `p1-gap-focusgroup`): `focusGroup` ([SameObject, PutForwards=value] `DOMTokenList` с собственным `supports()` по 12 токенам) и `focusGroupStart` — члены `_LUMEN_WRAPPER_MEMBERS` на `Element.prototype`, SVG/MathML покрыты; WPT `idl-reflection.html` 21/21, каталог focusgroup 6 → 35/123. Навигация стрелками не входила. Исходная постановка: HTML LS `focusgroup`/`focusgroupstart` content-атрибуты не заведены вовсе — `grep` по `focusGroup`/`focusgroup` (регистронезависимо) в `crates/js/src` и во всех JS-шимах даёт ноль. Заявка BUG-601 описывала это как точечный дефект («глобальный `DOMTokenList`-конструктор не привязан, сам объект рабочий»), но живой прогон `focusgroup/tentative/idl-reflection.html` даёт 1/21, а не 17/20 — единственный проходящий сабтест тривиален (`focusGroupStart` на элементе без атрибута читается как `undefined`, что и так falsy). Нужно с нуля: (1) `element.focusGroup` — live `DOMTokenList` над атрибутом `focusgroup` с PutForwards-семантикой (присваивание строки не заменяет объект, `_lumen_wrapper_slot`-паттерн из `classList`, `crates/js/src/shim/web_api_shim_mid.js:6542`, подходит как есть); (2) `.supports()` со списком из 12 спецификационных токенов (`toolbar`/`tablist`/`radiogroup`/`listbox`/`menu`/`menubar`/`wrap`/`nowrap`/`inline`/`block`/`nomemory`/`none`) — `DOMTokenList.prototype.supports` на `classList` сейчас не существует вовсе (у `class` нет своего `supports`), паттерн ближе к `relList.supports()` (BUG-826); (3) `element.focusGroupStart` — обычная boolean-рефлексия через существующую IDL-таблицу (BUG-383); (4) экспозиция на `SVGElement`/`MathMLElement` через `HTMLOrSVGOrMathMLElement`-миксин, не только на `HTMLElement`. Сама фокус-навигационная семантика (стрелки внутри `focusgroup`, wrap/nowrap, вложенность) вне этой задачи — тестовый файл проверяет только IDL, не поведение. Найден P2, WPT-VENDOR-html-interaction, 2026-08-04; реклассифицировано из BUG-601 2026-09-16 (P3) по тому же правилу, что BUG-553/554/562/568/583/584/585 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект).",
        "bugs": [
         "BUG-601"
        ]
@@ -7539,27 +7539,6 @@
    "status": "open",
    "title": "`Origin` WebIDL global (`Origin.from()`, tuple/opaque origin) not implemented at all. 181 subtests, all `html/browsers/origin/api/` (self-contained category). K…",
    "component": "js (`crates/js/src/dom.rs` -- no `Origin` global constructor anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-601": {
-   "status": "open",
-   "title": "`DOMTokenList` constructor not exposed on `window` -- `instanceof DOMTokenList` throws `ReferenceError` even though the underlying object (`classList`/`focusGro…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- no `focusGroup`/`focusGroupStart` anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-669": {
-   "status": "open",
-   "title": "The `WakeLock` interface object is never exposed on `globalThis` at all — only `WakeLockSentinel` and `navigator.wakeLock` (the manager instance) are — so `'Wak…",
-   "component": "js (`crates/js/src/wake_lock.rs` — Screen Wake Lock Level 1 Phase 1 shim)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-670": {
-   "status": "open",
-   "title": "`AnimationEffect.getComputedTiming()` is missing entirely — only `getTiming()` (the *specified* timing dict) exists on `KeyframeEffect.prototype`; `getComputedT…",
-   "component": "js (`crates/js/src/dom.rs:12449-12452` — Web Animations `WEB_API_SHIM`, `KeyframeEffect.prototype`)",
    "date": null,
    "debtor": false
   },
@@ -8501,41 +8480,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1128": {
-   "status": "open",
-   "title": "Четыре вставленных `<script src>`: Lumen исполняет все четыре тела, потом шлёт четыре `load` (`['m1<-m4','m2<-null',…]`), Chrome чередует «исполнить → load». Ло…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:11895-11910` `_lumen_script_load_external`: `setTimeout` → `fetch().then(execute).then(fire load)`, таймеры одного тика исполняются подряд)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1129": {
-   "status": "open",
-   "title": "Скрипт из `<body>` вставляет `<script src>` и вешает `window.onload`: Lumen шлёт `load` окна до загрузки вставленного скрипта, Chrome — после (скрипт задерживае…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:11478` `_lumen_apply_ready_state('complete')` не учитывает ожидающие `_lumen_script_load_external`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1131": {
-   "status": "open",
-   "title": "`typeof IntersectionObserverEntry === 'undefined'` при живом `IntersectionObserver`. duolingo: встроенная проверка браузера требует `\"IntersectionObserverEntry\"…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid_b3.js:1479` `function IntersectionObserver`, `:1608` — запись собирается литералом `{isIntersecting:…, intersectionRatio:…}`; экспорт — `web_api_shim_tail_mc.js:48`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1132": {
-   "status": "open",
-   "title": "`script.innerHTML` возвращает `if (a &lt; 3) … &amp;&amp;`, `style.innerHTML` — `a&gt;b{x:\"&amp;&lt;\"}`; `.text`/`.textContent` верны. Скрипт, пересозданный из…",
-   "component": "js (`crates/js/src/v8_runtime/dom_helpers.rs::serialize_node` — `NodeData::Text` всегда через `escape_html_text`, без проверки родителя)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1133": {
-   "status": "open",
-   "title": "`atob('YQ')`, `atob('YWI')` бросают `InvalidCharacterError` (Chrome: `'a'`, `'ab'`), а `atob('YQ==YQ==')` возвращает `'aa'` (Chrome бросает). airbnb: `tags.js`…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid_c.js:17-39` — проверка `s.length % 4 !== 0` и `=` в любой позиции; сверить `worker.rs:2514` `atob_native_v8`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1134": {
    "status": "open",
    "title": "Файл `<!-- by TradingView --><svg …>` (`image/svg+xml`) → «Не декодируется …svg: формат изображения не распознан по сигнатуре»; тот же файл без комментария деко…",
@@ -8904,6 +8848,20 @@
    "status": "open",
    "title": "`getComputedStyle(el).length === 0` у элемента flat tree без собственного бокса: пустой inline (`<span></span>`), потомок `content-visibility: hidden`/`display:…",
    "component": "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles` — снимок по `LayoutBox`-дереву), js (шим `getComputedStyle`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1192": {
+   "status": "open",
+   "title": "Анимация с `fill: forwards`/`both` после конца активного интервала остаётся `running` навсегда: `finished` не резолвится, `finish` не приходит. `_wa_iter_progre…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_iter_progress`/`Animation.prototype._tick`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1193": {
+   "status": "open",
+   "title": "В Service Worker `atob`/`btoa` не по HTML LS §8.3: `atob(btoa('\\xff'))` даёт не `'\\xff'` (двоичная строка читается как UTF-8), на невалидном входе натив отдаёт…",
+   "component": "js (`crates/js/src/sw_worker.rs` — нативы `atob`/`btoa` в `install_sw_globals_v8` (`sw_worker.rs:761-769`): `base64_decode` + `String::from_utf8`, `btoa` кодирует UTF-8 байты)",
    "date": null,
    "debtor": false
   },
@@ -15192,6 +15150,62 @@
    "component": "js (`crates/js/src/scheduler.rs` — Scheduler API Phase 0 shim)",
    "date": "2026-09-26",
    "debtor": false
+  },
+  "BUG-1128": {
+   "status": "fixed",
+   "title": "Четыре вставленных `<script src>`: Lumen исполняет все четыре тела, потом шлёт четыре `load` (`['m1<-m4','m2<-null',…]`), Chrome чередует «исполнить → load». Ло…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:11895-11910` `_lumen_script_load_external`: `setTimeout` → `fetch().then(execute).then(fire load)`, таймеры одного тика исполняются подряд)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-669": {
+   "status": "fixed",
+   "title": "The `WakeLock` interface object is never exposed on `globalThis` at all — only `WakeLockSentinel` and `navigator.wakeLock` (the manager instance) are — so `'Wak…",
+   "component": "js (`crates/js/src/wake_lock.rs` — Screen Wake Lock Level 1 Phase 1 shim)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1129": {
+   "status": "fixed",
+   "title": "Скрипт из `<body>` вставляет `<script src>` и вешает `window.onload`: Lumen шлёт `load` окна до загрузки вставленного скрипта, Chrome — после (скрипт задерживае…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:11478` `_lumen_apply_ready_state('complete')` не учитывает ожидающие `_lumen_script_load_external`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1131": {
+   "status": "fixed",
+   "title": "`typeof IntersectionObserverEntry === 'undefined'` при живом `IntersectionObserver`. duolingo: встроенная проверка браузера требует `\"IntersectionObserverEntry\"…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b4.js` `function IntersectionObserver` — записи собирались литералом `{isIntersecting:…, intersectionRatio:…}`; интерфейс `IntersectionObserverEntry` рядом с `_io_dom_rect`, экспорт — `web_api_shim_tail_mc.js:49`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1132": {
+   "status": "fixed",
+   "title": "`script.innerHTML` возвращает `if (a &lt; 3) … &amp;&amp;`, `style.innerHTML` — `a&gt;b{x:\"&amp;&lt;\"}`; `.text`/`.textContent` верны. Скрипт, пересозданный из…",
+   "component": "js (`crates/js/src/v8_runtime/dom_helpers.rs::serialize_node` — `NodeData::Text` всегда через `escape_html_text`, без проверки родителя)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-670": {
+   "status": "fixed",
+   "title": "`AnimationEffect.getComputedTiming()` is missing entirely — only `getTiming()` (the *specified* timing dict) exists on `KeyframeEffect.prototype`; `getComputedT…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — Web Animations, `KeyframeEffect.prototype`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1133": {
+   "status": "fixed",
+   "title": "`atob('YQ')`, `atob('YWI')` бросали `InvalidCharacterError` (Chrome: `'a'`, `'ab'`), а `atob('YQ==YQ==')` возвращал `'aa'` (Chrome бросает). airbnb: `tags.js` д…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_c.js` `function atob` — требовал длину кратную 4 и пускал `=` в любой позиции; воркерный `crates/js/src/worker.rs::b64_decode` пропускал `=` везде и не проверял длину, `atob_native_v8` читал байты как UTF-8)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-601": {
+   "status": "fixed",
+   "title": "`element.focusGroup`/`focusGroupStart` (HTML LS `focusgroup`/`focusgroupstart`) did not exist at all -- the report blamed a missing global `DOMTokenList`, but a…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `_LUMEN_WRAPPER_MEMBERS.focusGroup`/`focusGroupStart`)",
+   "date": "2026-09-26",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15901,9 +15915,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid_b.js`, `web_api_shim_tail_b.js`, `web_api_shim_tail_mc.js`; `crates/js/src/generic_sensor.rs`, `geolocation.rs`, `wake_lock.rs`)": [
    "BUG-765"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid_b3.js:1479` `function IntersectionObserver`, `:1608` — запись собирается литералом `{isIntersecting:…, intersectionRatio:…}`; экспорт — `web_api_shim_tail_mc.js:48`)": [
-   "BUG-1131"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid_b3.js:2292-2302` `window.postMessage` — слушатели `_message_listeners` вызываются напрямую, без dispatch; то же в `_lumen_deliver_frame_message`, `:2325-2334`)": [
    "BUG-1139"
   ],
@@ -15919,7 +15930,10 @@
   "js (`crates/js/src/shim/web_api_shim_mid_b4.js:1887` `window.addEventListener`, `:1950` `window.dispatchEvent`)": [
    "BUG-1172"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid_c.js:17-39` — проверка `s.length % 4 !== 0` и `=` в любой позиции; сверить `worker.rs:2514` `atob_native_v8`)": [
+  "js (`crates/js/src/shim/web_api_shim_mid_b4.js` `function IntersectionObserver` — записи собирались литералом `{isIntersecting:…, intersectionRatio:…}`; интерфейс `IntersectionObserverEntry` рядом с `_io_dom_rect`, экспорт — `web_api_shim_tail_mc.js:49`)": [
+   "BUG-1131"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid_c.js` `function atob` — требовал длину кратную 4 и пускал `=` в любой позиции; воркерный `crates/js/src/worker.rs::b64_decode` пропускал `=` везде и не проверял длину, `atob_native_v8` читал байты как UTF-8)": [
    "BUG-1133"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js:103-112` — `window.getComputedStyle`)": [
@@ -15940,6 +15954,9 @@
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable`, `HTMLElement.prototype.focus`)": [
    "BUG-951"
   ],
+  "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_iter_progress`/`Animation.prototype._tick`)": [
+   "BUG-1192"
+  ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.find`)": [
    "BUG-623"
   ],
@@ -15958,6 +15975,9 @@
   ],
   "js (`crates/js/src/svg.rs` — 88 присвоений `window.SVG* = ...`, но не для этих 13 имён; `createSVGNumber()`/`createSVGAngle()` на `SVGSVGElement.prototype`, `svg.rs:522-523`, возвращают объект-литерал)": [
    "BUG-1092"
+  ],
+  "js (`crates/js/src/sw_worker.rs` — нативы `atob`/`btoa` в `install_sw_globals_v8` (`sw_worker.rs:761-769`): `base64_decode` + `String::from_utf8`, `btoa` кодирует UTF-8 байты)": [
+   "BUG-1193"
   ],
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
    "BUG-748"
