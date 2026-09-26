@@ -13,7 +13,7 @@ FAIL <select></select> has a shadow tree with slot - assert_not_equals: child sh
 (`widgets/shadow-dom.html` — the `getClientRects` `TypeError`s are
 [BUG-478](BUG-478-FIXED.md)/[BUG-522](BUG-522-FIXED.md)/[BUG-551](BUG-551-DUPLICATE.md)/[BUG-580](BUG-580-DUPLICATE.md)
 territory and the `outerHTML`-in-test-name-collision harness `ERROR` is
-[BUG-351](BUG-351-OPEN.md); this bug is the *assertion content* underneath
+[BUG-351](BUG-351-FIXED.md); this bug is the *assertion content* underneath
 both, once those are stripped out)
 
 ## Причина
