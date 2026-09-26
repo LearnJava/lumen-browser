@@ -1,6 +1,7 @@
 //! OBJECT-1: `<object data>`/`<embed src>`, чей ресурс декодировался как
 //! картинка, — replaced-бокс изображения; иначе `<object>` показывает
-//! fallback-потомков (HTML LS §4.8.6/§4.8.7).
+//! fallback-потомков (HTML LS §4.8.6/§4.8.7). Срез 2: ресурс-документ —
+//! бокс вложенного документа, как у `<iframe>`.
 
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeId};
@@ -113,4 +114,53 @@ fn embed_with_decoded_image_is_an_image_box() {
     let root = layout(&doc, &lumen_css_parser::parse(""), VP);
     let img = find_image(&root).expect("embed with decoded image must be an Image box");
     assert_eq!((img.rect.width, img.rect.height), (32.0, 16.0));
+}
+
+fn find_iframe(b: &LayoutBox) -> Option<&LayoutBox> {
+    if matches!(b.kind, BoxKind::Iframe { .. }) {
+        return Some(b);
+    }
+    b.children.iter().find_map(find_iframe)
+}
+
+/// OBJECT-1 срез 2: ресурс, который шелл признал документом, делает
+/// `<object>` боксом вложенного документа — тем же `BoxKind::Iframe`, что у
+/// `<iframe>`, с UA-размером 300×150 и адресом `data` (ключ заглушки, на место
+/// которой шелл вклеивает содержимое фрейма). Fallback не раскладывается.
+#[test]
+fn object_with_embedded_document_is_iframe_box_without_fallback() {
+    let mut doc = lumen_html_parser::parse(r#"<object data="page.html">fallback text</object>"#);
+    let obj = find_tag(&doc, doc.root(), "object").expect("object");
+    assert!(doc.set_embedded_document(obj, "page.html", true));
+    let root = layout(&doc, &lumen_css_parser::parse(""), VP);
+    let frame = find_iframe(&root).expect("<object> с документом — бокс фрейма");
+    assert!(matches!(&frame.kind, BoxKind::Iframe { src, .. } if src == "page.html"));
+    assert!((frame.rect.width - 300.0).abs() < 0.5 && (frame.rect.height - 150.0).abs() < 0.5, "{:?}", frame.rect);
+    assert!(!has_text(&root, "fallback text"), "fallback не раскладывается");
+}
+
+/// Вердикт «не документ» и вердикт для прежнего `data` оставляют fallback.
+#[test]
+fn object_not_document_or_stale_verdict_keeps_fallback() {
+    let mut doc = lumen_html_parser::parse(
+        r#"<object data="a.pdf">fallback one</object><embed src="new.html">"#,
+    );
+    let obj = find_tag(&doc, doc.root(), "object").expect("object");
+    let embed = find_tag(&doc, doc.root(), "embed").expect("embed");
+    doc.set_embedded_document(obj, "a.pdf", false);
+    doc.set_embedded_document(embed, "old.html", true);
+    let root = layout(&doc, &lumen_css_parser::parse(""), VP);
+    assert!(find_iframe(&root).is_none());
+    assert!(has_text(&root, "fallback one"));
+}
+
+/// `width`/`height` у `<embed>` с документом — размер бокса фрейма.
+#[test]
+fn embed_with_embedded_document_honours_dimension_attributes() {
+    let mut doc = lumen_html_parser::parse(r#"<embed src="p.html" width="120" height="40">"#);
+    let embed = find_tag(&doc, doc.root(), "embed").expect("embed");
+    doc.set_embedded_document(embed, "p.html", true);
+    let root = layout(&doc, &lumen_css_parser::parse(""), VP);
+    let frame = find_iframe(&root).expect("бокс фрейма");
+    assert!((frame.rect.width - 120.0).abs() < 0.5 && (frame.rect.height - 40.0).abs() < 0.5, "{:?}", frame.rect);
 }

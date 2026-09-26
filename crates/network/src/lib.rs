@@ -4019,6 +4019,18 @@ impl HttpClient {
             .map(|(body, _content_type)| body)
     }
 
+    /// Same fetch as [`Self::fetch_subresource_document`], plus the response's
+    /// `Content-Type` — OBJECT-1 срез 2: `<object>`/`<embed>` become a nested
+    /// document only when the response *is* one (HTML LS §4.8.6/§4.8.7), and
+    /// the type is what tells an HTML page from an image or a PDF.
+    pub fn fetch_subresource_document_with_content_type(
+        &self,
+        url: &Url,
+        send_uir_header: bool,
+    ) -> Result<(Vec<u8>, Option<String>)> {
+        self.fetch_subresource_inner(url, RequestDestination::Document, send_uir_header)
+    }
+
     fn fetch_subresource_inner(
         &self,
         url: &Url,
