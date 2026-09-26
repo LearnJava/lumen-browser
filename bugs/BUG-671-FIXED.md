@@ -1,7 +1,7 @@
 # BUG-671 — `window.Selection` interface constructor missing entirely
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — `Selection`/`getSelection()` шим)
+**Статус:** FIXED 2026-09-26 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — синглтон `_lumen_selection`, `Selection`/`getSelection()`)
 **Найден:** P2, WPT-VENDOR-selection, 2026-08-06
 
 ## Симптом
@@ -34,9 +34,9 @@ sanity-check `assert_true("Selection" in window, "…")`, который пад�
 категории (`shadow-dom/tentative/*`, `textcontrols/*` и др.) — WPT-конвенция
 подстраховки от "сломанного интерфейса", но здесь ловит именно этот случай.
 Не единственная причина отказов категории (доминирующие независимые классы —
-уже открытые [BUG-368](BUG-368-OPEN.md) `innerHTML`-текстовая заглушка,
-[BUG-384](BUG-384-FIXED.md) именованный доступ на `window`, [BUG-346](BUG-346-OPEN.md)
-`..`-сегменты в `Url::resolve()`, [BUG-462](BUG-462-OPEN.md) `Node.contains`
+уже открытые [BUG-368](BUG-368-FIXED.md) `innerHTML`-текстовая заглушка,
+[BUG-384](BUG-384-FIXED.md) именованный доступ на `window`, [BUG-346](BUG-346-FIXED.md)
+`..`-сегменты в `Url::resolve()`, [BUG-462](BUG-462-FIXED.md) `Node.contains`
 отсутствует, [BUG-415](BUG-415-FIXED.md) отсоединённый документ без Node-методов/
 HTML-аксессоров), но независимая находка, не покрытая ни одним из них.
 
@@ -62,3 +62,39 @@ Fix scope: завести `class Selection` (или эквивалентный �
 переключить фабрику `getSelection()`/`document.getSelection()` на
 `new Selection(...)` вместо литерала. Заодно стоит проверить
 `Symbol.toStringTag` (см. класс BUG-369/589) — не проверялось в этой сессии.
+
+## Исправление (2026-09-26, P3)
+
+Причина подтверждена: `_lumen_selection` (`web_api_shim_mid.js`, секция
+«Selection interface») собирался литералом `{ get anchorNode() {…}, … }`, и
+глобалу `Selection` неоткуда было взяться.
+
+Теперь `function Selection()` бросает `TypeError('Illegal constructor')` (в IDL
+нет конструктора), синглтон документа — `Object.create(Selection.prototype)`,
+все атрибуты/операции перенесены на `Selection.prototype` (перечислимые,
+configurable, геттеры `get <имя>`), каждый член проверяет `this` против
+синглтона (`TypeError('Illegal invocation')`), `length` — по IDL
+(`setBaseAndExtent` 4, `collapse`/`extend`/`getRangeAt`/… 1). Добавлены
+`Symbol.toStringTag = "Selection"`, `globalThis.Selection` и алиас
+`setPosition` → `collapse` (§3). Таблица длин — без прототипа: иначе
+`lengths.toString` находил `Object.prototype.toString` и ставил функцию в `length`.
+
+Проверка: тесты `dom::tests::v8_bug671_selection_interface` (3). WPT
+`selection` (128 id): 68/128 → **116/128 harness OK**, 8585/34970 сабтестов —
+sanity-check `"Selection" in window` больше не роняет файлы `addRange-*`/
+`collapse-*`/`extend-*`/`selectAllChildren` целиком, они впервые выполняют свои
+тысячи сабтестов. Baseline обновлён (`--update-expected`, 47 `.ini` переписано,
+10 удалено), контрольный `--check` чистый.
+
+Не регрессии, хотя `--check` их показал до обновления baseline:
+- 6 файлов OK→ERROR (`canvas-click`, `user-select-on-input-and-contenteditable`,
+  `*/initial-selection-during-focus-event-propagation`) — `test_driver.click`
+  строит селектор `*|body > *|div`, отвергаемый движком
+  ([BUG-1063](BUG-1063-OPEN.md)); бинарник `main` до фикса даёт тот же ERROR —
+  дрейф baseline от 2026-08-06.
+- `onselectionchange-on-document.html` FAIL→TIMEOUT — раньше `setPosition`
+  отсутствовал и тест падал сразу, теперь дожидается `selectionchange`, которое
+  не диспатчится вовсе ([BUG-857](BUG-857-OPEN.md)).
+
+Остаток вне скоупа: атрибут `direction`, заглушки `containsNode`/
+`getComposedRanges`/`modify`, `removeRange` не бросает `NotFoundError`.

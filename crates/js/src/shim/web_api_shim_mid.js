@@ -10947,12 +10947,18 @@ function _lumen_set_adopted_style_sheets_validated(scopeId, value) {
     _lumen_set_adopted_stylesheets(scopeId, ids);
 }
 
-// ── Selection singleton (WHATWG Selection API §3) ─────────────────────────
+// ── Selection interface + document singleton (Selection API §3) ───────────
 // All access to the selection state goes through the Rust bindings.
+// `Selection` has no constructor operation; members live on the prototype as
+// WebIDL attributes/operations (brand-checked, spec `length`), and the one
+// selection of this document is an instance of it (BUG-671 — it used to be a
+// plain object literal, so `window.Selection` did not exist at all).
+function Selection() { throw new TypeError('Illegal constructor'); }
+var _lumen_selection = Object.create(Selection.prototype);
 
-var _lumen_selection = (function() {
+(function() {
     function _raw() { return _lumen_get_selection(); } // null | [aNid,aOff,fNid,fOff]
-    return {
+    var members = {
         get anchorNode()   { var s = _raw(); return s ? _lumen_make_element(s[0]) : null; },
         get anchorOffset() { var s = _raw(); return s ? s[1] : 0; },
         get focusNode()    { var s = _raw(); return s ? _lumen_make_element(s[2]) : null; },
@@ -11023,7 +11029,37 @@ var _lumen_selection = (function() {
         modify:          function() {},
         toString: function() { return _lumen_get_selection_text(); },
     };
+    members.setPosition = members.collapse; // §3: `setPosition` is an alias of `collapse`
+    // Required-argument counts from the Selection IDL (`Function.length`).
+    // No prototype: `lengths.toString` must not find `Object.prototype.toString`.
+    var lengths = Object.assign(Object.create(null), {
+        getRangeAt: 1, addRange: 1, removeRange: 1, collapse: 1, setPosition: 1,
+        extend: 1, setBaseAndExtent: 4, selectAllChildren: 1, containsNode: 1,
+    });
+    function branded(fn, name, length) {
+        // Method shorthand: WebIDL operations/accessors are not constructors.
+        var w = ({ f() {
+            if (this !== _lumen_selection) throw new TypeError('Illegal invocation');
+            return fn.apply(this, arguments);
+        } }).f;
+        Object.defineProperty(w, 'name', { value: name });
+        Object.defineProperty(w, 'length', { value: length });
+        return w;
+    }
+    Object.keys(members).forEach(function(k) {
+        var d = Object.getOwnPropertyDescriptor(members, k);
+        if (d.get) {
+            d.get = branded(d.get, 'get ' + k, 0);
+        } else {
+            d.value = branded(d.value, k, lengths[k] || 0);
+        }
+        d.enumerable = true;
+        Object.defineProperty(Selection.prototype, k, d);
+    });
 }());
+Object.defineProperty(Selection.prototype, Symbol.toStringTag,
+    { value: 'Selection', configurable: true });
+globalThis.Selection = Selection;
 
 // ── contenteditable key dispatch (Input Events Level 2 §4.1) ─────────────────
 // Called by the shell when a key is pressed while a contenteditable element has
