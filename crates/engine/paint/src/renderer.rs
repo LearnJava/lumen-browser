@@ -1162,6 +1162,10 @@ impl Renderer {
         let viewport_css_h = surface_h as f32 / dpr_f32;
         let viewport_css_w = surface_w as f32 / dpr_f32;
         let mut sticky_stack: Vec<(f32, f32)> = Vec::new();
+        // CSS Backgrounds L3 §3.6 — depth of open `BeginFixedBackground`
+        // brackets of the page list. Inside one, a background's positioning
+        // geometry is viewport-relative: the page scroll is cancelled for it.
+        let mut fixed_bg_depth: u32 = 0;
 
         // Compose-путь скролл-композитора: полоса страницы рисуется первым
         // op-ом level 0 (после LoadOp::Clear того же пасса) — под overlay,
@@ -1360,6 +1364,27 @@ impl Renderer {
                 (0.0_f32, 0.0_f32)
             } else {
                 sticky_stack.last().copied().unwrap_or((-scroll_y, -scroll_x))
+            };
+            // `background-attachment: fixed` (CSS Backgrounds L3 §3.6): the
+            // positioning area was emitted at the scroll-0 viewport, so adding
+            // the page scroll back keeps the picture still on screen. Gradient
+            // quads are pure positioning geometry (their painting area is the
+            // surrounding `PushClip*`, which keeps the normal offset); for a
+            // background image only `origin_rect` moves — see its arm.
+            let (fbg_dy, fbg_dx) = if fixed_bg_depth > 0 && !is_overlay {
+                (scroll_y, scroll_x)
+            } else {
+                (0.0, 0.0)
+            };
+            let (dy, dx) = if matches!(
+                cmd,
+                DisplayCommand::DrawLinearGradient { .. }
+                    | DisplayCommand::DrawRadialGradient { .. }
+                    | DisplayCommand::DrawConicGradient { .. }
+            ) {
+                (dy + fbg_dy, dx + fbg_dx)
+            } else {
+                (dy, dx)
             };
             // BUG-771 (диагностика, `LUMEN_TEXT_SIG=2`): сама команда текста
             // overlay-а — чтобы отличить «шелл прислал другой список» от
@@ -2412,7 +2437,7 @@ impl Renderer {
                     // `oarea` — positioning area (background-origin). Used for size/position math
                     //           per CSS Backgrounds L3 §3.5/3.5.2.
                     let area  = translate_rect(*rect, dx, dy);
-                    let oarea = translate_rect(*origin_rect, dx, dy);
+                    let oarea = translate_rect(*origin_rect, dx + fbg_dx, dy + fbg_dy);
                     let Some(gpu) = self.images.get(src) else { continue };
                     let img_w = gpu.width as f32;
                     let img_h = gpu.height as f32;
@@ -3405,6 +3430,18 @@ impl Renderer {
                 // (ADR-016 M3.2.1c). No draw-time offset: fixed content is already
                 // at viewport-fixed coords, so these are pure no-ops here.
                 DisplayCommand::BeginFixedLayer | DisplayCommand::EndFixedLayer => {}
+                // CSS Backgrounds L3 §3.6 — `background-attachment: fixed`
+                // bracket; consumed by the offset computation above.
+                DisplayCommand::BeginFixedBackground => {
+                    if !is_overlay {
+                        fixed_bg_depth += 1;
+                    }
+                }
+                DisplayCommand::EndFixedBackground => {
+                    if !is_overlay {
+                        fixed_bg_depth = fixed_bg_depth.saturating_sub(1);
+                    }
+                }
                 // CSS Masking L1 §5 — PushMaskLayer: open an offscreen layer for mask content.
                 // The caller (emit_box) is responsible for ensuring the element content is
                 // isolated in the parent layer (e.g. via PushOpacity) before calling this.

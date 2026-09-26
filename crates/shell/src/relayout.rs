@@ -1838,7 +1838,7 @@ pub(crate) fn compute_layout(
     let doc = document.lock().unwrap();
     let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
-    let dl = paint_ordered(&layout);
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
     (dl, layout)
 }
 
@@ -1889,7 +1889,7 @@ pub(crate) fn compute_layout_incremental(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
     );
     drop(doc);
-    let dl = paint_ordered(&layout);
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
     (dl, layout, counters)
 }
 
@@ -1959,7 +1959,7 @@ pub(crate) fn compute_layout_incremental_restyle(
     );
     drop(doc);
     let paint_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
-    let dl = paint_ordered(&layout);
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
     if let Some(t0) = log_t0 {
         let paint_ms = paint_t0.map(|t| t.elapsed().as_secs_f32() * 1000.0).unwrap_or(0.0);
         eprintln!(

@@ -102,7 +102,7 @@ pub(crate) fn render_bytes(
     dynamic_image_hook_ctx: Option<crate::dynamic_image_hook::DynamicImageHookCtx>,
 ) -> Result<RenderedPage, Box<dyn Error>> {
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, push_backend, target, false, csp_header, report_to_endpoints, sync_xhr_document_policy, sync_xhr_permissions_policy, referrer_policy_header, dynamic_image_hook_ctx)?;
-    let display_list = paint_ordered(&parsed.layout);
+    let display_list = crate::display_list_metrics::paint_ordered_in(&parsed.layout, viewport);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
         parsed.document.lock().unwrap().len(),

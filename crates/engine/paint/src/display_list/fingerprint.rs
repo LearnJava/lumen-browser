@@ -759,7 +759,8 @@ fn filter_bbox_inflate(filters: &[FilterFn]) -> f32 {
 /// - сегмент несбалансирован по push/pop (не должно случаться по построению);
 /// - статичная команда, рисуемая ПОЗЖЕ сегмента, пересекает его bbox —
 ///   сегмент, нарисованный поверх полосы, перекрыл бы её;
-/// - в списке есть `BeginStickyLayer` (нелинейная зависимость от скролла).
+/// - в списке есть `BeginStickyLayer` или `BeginFixedBackground`
+///   (нелинейная зависимость от скролла).
 pub fn anim_split_compose_plan(
     content: &[DisplayCommand],
     ranges: &[std::ops::Range<usize>],
@@ -830,6 +831,7 @@ pub fn anim_split_compose_plan(
 
         match cmd {
             DisplayCommand::BeginStickyLayer { .. } => bail!("sticky layer at {}", i),
+            DisplayCommand::BeginFixedBackground => bail!("fixed background at {}", i),
             DisplayCommand::PushTransform { matrix } => {
                 let m = if matrix.is_2d_affine() {
                     if identity_below {
@@ -1035,7 +1037,8 @@ fn layer_push_pop_delta(cmd: &DisplayCommand) -> i64 {
         | DisplayCommand::PushMaskConicGradient { .. }
         | DisplayCommand::PushMaskLayer { .. }
         | DisplayCommand::PushScrollLayer { .. }
-        | DisplayCommand::BeginStickyLayer { .. } => 1,
+        | DisplayCommand::BeginStickyLayer { .. }
+        | DisplayCommand::BeginFixedBackground => 1,
         DisplayCommand::PopTransform
         | DisplayCommand::PopClip
         | DisplayCommand::PopOpacity
@@ -1045,7 +1048,8 @@ fn layer_push_pop_delta(cmd: &DisplayCommand) -> i64 {
         | DisplayCommand::PopMask
         | DisplayCommand::PopMaskLayer
         | DisplayCommand::PopScrollLayer
-        | DisplayCommand::EndStickyLayer => -1,
+        | DisplayCommand::EndStickyLayer
+        | DisplayCommand::EndFixedBackground => -1,
         _ => 0,
     }
 }

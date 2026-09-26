@@ -58,6 +58,8 @@ pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::EndStickyLayer
             | DisplayCommand::BeginFixedLayer
             | DisplayCommand::EndFixedLayer
+            | DisplayCommand::BeginFixedBackground
+            | DisplayCommand::EndFixedBackground
             | DisplayCommand::PushScrollLayer { .. }
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }
@@ -120,6 +122,8 @@ pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::EndStickyLayer
             | DisplayCommand::BeginFixedLayer
             | DisplayCommand::EndFixedLayer
+            | DisplayCommand::BeginFixedBackground
+            | DisplayCommand::EndFixedBackground
             | DisplayCommand::PushScrollLayer { .. }
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }
@@ -178,6 +182,15 @@ pub(crate) fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
     let order = PaintOrder::from_tree(&tree);
     build_display_list_ordered(layout, &tree, &order).0
+}
+
+/// [`paint_ordered`] для документа, разложенного под `viewport`: его
+/// `background-attachment: fixed` слои позиционируются от этого вьюпорта
+/// (CSS Backgrounds L3 §3.6). Корневой бокс — `max(вьюпорт, документ)`, так
+/// что без вьюпорта фиксированный фон длинной страницы растянулся бы на весь
+/// документ.
+pub(crate) fn paint_ordered_in(layout: &lumen_layout::LayoutBox, viewport: lumen_core::geom::Size) -> DisplayList {
+    lumen_paint::with_fixed_background_viewport(viewport, || paint_ordered(layout))
 }
 
 /// Следующая версия display list-а; `0` пропускается — он зарезервирован за

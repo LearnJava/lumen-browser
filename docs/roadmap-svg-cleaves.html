@@ -58,11 +58,11 @@
  "generated": "2026-09-27",
  "counts": {
   "open": 216,
-  "fixed": 924,
+  "fixed": 925,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1140,
+ "total_bugs": 1141,
  "phases": [
   {
    "id": "P0",
@@ -6987,7 +6987,7 @@
        "title": "GAP: `Origin` WebIDL-глобал (tuple/opaque происхождение, cross-origin проверки, PSL same-site)",
        "status": "done",
        "size": "M",
-       "note": "ЗАКРЫТ 2026-09-27 (P1, ветка `p1-gap-origin`): интерфейс `Origin` (`[Exposed=*]`, страница и все воркеры) — `new Origin()`, `Origin.from()` над строкой/`URL`/`Origin`/глобалом/`<a>`/`<area>`/SVG `<a>` (`SVGAnimatedString href`)/фасадом `contentWindow`/доставленным `MessageEvent`, `opaque`, `isSameOrigin()`, `isSameSite()` по Public Suffix List (DI `set_public_suffix_list`, шелл ставит `PslProvider`); tuple/opaque — `Url::tuple_origin` по URL Standard §6.1. Попутно `new URL(rel)` без base бросает `TypeError` (WPT url 7476 → 7557). WPT `html/browsers/origin/api` 0/307 → 296/325. Остаток — BUG-1196 (blob-URL без происхождения), BUG-1197 (песочница → непрозрачное происхождение сообщений), BUG-1198 (`window.open` в WPT → TIMEOUT); 25 сабтестов MathML `<a>` пишут expando `href`.",
+       "note": "ЗАКРЫТ 2026-09-27 (P1, ветка `p1-gap-origin`): интерфейс `Origin` (`[Exposed=*]`, страница и все воркеры) — `new Origin()`, `Origin.from()` над строкой/`URL`/`Origin`/глобалом/`<a>`/`<area>`/SVG `<a>` (`SVGAnimatedString href`)/фасадом `contentWindow`/доставленным `MessageEvent`, `opaque`, `isSameOrigin()`, `isSameSite()` по Public Suffix List (DI `set_public_suffix_list`, шелл ставит `PslProvider`); tuple/opaque — `Url::tuple_origin` по URL Standard §6.1. Попутно `new URL(rel)` без base бросает `TypeError` (WPT url 7476 → 7557). WPT `html/browsers/origin/api` 0/307 → 296/325. Остаток — BUG-1197 (blob-URL без происхождения), BUG-1198 (песочница → непрозрачное происхождение сообщений), BUG-1199 (`window.open` в WPT → TIMEOUT); 25 сабтестов MathML `<a>` пишут expando `href`.",
        "bugs": [
         "BUG-585"
        ]
@@ -8742,21 +8742,21 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1196": {
+  "BUG-1197": {
    "status": "open",
    "title": "`URL.createObjectURL` отдаёт `blob:lumen/N` без происхождения вместо `blob:<origin>/<uuid>` (File API §8.3): blob-воркер получает непрозрачное происхождение (`O…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid_c2.js:4` — `URL.createObjectURL`; `crates/js/src/worker.rs` — префикс `blob:lumen/`)",
    "date": null,
    "debtor": false
   },
-  "BUG-1197": {
+  "BUG-1198": {
    "status": "open",
    "title": "Сообщение из `<iframe sandbox>` без `allow-same-origin` приходит с tuple-origin по URL, а не с непрозрачным происхождением документа; нет идентичности непрозрач…",
    "component": "js (`crates/js/src/frame_bridge.rs:507` — `binding_origin`; `web_api_shim_mid_b4.js` — `_lumen_deliver_frame_message`)",
    "date": null,
    "debtor": false
   },
-  "BUG-1198": {
+  "BUG-1199": {
    "status": "open",
    "title": "WPT-страница, вызвавшая `window.open()`, не отдаёт результаты харнесса — TIMEOUT всего файла без сабтестов (`origin-from-window`, `origin-from-messageevent`); г…",
    "component": "shell / wptrunner (`executorlumen.py` — ожидание `testharnessreport.js`), `window.open`",
@@ -15223,6 +15223,13 @@
    "component": "js (`crates/js/src/shim/origin_shim.js`, `crates/js/src/origin.rs` — натив `_lumen_url_origin` + DI Public Suffix List), core (`Url::tuple_origin`)",
    "date": "2026-09-27",
    "debtor": false
+  },
+  "BUG-1196": {
+   "status": "fixed",
+   "title": "Linux: SIGSEGV на первом `eval`/`new Function` — codegen-callback TRUSTEDTYPES-1 был реализован только в MSVC-форме (скрытый указатель результата первым аргумен…",
+   "component": "js (`crates/js/src/v8_runtime/codegen_hook.rs` — `RawCallback`, `codegen_result`)",
+   "date": "2026-09-27",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15708,7 +15715,7 @@
    "BUG-698"
   ],
   "js (`crates/js/src/frame_bridge.rs:507` — `binding_origin`; `web_api_shim_mid_b4.js` — `_lumen_deliver_frame_message`)": [
-   "BUG-1197"
+   "BUG-1198"
   ],
   "js (`crates/js/src/frame_bridge.rs::frameElem`)": [
    "BUG-1147"
@@ -15960,7 +15967,7 @@
    "BUG-1133"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_c2.js:4` — `URL.createObjectURL`; `crates/js/src/worker.rs` — префикс `blob:lumen/`)": [
-   "BUG-1196"
+   "BUG-1197"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js:103-112` — `window.getComputedStyle`)": [
    "BUG-539"
@@ -16034,6 +16041,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs` — уровень изолята)": [
    "BUG-716"
+  ],
+  "js (`crates/js/src/v8_runtime/codegen_hook.rs` — `RawCallback`, `codegen_result`)": [
+   "BUG-1196"
   ],
   "js (`crates/js/src/v8_runtime/dom_helpers.rs::parse_html_fragment`) / engine (`crates/engine/html-parser`)": [
    "BUG-982"
@@ -16961,7 +16971,7 @@
    "BUG-308"
   ],
   "shell / wptrunner (`executorlumen.py` — ожидание `testharnessreport.js`), `window.open`": [
-   "BUG-1198"
+   "BUG-1199"
   ],
   "shell+font": [
    "BUG-170"

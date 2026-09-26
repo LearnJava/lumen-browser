@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 158 background-attachment</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: content-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+    /* CSS Backgrounds L3 §3.6 background-attachment.
+       Every `fixed` box below is positioned against the VIEWPORT (1024×720 at
+       scroll 0), not against its own box: a fixed layer is one picture spread
+       over the whole window, and each box is only a window onto it. */
+    .b { position: absolute; width: 220px; height: 200px; border: 6px solid #e2e8f0; }
+
+    /* Row 1: one hard-stop horizontal gradient 0..1024px (four 256px bands).
+       The three fixed boxes sit at different x and each shows the band of the
+       viewport under it — the colours line up as one continuous strip. */
+    .strip {
+      background: linear-gradient(to right,
+        #e53e3e 0, #e53e3e 256px, #38a169 256px, #38a169 512px,
+        #3182ce 512px, #3182ce 768px, #d69e2e 768px, #d69e2e 1024px) fixed;
+    }
+    .r1a { left: 40px;  top: 30px; }
+    .r1b { left: 400px; top: 30px; }
+    .r1c { left: 760px; top: 30px; }
+
+    /* Row 2: same gradient with `scroll` (initial) — each box maps the whole
+       gradient onto its own 232px border box instead: all four bands per box. */
+    .strip-scroll {
+      background: linear-gradient(to right,
+        #e53e3e 0, #e53e3e 25%, #38a169 25%, #38a169 50%,
+        #3182ce 50%, #3182ce 75%, #d69e2e 75%, #d69e2e 100%) scroll;
+    }
+    .r2a { left: 40px;  top: 270px; }
+
+    /* Row 2 middle: a fixed vertical split at 50% of the viewport height
+       (360px). The box spans 270..482px, so it straddles the split: pink
+       above y=360, teal below — the split does not follow the box. */
+    .vsplit { background: linear-gradient(#ed64a6 0, #ed64a6 50%, #319795 50%, #319795 100%) fixed; }
+    .r2b { left: 400px; top: 270px; }
+
+    /* Row 2 right: the vertical split moved to another x — same y-split at
+       360px, proof it depends on the viewport, not on the box. */
+    .r2c { left: 760px; top: 270px; }
+
+    /* Row 3 middle: a fixed repeating image, 320×200 tiles anchored at the
+       viewport centre (a tile starts at x=352, y=260), so inside this box
+       (x 400..632, y 510..680) the tile seam falls at y=660 and x=672 is
+       outside — one horizontal seam, no vertical one. */
+    .img {
+      background: #4a5568 url(../samples/images/perceptron.png) repeat fixed;
+      background-size: 320px 200px;
+      background-position: center;
+    }
+    .r3b { left: 400px; top: 510px; height: 170px; }
+
+    /* Row 3 left: multiple layers, only the top one fixed — a fixed 64px
+       checker grid over a scroll gradient of the box itself. */
+    .multi {
+      background:
+        repeating-linear-gradient(to right, rgba(0,0,0,.55) 0, rgba(0,0,0,.55) 32px, transparent 32px, transparent 64px) fixed,
+        linear-gradient(#805ad5, #d53f8c) scroll;
+    }
+    .r3a { left: 40px; top: 510px; height: 170px; }
+
+    /* Row 3 right: padding + background-clip: content-box — the painting
+       area shrinks, the positioning area stays the viewport (bands still at
+       the viewport's x, not shifted by the 30px padding). */
+    .clip { padding: 30px; width: 160px; height: 110px; background-clip: content-box; }
+    .r3c { left: 760px; top: 510px; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <div class="b strip r1a"></div>
+    <div class="b strip r1b"></div>
+    <div class="b strip r1c"></div>
+
+    <div class="b strip-scroll r2a"></div>
+    <div class="b vsplit r2b"></div>
+    <div class="b vsplit r2c"></div>
+
+    <div class="b multi r3a"></div>
+    <div class="b img r3b"></div>
+    <div class="b strip clip r3c"></div>
+  </div>
+</body>
+</html>
