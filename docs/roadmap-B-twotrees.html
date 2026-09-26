@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-26",
  "counts": {
-  "open": 228,
-  "fixed": 907,
+  "open": 223,
+  "fixed": 914,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1135,
+ "total_bugs": 1137,
  "phases": [
   {
    "id": "P0",
@@ -4161,7 +4161,7 @@
        "title": "WPT: вендорить + прогнать категорию `serial`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (Serial). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root serial --recursive`, ~3 мин 51 с, 18 файлов, 10 отобранных id, 5 `*-manual.https.html` исключены фильтром раннера) — **0/10 harness OK**. Все 10 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Serial API реально реализован как Phase 0 заглушка (`crates/js/src/serial.rs`) и соответствует своему doc-комментарию (`requestPort()`→`NotSupportedError`, `getPorts()`→`[]`) — не баг. Живая проба (`--mcp-live-port`) на контейнере (прототипная цепочка исправна, `navigator.serial instanceof EventTarget === true`, в отличие от класса BUG-664/BUG-668) нашла независимую находку — [BUG-672](bugs/BUG-672-OPEN.md): `Serial`/`SerialPort` — обычные ES6-классы без guard на `new.target`, `new SerialPort()`/`new Serial()` конструируются успешно, хотя спека не определяет конструктор ни для одного из них (тот же класс, что [BUG-629](bugs/BUG-629-FIXED.md)/[BUG-374](bugs/BUG-374-FIXED.md), новая поверхность). Один новый номер бага",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (Serial). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root serial --recursive`, ~3 мин 51 с, 18 файлов, 10 отобранных id, 5 `*-manual.https.html` исключены фильтром раннера) — **0/10 harness OK**. Все 10 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Serial API реально реализован как Phase 0 заглушка (`crates/js/src/serial.rs`) и соответствует своему doc-комментарию (`requestPort()`→`NotSupportedError`, `getPorts()`→`[]`) — не баг. Живая проба (`--mcp-live-port`) на контейнере (прототипная цепочка исправна, `navigator.serial instanceof EventTarget === true`, в отличие от класса BUG-664/BUG-668) нашла независимую находку — [BUG-672](bugs/BUG-672-FIXED.md): `Serial`/`SerialPort` — обычные ES6-классы без guard на `new.target`, `new SerialPort()`/`new Serial()` конструируются успешно, хотя спека не определяет конструктор ни для одного из них (тот же класс, что [BUG-629](bugs/BUG-629-FIXED.md)/[BUG-374](bugs/BUG-374-FIXED.md), новая поверхность). Один новый номер бага",
        "bugs": [
         "BUG-672"
        ]
@@ -4371,7 +4371,7 @@
        "title": "WPT: вендорить + прогнать категорию `ua-client-hints`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root ua-client-hints --recursive`, ~1 мин, 4 файла, 2 отобранных id) — **0/2 harness OK**, оба `.https.` TIMEOUT на задокументированном TLS-гэпе `UnknownIssuer`. Функциональная часть `navigator.userAgentData` (Phase 0, статический профиль Chrome 114) корректна — все ассерты `useragentdata.https.any.js` прошли бы. Заведён [BUG-690](bugs/BUG-690-OPEN.md) живой пробой (`--mcp-live-port`): `NavigatorUAData` форгуем через `new` (спека не определяет конструктор) и не имеет `Symbol.toStringTag` — тот же класс, что [BUG-672](bugs/BUG-672-OPEN.md)/[BUG-677](bugs/BUG-677-OPEN.md). Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root ua-client-hints --recursive`, ~1 мин, 4 файла, 2 отобранных id) — **0/2 harness OK**, оба `.https.` TIMEOUT на задокументированном TLS-гэпе `UnknownIssuer`. Функциональная часть `navigator.userAgentData` (Phase 0, статический профиль Chrome 114) корректна — все ассерты `useragentdata.https.any.js` прошли бы. Заведён [BUG-690](bugs/BUG-690-OPEN.md) живой пробой (`--mcp-live-port`): `NavigatorUAData` форгуем через `new` (спека не определяет конструктор) и не имеет `Symbol.toStringTag` — тот же класс, что [BUG-672](bugs/BUG-672-FIXED.md)/[BUG-677](bugs/BUG-677-OPEN.md). Один новый номер бага",
        "bugs": [
         "BUG-690"
        ]
@@ -4877,7 +4877,7 @@
        "title": "WPT: прогнать подсрез `html/semantics/{interactive-elements,popovers,permission-element,links,interestfor,selectors,the-button-element,tabular-data,menu,grouping-content,text-level-semantics,disabled-elements,edits,sections}` + 2 корневых файла",
        "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-FIXED.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-FIXED.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-DUPLICATE.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-FIXED.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-FIXED.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-OPEN.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-FIXED.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-FIXED.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-DUPLICATE.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-FIXED.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-FIXED.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-FIXED.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
        "bugs": [
         "BUG-577",
         "BUG-578",
@@ -6993,9 +6993,9 @@
       {
        "id": "GAP-INTERESTINVOKER",
        "title": "GAP: Interest Invokers API (`interestfor`/`InterestEvent`/hover-delay) отсутствует целиком",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Interest Invokers API (WHATWG HTML draft, `.tentative.`, hover/focus-triggered \"preview\" аналог существующего BUG-582 Invoker Commands API) не реализован вовсе: нет `interestForElement` IDL-рефлексии (`commandForElement`-подобный паттерн, `crates/js/src/shim/web_api_shim_tail_b.js:1404-1447`, есть куда встроить), нет `InterestEvent` (`CommandEvent`-подобный шаблон, `web_api_shim_mid.js:303-325`), нет `interest`/`loseinterest` диспатча и hover-delay/focus-delay/Escape таймер-модели. В отличие от BUG-582 (реализован целиком в JS-шиме, без CSS/layout), поведенческие тесты (`interestfor-basic-delays`, `interestfor-delay-start`, `interestfor-delay-end`.tentative.html; `createPopoverAndInvokerForHoverTests`, `tests/wpt/html/semantics/interestfor/resources/invoker-utils.js:96-121`) читают реальные CSS-свойства `interest-delay-start`/`interest-delay-end` через `getComputedStyle` — `grep` по `crates/layout`, `crates/css`, `CSS-SPECS.md` на `interest-delay` даёт ноль совпадений, это новая пара CSS-свойств (не заглушка), плюс `interestfor-pseudo-classes.tentative.html` требует псевдоклассов `:has-interest`/`:target-of-interest`. Найден P2, WPT-VENDOR-html-semantics-misc, 2026-08-04; реклассифицировано из BUG-584 2026-09-15 (P3) по тому же правилу, что BUG-553/554/562/568/583 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект). Не W3C Candidate Recommendation — приоритет по решению, не автоматически.",
+       "note": "ЗАКРЫТ 2026-09-26 (P1, ветка `p1-gap-interestinvoker`): `interestForElement` на button/a/area/SVG a, `InterestEvent`, `interest`/`loseinterest` с hover/focus-задержками и Escape, CSS `interest-delay-*`, `:interest-source`/`:interest-target`; WPT interestfor 49/268 → 164/244. Остаток — BUG-1194 (test_driver hover/Escape), BUG-1195 (Web Animations), интерполяция `<time>` в CSS Transitions/Animations, `::interest-button`. Исходная постановка: Interest Invokers API (WHATWG HTML draft, `.tentative.`, hover/focus-triggered \"preview\" аналог существующего BUG-582 Invoker Commands API) не реализован вовсе: нет `interestForElement` IDL-рефлексии (`commandForElement`-подобный паттерн, `crates/js/src/shim/web_api_shim_tail_b.js:1404-1447`, есть куда встроить), нет `InterestEvent` (`CommandEvent`-подобный шаблон, `web_api_shim_mid.js:303-325`), нет `interest`/`loseinterest` диспатча и hover-delay/focus-delay/Escape таймер-модели. В отличие от BUG-582 (реализован целиком в JS-шиме, без CSS/layout), поведенческие тесты (`interestfor-basic-delays`, `interestfor-delay-start`, `interestfor-delay-end`.tentative.html; `createPopoverAndInvokerForHoverTests`, `tests/wpt/html/semantics/interestfor/resources/invoker-utils.js:96-121`) читают реальные CSS-свойства `interest-delay-start`/`interest-delay-end` через `getComputedStyle` — `grep` по `crates/layout`, `crates/css`, `CSS-SPECS.md` на `interest-delay` даёт ноль совпадений, это новая пара CSS-свойств (не заглушка), плюс `interestfor-pseudo-classes.tentative.html` требует псевдоклассов `:has-interest`/`:target-of-interest`. Найден P2, WPT-VENDOR-html-semantics-misc, 2026-08-04; реклассифицировано из BUG-584 2026-09-15 (P3) по тому же правилу, что BUG-553/554/562/568/583 (целиком отсутствующая фича — задача ROADMAP, не точечный дефект). Не W3C Candidate Recommendation — приоритет по решению, не автоматически.",
        "bugs": [
         "BUG-584"
        ]
@@ -7528,31 +7528,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-584": {
-   "status": "open",
-   "title": "Interest Invokers API (`interestfor`, `InterestEvent` -- hover/focus analogue of BUG-582's `command`/`commandfor`) not implemented at all, entirely `.tentative.…",
-   "component": "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-585": {
    "status": "open",
    "title": "`Origin` WebIDL global (`Origin.from()`, tuple/opaque origin) not implemented at all. 181 subtests, all `html/browsers/origin/api/` (self-contained category). K…",
    "component": "js (`crates/js/src/dom.rs` -- no `Origin` global constructor anywhere)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-671": {
-   "status": "open",
-   "title": "`window.Selection` interface constructor is missing entirely — not a broken getter, the property doesn't exist (`'Selection' in window === false`). `window.getS…",
-   "component": "js (`crates/js/src/dom.rs` — `Selection`/`getSelection()` shim)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-672": {
-   "status": "open",
-   "title": "`Serial`/`SerialPort` are plain ES6 `class X extends EventTarget` with no `new.target`/constructor guard, so `new SerialPort()`/`new Serial()` both succeed even…",
-   "component": "js (`crates/js/src/serial.rs` — `SERIAL_SHIM`)",
    "date": null,
    "debtor": false
   },
@@ -8480,34 +8459,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1134": {
-   "status": "open",
-   "title": "Файл `<!-- by TradingView --><svg …>` (`image/svg+xml`) → «Не декодируется …svg: формат изображения не распознан по сигнатуре»; тот же файл без комментария деко…",
-   "component": "image (`crates/engine/image/src/lib.rs:68-93` `is_svg` — после BOM/пробелов ждёт только `<svg`, `<!doctype svg`, `<?xml`; `Content-Type: image/svg+xml` не учитывается)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1135": {
-   "status": "open",
-   "title": "`import.meta.resolve('/abs/x.js')` из модуля `/sub/dir/m.js` → `/sub/dir//abs/x.js` (Chrome `/abs/x.js`), `'./rel.js'` → `/sub/dir/./rel.js`, `'../up.js'` → `/s…",
-   "component": "js (`crates/js/src/import_meta.rs:55-62` `build_preamble`: `resolve = b.slice(0, lastIndexOf('/')+1) + s`; тест `crates/js/src/v8_esm.rs:1388` `v8_import_meta_resolve_relative` закрепляет неверный результат)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1136": {
-   "status": "open",
-   "title": "`typeof el.getAttributeNames === 'undefined'` при `hasAttributes() === true`, `attributes.length === 4`. samsung: `d.getAttributeNames is not a function` (вмест…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — у `Element.prototype` метода нет; есть только у `VElement` в `crates/js/src/dom_parser.rs:229`, а сам шим проверяет его наличие в `:10801`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1137": {
-   "status": "open",
-   "title": "`typeof History === 'undefined'`, `history instanceof History` → `ReferenceError`, `toString.call(history) === '[object Object]'`. Тот же класс, что BUG-624 (`N…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js:1006` — `var history = {` — литерал без интерфейса)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1138": {
    "status": "open",
    "title": "`toString.call(document) === '[object Object]'`, `typeof HTMLDocument === 'undefined'` (Chrome: `'[object HTMLDocument]'`, `function`). yahoo.co.jp: `ual-2.10.2…",
@@ -8862,6 +8813,20 @@
    "status": "open",
    "title": "В Service Worker `atob`/`btoa` не по HTML LS §8.3: `atob(btoa('\\xff'))` даёт не `'\\xff'` (двоичная строка читается как UTF-8), на невалидном входе натив отдаёт…",
    "component": "js (`crates/js/src/sw_worker.rs` — нативы `atob`/`btoa` в `install_sw_globals_v8` (`sw_worker.rs:761-769`): `base64_decode` + `String::from_utf8`, `btoa` кодирует UTF-8 байты)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1194": {
+   "status": "open",
+   "title": "`test_driver.Actions()` не умеет навести курсор и нажать Escape: `pointerMove` без `pointerDown` только запоминает точку (нет `mouseover`/`:hover`), а `keyDown(…",
+   "component": "bidi-server (`crates/bidi-server/src/protocol.rs` — `replay_input_actions`; `crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Type`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1195": {
+   "status": "open",
+   "title": "Web Animations смешивает числа разных единиц без приведения (`1s → 2000ms` на 0.5 → `1000.5s`) и зажимает прогресс сегмента в [0,1], так что `cubic-bezier` с вы…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_lerp_scalar`, `_wa_compute_at_p`)",
    "date": null,
    "debtor": false
   },
@@ -15206,6 +15171,55 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- `_LUMEN_WRAPPER_MEMBERS.focusGroup`/`focusGroupStart`)",
    "date": "2026-09-26",
    "debtor": false
+  },
+  "BUG-1134": {
+   "status": "fixed",
+   "title": "Файл `<!-- by TradingView --><svg …>` (`image/svg+xml`) → «Не декодируется …svg: формат изображения не распознан по сигнатуре»; тот же файл без комментария деко…",
+   "component": "image (`crates/engine/image/src/lib.rs:68-93` `is_svg` — после BOM/пробелов ждёт только `<svg`, `<!doctype svg`, `<?xml`; `Content-Type: image/svg+xml` не учитывается)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-671": {
+   "status": "fixed",
+   "title": "`window.Selection` interface constructor is missing entirely — not a broken getter, the property doesn't exist (`'Selection' in window === false`). `window.getS…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — синглтон `_lumen_selection` был литералом; теперь `Object.create(Selection.prototype)`, члены на prototype)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1135": {
+   "status": "fixed",
+   "title": "`import.meta.resolve('/abs/x.js')` из модуля `/sub/dir/m.js` → `/sub/dir//abs/x.js` (Chrome `/abs/x.js`), `'./rel.js'` → `/sub/dir/./rel.js`, `'../up.js'` → `/s…",
+   "component": "js (`crates/js/src/import_meta.rs:55-62` `build_preamble`: `resolve = b.slice(0, lastIndexOf('/')+1) + s`; тест `crates/js/src/v8_esm.rs:1388` `v8_import_meta_resolve_relative` закрепляет неверный результат)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1136": {
+   "status": "fixed",
+   "title": "`typeof el.getAttributeNames === 'undefined'` при `hasAttributes() === true`, `attributes.length === 4`. samsung: `d.getAttributeNames is not a function` (вмест…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:7334` — метод добавлен на `Element.prototype`; было: есть только у `VElement` в `crates/js/src/dom_parser.rs:229`, а сам шим проверяет его наличие в `:10801`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-672": {
+   "status": "fixed",
+   "title": "`Serial`/`SerialPort` are plain ES6 `class X extends EventTarget` with no `new.target`/constructor guard, so `new SerialPort()`/`new Serial()` both succeed even…",
+   "component": "js (`crates/js/src/serial.rs` — `SERIAL_SHIM`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-1137": {
+   "status": "fixed",
+   "title": "`typeof History === 'undefined'`, `history instanceof History` → `ReferenceError`, `toString.call(history) === '[object Object]'`. Тот же класс, что BUG-624 (`N…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js:1078` — интерфейс `History`, члены на прототипе; было: литерал `var history = {`)",
+   "date": "2026-09-26",
+   "debtor": false
+  },
+  "BUG-584": {
+   "status": "fixed",
+   "title": "Interest Invokers API did not exist at all. Now `interestForElement` on button/a/area/SVG a, `InterestEvent`, `interest`/`loseinterest` with the hover/focus del…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` -- `_lumen_install_interest_for`, `_lumen_interest_reevaluate`), layout (`interest-delay-*`, `:interest-source`/`:interest-target`)",
+   "date": "2026-09-26",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15229,6 +15243,9 @@
   ],
   "a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`/`AXRole`; потребитель `crates/engine/a11y/src/lib.rs::resolve_role`)": [
    "BUG-764"
+  ],
+  "bidi-server (`crates/bidi-server/src/protocol.rs` — `replay_input_actions`; `crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Type`)": [
+   "BUG-1194"
   ],
   "bidi-server (protocol.rs)": [
    "BUG-319"
@@ -15795,6 +15812,9 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js:4305` `doc.createElement` отсоединённого документа — `toLowerCase()` и HTML-namespace для любого `contentType`)": [
    "BUG-1162"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js:7334` — метод добавлен на `Element.prototype`; было: есть только у `VElement` в `crates/js/src/dom_parser.rs:229`, а сам шим проверяет его наличие в `:10801`)": [
+   "BUG-1136"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js:7725-7744` — `_LUMEN_WRAPPER_MEMBERS.nextSibling`/`previousSibling`)": [
    "BUG-556"
   ],
@@ -15873,9 +15893,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)": [
    "BUG-929"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` — у `Element.prototype` метода нет; есть только у `VElement` в `crates/js/src/dom_parser.rs:229`, а сам шим проверяет его наличие в `:10801`)": [
-   "BUG-1136"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — фабрики коллекций `getElementsByTagName`/`getElementsByClassName`/`querySelectorAll`/`children`)": [
    "BUG-994"
   ],
@@ -15897,7 +15914,7 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_mc.js`, `web_api_shim_head.js`)": [
    "BUG-479"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid_b.js:1006` — `var history = {` — литерал без интерфейса)": [
+  "js (`crates/js/src/shim/web_api_shim_mid_b.js:1078` — интерфейс `History`, члены на прототипе; было: литерал `var history = {`)": [
    "BUG-1137"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_ro_schedule_initial`/`_ro_initial_pass`, `_lumen_timers`)": [
@@ -15956,6 +15973,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_iter_progress`/`Animation.prototype._tick`)": [
    "BUG-1192"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_lerp_scalar`, `_wa_compute_at_p`)": [
+   "BUG-1195"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.find`)": [
    "BUG-623"
