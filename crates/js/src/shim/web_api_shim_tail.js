@@ -653,7 +653,12 @@ function _lumen_idle_arm(deadline) {
 
 function _lumen_idle_invoke(fn, deadline) {
     var t0 = _lumen_now_ms();
-    try { fn(deadline); } catch (e) { _lumen_report_exception(e); }
+    // BUG-665: run under a background scheduling state (scheduler.rs), so a
+    // `scheduler.yield()` inside the callback continues at that priority.
+    try {
+        if (typeof _lumen_sched_idle_invoke === 'function') _lumen_sched_idle_invoke(fn, deadline);
+        else fn(deadline);
+    } catch (e) { _lumen_report_exception(e); }
     var t1 = _lumen_now_ms();
     if (t1 - t0 > _LUMEN_IDLE_FRAME_MS) _lumen_idle_busy_until = t1 + _LUMEN_IDLE_FRAME_MS;
 }

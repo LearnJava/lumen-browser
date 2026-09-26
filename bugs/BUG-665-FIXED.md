@@ -1,6 +1,6 @@
 # BUG-665 — Scheduler API shim: `TaskSignal.any()` missing entirely, `setPriority()` doesn't reorder already-queued tasks, `scheduler.yield()` ignores `signal`/`priority`, `prioritychange` event has no `target`, abort during a sync callback body is dropped
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P3)
 **Компонент:** js (`crates/js/src/scheduler.rs` — whole file, Phase 0 Scheduler API shim)
 **Найден:** P2, WPT-VENDOR-scheduler (2026-08-05), `run_report.py --all --root scheduler --recursive` real run
 
@@ -156,3 +156,42 @@ fixing them properly needs an actual per-priority task queue that `postTask`, `y
 `setPriority` all share (drain `user-blocking` before `user-visible` before `background` at
 each checkpoint, re-sorting on `prioritychange`), not a patch to the current three-branch
 `if`/`else`.
+
+## Исправление (2026-09-26, P3)
+
+Сделан предложенный выше фикс целиком — все пять находок.
+
+- **Одна очередь планировщика** (`crates/js/src/scheduler.rs`). Каждая задача
+  `postTask` и каждое продолжение `yield()` лежат в одной очереди; каждая
+  engine-задача (`_lumen_timers`, чтобы между двумя задачами шёл microtask
+  checkpoint) берёт запись с лучшим *текущим* рангом — ранг читается из
+  сигнала приоритета в момент выбора, поэтому `setPriority()` переупорядочивает
+  уже поставленные задачи (находка 2). Продолжения `yield()` старше задач
+  своего приоритета.
+- **Состояние планирования** `{abortSource, prioritySource}` держится в
+  continuation-preserved embedder data V8 (нативы `_lumen_sched_cped_*`) —
+  механизм Chromium: `yield()` наследует приоритет и сигнал отмены вызвавшей
+  задачи через `await`/`queueMicrotask` и отклоняется по abort; в посторонние
+  таймеры ничего не утекает (находка 3). Колбэки `requestIdleCallback` идут с
+  состоянием `background` (`_lumen_sched_idle_invoke`, `web_api_shim_tail.js`).
+- **`TaskSignal : AbortSignal`, `TaskController : AbortController`,
+  `TaskSignal.any()`, `TaskPriorityChangeEvent` с `target`** (находки 1, 4).
+  `TaskSignal.any` и `AbortSignal.any` делят один алгоритм DOM §3.2 «create a
+  dependent abort signal» (`_lumen_abort_signal_make_dependent`,
+  `abort_shim.js`): зависимые сигналы помечаются aborted до первого события,
+  события идут в порядке создания — попутно `dom/abort/abort-signal-any`
+  стал 14/14 (окно и воркер), `.ini` удалён.
+- **Abort внутри синхронного тела колбэка** отклоняет промис задачи (находка 5).
+
+WPT `scheduler` (`--recursive`, теперь со всеми вариантами `.any.js`):
+**81/114 harness OK, 81/182 subtests** (до фикса оконный набор 31/37, 22/64).
+Оставшиеся TIMEOUT — `*.serviceworker.html`: `scheduler` в воркерах не
+установлен (CAPABILITIES.md), это отдельная функциональность, не этот баг.
+
+**Намеренный FAIL:** `post-task-with-signal-from-detached-iframe.html` на main
+проходил только потому, что старый шим не проверял тип `signal` вообще. Глобал
+соседнего фрейма пересекает границу изолятов структурной копией
+(`frame_bridge.rs` — идентичности объектов между окнами нет by design), такое
+значение не является `AbortSignal`, и `postTask` отвергает его по WebIDL.
+Настоящий сигнал из другого реалма принимается (юнит-тест
+`signal_from_another_realm_is_accepted`). Пояснение — в `.ini`.
