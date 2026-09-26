@@ -147,4 +147,4 @@ element») заменил вставку в конец `<body>`:
 `--processes 4` один раз дал TIMEOUT, в одиночку 3/3 OK — как и на main). baseline `.ini` обновлён.
 
 **Остаток на tumblr (не этот баг):** после загрузки бандлов гидрация падает на
-`document.body.classList is not iterable` — [BUG-1125](BUG-1125-OPEN.md) (следующая в очереди P6).
+`document.body.classList is not iterable` — [BUG-1125](BUG-1125-FIXED.md) (следующая в очереди P6).

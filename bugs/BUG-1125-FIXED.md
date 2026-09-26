@@ -1,6 +1,6 @@
 # BUG-1125 — `DOMTokenList` (`classList`) не итерируем: нет `Symbol.iterator`/`values`/`keys`/`entries`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-26 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js:1336-1398` — `DOMTokenList.prototype`: есть `forEach`, итераторов нет; образец — `NodeList`, `:6067-6088`)
 
@@ -38,3 +38,17 @@ return o;};
 DOM §7.1: `DOMTokenList` объявлен `iterable<DOMString>` → WebIDL §3.7.9 даёт
 `entries`/`keys`/`values`/`forEach`/`@@iterator` (`@@iterator === values`). Добавить их на
 `DOMTokenList.prototype` по образцу `NodeList`. Критерий: репро даёт результат Chrome.
+
+## Исправление (2026-09-26, P6)
+
+`crates/js/src/shim/web_api_shim_mid.js`, `DOMTokenList.prototype`: добавлены `entries`/`keys`/`values`
+и `@@iterator`. По WebIDL §3.7.9 это тот же объект функции, что `values`. Итератор тот же живой
+`_lumen_index_iterator`, что у `NodeList`: он читает `length`/`[i]` через indexed-Proxy на каждом шаге,
+поэтому токен, добавленный посреди обхода, виден. `forEach` переписан на тот же живой обход:
+третьим аргументом колбэку он передаёт сам список, а не массив-снимок, и бросает `TypeError`,
+если колбэк не функция (как у `NodeList`). `relList` построен на том же прототипе и получил всё это без
+отдельной правки.
+
+Тесты: `crates/js/src/dom/tests/v8_events_cache.rs` — `classlist_is_iterable` (итератор, `values`,
+`keys`, `entries`, spread, `@@iterator === values`, `.next` у итератора — это шаблон airgap) и
+`classlist_iterator_is_live_and_foreach_passes_list`.
