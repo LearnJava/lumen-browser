@@ -1,7 +1,7 @@
 # BUG-664 — `NetworkInformation` (`navigator.connection`) не наследуется от `EventTarget`, `change`-событие никогда не доставляется
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:12855-12874` — IIFE секции «Network
+**Статус:** FIXED 2026-09-26 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js` — IIFE секции «Network
 Information API», `function NetworkInformation() { ... }`)
 **Найден:** P2, WPT-VENDOR-savedata (2026-08-05), прямая проба
 `--mcp-live-port`/`eval` (сам `idlharness.any.js` категории `savedata`
@@ -82,6 +82,37 @@ NetworkInformation.prototype.removeEventListener = function() {};
 Регрессия без WPT: `navigator.connection instanceof EventTarget === true`,
 `Object.prototype.toString.call(navigator.connection) ===
 '[object NetworkInformation]'`.
+
+## Исправление (P3, 2026-09-26)
+
+`crates/js/src/shim/web_api_shim_tail_b.js`, секция «Network Information API»
+(шим давно переехал из `dom.rs` в `src/shim/*.js`), переписана по образцу
+`Performance` ([BUG-400](BUG-400-FIXED.md)):
+
+* `NetworkInformation` — интерфейс без конструктора (`new NetworkInformation()`
+  → `TypeError: Illegal constructor`), `prototype = Object.create(EventTarget.prototype)`,
+  `Symbol.toStringTag = 'NetworkInformation'`. Заглушки
+  `addEventListener`/`removeEventListener` удалены — работают унаследованные
+  (`once`/`capture`/`handleEvent`/`dispatchEvent`).
+* `type`/`effectiveType`/`downlink`/`downlinkMax`/`rtt`/`saveData` — readonly
+  WebIDL-атрибуты: геттеры на прототипе поверх состояния в замыкании, у
+  экземпляра нет собственных перечислимых свойств, присваивание со страницы
+  значение не меняет.
+* `onchange` — accessor на прототипе; `EventTarget.dispatchEvent` вызывает его
+  после слушателей.
+* `navigator.connection = Object.create(NetworkInformation.prototype)` +
+  `EventTarget.call(...)` (инициализация `_listeners`).
+
+Живой доставки `change` по-прежнему нет — у Lumen нет измерения сети,
+значения статичны (п. 3 «Как чинить»); это функциональный пробел, не часть
+дефекта формы интерфейса.
+
+Регрессия: `crates/js/src/dom/tests/v8_fullscreen_locks.rs` —
+`navigator_connection_is_event_target_interface` (instanceof/toStringTag/
+illegal constructor/readonly) и
+`navigator_connection_change_reaches_listener_and_onchange` (`once`-слушатель
++ `onchange`, `target`). `cargo test -p lumen-js --features v8-backend`:
+4473 + 158 зелёные.
 
 ## Связанные
 
