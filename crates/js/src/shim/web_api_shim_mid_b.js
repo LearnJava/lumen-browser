@@ -1068,13 +1068,27 @@ function _lumen_history_can_rewrite_url(target) {
     return t.pathname === d.pathname && t.search === d.search;
 }
 
-var history = {
+// HTML LS §7.4.2 `interface History` (BUG-1137). Not constructible from
+// script; `history` is its only instance and every member lives on
+// `History.prototype` — the attributes as getter-only accessors, the
+// operations as methods — so `history instanceof History` holds and
+// `toString.call(history)` is `[object History]`. Meta's hyperion wraps
+// `History` by name (`new ShadowPrototype(History, …)`) and disables itself
+// when the global is missing.
+function History() { throw new TypeError('Illegal constructor'); }
+var _lumen_history_instance = null;
+function _lumen_history_check(self) {
+    if (self !== _lumen_history_instance) throw new TypeError('Illegal invocation');
+}
+var _lumen_history_members = {
     get length()  {
+        _lumen_history_check(this);
         var m = _lumen_history_length();
         try { var st = JSON.parse(_lumen_navigation_entries_json()); if (st && st.entries && st.entries.length > m) return st.entries.length; } catch (e) {}
         return m;
     },
     get state()   {
+        _lumen_history_check(this);
         try { return JSON.parse(_lumen_history_state_json()); } catch(e) { return null; }
     },
     // `url` is a nullable DOMString defaulting to null, so only an omitted (or
@@ -1083,6 +1097,7 @@ var history = {
     // resolution runs BEFORE anything is stored, because its `SecurityError`
     // must leave the session history untouched (HTML LS §7.4.6 step 3).
     pushState:    function(state, title, url) {
+        _lumen_history_check(this);
         var target = (url === undefined || url === null) ? null : _lumen_history_state_url(url);
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
         _lumen_history_push(new_state_json, target === null ? '' : target);
@@ -1098,6 +1113,7 @@ var history = {
         _lumen_history_push_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
     },
     replaceState: function(state, title, url) {
+        _lumen_history_check(this);
         var target = (url === undefined || url === null) ? null : _lumen_history_state_url(url);
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
         _lumen_history_replace(new_state_json, target === null ? '' : target);
@@ -1106,9 +1122,10 @@ var history = {
         }
         _lumen_history_replace_url(target !== null ? target : _lumen_loc_parts.href, new_state_json);
     },
-    back:    function() { history.go(-1); },
-    forward: function() { history.go(1); },
+    back:    function() { _lumen_history_check(this); _lumen_history_instance.go(-1); },
+    forward: function() { _lumen_history_check(this); _lumen_history_instance.go(1); },
     go: function(delta) {
+        _lumen_history_check(this);
         // HTML LS (history traversal): history.go(0) reloads the current document.
         if ((delta | 0) === 0) {
             _lumen_reload();
@@ -1136,6 +1153,23 @@ var history = {
         }
     },
 };
+(function() {
+    var proto = History.prototype;
+    Object.getOwnPropertyNames(_lumen_history_members).forEach(function(name) {
+        var d = Object.getOwnPropertyDescriptor(_lumen_history_members, name);
+        if (d.get) {
+            Object.defineProperty(proto, name, { get: d.get, enumerable: true, configurable: true });
+        } else {
+            Object.defineProperty(proto, name, { value: d.value, writable: true, enumerable: true, configurable: true });
+        }
+    });
+    Object.defineProperty(proto, Symbol.toStringTag, {
+        value: 'History', writable: false, enumerable: false, configurable: true });
+    Object.defineProperty(History, 'prototype', { writable: false });
+})();
+_lumen_history_members = undefined;
+var history = _lumen_history_instance = Object.create(History.prototype);
+Object.defineProperty(globalThis, 'History', { enumerable: false });
 
 // ── Server-Sent Events API (HTML Living Standard §9.2) ─────────────────────
 // Phase 0 model: synchronous connect; background recv thread queues events;
