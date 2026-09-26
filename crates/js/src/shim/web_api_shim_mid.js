@@ -1392,7 +1392,24 @@ DOMTokenList.prototype.replace = function(oldCls, newCls) {
 DOMTokenList.prototype.item = function(i) {
     var arr = _lumen_token_list_arr(this); i = i >>> 0; return i < arr.length ? arr[i] : null;
 };
-DOMTokenList.prototype.forEach = function(fn, thisArg) { _lumen_token_list_arr(this).forEach(fn, thisArg); };
+// BUG-1125: DOM §7.1 declares `iterable<DOMString>`, so WebIDL §3.7.9 gives
+// `entries`/`keys`/`values`/`forEach` plus `@@iterator`, which is the very
+// same function object as `values`. Only `forEach` existed, so
+// `classList.values()` (wordpress) and `classList[Symbol.iterator]()`
+// (Transcend `airgap.js` on mozilla) threw. Same live index iterator as
+// `NodeList` (`_lumen_index_iterator`, declared further down this file and
+// looked up only at call time): `this` is the indexed Proxy, so every step
+// re-reads the attribute. `forEach` walks the same live view and passes the
+// list itself as the third callback argument, as WebIDL does.
+DOMTokenList.prototype.forEach = function(fn, thisArg) {
+    if (typeof fn !== 'function') throw new TypeError('callback is not a function');
+    for (var i = 0; i < this.length; i++) fn.call(thisArg, this[i], i, this);
+};
+DOMTokenList.prototype.entries = function() { return _lumen_index_iterator(this, 'entries'); };
+DOMTokenList.prototype.keys    = function() { return _lumen_index_iterator(this, 'keys'); };
+DOMTokenList.prototype.values  = function() { return _lumen_index_iterator(this, 'values'); };
+Object.defineProperty(DOMTokenList.prototype, Symbol.iterator,
+    { value: DOMTokenList.prototype.values, writable: true, enumerable: false, configurable: true });
 DOMTokenList.prototype.toString = function() { return _lumen_token_list_arr(this).join(' '); };
 Object.defineProperty(DOMTokenList.prototype, 'length', {
     get: function() { return _lumen_token_list_arr(this).length; },

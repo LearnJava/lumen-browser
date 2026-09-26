@@ -208,6 +208,63 @@ fn classlist_object_keys_sees_indices() {
     assert_eq!(result, lumen_core::JsValue::String("[\"0\"]".into()));
 }
 
+// BUG-1125: `DOMTokenList` is `iterable<DOMString>` (DOM §7.1) — WebIDL §3.7.9
+// gives `values`/`keys`/`entries` and `@@iterator`, the same function object
+// as `values`. Only `forEach` existed; `classList.values()` and spread threw.
+#[test]
+fn classlist_is_iterable() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            "(function() { \
+                 var cl = document.getElementById('main').classList; \
+                 cl.value = 'a b c'; \
+                 var P = DOMTokenList.prototype; \
+                 return [ \
+                     typeof cl[Symbol.iterator], \
+                     P[Symbol.iterator] === P.values, \
+                     [...cl].join(','), \
+                     Array.from(cl.values()).join(','), \
+                     Array.from(cl.keys()).join(','), \
+                     JSON.stringify(Array.from(cl.entries())), \
+                     typeof cl[Symbol.iterator]().next \
+                 ].join('|'); \
+             })()",
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        lumen_core::JsValue::String(
+            "function|true|a,b,c|a,b,c|0,1,2|[[0,\"a\"],[1,\"b\"],[2,\"c\"]]|function".into()
+        )
+    );
+}
+
+// BUG-1125: the iterator reads the live attribute, and `forEach` passes the
+// list itself (not an array snapshot) as the third callback argument.
+#[test]
+fn classlist_iterator_is_live_and_foreach_passes_list() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            "(function() { \
+                 var cl = document.getElementById('main').classList; \
+                 cl.value = 'a b'; \
+                 var it = cl.values(); \
+                 var first = it.next().value; \
+                 cl.add('z'); \
+                 var rest = Array.from(it).join(','); \
+                 var third = null; \
+                 cl.forEach(function(v, i, l) { third = l; }); \
+                 var threw = 'no'; \
+                 try { cl.forEach(null); } catch (e) { threw = e instanceof TypeError ? 'TypeError' : 'other'; } \
+                 return first + '|' + rest + '|' + (third === cl) + '|' + threw; \
+             })()",
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("a|b,z|true|TypeError".into()));
+}
+
 // ── style / CSSStyleDeclaration ──────────────────────────────────────────
 
 #[test]
