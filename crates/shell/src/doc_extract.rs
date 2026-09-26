@@ -195,7 +195,7 @@ fn walk_style_blocks(
             // violated policy (CSP3 §7.8/§3.4), not just the first.
             let violated = crate::csp_enforce::violating_inline_policy(
                 policy,
-                &lumen_network::csp::CspDirective::StyleSrc,
+                &lumen_network::csp::CspDirective::StyleSrcElem,
                 nonce,
                 &text,
             );

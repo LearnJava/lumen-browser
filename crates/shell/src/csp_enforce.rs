@@ -297,6 +297,13 @@
 //! того, сколько политик его запрещают, — только событий теперь по одному на
 //! каждую нарушенную политику. Остаток дорожки не изменился: `report-to`,
 //! `manifest-src` (см. выше).
+//!
+//! BUG-1183: гейты `<script>`/`<style>`/`<link rel=stylesheet>` спрашивают
+//! элементные директивы `script-src-elem`/`style-src-elem`, а
+//! [`CspPolicy::effective_sources`] идёт по fallback-списку CSP3 §6.8.4
+//! (`*-src-elem`/`*-src-attr` → `script-src`/`style-src` → `default-src`).
+//! До этого гейты спрашивали `script-src`/`style-src`, и разобранные
+//! `*-src-elem` не участвовали в решении вовсе.
 
 use lumen_network::csp::{CspDirective, CspPolicy, CspSource};
 use lumen_network::Origin;
@@ -372,7 +379,7 @@ pub(crate) fn document_csp_policy(doc: &Document, root: NodeId) -> Option<(Vec<C
 /// name.
 #[cfg(test)]
 fn inline_script_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
-    inline_directive_blocked(policies, &CspDirective::ScriptSrc, nonce, body)
+    inline_directive_blocked(policies, &CspDirective::ScriptSrcElem, nonce, body)
 }
 
 /// Срез 57: test-only now — the production caller (`doc_extract::
@@ -383,7 +390,7 @@ fn inline_script_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str
 /// (or `default-src`) forbids the given inline `<style>` body.
 #[cfg(test)]
 fn inline_style_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str) -> bool {
-    inline_directive_blocked(policies, &CspDirective::StyleSrc, nonce, body)
+    inline_directive_blocked(policies, &CspDirective::StyleSrcElem, nonce, body)
 }
 
 /// Срез 57: test-only now — the production caller (`doc_extract::
@@ -399,22 +406,16 @@ fn inline_style_blocked(policies: &[CspPolicy], nonce: Option<&str>, body: &str)
 /// `nonce=` attribute), and a hash source only matches an attribute if the
 /// policy also carries `'unsafe-hashes'` (CSP3 §8.1) — a bare hash source is
 /// enough for `<style>` element text but never for an attribute. Fallback
-/// chain is the CSP3 §6.4 granular one (`style-src-attr` → `style-src` →
-/// `default-src`), one step deeper than [`inline_directive_blocked`]'s single
-/// `directive` → `default-src` step used by every other directive in this
-/// file.
+/// chain is the CSP3 §6.8.4 one (`style-src-attr` → `style-src` →
+/// `default-src`), the same [`CspPolicy::effective_sources`] walks for
+/// `<style>` via `style-src-elem` (BUG-1183).
 #[cfg(test)]
 fn style_attribute_blocked(policies: &[CspPolicy], body: &str) -> bool {
     policies.iter().any(|policy| single_style_attribute_blocked(policy, body))
 }
 
 fn single_style_attribute_blocked(policy: &CspPolicy, body: &str) -> bool {
-    let Some(sources) = policy
-        .directives
-        .get(&CspDirective::StyleSrcAttr)
-        .or_else(|| policy.directives.get(&CspDirective::StyleSrc))
-        .or_else(|| policy.directives.get(&CspDirective::DefaultSrc))
-    else {
+    let Some(sources) = policy.effective_sources(&CspDirective::StyleSrcAttr) else {
         return false;
     };
     let unsafe_hashes = sources.contains(&CspSource::UnsafeHashes);
@@ -467,7 +468,11 @@ fn single_inline_directive_blocked(
 /// (`crates/js/src/csp.rs`) — единственная точка диспетчеризации
 /// `securitypolicyviolation`, срез 1 зовёт её впервые для инлайна
 /// (`blocked_uri = "inline"`); срез 6 обобщил на внешний `<script src>`
-/// (`blocked_uri` = резолвленный адрес файла).
+/// (`blocked_uri` = резолвленный адрес файла). BUG-1183: директива —
+/// эффективная, `script-src-elem` (CSP3 §6.8.2/§6.8.3: и запрос с destination
+/// `script`, и инлайн типа `script` — элементные), даже если политика задаёт
+/// только `script-src`; так же сообщают Chrome и вставленный скриптом
+/// `<script src>` (BUG-1175).
 pub(crate) fn fire_script_src_violation(
     rt: &lumen_js::v8_runtime::V8JsRuntime,
     blocked_uri: &str,
@@ -476,7 +481,7 @@ pub(crate) fn fire_script_src_violation(
     use lumen_core::ext::JsRuntime as _;
     let _ = rt.eval(&format!(
         "_lumen_dispatch_csp_violation({}, {}, {}, 'enforce');",
-        js_string_literal("script-src"),
+        js_string_literal("script-src-elem"),
         js_string_literal(blocked_uri),
         js_string_literal(original_policy),
     ));
@@ -494,7 +499,7 @@ fn script_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Or
     };
     policies
         .iter()
-        .any(|policy| !policy.fetch_directive_allows(&CspDirective::ScriptSrc, &parsed, self_origin))
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::ScriptSrcElem, &parsed, self_origin))
 }
 
 /// Переписать `url` под `upgrade-insecure-requests` (срез 43): `Some(новый
@@ -593,8 +598,8 @@ pub(crate) fn object_src_blocked(policies: &[CspPolicy], url: &str, self_origin:
         .any(|policy| !policy.fetch_directive_allows(&CspDirective::ObjectSrc, &parsed, self_origin))
 }
 
-/// `true` if `style-src` (or `default-src`) forbids fetching the external
-/// `<link rel=stylesheet>` at `url` — срез 7, same fetch-gate shape as
+/// `true` if `style-src-elem` (or `style-src`, or `default-src`) forbids
+/// fetching the external `<link rel=stylesheet>` at `url` — срез 7, same fetch-gate shape as
 /// [`img_src_blocked`]/`script_src_blocked`: absence of a policy is not
 /// checked here (the caller only calls this when a policy exists), and a
 /// `url` that fails to parse is treated as allowed.
@@ -604,7 +609,7 @@ pub(crate) fn style_src_blocked(policies: &[CspPolicy], url: &str, self_origin: 
     };
     policies
         .iter()
-        .any(|policy| !policy.fetch_directive_allows(&CspDirective::StyleSrc, &parsed, self_origin))
+        .any(|policy| !policy.fetch_directive_allows(&CspDirective::StyleSrcElem, &parsed, self_origin))
 }
 
 /// Срез 56: test-only now — the one production caller
@@ -768,7 +773,7 @@ pub(crate) fn violating_fetch_policy_via_child_src<'a>(
 }
 
 /// `<script>` element counterpart of [`violating_fetch_policy`] (BUG-1124):
-/// text of every policy whose `script-src`/`default-src` pre-request check
+/// text of every policy whose `script-src-elem` pre-request check
 /// (CSP3 §6.7.1.1 — nonce, integrity hashes, `'strict-dynamic'`, then the URL;
 /// [`CspPolicy::script_element_fetch_allows`]) forbids this element's fetch of
 /// `url`. The URL-only [`violating_fetch_policy`] read a `'nonce-…'`-only list
@@ -1341,6 +1346,16 @@ mod tests {
     fn style_src_attr_unsafe_inline_allows() {
         let p = lumen_network::csp::parse_csp_header("style-src-attr 'unsafe-inline'");
         assert!(!style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
+    }
+
+    /// BUG-1183: `style-src-elem` governs `<style>`, not the attribute — its
+    /// sibling `style-src-attr` falls back to `style-src`, never to it (Chrome
+    /// keeps `style=""` under `style-src-elem 'none'`).
+    #[test]
+    fn style_src_elem_does_not_reach_attribute() {
+        let p = lumen_network::csp::parse_csp_header("style-src-elem 'none'");
+        assert!(!style_attribute_blocked(std::slice::from_ref(&p), "color:red"));
+        assert!(inline_style_blocked(std::slice::from_ref(&p), None, "p{color:red}"));
     }
 
     /// `style-src` (no `-attr` split) falls back for the attribute too — CSP3

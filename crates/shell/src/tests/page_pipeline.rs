@@ -1492,6 +1492,81 @@ fn style_src_violations_report_style_src_elem() {
     assert!(!spv.contains("style-src/"), "no bare style-src: {spv}");
 }
 
+/// BUG-1183: `style-src-elem` decides for `<style>`/`<link>` ahead of
+/// `style-src` (CSP3 §6.8.4 fallback list), as in Chrome: `style-src-elem
+/// 'none'` blocks both and reports `style-src-elem`; `style-src 'none';
+/// style-src-elem 'unsafe-inline'` lets the `<style>` in. Before the fix the
+/// gates asked `style-src` only. The page's final author sheet is the
+/// witness — the parse-time `getComputedStyle` snapshot does not drop a
+/// CSP-blocked `<style>` even under plain `style-src 'none'` (BUG-1184).
+#[cfg(feature = "v8")]
+#[test]
+fn style_src_elem_decides_for_style_elements() {
+    let blocked = parse_and_layout_for_test(
+        "<html><head>\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"style-src-elem 'none'\">\
+         <script>document.addEventListener('securitypolicyviolation',function(e){\
+         var h=document.documentElement;\
+         h.setAttribute('data-spv',(h.getAttribute('data-spv')||'')+\
+         e.violatedDirective+'/'+(e.blockedURI==='inline'?'inline':'url')+';');});</script>\
+         <link rel=stylesheet href=bug1183.css>\
+         <style>#t{color:rgb(0,0,255)}</style>\
+         </head><body><p id=t>t</p></body></html>",
+    );
+    let spv = probe_attr(&blocked, "data-spv");
+    assert!(spv.contains("style-src-elem/url;"), "link: {spv}");
+    assert!(spv.contains("style-src-elem/inline;"), "style: {spv}");
+    assert_eq!(blocked.rule_count, 0, "<style> must stay out of the author sheet");
+
+    let allowed = parse_and_layout_for_test(
+        "<html><head>\
+         <meta http-equiv=\"Content-Security-Policy\" \
+         content=\"style-src 'none'; style-src-elem 'unsafe-inline'\">\
+         <style>#t{color:rgb(0,0,255)}</style>\
+         </head><body><p id=t>t</p></body></html>",
+    );
+    assert_eq!(allowed.rule_count, 1, "style-src-elem must win over style-src");
+}
+
+/// BUG-1183: a parser-inserted inline `<script>` is gated by `script-src-elem`
+/// and reports it as the violated directive, like Chrome, even when the
+/// policy only has `script-src`; `script-src-elem` set alongside
+/// `script-src 'none'` lets the script run. Before the fix the gate asked
+/// `script-src` and the event said `script-src`.
+#[cfg(feature = "v8")]
+#[test]
+fn inline_script_is_gated_and_reported_as_script_src_elem() {
+    let blocked = parse_and_layout_for_test(
+        "<html><head>\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'nonce-x'\">\
+         <script nonce=x>document.addEventListener('securitypolicyviolation',function(e){\
+         var h=document.documentElement;\
+         h.setAttribute('data-spv',(h.getAttribute('data-spv')||'')+\
+         e.violatedDirective+'/'+e.effectiveDirective+'/'+e.blockedURI+';');});</script>\
+         <script>document.documentElement.setAttribute('data-ran','1');</script>\
+         </head><body></body></html>",
+    );
+    assert_eq!(probe_attr(&blocked, "data-spv"), "script-src-elem/script-src-elem/inline;");
+    assert_eq!(probe_attr(&blocked, "data-ran"), "");
+
+    let elem_only = parse_and_layout_for_test(
+        "<html><head>\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"script-src-elem 'none'\">\
+         <script>document.documentElement.setAttribute('data-ran','1');</script>\
+         </head><body></body></html>",
+    );
+    assert_eq!(probe_attr(&elem_only, "data-ran"), "", "script-src-elem 'none' must block");
+
+    let elem_wins = parse_and_layout_for_test(
+        "<html><head>\
+         <meta http-equiv=\"Content-Security-Policy\" \
+         content=\"script-src 'none'; script-src-elem 'unsafe-inline'\">\
+         <script>document.documentElement.setAttribute('data-ran','1');</script>\
+         </head><body></body></html>",
+    );
+    assert_eq!(probe_attr(&elem_wins, "data-ran"), "1", "script-src-elem must win over script-src");
+}
+
 /// BUG-470: `prop in getComputedStyle(el)` used to be `false` for every
 /// property, not just `float`/`clear` — the returned `Proxy({}, handler)`
 /// had no `has` trap, so `in` fell through to `Reflect.has` on the empty
