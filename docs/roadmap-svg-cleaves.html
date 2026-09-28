@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-28",
  "counts": {
-  "open": 210,
-  "fixed": 944,
+  "open": 209,
+  "fixed": 945,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8703,13 +8703,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1209": {
-   "status": "open",
-   "title": "За HTTP-прокси CONNECT-туннель к одному хосту достаётся из пула запросу к другому: 24 ответа `421` на 5 сайтах top100 (twitch пустой), запросы с `Host: B` уходя…",
-   "component": "network (`crates/network/src/lib.rs` — `fetch_single`: `PoolKey` за HTTP-прокси = адрес прокси; `h2_pool` выключен)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1210": {
    "status": "open",
    "title": "Флаг `--proxy` молча не действует — трафик идёт напрямую; работает только `proxy =` в `fingerprint.toml`. `--tor` по коду тот же no-op (не проверено опытом) — в…",
@@ -15331,6 +15324,13 @@
    "component": "shell (`crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Eval`/`Navigate`; `Lumen::automation_tab`)",
    "date": "2026-09-28",
    "debtor": false
+  },
+  "BUG-1209": {
+   "status": "fixed",
+   "title": "За HTTPS через HTTP-прокси после CONNECT-туннеля соединение ведёт к целевому origin-у, а `PoolKey` ключевался адресом прокси — `pool.acquire()` мог отдать запро…",
+   "component": "network (`crates/network/src/lib.rs::fetch_single` — `pool_key_for_fetch`)",
+   "date": "2026-09-28",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -16706,6 +16706,9 @@
   "network (`crates/network/src/lib.rs::connect_inner` — последовательный цикл `connect_timeout` по адресам)": [
    "BUG-1149"
   ],
+  "network (`crates/network/src/lib.rs::fetch_single` — `pool_key_for_fetch`)": [
+   "BUG-1209"
+  ],
   "network (`crates/network/src/lib.rs::fetch_with_redirect`)": [
    "BUG-1114"
   ],
@@ -16717,9 +16720,6 @@
   ],
   "network (`crates/network/src/lib.rs` — `bind_ephemeral_listener`, `mod bad_port`)": [
    "BUG-911"
-  ],
-  "network (`crates/network/src/lib.rs` — `fetch_single`: `PoolKey` за HTTP-прокси = адрес прокси; `h2_pool` выключен)": [
-   "BUG-1209"
   ],
   "network (`crates/network/src/referrer_policy.rs::compute_referrer`, `referrer_policy.rs:98-148`)": [
    "BUG-1096"
