@@ -88,7 +88,9 @@ const STORAGE_MANAGER_SHIM: &str = r#"
 
   // ── StorageManager ─────────────────────────────────────────────────────────
 
-  function StorageManager() {}
+  // WebIDL: StorageManager declares no constructor — the only instance is the
+  // `navigator.storage` singleton the engine builds below (BUG-681).
+  function StorageManager() { throw new TypeError('Illegal constructor'); }
 
   // WHATWG Storage §9.5 — byte usage and available quota.
   // Phase 0: 0 bytes used, 10 GiB available.
@@ -141,7 +143,7 @@ const STORAGE_MANAGER_SHIM: &str = r#"
   };
 
   // Install singleton on navigator.
-  navigator.storage = new StorageManager();
+  navigator.storage = Object.create(StorageManager.prototype);
 
   // Export class for introspection.
   window.StorageManager = StorageManager;
@@ -226,6 +228,24 @@ mod tests {
     fn storage_manager_class_exported() {
         with_storage_manager(|rt| {
             let ok = rt.eval("typeof window.StorageManager === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-681: WebIDL defines no constructor for `StorageManager`; the
+    /// `navigator.storage` singleton is still an instance of it.
+    #[test]
+    fn storage_manager_is_not_constructible() {
+        with_storage_manager(|rt| {
+            let r = rt
+                .eval(
+                    "(function() { try { new StorageManager(); return 'constructed'; }                      catch (e) { return e instanceof TypeError ? 'TypeError' : String(e); } })()",
+                )
+                .unwrap();
+            assert_eq!(r, JsValue::String("TypeError".into()));
+            let ok = rt
+                .eval("navigator.storage instanceof StorageManager && StorageManager.length === 0")
+                .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
     }
