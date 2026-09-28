@@ -1784,5 +1784,5 @@ shell 1610+2 ok (без изменений — новый путь не имее
   Репро `.tmp/compat/g2/iframejs.html`.
 - **w3schools** — FastCMP в `load` iframe без `src` пишет
   `iframe.contentDocument.documentElement.style.cssText`; синхронно после `appendChild`
-  `contentDocument === null` (Chrome — документ `about:blank`), а у фасада `frameElem` нет `.style`
-  (см. BUG-970). Диалог согласия не строится. Репро `.tmp/compat/g6/site/iframedoc.html`.
+  `contentDocument === null` (Chrome — документ `about:blank`); пробел `.style` у фасада `frameElem`
+  закрыт в [BUG-1147](BUG-1147-FIXED.md) 2026-09-28. Диалог согласия не строится. Репро `.tmp/compat/g6/site/iframedoc.html`.
