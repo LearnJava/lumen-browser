@@ -6919,9 +6919,14 @@ function _lumen_merge_with_next_text(pid, nodeNid) {
 // is itself `display: none` or `visibility: hidden`; nothing distinguishes those
 // from an ordinary one at this layer.
 
-// A node is «being rendered» when the engine published a computed style for it.
+// A node is «being rendered» when the engine published a computed style for it
+// and that style is not `display: none`. BUG-1144: a `display: none` element
+// (an author-hidden `<div>`, a `<script>` in `<body>`) still gets a skipped box
+// in the layout tree, and the snapshot publishes that box's style — so the
+// entry alone would call it rendered and step 1 would never reach `textContent`.
 function _lumen_rt_is_rendered(n) {
-    return _lumen_get_computed_style(n, 'visibility') !== '';
+    return _lumen_get_computed_style(n, 'visibility') !== ''
+        && _lumen_get_computed_style(n, 'display') !== 'none';
 }
 
 // Step 8 of the collection steps: a box that starts and ends a line. `table-row`
@@ -7013,10 +7018,13 @@ function _lumen_rt_collect(n) {
     // already accounted for by the text nodes below it. Its children's items
     // pass through — which is also step 3's behaviour for `display: contents` —
     // but it contributes no line break of its own, so a `display: none` block
-    // adds nothing at all.
+    // adds nothing at all. The skipped box of a `display: none` element does
+    // carry an entry (BUG-1144), so it is caught here by its `display` instead —
+    // otherwise a hidden `<p>` would still add step 7's line breaks.
     if (vis === '') { return items; }
 
     var display = _lumen_get_computed_style(n, 'display');
+    if (display === 'none') { return items; }
     if (display === 'table-cell') {                                        // step 6
         var pid = _lumen_u2n(_lumen_get_parent(n));
         if (pid !== null) {
