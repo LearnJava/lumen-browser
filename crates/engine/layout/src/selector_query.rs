@@ -1549,6 +1549,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         Some(v) => v.to_css(),
     });
     m.insert("scroll-target-group".into(), style.scroll_target_group.to_css().into());
+    // CSS Scroll Snap L1 §4 `scroll-margin-*` (BUG-962): already resolved to
+    // px at cascade time (`style/apply/motion.rs`) and, unlike `margin-*`,
+    // never touched by `apply_zoom_to_lengths` — reported as-is, no unzoom.
+    m.insert("scroll-margin-top".into(), px_str(style.scroll_margin_top));
+    m.insert("scroll-margin-right".into(), px_str(style.scroll_margin_right));
+    m.insert("scroll-margin-bottom".into(), px_str(style.scroll_margin_bottom));
+    m.insert("scroll-margin-left".into(), px_str(style.scroll_margin_left));
     // CSS Scroll Anchoring 1 — `overflow-anchor` (BUG-524 срез 1, parsing/CSSOM only).
     m.insert("overflow-anchor".into(), match style.overflow_anchor {
         OverflowAnchor::Auto => "auto",

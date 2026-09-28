@@ -1,15 +1,15 @@
 # BUG-962: `scrollIntoView` alignment ignores `scroll-margin-*`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-29 (P6)
 **Дата:** 2026-09-02
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js::Element.scrollIntoView`,
 `_lumen_align_scroll`/`_lumen_get_bounding_rect` — `web_api_shim_head.js`) +
 possibly a new native binding in `crates/js/src/v8_runtime/install/platform.rs`
-**Найден:** P3 2026-09-02, residual of [BUG-479](bugs/BUG-479-FIXED.md)
+**Найден:** P3 2026-09-02, residual of [BUG-479](BUG-479-FIXED.md)
 
 ## Симптом
 
-[BUG-479](bugs/BUG-479-FIXED.md) gave `scrollIntoView` real `block`/`inline`/
+[BUG-479](BUG-479-FIXED.md) gave `scrollIntoView` real `block`/`inline`/
 `behavior` handling and a `Promise` return value, computing each axis's
 target scroll offset from the target element's and container's
 `getBoundingClientRect()`s alone. CSS `scroll-margin-top`/`-right`/`-bottom`/
@@ -42,3 +42,13 @@ margin folded in per CSS Scroll Snap L1 §4's scroll-margin definition (the
 margin expands the target's effective box on `'start'`/`'end'`/`'center'`
 the same way it already does for scroll-snap's snap area in
 `crates/engine/layout/src/lib.rs`).
+
+## Исправлено (2026-09-29, P6)
+
+Вариант 2 (дешевле, `getComputedStyle`): `computed_style_to_map`
+(`crates/engine/layout/src/selector_query.rs`) отдаёт уже посчитанные
+`scroll-margin-top/right/bottom/left` (не тронуты `apply_zoom_to_lengths`,
+репортятся как есть, без unzoom). `scrollIntoView`'s шим читает их через
+`_lumen_get_computed_style` и подмешивает в `contentPos`/`mw`/`mh` на обеих
+осях — и для скролла к предку-контейнеру, и для page-level fallback.
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` чисто.
