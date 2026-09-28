@@ -219,7 +219,7 @@ imdb, 4 прогона: ни одного `a is not a function`. В двух п�
 → `'undefined'`). Эта находка жила только внутри этого бага, поэтому заведена отдельно:
 [BUG-1186](BUG-1186-OPEN.md). На cnbc две `rel=preload`-загрузки упали с `H2 I/O: peer closed
 connection without sending TLS close_notify` без повтора на новом соединении. Это класс
-[BUG-1177](BUG-1177-OPEN.md), сайт дописан туда.
+[BUG-1177](BUG-1177-FIXED.md), сайт дописан туда.
 
 **WPT `performance-timeline`** (`run_report.py --all --root performance-timeline --check`, тот же
 бинарь): 28 новых PASS (`po-observe-type`, `po-disconnect*`, `po-takeRecords`, `po-callback-mutate`,

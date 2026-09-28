@@ -404,7 +404,7 @@ mod tests {
     use super::*;
     use crate::h2::frame::{Frame, SETTING_MAX_CONCURRENT_STREAMS};
     use crate::h2::hpack::{Decoder, Encoder};
-    use crate::h2::pool::{Acquire, H2Pool};
+    use crate::h2::pool::{send_resending, Acquire, H2Pool, Sent, H2_RESEND_LIMIT};
     use crate::pool::PoolKey;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -595,6 +595,157 @@ mod tests {
         assert!(err.retryable, "idempotent request lost before any response is retryable");
         std::thread::sleep(Duration::from_millis(50));
         assert!(!mux.is_usable());
+    }
+
+    /// h2c server that answers each request as soon as it arrives and hangs
+    /// up — without GOAWAY, like a dropped TCP connection — once it has
+    /// answered `limit` of them (`0`: hang up after reading the first frames).
+    /// Requests still in flight or queued at that moment got no response.
+    fn serve_then_drop(stream: TcpStream, max_streams: u32, limit: usize) {
+        let mut s = stream;
+        let mut magic = [0u8; 24];
+        if s.read_exact(&mut magic).is_err() {
+            return;
+        }
+        let mut out = Vec::new();
+        let _ = Frame::Settings { ack: false, params: vec![(SETTING_MAX_CONCURRENT_STREAMS, max_streams)] }
+            .encode(&mut out);
+        let _ = Frame::Settings { ack: true, params: vec![] }.encode(&mut out);
+        if s.write_all(&out).is_err() {
+            return;
+        }
+        let mut dec = Decoder::new();
+        let mut enc = Encoder::new();
+        let mut buf = Vec::new();
+        let mut answered = 0;
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = match s.read(&mut chunk) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            if limit == 0 {
+                return;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            while let Ok(Some((frame, used))) = Frame::parse(&buf, 1 << 20) {
+                buf.drain(..used);
+                let Frame::Headers { stream_id, block_fragment, .. } = frame else {
+                    continue;
+                };
+                let fields = dec.decode(&block_fragment).unwrap_or_default();
+                let path = fields.iter().find(|f| f.name == b":path").map(|f| f.value.clone()).unwrap_or_default();
+                let mut out = Vec::new();
+                let block = enc.encode(&[(b":status".as_slice(), b"200".as_slice())]);
+                let _ = Frame::Headers { stream_id, end_stream: false, end_headers: true, priority: None, block_fragment: block }
+                    .encode(&mut out);
+                let _ = Frame::Data { stream_id, end_stream: true, data: path }.encode(&mut out);
+                if s.write_all(&out).is_err() {
+                    return;
+                }
+                answered += 1;
+                if answered == limit {
+                    // FIN after the answers, then drain: closing with unread
+                    // client frames would send RST, and on Windows an RST
+                    // discards the answers the client has not read yet.
+                    let _ = s.shutdown(std::net::Shutdown::Write);
+                    let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
+                    while matches!(s.read(&mut chunk), Ok(n) if n > 0) {}
+                    return;
+                }
+            }
+        }
+    }
+
+    /// What `fetch_single` does around [`send_resending`]: open the
+    /// connection whenever told to, then send through the resending path.
+    fn fetch_via_pool(pool: &H2Pool, key: &PoolKey, addr: std::net::SocketAddr, path: &str) -> (Result<H2Response, MuxError>, u32) {
+        let mut left = H2_RESEND_LIMIT;
+        let send = |m: &H2Mux| m.request(get(path), None);
+        let mut opened = None;
+        loop {
+            match send_resending(Some(pool), key, opened.take(), &mut left, &send) {
+                Sent::Done(r) => return (r, left),
+                Sent::Connect(Some(r)) => opened = Some(r.fulfill(open_mux(addr))),
+                Sent::Connect(None) => opened = Some(Arc::new(open_mux(addr))),
+            }
+        }
+    }
+
+    #[test]
+    fn request_that_opened_a_dying_connection_is_resent() {
+        // BUG-1177: the first connection dies holding the very request that
+        // opened it; that request used to fail outright.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                let limit = if count.fetch_add(1, Ordering::SeqCst) == 0 { 0 } else { usize::MAX };
+                std::thread::spawn(move || serve_then_drop(s, 100, limit));
+            }
+        });
+        let pool = H2Pool::new();
+        let key = PoolKey { host: "127.0.0.1".to_owned(), port: addr.port(), is_tls: false };
+        let (resp, left) = fetch_via_pool(&pool, &key, addr, "/opener");
+        let (status, _, body) = resp.expect("resent on a fresh connection");
+        assert_eq!((status, body), (200, b"/opener".to_vec()));
+        assert_eq!(accepted.load(Ordering::SeqCst), 2);
+        assert_eq!(left, H2_RESEND_LIMIT - 1, "exactly one resend");
+    }
+
+    #[test]
+    fn requests_lost_with_a_dying_connection_all_get_answers() {
+        // BUG-1177 (bbc): 6 requests to one origin, 2 streams at a time; the
+        // connection drops after 4 answers, the rest are in flight or queued.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                count.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || serve_then_drop(s, 2, 4));
+            }
+        });
+        let pool = Arc::new(H2Pool::new());
+        let key = PoolKey { host: "127.0.0.1".to_owned(), port: addr.port(), is_tls: false };
+        let handles: Vec<_> = (0..6)
+            .map(|i| {
+                let pool = Arc::clone(&pool);
+                let key = key.clone();
+                std::thread::spawn(move || (i, fetch_via_pool(&pool, &key, addr, &format!("/b{i}")).0))
+            })
+            .collect();
+        for h in handles {
+            let (i, resp) = h.join().expect("join");
+            let (status, _, body) = resp.unwrap_or_else(|e| panic!("/b{i} lost: {}", e.error));
+            assert_eq!((status, body), (200, format!("/b{i}").into_bytes()));
+        }
+        assert_eq!(accepted.load(Ordering::SeqCst), 2, "the survivors coalesce on one new connection");
+    }
+
+    #[test]
+    fn resend_budget_is_bounded() {
+        // A peer that drops every connection unanswered: the request gives up
+        // after `H2_RESEND_LIMIT` resends instead of looping.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                count.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || serve_then_drop(s, 100, 0));
+            }
+        });
+        let pool = H2Pool::new();
+        let key = PoolKey { host: "127.0.0.1".to_owned(), port: addr.port(), is_tls: false };
+        let (resp, left) = fetch_via_pool(&pool, &key, addr, "/never");
+        assert!(resp.expect_err("every connection drops").retryable);
+        assert_eq!(left, 0);
+        assert_eq!(accepted.load(Ordering::SeqCst), H2_RESEND_LIMIT as usize + 1);
     }
 
     #[test]

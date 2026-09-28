@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use super::mux::H2Mux;
+use super::mux::{H2Mux, MuxError};
 use crate::pool::PoolKey;
 
 /// Longest a requester waits for another thread's handshake to the same
@@ -204,6 +204,62 @@ impl H2Pool {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.lock().len()
+    }
+}
+
+/// How many times one request is resent after its connection lost it
+/// unprocessed — the same budget as Chromium's `HttpNetworkTransaction`
+/// (`kMaxRetryAttempts = 2`). Bounded, so a peer that drops every connection
+/// cannot keep a request looping.
+pub(crate) const H2_RESEND_LIMIT: u32 = 2;
+
+/// Where [`send_resending`] stopped.
+pub(crate) enum Sent<'a, R> {
+    /// A response, or an error that must not be resent (or the resend budget
+    /// is spent).
+    Done(Result<R, MuxError>),
+    /// There is no live connection to send on: open one. `Some` — this
+    /// requester holds the origin's reservation; `None` — bypass the pool
+    /// (HTTP/1.1 origin, no pool, or a failed handshake elsewhere).
+    Connect(Option<Reservation<'a>>),
+}
+
+/// Send one request over the origin's shared HTTP/2 connection, resending it
+/// on a fresh connection whenever the peer certainly did not process it
+/// ([`MuxError::retryable`]: queued behind a dying connection, refused by
+/// GOAWAY, lost before any response header) — BUG-1177.
+///
+/// `opened` is a connection this requester has just opened itself (the
+/// request that triggers the handshake must be resent exactly like the ones
+/// that found the connection in the pool); `None` starts from the pool. A
+/// dead connection is evicted before the next attempt, so the requesters it
+/// failed coalesce on one new handshake instead of each opening its own.
+pub(crate) fn send_resending<'a, R>(
+    pool: Option<&'a H2Pool>,
+    key: &PoolKey,
+    opened: Option<Arc<H2Mux>>,
+    resends_left: &mut u32,
+    send: &dyn Fn(&H2Mux) -> Result<R, MuxError>,
+) -> Sent<'a, R> {
+    let mut next = opened;
+    loop {
+        let mux = match next.take() {
+            Some(m) => m,
+            None => match pool.map(|p| p.acquire(key)) {
+                Some(Acquire::Mux(m)) => m,
+                Some(Acquire::Connect(r)) => return Sent::Connect(Some(r)),
+                Some(Acquire::Direct) | None => return Sent::Connect(None),
+            },
+        };
+        match send(&mux) {
+            Err(e) if e.retryable && *resends_left > 0 => {
+                if let Some(p) = pool {
+                    p.evict(key, &mux);
+                }
+                *resends_left -= 1;
+            }
+            other => return Sent::Done(other),
+        }
     }
 }
 
