@@ -45,7 +45,7 @@ detached» на всех тестах с `<iframe>` — 52 сабтеста), [B
 [BUG-384](BUG-384-FIXED.md) (именованный доступ `window.<id>` не реализован,
 `ReferenceError: square is not defined` в `order-of-events/mouse-events/
 click-on-div.html` — 2 сабтеста)). Оба новых дефекта того же класса, что
-[BUG-680](BUG-680-FIXED.md)/[BUG-688](BUG-688-OPEN.md)/[BUG-687](BUG-687-FIXED.md):
+[BUG-680](BUG-680-FIXED.md)/[BUG-688](BUG-688-FIXED.md)/[BUG-687](BUG-687-FIXED.md):
 WebIDL-поверхность интерфейса, объявленного спекой, не установлена на
 глобале/прототипе вовсе, при том что близкие соседние интерфейсы (`UIEvent`
 сам, `MouseEvent`, `KeyboardEvent`) реализованы полноценно рядом в том же
