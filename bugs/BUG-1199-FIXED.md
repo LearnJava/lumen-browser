@@ -66,7 +66,7 @@ Reload: http://127.0.0.1:18300/html/browsers/windows/resources/post-to-opener.ht
 
 - оба сабтеста с окнами: два `window.open()` подряд не доставляют опенеру ни одного
   сообщения, хотя одиночный попап доставляет (`e.source === w` верно) —
-  [BUG-1209](BUG-1209-OPEN.md);
+  [BUG-1212](BUG-1212-OPEN.md);
 - `returns an opaque origin for a data URL source`: `postMessage` родителю из первого
   синхронного скрипта `data:`-фрейма не доходит (проба: родитель не получил ничего) — по
   симптому это [BUG-1188](BUG-1188-OPEN.md); отложенную отправку из `data:`-фрейма проба не
