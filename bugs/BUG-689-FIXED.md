@@ -124,7 +124,7 @@ WPT (dev-release, `run_smoke.py`/`run_report.py`, база — тот же сл�
 60/75. `trusted-types`, 16 файлов, трогающих Attr-API: 432→744/1192 сабтестов, их
 `.ini` переписаны ратчетом. 24 бывших PASS (SVG `<script href>` через Attr-путь)
 проходили только за счёт `TypeError` от отсутствующего `createAttributeNS` — реальная
-причина в таблице Trusted Types, [BUG-1213](BUG-1213-OPEN.md).
+причина в таблице Trusted Types, [BUG-1213](BUG-1213-FIXED.md).
 
 Остаток `attributes.html` — не Attr-узлы: `setAttribute`/`toggleAttribute` не
 валидируют имя, «первый атрибут с таким именем» при дублях из разных namespace,

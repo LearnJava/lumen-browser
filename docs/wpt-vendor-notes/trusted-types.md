@@ -13,4 +13,4 @@
 плюс хелперы `*_set_ns` из `support/helper.sub.js`). Остальные 218 файлов категории
 не перепрогонялись: полный `--update-expected` подтягивал и чужой дрейф (worker-тесты
 TIMEOUT→FAIL), который к этой правке не относится. SVG `<script href>` не считается
-sink'ом — [BUG-1213](../../bugs/BUG-1213-OPEN.md).
+sink'ом — было [BUG-1213](../../bugs/BUG-1213-FIXED.md), fixed 2026-09-29.
