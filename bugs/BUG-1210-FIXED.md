@@ -1,6 +1,6 @@
 # BUG-1210 — флаг `--proxy` молча не действует: профиль уже зафиксирован в `OnceLock`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28
 **Компонент:** shell (`crates/shell/src/cli_args.rs` — `config::init_global(startup_profile)` до
 `extract_proxy`; повторный `config::init_global(cfg)` для `--proxy` и `--tor`;
 `crates/shell/src/config.rs:49` — `GLOBAL.set(profile).is_ok()`, результат игнорируется)
@@ -36,3 +36,13 @@ data/fingerprint.toml: proxy = "http://127.0.0.1:8977"; lumen --dump-source … 
 Разбирать `--proxy`/`--tor` до первого `init_global` (как уже сделано для `no_persistent_state` в BUG-315)
 и сделать повторный `init_global` ошибкой (`debug_assert!` / `Result`), чтобы такой no-op не повторился.
 Тест: `--proxy` на закрытый порт даёт ошибку загрузки, а не страницу.
+
+## Исправление
+
+`extract_proxy`/`extract_tor_mode` теперь разбираются в `run_cli` до единственного вызова
+`config::init_global` (`crates/shell/src/cli_args.rs`) — оба флага сворачиваются в
+`startup_profile` до установки `OnceLock`, второго вызова `init_global` для них больше нет.
+`config::init_global` (`crates/shell/src/config.rs:49`) на повторный вызов теперь падает
+`debug_assert!` вместо тихого игнора. Проверено вручную: `lumen --proxy http://127.0.0.1:1
+--dump-source https://example.com/` завершается `rc=1` с сетевой ошибкой подключения к
+127.0.0.1:1 (трафик реально идёт на прокси), без `--proxy` та же команда получает страницу.

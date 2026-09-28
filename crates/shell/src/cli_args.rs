@@ -657,6 +657,42 @@ pub(crate) fn run_cli() -> ExitCode {
     {
         startup_profile.no_persistent_state = true;
     }
+
+    // BUG-1210: `--proxy`/`--tor` must be folded into `startup_profile` BEFORE the
+    // single `config::init_global` call below — the profile `OnceLock` is set-once,
+    // so a *second* `init_global(cfg)` after the first one (as this used to do,
+    // once here and once further down per flag) is silently ignored and the flag
+    // has no effect. Parse them here, off the raw args, same as the
+    // `no_persistent_state` scan above.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (proxy, args) = match extract_proxy(&args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка --proxy: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(proxy_str) = proxy {
+        startup_profile.proxy = Some(proxy_str);
+    }
+    let (tor_port, args) = extract_tor_mode(&args);
+    if let Some(port) = tor_port {
+        if !check_tor_connectivity(port) {
+            eprintln!(
+                "lumen --tor: Tor-демон недоступен на 127.0.0.1:{port} — \
+                 запустите Tor перед запуском Lumen"
+            );
+            return ExitCode::FAILURE;
+        }
+        startup_profile.http_profile = lumen_network::HttpProfile::TorBrowser;
+        startup_profile.socks5_proxy = Some(format!("socks5://127.0.0.1:{port}"));
+        startup_profile.no_persistent_state = true;
+        eprintln!(
+            "lumen: Tor-режим активирован (socks5://127.0.0.1:{port}, \
+             профиль TorBrowser, без персистентного хранилища)"
+        );
+    }
+
     // UPD-5: first-run-after-update detection + `data/*.db` backup. Must run
     // before any `lumen_storage` store is constructed — see
     // `update::backup_before_migration_if_updated`. Skipped for
@@ -676,7 +712,6 @@ pub(crate) fn run_cli() -> ExitCode {
     drop(cfg_phase);
 
     let arg_phase = startup.phase("arg-parse");
-    let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {
         Ok(r) => r,
         Err(err) => {
@@ -725,42 +760,9 @@ pub(crate) fn run_cli() -> ExitCode {
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (use_network_service, rest_args) = extract_network_service(&rest_args);
     let (ipc_server, rest_args) = extract_ipc_server(&rest_args);
-    let (proxy, rest_args) = match extract_proxy(&rest_args) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("Ошибка --proxy: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // Если прокси передан в командной строке, переопределить конфиг.
-    if let Some(proxy_str) = proxy {
-        let mut cfg = config::global().clone();
-        cfg.proxy = Some(proxy_str);
-        config::init_global(cfg);
-    }
-
-    let (tor_port, rest_args) = extract_tor_mode(&rest_args);
-
-    // --tor: переключить на профиль TorBrowser + SOCKS5 + без персистентного хранилища.
-    if let Some(port) = tor_port {
-        if !check_tor_connectivity(port) {
-            eprintln!(
-                "lumen --tor: Tor-демон недоступен на 127.0.0.1:{port} — \
-                 запустите Tor перед запуском Lumen"
-            );
-            return ExitCode::FAILURE;
-        }
-        let mut cfg = config::global().clone();
-        cfg.http_profile = lumen_network::HttpProfile::TorBrowser;
-        cfg.socks5_proxy = Some(format!("socks5://127.0.0.1:{port}"));
-        cfg.no_persistent_state = true;
-        config::init_global(cfg);
-        eprintln!(
-            "lumen: Tor-режим активирован (socks5://127.0.0.1:{port}, \
-             профиль TorBrowser, без персистентного хранилища)"
-        );
-    }
+    // BUG-1210: `--proxy`/`--tor` were already parsed and folded into
+    // `startup_profile` before the single `config::init_global` call above —
+    // no second parse/apply here, see the comment there.
 
     let cli = if let Some(output) = pdf_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
