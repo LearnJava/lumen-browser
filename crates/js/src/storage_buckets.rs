@@ -27,9 +27,11 @@ pub(crate) fn install_storage_buckets_v8(
 /// JavaScript shim implementing the W3C Storage Buckets API (Phase 0, ES5-only).
 #[cfg(feature = "v8-backend")]
 const STORAGE_BUCKETS_SHIM: &str = r#"(function() {
-  function StorageBucketManager() {
-    this._buckets = {};
-  }
+  // WebIDL: neither StorageBucketManager nor StorageBucket declares a
+  // constructor — the manager is only the `navigator.storageBuckets` singleton
+  // and buckets only come from `open()`, so `new X()` from a page is an illegal
+  // constructor (BUG-681). The shim builds its instances with Object.create.
+  function StorageBucketManager() { throw new TypeError('Illegal constructor'); }
 
   StorageBucketManager.prototype.open = function(name, options) {
     var self = this;
@@ -46,7 +48,7 @@ const STORAGE_BUCKETS_SHIM: &str = r#"(function() {
         resolve(self._buckets[name]);
         return;
       }
-      var bucket = new StorageBucket(name, options || {});
+      var bucket = makeBucket(name, options || {});
       self._buckets[name] = bucket;
       resolve(bucket);
     });
@@ -69,12 +71,16 @@ const STORAGE_BUCKETS_SHIM: &str = r#"(function() {
     });
   };
 
-  function StorageBucket(name, options) {
-    this._name = name;
-    this._persisted = options.persisted || false;
-    this._durability = options.durability || 'relaxed';
-    this._quota = options.quota || 0;
-    this._expires = options.expires || null;
+  function StorageBucket() { throw new TypeError('Illegal constructor'); }
+
+  function makeBucket(name, options) {
+    var bucket = Object.create(StorageBucket.prototype);
+    bucket._name = name;
+    bucket._persisted = options.persisted || false;
+    bucket._durability = options.durability || 'relaxed';
+    bucket._quota = options.quota || 0;
+    bucket._expires = options.expires || null;
+    return bucket;
   }
 
   Object.defineProperty(StorageBucket.prototype, 'name', {
@@ -122,7 +128,8 @@ const STORAGE_BUCKETS_SHIM: &str = r#"(function() {
       return (typeof caches !== 'undefined') ? caches : null;
     }
   });
-  var _manager = new StorageBucketManager();
+  var _manager = Object.create(StorageBucketManager.prototype);
+  _manager._buckets = {};
   globalThis.StorageBucketManager = StorageBucketManager;
   globalThis.StorageBucket = StorageBucket;
   if (typeof navigator !== 'undefined') { navigator.storageBuckets = _manager; }
@@ -141,8 +148,42 @@ mod tests {
 
     fn with_storage_buckets(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var window = globalThis; var navigator = {};").unwrap();
         install_storage_buckets_v8(&rt).unwrap();
         f(&rt);
+    }
+
+    fn ctor_result(rt: &V8JsRuntime, call: &str) -> JsValue {
+        rt.eval(&format!(
+            "(function() {{ try {{ {call}; return 'constructed'; }}              catch (e) {{ return e instanceof TypeError ? 'TypeError' : String(e); }} }})()"
+        ))
+        .unwrap()
+    }
+
+    /// BUG-681: WebIDL defines no constructor for either interface, so page
+    /// script must not be able to mint a manager or a bucket of its own.
+    #[test]
+    fn interfaces_are_not_constructible() {
+        with_storage_buckets(|rt| {
+            let type_error = JsValue::String("TypeError".into());
+            assert_eq!(ctor_result(rt, "new StorageBucketManager()"), type_error);
+            assert_eq!(ctor_result(rt, "new StorageBucket('x', {})"), type_error);
+            assert_eq!(ctor_result(rt, "StorageBucket('x', {})"), type_error);
+        });
+    }
+
+    /// The engine-made singleton and the buckets `open()` hands out are still
+    /// genuine instances of the exported interfaces.
+    #[test]
+    fn engine_instances_keep_their_interfaces() {
+        with_storage_buckets(|rt| {
+            let r = rt
+                .eval(
+                    "var m=navigator.storageBuckets; m.open('pics');                      m instanceof StorageBucketManager &&                      m._buckets['pics'] instanceof StorageBucket &&                      StorageBucketManager.length === 0 && StorageBucket.length === 0",
+                )
+                .unwrap();
+            assert_eq!(r, JsValue::Bool(true));
+        });
     }
 
     #[test]
@@ -159,7 +200,7 @@ mod tests {
     fn open_creates_bucket() {
         with_storage_buckets(|rt| {
             let r = rt
-                .eval("var m=new StorageBucketManager(); m.open('photos'); Object.keys(m._buckets).length")
+                .eval("var m=navigator.storageBuckets; m.open('photos'); Object.keys(m._buckets).length")
                 .unwrap();
             assert_eq!(r, JsValue::Number(1.0));
         });
@@ -171,7 +212,7 @@ mod tests {
             // A native Promise reports `typeof` as "object"; assert it is thenable.
             let r = rt
                 .eval(
-                    "var p=(new StorageBucketManager()).open('x'); \
+                    "var p=navigator.storageBuckets.open('x'); \
                      typeof p === 'object' && typeof p.then === 'function' ? 'promise' : 'no'",
                 )
                 .unwrap();
@@ -184,7 +225,7 @@ mod tests {
         with_storage_buckets(|rt| {
             // Leading hyphen is invalid → reject before inserting into _buckets.
             let r = rt
-                .eval("var m=new StorageBucketManager(); m.open('-bad').catch(function(){}); Object.keys(m._buckets).length")
+                .eval("var m=navigator.storageBuckets; m.open('-bad').catch(function(){}); Object.keys(m._buckets).length")
                 .unwrap();
             assert_eq!(r, JsValue::Number(0.0));
         });
@@ -194,7 +235,7 @@ mod tests {
     fn open_dedupes_same_name() {
         with_storage_buckets(|rt| {
             let r = rt
-                .eval("var m=new StorageBucketManager(); m.open('a'); m.open('a'); Object.keys(m._buckets).length")
+                .eval("var m=navigator.storageBuckets; m.open('a'); m.open('a'); Object.keys(m._buckets).length")
                 .unwrap();
             assert_eq!(r, JsValue::Number(1.0));
         });
@@ -204,7 +245,7 @@ mod tests {
     fn bucket_name_readonly() {
         with_storage_buckets(|rt| {
             let r = rt
-                .eval("var m=new StorageBucketManager(); m.open('logs'); m._buckets['logs'].name")
+                .eval("var m=navigator.storageBuckets; m.open('logs'); m._buckets['logs'].name")
                 .unwrap();
             assert_eq!(r, JsValue::String("logs".to_string()));
         });
@@ -214,7 +255,7 @@ mod tests {
     fn delete_removes_bucket() {
         with_storage_buckets(|rt| {
             let r = rt
-                .eval("var m=new StorageBucketManager(); m.open('tmp'); m.delete('tmp'); Object.keys(m._buckets).length")
+                .eval("var m=navigator.storageBuckets; m.open('tmp'); m.delete('tmp'); Object.keys(m._buckets).length")
                 .unwrap();
             assert_eq!(r, JsValue::Number(0.0));
         });
@@ -224,7 +265,7 @@ mod tests {
     fn bucket_stores_durability() {
         with_storage_buckets(|rt| {
             let r = rt
-                .eval("var m=new StorageBucketManager(); m.open('d',{durability:'strict'}); m._buckets['d']._durability")
+                .eval("var m=navigator.storageBuckets; m.open('d',{durability:'strict'}); m._buckets['d']._durability")
                 .unwrap();
             assert_eq!(r, JsValue::String("strict".to_string()));
         });

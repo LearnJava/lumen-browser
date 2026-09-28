@@ -46,3 +46,22 @@ EventTarget`. Связать `Node.prototype`, прототип `window` и `XML
 `dispatchEvent` сделать общими: для узла и `window` делегировать в `_lumen_add_listener`, для
 прочих — в `_listeners`. Критерий: репро даёт результат Chrome, `window.addEventListener ===
 EventTarget.prototype.addEventListener`.
+
+## Прогресс
+
+**2026-09-28, P6, в рамках [BUG-1167](BUG-1167-FIXED.md):** сделана первая половина —
+`EventTarget.prototype.addEventListener`/`removeEventListener`/`dispatchEvent`, вызванные на
+`window`, `document` или узле, делегируют в собственную реализацию цели (хук
+`_lumen_et_platform_impl`: объявлен в `event_target_shim.js`, заполняется в конце
+`web_api_shim_tail_b.js`). ShadyDOM youtube теперь инициализируется до конца
+(`window.ShadowRoot` — его класс). Первые три строки репро дают `ok`.
+
+**Осталось:** `Node.prototype` → `EventTarget.prototype` в цепочке (`div instanceof EventTarget`),
+`XMLHttpRequestEventTarget`, идентичность `window.addEventListener ===
+EventTarget.prototype.addEventListener`. На youtube это следующий блокер:
+`Uncaught TypeError: a.__shady_native_dispatchEvent is not a function` — ShadyDOM копирует
+дескрипторы `EventTarget.prototype` в `__shady_native_*` на нём же, а узлы до него не доходят.
+
+Указатель этого бага потерялся из очередей после передачи P6 (`13dabf206`) при каком-то ремапе;
+возвращён в начало `STATUS-P6.md` — он из той же партии, что и уже закрытые BUG-1119..1146, и
+сейчас следующий блокер youtube.

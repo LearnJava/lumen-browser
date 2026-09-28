@@ -1,6 +1,6 @@
 # BUG-684 — `ReadableStream`/`WritableStream`/`TransformStream` callable without `new` silently succeed and pollute `globalThis`; `ReadableStream` is not async-iterable
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, §"WHATWG Streams", ~line 5630)
 **Найден:** P2, WPT-VENDOR-streams, 2026-08-06
 
@@ -11,7 +11,7 @@
 прогнана целиком (`run_report.py --all --root streams --recursive`, 5:50,
 88 отобранных id): **55/88 harness OK, 154/1076 сабтестов**. Подавляющее
 большинство неожиданных результатов объясняется без находок движка — уже
-открытым [BUG-346](BUG-346-OPEN.md) (`Url::resolve()` не схлопывает
+открытым [BUG-346](BUG-346-FIXED.md) (`Url::resolve()` не схлопывает
 `..`-сегменты: `streams/piping/../resources/recording-streams.js`,
 `streams/writable-streams/../resources/test-utils.js` и т.п. 404-ят,
 объясняя ~200 FAIL с текстом `recordingReadableStream is not defined` /
@@ -65,7 +65,7 @@ BUG-346/gc.js, эти тесты используют `for await` на испо�
 ([BUG-629](BUG-629-FIXED.md)), `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)), `Serial`/`SerialPort`
 ([BUG-672](BUG-672-FIXED.md)) и `StorageManager`/`StorageBucket`/
-`StorageBucketManager` ([BUG-681](BUG-681-OPEN.md)) — седьмая-девятая
+`StorageBucketManager` ([BUG-681](BUG-681-FIXED.md)) — седьмая-девятая
 независимая поверхность одного системного паттерна (ни один шим не
 ставит guard на `new.target`), на этот раз в `dom.rs`'s собственной
 реализации Streams, а не в отдельном модуле. Здесь риск выше обычного:
@@ -95,3 +95,40 @@ guard-механизм имеет смысл вводить один раз дл
 который сразу закроет заметную долю сигнала следующего прогона той же
 категории. Не требует HTTPS/TLS для воспроизведения/фикса — живой
 `--mcp-live-port`-пробы достаточно для верификации.
+
+## Исправление (2026-09-28, P3)
+
+Код Streams к этому времени переехал из `dom.rs` в
+`crates/js/src/shim/streams_shim.js`, а вторая половина бага —
+`ReadableStream.prototype[Symbol.asyncIterator]`/`values()` — уже была
+закрыта в BUG-824. Оставался guard.
+
+Все публичные интерфейсные объекты шима (`ReadableStream`,
+`WritableStream`, `TransformStream`, ридеры/райтер, `TextDecoderStream`,
+`TextEncoderStream`, `CompressionStream`, `DecompressionStream`, обе
+queuing strategy, а также контроллеры и `ReadableStreamBYOBRequest`)
+первой строкой зовут `_stream_require_new(new.target, name)` — вызов без
+`new` бросает `TypeError` с текстом Chrome («Please use the 'new'
+operator…»), до того как хоть одно поле попадёт в `globalThis`.
+
+Guard отсекает и `X.call(this, …)`, поэтому два места, которые так
+инициализировали уже созданный объект, переделаны:
+
+- тело `TransformStream` вынесено в `_ts_setup(self, …)`; подклассы
+  `TextDecoderStream`/`TextEncoderStream`/`CompressionStream`/
+  `DecompressionStream` зовут его напрямую;
+- `FileSystemWritableFileStream` (`filesystem_access.rs`, `makeWritable`)
+  строит базу через `Reflect.construct(WritableStream, [sink],
+  FileSystemWritableFileStream)` вместо `WritableStream.call(stream, sink)` —
+  прототип подкласса сохраняется, `new.target` у базы определён.
+
+Тесты — `v8_whatwg_streams::stream_constructors_require_new` (17
+интерфейсов без `new` → `TypeError`, ни одного утёкшего глобала),
+`v8_whatwg_streams::stream_subclasses_still_construct` (штатные подклассы и
+`class extends` со страницы); заглушка базы в
+`filesystem_access::tests::writable_extends_the_runtime_writable_stream`
+теперь тоже требует `new`.
+
+Остаток вне скоупа — [BUG-1204](BUG-1204-OPEN.md): контроллеры и
+`ReadableStreamBYOBRequest` по спеке вообще без конструктора, а `new X()`
+со страницы у них по-прежнему проходит.
