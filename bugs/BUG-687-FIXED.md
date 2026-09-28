@@ -1,6 +1,6 @@
 # BUG-687: `performance.mark()`/`performance.measure()` entries are plain objects, not `PerformanceMark`/`PerformanceMeasure` instances
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3, ветка `p3-bug687-perf-mark`)
 **Компонент:** js (`crates/js/src/dom.rs:8227` — `performance.mark()`; `crates/js/src/dom.rs:8247` — `performance.measure()`)
 **Найден:** P2, WPT-VENDOR-timing-entrytypes-registry, 2026-08-06
 
@@ -78,3 +78,51 @@ tests/wpt/run_report.py --binary <lumen.exe> --all --root timing-entrytypes-regi
 ```
 или живая проба: `eval("performance.mark('m'); typeof window.PerformanceMark")`
 → `"undefined"` на любой странице.
+
+## Исправление (2026-09-28, P3)
+
+`crates/js/src/shim/performance_shim.js` (общий для страницы и воркеров):
+
+- `PerformanceMark` — конструируемый интерфейс по User Timing L3 §4.2:
+  `new.target`-проверка, `SyntaxError` на имя из `PerformanceTiming` (только в
+  Window-скоупе), `TypeError` на не-словарь в `markOptions` и на
+  отрицательный/неконечный `startTime`, `detail` — `structuredClone`.
+  `performance.mark()` теперь буквально «конструктор + буфер + наблюдатели».
+- `PerformanceMeasure` — без конструктора (`Illegal constructor`),
+  `measure()` строит запись от его прототипа.
+- Форма WebIDL, которую проверяет `user-timing/idlharness`: `detail` — геттер
+  на прототипе (значение в неперечислимом слоте), `length` интерфейса и
+  операций `mark`/`measure`/`clearMarks`/`clearMeasures` без опциональных
+  аргументов, `mark()`/`measure()` без аргументов — `TypeError`,
+  неперезаписываемый `prototype`, неперечислимые глобалы (function expression +
+  `defineProperty(globalThis, …)`, как `_perf_po_iface`).
+- `Symbol.toStringTag` у обоих — именно его читает `registry.any.js`.
+
+Тот же дефект у остальных entry-типов, которые перечисляет
+`registry.window.js`: `[object Object]` вместо имени интерфейса. Тег добавлен
+`PerformancePaintTiming`/`LargestContentfulPaint`/`LayoutShift`(`Attribution`)/
+`PerformanceResourceTiming`/`PerformanceNavigationTiming`
+(`web_api_shim_tail.js`, `_lumen_idl_tag`), `PerformanceLongTaskTiming`/
+`TaskAttributionTiming` (`long_tasks.rs`), `PerformanceScriptTiming`/
+`PerformanceLongAnimationFrameTiming` (`long_animation_frames.rs`),
+`PerformanceSoftNavigationEntry` (`soft_navigation.rs`).
+
+WPT (`run_report.py --all --recursive`, бинарь до правки против после):
+`timing-entrytypes-registry` **2/9 → 8/9** сабтестов (`mark`/`measure`/
+`resource`/`navigation`/`paint`; остаток — `supportedEntryTypes` в воркере,
+`PerformanceObserver` там нет); `user-timing` **595/824 → 757/824**. Baseline
+обеих категорий (`tests/wpt/metadata/`) переснят этим же коммитом. В нём
+появились FAIL, которых раньше не было, — это сабтесты, до которых прогон
+прежде не доходил: `measure*.html` (файлы были ERROR) падают на валидации
+`measure()` — [BUG-696](BUG-696-OPEN.md); `idlharness` — на отсутствующем
+интерфейсе `PerformanceEntry` (не выставлен ни для одного entry-типа).
+`idlharness.any.serviceworker.html` записан TIMEOUT вместо ERROR — бинарь до
+правки даёт тот же TIMEOUT, старый baseline был устаревшим.
+`performance-timeline` — без изменений baseline (`--check`: единственные
+отклонения — флейки `idlharness.any.worker.html` TIMEOUT/OK).
+
+Регрессия — `performance_mark_and_measure_interfaces_back_entries` и
+`performance_entry_interfaces_have_class_strings`
+(`crates/js/src/dom/tests/v8_perf_observers.rs`),
+`v8_worker_user_timing_works_without_performance_observer` (`worker.rs`,
+интерфейсы в воркерном скоупе).

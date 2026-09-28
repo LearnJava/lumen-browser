@@ -102,6 +102,9 @@ const LOAF_SHIM: &str = r#"(function() {
     };
   };
 
+  // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+  Object.defineProperty(PerformanceScriptTiming.prototype, Symbol.toStringTag,
+    { value: 'PerformanceScriptTiming', configurable: true });
   globalThis.PerformanceScriptTiming = PerformanceScriptTiming;
 
   // ── PerformanceLongAnimationFrameTiming ────────────────────────────────────
@@ -148,6 +151,9 @@ const LOAF_SHIM: &str = r#"(function() {
     };
   };
 
+  // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+  Object.defineProperty(PerformanceLongAnimationFrameTiming.prototype, Symbol.toStringTag,
+    { value: 'PerformanceLongAnimationFrameTiming', configurable: true });
   globalThis.PerformanceLongAnimationFrameTiming = PerformanceLongAnimationFrameTiming;
 
   // ── Delivery binding ──────────────────────────────────────────────────────

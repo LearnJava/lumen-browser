@@ -102,4 +102,4 @@ PerformanceNavigationTiming : PerformanceResourceTiming`) и делать
 
 Остаток вне скоупа: `serverTiming` в записях (BUG-640/Server-Timing),
 `PerformanceEntry` как общий базовый интерфейс не выставлен — mark/measure
-по-прежнему литералы ([BUG-687](BUG-687-OPEN.md)).
+по-прежнему литералы ([BUG-687](BUG-687-FIXED.md)).

@@ -86,7 +86,7 @@ matrix, or the `detail` structured-clone step).
   `[object PerformanceMeasure]`, `PerformanceMark`/`PerformanceMeasure is
   not defined` (`mark-entry-constructor.any.html`,
   `mark-measure-return-objects.any.html`, `user-timing-tojson.html`) —
-  same as [BUG-687](BUG-687-OPEN.md) (entries are plain objects, not
+  same as [BUG-687](BUG-687-FIXED.md) (entries are plain objects, not
   real `PerformanceMark`/`PerformanceMeasure` instances; no `toJSON()`).
 - `clearMarks.html`/`clearMeasures.html`/`mark.html`/`measure.html`/
   `measures.html`/`measure_associated_with_navigation_timing.html`/
@@ -109,3 +109,18 @@ or a live probe:
 try { performance.mark("navigationStart"); console.log("no throw"); }
 catch (e) { console.log(e.name); }   // spec: SyntaxError. Lumen: "no throw"
 ```
+
+## Сужение 2026-09-28 (BUG-687)
+
+Половина `mark()` закрыта [BUG-687](BUG-687-FIXED.md): `performance.mark()`
+теперь исполняет конструктор `PerformanceMark` (User Timing L3 §4.2), а тот
+валидирует `markOptions`/`startTime`/зарезервированные имена и клонирует
+`detail`; `detail` у `measure()` тоже клонируется, `mark()`/`measure()` без
+аргументов бросают `TypeError`. Открытым остаётся только `measure()`:
+несуществующие метки (`SyntaxError`), конфликтующие члены словаря
+(`TypeError`), имена атрибутов `PerformanceTiming` как концы интервала
+(разрешение через `performance.timing`, `InvalidAccessError` на нулевом
+значении) — ровно то, на чём после BUG-687 падают `measure.html`,
+`measure_associated_with_navigation_timing.html`,
+`measure_exceptions_navigation_timing.html` (раньше эти файлы были ERROR и до
+утверждений не доходили).

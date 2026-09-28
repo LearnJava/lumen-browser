@@ -49,6 +49,9 @@ const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
         navigationId: this.navigationId
       };
     };
+    // Class string names the interface (`timing-entrytypes-registry`, BUG-687).
+    Object.defineProperty(PerformanceSoftNavigationEntry.prototype, Symbol.toStringTag,
+      { value: 'PerformanceSoftNavigationEntry', configurable: true });
     globalThis.PerformanceSoftNavigationEntry = PerformanceSoftNavigationEntry;
   }
 
