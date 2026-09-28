@@ -187,6 +187,212 @@ PointerEvent.prototype.constructor = PointerEvent;
 PointerEvent.prototype.getCoalescedEvents = function() { return []; };
 PointerEvent.prototype.getPredictedEvents = function() { return []; };
 
+// ── Touch Events L2: Touch / TouchList / TouchEvent (BUG-688) ────────────────
+// The three interfaces as a desktop engine without a touch screen exposes
+// them: constructible `Touch`/`TouchEvent`, a script-built `TouchList`, and
+// NO `ontouch*` members on `window`/`document`/elements — the spec's "expose
+// legacy touch event APIs" flag is off, so `'ontouchstart' in window` stays
+// `false` and touch-detecting sites keep their mouse UI, as in desktop Edge.
+// Nothing in the shell synthesizes touches; a page only sees what it builds.
+// State sits in WeakMaps behind prototype getters (WebIDL attributes), which
+// also serve as the brand check. Globals are published non-enumerable at the
+// end of the block, as `_perf_mark_iface` in `performance_shim.js` explains.
+var _LUMEN_TOUCH_SLOTS = new WeakMap();
+var _LUMEN_TOUCH_LIST_SLOTS = new WeakMap();
+var _LUMEN_TOUCH_EVENT_SLOTS = new WeakMap();
+
+// Readonly WebIDL attributes as prototype accessors named `get <attr>`.
+function _lumen_touch_define_getters(proto, slots, names) {
+    names.forEach(function(name) {
+        var getter = function() {
+            var s = slots.get(this);
+            if (s === undefined) throw new TypeError('Illegal invocation');
+            return s[name];
+        };
+        Object.defineProperty(getter, 'name', { value: 'get ' + name });
+        Object.defineProperty(proto, name, { get: getter, enumerable: true, configurable: true });
+    });
+}
+
+// WebIDL dictionary argument: undefined/null read as `{}`, any other
+// non-object is a TypeError.
+function _lumen_touch_dict(value, iface, dictName) {
+    if (value === undefined || value === null) return {};
+    if (typeof value !== 'object' && typeof value !== 'function') {
+        throw new TypeError("Failed to construct '" + iface + "': The provided value is not of type '" + dictName + "'.");
+    }
+    return value;
+}
+
+// `TouchInit` members in WebIDL conversion order (lexicographic), with the
+// type each converts to: `double`/`float` are the restricted kinds, so a
+// non-finite value throws.
+var _LUMEN_TOUCH_INIT_MEMBERS = [
+    ['altitudeAngle', 'double'], ['azimuthAngle', 'double'],
+    ['clientX', 'double'], ['clientY', 'double'], ['force', 'float'],
+    ['identifier', 'long'], ['pageX', 'double'], ['pageY', 'double'],
+    ['radiusX', 'float'], ['radiusY', 'float'], ['rotationAngle', 'float'],
+    ['screenX', 'double'], ['screenY', 'double'], ['target', 'EventTarget'],
+    ['touchType', 'TouchType'],
+];
+
+// Touch Events L2 §5.1 `constructor(TouchInit touchInitDict)` — `identifier`
+// and `target` are required members, so even `new Touch({})` throws.
+var _lumen_touch_iface = function Touch(touchInitDict) {
+    if (new.target === undefined) {
+        throw new TypeError("Failed to construct 'Touch': Please use the 'new' operator.");
+    }
+    if (arguments.length < 1) {
+        throw new TypeError("Failed to construct 'Touch': 1 argument required, but only 0 present.");
+    }
+    var init = _lumen_touch_dict(touchInitDict, 'Touch', 'TouchInit');
+    var s = {};
+    _LUMEN_TOUCH_INIT_MEMBERS.forEach(function(m) {
+        var name = m[0], type = m[1], v = init[name];
+        var prefix = "Failed to construct 'Touch': ";
+        if (v === undefined) {
+            if (name === 'identifier' || name === 'target') {
+                throw new TypeError(prefix + "required member " + name + " is undefined.");
+            }
+            s[name] = type === 'TouchType' ? 'direct' : 0;
+            return;
+        }
+        if (type === 'long') {
+            s[name] = Number(v) | 0;
+        } else if (type === 'EventTarget') {
+            if (!(v instanceof EventTarget)) {
+                throw new TypeError(prefix + "Failed to read the 'target' property from 'TouchInit': Failed to convert value to 'EventTarget'.");
+            }
+            s[name] = v;
+        } else if (type === 'TouchType') {
+            v = String(v);
+            if (v !== 'direct' && v !== 'stylus') {
+                throw new TypeError(prefix + "Failed to read the 'touchType' property from 'TouchInit': The provided value '"
+                    + v + "' is not a valid enum value of type TouchType.");
+            }
+            s[name] = v;
+        } else {
+            var n = type === 'float' ? Math.fround(Number(v)) : Number(v);
+            if (!isFinite(n)) {
+                throw new TypeError(prefix + "Failed to read the '" + name + "' property from 'TouchInit': The provided "
+                    + type + " value is non-finite.");
+            }
+            s[name] = n;
+        }
+    });
+    _LUMEN_TOUCH_SLOTS.set(this, s);
+};
+_lumen_touch_define_getters(_lumen_touch_iface.prototype, _LUMEN_TOUCH_SLOTS, [
+    'identifier', 'target', 'screenX', 'screenY', 'clientX', 'clientY', 'pageX',
+    'pageY', 'radiusX', 'radiusY', 'rotationAngle', 'force', 'altitudeAngle',
+    'azimuthAngle', 'touchType',
+]);
+
+// Touch Events L2 §5.2 — no constructor; a list exists only as a
+// `TouchEvent` attribute. Entries are own indexed properties (the
+// `getter Touch? item()` indexed getter) over a frozen snapshot.
+var _lumen_touch_list_iface = function TouchList() { throw new TypeError('Illegal constructor'); };
+function _lumen_make_touch_list(touches) {
+    var list = Object.create(_lumen_touch_list_iface.prototype);
+    _LUMEN_TOUCH_LIST_SLOTS.set(list, { length: touches.length, items: touches });
+    for (var i = 0; i < touches.length; i++) {
+        Object.defineProperty(list, i, { value: touches[i], writable: false, enumerable: true, configurable: true });
+    }
+    return list;
+}
+_lumen_touch_define_getters(_lumen_touch_list_iface.prototype, _LUMEN_TOUCH_LIST_SLOTS, ['length']);
+Object.defineProperty(_lumen_touch_list_iface.prototype, 'item', {
+    value: function item(index) {
+        var s = _LUMEN_TOUCH_LIST_SLOTS.get(this);
+        if (s === undefined) throw new TypeError('Illegal invocation');
+        if (arguments.length < 1) {
+            throw new TypeError("Failed to execute 'item' on 'TouchList': 1 argument required, but only 0 present.");
+        }
+        var i = Number(index) >>> 0;
+        return i < s.length ? s.items[i] : null;
+    },
+    writable: true, enumerable: true, configurable: true,
+});
+// WebIDL §3.7.6: an indexed getter plus an integer `length` makes the
+// interface iterable through `%Array.prototype.values%`.
+Object.defineProperty(_lumen_touch_list_iface.prototype, Symbol.iterator,
+    { value: Array.prototype.values, writable: true, enumerable: false, configurable: true });
+
+// `sequence<Touch>` member of `TouchEventInit`: any iterable of `Touch`.
+function _lumen_touch_sequence(value, name) {
+    if (value === undefined) return [];
+    var prefix = "Failed to construct 'TouchEvent': Failed to read the '" + name + "' property from 'TouchEventInit': ";
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function')
+        || typeof value[Symbol.iterator] !== 'function') {
+        throw new TypeError(prefix + "The provided value cannot be converted to a sequence.");
+    }
+    var out = [];
+    for (var t of value) {
+        if (!_LUMEN_TOUCH_SLOTS.has(t)) {
+            throw new TypeError(prefix + "Failed to convert value to 'Touch'.");
+        }
+        out.push(t);
+    }
+    return out;
+}
+
+// Touch Events L2 §5.4 `TouchEvent : UIEvent`,
+// `constructor(DOMString type, optional TouchEventInit eventInitDict = {})`.
+var _lumen_touch_event_iface = function TouchEvent(type) {
+    if (new.target === undefined) {
+        throw new TypeError("Failed to construct 'TouchEvent': Please use the 'new' operator.");
+    }
+    if (arguments.length < 1) {
+        throw new TypeError("Failed to construct 'TouchEvent': 1 argument required, but only 0 present.");
+    }
+    var init = _lumen_touch_dict(arguments[1], 'TouchEvent', 'TouchEventInit');
+    UIEvent.call(this, type, init);
+    _LUMEN_TOUCH_EVENT_SLOTS.set(this, {
+        altKey: !!init.altKey,
+        ctrlKey: !!init.ctrlKey,
+        metaKey: !!init.metaKey,
+        shiftKey: !!init.shiftKey,
+        changedTouches: _lumen_make_touch_list(_lumen_touch_sequence(init.changedTouches, 'changedTouches')),
+        targetTouches: _lumen_make_touch_list(_lumen_touch_sequence(init.targetTouches, 'targetTouches')),
+        touches: _lumen_make_touch_list(_lumen_touch_sequence(init.touches, 'touches')),
+    });
+};
+Object.defineProperty(_lumen_touch_event_iface, 'prototype', { value: Object.create(UIEvent.prototype) });
+Object.setPrototypeOf(_lumen_touch_event_iface, UIEvent);
+_lumen_touch_define_getters(_lumen_touch_event_iface.prototype, _LUMEN_TOUCH_EVENT_SLOTS, [
+    'touches', 'targetTouches', 'changedTouches', 'altKey', 'metaKey', 'ctrlKey', 'shiftKey',
+]);
+// Only the four modifiers the init dictionary carries, as in `MouseEvent`.
+Object.defineProperty(_lumen_touch_event_iface.prototype, 'getModifierState', {
+    value: function getModifierState(keyArg) {
+        var s = _LUMEN_TOUCH_EVENT_SLOTS.get(this);
+        if (s === undefined) throw new TypeError('Illegal invocation');
+        if (arguments.length < 1) {
+            throw new TypeError("Failed to execute 'getModifierState' on 'TouchEvent': 1 argument required, but only 0 present.");
+        }
+        var key = String(keyArg);
+        if (key === 'Alt') return s.altKey;
+        if (key === 'Control') return s.ctrlKey;
+        if (key === 'Meta') return s.metaKey;
+        if (key === 'Shift') return s.shiftKey;
+        return false;
+    },
+    writable: true, enumerable: true, configurable: true,
+});
+
+[[_lumen_touch_iface, 'Touch'], [_lumen_touch_list_iface, 'TouchList'],
+ [_lumen_touch_event_iface, 'TouchEvent']].forEach(function(p) {
+    var iface = p[0], name = p[1];
+    Object.defineProperty(iface.prototype, 'constructor',
+        { value: iface, writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(iface.prototype, Symbol.toStringTag,
+        { value: name, writable: false, enumerable: false, configurable: true });
+    // An interface object's `prototype` is non-writable (WebIDL §3.7.1).
+    Object.defineProperty(iface, 'prototype', { writable: false });
+    Object.defineProperty(globalThis, name,
+        { value: iface, writable: true, enumerable: false, configurable: true });
+});
+
 // AnimationEvent — animationstart / animationend / animationiteration / animationcancel
 function AnimationEvent(type, init) {
     Event.call(this, type, init);
@@ -846,8 +1052,11 @@ var _LUMEN_EVENT_HANDLER_ATTRS = [
     'onprogress', 'onratechange', 'onreset', 'onresize', 'onscroll',
     'onscrollend', 'onsecuritypolicyviolation', 'onseeked', 'onseeking',
     'onselect', 'onslotchange', 'onstalled', 'onsubmit', 'onsuspend',
-    'ontimeupdate', 'ontoggle', 'ontouchcancel', 'ontouchend', 'ontouchmove',
-    'ontouchstart', 'ontransitioncancel', 'ontransitionend', 'ontransitionrun',
+    // No `ontouch*`: Touch Events L2 adds them only under "expose legacy touch
+    // event APIs", which a desktop engine leaves off — an element answering
+    // `'ontouchstart' in el` would flip touch-detecting sites to their touch
+    // UI while `window`/`document` said otherwise (BUG-688).
+    'ontimeupdate', 'ontoggle', 'ontransitioncancel', 'ontransitionend', 'ontransitionrun',
     'ontransitionstart', 'onvolumechange', 'onwaiting', 'onwaitingforkey',
     'onwheel'
 ];

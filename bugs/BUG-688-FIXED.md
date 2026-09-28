@@ -1,6 +1,6 @@
 # BUG-688: Touch Events API (`Touch`/`TouchList`/`TouchEvent`, `ontouch*` on `GlobalEventHandlers`) entirely unimplemented
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM`; analogous constructors live at `dom.rs:437` `UIEvent`, `dom.rs:445` `MouseEvent`, `dom.rs:536-554` `PointerEvent`, none of that pattern exists for Touch)
 **Найден:** P2, WPT-VENDOR-touch-events, 2026-08-06
 
@@ -84,3 +84,44 @@ work than the constructors alone — the constructors fix `historical.html`,
 `touch-touchevent-constructor.html`, and the `PRECONDITION_FAILED` half of
 `touch-globaleventhandler-interface.html` on their own; dispatch is needed for
 `single-touch*.html` and the multi-touch interaction tests.
+
+## Исправление (2026-09-28, P3)
+
+`crates/js/src/shim/web_api_shim_mid.js`, блок сразу после `PointerEvent`:
+
+- `Touch` — конструктор по Touch Events L2 §5.1: `TouchInit` конвертируется в
+  WebIDL-порядке членов, `identifier`/`target` обязательны, `target` обязан быть
+  `EventTarget` (`location` → `TypeError`), `double`/`float` без не-конечных
+  значений, `touchType` — enum `direct`/`stylus`. Никаких `webkit*`-алиасов.
+- `TouchList` — не конструируемый; индексные собственные свойства, `length`,
+  `item()` (за пределами — `null`), `@@iterator` = `%Array.prototype.values%`.
+- `TouchEvent : UIEvent` — `touches`/`targetTouches`/`changedTouches` из
+  `sequence<Touch>` (не-`Touch` → `TypeError`), четыре модификатора,
+  `getModifierState()`; без `initTouchEvent`.
+- Форма по idlharness: атрибуты — геттеры на прототипе с brand-check через
+  WeakMap, `Symbol.toStringTag`, нередактируемый `prototype`, неперечислимые
+  глобалы.
+
+**`ontouch*` намеренно НЕ выставлены** ни на `window`/`document`, ни на элементах:
+спека добавляет их только под «expose legacy touch event APIs», который десктоп
+без тачскрина держит выключенным (так же ведёт себя Edge). До фикса
+`'ontouchstart' in el` был `true` на элементах (они стояли в
+`_LUMEN_EVENT_HANDLER_ATTRS`) при `false` у `window`/`document` — сайты, детектящие
+тач по `document.documentElement`, переключались на тач-интерфейс. Контент-атрибут
+`ontouchstart="…"` по-прежнему компилируется общим `on*`-путём.
+`touch-globaleventhandler-interface.html` поэтому остаётся PRECONDITION_FAILED, а
+idlharness — FAIL на `ontouch*`-членах: это ожидаемое десктопное поведение.
+
+Регрессия: `crates/js/src/dom/tests/v8_bug688_touch_events.rs` (4 теста).
+
+WPT `touch-events` (`--all --root touch-events --recursive`, baseline переснят):
+**6/14 harness OK, 130/172 сабтестов** (было 8/14, 19/44). `historical.html` 8/8,
+`touch-touchevent-constructor.html` 5/5, idlharness теперь исполняется (раньше
+падал на `idl_test setup`). Минус два harness OK — не эта правка: с 2026-09-04
+исполнитель дошёл до `test_driver.Actions`, и селектор `*|body`, который он строит
+для элемента, отвергается `querySelector` ([BUG-1063](BUG-1063-OPEN.md)).
+
+**Остаток вне этого бага:** реальные касания не диспатчатся — шелл не синтезирует
+`touchstart`/`touchmove`/`touchend`, а `executorlumen.py` не переводит
+`pointerType: "touch"` в касания (`single-touch*.html`, `multi-touch-*.html`,
+`pinch-zoom-change.html`).
