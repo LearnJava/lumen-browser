@@ -193,6 +193,8 @@
 #[cfg(feature = "v8-backend")]
 use std::collections::HashSet;
 #[cfg(feature = "v8-backend")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Псевдо-bid слота «окно родителя» в реестре ([`FrameDocSlots::parent`]).
@@ -237,6 +239,16 @@ pub(crate) struct FrameDocBinding {
     /// `false` — cross-origin или opaque sandbox: нативы чтения отдают пустые
     /// результаты, `.document` фасада окна — `null`.
     pub(crate) accessible: bool,
+    /// BUG-1198: `Some(id)` — у документа непрозрачное происхождение
+    /// (`sandbox` без `allow-same-origin`, HTML LS §7.1.1 «sandboxed origin
+    /// browsing context flag»): `event.origin` его сообщений — `"null"`, а
+    /// `id` — идентичность этого происхождения для `Origin.from(event)`.
+    /// Одна на документ (все сообщения одного документа same-origin друг с
+    /// другом) и новая у каждого нового документа того же хоста — перезагрузка
+    /// выдаёт другое непрозрачное происхождение ([`next_opaque_origin_id`],
+    /// перенос при повторной регистрации — [`upsert_binding`]). `None` —
+    /// tuple-origin по `url`.
+    pub(crate) opaque_id: Option<u64>,
     /// BUG-979: хэндл для синхронного кросс-изолятного чтения/вызова
     /// РЕАЛЬНЫХ глобалов этого под-документа (не только фиксированный
     /// IDL-набор `winFacade`) — `None` у тестовых биндингов без рантайма и
@@ -285,10 +297,20 @@ pub(crate) struct FrameDocSlots {
 /// `contentDocument`/`contentWindow` родителя вечно отдавали бы выброшенный
 /// документ; заодно `window.length` рос бы на каждую навигацию, а `window[i]`
 /// разъезжался бы с порядком документа.
+///
+/// BUG-1198: shell регистрирует один и тот же документ дважды — до его
+/// скриптов (без `peer`) и после; непрозрачное происхождение принадлежит
+/// документу, поэтому повторная регистрация ТОГО ЖЕ документа сохраняет
+/// прежний `opaque_id`, а новый документ хоста (навигация, перезагрузка)
+/// остаётся со свежим.
 #[cfg(feature = "v8-backend")]
-pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, binding: FrameDocBinding) -> usize {
+pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, mut binding: FrameDocBinding) -> usize {
     match slots.frames.iter().position(|b| b.host_nid == binding.host_nid) {
         Some(i) => {
+            let old = &slots.frames[i];
+            if binding.opaque_id.is_some() && Arc::ptr_eq(&old.doc, &binding.doc) {
+                binding.opaque_id = old.opaque_id.or(binding.opaque_id);
+            }
             slots.frames[i] = binding;
             i
         }
@@ -498,6 +520,16 @@ pub(crate) fn frame_transport_has_for(key: Option<usize>) -> bool {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     evs.iter().any(|e| Arc::as_ptr(&e.target_doc) as usize == key)
+}
+
+/// BUG-1198: выдать идентичность нового непрозрачного происхождения —
+/// монотонный счётчик процесса, а не адрес документа: адрес освобождённого
+/// документа может достаться его же перезагруженной копии, и два разных
+/// непрозрачных происхождения совпали бы.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn next_opaque_origin_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Нормализованный origin URL биндинга для `event.origin`/валидации
@@ -991,8 +1023,11 @@ pub(crate) fn install_frame_bridge_v8(
                 // HTML LS §9.2.9 шаг 3: '*' доставляет всегда, '/' — только
                 // same-origin (у нас это уже вычисленный shell'ом accessible),
                 // явная строка — совпадение с origin адресата.
+                // BUG-1198: непрозрачное происхождение адресата не равно
+                // никакому сериализованному — доставляет только '*'.
                 let matches = match target_origin.as_str() {
                     "*" => true,
+                    _ if binding.opaque_id.is_some() => false,
                     "/" | "" => binding.accessible,
                     o => o.eq_ignore_ascii_case(&binding_origin(
                         &binding.url,
@@ -1055,15 +1090,23 @@ pub(crate) fn install_frame_bridge_v8(
                 // только реестр получателя знает свои слоты (source) и чем
                 // наследуется origin about:-детей (srcdoc/about:blank →
                 // origin получателя-родителя).
+                //
+                // BUG-1198: отправитель с непрозрачным происхождением даёт
+                // `origin === "null"` и идентичность этого происхождения
+                // (`opaque`) — по ней шим строит `Origin.from(event)`.
+                let sender_origin = |b: &FrameDocBinding| match b.opaque_id {
+                    Some(id) => ("null".to_owned(), Some(id)),
+                    None => (binding_origin(&b.url, &reg.self_origin), None),
+                };
                 let items: Vec<serde_json::Value> = taken
                     .into_iter()
                     .map(|m| {
-                        let (source_bid, origin) = match m.source {
+                        let (source_bid, (origin, opaque)) = match m.source {
                             SourceKind::Parent => (
                                 reg.parent.as_ref().map(|_| PARENT_BID),
                                 reg.parent
                                     .as_ref()
-                                    .map(|b| binding_origin(&b.url, &reg.self_origin))
+                                    .map(sender_origin)
                                     .unwrap_or_default(),
                             ),
                             SourceKind::ChildDoc(doc_key) => {
@@ -1072,22 +1115,17 @@ pub(crate) fn install_frame_bridge_v8(
                                     .iter()
                                     .position(|b| Arc::as_ptr(&b.doc) as usize == doc_key)
                                 {
-                                    Some(j) => {
-                                        let b = &reg.frames[j];
-                                        (
-                                            Some(j as u32),
-                                            binding_origin(&b.url, &reg.self_origin),
-                                        )
-                                    }
+                                    Some(j) => (Some(j as u32), sender_origin(&reg.frames[j])),
                                     // Отправителя нет в прямых слотах получателя
                                     // (внук → top): source = null, origin пустой.
-                                    None => (None, String::new()),
+                                    None => (None, (String::new(), None)),
                                 }
                             }
                         };
                         serde_json::json!({
                             "bid": source_bid,
                             "origin": origin,
+                            "opaque": opaque,
                             "data": serde_json::from_str::<serde_json::Value>(&m.data_json)
                                 .unwrap_or(serde_json::Value::Null),
                         })
@@ -2368,6 +2406,10 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         configurable: true,
       });
     } catch (e) {}
+    // BUG-1198: в полном шиме `top` — unforgeable (BUG-587), переопределить
+    // его нельзя; его геттер читает этот хук. Прямое определение остаётся для
+    // минимальных изолятов без шима, где `top` ещё настраиваемый.
+    globalThis._lumen_frame_top = topOfContext;
     try {
       Object.defineProperty(window, 'top', {
         get: function() { return topOfContext(); },
@@ -2465,7 +2507,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             if (m.bid !== null && m.bid !== undefined) {
               source = winFacade(m.bid);
             }
-            _lumen_deliver_frame_message(m.data, m.origin, source);
+            _lumen_deliver_frame_message(m.data, m.origin, source, m.opaque);
           }
         }
       }
@@ -2590,6 +2632,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            opaque_id: None,
             peer: None,
         });
         f(&rt);
@@ -2635,6 +2678,7 @@ mod tests {
                 url: "https://parent.example/".to_owned(),
                 name: Some("hostframe".to_owned()),
                 accessible,
+                opaque_id: None,
                 peer: None,
             });
             if let Some(top) = top_html {
@@ -2644,6 +2688,7 @@ mod tests {
                     url: "https://top.example/".to_owned(),
                     name: None,
                     accessible,
+                    opaque_id: None,
                     peer: None,
                 });
             }
@@ -2674,6 +2719,7 @@ mod tests {
             url: "about:blank".to_owned(),
             name: Some("o".to_owned()),
             accessible: true,
+            opaque_id: None,
             peer: None,
         });
         // Атрибут хоста уже переименован — фасад его не читает.
@@ -2987,6 +3033,7 @@ mod tests {
             url: "https://parent.example/".to_owned(),
             name: Some("hostframe".to_owned()),
             accessible: true,
+            opaque_id: None,
             peer: None,
         });
         rt.eval(
@@ -3045,6 +3092,7 @@ mod tests {
             url: "https://parent.example/".to_owned(),
             name: Some("hostframe".to_owned()),
             accessible: true,
+            opaque_id: None,
             peer: None,
         });
         rt.eval(
@@ -3087,6 +3135,7 @@ mod tests {
                 url: "about:blank".to_owned(),
                 name,
                 accessible: true,
+                opaque_id: None,
                 peer: None,
             });
             rt.eval(&format!("_lumen_frame_install_index({i})")).unwrap();
@@ -3155,6 +3204,7 @@ mod tests {
                 url: "about:srcdoc".to_owned(),
                 name: None,
                 accessible: child_accessible_to_parent,
+                opaque_id: None,
                 peer: None,
             });
         }
@@ -3176,6 +3226,7 @@ mod tests {
                 url: "https://parent.example/".to_owned(),
                 name: Some("hostframe".to_owned()),
                 accessible: parent_accessible_to_child,
+                opaque_id: None,
                 peer: None,
             });
         }
@@ -3355,6 +3406,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            opaque_id: None,
             peer: None,
         });
         f(&rt, &doc);
@@ -3374,6 +3426,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible: true,
+            opaque_id: None,
             peer: None,
         });
         rt
@@ -3512,6 +3565,7 @@ mod tests {
             url: url.to_owned(),
             name: None,
             accessible: true,
+            opaque_id: None,
             peer: None,
         };
         let first = upsert_binding(
@@ -3554,6 +3608,7 @@ mod tests {
                 url: "about:srcdoc".to_owned(),
                 name: None,
                 accessible: true,
+                opaque_id: None,
                 peer: None,
             });
         }

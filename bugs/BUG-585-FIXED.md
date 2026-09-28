@@ -111,7 +111,7 @@ WPT `html/browsers/origin/api/`: **0/307 → 296/325** сабтестов, 15/23
 - 25 — `Origin.from(MathML <a href>)`: тест пишет `a.href = …` — у `MathMLElement` нет IDL
   `href` (MathML Core), это expando, атрибут не появляется; движок читает атрибут `href`.
 - 1 — blob-воркер непрозрачен: [BUG-1197](BUG-1197-FIXED.md) (`blob:lumen/N` без происхождения).
-- 3 — песочница без `allow-same-origin`: [BUG-1198](BUG-1198-OPEN.md).
+- 3 — песочница без `allow-same-origin`: [BUG-1198](BUG-1198-FIXED.md).
 - `origin-from-window`/`origin-from-messageevent` TIMEOUT после `window.open`:
   [BUG-1199](BUG-1199-OPEN.md).
 - `*.any.serviceworker.html` (2 файла) TIMEOUT — общая беда SW-вариантов под wptrunner, не

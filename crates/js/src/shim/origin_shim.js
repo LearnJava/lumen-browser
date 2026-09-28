@@ -132,4 +132,17 @@
         value: Origin, writable: true, enumerable: false, configurable: true,
     });
     globalThis._lumen_origin_register_source = function(obj, fn) { sources.set(obj, fn); };
+    // BUG-1198: an opaque origin minted outside this realm (a sandboxed
+    // frame's document, `frame_bridge.rs::next_opaque_origin_id`), keyed by
+    // that identity — the same key yields the same record, so two messages of
+    // one sandboxed document are same-origin and a reloaded one is not.
+    var foreignOpaque = new Map();
+    globalThis._lumen_origin_opaque = function(key) {
+        var r = foreignOpaque.get(key);
+        if (r === undefined) {
+            r = opaqueRecord();
+            foreignOpaque.set(key, r);
+        }
+        return wrap(r);
+    };
 })();

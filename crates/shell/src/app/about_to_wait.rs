@@ -153,6 +153,7 @@ impl Lumen {
         // BUG-480 срез 20: `form.submit()`/`requestSubmit()` из скрипта самого
         // ребёнка — второй вход в отправку его формы.
         let mut frame_submits: Vec<(usize, u32, i32)> = Vec::new();
+        let mut frame_reloads: Vec<usize> = Vec::new();
         // BUG-480 срез 25: relayout ребёнка при мутации его DOM — своим
         // скриптом (штатный `take_dom_dirty` этого рантайма) или родителем
         // через мост (`take_frame_dom_dirty`, тот же тик, что и остальной
@@ -175,10 +176,20 @@ impl Lumen {
             // не навигация «куда попало», а второй вход в ту же отправку формы
             // ребёнка, что и нативный клик по submit-кнопке. Применяется после
             // цикла: там нужен `&mut self`.
-            if let Some(JsNavigateRequest::SubmitForm { form, submitter }) =
-                fjs.take_navigate_request()
-            {
-                frame_submits.push((*idx, form, submitter));
+            //
+            // BUG-1198: и кроме перезагрузки самого фрейма — `location.reload()`
+            // сюда, `navigation.reload()` очередью Navigation API ниже. Прочие
+            // запросы Navigation API фрейма дренируются и отбрасываются, как
+            // навигация выше.
+            match fjs.take_navigate_request() {
+                Some(JsNavigateRequest::SubmitForm { form, submitter }) => {
+                    frame_submits.push((*idx, form, submitter));
+                }
+                Some(JsNavigateRequest::Reload) => frame_reloads.push(*idx),
+                _ => {}
+            }
+            if fjs.take_nav_updates().iter().any(|(code, ..)| *code == 5) {
+                frame_reloads.push(*idx);
             }
             // Гладкий (`behavior: 'smooth'`) применяется мгновенно: своей
             // анимации у прокрутки фрейма нет, а тикать её было бы негде —
@@ -223,6 +234,14 @@ impl Lumen {
             let form_id = NodeId::from_index(form as usize);
             let submitter_id = (submitter >= 0).then(|| NodeId::from_index(submitter as usize));
             self.run_frame_form_submission(idx, form_id, submitter_id, false);
+        }
+        // BUG-1198: перезагрузка асинхронна (`replace_frame_document` уносит
+        // загрузку на фоновый поток), `self.frames` до её ответа не меняется —
+        // индексы этого тика остаются верны. Дубли (оба API в один тик)
+        // схлопываются: вторая перезагрузка лишь перебила бы первую.
+        frame_reloads.dedup();
+        for idx in frame_reloads {
+            self.reload_frame(idx);
         }
         // ADR-016 M2.2c-2d (20): gate on `self.js_present` instead of borrowing the
         // `Arc` directly (`if let Some(js) = &self.js_ctx`), so the block stays live

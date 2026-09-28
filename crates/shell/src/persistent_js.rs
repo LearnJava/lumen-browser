@@ -322,8 +322,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `contentDocument` из скриптов родителя видят фасады под-документа
     /// (`crates/js/src/frame_bridge.rs`).
     ///
-    /// Вызывается из [`load_frame_sub_documents`] после исполнения скриптов
-    /// ребёнка и **до** диспатча trusted `load` на хосте. `name` — значение
+    /// Вызывается из [`load_frame_sub_documents`] дважды: до скриптов
+    /// ребёнка без `peer` (BUG-1198, `frame_ancestry.rs`) и после них — с
+    /// `peer`, **до** диспатча trusted `load` на хосте. `name` — значение
     /// атрибута `name` хоста (ключ именованного доступа `window[name]`,
     /// срез 3). `accessible=false`
     /// (cross-origin / opaque sandbox) регистрирует биндинг без доступа к
@@ -332,7 +333,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// чтения/вызова его реальных глобалов из фасада `winFacade` (не только
     /// фиксированный IDL-набор); `None`, если у ребёнка нет своего рантайма
     /// (загрузка провалилась) — фасад в этом случае остаётся на прежнем
-    /// поведении (только IDL-набор). Default no-op покрывает сборки без v8.
+    /// поведении (только IDL-набор). `opaque` — BUG-1198: у ребёнка
+    /// непрозрачное происхождение (`sandbox` без `allow-same-origin`), его
+    /// сообщения приходят с `origin === "null"`. Связи ребёнка с предками
+    /// ставит не этот трейт, а `frame_ancestry.rs` — прямо на рантайме
+    /// ребёнка, до его первого скрипта. Default no-op покрывает сборки без v8.
+    #[allow(clippy::too_many_arguments)]
     fn register_iframe_document(
         &self,
         _host_nid: u32,
@@ -340,43 +346,7 @@ pub(crate) trait PersistentJs: Send + Sync {
         _url: &str,
         _name: Option<&str>,
         _accessible: bool,
-        _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-    }
-    /// BUG-480 срез 3: зарегистрировать документ родителя в JS-контексте
-    /// фрейма — внутри фрейма `window.parent`/`window.frameElement`/`window.name`
-    /// видят фасад родительской стороны (`crates/js/src/frame_bridge.rs`).
-    ///
-    /// Вызывается из [`load_frame_sub_documents`] сразу после создания
-    /// контекста ребёнка и до его DOMContentLoaded/load: обработчики ребёнка
-    /// читают предков из любого события. `host_nid` — nid хоста в дереве
-    /// родителя. `name` — значение атрибута `name` хоста НА МОМЕНТ вызова
-    /// (BUG-921): `window.name` ребёнка запоминает его один раз, а не
-    /// перечитывает атрибут при каждом обращении. `peer` — BUG-979: хэндл
-    /// РОДИТЕЛЯ, симметричный `register_iframe_document`'s `peer` (ребёнок
-    /// синхронно читает/вызывает глобалы родителя через `window.parent`/
-    /// `.top` так же, как родитель — глобалы ребёнка через `contentWindow`).
-    /// Default no-op покрывает сборки без v8.
-    fn register_parent_document(
-        &self,
-        _host_nid: u32,
-        _doc: Arc<Mutex<Document>>,
-        _url: &str,
-        _name: Option<&str>,
-        _accessible: bool,
-        _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-    }
-    /// BUG-480 срез 3: зарегистрировать документ верхнего окна в JS-контексте
-    /// фрейма глубины ≥ 2 (`window.top` ведёт в корень, а не в непосредственного
-    /// родителя). Для фрейма первого уровня не вызывается — там top разрешается
-    /// через [`PersistentJs::register_parent_document`]. `peer` — BUG-979, тот
-    /// же смысл, что у `register_parent_document`. Default no-op без v8.
-    fn register_top_document(
-        &self,
-        _doc: Arc<Mutex<Document>>,
-        _url: &str,
-        _accessible: bool,
+        _opaque: bool,
         _peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
     }
@@ -938,8 +908,9 @@ pub(crate) struct V8PersistentJs {
     /// BUG-979: `Arc`-wrapped (not owned by value) so a peer frame's registry
     /// can hold its own clone for [`lumen_js::frame_peer_bridge::FramePeerBridge`]
     /// alongside the `Arc<Mutex<Document>>` it already keeps for the same
-    /// lifetime — see `register_iframe_document`/`register_parent_document`/
-    /// `register_top_document` below.
+    /// lifetime — see `register_iframe_document` below and
+    /// `frame_ancestry.rs`, which registers the parent/top slots straight on
+    /// the child's runtime.
     pub(crate) rt: Arc<lumen_js::v8_runtime::V8JsRuntime>,
 }
 
@@ -1171,6 +1142,7 @@ impl PersistentJs for V8PersistentJs {
         url: &str,
         name: Option<&str>,
         accessible: bool,
+        opaque: bool,
         peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
     ) {
         self.rt.register_frame_document(
@@ -1179,35 +1151,9 @@ impl PersistentJs for V8PersistentJs {
             url.to_owned(),
             name.map(str::to_owned),
             accessible,
+            opaque,
             peer,
         );
-    }
-    fn register_parent_document(
-        &self,
-        host_nid: u32,
-        doc: Arc<Mutex<Document>>,
-        url: &str,
-        name: Option<&str>,
-        accessible: bool,
-        peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-        self.rt.register_parent_document(
-            host_nid,
-            doc,
-            url.to_owned(),
-            name.map(str::to_owned),
-            accessible,
-            peer,
-        );
-    }
-    fn register_top_document(
-        &self,
-        doc: Arc<Mutex<Document>>,
-        url: &str,
-        accessible: bool,
-        peer: Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>>,
-    ) {
-        self.rt.register_top_document(doc, url.to_owned(), accessible, peer);
     }
     fn frame_peer_bridge(&self) -> Option<Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>> {
         Some(Arc::clone(&self.rt) as Arc<dyn lumen_js::frame_peer_bridge::FramePeerBridge>)

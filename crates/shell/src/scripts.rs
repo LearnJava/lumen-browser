@@ -751,6 +751,10 @@ pub(crate) fn run_scripts_with_dom(
     // see one store. `None` (headless dump/PDF, opaque-origin frames) keeps
     // `document.cookie` empty.
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    // BUG-1198: связи фрейма с предками, регистрируемые до первой строки
+    // его скрипта (`frame_ancestry.rs`). `None` у всех, кроме
+    // `frames::spawn_frame`.
+    ancestry: Option<&crate::frame_ancestry::FrameAncestry<'_>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // GAP-NAVCTX срез 5 (BUG-797): taken unconditionally, before either early
     // return below — see `window_messaging::take_pending_opener`'s doc
@@ -824,6 +828,9 @@ pub(crate) fn run_scripts_with_dom(
                 }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, push_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
+                }
+                if let Some(ancestry) = ancestry {
+                    ancestry.register(&doc_arc, &rt);
                 }
                 // CSSOM-1 срез 3: seed document.styleSheets/element.sheet
                 // before the first script line runs (BUG-443 spec order —

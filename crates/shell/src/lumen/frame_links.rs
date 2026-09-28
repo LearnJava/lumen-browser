@@ -421,7 +421,7 @@ impl Lumen {
             .get(idx)
             .filter(|h| h.parent_doc.is_none())
             .map(|h| (h.host, h.url.clone()));
-        if !self.replace_frame_document(idx, href, nav_base, uir_override) {
+        if !self.replace_frame_document(idx, Some(href), nav_base, uir_override) {
             return;
         }
         let Some((host, prev_url)) = history_step else { return };
@@ -456,14 +456,18 @@ impl Lumen {
     /// применяет [`Self::on_frame_nav_done`]. История и сброс hover/focus/
     /// active читают только адрес и identity, известные ДО сети, поэтому
     /// синхронный «принят» — всё, что им нужно.
+    ///
+    /// `href: None` — не адрес, а заново разметка хозяина (`srcdoc`):
+    /// перезагрузка srcdoc-документа ([`Self::reload_frame`], BUG-1198).
     fn replace_frame_document(
         &mut self,
         idx: usize,
-        href: &str,
+        href: Option<&str>,
         nav_base: &ResourceBase,
         uir_override: Option<bool>,
     ) -> bool {
         let Some(env) = self.frame_env.clone() else {
+            let href = href.unwrap_or("about:srcdoc");
             eprintln!("iframe: навигация '{href}' без окружения загрузки страницы — пропуск");
             return false;
         };
@@ -481,12 +485,13 @@ impl Lumen {
         };
         let generation = frames::bump_frame_nav_generation(&mut self.frame_nav_requests, &prep.host_doc, prep.host);
         let (host_doc, host) = (Arc::clone(&prep.host_doc), prep.host);
-        let href = href.to_owned();
+        let href = href.map(str::to_owned);
         let nav_base = nav_base.clone();
         let proxy = self.load_proxy.clone();
         std::thread::spawn(move || {
             let old_doc = Arc::clone(&prep.old_doc);
-            let handles = frames::run_frame_navigation(&prep, &href, &nav_base, &page_doc, &env, uir_override);
+            let handles =
+                frames::run_frame_navigation(&prep, href.as_deref(), &nav_base, &page_doc, &env, uir_override);
             let _ = proxy.send_event(LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles });
         });
         true
@@ -554,8 +559,22 @@ impl Lumen {
         // История не несёт своей CSP-политики — тот же документ уже был
         // показан раньше, а не заново гейтится: `None` отдаёт решение
         // `csp_gate` хозяина, как и любая другая навигация ХОЗЯИНОМ.
-        self.replace_frame_document(idx, target_url, &nav_base, None)
+        self.replace_frame_document(idx, Some(target_url), &nav_base, None)
             .then_some(prev_url)
+    }
+
+    /// BUG-1198: перезагрузка фрейма `idx`, запрошенная его СОБСТВЕННЫМ
+    /// скриптом — `location.reload()` или `navigation.reload()` (HTML LS
+    /// §7.4.7 «reload»). Новый документ того же адреса со своим JS-контекстом
+    /// и, у opaque-sandbox фрейма, новым непрозрачным происхождением.
+    /// srcdoc-документ перечитывается из атрибута хозяина: у него нет адреса,
+    /// по которому его можно запросить заново. Запись истории не заводится —
+    /// перезагрузка текущую запись не меняет.
+    pub(crate) fn reload_frame(&mut self, idx: usize) {
+        let Some(h) = self.frames.get(idx) else { return };
+        let href = (h.url != "about:srcdoc").then(|| h.url.clone());
+        let nav_base = h.base.clone();
+        self.replace_frame_document(idx, href.as_deref(), &nav_base, None);
     }
 
     /// Фрагментная навигация ВНУТРИ под-документа: `:target`, `location` и

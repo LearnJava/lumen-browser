@@ -157,6 +157,8 @@ pub(crate) fn restore_js_context(
         None,
         // BUG-1119: the restored page's `document.cookie` sees the tab's jar.
         js_cookie_jar,
+        // BUG-1198: a restored top-level page has no ancestors.
+        None,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

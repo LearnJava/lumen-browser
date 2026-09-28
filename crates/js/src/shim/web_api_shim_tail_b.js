@@ -6284,8 +6284,16 @@ Object.defineProperty(window, 'window', {
     enumerable: true,
     configurable: false,
 });
+// BUG-1198: `top` is unforgeable, so the frame bridge cannot redefine it for
+// an embedded frame's context the way it does `parent`/`frameElement` — it
+// installs `_lumen_frame_top` (`frame_bridge.rs::installHierarchyAccessors`)
+// and this getter defers to it. Before that `window.top` of every frame was
+// the frame itself, and `top.postMessage()` from a frame never left it.
 Object.defineProperty(window, 'top', {
-    get: function() { return globalThis; },   // top-level browsing context is itself
+    get: function() {
+        // Top-level browsing context is itself.
+        return typeof _lumen_frame_top === 'function' ? _lumen_frame_top() : globalThis;
+    },
     enumerable: true,
     configurable: false,
 });

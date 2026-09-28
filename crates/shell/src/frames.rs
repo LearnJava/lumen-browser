@@ -2374,6 +2374,39 @@ pub(crate) fn spawn_frame(
     // хранилищ; провайдеры сети остаются: sandbox режет origin-доступ,
     // а не сеть (скрипты целиком гейтятся флагом SCRIPTS отдельно).
     let opaque = info.is_sandboxed && info.sandbox.contains(lumen_core::SandboxFlags::ORIGIN);
+    // BUG-1198: доступность в обе стороны считается ДО скриптов ребёнка —
+    // по ней [`crate::frame_ancestry::FrameAncestry`] регистрирует предков и сам биндинг ребёнка
+    // раньше первой строки его скрипта.
+    let accessible_parent = frame_access_allowed(base, &child_url, opaque);
+    let accessible_top = frame_access_allowed(&env.page_base, &child_url, opaque);
+    // BUG-921: снимок атрибута `name` хоста на момент создания контекста —
+    // `window.name` ребёнка запоминает его один раз (HTML LS §7.2.3), а не
+    // перечитывает атрибут при каждом обращении.
+    // BUG-979: peer — родитель, only когда сам доступен same-origin
+    // (`accessible_parent`) — глобалы читаются исключительно same-origin,
+    // натив ещё раз гейтит это явно, но не полагаться на второй слой
+    // защиты, когда первый доступен бесплатно.
+    let parent_peer = accessible_parent.then(|| parent_js.and_then(|js| js.frame_peer_bridge())).flatten();
+    let ancestry = crate::frame_ancestry::FrameAncestry {
+        parent_js,
+        host_nid: info.node.index() as u32,
+        name: info.name.as_deref(),
+        child_url: &child_url,
+        // Для биндинга ребёнка в реестре РОДИТЕЛЯ доступность та же, что
+        // у родителя для ребёнка: same-origin симметричен.
+        accessible: accessible_parent,
+        opaque,
+        parent_doc: parent,
+        parent_url: &parent_url,
+        parent_peer,
+        // Ребёнок глубины ≥ 1 получает отдельный слот top: его верх —
+        // корень страницы, а не непосредственный родитель.
+        // BUG-979: top's own runtime is not reachable here (only its doc
+        // Arc is threaded down through `top_doc`) — `window.top`'s facade
+        // keeps the IDL-only whitelist for now; scope stays contentWindow/
+        // parent, the shapes this bug's WPT repro actually exercises.
+        top: (depth >= 1).then_some((top_doc, top_url.as_str(), accessible_top)),
+    };
     let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
         child_doc,
         info.sandbox,
@@ -2418,6 +2451,7 @@ pub(crate) fn spawn_frame(
         // BUG-1119: the frame's `document.cookie` uses the jar its requests
         // go through; an opaque origin has no cookies (HTML LS §3.1.3).
         env.cookie_jar.clone().filter(|_| !opaque),
+        Some(&ancestry),
     );
     // PERF-14: same headless settle the page gets after its own scripts.
     crate::page_pipeline::settle_headless_fetches(child_js.as_ref());
@@ -2430,41 +2464,9 @@ pub(crate) fn spawn_frame(
         };
         eprintln!("iframe: навигация из под-документа ({child_url}) не поддерживается (BUG-480 срез 1), запрос '{target}' отклонён");
     }
-    // Срез 3 BUG-480: ссылки на предков в контексте ребёнка — до его
-    // DOMContentLoaded/load, чтобы обработчики (в т.ч. встроенный
-    // testharness на window load) читали window.parent/top/frameElement
-    // сразу. Инлайн-скрипты ребёнка к этому моменту уже исполнены и при
-    // чтении видели прежний fallback (parent === window) — известное
-    // ограничение среза.
-    if let Some(js) = &child_js {
-        let accessible_parent = frame_access_allowed(base, &child_url, opaque);
-        // BUG-921: снимок атрибута `name` хоста на момент создания контекста —
-        // `window.name` ребёнка запоминает его один раз (HTML LS §7.2.3), а не
-        // перечитывает атрибут при каждом обращении.
-        // BUG-979: peer — родитель, only когда сам доступен same-origin
-        // (`accessible_parent`) — глобалы читаются исключительно same-origin,
-        // натив ещё раз гейтит это явно, но не полагаться на второй слой
-        // защиты, когда первый доступен бесплатно.
-        let parent_peer = accessible_parent.then(|| parent_js.and_then(|js| js.frame_peer_bridge())).flatten();
-        js.register_parent_document(
-            info.node.index() as u32,
-            Arc::clone(parent),
-            &parent_url,
-            info.name.as_deref(),
-            accessible_parent,
-            parent_peer,
-        );
-        // Ребёнок глубины ≥ 2 получает отдельный слот top: его верх —
-        // корень страницы, а не непосредственный родитель.
-        if depth >= 1 {
-            let accessible_top = frame_access_allowed(&env.page_base, &child_url, opaque);
-            // BUG-979: top's own runtime is not reachable here (only its doc
-            // Arc is threaded down through `top_doc`) — `window.top`'s facade
-            // keeps the IDL-only whitelist for now; scope stays contentWindow/
-            // parent, the shapes this bug's WPT repro actually exercises.
-            js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top, None);
-        }
-    }
+    // Ссылки на предков в контексте ребёнка (срез 3 BUG-480) уже стоят:
+    // `run_scripts_with_dom` ставит их через `ancestry` до первой строки
+    // скрипта ребёнка (BUG-1198).
     // BUG-480 срез 12: cascade + layout ребёнка — контентная геометрия
     // внутри фрейма (getBoundingClientRect/offsetWidth/offsetHeight)
     // вместо честных нулей (см. frame_bridge.rs: «layout содержимого
@@ -2655,17 +2657,22 @@ pub(crate) fn spawn_frame(
     // contentDocument родителя — строго до trusted `load` на хосте,
     // чтобы обработчики читали фасады сразу из обработчика. Срез 3:
     // имя хоста едет вместе с биндингом (ключ window[name]).
+    //
+    // BUG-1198: у ребёнка с рантаймом биндинг уже стоит с до-скриптовой
+    // регистрации ([`crate::frame_ancestry::FrameAncestry::register`]); повтор здесь замещает его
+    // на месте, добавляя `peer`, которого до создания рантайма ребёнка не
+    // было, и сохраняет идентичность непрозрачного происхождения документа.
     if let Some(js) = parent_js {
-        let accessible = frame_access_allowed(base, &child_url, opaque);
         // BUG-979: peer only when same-origin — see the symmetric comment on
-        // the `register_parent_document` call site above.
-        let child_peer = accessible.then(|| child_js.as_ref().and_then(|js| js.frame_peer_bridge())).flatten();
+        // `parent_peer` above.
+        let child_peer = accessible_parent.then(|| child_js.as_ref().and_then(|js| js.frame_peer_bridge())).flatten();
         js.register_iframe_document(
             info.node.index() as u32,
             Arc::clone(&child_doc_arc),
             &child_url,
             info.name.as_deref(),
-            accessible,
+            accessible_parent,
+            opaque,
             child_peer,
         );
     }
@@ -2851,9 +2858,12 @@ pub(crate) fn clear_frame_nav_requests(requests: &mut Vec<FrameNavRequest>) {
 ///
 /// `uir_override` — GAP-CSPENF срез 55, прямиком в [`spawn_frame`]'s
 /// одноимённый параметр: см. его doc-comment.
+///
+/// `href: None` — источник снова берётся из разметки хозяина, как при
+/// первичной вставке (перезагрузка srcdoc-документа, BUG-1198).
 pub(crate) fn run_frame_navigation(
     prep: &FrameNavPrep,
-    href: &str,
+    href: Option<&str>,
     nav_base: &ResourceBase,
     page_doc: &Arc<Mutex<Document>>,
     env: &FrameLoadEnv,
@@ -2861,7 +2871,7 @@ pub(crate) fn run_frame_navigation(
 ) -> Vec<FrameHandle> {
     spawn_frame(
         &prep.info,
-        Some((href, nav_base)),
+        href.map(|href| (href, nav_base)),
         &prep.host_doc,
         prep.depth,
         &prep.host_base,

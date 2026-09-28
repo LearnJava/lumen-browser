@@ -130,6 +130,7 @@ mod tests {
             url: "about:srcdoc".to_owned(),
             name: None,
             accessible,
+            opaque_id: None,
             peer: Some(child_rt as Arc<dyn crate::frame_peer_bridge::FramePeerBridge>),
         });
         f(&parent_rt);
