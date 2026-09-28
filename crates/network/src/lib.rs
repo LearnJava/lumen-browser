@@ -2379,6 +2379,11 @@ fn fetch_with_redirect(
     extra_request_headers: &str,
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
+    // BUG-1146: ASCII host of the document the request is made on behalf of
+    // (`HttpClient::document_context`), for EasyList `$domain=`. Unlike
+    // `top_level_site` it is the full host, not the registrable domain, so
+    // `domain=sub.example.com` can match. Propagated verbatim across hops.
+    document_host: Option<&str>,
     proxy: Option<&HttpProxy>,
     socks5_proxy: Option<&socks5::Socks5Proxy>,
     // Alt-Svc cache of the h3 dispatch path (RFC 7838); `Some` ⇔ HTTP/3 enabled.
@@ -2524,6 +2529,7 @@ fn fetch_with_redirect(
         resource_type: destination.map(destination_to_resource_type),
         third_party: top_level_site.map(|tls| !host_ascii.ends_with(tls) && host_ascii != tls),
         is_top_level,
+        document_host,
     };
     if let Some(f) = effective_filter
         && let Some(reason) = f.should_block_ctx(url, &filter_ctx)
@@ -2912,6 +2918,7 @@ fn fetch_with_redirect(
                     "",
                     cookie_jar,
                     top_level_site,
+                    document_host,
                     proxy,
                     socks5_proxy,
                     h3_alt_svc,
@@ -3249,6 +3256,15 @@ impl HttpClient {
     pub fn with_document_context(mut self, referrer_url: Url, policy: ReferrerPolicy) -> Self {
         self.document_context = Some((referrer_url, policy));
         self
+    }
+
+    /// ASCII host of the [`Self::with_document_context`] document — the page
+    /// EasyList `$domain=` rules are checked against (BUG-1146).
+    fn document_host(&self) -> Option<&str> {
+        self.document_context
+            .as_ref()
+            .map(|(doc_url, _)| doc_url.host_ascii_normalized())
+            .filter(|h| !h.is_empty())
     }
 
     /// Attach the document's CSP `connect-src` (or `default-src`) gate —
@@ -3804,6 +3820,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -3848,6 +3865,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -3926,6 +3944,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4120,6 +4139,7 @@ impl HttpClient {
                     &combined_extra_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.document_host(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4185,6 +4205,7 @@ impl HttpClient {
             &extra_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4307,6 +4328,7 @@ impl HttpClient {
             &extra,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
@@ -4418,7 +4440,7 @@ impl HttpClient {
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
-                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
                     self.h3_pool(),
@@ -4456,7 +4478,7 @@ impl HttpClient {
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
             self.mixed_content.as_ref(), destination, None, uir_header,
-            self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
             self.h3_pool(),
@@ -4542,7 +4564,7 @@ impl HttpClient {
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
                     &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
                     self.mixed_content.as_ref(), destination, None, &combined_extra_headers,
-                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
                     self.h3_pool(),
@@ -4583,7 +4605,7 @@ impl HttpClient {
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
             &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
             self.mixed_content.as_ref(), destination, None, uir_header,
-            self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(), self.document_host(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
             self.h3_pool(),
@@ -4652,6 +4674,7 @@ impl NetworkTransport for HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.document_host(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -4693,6 +4716,7 @@ impl NetworkTransport for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
@@ -5770,6 +5794,7 @@ impl HttpClient {
             &author_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.document_host(),
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
