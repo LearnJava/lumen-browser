@@ -144,12 +144,20 @@ mod tests {
     }
 
     #[test]
-    fn chrome_has_sec_fetch_and_dnt() {
+    fn chrome_has_sec_fetch_but_no_dnt() {
+        // Stock Chrome sends no DNT; `DNT: 1` with a Chrome UA is an anti-bot
+        // tell (BUG-1113: accuweather/adobe/washingtonpost → 403/RST_STREAM).
         let h = build_request_headers("example.com", "", "", HttpProfile::Chrome);
         assert!(h.contains("Sec-Fetch-Site: none"), "Chrome must send Sec-Fetch-Site: none");
         assert!(h.contains("Sec-Fetch-Mode: navigate"), "Chrome must send Sec-Fetch-Mode: navigate");
         assert!(h.contains("Sec-Fetch-Dest: document"), "Chrome must send Sec-Fetch-Dest: document");
-        assert!(h.contains("DNT: 1"), "Chrome must send DNT: 1");
+        assert!(!h.contains("DNT:"), "Chrome must NOT send DNT");
+    }
+
+    #[test]
+    fn edge_has_no_dnt() {
+        let h = build_request_headers("example.com", "", "", HttpProfile::Edge);
+        assert!(!h.contains("DNT:"), "Edge must NOT send DNT");
     }
 
     #[test]

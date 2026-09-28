@@ -1,6 +1,6 @@
 # BUG-1113 — Chrome-профиль HTTP-заголовков выдаёт не-браузер: `DNT: 1` и UA `Chrome/130` → антибот 403/401/RST
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3)
 **Заведён:** 2026-09-23 (P2, прогон top100-foreign против видимого Chrome 153,
 [журнал](../docs/perf/journal.md) §2026-09-23 top100 split).
 **Область:** network (`crates/network/src/http/headers.rs::build_request_headers`
@@ -80,3 +80,30 @@ khanacademy отдаёт в `__KA_DATA__` флаг `KA-is-unsupported-browser: t
 Chrome 153 (видимое окно, `--user-agent=…`) с `Chrome/130.0.0.0` получает `true`,
 с `Chrome/140.0.0.0` — `false`, со своим UA — `false`. Lumen шлёт `Chrome/130` из
 `CHROME_USER_AGENT`. Критерий фикса дополняется: на khanacademy `KA-is-unsupported-browser` — `false`.
+
+## Исправление (2026-09-28, P3)
+
+- `DNT: 1` в Chrome-ветке `build_request_headers` оставлен только для `HttpProfile::Strict`
+  (явный профиль приватности, стоит рядом с `Sec-GPC`); `Chrome` и `Edge` его не шлют.
+  H2-путь берёт тот же блок (`h2_fingerprint_headers`), отдельной правки не требовалось.
+- Мажор Chrome — один макрос `chrome_major!()` в `crates/network/src/http/mod.rs` (153), из него
+  собраны `CHROME_USER_AGENT` и новый `EDGE_USER_AGENT` (раньше Edge — отдельный литерал `Edg/130`).
+- Способ не отставать: шаг 1 скилла `lumen-perf-audit` — сверить `chrome_major!()` с мажором
+  Chrome на машине до прогона (тест по дате отвергнут: краснел бы без изменения кода).
+- Тесты: `test_chromium_user_agents_share_one_major`, `test_h2_chrome_fingerprint_has_no_dnt`,
+  `chrome_has_sec_fetch_but_no_dnt`, `edge_has_no_dnt`.
+
+**Перепроверка** `lumen --dump-source`, `LUMEN_NO_ADBLOCK=1`, база — бинарь main от 2026-09-24:
+
+| Сайт | База | Фикс |
+|---|---|---|
+| zillow | 403 | 200 (424 КБ) |
+| accuweather | 403 | 200 (218 КБ) |
+| adobe | `RST_STREAM 0x2` | 200 |
+| washingtonpost | `RST_STREAM 0x2` | 200 (4.6 МБ) |
+| khanacademy | таймаут 60 с | 200, `KA-is-unsupported-browser: false` |
+| reuters | таймаут 60 с | 401 — DataDome-интерстициал (`geo.captcha-delivery.com`) |
+
+reuters — не заголовки: `curl` с полным набором заголовков Chrome 153 тем же маршрутом тоже
+получает 401 — репутация IP у DataDome. Тело 401 после [BUG-1114](BUG-1114-FIXED.md)
+рендерится, судьбу JS-челленджа покажет следующий прогон top100.

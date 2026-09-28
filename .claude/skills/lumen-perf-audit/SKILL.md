@@ -38,6 +38,10 @@ cargo build -p lumen-shell --profile dev-release     # НЕ --release (в 2-3 р
 ```
 Бинарь: `target/dev-release/lumen.exe` (скрипт найдёт сам; иначе `$LUMEN_EXE`).
 
+**Версия Chrome в UA.** Сверь `chrome_major!()` в `crates/network/src/http/mod.rs` с мажором
+стабильного Chrome на машине (`chrome://version`). Отстаёт больше чем на 2 мажора — подними
+отдельным коммитом до прогона: устаревший UA сам по себе даёт 403/«unsupported browser» (BUG-1113).
+
 ## Шаг 2. Прогон (в фоне; на экране появится живое окно)
 
 Три РЕЖИМА (AUDIT-1) — каждый ловит своё, не смешивай в одном отчёте
