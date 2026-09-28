@@ -6290,15 +6290,6 @@ Object.defineProperty(window, 'top', {
     configurable: false,
 });
 
-// addEventListener/removeEventListener/dispatchEvent now resolve as bare
-// identifiers because `window` (just reassigned above) IS the global object —
-// this rebind is mostly for clarity, since the copy loop above already put the
-// raw functions onto globalThis. Kept explicit and bound to `window` so
-// `this` inside these methods is well-defined regardless of call style.
-var addEventListener    = window.addEventListener.bind(window);
-var removeEventListener = window.removeEventListener.bind(window);
-var dispatchEvent       = window.dispatchEvent.bind(window);
-
 // BUG-589: `window` must be a proper WebIDL exotic object — instanceof
 // `EventTarget`, `Object.prototype.toString.call(window) === "[object
 // Window]"`, and a "global scope polluter" object in its prototype chain
@@ -6336,30 +6327,28 @@ var dispatchEvent       = window.dispatchEvent.bind(window);
     });
 })();
 
-// BUG-1167: `EventTarget.prototype.addEventListener/removeEventListener/
-// dispatchEvent` called on a window, document or node run that target's own
-// engine implementation (hook declared in `event_target_shim.js`). Captured
-// here, after every shim has finished defining them, so a page that later
-// wraps `window.addEventListener` & co. around the "native" EventTarget
-// method cannot turn the delegation into a loop. A `null`/`undefined` this
-// is the global object (WebIDL §3.7.5.1 operation steps).
+// BUG-1123: the window and the document hand their own EventTarget methods
+// over to the tables `_lumen_et_platform_impl` reads (`web_api_shim_mid.js`)
+// and from here on inherit `EventTarget.prototype`'s, as every node already
+// does — `window.addEventListener === EventTarget.prototype.addEventListener`,
+// which ShadyDOM (youtube) relies on when it copies that prototype's
+// descriptors. Done last, after every shim has finished defining or wrapping
+// them, so the tables hold the final implementations and a page that later
+// wraps `window.addEventListener` around the inherited method cannot turn the
+// delegation into a loop. The bare `addEventListener(…)` call still works: an
+// identifier lookup on the global object walks its prototype chain, and a
+// missing receiver is the global object.
 (function() {
     var names = ['addEventListener', 'removeEventListener', 'dispatchEvent'];
-    function pick(obj) {
+    function take(obj) {
         var out = {};
         for (var i = 0; i < names.length; i++) {
             var fn = obj[names[i]];
             out[names[i]] = (typeof fn === 'function' && fn !== EventTarget.prototype[names[i]]) ? fn : null;
+            delete obj[names[i]];
         }
         return out;
     }
-    var win = pick(window), doc = pick(document);
-    var shadow = pick(ShadowRoot.prototype), node = pick(Node.prototype);
-    var ShadowRootIface = ShadowRoot;
-    _lumen_et_platform_impl = function(target, name) {
-        if (target == null || target === window) return win[name];
-        if (target === document) return doc[name];
-        if (target.__nid__ === undefined) return null;
-        return (target instanceof ShadowRootIface ? shadow : node)[name];
-    };
+    _lumen_window_et = take(window);
+    _lumen_document_et = take(document);
 })();

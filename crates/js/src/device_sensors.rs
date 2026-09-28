@@ -54,8 +54,13 @@ const DEVICE_SENSORS_SHIM: &str = r#"
 
   // EventTarget mixin for device orientation events
   if (typeof window !== 'undefined') {
-    const originalAddEventListener = window.addEventListener;
-    const originalRemoveEventListener = window.removeEventListener;
+    // BUG-1123: the window inherits `EventTarget.prototype`'s methods, which
+    // route to its engine implementation in `_lumen_window_et`; the hook goes
+    // there, so `window.addEventListener` stays the inherited method.
+    const windowEt = (typeof _lumen_window_et === 'object' && _lumen_window_et !== null)
+      ? _lumen_window_et : window;
+    const originalAddEventListener = windowEt.addEventListener;
+    const originalRemoveEventListener = windowEt.removeEventListener;
 
     // Listeners already registered per type. A reading is scheduled only
     // for a listener not seen before, so a handler that re-adds an already
@@ -96,7 +101,7 @@ const DEVICE_SENSORS_SHIM: &str = r#"
       }, 0);
     }
 
-    window.addEventListener = function(type, listener, options) {
+    windowEt.addEventListener = function(type, listener, options) {
       const result = originalAddEventListener.call(this, type, listener, options);
       const known = type === 'deviceorientation' ? deviceOrientationListeners
         : type === 'devicemotion' ? deviceMotionListeners : null;
@@ -114,7 +119,7 @@ const DEVICE_SENSORS_SHIM: &str = r#"
       return result;
     };
 
-    window.removeEventListener = function(type, listener, options) {
+    windowEt.removeEventListener = function(type, listener, options) {
       if (type === 'deviceorientation') {
         deviceOrientationListeners.delete(listener);
       } else if (type === 'devicemotion') {

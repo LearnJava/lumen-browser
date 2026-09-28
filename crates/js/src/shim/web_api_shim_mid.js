@@ -4180,13 +4180,19 @@ ShadowRoot.prototype.removeChild = function(c) {
     }
     return c;
 };
-ShadowRoot.prototype.addEventListener = function(type, fn, options) { _lumen_add_listener(this.__nid__, type, fn, options); };
-ShadowRoot.prototype.removeEventListener = function(type, fn, options) { _lumen_rm_listener(this.__nid__, type, fn, options); };
-ShadowRoot.prototype.dispatchEvent = function(evt) {
-    if (!evt) return true;
-    evt.target = this; evt.currentTarget = this;
-    return _lumen_dispatch(this.__nid__, evt);
+// A shadow root's EventTarget implementation; reached through
+// `EventTarget.prototype` (BUG-1123, `_lumen_et_platform_impl` below), the
+// element one sits in `_lumen_node_et`.
+var _lumen_shadow_et = {
+    addEventListener: function(type, fn, options) { _lumen_add_listener(this.__nid__, type, fn, options); },
+    removeEventListener: function(type, fn, options) { _lumen_rm_listener(this.__nid__, type, fn, options); },
+    dispatchEvent: function(evt) {
+        if (!evt) return true;
+        evt.target = this; evt.currentTarget = this;
+        return _lumen_dispatch(this.__nid__, evt);
+    },
 };
+var _lumen_node_et = {};
 // ── setHTMLUnsafe / getHTML (WHATWG HTML LS §14.5, BUG-592) ──────────────────
 // Same Element/ShadowRoot mixin the spec places these two on — `Element`'s
 // object-literal copy lives further down this file; `ShadowRoot` shares the
@@ -9064,8 +9070,9 @@ var _LUMEN_WRAPPER_ON_DESCRIPTORS = Object.getOwnPropertyDescriptors(_LUMEN_WRAP
 // BUG-1101 had already moved `firstChild`/`nextSibling` for the same reason.
 //
 // Which prototype gets which member (DOM §4.4 Node, §4.2.8 ChildNode,
-// §4.2.7 NonDocumentTypeChildNode; `EventTarget` members sit on `Node.prototype`
-// until `Node` inherits from `EventTarget`, BUG-1123). Everything else in
+// §4.2.7 NonDocumentTypeChildNode; the `EventTarget` members go on no
+// prototype at all — `Node` inherits them from `EventTarget`, see below,
+// BUG-1123). Everything else in
 // `_LUMEN_WRAPPER_MEMBERS` goes on `Element.prototype`: the bundle never told
 // Element members from HTMLElement/HTMLDialogElement/form-control ones, and
 // SVG/MathML elements rely on reaching them through `Element.prototype`.
@@ -9074,8 +9081,9 @@ var _LUMEN_NODE_MEMBER_NAMES = [
     'firstChild', 'lastChild', 'previousSibling', 'nextSibling', 'ownerDocument',
     'isConnected', 'textContent', 'appendChild', 'insertBefore', 'removeChild',
     'replaceChild', 'cloneNode', 'isSameNode', 'isEqualNode', 'getRootNode',
-    'normalize', 'addEventListener', 'removeEventListener', 'dispatchEvent',
+    'normalize',
 ];
+var _LUMEN_ET_MEMBER_NAMES = ['addEventListener', 'removeEventListener', 'dispatchEvent'];
 var _LUMEN_CHILD_NODE_MEMBER_NAMES = [
     'before', 'after', 'replaceWith', 'remove',
     'nextElementSibling', 'previousElementSibling',
@@ -9127,9 +9135,12 @@ function _lumen_install_node_members(proto, descs, names) {
 (function() {
     var elementDescs = {};
     Object.keys(_LUMEN_WRAPPER_DESCRIPTORS).forEach(function(k) {
-        if (_LUMEN_NODE_MEMBER_NAMES.indexOf(k) < 0) elementDescs[k] = _LUMEN_WRAPPER_DESCRIPTORS[k];
+        if (_LUMEN_NODE_MEMBER_NAMES.indexOf(k) < 0 && _LUMEN_ET_MEMBER_NAMES.indexOf(k) < 0) {
+            elementDescs[k] = _LUMEN_WRAPPER_DESCRIPTORS[k];
+        }
     });
     _lumen_install_node_members(Node.prototype, _LUMEN_WRAPPER_DESCRIPTORS, _LUMEN_NODE_MEMBER_NAMES);
+    _LUMEN_ET_MEMBER_NAMES.forEach(function(k) { _lumen_node_et[k] = _LUMEN_WRAPPER_DESCRIPTORS[k].value; });
     _lumen_install_node_members(Element.prototype, elementDescs);
     // After the bundle, as on the old hidden prototype: the `on<type>`
     // accessors replace the bundle's plain `ondrag*: null` fields.
@@ -9138,6 +9149,37 @@ function _lumen_install_node_members(proto, descs, names) {
     _lumen_install_node_members(CharacterData.prototype, _LUMEN_WRAPPER_CD_DESCRIPTORS);
     _lumen_install_node_members(ProcessingInstruction.prototype, _LUMEN_WRAPPER_PI_DESCRIPTORS, ['target']);
 })();
+
+// ── BUG-1123: `Node : EventTarget` (DOM §4.4) ────────────────────────────────
+// `Node.prototype` inherited straight from `Object.prototype`, with its own
+// copy of the three EventTarget methods: `div instanceof EventTarget` was
+// `false`, Meta's hyperion (whatsapp) walked `getPrototypeOf` from
+// `Node.prototype` without reaching `EventTarget.prototype` ("Invalid
+// prototype chain"), and ShadyDOM (youtube) copied the descriptors of
+// `EventTarget.prototype` into `__shady_native_*` on that same prototype,
+// which no node then reached (`a.__shady_native_dispatchEvent is not a
+// function`). Now every node, the document and the window inherit the one
+// `EventTarget.prototype` set of methods, and those route to the target's
+// engine implementation through `_lumen_et_platform_impl`
+// (`event_target_shim.js`). The tables hold those implementations: the
+// node one is filled above, the shadow-root one next to `ShadowRoot`; window
+// and document are object literals whose own methods the shim itself calls
+// before their prototype chains exist, so they keep them until the end of
+// `web_api_shim_tail_b.js`, which moves them here. Any object with an
+// `__nid__` is a node, whether or not it inherits `Node.prototype` (the plain
+// `new DocumentFragment()` literal does not). A `null`/`undefined` receiver
+// is the global object (WebIDL §3.7.5.1 operation steps).
+var _lumen_window_et = null, _lumen_document_et = null;
+Object.setPrototypeOf(Node.prototype, EventTarget.prototype);
+Object.setPrototypeOf(Node, EventTarget);
+_lumen_et_platform_impl = function(target, name) {
+    var table;
+    if (target == null || target === window) table = _lumen_window_et;
+    else if (target === document) table = _lumen_document_et;
+    else if (target.__nid__ === undefined) return null;
+    else table = target instanceof ShadowRoot ? _lumen_shadow_et : _lumen_node_et;
+    return table === null ? null : table[name];
+};
 
 // ── BUG-1130: the rest of ShadowRoot's interfaces ────────────────────────────
 // `ShadowRoot : DocumentFragment : Node` (DOM §4.8) with `ParentNode` on

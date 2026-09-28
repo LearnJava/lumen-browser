@@ -76,22 +76,35 @@ function _lumen_record_script_timing(startTime, invoker, invokerType, fn) {
     }
     _lumen_frame_scripts.push(entry);
 }
-// BUG-1167: in a browser `EventTarget.prototype.addEventListener` is *the*
-// method every window, document and node inherits, so libraries capture it
-// as "the native one" and `.call()` it on any target — ShadyDOM
+// BUG-1167/BUG-1123: `EventTarget.prototype.addEventListener` is *the*
+// method every window, document and node inherits (DOM §2.7 `Node :
+// EventTarget`, HTML `Window : EventTarget`), and libraries capture it as
+// "the native one" and `.call()` it on any target — ShadyDOM
 // (webcomponents-sd, youtube) does `EventTarget.prototype.addEventListener
-// .call(window, 'focus', …)` while initialising. Here window/document/nodes
-// carry their own engine-backed methods and the three below only serve
-// pure-JS targets built by `new EventTarget()` (`this._listeners`), so that
-// call died on `this._listeners[type]`, aborted ShadyDOM before it installed
-// its `ShadowRoot`, and youtube's app never attached a shadow root. The page
-// shim fills this hook in (end of `web_api_shim_tail_b.js`) with a lookup
-// returning the target's own engine implementation, or `null`; a worker
-// scope never sets it. Identity decides, not a missing `_listeners`: a page
-// global `var _listeners` would otherwise shadow the window's own store.
+// .call(window, 'focus', …)` while initialising. Window, document and node
+// listeners live in the engine (`_lumen_add_listener`, the window buckets),
+// not in `this._listeners`, so these three methods ask this hook for the
+// target's engine implementation first and fall back to the pure-JS store
+// only when it answers `null`. The page shim fills it in where
+// `Node.prototype` is chained to `EventTarget.prototype`
+// (`web_api_shim_mid.js`); a worker scope never sets it. Identity decides,
+// not a missing `_listeners`: a page global `var _listeners` would otherwise
+// shadow the window's own store.
 var _lumen_et_platform_impl = null;
 function _lumen_et_platform_method(target, name) {
     return _lumen_et_platform_impl === null ? null : _lumen_et_platform_impl(target, name);
+}
+// The pure-JS listener store of `target`, created on first use for a target
+// that never ran the `EventTarget` constructor: a detached JS-only node
+// (`new Text()`, `new Document()`), which inherits these methods through
+// `Node.prototype`, or a `X.prototype = Object.create(EventTarget.prototype)`
+// subclass whose constructor skips `EventTarget.call(this)`. Own store only —
+// an inherited one would be shared by every object below that prototype.
+function _lumen_et_store(target) {
+    if (Object.prototype.hasOwnProperty.call(target, '_listeners')) return target._listeners;
+    var store = Object.create(null);
+    Object.defineProperty(target, '_listeners', { value: store, writable: true, configurable: true });
+    return store;
 }
 EventTarget.prototype.addEventListener = function(type, callback, options) {
     var platform = _lumen_et_platform_method(this, 'addEventListener');
@@ -99,7 +112,8 @@ EventTarget.prototype.addEventListener = function(type, callback, options) {
     if (!callback) return;
     type = String(type);
     var capture = !!(options === true || (options && options.capture));
-    var list = this._listeners[type] || (this._listeners[type] = []);
+    var store = _lumen_et_store(this);
+    var list = store[type] || (store[type] = []);
     for (var i = 0; i < list.length; i++) {
         if (list[i].callback === callback && list[i].capture === capture) return;
     }
@@ -109,7 +123,7 @@ EventTarget.prototype.removeEventListener = function(type, callback, options) {
     var platform = _lumen_et_platform_method(this, 'removeEventListener');
     if (platform) return platform.call(this == null ? globalThis : this, type, callback, options);
     type = String(type);
-    var list = this._listeners[type];
+    var list = _lumen_et_store(this)[type];
     if (!list) return;
     var capture = !!(options === true || (options && options.capture));
     for (var i = 0; i < list.length; i++) {
@@ -130,7 +144,7 @@ EventTarget.prototype.dispatchEvent = function(event) {
     // `web_api_shim_mid.js`), not this one.
     var ctorName = (this && this.constructor && this.constructor.name) || 'EventTarget';
     var invoker = ctorName + '.' + type;
-    var list = this._listeners[type];
+    var list = _lumen_et_store(this)[type];
     if (list) {
         var snapshot = list.slice();
         for (var i = 0; i < snapshot.length; i++) {

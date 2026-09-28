@@ -37,11 +37,14 @@ fn members_are_own_properties_of_interface_prototypes() {
     let node = [
         "appendChild", "insertBefore", "removeChild", "replaceChild", "cloneNode", "getRootNode",
         "parentNode", "childNodes", "lastChild", "textContent", "nodeType", "nodeName",
-        "isConnected", "ownerDocument", "addEventListener", "firstChild", "nextSibling",
+        "isConnected", "ownerDocument", "firstChild", "nextSibling",
     ];
     for m in node {
         assert_eq!(own(&rt, "Node", m), "true", "Node.prototype.{m}");
     }
+    // `Node : EventTarget` (BUG-1123): the listener methods are inherited.
+    assert_eq!(own(&rt, "Node", "addEventListener"), "false");
+    assert_eq!(own(&rt, "EventTarget", "addEventListener"), "true");
     let element = [
         "hasAttribute", "getAttribute", "setAttribute", "querySelector", "querySelectorAll",
         "attachShadow", "closest", "matches", "append", "children", "innerHTML",

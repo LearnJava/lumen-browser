@@ -52,7 +52,7 @@ ShadyDOM и в Chrome).
    `EventTarget.prototype.addEventListener` на `window`, а шимовый метод работает только с
    `this._listeners` объектов `new EventTarget()` → `Cannot read properties of undefined (reading
    'focus')` (та же ошибка есть в логе youtube как `Uncaught TypeError`). Это первая половина
-   [BUG-1123](BUG-1123-OPEN.md).
+   [BUG-1123](BUG-1123-FIXED.md).
 
 ## Исправление
 
@@ -83,7 +83,7 @@ ShadyDOM и в Chrome).
 
 - `Uncaught TypeError: a.__shady_native_dispatchEvent is not a function` — ShadyDOM ставит
   `__shady_native_*` на `EventTarget.prototype`, а `Node.prototype` его не наследует: вторая
-  половина [BUG-1123](BUG-1123-OPEN.md);
+  половина [BUG-1123](BUG-1123-FIXED.md);
 - ``CE connectedCallback (upgrade): Error: md`InjectionToken(PAGE_TOKEN)`` — DI youtube не нашёл
   провайдер страницы; вероятно, следствие предыдущей ошибки, перепроверить после BUG-1123.
 

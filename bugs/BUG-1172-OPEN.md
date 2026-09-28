@@ -46,6 +46,6 @@ window.dispatchEvent(new Event('yy'));
 в библиотеках), через `{ once: true }` или `AbortSignal`, либо читающая
 `event.target` у событий, отправленных `window.dispatchEvent` (сюда же попадают
 синтетические события шимов: `deviceorientation`, `gamepadconnected`, `unload` …).
-Родственный, но другой дефект — [BUG-1123](BUG-1123-OPEN.md) (`window` не наследует
+Родственный, но другой дефект — [BUG-1123](BUG-1123-FIXED.md) (`window` не наследует
 `EventTarget.prototype`); общий фикс — перевести `window` на общую реализацию
 `EventTarget` — закрыл бы оба.
