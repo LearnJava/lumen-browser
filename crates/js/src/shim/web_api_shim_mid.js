@@ -1391,13 +1391,41 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
 // `HTMLCollection`/`NodeList`/`ShadowRoot` already do.
 function DOMTokenList() { throw new TypeError('Illegal constructor'); }
 
+// BUG-1147: attribute backing shared by the attribute-backed views
+// (`DOMTokenList`, the element `CSSStyleDeclaration`, `DOMStringMap`). An
+// instance carrying `__fbid__` belongs to a cross-frame facade element
+// (`frame_bridge.rs::frameElem`) — node `__nid__` of ANOTHER document, reached
+// only through the `_lumen_f_*` bridge natives; without it `__nid__` is a node
+// of this document. `in`, not a property read: the style Proxy answers any
+// unknown property read with `getPropertyValue`, which would re-parse the
+// attribute just to learn that there is no backing.
+function _lumen_backing_fbid(o) {
+    return '__fbid__' in o ? o.__fbid__ : undefined;
+}
+function _lumen_backing_get_attr(fbid, nid, name) {
+    return _lumen_u2n(fbid !== undefined ? _lumen_f_attr(fbid, nid, name) : _lumen_get_attr(nid, name));
+}
+function _lumen_backing_set_attr(fbid, nid, name, value) {
+    if (fbid !== undefined) _lumen_f_set_attr(fbid, nid, name, value);
+    else _lumen_set_attr(nid, name, value);
+}
+function _lumen_backing_remove_attr(fbid, nid, name) {
+    if (fbid !== undefined) _lumen_f_remove_attr(fbid, nid, name);
+    else _lumen_remove_attr(nid, name);
+}
+function _lumen_backing_attr_names(fbid, nid) {
+    return fbid !== undefined ? _lumen_f_attr_names(fbid, nid) : _lumen_get_attr_names(nid);
+}
+
 function _lumen_token_list_arr(tl) {
-    var c = _lumen_get_attr(tl.__nid__, tl.__attrName__);
+    var c = _lumen_backing_get_attr(_lumen_backing_fbid(tl), tl.__nid__, tl.__attrName__);
     return (c && c.length > 0)
         ? c.split(/\s+/).filter(function(t) { return t.length > 0; })
         : [];
 }
-function _lumen_token_list_save(tl, arr) { _lumen_set_attr(tl.__nid__, tl.__attrName__, arr.join(' ')); }
+function _lumen_token_list_save(tl, arr) {
+    _lumen_backing_set_attr(_lumen_backing_fbid(tl), tl.__nid__, tl.__attrName__, arr.join(' '));
+}
 
 DOMTokenList.prototype.contains = function(cls) { return _lumen_token_list_arr(this).indexOf(String(cls)) >= 0; };
 DOMTokenList.prototype.add = function() {
@@ -1462,8 +1490,8 @@ Object.defineProperty(DOMTokenList.prototype, 'length', {
     enumerable: true, configurable: true,
 });
 Object.defineProperty(DOMTokenList.prototype, 'value', {
-    get: function() { return _lumen_get_attr(this.__nid__, this.__attrName__) || ''; },
-    set: function(v) { _lumen_set_attr(this.__nid__, this.__attrName__, String(v)); },
+    get: function() { return _lumen_backing_get_attr(_lumen_backing_fbid(this), this.__nid__, this.__attrName__) || ''; },
+    set: function(v) { _lumen_backing_set_attr(_lumen_backing_fbid(this), this.__nid__, this.__attrName__, String(v)); },
     enumerable: true, configurable: true,
 });
 Object.defineProperty(DOMTokenList.prototype, Symbol.toStringTag,
@@ -1522,17 +1550,22 @@ function _lumen_make_indexed_readonly_proxy(target, getArr) {
     });
 }
 
-function _lumen_make_attr_token_list(nid, attrName) {
+// `fbid` — optional cross-frame binding (BUG-1147, see `_lumen_backing_fbid`).
+function _lumen_make_attr_token_list(nid, attrName, fbid) {
     var tl = Object.create(DOMTokenList.prototype);
     Object.defineProperty(tl, '__nid__',
         { value: nid, enumerable: false, writable: false, configurable: false });
+    if (fbid !== undefined) {
+        Object.defineProperty(tl, '__fbid__',
+            { value: fbid, enumerable: false, writable: false, configurable: false });
+    }
     Object.defineProperty(tl, '__attrName__',
         { value: attrName, enumerable: false, writable: false, configurable: false });
     return _lumen_make_indexed_readonly_proxy(tl, _lumen_token_list_arr);
 }
 
-function _lumen_make_class_list(nid) {
-    return _lumen_make_attr_token_list(nid, 'class');
+function _lumen_make_class_list(nid, fbid) {
+    return _lumen_make_attr_token_list(nid, 'class', fbid);
 }
 
 // GAP-FOCUSGROUP: HTML LS «focusgroup» — `element.focusGroup` is the
@@ -2769,7 +2802,8 @@ function _lumen_canonicalize_longhand(key, strVal) {
 function CSSStyleDeclaration() { throw new TypeError('Illegal constructor'); }
 
 // `target` is a `CSSStyleDeclaration` instance: either an element's live
-// style (carries `__nid__`, backed by the `style=""` attribute) or a
+// style (carries `__nid__`, backed by the `style=""` attribute — of a
+// cross-frame sub-document when it also carries `__fbid__`, BUG-1147) or a
 // CSSOM-8 rule style (carries `__loc__`, backed by
 // `_lumen_stylesheet_rule_(set_)style`/`_lumen_stylesheet_media_child_
 // (set_)style` — `document.styleSheets`'s OWN, not constructed, sheets
@@ -2790,8 +2824,8 @@ function _lumen_style_get_parsed(target) {
         var t = raw ? JSON.parse(raw).styleCssText : '';
         return _lumen_parse_style(t !== undefined && t !== null ? t : '');
     }
-    var s = _lumen_get_attr(target.__nid__, 'style');
-    return _lumen_parse_style(s !== undefined ? s : '');
+    var s = _lumen_backing_get_attr(_lumen_backing_fbid(target), target.__nid__, 'style');
+    return _lumen_parse_style(s !== null ? s : '');
 }
 function _lumen_style_set_parsed(target, obj) {
     var loc = target.__loc__;
@@ -2806,7 +2840,7 @@ function _lumen_style_set_parsed(target, obj) {
         }
         return;
     }
-    _lumen_set_attr(target.__nid__, 'style', _lumen_serialize_style(obj));
+    _lumen_backing_set_attr(_lumen_backing_fbid(target), target.__nid__, 'style', _lumen_serialize_style(obj));
 }
 
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
@@ -2955,10 +2989,15 @@ Object.defineProperty(CSSStyleDeclaration.prototype, Symbol.toStringTag,
     { value: 'CSSStyleDeclaration', configurable: true });
 globalThis.CSSStyleDeclaration = CSSStyleDeclaration;
 
-function _lumen_make_style(nid) {
+// `fbid` — optional cross-frame binding (BUG-1147, see `_lumen_backing_fbid`).
+function _lumen_make_style(nid, fbid) {
     var target = Object.create(CSSStyleDeclaration.prototype);
     Object.defineProperty(target, '__nid__',
         { value: nid, enumerable: false, writable: false, configurable: false });
+    if (fbid !== undefined) {
+        Object.defineProperty(target, '__fbid__',
+            { value: fbid, enumerable: false, writable: false, configurable: false });
+    }
     return new Proxy(target, {
         get: function(t, prop, receiver) {
             if (prop in t) return Reflect.get(t, prop, receiver);
@@ -6537,9 +6576,9 @@ function _lumen_dataset_attr_name(prop) {
 function _lumen_dataset_prop_name(attr) {
     return attr.slice(5).replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
 }
-function _lumen_dataset_keys(nid) {
+function _lumen_dataset_keys(nid, fbid) {
     var out = [];
-    var names = _lumen_get_attr_names(nid);
+    var names = _lumen_backing_attr_names(fbid, nid);
     for (var i = 0; i < names.length; i++) {
         if (names[i].indexOf('data-') === 0) { out.push(_lumen_dataset_prop_name(names[i])); }
     }
@@ -6552,13 +6591,14 @@ function _lumen_dataset_keys(nid) {
 function DOMStringMap() { throw new TypeError('Illegal constructor'); }
 globalThis.DOMStringMap = DOMStringMap;
 
-function _lumen_make_dataset(nid) {
+// `fbid` — optional cross-frame binding (BUG-1147, see `_lumen_backing_fbid`).
+function _lumen_make_dataset(nid, fbid) {
     return new Proxy(Object.create(DOMStringMap.prototype), {
         get: function(_t, prop) {
             if (typeof prop !== 'string') { return undefined; }
             var attr = _lumen_dataset_attr_name(prop);
             if (attr === null) { return undefined; }
-            var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+            var v = _lumen_backing_get_attr(fbid, nid, attr);
             return v !== null ? v : undefined;
         },
         set: function(_t, prop, value) {
@@ -6566,25 +6606,25 @@ function _lumen_make_dataset(nid) {
             if (attr === null) {
                 throw new DOMException('Invalid dataset name: ' + prop, 'SyntaxError');
             }
-            _lumen_set_attr(nid, attr, String(value));
+            _lumen_backing_set_attr(fbid, nid, attr, String(value));
             return true;
         },
         has: function(_t, prop) {
             if (typeof prop !== 'string') { return false; }
             var attr = _lumen_dataset_attr_name(prop);
-            return attr !== null && _lumen_u2n(_lumen_get_attr(nid, attr)) !== null;
+            return attr !== null && _lumen_backing_get_attr(fbid, nid, attr) !== null;
         },
         deleteProperty: function(_t, prop) {
             var attr = _lumen_dataset_attr_name(String(prop));
-            if (attr !== null) { _lumen_remove_attr(nid, attr); }
+            if (attr !== null) { _lumen_backing_remove_attr(fbid, nid, attr); }
             return true;
         },
-        ownKeys: function() { return _lumen_dataset_keys(nid); },
+        ownKeys: function() { return _lumen_dataset_keys(nid, fbid); },
         getOwnPropertyDescriptor: function(_t, prop) {
             if (typeof prop !== 'string') { return undefined; }
             var attr = _lumen_dataset_attr_name(prop);
             if (attr === null) { return undefined; }
-            var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+            var v = _lumen_backing_get_attr(fbid, nid, attr);
             if (v === null) { return undefined; }
             return { value: v, writable: true, enumerable: true, configurable: true };
         },

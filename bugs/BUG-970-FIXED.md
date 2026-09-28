@@ -16,7 +16,7 @@ at all — reading it throws `TypeError`
 `removeNamedItem()`/итерация; `removeNamedItem` снимает снимок значения ДО удаления атрибута —
 иначе живой геттер `Attr`-подобного узла читал бы уже удалённое значение. Тест
 `frame_facade_attributes_named_node_map`. Второй член того же фасада (`.style`/`classList`/
-`dataset`, найден отдельно w3schools 2026-09-24) вынесен в [BUG-1147](BUG-1147-OPEN.md) — не
+`dataset`, найден отдельно w3schools 2026-09-24) вынесен в [BUG-1147](BUG-1147-FIXED.md) — не
 затронут этим фиксом.
 
 ## Механизм
