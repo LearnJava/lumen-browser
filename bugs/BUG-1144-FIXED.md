@@ -1,6 +1,6 @@
 # BUG-1144 — `innerText` у элемента, который не рендерится (`display:none`, `<script>`), возвращает `''` вместо `textContent`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P6)
 **Заведён:** 2026-09-24 (P2, разбор совместимости после прогона top100-foreign: 48 сайтов с поломкой отрисовки, видимое окно `--maximized` против Chrome 153, **без блокировщика** (`LUMEN_NO_ADBLOCK=1`); [журнал](../docs/perf/journal.md) §2026-09-24 compat). Передан P6 по решению пользователя.
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js:~6665` геттер `innerText` / `_lumen_rendered_text` (BUG-413 срез 2) — нет шага «not being rendered → textContent»)
 
@@ -42,3 +42,32 @@ setTimeout(function(){ r.ldLater = it('ld'); r.dnLater = it('dn'); }, 300);
 HTML LS §3.2.7 «The innerText and outerText properties», шаг 1: если элемент не being
 rendered или user agent не поддерживает рендеринг — вернуть descendant text content (`textContent`).
 Критерий: репро даёт результат Chrome.
+
+## Исправление (2026-09-28, P6)
+
+Шаг 1 в геттере был с BUG-413 (срез 2), но признак «рендерится» был неверным.
+`_lumen_rt_is_rendered` считал узел отрисованным, если у него есть запись в снимке
+computed style. Однако элемент с `display: none` (авторский `display:none`, `<script>` в
+`<body>` по UA-стилю) получает в дереве layout пропущенный бокс, и
+`collect_computed_styles` публикует его стиль (`display: none`, `visibility: visible`).
+Геттер собирал пустую строку по потомкам без записей, признак говорил «отрисован» —
+до `textContent` дело не доходило. `ld+json` в `<head>` работал только потому, что
+внутри пропущенного `<head>` у `<script>` записи нет вовсе.
+
+`crates/js/src/shim/web_api_shim_mid.js`:
+
+- `_lumen_rt_is_rendered` — «есть запись **и** `display` не `none`»;
+- `_lumen_rt_collect` — элемент с `display: none` внутри отрисованного предка ничего не
+  вносит (раньше скрытый `<p>` по шагу 7 давал два перевода строки: `A<p hidden>X</p>B` →
+  `"A
+
+B"` вместо `"AB"`).
+
+Тест на настоящем конвейере (стиль → layout → снимок):
+`crates/driver/tests/cases/inner_text_getter.rs::unrendered_connected_element_falls_back_to_text_content`
+— `#dn` → `'hidden text'`, `<script>` в `<body>` → `'var x = 1;'`, `ld+json` → `'{"a":1}'`,
+скрытый `<p>` внутри отрисованного `div` → `"AB"`. До правки падал на `#dn` (`''`).
+
+Не сделано: `content-visibility: hidden` пока тоже даёт запись без бокса-содержимого —
+там признак не менялся (сайтов на этом не найдено). Живой прогон в окне не делался:
+тест идёт через тот же каскад, layout и снимок, что и шелл.
