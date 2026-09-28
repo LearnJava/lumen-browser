@@ -213,7 +213,7 @@ impl BrowserSession for LiveWindowSession {
     /// «адрес, который запросили» единственное, что вообще известно.
     fn current_url(&self) -> String {
         let snapshot = self.current_url.lock().map(|g| g.clone()).unwrap_or_default();
-        match self.execute(AutomationCommand::Eval("location.href".to_owned())) {
+        match self.execute(AutomationCommand::Eval("location.href".to_owned(), None)) {
             Ok(AutomationReply::Eval(json)) => serde_json::from_str::<String>(&json)
                 .ok()
                 .filter(|u| !u.is_empty())
@@ -267,8 +267,20 @@ impl BrowserSession for LiveWindowSession {
     }
 
     fn eval(&mut self, js: &str) -> Result<String> {
-        match self.execute(AutomationCommand::Eval(js.to_owned()))? {
+        match self.execute(AutomationCommand::Eval(js.to_owned(), None))? {
             AutomationReply::Eval(json) => Ok(json),
+            other => Err(unexpected_reply("Eval", &other)),
+        }
+    }
+
+    /// BUG-1145: the live window waits `timeout_ms` for its engine thread
+    /// (instead of its default) — the round-trip gets the same headroom
+    /// `wait` gives its deadline, never less than [`DEFAULT_TIMEOUT`].
+    fn eval_with_timeout(&mut self, js: &str, timeout_ms: u64) -> Result<String> {
+        let round_trip = (Duration::from_millis(timeout_ms) + Duration::from_secs(2)).max(DEFAULT_TIMEOUT);
+        match self.handle.execute(AutomationCommand::Eval(js.to_owned(), Some(timeout_ms)), round_trip)? {
+            AutomationReply::Eval(json) => Ok(json),
+            AutomationReply::Error(msg) => Err(Error::Other(msg)),
             other => Err(unexpected_reply("Eval", &other)),
         }
     }

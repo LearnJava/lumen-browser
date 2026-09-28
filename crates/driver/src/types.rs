@@ -499,7 +499,11 @@ pub enum AutomationCommand {
     /// Scroll by delta in document coordinates.
     Scroll(ScrollDelta),
     /// Evaluate JavaScript in the active tab.
-    Eval(String),
+    ///
+    /// The second field is how long (ms) the live window waits for its engine
+    /// thread to run the script before replying that the thread is busy
+    /// (BUG-1145); `None` — the shell's default.
+    Eval(String, Option<u64>),
     /// Take a screenshot.
     Screenshot,
     /// Wait for condition.

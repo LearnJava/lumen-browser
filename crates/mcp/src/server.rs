@@ -303,6 +303,10 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         "code": {
                             "type": "string",
                             "description": "JavaScript code to execute"
+                        },
+                        "timeout_ms": {
+                            "type": "integer",
+                            "description": "Live window only: how long to wait for a busy engine thread before reporting it busy (default 5000)"
                         }
                     }
                 }),
@@ -659,7 +663,13 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Some(c) => c,
                     None => return McpResponse::err(id.clone(), -32602, "Missing code argument"),
                 };
-                match self.session.eval(code) {
+                // BUG-1145: без `timeout_ms` — прежний путь с таймаутом живого
+                // окна по умолчанию.
+                let result = match args.get("timeout_ms").and_then(|v| v.as_u64()) {
+                    Some(ms) => self.session.eval_with_timeout(code, ms),
+                    None => self.session.eval(code),
+                };
+                match result {
                     Ok(result) => json!({ "success": true, "result": result }),
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Eval error: {e}")),
                 }
@@ -953,6 +963,10 @@ mod tests {
 
         fn eval(&mut self, _js: &str) -> lumen_core::error::Result<String> {
             Ok("null".to_string())
+        }
+
+        fn eval_with_timeout(&mut self, _js: &str, timeout_ms: u64) -> lumen_core::error::Result<String> {
+            Ok(format!("\"waited {timeout_ms}\""))
         }
 
         fn query(&self, _sel: &str) -> lumen_core::error::Result<Vec<lumen_driver::NodeRef>> {
@@ -1406,6 +1420,19 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["success"], true);
+    }
+
+    #[test]
+    fn tool_eval_timeout_ms_reaches_session() {
+        // BUG-1145: `timeout_ms` уходит в `eval_with_timeout`, а не теряется.
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "eval", "arguments": { "code": "1+1", "timeout_ms": 30000 } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["result"], "\"waited 30000\"");
     }
 
     #[test]
