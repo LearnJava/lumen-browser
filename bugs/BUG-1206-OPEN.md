@@ -1,4 +1,4 @@
-# BUG-1204 — при `require-trusted-types-for 'script'` не исполняется ни один `<script>`, вставленный через DOM
+# BUG-1206 — при `require-trusted-types-for 'script'` не исполняется ни один `<script>`, вставленный через DOM
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_script_execute_classic`, `(0, eval)(text)`; `crates/js/src/v8_runtime/codegen_hook.rs` + `crates/js/src/trusted_types.rs` — `_lumen_tt_get_compliant_script_for_codegen`)

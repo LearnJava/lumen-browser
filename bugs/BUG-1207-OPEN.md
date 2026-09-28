@@ -1,4 +1,4 @@
-# BUG-1205 — youtube: `CE connectedCallback (upgrade): Error: InjectionToken(PAGE_TOKEN)`, контент не рисуется
+# BUG-1207 — youtube: `CE connectedCallback (upgrade): Error: InjectionToken(PAGE_TOKEN)`, контент не рисуется
 
 **Статус:** OPEN
 **Компонент:** js — не локализовано (DI-контейнер youtube не находит провайдер `PAGE_TOKEN` при апгрейде custom element)
