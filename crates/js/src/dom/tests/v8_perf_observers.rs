@@ -249,6 +249,44 @@ fn performance_paint_timing_interface_backs_paint_entries() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-678: `assert_implements(window.LargestContentfulPaint)` opens every LCP
+// and soft-navigation WPT; the interface object must exist, refuse `new`, back
+// the entries the shell delivers and serialise the IDL attributes.
+#[test]
+fn largest_contentful_paint_interface_backs_lcp_entries() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // NodeId 6 = <div id="main"> in make_doc().
+    let r = rt.eval("\
+                var threw = false;\
+                try { new LargestContentfulPaint(); } catch (e) { threw = e instanceof TypeError; }\
+                _lumen_deliver_lcp_entry(6, 1024, 200.5, 210.5);\
+                var e = performance.getEntriesByType('largest-contentful-paint')[0];\
+                var j = e.toJSON();\
+                typeof window.LargestContentfulPaint === 'function' && threw\
+                    && e instanceof LargestContentfulPaint\
+                    && e.renderTime === 210.5 && e.loadTime === 200.5\
+                    && j.entryType === 'largest-contentful-paint' && j.size === 1024\
+                    && j.renderTime === 210.5 && j.element === e.element && !('toJSON' in j)\
+            ").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-678: the soft-navigation hook writes into the page shim's performance
+// timeline — it used to push into `performance._perf_entries`, which does not
+// exist, so `getEntriesByType('soft-navigation')` stayed empty even when called.
+#[test]
+fn soft_nav_hook_feeds_the_performance_timeline() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("\
+                _lumen_deliver_soft_nav('https://example.test/about', 12.5, 0);\
+                var list = performance.getEntriesByType('soft-navigation');\
+                list.length === 1 && list[0] instanceof PerformanceSoftNavigationEntry\
+                    && list[0].name === 'https://example.test/about' && list[0].startTime === 12.5\
+                    && performance.getEntries().indexOf(list[0]) !== -1\
+            ").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-673: resource/navigation entries are instances of
 // PerformanceResourceTiming / PerformanceNavigationTiming (the latter
 // inheriting from the former); neither interface is constructible, and the

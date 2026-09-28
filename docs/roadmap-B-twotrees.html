@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-27",
+ "generated": "2026-09-28",
  "counts": {
-  "open": 216,
-  "fixed": 925,
+  "open": 215,
+  "fixed": 926,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7039,6 +7039,16 @@
        "bugs": [
         "BUG-535"
        ]
+      },
+      {
+       "id": "GAP-SOFTNAV",
+       "title": "Soft Navigations: детекция мягкой навигации",
+       "status": "planned",
+       "size": "L",
+       "note": "Soft Navigations (WICG): детекция мягкой навигации не реализована — `PerformanceSoftNavigationEntry` и хук `_lumen_deliver_soft_nav` (`crates/js/src/soft_navigation.rs`, с 2026-09-28 пишет в настоящий буфер `_perf_entries` + `_perf_observer_notify`) есть, но их не вызывает никто. Нужно: атрибуция задач пользовательского взаимодействия (клик/keydown → обработчики → порождённые ими промисы/таймеры), фиксация изменения URL (`pushState`/`replaceState`/Navigation API) и DOM-модификации в той же атрибуции, contentful paint новых узлов, `navigationId` на последующих записях, повторный замер LCP — и живая доставка LCP-записей из shell, которой нет (`PersistentJs::deliver_lcp_entry` — `#[allow(dead_code)]`, зовёт только `lumen-driver`). После — `'soft-navigation'` в `_PERF_SUPPORTED_ENTRY_TYPES`. Самодостаточно `tests/wpt/soft-navigation-heuristics/` (94 id, 2/101 сабтестов на 2026-08-06). Реклассифицировано из BUG-678 2026-09-28 (P3) по `docs/probe-method.md` §8; дефекты той же записи (`window.LargestContentfulPaint`, хук в пустоту) закрыты тем же днём",
+       "bugs": [
+        "BUG-678"
+       ]
       }
      ]
     },
@@ -8421,13 +8431,6 @@
    "status": "open",
    "title": "`EventTarget.prototype.addEventListener.call(window",
    "component": "js (`crates/js/src/shim/event_target_shim.js:21-25` — метод работает только с `this._listeners`; `web_api_shim_mid.js:3215` `function Node` — `Node.prototype` не наследует `EventTarget.prototype`; `crates/js/src/xhr.rs:59` `_XhrEventTarget` — своя база)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1143": {
-   "status": "open",
-   "title": "Каждое из шести имён и `BarProp` → `ReferenceError` (Chrome: объекты с `visible === true`, `typeof BarProp === 'function'`). weibo: бандл `index-*.js` обращаетс…",
-   "component": "js (`crates/js/src/shim/*` — ни одного определения `toolbar`/`locationbar`/`BarProp`, `grep` — 0)",
    "date": null,
    "debtor": false
   },
@@ -15248,6 +15251,13 @@
    "component": "js (`crates/js/src/v8_runtime/codegen_hook.rs` — `RawCallback`, `codegen_result`)",
    "date": "2026-09-27",
    "debtor": false
+  },
+  "BUG-1143": {
+   "status": "fixed",
+   "title": "Не было `window.toolbar`/`locationbar`/`menubar`/`personalbar`/`scrollbars`/`statusbar` и `BarProp` — каждое имя давало `ReferenceError`; weibo `newlogin` падал…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_mc.js` — `BarProp` и шесть `[Replaceable]`-аксессоров `window`)",
+   "date": "2026-09-28",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -15792,9 +15802,6 @@
   "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
    "BUG-867"
   ],
-  "js (`crates/js/src/shim/*` — ни одного определения `toolbar`/`locationbar`/`BarProp`, `grep` — 0)": [
-   "BUG-1143"
-  ],
   "js (`crates/js/src/shim/event_target_shim.js:21-25` — метод работает только с `this._listeners`; `web_api_shim_mid.js:3215` `function Node` — `Node.prototype` не наследует `EventTarget.prototype`; `crates/js/src/xhr.rs:59` `_XhrEventTarget` — своя база)": [
    "BUG-1123"
   ],
@@ -16016,6 +16023,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js`)": [
    "BUG-483"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_tail_mc.js` — `BarProp` и шесть `[Replaceable]`-аксессоров `window`)": [
+   "BUG-1143"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_mc.js` — `Window`-шим)": [
    "BUG-515",
