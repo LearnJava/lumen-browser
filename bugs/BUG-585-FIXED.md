@@ -113,6 +113,6 @@ WPT `html/browsers/origin/api/`: **0/307 → 296/325** сабтестов, 15/23
 - 1 — blob-воркер непрозрачен: [BUG-1197](BUG-1197-FIXED.md) (`blob:lumen/N` без происхождения).
 - 3 — песочница без `allow-same-origin`: [BUG-1198](BUG-1198-FIXED.md).
 - `origin-from-window`/`origin-from-messageevent` TIMEOUT после `window.open`:
-  [BUG-1199](BUG-1199-OPEN.md).
+  [BUG-1199](BUG-1199-FIXED.md).
 - `*.any.serviceworker.html` (2 файла) TIMEOUT — общая беда SW-вариантов под wptrunner, не
   этого API.

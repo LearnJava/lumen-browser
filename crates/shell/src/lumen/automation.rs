@@ -362,6 +362,14 @@ impl Lumen {
             lumen_image::encode_png_rgba8(&image).map_err(|e| format!("PNG encoding: {e}"))
         }
 
+        /// Stable id of [`Self::automation_tab`] while a page-driven tab
+        /// switch (`window.open()`, `target=_blank`) keeps it parked in
+        /// `bg_tabs`; `None` when it is the active tab or no longer open
+        /// (BUG-1199).
+        pub(crate) fn automation_tab_in_background(&self) -> Option<usize> {
+            self.automation_tab.filter(|&id| self.tab_strip.inactive_index_of(id).is_some())
+        }
+
     /// Return a cloneable [`InputSender`] for injecting synthetic input events.
     ///
     /// Callers on any thread can use the sender to enqueue [`InputCommand`]s;
