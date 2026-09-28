@@ -1571,6 +1571,40 @@ fn is_stale_error(err: &Error) -> bool {
         || msg.contains("os error 10054")
 }
 
+/// Ключ пула соединений для `fetch_single` (BUG-1209).
+///
+/// За HTTPS через HTTP-прокси после CONNECT-туннеля физическое соединение
+/// ведёт к целевому origin-у (TLS-сессия установлена к `host:port`), а не к
+/// прокси, поэтому ключуется реальным назначением — иначе `pool.acquire` по
+/// ключу прокси может отдать запросу к host-B TLS-сессию, поднятую для
+/// host-A (421 Misdirected Request, RFC 9110 §15.5.20; в худшем случае
+/// cookies/Authorization host-B уходят в чужой tunnel). Плоский (не-TLS)
+/// relay через прокси остаётся общим по адресу прокси: одно и то же
+/// TCP-соединение легитимно обслуживает любой `Host` через absolute-URI.
+fn pool_key_for_fetch(
+    via_http_proxy: bool,
+    is_tls: bool,
+    host: &str,
+    port: u16,
+    connect_host: &str,
+    connect_port: u16,
+    connect_is_tls: bool,
+) -> PoolKey {
+    if via_http_proxy && is_tls {
+        PoolKey {
+            host: host.to_owned(),
+            port,
+            is_tls: true,
+        }
+    } else {
+        PoolKey {
+            host: connect_host.to_owned(),
+            port: connect_port,
+            is_tls: connect_is_tls,
+        }
+    }
+}
+
 /// Один полный HTTP-запрос: acquire из пула (или connect), write_request,
 /// read_response, release. При попадании на stale pooled connection —
 /// однократный retry с свежим. Возвращает `Response` и в случае success
@@ -1684,16 +1718,20 @@ fn fetch_single(
         (host, port, is_tls)
     };
 
-    let key = PoolKey {
-        host: connect_host.to_owned(),
-        port: connect_port,
-        is_tls: connect_is_tls,
-    };
+    // BUG-1209: за HTTPS через HTTP-прокси после CONNECT-туннеля соединение
+    // привязано к конкретному целевому origin-у (TLS-сессия к host:port), а
+    // не к прокси — ключевать пул нужно реальным назначением, иначе
+    // следующий acquire отдаёт запросу к другому хосту чужую TLS-сессию
+    // (421 Misdirected Request, а в худшем случае утечка cookies/Authorization
+    // не туда).
+    let key = pool_key_for_fetch(effective_proxy.is_some(), is_tls, host, port, connect_host, connect_port, connect_is_tls);
 
     // HTTP/2 (PERF-13): every request to an origin shares one multiplexed
-    // connection. Only for direct/SOCKS5 routes — behind an HTTP proxy `key`
-    // names the proxy, not the origin a CONNECT tunnel leads to.
-    let h2_pool = if effective_proxy.is_none() { h2_pool } else { None };
+    // connection. Direct/SOCKS5 routes always qualify; behind an HTTP proxy
+    // only the TLS/CONNECT-tunnelled leg does — `key` above now names the
+    // real tunnelled origin, so pooling it is safe. The plain-HTTP relay leg
+    // never negotiates h2 (no TLS ALPN), so it is excluded either way.
+    let h2_pool = if effective_proxy.is_none() || is_tls { h2_pool } else { None };
     let scheme = if is_tls { "https" } else { "http" };
     let send = |mux: &h2::mux::H2Mux| {
         h2_mux_request(mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body)
@@ -12778,6 +12816,49 @@ mod proxy_tests {
         let client = HttpClient::new().with_proxy(Arc::clone(&proxy));
         // Verify that the proxy was attached (no public accessor, so we just verify it doesn't crash)
         assert!(client.proxy.is_some());
+    }
+
+    // ── BUG-1209: pool key за HTTP-прокси ключуется целевым origin-ом ──────
+
+    #[test]
+    fn pool_key_direct_route_uses_target_host() {
+        // Без прокси ключ — всегда реальный (target) host:port, как раньше.
+        let key = pool_key_for_fetch(false, true, "a.example", 443, "a.example", 443, true);
+        assert_eq!(key.host, "a.example");
+        assert_eq!(key.port, 443);
+        assert!(key.is_tls);
+    }
+
+    #[test]
+    fn pool_key_https_over_proxy_uses_target_not_proxy() {
+        // За HTTP-прокси, после CONNECT-туннеля к TLS-хосту, ключ обязан
+        // называть реальный target — connect_host/connect_port здесь всегда
+        // адрес прокси (см. fetch_single), а ключ должен их игнорировать.
+        let key = pool_key_for_fetch(true, true, "a.example", 443, "proxy.local", 3128, false);
+        assert_eq!(key.host, "a.example");
+        assert_eq!(key.port, 443);
+        assert!(key.is_tls);
+    }
+
+    #[test]
+    fn pool_key_https_over_proxy_distinguishes_two_hosts() {
+        // Регрессия BUG-1209: два разных TLS-хоста за одним прокси не
+        // должны получить один и тот же ключ пула (иначе acquire() отдаёт
+        // TLS-сессию host-A запросу к host-B → 421 Misdirected Request).
+        let key_a = pool_key_for_fetch(true, true, "a.example", 443, "proxy.local", 3128, false);
+        let key_b = pool_key_for_fetch(true, true, "b.example", 443, "proxy.local", 3128, false);
+        assert_ne!(key_a, key_b);
+    }
+
+    #[test]
+    fn pool_key_plain_http_over_proxy_uses_proxy_address() {
+        // Обычный (не-TLS) relay через прокси остаётся общим по адресу
+        // прокси: одно TCP-соединение легитимно обслуживает разные Host
+        // через absolute-URI в строке запроса.
+        let key = pool_key_for_fetch(true, false, "a.example", 80, "proxy.local", 3128, false);
+        assert_eq!(key.host, "proxy.local");
+        assert_eq!(key.port, 3128);
+        assert!(!key.is_tls);
     }
 
     #[test]
