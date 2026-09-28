@@ -11,8 +11,9 @@
 в `data/fingerprint.toml`, прокси — [`scripts/split_proxy.py`](../scripts/split_proxy.py) с логом каждого
 `CONNECT`), dev-release `8bd5c5dd1`, без блокировщика:
 
-- 40 ответов `421 Misdirected Request` на 8 сайтах (twitch, bbc, spotify, zillow, soundcloud, yahoo-jp,
-  baidu, tradingview, tumblr); в прогоне 2026-09-23 (другой маршрут, см. журнал) — ни одного.
+- 24 ответа `421 Misdirected Request` на 5 сайтах (soundcloud 7, bbc 6, twitch 5, zillow 4, spotify 2;
+  подсчёт строк `← 421` в stderr-логах, `scripts/perf_compare.py`); в прогоне 2026-09-23 (другой маршрут,
+  см. журнал) — ни одного.
   На twitch `421` получают `assets.twitch.tv` (4 из 4 скриптов/иконок) и `gql.twitch.tv` — страница пустая.
 - Хосты, ответившие Lumen, но ни разу не получившие собственного `CONNECT` в логе прокси:
   twitch — `gql.twitch.tv`; bbc — `www.googletagmanager.com`, `static.chartbeat.com`, `jssdks.mparticle.com`,
