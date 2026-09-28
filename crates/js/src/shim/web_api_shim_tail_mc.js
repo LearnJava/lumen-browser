@@ -164,6 +164,33 @@ Object.defineProperties(VisualViewport.prototype, {
 });
 window.visualViewport = new VisualViewport();
 
+// ── BarProp: window.locationbar/menubar/personalbar/scrollbars/statusbar/toolbar
+// HTML LS §7.2.4 (BUG-1143). Six distinct objects, one per attribute, each
+// with a `visible` getter that is the negation of the top-level traversable's
+// "is popup". Lumen opens every `window.open()` target as a full tab with the
+// browser UI, so no browsing context here is ever a popup and `visible` is
+// always `true`. Each attribute is `[Replaceable]`: an own accessor of
+// `window` whose setter shadows it with a plain data property (WebIDL
+// §3.7.6), the shape `window-properties.https.html` checks. The accessors are
+// carried onto `globalThis` by the descriptor-preserving copy in
+// `web_api_shim_tail_b.js`, so the bare identifiers (`toolbar`) resolve too.
+function BarProp() { throw new TypeError('Illegal constructor'); }
+Object.defineProperty(BarProp.prototype, 'visible', {
+    get: function() { return true; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(BarProp.prototype, Symbol.toStringTag, { value: 'BarProp', configurable: true });
+['locationbar', 'menubar', 'personalbar', 'scrollbars', 'statusbar', 'toolbar'].forEach(function(name) {
+    var bar = Object.create(BarProp.prototype);
+    Object.defineProperty(window, name, {
+        get: function() { return bar; },
+        set: function(v) {
+            Object.defineProperty(globalThis, name, { value: v, writable: true, enumerable: true, configurable: true });
+        },
+        enumerable: true, configurable: true,
+    });
+});
+
 // ── window.CSS (CSS Object Model L1 §5 + CSS Conditional Rules L3 §6) ────────
 // CSS.supports(property, value) — two-argument form.
 // CSS.supports(conditionText) — one-argument form.

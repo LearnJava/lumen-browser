@@ -400,6 +400,9 @@ mod v8_bug1138_html_document;
 mod v8_bug1139_message_target;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1143_barprop;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug863_cdata_section;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1122_iface_protos;
