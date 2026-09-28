@@ -1695,181 +1695,166 @@ fn fetch_single(
     // names the proxy, not the origin a CONNECT tunnel leads to.
     let h2_pool = if effective_proxy.is_none() { h2_pool } else { None };
     let scheme = if is_tls { "https" } else { "http" };
-    let mut reservation = None;
-    if let Some(h2p) = h2_pool {
-        let mut retried = false;
-        loop {
-            match h2p.acquire(&key) {
-                h2::pool::Acquire::Mux(mux) => {
-                    match h2_mux_request(&mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
-                        Ok(resp) => return Ok(resp),
-                        // Body larger than the peer's send window: not a failure, a
-                        // routing decision — retry the same request over HTTP/1.1,
-                        // where the body streams into the socket buffer.
-                        Err(e) if is_h2_body_window_error(&e.error) => {
-                            return fetch_single_h1_only(
-                                pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
-                                request_host_header, request_path, range, if_range, authorization,
-                                accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
-                            );
-                        }
-                        // The peer never processed it (GOAWAY, refused stream,
-                        // connection gone before any response): once more on
-                        // whatever connection the pool has or opens next.
-                        Err(e) if e.retryable && !retried => {
-                            h2p.evict(&key, &mux);
-                            retried = true;
-                        }
-                        Err(e) => return Err(e.error),
-                    }
+    let send = |mux: &h2::mux::H2Mux| {
+        h2_mux_request(mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body)
+    };
+    // BUG-1177: a request the peer certainly did not process (queued behind a
+    // dying connection, refused by GOAWAY, lost before any response) is sent
+    // again on a fresh connection — whether it found the connection in the
+    // pool or opened it itself — within one shared budget.
+    let mut resends_left = h2::pool::H2_RESEND_LIMIT;
+    let mut opened: Option<Arc<h2::mux::H2Mux>> = None;
+    let conn = loop {
+        let mut reservation = None;
+        if h2_pool.is_some() || opened.is_some() {
+            match h2::pool::send_resending(h2_pool, &key, opened.take(), &mut resends_left, &send) {
+                h2::pool::Sent::Done(Ok(resp)) => return Ok(resp),
+                // Body larger than the peer's send window: not a failure, a
+                // routing decision — retry the same request over HTTP/1.1,
+                // where the body streams into the socket buffer.
+                h2::pool::Sent::Done(Err(e)) if is_h2_body_window_error(&e.error) => {
+                    return fetch_single_h1_only(
+                        pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
+                        request_host_header, request_path, range, if_range, authorization,
+                        accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
+                    );
                 }
-                h2::pool::Acquire::Connect(r) => {
-                    reservation = Some(r);
-                    break;
-                }
-                h2::pool::Acquire::Direct => break,
+                h2::pool::Sent::Done(Err(e)) => return Err(e.error),
+                h2::pool::Sent::Connect(r) => reservation = r,
             }
         }
-    }
 
-    // Попытка 1: используем pooled connection, если он есть.
-    if let Some(pooled) = pool.acquire(&key) {
-        // Живое HTTP/1.1-соединение к origin-у — значит, h2 он не говорит.
+        // Попытка 1: используем pooled connection, если он есть.
+        if let Some(pooled) = pool.acquire(&key) {
+            // Живое HTTP/1.1-соединение к origin-у — значит, h2 он не говорит.
+            if let Some(r) = reservation.take() {
+                r.mark_http1();
+            }
+            match do_request(
+                pooled,
+                method,
+                request_host_header,
+                request_path,
+                range,
+                if_range,
+                authorization,
+                accept_encoding,
+                extra_headers,
+                http_profile,
+                stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
+                body,
+            ) {
+                Ok((resp, conn)) => {
+                    if !conn.closed {
+                        pool.release(key, conn);
+                    }
+                    return Ok(resp);
+                }
+                Err(e) if is_stale_error(&e) => {
+                    // Сервер успел закрыть idle-соединение — pooled умер. Дальше
+                    // упадём на ветку «новый connect»; pooled уже не возвращается.
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Попытка 2 (или 1, если пул был пуст): свежий connect.
+        let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
+
+        // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
+        #[allow(clippy::collapsible_if)]
+        if let Some(proxy) = effective_proxy {
+            if is_tls {
+                // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту через прокси.
+                let mut stream = conn.into_stream();
+                let connect_request = format!(
+                    "CONNECT {host}:{port} HTTP/1.1\r\n\
+                    Host: {host}:{port}\r\n\
+                    Connection: keep-alive\r\n"
+                );
+                let auth_header = if let Some(auth) = &proxy.auth {
+                    format!("Proxy-Authorization: Basic {auth}\r\n")
+                } else {
+                    String::new()
+                };
+                let full_request = format!("{}{}\r\n", connect_request, auth_header);
+
+                stream.write_all(full_request.as_bytes())
+                    .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
+                stream.flush()
+                    .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
+
+                // Читаем ответ на CONNECT (должен быть 200 OK).
+                let mut reader = BufReader::new(stream);
+                let mut status_line = String::new();
+                let n = reader.read_line(&mut status_line)
+                    .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
+                if n == 0 {
+                    return Err(Error::Network("EOF before CONNECT status line".to_owned()));
+                }
+
+                if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
+                    return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
+                }
+
+                // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line)
+                        .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
+                    if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
+                        break;
+                    }
+                }
+
+                // Теперь stream находится над HTTP-туннелем. Устанавливаем TLS.
+                let tunnel_stream = reader.into_inner();
+
+                // RawStream::Plain содержит TcpStream внутри.
+                let tcp = match tunnel_stream {
+                    RawStream::Plain(t) => t,
+                    _ => return Err(Error::Network("unexpected tunnel stream type".to_owned())),
+                };
+
+                let server_name = ServerName::try_from(host.to_owned())
+                    .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+
+                let tls_config = tls_config_for_profile(tls_profile);
+                let mut tls_conn = ClientConnection::new(tls_config, server_name)
+                    .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+                let mut tcp_copy = tcp;
+                tls_conn.complete_io(&mut tcp_copy)
+                    .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
+
+                let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
+                let cert_info = cert_info_from_completed_handshake(&tls_conn);
+
+                conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
+                conn.is_h2 = is_h2;
+                conn.cert_info = cert_info;
+            }
+        }
+
+        // HTTP/2: hand the fresh connection to a multiplexer and share it via
+        // the pool (the reservation's waiters are parked on exactly this),
+        // then send on it through the same resending path as a pooled one.
+        if conn.is_h2 {
+            let cert_info = conn.cert_info.clone();
+            let h2 = h2::conn::H2Conn::connect_with_profile(conn.into_stream(), http_profile)?;
+            let mux = h2::mux::H2Mux::spawn(h2, cert_info)?;
+            opened = Some(match (reservation.take(), h2_pool) {
+                (Some(r), _) => r.fulfill(mux),
+                (None, Some(h2p)) => h2p.offer(&key, mux),
+                (None, None) => Arc::new(mux),
+            });
+            continue;
+        }
         if let Some(r) = reservation.take() {
             r.mark_http1();
         }
-        match do_request(
-            pooled,
-            method,
-            request_host_header,
-            request_path,
-            range,
-            if_range,
-            authorization,
-            accept_encoding,
-            extra_headers,
-            http_profile,
-            stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
-            body,
-        ) {
-            Ok((resp, conn)) => {
-                if !conn.closed {
-                    pool.release(key, conn);
-                }
-                return Ok(resp);
-            }
-            Err(e) if is_stale_error(&e) => {
-                // Сервер успел закрыть idle-соединение — pooled умер. Дальше
-                // упадём на ветку «новый connect»; pooled уже не возвращается.
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
-
-    // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
-    #[allow(clippy::collapsible_if)]
-    if let Some(proxy) = effective_proxy {
-        if is_tls {
-            // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту через прокси.
-            let mut stream = conn.into_stream();
-            let connect_request = format!(
-                "CONNECT {host}:{port} HTTP/1.1\r\n\
-                Host: {host}:{port}\r\n\
-                Connection: keep-alive\r\n"
-            );
-            let auth_header = if let Some(auth) = &proxy.auth {
-                format!("Proxy-Authorization: Basic {auth}\r\n")
-            } else {
-                String::new()
-            };
-            let full_request = format!("{}{}\r\n", connect_request, auth_header);
-
-            stream.write_all(full_request.as_bytes())
-                .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
-            stream.flush()
-                .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
-
-            // Читаем ответ на CONNECT (должен быть 200 OK).
-            let mut reader = BufReader::new(stream);
-            let mut status_line = String::new();
-            let n = reader.read_line(&mut status_line)
-                .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
-            if n == 0 {
-                return Err(Error::Network("EOF before CONNECT status line".to_owned()));
-            }
-
-            if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
-                return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
-            }
-
-            // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
-            loop {
-                let mut line = String::new();
-                let n = reader.read_line(&mut line)
-                    .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
-                if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
-                    break;
-                }
-            }
-
-            // Теперь stream находится над HTTP-туннелем. Устанавливаем TLS.
-            let tunnel_stream = reader.into_inner();
-
-            // RawStream::Plain содержит TcpStream внутри.
-            let tcp = match tunnel_stream {
-                RawStream::Plain(t) => t,
-                _ => return Err(Error::Network("unexpected tunnel stream type".to_owned())),
-            };
-
-            let server_name = ServerName::try_from(host.to_owned())
-                .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
-
-            let tls_config = tls_config_for_profile(tls_profile);
-            let mut tls_conn = ClientConnection::new(tls_config, server_name)
-                .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
-
-            let mut tcp_copy = tcp;
-            tls_conn.complete_io(&mut tcp_copy)
-                .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
-
-            let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
-            let cert_info = cert_info_from_completed_handshake(&tls_conn);
-
-            conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
-            conn.is_h2 = is_h2;
-            conn.cert_info = cert_info;
-        }
-    }
-
-    // HTTP/2: hand the fresh connection to a multiplexer and share it via
-    // the pool (the reservation's waiters are parked on exactly this).
-    if conn.is_h2 {
-        let cert_info = conn.cert_info.clone();
-        let h2 = h2::conn::H2Conn::connect_with_profile(conn.into_stream(), http_profile)?;
-        let mux = h2::mux::H2Mux::spawn(h2, cert_info)?;
-        let mux = match (reservation.take(), h2_pool) {
-            (Some(r), _) => r.fulfill(mux),
-            (None, Some(h2p)) => h2p.offer(&key, mux),
-            (None, None) => Arc::new(mux),
-        };
-        return match h2_mux_request(&mux, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
-            Ok(resp) => Ok(resp),
-            // Same routing fallback as the pooled branch: a body that doesn't fit
-            // the peer's send window goes over HTTP/1.1 instead.
-            Err(e) if is_h2_body_window_error(&e.error) => fetch_single_h1_only(
-                pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
-                request_host_header, request_path, range, if_range, authorization,
-                accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
-            ),
-            Err(e) => Err(e.error),
-        };
-    }
-    if let Some(r) = reservation.take() {
-        r.mark_http1();
-    }
+        break conn;
+    };
 
     // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
     // SOCKS5 туннелирует до реального хоста, поэтому relative path.
