@@ -11,7 +11,7 @@
 //! `V8JsRuntime::pump_workers()`, which delivers messages to the matching
 //! `Worker` instance in JS via `_lumen_deliver_worker_messages(msgs)`.
 //!
-//! **importScripts():** supported for `data:` and `blob:lumen/` URLs via
+//! **importScripts():** supported for `data:` and `blob:` URLs via
 //! `WorkerBlobStore` — a Rust-side `Arc<Mutex<HashMap<String, String>>>` that
 //! mirrors text blobs registered by `URL.createObjectURL()` on the main thread.
 //! The WORKER_SHIM wraps `URL.createObjectURL` to populate this store for any
@@ -104,7 +104,7 @@ pub type WorkerMessageQueue = Arc<Mutex<Vec<(u32, String)>>>;
 ///
 /// Populated on the main thread via `_lumen_register_worker_blob(url, text)`
 /// whenever `URL.createObjectURL` is called with a text/javascript Blob.
-/// Worker threads read this store to implement `importScripts('blob:lumen/…')`.
+/// Worker threads read this store to implement `importScripts('blob:…')`.
 pub type WorkerBlobStore = Arc<Mutex<HashMap<String, String>>>;
 
 /// Outbound port-message queue: messages posted by a `MessagePort` living
@@ -337,10 +337,11 @@ fn percent_decode(s: &str) -> String {
 ///
 /// Supported schemes:
 /// - `data:[type][;base64],<content>` — decoded inline; no network required.
-/// - `blob:lumen/<id>` — looked up in `blob_store`.
+/// - `blob:<origin>/<uuid>` — looked up in `blob_store` by the URL without
+///   its fragment (File API §8.3 «resolve a blob URL»).
 /// - anything else — a synchronous GET via `fetch_provider` (BUG-778's
 ///   WPT-RUN-6 extension: `importScripts()` previously only worked for
-///   `data:`/`blob:lumen/`, but the wrapper wptrunner builds for every
+///   `data:`/`blob:`, but the wrapper wptrunner builds for every
 ///   `.worker.html`/`.any.worker.html`/`.any.sharedworker.html` test opens
 ///   with `importScripts("/resources/testharness.js")`). `url` is expected
 ///   pre-resolved to absolute by the calling JS shim (`_lumen_worker_base_url`
@@ -364,8 +365,9 @@ pub(crate) fn resolve_import_url(
         } else {
             Some(percent_decode(content))
         }
-    } else if url.starts_with("blob:lumen/") {
-        blob_store.lock().unwrap().get(url).cloned()
+    } else if url.starts_with("blob:") {
+        let key = url.split('#').next().unwrap_or(url);
+        blob_store.lock().unwrap().get(key).cloned()
     } else {
         fetch_worker_script(fetch_provider, url).map(|(body, _final_url)| body)
     }
@@ -872,7 +874,7 @@ fn worker_global_shim(worker_id: u32) -> String {
 
   // importScripts(url1[, url2, …]) — WHATWG Web Workers §4.2.3.
   // Synchronously loads and evaluates one or more scripts. `data:`/
-  // `blob:lumen/` resolve locally; anything else is resolved against the
+  // `blob:` resolve locally; anything else is resolved against the
   // worker's own script URL (`_lumen_worker_base_url`, set at worker
   // creation — empty for a blob:/data: worker) and fetched over the network
   // (BUG-778 — previously only data:/blob: worked at all, and an http(s) URL
@@ -1043,7 +1045,7 @@ pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
 ///   (native bindings installed by `install_worker_bindings_v8` above).
 /// - `_lumen_register_worker_blob` (native binding installed above — mirrors
 ///   text blobs into `WorkerBlobStore` so `importScripts` can load them).
-/// - `_object_url_store` (defined in WEB_API_SHIM for blob: URL resolution).
+/// - `_lumen_blob_url_entry` (defined in WEB_API_SHIM for blob: URL resolution).
 /// - `TextDecoder` (defined in WEB_API_SHIM for UTF-8 decoding of blob bytes).
 /// - `atob` (defined in WEB_API_SHIM for data: URLs with base64 encoding).
 #[cfg(feature = "v8-backend")]
@@ -1138,9 +1140,9 @@ const WORKER_SHIM: &str = r#"(function() {
     // is empty, as before.
     var scriptUrl = u;
 
-    if (u.startsWith('blob:lumen/')) {
+    if (u.startsWith('blob:')) {
       // Blob URL created via URL.createObjectURL(blob).
-      var blob = (typeof _object_url_store !== 'undefined') ? _object_url_store[u] : null;
+      var blob = (typeof _lumen_blob_url_entry === 'function') ? _lumen_blob_url_entry(u) : null;
       if (blob && blob._bytes) {
         // Decode UTF-8 bytes stored in the Blob.
         try {
@@ -1445,7 +1447,7 @@ const WORKER_SHIM: &str = r#"(function() {
 /// `Worker` JS class into `rt`.
 ///
 /// Must be called after the core DOM shim so that `TextDecoder` and
-/// `_object_url_store` are available for blob-URL resolution in the constructor.
+/// `_lumen_blob_url_entry` are available for blob-URL resolution in the constructor.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]  // BUG-868 GAP-WORKERSCOPE срез 2 added port_queue
@@ -1691,7 +1693,7 @@ fn install_worker_constructor_v8(
 }
 
 /// GAP-CSPENF срез 28: would `provider`'s `worker-src`/`default-src` policy
-/// refuse `url` as an `importScripts()` target? `data:`/`blob:lumen/` URLs
+/// refuse `url` as an `importScripts()` target? `data:`/`blob:` URLs
 /// never reach the network in [`resolve_import_url`], so they need no gate —
 /// CSP source-list matching does not apply to them anyway (CSP3 §6.6.2.1
 /// treats `data:`/`blob:` as always non-matching hosts, but here it is
@@ -1703,7 +1705,7 @@ pub(crate) fn import_scripts_csp_blocked(
     provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
     url: &str,
 ) -> bool {
-    !(url.starts_with("data:") || url.starts_with("blob:lumen/"))
+    !(url.starts_with("data:") || url.starts_with("blob:"))
         && provider.is_some_and(|p| p.check_worker_src(url).is_err())
 }
 
@@ -2265,7 +2267,7 @@ fn install_worker_globals_v8(
     // every subsequent `importScripts(url)` call inside an already-running
     // worker to reach the network unchecked (through the plain
     // `fetch_worker_script` branch of [`resolve_import_url`]). `data:`/
-    // `blob:lumen/` URLs bypass the check — they never touch the network in
+    // `blob:` URLs bypass the check — they never touch the network in
     // [`resolve_import_url`] either, so there is nothing for CSP to gate.
     // No `securitypolicyviolation` dispatch here: unlike the constructor
     // path (which runs on the parent's own JS runtime and already had a
@@ -2488,8 +2490,10 @@ mod tests {
     #[test]
     fn resolve_blob_url_from_store() {
         let store = make_store();
-        store.lock().unwrap().insert("blob:lumen/42".to_string(), "var x = 1;".to_string());
-        assert_eq!(resolve_import_url("blob:lumen/42", &store, None).unwrap(), "var x = 1;");
+        store.lock().unwrap().insert("blob:null/42".to_string(), "var x = 1;".to_string());
+        assert_eq!(resolve_import_url("blob:null/42", &store, None).unwrap(), "var x = 1;");
+        // File API §8.3: the fragment takes no part in the lookup.
+        assert_eq!(resolve_import_url("blob:null/42#f", &store, None).unwrap(), "var x = 1;");
     }
 
     #[test]
@@ -3196,7 +3200,7 @@ mod tests_v8 {
         // Pre-populate the blob store as the main thread would via createObjectURL.
         let store = make_store();
         store.lock().unwrap().insert(
-            "blob:lumen/helper".to_string(),
+            "blob:null/helper".to_string(),
             "function mul(a,b){return a*b;}".to_string(),
         );
 
@@ -3204,7 +3208,7 @@ mod tests_v8 {
         let nid = Arc::new(Mutex::new(0u32));
 
         let script =
-            "importScripts('blob:lumen/helper');\
+            "importScripts('blob:null/helper');\
              onmessage = function(e) { postMessage(mul(e.data, 3)); };"
                 .to_string();
 
@@ -3249,7 +3253,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let store = make_store();
         store.lock().unwrap().insert(
-            "blob:lumen/1".to_string(),
+            "blob:null/1".to_string(),
             "globalThis._ms1 = 10;".to_string(),
         );
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
@@ -3258,7 +3262,7 @@ mod tests_v8 {
 
         rt.eval(
             "importScripts(\
-               'blob:lumen/1',\
+               'blob:null/1',\
                'data:text/javascript,globalThis._ms2 = 20;'\
              )"
         ).unwrap();
@@ -3618,13 +3622,13 @@ mod tests_v8 {
         );
     }
 
-    /// `data:`/`blob:lumen/` targets never touch the network, so
+    /// `data:`/`blob:null/` targets never touch the network, so
     /// [`import_scripts_csp_blocked`] must not gate them even when the
     /// provider refuses every URL unconditionally.
     #[test]
     fn import_scripts_csp_blocked_skips_data_and_blob_urls() {
         assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "data:text/javascript,1"));
-        assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "blob:lumen/abc"));
+        assert!(!import_scripts_csp_blocked(Some(&CspBlockedImportNet), "blob:null/abc"));
         assert!(import_scripts_csp_blocked(Some(&CspBlockedImportNet), "https://blocked.example/lib.js"));
     }
 
@@ -3751,7 +3755,7 @@ mod tests_v8 {
     #[test]
     fn v8_data_url_worker_keeps_its_href_but_has_no_base() {
         assert_eq!(worker_base_url("data:text/javascript,1"), "");
-        assert_eq!(worker_base_url("blob:lumen/7"), "");
+        assert_eq!(worker_base_url("blob:null/7"), "");
         assert_eq!(worker_base_url("https://example.test/w.js"), "https://example.test/w.js");
 
         let rt = V8JsRuntime::new().unwrap();

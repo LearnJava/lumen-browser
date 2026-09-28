@@ -199,6 +199,15 @@ impl Url {
         }
     }
 
+    /// ASCII serialization of the URL Standard origin (HTML LS §7.1.1
+    /// «serialization of an origin»): `scheme://host[:port]` for a tuple
+    /// origin, `null` for an opaque one. For `blob:` this is the origin of
+    /// the URL in its path (BUG-1197) — [`Url::origin`] would give the empty
+    /// string, since a blob: URL has no authority of its own.
+    pub fn origin_serialization(&self) -> String {
+        self.inner.origin().ascii_serialization()
+    }
+
     /// Full serialization per the WHATWG URL Standard (`inner.as_str()`,
     /// ASCII/IDNA host) — as opposed to [`Url::as_str`]/[`Display`], which
     /// splice the raw Unicode host back in for the address bar (module doc).

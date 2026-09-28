@@ -481,8 +481,8 @@
   // Both are matched on the *raw* attribute, before base resolution: neither is
   // a URL `_url_resolve` has any business rewriting.
   function readTrackBody(url) {
-    if (url.indexOf('blob:lumen/') === 0) {
-      var blob = (typeof _object_url_store !== 'undefined') ? _object_url_store[url] : null;
+    if (url.indexOf('blob:') === 0) {
+      var blob = (typeof _lumen_blob_url_entry === 'function') ? _lumen_blob_url_entry(url) : null;
       if (!blob || !blob._bytes) return Promise.reject(new Error('object URL is not registered'));
       try { return Promise.resolve(new TextDecoder().decode(new Uint8Array(blob._bytes))); }
       catch (e) { return Promise.reject(e); }

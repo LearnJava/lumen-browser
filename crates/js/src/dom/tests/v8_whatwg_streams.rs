@@ -1208,7 +1208,7 @@ fn fetch_blob_url_reads_the_blob_without_the_network() {
     let capture = CaptureFetch::new();
     let rt = v8_runtime_with_fetch(Arc::clone(&capture));
     rt.eval(
-        "var out = null;          var u = URL.createObjectURL(new Blob(['window.__blobRan = 42;'], {type: 'text/javascript'}));          fetch(u + '#frag').then(function(r) {              out = [r.status, r.statusText, r.url, r.headers.get('content-type'), r.headers.get('content-length')];              return r.text();          }).then(function(t) { out.push(t); });",
+        "var out = null;          var u = URL.createObjectURL(new Blob(['window.__blobRan = 42;'], {type: 'text/javascript'}));          fetch(u + '#frag').then(function(r) {              out = [r.status, r.statusText, r.url === u + '#frag', r.headers.get('content-type'), r.headers.get('content-length')];              return r.text();          }).then(function(t) { out.push(t); });",
     )
     .unwrap();
     rt.settle_pending_fetches(std::time::Duration::from_secs(5));
@@ -1216,7 +1216,7 @@ fn fetch_blob_url_reads_the_blob_without_the_network() {
     assert_eq!(
         r,
         lumen_core::JsValue::String(
-            r#"[200,"OK","blob:lumen/1#frag","text/javascript","22","window.__blobRan = 42;"]"#.into()
+            r#"[200,"OK",true,"text/javascript","22","window.__blobRan = 42;"]"#.into()
         )
     );
     assert!(capture.calls.lock().unwrap().is_empty(), "blob: must not reach the network provider");
@@ -1306,7 +1306,7 @@ fn xhr_blob_url_loads_in_sync_and_async_mode() {
     let capture = CaptureFetch::new();
     let rt = v8_runtime_with_fetch(Arc::clone(&capture));
     rt.eval(
-        "var u = URL.createObjectURL(new Blob(['{\"a\":1}'], {type: 'application/json'}));          var s = new XMLHttpRequest(); s.open('GET', u, false); s.send();          var syncOut = [s.status, s.responseText, s.getResponseHeader('content-type')];          var asyncOut = null;          var x = new XMLHttpRequest(); x.open('GET', u); x.responseType = 'json';          x.onload = function() { asyncOut = [x.status, x.response.a, x.responseURL]; };          x.send();          var bad = null;          var y = new XMLHttpRequest(); y.open('GET', 'blob:lumen/999');          y.onerror = function() { bad = 'error'; }; y.send();",
+        "var u = URL.createObjectURL(new Blob(['{\"a\":1}'], {type: 'application/json'}));          var s = new XMLHttpRequest(); s.open('GET', u, false); s.send();          var syncOut = [s.status, s.responseText, s.getResponseHeader('content-type')];          var asyncOut = null;          var x = new XMLHttpRequest(); x.open('GET', u); x.responseType = 'json';          x.onload = function() { asyncOut = [x.status, x.response.a, x.responseURL === u]; };          x.send();          var bad = null;          var y = new XMLHttpRequest(); y.open('GET', 'blob:null/00000000-0000-4000-8000-000000000000');          y.onerror = function() { bad = 'error'; }; y.send();",
     )
     .unwrap();
     for _ in 0..50 {
@@ -1320,7 +1320,7 @@ fn xhr_blob_url_loads_in_sync_and_async_mode() {
     assert_eq!(
         r,
         lumen_core::JsValue::String(
-            r#"[[200,"{\"a\":1}","application/json"],[200,1,"blob:lumen/1"],"error"]"#.into()
+            r#"[[200,"{\"a\":1}","application/json"],[200,1,true],"error"]"#.into()
         )
     );
     assert!(capture.calls.lock().unwrap().is_empty(), "blob: must not reach the network provider");

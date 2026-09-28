@@ -679,7 +679,7 @@ fn install_sw_globals_v8(
     // `importScripts` (this file, not `worker.rs`) unnarrowed — its
     // constructor was never in scope for срез 13 either, so the whole call
     // path had no precheck at all. Reuses `worker::import_scripts_csp_blocked`
-    // rather than re-deriving the `data:`/`blob:lumen/` skip logic — same
+    // rather than re-deriving the `data:`/`blob:` skip logic — same
     // I/O-free precheck shape, different runtime.
     {
         let provider = fetch_provider.clone();

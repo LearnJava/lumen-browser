@@ -316,7 +316,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // matches the dedicated worker's own resolution — `data:` inline, and
   // anything else resolved against the worker's own script URL
   // (`_lumen_worker_base_url`, empty for a blob:/data: worker) and fetched
-  // over the network. `blob:lumen/` still fails — see
+  // over the network. `blob:` still fails — see
   // `install_shared_worker_globals_v8`'s doc comment on why.
   globalThis.importScripts = function() {
     // HTML LS §10.2.3: unavailable in a module worker, unconditionally and
@@ -368,7 +368,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
 /// Main-thread `SharedWorker` class shim (evaluated in the page JS context).
 ///
 /// Depends on the `_lumen_sw_connect` / `_lumen_sw_post` / `_lumen_sw_close`
-/// native bindings, plus `_object_url_store` / `TextDecoder` / `atob` from the
+/// native bindings, plus `_lumen_blob_url_entry` / `TextDecoder` / `atob` from the
 /// core DOM shim for blob-/data-URL script resolution.
 #[cfg(feature = "v8-backend")]
 const SHARED_WORKER_SHIM: &str = r#"(function() {
@@ -384,8 +384,8 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   // `fetch()`/`XMLHttpRequest` resolve a relative target against (BUG-778).
   function _resolveScript(url) {
     var u = String(url || '');
-    if (u.startsWith('blob:lumen/')) {
-      var blob = (typeof _object_url_store !== 'undefined') ? _object_url_store[u] : null;
+    if (u.startsWith('blob:')) {
+      var blob = (typeof _lumen_blob_url_entry === 'function') ? _lumen_blob_url_entry(u) : null;
       if (blob && blob._bytes) {
         try { return { script: new TextDecoder().decode(blob._bytes), url: u }; }
         catch(e) { return { script: '', url: u }; }
@@ -681,7 +681,7 @@ fn close_shared_worker_port_v8(key: &str, port_id: u32) {
 /// native bindings and the `SharedWorker` JS class into a V8 context.
 ///
 /// Must be called after the core DOM shim so that `TextDecoder`,
-/// `_object_url_store`, and `atob` are available for blob-/data-URL
+/// `_lumen_blob_url_entry`, and `atob` are available for blob-/data-URL
 /// resolution in the constructor.  `outbox` is this runtime's outbound queue;
 /// `errors` is this runtime's shared-worker uncaught-exception queue
 /// (BUG-591), drained by [`crate::v8_runtime::V8JsRuntime::pump_shared_workers`].
@@ -1039,7 +1039,7 @@ fn broadcast_shared_worker_error(
 /// client-visible error report is [`run_shared_worker_thread_v8`]'s top-level
 /// parse/load-failure branch, which writes into `error_ports` directly.
 ///
-/// `importScripts('blob:lumen/…')` is not supported here (`None` is passed as
+/// `importScripts('blob:…')` is not supported here (`None` is passed as
 /// the blob store — always empty): unlike a dedicated [`crate::worker`], a
 /// shared worker has no per-instance blob mirroring from the connecting
 /// page's `_object_url_store`. `data:`/`http(s):` targets — the shape that
@@ -1087,7 +1087,7 @@ fn install_shared_worker_globals_v8(
     let net_provider = fetch_provider.clone();
 
     // _lumen_import_scripts_resolve(url) → String | undefined — BUG-778, see
-    // this function's own doc comment on the `blob:lumen/` limitation.
+    // this function's own doc comment on the `blob:` limitation.
     //
     // GAP-CSPENF срез 28: same `worker-src`/`default-src` gate that
     // `worker.rs`'s twin registration now applies — a `SharedWorker` shares
