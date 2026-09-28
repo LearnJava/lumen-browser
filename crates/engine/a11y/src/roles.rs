@@ -10,7 +10,7 @@
 //! mapping and are only reachable via an explicit `role="doc-*"` attribute.
 
 use serde::{Deserialize, Serialize};
-use lumen_dom::{InputType, Node};
+use lumen_dom::{Document, InputType, Namespace, Node, NodeId};
 
 /// All WAI-ARIA 1.2 roles plus the Graphics ARIA Module extension roles.
 ///
@@ -529,12 +529,17 @@ impl AXRole {
     }
 }
 
-/// Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5.
+/// Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5, or
+/// SVG-AAM §6.2 for elements in the SVG namespace.
 ///
 /// Returns `AXRole::Generic` for elements with no meaningful semantic role
 /// (e.g., `<div>`, `<span>`). Returns `AXRole::Generic` for non-element nodes.
-pub fn implicit_role(node: &Node) -> AXRole {
+pub fn implicit_role(doc: &Document, node_id: NodeId) -> AXRole {
+    let node = doc.get(node_id);
     let name = match node.element_name() {
+        // SVG `a`/`image`/`title`/`script` share local names with HTML tags but
+        // map differently, so the namespace is dispatched first (BUG-686).
+        Some(n) if n.namespace == Namespace::Svg => return svg_implicit_role(doc, node_id, &n.local),
         Some(n) => n.local.as_str(),
         None => return AXRole::Generic,
     };
@@ -629,6 +634,55 @@ pub fn implicit_role(node: &Node) -> AXRole {
         // ── No meaningful role ────────────────────────────────────────────────
         _ => AXRole::Generic,
     }
+}
+
+/// SVG-AAM 1.0 §6.2 "Element Mapping" for elements in the SVG namespace.
+///
+/// Grouping elements and basic shapes are exposed only when §5.1.2 "Including
+/// Elements" applies (see [`svg_is_included`]); otherwise they stay `Generic`,
+/// which the WPT `svg-aam/role/roles-generic.html` expectation accepts.
+/// `text`/`tspan`/`textPath`/`symbol` are deliberately left `Generic`: their
+/// mapping is still an open spec issue (WPT marks them "blocked").
+fn svg_implicit_role(doc: &Document, node_id: NodeId, local: &str) -> AXRole {
+    let node = doc.get(node_id);
+    match local {
+        "svg" => AXRole::GraphicsDocument,
+        // Unlike HTML, an SVG `a` without a link target is a group, not generic;
+        // SVG 1.1 content still uses the XLink form of the attribute.
+        "a" => {
+            if node.get_attr("href").is_some() || node.get_attr("xlink:href").is_some() {
+                AXRole::Link
+            } else {
+                AXRole::Group
+            }
+        }
+        "image" | "mesh" => AXRole::Img,
+        "g" | "foreignObject" if svg_is_included(doc, node_id) => AXRole::Group,
+        "use" if svg_is_included(doc, node_id) => AXRole::GraphicsObject,
+        "circle" | "ellipse" | "line" | "path" | "polygon" | "polyline" | "rect"
+            if svg_is_included(doc, node_id) =>
+        {
+            AXRole::GraphicsSymbol
+        }
+        _ => AXRole::Generic,
+    }
+}
+
+/// SVG-AAM 1.0 §5.1.2: an otherwise role-less SVG element enters the tree when
+/// it carries a label, a description or focusability — `aria-label`,
+/// `aria-labelledby`, `aria-describedby`, `tabindex`, or a direct `<title>`/
+/// `<desc>` child with non-empty text.
+fn svg_is_included(doc: &Document, node_id: NodeId) -> bool {
+    let node = doc.get(node_id);
+    let has_attr = ["aria-label", "aria-labelledby", "aria-describedby", "tabindex"]
+        .iter()
+        .any(|attr| node.get_attr(attr).is_some_and(|v| !v.trim().is_empty()));
+    has_attr
+        || node.children.iter().any(|&child_id| {
+            doc.get(child_id).element_name().is_some_and(|n| {
+                n.namespace == Namespace::Svg && matches!(n.local.as_str(), "title" | "desc")
+            }) && !crate::names::collect_text_content(doc, child_id).is_empty()
+        })
 }
 
 fn input_role(node: &Node) -> AXRole {

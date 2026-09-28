@@ -234,7 +234,7 @@ fn find_element_by_id(doc: &Document, target_id: &str) -> Option<NodeId> {
 
 /// Return innerText equivalent: concatenate all Text nodes under `node_id`,
 /// collapsing whitespace runs to a single space.
-fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
+pub(crate) fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
     let mut buf = String::new();
     collect_text_recursive(doc, node_id, &mut buf);
     // Collapse runs of whitespace into a single space, trim edges.

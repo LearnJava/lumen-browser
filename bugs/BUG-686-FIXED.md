@@ -1,6 +1,6 @@
 # BUG-686 — `implicit_role` не знает ни одного SVG-тега, `<svg>`/`<circle>`/… откатываются к Generic
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3, ветка `p3-bug686-svg-roles`)
 **Компонент:** a11y (`crates/engine/a11y/src/roles.rs::implicit_role`)
 **Найден:** P2, WPT-VENDOR-svg-aam (2026-08-06), прогон не дал сигнала —
 находка получена прямой пробой на движке (Rust-тест на `build_ax_tree`), не прогоном
@@ -69,6 +69,31 @@ SVG-AAM по одному только тегу (`<svg>` → `graphics-document`
    `/wai-aria/scripts/aria-utils.js` (`WPT-VENDOR-wai-aria`, ROADMAP.md:560) —
    чинить implicit-роль можно независимо от этой задачи, verify-петля пока
    только через прямой Rust-тест на `build_ax_tree`.
+
+## Фикс (2026-09-28)
+
+`implicit_role` теперь принимает `(doc, node_id)` и диспетчеризует по
+namespace до локального имени: SVG-элементы уходят в `svg_implicit_role`
+(`roles.rs`) по таблице SVG-AAM §6.2 — `svg` → `GraphicsDocument`, `a` с
+`href`/`xlink:href` → `Link`, без цели → `Group`, `image`/`mesh` → `Img`.
+`g`/`foreignObject` → `Group`, `use` → `GraphicsObject`, базовые фигуры
+(`circle`/`ellipse`/`line`/`path`/`polygon`/`polyline`/`rect`) →
+`GraphicsSymbol` — только если элемент включён по §5.1.2 (`svg_is_included`:
+`aria-label`/`-labelledby`/`-describedby`, `tabindex` или прямой SVG-потомок
+`<title>`/`<desc>` с непустым текстом); иначе `Generic`, что принимает
+ожидание `ex-generic` в `roles-generic.html`. Контекстного варианта
+«`<svg>` → img/group» из раздела «Что нужно сделать» спека не задаёт:
+§6.2 отображает `svg` всегда в `graphics-document`.
+
+Оставлены `Generic` намеренно: `text`/`tspan`/`textPath`/`symbol` — маппинг
+в спеке открыт (WPT помечает их «blocked»). Ловушка, найденная тестом:
+`<title>` внутри `<foreignObject>` парсер (корректно) кладёт в HTML
+namespace — это HTML integration point, поэтому он не включает
+`foreignObject`; учитываются только SVG-`<title>`/`<desc>`.
+
+Регрессия — 5 тестов `svg_*` в `crates/engine/a11y/tests/cases/ax_tree.rs`
+(в т.ч. проба из отчёта: `<svg><circle/></svg>`). WPT `svg-aam` по-прежнему
+сигнала не даёт до довендоривания `aria-utils.js` (`WPT-VENDOR-wai-aria`).
 
 ## Связанные
 
