@@ -1,6 +1,6 @@
 # BUG-689 — `Attr` node subsystem entirely absent: `Element.attributes`, `document.createAttribute(NS)`, `Element.getAttributeNode(NS)`/`setAttributeNode(NS)` all missing
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3, ветка `p3-bug689-create-attribute`)
 **Компонент:** js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — `_lumen_build_element` for the `Element`
 side, `_lumen_build_document`-style factory functions for the `Document` side)
 **Найден:** 2026-08-09 (P2), WPT-VENDOR-trusted-types
@@ -81,3 +81,52 @@ Since the underlying storage has no notion of an `Attr` identity separate from t
 pair, the honest implementation is "materialize an `Attr`-shaped wrapper on demand" rather than a
 truly live node graph — matches the existing `*NS` precedent (BUG-309: "namespace argument is
 accepted but ignored").
+
+## Исправление (2026-09-28, P3)
+
+К моменту починки `Element.attributes`, `getAttributeNode(NS)`/`setAttributeNode(NS)`
+уже существовали (BUG-732), но как обёртки на одно обращение: каждый доступ создавал
+новый `Attr`, `setAttributeNode` возвращал «живой» старый `Attr`, показывающий новое
+значение, а `document.createAttribute(NS)` не было вовсе. Всё в
+`crates/js/src/shim/web_api_shim_mid.js`:
+
+- **`Attr`** — состояние в `WeakMap` `_lumen_attr_state` (`nid` владельца или `null`,
+  qualified name, namespace, снимок значения), аксессоры на `Attr.prototype`. Пока
+  элемент несёт атрибут, чтение идёт в него; после удаления объект хранит последнее
+  значение (снимок снимается при создании, при каждом чтении и перед
+  `removeAttribute`/`removeAttributeNS`/`toggleAttribute` через
+  `_lumen_attr_note_removal`). `localName`/`prefix` делятся по двоеточию только у
+  атрибута с namespace (`setAttribute('pre:fix')` даёт локальное имя `pre:fix`).
+  Сеттер `value` у прикреплённого `Attr` идёт через `setAttribute(NS)` элемента, так
+  что Trusted Types, компиляция `on*` и CE-реакции применяются как обычно.
+- **`NamedNodeMap`** — методы на `NamedNodeMap.prototype` (состояние карты в
+  `_lumen_nnm_impl`), именованный атрибут не перекрывает ничего на цепочке прототипов
+  (WebIDL named property visibility: атрибуты `item`, `toString`); `Attr` кэшируются на
+  время жизни карты, так что `el.getAttributeNode('id') === el.attributes[0]`.
+  `setNamedItem(NS)` — DOM «set an attribute»: `InUseAttributeError` для чужого
+  `Attr`, замена по (namespace, local name), возврат отвязанного старого;
+  `removeAttributeNode` требует именно этот узел, иначе `NotFoundError`.
+- **`createAttribute`/`createAttributeNS`** на живом и detached-документах: имя по
+  ослабленной продукции DOM (без пробелов, NULL, `/`, `=`, `>`), нижний регистр в
+  HTML-документе, validate-and-extract с четырьмя проверками `NamespaceError`.
+- Попутно: `find_attr_by_namespace` (`crates/js/src/v8_runtime/dom_helpers.rs`) для
+  произвольного URI ищет по `Namespace::Other` — `setAttributeNS` хранит его с
+  GAP-XMLDOC среза 37, а поиск откатывался к полному имени и не находил `p:foo`;
+  `get/has/removeAttributeNS` принимали `undefined` от натива («не найдено») за имя;
+  «locate a namespace» отвечает на префиксы `xml`/`xmlns` сам;
+  `lookupNamespaceURI`/`lookupPrefix` сравнивают `xmlns:*` по полному имени, как раньше.
+
+Тесты — `crates/js/src/dom/tests/v8_bug689_attr_nodes.rs` (13).
+
+WPT (dev-release, `run_smoke.py`/`run_report.py`, база — тот же слот до правки):
+`dom/nodes/Document-createAttribute.html` 0→36/36, `attributes-namednodemap.html`
+5→8/8, `attributes.html` 26→43/67, `Node-lookupNamespaceURI.html` ERROR 51/70 → OK
+60/75. `trusted-types`, 16 файлов, трогающих Attr-API: 432→744/1192 сабтестов, их
+`.ini` переписаны ратчетом. 24 бывших PASS (SVG `<script href>` через Attr-путь)
+проходили только за счёт `TypeError` от отсутствующего `createAttributeNS` — реальная
+причина в таблице Trusted Types, [BUG-1213](BUG-1213-OPEN.md).
+
+Остаток `attributes.html` — не Attr-узлы: `setAttribute`/`toggleAttribute` не
+валидируют имя, «первый атрибут с таким именем» при дублях из разных namespace,
+регистр имён у HTML-элемента, `setAttributeNS` сливает атрибуты с одинаковым
+qualified name без учёта регистра (`set_attribute_ns`).

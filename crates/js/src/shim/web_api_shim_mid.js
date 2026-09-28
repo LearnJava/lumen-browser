@@ -3782,12 +3782,16 @@ function _lumen_locate_namespace(node, prefix) {
     if (!node) return null;
     switch (node.nodeType) {
         case 1: // Element
+            // The two prefixes bound by definition, whatever the attributes say.
+            if (prefix === 'xml') return 'http://www.w3.org/XML/1998/namespace';
+            if (prefix === 'xmlns') return 'http://www.w3.org/2000/xmlns/';
             if (node.namespaceURI !== null && node.prefix === prefix) return node.namespaceURI;
             var attrs = node.attributes;
             for (var i = 0; i < attrs.length; i++) {
+                // By qualified name: an HTML-parsed `xmlns:x` carries no
+                // namespace, so its `prefix`/`localName` do not split (BUG-689).
                 var a = attrs[i];
-                if (prefix !== null ? (a.prefix === 'xmlns' && a.localName === prefix)
-                                     : (a.prefix === null && a.localName === 'xmlns')) {
+                if (a.name === (prefix !== null ? 'xmlns:' + prefix : 'xmlns')) {
                     return a.value !== '' ? a.value : null;
                 }
             }
@@ -3811,7 +3815,7 @@ function _lumen_locate_prefix(node, ns) {
             var attrs = node.attributes;
             for (var i = 0; i < attrs.length; i++) {
                 var a = attrs[i];
-                if (a.prefix === 'xmlns' && a.value === ns) return a.localName;
+                if (a.name.slice(0, 6) === 'xmlns:' && a.value === ns) return a.name.slice(6);
             }
             return _lumen_locate_prefix(node.parentElement, ns);
         case 9: // Document
@@ -4735,6 +4739,13 @@ function _lumen_build_detached_document(proto, contentType) {
         var nid = _lumen_create_element_ns(ns === null || ns === undefined ? '' : String(ns), local);
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
         return _lumen_make_element(nid);
+    };
+    // BUG-689: the detached-document twins of the live `document`'s factories.
+    doc.createAttribute = function(localName) {
+        return _lumen_create_attribute_checked(contentType === 'text/html', localName, doc);
+    };
+    doc.createAttributeNS = function(ns, qualifiedName) {
+        return _lumen_create_attribute_ns_checked(ns, qualifiedName, doc);
     };
     doc.createTextNode = function(t) {
         var nid = _lumen_create_text_node(String(t));
@@ -6864,108 +6875,339 @@ function _lumen_ns_arg(ns) {
     return (ns === undefined || ns === null || ns === '') ? null : String(ns);
 }
 
-// A live `Attr` node over `nid`'s `name` attribute: reads and writes go
-// straight through to the element, so the object never holds a stale value.
-// `prefix`/`localName` still come from a textual split of the qualified name
-// (Lumen's attribute model has no separate prefix field) — but `namespaceURI`
-// now reads the real `Namespace` the parser/`setAttributeNS` tagged the
-// attribute with (GAP-XMLDOC срез 10, BUG-685, BUG-309), instead of being
-// hardcoded `null`. An attribute the parser never namespaces (plain `id`,
-// `class`, ...) still reports `null` — `_lumen_get_attr_namespace_uri`
-// returns `undefined` for those (`Namespace::Html` isn't a "real" namespace
-// for attributes, same asymmetry `Node.namespaceURI` doesn't have but
-// `Attr.namespaceURI` does per spec: only §13.2.6.5's eleven names get one).
-function _lumen_make_attr(nid, name) {
-    var colon = name.indexOf(':');
+// DOM §4.9.2 `Attr` (BUG-732, BUG-689). Lumen stores attributes as plain
+// (qualified name, value, namespace) triples on the element, with no node of
+// their own, so an `Attr` is a JS object whose internal state lives in
+// `_lumen_attr_state`: `nid` is the owning element (`null` while detached),
+// `name` the qualified name, `ns` the namespace a detached attribute was
+// created with, `value` the last value seen. While the element still carries
+// the attribute every read goes straight to it, so the object never holds a
+// stale value; once the attribute is removed the object keeps the value it had
+// — DOM §4.9 "remove an attribute" leaves the removed `Attr` intact, and
+// `setAttributeNode`'s return value is exactly such an object (before BUG-689
+// it stayed live and reported the value that had just replaced it).
+// `prefix`/`localName` come from a textual split of the qualified name
+// (Lumen's attribute model has no separate prefix field) — for a namespaced
+// attribute only: `setAttribute('pre:fix', …)` makes a no-namespace attribute
+// whose local name is the whole `pre:fix` (WPT `attributes.html`); `namespaceURI` of
+// an attached attribute reads the real `Namespace` the parser/`setAttributeNS`
+// tagged it with (GAP-XMLDOC срез 10, BUG-685, BUG-309). An attribute the
+// parser never namespaces (plain `id`, `class`, ...) reports `null` —
+// `_lumen_get_attr_namespace_uri` returns `undefined` for those
+// (`Namespace::Html` isn't a "real" namespace for attributes: only
+// §13.2.6.5's eleven names get one).
+var _lumen_attr_state = new WeakMap();
+
+function _lumen_new_attr(nid, name, ns, value, doc) {
     var attr = Object.create(Attr.prototype);
-    function value() {
-        var v = _lumen_u2n(_lumen_get_attr(nid, name));
-        return v !== null ? v : '';
-    }
-    function setValue(v) { _lumen_set_attr(nid, name, String(v)); }
-    Object.defineProperties(attr, {
-        name:         { get: function() { return name; }, enumerable: true, configurable: true },
-        nodeName:     { get: function() { return name; }, enumerable: true, configurable: true },
-        localName:    { get: function() { return colon >= 0 ? name.slice(colon + 1) : name; }, enumerable: true, configurable: true },
-        prefix:       { get: function() { return colon >= 0 ? name.slice(0, colon) : null; }, enumerable: true, configurable: true },
-        namespaceURI: { get: function() {
-            var uri = _lumen_get_attr_namespace_uri(nid, name);
-            return uri === undefined || uri === 'http://www.w3.org/1999/xhtml' ? null : uri;
-        }, enumerable: true, configurable: true },
-        nodeType:     { get: function() { return 2; }, enumerable: true, configurable: true },
-        // DOM §4.9.2: `specified` is a legacy getter that is always true.
-        specified:    { get: function() { return true; }, enumerable: true, configurable: true },
-        value:        { get: value, set: setValue, enumerable: true, configurable: true },
-        nodeValue:    { get: value, set: setValue, enumerable: true, configurable: true },
-        textContent:  { get: value, set: setValue, enumerable: true, configurable: true },
-        ownerElement: { get: function() { return _lumen_make_element(nid); }, enumerable: true, configurable: true },
-        ownerDocument: { get: function() { return document; }, enumerable: true, configurable: true },
-    });
+    var s = { nid: nid, name: name, ns: ns, value: value, doc: doc };
+    _lumen_attr_state.set(attr, s);
+    // Seed the snapshot, so an attribute removed before anyone read it through
+    // this object still reports the value it had.
+    if (nid !== null) _lumen_attr_value(s);
     return attr;
+}
+
+function _lumen_attr_st(attr) {
+    var s = _lumen_attr_state.get(attr);
+    if (!s) throw new TypeError('Illegal invocation');
+    return s;
+}
+
+// The element `s` is still an attribute of, or `null`: a removed attribute
+// (`removeAttribute`, or its element dropping it any other way) leaves the
+// `Attr` detached even though nobody told it.
+function _lumen_attr_owner_nid(s) {
+    return s.nid !== null && _lumen_get_attr(s.nid, s.name) !== undefined ? s.nid : null;
+}
+
+function _lumen_attr_value(s) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid !== null) s.value = _lumen_u2n(_lumen_get_attr(nid, s.name)) || '';
+    return s.value;
+}
+
+function _lumen_attr_namespace(s) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid === null) return s.ns;
+    var uri = _lumen_get_attr_namespace_uri(nid, s.name);
+    return uri === undefined || uri === 'http://www.w3.org/1999/xhtml' ? null : uri;
+}
+
+// Index of the prefix/local-name colon, or -1 for a no-namespace attribute.
+function _lumen_attr_colon(s) {
+    return _lumen_attr_namespace(s) === null ? -1 : s.name.indexOf(':');
+}
+
+// DOM §4.9 "set an existing attribute value": a detached `Attr` just keeps
+// the string; an attached one changes the element's attribute through the
+// element's own setter, so Trusted Types (TT §4.1 "get Trusted Types-compliant
+// attribute value"), `on*` handler compilation and custom-element reactions
+// apply exactly as for `setAttribute` (WPT `trusted-types` `Attr.value`/
+// `Node.nodeValue`/`Node.textContent` cases).
+function _lumen_attr_set_value(s, v) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid === null) {
+        s.value = String(v);
+        return;
+    }
+    // `value` is a DOMString: a Trusted Type is stringified before the TT
+    // check sees it, so it gets no pass here (unlike `setAttribute`'s own
+    // union-typed argument).
+    var str = String(v);
+    var ns = _lumen_attr_namespace(s);
+    var el = _lumen_make_element(nid);
+    if (ns === null) el.setAttribute(s.name, str);
+    else el.setAttributeNS(ns, s.name, str);
+    _lumen_attr_value(s);
+}
+
+// Snapshots the value and namespace, then cuts the tie to the element.
+function _lumen_attr_detach(s) {
+    var nid = _lumen_attr_owner_nid(s);
+    if (nid !== null) {
+        _lumen_attr_value(s);
+        s.ns = _lumen_attr_namespace(s);
+    }
+    s.nid = null;
+}
+
+(function() {
+    function accessor(get, set) {
+        return { get: get, set: set, enumerable: true, configurable: true };
+    }
+    function valueGet() { return _lumen_attr_value(_lumen_attr_st(this)); }
+    function valueSet(v) { _lumen_attr_set_value(_lumen_attr_st(this), v); }
+    Object.defineProperties(Attr.prototype, {
+        name:         accessor(function() { return _lumen_attr_st(this).name; }),
+        nodeName:     accessor(function() { return _lumen_attr_st(this).name; }),
+        localName:    accessor(function() {
+            var s = _lumen_attr_st(this), colon = _lumen_attr_colon(s);
+            return colon >= 0 ? s.name.slice(colon + 1) : s.name;
+        }),
+        prefix:       accessor(function() {
+            var s = _lumen_attr_st(this), colon = _lumen_attr_colon(s);
+            return colon >= 0 ? s.name.slice(0, colon) : null;
+        }),
+        namespaceURI: accessor(function() { return _lumen_attr_namespace(_lumen_attr_st(this)); }),
+        nodeType:     accessor(function() { _lumen_attr_st(this); return 2; }),
+        // DOM §4.9.2: `specified` is a legacy getter that is always true.
+        specified:    accessor(function() { _lumen_attr_st(this); return true; }),
+        value:        accessor(valueGet, valueSet),
+        nodeValue:    accessor(valueGet, valueSet),
+        textContent:  accessor(valueGet, valueSet),
+        ownerElement: accessor(function() {
+            var nid = _lumen_attr_owner_nid(_lumen_attr_st(this));
+            return nid === null ? null : _lumen_make_element(nid);
+        }),
+        ownerDocument: accessor(function() { return _lumen_attr_st(this).doc || document; }),
+    });
+})();
+
+// DOM §4.9 "valid attribute local name": non-empty, no ASCII whitespace,
+// NULL, `/`, `=` or `>` — the relaxed production that replaced the XML Name
+// check (whatwg/dom#1079); a namespace prefix is the same minus the `=` ban.
+var _LUMEN_ATTR_LOCAL_NAME_BAD = /[\t\n\f\r \u0000\/=>]/;
+var _LUMEN_NS_PREFIX_BAD = /[\t\n\f\r \u0000\/>]/;
+
+// DOM §4.5 `createAttribute(localName)` for any document flavour: lowercased
+// in an HTML document, like `createElement`.
+function _lumen_create_attribute_checked(isHtml, localName, doc) {
+    var name = String(localName);
+    if (name === '' || _LUMEN_ATTR_LOCAL_NAME_BAD.test(name)) {
+        throw new DOMException(
+            'createAttribute: not a valid attribute name: ' + name, 'InvalidCharacterError');
+    }
+    return _lumen_new_attr(null, isHtml ? name.toLowerCase() : name, null, '', doc);
+}
+
+// DOM §4.5 `createAttributeNS(namespace, qualifiedName)` — "validate and
+// extract" with the attribute rules, then the four namespace constraints.
+function _lumen_create_attribute_ns_checked(namespace, qualifiedName, doc) {
+    var XML_NS = 'http://www.w3.org/XML/1998/namespace';
+    var XMLNS_NS = 'http://www.w3.org/2000/xmlns/';
+    var ns = _lumen_ns_arg(namespace);
+    var qn = String(qualifiedName);
+    var colon = qn.indexOf(':');
+    var prefix = colon >= 0 ? qn.slice(0, colon) : null;
+    var local = colon >= 0 ? qn.slice(colon + 1) : qn;
+    if ((prefix !== null && (prefix === '' || _LUMEN_NS_PREFIX_BAD.test(prefix)))
+        || local === '' || _LUMEN_ATTR_LOCAL_NAME_BAD.test(local)) {
+        throw new DOMException(
+            'createAttributeNS: not a valid qualified name: ' + qn, 'InvalidCharacterError');
+    }
+    if ((prefix !== null && ns === null)
+        || (prefix === 'xml' && ns !== XML_NS)
+        || ((qn === 'xmlns' || prefix === 'xmlns') !== (ns === XMLNS_NS))) {
+        throw new DOMException(
+            'createAttributeNS: ' + qn + ' does not fit namespace ' + ns, 'NamespaceError');
+    }
+    return _lumen_new_attr(null, qn, ns, '', doc);
 }
 
 // Live `NamedNodeMap` over `nid`'s attributes: indices, `length`, `item()`,
 // `getNamedItem()`/`setNamedItem()`/`removeNamedItem()` and named access all
 // re-read `_lumen_get_attr_names` on every access, so the map tracks
 // `setAttribute`/`removeAttribute` without being rebuilt — the same Proxy
-// design `_lumen_make_nid_collection` uses for HTMLCollection.
+// design `_lumen_make_nid_collection` uses for HTMLCollection. `Attr` objects
+// are cached per qualified name for the map's (= the element wrapper's)
+// lifetime, so `el.getAttributeNode('id') === el.attributes[0]` holds and an
+// `Attr` passed to `setAttributeNode` is the one later handed back.
+//
+// The methods live on `NamedNodeMap.prototype` (WebIDL operations), reaching
+// the per-map state through `_lumen_nnm_impl`; a named attribute never
+// shadows them or anything else on the prototype chain — WebIDL's named
+// property visibility, which WPT `attributes-namednodemap.html` checks with
+// attributes called `item` and `toString` (BUG-689).
+var _lumen_nnm_impl = new WeakMap();
+
+function _lumen_nnm(map) {
+    var impl = _lumen_nnm_impl.get(map);
+    if (!impl) throw new TypeError('Illegal invocation');
+    return impl;
+}
+
+NamedNodeMap.prototype.item = function item(index) { return _lumen_nnm(this).item(index); };
+NamedNodeMap.prototype.getNamedItem = function getNamedItem(qualifiedName) {
+    return _lumen_nnm(this).byName(qualifiedName);
+};
+NamedNodeMap.prototype.getNamedItemNS = function getNamedItemNS(namespace, localName) {
+    return _lumen_nnm(this).byNs(namespace, localName);
+};
+NamedNodeMap.prototype.setNamedItem = function setNamedItem(attr) { return _lumen_nnm(this).set(attr); };
+NamedNodeMap.prototype.setNamedItemNS = function setNamedItemNS(attr) { return _lumen_nnm(this).set(attr); };
+NamedNodeMap.prototype.removeNamedItem = function removeNamedItem(qualifiedName) {
+    return _lumen_nnm(this).removeByName(qualifiedName);
+};
+NamedNodeMap.prototype.removeNamedItemNS = function removeNamedItemNS(namespace, localName) {
+    return _lumen_nnm(this).removeByNs(namespace, localName);
+};
+Object.defineProperty(NamedNodeMap.prototype, 'length', {
+    get: function() { return _lumen_nnm(this).names().length; },
+    enumerable: true, configurable: true,
+});
+
+// Called by the element's own `removeAttribute`/`removeAttributeNS`/
+// `toggleAttribute` before the attribute goes: the cached `Attr`, if any,
+// takes its value snapshot while the value is still there to read.
+function _lumen_attr_note_removal(el, name) {
+    var map = el.__attributes__;
+    if (map !== undefined) _lumen_nnm(map).forget(name);
+}
+
 function _lumen_make_named_node_map(nid) {
-    var proto = Object.create(NamedNodeMap.prototype);
+    var target = Object.create(NamedNodeMap.prototype);
+    var cache = Object.create(null);
     function names() { return _lumen_get_attr_names(nid); }
-    function at(list, i) { return i < list.length ? _lumen_make_attr(nid, list[i]) : null; }
-    var methods = {
+    function attrFor(name) {
+        var a = cache[name];
+        if (a === undefined || _lumen_attr_state.get(a).nid !== nid) {
+            a = _lumen_new_attr(nid, name, null, '', null);
+            cache[name] = a;
+        }
+        return a;
+    }
+    function at(list, i) { return i < list.length ? attrFor(list[i]) : null; }
+    function byName(n) {
+        var name = String(n);
+        if (_lumen_get_attr(nid, name) !== undefined) return attrFor(name);
+        delete cache[name];
+        return null;
+    }
+    function byNs(ns, n) {
+        var name = _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)));
+        return name === null ? null : attrFor(name);
+    }
+    function forget(name) {
+        var a = cache[name];
+        if (a !== undefined) {
+            _lumen_attr_detach(_lumen_attr_state.get(a));
+            delete cache[name];
+        }
+    }
+    function remove(attr) {
+        var name = _lumen_attr_state.get(attr).name;
+        forget(name);
+        _lumen_make_element(nid).removeAttribute(name);
+        return attr;
+    }
+    function notFound(what) {
+        return new DOMException('No attribute ' + what, 'NotFoundError');
+    }
+    var impl = {
+        names: names,
         item: function(i) { return at(names(), i >>> 0); },
-        getNamedItem: function(n) {
-            var name = String(n);
-            return _lumen_get_attr(nid, name) !== undefined ? _lumen_make_attr(nid, name) : null;
-        },
-        // Namespaces are not modelled (see `_lumen_make_attr`), so the NS forms
-        // ignore the namespace and look the qualified name up.
-        getNamedItemNS: function(ns, n) { return methods.getNamedItem(n); },
-        setNamedItem: function(attr) {
-            if (!attr || typeof attr.name !== 'string') {
-                throw new TypeError('setNamedItem: argument is not an Attr');
+        byName: byName,
+        byNs: byNs,
+        forget: forget,
+        // DOM §4.9 "set an attribute": replaces the attribute with the same
+        // (namespace, local name) and hands back the replaced `Attr`, now
+        // detached and holding its old value. Goes through the element's own
+        // `setAttribute`/`setAttributeNS`, so Trusted Types, `on*` handler
+        // compilation and custom-element reactions see it like any other write.
+        set: function(attr) {
+            var s = attr instanceof Attr ? _lumen_attr_state.get(attr) : undefined;
+            if (!s) throw new TypeError('setNamedItem: argument is not an Attr');
+            var owner = _lumen_attr_owner_nid(s);
+            if (owner !== null && owner !== nid) {
+                throw new DOMException('The attribute is in use by another element', 'InUseAttributeError');
             }
-            var prev = methods.getNamedItem(attr.name);
-            _lumen_set_attr(nid, attr.name, String(attr.value));
-            return prev;
-        },
-        setNamedItemNS: function(attr) { return methods.setNamedItem(attr); },
-        removeNamedItem: function(n) {
-            var name = String(n);
-            if (_lumen_get_attr(nid, name) === undefined) {
-                throw new DOMException('No attribute named ' + name, 'NotFoundError');
+            var ns = attr.namespaceURI;
+            var value = _lumen_attr_value(s);
+            var old = byNs(ns, attr.localName);
+            if (old === attr) return attr;
+            if (old !== null) {
+                var oldName = _lumen_attr_state.get(old).name;
+                forget(oldName);
+                if (oldName !== s.name) _lumen_remove_attr(nid, oldName);
             }
-            var prev = _lumen_make_attr(nid, name);
-            _lumen_remove_attr(nid, name);
-            return prev;
+            var el = _lumen_make_element(nid);
+            if (ns === null) el.setAttribute(s.name, value);
+            else el.setAttributeNS(ns, s.name, value);
+            s.nid = nid;
+            cache[s.name] = attr;
+            return old;
         },
-        removeNamedItemNS: function(ns, n) { return methods.removeNamedItem(n); },
+        removeByName: function(n) {
+            var attr = byName(n);
+            if (attr === null) throw notFound('named ' + String(n));
+            return remove(attr);
+        },
+        removeByNs: function(ns, n) {
+            var attr = byNs(ns, n);
+            if (attr === null) throw notFound(String(n) + ' in namespace ' + ns);
+            return remove(attr);
+        },
+        // DOM §4.9 `removeAttributeNode(attr)`: `attr` itself, not a lookalike
+        // with the same name, must be one of this element's attributes.
+        removeNode: function(attr) {
+            var s = attr instanceof Attr ? _lumen_attr_state.get(attr) : undefined;
+            if (!s) throw new TypeError('removeAttributeNode: argument is not an Attr');
+            if (_lumen_attr_owner_nid(s) !== nid || attrFor(s.name) !== attr) {
+                throw notFound('node for ' + s.name + ' on this element');
+            }
+            return remove(attr);
+        },
     };
-    return new Proxy(proto, {
-        get: function(target, prop) {
-            if (prop === 'length') return names().length;
-            if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) {
-                return methods[prop];
-            }
-            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+    function isIndex(prop) { return typeof prop === 'string' && /^[0-9]+$/.test(prop); }
+    // A supported property name that the prototype chain does not already
+    // answer (WebIDL "named property visibility").
+    function isVisibleName(prop) {
+        return typeof prop === 'string' && !(prop in target)
+            && _lumen_get_attr(nid, prop) !== undefined;
+    }
+    var map = new Proxy(target, {
+        get: function(t, prop, receiver) {
+            if (isIndex(prop)) {
                 var byIndex = at(names(), parseInt(prop, 10));
                 return byIndex !== null ? byIndex : undefined;
             }
-            if (typeof prop === 'string' && prop !== 'constructor'
-                && _lumen_get_attr(nid, prop) !== undefined) {
-                return _lumen_make_attr(nid, prop);
-            }
-            return target[prop];
+            if (isVisibleName(prop)) return attrFor(prop);
+            return Reflect.get(t, prop, receiver);
         },
-        has: function(target, prop) {
-            if (prop === 'length') return true;
-            if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) return true;
-            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
-                return parseInt(prop, 10) < names().length;
-            }
-            if (typeof prop === 'string' && _lumen_get_attr(nid, prop) !== undefined) return true;
-            return prop in target;
+        has: function(t, prop) {
+            if (isIndex(prop)) return parseInt(prop, 10) < names().length;
+            return prop in t || isVisibleName(prop);
         },
         // Indexed keys enumerable, named keys own-but-not-enumerable — the same
         // split `_lumen_make_nid_collection` applies (BUG-323), so `for-in`
@@ -6975,25 +7217,28 @@ function _lumen_make_named_node_map(nid) {
             var keys = [];
             for (var i = 0; i < list.length; i++) keys.push(String(i));
             for (var k = 0; k < list.length; k++) {
-                if (!/^[0-9]+$/.test(list[k])) keys.push(list[k]);
+                if (!isIndex(list[k]) && !(list[k] in target)) keys.push(list[k]);
             }
             return keys;
         },
-        getOwnPropertyDescriptor: function(target, prop) {
-            if (typeof prop !== 'string') return undefined;
-            var list = names();
-            if (/^[0-9]+$/.test(prop)) {
-                var byIndex = at(list, parseInt(prop, 10));
+        getOwnPropertyDescriptor: function(t, prop) {
+            if (isIndex(prop)) {
+                var byIndex = at(names(), parseInt(prop, 10));
                 return byIndex !== null
                     ? { value: byIndex, writable: false, enumerable: true, configurable: true }
                     : undefined;
             }
-            if (_lumen_get_attr(nid, prop) !== undefined) {
-                return { value: _lumen_make_attr(nid, prop), writable: false, enumerable: false, configurable: true };
+            if (isVisibleName(prop)) {
+                return { value: attrFor(prop), writable: false, enumerable: false, configurable: true };
             }
-            return undefined;
+            return Reflect.getOwnPropertyDescriptor(t, prop);
         },
     });
+    // Both keys: methods see the proxy as `this`, but an accessor reached
+    // through `Reflect.get` on the target (`length`) may see the target.
+    _lumen_nnm_impl.set(map, impl);
+    _lumen_nnm_impl.set(target, impl);
+    return map;
 }
 
 // ── HTML LS §3.2.7 `innerText` / `outerText` setters (BUG-413) ───────────────
@@ -7497,14 +7742,11 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         // DOM §4.9: the Attr-node accessors that pair with `attributes`.
         getAttributeNode:   function(n)      { var nid = this.__nid__; return this.attributes.getNamedItem(n); },
-        getAttributeNodeNS: function(ns, n)  { var nid = this.__nid__; return this.attributes.getNamedItem(n); },
+        getAttributeNodeNS: function(ns, n)  { var nid = this.__nid__; return this.attributes.getNamedItemNS(ns, n); },
         setAttributeNode:   function(attr)   { var nid = this.__nid__; return this.attributes.setNamedItem(attr); },
         setAttributeNodeNS: function(attr)   { var nid = this.__nid__; return this.attributes.setNamedItem(attr); },
         removeAttributeNode: function(attr)  { var nid = this.__nid__;
-            if (!attr || typeof attr.name !== 'string') {
-                throw new TypeError('removeAttributeNode: argument is not an Attr');
-            }
-            return this.attributes.removeNamedItem(attr.name);
+            return _lumen_nnm(this.attributes).removeNode(attr);
         },
         get attributeStyleMap() { var nid = this.__nid__;
             // CSS Typed OM L1 — StylePropertyMap for element.style (mutable)
@@ -7662,6 +7904,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
             try {
                 var attrName = String(n);
                 var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                // BUG-689: a cached `Attr` keeps the value it had.
+                _lumen_attr_note_removal(this, attrName);
                 _lumen_remove_attr(nid, attrName);
                 if (_lumen_is_on_attr_name(attrName)) {
                     _lumen_set_on_handler(nid, attrName, null);
@@ -7687,7 +7931,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // `_lumen_ns_arg` normalizes `undefined`/`null`/`''` to `null` (the
         // native side's `Option<String>::None`) before crossing into Rust.
         getAttributeNS:    function(ns, n)    { var nid = this.__nid__;
-            var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
+            var attrName = _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)));
             return attrName === null ? null : _lumen_u2n(_lumen_get_attr(nid, attrName));
         },
         setAttributeNS:    function(ns, n, v) { var nid = this.__nid__;
@@ -7709,16 +7953,17 @@ var _LUMEN_WRAPPER_MEMBERS = {
         removeAttributeNS: function(ns, n)    { var nid = this.__nid__;
             _lumen_ce_push_element_queue();
             try {
-                var attrName = _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n));
+                var attrName = _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)));
                 if (attrName !== null) {
                     var oldVal = _lumen_u2n(_lumen_get_attr(nid, attrName));
+                    _lumen_attr_note_removal(this, attrName);
                     _lumen_remove_attr(nid, attrName);
                     if (oldVal !== null) _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
                 }
             } finally { _lumen_ce_pop_current_element_queue(); }
         },
         hasAttributeNS:    function(ns, n)    { var nid = this.__nid__;
-            return _lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n)) !== null;
+            return _lumen_u2n(_lumen_find_attr_by_ns(nid, _lumen_ns_arg(ns), String(n))) !== null;
         },
         // DOM LS §4.9.3: toggleAttribute(qualifiedName, force?)
         toggleAttribute: function(n, force) { var nid = this.__nid__;
@@ -7729,6 +7974,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var has = oldVal !== null;
                 if (force === undefined) {
                     if (has) {
+                        _lumen_attr_note_removal(this, attrName);
                         _lumen_remove_attr(nid, attrName);
                         _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
                         return false;
@@ -7745,6 +7991,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     return true;
                 }
                 if (has) {
+                    _lumen_attr_note_removal(this, attrName);
                     _lumen_remove_attr(nid, attrName);
                     _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, null);
                 }
@@ -12073,6 +12320,16 @@ var document = {
             if (_ceEntry) return _lumen_ce_construct_sync(nid, _ceEntry);
         }
         return _lumen_make_element(nid);
+    },
+    // DOM §4.5: a detached `Attr`, to be attached with `setAttributeNode`
+    // (BUG-689: both were missing, and WPT `trusted-types` builds most of its
+    // attribute cases this way).
+    createAttribute:   function(localName) {
+        return _lumen_create_attribute_checked(
+            _lumen_get_document_content_type() === 'text/html', localName, null);
+    },
+    createAttributeNS: function(ns, qualifiedName) {
+        return _lumen_create_attribute_ns_checked(ns, qualifiedName, null);
     },
     createTextNode:         function(t) {
         var nid = _lumen_create_text_node(String(t));

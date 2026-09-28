@@ -237,21 +237,18 @@ pub(super) fn remove_attribute(doc: &mut lumen_dom::Document, id: lumen_dom::Nod
 }
 
 /// DOM §4.5 "validate and extract" namespace resolution, attribute-namespacing
-/// slice (GAP-XMLDOC срез 10, BUG-685): the reverse of [`namespace_uri`],
-/// restricted to the namespaces Lumen's closed `Namespace` enum can actually
-/// represent. `None` means "not one of the namespaces Lumen tracks for
-/// attributes" — distinct from `Namespace::Html`'s "definitely no namespace",
-/// since a caller-supplied URI Lumen has no representation for is neither
-/// (same BUG-830 "no general namespace registry yet" limitation as
-/// `_lumen_create_element_ns`, applied to attributes rather than elements).
+/// slice (GAP-XMLDOC срез 10, BUG-685): the reverse of [`namespace_uri`].
+/// `None` means "search by plain name" — the "no namespace" ask (`None`/empty)
+/// and the XHTML URI, which every plain attribute is stored under
+/// ([`resolve_attribute_namespace`]). Any other URI resolves to its own
+/// `Namespace`, `Namespace::Other` included: since GAP-XMLDOC срез 37
+/// `setAttributeNS` stores an unrecognized URI verbatim, so the lookup must
+/// match it too — before BUG-689 it fell back to the plain-name search, and
+/// `getAttributeNS('urn:x', 'foo')` missed the `p:foo` it had just set.
 fn known_attribute_namespace(ns: Option<&str>) -> Option<lumen_dom::Namespace> {
     match ns? {
-        "http://www.w3.org/1999/xlink" => Some(lumen_dom::Namespace::XLink),
-        "http://www.w3.org/XML/1998/namespace" => Some(lumen_dom::Namespace::Xml),
-        "http://www.w3.org/2000/xmlns/" => Some(lumen_dom::Namespace::XmlNs),
-        "http://www.w3.org/2000/svg" => Some(lumen_dom::Namespace::Svg),
-        "http://www.w3.org/1998/Math/MathML" => Some(lumen_dom::Namespace::MathMl),
-        _ => None,
+        "" | "http://www.w3.org/1999/xhtml" => None,
+        uri => Some(lumen_dom::Namespace::from_uri(Some(uri))),
     }
 }
 
@@ -276,11 +273,9 @@ pub(super) fn resolve_attribute_namespace(ns: Option<&str>) -> lumen_dom::Namesp
 /// BUG-685, BUG-309): finds the stored qualified name of the attribute whose
 /// namespace URI is `ns` and whose local name (the qualified name's suffix
 /// after the last `:`, or the whole name if there is none) is `local_name`.
-/// `ns` of `None`/empty/unrecognized falls back to a plain by-name lookup —
-/// the DOM standard's "no namespace" case for the first two, and (BUG-309,
-/// BUG-830) the best Lumen can do for a namespace URI it has no
-/// representation for, matching pre-срез-10 behavior for that case rather
-/// than newly reporting "not found" for every attribute set through it.
+/// `ns` of `None`/empty/XHTML falls back to a plain by-name lookup — the DOM
+/// standard's "no namespace" case, which is how Lumen stores every plain
+/// attribute (see [`known_attribute_namespace`]).
 pub(super) fn find_attr_by_namespace(
     doc: &lumen_dom::Document,
     id: lumen_dom::NodeId,
