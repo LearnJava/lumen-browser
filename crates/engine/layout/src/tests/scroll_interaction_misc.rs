@@ -1557,6 +1557,99 @@ fn set_scroll_position_max_scroll_uses_padding_box_not_border_box() {
     );
 }
 
+// ── BUG-960: scrollable-overflow rollup through non-clipping descendants ──
+
+#[test]
+fn scroll_width_nested_overflow_visible_reaches_outer_container() {
+    // A grandchild that overflows only reaches the outer scroll container's
+    // scroll_width when the intermediate box doesn't clip (`overflow: visible`,
+    // the default) — before BUG-960's fix, `content_width` only walked direct
+    // children, so this nested overflow was invisible to `#s`.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"mid\"><div id=\"deep\"></div></div></div>",
+        "#s { overflow: auto; width: 100px; height: 100px; } \
+         #mid { width: 50px; height: 50px; } \
+         #deep { width: 400px; height: 40px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_width - 400.0).abs() < 0.5,
+        "nested overflow (through a non-clipping #mid) must still grow #s's \
+         scroll_width to ≈400, got {}",
+        containers[0].scroll_width
+    );
+}
+
+#[test]
+fn scroll_width_nested_overflow_stops_at_clipping_descendant() {
+    // Mirror of the above: when the intermediate box itself clips
+    // (`overflow: hidden`), its own overflowing content must NOT roll up
+    // into the outer container — it's already contained by `#mid`. `#mid`
+    // is wider than `#s`'s padding box (150 > 100) so its own border box
+    // still grows `#s`'s scroll_width past the floor, but `#deep`'s 400px
+    // must not reach any further than that.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"mid\"><div id=\"deep\"></div></div></div>",
+        "#s { overflow: auto; width: 100px; height: 100px; } \
+         #mid { width: 150px; height: 50px; overflow: hidden; } \
+         #deep { width: 400px; height: 40px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_width - 150.0).abs() < 0.5,
+        "#mid clips its own overflow, so #s's scroll_width should stop at \
+         #mid's own border-box width (≈150), not reach #deep's 400, got {}",
+        containers[0].scroll_width
+    );
+}
+
+#[test]
+fn scroll_width_overflow_visible_reports_exact_overflow_not_just_border_box() {
+    // CSSOM View defines scrollWidth/scrollHeight for every element, not
+    // just designated scroll containers — an `overflow: visible` box whose
+    // content overflows its own padding box must be JS-visible with the
+    // exact scrollable-overflow magnitude (not just the border-box floor
+    // BUG-475 left in place).
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { width: 80px; height: 80px; } \
+         #child { width: 300px; height: 30px; }",
+    );
+    assert_eq!(
+        collect_scroll_containers(&root).len(),
+        0,
+        "overflow:visible is never wheel-routable"
+    );
+    let js_containers = collect_scroll_containers_for_js_state(&root);
+    assert_eq!(js_containers.len(), 1, "overflowing visible box must be JS-visible");
+    assert!(
+        (js_containers[0].scroll_width - 300.0).abs() < 0.5,
+        "expected exact scroll_width≈300 (child's width), got {}",
+        js_containers[0].scroll_width
+    );
+}
+
+#[test]
+fn scroll_width_overflow_visible_non_overflowing_absent_from_js_state() {
+    // The common case — content that fits inside the padding box — must NOT
+    // be published: the JS shim's border-box fallback already gives the
+    // right answer more cheaply, and publishing every non-overflowing box
+    // would blow up `update_scroll_states`'s per-frame cost.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { width: 200px; height: 200px; } \
+         #child { width: 50px; height: 30px; }",
+    );
+    let js_containers = collect_scroll_containers_for_js_state(&root);
+    assert_eq!(
+        js_containers.len(),
+        0,
+        "non-overflowing overflow:visible box must not be published"
+    );
+}
+
 // ── text-wrap: balance / pretty ─────────────────────────────────────────
 
 fn twrap_find_run(b: &LayoutBox) -> Option<&LayoutBox> {
