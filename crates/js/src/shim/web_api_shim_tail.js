@@ -358,21 +358,36 @@ function _lumen_deliver_paint_entry(name, start_ms) {
     _perf_observer_notify([entry]);
 }
 
+// Largest Contentful Paint §2 `interface LargestContentfulPaint :
+// PerformanceEntry` (BUG-678) — the interface object every LCP and
+// soft-navigation WPT feature-detects (`assert_implements(window.
+// LargestContentfulPaint)`). Same shape as PerformancePaintTiming above: no IDL
+// constructor, entries are built off the prototype, fields stay own
+// properties; `[Default] toJSON` serialises the IDL attributes.
+function LargestContentfulPaint() { throw new TypeError('Illegal constructor'); }
+LargestContentfulPaint.prototype.toJSON = function() {
+    return { name: this.name, entryType: this.entryType, startTime: this.startTime,
+             duration: this.duration, renderTime: this.renderTime,
+             loadTime: this.loadTime, size: this.size, id: this.id, url: this.url,
+             element: this.element };
+};
+
 // Called by the shell after rendering a large content element (LCP).
 // element_id = NID of the element; size = area in pixels (>500px²).
 // start_ms = DOMHighResTimeStamp; render_time_ms = when rendering completed.
 function _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) {
-    var entry = {
-        entryType: 'largest-contentful-paint',
-        name: 'largest-contentful-paint',
-        startTime: start_ms,
-        duration: render_time_ms - start_ms,
-        size: size,
-        element: element_id >= 0 ? _lumen_make_element(element_id) : null,
-        url: '',
-        id: '',
-        activationStart: 0,
-    };
+    var entry = Object.create(LargestContentfulPaint.prototype);
+    entry.entryType = 'largest-contentful-paint';
+    entry.name = 'largest-contentful-paint';
+    entry.startTime = start_ms;
+    entry.duration = render_time_ms - start_ms;
+    entry.renderTime = render_time_ms;
+    entry.loadTime = start_ms;
+    entry.size = size;
+    entry.element = element_id >= 0 ? _lumen_make_element(element_id) : null;
+    entry.url = '';
+    entry.id = '';
+    entry.activationStart = 0;
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }

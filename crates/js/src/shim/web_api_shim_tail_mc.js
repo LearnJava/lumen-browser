@@ -56,6 +56,7 @@ window.Performance           = Performance;
 window.PerformanceObserver   = PerformanceObserver;
 window.PerformanceObserverEntryList = PerformanceObserverEntryList;
 window.PerformancePaintTiming = PerformancePaintTiming;
+window.LargestContentfulPaint = LargestContentfulPaint;
 window.PerformanceResourceTiming = PerformanceResourceTiming;
 window.PerformanceNavigationTiming = PerformanceNavigationTiming;
 window.LayoutShift           = LayoutShift;
