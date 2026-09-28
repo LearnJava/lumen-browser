@@ -151,3 +151,27 @@ fn inline_element_and_its_text_node_report_the_same_style() {
         .expect("eval block style");
     assert_eq!(block, "\"block\"");
 }
+
+/// BUG-1144: HTML LS §3.2.7 step 1 — an element that is *in the document* but
+/// not being rendered (`display: none`, a `<script>` in `<body>`) answers
+/// `textContent`, not the empty string its box-less subtree would collect.
+#[test]
+fn unrendered_connected_element_falls_back_to_text_content() {
+    let mut session = InProcessSession::new();
+    session
+        .navigate_html(
+            "<html><head><script type=\"application/ld+json\" id=\"ld\">{\"a\":1}</script></head>\
+             <body><div id=\"dn\" style=\"display:none\">hidden <b>text</b></div>\
+             <script id=\"js\">var x = 1;</script>\
+             <div id=\"wrap\">A<p style=\"display:none\">X</p>B</div></body></html>",
+        )
+        .expect("navigate_html");
+
+    assert_eq!(rendered_text(&mut session, "#dn"), "hidden text");
+    assert_eq!(rendered_text(&mut session, "#js"), "var x = 1;");
+    assert_eq!(rendered_text(&mut session, "#ld"), "{\"a\":1}");
+
+    // Inside a rendered parent the hidden `<p>` contributes nothing — not its
+    // text, and not the two line breaks step 7 gives a rendered `<p>`.
+    assert_eq!(rendered_text(&mut session, "#wrap"), "AB");
+}
