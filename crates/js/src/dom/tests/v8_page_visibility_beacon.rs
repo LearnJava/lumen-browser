@@ -1132,9 +1132,29 @@ fn url_create_object_url() {
     let r = rt.eval(
         "var b = new Blob(['data']); \
                  var url = URL.createObjectURL(b); \
-                 url.startsWith('blob:lumen/')"
+                 /^blob:null\\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(url) \
+                   && url !== URL.createObjectURL(b)"
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1197: File API §8.3 — the blob URL carries the creating document's
+/// origin, and the URL Standard reads it back out as the URL's own origin.
+#[test]
+fn url_create_object_url_carries_document_origin() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "_lumen_location_update('http://localhost:18300/dir/page.html'); \
+                 var u = URL.createObjectURL(new Blob(['x'])); \
+                 JSON.stringify([u.slice(0, 28), new URL(u).origin, new URL(u + '#f').origin, \
+                   Origin.from(u).isSameOrigin(Origin.from('http://localhost:18300/'))])"
+    ).unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            r#"["blob:http://localhost:18300/","http://localhost:18300","http://localhost:18300",true]"#.into()
+        )
+    );
 }
 
 #[test]
@@ -1144,7 +1164,7 @@ fn url_revoke_object_url() {
         "var b = new Blob(['x']); \
                  var u = URL.createObjectURL(b); \
                  URL.revokeObjectURL(u); \
-                 u.startsWith('blob:lumen/')"  // revoke just removes from store, url string stays
+                 u.startsWith('blob:')"  // revoke just removes from store, url string stays
     ).unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }

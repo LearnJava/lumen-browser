@@ -5167,7 +5167,7 @@ pub trait AudioPlaybackProvider: Send + Sync {
     /// Fetch and decode audio from `url`.
     ///
     /// Runs in the background; query `ready_state(handle)` to monitor progress.
-    /// `url` may be `http(s)://`, `data:`, or `blob:lumen/…`.
+    /// `url` may be `http(s)://`, `data:`, or `blob:…`.
     fn load(&self, handle: u64, url: &str);
 
     /// Start or resume playback.  No-op if already playing.

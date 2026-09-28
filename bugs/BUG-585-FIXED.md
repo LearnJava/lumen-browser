@@ -110,7 +110,7 @@ WPT `html/browsers/origin/api/`: **0/307 → 296/325** сабтестов, 15/23
 
 - 25 — `Origin.from(MathML <a href>)`: тест пишет `a.href = …` — у `MathMLElement` нет IDL
   `href` (MathML Core), это expando, атрибут не появляется; движок читает атрибут `href`.
-- 1 — blob-воркер непрозрачен: [BUG-1197](BUG-1197-OPEN.md) (`blob:lumen/N` без происхождения).
+- 1 — blob-воркер непрозрачен: [BUG-1197](BUG-1197-FIXED.md) (`blob:lumen/N` без происхождения).
 - 3 — песочница без `allow-same-origin`: [BUG-1198](BUG-1198-OPEN.md).
 - `origin-from-window`/`origin-from-messageevent` TIMEOUT после `window.open`:
   [BUG-1199](BUG-1199-OPEN.md).

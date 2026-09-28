@@ -352,6 +352,36 @@ fn worker_blob_url_script() {
     assert_eq!(result, lumen_core::JsValue::Number(11.0));
 }
 
+/// BUG-1197: a blob URL carries its creator's origin, so a worker started from
+/// one has the page's tuple origin — not the opaque one `blob:lumen/N` gave it
+/// (WPT `origin-from-worker.window.html`, tuple-origin subtest).
+#[test]
+fn worker_from_blob_url_has_the_creating_page_origin() {
+    use std::time::Duration;
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "_lumen_location_update('http://localhost:18300/origin/page.html'); \
+                 var blob = new Blob([\"postMessage([location.origin, Origin.from(globalThis).opaque, \
+                   Origin.from(globalThis).isSameOrigin(Origin.from('http://localhost:18300/'))]);\"], \
+                  {type:'text/javascript'}); \
+                 var w = new Worker(URL.createObjectURL(blob)); \
+                 var res = null; \
+                 w.onmessage = function(e){ res = JSON.stringify(e.data); };",
+    )
+    .unwrap();
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(25));
+        rt.pump_workers();
+        if rt.eval("res !== null").unwrap() == lumen_core::JsValue::Bool(true) {
+            break;
+        }
+    }
+    assert_eq!(
+        rt.eval("res").unwrap(),
+        lumen_core::JsValue::String(r#"["http://localhost:18300",false,true]"#.into())
+    );
+}
+
 // ── BUG-364: external (http/https) Worker/SharedWorker script URLs ──────
 
 /// Fetch provider stub for BUG-364 tests: returns a fixed status/body for
