@@ -337,9 +337,9 @@ function _perf_observer_notify(entries) {
 // declares no constructor, so script-side `new` throws; the shell's entries
 // are built off the prototype instead. Fields stay own properties, as on every
 // other entry type in this shim; `toJSON` is the WebIDL `[Default]` one of
-// PerformanceEntry. PerformanceEntry itself is not exposed: mark/measure
-// entries are still plain objects, and a global that `instanceof`
-// answered false for would lie about them.
+// PerformanceEntry. PerformanceEntry itself is not exposed: every entry
+// interface here is a standalone function with no shared base prototype, so a
+// global that `instanceof` answered false for would lie about all of them.
 function PerformancePaintTiming() { throw new TypeError('Illegal constructor'); }
 PerformancePaintTiming.prototype.toJSON = function() {
     return { name: this.name, entryType: this.entryType, startTime: this.startTime,
@@ -456,6 +456,18 @@ function PerformanceNavigationTiming() { throw new TypeError('Illegal constructo
 PerformanceNavigationTiming.prototype = Object.create(PerformanceResourceTiming.prototype, {
     constructor: { value: PerformanceNavigationTiming, writable: true, configurable: true },
 });
+
+// Class strings of the entry interfaces above: `timing-entrytypes-registry`
+// checks `Object.prototype.toString.call(entry)` against the interface name
+// for every supported entry type (BUG-687), and an entry built off a plain
+// function prototype answers `[object Object]`. Per prototype, so the
+// navigation entry does not inherit the resource tag.
+_lumen_idl_tag(PerformancePaintTiming, 'PerformancePaintTiming');
+_lumen_idl_tag(LargestContentfulPaint, 'LargestContentfulPaint');
+_lumen_idl_tag(LayoutShift, 'LayoutShift');
+_lumen_idl_tag(LayoutShiftAttribution, 'LayoutShiftAttribution');
+_lumen_idl_tag(PerformanceResourceTiming, 'PerformanceResourceTiming');
+_lumen_idl_tag(PerformanceNavigationTiming, 'PerformanceNavigationTiming');
 
 // Called when a resource fetch completes — from the shim itself for everything
 // the page starts (`fetch()`, XHR, `<script src>`, `<link>`), and from the

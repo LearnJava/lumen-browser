@@ -316,6 +316,69 @@ fn performance_resource_and_navigation_timing_interfaces_back_entries() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-687: mark/measure entries are PerformanceMark / PerformanceMeasure
+// instances whose class string names the interface (the registry WPT's
+// `[object PerformanceMark]` check). PerformanceMark is constructible per User
+// Timing L3 §4.2 (validating startTime and PerformanceTiming names, cloning
+// `detail`); PerformanceMeasure is not.
+#[test]
+fn performance_mark_and_measure_interfaces_back_entries() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                var d = { a: 1 };
+                var m = performance.mark('m1', { startTime: 5, detail: d });
+                d.a = 2;
+                var s = performance.measure('s1', 'm1');
+                var built = new PerformanceMark('free', { startTime: 7 });
+                var threw = 0;
+                try { new PerformanceMeasure(); } catch (e) { if (e instanceof TypeError) threw++; }
+                try { PerformanceMark('x'); } catch (e) { if (e instanceof TypeError) threw++; }
+                try { new PerformanceMark('x', { startTime: -1 }); } catch (e) { if (e instanceof TypeError) threw++; }
+                try { performance.mark('navigationStart'); } catch (e) { if (e.name === 'SyntaxError') threw++; }
+                try { performance.mark('x', 123); } catch (e) { if (e instanceof TypeError) threw++; }
+                try { new PerformanceMark('x', { startTime: NaN }); } catch (e) { if (e instanceof TypeError) threw++; }
+                typeof window.PerformanceMark === 'function' && typeof window.PerformanceMeasure === 'function'
+                    && threw === 6
+                    && m instanceof PerformanceMark && s instanceof PerformanceMeasure
+                    && Object.prototype.toString.call(m) === '[object PerformanceMark]'
+                    && Object.prototype.toString.call(s) === '[object PerformanceMeasure]'
+                    && m.startTime === 5 && m.detail.a === 1 && m.detail !== d
+                    && s.startTime === 5 && s.detail === null
+                    && built.entryType === 'mark' && built.startTime === 7 && built.detail === null
+                    && performance.getEntriesByName('free').length === 0
+                    && !m.hasOwnProperty('detail') && PerformanceMark.length === 1
+                    && performance.mark.length === 1 && performance.measure.length === 1
+                    && !Object.getOwnPropertyDescriptor(window, 'PerformanceMark').enumerable
+                    && Object.getOwnPropertyDescriptor(PerformanceMark.prototype, 'detail').get.name === 'get detail'
+                    && (function() { try { performance.mark.call(null, 'x'); } catch (e) { return e instanceof TypeError; } return false; })()
+                    && JSON.stringify(m.toJSON()) === '{"name":"m1","entryType":"mark","startTime":5,"duration":0,"detail":{"a":1}}'
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-687, same WPT: every entry type the registry lists must stringify as its
+// interface — the navigation entry by its own tag, not the inherited resource one.
+#[test]
+fn performance_entry_interfaces_have_class_strings() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                _lumen_deliver_paint_entry('first-paint', 10.0);
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 5);
+                _lumen_deliver_perf_entry('navigation', 'https://example.com/', 0.0, 300.0, '{}');
+                _lumen_deliver_longtask_entry(1, 60);
+                var tag = function(type) {
+                    return Object.prototype.toString.call(performance.getEntriesByType(type)[0]);
+                };
+                tag('paint') === '[object PerformancePaintTiming]'
+                    && tag('resource') === '[object PerformanceResourceTiming]'
+                    && tag('navigation') === '[object PerformanceNavigationTiming]'
+                    && tag('longtask') === '[object PerformanceLongTaskTiming]'
+                    && Object.prototype.toString.call(new TaskAttributionTiming())
+                        === '[object TaskAttributionTiming]'
+            "#).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn performance_observer_buffered_delivers_existing() {
     let rt = v8_runtime_with_dom(make_doc());

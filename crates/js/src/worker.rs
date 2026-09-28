@@ -3074,6 +3074,8 @@ mod tests_v8 {
                    performance.mark('a'); performance.mark('b');\
                    var m = performance.measure('m', 'a', 'b');\
                    return m.entryType === 'measure' &&\
+                          m instanceof PerformanceMeasure &&\
+                          new PerformanceMark('c') instanceof PerformanceMark &&\
                           performance.getEntriesByType('mark').length === 2;\
                  })()",
             )
