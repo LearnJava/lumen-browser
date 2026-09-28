@@ -200,12 +200,13 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   // GlobalEventHandlers) reports as the generic `Element <attrName>`, which
   // is what the WPT fixtures (`GlobalEventHandlers-onclick.html`,
   // `get-trusted-types-compliant-attribute-value.html`) assert for `onclick`.
-  globalThis._lumen_tt_get_compliant_attribute_value = function (tagLower, attrLower, value) {
-    var type = factory.getAttributeType(tagLower, attrLower);
+  globalThis._lumen_tt_get_compliant_attribute_value = function (tagLower, attrLower, value, elementNs, attrNs) {
+    var type = factory.getAttributeType(tagLower, attrLower, elementNs, attrNs);
     if (type === null) return String(value);
     var sink;
     if (tagLower === 'iframe' && attrLower === 'srcdoc') sink = 'HTMLIFrameElement srcdoc';
     else if (tagLower === 'script' && attrLower === 'src') sink = 'HTMLScriptElement src';
+    else if (tagLower === 'script' && attrLower === 'href') sink = 'SVGScriptElement href';
     else sink = 'Element ' + attrLower;
     if (type === 'TrustedHTML') return _lumen_tt_get_compliant_html(value, sink, false);
     if (type === 'TrustedScript') return _lumen_tt_get_compliant_script(value, sink);
@@ -234,12 +235,47 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
     get emptyHTML() { return EMPTY_HTML; },
     get emptyScript() { return EMPTY_SCRIPT; },
     // TT §4.4 sink tables (minimal Phase 0 subset).
-    getAttributeType: function (tagName, attribute) {
+    // TT §4.4 sink tables (spec algorithm: "Get Trusted Type data for
+    // attribute" — takes elementNs/attrNs; default undefined ns normalizes to
+    // null/HTML for the common call sites that omit them, matching every WPT
+    // fixture that calls `getAttributeType(tag, attr)` with no namespace and
+    // expects the plain-HTML table).
+    getAttributeType: function (tagName, attribute, elementNs, attrNs) {
       tagName = String(tagName).toLowerCase();
       attribute = String(attribute).toLowerCase();
-      if (attribute.length > 2 && attribute.indexOf('on') === 0) return 'TrustedScript';
-      if (tagName === 'iframe' && attribute === 'srcdoc') return 'TrustedHTML';
-      if (tagName === 'script' && attribute === 'src') return 'TrustedScriptURL';
+      // Normalize: undefined/null/'' element namespace means "no namespace"
+      // for on*/srcdoc/src (HTML elements), but SVG's own namespace URI must
+      // be compared literally for the SVG-script/href entry below.
+      var elemNsNorm = (elementNs === undefined || elementNs === null) ? null : String(elementNs);
+      var attrNsNorm = (attrNs === undefined || attrNs === null || attrNs === '') ? null : String(attrNs);
+      if (attribute.length > 2 && attribute.indexOf('on') === 0) {
+        // Event handler content attributes: valid on the null attribute
+        // namespace, and only for elements in the HTML/SVG/MathML namespaces
+        // (the three namespaces HTML LS defines event handler content
+        // attributes for) — an element in an arbitrary namespace (e.g. a
+        // custom XML vocabulary) does not get this sink at all. `elemNsNorm`
+        // is `null` only for the no-namespace call form; a real HTML element
+        // carries the XHTML namespace URI and must count as HTML too.
+        if (attrNsNorm !== null) return null;
+        if (elemNsNorm !== null &&
+            elemNsNorm !== 'http://www.w3.org/1999/xhtml' &&
+            elemNsNorm !== 'http://www.w3.org/2000/svg' &&
+            elemNsNorm !== 'http://www.w3.org/1998/Math/MathML') {
+          return null;
+        }
+        return 'TrustedScript';
+      }
+      if (tagName === 'iframe' && attribute === 'srcdoc' &&
+          (elemNsNorm === null || elemNsNorm === 'http://www.w3.org/1999/xhtml') &&
+          attrNsNorm === null) return 'TrustedHTML';
+      if (tagName === 'script' && attribute === 'src' &&
+          (elemNsNorm === null || elemNsNorm === 'http://www.w3.org/1999/xhtml') &&
+          attrNsNorm === null) return 'TrustedScriptURL';
+      if (tagName === 'script' && attribute === 'href' &&
+          elemNsNorm === 'http://www.w3.org/2000/svg' &&
+          (attrNsNorm === null || attrNsNorm === 'http://www.w3.org/1999/xlink')) {
+        return 'TrustedScriptURL';
+      }
       return null;
     },
     getPropertyType: function (tagName, property) {
