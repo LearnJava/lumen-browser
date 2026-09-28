@@ -8623,16 +8623,28 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // Scroll the nearest ancestor scroll container to make this element visible.
             var r = _lumen_get_bounding_rect(nid);
             if (!r) return Promise.resolve();
+            // BUG-962: CSS Scroll Snap L1 §4's scroll-margin expands the
+            // target's border box into a "scroll margin box" before any
+            // alignment math runs (start/end/center all measure against the
+            // expanded box, exactly like it already does for scroll-snap's
+            // own snap area in `lumen_layout`) — fold it into the position/
+            // size pair fed to `_lumen_align_scroll` on both axes.
+            var smTop = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-top')) || 0;
+            var smRight = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-right')) || 0;
+            var smBottom = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-bottom')) || 0;
+            var smLeft = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-left')) || 0;
+            var mw = r[2] + smLeft + smRight;
+            var mh = r[3] + smTop + smBottom;
             var parent = _lumen_u2n(_lumen_get_parent(nid));
             while (parent !== null && parent !== undefined) {
                 var ps = _lumen_get_scroll_state(parent);
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
                     if (pr) {
-                        var contentX = (r[0] - pr[0]) + ps[0];
-                        var contentY = (r[1] - pr[1]) + ps[1];
-                        var newX = _lumen_align_scroll(contentX, r[2], pr[2], ps[0], opts.inline);
-                        var newY = _lumen_align_scroll(contentY, r[3], pr[3], ps[1], opts.block);
+                        var contentX = (r[0] - smLeft - pr[0]) + ps[0];
+                        var contentY = (r[1] - smTop - pr[1]) + ps[1];
+                        var newX = _lumen_align_scroll(contentX, mw, pr[2], ps[0], opts.inline);
+                        var newY = _lumen_align_scroll(contentY, mh, pr[3], ps[1], opts.block);
                         _lumen_request_scroll(parent, newX, newY);
                         var parentEl = _lumen_make_element(parent);
                         if (parentEl) {
@@ -8652,7 +8664,7 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // has no tracked horizontal scroll position (`scrollX` is a
             // hardcoded 0 — a separate gap), so only the block axis moves here.
             var pageY = _lumen_align_scroll(
-                r[1] + _lumen_get_page_scroll_y(), r[3],
+                (r[1] - smTop) + _lumen_get_page_scroll_y(), mh,
                 _lumen_get_viewport_size()[1], _lumen_get_page_scroll_y(), opts.block);
             _lumen_request_page_scroll(pageY, opts.behavior === 'smooth' ? 1 : 0);
             return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_page_scroll_y()]; });
