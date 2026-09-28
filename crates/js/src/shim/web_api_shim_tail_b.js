@@ -6335,3 +6335,31 @@ var dispatchEvent       = window.dispatchEvent.bind(window);
         value: Window, writable: true, enumerable: false, configurable: true,
     });
 })();
+
+// BUG-1167: `EventTarget.prototype.addEventListener/removeEventListener/
+// dispatchEvent` called on a window, document or node run that target's own
+// engine implementation (hook declared in `event_target_shim.js`). Captured
+// here, after every shim has finished defining them, so a page that later
+// wraps `window.addEventListener` & co. around the "native" EventTarget
+// method cannot turn the delegation into a loop. A `null`/`undefined` this
+// is the global object (WebIDL §3.7.5.1 operation steps).
+(function() {
+    var names = ['addEventListener', 'removeEventListener', 'dispatchEvent'];
+    function pick(obj) {
+        var out = {};
+        for (var i = 0; i < names.length; i++) {
+            var fn = obj[names[i]];
+            out[names[i]] = (typeof fn === 'function' && fn !== EventTarget.prototype[names[i]]) ? fn : null;
+        }
+        return out;
+    }
+    var win = pick(window), doc = pick(document);
+    var shadow = pick(ShadowRoot.prototype), node = pick(Node.prototype);
+    var ShadowRootIface = ShadowRoot;
+    _lumen_et_platform_impl = function(target, name) {
+        if (target == null || target === window) return win[name];
+        if (target === document) return doc[name];
+        if (target.__nid__ === undefined) return null;
+        return (target instanceof ShadowRootIface ? shadow : node)[name];
+    };
+})();

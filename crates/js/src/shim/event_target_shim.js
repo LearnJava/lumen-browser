@@ -76,7 +76,26 @@ function _lumen_record_script_timing(startTime, invoker, invokerType, fn) {
     }
     _lumen_frame_scripts.push(entry);
 }
+// BUG-1167: in a browser `EventTarget.prototype.addEventListener` is *the*
+// method every window, document and node inherits, so libraries capture it
+// as "the native one" and `.call()` it on any target — ShadyDOM
+// (webcomponents-sd, youtube) does `EventTarget.prototype.addEventListener
+// .call(window, 'focus', …)` while initialising. Here window/document/nodes
+// carry their own engine-backed methods and the three below only serve
+// pure-JS targets built by `new EventTarget()` (`this._listeners`), so that
+// call died on `this._listeners[type]`, aborted ShadyDOM before it installed
+// its `ShadowRoot`, and youtube's app never attached a shadow root. The page
+// shim fills this hook in (end of `web_api_shim_tail_b.js`) with a lookup
+// returning the target's own engine implementation, or `null`; a worker
+// scope never sets it. Identity decides, not a missing `_listeners`: a page
+// global `var _listeners` would otherwise shadow the window's own store.
+var _lumen_et_platform_impl = null;
+function _lumen_et_platform_method(target, name) {
+    return _lumen_et_platform_impl === null ? null : _lumen_et_platform_impl(target, name);
+}
 EventTarget.prototype.addEventListener = function(type, callback, options) {
+    var platform = _lumen_et_platform_method(this, 'addEventListener');
+    if (platform) return platform.call(this == null ? globalThis : this, type, callback, options);
     if (!callback) return;
     type = String(type);
     var capture = !!(options === true || (options && options.capture));
@@ -87,6 +106,8 @@ EventTarget.prototype.addEventListener = function(type, callback, options) {
     list.push({ callback: callback, capture: capture, once: !!(options && options.once) });
 };
 EventTarget.prototype.removeEventListener = function(type, callback, options) {
+    var platform = _lumen_et_platform_method(this, 'removeEventListener');
+    if (platform) return platform.call(this == null ? globalThis : this, type, callback, options);
     type = String(type);
     var list = this._listeners[type];
     if (!list) return;
@@ -96,6 +117,8 @@ EventTarget.prototype.removeEventListener = function(type, callback, options) {
     }
 };
 EventTarget.prototype.dispatchEvent = function(event) {
+    var platform = _lumen_et_platform_method(this, 'dispatchEvent');
+    if (platform) return platform.call(this == null ? globalThis : this, event);
     if (!event || event.type == null) return true;
     var type = String(event.type);
     event.target = event.target || this;

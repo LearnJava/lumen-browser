@@ -13905,21 +13905,65 @@ function _lumen_ce_pop_current_element_queue() {
     _lumen_ce_invoke_element_queue(q);
 }
 
+// BUG-1167: nid -> the custom element object itself, held strongly. A custom
+// element *is* its wrapper — the class prototype and everything its
+// constructor stored on `this` live there, not in the DOM — while the wrapper
+// cache holds only `WeakRef`s (GAP-P3GCJSDOM). Without this pin, a GC
+// between two script accesses let `_lumen_make_element` rebuild a plain
+// `HTMLElement` for the node, and Polymer's callbacks then ran on an object
+// without `_attributeToProperty` (youtube). An entry here is also the
+// "custom element state is not undefined" test: it is written the moment a
+// constructor has run for the node, so a later insertion never constructs it
+// twice. Cost: a custom element node stays alive for the document's
+// lifetime even once detached and unreferenced — no longer weakly reclaimable.
+var _lumen_ce_elements = {};
+// nid -> true once that node's constructor threw — the spec's "failed" state:
+// no reactions are ever enqueued for it and no second construction is tried.
+var _lumen_ce_failed = {};
+
 // Builds the wrapper for a custom element being constructed via `new
 // ctor()`, interning it exactly like `_lumen_make_element` does for every
 // other node — required for node identity (`===`) and for `document
 // .createElement('my-el') === el` once упгрейд (срез 2) starts reusing this.
-// `__ceUpgraded__ = true` marks the node as having gone through the real
-// constructor — set here rather than by each caller so both a bare `new
-// MyEl()` (срез 1) and the upgrade path (срез 2, `_lumen_ce_upgrade_element`)
-// agree on the flag: without it, `_lumen_ce_maybe_connected` on a directly
-// constructed element (never `__ceUpgraded__`) would route it right back
-// through `_lumen_ce_upgrade_element` on its first `appendChild` and run the
-// constructor a second time.
+// Pinned here rather than by each caller, so a bare `new MyEl()` (срез 1)
+// and the upgrade path (срез 2, `_lumen_ce_upgrade_element`) agree that the
+// node went through its real constructor.
 function _lumen_ce_build_wrapper(nid, ctor) {
     var built = _lumen_build_element(nid, ctor.prototype);
-    built.__ceUpgraded__ = true;
+    _lumen_ce_elements[nid] = built;
     return _lumen_wrapper_cache_set(nid, built);
+}
+
+// Runs `ctor` over the existing node `nid` through its construction stack
+// (HTMLElement's constructor consumes the pushed nid instead of minting a
+// node) and records the outcome: the resulting element is pinned in
+// `_lumen_ce_elements` — also a legacy `function Foo() {}` that never calls
+// `super()`, whose plain wrapper then stands in for the instance — and a
+// throw marks the node failed. Returns the element either way.
+function _lumen_ce_run_constructor(nid, ctor, label) {
+    var stack = _lumen_ce_construction_stacks.get(ctor);
+    if (!stack) {
+        stack = [];
+        _lumen_ce_construction_stacks.set(ctor, stack);
+    }
+    stack.push(nid);
+    try {
+        new ctor();
+    } catch (e) {
+        _lumen_ce_failed[nid] = true;
+        _lumen_console_error(label + e);
+    }
+    stack.pop();
+    var el = _lumen_make_element(nid);
+    _lumen_ce_elements[nid] = el;
+    return el;
+}
+
+// The custom element object for `nid` if its constructor ran and succeeded
+// (state "custom" — the only state callback reactions are enqueued for),
+// else `undefined`.
+function _lumen_ce_custom_element(nid) {
+    return _lumen_ce_failed[nid] ? undefined : _lumen_ce_elements[nid];
 }
 
 // GAP-CEREG срез 2 (BUG-890): a node's "associated custom element registry" —
@@ -13969,16 +14013,20 @@ function _lumen_ce_registry_for_nid(nid) {
 // right after upgrade/createElement) — only the *callback* is queued.
 function _lumen_ce_maybe_connected(el) {
     if (!el || el.__nid__ === undefined) return;
-    var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
-    var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
+    var nid   = el.__nid__;
+    var tag   = _lumen_get_tag_name(nid).toLowerCase();
+    var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
-    if (!el.__ceUpgraded__) {
+    if (_lumen_ce_elements[nid] === undefined) {
         _lumen_ce_upgrade_element(el, entry);
         return;
     }
-    if (typeof entry.ctor.prototype.connectedCallback === 'function') {
-        _lumen_ce_enqueue_reaction(el.__nid__, function() {
-            try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
+    // `el` may be a wrapper script obtained before the upgrade replaced it;
+    // the callback's `this` is the constructed element regardless.
+    var inst = _lumen_ce_custom_element(nid);
+    if (inst && typeof entry.ctor.prototype.connectedCallback === 'function') {
+        _lumen_ce_enqueue_reaction(nid, function() {
+            try { entry.ctor.prototype.connectedCallback.call(inst); } catch(e) {
                 _lumen_console_error('CE connectedCallback: ' + e);
             }
         });
@@ -14005,12 +14053,15 @@ function _lumen_ce_upgrade_subtree(nid) {
 // registry (CE-1 срез 4).
 function _lumen_ce_maybe_disconnected(el) {
     if (!el || el.__nid__ === undefined) return;
-    var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
-    var entry = _lumen_ce_registry_for_nid(el.__nid__).registry[tag];
+    var nid  = el.__nid__;
+    var inst = _lumen_ce_custom_element(nid);
+    if (!inst) return;
+    var tag   = _lumen_get_tag_name(nid).toLowerCase();
+    var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
     if (typeof entry.ctor.prototype.disconnectedCallback === 'function') {
-        _lumen_ce_enqueue_reaction(el.__nid__, function() {
-            try { entry.ctor.prototype.disconnectedCallback.call(el); } catch(e) {
+        _lumen_ce_enqueue_reaction(nid, function() {
+            try { entry.ctor.prototype.disconnectedCallback.call(inst); } catch(e) {
                 _lumen_console_error('CE disconnectedCallback: ' + e);
             }
         });
@@ -14018,8 +14069,12 @@ function _lumen_ce_maybe_disconnected(el) {
 }
 
 // Enqueues attributeChangedCallback on the element at `nid` if applicable,
-// using the registry that nid is scoped to (CE-1 срез 4).
+// using the registry that nid is scoped to (CE-1 срез 4). Only a custom
+// element gets one: a defined tag's node that was never upgraded (or whose
+// constructor threw) has no instance to call it on.
 function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
+    var inst = _lumen_ce_custom_element(nid);
+    if (!inst) return;
     var tag   = _lumen_get_tag_name(nid).toLowerCase();
     var entry = _lumen_ce_registry_for_nid(nid).registry[tag];
     if (!entry) return;
@@ -14028,7 +14083,7 @@ function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
         _lumen_ce_enqueue_reaction(nid, function() {
             try {
                 entry.ctor.prototype.attributeChangedCallback.call(
-                    _lumen_make_element(nid), attrName, oldVal, newVal
+                    inst, attrName, oldVal, newVal
                 );
             } catch(e) {
                 _lumen_console_error('CE attributeChangedCallback: ' + e);
@@ -14040,36 +14095,47 @@ function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
 // CE-1 срез 2 (HTML LS §4.13.5 "upgrade an element"): runs the definition's
 // real constructor over the existing native node, reusing the same
 // construction-stack mechanism срез 1 built for a bare `new MyEl()` — this
-// is its other writer. Pushing `nid` first makes `HTMLElement`'s constructor
-// (top of this file) consume it instead of minting a new node, and hand
-// back a wrapper built off `entry.ctor.prototype`; `_lumen_ce_build_wrapper`
-// interns it via `_lumen_wrapper_cache_set`, REPLACING whatever wrapper
-// `nid` had (a plain pre-upgrade one, or none). Any JS reference obtained
-// before the upgrade keeps pointing at the pre-upgrade object — the same
-// wrapper-identity limitation every other `_lumen_wrapper_cache_set` call in
-// this file already has (subsystems/js.md, BUG-732 et al.); not addressed
-// here. A `ctor` that never calls `super()` (most of the pre-срез-1 test
-// suite still registers a bare `function Foo() {}`) leaves the pushed `nid`
-// unconsumed — harmless, since it is popped unconditionally below and the
-// pre-existing wrapper is left as-is, only the callback still fires.
+// is its other writer (`_lumen_ce_run_constructor`). Pushing `nid` first
+// makes `HTMLElement`'s constructor (top of this file) consume it instead of
+// minting a new node, and hand back a wrapper built off `entry.ctor.prototype`;
+// `_lumen_ce_build_wrapper` interns it via `_lumen_wrapper_cache_set`,
+// REPLACING whatever wrapper `nid` had (a plain pre-upgrade one, or none).
+// Any JS reference obtained before the upgrade keeps pointing at the
+// pre-upgrade object — the same wrapper-identity limitation every other
+// `_lumen_wrapper_cache_set` call in this file already has (subsystems/js.md,
+// BUG-732 et al.); the reactions below and in `_lumen_ce_maybe_*` always call
+// back on the constructed element, never on such a stale one. A `ctor` that
+// never calls `super()` (most of the pre-срез-1 test suite still registers a
+// bare `function Foo() {}`) leaves the pushed `nid` unconsumed — harmless,
+// since it is popped unconditionally and the pre-existing wrapper stands in.
+//
+// Steps 4-5 (BUG-1167): an `attributeChangedCallback` for every observed
+// attribute the node already carries, in attribute order with a null old
+// value, then `connectedCallback` if connected. The spec enqueues them
+// before running the constructor but invokes them after it; enqueueing here,
+// after construction, gives the same order without a nested element queue.
+// A throwing constructor leaves the element "failed" — no reactions at all.
 function _lumen_ce_upgrade_element(el, entry) {
-    if (!el || el.__nid__ === undefined || el.__ceUpgraded__) return;
-    var nid  = el.__nid__;
+    if (!el || el.__nid__ === undefined) return;
+    var nid = el.__nid__;
+    if (_lumen_ce_elements[nid] !== undefined) return;
     var ctor = entry.ctor;
-    var stack = _lumen_ce_construction_stacks.get(ctor);
-    if (!stack) {
-        stack = [];
-        _lumen_ce_construction_stacks.set(ctor, stack);
+    var upgraded = _lumen_ce_run_constructor(nid, ctor, 'CE upgrade constructor: ');
+    if (_lumen_ce_failed[nid]) return;
+    if (entry.observedAttributes.length > 0
+        && typeof ctor.prototype.attributeChangedCallback === 'function') {
+        var names = _lumen_get_attr_names(nid);
+        for (var i = 0; i < names.length; i++) {
+            if (entry.observedAttributes.indexOf(names[i]) < 0) continue;
+            (function(name, value) {
+                _lumen_ce_enqueue_reaction(nid, function() {
+                    try { ctor.prototype.attributeChangedCallback.call(upgraded, name, null, value); } catch(e) {
+                        _lumen_console_error('CE attributeChangedCallback (upgrade): ' + e);
+                    }
+                });
+            })(names[i], _lumen_u2n(_lumen_get_attr(nid, names[i])));
+        }
     }
-    stack.push(nid);
-    try {
-        new ctor();
-    } catch (e) {
-        _lumen_console_error('CE upgrade constructor: ' + e);
-    }
-    stack.pop();
-    var upgraded = _lumen_make_element(nid);
-    upgraded.__ceUpgraded__ = true;
     if (_lumen_resource_is_connected(nid)
         && typeof ctor.prototype.connectedCallback === 'function') {
         _lumen_ce_enqueue_reaction(nid, function() {
@@ -14087,27 +14153,11 @@ function _lumen_ce_upgrade_element(el, entry) {
 // gets constructed through the real class immediately, so
 // `el.someMethod()` works right after `createElement`, before the element
 // is ever inserted (the WPT probe this срез targets reads `ctorRan`
-// synchronously). Same construction-stack push/pop `_lumen_ce_upgrade_element`
-// and срез 1's bare `new MyEl()` use; on constructor failure (spec's
-// "failed" custom element state) the plain wrapper is kept, still marked
-// upgraded so a later insertion does not retry the constructor.
+// synchronously). On constructor failure (spec's "failed" custom element
+// state) the wrapper is kept and a later insertion does not retry the
+// constructor.
 function _lumen_ce_construct_sync(nid, entry) {
-    var ctor = entry.ctor;
-    var stack = _lumen_ce_construction_stacks.get(ctor);
-    if (!stack) {
-        stack = [];
-        _lumen_ce_construction_stacks.set(ctor, stack);
-    }
-    stack.push(nid);
-    try {
-        new ctor();
-    } catch (e) {
-        _lumen_console_error('CE create constructor: ' + e);
-    }
-    stack.pop();
-    var built = _lumen_make_element(nid);
-    built.__ceUpgraded__ = true;
-    return built;
+    return _lumen_ce_run_constructor(nid, entry.ctor, 'CE create constructor: ');
 }
 
 // Upgrades all DOM elements matching `tag` that are scoped to `scope`
