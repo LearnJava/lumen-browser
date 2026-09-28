@@ -1,6 +1,6 @@
 # BUG-680 — `SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` constructors don't exist; dispatched events are plain object literals, not instances of either
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3)
 **Компонент:** js (`crates/js/src/speech.rs` — `SPEECH_SHIM`, `SpeechSynthesisUtterance.prototype._fire` at line 136, globals export block at lines 273-289)
 **Найден:** P2, WPT-VENDOR-speech-api, 2026-08-06
 
@@ -45,7 +45,7 @@ SpeechSynthesisErrorEvent(...)`. `SpeechSynthesisEvent-properties.html`
 (проверяют порядок `start`/`end`) падают отдельно, но по другой,
 уже задокументированной причине — testdriver `bless()`/`click()` вызывает
 `elementDocument.contains(...)`, отсутствующему на любом узле
-([BUG-574](BUG-574-OPEN.md)); дефект конструкторов маскируется этим более
+([BUG-574](BUG-574-FIXED.md)); дефект конструкторов маскируется этим более
 ранним падением в двух из трёх файлов, но виден напрямую в
 `*-constructor.html`.
 
@@ -99,3 +99,37 @@ eventInitDict)` — оба наследуют от `Event` (шаблон уже 
 prototype._fire` (строка 136) на `new SpeechSynthesisEvent(...)` (обычные
 события) / `new SpeechSynthesisErrorEvent(...)` (событие `error`) вместо
 текущего plain-literal.
+
+## Исправление (P3, 2026-09-28)
+
+`SPEECH_SHIM` (`crates/js/src/speech.rs`) получил два класса по IDL Web Speech API
+§4.2.6–4.2.7: `SpeechSynthesisEvent extends Event` и `SpeechSynthesisErrorEvent extends
+SpeechSynthesisEvent`. Конструктор проверяет словарь как WebIDL: меньше двух аргументов —
+`TypeError`; `utterance` обязателен и должен быть `SpeechSynthesisUtterance`;
+`charIndex`/`charLength` — `unsigned long` (`>>> 0`), `elapsedTime` — `float`
+(`Math.fround`, не-конечное → `TypeError`), `name` — `DOMString`. У события ошибки
+`error` обязателен и сверяется с перечислением `SpeechSynthesisErrorCode` (по спеке,
+а не по списку из раздела «Дальше» выше: там был `no-speech` из распознавания и не было
+`canceled`/`interrupted`). Атрибуты — read-only геттеры на прототипе поверх
+неперечисляемого слота, как у IDL-атрибутов. Оба класса выставлены на `window` и
+`globalThis`.
+
+`SpeechSynthesisUtterance.prototype._fire` теперь строит настоящий инстанс
+(`SpeechSynthesisErrorEvent` для `error` с `synthesis-failed` по умолчанию), помечает его
+`isTrusted`, ставит `target`/`currentTarget` на утверждение и `eventPhase` AT_TARGET на
+время доставки.
+
+**Проверка.** 6 новых тестов в `crates/js/tests/cases/speech_api.rs` (конструкторы,
+обязательные члены, умолчания, перечисление ошибок, доставленные `start`/`error`).
+WPT A/B на release-бинарниках одного слота (`run_report.py --all --root speech-api
+--recursive --check`): `SpeechSynthesisEvent-constructor.html` и
+`SpeechSynthesisErrorEvent-constructor.html` — все сабтесты PASS (их `.ini` удалены как
+полностью чистые), `idlharness.https.window.html` — на 10 провалов меньше (interface
+object length/name, prototype, `constructor`, `@@unscopables` у обоих интерфейсов).
+Остальные 224 «регрессии» `--check` в категории воспроизводятся на бинарнике из `main`
+побитово одинаково — это устаревший baseline `.https.`-тестов, к фиксу не относится.
+`SpeechSynthesisEvent-properties.html` (и `speak-events`/`speak-twice`/`pause-resume`)
+по-прежнему падает раньше, на `test_driver.bless()` с `element click intercepted error`.
+Это уже не BUG-574 (закрыт): `testdriver.js::click` ищет свежевставленную кнопку через
+`document.elementsFromPoint`, а тот отвечает по дереву хит-теста прошлого кадра и её не
+находит — заведено как [BUG-1202](BUG-1202-OPEN.md).
