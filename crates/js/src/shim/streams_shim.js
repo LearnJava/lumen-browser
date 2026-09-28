@@ -46,9 +46,20 @@ function _stream_is_thenable(v) {
         && (typeof v === 'object' || typeof v === 'function')
         && typeof v.then === 'function';
 }
+// WebIDL §3.7.1: an interface object called as a plain function throws. These are
+// ES5 functions, so without the check a call without `new` ran in sloppy mode
+// with `this === globalThis` and left every field the constructor sets behind
+// as a global — `TransformStream()` leaked `readable`/`writable` (BUG-684).
+function _stream_require_new(newTarget, name) {
+    if (newTarget === undefined) {
+        throw new TypeError("Failed to construct '" + name + "': Please use the 'new' operator, "
+            + "this DOM object constructor cannot be called as a function.");
+    }
+}
 
 // ── ReadableStream §3 ────────────────────────────────────────────────────────
 function ReadableStreamDefaultController(stream) {
+    _stream_require_new(new.target, 'ReadableStreamDefaultController');
     this._stream = stream;
     this._queue = [];
     this._closeRequested = false;
@@ -143,6 +154,7 @@ function _rs_pull_if_needed(stream) {
 }
 
 function ReadableStream(source, strategy) {
+    _stream_require_new(new.target, 'ReadableStream');
     source = source || {};
     // §3.2.3 step 2: `type` picks the controller. BUG-824: it used to be ignored,
     // so a byte stream was silently an ordinary one and `{mode:'byob'}` degraded
@@ -384,6 +396,7 @@ ReadableStream.from = function(iterable) {
 
 // ── ReadableStreamDefaultReader §3.7 ─────────────────────────────────────────
 function ReadableStreamDefaultReader(stream) {
+    _stream_require_new(new.target, 'ReadableStreamDefaultReader');
     this._stream = stream;
     this._readRequests = [];
     this._closedD = _stream_deferred();
@@ -449,6 +462,7 @@ ReadableStreamDefaultReader.prototype.read = function() {
 // its own reference to the pre-read view still sees the bytes, where a spec
 // browser would have detached it.
 function ReadableByteStreamController(stream, autoAllocateChunkSize) {
+    _stream_require_new(new.target, 'ReadableByteStreamController');
     this._stream = stream;
     this._queue = [];
     this._closeRequested = false;
@@ -567,6 +581,7 @@ function _rbs_respond(request, bytes) {
 
 // ── ReadableStreamBYOBRequest §3.10 ─────────────────────────────────────────
 function ReadableStreamBYOBRequest(ctrl, view) {
+    _stream_require_new(new.target, 'ReadableStreamBYOBRequest');
     this._ctrl = ctrl;
     this._view = view;
 }
@@ -586,6 +601,7 @@ ReadableStreamBYOBRequest.prototype.respondWithNewView = function(view) {
 
 // ── ReadableStreamBYOBReader §3.8 ───────────────────────────────────────────
 function ReadableStreamBYOBReader(stream) {
+    _stream_require_new(new.target, 'ReadableStreamBYOBReader');
     this._stream = stream;
     this._readRequests = [];
     // Parallel to _readRequests: the view each pending read is to be filled into.
@@ -639,6 +655,7 @@ ReadableStreamBYOBReader.prototype.read = function(view) {
 var _WS_CLOSE_SENTINEL = { closeSentinel: true };
 
 function WritableStreamDefaultController(stream, sink, hwm, sizeFn) {
+    _stream_require_new(new.target, 'WritableStreamDefaultController');
     this._stream = stream;
     this._sink = sink;
     this._queue = [];
@@ -913,6 +930,7 @@ function _ws_close(stream) {
 }
 
 function WritableStream(sink, strategy) {
+    _stream_require_new(new.target, 'WritableStream');
     sink = sink || {};
     strategy = strategy || {};
     this._ws_state = 'writable';
@@ -948,6 +966,7 @@ WritableStream.prototype.close = function() {
 
 // ── WritableStreamDefaultWriter §4.6 ─────────────────────────────────────────
 function WritableStreamDefaultWriter(stream) {
+    _stream_require_new(new.target, 'WritableStreamDefaultWriter');
     if (!stream || typeof stream._ws_state !== 'string') {
         throw new TypeError('WritableStreamDefaultWriter requires a WritableStream');
     }
@@ -1038,6 +1057,7 @@ WritableStreamDefaultWriter.prototype.releaseLock = function() {
 // side takes the other down, which is what «errors thrown in transform put the
 // writable and readable in an errored state» asks for.
 function TransformStreamDefaultController(ts) {
+    _stream_require_new(new.target, 'TransformStreamDefaultController');
     this._ts = ts;
 }
 Object.defineProperty(TransformStreamDefaultController.prototype, 'desiredSize', {
@@ -1109,12 +1129,18 @@ function _ts_flush(ts) {
 }
 
 function TransformStream(transformer, writableStrategy, readableStrategy) {
+    _stream_require_new(new.target, 'TransformStream');
+    _ts_setup(this, transformer, writableStrategy, readableStrategy);
+}
+// The constructor body, shared with the TransformStream subclasses below: they
+// initialise an instance that already exists, which the `new.target` guard
+// would refuse if they went through the constructor itself.
+function _ts_setup(self, transformer, writableStrategy, readableStrategy) {
     transformer = transformer || {};
-    var self = this;
-    this._ts_transformer = transformer;
-    this._ts_ctrl = new TransformStreamDefaultController(this);
-    this._ts_readableCtrl = null;
-    this.readable = new ReadableStream({
+    self._ts_transformer = transformer;
+    self._ts_ctrl = new TransformStreamDefaultController(self);
+    self._ts_readableCtrl = null;
+    self.readable = new ReadableStream({
         start: function(ctrl) { self._ts_readableCtrl = ctrl; },
         // §5.3: cancelling the readable end errors the writable one, so a writer
         // waiting on `closed` after `readable.cancel()` hears about it.
@@ -1122,12 +1148,12 @@ function TransformStream(transformer, writableStrategy, readableStrategy) {
     }, readableStrategy);
     var startResult;
     try {
-        startResult = typeof transformer.start === 'function' ? transformer.start(this._ts_ctrl) : undefined;
-        this._ts_startPromise = Promise.resolve(startResult);
+        startResult = typeof transformer.start === 'function' ? transformer.start(self._ts_ctrl) : undefined;
+        self._ts_startPromise = Promise.resolve(startResult);
     } catch (e) {
-        this._ts_startPromise = Promise.reject(e);
+        self._ts_startPromise = Promise.reject(e);
     }
-    this.writable = new WritableStream({
+    self.writable = new WritableStream({
         start: function() { return self._ts_startPromise; },
         write: function(chunk) { return _ts_transform(self, chunk); },
         close: function() { return _ts_flush(self); },
@@ -1135,13 +1161,14 @@ function TransformStream(transformer, writableStrategy, readableStrategy) {
     }, writableStrategy);
     // The writable half hears about a failed start() through its own sink; the
     // readable half needs telling separately.
-    _stream_mark_handled(this._ts_startPromise.then(undefined, function(e) { _ts_error(self, e); }));
+    _stream_mark_handled(self._ts_startPromise.then(undefined, function(e) { _ts_error(self, e); }));
 }
 
 // ── TextDecoderStream / TextEncoderStream (Encoding Standard §5.1) ───────────
 function TextDecoderStream(label, options) {
+    _stream_require_new(new.target, 'TextDecoderStream');
     var dec = new TextDecoder(label, options);
-    TransformStream.call(this, {
+    _ts_setup(this, {
         transform: function(chunk, c) {
             var str = dec.decode(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk), { stream: true });
             if (str.length > 0) c.enqueue(str);
@@ -1159,8 +1186,9 @@ TextDecoderStream.prototype = Object.create(TransformStream.prototype);
 TextDecoderStream.prototype.constructor = TextDecoderStream;
 
 function TextEncoderStream() {
+    _stream_require_new(new.target, 'TextEncoderStream');
     var enc = new TextEncoder();
-    TransformStream.call(this, {
+    _ts_setup(this, {
         transform: function(chunk, c) {
             c.enqueue(enc.encode(String(chunk)));
         }
@@ -1229,7 +1257,7 @@ function _csInit(self, format, label, decompress) {
         throw new TypeError(label + ': unsupported format: ' + format);
     var st = { h: _lumen_cs_new(format, decompress), label: label, format: format };
     if (!st.h) throw new TypeError(label + ': unsupported format: ' + format);
-    TransformStream.call(self, {
+    _ts_setup(self, {
         transform: function(chunk, c) { _csTransform(st, chunk, c); },
         flush: function(c) { _csFlush(st, c); }
     });
@@ -1237,12 +1265,14 @@ function _csInit(self, format, label, decompress) {
 }
 
 function CompressionStream(format) {
+    _stream_require_new(new.target, 'CompressionStream');
     _csInit(this, format, 'CompressionStream', false);
 }
 CompressionStream.prototype = Object.create(TransformStream.prototype);
 CompressionStream.prototype.constructor = CompressionStream;
 
 function DecompressionStream(format) {
+    _stream_require_new(new.target, 'DecompressionStream');
     _csInit(this, format, 'DecompressionStream', true);
 }
 DecompressionStream.prototype = Object.create(TransformStream.prototype);
@@ -1250,12 +1280,14 @@ DecompressionStream.prototype.constructor = DecompressionStream;
 
 // ── ByteLengthQueuingStrategy / CountQueuingStrategy §6 ──────────────────────
 function ByteLengthQueuingStrategy(init) {
+    _stream_require_new(new.target, 'ByteLengthQueuingStrategy');
     this.highWaterMark = (init && typeof init.highWaterMark === 'number') ? init.highWaterMark : 1;
 }
 ByteLengthQueuingStrategy.prototype.size = function(chunk) {
     return (chunk && chunk.byteLength) ? chunk.byteLength : 0;
 };
 function CountQueuingStrategy(init) {
+    _stream_require_new(new.target, 'CountQueuingStrategy');
     this.highWaterMark = (init && typeof init.highWaterMark === 'number') ? init.highWaterMark : 1;
 }
 CountQueuingStrategy.prototype.size = function() { return 1; };

@@ -26,3 +26,6 @@ while in progress`; изолированно проходит.
 
 - 2026-09-28, P3, гейт BUG-678: упал в полном `cargo test -p lumen-shell` (2113 passed, 1 failed),
   два повторных прогона `download::tests` — 39/39 зелёные. Правка ветки (JS-шим) крейт shell не трогает.
+- 2026-09-28, P3, гейт BUG-684: снова упал в `scoped-test.sh` (`lumen-shell --bin lumen`, 2121 passed,
+  1 failed), адресный перезапуск — зелёный. Правка ветки (шим Streams + `filesystem_access.rs`)
+  крейт shell не трогает.
