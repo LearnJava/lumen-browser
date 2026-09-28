@@ -209,6 +209,16 @@ impl TabStrip {
         new_active
     }
 
+    /// Strip index of the tab with stable `id`, but only while it is open and
+    /// **not** the active one — `None` for the active tab and for a closed id.
+    ///
+    /// Used to route automation commands to the tab the automation client
+    /// addresses after a `window.open()` moved the foreground elsewhere
+    /// (BUG-1199, `Lumen::automation_tab`).
+    pub fn inactive_index_of(&self, id: usize) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == id).filter(|&idx| idx != self.active)
+    }
+
     /// Update the title of the active tab.
     pub fn set_active_title(&mut self, title: impl Into<String>) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -547,6 +557,21 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         assert_eq!(s.tabs[1].tab_state, TabState::Active);
+    }
+
+    #[test]
+    fn inactive_index_of_skips_active_and_closed_tabs() {
+        let mut s = TabStrip::new();
+        let opener_id = s.tabs[0].id;
+        let popup = s.push_blank(0.0);
+        let popup_id = s.tabs[popup].id;
+        assert_eq!(s.inactive_index_of(opener_id), None, "активная вкладка — не фоновая цель");
+        // `window.open()` делает попап активным — вкладка теста уходит в фон.
+        s.active = popup;
+        assert_eq!(s.inactive_index_of(opener_id), Some(0));
+        assert_eq!(s.inactive_index_of(popup_id), None);
+        s.remove(0);
+        assert_eq!(s.inactive_index_of(opener_id), None, "закрытая вкладка не находится");
     }
 
     #[test]

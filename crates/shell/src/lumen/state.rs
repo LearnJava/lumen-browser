@@ -1057,6 +1057,14 @@ pub(crate) struct Lumen {
     /// `AutomationCommand::Eval` requests queued on the engine thread and not
     /// yet answered (BUG-1145) — polled in `about_to_wait` like `pending_waits`.
     pub(crate) pending_evals: Vec<PendingEval>,
+    /// Stable id of the tab the automation client addresses — the one its
+    /// last `Navigate`/`NewTab` loaded (BUG-1199). `None` until the first
+    /// such command: automation then simply follows the active tab.
+    ///
+    /// A page-driven `window.open()` activates the popup and parks this tab
+    /// in `bg_tabs`, where its runtime keeps ticking; without the id, `Eval`
+    /// polled the popup and the test page's harness results were never read.
+    pub(crate) automation_tab: Option<usize>,
     /// Receiver side of the input injection channel (ADR-007 §8C).
     ///
     /// Drained each `about_to_wait`; commands are processed through the same
