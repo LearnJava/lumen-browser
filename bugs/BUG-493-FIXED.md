@@ -511,7 +511,7 @@ styled-тега не `null` ни разу. Quora к styled-components не пу�
 
 - [BUG-1176](BUG-1176-OPEN.md) — quora: управляемый челлендж Cloudflare падает в Lumen с
   `Cannot read properties of null (reading 'eval')` и перезапускается по кругу;
-- [BUG-1177](BUG-1177-OPEN.md) — bbc: два чанка Next.js потеряны с `H2 connection unusable:
+- [BUG-1177](BUG-1177-FIXED.md) — bbc: два чанка Next.js потеряны с `H2 connection unusable:
   connection closing` после обрыва общего HTTP/2-соединения (1 прогон из 3);
 - [BUG-1178](BUG-1178-OPEN.md) — MCP `eval` на странице без `<script>` всегда отвечает
   `JS context not available`: у такого документа рантайма нет вовсе;
