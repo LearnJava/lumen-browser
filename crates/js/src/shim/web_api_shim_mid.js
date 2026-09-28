@@ -7887,7 +7887,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
                 var newVal   = (typeof _lumen_tt_get_compliant_attribute_value === 'function')
                     ? _lumen_tt_get_compliant_attribute_value(
-                          (_lumen_get_tag_name(nid) || '').toLowerCase(), attrName.toLowerCase(), v)
+                          (_lumen_get_tag_name(nid) || '').toLowerCase(), attrName.toLowerCase(), v,
+                          _lumen_u2n(_lumen_get_namespace_uri(nid)), null)
                     : String(v);
                 _lumen_set_attr(nid, attrName, newVal);
                 // BUG-360: (re)compile `on<type>` content attributes into a handler
@@ -7943,7 +7944,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
                     ? qualifiedName.slice(qualifiedName.indexOf(':') + 1) : qualifiedName;
                 var newVal = (typeof _lumen_tt_get_compliant_attribute_value === 'function')
                     ? _lumen_tt_get_compliant_attribute_value(
-                          (_lumen_get_tag_name(nid) || '').toLowerCase(), localName.toLowerCase(), v)
+                          (_lumen_get_tag_name(nid) || '').toLowerCase(), localName.toLowerCase(), v,
+                          _lumen_u2n(_lumen_get_namespace_uri(nid)), _lumen_ns_arg(ns))
                     : String(v);
                 _lumen_set_attr_ns(nid, _lumen_ns_arg(ns), qualifiedName, newVal);
                 _lumen_ce_maybe_attr_changed(nid, qualifiedName, oldVal, newVal);
