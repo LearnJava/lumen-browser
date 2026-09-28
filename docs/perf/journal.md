@@ -339,7 +339,7 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 | `PerformanceObserver` buffered синхронно (BUG-648) | cnbc |
 | 4xx/5xx заменяется страницей ошибки, `fetch` реджектит (BUG-1114) | reddit (403 и в Chrome), duolingo, fandom |
 
-Служебные находки: [BUG-1145](../../bugs/BUG-1145-OPEN.md) (MCP `eval` отдаёт таймаут движкового
+Служебные находки: [BUG-1145](../../bugs/BUG-1145-FIXED.md) (MCP `eval` отдаёт таймаут движкового
 потока как «JS context not available»; мешал снять DOM на cnbc, gemini, udemy, imgur, github) и
 [BUG-1146](../../bugs/BUG-1146-OPEN.md) (блокировщик игнорирует `$domain=`, виден только при
 включённом блокировщике).

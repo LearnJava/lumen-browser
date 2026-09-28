@@ -919,27 +919,32 @@ impl Lumen {
                     self.scroll_by_delta(delta.x, delta.y);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
-                AutomationCommand::Eval(js) => {
-                    // ADR-016 M2.2c-2c: value-returning `eval_js_value` через
-                    // `route_query_js`. Под флагом чтение упорядочено за уже
-                    // отправленными `task`; без флага байт-идентично: `Some(js_ctx)`
-                    // → `Some(result)`, отсутствие хэндла → `None` → «JS context
-                    // not available».
-                    match route_query_js(
-                        self.engine_thread.as_ref(),
-                        self.js_ctx.as_ref(),
-                        move |j| j.eval_js_value(&js),
-                    ) {
-                        Some(Ok(json)) => {
-                            let _ = reply_tx.send(AutomationReply::Eval(json));
-                        }
-                        Some(Err(e)) => {
-                            let _ = reply_tx.send(AutomationReply::Error(e));
+                AutomationCommand::Eval(js, timeout_ms) => {
+                    // BUG-1145: с движковым потоком eval уходит `Task`-ом (по
+                    // порядку за уже отправленными `task`) и ждёт в
+                    // `pending_evals`, не блокируя UI-поток; срок — из запроса.
+                    // Без потока — синхронно по UI-хэндлу, как раньше.
+                    match self.engine_thread.as_ref() {
+                        Some(engine) => {
+                            let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<EvalOutcome>(1);
+                            let wake = self.load_proxy.clone();
+                            engine.task(move |state| {
+                                let outcome = state.js.as_ref().map(|j| j.eval_js_value(&js));
+                                // Клиент уже получил отказ по сроку — будить некого.
+                                if result_tx.send(outcome).is_ok() {
+                                    let _ = wake.send_event(LoadEvent::AutomationWake);
+                                }
+                            });
+                            self.pending_evals.push(PendingEval {
+                                result_rx,
+                                started: std::time::Instant::now(),
+                                timeout: PendingEval::timeout_from_ms(timeout_ms),
+                                reply_tx,
+                            });
                         }
                         None => {
-                            let _ = reply_tx.send(AutomationReply::Error(
-                                "JS context not available".to_string(),
-                            ));
+                            let outcome = self.js_ctx.as_ref().map(|j| j.eval_js_value(&js));
+                            let _ = reply_tx.send(eval_outcome_reply(outcome, self.nav_start.is_some()));
                         }
                     }
                 }
@@ -1155,6 +1160,31 @@ impl Lumen {
                 }
             }
             self.pending_waits = still_pending;
+        }
+
+        // BUG-1145: ответы движкового потока на eval и сроки ожидания. Приход
+        // ответа будит цикл сам (`AutomationWake`), а срок — нет, поэтому
+        // ближайший вкладываем в уже выставленный `ControlFlow`.
+        if !self.pending_evals.is_empty() {
+            let now = std::time::Instant::now();
+            let engine = self.engine_thread.as_ref();
+            let loading = self.nav_start.is_some();
+            self.pending_evals.retain(|pending| match pending.poll(now, loading, || engine.and_then(|e| e.busy())) {
+                Some(reply) => {
+                    let _ = pending.reply_tx.send(reply);
+                    false
+                }
+                None => true,
+            });
+            if let Some(deadline) = self.pending_evals.iter().map(PendingEval::deadline).min() {
+                match event_loop.control_flow() {
+                    ControlFlow::Poll => {}
+                    ControlFlow::WaitUntil(t) => {
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(t.min(deadline)));
+                    }
+                    ControlFlow::Wait => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+                }
+            }
         }
 
         // Ph3 pointer-events-l3: flush any `CursorMoved` samples queued this
@@ -1957,4 +1987,99 @@ pub(crate) struct PendingWait {
     pub(crate) deadline: std::time::Instant,
     /// Where to send the `Ack`/`Error` reply once resolved.
     pub(crate) reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+}
+
+/// Верхняя граница `timeout_ms` у `AutomationCommand::Eval` (BUG-1145): дальше
+/// ждать движковый поток бессмысленно, а неограниченное значение переполнило бы
+/// `Instant + Duration`.
+const MAX_EVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Итог `eval_js_value` на движковом потоке; `None` — JS-контекста нет.
+pub(crate) type EvalOutcome = Option<Result<String, String>>;
+
+/// `AutomationCommand::Eval`, поставленный движковому потоку и ждущий его
+/// (BUG-1145). Раньше UI-поток блокировался на `EngineThread::query` и после
+/// `QUERY_TIMEOUT` отвечал «JS context not available» — так же, как при
+/// настоящем отсутствии контекста. Теперь eval уходит `Task`-ом, UI-поток не
+/// ждёт, а `about_to_wait` раз в итерацию проверяет ответ и срок.
+///
+/// По истечении срока задание остаётся в очереди и всё равно исполнится —
+/// теряется только ответ, как и у `query`.
+pub(crate) struct PendingEval {
+    /// Сюда движковый поток кладёт итог; дроп без отправки — поток остановлен.
+    pub(crate) result_rx: std::sync::mpsc::Receiver<EvalOutcome>,
+    /// Когда eval поставлен в очередь.
+    pub(crate) started: std::time::Instant,
+    /// Сколько ждать до ответа «поток занят».
+    pub(crate) timeout: std::time::Duration,
+    /// Куда ответить клиенту автоматизации.
+    pub(crate) reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+}
+
+impl PendingEval {
+    /// Срок ожидания `timeout_ms` (или умолчание — `QUERY_TIMEOUT`), обрезанный
+    /// по [`MAX_EVAL_TIMEOUT`].
+    pub(crate) fn timeout_from_ms(timeout_ms: Option<u64>) -> std::time::Duration {
+        timeout_ms
+            .map_or(crate::engine_thread::QUERY_TIMEOUT, std::time::Duration::from_millis)
+            .min(MAX_EVAL_TIMEOUT)
+    }
+
+    /// Момент, когда eval сдаётся.
+    pub(crate) fn deadline(&self) -> std::time::Instant {
+        self.started + self.timeout
+    }
+
+    /// Ответ клиенту, если eval завершён: итог, остановленный поток или срок
+    /// (`busy` называет, чем поток занят); `None` — ждать дальше. `loading` —
+    /// идёт навигация (см. [`eval_outcome_reply`]).
+    pub(crate) fn poll(
+        &self,
+        now: std::time::Instant,
+        loading: bool,
+        busy: impl FnOnce() -> Option<(crate::engine_thread::EngineWork, std::time::Duration)>,
+    ) -> Option<AutomationReply> {
+        match self.result_rx.try_recv() {
+            Ok(outcome) => Some(eval_outcome_reply(outcome, loading)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(AutomationReply::Error(
+                "engine thread stopped before running eval".to_string(),
+            )),
+            Err(std::sync::mpsc::TryRecvError::Empty) if now >= self.deadline() => {
+                Some(AutomationReply::Error(eval_busy_message(self.timeout, busy())))
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        }
+    }
+}
+
+/// Ответ автоматизации на итог eval: `None` — контекста действительно нет.
+/// `loading` — навигация ещё не дошла до установки рантайма страницы: на
+/// тяжёлом сайте это десятки секунд, и без пометки такой ответ неотличим от
+/// страницы, где рантайма нет вовсе (BUG-1178).
+pub(crate) fn eval_outcome_reply(outcome: EvalOutcome, loading: bool) -> AutomationReply {
+    match outcome {
+        Some(Ok(json)) => AutomationReply::Eval(json),
+        Some(Err(e)) => AutomationReply::Error(e),
+        None if loading => {
+            AutomationReply::Error("JS context not available: page is still loading".to_string())
+        }
+        None => AutomationReply::Error("JS context not available".to_string()),
+    }
+}
+
+/// Текст отказа по сроку: сколько ждали и, если известно, чем занят поток.
+fn eval_busy_message(
+    timeout: std::time::Duration,
+    busy: Option<(crate::engine_thread::EngineWork, std::time::Duration)>,
+) -> String {
+    let mut msg = format!(
+        "engine thread busy: eval not run within {:.1} s",
+        timeout.as_secs_f32()
+    );
+    if let Some((work, for_how_long)) = busy {
+        use std::fmt::Write as _;
+        let _ = write!(msg, " (running {work} for {:.1} s)", for_how_long.as_secs_f32());
+    }
+    msg.push_str("; retry or pass a larger timeout_ms");
+    msg
 }

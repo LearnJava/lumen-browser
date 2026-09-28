@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod automation_eval;
 mod automation_hit;
 mod bfcache_salvage;
 mod bug341_census;
