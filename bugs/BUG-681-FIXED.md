@@ -1,6 +1,6 @@
 # BUG-681 — `StorageManager`/`StorageBucket`/`StorageBucketManager` are directly constructible with `new`, though neither spec defines a constructor
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-28 (P3)
 **Компонент:** js (`crates/js/src/storage_manager.rs` — `STORAGE_MANAGER_SHIM`; `crates/js/src/storage_buckets.rs` — `STORAGE_BUCKETS_SHIM`)
 **Найден:** P2, WPT-VENDOR-storage, 2026-08-06
 
@@ -78,3 +78,23 @@ StorageBucketManager()`/`new StorageBucket(...)` во всех трёх мест
 смысл вводить один раз для всех «singleton-only»/«factory-only» интерфейсов
 сразу, а не по одному на баг). Не требует TLS-гэпа для воспроизведения/фикса —
 живой `--mcp-live-port`-пробы достаточно для верификации.
+
+## Исправление (2026-09-28, P3)
+
+Все три конструктора теперь безусловно бросают `TypeError: Illegal
+constructor` — и при `new X()`, и при вызове без `new`. Экземпляры шимы
+строят сами через `Object.create(X.prototype)`: `navigator.storage` и
+`navigator.storageBuckets` — при установке, бакеты — во внутренней фабрике
+`makeBucket(name, options)` из `open()`. Ключ-капча, как в BUG-672, здесь не
+нужна: ни одному из трёх интерфейсов не нужна цепочка `super()` к
+`EventTarget`, поэтому `Object.create` проще и оставляет `X.length === 0`.
+`instanceof` для экземпляров от движка сохраняется. Тесты —
+`storage_manager::tests::storage_manager_is_not_constructible`,
+`storage_buckets::tests::interfaces_are_not_constructible`,
+`storage_buckets::tests::engine_instances_keep_their_interfaces`; старые тесты
+бакетов, строившие менеджер через `new StorageBucketManager()`, переведены на
+`navigator.storageBuckets`.
+
+Остаток вне скоупа: `persist()`/`persisted()` по-прежнему резолвятся `true`,
+расходясь с `permissions.query({name:'persistent-storage'})` → `denied`;
+поля экземпляров (`_buckets`, `_name`…) видны странице.

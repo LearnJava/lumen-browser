@@ -65,7 +65,7 @@ BUG-346/gc.js, эти тесты используют `for await` на испо�
 ([BUG-629](BUG-629-FIXED.md)), `FileSystemFileHandle`
 ([BUG-374](BUG-374-FIXED.md)), `Serial`/`SerialPort`
 ([BUG-672](BUG-672-FIXED.md)) и `StorageManager`/`StorageBucket`/
-`StorageBucketManager` ([BUG-681](BUG-681-OPEN.md)) — седьмая-девятая
+`StorageBucketManager` ([BUG-681](BUG-681-FIXED.md)) — седьмая-девятая
 независимая поверхность одного системного паттерна (ни один шим не
 ставит guard на `new.target`), на этот раз в `dom.rs`'s собственной
 реализации Streams, а не в отдельном модуле. Здесь риск выше обычного:
