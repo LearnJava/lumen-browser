@@ -137,7 +137,7 @@ pub trait RequestFilter: Send + Sync {
     /// вести себя как `should_block`: type/party-ограниченные правила
     /// срабатывают консервативно (блокируют), как при полном игнорировании
     /// опций до Phase 2.
-    fn should_block_ctx(&self, url: &Url, _ctx: &RequestContext) -> Option<String> {
+    fn should_block_ctx(&self, url: &Url, _ctx: &RequestContext<'_>) -> Option<String> {
         self.should_block(url)
     }
 }
@@ -174,7 +174,7 @@ pub enum ResourceType {
 /// правила тогда срабатывают консервативно (блокируют) — так сохраняется
 /// до-Phase-2 поведение для путей, которые не знают тип ресурса.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct RequestContext {
+pub struct RequestContext<'a> {
     /// Тип ресурса запроса; `None` — неизвестен.
     pub resource_type: Option<ResourceType>,
     /// `Some(true)` — third-party (хост запроса вне registrable-домена
@@ -188,11 +188,17 @@ pub struct RequestContext {
     /// такие правила НЕ срабатывать, снимая массовый over-block голых доменов
     /// (`example.com`, `github.com`) узкими regex-правилами easylist (BUG-292).
     pub is_top_level: bool,
+    /// ASCII-хост (lowercase) документа, от имени которого идёт запрос, —
+    /// «страница» в смысле опции ABP `$domain=a.com|~b.com`, которая
+    /// ограничивает правило запросами с перечисленных сайтов (BUG-1146).
+    /// `None` — документ неизвестен, `domain=`-правило тогда срабатывает
+    /// консервативно, как и type/party-правила.
+    pub document_host: Option<&'a str>,
 }
 
-impl RequestContext {
-    /// Контекст без информации: `resource_type`/`third_party` = `None`,
-    /// `is_top_level` = `false`. Заставляет `should_block_ctx` вести себя как
+impl RequestContext<'_> {
+    /// Контекст без информации: `resource_type`/`third_party`/`document_host`
+    /// = `None`, `is_top_level` = `false`. Заставляет `should_block_ctx` вести себя как
     /// `should_block` (консервативный блок для type/party-правил).
     pub fn unknown() -> Self {
         Self::default()

@@ -19,12 +19,14 @@
 //!   `$script,image,stylesheet,font,xmlhttprequest,subdocument,media,other`
 //!   (and `~`-negated forms) restrict a rule to matching request types;
 //!   `$third-party` / `$~third-party` (`first-party`) restrict by party.
-//!   `domain=` and unmodelled per-request-type keywords (`popup`, `ping`, …)
-//!   are parsed-and-ignored for subresource matching — the rule keeps
-//!   blocking every resource type, never narrows on an unmodelled modifier
-//!   (no over-allow) — but both also disqualify the rule from ever matching a
-//!   top-level document navigation (BUG-989: dropping e.g. `domain=` must not
-//!   silently turn a referrer-conditional ad rule into a full site block).
+//!   `$domain=a.com|~b.com` restricts the rule to requests made by a
+//!   document on the listed sites (BUG-1146) — see [`DomainCondition`].
+//!   Unmodelled per-request-type keywords (`popup`, `ping`, …) are
+//!   parsed-and-ignored for subresource matching — the rule keeps blocking
+//!   every resource type, never narrows on an unmodelled modifier (no
+//!   over-allow). Both `domain=` and those keywords disqualify the rule from
+//!   ever matching a top-level document navigation (BUG-989: a
+//!   referrer-conditional ad rule must not turn into a full site block).
 //!   Other modifiers (`important`, `match-case`, `csp=`, `redirect=`, …) are
 //!   plain noise.
 
@@ -97,35 +99,97 @@ fn type_option_bit(key: &str) -> Option<u16> {
     })
 }
 
+/// Parsed `$domain=` option: the sites whose documents the rule applies on.
+///
+/// Adblock Plus semantics: `domain=a.com|~sub.a.com` — a page host matches an
+/// entry when it equals it or is its subdomain; the most specific (longest)
+/// matching entry decides, `~` entries exclude. A host matching no entry is
+/// covered only when the list has no positive entries (`domain=~b.com` —
+/// "everywhere except b.com"). An entity entry `name.*` (uBlock syntax)
+/// matches a host label `name` followed by any suffix.
+#[derive(Debug, Clone, Default)]
+struct DomainCondition {
+    include: HashSet<String>,
+    exclude: HashSet<String>,
+}
+
+impl DomainCondition {
+    /// Parse the value of `domain=` (`a.com|~b.com|…`).
+    fn parse(value: &str) -> Self {
+        let mut cond = Self::default();
+        for raw in value.split('|') {
+            let entry = raw.trim().to_ascii_lowercase();
+            match entry.strip_prefix('~') {
+                Some("") => {}
+                Some(d) => {
+                    cond.exclude.insert(d.to_owned());
+                }
+                None if !entry.is_empty() => {
+                    cond.include.insert(entry);
+                }
+                None => {}
+            }
+        }
+        cond
+    }
+
+    /// Returns `true` if the rule applies on a page whose host is `host`
+    /// (ASCII, lowercase).
+    fn applies_on(&self, host: &str) -> bool {
+        let mut cur = host.trim_end_matches('.');
+        loop {
+            // `name.tld…` also matches the entity entry `name.*`.
+            let entity = cur.find('.').map(|dot| format!("{}.*", &cur[..dot]));
+            let hit = |set: &HashSet<String>| {
+                set.contains(cur) || entity.as_ref().is_some_and(|e| set.contains(e))
+            };
+            if hit(&self.exclude) {
+                return false;
+            }
+            if hit(&self.include) {
+                return true;
+            }
+            match cur.find('.') {
+                Some(dot) => cur = &cur[dot + 1..],
+                None => return self.include.is_empty(),
+            }
+        }
+    }
+}
+
 /// Parsed `$`-options constraining when a [`FilterEntry`] applies.
 ///
-/// Both `types`/`third_party` default to "applies always": `types == None`
-/// matches every resource type, `third_party == None` matches first- and
-/// third-party alike.
-#[derive(Debug, Clone, Copy)]
+/// `types`/`third_party`/`domains` default to "applies always": `types ==
+/// None` matches every resource type, `third_party == None` matches first-
+/// and third-party alike, `domains == None` matches on any page.
+#[derive(Debug, Clone)]
 struct RuleOptions {
     /// Allowed resource-type mask, or `None` for "any type".
     types: Option<u16>,
     /// `Some(true)` — only third-party requests, `Some(false)` — only
     /// first-party, `None` — either.
     third_party: Option<bool>,
+    /// `$domain=` page condition, `None` when the rule has none. Boxed: only
+    /// about a thousand of the lists' rules carry one.
+    domains: Option<Box<DomainCondition>>,
     /// `true` when the rule carries a `domain=` referrer condition or a
     /// recognised-but-unmodelled per-request-type keyword (`popup`, `ping`,
-    /// …). Deliberately kept separate from `types`/`third_party`: it must
-    /// NOT narrow which subresources the rule matches (`domain_option_ignored_not_narrowing`,
-    /// `unmodelled_option_does_not_narrow` — dropping an unmodelled condition
-    /// keeps blocking everything, same as before), it only disqualifies the
-    /// rule from the top-level-navigation exemption below (BUG-989).
+    /// …). Deliberately kept separate from `types`/`third_party`: an
+    /// unmodelled keyword must NOT narrow which subresources the rule matches
+    /// (`unmodelled_option_does_not_narrow` — dropping an unmodelled condition
+    /// keeps blocking everything), it only disqualifies the rule from the
+    /// top-level-navigation exemption below (BUG-989).
     narrows_beyond_domain: bool,
 }
 
 impl RuleOptions {
     /// Options that match every request (no `$`-restrictions).
     fn all() -> Self {
-        Self { types: None, third_party: None, narrows_beyond_domain: false }
+        Self { types: None, third_party: None, domains: None, narrows_beyond_domain: false }
     }
 
-    /// Returns `true` if `ctx` satisfies the type and party restrictions.
+    /// Returns `true` if `ctx` satisfies the type, party and page-domain
+    /// restrictions.
     ///
     /// Unknown context fields ([`RequestContext::unknown`]) satisfy any
     /// restriction (conservative block) — matching the pre-Phase-2 behaviour
@@ -134,7 +198,7 @@ impl RuleOptions {
     /// Exception: a top-level document navigation ([`RequestContext::is_top_level`])
     /// is never matched by a rule carrying resource-type `$`-options — see the
     /// inline note below.
-    fn matches(&self, ctx: &RequestContext) -> bool {
+    fn matches(&self, ctx: &RequestContext<'_>) -> bool {
         // Top-level document navigation: rules carrying explicit resource-type
         // options (`$script`, `$image`, …) describe subresources only. In ABP
         // semantics a main-frame document is blocked solely by an explicit
@@ -168,6 +232,14 @@ impl RuleOptions {
         {
             return false;
         }
+        // BUG-1146: `domain=` names the pages the rule is written for; on any
+        // other page it must not fire (`…$script,domain=3movs.com|…` blocked
+        // whatsapp's own bundle). Unknown page → conservative block.
+        if let (Some(cond), Some(host)) = (&self.domains, ctx.document_host)
+            && !cond.applies_on(host)
+        {
+            return false;
+        }
         true
     }
 }
@@ -186,12 +258,13 @@ const UNMODELLED_TYPE_KEYWORDS: &[&str] = &[
 /// Positive type options form an allow-list (`$script,image` → only those);
 /// if only negated types are present, the rule applies to all *except* them
 /// (`$~image` → everything but images). `third-party`/`first-party` (and the
-/// `3p`/`1p` aliases) set the party restriction. `domain=` and unmodelled
-/// per-request-type keywords (`popup`, `ping`, …) set
-/// [`RuleOptions::narrows_beyond_domain`] but otherwise stay ignored — never
-/// narrowing which subresources the rule matches (avoids silently allowing
-/// requests a Phase-1 build would have blocked). Any other modifier
-/// (`important`, `match-case`, `csp=`, `redirect=`, …) is plain noise.
+/// `3p`/`1p` aliases) set the party restriction, `domain=` the page
+/// condition ([`DomainCondition`]). `domain=` and unmodelled per-request-type
+/// keywords (`popup`, `ping`, …) set [`RuleOptions::narrows_beyond_domain`];
+/// the keywords otherwise stay ignored — never narrowing which subresources
+/// the rule matches (avoids silently allowing requests a Phase-1 build would
+/// have blocked). Any other modifier (`important`, `match-case`, `csp=`,
+/// `redirect=`, …) is plain noise.
 fn parse_options(opts: &str) -> RuleOptions {
     if opts.is_empty() {
         return RuleOptions::all();
@@ -201,6 +274,7 @@ fn parse_options(opts: &str) -> RuleOptions {
     let mut has_pos = false;
     let mut has_neg = false;
     let mut third_party: Option<bool> = None;
+    let mut domains: Option<Box<DomainCondition>> = None;
     let mut narrows_beyond_domain = false;
 
     for raw in opts.split(',') {
@@ -230,7 +304,12 @@ fn parse_options(opts: &str) -> RuleOptions {
         } else if key == "first-party" || key == "1p" {
             // `first-party` ⇒ not third-party; `~first-party` ⇒ third-party.
             third_party = Some(neg);
-        } else if key == "domain" || UNMODELLED_TYPE_KEYWORDS.contains(&key) {
+        } else if key == "domain" {
+            narrows_beyond_domain = true;
+            if let Some((_, value)) = name.split_once('=') {
+                domains = Some(Box::new(DomainCondition::parse(value)));
+            }
+        } else if UNMODELLED_TYPE_KEYWORDS.contains(&key) {
             narrows_beyond_domain = true;
         }
         // Remaining modifier (important, match-case, csp=, redirect=, …): noise.
@@ -243,7 +322,7 @@ fn parse_options(opts: &str) -> RuleOptions {
     } else {
         None
     };
-    RuleOptions { types, third_party, narrows_beyond_domain }
+    RuleOptions { types, third_party, domains, narrows_beyond_domain }
 }
 
 /// A single parsed filter rule.
@@ -259,7 +338,7 @@ struct FilterEntry {
 impl FilterEntry {
     /// Returns `true` if this entry matches `url` under request `ctx` (both the
     /// URL pattern and the `$`-option restrictions must hold).
-    fn matches(&self, url: &Url, ctx: &RequestContext) -> bool {
+    fn matches(&self, url: &Url, ctx: &RequestContext<'_>) -> bool {
         self.url_matches(url) && self.options.matches(ctx)
     }
 
@@ -438,7 +517,7 @@ impl EasyListFilter {
     }
 
     /// Check if `url` matches any block rule (before exception check).
-    fn is_blocked_raw(&self, url: &Url, ctx: &RequestContext) -> Option<&str> {
+    fn is_blocked_raw(&self, url: &Url, ctx: &RequestContext<'_>) -> Option<&str> {
         // Walk host hierarchy.
         let host = url.host().to_lowercase();
         if let Some(reason) = self.check_host_rules(&host, url, ctx) {
@@ -453,7 +532,7 @@ impl EasyListFilter {
         None
     }
 
-    fn check_host_rules<'a>(&'a self, host: &str, url: &Url, ctx: &RequestContext) -> Option<&'a str> {
+    fn check_host_rules<'a>(&'a self, host: &str, url: &Url, ctx: &RequestContext<'_>) -> Option<&'a str> {
         // Exact host match.
         if let Some(entries) = self.block.get(host) {
             for e in entries {
@@ -480,7 +559,7 @@ impl EasyListFilter {
     }
 
     /// Check if `url` is covered by an exception rule.
-    fn is_allowed(&self, url: &Url, ctx: &RequestContext) -> bool {
+    fn is_allowed(&self, url: &Url, ctx: &RequestContext<'_>) -> bool {
         let host = url.host().to_lowercase();
         // Host-indexed exceptions.
         if let Some(entries) = self.allow.get(&host) {
@@ -518,7 +597,7 @@ impl RequestFilter for EasyListFilter {
         self.should_block_ctx(url, &RequestContext::unknown())
     }
 
-    fn should_block_ctx(&self, url: &Url, ctx: &RequestContext) -> Option<String> {
+    fn should_block_ctx(&self, url: &Url, ctx: &RequestContext<'_>) -> Option<String> {
         if let Some(reason) = self.is_blocked_raw(url, ctx)
             && !self.is_allowed(url, ctx)
         {
@@ -647,8 +726,8 @@ mod tests {
     // ── Resource-type & party options (Phase 2) ───────────────────────────
 
     /// Context with a known resource type and unknown party.
-    fn ctx_type(rt: ResourceType) -> RequestContext {
-        RequestContext { resource_type: Some(rt), third_party: None, is_top_level: false }
+    fn ctx_type(rt: ResourceType) -> RequestContext<'static> {
+        RequestContext { resource_type: Some(rt), third_party: None, is_top_level: false, document_host: None }
     }
 
     #[test]
@@ -696,8 +775,8 @@ mod tests {
     #[test]
     fn third_party_option_respects_party() {
         let f = filter("||widget.net^$third-party");
-        let third = RequestContext { resource_type: None, third_party: Some(true), is_top_level: false };
-        let first = RequestContext { resource_type: None, third_party: Some(false), is_top_level: false };
+        let third = RequestContext { resource_type: None, third_party: Some(true), is_top_level: false, document_host: None };
+        let first = RequestContext { resource_type: None, third_party: Some(false), is_top_level: false, document_host: None };
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &third).is_some());
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &first).is_none());
     }
@@ -705,21 +784,82 @@ mod tests {
     #[test]
     fn first_party_option_respects_party() {
         let f = filter("||widget.net^$~third-party");
-        let third = RequestContext { resource_type: None, third_party: Some(true), is_top_level: false };
-        let first = RequestContext { resource_type: None, third_party: Some(false), is_top_level: false };
+        let third = RequestContext { resource_type: None, third_party: Some(true), is_top_level: false, document_host: None };
+        let first = RequestContext { resource_type: None, third_party: Some(false), is_top_level: false, document_host: None };
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &first).is_some());
         assert!(f.should_block_ctx(&url("https://widget.net/x"), &third).is_none());
     }
 
+    /// Subresource context on a page with host `page`.
+    fn ctx_on(rt: ResourceType, page: &str) -> RequestContext<'_> {
+        RequestContext { document_host: Some(page), ..ctx_type(rt) }
+    }
+
     #[test]
-    fn domain_option_ignored_not_narrowing() {
-        // domain= is parsed-and-ignored; rule still applies (no over-allow).
+    fn domain_option_limits_rule_to_listed_pages() {
+        // BUG-1146 (whatsapp): a rule written for other sites must not block a
+        // page's own bundle.
+        let f = filter(
+            r"/^https?:\/\/.*\/[a-z0-9A-Z_]{2,15}\.(php|jx|jsx|1ph|jsf|jz|jsm|j$)/$script,subdocument,domain=3movs.com|4kporn.xxx",
+        );
+        let bundle = url("https://static.whatsapp.net/rsrc.php/v4/yw/r/wK5kjw4kgtM.js");
+        assert!(f.should_block_ctx(&bundle, &ctx_on(ResourceType::Script, "web.whatsapp.com")).is_none());
+        assert!(f.should_block_ctx(&bundle, &ctx_on(ResourceType::Script, "3movs.com")).is_some());
+        // Subdomain of a listed site is covered.
+        assert!(f.should_block_ctx(&bundle, &ctx_on(ResourceType::Script, "www.3movs.com")).is_some());
+        // A suffix that is not a label boundary is not.
+        assert!(f.should_block_ctx(&bundle, &ctx_on(ResourceType::Script, "not3movs.com")).is_none());
+    }
+
+    #[test]
+    fn domain_option_host_rule_applies_on_listed_page() {
+        // BUG-1146 (duolingo / naver): `||cloudfront.net^$domain=…` fires only on
+        // the listed pages.
+        let f = filter("||cloudfront.net^$domain=buffsports.io|naver.com");
+        let js = url("https://d35aaqx5ub95lt.cloudfront.net/js/app.js");
+        assert!(f.should_block_ctx(&js, &ctx_on(ResourceType::Script, "www.duolingo.com")).is_none());
+        assert!(f.should_block_ctx(&js, &ctx_on(ResourceType::Script, "www.naver.com")).is_some());
+    }
+
+    #[test]
+    fn domain_option_negated_entries_exclude() {
+        // Only `~` entries: everywhere except the excluded sites.
+        let f = filter("||ads.net^$domain=~foo.com");
+        let ad = url("https://ads.net/a.js");
+        assert!(f.should_block_ctx(&ad, &ctx_on(ResourceType::Script, "bar.com")).is_some());
+        assert!(f.should_block_ctx(&ad, &ctx_on(ResourceType::Script, "m.foo.com")).is_none());
+        // Most specific entry wins: a `~` subdomain inside a listed site.
+        let f2 = filter("||ads.net^$domain=foo.com|~safe.foo.com");
+        assert!(f2.should_block_ctx(&ad, &ctx_on(ResourceType::Script, "www.foo.com")).is_some());
+        assert!(f2.should_block_ctx(&ad, &ctx_on(ResourceType::Script, "a.safe.foo.com")).is_none());
+    }
+
+    #[test]
+    fn domain_option_entity_entry() {
+        let f = filter("||ads.net^$domain=wayfair.*");
+        let ad = url("https://ads.net/a.js");
+        assert!(f.should_block_ctx(&ad, &ctx_on(ResourceType::Script, "www.wayfair.co.uk")).is_some());
+        assert!(f.should_block_ctx(&ad, &ctx_on(ResourceType::Script, "example.com")).is_none());
+    }
+
+    #[test]
+    fn domain_option_unknown_page_blocks_conservatively() {
+        // No document host → the rule applies, same contract as unknown
+        // type/party; the type restriction is still honoured.
         let f = filter("||ads.net^$script,domain=foo.com");
         assert!(f.should_block_ctx(&url("https://ads.net/a.js"),
             &ctx_type(ResourceType::Script)).is_some());
-        // But the type restriction is honoured.
         assert!(f.should_block_ctx(&url("https://ads.net/a.png"),
             &ctx_type(ResourceType::Image)).is_none());
+    }
+
+    #[test]
+    fn domain_option_limits_exception_rule() {
+        // `@@…$domain=` whitelists only on the listed pages.
+        let f = filter("||cdn.net^\n@@||cdn.net^$domain=good.com");
+        let res = url("https://cdn.net/a.js");
+        assert!(f.should_block_ctx(&res, &ctx_on(ResourceType::Script, "good.com")).is_none());
+        assert!(f.should_block_ctx(&res, &ctx_on(ResourceType::Script, "other.com")).is_some());
     }
 
     #[test]
@@ -741,8 +881,8 @@ mod tests {
     }
 
     /// A top-level document navigation context (BUG-292).
-    fn ctx_top_level() -> RequestContext {
-        RequestContext { resource_type: None, third_party: None, is_top_level: true }
+    fn ctx_top_level() -> RequestContext<'static> {
+        RequestContext { resource_type: None, third_party: None, is_top_level: true, document_host: None }
     }
 
     #[test]
@@ -789,7 +929,7 @@ mod tests {
             f.should_block_ctx(&url("https://imgur.com/"), &ctx_top_level()).is_none(),
             "domain=-conditional rule must not block a top-level document navigation"
         );
-        // Subresource matching is untouched — domain= still doesn't narrow.
+        // A subresource with an unknown page is still blocked conservatively.
         assert!(
             f.should_block_ctx(&url("https://imgur.com/x.png"),
                 &ctx_type(ResourceType::Image)).is_some(),
