@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-28",
  "counts": {
-  "open": 215,
-  "fixed": 926,
+  "open": 210,
+  "fixed": 944,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 1141,
+ "total_bugs": 1154,
  "phases": [
   {
    "id": "P0",
@@ -4253,7 +4253,7 @@
        "title": "WPT: вендорить + прогнать категорию `speech-api`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нет речевого движка. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root speech-api --recursive`, 1:36, 27 файлов, 16 отобранных id) — **9/16 harness OK, 6/31 сабтестов**, необычно высоко для 🚫-категории — движок реально реализует TTS-мост (SAPI/espeak/`say`) и шим `SpeechSynthesis`/`SpeechSynthesisUtterance` (CAPABILITIES.md перечисляет «Web Speech TTS (OS)»). Новая находка — [BUG-680](bugs/BUG-680-OPEN.md): `SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` не существуют как глобальные конструкторы (`ReferenceError` на `new SpeechSynthesisEvent(...)`), а доставляемые события — plain object literals, не инстансы этих классов. Остальной сигнал — реконфирмация: [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует, ломает testdriver `bless()`/`click()`), класс BUG-380 (переиспользуемый browsing context), TLS `UnknownIssuer` TIMEOUT на всех `.https.` id. `historical.html` (2 FAIL: `webkitSpeechRecognition` существует, `SpeechRecognitionEvent` без `interpretation`/`emma`) соответствует документированному дизайну шима (legacy-алиас), не баг. Один новый номер бага",
+       "note": "Скоуп: 🚫 (вне скоупа). нет речевого движка. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root speech-api --recursive`, 1:36, 27 файлов, 16 отобранных id) — **9/16 harness OK, 6/31 сабтестов**, необычно высоко для 🚫-категории — движок реально реализует TTS-мост (SAPI/espeak/`say`) и шим `SpeechSynthesis`/`SpeechSynthesisUtterance` (CAPABILITIES.md перечисляет «Web Speech TTS (OS)»). Новая находка — [BUG-680](bugs/BUG-680-FIXED.md): `SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` не существуют как глобальные конструкторы (`ReferenceError` на `new SpeechSynthesisEvent(...)`), а доставляемые события — plain object literals, не инстансы этих классов. Остальной сигнал — реконфирмация: [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует, ломает testdriver `bless()`/`click()`), класс BUG-380 (переиспользуемый browsing context), TLS `UnknownIssuer` TIMEOUT на всех `.https.` id. `historical.html` (2 FAIL: `webkitSpeechRecognition` существует, `SpeechRecognitionEvent` без `interpretation`/`emma`) соответствует документированному дизайну шима (legacy-алиас), не баг. Один новый номер бага",
        "bugs": [
         "BUG-680"
        ]
@@ -4263,7 +4263,7 @@
        "title": "WPT: вендорить + прогнать категорию `storage`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage --recursive`, 7:47, 32 значимых файла, 26 отобранных id) — **0/26 harness OK**. Все 26 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не дошёл до навигации. `navigator.storage`/`navigator.storageBuckets` реально реализованы как Phase 0 in-memory заглушки (`crates/js/src/storage_manager.rs`/`storage_buckets.rs`), поведение самих методов соответствует doc-комментариям — не баг. Новая находка — [BUG-681](bugs/BUG-681-OPEN.md): `StorageManager`/`StorageBucketManager`/`StorageBucket` — обычные ES5-конструкторы без `new.target`-гварда, все три конструируемы напрямую со страницы, хотя ни один спек не определяет для них конструктор (тот же класс, что BUG-629/374/672, три новые поверхности сразу). `navigator.permissions.query({name:'persistent-storage'})` → `granted` — реконфирмация уже открытого [BUG-386](bugs/BUG-386-FIXED.md) (прямо перечисляет `persistent-storage` в примере), не новая находка. Живая проба через `--mcp-live-port`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage --recursive`, 7:47, 32 значимых файла, 26 отобранных id) — **0/26 harness OK**. Все 26 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не дошёл до навигации. `navigator.storage`/`navigator.storageBuckets` реально реализованы как Phase 0 in-memory заглушки (`crates/js/src/storage_manager.rs`/`storage_buckets.rs`), поведение самих методов соответствует doc-комментариям — не баг. Новая находка — [BUG-681](bugs/BUG-681-FIXED.md): `StorageManager`/`StorageBucketManager`/`StorageBucket` — обычные ES5-конструкторы без `new.target`-гварда, все три конструируемы напрямую со страницы, хотя ни один спек не определяет для них конструктор (тот же класс, что BUG-629/374/672, три новые поверхности сразу). `navigator.permissions.query({name:'persistent-storage'})` → `granted` — реконфирмация уже открытого [BUG-386](bugs/BUG-386-FIXED.md) (прямо перечисляет `persistent-storage` в примере), не новая находка. Живая проба через `--mcp-live-port`. Один новый номер бага",
        "bugs": [
         "BUG-681"
        ]
@@ -4283,7 +4283,7 @@
        "title": "WPT: вендорить + прогнать категорию `streams`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root streams --recursive`, 5:50, 98 значимых файлов, 88 отобранных id) — **55/88 harness OK, 154/1076 сабтестов**. Основной объём сигнала — реконфирмация: [BUG-346](bugs/BUG-346-FIXED.md) (`..`-сегменты в `Url::resolve()`, ~200 FAIL через `streams/piping/../resources/*.js` 404); недокументированно-невендоренный `/common/gc.js` (`garbageCollect is not defined`, тот же класс, что `FileAPI`/`custom-elements`/`js`); отсутствие `byobRequest`/повторных вызовов `pull()`/`flush()` соответствует собственному doc-комментарию модуля (`dom.rs:5630-5634`, «synchronous-friendly model», Phase 0) — не баг. Новая находка — [BUG-684](bugs/BUG-684-OPEN.md): `ReadableStream`/`WritableStream`/`TransformStream` — обычные ES5-конструкторы без `new.target`-гварда, вызов без `new` молча биндит `this` на `globalThis` и утекает поля конструктора как одноимённые глобалы (`TransformStream()` — худший случай, утекают `globalThis.readable`/`globalThis.writable`, предельно общие имена); тот же класс, что BUG-629/374/672/681, седьмая-девятая поверхность. Отдельно: `ReadableStream.prototype[Symbol.asyncIterator]`/`.values()` отсутствуют целиком (WHATWG Streams §4.1), объясняя кластер `s[Symbol.asyncIterator] is not a function` в самом прогоне. Живая проба через `--mcp-live-port`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root streams --recursive`, 5:50, 98 значимых файлов, 88 отобранных id) — **55/88 harness OK, 154/1076 сабтестов**. Основной объём сигнала — реконфирмация: [BUG-346](bugs/BUG-346-FIXED.md) (`..`-сегменты в `Url::resolve()`, ~200 FAIL через `streams/piping/../resources/*.js` 404); недокументированно-невендоренный `/common/gc.js` (`garbageCollect is not defined`, тот же класс, что `FileAPI`/`custom-elements`/`js`); отсутствие `byobRequest`/повторных вызовов `pull()`/`flush()` соответствует собственному doc-комментарию модуля (`dom.rs:5630-5634`, «synchronous-friendly model», Phase 0) — не баг. Новая находка — [BUG-684](bugs/BUG-684-FIXED.md): `ReadableStream`/`WritableStream`/`TransformStream` — обычные ES5-конструкторы без `new.target`-гварда, вызов без `new` молча биндит `this` на `globalThis` и утекает поля конструктора как одноимённые глобалы (`TransformStream()` — худший случай, утекают `globalThis.readable`/`globalThis.writable`, предельно общие имена); тот же класс, что BUG-629/374/672/681, седьмая-девятая поверхность. Отдельно: `ReadableStream.prototype[Symbol.asyncIterator]`/`.values()` отсутствуют целиком (WHATWG Streams §4.1), объясняя кластер `s[Symbol.asyncIterator] is not a function` в самом прогоне. Живая проба через `--mcp-live-port`. Один новый номер бага",
        "bugs": [
         "BUG-684"
        ]
@@ -4327,7 +4327,7 @@
        "title": "WPT: вендорить + прогнать категорию `timing-entrytypes-registry`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root timing-entrytypes-registry --recursive`, ~45 с, 2 файла/2 id) — **0/2 harness OK, 2/8 сабтестов**. `performance.mark()`/`performance.measure()` доставляют записи через `PerformanceObserver`, но записи — обычные объектные литералы, не инстансы `PerformanceMark`/`PerformanceMeasure` (`[object Object]` вместо `[object PerformanceMark]`/`[object PerformanceMeasure]`) — заведён [BUG-687](bugs/BUG-687-OPEN.md), тот же класс, что [BUG-645](bugs/BUG-645-FIXED.md)/[BUG-673](bugs/BUG-673-FIXED.md). Второстепенный сигнал — реконфирмация: `resource` NOTRUN (BUG-520), `paint`/`longtask` NOTRUN (BUG-645/BUG-354). Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root timing-entrytypes-registry --recursive`, ~45 с, 2 файла/2 id) — **0/2 harness OK, 2/8 сабтестов**. `performance.mark()`/`performance.measure()` доставляют записи через `PerformanceObserver`, но записи — обычные объектные литералы, не инстансы `PerformanceMark`/`PerformanceMeasure` (`[object Object]` вместо `[object PerformanceMark]`/`[object PerformanceMeasure]`) — заведён [BUG-687](bugs/BUG-687-FIXED.md), тот же класс, что [BUG-645](bugs/BUG-645-FIXED.md)/[BUG-673](bugs/BUG-673-FIXED.md). Второстепенный сигнал — реконфирмация: `resource` NOTRUN (BUG-520), `paint`/`longtask` NOTRUN (BUG-645/BUG-354). Один новый номер бага",
        "bugs": [
         "BUG-687"
        ]
@@ -4344,7 +4344,7 @@
        "title": "WPT: вендорить + прогнать категорию `touch-events`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root touch-events --recursive`, ~53 с, 17 файлов, 15 отобранных id) — **8/14 harness OK, 19/44 сабтестов**. Заведён [BUG-688](bugs/BUG-688-OPEN.md): `Touch`/`TouchList`/`TouchEvent` глобальные конструкторы отсутствуют вовсе, `GlobalEventHandlers` без `ontouch*` — прямая причина `historical.html`/`touch-touchevent-constructor.html`/половины `touch-globaleventhandler-interface.html`/`pinch-zoom-change.html`; ни один нативный код не диспатчит реальный `TouchEvent`, поэтому `single-touch*.html` TIMEOUT. Второстепенный сигнал (5 файлов `Browsing context for element was detached`) — реконфирмация [BUG-622](bugs/BUG-622-DUPLICATE.md) (`document.defaultView`), плюс документированные гэпы `action_sequence`-исполнителя и невендоренного `idlharness.js`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root touch-events --recursive`, ~53 с, 17 файлов, 15 отобранных id) — **8/14 harness OK, 19/44 сабтестов**. Заведён [BUG-688](bugs/BUG-688-FIXED.md): `Touch`/`TouchList`/`TouchEvent` глобальные конструкторы отсутствуют вовсе, `GlobalEventHandlers` без `ontouch*` — прямая причина `historical.html`/`touch-touchevent-constructor.html`/половины `touch-globaleventhandler-interface.html`/`pinch-zoom-change.html`; ни один нативный код не диспатчит реальный `TouchEvent`, поэтому `single-touch*.html` TIMEOUT. Второстепенный сигнал (5 файлов `Browsing context for element was detached`) — реконфирмация [BUG-622](bugs/BUG-622-DUPLICATE.md) (`document.defaultView`), плюс документированные гэпы `action_sequence`-исполнителя и невендоренного `idlharness.js`. Один новый номер бага",
        "bugs": [
         "BUG-688"
        ]
@@ -4422,7 +4422,7 @@
        "title": "WPT: вендорить + прогнать категорию `user-timing`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root user-timing --recursive`, ~1:42, 44 файла, 36 отобранных id) — **27/36 harness OK, 66/176 сабтестов**. Заведён [BUG-696](bugs/BUG-696-OPEN.md): `performance.mark()`/`.measure()` (`dom.rs:8366-8392`) не валидируют аргументы вовсе — ни `SyntaxError` на зарезервированных именах вроде `navigationStart`, ни `TypeError` на невалидных mark-options (`123`/`NaN`/строка/отрицательный `startTime`), ни `SyntaxError` на несуществующих именованных метках в `measure()`, `detail` не клонируется вовсе. Второстепенный сигнал — реконфирмация [BUG-687](bugs/BUG-687-OPEN.md) (`PerformanceMark`/`PerformanceMeasure` — plain-объекты) и [BUG-360](bugs/BUG-360-FIXED.md) (`<body onload=\"...\">` мёртв на момент прогона, 7 TIMEOUT-файлов — фикс влит в main параллельно тем же днём, повторный прогон не переснят), плюс известный невендоренный `idlharness.js`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root user-timing --recursive`, ~1:42, 44 файла, 36 отобранных id) — **27/36 harness OK, 66/176 сабтестов**. Заведён [BUG-696](bugs/BUG-696-OPEN.md): `performance.mark()`/`.measure()` (`dom.rs:8366-8392`) не валидируют аргументы вовсе — ни `SyntaxError` на зарезервированных именах вроде `navigationStart`, ни `TypeError` на невалидных mark-options (`123`/`NaN`/строка/отрицательный `startTime`), ни `SyntaxError` на несуществующих именованных метках в `measure()`, `detail` не клонируется вовсе. Второстепенный сигнал — реконфирмация [BUG-687](bugs/BUG-687-FIXED.md) (`PerformanceMark`/`PerformanceMeasure` — plain-объекты) и [BUG-360](bugs/BUG-360-FIXED.md) (`<body onload=\"...\">` мёртв на момент прогона, 7 TIMEOUT-файлов — фикс влит в main параллельно тем же днём, повторный прогон не переснят), плюс известный невендоренный `idlharness.js`. Один новый номер бага",
        "bugs": [
         "BUG-696"
        ]
@@ -7545,48 +7545,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-680": {
-   "status": "open",
-   "title": "`SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` constructors don't exist on `window`/`globalThis` at all — `new SpeechSynthesisEvent(...)`/`new SpeechSynthes…",
-   "component": "js (`crates/js/src/speech.rs` — `SPEECH_SHIM`, `_fire` at line 136, globals export at lines 273-289)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-681": {
-   "status": "open",
-   "title": "`StorageManager`/`StorageBucketManager`/`StorageBucket` are plain ES5 `function X() {}` constructors with no `new.target` guard, so `new StorageManager()`/`new…",
-   "component": "js (`crates/js/src/storage_manager.rs` — `STORAGE_MANAGER_SHIM`; `crates/js/src/storage_buckets.rs` — `STORAGE_BUCKETS_SHIM`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-684": {
-   "status": "open",
-   "title": "`ReadableStream`/`WritableStream`/`TransformStream` are plain ES5 `function X(...) { this._foo = ...; }` constructors with no `new.target` guard, so calling any…",
-   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, §\"WHATWG Streams\", ~line 5630)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-686": {
-   "status": "open",
-   "title": "`implicit_role` maps only HTML tag local names (`nav`/`main`/`button`/`img`/…) and never checks `node.namespace()` — no arm exists for any SVG tag (`svg`/`circl…",
-   "component": "a11y (`crates/engine/a11y/src/roles.rs::implicit_role`, line 349)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-687": {
-   "status": "open",
-   "title": "`performance.mark()`/`.measure()` build entries as plain object literals (`{ entryType: 'mark', name, startTime, duration }`); neither `PerformanceMark` nor `Pe…",
-   "component": "js (`crates/js/src/dom.rs:8227` — `performance.mark()`; `crates/js/src/dom.rs:8247` — `performance.measure()`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-688": {
-   "status": "open",
-   "title": "`Touch`/`TouchList`/`TouchEvent` global constructors don't exist at all (`ReferenceError`), and `GlobalEventHandlers` has no `ontouchstart`/`ontouchmove`/`ontou…",
-   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`; analogous constructors at `dom.rs:437` `UIEvent`, `dom.rs:445` `MouseEvent`, `dom.rs:536-554` `PointerEvent`, no equivalent for Touch)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-689": {
    "status": "open",
    "title": "The whole `Attr`/`NamedNodeMap` half of DOM §4.9 is missing: `Element.attributes` is `undefined` (not a `NamedNodeMap`), `document.createAttribute()`/`createAtt…",
@@ -7990,13 +7948,6 @@
    "status": "open",
    "title": "`iframe.contentWindow`/`window.parent`/`.top`/`.frameElement` — фасад окна фрейма (`winFacade`) собран как голый `{}` без `addEventListener`/`removeEventListene…",
    "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-958": {
-   "status": "open",
-   "title": "`CSS.supports(\"prop: value\")` — однoаргументная форма без скобок — всегда `false`, даже для реально поддержанного свойства: `parse_supports_atom` требует ведущу…",
-   "component": "css-parser (`crates/engine/css-parser/src/parser.rs::parse_supports_atom`)",
    "date": null,
    "debtor": false
   },
@@ -8420,48 +8371,6 @@
    "date": null,
    "debtor": true
   },
-  "BUG-1113": {
-   "status": "open",
-   "title": "Chrome-профиль заголовков выдаёт не-браузер: `DNT: 1` (Chrome по умолчанию его не шлёт — проверено эхо-сервером на Chrome 153) и UA `Chrome/130` при стабильном…",
-   "component": "network (`crates/network/src/http/headers.rs::build_request_headers` — `DNT: 1` в `HttpProfile::Chrome`; `crates/network/src/http/mod.rs:39` — `CHROME_USER_AGENT` = Chrome/130)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1123": {
-   "status": "open",
-   "title": "`EventTarget.prototype.addEventListener.call(window",
-   "component": "js (`crates/js/src/shim/event_target_shim.js:21-25` — метод работает только с `this._listeners`; `web_api_shim_mid.js:3215` `function Node` — `Node.prototype` не наследует `EventTarget.prototype`; `crates/js/src/xhr.rs:59` `_XhrEventTarget` — своя база)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1144": {
-   "status": "open",
-   "title": "`div` с `display:none` → `''` (Chrome: `'hidden text'`), `<script>` в `<body>` → `''` (Chrome: текст скрипта). `ld+json` в `<head>` и отсоединённый элемент — ве…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:~6665` геттер `innerText` / `_lumen_rendered_text` (BUG-413 срез 2) — нет шага «not being rendered → textContent»)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1145": {
-   "status": "open",
-   "title": "На тяжёлых страницах `script.evaluate` через `--mcp-live-port` отвечает «Eval error: JS context not available» (cnbc 3 из 3, gemini 3 из 3, udemy 3 из 3, imgur…",
-   "component": "shell (`crates/shell/src/engine_thread.rs:64` `QUERY_TIMEOUT = 5s`, `:293` `recv_timeout → None`; `crates/shell/src/app/about_to_wait.rs:928-943` — `None` → «JS context not available»)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1146": {
-   "status": "open",
-   "title": "Правило `…$script,domain=3movs.com",
-   "component": "network (`crates/network/src/filter/easylist.rs:233-235` `parse_options`: `key == \"domain\"` → только `narrows_beyond_domain`, домен страницы не сверяется; `crates/core/src/ext.rs:177` — в `RequestContext` нет хоста документа)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1147": {
-   "status": "open",
-   "title": "Кросс-фреймовый Element-фасад не определяет `.style` (и `classList`, `dataset`): `iframe.contentDocument.documentElement.style`/`body.style` — `undefined`. w3sc…",
-   "component": "js (`crates/js/src/frame_bridge.rs::frameElem`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1148": {
    "status": "open",
    "title": "Остаток [BUG-1118](bugs/BUG-1118-FIXED.md): немедленная загрузка картинки из скрипта работает только для `<img src>` в документе верхнего уровня. Не запускают з…",
@@ -8595,13 +8504,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1167": {
-   "status": "open",
-   "title": "youtube после BUG-1122: `CE attributeChangedCallback: TypeError: this._attributeToProperty is not a function` и `CE connectedCallback (upgrade): TypeError: b.Aa…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_ce_maybe_attr_changed`/`_lumen_ce_upgrade_element` — колбэки custom elements)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1168": {
    "status": "open",
    "title": "Флейк `bug908_rendered_buffer_differs_across_sessions_when_noise_is_on`: в полном прогоне lib-тестов lumen-js суммы отрендеренных буферов двух origin-ов совпали…",
@@ -8655,13 +8557,6 @@
    "status": "open",
    "title": "quora: управляемый челлендж Cloudflare падает с `Cannot read properties of null (reading 'eval')` и перезапускается по кругу (403 → challenge → 403), документ о…",
    "component": "js — не локализовано (оркестратор челленджа Cloudflare `cdn-cgi/challenge-platform/.../orchestrate/chl_page/v1`, падение на тике таймера; кандидат — `iframe.contentWindow === null` синхронно после `appendChild`, BUG-480)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1177": {
-   "status": "open",
-   "title": "При обрыве общего HTTP/2-соединения запросы, ещё стоявшие в очереди мультиплексора, падают `H2 connection unusable: connection closing` вместо повтора на новом…",
-   "component": "network (`crates/network/src/h2/mux.rs:395` `fail_queued` → `retryable(\"connection closing\")`; `crates/network/src/lib.rs:1699-1723` — один повтор и только в ветке пула, `:1858-1868` — запрос-открыватель без повтора)",
    "date": null,
    "debtor": false
   },
@@ -8763,24 +8658,94 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1197": {
+  "BUG-1200": {
    "status": "open",
-   "title": "`URL.createObjectURL` отдаёт `blob:lumen/N` без происхождения вместо `blob:<origin>/<uuid>` (File API §8.3): blob-воркер получает непрозрачное происхождение (`O…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid_c2.js:4` — `URL.createObjectURL`; `crates/js/src/worker.rs` — префикс `blob:lumen/`)",
+   "title": "Детектор циклов сравнивает identity hash предков, а не сами объекты: коллизия хешей даёт ложный `[Circular]` при возврате значения из JS. Флак `eval_deeply_nest…",
+   "component": "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded` — `ancestors.contains(&hash)` по `get_identity_hash()`)",
    "date": null,
    "debtor": false
   },
-  "BUG-1198": {
+  "BUG-1201": {
    "status": "open",
-   "title": "Сообщение из `<iframe sandbox>` без `allow-same-origin` приходит с tuple-origin по URL, а не с непрозрачным происхождением документа; нет идентичности непрозрач…",
-   "component": "js (`crates/js/src/frame_bridge.rs:507` — `binding_origin`; `web_api_shim_mid_b4.js` — `_lumen_deliver_frame_message`)",
+   "title": "Флак `download::tests::build_bar_shows_progress_track_for_in_progress_only` в полном прогоне `lumen-shell --bin lumen`, изолированно проходит; гипотеза — поток…",
+   "component": "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)",
    "date": null,
    "debtor": false
   },
-  "BUG-1199": {
+  "BUG-1202": {
    "status": "open",
-   "title": "WPT-страница, вызвавшая `window.open()`, не отдаёт результаты харнесса — TIMEOUT всего файла без сабтестов (`origin-from-window`, `origin-from-messageevent`); г…",
-   "component": "shell / wptrunner (`executorlumen.py` — ожидание `testharnessreport.js`), `window.open`",
+   "title": "`elementFromPoint`/`elementsFromPoint` отвечают по дереву хит-теста последнего кадра: только что вставленная `<button>` не находится (`[]`/`null`), хотя `getCli…",
+   "component": "js (`crates/js/src/v8_runtime/install/platform.rs:386`/`:394` — `_lumen_element_from_point`/`_lumen_elements_from_point` без `flush.maybe_flush()`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1203": {
+   "status": "open",
+   "title": "Тест-бинарь `lumen-network --test all` проходит 60/60 и не завершает процесс (висит живой поток/сокет): `scoped-test.sh` без ручного снятия не заканчивается, по…",
+   "component": "network (`crates/network/tests/all.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1204": {
+   "status": "open",
+   "title": "`ReadableStreamDefaultController`/`ReadableByteStreamController`/`ReadableStreamBYOBRequest`/`WritableStreamDefaultController`/`TransformStreamDefaultController…",
+   "component": "js (`crates/js/src/shim/streams_shim.js`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1205": {
+   "status": "open",
+   "title": "Замолчавшее без FIN/RST HTTP/2-соединение (cnbc, VPN, 1 из 3): 34 запроса к `static-redesign.cnbcfm.com` по 60 с ждут `stream timed out`, новые запросы садятся…",
+   "component": "network (`crates/network/src/h2/mux.rs` — `STREAM_TIMEOUT = 60 s`, нет PING-проверки живости)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1206": {
+   "status": "open",
+   "title": "При `require-trusted-types-for 'script'` без политики `default` хук кодогенерации блокирует собственное исполнение движком каждого `<script>`, вставленного чере…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_script_execute_classic` исполняет тело через `(0, eval)`; `crates/js/src/v8_runtime/codegen_hook.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1207": {
+   "status": "open",
+   "title": "youtube: ``CE connectedCallback (upgrade): Error: md`InjectionToken(PAGE_TOKEN)`` — провайдер страницы не найден, `ytd-app` без `shadowRoot`, контент пуст. Не с…",
+   "component": "js — не локализовано (апгрейд custom element, `_lumen_ce_upgrade_element`; DI youtube)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1208": {
+   "status": "open",
+   "title": "`window.origin`/`self.origin` отсутствует (`undefined`, `'origin' in window === false`) на странице и во фреймах; `location.origin` srcdoc-фрейма — `''` вместо…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — глобал `window` без `origin`; `location.origin` документа `about:srcdoc`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1209": {
+   "status": "open",
+   "title": "За HTTP-прокси CONNECT-туннель к одному хосту достаётся из пула запросу к другому: 24 ответа `421` на 5 сайтах top100 (twitch пустой), запросы с `Host: B` уходя…",
+   "component": "network (`crates/network/src/lib.rs` — `fetch_single`: `PoolKey` за HTTP-прокси = адрес прокси; `h2_pool` выключен)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1210": {
+   "status": "open",
+   "title": "Флаг `--proxy` молча не действует — трафик идёт напрямую; работает только `proxy =` в `fingerprint.toml`. `--tor` по коду тот же no-op (не проверено опытом) — в…",
+   "component": "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорируется)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1211": {
+   "status": "open",
+   "title": "cnn, udemy, dailymail: движковый поток занят минутами (~150 % CPU), MCP не отвечает, `--dump-layout` не завершается за 200 с; повторено дважды в прогоне и headl…",
+   "component": "js / engine-поток — не локализовано",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1212": {
+   "status": "open",
+   "title": "Два `window.open()` подряд в одном скрипте: опенер не получает `postMessage` ни от одного попапа, хотя одиночный попап доставляет (`e.source === w` верно). TIME…",
+   "component": "shell/js (`crates/shell/src/lumen/tabs_cmd.rs` — `open_new_tab`; `lumen_js::window_messaging` — доставка попап → опенер)",
    "date": null,
    "debtor": false
   },
@@ -14475,6 +14440,13 @@
    "date": "2026-09-24",
    "debtor": false
   },
+  "BUG-1113": {
+   "status": "fixed",
+   "title": "Chrome-профиль заголовков выдаёт не-браузер: `DNT: 1` (Chrome по умолчанию его не шлёт — проверено эхо-сервером на Chrome 153) и UA `Chrome/130` при стабильном…",
+   "component": "network (`crates/network/src/http/headers.rs::build_request_headers` — `DNT: 1` в `HttpProfile::Chrome`; `crates/network/src/http/mod.rs:39` — `CHROME_USER_AGENT` = Chrome/130)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
   "BUG-1114": {
    "status": "fixed",
    "title": "Навигация и `fetch()` с 4xx/5xx выбрасывали тело и показывали «Ошибка загрузки … HTTP NNN» вместо страницы сервера (HTML LS: ответ навигации с любым статусом —…",
@@ -14951,6 +14923,13 @@
    "date": "2026-09-26",
    "debtor": false
   },
+  "BUG-1177": {
+   "status": "fixed",
+   "title": "При обрыве общего HTTP/2-соединения запросы, ещё стоявшие в очереди мультиплексора, падают `H2 connection unusable: connection closing` вместо повтора на новом…",
+   "component": "network (`crates/network/src/h2/mux.rs:395` `fail_queued` → `retryable(\"connection closing\")`; `crates/network/src/lib.rs:1699-1723` — один повтор и только в ветке пула, `:1858-1868` — запрос-открыватель без повтора)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
   "BUG-1180": {
    "status": "fixed",
    "title": "Вставленный скриптом `<link rel=stylesheet>` при `style-src 'none'` скачивался и применялся: реестр листов качал `href` без проверки `style-src`. Теперь реестр…",
@@ -15256,6 +15235,118 @@
    "status": "fixed",
    "title": "Не было `window.toolbar`/`locationbar`/`menubar`/`personalbar`/`scrollbars`/`statusbar` и `BarProp` — каждое имя давало `ReferenceError`; weibo `newlogin` падал…",
    "component": "js (`crates/js/src/shim/web_api_shim_tail_mc.js` — `BarProp` и шесть `[Replaceable]`-аксессоров `window`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1144": {
+   "status": "fixed",
+   "title": "`div` с `display:none` → `''` (Chrome: `'hidden text'`), `<script>` в `<body>` → `''` (Chrome: текст скрипта). `ld+json` в `<head>` и отсоединённый элемент — ве…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:~6665` геттер `innerText` / `_lumen_rendered_text` (BUG-413 срез 2) — нет шага «not being rendered → textContent»)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1145": {
+   "status": "fixed",
+   "title": "На тяжёлых страницах `script.evaluate` через `--mcp-live-port` отвечает «Eval error: JS context not available» (cnbc 3 из 3, gemini 3 из 3, udemy 3 из 3, imgur…",
+   "component": "shell (`crates/shell/src/engine_thread.rs:64` `QUERY_TIMEOUT = 5s`, `:293` `recv_timeout → None`; `crates/shell/src/app/about_to_wait.rs:928-943` — `None` → «JS context not available»)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1146": {
+   "status": "fixed",
+   "title": "Правило `…$script,domain=3movs.com",
+   "component": "network (`crates/network/src/filter/easylist.rs` — `DomainCondition`, `RuleOptions::matches`; `crates/core/src/ext.rs` — `RequestContext::document_host`; `crates/network/src/lib.rs` — `fetch_with_redirect(document_host)`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1147": {
+   "status": "fixed",
+   "title": "Кросс-фреймовый Element-фасад не определял `.style`/`classList`/`dataset`: `iframe.contentDocument.body.style` — `undefined`, w3schools (FastCMP) падал на `sett…",
+   "component": "js (`crates/js/src/frame_bridge.rs::frameElem`; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_backing_*`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-680": {
+   "status": "fixed",
+   "title": "Конструкторов `SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` не было вовсе (`ReferenceError`), а доставляемые движком события были plain-литералами, так что…",
+   "component": "js (`crates/js/src/speech.rs` — `SPEECH_SHIM`: классы `SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent`, `SpeechSynthesisUtterance.prototype._fire`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-681": {
+   "status": "fixed",
+   "title": "`StorageManager`/`StorageBucketManager`/`StorageBucket` are plain ES5 `function X() {}` constructors with no `new.target` guard, so `new StorageManager()`/`new…",
+   "component": "js (`crates/js/src/storage_manager.rs` — `STORAGE_MANAGER_SHIM`; `crates/js/src/storage_buckets.rs` — `STORAGE_BUCKETS_SHIM`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1167": {
+   "status": "fixed",
+   "title": "youtube: `CE attributeChangedCallback: this._attributeToProperty is not a function` и `CE connectedCallback (upgrade): b.Aa is not a function`. Две причины: кэш…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_ce_elements`/`_lumen_ce_run_constructor`/`_lumen_ce_upgrade_element`; `crates/js/src/shim/event_target_shim.js` + `web_api_shim_tail_b.js` — `_lumen_et_platform_impl`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-684": {
+   "status": "fixed",
+   "title": "`ReadableStream`/`WritableStream`/`TransformStream` are plain ES5 `function X(...) { this._foo = ...; }` constructors with no `new.target` guard, so calling any…",
+   "component": "js (`crates/js/src/shim/streams_shim.js`; `crates/js/src/filesystem_access.rs` — `makeWritable`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-686": {
+   "status": "fixed",
+   "title": "`implicit_role` maps only HTML tag local names (`nav`/`main`/`button`/`img`/…) and never checks `node.namespace()` — no arm exists for any SVG tag (`svg`/`circl…",
+   "component": "a11y (`crates/engine/a11y/src/roles.rs::implicit_role`, line 349)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1123": {
+   "status": "fixed",
+   "title": "`EventTarget.prototype.addEventListener.call(window",
+   "component": "js (`crates/js/src/shim/event_target_shim.js:21-25` — метод работает только с `this._listeners`; `web_api_shim_mid.js:3215` `function Node` — `Node.prototype` не наследует `EventTarget.prototype`; `crates/js/src/xhr.rs:59` `_XhrEventTarget` — своя база)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1197": {
+   "status": "fixed",
+   "title": "`URL.createObjectURL` отдаёт `blob:lumen/N` без происхождения вместо `blob:<origin>/<uuid>` (File API §8.3): blob-воркер получает непрозрачное происхождение (`O…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_c2.js:4` — `URL.createObjectURL`; `crates/js/src/worker.rs` — префикс `blob:lumen/`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1198": {
+   "status": "fixed",
+   "title": "Сообщение из `<iframe sandbox>` без `allow-same-origin` приходит с tuple-origin по URL, а не с непрозрачным происхождением документа; нет идентичности непрозрач…",
+   "component": "js (`crates/js/src/frame_bridge.rs:507` — `binding_origin`; `web_api_shim_mid_b4.js` — `_lumen_deliver_frame_message`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-687": {
+   "status": "fixed",
+   "title": "`performance.mark()`/`.measure()` build entries as plain object literals (`{ entryType: 'mark', name, startTime, duration }`); neither `PerformanceMark` nor `Pe…",
+   "component": "js (`crates/js/src/shim/performance_shim.js` — `performance.mark()`/`.measure()`, `PerformanceMark`/`PerformanceMeasure`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-958": {
+   "status": "fixed",
+   "title": "`CSS.supports(\"prop: value\")` — однoаргументная форма без скобок — всегда `false`, даже для реально поддержанного свойства. Уже устранено коммитом `402b808fb89`…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/at_rules.rs::parse_supports_atom`) / js (`crates/js/src/v8_runtime/install/platform.rs::_lumen_css_supports_cond`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-688": {
+   "status": "fixed",
+   "title": "Touch Events L2 `Touch`/`TouchList`/`TouchEvent` отсутствовали целиком (`Touch is not defined`), а `ontouch*` торчали только на элементах — сигнал «тач-устройст…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `Touch`/`TouchList`/`TouchEvent`, `_LUMEN_EVENT_HANDLER_ATTRS`)",
+   "date": "2026-09-28",
+   "debtor": false
+  },
+  "BUG-1199": {
+   "status": "fixed",
+   "title": "WPT-страница, вызвавшая `window.open()`, не отдавала результаты харнесса — `script.evaluate` исполнителя шёл в ставший активным попап, а не в запаркованную вкла…",
+   "component": "shell (`crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Eval`/`Navigate`; `Lumen::automation_tab`)",
    "date": "2026-09-28",
    "debtor": false
   }
@@ -15745,7 +15836,7 @@
   "js (`crates/js/src/frame_bridge.rs:507` — `binding_origin`; `web_api_shim_mid_b4.js` — `_lumen_deliver_frame_message`)": [
    "BUG-1198"
   ],
-  "js (`crates/js/src/frame_bridge.rs::frameElem`)": [
+  "js (`crates/js/src/frame_bridge.rs::frameElem`; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_backing_*`)": [
    "BUG-1147"
   ],
   "js (`crates/js/src/frame_bridge.rs::wrapWinFacadeGlobals` + `crates/js/src/v8_runtime/eval.rs:613-654::peer_global_call`)": [
@@ -15820,6 +15911,9 @@
   "js (`crates/js/src/shim/performance_shim.js` — записи — объектные литералы)": [
    "BUG-1189"
   ],
+  "js (`crates/js/src/shim/streams_shim.js`)": [
+   "BUG-1204"
+  ],
   "js (`crates/js/src/shim/url_parse_shim.js::_lumen_parse_url`)": [
    "BUG-904"
   ],
@@ -15871,9 +15965,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` -- литерал `var document`, обёртка doctype, геттер `parentNode` обёрток узлов)": [
    "BUG-557"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_ce_maybe_attr_changed`/`_lumen_ce_upgrade_element` — колбэки custom elements)": [
-   "BUG-1167"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — объектный литерал Range)": [
    "BUG-1159"
   ],
@@ -15882,6 +15973,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `ShadowRoot.prototype`, `document`)": [
    "BUG-895"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_ce_elements`/`_lumen_ce_run_constructor`/`_lumen_ce_upgrade_element`; `crates/js/src/shim/event_target_shim.js` + `web_api_shim_tail_b.js` — `_lumen_et_platform_impl`)": [
+   "BUG-1167"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_document_collection`, геттеры литерала `document`)": [
    "BUG-892"
@@ -15903,6 +15997,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_parse_font_shorthand_families`)": [
    "BUG-1015"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_script_execute_classic` исполняет тело через `(0, eval)`; `crates/js/src/v8_runtime/codegen_hook.rs`)": [
+   "BUG-1206"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_script_prepare`, `_lumen_resource_try_prepare`)": [
    "BUG-882"
@@ -16021,6 +16118,9 @@
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.find`)": [
    "BUG-623"
   ],
+  "js (`crates/js/src/shim/web_api_shim_tail_b.js` — глобал `window` без `origin`; `location.origin` документа `about:srcdoc`)": [
+   "BUG-1208"
+  ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js`)": [
    "BUG-483"
   ],
@@ -16094,6 +16194,9 @@
   "js (`crates/js/src/v8_runtime/install/dom_core.rs`, `crates/js/src/v8_runtime/install/platform.rs`)": [
    "BUG-1036"
   ],
+  "js (`crates/js/src/v8_runtime/install/platform.rs:386`/`:394` — `_lumen_element_from_point`/`_lumen_elements_from_point` без `flush.maybe_flush()`)": [
+   "BUG-1202"
+  ],
   "js (`crates/js/src/v8_runtime/install/platform.rs::_lumen_css_supports_prop`)": [
    "BUG-502"
   ],
@@ -16108,6 +16211,9 @@
   ],
   "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)": [
    "BUG-949"
+  ],
+  "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded` — `ancestors.contains(&hash)` по `get_identity_hash()`)": [
+   "BUG-1200"
   ],
   "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded`) / js-shim (`crates/js/src/shim/web_api_shim_mid.js` — обёртки `cssRules`/`parentStyleSheet` конструируемого листа без кэша)": [
    "BUG-978"
@@ -16226,8 +16332,14 @@
   "js (шим), layout (`zoom`)": [
    "BUG-943"
   ],
+  "js / engine-поток — не локализовано": [
+   "BUG-1211"
+  ],
   "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-494"
+  ],
+  "js — не локализовано (апгрейд custom element, `_lumen_ce_upgrade_element`; DI youtube)": [
+   "BUG-1207"
   ],
   "js — не локализовано (оркестратор челленджа Cloudflare `cdn-cgi/challenge-platform/.../orchestrate/chl_page/v1`, падение на тике таймера; кандидат — `iframe.contentWindow === null` синхронно после `appendChild`, BUG-480)": [
    "BUG-1176"
@@ -16573,7 +16685,7 @@
   "network (`crates/network/src/dns.rs::SystemDnsResolver::resolve` — целиком `getaddrinfo`)": [
    "BUG-1070"
   ],
-  "network (`crates/network/src/filter/easylist.rs:233-235` `parse_options`: `key == \"domain\"` → только `narrows_beyond_domain`, домен страницы не сверяется; `crates/core/src/ext.rs:177` — в `RequestContext` нет хоста документа)": [
+  "network (`crates/network/src/filter/easylist.rs` — `DomainCondition`, `RuleOptions::matches`; `crates/core/src/ext.rs` — `RequestContext::document_host`; `crates/network/src/lib.rs` — `fetch_with_redirect(document_host)`)": [
    "BUG-1146"
   ],
   "network (`crates/network/src/filter/easylist.rs`)": [
@@ -16581,6 +16693,9 @@
   ],
   "network (`crates/network/src/h2/mux.rs:395` `fail_queued` → `retryable(\"connection closing\")`; `crates/network/src/lib.rs:1699-1723` — один повтор и только в ветке пула, `:1858-1868` — запрос-открыватель без повтора)": [
    "BUG-1177"
+  ],
+  "network (`crates/network/src/h2/mux.rs` — `STREAM_TIMEOUT = 60 s`, нет PING-проверки живости)": [
+   "BUG-1205"
   ],
   "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)": [
    "BUG-805"
@@ -16621,6 +16736,9 @@
   "network (`crates/network/src/lib.rs` — `bind_ephemeral_listener`, `mod bad_port`)": [
    "BUG-911"
   ],
+  "network (`crates/network/src/lib.rs` — `fetch_single`: `PoolKey` за HTTP-прокси = адрес прокси; `h2_pool` выключен)": [
+   "BUG-1209"
+  ],
   "network (`crates/network/src/referrer_policy.rs::compute_referrer`, `referrer_policy.rs:98-148`)": [
    "BUG-1096"
   ],
@@ -16632,6 +16750,9 @@
   ],
   "network (`crates/network/src/tls/mod.rs`, `http/headers.rs`)": [
    "BUG-331"
+  ],
+  "network (`crates/network/tests/all.rs`)": [
+   "BUG-1203"
   ],
   "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
    "BUG-292"
@@ -16842,6 +16963,9 @@
   "shell (`crates/shell/build.rs`, `src/main.rs`, `src/app/user_event.rs`, `src/window_mode.rs`) + js (`crates/js/src/v8_runtime/runtime.rs`) + core (`crates/core/src/deep_stack.rs`)": [
    "BUG-1027"
   ],
+  "shell (`crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Eval`/`Navigate`; `Lumen::automation_tab`)": [
+   "BUG-1199"
+  ],
   "shell (`crates/shell/src/app/about_to_wait.rs` — per-tick насос таймеров/сокетов, `crates/shell/src/lumen/tabs_cmd.rs` — `switch_tab` подхватывает `take_dom_dirty()` на восстановлении)": [
    "BUG-883"
   ],
@@ -16853,6 +16977,12 @@
   ],
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
+  ],
+  "shell (`crates/shell/src/cli_args.rs` — `init_global` до `extract_proxy`/`extract_tor_mode`; `config.rs:49` — результат `OnceLock::set` игнорируется)": [
+   "BUG-1210"
+  ],
+  "shell (`crates/shell/src/download.rs:1781` — тест поверх `start_download`, который поднимает настоящий поток загрузки)": [
+   "BUG-1201"
   ],
   "shell (`crates/shell/src/engine_thread.rs:64` `QUERY_TIMEOUT = 5s`, `:293` `recv_timeout → None`; `crates/shell/src/app/about_to_wait.rs:928-943` — `None` → «JS context not available»)": [
    "BUG-1145"
@@ -16998,15 +17128,15 @@
   "shell (навигация)": [
    "BUG-308"
   ],
-  "shell / wptrunner (`executorlumen.py` — ожидание `testharnessreport.js`), `window.open`": [
-   "BUG-1199"
-  ],
   "shell+font": [
    "BUG-170"
   ],
   "shell/js": [
    "BUG-164",
    "BUG-345"
+  ],
+  "shell/js (`crates/shell/src/lumen/tabs_cmd.rs` — `open_new_tab`; `lumen_js::window_messaging` — доставка попап → опенер)": [
+   "BUG-1212"
   ],
   "shell/network": [
    "BUG-234"
