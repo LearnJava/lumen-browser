@@ -183,7 +183,7 @@ fn push_composed_children(doc: &Document, node_id: NodeId, flat_tree: &FlatTree,
 fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat_tree: &FlatTree) -> AXNode {
     let node = doc.get(node_id);
     let state = compute_state(doc, node_id, node);
-    let role = resolve_role(node, parent_role);
+    let role = resolve_role(doc, node_id, parent_role);
     let name = names::compute_name(doc, node_id);
     let description = names::compute_description(doc, node_id);
     let placeholder = node.get_attr("placeholder").unwrap_or("").to_owned();
@@ -293,7 +293,8 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat
     AXNode { node_id, role, name, description, placeholder, state, children, controls, owns, flow_to, details }
 }
 
-fn resolve_role(node: &lumen_dom::Node, parent_role: Option<AXRole>) -> AXRole {
+fn resolve_role(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>) -> AXRole {
+    let node = doc.get(node_id);
     // Step 1: Check explicit role attribute and validate against parent context.
     if let Some(role_attr) = node.get_attr("role") {
         // The `role` attribute is a space-separated list; take the first valid value.
@@ -306,8 +307,8 @@ fn resolve_role(node: &lumen_dom::Node, parent_role: Option<AXRole>) -> AXRole {
             }
         }
     }
-    // Step 2: Fall back to implicit role from HTML tag.
-    implicit_role(node)
+    // Step 2: Fall back to implicit role from the tag (HTML-AAM / SVG-AAM).
+    implicit_role(doc, node_id)
 }
 
 fn compute_state(doc: &Document, node_id: NodeId, node: &lumen_dom::Node) -> AXState {
