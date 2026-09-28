@@ -805,6 +805,14 @@ impl Lumen {
         for (cmd, reply_tx) in automation_cmds {
             match cmd {
                 AutomationCommand::Navigate(url) => {
+                    // BUG-1199: a `window.open()` of the previous page left the
+                    // automation tab in the background — navigate *it*, not the
+                    // popup that took the foreground.
+                    if let Some(idx) =
+                        self.automation_tab.and_then(|id| self.tab_strip.inactive_index_of(id))
+                    {
+                        self.switch_tab(idx);
+                    }
                     // Real browsers clear the console on navigation (unless "preserve
                     // log" is set); doing the same here keeps `ConsoleLog` (DEVX-1)
                     // scoped to the page just loaded instead of accumulating across
@@ -817,6 +825,7 @@ impl Lumen {
                     // Letting it through `navigate_to` let a leftover listener from
                     // the previous test page wedge the browsing context forever.
                     self.navigate_to_forced(page_source_for_automation_url(&url));
+                    self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::NewTab(url) => {
@@ -827,6 +836,7 @@ impl Lumen {
                     // BUG-1031: see `AutomationCommand::Navigate` above — the tab
                     // starts blank, but stay consistent and non-interceptable here too.
                     self.navigate_to_forced(page_source_for_automation_url(&url));
+                    self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Click(target) => {
@@ -937,6 +947,18 @@ impl Lumen {
                 AutomationCommand::Scroll(delta) => {
                     self.scroll_by_delta(delta.x, delta.y);
                     let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                // BUG-1199: the page under test called `window.open()` and is
+                // parked in `bg_tabs` — its runtime keeps ticking there (GAP-NAVCTX
+                // срез 15), so evaluate against it directly, as the per-tick pump
+                // below does, instead of polling the popup in the foreground.
+                AutomationCommand::Eval(js, _) if let Some(id) = self.automation_tab_in_background() => {
+                    let outcome = self
+                        .bg_tabs
+                        .get(&id)
+                        .and_then(|snap| snap.js_ctx.as_ref())
+                        .map(|j| j.eval_js_value(&js));
+                    let _ = reply_tx.send(eval_outcome_reply(outcome, false));
                 }
                 AutomationCommand::Eval(js, timeout_ms) => {
                     // BUG-1145: с движковым потоком eval уходит `Task`-ом (по

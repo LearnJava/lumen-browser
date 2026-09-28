@@ -429,6 +429,7 @@ pub(crate) fn run_window_mode(
         automation_cmd_tx,
         pending_waits: Vec::new(),
         pending_evals: Vec::new(),
+        automation_tab: None,
         input_rx,
         input_tx,
         focused_node: None,

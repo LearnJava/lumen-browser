@@ -415,6 +415,98 @@ top100 против этого числа не делался.
 
 ---
 
+## 2026-09-28 — 8bd5c5dd1 — Windows 10, dev-release — повтор top100 против 2026-09-23 и Chrome 153
+
+Сырые данные: [runs/2026-09-28-top100-split.json](runs/2026-09-28-top100-split.json) (compat, таймаут
+240 с, без блокировщика — `blocked: easylist` ни в одном логе, холодный `data/`). Chrome не перемерялся:
+база — [runs/2026-09-23-top100-split-chrome.json](runs/2026-09-23-top100-split-chrome.json);
+`chrome_major!()` = 153 совпадает с Chrome for Testing 153.0.8010.12 на машине.
+
+**Маршрут — не тот же, что 09-23.** Прокси прогона 09-23 в репозитории не сохранился. Для этого прогона
+написан [`scripts/split_proxy.py`](../../scripts/split_proxy.py): HTTP-прокси, исходящий сокет привязан к
+Wi-Fi (мимо TUN), 41 домен из [split-tunnel-hosts.txt](split-tunnel-hosts.txt) и хосты, у которых прямой
+connect не прошёл или прямое соединение закрылось без ответа, — в туннель (26 таких за прогон).
+Lumen ходил в него через `proxy =` в `data/fingerprint.toml`: флаг `--proxy` не действует
+([BUG-1210](../../bugs/BUG-1210-OPEN.md)). За HTTP-прокси Lumen теряет мультиплексирование HTTP/2 PERF-13
+и получает `421` ([BUG-1209](../../bugs/BUG-1209-OPEN.md)), поэтому **скорость и соединения ниже —
+Lumen-за-прокси, не прямой Lumen**; статусы от этого страдают только на сайтах с `421`.
+
+| Статус | 09-23 | 09-28 |
+|---|---|---|
+| OK | 18 | 27 |
+| DEGRADED | 25 | 31 |
+| BROKEN_RENDER | 23 | 18 |
+| SITE_REFUSED | 19 | 14 |
+| TIMEOUT | 7 | 0 |
+| NET_FAIL | 7 | 7 |
+| HUNG | 1 | 3 |
+
+**Переходы.** Лучше (30): tiktok, bing, espn BROKEN→DEGRADED; canva, quora, dropbox BROKEN→OK; yahoo-jp,
+zoom, tumblr, webmd, huggingface, coursera, discord, github DEGRADED→OK; accuweather, ndtv
+SITE_REFUSED→OK; nytimes, wsj, zillow, reuters SITE_REFUSED→DEGRADED; uber, target TIMEOUT→OK; costco
+TIMEOUT→DEGRADED; temu, stackoverflow TIMEOUT→BROKEN; adobe NET_FAIL→BROKEN; mercadolivre, cricbuzz,
+coinbase NET_FAIL→DEGRADED; flipkart HUNG→SITE_REFUSED. Хуже (14): live, bilibili, baidu, claude,
+rakuten, xcom OK→DEGRADED; microsoft DEGRADED→BROKEN; fandom, walmart, cnbc, duolingo →NET_FAIL;
+cnn, dailymail, udemy →HUNG.
+
+**NET_FAIL — маршрут, не Lumen.** fandom, walmart, washingtonpost, nbcnews, uol падали
+`H2 I/O: peer closed connection without sending TLS close_notify` на первом же документе. A/B
+`--dump-source` 4 сайта × 4 раза: прямой путь прокси — 5 обрывов из 16, туннель — 0 из 16, тот же
+прокси со всем трафиком в туннель — 0 из 16; сырой TLS из Python по Wi-Fi тоже рвётся (3 таймаута из 16).
+Повтор этих сайтов: fandom OK, walmart/nbcnews/uol DEGRADED, washingtonpost/duolingo BROKEN_RENDER, cnbc
+снова NET_FAIL (прямой путь режется после ClientHello, туннель — `TLS handshake over tunnel: EOF`).
+
+**Скорость** (ready_s Lumen против `load` Chrome, сайты, открывшиеся в обоих и в оба прогона):
+
+| Маршрут | Сайтов | Lumen 09-23 | Lumen 09-28 | Chrome | Отношение 09-23 | Отношение 09-28 |
+|---|---|---|---|---|---|---|
+| напрямую | 34 | 12.7 с | 17.8 с | 4.3 с | 3.4× | 2.8× |
+| через туннель | 11 | 50.5 с | 10.2 с | 16.2 с | 3.2× | 0.9× |
+
+Все 52 сайта, открывшиеся сейчас у обоих: Lumen 13.7 с, Chrome 5.7 с, 2.1×. «Туннельные» сайты у Lumen
+в 5 раз быстрее — но Chrome мерился 09-23 на старом маршруте, а прямой путь сегодня медленнее
+(TLS 0.1-0.6 с против 47-63 мс 09-23); отношения между днями не сравнимы строго.
+
+**Память** (пик процесса): медиана 651 → 797 МБ, максимум 4.8 ГБ (github) → 3.0 ГБ (nytimes);
+github 4.8 ГБ → 1.9 ГБ.
+
+**Соединения.** Ожидания PERF-13 («около одного на origin») за прокси не проверяемы: 8944 `CONNECT` на
+824 пары сайт/хост — 10.9 на хост (09-23 без прокси: 22.9 TCP на хост); nytimes `www.nytimes.com` 478,
+x.com `abs.twimg.com` 454, github `github.githubassets.com` 130. Причина — BUG-1209.
+
+**Наблюдение.**
+- «Не отвечает» ≥ 2 с: 28 сайтов (09-23 — 20): nytimes 211 с, coinbase 92, yahoo 75, tradingview 64,
+  reddit 62, ndtv 48, tumblr 32, archive 28, adobe 24, discord 22, wsj 21, airbnb 20, …; github 170 → 13 с,
+  instagram 86 → 0, youtube 84 → 0. tradingview 64 с и archive, airbnb, discord, linkedin, zoom — второй
+  прогон подряд; github — BUG-306.
+- `H2 stream … timed out after 60s` (BUG-1205): 2 сайта (airbnb ×3, reuters ×2) в основном прогоне,
+  dailymail ×2 в повторе.
+- `EvalError: Code generation…` (BUG-1206): 3 сайта — youtube, live ×12, gemini ×4.
+- Белый кадр среди OK: instagram (`frame_dominant_frac` 0.997, ноль ошибок).
+- Повторившиеся HUNG: cnn, dailymail, udemy — оба прогона, cnn и udemy headless через туннель тоже
+  → [BUG-1211](../../bugs/BUG-1211-OPEN.md).
+
+**Сверка с закрытыми багами** (сайт: 09-23 → 09-28):
+
+| Подтвердилось | Не подтвердилось |
+|---|---|
+| accuweather SITE_REFUSED→OK, zillow →DEGRADED, adobe NET_FAIL→BROKEN (заголовки прошли, 200) — BUG-1113 | washingtonpost — NET_FAIL маршрута; в повторе 200 и BROKEN_RENDER |
+| stackoverflow TIMEOUT→BROKEN: тело 403 теперь отдаётся, челлендж Cloudflare стартует — BUG-1114 | ebay — 403 и у curl с UA Chrome 153 по Wi-Fi (IP), не Lumen |
+| dropbox, quora, zoom, tumblr, webmd, huggingface, coursera, yahoo-jp, discord →OK | khanacademy BROKEN, узлов 31→417 (`__KA_DATA__ not found` ушла), кадр — спиннер |
+| youtube: ошибки BUG-1122/1123 ушли, узлов 428→1265 | youtube BROKEN — теперь BUG-1207 и BUG-1206 |
+| archive: `t.insertBefore` ушла (BUG-1130), samsung: `getAttributeNames` ушла (BUG-1136) | archive, samsung — BROKEN (samsung: `this.videoInfo.el.load is not a function`) |
+| apple (`javaEnabled`), wordpress (`classList.values`), whatsapp (`requireLazy`), airbnb (`atob`) — исходные ошибки ушли | статус DEGRADED — другими ошибками |
+| | imdb, amazon — AWS WAF: `AwsWafIntegration is not defined`, челлендж не проходит (BUG-1179) |
+| | twitch BROKEN — скрипты `assets.twitch.tv` получают `421` (BUG-1209); BUG-493 до исправления BUG-1209 не проверить |
+
+Новых регрессий закрытых багов (та же ошибка снова) не найдено — баги на закрытые не заводились. Сведение
+каждого BROKEN/DEGRADED к локальной странице в этот прогон не вошло: сначала нужен BUG-1209, иначе часть
+поломок — `421` прокси, а не движок.
+
+**Заведённые баги:** BUG-1209, BUG-1210, BUG-1211.
+
+---
+
 ## Исторический контекст (до журнала)
 
 **2026-07-02 — ручной аудит 14 сайтов** (headless `--screenshot`, dev-release,
