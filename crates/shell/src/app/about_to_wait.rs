@@ -1336,6 +1336,16 @@ impl Lumen {
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
+            // BUG-1212: read ONCE, before the loop below can switch tabs.
+            // Every popup drained here was queued by the SAME synchronous
+            // script tick on the SAME calling tab — two `window.open()`
+            // calls back to back share one real opener. Reading this inside
+            // the loop (the pre-fix code did) is only correct for the FIRST
+            // iteration: `open_new_tab()`/`switch_tab()` below move
+            // `self.tab_strip.active` to the just-created popup, so a second
+            // request in the same batch would pick up the FIRST popup's tab
+            // id as its "opener" instead of the real one.
+            let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
             for (url, target, _width, _height, token, no_opener) in popups {
                 // GAP-NAVCTX срез 1 (BUG-884): `open("javascript:...")` must run
                 // the code (in the OPENER's context, per HTML LS §7.4.5) rather
@@ -1359,10 +1369,10 @@ impl Lumen {
                 } else {
                     Err("blocked by CSP navigate-to".to_owned())
                 };
-                // GAP-NAVCTX срез 4 (BUG-797): opener's tab id, read BEFORE
-                // `open_new_tab()`/`switch_tab()` moves `self.tab_strip.active`
-                // away from it.
-                let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                // GAP-NAVCTX срез 4 (BUG-797): opener's tab id — now read ONCE
+                // above the loop (BUG-1212) instead of here, so a second
+                // popup in the same batch does not pick up the first popup's
+                // tab id as its opener.
                 // GAP-NAVCTX срез 14 (BUG-883): `_self` (HTML LS §7.3.2) means
                 // "navigate THIS browsing context", not "open a browsing
                 // context" — before this slice it fell through to the

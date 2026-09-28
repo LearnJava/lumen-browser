@@ -32,3 +32,24 @@ WPT `html/browsers/origin/api/origin-from-window.window.html` и
 того, сколько окон открыто и какое из них активно. Критерий: проба с двумя попапами получает
 оба сообщения, у каждого `e.source` совпадает со своим `WindowProxy`; сабтесты с окнами в двух
 файлах выше — PASS.
+
+## Прогресс 2026-09-29 (P3)
+
+Первая половина причины исправлена: `about_to_wait`'s `window_open_requests`-цикл читал
+`opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id` ВНУТРИ цикла — на второй
+итерации `self.tab_strip.active` уже был переключён (`open_new_tab()`/`switch_tab()`) на только
+что созданную вкладку первого попапа, так что второй попап получал tab id первого попапа как
+своего «опенера», а не реального вызывающего таба. Фикс — читать `opener_tab_id` ОДИН раз, до
+цикла (`crates/shell/src/app/about_to_wait.rs`).
+
+Подтверждено через `tests/wpt/run_smoke.py` на `origin-from-messageevent.window.html`: до фикса
+— TIMEOUT у ОБОИХ popup-сабтестов (`for same-origin windows`/`for cross-origin windows`), 2/2
+unexpected; после фикса — TIMEOUT только у ОДНОГО, 1/2 unexpected.
+
+Второй, независимый баг всё ещё блокирует полное закрытие: `Lumen::load_generation` — общий
+счётчик на процесс, а не per-tab (см. [BUG-1214](BUG-1214-OPEN.md)) — первый попап batch'а
+теряет свой `LoadEvent::LoadDone` (отбрасывается generation-guard'ом, потому что второй попап
+уже успел бампнуть тот же общий счётчик), и его `run_scripts_with_dom` никогда не запускается —
+`window.opener.postMessage()` со стороны первого попапа никогда не отправляется. Оставлено OPEN
+до фикса BUG-1214; `opener_tab_id`-часть фикса landed отдельным коммитом на ветке
+`p3-bug1212-opener-batch` — необходимая, но не достаточная часть закрытия.
