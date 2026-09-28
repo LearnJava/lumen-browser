@@ -49,3 +49,20 @@ String(window.__ran) + '|' + errs.join(';');
 элемента `<script>`», при котором `_lumen_tt_get_compliant_script_for_codegen` пропускает строку.
 Проверить все пути, которые зовут `_lumen_script_execute_classic` (вставка через DOM, внешний `src`,
 `document.write`).
+
+## Регрессия подтверждена, репро с настоящими заголовками (P3, 2026-09-28)
+
+Локальный сервер отдаёт страницу с двумя заголовками, как accounts.google.com:
+`Content-Security-Policy: require-trusted-types-for 'script'` и
+`Content-Security-Policy: script-src 'nonce-abc' 'unsafe-inline'`
+(`.tmp/b1123/tt_server.py <port> <file>` и `csp_tt.html` в слоте `p6-work`). Страница создаёт
+политику, присваивает `script.textContent = policy.createScript('console.log("INSERTED inline ran")')`
+и вставляет скрипт с верным nonce. `lumen --dump-layout http://127.0.0.1:<port>/`:
+
+| Бинарь | Результат |
+|---|---|
+| main 2026-09-24 (до TRUSTEDTYPES-1 срез 7, `c71846072`) | `INSERTED inline ran` |
+| main 2026-09-28 (`2d6fbf4a0`) | `EvalError: Code generation from strings disallowed`, тело не исполнено |
+
+Без `require-trusted-types-for` (одна `script-src` без `'unsafe-eval'`, заголовком или `<meta>`)
+вставленный скрипт исполняется на обоих — дело в TT-ветке хука, а не в CSP `unsafe-eval`.
