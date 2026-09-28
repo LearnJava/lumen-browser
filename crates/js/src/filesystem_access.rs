@@ -2135,24 +2135,28 @@ function commitWrite(st) {
 }
 
 function makeWritable(handleId) {
-  var stream = new FileSystemWritableFileStream(BRAND);
   var st = {
     id: String(handleId == null ? '' : handleId),
     position: 0,
     closed: false,
     queue: Promise.resolve(),
   };
-  WRITE_STATE.set(stream, st);
+  var stream;
   if (WritableStreamBase) {
     // The stream really is a `WritableStream`: its sink is the FS write
     // algorithm, so `getWriter().write(chunk)` and `stream.write(chunk)` commit
-    // the same bytes through the same path.
-    WritableStreamBase.call(stream, {
+    // the same bytes through the same path. Constructed, not `.call`ed: the
+    // base refuses a call without `new` (BUG-684), and `Reflect.construct`
+    // hands it `new.target` while keeping this subclass's prototype.
+    stream = Reflect.construct(WritableStreamBase, [{
       write: function(chunk) { return writeCommand(st, chunk); },
       close: function() { return enqueue(st, function() { return commitWrite(st); }); },
       abort: function() { st.closed = true; },
-    });
+    }], FileSystemWritableFileStream);
+  } else {
+    stream = new FileSystemWritableFileStream(BRAND);
   }
+  WRITE_STATE.set(stream, st);
   return stream;
 }
 
@@ -3859,13 +3863,17 @@ mod tests_v8 {
     /// The base here is a stand-in (the real one comes from `dom.rs`'s shim,
     /// which this harness does not evaluate). What it can prove is the wiring:
     /// the prototype chain, and that the sink handed to the base is the one that
-    /// reaches Rust.
+    /// reaches Rust. Like the real one, the stand-in refuses a call without
+    /// `new` (BUG-684), so the subclass has to construct its base.
     #[test]
     fn writable_extends_the_runtime_writable_stream() {
         let (rt, dir, pid) = opfs_case("stream_base", true);
         rt.eval(
             r#"
-            function WritableStream(sink) { this._ws_sink = sink; this._ws_state = 'writable'; }
+            function WritableStream(sink) {
+              if (new.target === undefined) throw new TypeError('use new');
+              this._ws_sink = sink; this._ws_state = 'writable';
+            }
             WritableStream.prototype.getWriter = function() {
               var sink = this._ws_sink;
               return { write: function(chunk) { return sink.write(chunk); } };

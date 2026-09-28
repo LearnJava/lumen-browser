@@ -1540,3 +1540,49 @@ fn readable_stream_from_array() {
     let r = rt.eval("done").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+/// BUG-684: every Streams interface object called without `new` throws a
+/// TypeError instead of running with `this === globalThis` and leaking the
+/// fields it sets (`TransformStream()` used to leave `readable`/`writable`
+/// behind as globals).
+#[test]
+fn stream_constructors_require_new() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var names = ['ReadableStream', 'WritableStream', 'TransformStream', \
+                      'ReadableStreamDefaultReader', 'ReadableStreamBYOBReader', \
+                      'WritableStreamDefaultWriter', 'TextDecoderStream', 'TextEncoderStream', \
+                      'CompressionStream', 'DecompressionStream', \
+                      'ByteLengthQueuingStrategy', 'CountQueuingStrategy', \
+                      'ReadableStreamDefaultController', 'ReadableByteStreamController', \
+                      'ReadableStreamBYOBRequest', 'WritableStreamDefaultController', \
+                      'TransformStreamDefaultController']; \
+         var bad = names.filter(function(n) { \
+           try { globalThis[n]({}); return true; } \
+           catch (e) { return !(e instanceof TypeError); } \
+         }); \
+         var leaked = ['readable', 'writable', '_rs_state', '_ws_state', '_ts_ctrl', 'highWaterMark'] \
+           .filter(function(k) { return Object.prototype.hasOwnProperty.call(globalThis, k); }); \
+         bad.concat(leaked).join(',')",
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(String::new()));
+}
+
+/// The guard keys on `new.target`, so the subclasses that share the
+/// TransformStream body, and page-defined `class extends`, still construct.
+#[test]
+fn stream_subclasses_still_construct() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "class MyTS extends TransformStream {} \
+         class MyRS extends ReadableStream {} \
+         var a = new TextDecoderStream(), b = new TextEncoderStream(), \
+             c = new CompressionStream('gzip'), d = new DecompressionStream('deflate'), \
+             e = new MyTS(), f = new MyRS(); \
+         [a, b, c, d, e].every(function(t) { \
+           return t instanceof TransformStream && t.readable instanceof ReadableStream \
+             && t.writable instanceof WritableStream; \
+         }) && f instanceof ReadableStream && f.locked === false",
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
