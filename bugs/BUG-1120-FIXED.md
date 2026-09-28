@@ -83,7 +83,7 @@ HTML LS §4.12.1.1 «prepare the script element», шаг 31: парсерный
 - **khanacademy** показывает баннер «Unsupported browser»: сервер ставит
   `KA-is-unsupported-browser: true` по UA. Lumen шлёт `Chrome/130.0.0.0` (Chrome-профиль);
   Chrome 153 с UA `Chrome/130` получает тот же `true`, с `Chrome/140` — `false`, с `Lumen/0.5.0` —
-  `false`. Это [BUG-1113](BUG-1113-OPEN.md). Кроме того, все `@font-face` из
+  `false`. Это [BUG-1113](BUG-1113-FIXED.md). Кроме того, все `@font-face` из
   `cdn.kastatic.org/khanacademy/*.css` запрашиваются от базы документа (`www.khanacademy.org/fonts/…`
   → 403 вместо `cdn.kastatic.org/khanacademy/fonts/…` → 200) — [BUG-1127](BUG-1127-FIXED.md).
 - **coursera** выше Chrome (9115 против 5922 px): у карусельных колонок

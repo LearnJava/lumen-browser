@@ -32,16 +32,45 @@ pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hint
 /// version bump — see the versioning policy in `CLAUDE.md`.
 pub const DEFAULT_USER_AGENT: &str = concat!("Lumen/", env!("CARGO_PKG_VERSION"));
 
-/// Chrome 130 User-Agent — used by `HttpProfile::Chrome` and `HttpProfile::Strict`
+/// Major version of the stable Chrome the `Chrome`/`Edge`/`Strict` profiles
+/// impersonate — the single source for every Chromium UA string below.
+///
+/// Must track current stable Chrome: a UA many majors behind is itself an
+/// anti-bot signal (BUG-1113 — `Chrome/130` against stable 153 got 403/401 from
+/// zillow and reuters and the "unsupported browser" page from khanacademy).
+/// Checked against the machine's Chrome before every site audit
+/// (`.claude/skills/lumen-perf-audit/SKILL.md` step 1).
+macro_rules! chrome_major {
+    () => {
+        "153"
+    };
+}
+
+/// [`chrome_major!`] as a value, for code that compares against it.
+pub const CHROME_MAJOR: &str = chrome_major!();
+
+/// Chrome User-Agent — used by `HttpProfile::Chrome` and `HttpProfile::Strict`
 /// to match current stable Chrome on Windows so sites that block unknown clients
 /// (e.g., redirect-loop on unrecognised UA) treat Lumen as a standard browser.
-pub const CHROME_USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+pub const CHROME_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
+    chrome_major!(),
+    ".0.0.0 Safari/537.36"
+);
+
+/// Edge User-Agent — the Chromium UA of the same major plus the `Edg/` token.
+pub const EDGE_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
+    chrome_major!(),
+    ".0.0.0 Safari/537.36 Edg/",
+    chrome_major!(),
+    ".0.0.0"
+);
 
 /// Default Accept-Language header (does not leak real locale).
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
-/// Chrome 130 `Accept` header for a **top-level document navigation**.
+/// Chrome `Accept` header for a **top-level document navigation**.
 ///
 /// Real Chrome sends this exact string when navigating to an HTML document;
 /// a bare `*/*` (what a generic HTTP client sends) is a cheap anti-bot signal
