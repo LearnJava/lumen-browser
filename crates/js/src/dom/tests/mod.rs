@@ -420,3 +420,6 @@ mod v8_bug1123_event_target_chain;
 #[cfg(feature = "v8-backend")]
 mod v8_bug688_touch_events;
 mod v8_bug1167_ce_wrapper_gc;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug689_attr_nodes;
