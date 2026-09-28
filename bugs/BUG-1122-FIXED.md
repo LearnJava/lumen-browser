@@ -101,7 +101,7 @@ object (`Node.prototype`, `Element.prototype`, `ParentNode`-миксин — н�
   `Constructing iron-iconset-svg`, `this.querySelector is not a function`, счёт узлов не снят
   (eval не вернулся); после — **1234 узла** (Chrome 1529–1868), ни одной ошибки
   `hasAttribute`/`querySelector`. Остались: `reading 'focus'` в `EventTarget.addEventListener`
-  (это [BUG-1123](BUG-1123-OPEN.md)), `this._attributeToProperty is not a function` и
+  (это [BUG-1123](BUG-1123-FIXED.md)), `this._attributeToProperty is not a function` и
   `b.Aa is not a function` в колбэках custom elements ([BUG-1167](BUG-1167-FIXED.md)), `atob: invalid base64 string`
   ([BUG-1133](BUG-1133-FIXED.md)); `innerText` тела пуст — страница ещё не рисует контент.
 - WPT `dom/nodes` (`run_report.py --all --root dom/nodes --processes 4`, до/после): 136/157 OK в обоих прогонах,

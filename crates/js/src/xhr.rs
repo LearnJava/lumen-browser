@@ -55,8 +55,14 @@ ProgressEvent.prototype = Object.create(Event.prototype);
 ProgressEvent.prototype.constructor = ProgressEvent;
 
 // ── XMLHttpRequestEventTarget (XHR §3.1) ──────────────────────────────────
-// Base mixin for XMLHttpRequest and XMLHttpRequestUpload.
-function _XhrEventTarget() {
+// Base interface of XMLHttpRequest and XMLHttpRequestUpload, itself an
+// `EventTarget` (BUG-1123: it was a free-standing base with its own
+// listener methods, so `xhr instanceof EventTarget` was `false` and
+// `EventTarget.prototype.addEventListener.call(xhr, …)` wrote into a store
+// this dispatch never read). Listeners, `once`, `handleEvent` objects and the
+// `on<type>` handler all come from `EventTarget.prototype`.
+function XMLHttpRequestEventTarget() {
+    EventTarget.call(this);
     this.onloadstart  = null;
     this.onprogress   = null;
     this.onabort      = null;
@@ -64,43 +70,23 @@ function _XhrEventTarget() {
     this.onload       = null;
     this.ontimeout    = null;
     this.onloadend    = null;
-    this._listeners   = {};
 }
-_XhrEventTarget.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (!this._listeners[type]) this._listeners[type] = [];
-    this._listeners[type].push(fn);
-};
-_XhrEventTarget.prototype.removeEventListener = function(type, fn) {
-    var arr = this._listeners[type];
-    if (!arr) return;
-    var idx = arr.indexOf(fn);
-    if (idx >= 0) arr.splice(idx, 1);
-};
-_XhrEventTarget.prototype.dispatchEvent = function(evt) {
-    evt.target = this;
-    var prop = 'on' + evt.type;
-    if (typeof this[prop] === 'function') { try { this[prop](evt); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
-    var arr = this._listeners[evt.type];
-    if (arr) {
-        var snap = arr.slice();
-        for (var i = 0; i < snap.length; i++) { try { snap[i](evt); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
-    }
-    return !evt.defaultPrevented;
-};
+XMLHttpRequestEventTarget.prototype = Object.create(EventTarget.prototype);
+XMLHttpRequestEventTarget.prototype.constructor = XMLHttpRequestEventTarget;
+Object.setPrototypeOf(XMLHttpRequestEventTarget, EventTarget);
 
 // ── XMLHttpRequestUpload (XHR §4.7) ────────────────────────────────────────
 // Stub: holds upload event handlers, no actual upload tracking in Phase 0.
 function XMLHttpRequestUpload() {
-    _XhrEventTarget.call(this);
+    XMLHttpRequestEventTarget.call(this);
 }
-XMLHttpRequestUpload.prototype = Object.create(_XhrEventTarget.prototype);
+XMLHttpRequestUpload.prototype = Object.create(XMLHttpRequestEventTarget.prototype);
 XMLHttpRequestUpload.prototype.constructor = XMLHttpRequestUpload;
 
 // ── XMLHttpRequest (XHR §4) ────────────────────────────────────────────────
 
 function XMLHttpRequest() {
-    _XhrEventTarget.call(this);
+    XMLHttpRequestEventTarget.call(this);
 
     // XHR §4.1 — readyState
     this.readyState = 0; // UNSENT
@@ -141,7 +127,7 @@ XMLHttpRequest.HEADERS_RECEIVED = 2;
 XMLHttpRequest.LOADING          = 3;
 XMLHttpRequest.DONE             = 4;
 
-XMLHttpRequest.prototype = Object.create(_XhrEventTarget.prototype);
+XMLHttpRequest.prototype = Object.create(XMLHttpRequestEventTarget.prototype);
 XMLHttpRequest.prototype.constructor = XMLHttpRequest;
 
 // Inherit UNSENT/OPENED/HEADERS_RECEIVED/LOADING/DONE on instances too.
@@ -560,12 +546,12 @@ XMLHttpRequest.prototype.overrideMimeType = function(mime) {
 // `window.XMLHttpRequest` works in library compatibility checks.
 globalThis.XMLHttpRequest            = XMLHttpRequest;
 globalThis.XMLHttpRequestUpload      = XMLHttpRequestUpload;
-globalThis.XMLHttpRequestEventTarget = _XhrEventTarget;
+globalThis.XMLHttpRequestEventTarget = XMLHttpRequestEventTarget;
 globalThis.ProgressEvent             = ProgressEvent;
 if (typeof window !== 'undefined') {
     window.XMLHttpRequest            = XMLHttpRequest;
     window.XMLHttpRequestUpload      = XMLHttpRequestUpload;
-    window.XMLHttpRequestEventTarget = _XhrEventTarget;
+    window.XMLHttpRequestEventTarget = XMLHttpRequestEventTarget;
     window.ProgressEvent             = ProgressEvent;
 }
 
