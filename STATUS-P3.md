@@ -1,3 +1,6 @@
+BUGS.md:243
+BUGS.md:244
+BUGS.md:245
 BUGS.md:26
 BUGS.md:27
 BUGS.md:28
@@ -157,6 +160,3 @@ BUGS.md:227
 BUGS.md:228
 BUGS.md:229
 BUGS.md:238
-BUGS.md:244
-BUGS.md:243
-BUGS.md:245
