@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 mod activation_target;
+mod bug1147_frame_facade_style;
 mod bug518_mixin_cssom;
 mod bug534_highlight_api;
 mod bug569_img_decode;

@@ -4,6 +4,8 @@
 //! - `window.speechSynthesis` — `SpeechSynthesis` object with `speak/cancel/pause/resume/getVoices`.
 //! - `SpeechSynthesisUtterance` — text + properties + events (`start/end/error/pause/resume`).
 //! - `SpeechSynthesisVoice` — one synthetic voice "Lumen Voice" (en-US, localService=true).
+//! - `SpeechSynthesisEvent` / `SpeechSynthesisErrorEvent` — constructible `Event` subclasses;
+//!   every event an utterance delivers is an instance of one of them (BUG-680).
 //! - `window.SpeechRecognition` / `window.webkitSpeechRecognition` — stub that always rejects
 //!   with `service-not-allowed` (no ML model bundled in Phase 0).
 //!
@@ -134,15 +136,94 @@ SpeechSynthesisUtterance.prototype.removeEventListener = function(type, fn) {
     this._listeners[type] = this._listeners[type].filter(function(f) { return f !== fn; });
 };
 SpeechSynthesisUtterance.prototype._fire = function(type, extra) {
-    var ev = { type: type, utterance: this, charIndex: 0, charLength: 0, elapsedTime: 0 };
+    // BUG-680: a delivered event is a real SpeechSynthesis(Error)Event, not a
+    // plain literal, so `instanceof` and the Event methods work on it.
+    var init = { utterance: this };
     if (extra) {
-        for (var k in extra) ev[k] = extra[k];
+        for (var k in extra) init[k] = extra[k];
     }
+    var ev;
+    if (type === 'error') {
+        if (init.error === undefined) init.error = 'synthesis-failed';
+        ev = new SpeechSynthesisErrorEvent(type, init);
+    } else {
+        ev = new SpeechSynthesisEvent(type, init);
+    }
+    ev.isTrusted     = true;
+    ev.target        = this;
+    ev.currentTarget = this;
+    ev.eventPhase    = 2;
     var handler = this['on' + type];
     if (typeof handler === 'function') { try { handler.call(this, ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
     var ls = this._listeners[type];
     if (ls) ls.forEach(function(f) { try { f(ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } });
+    ev.currentTarget = null;
+    ev.eventPhase    = 0;
 };
+
+// ── SpeechSynthesisEvent / SpeechSynthesisErrorEvent (Web Speech API §4.2.6–4.2.7) ──
+// Both dictionaries have required members, so a missing `utterance` (and, for
+// the error event, a missing or non-enum `error`) is a WebIDL TypeError.
+var _SYNTH_ERROR_CODES = ['canceled', 'interrupted', 'audio-busy', 'audio-hardware',
+    'network', 'synthesis-unavailable', 'synthesis-failed', 'language-unavailable',
+    'voice-unavailable', 'text-too-long', 'invalid-argument', 'not-allowed'];
+
+function _synthEventInit(ctor, args) {
+    if (args.length < 2) {
+        throw new TypeError("Failed to construct '" + ctor + "': 2 arguments required, but only " + args.length + ' present.');
+    }
+    var init = args[1];
+    if (init === undefined || init === null) init = {};
+    if (typeof init !== 'object' && typeof init !== 'function') {
+        throw new TypeError("Failed to construct '" + ctor + "': The provided value is not of type '" + ctor + "Init'.");
+    }
+    if (!(init.utterance instanceof SpeechSynthesisUtterance)) {
+        throw new TypeError("Failed to construct '" + ctor + "': required member utterance is " +
+            (init.utterance === undefined ? 'undefined' : "not of type 'SpeechSynthesisUtterance'") + '.');
+    }
+    var elapsed = init.elapsedTime === undefined ? 0 : Math.fround(Number(init.elapsedTime));
+    if (!isFinite(elapsed)) {
+        throw new TypeError("Failed to construct '" + ctor + "': The provided float value is non-finite.");
+    }
+    return {
+        utterance:   init.utterance,
+        charIndex:   init.charIndex  === undefined ? 0 : Number(init.charIndex)  >>> 0,
+        charLength:  init.charLength === undefined ? 0 : Number(init.charLength) >>> 0,
+        elapsedTime: elapsed,
+        name:        init.name === undefined ? '' : String(init.name),
+        raw:         init
+    };
+}
+
+class SpeechSynthesisEvent extends Event {
+    constructor(type, eventInitDict) {
+        var d = _synthEventInit(new.target.name, arguments);
+        super(type, d.raw);
+        Object.defineProperty(this, '_ss', { value: d });
+    }
+    get utterance()   { return this._ss.utterance; }
+    get charIndex()   { return this._ss.charIndex; }
+    get charLength()  { return this._ss.charLength; }
+    get elapsedTime() { return this._ss.elapsedTime; }
+    get name()        { return this._ss.name; }
+}
+
+class SpeechSynthesisErrorEvent extends SpeechSynthesisEvent {
+    constructor(type, eventInitDict) {
+        super(type, eventInitDict);
+        var err = this._ss.raw.error;
+        if (err === undefined) {
+            throw new TypeError("Failed to construct 'SpeechSynthesisErrorEvent': required member error is undefined.");
+        }
+        err = String(err);
+        if (_SYNTH_ERROR_CODES.indexOf(err) < 0) {
+            throw new TypeError("Failed to construct 'SpeechSynthesisErrorEvent': The provided value '" + err +
+                "' is not a valid enum value of type SpeechSynthesisErrorCode.");
+        }
+        Object.defineProperty(this, '_ssError', { value: err });
+    }
+    get error() { return this._ssError; }
+}
 
 // ── SpeechSynthesis (singleton) ───────────────────────────────────────────────
 var _queue    = [];
@@ -277,6 +358,8 @@ SpeechRecognition.prototype.abort = function() {};
 if (typeof window !== 'undefined') {
     window.SpeechSynthesisUtterance = SpeechSynthesisUtterance;
     window.SpeechSynthesisVoice     = SpeechSynthesisVoice;
+    window.SpeechSynthesisEvent      = SpeechSynthesisEvent;
+    window.SpeechSynthesisErrorEvent = SpeechSynthesisErrorEvent;
     window.speechSynthesis          = speechSynthesis;
     window.SpeechRecognition        = SpeechRecognition;
     window.webkitSpeechRecognition  = SpeechRecognition;
@@ -284,6 +367,8 @@ if (typeof window !== 'undefined') {
 // Also expose on globalThis so Worker contexts and bare-name access work.
 globalThis.SpeechSynthesisUtterance = SpeechSynthesisUtterance;
 globalThis.SpeechSynthesisVoice     = SpeechSynthesisVoice;
+globalThis.SpeechSynthesisEvent      = SpeechSynthesisEvent;
+globalThis.SpeechSynthesisErrorEvent = SpeechSynthesisErrorEvent;
 globalThis.speechSynthesis          = speechSynthesis;
 globalThis.SpeechRecognition        = SpeechRecognition;
 globalThis.webkitSpeechRecognition  = SpeechRecognition;

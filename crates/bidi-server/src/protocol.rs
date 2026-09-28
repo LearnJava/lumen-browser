@@ -2298,7 +2298,7 @@ mod tests {
             for (cmd, reply_tx) in rx {
                 let reply = match cmd {
                     AutomationCommand::Navigate(_) => AutomationReply::Ack,
-                    AutomationCommand::Eval(js) => AutomationReply::Eval(format!("\"{js}\"")),
+                    AutomationCommand::Eval(js, _) => AutomationReply::Eval(format!("\"{js}\"")),
                     AutomationCommand::Screenshot => AutomationReply::Screenshot(vec![0x89, b'P', b'N', b'G']),
                     AutomationCommand::Click(_) | AutomationCommand::Type(_, _) | AutomationCommand::Scroll(_) => {
                         AutomationReply::Ack
@@ -2373,10 +2373,10 @@ mod tests {
         std::thread::spawn(move || {
             for (cmd, reply_tx) in rx {
                 let reply = match cmd {
-                    AutomationCommand::Eval(js) if js.contains("Promise.resolve") => {
+                    AutomationCommand::Eval(js, _) if js.contains("Promise.resolve") => {
                         AutomationReply::Eval("\"pending\"".into())
                     }
-                    AutomationCommand::Eval(_) => AutomationReply::Eval(settled.clone()),
+                    AutomationCommand::Eval(..) => AutomationReply::Eval(settled.clone()),
                     _ => AutomationReply::Ack,
                 };
                 let _ = reply_tx.send(reply);

@@ -314,7 +314,7 @@ docs-rs -72% (раньше 403/500-класс), mdn +594% ⚠ (см. наход�
 duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` печатается при каждом старте и
 о включённом блокировщике не говорит. Признак — `blocked: easylist`.
 
-**Итог.** Заведено 28 багов, [BUG-1119](../../bugs/BUG-1119-FIXED.md)…[BUG-1146](../../bugs/BUG-1146-OPEN.md).
+**Итог.** Заведено 28 багов, [BUG-1119](../../bugs/BUG-1119-FIXED.md)…[BUG-1146](../../bugs/BUG-1146-FIXED.md).
 В 8 открытых дописаны сайты: BUG-892, 493, 568, 648, 863, 480, 970, 1114. Все отданы P6, очередь —
 `STATUS-P6.md`, по числу сломанных сайтов.
 
@@ -339,9 +339,9 @@ duolingo, imgur, discord. Строка `adblock: filter installed (N rules)` п�
 | `PerformanceObserver` buffered синхронно (BUG-648) | cnbc |
 | 4xx/5xx заменяется страницей ошибки, `fetch` реджектит (BUG-1114) | reddit (403 и в Chrome), duolingo, fandom |
 
-Служебные находки: [BUG-1145](../../bugs/BUG-1145-OPEN.md) (MCP `eval` отдаёт таймаут движкового
+Служебные находки: [BUG-1145](../../bugs/BUG-1145-FIXED.md) (MCP `eval` отдаёт таймаут движкового
 потока как «JS context not available»; мешал снять DOM на cnbc, gemini, udemy, imgur, github) и
-[BUG-1146](../../bugs/BUG-1146-OPEN.md) (блокировщик игнорирует `$domain=`, виден только при
+[BUG-1146](../../bugs/BUG-1146-FIXED.md) (блокировщик игнорирует `$domain=`, виден только при
 включённом блокировщике).
 
 **Без движкового корня.** canva и character-ai почти на уровне Chrome. microsoft отдаёт Akamai

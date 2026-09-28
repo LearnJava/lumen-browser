@@ -172,7 +172,7 @@ mod renderer_process;
 use crate::display_list_metrics::{
     build_split_placeholder, content_height_of, content_width_of, next_dl_epoch, paint_ordered,
 };
-use crate::app::about_to_wait::PendingWait;
+use crate::app::about_to_wait::{PendingEval, PendingWait};
 use crate::doc_extract::{
     DynamicCssBase, collect_style_attr_csp_blocked, extract_style_blocks, extract_title,
     inline_style_fingerprint, stylesheet_link_fingerprint, window_title,

@@ -232,6 +232,15 @@ pub trait BrowserSession {
     /// `screenshot` reflect any DOM mutation the script made.
     fn eval(&mut self, js: &str) -> Result<String>;
 
+    /// [`Self::eval`] with an explicit wait budget in milliseconds (BUG-1145).
+    ///
+    /// Only the live window has something to wait for — its engine thread can
+    /// be busy with earlier work — so the default ignores `timeout_ms`.
+    fn eval_with_timeout(&mut self, js: &str, timeout_ms: u64) -> Result<String> {
+        let _ = timeout_ms;
+        self.eval(js)
+    }
+
     /// Найти DOM-узлы по CSS-селектору. Возвращает пустой вектор, если
     /// ни один узел не совпал.
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>>;

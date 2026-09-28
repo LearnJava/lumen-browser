@@ -1054,6 +1054,9 @@ pub(crate) struct Lumen {
     /// depends on), so a wait is queued here and re-checked once per frame in
     /// `about_to_wait` until it is satisfied or its deadline passes.
     pub(crate) pending_waits: Vec<PendingWait>,
+    /// `AutomationCommand::Eval` requests queued on the engine thread and not
+    /// yet answered (BUG-1145) — polled in `about_to_wait` like `pending_waits`.
+    pub(crate) pending_evals: Vec<PendingEval>,
     /// Receiver side of the input injection channel (ADR-007 §8C).
     ///
     /// Drained each `about_to_wait`; commands are processed through the same

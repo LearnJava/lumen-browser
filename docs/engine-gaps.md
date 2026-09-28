@@ -19,8 +19,6 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 - **A headless dump mode is a good JS probe harness, but only for synchronous script** — `lumen --dump-layout <page>` runs the page's scripts and `console.log` lands on stderr prefixed `[JS] `, which makes it the cheapest way to read a DOM-level result without a window. What it will not give you is anything behind a timer: a `setTimeout(…, 0)` callback simply never logs, because the one-shot run finishes first. Silent, so an absent line reads as «the API returned nothing» rather than «the callback never ran» — measured 2026-09-09 while probing [BUG-982](../bugs/BUG-982-FIXED.md). Anything asynchronous needs a live window.
 - **A spacer that paints nothing gives the page no scroll** — `content_height` comes from the display list, so `<div style="height:4000px">` leaves `max_scroll()` at 0 and `scrollTo` genuinely does nothing. Give it a background.
 
-- **MCP `eval` answers `JS context not available` when the engine thread is merely busy** for more than 5 s ([BUG-1145](../bugs/BUG-1145-OPEN.md)) — on a heavy page (cnbc, github) that is a timeout, not a missing context; retry later instead of concluding the page has no JS.
-
 ## Events and dispatch
 
 - **There is no `navigation` global at all** — `'onnavigate' in navigation` and every other Navigation API feature-detect throws `ReferenceError` before it even gets to answer `false` ([BUG-881](../bugs/BUG-881-OPEN.md)). What a probe should still not expect is shadow-tree retargeting, which is unmodelled, so a path crossing a shadow boundary lists the real nodes.

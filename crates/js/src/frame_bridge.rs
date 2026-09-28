@@ -1918,6 +1918,16 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     if (!cache) { cache = {}; elems[bid] = cache; }
     var cached = cache[nid];
     if (cached) return cached;
+    // BUG-1147: views over this node's `style`/`class`/`data-*` attributes,
+    // built on first read and kept for the facade's lifetime
+    // (`el.style === el.style`), like `_lumen_wrapper_slot` of the main shim.
+    var views = {};
+    function view(key, make) {
+      if (views[key] === undefined) {
+        views[key] = typeof make === 'function' ? make(nid, bid) : undefined;
+      }
+      return views[key];
+    }
     var el = {
       __bid__: bid,
       __nid__: nid,
@@ -1947,6 +1957,23 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       // cached (unlike the main document's `attributes`, BUG-732), the map
       // itself is a live Proxy so a fresh one is cheap and always current.
       get attributes() { return frameNamedNodeMap(bid, nid); },
+      // BUG-1147: the main shim's own `CSSStyleDeclaration`/`DOMTokenList`/
+      // `DOMStringMap`, bound to this sub-document through their `fbid`
+      // argument — every read and write goes through the `_lumen_f_*` attribute
+      // natives, so the child's cascade sees `style.cssText = …` and the
+      // parent sees the child's own later `setAttribute('style', …)`. The
+      // `typeof` guard in `view` covers minimal test isolates without the shim.
+      get style() {
+        return view('style', typeof _lumen_make_style === 'function' ? _lumen_make_style : undefined);
+      },
+      // Web IDL [PutForwards=cssText], same as the main shim (BUG-494).
+      set style(v) { var st = this.style; if (st) st.cssText = String(v); },
+      get classList() {
+        return view('classList', typeof _lumen_make_class_list === 'function' ? _lumen_make_class_list : undefined);
+      },
+      get dataset() {
+        return view('dataset', typeof _lumen_make_dataset === 'function' ? _lumen_make_dataset : undefined);
+      },
       get children() { return _lumen_f_children(bid, nid).map(function(c) { return frameElem(bid, c); }); },
       get childElementCount() { return _lumen_f_children(bid, nid).length; },
       get firstElementChild() { return frameElem(bid, _lumen_f_children(bid, nid)[0]); },

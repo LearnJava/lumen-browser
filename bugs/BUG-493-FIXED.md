@@ -522,5 +522,5 @@ styled-тега не `null` ни разу. Quora к styled-components не пу�
   `PerformanceObserver` (`a is not a function`), дописано к cnbc;
 - [BUG-1158](BUG-1158-OPEN.md) — bbc даёт `Unexpected token ':'` на вставленном скрипте 3 из 3,
   дописано к yahoo;
-- [BUG-1145](BUG-1145-OPEN.md) — imdb и twitch: `eval` отвечает `JS context not available` посреди
+- [BUG-1145](BUG-1145-FIXED.md) — imdb и twitch: `eval` отвечает `JS context not available` посреди
   загрузки и снова работает через 10–25 с, дописано.
