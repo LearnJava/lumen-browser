@@ -45,6 +45,7 @@ fn register(rt: &V8JsRuntime, nid: u32, accessible: bool) {
         "https://example.com/inner.html".to_owned(),
         Some("o".to_owned()),
         accessible,
+        false,
         None,
     );
 }
@@ -154,6 +155,7 @@ fn svg_nested_document_is_returned_by_get_svg_document() {
             "https://example.com/logo.svg".to_owned(),
             None,
             true,
+            false,
             None,
         );
         assert!(

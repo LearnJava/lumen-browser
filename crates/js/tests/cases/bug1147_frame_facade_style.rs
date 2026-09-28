@@ -28,6 +28,7 @@ fn frame_rt(child_html: &str) -> V8JsRuntime {
         "about:blank".to_owned(),
         None,
         true,
+        false,
         None,
     );
     rt.eval("var d = f.contentDocument;").unwrap();

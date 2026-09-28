@@ -1,7 +1,7 @@
 //! Navigation API (HTML LS §7.8).
 //!
 //! Provides `window.navigation` singleton with `currentEntry`, `entries()`,
-//! `navigate()`, `back()`, `forward()`, `traverseTo()` methods and events
+//! `navigate()`, `reload()`, `back()`, `forward()`, `traverseTo()` methods and events
 //! `navigate`, `navigatesuccess`, `navigateerror`, `currententrychange`.
 
 /// V8 port of the former rquickjs `install_navigation_api` (Ph3 V8 migration S5-S7,
@@ -480,6 +480,17 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
       this._mkId();
       const stateJson = JSON.stringify(state !== undefined ? state : null);
       return this._request(replace ? 1 : 0, url, key, stateJson, null);
+    }
+
+    /// HTML LS §7.2.9.4 `reload(options)`: the shell reloads the current
+    /// document (a frame's own — BUG-1198 — when called inside one). An
+    /// unserializable `state` throws DataCloneError before anything is
+    /// queued; the reloaded document is a new realm, so the state is not
+    /// carried over yet (same limit as a cross-document traversal above).
+    reload(options = {}) {
+      const opts = options || {};
+      if (opts.state !== undefined) structuredClone(opts.state);
+      return this._request(5, '', '', '', null);
     }
 
     back(options = {}) {

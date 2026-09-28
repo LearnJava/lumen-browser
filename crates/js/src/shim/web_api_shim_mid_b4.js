@@ -2159,13 +2159,16 @@ for (var _wohi = 0; _wohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _wohi++) {
 // фреймов (frame_bridge::_lumen_frame_pump_messages). Данные уже разобраны,
 // source — фасад окна отправителя или null. Тот же порядок, что у локального
 // window.postMessage выше: сначала onmessage, затем addEventListener('message').
-globalThis._lumen_deliver_frame_message = function(data, origin, source) {
+globalThis._lumen_deliver_frame_message = function(data, origin, source, opaqueId) {
     var ev = new MessageEvent(data);
     ev.origin = origin || '';
     if (source !== null && source !== undefined) ev.source = source;
     // GAP-ORIGIN: the sender's origin as the frame bridge computed it; empty
-    // (a grandchild posting to top) stays "no origin".
-    if (origin) _lumen_origin_register_source(ev, function() { return origin; });
+    // (a grandchild posting to top) stays "no origin". BUG-1198: an opaque
+    // sender (`origin === 'null'`) carries the identity of its opaque origin
+    // instead — the same one for every message of that document.
+    if (opaqueId) _lumen_origin_register_source(ev, function() { return _lumen_origin_opaque(opaqueId); });
+    else if (origin) _lumen_origin_register_source(ev, function() { return origin; });
     window.dispatchEvent(ev);
 };
 

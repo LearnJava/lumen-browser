@@ -111,6 +111,7 @@ mod engine_bridge;
 mod engine_thread;
 mod download;
 mod find;
+mod frame_ancestry;
 mod frame_dynamic_load;
 mod frame_lazy;
 mod frame_log;

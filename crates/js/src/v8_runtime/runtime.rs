@@ -1300,6 +1300,12 @@ impl V8JsRuntime {
     /// каждую навигацию, и `window[i]` разъехался бы с порядком документа.
     /// Сохранение ИНДЕКСА здесь и есть содержательная часть: вложенный
     /// browsing context при навигации остаётся тем же, меняется его документ.
+    ///
+    /// BUG-1198: `opaque` — у документа непрозрачное происхождение (`sandbox`
+    /// без `allow-same-origin`): его сообщения приходят с `origin === "null"`
+    /// и одной на документ идентичностью для `Origin.from(event)`. Повторная
+    /// регистрация того же `doc` эту идентичность сохраняет.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_frame_document(
         &self,
         host_nid: u32,
@@ -1307,6 +1313,7 @@ impl V8JsRuntime {
         url: String,
         name: Option<String>,
         accessible: bool,
+        opaque: bool,
         peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
     ) {
         let registry = Arc::clone(&self.frame_docs);
@@ -1318,6 +1325,7 @@ impl V8JsRuntime {
                 url,
                 name,
                 accessible,
+                opaque_id: opaque.then(crate::frame_bridge::next_opaque_origin_id),
                 peer,
             };
             crate::frame_bridge::upsert_binding(&mut reg, binding)
@@ -1366,6 +1374,7 @@ impl V8JsRuntime {
                     url,
                     name,
                     accessible,
+                    opaque_id: None,
                     peer,
                 });
         });
@@ -1398,6 +1407,7 @@ impl V8JsRuntime {
                     url,
                     name: None,
                     accessible,
+                    opaque_id: None,
                     peer,
                 });
         });
