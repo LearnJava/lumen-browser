@@ -413,3 +413,6 @@ mod v8_bug1119_document_cookie;
 
 #[cfg(feature = "v8-backend")]
 mod v8_gap_uashadowslot;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1167_ce_wrapper_gc;
